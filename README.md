@@ -27,7 +27,8 @@ manual smoke checks:
 - `split`: splits the active pane.
 - `close active pane`: closes the active pane and leaves its session detached
   when another pane remains.
-- `detached`: attaches a detached session back into the active tab as a split.
+- `detached`: shows detached sessions such as `Terminal #2` and attaches the
+  selected session back into the active tab as a split.
 - `tab 1`, `tab 2`, ...: switches to the matching tab.
 - `terminate active session`: terminates the active session.
 

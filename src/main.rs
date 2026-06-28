@@ -31,6 +31,7 @@ enum PaletteItem {
     DetachedSession {
         session_id: SessionId,
         kind: SessionKind,
+        display_number: usize,
         title: String,
     },
     Tab {
@@ -559,7 +560,7 @@ impl PaletteItem {
     fn title(&self) -> String {
         match self {
             Self::Command(entry) => entry.spec.title.to_string(),
-            Self::DetachedSession { title, .. } => format!("Attach Detached {title}"),
+            Self::DetachedSession { title, .. } => format!("Attach {title}"),
             Self::Tab { index, title, .. } => format!("Tab {}: {title}", index + 1),
         }
     }
@@ -567,10 +568,15 @@ impl PaletteItem {
     fn description(&self) -> String {
         match self {
             Self::Command(entry) => entry.spec.description.to_string(),
-            Self::DetachedSession { kind, .. } => {
+            Self::DetachedSession {
+                kind,
+                display_number,
+                ..
+            } => {
                 format!(
-                    "Attach detached {} session to the active tab as a split.",
-                    session_kind_label(*kind)
+                    "Detached {} session #{}; attach to the active tab as a split.",
+                    session_kind_label(*kind),
+                    display_number
                 )
             }
             Self::Tab {
@@ -606,6 +612,7 @@ fn palette_items(workspace: &Workspace, query: &str) -> Vec<PaletteItem> {
             .detached_session_summaries()
             .into_iter()
             .filter(|session| {
+                let display_number = session.display_number.to_string();
                 palette_matches(
                     &query,
                     &[
@@ -613,12 +620,14 @@ fn palette_items(workspace: &Workspace, query: &str) -> Vec<PaletteItem> {
                         "session",
                         session.title.as_str(),
                         session_kind_label(session.kind),
+                        display_number.as_str(),
                     ],
                 )
             })
             .map(|session| PaletteItem::DetachedSession {
                 session_id: session.id,
                 kind: session.kind,
+                display_number: session.display_number,
                 title: session.title,
             }),
     );
@@ -1097,9 +1106,7 @@ fn pane_view(
 
     let title = move || {
         workspace.with(|ws| {
-            ws.visible_panes()
-                .get(index)
-                .map(|pane| pane.title())
+            ws.visible_pane_title(index)
                 .unwrap_or_else(|| "Empty".to_string())
         })
     };
@@ -1592,7 +1599,7 @@ mod tests {
                 title,
                 active: false,
                 ..
-            } if title == "Terminal"
+            } if title == "Terminal #1"
         )));
     }
 

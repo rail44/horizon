@@ -18,6 +18,8 @@ pub struct Workspace {
     panes: Vec<Pane>,
     sessions: Vec<WorkspaceSession>,
     active_tab: TabId,
+    next_terminal_display_number: usize,
+    next_agent_display_number: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -39,6 +41,7 @@ pub struct TabSummary {
 pub struct SessionSummary {
     pub id: SessionId,
     pub kind: SessionKind,
+    pub display_number: usize,
     pub title: String,
     pub attached: bool,
 }
@@ -47,6 +50,7 @@ pub struct SessionSummary {
 pub struct WorkspaceSession {
     pub id: SessionId,
     pub kind: SessionKind,
+    pub display_number: usize,
     pub title: String,
 }
 
@@ -121,11 +125,9 @@ impl Workspace {
             active_tab: tab.id,
             tabs: vec![tab],
             panes: vec![terminal],
-            sessions: vec![WorkspaceSession::new(
-                session_id,
-                SessionKind::Terminal,
-                "Terminal",
-            )],
+            sessions: vec![WorkspaceSession::new(session_id, SessionKind::Terminal, 1)],
+            next_terminal_display_number: 2,
+            next_agent_display_number: 1,
         }
     }
 
@@ -382,6 +384,7 @@ impl Workspace {
             .map(|session| SessionSummary {
                 id: session.id,
                 kind: session.kind,
+                display_number: session.display_number,
                 title: session.title.clone(),
                 attached: false,
             })
@@ -433,8 +436,14 @@ impl Workspace {
         self.panes
             .iter()
             .find(|pane| Some(pane.id) == active)
-            .map(Pane::title)
+            .map(|pane| self.pane_title(pane))
             .unwrap_or_else(|| "none".to_string())
+    }
+
+    pub fn visible_pane_title(&self, index: usize) -> Option<String> {
+        self.visible_panes()
+            .get(index)
+            .map(|pane| self.pane_title(pane))
     }
 
     fn visible_pane_ids(&self) -> Vec<PaneId> {
@@ -457,8 +466,15 @@ impl Workspace {
         self.panes
             .iter()
             .find(|pane| pane.id == tab.active)
-            .map(Pane::title)
+            .map(|pane| self.pane_title(pane))
             .unwrap_or_else(|| "Empty".to_string())
+    }
+
+    fn pane_title(&self, pane: &Pane) -> String {
+        pane.session_id
+            .and_then(|session_id| self.session(session_id))
+            .map(|session| session.title.clone())
+            .unwrap_or_else(|| pane.title())
     }
 
     fn ensure_session(&mut self, kind: PaneKind, session_id: Option<SessionId>) {
@@ -469,27 +485,44 @@ impl Workspace {
             return;
         }
 
+        let session_kind = SessionKind::from(kind);
+        let display_number = self.allocate_session_display_number(session_kind);
         self.sessions.push(WorkspaceSession::new(
             session_id,
-            SessionKind::from(kind),
-            session_title(kind),
+            session_kind,
+            display_number,
         ));
     }
 
     fn session_pane_kind(&self, session_id: SessionId) -> Option<PaneKind> {
+        self.session(session_id)
+            .map(|session| PaneKind::from(session.kind))
+    }
+
+    fn session(&self, session_id: SessionId) -> Option<&WorkspaceSession> {
         self.sessions
             .iter()
             .find(|session| session.id == session_id)
-            .map(|session| PaneKind::from(session.kind))
+    }
+
+    fn allocate_session_display_number(&mut self, kind: SessionKind) -> usize {
+        let next = match kind {
+            SessionKind::Terminal => &mut self.next_terminal_display_number,
+            SessionKind::Agent => &mut self.next_agent_display_number,
+        };
+        let display_number = *next;
+        *next += 1;
+        display_number
     }
 }
 
 impl WorkspaceSession {
-    fn new(id: SessionId, kind: SessionKind, title: impl Into<String>) -> Self {
+    fn new(id: SessionId, kind: SessionKind, display_number: usize) -> Self {
         Self {
             id,
             kind,
-            title: title.into(),
+            display_number,
+            title: session_title(kind, display_number),
         }
     }
 }
@@ -571,14 +604,21 @@ impl Pane {
     }
 
     pub fn title(&self) -> String {
-        session_title(self.kind).to_string()
+        pane_kind_title(self.kind).to_string()
     }
 }
 
-fn session_title(kind: PaneKind) -> &'static str {
+fn pane_kind_title(kind: PaneKind) -> &'static str {
     match kind {
         PaneKind::Terminal => "Terminal",
         PaneKind::Agent => "AI Agent",
+    }
+}
+
+fn session_title(kind: SessionKind, display_number: usize) -> String {
+    match kind {
+        SessionKind::Terminal => format!("Terminal #{display_number}"),
+        SessionKind::Agent => format!("Agent #{display_number}"),
     }
 }
 
@@ -659,9 +699,52 @@ mod tests {
             vec![SessionSummary {
                 id: session_id,
                 kind: SessionKind::Terminal,
-                title: "Terminal".to_string(),
+                display_number: 2,
+                title: "Terminal #2".to_string(),
                 attached: false,
             }]
+        );
+    }
+
+    #[test]
+    fn session_identity_survives_detach_and_reattach() {
+        let mut workspace = Workspace::mvp();
+        let session_id = SessionId::new();
+        workspace.attach_session_to_split(session_id);
+
+        assert_eq!(
+            workspace.visible_pane_title(1),
+            Some("Terminal #2".to_string())
+        );
+        workspace.close_visible_pane(1);
+        assert_eq!(
+            workspace.detached_session_summaries()[0].title,
+            "Terminal #2"
+        );
+
+        workspace
+            .attach_existing_session_to_split(session_id)
+            .expect("reattached pane");
+
+        assert_eq!(
+            workspace.visible_pane_title(1),
+            Some("Terminal #2".to_string())
+        );
+    }
+
+    #[test]
+    fn session_display_numbers_are_not_reused_after_terminate() {
+        let mut workspace = Workspace::mvp();
+        let second_session = SessionId::new();
+        workspace.attach_session_to_split(second_session);
+        workspace.terminate_session(second_session);
+
+        let third_session = SessionId::new();
+        workspace.attach_session_to_split(third_session);
+
+        assert_eq!(
+            workspace.visible_pane_title(1),
+            Some("Terminal #3".to_string())
         );
     }
 
@@ -693,7 +776,7 @@ mod tests {
             vec![
                 TabSummary {
                     index: 0,
-                    title: "Terminal".to_string(),
+                    title: "Terminal #1".to_string(),
                     active: false,
                     pane_count: 1,
                 },
