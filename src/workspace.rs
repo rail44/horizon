@@ -36,6 +36,14 @@ pub struct TabSummary {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionSummary {
+    pub id: SessionId,
+    pub kind: SessionKind,
+    pub title: String,
+    pub attached: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkspaceSession {
     pub id: SessionId,
     pub kind: SessionKind,
@@ -160,6 +168,11 @@ impl Workspace {
 
     pub fn attach_session_to_split(&mut self, session_id: SessionId) -> PaneId {
         self.split_active(PaneKind::Terminal, Some(session_id))
+    }
+
+    pub fn attach_existing_session_to_split(&mut self, session_id: SessionId) -> Option<PaneId> {
+        let kind = self.session_pane_kind(session_id)?;
+        Some(self.split_active(kind, Some(session_id)))
     }
 
     pub fn activate_tab_index(&mut self, index: usize) -> bool {
@@ -362,6 +375,19 @@ impl Workspace {
             .count()
     }
 
+    pub fn detached_session_summaries(&self) -> Vec<SessionSummary> {
+        self.sessions
+            .iter()
+            .filter(|session| !self.session_is_referenced(session.id))
+            .map(|session| SessionSummary {
+                id: session.id,
+                kind: session.kind,
+                title: session.title.clone(),
+                attached: false,
+            })
+            .collect()
+    }
+
     pub fn tab_summaries(&self) -> Vec<TabSummary> {
         self.tabs
             .iter()
@@ -449,6 +475,13 @@ impl Workspace {
             session_title(kind),
         ));
     }
+
+    fn session_pane_kind(&self, session_id: SessionId) -> Option<PaneKind> {
+        self.sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .map(|session| PaneKind::from(session.kind))
+    }
 }
 
 impl WorkspaceSession {
@@ -466,6 +499,15 @@ impl From<PaneKind> for SessionKind {
         match kind {
             PaneKind::Terminal => Self::Terminal,
             PaneKind::Agent => Self::Agent,
+        }
+    }
+}
+
+impl From<SessionKind> for PaneKind {
+    fn from(kind: SessionKind) -> Self {
+        match kind {
+            SessionKind::Terminal => Self::Terminal,
+            SessionKind::Agent => Self::Agent,
         }
     }
 }
@@ -603,6 +645,41 @@ mod tests {
         assert!(!workspace.session_is_referenced(session_id));
         assert_eq!(workspace.session_count(), 2);
         assert_eq!(workspace.detached_session_count(), 1);
+    }
+
+    #[test]
+    fn detached_session_summaries_list_unattached_sessions() {
+        let mut workspace = Workspace::mvp();
+        let session_id = SessionId::new();
+        workspace.attach_session_to_split(session_id);
+        workspace.close_visible_pane(1);
+
+        assert_eq!(
+            workspace.detached_session_summaries(),
+            vec![SessionSummary {
+                id: session_id,
+                kind: SessionKind::Terminal,
+                title: "Terminal".to_string(),
+                attached: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn attach_existing_session_to_split_reuses_session_kind() {
+        let mut workspace = Workspace::mvp();
+        let session_id = SessionId::new();
+        workspace.open_tab(PaneKind::Agent, Some(session_id));
+        workspace.close_tab_index(1);
+
+        let pane_id = workspace
+            .attach_existing_session_to_split(session_id)
+            .expect("attached pane");
+
+        assert_eq!(workspace.visible_pane_id(1), Some(pane_id));
+        assert_eq!(workspace.visible_panes()[1].kind, PaneKind::Agent);
+        assert!(workspace.session_is_referenced(session_id));
+        assert_eq!(workspace.detached_session_count(), 0);
     }
 
     #[test]

@@ -37,11 +37,6 @@ pub struct CommandEntry {
     pub enabled: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PaletteItem {
-    pub entry: CommandEntry,
-}
-
 pub fn core_commands() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
@@ -111,7 +106,7 @@ pub fn command_entries(state: CommandState) -> Vec<CommandEntry> {
         .collect()
 }
 
-pub fn filter_command_entries(entries: Vec<CommandEntry>, query: &str) -> Vec<PaletteItem> {
+pub fn filter_command_entries(entries: Vec<CommandEntry>, query: &str) -> Vec<CommandEntry> {
     let query = normalize_query(query);
     entries
         .into_iter()
@@ -125,7 +120,6 @@ pub fn filter_command_entries(entries: Vec<CommandEntry>, query: &str) -> Vec<Pa
                     .to_ascii_lowercase()
                     .contains(&query)
         })
-        .map(|entry| PaletteItem { entry })
         .collect()
 }
 
@@ -234,11 +228,11 @@ mod tests {
 
         let terminal = filter_command_entries(entries.clone(), "terminal");
         assert_eq!(terminal.len(), 1);
-        assert_eq!(terminal[0].entry.spec.id, CommandId::NewTerminal);
+        assert_eq!(terminal[0].spec.id, CommandId::NewTerminal);
 
         let current = filter_command_entries(entries, "current tab");
         assert_eq!(current.len(), 1);
-        assert_eq!(current[0].entry.spec.id, CommandId::SplitActivePane);
+        assert_eq!(current[0].spec.id, CommandId::SplitActivePane);
     }
 
     #[test]

@@ -10,18 +10,34 @@ use floem::{
     Application, Clipboard,
 };
 use horizon::commands::{
-    clamp_palette_selection, command_enabled, command_entries, filter_command_entries, CommandId,
-    CommandState, PaletteItem,
+    clamp_palette_selection, command_enabled, command_entries, filter_command_entries,
+    CommandEntry, CommandId, CommandState,
 };
 use horizon::session::SessionRegistry;
 use horizon::terminal::{
     TerminalCommand, TerminalFrame, TerminalSession, TerminalSize, TerminalUpdate,
 };
-use horizon::workspace::{PaneKind, SessionId, Workspace};
+use horizon::workspace::{PaneKind, SessionId, SessionKind, Workspace};
 use std::path::PathBuf;
 use termwiz::input::{KeyCode as TermKeyCode, Modifiers as TermModifiers};
 
 mod terminal_view;
+
+#[derive(Clone, Debug)]
+enum PaletteItem {
+    Command(CommandEntry),
+    DetachedSession {
+        session_id: SessionId,
+        kind: SessionKind,
+        title: String,
+    },
+    Tab {
+        index: usize,
+        title: String,
+        pane_count: usize,
+        active: bool,
+    },
+}
 
 fn main() {
     Application::new()
@@ -372,22 +388,12 @@ fn palette_row(
     let selected = move || palette_selection.get() == index;
 
     v_stack((
-        label(move || {
-            item()
-                .map(|item| item.entry.spec.title.to_string())
-                .unwrap_or_default()
-        })
-        .style(|s| {
+        label(move || item().map(|item| item.title()).unwrap_or_default()).style(|s| {
             s.width_full()
                 .font_size(13)
                 .color(floem::peniko::Color::rgb8(233, 236, 242))
         }),
-        label(move || {
-            item()
-                .map(|item| item.entry.spec.description.to_string())
-                .unwrap_or_default()
-        })
-        .style(|s| {
+        label(move || item().map(|item| item.description()).unwrap_or_default()).style(|s| {
             s.width_full()
                 .font_size(11)
                 .color(floem::peniko::Color::rgb8(178, 185, 198))
@@ -415,7 +421,7 @@ fn palette_row(
         } else {
             floem::peniko::Color::rgb8(22, 24, 29)
         };
-        let text_color = if item.entry.enabled {
+        let text_color = if item.enabled() {
             floem::peniko::Color::rgb8(233, 236, 242)
         } else {
             floem::peniko::Color::rgb8(115, 122, 136)
@@ -536,8 +542,112 @@ fn command_state(workspace: &Workspace) -> CommandState {
     }
 }
 
+impl PaletteItem {
+    fn title(&self) -> String {
+        match self {
+            Self::Command(entry) => entry.spec.title.to_string(),
+            Self::DetachedSession { title, .. } => format!("Attach Detached {title}"),
+            Self::Tab { index, title, .. } => format!("Tab {}: {title}", index + 1),
+        }
+    }
+
+    fn description(&self) -> String {
+        match self {
+            Self::Command(entry) => entry.spec.description.to_string(),
+            Self::DetachedSession { kind, .. } => {
+                format!(
+                    "Attach detached {} session to the active tab as a split.",
+                    session_kind_label(*kind)
+                )
+            }
+            Self::Tab {
+                pane_count, active, ..
+            } => {
+                if *active {
+                    format!("Current tab with {pane_count} pane(s).")
+                } else {
+                    format!("Switch to tab with {pane_count} pane(s).")
+                }
+            }
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        match self {
+            Self::Command(entry) => entry.enabled,
+            Self::DetachedSession { .. } | Self::Tab { .. } => true,
+        }
+    }
+}
+
 fn palette_items(workspace: &Workspace, query: &str) -> Vec<PaletteItem> {
-    filter_command_entries(command_entries(command_state(workspace)), query)
+    let mut items: Vec<_> =
+        filter_command_entries(command_entries(command_state(workspace)), query)
+            .into_iter()
+            .map(PaletteItem::Command)
+            .collect();
+    let query = normalize_palette_query(query);
+
+    items.extend(
+        workspace
+            .detached_session_summaries()
+            .into_iter()
+            .filter(|session| {
+                palette_matches(
+                    &query,
+                    &[
+                        "detached",
+                        "session",
+                        session.title.as_str(),
+                        session_kind_label(session.kind),
+                    ],
+                )
+            })
+            .map(|session| PaletteItem::DetachedSession {
+                session_id: session.id,
+                kind: session.kind,
+                title: session.title,
+            }),
+    );
+
+    items.extend(
+        workspace
+            .tab_summaries()
+            .into_iter()
+            .filter(|tab| {
+                let index_label = format!("tab {}", tab.index + 1);
+                palette_matches(
+                    &query,
+                    &["tab", index_label.as_str(), tab.title.as_str(), "switch"],
+                )
+            })
+            .map(|tab| PaletteItem::Tab {
+                index: tab.index,
+                title: tab.title,
+                pane_count: tab.pane_count,
+                active: tab.active,
+            }),
+    );
+
+    items
+}
+
+fn palette_matches(query: &str, fields: &[&str]) -> bool {
+    query.is_empty()
+        || fields
+            .iter()
+            .any(|field| normalize_palette_query(field).contains(query))
+}
+
+fn normalize_palette_query(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+fn session_kind_label(kind: SessionKind) -> &'static str {
+    match kind {
+        SessionKind::Terminal => "terminal",
+        SessionKind::Agent => "agent",
+    }
 }
 
 fn open_palette(
@@ -579,18 +689,30 @@ fn execute_palette_selection(
         return;
     };
 
-    if !item.entry.enabled {
+    if !item.enabled() {
         return;
     }
 
     close_palette(palette_open, palette_query);
-    execute_command(
-        item.entry.spec.id,
-        workspace,
-        sessions,
-        terminal_dump,
-        clipboard_dump,
-    );
+    match item {
+        PaletteItem::Command(entry) => execute_command(
+            entry.spec.id,
+            workspace,
+            sessions,
+            terminal_dump,
+            clipboard_dump,
+        ),
+        PaletteItem::DetachedSession { session_id, .. } => {
+            workspace.update(|ws| {
+                ws.attach_existing_session_to_split(session_id);
+            });
+        }
+        PaletteItem::Tab { index, .. } => {
+            workspace.update(|ws| {
+                ws.activate_tab_index(index);
+            });
+        }
+    }
 }
 
 fn update_palette_query(
@@ -1412,6 +1534,43 @@ mod tests {
                 has_active_session: true,
             }
         );
+    }
+
+    #[test]
+    fn palette_items_include_detached_sessions() {
+        let mut workspace = Workspace::mvp();
+        let session_id = SessionId::new();
+        workspace.split_active(PaneKind::Terminal, Some(session_id));
+        workspace.close_visible_pane(1);
+
+        let items = palette_items(&workspace, "detached");
+
+        assert!(items.iter().any(|item| matches!(
+            item,
+            PaletteItem::DetachedSession {
+                session_id: id,
+                kind: SessionKind::Terminal,
+                ..
+            } if *id == session_id
+        )));
+    }
+
+    #[test]
+    fn palette_items_include_tabs_by_index() {
+        let mut workspace = Workspace::mvp();
+        workspace.open_tab(PaneKind::Agent, None);
+
+        let items = palette_items(&workspace, "tab 1");
+
+        assert!(items.iter().any(|item| matches!(
+            item,
+            PaletteItem::Tab {
+                index: 0,
+                title,
+                active: false,
+                ..
+            } if title == "Terminal"
+        )));
     }
 
     #[test]
