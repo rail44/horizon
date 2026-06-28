@@ -203,6 +203,11 @@ fn app_view() -> impl IntoView {
     .on_event(EventListener::KeyDown, move |event| {
         if let Event::KeyDown(key_event) = event {
             if palette_open.get_untracked() {
+                if is_palette_open_key(key_event) {
+                    switch_control_mode(control_mode);
+                    return EventPropagation::Stop;
+                }
+
                 if handle_control_key(
                     key_event,
                     workspace,
@@ -399,6 +404,11 @@ fn command_palette(
     })
     .on_event(EventListener::KeyDown, move |event| {
         if let Event::KeyDown(key_event) = event {
+            if is_palette_open_key(key_event) {
+                switch_control_mode(control_mode);
+                return EventPropagation::Stop;
+            }
+
             if handle_control_key(
                 key_event,
                 workspace,
@@ -637,6 +647,11 @@ fn workspace_overview(
     })
     .on_event(EventListener::KeyDown, move |event| {
         if let Event::KeyDown(key_event) = event {
+            if is_palette_open_key(key_event) {
+                switch_control_mode(control_mode);
+                return EventPropagation::Stop;
+            }
+
             if handle_workspace_control_key(
                 key_event,
                 workspace,
@@ -857,8 +872,8 @@ fn handle_control_key(
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) -> bool {
-    if let Some(reverse) = control_mode_switch_direction(key_event) {
-        switch_control_mode(control_mode, reverse);
+    if is_control_mode_switch_key(key_event) {
+        switch_control_mode(control_mode);
         return true;
     }
 
@@ -890,8 +905,8 @@ fn handle_workspace_control_key(
     control_mode: RwSignal<ControlMode>,
     overview_selection: RwSignal<usize>,
 ) -> bool {
-    if let Some(reverse) = control_mode_switch_direction(key_event) {
-        switch_control_mode(control_mode, reverse);
+    if is_control_mode_switch_key(key_event) {
+        switch_control_mode(control_mode);
         return true;
     }
 
@@ -916,15 +931,11 @@ fn handle_workspace_control_key(
     }
 }
 
-fn control_mode_switch_direction(event: &KeyEvent) -> Option<bool> {
-    match event.key.logical_key {
-        Key::Named(NamedKey::ArrowLeft) => Some(true),
-        Key::Named(NamedKey::ArrowRight) => Some(false),
-        _ => None,
-    }
+fn is_control_mode_switch_key(event: &KeyEvent) -> bool {
+    matches!(event.key.logical_key, Key::Named(NamedKey::Tab))
 }
 
-fn switch_control_mode(control_mode: RwSignal<ControlMode>, _reverse: bool) {
+fn switch_control_mode(control_mode: RwSignal<ControlMode>) {
     control_mode.update(|mode| {
         *mode = match *mode {
             ControlMode::Commands => ControlMode::Workspace,
@@ -1748,6 +1759,11 @@ fn pane_view(
     .on_event(EventListener::KeyDown, move |event| {
         if let Event::KeyDown(key_event) = event {
             if palette_open.get_untracked() {
+                if is_palette_open_key(key_event) {
+                    switch_control_mode(control_mode);
+                    return EventPropagation::Stop;
+                }
+
                 if handle_control_key(
                     key_event,
                     workspace,
