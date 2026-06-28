@@ -259,7 +259,7 @@ fn command_palette(
             label(move || {
                 let query = palette_query.get();
                 if query.is_empty() {
-                    "> Type a command".to_string()
+                    "> Search commands, sessions, tabs".to_string()
                 } else {
                     format!("> {query}")
                 }
@@ -401,16 +401,39 @@ fn palette_row(
     };
     let selected = move || palette_selection.get() == item_index();
 
-    v_stack((
-        label(move || item().map(|item| item.title()).unwrap_or_default()).style(|s| {
-            s.width_full()
-                .font_size(13)
-                .color(floem::peniko::Color::rgb8(233, 236, 242))
+    h_stack((
+        label(move || item().map(|item| item.kind_label()).unwrap_or_default()).style(move |s| {
+            let Some(item) = item() else {
+                return s.hide();
+            };
+
+            s.width(72)
+                .height(22)
+                .items_center()
+                .justify_center()
+                .font_size(10)
+                .border(1.0)
+                .border_color(item.kind_color())
+                .color(item.kind_color())
         }),
-        label(move || item().map(|item| item.description()).unwrap_or_default()).style(|s| {
-            s.width_full()
-                .font_size(11)
-                .color(floem::peniko::Color::rgb8(178, 185, 198))
+        v_stack((
+            label(move || item().map(|item| item.title()).unwrap_or_default()).style(|s| {
+                s.width_full()
+                    .font_size(13)
+                    .color(floem::peniko::Color::rgb8(233, 236, 242))
+            }),
+            label(move || item().map(|item| item.description()).unwrap_or_default()).style(|s| {
+                s.width_full()
+                    .font_size(11)
+                    .color(floem::peniko::Color::rgb8(178, 185, 198))
+            }),
+        ))
+        .style(|s| {
+            s.flex()
+                .flex_col()
+                .min_width(0.0)
+                .flex_basis(0.0)
+                .flex_grow(1.0)
         }),
     ))
     .on_click_stop(move |_| {
@@ -443,6 +466,8 @@ fn palette_row(
 
         s.width_full()
             .height(48)
+            .items_center()
+            .gap(10)
             .padding_horiz(12)
             .padding_vert(6)
             .background(background)
@@ -557,6 +582,22 @@ fn command_state(workspace: &Workspace) -> CommandState {
 }
 
 impl PaletteItem {
+    fn kind_label(&self) -> String {
+        match self {
+            Self::Command(_) => "COMMAND".to_string(),
+            Self::DetachedSession { .. } => "SESSION".to_string(),
+            Self::Tab { .. } => "TAB".to_string(),
+        }
+    }
+
+    fn kind_color(&self) -> floem::peniko::Color {
+        match self {
+            Self::Command(_) => floem::peniko::Color::rgb8(132, 220, 198),
+            Self::DetachedSession { .. } => floem::peniko::Color::rgb8(126, 170, 255),
+            Self::Tab { .. } => floem::peniko::Color::rgb8(224, 184, 104),
+        }
+    }
+
     fn title(&self) -> String {
         match self {
             Self::Command(entry) => entry.spec.title.to_string(),
