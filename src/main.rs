@@ -49,6 +49,7 @@ fn app_view() -> impl IntoView {
     let terminal_dump = std::env::var_os("HORIZON_TERMINAL_DUMP").map(PathBuf::from);
     let clipboard_dump = std::env::var_os("HORIZON_CLIPBOARD_DUMP").map(PathBuf::from);
     let status_dump = std::env::var_os("HORIZON_STATUS_DUMP").map(PathBuf::from);
+    let show_toolbar = std::env::var_os("HORIZON_SHOW_TOOLBAR").is_some();
 
     for session_id in workspace.with(|ws| ws.terminal_session_ids()) {
         spawn_terminal_session(
@@ -65,6 +66,7 @@ fn app_view() -> impl IntoView {
             toolbar(
                 workspace,
                 sessions,
+                show_toolbar,
                 terminal_dump.clone(),
                 clipboard_dump.clone(),
             ),
@@ -168,7 +170,7 @@ fn app_view() -> impl IntoView {
         }
         EventPropagation::Continue
     })
-    .style(|s| {
+    .style(move |s| {
         s.size_full()
             .background(floem::peniko::Color::rgb8(22, 24, 29))
     })
@@ -231,6 +233,7 @@ fn spawn_terminal_session(
 fn toolbar(
     workspace: RwSignal<Workspace>,
     sessions: RwSignal<SessionRegistry>,
+    show_toolbar: bool,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) -> impl IntoView {
@@ -281,7 +284,11 @@ fn toolbar(
             );
         }),
     ))
-    .style(|s| {
+    .style(move |s| {
+        if !show_toolbar {
+            return s.hide();
+        }
+
         s.width_full()
             .height(44)
             .items_center()
@@ -1407,7 +1414,7 @@ fn status_bar(workspace: RwSignal<Workspace>, status_dump: Option<PathBuf>) -> i
     label(move || {
         workspace.with(|ws| {
             let status = format!(
-                "{} tab(s), {} pane(s), active: {}, active pane: {}",
+                "{} tab(s), {} pane(s), active: {}, active pane: {} | Ctrl+Shift+P: commands",
                 ws.tab_count(),
                 ws.visible_panes().len(),
                 ws.active_title(),
