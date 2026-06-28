@@ -19,8 +19,8 @@ cargo test
 cargo run
 ```
 
-After `cargo run`, use `Ctrl+Shift+P` to open the command palette. Useful
-manual smoke checks:
+After `cargo run`, use `Ctrl+Shift+P` to open the control surface. Commands mode
+supports these manual smoke checks:
 
 - `new terminal`: opens another terminal tab.
 - `new agent`: opens an agent tab.
@@ -32,9 +32,9 @@ manual smoke checks:
 - `tab 1`, `tab 2`, ...: switches to the matching tab.
 - `terminate active session`: terminates the active session.
 
-Use `Ctrl+Shift+O` to open the workspace overview. It lists open tabs and
-detached sessions; Enter switches to the selected tab or attaches the selected
-detached session as a split.
+Use `Left`/`Right` while the control surface is open to switch between Commands
+and Workspace. The Workspace mode lists open tabs and detached sessions; Enter
+switches to the selected tab or attaches the selected detached session as a split.
 
 For automated visual inspection of the terminal pane:
 
