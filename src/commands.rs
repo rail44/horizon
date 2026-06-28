@@ -6,6 +6,7 @@ pub enum CommandId {
     FocusNextPane,
     CloseActivePane,
     CloseActiveTab,
+    TerminateActiveSession,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -27,6 +28,7 @@ pub struct CommandSpec {
 pub struct CommandState {
     pub tab_count: usize,
     pub visible_pane_count: usize,
+    pub has_active_session: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -78,6 +80,12 @@ pub fn core_commands() -> Vec<CommandSpec> {
             category: CommandCategory::Workspace,
             description: "Close the active tab when another tab remains.",
         },
+        CommandSpec {
+            id: CommandId::TerminateActiveSession,
+            title: "Terminate Active Session",
+            category: CommandCategory::Workspace,
+            description: "Terminate the active session and close its panes.",
+        },
     ]
 }
 
@@ -89,6 +97,7 @@ pub fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
         | CommandId::FocusNextPane => true,
         CommandId::CloseActivePane => state.visible_pane_count > 1,
         CommandId::CloseActiveTab => state.tab_count > 1,
+        CommandId::TerminateActiveSession => state.has_active_session,
     }
 }
 
@@ -140,11 +149,11 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 6);
+        assert_eq!(commands.len(), 7);
         assert_eq!(commands[0].id, CommandId::NewTerminal);
         assert_eq!(commands[0].title, "New Terminal");
-        assert_eq!(commands[5].id, CommandId::CloseActiveTab);
-        assert_eq!(commands[5].title, "Close Active Tab");
+        assert_eq!(commands[6].id, CommandId::TerminateActiveSession);
+        assert_eq!(commands[6].title, "Terminate Active Session");
     }
 
     #[test]
@@ -160,6 +169,7 @@ mod tests {
         let entries = command_entries(CommandState {
             tab_count: 1,
             visible_pane_count: 1,
+            has_active_session: true,
         });
 
         let close_pane = entries
@@ -181,6 +191,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 2,
+                has_active_session: true,
             }
         ));
         assert!(command_enabled(
@@ -188,6 +199,27 @@ mod tests {
             CommandState {
                 tab_count: 2,
                 visible_pane_count: 1,
+                has_active_session: true,
+            }
+        ));
+    }
+
+    #[test]
+    fn terminate_active_session_requires_active_session() {
+        assert!(!command_enabled(
+            CommandId::TerminateActiveSession,
+            CommandState {
+                tab_count: 0,
+                visible_pane_count: 0,
+                has_active_session: false,
+            }
+        ));
+        assert!(command_enabled(
+            CommandId::TerminateActiveSession,
+            CommandState {
+                tab_count: 1,
+                visible_pane_count: 1,
+                has_active_session: true,
             }
         ));
     }
@@ -197,6 +229,7 @@ mod tests {
         let entries = command_entries(CommandState {
             tab_count: 2,
             visible_pane_count: 2,
+            has_active_session: true,
         });
 
         let terminal = filter_command_entries(entries.clone(), "terminal");

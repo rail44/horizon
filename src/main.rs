@@ -465,6 +465,9 @@ fn execute_command(
             let index = workspace.with_untracked(|ws| ws.active_tab_index());
             close_tab(workspace, sessions, index);
         }
+        CommandId::TerminateActiveSession => {
+            terminate_active_session(workspace, sessions);
+        }
     }
 }
 
@@ -529,6 +532,7 @@ fn command_state(workspace: &Workspace) -> CommandState {
     CommandState {
         tab_count: workspace.tab_count(),
         visible_pane_count: workspace.visible_panes().len(),
+        has_active_session: workspace.active_session_id().is_some(),
     }
 }
 
@@ -682,6 +686,19 @@ fn split_active_pane(
     }
 }
 
+fn terminate_active_session(workspace: RwSignal<Workspace>, sessions: RwSignal<SessionRegistry>) {
+    let Some(session_id) = workspace.with_untracked(|ws| ws.active_session_id()) else {
+        return;
+    };
+
+    workspace.update(|ws| {
+        ws.terminate_session(session_id);
+    });
+    sessions.update(|registry| {
+        registry.shutdown_terminal(session_id);
+    });
+}
+
 fn tab_strip(workspace: RwSignal<Workspace>, sessions: RwSignal<SessionRegistry>) -> impl IntoView {
     h_stack((
         tab_button(workspace, sessions, 0),
@@ -795,40 +812,17 @@ fn pane_terminal_sender(
 
 fn close_visible_pane(
     workspace: RwSignal<Workspace>,
-    sessions: RwSignal<SessionRegistry>,
+    _sessions: RwSignal<SessionRegistry>,
     index: usize,
 ) {
-    let mut closed_session = None;
-    let mut still_referenced = false;
     workspace.update(|ws| {
-        closed_session = ws.close_visible_pane(index);
-        if let Some(session_id) = closed_session {
-            still_referenced = ws.session_is_referenced(session_id);
-        }
+        ws.close_visible_pane(index);
     });
-
-    if let Some(session_id) = closed_session {
-        sessions.update(|registry| {
-            registry.shutdown_terminal_if_unreferenced(session_id, still_referenced);
-        });
-    }
 }
 
-fn close_tab(workspace: RwSignal<Workspace>, sessions: RwSignal<SessionRegistry>, index: usize) {
-    let mut closed_sessions = Vec::new();
-    let mut session_references = Vec::new();
+fn close_tab(workspace: RwSignal<Workspace>, _sessions: RwSignal<SessionRegistry>, index: usize) {
     workspace.update(|ws| {
-        closed_sessions = ws.close_tab_index(index);
-        session_references = closed_sessions
-            .iter()
-            .map(|session_id| (*session_id, ws.session_is_referenced(*session_id)))
-            .collect();
-    });
-
-    sessions.update(|registry| {
-        for (session_id, is_referenced) in session_references {
-            registry.shutdown_terminal_if_unreferenced(session_id, is_referenced);
-        }
+        ws.close_tab_index(index);
     });
 }
 
@@ -1338,9 +1332,10 @@ fn status_bar(workspace: RwSignal<Workspace>, status_dump: Option<PathBuf>) -> i
     label(move || {
         workspace.with(|ws| {
             let status = format!(
-                "{} tab(s), {} pane(s), active: {}, active pane: {} | Ctrl+Shift+P: commands",
+                "{} tab(s), {} pane(s), {} detached session(s), active: {}, active pane: {} | Ctrl+Shift+P: commands",
                 ws.tab_count(),
                 ws.visible_panes().len(),
+                ws.detached_session_count(),
                 ws.active_title(),
                 ws.active_visible_index() + 1
             );
@@ -1404,6 +1399,7 @@ mod tests {
             horizon::commands::CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_active_session: true,
             }
         );
 
@@ -1413,6 +1409,7 @@ mod tests {
             horizon::commands::CommandState {
                 tab_count: 1,
                 visible_pane_count: 2,
+                has_active_session: true,
             }
         );
     }

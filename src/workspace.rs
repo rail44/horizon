@@ -16,6 +16,7 @@ pub struct TabId(Uuid);
 pub struct Workspace {
     tabs: Vec<Tab>,
     panes: Vec<Pane>,
+    sessions: Vec<WorkspaceSession>,
     active_tab: TabId,
 }
 
@@ -32,6 +33,13 @@ pub struct TabSummary {
     pub title: String,
     pub active: bool,
     pub pane_count: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkspaceSession {
+    pub id: SessionId,
+    pub kind: SessionKind,
+    pub title: String,
 }
 
 #[derive(Clone, Debug)]
@@ -62,6 +70,12 @@ pub struct Pane {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PaneKind {
+    Terminal,
+    Agent,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SessionKind {
     Terminal,
     Agent,
 }
@@ -99,10 +113,16 @@ impl Workspace {
             active_tab: tab.id,
             tabs: vec![tab],
             panes: vec![terminal],
+            sessions: vec![WorkspaceSession::new(
+                session_id,
+                SessionKind::Terminal,
+                "Terminal",
+            )],
         }
     }
 
     pub fn open_tab(&mut self, kind: PaneKind, session_id: Option<SessionId>) -> PaneId {
+        self.ensure_session(kind, session_id);
         let pane = Pane::new(kind, session_id);
         let pane_id = pane.id;
         let tab = Tab {
@@ -117,6 +137,7 @@ impl Workspace {
     }
 
     pub fn split_active(&mut self, kind: PaneKind, session_id: Option<SessionId>) -> PaneId {
+        self.ensure_session(kind, session_id);
         let pane = Pane::new(kind, session_id);
         let pane_id = pane.id;
         if let Some(tab) = self.active_tab_mut() {
@@ -181,6 +202,30 @@ impl Workspace {
         }
 
         session_ids
+    }
+
+    pub fn terminate_session(&mut self, session_id: SessionId) -> bool {
+        let Some(_) = self
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+        else {
+            return false;
+        };
+
+        let pane_ids: Vec<_> = self
+            .panes
+            .iter()
+            .filter(|pane| pane.session_id == Some(session_id))
+            .map(|pane| pane.id)
+            .collect();
+
+        self.sessions.retain(|session| session.id != session_id);
+        for pane_id in pane_ids {
+            self.detach_pane(pane_id);
+        }
+
+        true
     }
 
     pub fn activate_visible_pane(&mut self, index: usize) -> bool {
@@ -282,6 +327,14 @@ impl Workspace {
             .and_then(|pane| pane.session_id)
     }
 
+    pub fn active_session_id(&self) -> Option<SessionId> {
+        let active = self.active_tab()?.active;
+        self.panes
+            .iter()
+            .find(|pane| pane.id == active)
+            .and_then(|pane| pane.session_id)
+    }
+
     pub fn visible_terminal_session_id(&self, index: usize) -> Option<SessionId> {
         let pane_id = self.visible_pane_id(index)?;
         self.panes
@@ -291,11 +344,22 @@ impl Workspace {
     }
 
     pub fn terminal_session_ids(&self) -> Vec<SessionId> {
-        self.panes
+        self.sessions
             .iter()
-            .filter(|pane| pane.kind == PaneKind::Terminal)
-            .filter_map(|pane| pane.session_id)
+            .filter(|session| session.kind == SessionKind::Terminal)
+            .map(|session| session.id)
             .collect()
+    }
+
+    pub fn session_count(&self) -> usize {
+        self.sessions.len()
+    }
+
+    pub fn detached_session_count(&self) -> usize {
+        self.sessions
+            .iter()
+            .filter(|session| !self.session_is_referenced(session.id))
+            .count()
     }
 
     pub fn tab_summaries(&self) -> Vec<TabSummary> {
@@ -370,6 +434,40 @@ impl Workspace {
             .map(Pane::title)
             .unwrap_or_else(|| "Empty".to_string())
     }
+
+    fn ensure_session(&mut self, kind: PaneKind, session_id: Option<SessionId>) {
+        let Some(session_id) = session_id else {
+            return;
+        };
+        if self.sessions.iter().any(|session| session.id == session_id) {
+            return;
+        }
+
+        self.sessions.push(WorkspaceSession::new(
+            session_id,
+            SessionKind::from(kind),
+            session_title(kind),
+        ));
+    }
+}
+
+impl WorkspaceSession {
+    fn new(id: SessionId, kind: SessionKind, title: impl Into<String>) -> Self {
+        Self {
+            id,
+            kind,
+            title: title.into(),
+        }
+    }
+}
+
+impl From<PaneKind> for SessionKind {
+    fn from(kind: PaneKind) -> Self {
+        match kind {
+            PaneKind::Terminal => Self::Terminal,
+            PaneKind::Agent => Self::Agent,
+        }
+    }
 }
 
 impl LayoutNode {
@@ -431,10 +529,14 @@ impl Pane {
     }
 
     pub fn title(&self) -> String {
-        match self.kind {
-            PaneKind::Terminal => "Terminal".to_string(),
-            PaneKind::Agent => "AI Agent".to_string(),
-        }
+        session_title(self.kind).to_string()
+    }
+}
+
+fn session_title(kind: PaneKind) -> &'static str {
+    match kind {
+        PaneKind::Terminal => "Terminal",
+        PaneKind::Agent => "AI Agent",
     }
 }
 
@@ -448,6 +550,7 @@ mod tests {
 
         assert_eq!(workspace.terminal_session_ids().len(), 1);
         assert!(workspace.active_terminal_session_id().is_some());
+        assert_eq!(workspace.session_count(), 1);
     }
 
     #[test]
@@ -469,6 +572,7 @@ mod tests {
 
         assert_eq!(workspace.detach_pane(pane_id), Some(session_id));
         assert!(!workspace.session_is_referenced(session_id));
+        assert_eq!(workspace.detached_session_count(), 1);
     }
 
     #[test]
@@ -497,6 +601,8 @@ mod tests {
         assert_eq!(workspace.close_visible_pane(1), Some(session_id));
         assert_eq!(workspace.visible_panes().len(), 1);
         assert!(!workspace.session_is_referenced(session_id));
+        assert_eq!(workspace.session_count(), 2);
+        assert_eq!(workspace.detached_session_count(), 1);
     }
 
     #[test]
@@ -555,6 +661,8 @@ mod tests {
         assert_eq!(workspace.tab_count(), 1);
         assert!(workspace.session_is_referenced(first_session));
         assert!(!workspace.session_is_referenced(second_session));
+        assert_eq!(workspace.session_count(), 2);
+        assert_eq!(workspace.detached_session_count(), 1);
         assert_eq!(workspace.active_terminal_session_id(), Some(first_session));
     }
 
@@ -603,5 +711,28 @@ mod tests {
         assert_eq!(workspace.active_tab_index(), 1);
         assert!(workspace.activate_tab_index(0));
         assert_eq!(workspace.active_tab_index(), 0);
+    }
+
+    #[test]
+    fn terminate_session_removes_session_and_attachments() {
+        let mut workspace = Workspace::mvp();
+        let first_session = workspace.active_terminal_session_id().expect("session");
+        let second_session = SessionId::new();
+        workspace.attach_session_to_split(second_session);
+
+        assert!(workspace.terminate_session(second_session));
+        assert_eq!(workspace.session_count(), 1);
+        assert!(!workspace.session_is_referenced(second_session));
+        assert!(workspace.session_is_referenced(first_session));
+        assert_eq!(workspace.visible_panes().len(), 1);
+    }
+
+    #[test]
+    fn terminate_unknown_session_is_noop() {
+        let mut workspace = Workspace::mvp();
+
+        assert!(!workspace.terminate_session(SessionId::new()));
+        assert_eq!(workspace.session_count(), 1);
+        assert_eq!(workspace.visible_panes().len(), 1);
     }
 }
