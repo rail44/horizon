@@ -49,7 +49,6 @@ fn app_view() -> impl IntoView {
     let terminal_dump = std::env::var_os("HORIZON_TERMINAL_DUMP").map(PathBuf::from);
     let clipboard_dump = std::env::var_os("HORIZON_CLIPBOARD_DUMP").map(PathBuf::from);
     let status_dump = std::env::var_os("HORIZON_STATUS_DUMP").map(PathBuf::from);
-    let show_toolbar = std::env::var_os("HORIZON_SHOW_TOOLBAR").is_some();
 
     for session_id in workspace.with(|ws| ws.terminal_session_ids()) {
         spawn_terminal_session(
@@ -63,13 +62,6 @@ fn app_view() -> impl IntoView {
 
     stack((
         v_stack((
-            toolbar(
-                workspace,
-                sessions,
-                show_toolbar,
-                terminal_dump.clone(),
-                clipboard_dump.clone(),
-            ),
             tab_strip(workspace, sessions),
             workspace_view(
                 workspace,
@@ -228,74 +220,6 @@ fn spawn_terminal_session(
             });
         }
     }
-}
-
-fn toolbar(
-    workspace: RwSignal<Workspace>,
-    sessions: RwSignal<SessionRegistry>,
-    show_toolbar: bool,
-    terminal_dump: Option<PathBuf>,
-    clipboard_dump: Option<PathBuf>,
-) -> impl IntoView {
-    let terminal_dump_for_terminal = terminal_dump.clone();
-    let terminal_dump_for_agent = terminal_dump.clone();
-    let terminal_dump_for_split = terminal_dump.clone();
-    let terminal_dump_for_next = terminal_dump.clone();
-    let clipboard_dump_for_terminal = clipboard_dump.clone();
-    let clipboard_dump_for_agent = clipboard_dump.clone();
-    let clipboard_dump_for_split = clipboard_dump.clone();
-    let clipboard_dump_for_next = clipboard_dump.clone();
-
-    h_stack((
-        button("Terminal").action(move || {
-            execute_command(
-                CommandId::NewTerminal,
-                workspace,
-                sessions,
-                terminal_dump_for_terminal.clone(),
-                clipboard_dump_for_terminal.clone(),
-            );
-        }),
-        button("Agent").action(move || {
-            execute_command(
-                CommandId::NewAgent,
-                workspace,
-                sessions,
-                terminal_dump_for_agent.clone(),
-                clipboard_dump_for_agent.clone(),
-            );
-        }),
-        button("Split").action(move || {
-            execute_command(
-                CommandId::SplitActivePane,
-                workspace,
-                sessions,
-                terminal_dump_for_split.clone(),
-                clipboard_dump_for_split.clone(),
-            );
-        }),
-        button("Next").action(move || {
-            execute_command(
-                CommandId::FocusNextPane,
-                workspace,
-                sessions,
-                terminal_dump_for_next.clone(),
-                clipboard_dump_for_next.clone(),
-            );
-        }),
-    ))
-    .style(move |s| {
-        if !show_toolbar {
-            return s.hide();
-        }
-
-        s.width_full()
-            .height(44)
-            .items_center()
-            .gap(8)
-            .padding_horiz(12)
-            .background(floem::peniko::Color::rgb8(31, 34, 41))
-    })
 }
 
 fn command_palette(

@@ -93,13 +93,9 @@ DISPLAY="$client_display" xdotool windowsize "$window_id" 1100 720
 DISPLAY="$client_display" xdotool windowfocus "$window_id" 2>/dev/null || true
 
 if [[ "${HORIZON_TEST_SPLIT:-0}" == "1" ]]; then
-  if [[ -n "${HORIZON_SHOW_TOOLBAR:-}" ]]; then
-    DISPLAY="$client_display" xdotool mousemove --window "$window_id" 156 20 click 1
-  else
-    DISPLAY="$client_display" xdotool key ctrl+shift+p
-    sleep 0.2
-    DISPLAY="$client_display" xdotool key s p l i t Return
-  fi
+  DISPLAY="$client_display" xdotool key ctrl+shift+p
+  sleep 0.2
+  DISPLAY="$client_display" xdotool key s p l i t Return
   sleep 0.2
 fi
 
