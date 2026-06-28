@@ -203,11 +203,6 @@ fn app_view() -> impl IntoView {
     .on_event(EventListener::KeyDown, move |event| {
         if let Event::KeyDown(key_event) = event {
             if palette_open.get_untracked() {
-                if is_palette_open_key(key_event) {
-                    switch_control_mode(control_mode);
-                    return EventPropagation::Stop;
-                }
-
                 if handle_control_key(
                     key_event,
                     workspace,
@@ -404,11 +399,6 @@ fn command_palette(
     })
     .on_event(EventListener::KeyDown, move |event| {
         if let Event::KeyDown(key_event) = event {
-            if is_palette_open_key(key_event) {
-                switch_control_mode(control_mode);
-                return EventPropagation::Stop;
-            }
-
             if handle_control_key(
                 key_event,
                 workspace,
@@ -647,11 +637,6 @@ fn workspace_overview(
     })
     .on_event(EventListener::KeyDown, move |event| {
         if let Event::KeyDown(key_event) = event {
-            if is_palette_open_key(key_event) {
-                switch_control_mode(control_mode);
-                return EventPropagation::Stop;
-            }
-
             if handle_workspace_control_key(
                 key_event,
                 workspace,
@@ -1759,11 +1744,6 @@ fn pane_view(
     .on_event(EventListener::KeyDown, move |event| {
         if let Event::KeyDown(key_event) = event {
             if palette_open.get_untracked() {
-                if is_palette_open_key(key_event) {
-                    switch_control_mode(control_mode);
-                    return EventPropagation::Stop;
-                }
-
                 if handle_control_key(
                     key_event,
                     workspace,
