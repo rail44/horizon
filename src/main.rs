@@ -23,6 +23,8 @@ use termwiz::input::{KeyCode as TermKeyCode, Modifiers as TermModifiers};
 
 mod terminal_view;
 
+const PALETTE_VISIBLE_ROWS: usize = 6;
+
 #[derive(Clone, Debug)]
 enum PaletteItem {
     Command(CommandEntry),
@@ -383,9 +385,20 @@ fn palette_row(
 ) -> impl IntoView {
     let item = move || {
         let query = palette_query.get();
-        workspace.with(|ws| palette_items(ws, &query).get(index).cloned())
+        workspace.with(|ws| {
+            let items = palette_items(ws, &query);
+            let start = palette_visible_start(palette_selection.get(), items.len());
+            items.get(start + index).cloned()
+        })
     };
-    let selected = move || palette_selection.get() == index;
+    let item_index = move || {
+        let query = palette_query.get();
+        workspace.with(|ws| {
+            let item_count = palette_items(ws, &query).len();
+            palette_visible_start(palette_selection.get(), item_count) + index
+        })
+    };
+    let selected = move || palette_selection.get() == item_index();
 
     v_stack((
         label(move || item().map(|item| item.title()).unwrap_or_default()).style(|s| {
@@ -400,7 +413,7 @@ fn palette_row(
         }),
     ))
     .on_click_stop(move |_| {
-        palette_selection.set(index);
+        palette_selection.set(item_index());
         execute_palette_selection(
             workspace,
             sessions,
@@ -630,6 +643,16 @@ fn palette_items(workspace: &Workspace, query: &str) -> Vec<PaletteItem> {
     );
 
     items
+}
+
+fn palette_visible_start(selection: usize, item_count: usize) -> usize {
+    if item_count <= PALETTE_VISIBLE_ROWS {
+        return 0;
+    }
+
+    selection
+        .min(item_count - 1)
+        .saturating_sub(PALETTE_VISIBLE_ROWS - 1)
 }
 
 fn palette_matches(query: &str, fields: &[&str]) -> bool {
@@ -1571,6 +1594,20 @@ mod tests {
                 ..
             } if title == "Terminal"
         )));
+    }
+
+    #[test]
+    fn palette_visible_start_keeps_selection_in_rendered_rows() {
+        assert_eq!(palette_visible_start(0, 10), 0);
+        assert_eq!(palette_visible_start(5, 10), 0);
+        assert_eq!(palette_visible_start(6, 10), 1);
+        assert_eq!(palette_visible_start(9, 10), 4);
+    }
+
+    #[test]
+    fn palette_visible_start_handles_short_lists() {
+        assert_eq!(palette_visible_start(0, 0), 0);
+        assert_eq!(palette_visible_start(3, 4), 0);
     }
 
     #[test]

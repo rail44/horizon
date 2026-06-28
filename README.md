@@ -19,6 +19,18 @@ cargo test
 cargo run
 ```
 
+After `cargo run`, use `Ctrl+Shift+P` to open the command palette. Useful
+manual smoke checks:
+
+- `new terminal`: opens another terminal tab.
+- `new agent`: opens an agent tab.
+- `split`: splits the active pane.
+- `close active pane`: closes the active pane and leaves its session detached
+  when another pane remains.
+- `detached`: attaches a detached session back into the active tab as a split.
+- `tab 1`, `tab 2`, ...: switches to the matching tab.
+- `terminate active session`: terminates the active session.
+
 For automated visual inspection of the terminal pane:
 
 ```sh
