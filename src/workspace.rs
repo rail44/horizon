@@ -331,6 +331,13 @@ impl Workspace {
             .unwrap_or(0)
     }
 
+    pub fn active_tab_index(&self) -> usize {
+        self.tabs
+            .iter()
+            .position(|tab| tab.id == self.active_tab)
+            .unwrap_or(0)
+    }
+
     pub fn active_title(&self) -> String {
         let active = self.active_tab().map(|tab| tab.active);
         self.panes
@@ -586,5 +593,15 @@ mod tests {
         assert_eq!(workspace.active_visible_index(), 0);
         assert!(!workspace.activate_visible_pane(5));
         assert_eq!(workspace.active_visible_index(), 0);
+    }
+
+    #[test]
+    fn active_tab_index_tracks_active_tab() {
+        let mut workspace = Workspace::mvp();
+        workspace.open_tab(PaneKind::Agent, None);
+
+        assert_eq!(workspace.active_tab_index(), 1);
+        assert!(workspace.activate_tab_index(0));
+        assert_eq!(workspace.active_tab_index(), 0);
     }
 }

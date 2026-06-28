@@ -1,3 +1,4 @@
+pub mod commands;
 pub mod plugins;
 pub mod session;
 pub mod terminal;

@@ -9,6 +9,10 @@ use floem::{
     window::WindowConfig,
     Application, Clipboard,
 };
+use horizon::commands::{
+    clamp_palette_selection, command_enabled, command_entries, filter_command_entries, CommandId,
+    CommandState, PaletteItem,
+};
 use horizon::session::SessionRegistry;
 use horizon::terminal::{
     TerminalCommand, TerminalFrame, TerminalSession, TerminalSize, TerminalUpdate,
@@ -38,6 +42,10 @@ fn app_view() -> impl IntoView {
     let ime_composing = RwSignal::new(false);
     let ime_preedit = RwSignal::new(None::<String>);
     let ime_cursor_area = RwSignal::new((Point::new(12.0, 64.0), Size::new(8.0, 18.0)));
+    let palette_open = RwSignal::new(false);
+    let palette_query = RwSignal::new(String::new());
+    let palette_selection = RwSignal::new(0_usize);
+    let palette_focus_request = RwSignal::new(0_u64);
     let terminal_dump = std::env::var_os("HORIZON_TERMINAL_DUMP").map(PathBuf::from);
     let clipboard_dump = std::env::var_os("HORIZON_CLIPBOARD_DUMP").map(PathBuf::from);
     let status_dump = std::env::var_os("HORIZON_STATUS_DUMP").map(PathBuf::from);
@@ -52,22 +60,41 @@ fn app_view() -> impl IntoView {
         );
     }
 
-    v_stack((
-        toolbar(
+    stack((
+        v_stack((
+            toolbar(
+                workspace,
+                sessions,
+                terminal_dump.clone(),
+                clipboard_dump.clone(),
+            ),
+            tab_strip(workspace, sessions),
+            workspace_view(
+                workspace,
+                sessions,
+                ime_composing,
+                ime_preedit,
+                ime_cursor_area,
+                palette_open,
+                palette_query,
+                palette_selection,
+                palette_focus_request,
+                terminal_dump.clone(),
+                clipboard_dump.clone(),
+            ),
+            status_bar(workspace, status_dump),
+        ))
+        .style(|s| s.size_full().flex().flex_col()),
+        command_palette(
             workspace,
             sessions,
+            palette_open,
+            palette_query,
+            palette_selection,
+            palette_focus_request,
             terminal_dump.clone(),
             clipboard_dump.clone(),
         ),
-        tab_strip(workspace, sessions),
-        workspace_view(
-            workspace,
-            sessions,
-            ime_composing,
-            ime_preedit,
-            ime_cursor_area,
-        ),
-        status_bar(workspace, status_dump),
     ))
     .on_event(EventListener::WindowGotFocus, move |_| {
         set_ime_allowed(active_terminal(workspace));
@@ -123,10 +150,26 @@ fn app_view() -> impl IntoView {
 
         EventPropagation::Continue
     })
+    .keyboard_navigable()
+    .on_event(EventListener::KeyDown, move |event| {
+        if let Event::KeyDown(key_event) = event {
+            if is_palette_open_key(key_event) {
+                ime_composing.set(false);
+                ime_preedit.set(None);
+                set_ime_allowed(false);
+                open_palette(
+                    palette_open,
+                    palette_query,
+                    palette_selection,
+                    palette_focus_request,
+                );
+                return EventPropagation::Stop;
+            }
+        }
+        EventPropagation::Continue
+    })
     .style(|s| {
         s.size_full()
-            .flex()
-            .flex_col()
             .background(floem::peniko::Color::rgb8(22, 24, 29))
     })
 }
@@ -191,59 +234,51 @@ fn toolbar(
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) -> impl IntoView {
-    let terminal_dump_for_open = terminal_dump.clone();
+    let terminal_dump_for_terminal = terminal_dump.clone();
+    let terminal_dump_for_agent = terminal_dump.clone();
     let terminal_dump_for_split = terminal_dump.clone();
-    let clipboard_dump_for_open = clipboard_dump.clone();
+    let terminal_dump_for_next = terminal_dump.clone();
+    let clipboard_dump_for_terminal = clipboard_dump.clone();
+    let clipboard_dump_for_agent = clipboard_dump.clone();
     let clipboard_dump_for_split = clipboard_dump.clone();
+    let clipboard_dump_for_next = clipboard_dump.clone();
+
     h_stack((
         button("Terminal").action(move || {
-            let session_id = SessionId::new();
-            workspace.update(|ws| {
-                ws.open_tab(PaneKind::Terminal, Some(session_id));
-            });
-            spawn_terminal_session(
-                session_id,
+            execute_command(
+                CommandId::NewTerminal,
                 workspace,
                 sessions,
-                terminal_dump_for_open.clone(),
-                clipboard_dump_for_open.clone(),
+                terminal_dump_for_terminal.clone(),
+                clipboard_dump_for_terminal.clone(),
             );
         }),
         button("Agent").action(move || {
-            workspace.update(|ws| {
-                ws.open_tab(PaneKind::Agent, None);
-            });
+            execute_command(
+                CommandId::NewAgent,
+                workspace,
+                sessions,
+                terminal_dump_for_agent.clone(),
+                clipboard_dump_for_agent.clone(),
+            );
         }),
         button("Split").action(move || {
-            let kind = workspace.with_untracked(|ws| {
-                ws.active_terminal_session_id()
-                    .map(|_| PaneKind::Terminal)
-                    .unwrap_or(PaneKind::Agent)
-            });
-            workspace.update(|ws| {
-                if kind == PaneKind::Terminal {
-                    ws.split_active(PaneKind::Terminal, Some(SessionId::new()));
-                } else {
-                    ws.split_active(PaneKind::Agent, None);
-                }
-            });
-            if kind == PaneKind::Terminal {
-                let Some(session_id) =
-                    workspace.with_untracked(|ws| ws.active_terminal_session_id())
-                else {
-                    return;
-                };
-                spawn_terminal_session(
-                    session_id,
-                    workspace,
-                    sessions,
-                    terminal_dump_for_split.clone(),
-                    clipboard_dump_for_split.clone(),
-                );
-            }
+            execute_command(
+                CommandId::SplitActivePane,
+                workspace,
+                sessions,
+                terminal_dump_for_split.clone(),
+                clipboard_dump_for_split.clone(),
+            );
         }),
         button("Next").action(move || {
-            workspace.update(Workspace::focus_next);
+            execute_command(
+                CommandId::FocusNextPane,
+                workspace,
+                sessions,
+                terminal_dump_for_next.clone(),
+                clipboard_dump_for_next.clone(),
+            );
         }),
     ))
     .style(|s| {
@@ -254,6 +289,466 @@ fn toolbar(
             .padding_horiz(12)
             .background(floem::peniko::Color::rgb8(31, 34, 41))
     })
+}
+
+fn command_palette(
+    workspace: RwSignal<Workspace>,
+    sessions: RwSignal<SessionRegistry>,
+    palette_open: RwSignal<bool>,
+    palette_query: RwSignal<String>,
+    palette_selection: RwSignal<usize>,
+    palette_focus_request: RwSignal<u64>,
+    terminal_dump: Option<PathBuf>,
+    clipboard_dump: Option<PathBuf>,
+) -> impl IntoView {
+    let terminal_dump_for_key = terminal_dump.clone();
+    let clipboard_dump_for_key = clipboard_dump.clone();
+
+    container(
+        v_stack((
+            label(move || {
+                let query = palette_query.get();
+                if query.is_empty() {
+                    "> Type a command".to_string()
+                } else {
+                    format!("> {query}")
+                }
+            })
+            .style(|s| {
+                s.width_full()
+                    .height(38)
+                    .items_center()
+                    .padding_horiz(12)
+                    .font_size(14)
+                    .color(floem::peniko::Color::rgb8(233, 236, 242))
+                    .background(floem::peniko::Color::rgb8(31, 34, 41))
+            }),
+            palette_row(
+                workspace,
+                sessions,
+                palette_open,
+                palette_query,
+                palette_selection,
+                0,
+                terminal_dump.clone(),
+                clipboard_dump.clone(),
+            ),
+            palette_row(
+                workspace,
+                sessions,
+                palette_open,
+                palette_query,
+                palette_selection,
+                1,
+                terminal_dump.clone(),
+                clipboard_dump.clone(),
+            ),
+            palette_row(
+                workspace,
+                sessions,
+                palette_open,
+                palette_query,
+                palette_selection,
+                2,
+                terminal_dump.clone(),
+                clipboard_dump.clone(),
+            ),
+            palette_row(
+                workspace,
+                sessions,
+                palette_open,
+                palette_query,
+                palette_selection,
+                3,
+                terminal_dump.clone(),
+                clipboard_dump.clone(),
+            ),
+            palette_row(
+                workspace,
+                sessions,
+                palette_open,
+                palette_query,
+                palette_selection,
+                4,
+                terminal_dump.clone(),
+                clipboard_dump.clone(),
+            ),
+            palette_row(
+                workspace,
+                sessions,
+                palette_open,
+                palette_query,
+                palette_selection,
+                5,
+                terminal_dump,
+                clipboard_dump,
+            ),
+        ))
+        .style(|s| s.width_full()),
+    )
+    .keyboard_navigable()
+    .request_focus(move || {
+        palette_focus_request.get();
+    })
+    .on_event(EventListener::KeyDown, move |event| {
+        if let Event::KeyDown(key_event) = event {
+            if handle_palette_key(
+                key_event,
+                workspace,
+                sessions,
+                palette_open,
+                palette_query,
+                palette_selection,
+                terminal_dump_for_key.clone(),
+                clipboard_dump_for_key.clone(),
+            ) {
+                return EventPropagation::Stop;
+            }
+        }
+
+        EventPropagation::Stop
+    })
+    .style(move |s| {
+        if !palette_open.get() {
+            return s.hide();
+        }
+
+        s.absolute()
+            .inset_top(74.0)
+            .inset_left(240.0)
+            .width(620)
+            .z_index(10)
+            .border(1.0)
+            .border_color(floem::peniko::Color::rgb8(132, 220, 198))
+            .background(floem::peniko::Color::rgb8(22, 24, 29))
+    })
+}
+
+fn palette_row(
+    workspace: RwSignal<Workspace>,
+    sessions: RwSignal<SessionRegistry>,
+    palette_open: RwSignal<bool>,
+    palette_query: RwSignal<String>,
+    palette_selection: RwSignal<usize>,
+    index: usize,
+    terminal_dump: Option<PathBuf>,
+    clipboard_dump: Option<PathBuf>,
+) -> impl IntoView {
+    let item = move || {
+        let query = palette_query.get();
+        workspace.with(|ws| palette_items(ws, &query).get(index).cloned())
+    };
+    let selected = move || palette_selection.get() == index;
+
+    v_stack((
+        label(move || {
+            item()
+                .map(|item| item.entry.spec.title.to_string())
+                .unwrap_or_default()
+        })
+        .style(|s| {
+            s.width_full()
+                .font_size(13)
+                .color(floem::peniko::Color::rgb8(233, 236, 242))
+        }),
+        label(move || {
+            item()
+                .map(|item| item.entry.spec.description.to_string())
+                .unwrap_or_default()
+        })
+        .style(|s| {
+            s.width_full()
+                .font_size(11)
+                .color(floem::peniko::Color::rgb8(178, 185, 198))
+        }),
+    ))
+    .on_click_stop(move |_| {
+        palette_selection.set(index);
+        execute_palette_selection(
+            workspace,
+            sessions,
+            palette_open,
+            palette_query,
+            palette_selection,
+            terminal_dump.clone(),
+            clipboard_dump.clone(),
+        );
+    })
+    .style(move |s| {
+        let Some(item) = item() else {
+            return s.hide();
+        };
+
+        let background = if selected() {
+            floem::peniko::Color::rgb8(54, 59, 70)
+        } else {
+            floem::peniko::Color::rgb8(22, 24, 29)
+        };
+        let text_color = if item.entry.enabled {
+            floem::peniko::Color::rgb8(233, 236, 242)
+        } else {
+            floem::peniko::Color::rgb8(115, 122, 136)
+        };
+
+        s.width_full()
+            .height(48)
+            .padding_horiz(12)
+            .padding_vert(6)
+            .background(background)
+            .color(text_color)
+    })
+}
+
+fn execute_command(
+    command_id: CommandId,
+    workspace: RwSignal<Workspace>,
+    sessions: RwSignal<SessionRegistry>,
+    terminal_dump: Option<PathBuf>,
+    clipboard_dump: Option<PathBuf>,
+) {
+    let state = workspace.with_untracked(command_state);
+    if !command_enabled(command_id, state) {
+        return;
+    }
+
+    match command_id {
+        CommandId::NewTerminal => {
+            open_terminal_tab(workspace, sessions, terminal_dump, clipboard_dump)
+        }
+        CommandId::NewAgent => {
+            workspace.update(|ws| {
+                ws.open_tab(PaneKind::Agent, None);
+            });
+        }
+        CommandId::SplitActivePane => {
+            split_active_pane(workspace, sessions, terminal_dump, clipboard_dump);
+        }
+        CommandId::FocusNextPane => {
+            workspace.update(Workspace::focus_next);
+        }
+        CommandId::CloseActivePane => {
+            let index = workspace.with_untracked(|ws| ws.active_visible_index());
+            close_visible_pane(workspace, sessions, index);
+        }
+        CommandId::CloseActiveTab => {
+            let index = workspace.with_untracked(|ws| ws.active_tab_index());
+            close_tab(workspace, sessions, index);
+        }
+    }
+}
+
+fn handle_palette_key(
+    key_event: &KeyEvent,
+    workspace: RwSignal<Workspace>,
+    sessions: RwSignal<SessionRegistry>,
+    palette_open: RwSignal<bool>,
+    palette_query: RwSignal<String>,
+    palette_selection: RwSignal<usize>,
+    terminal_dump: Option<PathBuf>,
+    clipboard_dump: Option<PathBuf>,
+) -> bool {
+    match &key_event.key.logical_key {
+        Key::Named(NamedKey::Escape) => {
+            close_palette(palette_open, palette_query);
+            true
+        }
+        Key::Named(NamedKey::Enter) => {
+            execute_palette_selection(
+                workspace,
+                sessions,
+                palette_open,
+                palette_query,
+                palette_selection,
+                terminal_dump,
+                clipboard_dump,
+            );
+            true
+        }
+        Key::Named(NamedKey::ArrowUp) => {
+            move_palette_selection(workspace, palette_query, palette_selection, -1);
+            true
+        }
+        Key::Named(NamedKey::ArrowDown) => {
+            move_palette_selection(workspace, palette_query, palette_selection, 1);
+            true
+        }
+        Key::Named(NamedKey::Backspace) => {
+            update_palette_query(workspace, palette_query, palette_selection, |query| {
+                query.pop();
+            });
+            true
+        }
+        Key::Named(NamedKey::Space) => {
+            update_palette_query(workspace, palette_query, palette_selection, |query| {
+                query.push(' ');
+            });
+            true
+        }
+        Key::Character(text) if palette_accepts_text_input(key_event.modifiers) => {
+            update_palette_query(workspace, palette_query, palette_selection, |query| {
+                query.push_str(text.as_str());
+            });
+            true
+        }
+        _ => false,
+    }
+}
+
+fn command_state(workspace: &Workspace) -> CommandState {
+    CommandState {
+        tab_count: workspace.tab_count(),
+        visible_pane_count: workspace.visible_panes().len(),
+    }
+}
+
+fn palette_items(workspace: &Workspace, query: &str) -> Vec<PaletteItem> {
+    filter_command_entries(command_entries(command_state(workspace)), query)
+}
+
+fn open_palette(
+    palette_open: RwSignal<bool>,
+    palette_query: RwSignal<String>,
+    palette_selection: RwSignal<usize>,
+    palette_focus_request: RwSignal<u64>,
+) {
+    palette_query.set(String::new());
+    palette_selection.set(0);
+    palette_open.set(true);
+    palette_focus_request.update(|request| *request += 1);
+}
+
+fn close_palette(palette_open: RwSignal<bool>, palette_query: RwSignal<String>) {
+    palette_open.set(false);
+    palette_query.set(String::new());
+}
+
+fn execute_palette_selection(
+    workspace: RwSignal<Workspace>,
+    sessions: RwSignal<SessionRegistry>,
+    palette_open: RwSignal<bool>,
+    palette_query: RwSignal<String>,
+    palette_selection: RwSignal<usize>,
+    terminal_dump: Option<PathBuf>,
+    clipboard_dump: Option<PathBuf>,
+) {
+    let query = palette_query.get_untracked();
+    let selection = palette_selection.get_untracked();
+    let item = workspace.with_untracked(|ws| {
+        let items = palette_items(ws, &query);
+        items
+            .get(clamp_palette_selection(selection, items.len()))
+            .cloned()
+    });
+
+    let Some(item) = item else {
+        return;
+    };
+
+    if !item.entry.enabled {
+        return;
+    }
+
+    close_palette(palette_open, palette_query);
+    execute_command(
+        item.entry.spec.id,
+        workspace,
+        sessions,
+        terminal_dump,
+        clipboard_dump,
+    );
+}
+
+fn update_palette_query(
+    workspace: RwSignal<Workspace>,
+    palette_query: RwSignal<String>,
+    palette_selection: RwSignal<usize>,
+    update: impl FnOnce(&mut String),
+) {
+    palette_query.update(update);
+    clamp_current_palette_selection(workspace, palette_query, palette_selection);
+}
+
+fn clamp_current_palette_selection(
+    workspace: RwSignal<Workspace>,
+    palette_query: RwSignal<String>,
+    palette_selection: RwSignal<usize>,
+) {
+    let query = palette_query.get_untracked();
+    let item_count = workspace.with_untracked(|ws| palette_items(ws, &query).len());
+    palette_selection.update(|selection| {
+        *selection = clamp_palette_selection(*selection, item_count);
+    });
+}
+
+fn move_palette_selection(
+    workspace: RwSignal<Workspace>,
+    palette_query: RwSignal<String>,
+    palette_selection: RwSignal<usize>,
+    delta: isize,
+) {
+    let query = palette_query.get_untracked();
+    let item_count = workspace.with_untracked(|ws| palette_items(ws, &query).len());
+    if item_count == 0 {
+        palette_selection.set(0);
+        return;
+    }
+
+    palette_selection.update(|selection| {
+        let next = (*selection as isize + delta).clamp(0, item_count.saturating_sub(1) as isize);
+        *selection = next as usize;
+    });
+}
+
+fn open_terminal_tab(
+    workspace: RwSignal<Workspace>,
+    sessions: RwSignal<SessionRegistry>,
+    terminal_dump: Option<PathBuf>,
+    clipboard_dump: Option<PathBuf>,
+) {
+    let session_id = SessionId::new();
+    workspace.update(|ws| {
+        ws.open_tab(PaneKind::Terminal, Some(session_id));
+    });
+    spawn_terminal_session(
+        session_id,
+        workspace,
+        sessions,
+        terminal_dump,
+        clipboard_dump,
+    );
+}
+
+fn split_active_pane(
+    workspace: RwSignal<Workspace>,
+    sessions: RwSignal<SessionRegistry>,
+    terminal_dump: Option<PathBuf>,
+    clipboard_dump: Option<PathBuf>,
+) {
+    let kind = workspace.with_untracked(|ws| {
+        ws.active_terminal_session_id()
+            .map(|_| PaneKind::Terminal)
+            .unwrap_or(PaneKind::Agent)
+    });
+    workspace.update(|ws| {
+        if kind == PaneKind::Terminal {
+            ws.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        } else {
+            ws.split_active(PaneKind::Agent, None);
+        }
+    });
+    if kind == PaneKind::Terminal {
+        let Some(session_id) = workspace.with_untracked(|ws| ws.active_terminal_session_id())
+        else {
+            return;
+        };
+        spawn_terminal_session(
+            session_id,
+            workspace,
+            sessions,
+            terminal_dump,
+            clipboard_dump,
+        );
+    }
 }
 
 fn tab_strip(workspace: RwSignal<Workspace>, sessions: RwSignal<SessionRegistry>) -> impl IntoView {
@@ -418,6 +913,12 @@ fn workspace_view(
     ime_composing: RwSignal<bool>,
     ime_preedit: RwSignal<Option<String>>,
     ime_cursor_area: RwSignal<(Point, Size)>,
+    palette_open: RwSignal<bool>,
+    palette_query: RwSignal<String>,
+    palette_selection: RwSignal<usize>,
+    palette_focus_request: RwSignal<u64>,
+    terminal_dump: Option<PathBuf>,
+    clipboard_dump: Option<PathBuf>,
 ) -> impl IntoView {
     h_stack((
         pane_view(
@@ -427,6 +928,12 @@ fn workspace_view(
             ime_preedit,
             ime_cursor_area,
             0,
+            palette_open,
+            palette_query,
+            palette_selection,
+            palette_focus_request,
+            terminal_dump.clone(),
+            clipboard_dump.clone(),
         ),
         pane_view(
             workspace,
@@ -435,6 +942,40 @@ fn workspace_view(
             ime_preedit,
             ime_cursor_area,
             1,
+            palette_open,
+            palette_query,
+            palette_selection,
+            palette_focus_request,
+            terminal_dump.clone(),
+            clipboard_dump.clone(),
+        ),
+        pane_view(
+            workspace,
+            sessions,
+            ime_composing,
+            ime_preedit,
+            ime_cursor_area,
+            2,
+            palette_open,
+            palette_query,
+            palette_selection,
+            palette_focus_request,
+            terminal_dump.clone(),
+            clipboard_dump.clone(),
+        ),
+        pane_view(
+            workspace,
+            sessions,
+            ime_composing,
+            ime_preedit,
+            ime_cursor_area,
+            3,
+            palette_open,
+            palette_query,
+            palette_selection,
+            palette_focus_request,
+            terminal_dump,
+            clipboard_dump,
         ),
     ))
     .style(|s| {
@@ -457,6 +998,12 @@ fn pane_view(
     ime_preedit: RwSignal<Option<String>>,
     ime_cursor_area: RwSignal<(Point, Size)>,
     index: usize,
+    palette_open: RwSignal<bool>,
+    palette_query: RwSignal<String>,
+    palette_selection: RwSignal<usize>,
+    palette_focus_request: RwSignal<u64>,
+    terminal_dump: Option<PathBuf>,
+    clipboard_dump: Option<PathBuf>,
 ) -> impl IntoView {
     let focus_request = RwSignal::new(0_u64);
 
@@ -577,6 +1124,36 @@ fn pane_view(
         EventPropagation::Continue
     })
     .on_event(EventListener::KeyDown, move |event| {
+        if let Event::KeyDown(key_event) = event {
+            if palette_open.get_untracked() {
+                if handle_palette_key(
+                    key_event,
+                    workspace,
+                    sessions,
+                    palette_open,
+                    palette_query,
+                    palette_selection,
+                    terminal_dump.clone(),
+                    clipboard_dump.clone(),
+                ) {
+                    return EventPropagation::Stop;
+                }
+            }
+
+            if is_palette_open_key(key_event) {
+                ime_composing.set(false);
+                ime_preedit.set(None);
+                set_ime_allowed(false);
+                open_palette(
+                    palette_open,
+                    palette_query,
+                    palette_selection,
+                    palette_focus_request,
+                );
+                return EventPropagation::Stop;
+            }
+        }
+
         if !workspace.with(|ws| {
             ws.active_visible_index() == index
                 && ws
@@ -747,6 +1324,17 @@ fn is_terminal_paste_key(event: &KeyEvent) -> bool {
     is_terminal_paste_input(&event.key.logical_key, event.modifiers)
 }
 
+fn is_palette_open_key(event: &KeyEvent) -> bool {
+    match &event.key.logical_key {
+        Key::Character(text) => event.modifiers.control() && text.eq_ignore_ascii_case("p"),
+        _ => false,
+    }
+}
+
+fn palette_accepts_text_input(modifiers: Modifiers) -> bool {
+    !modifiers.control() && !modifiers.alt() && !modifiers.meta()
+}
+
 fn is_terminal_paste_input(key: &Key, modifiers: Modifiers) -> bool {
     match key {
         Key::Named(NamedKey::Paste) => true,
@@ -875,6 +1463,27 @@ mod tests {
     #[test]
     fn wheel_down_scrolls_to_bottom() {
         assert_eq!(scroll_lines_from_wheel(-1.0), Some(-3));
+    }
+
+    #[test]
+    fn command_state_reflects_workspace_counts() {
+        let mut workspace = Workspace::mvp();
+        assert_eq!(
+            command_state(&workspace),
+            horizon::commands::CommandState {
+                tab_count: 1,
+                visible_pane_count: 1,
+            }
+        );
+
+        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        assert_eq!(
+            command_state(&workspace),
+            horizon::commands::CommandState {
+                tab_count: 1,
+                visible_pane_count: 2,
+            }
+        );
     }
 
     #[test]
