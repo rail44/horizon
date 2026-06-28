@@ -32,6 +32,10 @@ manual smoke checks:
 - `tab 1`, `tab 2`, ...: switches to the matching tab.
 - `terminate active session`: terminates the active session.
 
+Use `Ctrl+Shift+O` to open the workspace overview. It lists open tabs and
+detached sessions; Enter switches to the selected tab or attaches the selected
+detached session as a split.
+
 For automated visual inspection of the terminal pane:
 
 ```sh

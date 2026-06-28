@@ -24,6 +24,7 @@ use termwiz::input::{KeyCode as TermKeyCode, Modifiers as TermModifiers};
 mod terminal_view;
 
 const PALETTE_VISIBLE_ROWS: usize = 6;
+const OVERVIEW_VISIBLE_ROWS: usize = 8;
 
 #[derive(Clone, Debug)]
 enum PaletteItem {
@@ -39,6 +40,22 @@ enum PaletteItem {
         title: String,
         pane_count: usize,
         active: bool,
+    },
+}
+
+#[derive(Clone, Debug)]
+enum OverviewItem {
+    Tab {
+        index: usize,
+        title: String,
+        pane_count: usize,
+        active: bool,
+    },
+    DetachedSession {
+        session_id: SessionId,
+        title: String,
+        kind: SessionKind,
+        display_number: usize,
     },
 }
 
@@ -65,6 +82,9 @@ fn app_view() -> impl IntoView {
     let palette_query = RwSignal::new(String::new());
     let palette_selection = RwSignal::new(0_usize);
     let palette_focus_request = RwSignal::new(0_u64);
+    let overview_open = RwSignal::new(false);
+    let overview_selection = RwSignal::new(0_usize);
+    let overview_focus_request = RwSignal::new(0_u64);
     let terminal_dump = std::env::var_os("HORIZON_TERMINAL_DUMP").map(PathBuf::from);
     let clipboard_dump = std::env::var_os("HORIZON_CLIPBOARD_DUMP").map(PathBuf::from);
     let status_dump = std::env::var_os("HORIZON_STATUS_DUMP").map(PathBuf::from);
@@ -92,6 +112,9 @@ fn app_view() -> impl IntoView {
                 palette_query,
                 palette_selection,
                 palette_focus_request,
+                overview_open,
+                overview_selection,
+                overview_focus_request,
                 terminal_dump.clone(),
                 clipboard_dump.clone(),
             ),
@@ -107,6 +130,12 @@ fn app_view() -> impl IntoView {
             palette_focus_request,
             terminal_dump.clone(),
             clipboard_dump.clone(),
+        ),
+        workspace_overview(
+            workspace,
+            overview_open,
+            overview_selection,
+            overview_focus_request,
         ),
     ))
     .on_event(EventListener::WindowGotFocus, move |_| {
@@ -170,11 +199,25 @@ fn app_view() -> impl IntoView {
                 ime_composing.set(false);
                 ime_preedit.set(None);
                 set_ime_allowed(false);
+                close_overview(overview_open);
                 open_palette(
                     palette_open,
                     palette_query,
                     palette_selection,
                     palette_focus_request,
+                );
+                return EventPropagation::Stop;
+            }
+            if is_overview_open_key(key_event) {
+                ime_composing.set(false);
+                ime_preedit.set(None);
+                set_ime_allowed(false);
+                close_palette(palette_open, palette_query);
+                open_overview(
+                    workspace,
+                    overview_open,
+                    overview_selection,
+                    overview_focus_request,
                 );
                 return EventPropagation::Stop;
             }
@@ -475,6 +518,164 @@ fn palette_row(
     })
 }
 
+fn workspace_overview(
+    workspace: RwSignal<Workspace>,
+    overview_open: RwSignal<bool>,
+    overview_selection: RwSignal<usize>,
+    overview_focus_request: RwSignal<u64>,
+) -> impl IntoView {
+    container(
+        v_stack((
+            v_stack((
+                label(|| "Workspace Overview".to_string()).style(|s| {
+                    s.width_full()
+                        .font_size(16)
+                        .color(floem::peniko::Color::rgb8(233, 236, 242))
+                }),
+                label(move || {
+                    workspace.with(|ws| {
+                        format!(
+                            "{} tab(s) · {} visible pane(s) · {} detached session(s)",
+                            ws.tab_count(),
+                            ws.visible_panes().len(),
+                            ws.detached_session_count()
+                        )
+                    })
+                })
+                .style(|s| {
+                    s.width_full()
+                        .font_size(12)
+                        .color(floem::peniko::Color::rgb8(178, 185, 198))
+                }),
+            ))
+            .style(|s| {
+                s.width_full()
+                    .padding_horiz(14)
+                    .padding_vert(12)
+                    .gap(4)
+                    .background(floem::peniko::Color::rgb8(31, 34, 41))
+            }),
+            overview_row(workspace, overview_open, overview_selection, 0),
+            overview_row(workspace, overview_open, overview_selection, 1),
+            overview_row(workspace, overview_open, overview_selection, 2),
+            overview_row(workspace, overview_open, overview_selection, 3),
+            overview_row(workspace, overview_open, overview_selection, 4),
+            overview_row(workspace, overview_open, overview_selection, 5),
+            overview_row(workspace, overview_open, overview_selection, 6),
+            overview_row(workspace, overview_open, overview_selection, 7),
+        ))
+        .style(|s| s.width_full()),
+    )
+    .keyboard_navigable()
+    .request_focus(move || {
+        overview_focus_request.get();
+    })
+    .on_event(EventListener::KeyDown, move |event| {
+        if let Event::KeyDown(key_event) = event {
+            if handle_overview_key(key_event, workspace, overview_open, overview_selection) {
+                return EventPropagation::Stop;
+            }
+        }
+
+        EventPropagation::Stop
+    })
+    .style(move |s| {
+        if !overview_open.get() {
+            return s.hide();
+        }
+
+        s.absolute()
+            .inset_top(74.0)
+            .inset_left(220.0)
+            .width(680)
+            .z_index(11)
+            .border(1.0)
+            .border_color(floem::peniko::Color::rgb8(132, 220, 198))
+            .background(floem::peniko::Color::rgb8(22, 24, 29))
+    })
+}
+
+fn overview_row(
+    workspace: RwSignal<Workspace>,
+    overview_open: RwSignal<bool>,
+    overview_selection: RwSignal<usize>,
+    index: usize,
+) -> impl IntoView {
+    let item = move || {
+        workspace.with(|ws| {
+            let items = overview_items(ws);
+            let start = overview_visible_start(overview_selection.get(), items.len());
+            items.get(start + index).cloned()
+        })
+    };
+    let item_index = move || {
+        workspace.with(|ws| {
+            let item_count = overview_items(ws).len();
+            overview_visible_start(overview_selection.get(), item_count) + index
+        })
+    };
+    let selected = move || overview_selection.get() == item_index();
+
+    h_stack((
+        label(move || item().map(|item| item.kind_label()).unwrap_or_default()).style(move |s| {
+            let Some(item) = item() else {
+                return s.hide();
+            };
+
+            s.width(86)
+                .height(22)
+                .items_center()
+                .justify_center()
+                .font_size(10)
+                .border(1.0)
+                .border_color(item.kind_color())
+                .color(item.kind_color())
+        }),
+        v_stack((
+            label(move || item().map(|item| item.title()).unwrap_or_default()).style(|s| {
+                s.width_full()
+                    .font_size(13)
+                    .color(floem::peniko::Color::rgb8(233, 236, 242))
+            }),
+            label(move || item().map(|item| item.description()).unwrap_or_default()).style(|s| {
+                s.width_full()
+                    .font_size(11)
+                    .color(floem::peniko::Color::rgb8(178, 185, 198))
+            }),
+        ))
+        .style(|s| {
+            s.flex()
+                .flex_col()
+                .min_width(0.0)
+                .flex_basis(0.0)
+                .flex_grow(1.0)
+        }),
+    ))
+    .on_click_stop(move |_| {
+        overview_selection.set(item_index());
+        execute_overview_selection(workspace, overview_open, overview_selection);
+    })
+    .style(move |s| {
+        let Some(_) = item() else {
+            return s.hide();
+        };
+
+        let background = if selected() {
+            floem::peniko::Color::rgb8(54, 59, 70)
+        } else {
+            floem::peniko::Color::rgb8(22, 24, 29)
+        };
+
+        s.width_full()
+            .height(52)
+            .items_center()
+            .gap(10)
+            .padding_horiz(14)
+            .padding_vert(6)
+            .background(background)
+    })
+}
+
 fn execute_command(
     command_id: CommandId,
     workspace: RwSignal<Workspace>,
@@ -640,6 +841,89 @@ impl PaletteItem {
     }
 }
 
+impl OverviewItem {
+    fn kind_label(&self) -> String {
+        match self {
+            Self::Tab { .. } => "TAB".to_string(),
+            Self::DetachedSession { .. } => "DETACHED".to_string(),
+        }
+    }
+
+    fn kind_color(&self) -> floem::peniko::Color {
+        match self {
+            Self::Tab { .. } => floem::peniko::Color::rgb8(224, 184, 104),
+            Self::DetachedSession { .. } => floem::peniko::Color::rgb8(126, 170, 255),
+        }
+    }
+
+    fn title(&self) -> String {
+        match self {
+            Self::Tab { index, title, .. } => format!("Tab {}: {title}", index + 1),
+            Self::DetachedSession { title, .. } => format!("Attach {title}"),
+        }
+    }
+
+    fn description(&self) -> String {
+        match self {
+            Self::Tab {
+                pane_count, active, ..
+            } => {
+                if *active {
+                    format!("Current tab · {pane_count} pane(s)")
+                } else {
+                    format!("Switch to tab · {pane_count} pane(s)")
+                }
+            }
+            Self::DetachedSession {
+                kind,
+                display_number,
+                ..
+            } => format!(
+                "Detached {} session #{} · Enter attaches as split",
+                session_kind_label(*kind),
+                display_number
+            ),
+        }
+    }
+}
+
+fn overview_items(workspace: &Workspace) -> Vec<OverviewItem> {
+    let mut items: Vec<_> = workspace
+        .tab_summaries()
+        .into_iter()
+        .map(|tab| OverviewItem::Tab {
+            index: tab.index,
+            title: tab.title,
+            pane_count: tab.pane_count,
+            active: tab.active,
+        })
+        .collect();
+
+    items.extend(
+        workspace
+            .detached_session_summaries()
+            .into_iter()
+            .map(|session| OverviewItem::DetachedSession {
+                session_id: session.id,
+                title: session.title,
+                kind: session.kind,
+                display_number: session.display_number,
+            }),
+    );
+
+    items
+}
+
+fn overview_visible_start(selection: usize, item_count: usize) -> usize {
+    if item_count <= OVERVIEW_VISIBLE_ROWS {
+        return 0;
+    }
+
+    selection
+        .min(item_count - 1)
+        .saturating_sub(OVERVIEW_VISIBLE_ROWS - 1)
+}
+
 fn palette_items(workspace: &Workspace, query: &str) -> Vec<PaletteItem> {
     let mut items: Vec<_> =
         filter_command_entries(command_entries(command_state(workspace)), query)
@@ -738,6 +1022,96 @@ fn open_palette(
 fn close_palette(palette_open: RwSignal<bool>, palette_query: RwSignal<String>) {
     palette_open.set(false);
     palette_query.set(String::new());
+}
+
+fn open_overview(
+    workspace: RwSignal<Workspace>,
+    overview_open: RwSignal<bool>,
+    overview_selection: RwSignal<usize>,
+    overview_focus_request: RwSignal<u64>,
+) {
+    let item_count = workspace.with_untracked(|ws| overview_items(ws).len());
+    overview_selection.update(|selection| {
+        *selection = clamp_palette_selection(*selection, item_count);
+    });
+    overview_open.set(true);
+    overview_focus_request.update(|request| *request += 1);
+}
+
+fn close_overview(overview_open: RwSignal<bool>) {
+    overview_open.set(false);
+}
+
+fn handle_overview_key(
+    key_event: &KeyEvent,
+    workspace: RwSignal<Workspace>,
+    overview_open: RwSignal<bool>,
+    overview_selection: RwSignal<usize>,
+) -> bool {
+    match &key_event.key.logical_key {
+        Key::Named(NamedKey::Escape) => {
+            close_overview(overview_open);
+            true
+        }
+        Key::Named(NamedKey::Enter) => {
+            execute_overview_selection(workspace, overview_open, overview_selection);
+            true
+        }
+        Key::Named(NamedKey::ArrowUp) => {
+            move_overview_selection(workspace, overview_selection, -1);
+            true
+        }
+        Key::Named(NamedKey::ArrowDown) => {
+            move_overview_selection(workspace, overview_selection, 1);
+            true
+        }
+        _ => false,
+    }
+}
+
+fn execute_overview_selection(
+    workspace: RwSignal<Workspace>,
+    overview_open: RwSignal<bool>,
+    overview_selection: RwSignal<usize>,
+) {
+    let selection = overview_selection.get_untracked();
+    let item = workspace.with_untracked(|ws| {
+        let items = overview_items(ws);
+        items
+            .get(clamp_palette_selection(selection, items.len()))
+            .cloned()
+    });
+
+    let Some(item) = item else {
+        return;
+    };
+
+    close_overview(overview_open);
+    workspace.update(|ws| match item {
+        OverviewItem::Tab { index, .. } => {
+            ws.activate_tab_index(index);
+        }
+        OverviewItem::DetachedSession { session_id, .. } => {
+            ws.attach_existing_session_to_split(session_id);
+        }
+    });
+}
+
+fn move_overview_selection(
+    workspace: RwSignal<Workspace>,
+    overview_selection: RwSignal<usize>,
+    delta: isize,
+) {
+    let item_count = workspace.with_untracked(|ws| overview_items(ws).len());
+    if item_count == 0 {
+        overview_selection.set(0);
+        return;
+    }
+
+    overview_selection.update(|selection| {
+        let next = (*selection as isize + delta).clamp(0, item_count.saturating_sub(1) as isize);
+        *selection = next as usize;
+    });
 }
 
 fn execute_palette_selection(
@@ -1037,6 +1411,9 @@ fn workspace_view(
     palette_query: RwSignal<String>,
     palette_selection: RwSignal<usize>,
     palette_focus_request: RwSignal<u64>,
+    overview_open: RwSignal<bool>,
+    overview_selection: RwSignal<usize>,
+    overview_focus_request: RwSignal<u64>,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) -> impl IntoView {
@@ -1052,6 +1429,9 @@ fn workspace_view(
             palette_query,
             palette_selection,
             palette_focus_request,
+            overview_open,
+            overview_selection,
+            overview_focus_request,
             terminal_dump.clone(),
             clipboard_dump.clone(),
         ),
@@ -1066,6 +1446,9 @@ fn workspace_view(
             palette_query,
             palette_selection,
             palette_focus_request,
+            overview_open,
+            overview_selection,
+            overview_focus_request,
             terminal_dump.clone(),
             clipboard_dump.clone(),
         ),
@@ -1080,6 +1463,9 @@ fn workspace_view(
             palette_query,
             palette_selection,
             palette_focus_request,
+            overview_open,
+            overview_selection,
+            overview_focus_request,
             terminal_dump.clone(),
             clipboard_dump.clone(),
         ),
@@ -1094,6 +1480,9 @@ fn workspace_view(
             palette_query,
             palette_selection,
             palette_focus_request,
+            overview_open,
+            overview_selection,
+            overview_focus_request,
             terminal_dump,
             clipboard_dump,
         ),
@@ -1122,6 +1511,9 @@ fn pane_view(
     palette_query: RwSignal<String>,
     palette_selection: RwSignal<usize>,
     palette_focus_request: RwSignal<u64>,
+    overview_open: RwSignal<bool>,
+    overview_selection: RwSignal<usize>,
+    overview_focus_request: RwSignal<u64>,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) -> impl IntoView {
@@ -1243,6 +1635,12 @@ fn pane_view(
     })
     .on_event(EventListener::KeyDown, move |event| {
         if let Event::KeyDown(key_event) = event {
+            if overview_open.get_untracked() {
+                if handle_overview_key(key_event, workspace, overview_open, overview_selection) {
+                    return EventPropagation::Stop;
+                }
+            }
+
             if palette_open.get_untracked() {
                 if handle_palette_key(
                     key_event,
@@ -1262,11 +1660,26 @@ fn pane_view(
                 ime_composing.set(false);
                 ime_preedit.set(None);
                 set_ime_allowed(false);
+                close_overview(overview_open);
                 open_palette(
                     palette_open,
                     palette_query,
                     palette_selection,
                     palette_focus_request,
+                );
+                return EventPropagation::Stop;
+            }
+
+            if is_overview_open_key(key_event) {
+                ime_composing.set(false);
+                ime_preedit.set(None);
+                set_ime_allowed(false);
+                close_palette(palette_open, palette_query);
+                open_overview(
+                    workspace,
+                    overview_open,
+                    overview_selection,
+                    overview_focus_request,
                 );
                 return EventPropagation::Stop;
             }
@@ -1449,6 +1862,13 @@ fn is_palette_open_key(event: &KeyEvent) -> bool {
     }
 }
 
+fn is_overview_open_key(event: &KeyEvent) -> bool {
+    match &event.key.logical_key {
+        Key::Character(text) => event.modifiers.control() && text.eq_ignore_ascii_case("o"),
+        _ => false,
+    }
+}
+
 fn palette_accepts_text_input(modifiers: Modifiers) -> bool {
     !modifiers.control() && !modifiers.alt() && !modifiers.meta()
 }
@@ -1525,7 +1945,7 @@ fn status_bar(workspace: RwSignal<Workspace>, status_dump: Option<PathBuf>) -> i
     label(move || {
         workspace.with(|ws| {
             let status = format!(
-                "{} tab(s), {} pane(s), {} detached session(s), active: {}, active pane: {} | Ctrl+Shift+P: commands",
+                "{} tab(s), {} pane(s), {} detached session(s), active: {}, active pane: {} | Ctrl+Shift+P: commands · Ctrl+Shift+O: overview",
                 ws.tab_count(),
                 ws.visible_panes().len(),
                 ws.detached_session_count(),
@@ -1642,6 +2062,41 @@ mod tests {
                 ..
             } if title == "Terminal #1"
         )));
+    }
+
+    #[test]
+    fn overview_items_include_tabs_and_detached_sessions() {
+        let mut workspace = Workspace::mvp();
+        let session_id = SessionId::new();
+        workspace.split_active(PaneKind::Terminal, Some(session_id));
+        workspace.close_visible_pane(1);
+
+        let items = overview_items(&workspace);
+
+        assert!(matches!(
+            items[0],
+            OverviewItem::Tab {
+                index: 0,
+                active: true,
+                ..
+            }
+        ));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            OverviewItem::DetachedSession {
+                session_id: id,
+                title,
+                ..
+            } if *id == session_id && title == "Terminal #2"
+        )));
+    }
+
+    #[test]
+    fn overview_visible_start_keeps_selection_in_rendered_rows() {
+        assert_eq!(overview_visible_start(0, 12), 0);
+        assert_eq!(overview_visible_start(7, 12), 0);
+        assert_eq!(overview_visible_start(8, 12), 1);
+        assert_eq!(overview_visible_start(11, 12), 4);
     }
 
     #[test]
