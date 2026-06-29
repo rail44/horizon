@@ -71,8 +71,25 @@ struct TerminalMetrics {
 struct CellLayout {
     text: TextLayout,
     columns: usize,
+    fg: [u8; 3],
     bg: [u8; 3],
+    block: Option<BlockElement>,
     visible: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BlockElement {
+    Full,
+    UpperHalf,
+    LowerHalf,
+    LeftHalf,
+    RightHalf,
+    Quadrants {
+        upper_left: bool,
+        upper_right: bool,
+        lower_left: bool,
+        lower_right: bool,
+    },
 }
 
 struct PreeditLayout {
@@ -213,7 +230,9 @@ impl View for TerminalTextView {
                         0.0,
                     );
                 }
-                if cell.visible {
+                if let Some(block) = cell.block {
+                    draw_block_element(cx, block, bg_rect, cell.fg);
+                } else if cell.visible {
                     cx.draw_text(&cell.text, Point::new(x, y));
                 }
                 col += columns;
@@ -391,10 +410,13 @@ fn text_cell(
         .line_height(floem::text::LineHeightValue::Px(LINE_HEIGHT as f32));
     let mut layout = TextLayout::new();
     layout.set_text(&text, AttrsList::new(attrs));
+    let block = block_element(text.as_str());
     CellLayout {
         text: layout,
         columns,
+        fg,
         bg,
+        block,
         visible: true,
     }
 }
@@ -403,13 +425,176 @@ fn empty_cell(bg: [u8; 3]) -> CellLayout {
     CellLayout {
         text: TextLayout::new(),
         columns: 1,
+        fg: [0, 0, 0],
         bg,
+        block: None,
         visible: false,
     }
 }
 
 fn char_columns(ch: char) -> usize {
     UnicodeWidthChar::width(ch).unwrap_or(0)
+}
+
+fn block_element(text: &str) -> Option<BlockElement> {
+    let mut chars = text.chars();
+    let ch = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+
+    match ch {
+        '█' => Some(BlockElement::Full),
+        '▀' => Some(BlockElement::UpperHalf),
+        '▄' => Some(BlockElement::LowerHalf),
+        '▌' => Some(BlockElement::LeftHalf),
+        '▐' => Some(BlockElement::RightHalf),
+        '▖' => Some(BlockElement::Quadrants {
+            upper_left: false,
+            upper_right: false,
+            lower_left: true,
+            lower_right: false,
+        }),
+        '▗' => Some(BlockElement::Quadrants {
+            upper_left: false,
+            upper_right: false,
+            lower_left: false,
+            lower_right: true,
+        }),
+        '▘' => Some(BlockElement::Quadrants {
+            upper_left: true,
+            upper_right: false,
+            lower_left: false,
+            lower_right: false,
+        }),
+        '▝' => Some(BlockElement::Quadrants {
+            upper_left: false,
+            upper_right: true,
+            lower_left: false,
+            lower_right: false,
+        }),
+        '▚' => Some(BlockElement::Quadrants {
+            upper_left: true,
+            upper_right: false,
+            lower_left: false,
+            lower_right: true,
+        }),
+        '▞' => Some(BlockElement::Quadrants {
+            upper_left: false,
+            upper_right: true,
+            lower_left: true,
+            lower_right: false,
+        }),
+        '▙' => Some(BlockElement::Quadrants {
+            upper_left: true,
+            upper_right: false,
+            lower_left: true,
+            lower_right: true,
+        }),
+        '▛' => Some(BlockElement::Quadrants {
+            upper_left: true,
+            upper_right: true,
+            lower_left: true,
+            lower_right: false,
+        }),
+        '▜' => Some(BlockElement::Quadrants {
+            upper_left: true,
+            upper_right: true,
+            lower_left: false,
+            lower_right: true,
+        }),
+        '▟' => Some(BlockElement::Quadrants {
+            upper_left: false,
+            upper_right: true,
+            lower_left: true,
+            lower_right: true,
+        }),
+        _ => None,
+    }
+}
+
+fn draw_block_element(cx: &mut PaintCx, block: BlockElement, cell_rect: Rect, fg: [u8; 3]) {
+    let color = Color::rgb8(fg[0], fg[1], fg[2]);
+    match block {
+        BlockElement::Full => cx.fill(&cell_rect, &color, 0.0),
+        BlockElement::UpperHalf => {
+            let rect = Rect::new(
+                cell_rect.x0,
+                cell_rect.y0,
+                cell_rect.x1,
+                midpoint(cell_rect.y0, cell_rect.y1),
+            );
+            cx.fill(&rect, &color, 0.0);
+        }
+        BlockElement::LowerHalf => {
+            let rect = Rect::new(
+                cell_rect.x0,
+                midpoint(cell_rect.y0, cell_rect.y1),
+                cell_rect.x1,
+                cell_rect.y1,
+            );
+            cx.fill(&rect, &color, 0.0);
+        }
+        BlockElement::LeftHalf => {
+            let rect = Rect::new(
+                cell_rect.x0,
+                cell_rect.y0,
+                midpoint(cell_rect.x0, cell_rect.x1),
+                cell_rect.y1,
+            );
+            cx.fill(&rect, &color, 0.0);
+        }
+        BlockElement::RightHalf => {
+            let rect = Rect::new(
+                midpoint(cell_rect.x0, cell_rect.x1),
+                cell_rect.y0,
+                cell_rect.x1,
+                cell_rect.y1,
+            );
+            cx.fill(&rect, &color, 0.0);
+        }
+        BlockElement::Quadrants {
+            upper_left,
+            upper_right,
+            lower_left,
+            lower_right,
+        } => {
+            let mid_x = midpoint(cell_rect.x0, cell_rect.x1);
+            let mid_y = midpoint(cell_rect.y0, cell_rect.y1);
+            if upper_left {
+                cx.fill(
+                    &Rect::new(cell_rect.x0, cell_rect.y0, mid_x, mid_y),
+                    &color,
+                    0.0,
+                );
+            }
+            if upper_right {
+                cx.fill(
+                    &Rect::new(mid_x, cell_rect.y0, cell_rect.x1, mid_y),
+                    &color,
+                    0.0,
+                );
+            }
+            if lower_left {
+                cx.fill(
+                    &Rect::new(cell_rect.x0, mid_y, mid_x, cell_rect.y1),
+                    &color,
+                    0.0,
+                );
+            }
+            if lower_right {
+                cx.fill(
+                    &Rect::new(mid_x, mid_y, cell_rect.x1, cell_rect.y1),
+                    &color,
+                    0.0,
+                );
+            }
+        }
+    }
+}
+
+fn midpoint(start: f64, end: f64) -> f64 {
+    start + (end - start) / 2.0
 }
 
 fn build_preedit_layout(text: Option<&str>) -> Option<PreeditLayout> {
@@ -513,5 +698,27 @@ mod tests {
             vec![1, 2, 1]
         );
         assert_eq!(cells.iter().map(|cell| cell.columns).sum::<usize>(), 4);
+    }
+
+    #[test]
+    fn span_cells_mark_block_elements_for_rect_rendering() {
+        let cells = build_span_cells(
+            &TerminalSpan {
+                text: "█▄▀".to_string(),
+                columns: 3,
+                fg: [1, 2, 3],
+                bg: [4, 5, 6],
+            },
+            &test_family(),
+        );
+
+        assert_eq!(
+            cells.iter().map(|cell| cell.block).collect::<Vec<_>>(),
+            vec![
+                Some(BlockElement::Full),
+                Some(BlockElement::LowerHalf),
+                Some(BlockElement::UpperHalf),
+            ]
+        );
     }
 }
