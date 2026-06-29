@@ -1457,24 +1457,24 @@ fn terminate_active_session(workspace: RwSignal<Workspace>, sessions: RwSignal<S
 
 fn tab_strip(workspace: RwSignal<Workspace>, sessions: RwSignal<SessionRegistry>) -> impl IntoView {
     h_stack((
-        tab_button(workspace, sessions, 0),
-        tab_button(workspace, sessions, 1),
-        tab_button(workspace, sessions, 2),
-        tab_button(workspace, sessions, 3),
-        tab_button(workspace, sessions, 4),
-        tab_button(workspace, sessions, 5),
+        tab_chip(workspace, sessions, 0),
+        tab_chip(workspace, sessions, 1),
+        tab_chip(workspace, sessions, 2),
+        tab_chip(workspace, sessions, 3),
+        tab_chip(workspace, sessions, 4),
+        tab_chip(workspace, sessions, 5),
     ))
     .style(|s| {
         s.width_full()
-            .height(34)
+            .height(35)
             .items_center()
-            .gap(4)
-            .padding_horiz(8)
-            .background(floem::peniko::Color::rgb8(25, 28, 34))
+            .gap(6)
+            .padding_horiz(10)
+            .background(floem::peniko::Color::rgb8(21, 24, 30))
     })
 }
 
-fn tab_button(
+fn tab_chip(
     workspace: RwSignal<Workspace>,
     sessions: RwSignal<SessionRegistry>,
     index: usize,
@@ -1505,39 +1505,110 @@ fn tab_button(
     let closeable = move || workspace.with(|ws| ws.tab_count() > 1);
 
     h_stack((
-        button(label(title)).action(move || {
-            workspace.update(|ws| {
-                ws.activate_tab_index(index);
-            });
+        label(title).style(|s| {
+            s.max_width(170)
+                .font_size(12)
+                .color(floem::peniko::Color::rgb8(233, 236, 242))
         }),
-        button("x")
-            .action(move || close_tab(workspace, sessions, index))
-            .style(move |s| if closeable() { s } else { s.hide() }),
+        chrome_close_button(
+            move || closeable(),
+            move || close_tab(workspace, sessions, index),
+        ),
     ))
+    .on_click_stop(move |_| {
+        workspace.update(|ws| {
+            ws.activate_tab_index(index);
+        });
+    })
     .style(move |s| {
         if !exists() {
             return s.hide();
         }
 
         let background = if active() {
-            floem::peniko::Color::rgb8(54, 59, 70)
+            floem::peniko::Color::rgb8(48, 53, 63)
         } else {
-            floem::peniko::Color::rgb8(37, 40, 48)
+            floem::peniko::Color::rgb8(31, 35, 43)
         };
         let border = if active() {
             floem::peniko::Color::rgb8(132, 220, 198)
         } else {
-            floem::peniko::Color::rgb8(54, 59, 70)
+            floem::peniko::Color::rgb8(62, 68, 80)
         };
-        s.height(26)
+        s.height(27)
+            .min_width(0.0)
             .items_center()
-            .gap(4)
-            .padding_horiz(4)
-            .font_size(12)
-            .color(floem::peniko::Color::rgb8(233, 236, 242))
+            .gap(7)
+            .padding_left(10)
+            .padding_right(4)
             .background(background)
             .border(1.0)
             .border_color(border)
+    })
+}
+
+fn chrome_close_button(
+    visible: impl Fn() -> bool + 'static + Copy,
+    on_close: impl Fn() + 'static + Copy,
+) -> impl IntoView {
+    label(|| "×".to_string())
+        .on_click_stop(move |_| on_close())
+        .style(move |s| {
+            if !visible() {
+                return s.hide();
+            }
+
+            s.width(22)
+                .height(22)
+                .items_center()
+                .justify_center()
+                .font_size(14)
+                .color(floem::peniko::Color::rgb8(186, 193, 205))
+                .background(floem::peniko::Color::rgb8(43, 48, 58))
+                .border(1.0)
+                .border_color(floem::peniko::Color::rgb8(73, 80, 94))
+        })
+}
+
+fn pane_header(
+    title: impl Fn() -> String + 'static + Copy,
+    active: impl Fn() -> bool + 'static + Copy,
+    closeable: impl Fn() -> bool + 'static + Copy,
+    on_close: impl Fn() + 'static + Copy,
+) -> impl IntoView {
+    h_stack((
+        label(title).style(|s| {
+            s.min_width(0.0)
+                .font_size(13)
+                .color(floem::peniko::Color::rgb8(233, 236, 242))
+        }),
+        label(move || {
+            if active() {
+                "active".to_string()
+            } else {
+                String::new()
+            }
+        })
+        .style(|s| {
+            s.font_size(11)
+                .color(floem::peniko::Color::rgb8(132, 220, 198))
+        }),
+        chrome_close_button(closeable, on_close),
+    ))
+    .style(move |s| {
+        let background = if active() {
+            floem::peniko::Color::rgb8(39, 44, 54)
+        } else {
+            floem::peniko::Color::rgb8(32, 36, 45)
+        };
+
+        s.width_full()
+            .height(35)
+            .items_center()
+            .gap(10)
+            .padding_left(11)
+            .padding_right(6)
+            .background(background)
     })
 }
 
@@ -1730,33 +1801,8 @@ fn pane_view(
     let closeable = move || workspace.with(|ws| ws.visible_panes().len() > 1);
 
     v_stack((
-        h_stack((
-            label(title).style(|s| {
-                s.font_size(13)
-                    .color(floem::peniko::Color::rgb8(233, 236, 242))
-            }),
-            label(move || {
-                if active() {
-                    "active".to_string()
-                } else {
-                    String::new()
-                }
-            })
-            .style(|s| {
-                s.font_size(11)
-                    .color(floem::peniko::Color::rgb8(132, 220, 198))
-            }),
-            button("x")
-                .action(move || close_visible_pane(workspace, sessions, index))
-                .style(move |s| if closeable() { s } else { s.hide() }),
-        ))
-        .style(|s| {
-            s.width_full()
-                .height(34)
-                .items_center()
-                .gap(10)
-                .padding_horiz(10)
-                .background(floem::peniko::Color::rgb8(37, 40, 48))
+        pane_header(title, active, closeable, move || {
+            close_visible_pane(workspace, sessions, index)
         }),
         terminal_output(
             terminal_frame,
