@@ -51,11 +51,18 @@ pub struct TerminalTextView {
     frame: TerminalFrame,
     lines: Vec<Vec<SpanLayout>>,
     preedit: Option<PreeditLayout>,
+    metrics: TerminalMetrics,
     terminal_tx: Option<Sender<TerminalCommand>>,
     last_size: Option<TerminalSize>,
     selecting: bool,
     window_origin: Box<dyn Fn() -> Point>,
     update_ime_cursor_area: Box<dyn Fn(Point, Size)>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TerminalMetrics {
+    cell_width: f64,
+    line_height: f64,
 }
 
 struct SpanLayout {
@@ -90,6 +97,7 @@ impl TerminalTextView {
             frame: state.frame,
             lines,
             preedit,
+            metrics: TerminalMetrics::default(),
             terminal_tx,
             last_size: None,
             selecting: false,
@@ -127,12 +135,14 @@ impl View for TerminalTextView {
                 self.selecting = true;
                 self.send_selection_command(TerminalCommand::SelectionStart(cell_from_point(
                     pointer.pos,
+                    self.metrics,
                 )));
                 EventPropagation::Continue
             }
             Event::PointerMove(pointer) if self.selecting => {
                 self.send_selection_command(TerminalCommand::SelectionUpdate(cell_from_point(
                     pointer.pos,
+                    self.metrics,
                 )));
                 EventPropagation::Stop
             }
@@ -140,6 +150,7 @@ impl View for TerminalTextView {
                 self.selecting = false;
                 self.send_selection_command(TerminalCommand::SelectionUpdate(cell_from_point(
                     pointer.pos,
+                    self.metrics,
                 )));
                 EventPropagation::Stop
             }
@@ -147,7 +158,7 @@ impl View for TerminalTextView {
                 if let Some(lines) = scroll_lines_from_wheel(pointer.delta.y) {
                     self.send_selection_command(TerminalCommand::Scroll(TerminalScroll {
                         lines,
-                        point: cell_from_point(pointer.pos),
+                        point: cell_from_point(pointer.pos, self.metrics),
                     }));
                     EventPropagation::Stop
                 } else {
@@ -173,15 +184,17 @@ impl View for TerminalTextView {
             return;
         }
         let clip = Rect::new(0.0, 0.0, width, height);
-        let max_rows = ((height - PADDING_Y * 2.0) / LINE_HEIGHT).max(0.0).floor() as usize;
-        let max_cols = ((width - PADDING_X * 2.0) / CELL_WIDTH).max(0.0).floor() as usize;
+        let cell_width = self.metrics.cell_width;
+        let line_height = self.metrics.line_height;
+        let max_rows = ((height - PADDING_Y * 2.0) / line_height).max(0.0).floor() as usize;
+        let max_cols = ((width - PADDING_X * 2.0) / cell_width).max(0.0).floor() as usize;
         self.resize_terminal(max_cols, max_rows);
 
         cx.save();
         cx.clip(&clip);
 
         for (row, spans) in self.lines.iter().take(max_rows).enumerate() {
-            let y = PADDING_Y + row as f64 * LINE_HEIGHT;
+            let y = PADDING_Y + row as f64 * line_height;
             let mut x = PADDING_X;
             let mut col = 0_usize;
             for span in spans {
@@ -189,7 +202,7 @@ impl View for TerminalTextView {
                     break;
                 }
                 let columns = span.columns.min(max_cols - col);
-                let bg_rect = Rect::new(x, y, x + columns as f64 * CELL_WIDTH, y + LINE_HEIGHT);
+                let bg_rect = Rect::new(x, y, x + columns as f64 * cell_width, y + line_height);
                 if span.bg != [24, 27, 32] {
                     cx.fill(
                         &bg_rect,
@@ -200,34 +213,34 @@ impl View for TerminalTextView {
                 if span.visible {
                     cx.draw_text(&span.text, Point::new(x, y));
                 }
-                x += columns as f64 * CELL_WIDTH;
+                x += columns as f64 * cell_width;
                 col += columns;
             }
         }
 
         if let Some(cursor) = self.frame.cursor {
             if cursor.row < max_rows && cursor.col < max_cols {
-                let x = PADDING_X + cursor.col as f64 * CELL_WIDTH;
-                let y = PADDING_Y + cursor.row as f64 * LINE_HEIGHT;
-                let ime_pos = (self.window_origin)() + Point::new(x, y + LINE_HEIGHT).to_vec2();
-                let ime_size = Size::new(CELL_WIDTH, LINE_HEIGHT);
+                let x = PADDING_X + cursor.col as f64 * cell_width;
+                let y = PADDING_Y + cursor.row as f64 * line_height;
+                let ime_pos = (self.window_origin)() + Point::new(x, y + line_height).to_vec2();
+                let ime_size = Size::new(cell_width, line_height);
                 (self.update_ime_cursor_area)(ime_pos, ime_size);
                 set_ime_cursor_area(ime_pos, ime_size);
                 if let Some(preedit) = &self.preedit {
                     let preedit_width = preedit.columns.max(1).min(max_cols - cursor.col);
                     let preedit_rect =
-                        Rect::new(x, y, x + preedit_width as f64 * CELL_WIDTH, y + LINE_HEIGHT);
+                        Rect::new(x, y, x + preedit_width as f64 * cell_width, y + line_height);
                     cx.fill(&preedit_rect, &Color::rgb8(52, 58, 70), 0.0);
                     cx.draw_text(&preedit.text, Point::new(x, y));
                     let underline = Rect::new(
                         x,
-                        y + LINE_HEIGHT - 2.0,
-                        x + preedit_width as f64 * CELL_WIDTH,
-                        y + LINE_HEIGHT - 1.0,
+                        y + line_height - 2.0,
+                        x + preedit_width as f64 * cell_width,
+                        y + line_height - 1.0,
                     );
                     cx.fill(&underline, &Color::rgb8(132, 220, 198), 0.0);
                 } else {
-                    let rect = Rect::new(x, y, x + CELL_WIDTH, y + LINE_HEIGHT);
+                    let rect = Rect::new(x, y, x + cell_width, y + line_height);
                     cx.fill(&rect, &Color::rgba8(132, 220, 198, 150), 0.0);
                 }
             }
@@ -237,7 +250,7 @@ impl View for TerminalTextView {
     }
 }
 
-const CELL_WIDTH: f64 = 8.0;
+const FALLBACK_CELL_WIDTH: f64 = 8.0;
 
 impl TerminalTextView {
     fn resize_terminal(&mut self, cols: usize, rows: usize) {
@@ -262,9 +275,22 @@ impl TerminalTextView {
     }
 }
 
-fn cell_from_point(point: Point) -> TerminalSelectionPoint {
-    let col = ((point.x - PADDING_X) / CELL_WIDTH).max(0.0).floor() as usize;
-    let row = ((point.y - PADDING_Y) / LINE_HEIGHT).max(0.0).floor() as usize;
+impl Default for TerminalMetrics {
+    fn default() -> Self {
+        Self {
+            cell_width: measured_cell_width(),
+            line_height: LINE_HEIGHT,
+        }
+    }
+}
+
+fn cell_from_point(point: Point, metrics: TerminalMetrics) -> TerminalSelectionPoint {
+    let col = ((point.x - PADDING_X) / metrics.cell_width)
+        .max(0.0)
+        .floor() as usize;
+    let row = ((point.y - PADDING_Y) / metrics.line_height)
+        .max(0.0)
+        .floor() as usize;
     TerminalSelectionPoint { row, col }
 }
 
@@ -321,4 +347,47 @@ fn build_preedit_layout(text: Option<&str>) -> Option<PreeditLayout> {
         text: layout,
         columns: UnicodeWidthStr::width(text),
     })
+}
+
+fn measured_cell_width() -> f64 {
+    let sample = "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm";
+    let family: Vec<FamilyOwned> =
+        FamilyOwned::parse_list("Noto Sans Mono CJK JP, monospace, Noto Sans CJK JP").collect();
+    let attrs = Attrs::new()
+        .color(Color::rgb8(233, 236, 242))
+        .family(&family)
+        .font_size(FONT_SIZE)
+        .line_height(floem::text::LineHeightValue::Px(LINE_HEIGHT as f32));
+    let mut layout = TextLayout::new();
+    layout.set_text(sample, AttrsList::new(attrs));
+    let width = layout.size().width / sample.len() as f64;
+
+    if width.is_finite() && width > 1.0 {
+        width
+    } else {
+        FALLBACK_CELL_WIDTH
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn measured_cell_width_is_usable() {
+        assert!(measured_cell_width() > 1.0);
+    }
+
+    #[test]
+    fn cell_from_point_uses_terminal_metrics() {
+        let metrics = TerminalMetrics {
+            cell_width: 10.0,
+            line_height: 20.0,
+        };
+
+        assert_eq!(
+            cell_from_point(Point::new(PADDING_X + 21.0, PADDING_Y + 41.0), metrics),
+            TerminalSelectionPoint { row: 2, col: 2 }
+        );
+    }
 }
