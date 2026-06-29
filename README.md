@@ -33,8 +33,9 @@ supports these manual smoke checks:
 - `terminate active session`: terminates the active session.
 
 Use `Tab` while the control surface is open to switch between Commands and
-Workspace. The Workspace mode lists open tabs and detached sessions; Enter
-switches to the selected tab or attaches the selected detached session as a split.
+Workspace. The Workspace mode lists open tabs, panes inside split tabs, and
+detached sessions; Enter switches to the selected tab or pane, or attaches the
+selected detached session as a split.
 
 For automated visual inspection of the terminal pane:
 

@@ -17,7 +17,7 @@ use horizon::session::SessionRegistry;
 use horizon::terminal::{
     TerminalCommand, TerminalFrame, TerminalSession, TerminalSize, TerminalUpdate,
 };
-use horizon::workspace::{PaneKind, SessionId, SessionKind, Workspace};
+use horizon::workspace::{PaneKind, PaneSummary, SessionId, SessionKind, Workspace};
 use std::path::PathBuf;
 use termwiz::input::{KeyCode as TermKeyCode, Modifiers as TermModifiers};
 
@@ -57,10 +57,13 @@ enum OverviewItem {
         kind: SessionKind,
         display_number: usize,
     },
-    AttachedSession {
+    Pane {
+        tab_index: usize,
+        pane_index: usize,
         title: String,
-        kind: SessionKind,
-        display_number: usize,
+        kind: PaneKind,
+        active: bool,
+        tab_active: bool,
     },
 }
 
@@ -1007,7 +1010,7 @@ impl OverviewItem {
         match self {
             Self::Tab { .. } => "TAB".to_string(),
             Self::DetachedSession { .. } => "DETACHED".to_string(),
-            Self::AttachedSession { .. } => "SESSION".to_string(),
+            Self::Pane { .. } => "PANE".to_string(),
         }
     }
 
@@ -1015,7 +1018,7 @@ impl OverviewItem {
         match self {
             Self::Tab { .. } => floem::peniko::Color::rgb8(224, 184, 104),
             Self::DetachedSession { .. } => floem::peniko::Color::rgb8(126, 170, 255),
-            Self::AttachedSession { .. } => floem::peniko::Color::rgb8(132, 220, 198),
+            Self::Pane { .. } => floem::peniko::Color::rgb8(132, 220, 198),
         }
     }
 
@@ -1023,7 +1026,12 @@ impl OverviewItem {
         match self {
             Self::Tab { index, title, .. } => format!("Tab {}: {title}", index + 1),
             Self::DetachedSession { title, .. } => format!("Attach {title}"),
-            Self::AttachedSession { title, .. } => title.clone(),
+            Self::Pane {
+                tab_index,
+                pane_index,
+                title,
+                ..
+            } => format!("Tab {} / Pane {}: {title}", tab_index + 1, pane_index + 1),
         }
     }
 
@@ -1047,62 +1055,77 @@ impl OverviewItem {
                 session_kind_label(*kind),
                 display_number
             ),
-            Self::AttachedSession {
+            Self::Pane {
                 kind,
-                display_number,
+                active,
+                tab_active,
                 ..
-            } => format!(
-                "Attached {} session #{}",
-                session_kind_label(*kind),
-                display_number
-            ),
+            } => {
+                let state = if *tab_active && *active {
+                    "Active pane"
+                } else if *tab_active {
+                    "Visible pane"
+                } else {
+                    "Pane in inactive tab"
+                };
+                format!("{state} · {} pane", pane_kind_label(*kind))
+            }
         }
     }
 }
 
 fn overview_items(workspace: &Workspace) -> Vec<OverviewItem> {
     let tabs = workspace.tab_summaries();
-    let tab_session_ids: Vec<_> = tabs
-        .iter()
-        .filter_map(|tab| tab.active_session_id)
-        .collect();
-    let mut items: Vec<_> = tabs
-        .into_iter()
-        .map(|tab| OverviewItem::Tab {
+    let panes = workspace.pane_summaries();
+    let mut items = Vec::new();
+
+    for tab in tabs {
+        let tab_index = tab.index;
+        let pane_count = tab.pane_count;
+        items.push(OverviewItem::Tab {
             index: tab.index,
             title: tab.title,
             pane_count: tab.pane_count,
             active: tab.active,
-        })
-        .collect();
+        });
+
+        if pane_count > 1 {
+            items.extend(
+                panes
+                    .iter()
+                    .filter(|pane| pane.tab_index == tab_index)
+                    .cloned()
+                    .map(OverviewItem::from),
+            );
+        }
+    }
 
     items.extend(
         workspace
-            .session_summaries()
+            .detached_session_summaries()
             .into_iter()
-            .filter_map(|session| {
-                if session.attached && !tab_session_ids.contains(&session.id) {
-                    OverviewItem::AttachedSession {
-                        title: session.title,
-                        kind: session.kind,
-                        display_number: session.display_number,
-                    }
-                    .into()
-                } else if !session.attached {
-                    OverviewItem::DetachedSession {
-                        session_id: session.id,
-                        title: session.title,
-                        kind: session.kind,
-                        display_number: session.display_number,
-                    }
-                    .into()
-                } else {
-                    None
-                }
+            .map(|session| OverviewItem::DetachedSession {
+                session_id: session.id,
+                title: session.title,
+                kind: session.kind,
+                display_number: session.display_number,
             }),
     );
 
     items
+}
+
+impl From<PaneSummary> for OverviewItem {
+    fn from(pane: PaneSummary) -> Self {
+        Self::Pane {
+            tab_index: pane.tab_index,
+            pane_index: pane.pane_index,
+            title: pane.title,
+            kind: pane.kind,
+            active: pane.active,
+            tab_active: pane.tab_active,
+        }
+    }
 }
 
 fn overview_visible_start(selection: usize, item_count: usize) -> usize {
@@ -1198,6 +1221,13 @@ fn session_kind_label(kind: SessionKind) -> &'static str {
     }
 }
 
+fn pane_kind_label(kind: PaneKind) -> &'static str {
+    match kind {
+        PaneKind::Terminal => "terminal",
+        PaneKind::Agent => "agent",
+    }
+}
+
 fn open_palette(
     palette_open: RwSignal<bool>,
     palette_query: RwSignal<String>,
@@ -1244,7 +1274,13 @@ fn execute_overview_selection(
         OverviewItem::DetachedSession { session_id, .. } => {
             ws.attach_existing_session_to_split(session_id);
         }
-        OverviewItem::AttachedSession { .. } => {}
+        OverviewItem::Pane {
+            tab_index,
+            pane_index,
+            ..
+        } => {
+            ws.activate_pane_index(tab_index, pane_index);
+        }
     });
 }
 
@@ -2201,14 +2237,9 @@ mod tests {
                 ..
             }
         ));
-        assert!(!items.iter().any(|item| matches!(
-            item,
-            OverviewItem::AttachedSession {
-                title,
-                kind: SessionKind::Terminal,
-                display_number: 1,
-            } if title == "Terminal #1"
-        )));
+        assert!(!items.iter().any(
+            |item| matches!(item, OverviewItem::Pane { title, .. } if title == "Terminal #1")
+        ));
         assert!(items.iter().any(|item| matches!(
             item,
             OverviewItem::DetachedSession {
@@ -2220,7 +2251,7 @@ mod tests {
     }
 
     #[test]
-    fn overview_items_include_split_sessions_not_represented_by_tabs() {
+    fn overview_items_include_split_panes_under_their_tab() {
         let mut workspace = Workspace::mvp();
         workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
 
@@ -2234,22 +2265,28 @@ mod tests {
                 ..
             } if title == "Terminal #2"
         ));
-        assert!(items.iter().any(|item| matches!(
-            item,
-            OverviewItem::AttachedSession {
+        assert!(matches!(
+            &items[1],
+            OverviewItem::Pane {
+                tab_index: 0,
+                pane_index: 0,
                 title,
-                kind: SessionKind::Terminal,
-                display_number: 1,
+                kind: PaneKind::Terminal,
+                active: false,
+                tab_active: true,
             } if title == "Terminal #1"
-        )));
-        assert!(!items.iter().any(|item| matches!(
-            item,
-            OverviewItem::AttachedSession {
+        ));
+        assert!(matches!(
+            &items[2],
+            OverviewItem::Pane {
+                tab_index: 0,
+                pane_index: 1,
                 title,
-                kind: SessionKind::Terminal,
-                display_number: 2,
+                kind: PaneKind::Terminal,
+                active: true,
+                tab_active: true,
             } if title == "Terminal #2"
-        )));
+        ));
     }
 
     #[test]

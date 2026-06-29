@@ -48,6 +48,16 @@ pub struct SessionSummary {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PaneSummary {
+    pub tab_index: usize,
+    pub pane_index: usize,
+    pub title: String,
+    pub kind: PaneKind,
+    pub active: bool,
+    pub tab_active: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkspaceSession {
     pub id: SessionId,
     pub kind: SessionKind,
@@ -184,6 +194,24 @@ impl Workspace {
         };
         self.active_tab = tab.id;
         true
+    }
+
+    pub fn activate_pane_index(&mut self, tab_index: usize, pane_index: usize) -> bool {
+        let Some(tab) = self.tabs.get(tab_index) else {
+            return false;
+        };
+        let Some(pane_id) = tab.root.pane_ids().get(pane_index).copied() else {
+            return false;
+        };
+        let tab_id = tab.id;
+
+        self.active_tab = tab_id;
+        if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) {
+            tab.active = pane_id;
+            return true;
+        }
+
+        false
     }
 
     pub fn close_tab_index(&mut self, index: usize) -> Vec<SessionId> {
@@ -408,6 +436,30 @@ impl Workspace {
                 active: tab.id == self.active_tab,
                 pane_count: tab.root.pane_ids().len(),
                 active_session_id: self.tab_session_id(tab),
+            })
+            .collect()
+    }
+
+    pub fn pane_summaries(&self) -> Vec<PaneSummary> {
+        self.tabs
+            .iter()
+            .enumerate()
+            .flat_map(|(tab_index, tab)| {
+                tab.root.pane_ids().into_iter().enumerate().filter_map(
+                    move |(pane_index, pane_id)| {
+                        self.panes
+                            .iter()
+                            .find(|pane| pane.id == pane_id)
+                            .map(|pane| PaneSummary {
+                                tab_index,
+                                pane_index,
+                                title: self.pane_title(pane),
+                                kind: pane.kind,
+                                active: tab.active == pane_id,
+                                tab_active: tab.id == self.active_tab,
+                            })
+                    },
+                )
             })
             .collect()
     }
@@ -908,6 +960,50 @@ mod tests {
         assert_eq!(workspace.active_visible_index(), 0);
         assert!(!workspace.activate_visible_pane(5));
         assert_eq!(workspace.active_visible_index(), 0);
+    }
+
+    #[test]
+    fn pane_summaries_include_split_panes_by_tab() {
+        let mut workspace = Workspace::mvp();
+        workspace.attach_session_to_split(SessionId::new());
+
+        assert_eq!(
+            workspace.pane_summaries(),
+            vec![
+                PaneSummary {
+                    tab_index: 0,
+                    pane_index: 0,
+                    title: "Terminal #1".to_string(),
+                    kind: PaneKind::Terminal,
+                    active: false,
+                    tab_active: true,
+                },
+                PaneSummary {
+                    tab_index: 0,
+                    pane_index: 1,
+                    title: "Terminal #2".to_string(),
+                    kind: PaneKind::Terminal,
+                    active: true,
+                    tab_active: true,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn activate_pane_index_switches_tab_and_pane() {
+        let mut workspace = Workspace::mvp();
+        workspace.attach_session_to_split(SessionId::new());
+        workspace.open_tab(PaneKind::Agent, None);
+
+        assert_eq!(workspace.active_tab_index(), 1);
+        assert!(workspace.activate_pane_index(0, 0));
+        assert_eq!(workspace.active_tab_index(), 0);
+        assert_eq!(workspace.active_visible_index(), 0);
+        assert_eq!(workspace.active_title(), "Terminal #1");
+        assert!(!workspace.activate_pane_index(9, 0));
+        assert!(!workspace.activate_pane_index(0, 9));
+        assert_eq!(workspace.active_title(), "Terminal #1");
     }
 
     #[test]
