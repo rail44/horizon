@@ -7,6 +7,8 @@ client_display="${HORIZON_CLIENT_DISPLAY:-localhost:${display_number}}"
 artifact_dir="${HORIZON_ARTIFACT_DIR:-/tmp/horizon-visual-$(date +%Y%m%d-%H%M%S)-$$}"
 window_name="${HORIZON_WINDOW_NAME:-Horizon}"
 wait_secs="${HORIZON_WAIT_SECS:-20}"
+capture_delay="${HORIZON_CAPTURE_DELAY:-1}"
+stddev_min="${HORIZON_SCREENSHOT_STDDEV_MIN:-0.003}"
 
 mkdir -p "$artifact_dir"
 
@@ -114,7 +116,7 @@ if [[ -n "${HORIZON_TEST_XDOTOOL:-}" ]]; then
   DISPLAY="$client_display" xdotool ${HORIZON_TEST_XDOTOOL}
 fi
 
-sleep 1
+sleep "$capture_delay"
 
 if ! kill -0 "$app_pid" 2>/dev/null; then
   echo "Horizon exited before screenshot capture. See $app_log" >&2
@@ -126,7 +128,11 @@ if [[ -f "$dump" ]]; then
 fi
 
 DISPLAY="$client_display" xwd -silent -id "$window_id" -out "$xwd_file"
-convert "$xwd_file" "$png"
+if command -v magick >/dev/null 2>&1; then
+  magick "$xwd_file" "$png"
+else
+  convert "$xwd_file" "$png"
+fi
 
 if [[ ! -s "$dump" ]]; then
   echo "Terminal dump is empty or missing: $dump" >&2
@@ -170,8 +176,13 @@ if [[ ! -s "$png" ]]; then
   exit 1
 fi
 
-dimensions="$(identify -format '%wx%h' "$png")"
-stddev="$(convert "$png" -colorspace Gray -format '%[fx:standard_deviation]' info:)"
+if command -v magick >/dev/null 2>&1; then
+  dimensions="$(magick identify -format '%wx%h' "$png")"
+  stddev="$(magick "$png" -colorspace Gray -format '%[fx:standard_deviation]' info:)"
+else
+  dimensions="$(identify -format '%wx%h' "$png")"
+  stddev="$(convert "$png" -colorspace Gray -format '%[fx:standard_deviation]' info:)"
+fi
 echo "screenshot=$png" >> "$metadata"
 echo "terminal_dump=$dump" >> "$metadata"
 echo "clipboard_dump=$clipboard_dump" >> "$metadata"
@@ -180,8 +191,8 @@ echo "pre_capture_dump=$pre_capture_dump" >> "$metadata"
 echo "dimensions=$dimensions" >> "$metadata"
 echo "gray_stddev=$stddev" >> "$metadata"
 
-awk -v sd="$stddev" 'BEGIN { exit(sd > 0.003 ? 0 : 1) }' || {
-  echo "Screenshot appears nearly blank. gray_stddev=$stddev, screenshot=$png" >&2
+awk -v sd="$stddev" -v min="$stddev_min" 'BEGIN { exit(sd > min ? 0 : 1) }' || {
+  echo "Screenshot appears nearly blank. gray_stddev=$stddev, min=$stddev_min, screenshot=$png" >&2
   exit 1
 }
 

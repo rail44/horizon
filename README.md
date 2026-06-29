@@ -48,6 +48,18 @@ to `terminal.txt`, captures the Horizon window to `screenshot.png`, and leaves
 all artifacts under `/tmp/horizon-visual-*` by default. It expects `Xvfb`,
 `xdotool`, `xwd`, and ImageMagick to be installed.
 
+To run the current terminal compatibility smoke suite:
+
+```sh
+scripts/run-terminal-smoke.sh
+```
+
+The suite runs shell input, new-terminal focus, split-pane status, ANSI color,
+and nvim screen scenarios. The nvim scenario is skipped when `nvim` is not
+installed. Artifacts are grouped under `/tmp/horizon-terminal-smoke-*` by
+default, with each scenario containing `terminal.txt`, `status.txt`,
+`screenshot.png`, and logs.
+
 ## Next Integration Points
 
 1. Bind `TerminalSession` updates into the Floem pane event loop.
