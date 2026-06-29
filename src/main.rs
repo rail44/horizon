@@ -25,6 +25,9 @@ mod terminal_view;
 
 const PALETTE_VISIBLE_ROWS: usize = 6;
 const OVERVIEW_VISIBLE_ROWS: usize = 8;
+const MAX_VISIBLE_PANES: usize = 4;
+
+type PaneFocusRequests = [RwSignal<u64>; MAX_VISIBLE_PANES];
 
 #[derive(Clone, Debug)]
 enum PaletteItem {
@@ -96,6 +99,12 @@ fn app_view() -> impl IntoView {
     let palette_query = RwSignal::new(String::new());
     let palette_selection = RwSignal::new(0_usize);
     let palette_focus_request = RwSignal::new(0_u64);
+    let pane_focus_requests = [
+        RwSignal::new(0_u64),
+        RwSignal::new(0_u64),
+        RwSignal::new(0_u64),
+        RwSignal::new(0_u64),
+    ];
     let control_mode = RwSignal::new(ControlMode::Commands);
     let overview_selection = RwSignal::new(0_usize);
     let terminal_dump = std::env::var_os("HORIZON_TERMINAL_DUMP").map(PathBuf::from);
@@ -125,6 +134,7 @@ fn app_view() -> impl IntoView {
                 palette_query,
                 palette_selection,
                 palette_focus_request,
+                pane_focus_requests,
                 control_mode,
                 overview_selection,
                 terminal_dump.clone(),
@@ -140,6 +150,7 @@ fn app_view() -> impl IntoView {
             palette_query,
             palette_selection,
             palette_focus_request,
+            pane_focus_requests,
             control_mode,
             overview_selection,
             terminal_dump.clone(),
@@ -220,6 +231,7 @@ fn app_view() -> impl IntoView {
                     palette_selection,
                     control_mode,
                     overview_selection,
+                    pane_focus_requests,
                     terminal_dump.clone(),
                     clipboard_dump.clone(),
                 ) {
@@ -310,6 +322,7 @@ fn command_palette(
     palette_query: RwSignal<String>,
     palette_selection: RwSignal<usize>,
     palette_focus_request: RwSignal<u64>,
+    pane_focus_requests: PaneFocusRequests,
     control_mode: RwSignal<ControlMode>,
     overview_selection: RwSignal<usize>,
     terminal_dump: Option<PathBuf>,
@@ -345,6 +358,7 @@ fn command_palette(
                 palette_query,
                 palette_selection,
                 0,
+                pane_focus_requests,
                 terminal_dump.clone(),
                 clipboard_dump.clone(),
             ),
@@ -355,6 +369,7 @@ fn command_palette(
                 palette_query,
                 palette_selection,
                 1,
+                pane_focus_requests,
                 terminal_dump.clone(),
                 clipboard_dump.clone(),
             ),
@@ -365,6 +380,7 @@ fn command_palette(
                 palette_query,
                 palette_selection,
                 2,
+                pane_focus_requests,
                 terminal_dump.clone(),
                 clipboard_dump.clone(),
             ),
@@ -375,6 +391,7 @@ fn command_palette(
                 palette_query,
                 palette_selection,
                 3,
+                pane_focus_requests,
                 terminal_dump.clone(),
                 clipboard_dump.clone(),
             ),
@@ -385,6 +402,7 @@ fn command_palette(
                 palette_query,
                 palette_selection,
                 4,
+                pane_focus_requests,
                 terminal_dump.clone(),
                 clipboard_dump.clone(),
             ),
@@ -395,6 +413,7 @@ fn command_palette(
                 palette_query,
                 palette_selection,
                 5,
+                pane_focus_requests,
                 terminal_dump,
                 clipboard_dump,
             ),
@@ -416,6 +435,7 @@ fn command_palette(
                 palette_selection,
                 control_mode,
                 overview_selection,
+                pane_focus_requests,
                 terminal_dump_for_key.clone(),
                 clipboard_dump_for_key.clone(),
             ) {
@@ -495,6 +515,7 @@ fn palette_row(
     palette_query: RwSignal<String>,
     palette_selection: RwSignal<usize>,
     index: usize,
+    pane_focus_requests: PaneFocusRequests,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) -> impl IntoView {
@@ -558,6 +579,7 @@ fn palette_row(
             palette_open,
             palette_query,
             palette_selection,
+            pane_focus_requests,
             terminal_dump.clone(),
             clipboard_dump.clone(),
         );
@@ -760,6 +782,7 @@ fn execute_command(
     command_id: CommandId,
     workspace: RwSignal<Workspace>,
     sessions: RwSignal<SessionRegistry>,
+    pane_focus_requests: PaneFocusRequests,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) {
@@ -769,19 +792,31 @@ fn execute_command(
     }
 
     match command_id {
-        CommandId::NewTerminal => {
-            open_terminal_tab(workspace, sessions, terminal_dump, clipboard_dump)
-        }
+        CommandId::NewTerminal => open_terminal_tab(
+            workspace,
+            sessions,
+            pane_focus_requests,
+            terminal_dump,
+            clipboard_dump,
+        ),
         CommandId::NewAgent => {
             workspace.update(|ws| {
                 ws.open_tab(PaneKind::Agent, None);
             });
+            request_active_pane_focus(workspace, pane_focus_requests);
         }
         CommandId::SplitActivePane => {
-            split_active_pane(workspace, sessions, terminal_dump, clipboard_dump);
+            split_active_pane(
+                workspace,
+                sessions,
+                pane_focus_requests,
+                terminal_dump,
+                clipboard_dump,
+            );
         }
         CommandId::FocusNextPane => {
             workspace.update(Workspace::focus_next);
+            request_active_pane_focus(workspace, pane_focus_requests);
         }
         CommandId::CloseActivePane => {
             let index = workspace.with_untracked(|ws| ws.active_visible_index());
@@ -804,6 +839,7 @@ fn handle_palette_key(
     palette_open: RwSignal<bool>,
     palette_query: RwSignal<String>,
     palette_selection: RwSignal<usize>,
+    pane_focus_requests: PaneFocusRequests,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) -> bool {
@@ -819,6 +855,7 @@ fn handle_palette_key(
                 palette_open,
                 palette_query,
                 palette_selection,
+                pane_focus_requests,
                 terminal_dump,
                 clipboard_dump,
             );
@@ -863,6 +900,7 @@ fn handle_control_key(
     palette_selection: RwSignal<usize>,
     control_mode: RwSignal<ControlMode>,
     overview_selection: RwSignal<usize>,
+    pane_focus_requests: PaneFocusRequests,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) -> bool {
@@ -879,6 +917,7 @@ fn handle_control_key(
             palette_open,
             palette_query,
             palette_selection,
+            pane_focus_requests,
             terminal_dump,
             clipboard_dump,
         ),
@@ -1307,6 +1346,7 @@ fn execute_palette_selection(
     palette_open: RwSignal<bool>,
     palette_query: RwSignal<String>,
     palette_selection: RwSignal<usize>,
+    pane_focus_requests: PaneFocusRequests,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) {
@@ -1333,6 +1373,7 @@ fn execute_palette_selection(
             entry.spec.id,
             workspace,
             sessions,
+            pane_focus_requests,
             terminal_dump,
             clipboard_dump,
         ),
@@ -1340,11 +1381,13 @@ fn execute_palette_selection(
             workspace.update(|ws| {
                 ws.attach_existing_session_to_split(session_id);
             });
+            request_active_pane_focus(workspace, pane_focus_requests);
         }
         PaletteItem::Tab { index, .. } => {
             workspace.update(|ws| {
                 ws.activate_tab_index(index);
             });
+            request_active_pane_focus(workspace, pane_focus_requests);
         }
     }
 }
@@ -1393,6 +1436,7 @@ fn move_palette_selection(
 fn open_terminal_tab(
     workspace: RwSignal<Workspace>,
     sessions: RwSignal<SessionRegistry>,
+    pane_focus_requests: PaneFocusRequests,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) {
@@ -1407,11 +1451,13 @@ fn open_terminal_tab(
         terminal_dump,
         clipboard_dump,
     );
+    request_active_pane_focus(workspace, pane_focus_requests);
 }
 
 fn split_active_pane(
     workspace: RwSignal<Workspace>,
     sessions: RwSignal<SessionRegistry>,
+    pane_focus_requests: PaneFocusRequests,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) {
@@ -1440,6 +1486,18 @@ fn split_active_pane(
             clipboard_dump,
         );
     }
+    request_active_pane_focus(workspace, pane_focus_requests);
+}
+
+fn request_active_pane_focus(
+    workspace: RwSignal<Workspace>,
+    pane_focus_requests: PaneFocusRequests,
+) {
+    let index = workspace.with_untracked(|ws| ws.active_visible_index());
+    if let Some(focus_request) = pane_focus_requests.get(index) {
+        focus_request.update(|request| *request += 1);
+    }
+    set_ime_allowed(active_terminal(workspace));
 }
 
 fn terminate_active_session(workspace: RwSignal<Workspace>, sessions: RwSignal<SessionRegistry>) {
@@ -1526,21 +1584,21 @@ fn tab_chip(
         }
 
         let background = if active() {
-            floem::peniko::Color::rgb8(48, 53, 63)
+            floem::peniko::Color::rgb8(39, 44, 54)
         } else {
-            floem::peniko::Color::rgb8(31, 35, 43)
+            floem::peniko::Color::rgb8(21, 24, 30)
         };
         let border = if active() {
             floem::peniko::Color::rgb8(132, 220, 198)
         } else {
-            floem::peniko::Color::rgb8(62, 68, 80)
+            floem::peniko::Color::rgb8(42, 46, 55)
         };
         s.height(27)
             .min_width(0.0)
             .items_center()
             .gap(7)
             .padding_left(10)
-            .padding_right(4)
+            .padding_right(3)
             .background(background)
             .border(1.0)
             .border_color(border)
@@ -1558,15 +1616,15 @@ fn chrome_close_button(
                 return s.hide();
             }
 
-            s.width(22)
-                .height(22)
+            s.width(20)
+                .height(20)
                 .items_center()
                 .justify_center()
-                .font_size(14)
-                .color(floem::peniko::Color::rgb8(186, 193, 205))
-                .background(floem::peniko::Color::rgb8(43, 48, 58))
+                .font_size(13)
+                .color(floem::peniko::Color::rgb8(170, 178, 190))
+                .background(floem::peniko::Color::rgb8(35, 39, 48))
                 .border(1.0)
-                .border_color(floem::peniko::Color::rgb8(73, 80, 94))
+                .border_color(floem::peniko::Color::rgb8(57, 64, 76))
         })
 }
 
@@ -1581,17 +1639,6 @@ fn pane_header(
             s.min_width(0.0)
                 .font_size(13)
                 .color(floem::peniko::Color::rgb8(233, 236, 242))
-        }),
-        label(move || {
-            if active() {
-                "active".to_string()
-            } else {
-                String::new()
-            }
-        })
-        .style(|s| {
-            s.font_size(11)
-                .color(floem::peniko::Color::rgb8(132, 220, 198))
         }),
         chrome_close_button(closeable, on_close),
     ))
@@ -1669,6 +1716,7 @@ fn workspace_view(
     palette_query: RwSignal<String>,
     palette_selection: RwSignal<usize>,
     palette_focus_request: RwSignal<u64>,
+    pane_focus_requests: PaneFocusRequests,
     control_mode: RwSignal<ControlMode>,
     overview_selection: RwSignal<usize>,
     terminal_dump: Option<PathBuf>,
@@ -1686,6 +1734,8 @@ fn workspace_view(
             palette_query,
             palette_selection,
             palette_focus_request,
+            pane_focus_requests[0],
+            pane_focus_requests,
             control_mode,
             overview_selection,
             terminal_dump.clone(),
@@ -1702,6 +1752,8 @@ fn workspace_view(
             palette_query,
             palette_selection,
             palette_focus_request,
+            pane_focus_requests[1],
+            pane_focus_requests,
             control_mode,
             overview_selection,
             terminal_dump.clone(),
@@ -1718,6 +1770,8 @@ fn workspace_view(
             palette_query,
             palette_selection,
             palette_focus_request,
+            pane_focus_requests[2],
+            pane_focus_requests,
             control_mode,
             overview_selection,
             terminal_dump.clone(),
@@ -1734,6 +1788,8 @@ fn workspace_view(
             palette_query,
             palette_selection,
             palette_focus_request,
+            pane_focus_requests[3],
+            pane_focus_requests,
             control_mode,
             overview_selection,
             terminal_dump,
@@ -1764,13 +1820,13 @@ fn pane_view(
     palette_query: RwSignal<String>,
     palette_selection: RwSignal<usize>,
     palette_focus_request: RwSignal<u64>,
+    focus_request: RwSignal<u64>,
+    pane_focus_requests: PaneFocusRequests,
     control_mode: RwSignal<ControlMode>,
     overview_selection: RwSignal<usize>,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) -> impl IntoView {
-    let focus_request = RwSignal::new(0_u64);
-
     let output = move || {
         workspace.with(|ws| {
             ws.visible_panes()
@@ -1872,6 +1928,7 @@ fn pane_view(
                     palette_selection,
                     control_mode,
                     overview_selection,
+                    pane_focus_requests,
                     terminal_dump.clone(),
                     clipboard_dump.clone(),
                 ) {

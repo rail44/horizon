@@ -220,18 +220,34 @@ impl View for TerminalTextView {
                 if col >= max_cols {
                     break;
                 }
+
                 let x = PADDING_X + col as f64 * cell_width;
                 let columns = cell.columns.min(max_cols - col);
                 let bg_rect = Rect::new(x, y, x + columns as f64 * cell_width, y + line_height);
                 if cell.bg != [24, 27, 32] {
                     cx.fill(
-                        &bg_rect,
+                        &expanded_rect(bg_rect),
                         &Color::rgb8(cell.bg[0], cell.bg[1], cell.bg[2]),
                         0.0,
                     );
                 }
+                col += columns;
+            }
+        }
+
+        for (row, cells) in self.lines.iter().take(max_rows).enumerate() {
+            let y = PADDING_Y + row as f64 * line_height;
+            let mut col = 0_usize;
+            for cell in cells {
+                if col >= max_cols {
+                    break;
+                }
+
+                let x = PADDING_X + col as f64 * cell_width;
+                let columns = cell.columns.min(max_cols - col);
+                let cell_rect = Rect::new(x, y, x + columns as f64 * cell_width, y + line_height);
                 if let Some(block) = cell.block {
-                    draw_block_element(cx, block, bg_rect, cell.fg);
+                    draw_block_element(cx, block, cell_rect, cell.fg);
                 } else if cell.visible {
                     cx.draw_text(&cell.text, Point::new(x, y));
                 }
