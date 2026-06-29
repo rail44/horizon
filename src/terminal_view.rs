@@ -80,10 +80,10 @@ struct CellLayout {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BlockElement {
     Full,
-    UpperHalf,
-    LowerHalf,
-    LeftHalf,
-    RightHalf,
+    UpperFraction(u8),
+    LowerFraction(u8),
+    LeftFraction(u8),
+    RightFraction(u8),
     Quadrants {
         upper_left: bool,
         upper_right: bool,
@@ -445,10 +445,24 @@ fn block_element(text: &str) -> Option<BlockElement> {
 
     match ch {
         '█' => Some(BlockElement::Full),
-        '▀' => Some(BlockElement::UpperHalf),
-        '▄' => Some(BlockElement::LowerHalf),
-        '▌' => Some(BlockElement::LeftHalf),
-        '▐' => Some(BlockElement::RightHalf),
+        '▔' => Some(BlockElement::UpperFraction(1)),
+        '▀' => Some(BlockElement::UpperFraction(4)),
+        '▁' => Some(BlockElement::LowerFraction(1)),
+        '▂' => Some(BlockElement::LowerFraction(2)),
+        '▃' => Some(BlockElement::LowerFraction(3)),
+        '▄' => Some(BlockElement::LowerFraction(4)),
+        '▅' => Some(BlockElement::LowerFraction(5)),
+        '▆' => Some(BlockElement::LowerFraction(6)),
+        '▇' => Some(BlockElement::LowerFraction(7)),
+        '▏' => Some(BlockElement::LeftFraction(1)),
+        '▎' => Some(BlockElement::LeftFraction(2)),
+        '▍' => Some(BlockElement::LeftFraction(3)),
+        '▌' => Some(BlockElement::LeftFraction(4)),
+        '▋' => Some(BlockElement::LeftFraction(5)),
+        '▊' => Some(BlockElement::LeftFraction(6)),
+        '▉' => Some(BlockElement::LeftFraction(7)),
+        '▐' => Some(BlockElement::RightFraction(4)),
+        '▕' => Some(BlockElement::RightFraction(1)),
         '▖' => Some(BlockElement::Quadrants {
             upper_left: false,
             upper_right: false,
@@ -516,42 +530,42 @@ fn block_element(text: &str) -> Option<BlockElement> {
 fn draw_block_element(cx: &mut PaintCx, block: BlockElement, cell_rect: Rect, fg: [u8; 3]) {
     let color = Color::rgb8(fg[0], fg[1], fg[2]);
     match block {
-        BlockElement::Full => cx.fill(&cell_rect, &color, 0.0),
-        BlockElement::UpperHalf => {
+        BlockElement::Full => cx.fill(&expanded_rect(cell_rect), &color, 0.0),
+        BlockElement::UpperFraction(eighths) => {
             let rect = Rect::new(
                 cell_rect.x0,
                 cell_rect.y0,
                 cell_rect.x1,
-                midpoint(cell_rect.y0, cell_rect.y1),
+                cell_rect.y0 + cell_rect.height() * fraction(eighths),
             );
-            cx.fill(&rect, &color, 0.0);
+            cx.fill(&expanded_rect(rect), &color, 0.0);
         }
-        BlockElement::LowerHalf => {
+        BlockElement::LowerFraction(eighths) => {
             let rect = Rect::new(
                 cell_rect.x0,
-                midpoint(cell_rect.y0, cell_rect.y1),
+                cell_rect.y1 - cell_rect.height() * fraction(eighths),
                 cell_rect.x1,
                 cell_rect.y1,
             );
-            cx.fill(&rect, &color, 0.0);
+            cx.fill(&expanded_rect(rect), &color, 0.0);
         }
-        BlockElement::LeftHalf => {
+        BlockElement::LeftFraction(eighths) => {
             let rect = Rect::new(
                 cell_rect.x0,
                 cell_rect.y0,
-                midpoint(cell_rect.x0, cell_rect.x1),
+                cell_rect.x0 + cell_rect.width() * fraction(eighths),
                 cell_rect.y1,
             );
-            cx.fill(&rect, &color, 0.0);
+            cx.fill(&expanded_rect(rect), &color, 0.0);
         }
-        BlockElement::RightHalf => {
+        BlockElement::RightFraction(eighths) => {
             let rect = Rect::new(
-                midpoint(cell_rect.x0, cell_rect.x1),
+                cell_rect.x1 - cell_rect.width() * fraction(eighths),
                 cell_rect.y0,
                 cell_rect.x1,
                 cell_rect.y1,
             );
-            cx.fill(&rect, &color, 0.0);
+            cx.fill(&expanded_rect(rect), &color, 0.0);
         }
         BlockElement::Quadrants {
             upper_left,
@@ -563,28 +577,28 @@ fn draw_block_element(cx: &mut PaintCx, block: BlockElement, cell_rect: Rect, fg
             let mid_y = midpoint(cell_rect.y0, cell_rect.y1);
             if upper_left {
                 cx.fill(
-                    &Rect::new(cell_rect.x0, cell_rect.y0, mid_x, mid_y),
+                    &expanded_rect(Rect::new(cell_rect.x0, cell_rect.y0, mid_x, mid_y)),
                     &color,
                     0.0,
                 );
             }
             if upper_right {
                 cx.fill(
-                    &Rect::new(mid_x, cell_rect.y0, cell_rect.x1, mid_y),
+                    &expanded_rect(Rect::new(mid_x, cell_rect.y0, cell_rect.x1, mid_y)),
                     &color,
                     0.0,
                 );
             }
             if lower_left {
                 cx.fill(
-                    &Rect::new(cell_rect.x0, mid_y, mid_x, cell_rect.y1),
+                    &expanded_rect(Rect::new(cell_rect.x0, mid_y, mid_x, cell_rect.y1)),
                     &color,
                     0.0,
                 );
             }
             if lower_right {
                 cx.fill(
-                    &Rect::new(mid_x, mid_y, cell_rect.x1, cell_rect.y1),
+                    &expanded_rect(Rect::new(mid_x, mid_y, cell_rect.x1, cell_rect.y1)),
                     &color,
                     0.0,
                 );
@@ -595,6 +609,20 @@ fn draw_block_element(cx: &mut PaintCx, block: BlockElement, cell_rect: Rect, fg
 
 fn midpoint(start: f64, end: f64) -> f64 {
     start + (end - start) / 2.0
+}
+
+fn fraction(eighths: u8) -> f64 {
+    eighths.clamp(1, 8) as f64 / 8.0
+}
+
+fn expanded_rect(rect: Rect) -> Rect {
+    const OVERLAP: f64 = 0.5;
+    Rect::new(
+        rect.x0 - OVERLAP,
+        rect.y0 - OVERLAP,
+        rect.x1 + OVERLAP,
+        rect.y1 + OVERLAP,
+    )
 }
 
 fn build_preedit_layout(text: Option<&str>) -> Option<PreeditLayout> {
@@ -716,8 +744,41 @@ mod tests {
             cells.iter().map(|cell| cell.block).collect::<Vec<_>>(),
             vec![
                 Some(BlockElement::Full),
-                Some(BlockElement::LowerHalf),
-                Some(BlockElement::UpperHalf),
+                Some(BlockElement::LowerFraction(4)),
+                Some(BlockElement::UpperFraction(4)),
+            ]
+        );
+    }
+
+    #[test]
+    fn span_cells_mark_fractional_block_elements_for_rect_rendering() {
+        let cells = build_span_cells(
+            &TerminalSpan {
+                text: "▏▎▍▌▋▊▉▁▂▃▄▅▆▇".to_string(),
+                columns: 14,
+                fg: [1, 2, 3],
+                bg: [4, 5, 6],
+            },
+            &test_family(),
+        );
+
+        assert_eq!(
+            cells.iter().map(|cell| cell.block).collect::<Vec<_>>(),
+            vec![
+                Some(BlockElement::LeftFraction(1)),
+                Some(BlockElement::LeftFraction(2)),
+                Some(BlockElement::LeftFraction(3)),
+                Some(BlockElement::LeftFraction(4)),
+                Some(BlockElement::LeftFraction(5)),
+                Some(BlockElement::LeftFraction(6)),
+                Some(BlockElement::LeftFraction(7)),
+                Some(BlockElement::LowerFraction(1)),
+                Some(BlockElement::LowerFraction(2)),
+                Some(BlockElement::LowerFraction(3)),
+                Some(BlockElement::LowerFraction(4)),
+                Some(BlockElement::LowerFraction(5)),
+                Some(BlockElement::LowerFraction(6)),
+                Some(BlockElement::LowerFraction(7)),
             ]
         );
     }
