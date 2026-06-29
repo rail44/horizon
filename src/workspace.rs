@@ -378,15 +378,21 @@ impl Workspace {
     }
 
     pub fn detached_session_summaries(&self) -> Vec<SessionSummary> {
+        self.session_summaries()
+            .into_iter()
+            .filter(|session| !session.attached)
+            .collect()
+    }
+
+    pub fn session_summaries(&self) -> Vec<SessionSummary> {
         self.sessions
             .iter()
-            .filter(|session| !self.session_is_referenced(session.id))
             .map(|session| SessionSummary {
                 id: session.id,
                 kind: session.kind,
                 display_number: session.display_number,
                 title: session.title.clone(),
-                attached: false,
+                attached: self.session_is_referenced(session.id),
             })
             .collect()
     }
@@ -703,6 +709,35 @@ mod tests {
                 title: "Terminal #2".to_string(),
                 attached: false,
             }]
+        );
+    }
+
+    #[test]
+    fn session_summaries_include_attached_and_detached_sessions() {
+        let mut workspace = Workspace::mvp();
+        let attached_session = workspace.active_terminal_session_id().expect("session");
+        let detached_session = SessionId::new();
+        workspace.attach_session_to_split(detached_session);
+        workspace.close_visible_pane(1);
+
+        assert_eq!(
+            workspace.session_summaries(),
+            vec![
+                SessionSummary {
+                    id: attached_session,
+                    kind: SessionKind::Terminal,
+                    display_number: 1,
+                    title: "Terminal #1".to_string(),
+                    attached: true,
+                },
+                SessionSummary {
+                    id: detached_session,
+                    kind: SessionKind::Terminal,
+                    display_number: 2,
+                    title: "Terminal #2".to_string(),
+                    attached: false,
+                },
+            ]
         );
     }
 

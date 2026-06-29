@@ -57,6 +57,11 @@ enum OverviewItem {
         kind: SessionKind,
         display_number: usize,
     },
+    AttachedSession {
+        title: String,
+        kind: SessionKind,
+        display_number: usize,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -600,9 +605,10 @@ fn workspace_overview(
                 label(move || {
                     workspace.with(|ws| {
                         format!(
-                            "{} tab(s) · {} visible pane(s) · {} detached session(s)",
+                            "{} tab(s) · {} visible pane(s) · {} session(s), {} detached",
                             ws.tab_count(),
                             ws.visible_panes().len(),
+                            ws.session_count(),
                             ws.detached_session_count()
                         )
                     })
@@ -1001,6 +1007,7 @@ impl OverviewItem {
         match self {
             Self::Tab { .. } => "TAB".to_string(),
             Self::DetachedSession { .. } => "DETACHED".to_string(),
+            Self::AttachedSession { .. } => "SESSION".to_string(),
         }
     }
 
@@ -1008,6 +1015,7 @@ impl OverviewItem {
         match self {
             Self::Tab { .. } => floem::peniko::Color::rgb8(224, 184, 104),
             Self::DetachedSession { .. } => floem::peniko::Color::rgb8(126, 170, 255),
+            Self::AttachedSession { .. } => floem::peniko::Color::rgb8(132, 220, 198),
         }
     }
 
@@ -1015,6 +1023,7 @@ impl OverviewItem {
         match self {
             Self::Tab { index, title, .. } => format!("Tab {}: {title}", index + 1),
             Self::DetachedSession { title, .. } => format!("Attach {title}"),
+            Self::AttachedSession { title, .. } => title.clone(),
         }
     }
 
@@ -1038,6 +1047,15 @@ impl OverviewItem {
                 session_kind_label(*kind),
                 display_number
             ),
+            Self::AttachedSession {
+                kind,
+                display_number,
+                ..
+            } => format!(
+                "Attached {} session #{}",
+                session_kind_label(*kind),
+                display_number
+            ),
         }
     }
 }
@@ -1054,17 +1072,22 @@ fn overview_items(workspace: &Workspace) -> Vec<OverviewItem> {
         })
         .collect();
 
-    items.extend(
-        workspace
-            .detached_session_summaries()
-            .into_iter()
-            .map(|session| OverviewItem::DetachedSession {
+    items.extend(workspace.session_summaries().into_iter().map(|session| {
+        if session.attached {
+            OverviewItem::AttachedSession {
+                title: session.title,
+                kind: session.kind,
+                display_number: session.display_number,
+            }
+        } else {
+            OverviewItem::DetachedSession {
                 session_id: session.id,
                 title: session.title,
                 kind: session.kind,
                 display_number: session.display_number,
-            }),
-    );
+            }
+        }
+    }));
 
     items
 }
@@ -1208,6 +1231,7 @@ fn execute_overview_selection(
         OverviewItem::DetachedSession { session_id, .. } => {
             ws.attach_existing_session_to_split(session_id);
         }
+        OverviewItem::AttachedSession { .. } => {}
     });
 }
 
@@ -2148,7 +2172,7 @@ mod tests {
     }
 
     #[test]
-    fn overview_items_include_tabs_and_detached_sessions() {
+    fn overview_items_include_tabs_and_sessions() {
         let mut workspace = Workspace::mvp();
         let session_id = SessionId::new();
         workspace.split_active(PaneKind::Terminal, Some(session_id));
@@ -2164,6 +2188,14 @@ mod tests {
                 ..
             }
         ));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            OverviewItem::AttachedSession {
+                title,
+                kind: SessionKind::Terminal,
+                display_number: 1,
+            } if title == "Terminal #1"
+        )));
         assert!(items.iter().any(|item| matches!(
             item,
             OverviewItem::DetachedSession {
