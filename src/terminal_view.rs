@@ -22,6 +22,8 @@ const FONT_SIZE: f32 = 13.0;
 const LINE_HEIGHT: f64 = 18.0;
 const PADDING_X: f64 = 12.0;
 const PADDING_Y: f64 = 12.0;
+const TERMINAL_FONT_FAMILY: &str =
+    "Iosevka Nerd Font Mono, Symbols Nerd Font Mono, Noto Sans Mono CJK JP, monospace, Noto Sans CJK JP";
 
 pub fn terminal_text_view(
     frame: impl Fn() -> TerminalFrame + 'static,
@@ -303,8 +305,7 @@ fn scroll_lines_from_wheel(delta_y: f64) -> Option<i32> {
 }
 
 fn build_line_layouts(frame: &TerminalFrame) -> Vec<Vec<CellLayout>> {
-    let family: Vec<FamilyOwned> =
-        FamilyOwned::parse_list("Noto Sans Mono CJK JP, monospace, Noto Sans CJK JP").collect();
+    let family = terminal_font_family();
 
     frame
         .lines
@@ -413,8 +414,7 @@ fn char_columns(ch: char) -> usize {
 
 fn build_preedit_layout(text: Option<&str>) -> Option<PreeditLayout> {
     let text = text.filter(|text| !text.is_empty())?;
-    let family: Vec<FamilyOwned> =
-        FamilyOwned::parse_list("Noto Sans Mono CJK JP, monospace, Noto Sans CJK JP").collect();
+    let family = terminal_font_family();
     let attrs = Attrs::new()
         .color(Color::rgb8(233, 236, 242))
         .family(&family)
@@ -430,8 +430,7 @@ fn build_preedit_layout(text: Option<&str>) -> Option<PreeditLayout> {
 
 fn measured_cell_width() -> f64 {
     let sample = "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm";
-    let family: Vec<FamilyOwned> =
-        FamilyOwned::parse_list("Noto Sans Mono CJK JP, monospace, Noto Sans CJK JP").collect();
+    let family = terminal_font_family();
     let attrs = Attrs::new()
         .color(Color::rgb8(233, 236, 242))
         .family(&family)
@@ -448,13 +447,17 @@ fn measured_cell_width() -> f64 {
     }
 }
 
+fn terminal_font_family() -> Vec<FamilyOwned> {
+    FamilyOwned::parse_list(TERMINAL_FONT_FAMILY).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use horizon::terminal::TerminalSpan;
 
     fn test_family() -> Vec<FamilyOwned> {
-        FamilyOwned::parse_list("Noto Sans Mono CJK JP, monospace, Noto Sans CJK JP").collect()
+        terminal_font_family()
     }
 
     #[test]
