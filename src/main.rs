@@ -1061,8 +1061,12 @@ impl OverviewItem {
 }
 
 fn overview_items(workspace: &Workspace) -> Vec<OverviewItem> {
-    let mut items: Vec<_> = workspace
-        .tab_summaries()
+    let tabs = workspace.tab_summaries();
+    let tab_session_ids: Vec<_> = tabs
+        .iter()
+        .filter_map(|tab| tab.active_session_id)
+        .collect();
+    let mut items: Vec<_> = tabs
         .into_iter()
         .map(|tab| OverviewItem::Tab {
             index: tab.index,
@@ -1072,22 +1076,31 @@ fn overview_items(workspace: &Workspace) -> Vec<OverviewItem> {
         })
         .collect();
 
-    items.extend(workspace.session_summaries().into_iter().map(|session| {
-        if session.attached {
-            OverviewItem::AttachedSession {
-                title: session.title,
-                kind: session.kind,
-                display_number: session.display_number,
-            }
-        } else {
-            OverviewItem::DetachedSession {
-                session_id: session.id,
-                title: session.title,
-                kind: session.kind,
-                display_number: session.display_number,
-            }
-        }
-    }));
+    items.extend(
+        workspace
+            .session_summaries()
+            .into_iter()
+            .filter_map(|session| {
+                if session.attached && !tab_session_ids.contains(&session.id) {
+                    OverviewItem::AttachedSession {
+                        title: session.title,
+                        kind: session.kind,
+                        display_number: session.display_number,
+                    }
+                    .into()
+                } else if !session.attached {
+                    OverviewItem::DetachedSession {
+                        session_id: session.id,
+                        title: session.title,
+                        kind: session.kind,
+                        display_number: session.display_number,
+                    }
+                    .into()
+                } else {
+                    None
+                }
+            }),
+    );
 
     items
 }
@@ -2188,7 +2201,7 @@ mod tests {
                 ..
             }
         ));
-        assert!(items.iter().any(|item| matches!(
+        assert!(!items.iter().any(|item| matches!(
             item,
             OverviewItem::AttachedSession {
                 title,
@@ -2203,6 +2216,39 @@ mod tests {
                 title,
                 ..
             } if *id == session_id && title == "Terminal #2"
+        )));
+    }
+
+    #[test]
+    fn overview_items_include_split_sessions_not_represented_by_tabs() {
+        let mut workspace = Workspace::mvp();
+        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+
+        let items = overview_items(&workspace);
+
+        assert!(matches!(
+            &items[0],
+            OverviewItem::Tab {
+                title,
+                active: true,
+                ..
+            } if title == "Terminal #2"
+        ));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            OverviewItem::AttachedSession {
+                title,
+                kind: SessionKind::Terminal,
+                display_number: 1,
+            } if title == "Terminal #1"
+        )));
+        assert!(!items.iter().any(|item| matches!(
+            item,
+            OverviewItem::AttachedSession {
+                title,
+                kind: SessionKind::Terminal,
+                display_number: 2,
+            } if title == "Terminal #2"
         )));
     }
 

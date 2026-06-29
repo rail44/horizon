@@ -35,6 +35,7 @@ pub struct TabSummary {
     pub title: String,
     pub active: bool,
     pub pane_count: usize,
+    pub active_session_id: Option<SessionId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -406,6 +407,7 @@ impl Workspace {
                 title: self.tab_title(tab),
                 active: tab.id == self.active_tab,
                 pane_count: tab.root.pane_ids().len(),
+                active_session_id: self.tab_session_id(tab),
             })
             .collect()
     }
@@ -474,6 +476,13 @@ impl Workspace {
             .find(|pane| pane.id == tab.active)
             .map(|pane| self.pane_title(pane))
             .unwrap_or_else(|| "Empty".to_string())
+    }
+
+    fn tab_session_id(&self, tab: &Tab) -> Option<SessionId> {
+        self.panes
+            .iter()
+            .find(|pane| pane.id == tab.active)
+            .and_then(|pane| pane.session_id)
     }
 
     fn pane_title(&self, pane: &Pane) -> String {
@@ -803,6 +812,7 @@ mod tests {
     #[test]
     fn opening_tab_is_reflected_in_tab_summaries() {
         let mut workspace = Workspace::mvp();
+        let first_session = workspace.active_terminal_session_id().expect("session");
 
         workspace.open_tab(PaneKind::Agent, None);
 
@@ -814,12 +824,14 @@ mod tests {
                     title: "Terminal #1".to_string(),
                     active: false,
                     pane_count: 1,
+                    active_session_id: Some(first_session),
                 },
                 TabSummary {
                     index: 1,
                     title: "AI Agent".to_string(),
                     active: true,
                     pane_count: 1,
+                    active_session_id: None,
                 },
             ]
         );
