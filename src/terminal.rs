@@ -101,6 +101,7 @@ pub struct TerminalFrame {
     pub text: String,
     pub lines: Vec<TerminalLine>,
     pub cursor: Option<TerminalCursor>,
+    pub mouse_reporting: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -129,6 +130,35 @@ pub struct TerminalSelectionPoint {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TerminalMouseReport {
+    pub kind: TerminalMouseKind,
+    pub button: TerminalMouseButton,
+    pub point: TerminalSelectionPoint,
+    pub modifiers: TerminalMouseModifiers,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminalMouseKind {
+    Press,
+    Release,
+    Drag,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminalMouseButton {
+    Left,
+    Middle,
+    Right,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TerminalMouseModifiers {
+    pub shift: bool,
+    pub alt: bool,
+    pub control: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TerminalScroll {
     pub lines: i32,
     pub point: TerminalSelectionPoint,
@@ -151,6 +181,7 @@ impl TerminalFrame {
             text,
             lines,
             cursor: None,
+            mouse_reporting: false,
         }
     }
 }
@@ -193,6 +224,21 @@ impl TerminalCore {
 
         self.scroll_display(scroll.lines);
         None
+    }
+
+    pub fn handle_mouse_report(&self, report: TerminalMouseReport) -> Option<Vec<u8>> {
+        let mode = *self.term.mode();
+        if !mode.intersects(TermMode::MOUSE_MODE) || !mode.contains(TermMode::SGR_MOUSE) {
+            return None;
+        }
+
+        if matches!(report.kind, TerminalMouseKind::Drag)
+            && !mode.intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION)
+        {
+            return None;
+        }
+
+        Some(sgr_mouse_input(report))
     }
 
     pub fn paste_input(&self, text: &str) -> Vec<u8> {
@@ -275,6 +321,8 @@ impl TerminalCore {
             text,
             lines: styled_rows,
             cursor: cursor_position(content.cursor.point.line.0, content.cursor.point.column.0),
+            mouse_reporting: self.term.mode().intersects(TermMode::MOUSE_MODE)
+                && self.term.mode().contains(TermMode::SGR_MOUSE),
         }
     }
 
@@ -376,6 +424,7 @@ pub enum TerminalCommand {
     Paste(String),
     Resize(TerminalSize),
     Scroll(TerminalScroll),
+    Mouse(TerminalMouseReport),
     SelectionStart(TerminalSelectionPoint),
     SelectionUpdate(TerminalSelectionPoint),
     CopySelection,
@@ -428,6 +477,7 @@ impl TerminalSession {
         let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
         let (resize_tx, resize_rx) = crossbeam_channel::unbounded();
         let (scroll_tx, scroll_rx) = crossbeam_channel::unbounded();
+        let (mouse_tx, mouse_rx) = crossbeam_channel::unbounded();
         let (paste_tx, paste_rx) = crossbeam_channel::unbounded();
         let (key_tx, key_rx) = crossbeam_channel::unbounded();
         let (selection_tx, selection_rx) = crossbeam_channel::unbounded();
@@ -444,6 +494,7 @@ impl TerminalSession {
                 pty_rx,
                 resize_rx,
                 scroll_rx,
+                mouse_rx,
                 paste_rx,
                 key_rx,
                 selection_rx,
@@ -458,6 +509,7 @@ impl TerminalSession {
                 command_rx,
                 resize_tx,
                 scroll_tx,
+                mouse_tx,
                 paste_tx,
                 key_tx,
                 selection_tx,
@@ -518,6 +570,7 @@ fn run_terminal_core(
     pty_rx: Receiver<Vec<u8>>,
     resize_rx: Receiver<TerminalSize>,
     scroll_rx: Receiver<TerminalScroll>,
+    mouse_rx: Receiver<TerminalMouseReport>,
     paste_rx: Receiver<String>,
     key_rx: Receiver<(KeyCode, Modifiers, bool)>,
     selection_rx: Receiver<SelectionCommand>,
@@ -540,6 +593,15 @@ fn run_terminal_core(
                     return;
                 };
                 if let Some(input) = core.handle_scroll(scroll) {
+                    let _ = command_tx.send(TerminalCommand::Input(input));
+                }
+                let _ = update_tx.send(TerminalUpdate::Snapshot(core.snapshot_frame()));
+            }
+            recv(mouse_rx) -> report => {
+                let Ok(report) = report else {
+                    return;
+                };
+                if let Some(input) = core.handle_mouse_report(report) {
                     let _ = command_tx.send(TerminalCommand::Input(input));
                 }
                 let _ = update_tx.send(TerminalUpdate::Snapshot(core.snapshot_frame()));
@@ -817,6 +879,7 @@ fn run_writer(
     command_rx: Receiver<TerminalCommand>,
     resize_tx: Sender<TerminalSize>,
     scroll_tx: Sender<TerminalScroll>,
+    mouse_tx: Sender<TerminalMouseReport>,
     paste_tx: Sender<String>,
     key_tx: Sender<(KeyCode, Modifiers, bool)>,
     selection_tx: Sender<SelectionCommand>,
@@ -848,6 +911,9 @@ fn run_writer(
             }
             TerminalCommand::Scroll(scroll) => {
                 let _ = scroll_tx.send(scroll);
+            }
+            TerminalCommand::Mouse(report) => {
+                let _ = mouse_tx.send(report);
             }
             TerminalCommand::SelectionStart(point) => {
                 let _ = selection_tx.send(SelectionCommand::Start(point));
@@ -909,6 +975,46 @@ fn sgr_mouse_wheel_input(lines: i32, col: usize, row: usize) -> Vec<u8> {
         input.extend_from_slice(format!("\x1b[<{button};{col};{row}M").as_bytes());
     }
     input
+}
+
+fn sgr_mouse_input(report: TerminalMouseReport) -> Vec<u8> {
+    let button = match report.kind {
+        TerminalMouseKind::Release => 3,
+        TerminalMouseKind::Press | TerminalMouseKind::Drag => {
+            let mut code = match report.button {
+                TerminalMouseButton::Left => 0,
+                TerminalMouseButton::Middle => 1,
+                TerminalMouseButton::Right => 2,
+            };
+            if matches!(report.kind, TerminalMouseKind::Drag) {
+                code += 32;
+            }
+            code + mouse_modifier_code(report.modifiers)
+        }
+    };
+    let col = report.point.col.saturating_add(1);
+    let row = report.point.row.saturating_add(1);
+    let suffix = if matches!(report.kind, TerminalMouseKind::Release) {
+        'm'
+    } else {
+        'M'
+    };
+
+    format!("\x1b[<{button};{col};{row}{suffix}").into_bytes()
+}
+
+fn mouse_modifier_code(modifiers: TerminalMouseModifiers) -> u8 {
+    let mut code = 0;
+    if modifiers.shift {
+        code += 4;
+    }
+    if modifiers.alt {
+        code += 8;
+    }
+    if modifiers.control {
+        code += 16;
+    }
+    code
 }
 
 #[cfg(test)]
@@ -1064,6 +1170,48 @@ mod tests {
     }
 
     #[test]
+    fn mouse_report_is_ignored_until_mouse_mode_is_enabled() {
+        let core = TerminalCore::new(TerminalSize { cols: 20, rows: 3 });
+
+        assert_eq!(
+            core.handle_mouse_report(test_mouse(TerminalMouseKind::Press)),
+            None
+        );
+    }
+
+    #[test]
+    fn sgr_mouse_mode_click_sends_press_and_release_reports() {
+        let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 3 });
+        core.write_vt(b"\x1b[?1000h\x1b[?1006h");
+
+        assert_eq!(
+            core.handle_mouse_report(test_mouse(TerminalMouseKind::Press)),
+            Some(b"\x1b[<0;8;5M".to_vec())
+        );
+        assert_eq!(
+            core.handle_mouse_report(test_mouse(TerminalMouseKind::Release)),
+            Some(b"\x1b[<3;8;5m".to_vec())
+        );
+    }
+
+    #[test]
+    fn sgr_mouse_drag_requires_drag_or_motion_mode() {
+        let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 3 });
+        core.write_vt(b"\x1b[?1000h\x1b[?1006h");
+
+        assert_eq!(
+            core.handle_mouse_report(test_mouse(TerminalMouseKind::Drag)),
+            None
+        );
+
+        core.write_vt(b"\x1b[?1002h\x1b[?1006h");
+        assert_eq!(
+            core.handle_mouse_report(test_mouse(TerminalMouseKind::Drag)),
+            Some(b"\x1b[<32;8;5M".to_vec())
+        );
+    }
+
+    #[test]
     fn paste_is_plain_text_by_default() {
         let core = TerminalCore::new(TerminalSize { cols: 20, rows: 3 });
 
@@ -1122,6 +1270,15 @@ mod tests {
         TerminalScroll {
             lines,
             point: TerminalSelectionPoint { row: 0, col: 0 },
+        }
+    }
+
+    fn test_mouse(kind: TerminalMouseKind) -> TerminalMouseReport {
+        TerminalMouseReport {
+            kind,
+            button: TerminalMouseButton::Left,
+            point: TerminalSelectionPoint { row: 4, col: 7 },
+            modifiers: TerminalMouseModifiers::default(),
         }
     }
 }

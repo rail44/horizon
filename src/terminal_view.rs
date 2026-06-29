@@ -7,13 +7,15 @@ use floem::{
         kurbo::{Point, Rect, Size},
         Color,
     },
+    pointer::PointerButton,
     reactive::create_updater,
     text::{Attrs, AttrsList, FamilyOwned, TextLayout},
     View, ViewId,
 };
 use floem_renderer::Renderer;
 use horizon::terminal::{
-    TerminalCommand, TerminalFrame, TerminalScroll, TerminalSelectionPoint, TerminalSize,
+    TerminalCommand, TerminalFrame, TerminalMouseButton, TerminalMouseKind, TerminalMouseModifiers,
+    TerminalMouseReport, TerminalScroll, TerminalSelectionPoint, TerminalSize,
 };
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
@@ -58,6 +60,7 @@ pub struct TerminalTextView {
     terminal_tx: Option<Sender<TerminalCommand>>,
     last_size: Option<TerminalSize>,
     selecting: bool,
+    reporting_button: Option<TerminalMouseButton>,
     window_origin: Box<dyn Fn() -> Point>,
     update_ime_cursor_area: Box<dyn Fn(Point, Size)>,
 }
@@ -121,6 +124,7 @@ impl TerminalTextView {
             terminal_tx,
             last_size: None,
             selecting: false,
+            reporting_button: None,
             window_origin,
             update_ime_cursor_area,
         }
@@ -151,6 +155,19 @@ impl View for TerminalTextView {
 
     fn event_after_children(&mut self, _cx: &mut EventCx, event: &Event) -> EventPropagation {
         match event {
+            Event::PointerDown(pointer) if self.frame.mouse_reporting => {
+                let Some(button) = terminal_mouse_button(pointer.button) else {
+                    return EventPropagation::Continue;
+                };
+                self.reporting_button = Some(button);
+                self.send_selection_command(TerminalCommand::Mouse(TerminalMouseReport {
+                    kind: TerminalMouseKind::Press,
+                    button,
+                    point: cell_from_point(pointer.pos, self.metrics),
+                    modifiers: terminal_mouse_modifiers(pointer.modifiers),
+                }));
+                EventPropagation::Stop
+            }
             Event::PointerDown(pointer) if pointer.button.is_primary() => {
                 self.selecting = true;
                 self.send_selection_command(TerminalCommand::SelectionStart(cell_from_point(
@@ -159,11 +176,39 @@ impl View for TerminalTextView {
                 )));
                 EventPropagation::Continue
             }
+            Event::PointerMove(pointer) if self.frame.mouse_reporting => {
+                let Some(button) = self.reporting_button else {
+                    return EventPropagation::Continue;
+                };
+                self.send_selection_command(TerminalCommand::Mouse(TerminalMouseReport {
+                    kind: TerminalMouseKind::Drag,
+                    button,
+                    point: cell_from_point(pointer.pos, self.metrics),
+                    modifiers: terminal_mouse_modifiers(pointer.modifiers),
+                }));
+                EventPropagation::Stop
+            }
             Event::PointerMove(pointer) if self.selecting => {
                 self.send_selection_command(TerminalCommand::SelectionUpdate(cell_from_point(
                     pointer.pos,
                     self.metrics,
                 )));
+                EventPropagation::Stop
+            }
+            Event::PointerUp(pointer) if self.frame.mouse_reporting => {
+                let button = self
+                    .reporting_button
+                    .take()
+                    .or_else(|| terminal_mouse_button(pointer.button));
+                let Some(button) = button else {
+                    return EventPropagation::Continue;
+                };
+                self.send_selection_command(TerminalCommand::Mouse(TerminalMouseReport {
+                    kind: TerminalMouseKind::Release,
+                    button,
+                    point: cell_from_point(pointer.pos, self.metrics),
+                    modifiers: terminal_mouse_modifiers(pointer.modifiers),
+                }));
                 EventPropagation::Stop
             }
             Event::PointerUp(pointer) if pointer.button.is_primary() && self.selecting => {
@@ -337,6 +382,26 @@ fn scroll_lines_from_wheel(delta_y: f64) -> Option<i32> {
     }
 
     Some(if delta_y > 0.0 { 3 } else { -3 })
+}
+
+fn terminal_mouse_button(button: PointerButton) -> Option<TerminalMouseButton> {
+    if button.is_primary() {
+        Some(TerminalMouseButton::Left)
+    } else if button.is_auxiliary() {
+        Some(TerminalMouseButton::Middle)
+    } else if button.is_secondary() {
+        Some(TerminalMouseButton::Right)
+    } else {
+        None
+    }
+}
+
+fn terminal_mouse_modifiers(modifiers: floem::keyboard::Modifiers) -> TerminalMouseModifiers {
+    TerminalMouseModifiers {
+        shift: modifiers.shift(),
+        alt: modifiers.alt(),
+        control: modifiers.control(),
+    }
 }
 
 fn build_line_layouts(frame: &TerminalFrame) -> Vec<Vec<CellLayout>> {
