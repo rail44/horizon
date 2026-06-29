@@ -15,6 +15,7 @@ use floem_renderer::Renderer;
 use horizon::terminal::{
     TerminalCommand, TerminalFrame, TerminalScroll, TerminalSelectionPoint, TerminalSize,
 };
+use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
 const FONT_SIZE: f32 = 13.0;
@@ -49,7 +50,7 @@ pub fn terminal_text_view(
 pub struct TerminalTextView {
     id: ViewId,
     frame: TerminalFrame,
-    lines: Vec<Vec<SpanLayout>>,
+    lines: Vec<Vec<CellLayout>>,
     preedit: Option<PreeditLayout>,
     metrics: TerminalMetrics,
     terminal_tx: Option<Sender<TerminalCommand>>,
@@ -65,7 +66,7 @@ struct TerminalMetrics {
     line_height: f64,
 }
 
-struct SpanLayout {
+struct CellLayout {
     text: TextLayout,
     columns: usize,
     bg: [u8; 3],
@@ -193,27 +194,26 @@ impl View for TerminalTextView {
         cx.save();
         cx.clip(&clip);
 
-        for (row, spans) in self.lines.iter().take(max_rows).enumerate() {
+        for (row, cells) in self.lines.iter().take(max_rows).enumerate() {
             let y = PADDING_Y + row as f64 * line_height;
-            let mut x = PADDING_X;
             let mut col = 0_usize;
-            for span in spans {
+            for cell in cells {
                 if col >= max_cols {
                     break;
                 }
-                let columns = span.columns.min(max_cols - col);
+                let x = PADDING_X + col as f64 * cell_width;
+                let columns = cell.columns.min(max_cols - col);
                 let bg_rect = Rect::new(x, y, x + columns as f64 * cell_width, y + line_height);
-                if span.bg != [24, 27, 32] {
+                if cell.bg != [24, 27, 32] {
                     cx.fill(
                         &bg_rect,
-                        &Color::rgb8(span.bg[0], span.bg[1], span.bg[2]),
+                        &Color::rgb8(cell.bg[0], cell.bg[1], cell.bg[2]),
                         0.0,
                     );
                 }
-                if span.visible {
-                    cx.draw_text(&span.text, Point::new(x, y));
+                if cell.visible {
+                    cx.draw_text(&cell.text, Point::new(x, y));
                 }
-                x += columns as f64 * cell_width;
                 col += columns;
             }
         }
@@ -302,7 +302,7 @@ fn scroll_lines_from_wheel(delta_y: f64) -> Option<i32> {
     Some(if delta_y > 0.0 { 3 } else { -3 })
 }
 
-fn build_line_layouts(frame: &TerminalFrame) -> Vec<Vec<SpanLayout>> {
+fn build_line_layouts(frame: &TerminalFrame) -> Vec<Vec<CellLayout>> {
     let family: Vec<FamilyOwned> =
         FamilyOwned::parse_list("Noto Sans Mono CJK JP, monospace, Noto Sans CJK JP").collect();
 
@@ -310,26 +310,105 @@ fn build_line_layouts(frame: &TerminalFrame) -> Vec<Vec<SpanLayout>> {
         .lines
         .iter()
         .map(|line| {
-            line.spans
-                .iter()
-                .map(|span| {
-                    let attrs = Attrs::new()
-                        .color(Color::rgb8(span.fg[0], span.fg[1], span.fg[2]))
-                        .family(&family)
-                        .font_size(FONT_SIZE)
-                        .line_height(floem::text::LineHeightValue::Px(LINE_HEIGHT as f32));
-                    let mut layout = TextLayout::new();
-                    layout.set_text(&span.text, AttrsList::new(attrs));
-                    SpanLayout {
-                        columns: span.columns,
-                        bg: span.bg,
-                        visible: !span.text.is_empty(),
-                        text: layout,
-                    }
-                })
-                .collect()
+            let mut cells = Vec::new();
+            for span in &line.spans {
+                cells.extend(build_span_cells(span, &family));
+            }
+            cells
         })
         .collect()
+}
+
+fn build_span_cells(
+    span: &horizon::terminal::TerminalSpan,
+    family: &[FamilyOwned],
+) -> Vec<CellLayout> {
+    if span.text.is_empty() {
+        return (0..span.columns)
+            .map(|_| empty_cell(span.bg))
+            .collect::<Vec<_>>();
+    }
+
+    let mut cells = Vec::new();
+    let mut current = String::new();
+    let mut current_columns = 0_usize;
+
+    for ch in span.text.chars() {
+        let columns = char_columns(ch);
+        if columns == 0 {
+            if current.is_empty() {
+                current.push(ch);
+                current_columns = 1;
+            } else {
+                current.push(ch);
+            }
+            continue;
+        }
+
+        if !current.is_empty() {
+            cells.push(text_cell(
+                std::mem::take(&mut current),
+                current_columns,
+                span.fg,
+                span.bg,
+                family,
+            ));
+        }
+        current.push(ch);
+        current_columns = columns;
+    }
+
+    if !current.is_empty() {
+        cells.push(text_cell(
+            std::mem::take(&mut current),
+            current_columns,
+            span.fg,
+            span.bg,
+            family,
+        ));
+    }
+
+    let used_columns = cells.iter().map(|cell| cell.columns).sum::<usize>();
+    if used_columns < span.columns {
+        cells.extend((used_columns..span.columns).map(|_| empty_cell(span.bg)));
+    }
+
+    cells
+}
+
+fn text_cell(
+    text: String,
+    columns: usize,
+    fg: [u8; 3],
+    bg: [u8; 3],
+    family: &[FamilyOwned],
+) -> CellLayout {
+    let attrs = Attrs::new()
+        .color(Color::rgb8(fg[0], fg[1], fg[2]))
+        .family(family)
+        .font_size(FONT_SIZE)
+        .line_height(floem::text::LineHeightValue::Px(LINE_HEIGHT as f32));
+    let mut layout = TextLayout::new();
+    layout.set_text(&text, AttrsList::new(attrs));
+    CellLayout {
+        text: layout,
+        columns,
+        bg,
+        visible: true,
+    }
+}
+
+fn empty_cell(bg: [u8; 3]) -> CellLayout {
+    CellLayout {
+        text: TextLayout::new(),
+        columns: 1,
+        bg,
+        visible: false,
+    }
+}
+
+fn char_columns(ch: char) -> usize {
+    UnicodeWidthChar::width(ch).unwrap_or(0)
 }
 
 fn build_preedit_layout(text: Option<&str>) -> Option<PreeditLayout> {
@@ -372,6 +451,11 @@ fn measured_cell_width() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use horizon::terminal::TerminalSpan;
+
+    fn test_family() -> Vec<FamilyOwned> {
+        FamilyOwned::parse_list("Noto Sans Mono CJK JP, monospace, Noto Sans CJK JP").collect()
+    }
 
     #[test]
     fn measured_cell_width_is_usable() {
@@ -389,5 +473,42 @@ mod tests {
             cell_from_point(Point::new(PADDING_X + 21.0, PADDING_Y + 41.0), metrics),
             TerminalSelectionPoint { row: 2, col: 2 }
         );
+    }
+
+    #[test]
+    fn span_cells_expand_spaces_as_invisible_cells() {
+        let cells = build_span_cells(
+            &TerminalSpan {
+                text: String::new(),
+                columns: 3,
+                fg: [1, 2, 3],
+                bg: [4, 5, 6],
+            },
+            &test_family(),
+        );
+
+        assert_eq!(cells.len(), 3);
+        assert!(cells.iter().all(|cell| !cell.visible));
+        assert_eq!(cells.iter().map(|cell| cell.columns).sum::<usize>(), 3);
+    }
+
+    #[test]
+    fn span_cells_preserve_wide_and_combining_columns() {
+        let cells = build_span_cells(
+            &TerminalSpan {
+                text: "A日e\u{301}".to_string(),
+                columns: 4,
+                fg: [1, 2, 3],
+                bg: [4, 5, 6],
+            },
+            &test_family(),
+        );
+
+        assert_eq!(cells.len(), 3);
+        assert_eq!(
+            cells.iter().map(|cell| cell.columns).collect::<Vec<_>>(),
+            vec![1, 2, 1]
+        );
+        assert_eq!(cells.iter().map(|cell| cell.columns).sum::<usize>(), 4);
     }
 }
