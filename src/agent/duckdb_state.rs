@@ -14,96 +14,19 @@ use crate::{
     workspace::SessionId,
 };
 
+mod records;
+mod schema;
+
+use schema::{CLEAR_ALL_AGENT_STATE_SQL, INITIALIZE_SCHEMA_SQL, PROJECTION_TABLES};
+
+pub use records::{
+    AgentStoredApproval, AgentStoredConversationMessage, AgentStoredEvent, AgentStoredMessage,
+    AgentStoredSession, AgentStoredSessionSnapshot, AgentStoredToolCall, AgentStoredToolResult,
+    AppendAgentEvent,
+};
+
 pub struct DuckDbAgentStateStore {
     conn: Connection,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AgentStoredSession {
-    pub session_id: SessionId,
-    pub provider_id: Option<AgentProviderId>,
-    pub last_sequence: i64,
-    pub updated_at: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AgentStoredSessionSnapshot {
-    pub session: AgentStoredSession,
-    pub frame: AgentFrame,
-    pub message_count: usize,
-    pub tool_call_count: usize,
-    pub approval_count: usize,
-}
-
-#[derive(Clone, Debug)]
-pub struct AppendAgentEvent {
-    pub session_id: SessionId,
-    pub turn_id: Option<String>,
-    pub provider_id: Option<AgentProviderId>,
-    pub event: AgentEvent,
-    pub provider_payload: Option<Value>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AgentStoredEvent {
-    pub event_id: String,
-    pub session_id: SessionId,
-    pub turn_id: Option<String>,
-    pub sequence: i64,
-    pub event_kind: String,
-    pub event: AgentEvent,
-    pub provider_id: Option<AgentProviderId>,
-    pub provider_payload: Option<Value>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AgentStoredMessage {
-    pub event_id: String,
-    pub session_id: SessionId,
-    pub sequence: i64,
-    pub role: AgentMessageRole,
-    pub text: String,
-    pub is_delta: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AgentStoredToolCall {
-    pub event_id: String,
-    pub session_id: SessionId,
-    pub sequence: i64,
-    pub call_id: AgentToolCallId,
-    pub tool_id: String,
-    pub input: Value,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AgentStoredToolResult {
-    pub event_id: String,
-    pub session_id: SessionId,
-    pub sequence: i64,
-    pub call_id: AgentToolCallId,
-    pub output: Value,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AgentStoredApproval {
-    pub event_id: String,
-    pub session_id: SessionId,
-    pub sequence: i64,
-    pub call_id: AgentToolCallId,
-    pub reason: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AgentStoredConversationMessage {
-    pub event_id: String,
-    pub session_id: SessionId,
-    pub conversation_id: String,
-    pub turn_id: Option<String>,
-    pub sequence: i64,
-    pub provider_id: Option<AgentProviderId>,
-    pub horizon_event_kind: String,
-    pub rig_message_json: String,
 }
 
 impl DuckDbAgentStateStore {
@@ -480,85 +403,12 @@ impl DuckDbAgentStateStore {
     }
 
     fn initialize_schema(&self) -> Result<()> {
-        self.conn.execute_batch(
-            "
-            CREATE TABLE IF NOT EXISTS agent_sessions (
-                session_id TEXT PRIMARY KEY,
-                provider_id TEXT,
-                last_sequence BIGINT NOT NULL DEFAULT -1,
-                updated_at TIMESTAMP NOT NULL DEFAULT now()
-            );
-
-            CREATE TABLE IF NOT EXISTS agent_events (
-                event_id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL,
-                turn_id TEXT,
-                sequence BIGINT NOT NULL,
-                event_kind TEXT NOT NULL,
-                horizon_event_json TEXT NOT NULL,
-                provider_id TEXT,
-                provider_payload_json TEXT,
-                created_at TIMESTAMP NOT NULL DEFAULT now(),
-                UNIQUE(session_id, sequence)
-            );
-
-            CREATE TABLE IF NOT EXISTS agent_messages (
-                event_id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL,
-                sequence BIGINT NOT NULL,
-                role TEXT NOT NULL,
-                text TEXT NOT NULL,
-                is_delta BOOLEAN NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS agent_tool_calls (
-                event_id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL,
-                sequence BIGINT NOT NULL,
-                call_id TEXT NOT NULL,
-                tool_id TEXT NOT NULL,
-                input_json TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS agent_tool_results (
-                event_id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL,
-                sequence BIGINT NOT NULL,
-                call_id TEXT NOT NULL,
-                output_json TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS agent_approvals (
-                event_id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL,
-                sequence BIGINT NOT NULL,
-                call_id TEXT NOT NULL,
-                reason TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS agent_conversation_messages (
-                event_id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL,
-                conversation_id TEXT NOT NULL,
-                turn_id TEXT,
-                sequence BIGINT NOT NULL,
-                provider_id TEXT,
-                horizon_event_kind TEXT NOT NULL,
-                rig_message_json TEXT NOT NULL
-            );
-            ",
-        )?;
+        self.conn.execute_batch(INITIALIZE_SCHEMA_SQL)?;
         Ok(())
     }
 
     fn clear_projections_for_session(&self, session_id: &str) -> Result<()> {
-        for table in [
-            "agent_messages",
-            "agent_tool_calls",
-            "agent_tool_results",
-            "agent_approvals",
-            "agent_conversation_messages",
-        ] {
+        for table in PROJECTION_TABLES {
             self.conn.execute(
                 &format!("DELETE FROM {table} WHERE session_id = ?"),
                 params![session_id],
@@ -568,17 +418,7 @@ impl DuckDbAgentStateStore {
     }
 
     fn clear_all_agent_state(&self) -> Result<()> {
-        self.conn.execute_batch(
-            "
-            DELETE FROM agent_messages;
-            DELETE FROM agent_tool_calls;
-            DELETE FROM agent_tool_results;
-            DELETE FROM agent_approvals;
-            DELETE FROM agent_conversation_messages;
-            DELETE FROM agent_events;
-            DELETE FROM agent_sessions;
-            ",
-        )?;
+        self.conn.execute_batch(CLEAR_ALL_AGENT_STATE_SQL)?;
         Ok(())
     }
 
