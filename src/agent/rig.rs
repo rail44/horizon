@@ -1,20 +1,27 @@
-use std::{
-    path::PathBuf,
-    thread,
-    time::{Duration, Instant},
-};
+use std::{path::PathBuf, thread};
 
 use crossbeam_channel::{unbounded, Sender};
 use futures_util::StreamExt;
 use rig_core::client::{CompletionClient, ProviderClient};
 use rig_core::{
-    completion::{
-        message::{Text, ToolCall, ToolFunction},
-        AssistantContent, CompletionModel, Message, ToolDefinition,
-    },
+    completion::{message::Text, AssistantContent, CompletionModel, Message, ToolDefinition},
     providers::openai,
     streaming::StreamedAssistantContent,
     OneOrMany,
+};
+
+mod mapping;
+mod stream;
+
+use mapping::{
+    horizon_provider_events_from_rig_message, rig_tool_call_request, rig_tool_result_message,
+    rig_workspace_snapshot_call,
+};
+use stream::{StreamDeltaBuffer, StreamDeltaKind};
+
+pub use mapping::{
+    horizon_events_from_rig_message, horizon_tool_definition_from_rig,
+    rig_messages_from_horizon_events, rig_tool_call_provider_payload,
 };
 
 use crate::{
@@ -22,17 +29,11 @@ use crate::{
         tools::{agent_tool_definitions, AgentToolDefinition},
         AgentCommand, AgentEvent, AgentMessage, AgentMessageRole, AgentProvider,
         AgentProviderEvent, AgentProviderId, AgentSessionHandle, AgentSessionState,
-        AgentToolCallId, AgentToolCallRequest, AgentToolCallResult, AgentToolPermission,
-        StartAgentSession,
+        AgentToolCallResult, StartAgentSession,
     },
     agent_config::RigAgentConfig,
     workspace::SessionId,
 };
-
-const RIG_PROVIDER_PAYLOAD_SCHEMA: &str = "horizon.rig.provider_payload";
-const RIG_PROVIDER_PAYLOAD_VERSION: u32 = 1;
-const STREAM_FLUSH_INTERVAL: Duration = Duration::from_millis(100);
-const STREAM_FLUSH_CHARS: usize = 320;
 
 pub struct RigAgentProvider {
     config: RigAgentConfig,
@@ -307,73 +308,6 @@ async fn rig_openai_turn_streaming(
     ))
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum StreamDeltaKind {
-    Reasoning,
-    AssistantText,
-}
-
-struct StreamDeltaBuffer {
-    events_tx: Sender<AgentProviderEvent>,
-    kind: StreamDeltaKind,
-    role: AgentMessageRole,
-    text: String,
-    last_flush: Instant,
-}
-
-impl StreamDeltaBuffer {
-    fn new(
-        events_tx: Sender<AgentProviderEvent>,
-        kind: StreamDeltaKind,
-        role: AgentMessageRole,
-    ) -> Self {
-        Self {
-            events_tx,
-            kind,
-            role,
-            text: String::new(),
-            last_flush: Instant::now(),
-        }
-    }
-
-    fn push(&mut self, text: String) {
-        if text.is_empty() {
-            return;
-        }
-
-        let should_flush = text.contains('\n')
-            || self.text.chars().count() + text.chars().count() >= STREAM_FLUSH_CHARS;
-        self.text.push_str(&text);
-        if should_flush || self.last_flush.elapsed() >= STREAM_FLUSH_INTERVAL {
-            self.flush();
-        }
-    }
-
-    fn flush(&mut self) {
-        if self.text.is_empty() {
-            return;
-        }
-
-        let text = std::mem::take(&mut self.text);
-        let event = match self.kind {
-            StreamDeltaKind::Reasoning => {
-                AgentEvent::ReasoningDelta(crate::agent::AgentMessageDelta {
-                    role: self.role,
-                    text,
-                })
-            }
-            StreamDeltaKind::AssistantText => {
-                AgentEvent::AssistantTextDelta(crate::agent::AgentMessageDelta {
-                    role: self.role,
-                    text,
-                })
-            }
-        };
-        let _ = self.events_tx.send(event.into());
-        self.last_flush = Instant::now();
-    }
-}
-
 fn rig_system_preamble() -> String {
     "You are the Horizon agent. Use available tools when workspace state is needed. Return concise, directly useful answers.".to_string()
 }
@@ -435,173 +369,14 @@ fn events_contain_tool_call(events: &[AgentProviderEvent]) -> bool {
         .any(|event| matches!(event.event, AgentEvent::ToolCallRequested(_)))
 }
 
-pub fn horizon_events_from_rig_message(message: Message) -> Vec<AgentEvent> {
-    horizon_provider_events_from_rig_message(message)
-        .into_iter()
-        .map(|event| event.event)
-        .collect()
-}
-
-pub fn horizon_provider_events_from_rig_message(message: Message) -> Vec<AgentProviderEvent> {
-    match message {
-        Message::System { content } => vec![AgentEvent::MessageCommitted(AgentMessage {
-            role: AgentMessageRole::Assistant,
-            text: format!("system: {content}"),
-        })
-        .into()],
-        Message::User { content } => content
-            .into_iter()
-            .filter_map(|content| match content {
-                rig_core::completion::message::UserContent::Text(text) => Some(
-                    AgentEvent::MessageCommitted(AgentMessage {
-                        role: AgentMessageRole::User,
-                        text: text.text,
-                    })
-                    .into(),
-                ),
-                _ => None,
-            })
-            .collect(),
-        Message::Assistant { content, .. } => {
-            let mut reasoning_events = Vec::new();
-            let mut output_events = Vec::new();
-
-            for content in content {
-                match content {
-                    AssistantContent::Text(text) => output_events.push(
-                        AgentEvent::MessageCommitted(AgentMessage {
-                            role: AgentMessageRole::Assistant,
-                            text: text.text,
-                        })
-                        .into(),
-                    ),
-                    AssistantContent::ToolCall(call) => {
-                        output_events.push(AgentProviderEvent::with_provider_payload(
-                            AgentEvent::ToolCallRequested(rig_tool_call_request(call.clone())),
-                            rig_tool_call_provider_payload(&call),
-                        ));
-                    }
-                    AssistantContent::Reasoning(reasoning) => {
-                        let text = reasoning.display_text();
-                        if !text.is_empty() {
-                            reasoning_events.push(
-                                AgentEvent::ReasoningDelta(crate::agent::AgentMessageDelta {
-                                    role: AgentMessageRole::Assistant,
-                                    text,
-                                })
-                                .into(),
-                            );
-                        }
-                    }
-                    AssistantContent::Image(_) => {}
-                }
-            }
-
-            reasoning_events.extend(output_events);
-            reasoning_events
-        }
-    }
-}
-
-pub fn horizon_tool_definition_from_rig(
-    definition: ToolDefinition,
-    permission: AgentToolPermission,
-) -> AgentToolDefinition {
-    AgentToolDefinition {
-        id: definition.name,
-        title: definition.description.clone(),
-        description: definition.description,
-        input_schema: definition.parameters,
-        permission,
-    }
-}
-
-pub fn rig_messages_from_horizon_events(events: &[AgentEvent]) -> Vec<Message> {
-    events
-        .iter()
-        .filter_map(|event| match event {
-            AgentEvent::MessageCommitted(message) => match message.role {
-                AgentMessageRole::User => Some(Message::user(message.text.clone())),
-                AgentMessageRole::Assistant => Some(Message::assistant(message.text.clone())),
-            },
-            AgentEvent::ToolCallRequested(request) => {
-                Some(Message::from(rig_tool_call_from_request(request)))
-            }
-            AgentEvent::ToolCallFinished(result) => Some(rig_tool_result_message(result)),
-            AgentEvent::Error(error) => {
-                Some(Message::assistant(format!("error: {}", error.message)))
-            }
-            AgentEvent::StateChanged(_)
-            | AgentEvent::ReasoningDelta(_)
-            | AgentEvent::AssistantTextDelta(_)
-            | AgentEvent::ToolCallStarted(_)
-            | AgentEvent::ApprovalRequested(_)
-            | AgentEvent::Exited(_) => None,
-        })
-        .collect()
-}
-
-fn rig_tool_call_request(call: ToolCall) -> AgentToolCallRequest {
-    AgentToolCallRequest {
-        call_id: AgentToolCallId(call.call_id.unwrap_or(call.id)),
-        tool_id: call.function.name,
-        input: call.function.arguments,
-    }
-}
-
-pub fn rig_tool_call_provider_payload(call: &ToolCall) -> serde_json::Value {
-    serde_json::json!({
-        "schema": RIG_PROVIDER_PAYLOAD_SCHEMA,
-        "version": RIG_PROVIDER_PAYLOAD_VERSION,
-        "rig": {
-            "tool_call": {
-                "id": call.id.clone(),
-                "call_id": call.call_id.clone(),
-                "signature": call.signature.clone(),
-                "additional_params": call.additional_params.clone(),
-                "function": {
-                    "name": call.function.name.clone(),
-                    "arguments": call.function.arguments.clone(),
-                }
-            }
-        }
-    })
-}
-
-fn rig_tool_call_from_request(request: &AgentToolCallRequest) -> ToolCall {
-    ToolCall::new(
-        request.call_id.0.clone(),
-        ToolFunction::new(request.tool_id.clone(), request.input.clone()),
-    )
-}
-
-fn rig_tool_result_message(result: &AgentToolCallResult) -> Message {
-    Message::tool_result(result.call_id.0.clone(), result.output.to_string())
-}
-
-fn rig_workspace_snapshot_call() -> ToolCall {
-    ToolCall::new(
-        "rig-workspace-snapshot-1".to_string(),
-        ToolFunction::new("workspace.snapshot".to_string(), serde_json::json!({})),
-    )
-}
-
-#[cfg(test)]
-fn rig_workspace_snapshot_call_with_provider_metadata() -> ToolCall {
-    ToolCall {
-        call_id: Some("provider-call-1".to_string()),
-        signature: Some("signature-1".to_string()),
-        additional_params: Some(serde_json::json!({
-            "provider": "rig",
-            "reasoning_ref": "reasoning-1"
-        })),
-        ..rig_workspace_snapshot_call()
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use super::mapping::{
+        rig_workspace_snapshot_call_with_provider_metadata, RIG_PROVIDER_PAYLOAD_SCHEMA,
+        RIG_PROVIDER_PAYLOAD_VERSION,
+    };
     use super::*;
+    use crate::agent::{AgentToolCallId, AgentToolCallRequest, AgentToolPermission};
     use rig_core::completion::message::{ToolResultContent, UserContent};
 
     #[test]
