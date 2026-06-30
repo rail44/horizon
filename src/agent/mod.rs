@@ -7,6 +7,11 @@ use crate::agent_config::AgentConfig;
 use crate::agent_tools::tool_result_message;
 use crate::workspace::SessionId;
 
+pub mod duckdb_state;
+pub mod event_log;
+pub mod rig;
+pub mod tools;
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 pub struct AgentProviderId(pub String);
 

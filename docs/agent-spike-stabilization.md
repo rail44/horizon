@@ -10,10 +10,10 @@ implications so the next implementation step does not continue from guesswork.
 
 The current agent stack has these primary pieces:
 
-- `src/agent.rs` is the Horizon-owned command/event/frame contract.
-- `src/agent_rig.rs` is the current Rig provider bridge.
-- `src/agent_event_log.rs` is the JSONL durable event log.
-- `src/agent_duckdb_state.rs` is the derived DuckDB projection layer.
+- `src/agent/mod.rs` is the Horizon-owned command/event/frame contract.
+- `src/agent/rig.rs` is the current Rig provider bridge.
+- `src/agent/event_log.rs` is the JSONL durable event log.
+- `src/agent/duckdb_state.rs` is the derived DuckDB projection layer.
 - `src/agent_view.rs` is the first rich Agent pane renderer.
 - The genai spike has been removed; genai remains only as comparative research
   material in historical notes.
@@ -30,7 +30,7 @@ An ignored micro benchmark was added:
 ```bash
 HORIZON_AGENT_DUCKDB_BENCH_EVENTS=500 \
   cargo test \
-  agent_duckdb_state::tests::bench_append_projection_costs \
+  agent::duckdb_state::tests::bench_append_projection_costs \
   -- --ignored --nocapture
 ```
 
