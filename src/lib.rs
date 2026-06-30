@@ -5,6 +5,7 @@ pub mod agent_event_log;
 pub mod agent_rig;
 pub mod agent_tools;
 pub mod commands;
+pub mod control_surface;
 pub mod fonts;
 pub mod plugins;
 pub mod session;
