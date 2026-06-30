@@ -6,14 +6,14 @@ use floem::prelude::*;
 use floem::reactive::create_effect;
 use floem::Clipboard;
 
+use crate::agent::duckdb_state::DuckDbAgentStateStore;
+use crate::agent::event_log::{read_agent_event_log, AgentEventLogWriterHandle};
+use crate::agent::tools::process_agent_provider_event;
 use crate::agent::{
     AgentCommand, AgentFrame, AgentInitialization, AgentProviderId, AgentProviderRegistry,
     AgentRuntimeStateStore,
 };
 use crate::agent_config::{AgentConfig, AgentPersistenceConfig};
-use crate::agent_duckdb_state::DuckDbAgentStateStore;
-use crate::agent_event_log::{read_agent_event_log, AgentEventLogWriterHandle};
-use crate::agent_tools::process_agent_provider_event;
 use crate::session::SessionRegistry;
 use crate::session_frames::SessionFrames;
 use crate::terminal::{TerminalSession, TerminalSize, TerminalUpdate};

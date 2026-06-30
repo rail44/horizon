@@ -45,7 +45,7 @@ impl AgentProviderRegistry {
     pub fn builtin_with_config(config: AgentConfig) -> Self {
         let mut registry = Self::default();
         registry.insert(Arc::new(MockAgentProvider::new()));
-        registry.insert(Arc::new(crate::agent_rig::RigAgentProvider::new(
+        registry.insert(Arc::new(crate::agent::rig::RigAgentProvider::new(
             config.rig,
             config.persistence.duckdb_path,
         )));

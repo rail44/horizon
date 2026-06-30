@@ -4,7 +4,7 @@ use crossbeam_channel::unbounded;
 
 use super::provider::{AgentProvider, AgentSessionHandle};
 use super::types::*;
-use crate::agent_tools::tool_result_message;
+use crate::agent::tools::tool_result_message;
 
 pub struct MockAgentProvider;
 

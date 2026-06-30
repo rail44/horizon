@@ -19,13 +19,13 @@ use rig_core::{
 
 use crate::{
     agent::{
+        tools::{agent_tool_definitions, AgentToolDefinition},
         AgentCommand, AgentEvent, AgentMessage, AgentMessageRole, AgentProvider,
         AgentProviderEvent, AgentProviderId, AgentSessionHandle, AgentSessionState,
         AgentToolCallId, AgentToolCallRequest, AgentToolCallResult, AgentToolPermission,
         StartAgentSession,
     },
     agent_config::RigAgentConfig,
-    agent_tools::{agent_tool_definitions, AgentToolDefinition},
     workspace::SessionId,
 };
 
@@ -383,7 +383,7 @@ fn load_rig_history(path: Option<&std::path::Path>, session_id: SessionId) -> Ve
         return Vec::new();
     };
 
-    crate::agent_duckdb_state::DuckDbAgentStateStore::open(path)
+    crate::agent::duckdb_state::DuckDbAgentStateStore::open(path)
         .and_then(|store| store.rig_messages_for_session(session_id))
         .unwrap_or_default()
 }
@@ -706,14 +706,14 @@ mod tests {
     #[test]
     fn duckdb_store_preserves_rig_provider_payload_for_tool_call() {
         let store =
-            crate::agent_duckdb_state::DuckDbAgentStateStore::open_in_memory().expect("store");
+            crate::agent::duckdb_state::DuckDbAgentStateStore::open_in_memory().expect("store");
         let session_id = crate::workspace::SessionId::new();
         let call = rig_workspace_snapshot_call_with_provider_metadata();
         let provider_payload = rig_tool_call_provider_payload(&call);
         let event = AgentEvent::ToolCallRequested(rig_tool_call_request(call));
 
         store
-            .append_event(crate::agent_duckdb_state::AppendAgentEvent {
+            .append_event(crate::agent::duckdb_state::AppendAgentEvent {
                 session_id,
                 turn_id: Some("turn-1".to_string()),
                 provider_id: Some(AgentProviderId("builtin.agent.rig".to_string())),
@@ -816,7 +816,7 @@ mod tests {
 
         {
             let store =
-                crate::agent_duckdb_state::DuckDbAgentStateStore::open(&path).expect("open store");
+                crate::agent::duckdb_state::DuckDbAgentStateStore::open(&path).expect("open store");
             store
                 .append_events(
                     session_id,

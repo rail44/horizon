@@ -177,7 +177,7 @@ mod tests {
         let session_id = SessionId::new();
         let provider_id = AgentProviderId("builtin.agent.rig".to_string());
         let writer =
-            crate::agent_event_log::AgentEventLogWriterHandle::open(&path).expect("event log");
+            crate::agent::event_log::AgentEventLogWriterHandle::open(&path).expect("event log");
         let store = AgentRuntimeStateStore::with_event_log(
             session_id,
             Some(provider_id.clone()),
@@ -199,7 +199,7 @@ mod tests {
         ]);
         writer.flush_for_tests().expect("flush");
 
-        let report = crate::agent_event_log::read_agent_event_log(&path).expect("read log");
+        let report = crate::agent::event_log::read_agent_event_log(&path).expect("read log");
         assert_eq!(report.records.len(), 2);
         assert_eq!(report.records[0].session_id, session_id);
         assert_eq!(report.records[0].provider_id, Some(provider_id));

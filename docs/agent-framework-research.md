@@ -254,7 +254,7 @@ as research context.
 
 Implemented files:
 
-- `src/agent_rig.rs`
+- `src/agent/rig.rs`
 
 Registry behavior:
 
@@ -294,7 +294,7 @@ Before committing to a DuckDB-backed Horizon agent store, we checked whether the
 provider-neutral `AgentEvent` transcript can still participate in Rig's
 ecosystem.
 
-Added to `src/agent_rig.rs`:
+Added to `src/agent/rig.rs`:
 
 - `rig_messages_from_horizon_events`
 - tests that rebuild Rig `completion::Message` history from Horizon events
@@ -378,7 +378,7 @@ is a derived projection.
 
 Implementation date: 2026-06-29
 
-The first Rig-backed provider loop is implemented in `src/agent_rig.rs`.
+The first Rig-backed provider loop is implemented in `src/agent/rig.rs`.
 Horizon uses `builtin.agent.rig` as the default Agent pane provider.
 
 Configuration is currently environment-backed and normalized through

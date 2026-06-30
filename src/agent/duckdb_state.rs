@@ -470,7 +470,7 @@ impl DuckDbAgentStateStore {
 
     pub fn replace_from_event_log_records(
         &self,
-        records: impl IntoIterator<Item = crate::agent_event_log::AgentEventLogRecord>,
+        records: impl IntoIterator<Item = crate::agent::event_log::AgentEventLogRecord>,
     ) -> Result<()> {
         self.clear_all_agent_state()?;
         for record in records {
@@ -584,7 +584,7 @@ impl DuckDbAgentStateStore {
 
     fn insert_event_log_record(
         &self,
-        record: crate::agent_event_log::AgentEventLogRecord,
+        record: crate::agent::event_log::AgentEventLogRecord,
     ) -> Result<()> {
         let session_id_text = session_id_text(record.session_id)?;
         let sequence = i64::try_from(record.sequence).context("agent event sequence overflow")?;
@@ -717,7 +717,7 @@ impl DuckDbAgentStateStore {
         event_kind: &str,
         event: &AgentEvent,
     ) -> Result<()> {
-        for message in crate::agent_rig::rig_messages_from_horizon_events(&[event.clone()]) {
+        for message in crate::agent::rig::rig_messages_from_horizon_events(&[event.clone()]) {
             let rig_message_json =
                 serde_json::to_string(&message).context("serialize Rig conversation message")?;
             self.conn.execute(
@@ -1261,9 +1261,9 @@ mod tests {
         let session_id = SessionId::new();
         let call_id = AgentToolCallId("call-1".to_string());
         let records = vec![
-            crate::agent_event_log::AgentEventLogRecord {
-                schema: crate::agent_event_log::AGENT_EVENT_LOG_SCHEMA.to_string(),
-                version: crate::agent_event_log::AGENT_EVENT_LOG_VERSION,
+            crate::agent::event_log::AgentEventLogRecord {
+                schema: crate::agent::event_log::AGENT_EVENT_LOG_SCHEMA.to_string(),
+                version: crate::agent::event_log::AGENT_EVENT_LOG_VERSION,
                 event_id: "event-1".to_string(),
                 sequence: 0,
                 session_id,
@@ -1281,9 +1281,9 @@ mod tests {
                 provider_payload: Some(serde_json::json!({ "source": "jsonl" })),
                 created_at_unix_ms: 1,
             },
-            crate::agent_event_log::AgentEventLogRecord {
-                schema: crate::agent_event_log::AGENT_EVENT_LOG_SCHEMA.to_string(),
-                version: crate::agent_event_log::AGENT_EVENT_LOG_VERSION,
+            crate::agent::event_log::AgentEventLogRecord {
+                schema: crate::agent::event_log::AGENT_EVENT_LOG_SCHEMA.to_string(),
+                version: crate::agent::event_log::AGENT_EVENT_LOG_VERSION,
                 event_id: "event-2".to_string(),
                 sequence: 1,
                 session_id,
@@ -1305,9 +1305,9 @@ mod tests {
                 provider_payload: None,
                 created_at_unix_ms: 2,
             },
-            crate::agent_event_log::AgentEventLogRecord {
-                schema: crate::agent_event_log::AGENT_EVENT_LOG_SCHEMA.to_string(),
-                version: crate::agent_event_log::AGENT_EVENT_LOG_VERSION,
+            crate::agent::event_log::AgentEventLogRecord {
+                schema: crate::agent::event_log::AGENT_EVENT_LOG_SCHEMA.to_string(),
+                version: crate::agent::event_log::AGENT_EVENT_LOG_VERSION,
                 event_id: "event-3".to_string(),
                 sequence: 2,
                 session_id,
@@ -1427,9 +1427,9 @@ mod tests {
             .expect("rig messages");
         assert_eq!(
             rig_messages,
-            rig_message_json_roundtrip(
-                crate::agent_rig::rig_messages_from_horizon_events(&events,)
-            )
+            rig_message_json_roundtrip(crate::agent::rig::rig_messages_from_horizon_events(
+                &events,
+            ))
         );
     }
 
@@ -1455,9 +1455,9 @@ mod tests {
             .iter()
             .enumerate()
             .map(
-                |(index, event)| crate::agent_event_log::AgentEventLogRecord {
-                    schema: crate::agent_event_log::AGENT_EVENT_LOG_SCHEMA.to_string(),
-                    version: crate::agent_event_log::AGENT_EVENT_LOG_VERSION,
+                |(index, event)| crate::agent::event_log::AgentEventLogRecord {
+                    schema: crate::agent::event_log::AGENT_EVENT_LOG_SCHEMA.to_string(),
+                    version: crate::agent::event_log::AGENT_EVENT_LOG_VERSION,
                     event_id: format!("event-{index}"),
                     sequence: index as u64,
                     session_id,
@@ -1481,9 +1481,9 @@ mod tests {
         assert_eq!(rig_messages.len(), 2);
         assert_eq!(
             rig_messages,
-            rig_message_json_roundtrip(
-                crate::agent_rig::rig_messages_from_horizon_events(&events,)
-            )
+            rig_message_json_roundtrip(crate::agent::rig::rig_messages_from_horizon_events(
+                &events,
+            ))
         );
     }
 

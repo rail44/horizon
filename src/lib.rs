@@ -1,9 +1,5 @@
 pub mod agent;
 pub mod agent_config;
-pub mod agent_duckdb_state;
-pub mod agent_event_log;
-pub mod agent_rig;
-pub mod agent_tools;
 pub mod app_commands;
 pub mod app_runtime;
 pub mod commands;

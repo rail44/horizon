@@ -170,7 +170,7 @@ pub struct AgentExit {
 pub fn horizon_events_for_provider_event(event: &AgentEvent) -> Vec<AgentEvent> {
     let mut events = vec![event.clone()];
     if let AgentEvent::ToolCallRequested(request) = event {
-        match crate::agent_tools::permission_for_tool(&request.tool_id)
+        match crate::agent::tools::permission_for_tool(&request.tool_id)
             .unwrap_or(AgentToolPermission::RequireApproval)
         {
             AgentToolPermission::AutoAllowRead | AgentToolPermission::AutoAllowUi => {}

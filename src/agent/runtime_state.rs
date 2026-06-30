@@ -72,12 +72,16 @@ impl AgentRuntimeStateStore {
     pub fn with_event_log(
         session_id: SessionId,
         provider_id: Option<AgentProviderId>,
-        writer: crate::agent_event_log::AgentEventLogWriterHandle,
+        writer: crate::agent::event_log::AgentEventLogWriterHandle,
     ) -> Self {
         Self {
             inner: Rc::new(RefCell::new(AgentRuntimeState::new())),
             persistence: Some(Rc::new(AgentRuntimePersistence::EventLog(RefCell::new(
-                crate::agent_event_log::AgentEventLogAppender::new(writer, session_id, provider_id),
+                crate::agent::event_log::AgentEventLogAppender::new(
+                    writer,
+                    session_id,
+                    provider_id,
+                ),
             )))),
         }
     }
@@ -95,7 +99,7 @@ impl AgentRuntimeStateStore {
 }
 
 enum AgentRuntimePersistence {
-    EventLog(RefCell<crate::agent_event_log::AgentEventLogAppender>),
+    EventLog(RefCell<crate::agent::event_log::AgentEventLogAppender>),
     Disabled,
 }
 

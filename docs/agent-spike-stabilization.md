@@ -319,5 +319,5 @@ This keeps failure recovery simple:
 4. Add DuckDB rebuild-from-JSONL path for existing event/message/tool/approval
    projections.
 5. Add `agent_conversation_messages` projection for Rig-compatible memory.
-6. Continue factoring `agent_rig.rs` by provider runtime, mapping, payload, and
+6. Continue factoring `agent/rig.rs` by provider runtime, mapping, payload, and
    memory responsibilities as those areas grow.
