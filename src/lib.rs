@@ -12,5 +12,6 @@ pub mod fonts;
 pub mod input;
 pub mod plugins;
 pub mod session;
+pub mod session_frames;
 pub mod terminal;
 pub mod workspace;

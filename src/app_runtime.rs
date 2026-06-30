@@ -15,6 +15,7 @@ use crate::agent_duckdb_state::DuckDbAgentStateStore;
 use crate::agent_event_log::{read_agent_event_log, AgentEventLogWriterHandle};
 use crate::agent_tools::process_agent_provider_event;
 use crate::session::SessionRegistry;
+use crate::session_frames::SessionFrames;
 use crate::terminal::{TerminalSession, TerminalSize, TerminalUpdate};
 use crate::workspace::{SessionId, Workspace};
 
@@ -23,7 +24,7 @@ static AGENT_DUCKDB_REBUILD_DONE: OnceLock<Mutex<bool>> = OnceLock::new();
 
 pub fn spawn_terminal_session(
     session_id: SessionId,
-    workspace: RwSignal<Workspace>,
+    frames: RwSignal<SessionFrames>,
     sessions: RwSignal<SessionRegistry>,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
@@ -41,19 +42,24 @@ pub fn spawn_terminal_session(
                             if let Some(path) = &terminal_dump {
                                 let _ = std::fs::write(path, &output.text);
                             }
-                            workspace.update(|ws| ws.update_terminal_frame(session_id, output));
+                            frames.update(|frames| {
+                                frames.update_terminal_frame(session_id, output);
+                            });
                         }
                         TerminalUpdate::Error(error) => {
-                            workspace.update(|ws| {
-                                ws.update_terminal_output(
+                            frames.update(|frames| {
+                                frames.update_terminal_output(
                                     session_id,
                                     format!("Terminal error: {error}"),
-                                )
+                                );
                             });
                         }
                         TerminalUpdate::Exited => {
-                            workspace.update(|ws| {
-                                ws.update_terminal_output(session_id, "Terminal exited".to_string())
+                            frames.update(|frames| {
+                                frames.update_terminal_output(
+                                    session_id,
+                                    "Terminal exited".to_string(),
+                                );
                             });
                         }
                         TerminalUpdate::Title(_) | TerminalUpdate::Bell => {}
@@ -68,8 +74,8 @@ pub fn spawn_terminal_session(
             });
         }
         Err(error) => {
-            workspace.update(|ws| {
-                ws.update_terminal_output(session_id, format!("Terminal error: {error}"))
+            frames.update(|frames| {
+                frames.update_terminal_output(session_id, format!("Terminal error: {error}"));
             });
         }
     }
@@ -78,6 +84,7 @@ pub fn spawn_terminal_session(
 pub fn spawn_agent_session(
     session_id: SessionId,
     workspace: RwSignal<Workspace>,
+    frames: RwSignal<SessionFrames>,
     sessions: RwSignal<SessionRegistry>,
     agent_state_status: RwSignal<Option<String>>,
     agent_config: AgentConfig,
@@ -91,14 +98,14 @@ pub fn spawn_agent_session(
         &agent_config.persistence,
     );
     let Some(handle) = providers.start_session(&provider_id, session_id) else {
-        workspace.update(|ws| {
-            ws.update_agent_frame(
+        frames.update(|frames| {
+            frames.update_agent_frame(
                 session_id,
                 AgentFrame {
                     state: None,
                     items: Vec::new(),
                 },
-            )
+            );
         });
         return;
     };
@@ -125,7 +132,7 @@ pub fn spawn_agent_session(
                 }
             }
             let frame = runtime_state.extend_provider_events(processing.horizon_events);
-            workspace.update(|ws| ws.update_agent_frame(session_id, frame));
+            frames.update(|frames| frames.update_agent_frame(session_id, frame));
         }
     });
 }

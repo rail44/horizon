@@ -1,9 +1,6 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::agent::AgentFrame;
-use crate::terminal::TerminalFrame;
-
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 pub struct PaneId(Uuid);
 
@@ -88,9 +85,6 @@ pub struct Pane {
     pub id: PaneId,
     pub kind: PaneKind,
     pub session_id: Option<SessionId>,
-    pub output: String,
-    pub terminal_frame: Option<TerminalFrame>,
-    pub agent_frame: Option<AgentFrame>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -346,21 +340,6 @@ impl Workspace {
         }
     }
 
-    pub fn update_terminal_output(&mut self, session_id: SessionId, output: String) {
-        self.update_terminal_frame(session_id, TerminalFrame::from_text(output));
-    }
-
-    pub fn update_terminal_frame(&mut self, session_id: SessionId, frame: TerminalFrame) {
-        for pane in self
-            .panes
-            .iter_mut()
-            .filter(|pane| pane.session_id == Some(session_id) && pane.kind == PaneKind::Terminal)
-        {
-            pane.output.clone_from(&frame.text);
-            pane.terminal_frame = Some(frame.clone());
-        }
-    }
-
     pub fn visible_pane_id(&self, index: usize) -> Option<PaneId> {
         self.visible_pane_ids().get(index).copied()
     }
@@ -395,12 +374,6 @@ impl Workspace {
             .iter()
             .find(|pane| pane.id == pane_id && pane.kind == PaneKind::Agent)
             .and_then(|pane| pane.session_id)
-    }
-
-    pub fn visible_agent_frame(&self, index: usize) -> Option<AgentFrame> {
-        self.visible_panes()
-            .get(index)
-            .and_then(|pane| pane.agent_frame.clone())
     }
 
     pub fn terminal_session_ids(&self) -> Vec<SessionId> {
@@ -607,18 +580,6 @@ impl Workspace {
     }
 }
 
-impl Workspace {
-    pub fn update_agent_frame(&mut self, session_id: SessionId, frame: AgentFrame) {
-        for pane in self
-            .panes
-            .iter_mut()
-            .filter(|pane| pane.session_id == Some(session_id) && pane.kind == PaneKind::Agent)
-        {
-            pane.agent_frame = Some(frame.clone());
-        }
-    }
-}
-
 impl WorkspaceSession {
     fn new(id: SessionId, kind: SessionKind, display_number: usize) -> Self {
         Self {
@@ -692,18 +653,10 @@ impl LayoutNode {
 
 impl Pane {
     fn new(kind: PaneKind, session_id: Option<SessionId>) -> Self {
-        let output = match kind {
-            PaneKind::Terminal => crate::terminal::initial_terminal_text(),
-            PaneKind::Agent => crate::plugins::builtin_agent_intro(),
-        };
         Self {
             id: PaneId::new(),
             kind,
             session_id,
-            terminal_frame: (kind == PaneKind::Terminal)
-                .then(|| TerminalFrame::from_text(output.clone())),
-            agent_frame: (kind == PaneKind::Agent).then(AgentFrame::empty),
-            output,
         }
     }
 

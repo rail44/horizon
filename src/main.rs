@@ -26,6 +26,7 @@ use horizon::input::{
     terminal_key_from_key, termwiz_modifiers, AgentDraftAction,
 };
 use horizon::session::SessionRegistry;
+use horizon::session_frames::SessionFrames;
 use horizon::terminal::{TerminalCommand, TerminalFrame};
 use horizon::workspace::{PaneKind, Workspace};
 use std::path::PathBuf;
@@ -52,6 +53,7 @@ fn main() {
 
 fn app_view() -> impl IntoView {
     let workspace = RwSignal::new(Workspace::mvp());
+    let frames = RwSignal::new(SessionFrames::default());
     let sessions = RwSignal::new(SessionRegistry::default());
     let ime_composing = RwSignal::new(false);
     let ime_preedit = RwSignal::new(None::<String>);
@@ -83,7 +85,7 @@ fn app_view() -> impl IntoView {
     for session_id in workspace.with(|ws| ws.terminal_session_ids()) {
         spawn_terminal_session(
             session_id,
-            workspace,
+            frames,
             sessions,
             terminal_dump.clone(),
             clipboard_dump.clone(),
@@ -93,6 +95,7 @@ fn app_view() -> impl IntoView {
         spawn_agent_session(
             session_id,
             workspace,
+            frames,
             sessions,
             agent_state_status,
             agent_config.clone(),
@@ -104,6 +107,7 @@ fn app_view() -> impl IntoView {
             tab_strip(workspace, sessions),
             workspace_view(
                 workspace,
+                frames,
                 sessions,
                 ime_composing,
                 ime_preedit,
@@ -126,6 +130,7 @@ fn app_view() -> impl IntoView {
         .style(|s| s.size_full().flex().flex_col()),
         command_palette(
             workspace,
+            frames,
             sessions,
             palette_open,
             palette_query,
@@ -214,6 +219,7 @@ fn app_view() -> impl IntoView {
                 if handle_control_key(
                     key_event,
                     workspace,
+                    frames,
                     sessions,
                     palette_open,
                     palette_query,
@@ -254,6 +260,7 @@ fn app_view() -> impl IntoView {
 
 fn command_palette(
     workspace: RwSignal<Workspace>,
+    frames: RwSignal<SessionFrames>,
     sessions: RwSignal<SessionRegistry>,
     palette_open: RwSignal<bool>,
     palette_query: RwSignal<String>,
@@ -292,6 +299,7 @@ fn command_palette(
             }),
             palette_row(
                 workspace,
+                frames,
                 sessions,
                 palette_open,
                 palette_query,
@@ -305,6 +313,7 @@ fn command_palette(
             ),
             palette_row(
                 workspace,
+                frames,
                 sessions,
                 palette_open,
                 palette_query,
@@ -318,6 +327,7 @@ fn command_palette(
             ),
             palette_row(
                 workspace,
+                frames,
                 sessions,
                 palette_open,
                 palette_query,
@@ -331,6 +341,7 @@ fn command_palette(
             ),
             palette_row(
                 workspace,
+                frames,
                 sessions,
                 palette_open,
                 palette_query,
@@ -344,6 +355,7 @@ fn command_palette(
             ),
             palette_row(
                 workspace,
+                frames,
                 sessions,
                 palette_open,
                 palette_query,
@@ -357,6 +369,7 @@ fn command_palette(
             ),
             palette_row(
                 workspace,
+                frames,
                 sessions,
                 palette_open,
                 palette_query,
@@ -380,6 +393,7 @@ fn command_palette(
             if handle_control_key(
                 key_event,
                 workspace,
+                frames,
                 sessions,
                 palette_open,
                 palette_query,
@@ -463,6 +477,7 @@ fn control_mode_tab(
 
 fn palette_row(
     workspace: RwSignal<Workspace>,
+    frames: RwSignal<SessionFrames>,
     sessions: RwSignal<SessionRegistry>,
     palette_open: RwSignal<bool>,
     palette_query: RwSignal<String>,
@@ -530,6 +545,7 @@ fn palette_row(
         palette_selection.set(item_index());
         execute_palette_selection(
             workspace,
+            frames,
             sessions,
             palette_open,
             palette_query,
@@ -738,6 +754,7 @@ fn overview_row(
 fn handle_palette_key(
     key_event: &KeyEvent,
     workspace: RwSignal<Workspace>,
+    frames: RwSignal<SessionFrames>,
     sessions: RwSignal<SessionRegistry>,
     palette_open: RwSignal<bool>,
     palette_query: RwSignal<String>,
@@ -756,6 +773,7 @@ fn handle_palette_key(
         Key::Named(NamedKey::Enter) => {
             execute_palette_selection(
                 workspace,
+                frames,
                 sessions,
                 palette_open,
                 palette_query,
@@ -801,6 +819,7 @@ fn handle_palette_key(
 fn handle_control_key(
     key_event: &KeyEvent,
     workspace: RwSignal<Workspace>,
+    frames: RwSignal<SessionFrames>,
     sessions: RwSignal<SessionRegistry>,
     palette_open: RwSignal<bool>,
     palette_query: RwSignal<String>,
@@ -822,6 +841,7 @@ fn handle_control_key(
         ControlMode::Commands => handle_palette_key(
             key_event,
             workspace,
+            frames,
             sessions,
             palette_open,
             palette_query,
@@ -963,6 +983,7 @@ fn move_overview_selection(
 
 fn execute_palette_selection(
     workspace: RwSignal<Workspace>,
+    frames: RwSignal<SessionFrames>,
     sessions: RwSignal<SessionRegistry>,
     palette_open: RwSignal<bool>,
     palette_query: RwSignal<String>,
@@ -995,6 +1016,7 @@ fn execute_palette_selection(
         PaletteItem::Command(entry) => execute_command(
             entry.spec.id,
             workspace,
+            frames,
             sessions,
             pane_focus_requests,
             agent_state_status,
@@ -1250,6 +1272,7 @@ fn trace_ime(message: &str) {
 
 fn workspace_view(
     workspace: RwSignal<Workspace>,
+    frames: RwSignal<SessionFrames>,
     sessions: RwSignal<SessionRegistry>,
     ime_composing: RwSignal<bool>,
     ime_preedit: RwSignal<Option<String>>,
@@ -1270,6 +1293,7 @@ fn workspace_view(
     h_stack((
         pane_view(
             workspace,
+            frames,
             sessions,
             ime_composing,
             ime_preedit,
@@ -1291,6 +1315,7 @@ fn workspace_view(
         ),
         pane_view(
             workspace,
+            frames,
             sessions,
             ime_composing,
             ime_preedit,
@@ -1312,6 +1337,7 @@ fn workspace_view(
         ),
         pane_view(
             workspace,
+            frames,
             sessions,
             ime_composing,
             ime_preedit,
@@ -1333,6 +1359,7 @@ fn workspace_view(
         ),
         pane_view(
             workspace,
+            frames,
             sessions,
             ime_composing,
             ime_preedit,
@@ -1368,6 +1395,7 @@ fn workspace_view(
 
 fn pane_view(
     workspace: RwSignal<Workspace>,
+    frames: RwSignal<SessionFrames>,
     sessions: RwSignal<SessionRegistry>,
     ime_composing: RwSignal<bool>,
     ime_preedit: RwSignal<Option<String>>,
@@ -1387,28 +1415,17 @@ fn pane_view(
     clipboard_dump: Option<PathBuf>,
     agent_state_status: RwSignal<Option<String>>,
 ) -> impl IntoView {
-    let output = move || {
-        workspace.with(|ws| {
-            ws.visible_panes()
-                .get(index)
-                .map(|pane| pane.output.clone())
-                .unwrap_or_else(|| "No split yet".to_string())
-        })
-    };
-
     let terminal_frame = move || {
-        workspace.with(|ws| {
-            ws.visible_panes()
-                .get(index)
-                .and_then(|pane| pane.terminal_frame.clone())
-                .unwrap_or_else(|| TerminalFrame::from_text(output()))
-        })
+        let Some(session_id) = workspace.with(|ws| ws.visible_terminal_session_id(index)) else {
+            return TerminalFrame::from_text("No split yet".to_string());
+        };
+        frames.with(|frames| frames.terminal_frame(session_id))
     };
     let agent_frame = move || {
-        workspace.with(|ws| {
-            ws.visible_agent_frame(index)
-                .unwrap_or_else(AgentFrame::empty)
-        })
+        let Some(session_id) = workspace.with(|ws| ws.visible_agent_session_id(index)) else {
+            return AgentFrame::empty();
+        };
+        frames.with(|frames| frames.agent_frame(session_id))
     };
 
     let title = move || {
@@ -1436,10 +1453,8 @@ fn pane_view(
         })
     };
     let pending_approval = move || {
-        workspace.with(|ws| {
-            ws.visible_agent_frame(index)
-                .and_then(|frame| frame.pending_approval_call_id())
-        })
+        let session_id = workspace.with(|ws| ws.visible_agent_session_id(index))?;
+        frames.with(|frames| frames.agent_frame(session_id).pending_approval_call_id())
     };
     let agent_draft = agent_drafts[index];
 
@@ -1541,6 +1556,7 @@ fn pane_view(
                 if handle_control_key(
                     key_event,
                     workspace,
+                    frames,
                     sessions,
                     palette_open,
                     palette_query,

@@ -8,6 +8,7 @@ use crate::app_runtime::{spawn_agent_session, spawn_terminal_session};
 use crate::commands::{command_enabled, CommandId};
 use crate::control_surface::command_state;
 use crate::session::SessionRegistry;
+use crate::session_frames::SessionFrames;
 use crate::workspace::{PaneKind, SessionId, Workspace};
 
 pub const MAX_VISIBLE_PANES: usize = 4;
@@ -17,6 +18,7 @@ pub type PaneFocusRequests = [RwSignal<u64>; MAX_VISIBLE_PANES];
 pub fn execute_command(
     command_id: CommandId,
     workspace: RwSignal<Workspace>,
+    frames: RwSignal<SessionFrames>,
     sessions: RwSignal<SessionRegistry>,
     pane_focus_requests: PaneFocusRequests,
     agent_state_status: RwSignal<Option<String>>,
@@ -32,6 +34,7 @@ pub fn execute_command(
     match command_id {
         CommandId::NewTerminal => open_terminal_tab(
             workspace,
+            frames,
             sessions,
             pane_focus_requests,
             terminal_dump,
@@ -40,6 +43,7 @@ pub fn execute_command(
         CommandId::NewAgent => {
             open_agent_tab(
                 workspace,
+                frames,
                 sessions,
                 pane_focus_requests,
                 agent_state_status,
@@ -49,6 +53,7 @@ pub fn execute_command(
         CommandId::SplitActivePane => {
             split_active_pane(
                 workspace,
+                frames,
                 sessions,
                 pane_focus_requests,
                 agent_state_status,
@@ -70,13 +75,14 @@ pub fn execute_command(
             close_tab(workspace, sessions, index);
         }
         CommandId::TerminateActiveSession => {
-            terminate_active_session(workspace, sessions);
+            terminate_active_session(workspace, frames, sessions);
         }
     }
 }
 
 pub fn open_terminal_tab(
     workspace: RwSignal<Workspace>,
+    frames: RwSignal<SessionFrames>,
     sessions: RwSignal<SessionRegistry>,
     pane_focus_requests: PaneFocusRequests,
     terminal_dump: Option<PathBuf>,
@@ -86,18 +92,13 @@ pub fn open_terminal_tab(
     workspace.update(|ws| {
         ws.open_tab(PaneKind::Terminal, Some(session_id));
     });
-    spawn_terminal_session(
-        session_id,
-        workspace,
-        sessions,
-        terminal_dump,
-        clipboard_dump,
-    );
+    spawn_terminal_session(session_id, frames, sessions, terminal_dump, clipboard_dump);
     request_active_pane_focus(workspace, pane_focus_requests);
 }
 
 pub fn open_agent_tab(
     workspace: RwSignal<Workspace>,
+    frames: RwSignal<SessionFrames>,
     sessions: RwSignal<SessionRegistry>,
     pane_focus_requests: PaneFocusRequests,
     agent_state_status: RwSignal<Option<String>>,
@@ -110,6 +111,7 @@ pub fn open_agent_tab(
     spawn_agent_session(
         session_id,
         workspace,
+        frames,
         sessions,
         agent_state_status,
         agent_config,
@@ -119,6 +121,7 @@ pub fn open_agent_tab(
 
 pub fn split_active_pane(
     workspace: RwSignal<Workspace>,
+    frames: RwSignal<SessionFrames>,
     sessions: RwSignal<SessionRegistry>,
     pane_focus_requests: PaneFocusRequests,
     agent_state_status: RwSignal<Option<String>>,
@@ -143,17 +146,12 @@ pub fn split_active_pane(
         else {
             return;
         };
-        spawn_terminal_session(
-            session_id,
-            workspace,
-            sessions,
-            terminal_dump,
-            clipboard_dump,
-        );
+        spawn_terminal_session(session_id, frames, sessions, terminal_dump, clipboard_dump);
     } else if let Some(session_id) = workspace.with_untracked(|ws| ws.active_session_id()) {
         spawn_agent_session(
             session_id,
             workspace,
+            frames,
             sessions,
             agent_state_status,
             agent_config,
@@ -175,6 +173,7 @@ pub fn request_active_pane_focus(
 
 pub fn terminate_active_session(
     workspace: RwSignal<Workspace>,
+    frames: RwSignal<SessionFrames>,
     sessions: RwSignal<SessionRegistry>,
 ) {
     let Some(session_id) = workspace.with_untracked(|ws| ws.active_session_id()) else {
@@ -188,6 +187,7 @@ pub fn terminate_active_session(
         registry.shutdown_terminal(session_id);
         registry.shutdown_agent(session_id);
     });
+    frames.update(|frames| frames.remove_session(session_id));
 }
 
 pub fn close_visible_pane(
