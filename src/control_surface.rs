@@ -1,185 +1,15 @@
-use floem::peniko::Color;
+mod query;
+mod types;
+mod visibility;
 
-use crate::commands::{command_entries, filter_command_entries, CommandEntry, CommandState};
-use crate::workspace::{PaneKind, PaneSummary, SessionId, SessionKind, Workspace};
+pub use types::{
+    ControlMode, OverviewItem, PaletteItem, OVERVIEW_VISIBLE_ROWS, PALETTE_VISIBLE_ROWS,
+};
+pub use visibility::{overview_visible_start, palette_visible_start};
 
-pub const PALETTE_VISIBLE_ROWS: usize = 6;
-pub const OVERVIEW_VISIBLE_ROWS: usize = 8;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ControlMode {
-    Commands,
-    Workspace,
-}
-
-#[derive(Clone, Debug)]
-pub enum PaletteItem {
-    Command(CommandEntry),
-    DetachedSession {
-        session_id: SessionId,
-        kind: SessionKind,
-        display_number: usize,
-        title: String,
-    },
-    Tab {
-        index: usize,
-        title: String,
-        pane_count: usize,
-        active: bool,
-    },
-}
-
-#[derive(Clone, Debug)]
-pub enum OverviewItem {
-    Tab {
-        index: usize,
-        title: String,
-        pane_count: usize,
-        active: bool,
-    },
-    DetachedSession {
-        session_id: SessionId,
-        title: String,
-        kind: SessionKind,
-        display_number: usize,
-    },
-    Pane {
-        tab_index: usize,
-        pane_index: usize,
-        title: String,
-        kind: PaneKind,
-        active: bool,
-        tab_active: bool,
-    },
-}
-
-impl PaletteItem {
-    pub fn kind_label(&self) -> String {
-        match self {
-            Self::Command(_) => "COMMAND".to_string(),
-            Self::DetachedSession { .. } => "SESSION".to_string(),
-            Self::Tab { .. } => "TAB".to_string(),
-        }
-    }
-
-    pub fn kind_color(&self) -> Color {
-        match self {
-            Self::Command(_) => Color::rgb8(132, 220, 198),
-            Self::DetachedSession { .. } => Color::rgb8(126, 170, 255),
-            Self::Tab { .. } => Color::rgb8(224, 184, 104),
-        }
-    }
-
-    pub fn title(&self) -> String {
-        match self {
-            Self::Command(entry) => entry.spec.title.to_string(),
-            Self::DetachedSession { title, .. } => format!("Attach {title}"),
-            Self::Tab { index, title, .. } => format!("Tab {}: {title}", index + 1),
-        }
-    }
-
-    pub fn description(&self) -> String {
-        match self {
-            Self::Command(entry) => entry.spec.description.to_string(),
-            Self::DetachedSession {
-                kind,
-                display_number,
-                ..
-            } => {
-                format!(
-                    "Detached {} session #{}; attach to the active tab as a split.",
-                    session_kind_label(*kind),
-                    display_number
-                )
-            }
-            Self::Tab {
-                pane_count, active, ..
-            } => {
-                if *active {
-                    format!("Current tab with {pane_count} pane(s).")
-                } else {
-                    format!("Switch to tab with {pane_count} pane(s).")
-                }
-            }
-        }
-    }
-
-    pub fn enabled(&self) -> bool {
-        match self {
-            Self::Command(entry) => entry.enabled,
-            Self::DetachedSession { .. } | Self::Tab { .. } => true,
-        }
-    }
-}
-
-impl OverviewItem {
-    pub fn kind_label(&self) -> String {
-        match self {
-            Self::Tab { .. } => "TAB".to_string(),
-            Self::DetachedSession { .. } => "DETACHED".to_string(),
-            Self::Pane { .. } => "PANE".to_string(),
-        }
-    }
-
-    pub fn kind_color(&self) -> Color {
-        match self {
-            Self::Tab { .. } => Color::rgb8(224, 184, 104),
-            Self::DetachedSession { .. } => Color::rgb8(126, 170, 255),
-            Self::Pane { .. } => Color::rgb8(132, 220, 198),
-        }
-    }
-
-    pub fn title(&self) -> String {
-        match self {
-            Self::Tab { index, title, .. } => format!("Tab {}: {title}", index + 1),
-            Self::DetachedSession { title, .. } => format!("Attach {title}"),
-            Self::Pane {
-                tab_index,
-                pane_index,
-                title,
-                ..
-            } => format!("Tab {} / Pane {}: {title}", tab_index + 1, pane_index + 1),
-        }
-    }
-
-    pub fn description(&self) -> String {
-        match self {
-            Self::Tab {
-                pane_count, active, ..
-            } => {
-                if *active {
-                    format!("Current tab · {pane_count} pane(s)")
-                } else {
-                    format!("Switch to tab · {pane_count} pane(s)")
-                }
-            }
-            Self::DetachedSession {
-                kind,
-                display_number,
-                ..
-            } => format!(
-                "Detached {} session #{} · Enter attaches as split",
-                session_kind_label(*kind),
-                display_number
-            ),
-            Self::Pane {
-                kind,
-                active,
-                tab_active,
-                ..
-            } => {
-                let state = if *tab_active && *active {
-                    "Active pane"
-                } else if *tab_active {
-                    "Visible pane"
-                } else {
-                    "Pane in inactive tab"
-                };
-                format!("{state} · {} pane", pane_kind_label(*kind))
-            }
-        }
-    }
-}
+use crate::commands::{command_entries, filter_command_entries, CommandState};
+use crate::control_surface::query::{normalize_palette_query, palette_matches, session_kind_label};
+use crate::workspace::Workspace;
 
 pub fn command_state(workspace: &Workspace) -> CommandState {
     CommandState {
@@ -228,16 +58,6 @@ pub fn overview_items(workspace: &Workspace) -> Vec<OverviewItem> {
     );
 
     items
-}
-
-pub fn overview_visible_start(selection: usize, item_count: usize) -> usize {
-    if item_count <= OVERVIEW_VISIBLE_ROWS {
-        return 0;
-    }
-
-    selection
-        .min(item_count - 1)
-        .saturating_sub(OVERVIEW_VISIBLE_ROWS - 1)
 }
 
 pub fn palette_items(workspace: &Workspace, query: &str) -> Vec<PaletteItem> {
@@ -293,54 +113,6 @@ pub fn palette_items(workspace: &Workspace, query: &str) -> Vec<PaletteItem> {
     );
 
     items
-}
-
-pub fn palette_visible_start(selection: usize, item_count: usize) -> usize {
-    if item_count <= PALETTE_VISIBLE_ROWS {
-        return 0;
-    }
-
-    selection
-        .min(item_count - 1)
-        .saturating_sub(PALETTE_VISIBLE_ROWS - 1)
-}
-
-fn palette_matches(query: &str, fields: &[&str]) -> bool {
-    query.is_empty()
-        || fields
-            .iter()
-            .any(|field| normalize_palette_query(field).contains(query))
-}
-
-fn normalize_palette_query(value: &str) -> String {
-    value.trim().to_ascii_lowercase()
-}
-
-fn session_kind_label(kind: SessionKind) -> &'static str {
-    match kind {
-        SessionKind::Terminal => "terminal",
-        SessionKind::Agent => "agent",
-    }
-}
-
-fn pane_kind_label(kind: PaneKind) -> &'static str {
-    match kind {
-        PaneKind::Terminal => "terminal",
-        PaneKind::Agent => "agent",
-    }
-}
-
-impl From<PaneSummary> for OverviewItem {
-    fn from(pane: PaneSummary) -> Self {
-        Self::Pane {
-            tab_index: pane.tab_index,
-            pane_index: pane.pane_index,
-            title: pane.title,
-            kind: pane.kind,
-            active: pane.active,
-            tab_active: pane.tab_active,
-        }
-    }
 }
 
 #[cfg(test)]
