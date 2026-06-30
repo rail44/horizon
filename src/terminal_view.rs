@@ -13,6 +13,7 @@ use floem::{
     View, ViewId,
 };
 use floem_renderer::Renderer;
+use horizon::fonts::HORIZON_FONT_FAMILY;
 use horizon::terminal::{
     TerminalCommand, TerminalFrame, TerminalMouseButton, TerminalMouseKind, TerminalMouseModifiers,
     TerminalMouseReport, TerminalScroll, TerminalSelectionPoint, TerminalSize,
@@ -24,9 +25,6 @@ const FONT_SIZE: f32 = 13.0;
 const LINE_HEIGHT: f64 = 18.0;
 const PADDING_X: f64 = 12.0;
 const PADDING_Y: f64 = 12.0;
-const TERMINAL_FONT_FAMILY: &str =
-    "Iosevka Nerd Font Mono, Symbols Nerd Font Mono, Noto Sans Mono CJK JP, monospace, Noto Sans CJK JP";
-
 pub fn terminal_text_view(
     frame: impl Fn() -> TerminalFrame + 'static,
     preedit: impl Fn() -> Option<String> + 'static,
@@ -381,7 +379,7 @@ fn scroll_lines_from_wheel(delta_y: f64) -> Option<i32> {
         return None;
     }
 
-    Some(if delta_y > 0.0 { 3 } else { -3 })
+    Some(if delta_y > 0.0 { -3 } else { 3 })
 }
 
 fn terminal_mouse_button(button: PointerButton) -> Option<TerminalMouseButton> {
@@ -742,7 +740,7 @@ fn measured_cell_width() -> f64 {
 }
 
 fn terminal_font_family() -> Vec<FamilyOwned> {
-    FamilyOwned::parse_list(TERMINAL_FONT_FAMILY).collect()
+    FamilyOwned::parse_list(HORIZON_FONT_FAMILY).collect()
 }
 
 #[cfg(test)]

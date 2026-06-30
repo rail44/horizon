@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::agent::AgentFrame;
 use crate::terminal::TerminalFrame;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
@@ -89,6 +90,7 @@ pub struct Pane {
     pub session_id: Option<SessionId>,
     pub output: String,
     pub terminal_frame: Option<TerminalFrame>,
+    pub agent_frame: Option<AgentFrame>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -387,10 +389,32 @@ impl Workspace {
             .and_then(|pane| pane.session_id)
     }
 
+    pub fn visible_agent_session_id(&self, index: usize) -> Option<SessionId> {
+        let pane_id = self.visible_pane_id(index)?;
+        self.panes
+            .iter()
+            .find(|pane| pane.id == pane_id && pane.kind == PaneKind::Agent)
+            .and_then(|pane| pane.session_id)
+    }
+
+    pub fn visible_agent_frame(&self, index: usize) -> Option<AgentFrame> {
+        self.visible_panes()
+            .get(index)
+            .and_then(|pane| pane.agent_frame.clone())
+    }
+
     pub fn terminal_session_ids(&self) -> Vec<SessionId> {
         self.sessions
             .iter()
             .filter(|session| session.kind == SessionKind::Terminal)
+            .map(|session| session.id)
+            .collect()
+    }
+
+    pub fn agent_session_ids(&self) -> Vec<SessionId> {
+        self.sessions
+            .iter()
+            .filter(|session| session.kind == SessionKind::Agent)
             .map(|session| session.id)
             .collect()
     }
@@ -583,6 +607,18 @@ impl Workspace {
     }
 }
 
+impl Workspace {
+    pub fn update_agent_frame(&mut self, session_id: SessionId, frame: AgentFrame) {
+        for pane in self
+            .panes
+            .iter_mut()
+            .filter(|pane| pane.session_id == Some(session_id) && pane.kind == PaneKind::Agent)
+        {
+            pane.agent_frame = Some(frame.clone());
+        }
+    }
+}
+
 impl WorkspaceSession {
     fn new(id: SessionId, kind: SessionKind, display_number: usize) -> Self {
         Self {
@@ -666,6 +702,7 @@ impl Pane {
             session_id,
             terminal_frame: (kind == PaneKind::Terminal)
                 .then(|| TerminalFrame::from_text(output.clone())),
+            agent_frame: (kind == PaneKind::Agent).then(AgentFrame::empty),
             output,
         }
     }
@@ -865,8 +902,9 @@ mod tests {
     fn opening_tab_is_reflected_in_tab_summaries() {
         let mut workspace = Workspace::mvp();
         let first_session = workspace.active_terminal_session_id().expect("session");
+        let agent_session = SessionId::new();
 
-        workspace.open_tab(PaneKind::Agent, None);
+        workspace.open_tab(PaneKind::Agent, Some(agent_session));
 
         assert_eq!(
             workspace.tab_summaries(),
@@ -880,10 +918,10 @@ mod tests {
                 },
                 TabSummary {
                     index: 1,
-                    title: "AI Agent".to_string(),
+                    title: "Agent #1".to_string(),
                     active: true,
                     pane_count: 1,
-                    active_session_id: None,
+                    active_session_id: Some(agent_session),
                 },
             ]
         );

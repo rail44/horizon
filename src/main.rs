@@ -9,18 +9,28 @@ use floem::{
     window::WindowConfig,
     Application, Clipboard,
 };
+use horizon::agent::{
+    AgentCommand, AgentFrame, AgentInitialization, AgentProviderRegistry, AgentRuntimeStateStore,
+    AgentToolCallId,
+};
+use horizon::agent_duckdb_state::DuckDbAgentStateStore;
+use horizon::agent_event_log::{read_agent_event_log, AgentEventLogWriterHandle};
+use horizon::agent_tools::process_agent_provider_event;
 use horizon::commands::{
     clamp_palette_selection, command_enabled, command_entries, filter_command_entries,
     CommandEntry, CommandId, CommandState,
 };
+use horizon::fonts::HORIZON_FONT_FAMILY;
 use horizon::session::SessionRegistry;
 use horizon::terminal::{
     TerminalCommand, TerminalFrame, TerminalSession, TerminalSize, TerminalUpdate,
 };
 use horizon::workspace::{PaneKind, PaneSummary, SessionId, SessionKind, Workspace};
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 use termwiz::input::{KeyCode as TermKeyCode, Modifiers as TermModifiers};
 
+mod agent_view;
 mod terminal_view;
 
 const PALETTE_VISIBLE_ROWS: usize = 6;
@@ -28,6 +38,10 @@ const OVERVIEW_VISIBLE_ROWS: usize = 8;
 const MAX_VISIBLE_PANES: usize = 4;
 
 type PaneFocusRequests = [RwSignal<u64>; MAX_VISIBLE_PANES];
+type AgentDrafts = [RwSignal<String>; MAX_VISIBLE_PANES];
+
+static AGENT_EVENT_LOG_WRITER: OnceLock<Mutex<Option<AgentEventLogWriterHandle>>> = OnceLock::new();
+static AGENT_DUCKDB_REBUILD_DONE: OnceLock<Mutex<bool>> = OnceLock::new();
 
 #[derive(Clone, Debug)]
 enum PaletteItem {
@@ -83,7 +97,9 @@ fn main() {
             Some(
                 WindowConfig::default()
                     .title("Horizon")
-                    .size((1100.0, 720.0)),
+                    .size((1100.0, 720.0))
+                    .show_titlebar(true)
+                    .undecorated(false),
             ),
         )
         .run();
@@ -105,8 +121,15 @@ fn app_view() -> impl IntoView {
         RwSignal::new(0_u64),
         RwSignal::new(0_u64),
     ];
+    let agent_drafts = [
+        RwSignal::new(String::new()),
+        RwSignal::new(String::new()),
+        RwSignal::new(String::new()),
+        RwSignal::new(String::new()),
+    ];
     let control_mode = RwSignal::new(ControlMode::Commands);
     let overview_selection = RwSignal::new(0_usize);
+    let agent_state_status = RwSignal::new(None::<String>);
     let terminal_dump = std::env::var_os("HORIZON_TERMINAL_DUMP").map(PathBuf::from);
     let clipboard_dump = std::env::var_os("HORIZON_CLIPBOARD_DUMP").map(PathBuf::from);
     let status_dump = std::env::var_os("HORIZON_STATUS_DUMP").map(PathBuf::from);
@@ -119,6 +142,9 @@ fn app_view() -> impl IntoView {
             terminal_dump.clone(),
             clipboard_dump.clone(),
         );
+    }
+    for session_id in workspace.with(|ws| ws.agent_session_ids()) {
+        spawn_agent_session(session_id, workspace, sessions, agent_state_status);
     }
 
     stack((
@@ -135,12 +161,14 @@ fn app_view() -> impl IntoView {
                 palette_selection,
                 palette_focus_request,
                 pane_focus_requests,
+                agent_drafts,
                 control_mode,
                 overview_selection,
                 terminal_dump.clone(),
                 clipboard_dump.clone(),
+                agent_state_status,
             ),
-            status_bar(workspace, status_dump),
+            status_bar(workspace, agent_state_status, status_dump),
         ))
         .style(|s| s.size_full().flex().flex_col()),
         command_palette(
@@ -151,6 +179,7 @@ fn app_view() -> impl IntoView {
             palette_selection,
             palette_focus_request,
             pane_focus_requests,
+            agent_state_status,
             control_mode,
             overview_selection,
             terminal_dump.clone(),
@@ -165,7 +194,7 @@ fn app_view() -> impl IntoView {
         ),
     ))
     .on_event(EventListener::WindowGotFocus, move |_| {
-        set_ime_allowed(active_terminal(workspace));
+        set_ime_allowed(active_text_input_pane(workspace));
         let (position, size) = ime_cursor_area.get_untracked();
         set_ime_cursor_area(position, size);
         EventPropagation::Continue
@@ -179,7 +208,7 @@ fn app_view() -> impl IntoView {
         EventPropagation::Continue
     })
     .on_event(EventListener::ImePreedit, move |event| {
-        if !active_terminal(workspace) {
+        if !active_text_input_pane(workspace) {
             return EventPropagation::Continue;
         }
 
@@ -200,7 +229,7 @@ fn app_view() -> impl IntoView {
         EventPropagation::Continue
     })
     .on_event(EventListener::ImeCommit, move |event| {
-        if !active_terminal(workspace) {
+        if !active_text_input_pane(workspace) {
             return EventPropagation::Continue;
         }
 
@@ -210,6 +239,12 @@ fn app_view() -> impl IntoView {
             trace_ime(&format!("commit text={text:?}"));
             ime_composing.set(false);
             ime_preedit.set(None);
+            if active_agent(workspace) {
+                if let Some(draft) = active_agent_draft(workspace, agent_drafts) {
+                    draft.update(|draft| draft.push_str(text));
+                    return EventPropagation::Stop;
+                }
+            }
             if let Some(tx) = active_terminal_sender(workspace, sessions) {
                 let _ = tx.send(TerminalCommand::Input(text.as_bytes().to_vec()));
                 return EventPropagation::Stop;
@@ -232,6 +267,7 @@ fn app_view() -> impl IntoView {
                     control_mode,
                     overview_selection,
                     pane_focus_requests,
+                    agent_state_status,
                     terminal_dump.clone(),
                     clipboard_dump.clone(),
                 ) {
@@ -315,6 +351,150 @@ fn spawn_terminal_session(
     }
 }
 
+fn spawn_agent_session(
+    session_id: SessionId,
+    workspace: RwSignal<Workspace>,
+    sessions: RwSignal<SessionRegistry>,
+    agent_state_status: RwSignal<Option<String>>,
+) {
+    let providers = AgentProviderRegistry::builtin();
+    let provider_id = providers.default_provider_id();
+    let Some(handle) = providers.start_session(&provider_id, session_id) else {
+        workspace.update(|ws| {
+            ws.update_agent_frame(
+                session_id,
+                AgentFrame {
+                    state: None,
+                    items: Vec::new(),
+                },
+            )
+        });
+        return;
+    };
+    let events = create_signal_from_channel(handle.events());
+    sessions.update(|registry| {
+        registry.insert_agent(session_id, handle);
+    });
+
+    if let Some(sender) = sessions.with_untracked(|registry| registry.agent_sender(session_id)) {
+        let _ = sender.send(AgentCommand::Initialize(AgentInitialization {
+            session_id,
+            provider_id: provider_id.clone(),
+        }));
+    }
+
+    let runtime_state =
+        open_agent_runtime_state_store(session_id, provider_id.clone(), agent_state_status);
+    create_effect(move |_| {
+        if let Some(event) = events.get() {
+            let processing = workspace.with_untracked(|ws| process_agent_provider_event(ws, event));
+            for command in processing.provider_commands {
+                if let Some(sender) =
+                    sessions.with_untracked(|registry| registry.agent_sender(session_id))
+                {
+                    let _ = sender.send(command);
+                }
+            }
+            let frame = runtime_state.extend_provider_events(processing.horizon_events);
+            workspace.update(|ws| ws.update_agent_frame(session_id, frame));
+        }
+    });
+}
+
+fn open_agent_runtime_state_store(
+    session_id: SessionId,
+    provider_id: horizon::agent::AgentProviderId,
+    agent_state_status: RwSignal<Option<String>>,
+) -> AgentRuntimeStateStore {
+    let event_log = match open_agent_event_log() {
+        Ok((writer, status)) => {
+            let mut messages = Vec::new();
+            if let Some(status) = status {
+                messages.push(status);
+            }
+            if let Err(error) = rebuild_agent_duckdb_from_event_log_once() {
+                messages.push(format!(
+                    "Agent DuckDB projection rebuild unavailable: {error}"
+                ));
+            }
+            if !messages.is_empty() {
+                agent_state_status.set(Some(messages.join(" | ")));
+            }
+            Some(writer)
+        }
+        Err(error) => {
+            agent_state_status.set(Some(format!(
+                "Agent event log unavailable ({error}); persistence disabled"
+            )));
+            None
+        }
+    };
+
+    if let Some(event_log) = event_log {
+        AgentRuntimeStateStore::with_event_log(session_id, Some(provider_id), event_log)
+    } else {
+        AgentRuntimeStateStore::with_disabled_persistence()
+    }
+}
+
+fn open_agent_event_log() -> anyhow::Result<(AgentEventLogWriterHandle, Option<String>)> {
+    let writer_cell = AGENT_EVENT_LOG_WRITER.get_or_init(|| Mutex::new(None));
+    let mut writer = writer_cell
+        .lock()
+        .map_err(|_| anyhow::anyhow!("agent event log writer lock poisoned"))?;
+    if let Some(writer) = writer.as_ref() {
+        return Ok((writer.clone(), None));
+    }
+
+    let Some(path) = std::env::var_os("HORIZON_AGENT_EVENT_LOG").map(PathBuf::from) else {
+        let path = std::env::temp_dir().join("horizon-agent-events.jsonl");
+        let status = Some(format!("Agent event log: {}", path.display()));
+        let handle = AgentEventLogWriterHandle::open(path)?;
+        *writer = Some(handle.clone());
+        return Ok((handle, status));
+    };
+
+    let status = Some(format!("Agent event log: {}", path.display()));
+    let handle = AgentEventLogWriterHandle::open(path)?;
+    *writer = Some(handle.clone());
+    Ok((handle, status))
+}
+
+fn rebuild_agent_duckdb_from_event_log_once() -> anyhow::Result<()> {
+    let rebuild_done = AGENT_DUCKDB_REBUILD_DONE.get_or_init(|| Mutex::new(false));
+    let mut rebuild_done = rebuild_done
+        .lock()
+        .map_err(|_| anyhow::anyhow!("agent DuckDB rebuild lock poisoned"))?;
+    if *rebuild_done {
+        return Ok(());
+    }
+
+    rebuild_agent_duckdb_from_event_log()?;
+    *rebuild_done = true;
+    Ok(())
+}
+
+fn rebuild_agent_duckdb_from_event_log() -> anyhow::Result<()> {
+    let Some(db_path) = std::env::var_os("HORIZON_AGENT_STATE_DB").map(PathBuf::from) else {
+        return Ok(());
+    };
+    let Some(log_path) = std::env::var_os("HORIZON_AGENT_EVENT_LOG").map(PathBuf::from) else {
+        return Ok(());
+    };
+
+    let report = read_agent_event_log(&log_path)?;
+
+    if let Some(parent) = db_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+
+    let store = DuckDbAgentStateStore::open(db_path)?;
+    store.replace_from_event_log_records(report.records)?;
+    Ok(())
+}
+
 fn command_palette(
     workspace: RwSignal<Workspace>,
     sessions: RwSignal<SessionRegistry>,
@@ -323,6 +503,7 @@ fn command_palette(
     palette_selection: RwSignal<usize>,
     palette_focus_request: RwSignal<u64>,
     pane_focus_requests: PaneFocusRequests,
+    agent_state_status: RwSignal<Option<String>>,
     control_mode: RwSignal<ControlMode>,
     overview_selection: RwSignal<usize>,
     terminal_dump: Option<PathBuf>,
@@ -359,6 +540,7 @@ fn command_palette(
                 palette_selection,
                 0,
                 pane_focus_requests,
+                agent_state_status,
                 terminal_dump.clone(),
                 clipboard_dump.clone(),
             ),
@@ -370,6 +552,7 @@ fn command_palette(
                 palette_selection,
                 1,
                 pane_focus_requests,
+                agent_state_status,
                 terminal_dump.clone(),
                 clipboard_dump.clone(),
             ),
@@ -381,6 +564,7 @@ fn command_palette(
                 palette_selection,
                 2,
                 pane_focus_requests,
+                agent_state_status,
                 terminal_dump.clone(),
                 clipboard_dump.clone(),
             ),
@@ -392,6 +576,7 @@ fn command_palette(
                 palette_selection,
                 3,
                 pane_focus_requests,
+                agent_state_status,
                 terminal_dump.clone(),
                 clipboard_dump.clone(),
             ),
@@ -403,6 +588,7 @@ fn command_palette(
                 palette_selection,
                 4,
                 pane_focus_requests,
+                agent_state_status,
                 terminal_dump.clone(),
                 clipboard_dump.clone(),
             ),
@@ -414,6 +600,7 @@ fn command_palette(
                 palette_selection,
                 5,
                 pane_focus_requests,
+                agent_state_status,
                 terminal_dump,
                 clipboard_dump,
             ),
@@ -436,6 +623,7 @@ fn command_palette(
                 control_mode,
                 overview_selection,
                 pane_focus_requests,
+                agent_state_status,
                 terminal_dump_for_key.clone(),
                 clipboard_dump_for_key.clone(),
             ) {
@@ -516,6 +704,7 @@ fn palette_row(
     palette_selection: RwSignal<usize>,
     index: usize,
     pane_focus_requests: PaneFocusRequests,
+    agent_state_status: RwSignal<Option<String>>,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) -> impl IntoView {
@@ -580,6 +769,7 @@ fn palette_row(
             palette_query,
             palette_selection,
             pane_focus_requests,
+            agent_state_status,
             terminal_dump.clone(),
             clipboard_dump.clone(),
         );
@@ -783,6 +973,7 @@ fn execute_command(
     workspace: RwSignal<Workspace>,
     sessions: RwSignal<SessionRegistry>,
     pane_focus_requests: PaneFocusRequests,
+    agent_state_status: RwSignal<Option<String>>,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) {
@@ -800,16 +991,14 @@ fn execute_command(
             clipboard_dump,
         ),
         CommandId::NewAgent => {
-            workspace.update(|ws| {
-                ws.open_tab(PaneKind::Agent, None);
-            });
-            request_active_pane_focus(workspace, pane_focus_requests);
+            open_agent_tab(workspace, sessions, pane_focus_requests, agent_state_status);
         }
         CommandId::SplitActivePane => {
             split_active_pane(
                 workspace,
                 sessions,
                 pane_focus_requests,
+                agent_state_status,
                 terminal_dump,
                 clipboard_dump,
             );
@@ -840,6 +1029,7 @@ fn handle_palette_key(
     palette_query: RwSignal<String>,
     palette_selection: RwSignal<usize>,
     pane_focus_requests: PaneFocusRequests,
+    agent_state_status: RwSignal<Option<String>>,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) -> bool {
@@ -856,6 +1046,7 @@ fn handle_palette_key(
                 palette_query,
                 palette_selection,
                 pane_focus_requests,
+                agent_state_status,
                 terminal_dump,
                 clipboard_dump,
             );
@@ -901,6 +1092,7 @@ fn handle_control_key(
     control_mode: RwSignal<ControlMode>,
     overview_selection: RwSignal<usize>,
     pane_focus_requests: PaneFocusRequests,
+    agent_state_status: RwSignal<Option<String>>,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) -> bool {
@@ -918,6 +1110,7 @@ fn handle_control_key(
             palette_query,
             palette_selection,
             pane_focus_requests,
+            agent_state_status,
             terminal_dump,
             clipboard_dump,
         ),
@@ -1347,6 +1540,7 @@ fn execute_palette_selection(
     palette_query: RwSignal<String>,
     palette_selection: RwSignal<usize>,
     pane_focus_requests: PaneFocusRequests,
+    agent_state_status: RwSignal<Option<String>>,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) {
@@ -1374,6 +1568,7 @@ fn execute_palette_selection(
             workspace,
             sessions,
             pane_focus_requests,
+            agent_state_status,
             terminal_dump,
             clipboard_dump,
         ),
@@ -1454,10 +1649,25 @@ fn open_terminal_tab(
     request_active_pane_focus(workspace, pane_focus_requests);
 }
 
+fn open_agent_tab(
+    workspace: RwSignal<Workspace>,
+    sessions: RwSignal<SessionRegistry>,
+    pane_focus_requests: PaneFocusRequests,
+    agent_state_status: RwSignal<Option<String>>,
+) {
+    let session_id = SessionId::new();
+    workspace.update(|ws| {
+        ws.open_tab(PaneKind::Agent, Some(session_id));
+    });
+    spawn_agent_session(session_id, workspace, sessions, agent_state_status);
+    request_active_pane_focus(workspace, pane_focus_requests);
+}
+
 fn split_active_pane(
     workspace: RwSignal<Workspace>,
     sessions: RwSignal<SessionRegistry>,
     pane_focus_requests: PaneFocusRequests,
+    agent_state_status: RwSignal<Option<String>>,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) {
@@ -1470,7 +1680,7 @@ fn split_active_pane(
         if kind == PaneKind::Terminal {
             ws.split_active(PaneKind::Terminal, Some(SessionId::new()));
         } else {
-            ws.split_active(PaneKind::Agent, None);
+            ws.split_active(PaneKind::Agent, Some(SessionId::new()));
         }
     });
     if kind == PaneKind::Terminal {
@@ -1485,6 +1695,8 @@ fn split_active_pane(
             terminal_dump,
             clipboard_dump,
         );
+    } else if let Some(session_id) = workspace.with_untracked(|ws| ws.active_session_id()) {
+        spawn_agent_session(session_id, workspace, sessions, agent_state_status);
     }
     request_active_pane_focus(workspace, pane_focus_requests);
 }
@@ -1497,7 +1709,7 @@ fn request_active_pane_focus(
     if let Some(focus_request) = pane_focus_requests.get(index) {
         focus_request.update(|request| *request += 1);
     }
-    set_ime_allowed(active_terminal(workspace));
+    set_ime_allowed(active_text_input_pane(workspace));
 }
 
 fn terminate_active_session(workspace: RwSignal<Workspace>, sessions: RwSignal<SessionRegistry>) {
@@ -1510,6 +1722,7 @@ fn terminate_active_session(workspace: RwSignal<Workspace>, sessions: RwSignal<S
     });
     sessions.update(|registry| {
         registry.shutdown_terminal(session_id);
+        registry.shutdown_agent(session_id);
     });
 }
 
@@ -1667,6 +1880,30 @@ fn active_terminal(workspace: RwSignal<Workspace>) -> bool {
     })
 }
 
+fn active_agent(workspace: RwSignal<Workspace>) -> bool {
+    workspace.with(|ws| {
+        ws.visible_panes()
+            .get(ws.active_visible_index())
+            .is_some_and(|pane| pane.kind == PaneKind::Agent)
+    })
+}
+
+fn active_text_input_pane(workspace: RwSignal<Workspace>) -> bool {
+    active_terminal(workspace) || active_agent(workspace)
+}
+
+fn active_agent_draft(
+    workspace: RwSignal<Workspace>,
+    agent_drafts: AgentDrafts,
+) -> Option<RwSignal<String>> {
+    if !active_agent(workspace) {
+        return None;
+    }
+
+    let index = workspace.with_untracked(|ws| ws.active_visible_index());
+    agent_drafts.get(index).copied()
+}
+
 fn active_terminal_sender(
     workspace: RwSignal<Workspace>,
     sessions: RwSignal<SessionRegistry>,
@@ -1682,6 +1919,15 @@ fn pane_terminal_sender(
 ) -> Option<crossbeam_channel::Sender<TerminalCommand>> {
     let session_id = workspace.with_untracked(|ws| ws.visible_terminal_session_id(index))?;
     sessions.with_untracked(|registry| registry.terminal_sender(session_id))
+}
+
+fn pane_agent_sender(
+    workspace: RwSignal<Workspace>,
+    sessions: RwSignal<SessionRegistry>,
+    index: usize,
+) -> Option<crossbeam_channel::Sender<AgentCommand>> {
+    let session_id = workspace.with_untracked(|ws| ws.visible_agent_session_id(index))?;
+    sessions.with_untracked(|registry| registry.agent_sender(session_id))
 }
 
 fn close_visible_pane(
@@ -1717,10 +1963,12 @@ fn workspace_view(
     palette_selection: RwSignal<usize>,
     palette_focus_request: RwSignal<u64>,
     pane_focus_requests: PaneFocusRequests,
+    agent_drafts: AgentDrafts,
     control_mode: RwSignal<ControlMode>,
     overview_selection: RwSignal<usize>,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
+    agent_state_status: RwSignal<Option<String>>,
 ) -> impl IntoView {
     h_stack((
         pane_view(
@@ -1736,10 +1984,12 @@ fn workspace_view(
             palette_focus_request,
             pane_focus_requests[0],
             pane_focus_requests,
+            agent_drafts,
             control_mode,
             overview_selection,
             terminal_dump.clone(),
             clipboard_dump.clone(),
+            agent_state_status,
         ),
         pane_view(
             workspace,
@@ -1754,10 +2004,12 @@ fn workspace_view(
             palette_focus_request,
             pane_focus_requests[1],
             pane_focus_requests,
+            agent_drafts,
             control_mode,
             overview_selection,
             terminal_dump.clone(),
             clipboard_dump.clone(),
+            agent_state_status,
         ),
         pane_view(
             workspace,
@@ -1772,10 +2024,12 @@ fn workspace_view(
             palette_focus_request,
             pane_focus_requests[2],
             pane_focus_requests,
+            agent_drafts,
             control_mode,
             overview_selection,
             terminal_dump.clone(),
             clipboard_dump.clone(),
+            agent_state_status,
         ),
         pane_view(
             workspace,
@@ -1790,10 +2044,12 @@ fn workspace_view(
             palette_focus_request,
             pane_focus_requests[3],
             pane_focus_requests,
+            agent_drafts,
             control_mode,
             overview_selection,
             terminal_dump,
             clipboard_dump,
+            agent_state_status,
         ),
     ))
     .style(|s| {
@@ -1822,10 +2078,12 @@ fn pane_view(
     palette_focus_request: RwSignal<u64>,
     focus_request: RwSignal<u64>,
     pane_focus_requests: PaneFocusRequests,
+    agent_drafts: AgentDrafts,
     control_mode: RwSignal<ControlMode>,
     overview_selection: RwSignal<usize>,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
+    agent_state_status: RwSignal<Option<String>>,
 ) -> impl IntoView {
     let output = move || {
         workspace.with(|ws| {
@@ -1844,6 +2102,12 @@ fn pane_view(
                 .unwrap_or_else(|| TerminalFrame::from_text(output()))
         })
     };
+    let agent_frame = move || {
+        workspace.with(|ws| {
+            ws.visible_agent_frame(index)
+                .unwrap_or_else(AgentFrame::empty)
+        })
+    };
 
     let title = move || {
         workspace.with(|ws| {
@@ -1855,6 +2119,27 @@ fn pane_view(
     let active = move || workspace.with(|ws| ws.active_visible_index() == index);
     let exists = move || workspace.with(|ws| ws.visible_panes().get(index).is_some());
     let closeable = move || workspace.with(|ws| ws.visible_panes().len() > 1);
+    let is_agent = move || {
+        workspace.with(|ws| {
+            ws.visible_panes()
+                .get(index)
+                .is_some_and(|pane| pane.kind == PaneKind::Agent)
+        })
+    };
+    let is_terminal = move || {
+        workspace.with(|ws| {
+            ws.visible_panes()
+                .get(index)
+                .is_some_and(|pane| pane.kind == PaneKind::Terminal)
+        })
+    };
+    let pending_approval = move || {
+        workspace.with(|ws| {
+            ws.visible_agent_frame(index)
+                .and_then(|frame| frame.pending_approval_call_id())
+        })
+    };
+    let agent_draft = agent_drafts[index];
 
     v_stack((
         pane_header(title, active, closeable, move || {
@@ -1870,6 +2155,38 @@ fn pane_view(
                 }
             },
             pane_terminal_sender(workspace, sessions, index),
+            ime_cursor_area,
+            is_terminal,
+        ),
+        agent_view::agent_frame_view(agent_frame, is_agent),
+        agent_approval_actions(
+            is_agent,
+            pending_approval,
+            move |call_id| {
+                if let Some(tx) = pane_agent_sender(workspace, sessions, index) {
+                    let _ = tx.send(AgentCommand::ApproveToolCall { call_id });
+                }
+            },
+            move |call_id| {
+                if let Some(tx) = pane_agent_sender(workspace, sessions, index) {
+                    let _ = tx.send(AgentCommand::DenyToolCall {
+                        call_id,
+                        reason: Some("Denied by user".to_string()),
+                    });
+                }
+            },
+        ),
+        agent_composer(
+            is_agent,
+            active,
+            agent_draft,
+            move || {
+                if active() && is_agent() {
+                    ime_preedit.get()
+                } else {
+                    None
+                }
+            },
             ime_cursor_area,
         ),
     ))
@@ -1894,7 +2211,7 @@ fn pane_view(
                 && ws
                     .visible_panes()
                     .get(index)
-                    .is_some_and(|pane| pane.kind == PaneKind::Terminal)
+                    .is_some_and(|pane| matches!(pane.kind, PaneKind::Terminal | PaneKind::Agent))
         }) {
             set_ime_allowed(true);
         }
@@ -1906,7 +2223,7 @@ fn pane_view(
                 && ws
                     .visible_panes()
                     .get(index)
-                    .is_some_and(|pane| pane.kind == PaneKind::Terminal)
+                    .is_some_and(|pane| matches!(pane.kind, PaneKind::Terminal | PaneKind::Agent))
         }));
         EventPropagation::Continue
     })
@@ -1929,6 +2246,7 @@ fn pane_view(
                     control_mode,
                     overview_selection,
                     pane_focus_requests,
+                    agent_state_status,
                     terminal_dump.clone(),
                     clipboard_dump.clone(),
                 ) {
@@ -1958,6 +2276,27 @@ fn pane_view(
                     .get(index)
                     .is_some_and(|pane| pane.kind == PaneKind::Terminal)
         }) {
+            if let Event::KeyDown(key_event) = event {
+                if ime_composing.get_untracked()
+                    && matches!(key_event.key.logical_key, Key::Character(_))
+                {
+                    return EventPropagation::Stop;
+                }
+
+                if workspace.with(|ws| {
+                    ws.active_visible_index() == index
+                        && ws
+                            .visible_panes()
+                            .get(index)
+                            .is_some_and(|pane| pane.kind == PaneKind::Agent)
+                }) && handle_agent_key(
+                    key_event,
+                    agent_draft,
+                    pane_agent_sender(workspace, sessions, index),
+                ) {
+                    return EventPropagation::Stop;
+                }
+            }
             return EventPropagation::Continue;
         }
 
@@ -2031,6 +2370,7 @@ fn terminal_output(
     preedit: impl Fn() -> Option<String> + 'static,
     terminal_tx: Option<crossbeam_channel::Sender<TerminalCommand>>,
     ime_cursor_area: RwSignal<(Point, Size)>,
+    visible: impl Fn() -> bool + 'static,
 ) -> impl IntoView {
     let terminal_origin = RwSignal::new(floem::peniko::kurbo::Point::ZERO);
     terminal_view::terminal_text_view(
@@ -2041,7 +2381,11 @@ fn terminal_output(
         move |position, size| ime_cursor_area.set((position, size)),
     )
     .on_move(move |origin| terminal_origin.set(origin))
-    .style(|s| {
+    .style(move |s| {
+        if !visible() {
+            return s.hide();
+        }
+
         s.absolute()
             .inset_left(0.0)
             .inset_right(0.0)
@@ -2054,6 +2398,219 @@ fn terminal_output(
             .flex_basis(0.0)
             .flex_grow(1.0)
     })
+}
+
+fn agent_composer(
+    visible: impl Fn() -> bool + 'static + Copy,
+    active: impl Fn() -> bool + 'static + Copy,
+    draft: RwSignal<String>,
+    preedit: impl Fn() -> Option<String> + 'static + Copy,
+    ime_cursor_area: RwSignal<(Point, Size)>,
+) -> impl IntoView {
+    label(move || {
+        let text = draft.get();
+        let preedit = preedit().unwrap_or_default();
+        if text.is_empty() && preedit.is_empty() {
+            "Message agent...".to_string()
+        } else if preedit.is_empty() {
+            text
+        } else {
+            format!("{text}{preedit}")
+        }
+    })
+    .style(move |s| {
+        if !visible() {
+            return s.hide();
+        }
+
+        let border = if active() {
+            floem::peniko::Color::rgb8(132, 220, 198)
+        } else {
+            floem::peniko::Color::rgb8(57, 64, 76)
+        };
+        let color = if draft.with(|text| text.is_empty()) && preedit().is_none() {
+            floem::peniko::Color::rgb8(115, 122, 136)
+        } else {
+            floem::peniko::Color::rgb8(233, 236, 242)
+        };
+
+        s.width_full()
+            .height(34)
+            .min_height(34)
+            .items_center()
+            .padding_horiz(10)
+            .margin_horiz(8)
+            .margin_bottom(7)
+            .font_family(HORIZON_FONT_FAMILY.to_string())
+            .font_size(12)
+            .line_height(1.2)
+            .color(color)
+            .background(floem::peniko::Color::rgb8(21, 24, 30))
+            .border(1.0)
+            .border_color(border)
+    })
+    .on_move(move |origin| {
+        if active() && visible() {
+            let position = origin + Point::new(10.0, 6.0).to_vec2();
+            let size = Size::new(8.0, 18.0);
+            ime_cursor_area.set((position, size));
+            set_ime_cursor_area(position, size);
+        }
+    })
+}
+
+fn agent_approval_actions(
+    visible: impl Fn() -> bool + 'static + Copy,
+    pending_approval: impl Fn() -> Option<AgentToolCallId> + 'static + Copy,
+    on_approve: impl Fn(AgentToolCallId) + 'static + Copy,
+    on_deny: impl Fn(AgentToolCallId) + 'static + Copy,
+) -> impl IntoView {
+    h_stack((
+        agent_approval_button(
+            "Approve",
+            visible,
+            pending_approval,
+            move |call_id| on_approve(call_id),
+            floem::peniko::Color::rgb8(48, 84, 75),
+            floem::peniko::Color::rgb8(132, 220, 198),
+        ),
+        agent_approval_button(
+            "Deny",
+            visible,
+            pending_approval,
+            move |call_id| on_deny(call_id),
+            floem::peniko::Color::rgb8(80, 50, 54),
+            floem::peniko::Color::rgb8(246, 137, 146),
+        ),
+    ))
+    .style(move |s| {
+        if !visible() || pending_approval().is_none() {
+            return s.hide();
+        }
+
+        s.width_full()
+            .height(30)
+            .min_height(30)
+            .items_center()
+            .justify_end()
+            .padding_horiz(8)
+            .gap(8)
+    })
+}
+
+fn agent_approval_button(
+    text: &'static str,
+    visible: impl Fn() -> bool + 'static + Copy,
+    pending_approval: impl Fn() -> Option<AgentToolCallId> + 'static + Copy,
+    on_click: impl Fn(AgentToolCallId) + 'static + Copy,
+    background: floem::peniko::Color,
+    border: floem::peniko::Color,
+) -> impl IntoView {
+    label(move || text.to_string())
+        .on_click_stop(move |_| {
+            if let Some(call_id) = pending_approval() {
+                on_click(call_id);
+            }
+        })
+        .style(move |s| {
+            if !visible() || pending_approval().is_none() {
+                return s.hide();
+            }
+
+            s.height(26)
+                .padding_horiz(12)
+                .items_center()
+                .justify_center()
+                .font_family(HORIZON_FONT_FAMILY.to_string())
+                .font_size(12)
+                .color(floem::peniko::Color::rgb8(233, 236, 242))
+                .background(background)
+                .border(1.0)
+                .border_color(border)
+        })
+}
+
+fn handle_agent_key(
+    event: &KeyEvent,
+    draft: RwSignal<String>,
+    agent_tx: Option<crossbeam_channel::Sender<AgentCommand>>,
+) -> bool {
+    if is_terminal_paste_key(event) {
+        if let Ok(text) = Clipboard::get_contents() {
+            draft.update(|draft| draft.push_str(&text));
+            return true;
+        }
+    }
+
+    match agent_draft_action(&event.key.logical_key, event.modifiers) {
+        Some(AgentDraftAction::Insert(text)) => {
+            draft.update(|draft| draft.push_str(&text));
+            true
+        }
+        Some(AgentDraftAction::Backspace) => {
+            draft.update(|draft| {
+                pop_last_grapheme_approx(draft);
+            });
+            true
+        }
+        Some(AgentDraftAction::Submit) => {
+            let text = draft.with_untracked(|draft| draft.trim().to_string());
+            if text.is_empty() {
+                return true;
+            }
+            if let Some(tx) = agent_tx {
+                let command = AgentCommand::UserMessage { text };
+                let _ = tx.send(command);
+                draft.set(String::new());
+            }
+            true
+        }
+        None => false,
+    }
+}
+
+fn pop_last_grapheme_approx(text: &mut String) {
+    while let Some(ch) = text.pop() {
+        if !is_combining_mark(ch) {
+            break;
+        }
+    }
+}
+
+fn is_combining_mark(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x0300..=0x036f
+            | 0x1ab0..=0x1aff
+            | 0x1dc0..=0x1dff
+            | 0x20d0..=0x20ff
+            | 0xfe20..=0xfe2f
+    )
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum AgentDraftAction {
+    Insert(String),
+    Backspace,
+    Submit,
+}
+
+fn agent_draft_action(key: &Key, modifiers: Modifiers) -> Option<AgentDraftAction> {
+    match key {
+        Key::Named(NamedKey::Enter) => Some(AgentDraftAction::Submit),
+        Key::Named(NamedKey::Backspace) => Some(AgentDraftAction::Backspace),
+        Key::Named(NamedKey::Space) if agent_accepts_text_input(modifiers) => {
+            Some(AgentDraftAction::Insert(" ".to_string()))
+        }
+        Key::Character(text) if agent_accepts_text_input(modifiers) => {
+            Some(AgentDraftAction::Insert(text.to_string()))
+        }
+        _ => None,
+    }
+}
+
+fn agent_accepts_text_input(modifiers: Modifiers) -> bool {
+    !modifiers.control() && !modifiers.alt() && !modifiers.meta()
 }
 
 fn terminal_input_from_key(event: &KeyEvent) -> Option<Vec<u8>> {
@@ -2156,14 +2713,6 @@ fn is_terminal_copy_input(key: &Key, modifiers: Modifiers) -> bool {
     }
 }
 
-fn scroll_lines_from_wheel(delta_y: f64) -> Option<i32> {
-    if delta_y.abs() < f64::EPSILON {
-        return None;
-    }
-
-    Some(if delta_y > 0.0 { 3 } else { -3 })
-}
-
 fn character_input(text: &str, modifiers: Modifiers) -> Option<Vec<u8>> {
     let mut chars = text.chars();
     let first = chars.next()?;
@@ -2200,17 +2749,15 @@ fn control_input(c: char) -> Option<Vec<u8>> {
     Some(vec![byte])
 }
 
-fn status_bar(workspace: RwSignal<Workspace>, status_dump: Option<PathBuf>) -> impl IntoView {
+fn status_bar(
+    workspace: RwSignal<Workspace>,
+    agent_state_status: RwSignal<Option<String>>,
+    status_dump: Option<PathBuf>,
+) -> impl IntoView {
     label(move || {
+        let agent_state_status = agent_state_status.get();
         workspace.with(|ws| {
-            let status = format!(
-                "{} tab(s), {} pane(s), {} detached session(s), active: {}, active pane: {} | Ctrl+Shift+P: control surface",
-                ws.tab_count(),
-                ws.visible_panes().len(),
-                ws.detached_session_count(),
-                ws.active_title(),
-                ws.active_visible_index() + 1
-            );
+            let status = status_bar_text(ws, agent_state_status.as_deref());
             if let Some(path) = &status_dump {
                 let _ = std::fs::write(path, &status);
             }
@@ -2226,6 +2773,21 @@ fn status_bar(workspace: RwSignal<Workspace>, status_dump: Option<PathBuf>) -> i
             .color(floem::peniko::Color::rgb8(178, 185, 198))
             .background(floem::peniko::Color::rgb8(31, 34, 41))
     })
+}
+
+fn status_bar_text(workspace: &Workspace, agent_state_status: Option<&str>) -> String {
+    let base = format!(
+        "{} tab(s), {} pane(s), {} detached session(s), active: {}, active pane: {} | Ctrl+Shift+P: control surface",
+        workspace.tab_count(),
+        workspace.visible_panes().len(),
+        workspace.detached_session_count(),
+        workspace.active_title(),
+        workspace.active_visible_index() + 1
+    );
+    match agent_state_status {
+        Some(status) if !status.is_empty() => format!("{base} | {status}"),
+        _ => base,
+    }
 }
 
 #[cfg(test)]
@@ -2254,13 +2816,40 @@ mod tests {
     }
 
     #[test]
-    fn wheel_up_scrolls_into_history() {
-        assert_eq!(scroll_lines_from_wheel(1.0), Some(3));
+    fn status_bar_text_includes_agent_state_diagnostic() {
+        let workspace = Workspace::mvp();
+        let status = status_bar_text(&workspace, Some("Agent state: /tmp/horizon.duckdb"));
+
+        assert!(status.contains("Ctrl+Shift+P: control surface"));
+        assert!(status.contains("Agent state: /tmp/horizon.duckdb"));
     }
 
     #[test]
-    fn wheel_down_scrolls_to_bottom() {
-        assert_eq!(scroll_lines_from_wheel(-1.0), Some(-3));
+    fn agent_draft_accepts_plain_text() {
+        assert_eq!(
+            agent_draft_action(&Key::Character("hello".into()), Modifiers::default()),
+            Some(AgentDraftAction::Insert("hello".to_string()))
+        );
+    }
+
+    #[test]
+    fn agent_draft_accepts_submit_and_backspace() {
+        assert_eq!(
+            agent_draft_action(&Key::Named(NamedKey::Enter), Modifiers::default()),
+            Some(AgentDraftAction::Submit)
+        );
+        assert_eq!(
+            agent_draft_action(&Key::Named(NamedKey::Backspace), Modifiers::default()),
+            Some(AgentDraftAction::Backspace)
+        );
+    }
+
+    #[test]
+    fn agent_draft_keeps_control_shortcuts_available() {
+        assert_eq!(
+            agent_draft_action(&Key::Character("p".into()), Modifiers::CONTROL),
+            None
+        );
     }
 
     #[test]

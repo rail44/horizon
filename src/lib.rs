@@ -1,4 +1,10 @@
+pub mod agent;
+pub mod agent_duckdb_state;
+pub mod agent_event_log;
+pub mod agent_rig_spike;
+pub mod agent_tools;
 pub mod commands;
+pub mod fonts;
 pub mod plugins;
 pub mod session;
 pub mod terminal;

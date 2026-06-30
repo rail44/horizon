@@ -93,7 +93,8 @@ Agents are sessions.
 - A global assistant sidebar is not part of the default model.
 
 This keeps AI integrated without making AI the visible center of the
-application.
+application. Detailed Agent pane decisions are recorded in
+`docs/agent-pane-design.md`.
 
 ## Plugin Model
 
@@ -163,4 +164,3 @@ Requirements:
   distinct from closing a surface.
 - Leave room for growth. Terminal, agent, and plugin views must fit the same
   pane model without forcing all plugin commands into persistent UI.
-
