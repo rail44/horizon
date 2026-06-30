@@ -4,12 +4,16 @@ Horizon is a Floem desktop shell for tabbed and split-pane applications.
 
 ## MVP Shape
 
-- Floem owns the native window, toolbar, tab actions, and split-pane layout.
-- Each pane is backed by a plugin-shaped `PluginFrame`.
-- Built-in plugins provide the first two MVP surfaces:
-  - Terminal: PTY-backed terminal core using `portable-pty`, `alacritty_terminal`, and `termwiz`.
-  - AI Agent: planned local-agent pane using the same command/frame contract.
-- WASM plugins are represented by manifests and validated through `wasmtime`.
+- Floem owns the native window, command surface, tab actions, and split-pane
+  layout.
+- Built-in sessions provide the first two MVP surfaces:
+  - Terminal: PTY-backed terminal core using `portable-pty`,
+    `alacritty_terminal`, and `termwiz`.
+  - AI Agent: provider-backed agent sessions using Horizon-owned
+    command/event/frame contracts.
+- WASM plugin manifests and validation are retained as the future path for
+  hot-reloadable pane development, including eventually developing Horizon
+  from inside Horizon.
 
 ## Commands
 
@@ -62,8 +66,7 @@ default, with each scenario containing `terminal.txt`, `status.txt`,
 
 ## Next Integration Points
 
-1. Bind `TerminalSession` updates into the Floem pane event loop.
-2. Convert Floem/winit keyboard events into `termwiz::input::KeyCode` values.
-3. Add a JSON-RPC or stdio bridge for the AI agent pane.
-4. Define the guest WASM ABI as WIT or a small exported JSON command function.
-5. Persist workspace state so tabs and splits survive restart.
+1. Persist workspace state so tabs and splits survive restart.
+2. Render split layouts recursively instead of through fixed pane slots.
+3. Define the guest WASM ABI as WIT or a small exported JSON command function.
+4. Wire plugin views into the session model for hot-reloadable pane development.

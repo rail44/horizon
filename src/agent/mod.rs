@@ -386,23 +386,6 @@ impl AgentRuntimeStateStore {
             .extend_events(events.into_iter().map(|event| event.event))
     }
 
-    pub fn with_duckdb_state(
-        session_id: SessionId,
-        provider_id: Option<AgentProviderId>,
-        store: Rc<crate::agent_duckdb_state::DuckDbAgentStateStore>,
-    ) -> Self {
-        Self {
-            inner: Rc::new(RefCell::new(AgentRuntimeState::new())),
-            persistence: Some(Rc::new(AgentRuntimePersistence::DuckDb(
-                AgentRuntimeDuckDbPersistence {
-                    session_id,
-                    provider_id,
-                    store,
-                },
-            ))),
-        }
-    }
-
     pub fn with_event_log(
         session_id: SessionId,
         provider_id: Option<AgentProviderId>,
@@ -423,57 +406,13 @@ impl AgentRuntimeStateStore {
         }
     }
 
-    pub fn try_extend_events(
-        &self,
-        events: impl IntoIterator<Item = AgentEvent>,
-    ) -> anyhow::Result<AgentFrame> {
-        self.try_extend_provider_events(events.into_iter().map(AgentProviderEvent::from))
-    }
-
-    pub fn try_extend_provider_events(
-        &self,
-        events: impl IntoIterator<Item = AgentProviderEvent>,
-    ) -> anyhow::Result<AgentFrame> {
-        let events = events.into_iter().collect::<Vec<_>>();
-        if let Some(persistence) = &self.persistence {
-            persistence.append_events(events.clone())?;
-        }
-        Ok(self
-            .inner
-            .borrow_mut()
-            .extend_events(events.into_iter().map(|event| event.event)))
-    }
-
     pub fn frame(&self) -> AgentFrame {
         self.inner.borrow().frame().clone()
     }
 }
 
-struct AgentRuntimeDuckDbPersistence {
-    session_id: SessionId,
-    provider_id: Option<AgentProviderId>,
-    store: Rc<crate::agent_duckdb_state::DuckDbAgentStateStore>,
-}
-
-impl AgentRuntimeDuckDbPersistence {
-    fn append_events(&self, events: Vec<AgentProviderEvent>) -> anyhow::Result<()> {
-        for event in events {
-            self.store
-                .append_event(crate::agent_duckdb_state::AppendAgentEvent {
-                    session_id: self.session_id,
-                    turn_id: None,
-                    provider_id: self.provider_id.clone(),
-                    event: event.event,
-                    provider_payload: event.provider_payload,
-                })?;
-        }
-        Ok(())
-    }
-}
-
 enum AgentRuntimePersistence {
     EventLog(RefCell<crate::agent_event_log::AgentEventLogAppender>),
-    DuckDb(AgentRuntimeDuckDbPersistence),
     Disabled,
 }
 
@@ -481,7 +420,6 @@ impl AgentRuntimePersistence {
     fn append_events(&self, events: Vec<AgentProviderEvent>) -> anyhow::Result<()> {
         match self {
             Self::EventLog(appender) => appender.borrow_mut().append_provider_events(events),
-            Self::DuckDb(persistence) => persistence.append_events(events),
             Self::Disabled => Ok(()),
         }
     }
@@ -1035,85 +973,6 @@ mod tests {
 
         assert_eq!(frame.state, Some(AgentSessionState::Running));
         assert_eq!(store.frame(), frame);
-    }
-
-    #[test]
-    fn runtime_state_store_persists_events_to_duckdb() {
-        let session_id = SessionId::new();
-        let duckdb = Rc::new(
-            crate::agent_duckdb_state::DuckDbAgentStateStore::open_in_memory().expect("duckdb"),
-        );
-        let store = AgentRuntimeStateStore::with_duckdb_state(
-            session_id,
-            Some(AgentProviderId("builtin.agent.mock".to_string())),
-            duckdb.clone(),
-        );
-        let call_id = AgentToolCallId("call-1".to_string());
-
-        let frame = store
-            .try_extend_events([
-                AgentEvent::StateChanged(AgentSessionState::Running),
-                AgentEvent::MessageCommitted(AgentMessage {
-                    role: AgentMessageRole::User,
-                    text: "snapshot".to_string(),
-                }),
-                AgentEvent::ToolCallRequested(AgentToolCallRequest {
-                    call_id: call_id.clone(),
-                    tool_id: "workspace.snapshot".to_string(),
-                    input: serde_json::json!({}),
-                }),
-                AgentEvent::ToolCallFinished(AgentToolCallResult {
-                    call_id,
-                    output: serde_json::json!({ "tab_count": 1 }),
-                }),
-                AgentEvent::StateChanged(AgentSessionState::WaitingForUser),
-            ])
-            .expect("extend events");
-
-        let persisted_frame = duckdb.frame_for_session(session_id).expect("frame");
-        assert_eq!(persisted_frame, frame);
-
-        let messages = duckdb.messages_for_session(session_id).expect("messages");
-        assert_eq!(messages[0].text, "snapshot");
-
-        let calls = duckdb.tool_calls_for_session(session_id).expect("calls");
-        assert_eq!(calls[0].tool_id, "workspace.snapshot");
-
-        let results = duckdb
-            .tool_results_for_session(session_id)
-            .expect("results");
-        assert_eq!(results[0].output["tab_count"], 1);
-    }
-
-    #[test]
-    fn runtime_state_store_persists_provider_payloads_to_duckdb() {
-        let session_id = SessionId::new();
-        let duckdb = Rc::new(
-            crate::agent_duckdb_state::DuckDbAgentStateStore::open_in_memory().expect("duckdb"),
-        );
-        let store = AgentRuntimeStateStore::with_duckdb_state(
-            session_id,
-            Some(AgentProviderId("builtin.agent.rig".to_string())),
-            duckdb.clone(),
-        );
-        let provider_payload = serde_json::json!({
-            "schema": "horizon.rig.provider_payload",
-            "version": 1,
-        });
-
-        let frame = store
-            .try_extend_provider_events([AgentProviderEvent::with_provider_payload(
-                AgentEvent::MessageCommitted(AgentMessage {
-                    role: AgentMessageRole::Assistant,
-                    text: "ready".to_string(),
-                }),
-                provider_payload.clone(),
-            )])
-            .expect("extend provider events");
-
-        assert_eq!(frame.items.len(), 1);
-        let events = duckdb.events_for_session(session_id).expect("events");
-        assert_eq!(events[0].provider_payload, Some(provider_payload));
     }
 
     #[test]

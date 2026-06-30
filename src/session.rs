@@ -29,18 +29,6 @@ impl SessionRegistry {
         true
     }
 
-    pub fn shutdown_terminal_if_unreferenced(
-        &mut self,
-        session_id: SessionId,
-        is_referenced: bool,
-    ) -> bool {
-        if is_referenced {
-            return false;
-        }
-
-        self.shutdown_terminal(session_id)
-    }
-
     pub fn insert_agent(&mut self, session_id: SessionId, handle: AgentSessionHandle) {
         self.agents.insert(session_id, handle);
     }
@@ -61,29 +49,6 @@ impl SessionRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn keeps_referenced_terminal_session() {
-        let session_id = SessionId::new();
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let mut registry = SessionRegistry::default();
-        registry.insert_terminal(session_id, tx);
-
-        assert!(!registry.shutdown_terminal_if_unreferenced(session_id, true));
-        assert!(registry.terminal_sender(session_id).is_some());
-    }
-
-    #[test]
-    fn shutdown_removes_unref_terminal_session() {
-        let session_id = SessionId::new();
-        let (tx, rx) = crossbeam_channel::unbounded();
-        let mut registry = SessionRegistry::default();
-        registry.insert_terminal(session_id, tx);
-
-        assert!(registry.shutdown_terminal_if_unreferenced(session_id, false));
-        assert!(registry.terminal_sender(session_id).is_none());
-        assert!(matches!(rx.try_recv(), Ok(TerminalCommand::Shutdown)));
-    }
 
     #[test]
     fn shutdown_removes_agent_session() {

@@ -1,3 +1,7 @@
+//! Plugin manifests and WASM validation for future hot-reloadable pane
+//! development. The runtime host path is intentionally not wired into the app
+//! shell yet; built-in terminal and agent panes are currently native sessions.
+
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -91,14 +95,4 @@ pub fn builtin_manifests() -> Vec<PluginManifest> {
             },
         },
     ]
-}
-
-pub fn builtin_agent_intro() -> String {
-    [
-        "AI Agent plugin",
-        "",
-        "This pane uses the same plugin frame contract as the terminal pane.",
-        "Next step: bind this to a local agent process over JSON-RPC or stdio.",
-    ]
-    .join("\n")
 }
