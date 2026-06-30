@@ -1,0 +1,237 @@
+use floem::{
+    peniko::Color,
+    text::{Attrs, AttrsList, FamilyOwned, TextLayout},
+};
+use horizon::terminal::TerminalFrame;
+use unicode_width::UnicodeWidthChar;
+
+use super::metrics::terminal_font_family;
+use super::{FONT_SIZE, LINE_HEIGHT};
+
+pub(super) struct CellLayout {
+    pub(super) text: TextLayout,
+    pub(super) columns: usize,
+    pub(super) fg: [u8; 3],
+    pub(super) bg: [u8; 3],
+    pub(super) block: Option<BlockElement>,
+    pub(super) visible: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum BlockElement {
+    Full,
+    UpperFraction(u8),
+    LowerFraction(u8),
+    LeftFraction(u8),
+    RightFraction(u8),
+    Quadrants {
+        upper_left: bool,
+        upper_right: bool,
+        lower_left: bool,
+        lower_right: bool,
+    },
+}
+
+pub(super) fn build_line_layouts(frame: &TerminalFrame) -> Vec<Vec<CellLayout>> {
+    let family = terminal_font_family();
+
+    frame
+        .lines
+        .iter()
+        .map(|line| {
+            let mut cells = Vec::new();
+            for span in &line.spans {
+                cells.extend(build_span_cells(span, &family));
+            }
+            cells
+        })
+        .collect()
+}
+
+pub(super) fn build_span_cells(
+    span: &horizon::terminal::TerminalSpan,
+    family: &[FamilyOwned],
+) -> Vec<CellLayout> {
+    if span.text.is_empty() {
+        return (0..span.columns)
+            .map(|_| empty_cell(span.bg))
+            .collect::<Vec<_>>();
+    }
+
+    let mut cells = Vec::new();
+    let mut current = String::new();
+    let mut current_columns = 0_usize;
+
+    for ch in span.text.chars() {
+        let columns = char_columns(ch);
+        if columns == 0 {
+            if current.is_empty() {
+                current.push(ch);
+                current_columns = 1;
+            } else {
+                current.push(ch);
+            }
+            continue;
+        }
+
+        if !current.is_empty() {
+            cells.push(text_cell(
+                std::mem::take(&mut current),
+                current_columns,
+                span.fg,
+                span.bg,
+                family,
+            ));
+        }
+        current.push(ch);
+        current_columns = columns;
+    }
+
+    if !current.is_empty() {
+        cells.push(text_cell(
+            std::mem::take(&mut current),
+            current_columns,
+            span.fg,
+            span.bg,
+            family,
+        ));
+    }
+
+    let used_columns = cells.iter().map(|cell| cell.columns).sum::<usize>();
+    if used_columns < span.columns {
+        cells.extend((used_columns..span.columns).map(|_| empty_cell(span.bg)));
+    }
+
+    cells
+}
+
+fn text_cell(
+    text: String,
+    columns: usize,
+    fg: [u8; 3],
+    bg: [u8; 3],
+    family: &[FamilyOwned],
+) -> CellLayout {
+    let attrs = Attrs::new()
+        .color(Color::rgb8(fg[0], fg[1], fg[2]))
+        .family(family)
+        .font_size(FONT_SIZE)
+        .line_height(floem::text::LineHeightValue::Px(LINE_HEIGHT as f32));
+    let mut layout = TextLayout::new();
+    layout.set_text(&text, AttrsList::new(attrs));
+    let block = block_element(text.as_str());
+    CellLayout {
+        text: layout,
+        columns,
+        fg,
+        bg,
+        block,
+        visible: true,
+    }
+}
+
+fn empty_cell(bg: [u8; 3]) -> CellLayout {
+    CellLayout {
+        text: TextLayout::new(),
+        columns: 1,
+        fg: [0, 0, 0],
+        bg,
+        block: None,
+        visible: false,
+    }
+}
+
+fn char_columns(ch: char) -> usize {
+    UnicodeWidthChar::width(ch).unwrap_or(0)
+}
+
+fn block_element(text: &str) -> Option<BlockElement> {
+    let mut chars = text.chars();
+    let ch = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+
+    match ch {
+        '█' => Some(BlockElement::Full),
+        '▔' => Some(BlockElement::UpperFraction(1)),
+        '▀' => Some(BlockElement::UpperFraction(4)),
+        '▁' => Some(BlockElement::LowerFraction(1)),
+        '▂' => Some(BlockElement::LowerFraction(2)),
+        '▃' => Some(BlockElement::LowerFraction(3)),
+        '▄' => Some(BlockElement::LowerFraction(4)),
+        '▅' => Some(BlockElement::LowerFraction(5)),
+        '▆' => Some(BlockElement::LowerFraction(6)),
+        '▇' => Some(BlockElement::LowerFraction(7)),
+        '▏' => Some(BlockElement::LeftFraction(1)),
+        '▎' => Some(BlockElement::LeftFraction(2)),
+        '▍' => Some(BlockElement::LeftFraction(3)),
+        '▌' => Some(BlockElement::LeftFraction(4)),
+        '▋' => Some(BlockElement::LeftFraction(5)),
+        '▊' => Some(BlockElement::LeftFraction(6)),
+        '▉' => Some(BlockElement::LeftFraction(7)),
+        '▐' => Some(BlockElement::RightFraction(4)),
+        '▕' => Some(BlockElement::RightFraction(1)),
+        '▖' => Some(BlockElement::Quadrants {
+            upper_left: false,
+            upper_right: false,
+            lower_left: true,
+            lower_right: false,
+        }),
+        '▗' => Some(BlockElement::Quadrants {
+            upper_left: false,
+            upper_right: false,
+            lower_left: false,
+            lower_right: true,
+        }),
+        '▘' => Some(BlockElement::Quadrants {
+            upper_left: true,
+            upper_right: false,
+            lower_left: false,
+            lower_right: false,
+        }),
+        '▝' => Some(BlockElement::Quadrants {
+            upper_left: false,
+            upper_right: true,
+            lower_left: false,
+            lower_right: false,
+        }),
+        '▚' => Some(BlockElement::Quadrants {
+            upper_left: true,
+            upper_right: false,
+            lower_left: false,
+            lower_right: true,
+        }),
+        '▞' => Some(BlockElement::Quadrants {
+            upper_left: false,
+            upper_right: true,
+            lower_left: true,
+            lower_right: false,
+        }),
+        '▙' => Some(BlockElement::Quadrants {
+            upper_left: true,
+            upper_right: false,
+            lower_left: true,
+            lower_right: true,
+        }),
+        '▛' => Some(BlockElement::Quadrants {
+            upper_left: true,
+            upper_right: true,
+            lower_left: true,
+            lower_right: false,
+        }),
+        '▜' => Some(BlockElement::Quadrants {
+            upper_left: true,
+            upper_right: true,
+            lower_left: false,
+            lower_right: true,
+        }),
+        '▟' => Some(BlockElement::Quadrants {
+            upper_left: false,
+            upper_right: true,
+            lower_left: true,
+            lower_right: true,
+        }),
+        _ => None,
+    }
+}

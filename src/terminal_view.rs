@@ -7,24 +7,35 @@ use floem::{
         kurbo::{Point, Rect, Size},
         Color,
     },
-    pointer::PointerButton,
     reactive::create_updater,
-    text::{Attrs, AttrsList, FamilyOwned, TextLayout},
     View, ViewId,
 };
 use floem_renderer::Renderer;
-use horizon::fonts::HORIZON_FONT_FAMILY;
 use horizon::terminal::{
-    TerminalCommand, TerminalFrame, TerminalMouseButton, TerminalMouseKind, TerminalMouseModifiers,
-    TerminalMouseReport, TerminalScroll, TerminalSelectionPoint, TerminalSize,
+    TerminalCommand, TerminalFrame, TerminalMouseButton, TerminalMouseKind, TerminalMouseReport,
+    TerminalScroll, TerminalSize,
 };
-use unicode_width::UnicodeWidthChar;
-use unicode_width::UnicodeWidthStr;
+
+mod input;
+mod layout;
+mod metrics;
+mod preedit;
+mod render;
+
+use input::{
+    cell_from_point, scroll_lines_from_wheel, terminal_mouse_button, terminal_mouse_modifiers,
+};
+use layout::{build_line_layouts, CellLayout};
+use metrics::TerminalMetrics;
+use preedit::{build_preedit_layout, PreeditLayout};
+use render::{draw_block_element, expanded_rect};
 
 const FONT_SIZE: f32 = 13.0;
 const LINE_HEIGHT: f64 = 18.0;
 const PADDING_X: f64 = 12.0;
 const PADDING_Y: f64 = 12.0;
+const FALLBACK_CELL_WIDTH: f64 = 8.0;
+
 pub fn terminal_text_view(
     frame: impl Fn() -> TerminalFrame + 'static,
     preedit: impl Fn() -> Option<String> + 'static,
@@ -61,41 +72,6 @@ pub struct TerminalTextView {
     reporting_button: Option<TerminalMouseButton>,
     window_origin: Box<dyn Fn() -> Point>,
     update_ime_cursor_area: Box<dyn Fn(Point, Size)>,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct TerminalMetrics {
-    cell_width: f64,
-    line_height: f64,
-}
-
-struct CellLayout {
-    text: TextLayout,
-    columns: usize,
-    fg: [u8; 3],
-    bg: [u8; 3],
-    block: Option<BlockElement>,
-    visible: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum BlockElement {
-    Full,
-    UpperFraction(u8),
-    LowerFraction(u8),
-    LeftFraction(u8),
-    RightFraction(u8),
-    Quadrants {
-        upper_left: bool,
-        upper_right: bool,
-        lower_left: bool,
-        lower_right: bool,
-    },
-}
-
-struct PreeditLayout {
-    text: TextLayout,
-    columns: usize,
 }
 
 struct TerminalViewState {
@@ -330,8 +306,6 @@ impl View for TerminalTextView {
     }
 }
 
-const FALLBACK_CELL_WIDTH: f64 = 8.0;
-
 impl TerminalTextView {
     fn resize_terminal(&mut self, cols: usize, rows: usize) {
         let size = TerminalSize {
@@ -355,406 +329,30 @@ impl TerminalTextView {
     }
 }
 
-impl Default for TerminalMetrics {
-    fn default() -> Self {
-        Self {
-            cell_width: measured_cell_width(),
-            line_height: LINE_HEIGHT,
-        }
-    }
-}
-
-fn cell_from_point(point: Point, metrics: TerminalMetrics) -> TerminalSelectionPoint {
-    let col = ((point.x - PADDING_X) / metrics.cell_width)
-        .max(0.0)
-        .floor() as usize;
-    let row = ((point.y - PADDING_Y) / metrics.line_height)
-        .max(0.0)
-        .floor() as usize;
-    TerminalSelectionPoint { row, col }
-}
-
-fn scroll_lines_from_wheel(delta_y: f64) -> Option<i32> {
-    if delta_y.abs() < f64::EPSILON {
-        return None;
-    }
-
-    Some(if delta_y > 0.0 { -3 } else { 3 })
-}
-
-fn terminal_mouse_button(button: PointerButton) -> Option<TerminalMouseButton> {
-    if button.is_primary() {
-        Some(TerminalMouseButton::Left)
-    } else if button.is_auxiliary() {
-        Some(TerminalMouseButton::Middle)
-    } else if button.is_secondary() {
-        Some(TerminalMouseButton::Right)
-    } else {
-        None
-    }
-}
-
-fn terminal_mouse_modifiers(modifiers: floem::keyboard::Modifiers) -> TerminalMouseModifiers {
-    TerminalMouseModifiers {
-        shift: modifiers.shift(),
-        alt: modifiers.alt(),
-        control: modifiers.control(),
-    }
-}
-
-fn build_line_layouts(frame: &TerminalFrame) -> Vec<Vec<CellLayout>> {
-    let family = terminal_font_family();
-
-    frame
-        .lines
-        .iter()
-        .map(|line| {
-            let mut cells = Vec::new();
-            for span in &line.spans {
-                cells.extend(build_span_cells(span, &family));
-            }
-            cells
-        })
-        .collect()
-}
-
-fn build_span_cells(
-    span: &horizon::terminal::TerminalSpan,
-    family: &[FamilyOwned],
-) -> Vec<CellLayout> {
-    if span.text.is_empty() {
-        return (0..span.columns)
-            .map(|_| empty_cell(span.bg))
-            .collect::<Vec<_>>();
-    }
-
-    let mut cells = Vec::new();
-    let mut current = String::new();
-    let mut current_columns = 0_usize;
-
-    for ch in span.text.chars() {
-        let columns = char_columns(ch);
-        if columns == 0 {
-            if current.is_empty() {
-                current.push(ch);
-                current_columns = 1;
-            } else {
-                current.push(ch);
-            }
-            continue;
-        }
-
-        if !current.is_empty() {
-            cells.push(text_cell(
-                std::mem::take(&mut current),
-                current_columns,
-                span.fg,
-                span.bg,
-                family,
-            ));
-        }
-        current.push(ch);
-        current_columns = columns;
-    }
-
-    if !current.is_empty() {
-        cells.push(text_cell(
-            std::mem::take(&mut current),
-            current_columns,
-            span.fg,
-            span.bg,
-            family,
-        ));
-    }
-
-    let used_columns = cells.iter().map(|cell| cell.columns).sum::<usize>();
-    if used_columns < span.columns {
-        cells.extend((used_columns..span.columns).map(|_| empty_cell(span.bg)));
-    }
-
-    cells
-}
-
-fn text_cell(
-    text: String,
-    columns: usize,
-    fg: [u8; 3],
-    bg: [u8; 3],
-    family: &[FamilyOwned],
-) -> CellLayout {
-    let attrs = Attrs::new()
-        .color(Color::rgb8(fg[0], fg[1], fg[2]))
-        .family(family)
-        .font_size(FONT_SIZE)
-        .line_height(floem::text::LineHeightValue::Px(LINE_HEIGHT as f32));
-    let mut layout = TextLayout::new();
-    layout.set_text(&text, AttrsList::new(attrs));
-    let block = block_element(text.as_str());
-    CellLayout {
-        text: layout,
-        columns,
-        fg,
-        bg,
-        block,
-        visible: true,
-    }
-}
-
-fn empty_cell(bg: [u8; 3]) -> CellLayout {
-    CellLayout {
-        text: TextLayout::new(),
-        columns: 1,
-        fg: [0, 0, 0],
-        bg,
-        block: None,
-        visible: false,
-    }
-}
-
-fn char_columns(ch: char) -> usize {
-    UnicodeWidthChar::width(ch).unwrap_or(0)
-}
-
-fn block_element(text: &str) -> Option<BlockElement> {
-    let mut chars = text.chars();
-    let ch = chars.next()?;
-    if chars.next().is_some() {
-        return None;
-    }
-
-    match ch {
-        '█' => Some(BlockElement::Full),
-        '▔' => Some(BlockElement::UpperFraction(1)),
-        '▀' => Some(BlockElement::UpperFraction(4)),
-        '▁' => Some(BlockElement::LowerFraction(1)),
-        '▂' => Some(BlockElement::LowerFraction(2)),
-        '▃' => Some(BlockElement::LowerFraction(3)),
-        '▄' => Some(BlockElement::LowerFraction(4)),
-        '▅' => Some(BlockElement::LowerFraction(5)),
-        '▆' => Some(BlockElement::LowerFraction(6)),
-        '▇' => Some(BlockElement::LowerFraction(7)),
-        '▏' => Some(BlockElement::LeftFraction(1)),
-        '▎' => Some(BlockElement::LeftFraction(2)),
-        '▍' => Some(BlockElement::LeftFraction(3)),
-        '▌' => Some(BlockElement::LeftFraction(4)),
-        '▋' => Some(BlockElement::LeftFraction(5)),
-        '▊' => Some(BlockElement::LeftFraction(6)),
-        '▉' => Some(BlockElement::LeftFraction(7)),
-        '▐' => Some(BlockElement::RightFraction(4)),
-        '▕' => Some(BlockElement::RightFraction(1)),
-        '▖' => Some(BlockElement::Quadrants {
-            upper_left: false,
-            upper_right: false,
-            lower_left: true,
-            lower_right: false,
-        }),
-        '▗' => Some(BlockElement::Quadrants {
-            upper_left: false,
-            upper_right: false,
-            lower_left: false,
-            lower_right: true,
-        }),
-        '▘' => Some(BlockElement::Quadrants {
-            upper_left: true,
-            upper_right: false,
-            lower_left: false,
-            lower_right: false,
-        }),
-        '▝' => Some(BlockElement::Quadrants {
-            upper_left: false,
-            upper_right: true,
-            lower_left: false,
-            lower_right: false,
-        }),
-        '▚' => Some(BlockElement::Quadrants {
-            upper_left: true,
-            upper_right: false,
-            lower_left: false,
-            lower_right: true,
-        }),
-        '▞' => Some(BlockElement::Quadrants {
-            upper_left: false,
-            upper_right: true,
-            lower_left: true,
-            lower_right: false,
-        }),
-        '▙' => Some(BlockElement::Quadrants {
-            upper_left: true,
-            upper_right: false,
-            lower_left: true,
-            lower_right: true,
-        }),
-        '▛' => Some(BlockElement::Quadrants {
-            upper_left: true,
-            upper_right: true,
-            lower_left: true,
-            lower_right: false,
-        }),
-        '▜' => Some(BlockElement::Quadrants {
-            upper_left: true,
-            upper_right: true,
-            lower_left: false,
-            lower_right: true,
-        }),
-        '▟' => Some(BlockElement::Quadrants {
-            upper_left: false,
-            upper_right: true,
-            lower_left: true,
-            lower_right: true,
-        }),
-        _ => None,
-    }
-}
-
-fn draw_block_element(cx: &mut PaintCx, block: BlockElement, cell_rect: Rect, fg: [u8; 3]) {
-    let color = Color::rgb8(fg[0], fg[1], fg[2]);
-    match block {
-        BlockElement::Full => cx.fill(&expanded_rect(cell_rect), &color, 0.0),
-        BlockElement::UpperFraction(eighths) => {
-            let rect = Rect::new(
-                cell_rect.x0,
-                cell_rect.y0,
-                cell_rect.x1,
-                cell_rect.y0 + cell_rect.height() * fraction(eighths),
-            );
-            cx.fill(&expanded_rect(rect), &color, 0.0);
-        }
-        BlockElement::LowerFraction(eighths) => {
-            let rect = Rect::new(
-                cell_rect.x0,
-                cell_rect.y1 - cell_rect.height() * fraction(eighths),
-                cell_rect.x1,
-                cell_rect.y1,
-            );
-            cx.fill(&expanded_rect(rect), &color, 0.0);
-        }
-        BlockElement::LeftFraction(eighths) => {
-            let rect = Rect::new(
-                cell_rect.x0,
-                cell_rect.y0,
-                cell_rect.x0 + cell_rect.width() * fraction(eighths),
-                cell_rect.y1,
-            );
-            cx.fill(&expanded_rect(rect), &color, 0.0);
-        }
-        BlockElement::RightFraction(eighths) => {
-            let rect = Rect::new(
-                cell_rect.x1 - cell_rect.width() * fraction(eighths),
-                cell_rect.y0,
-                cell_rect.x1,
-                cell_rect.y1,
-            );
-            cx.fill(&expanded_rect(rect), &color, 0.0);
-        }
-        BlockElement::Quadrants {
-            upper_left,
-            upper_right,
-            lower_left,
-            lower_right,
-        } => {
-            let mid_x = midpoint(cell_rect.x0, cell_rect.x1);
-            let mid_y = midpoint(cell_rect.y0, cell_rect.y1);
-            if upper_left {
-                cx.fill(
-                    &expanded_rect(Rect::new(cell_rect.x0, cell_rect.y0, mid_x, mid_y)),
-                    &color,
-                    0.0,
-                );
-            }
-            if upper_right {
-                cx.fill(
-                    &expanded_rect(Rect::new(mid_x, cell_rect.y0, cell_rect.x1, mid_y)),
-                    &color,
-                    0.0,
-                );
-            }
-            if lower_left {
-                cx.fill(
-                    &expanded_rect(Rect::new(cell_rect.x0, mid_y, mid_x, cell_rect.y1)),
-                    &color,
-                    0.0,
-                );
-            }
-            if lower_right {
-                cx.fill(
-                    &expanded_rect(Rect::new(mid_x, mid_y, cell_rect.x1, cell_rect.y1)),
-                    &color,
-                    0.0,
-                );
-            }
-        }
-    }
-}
-
-fn midpoint(start: f64, end: f64) -> f64 {
-    start + (end - start) / 2.0
-}
-
-fn fraction(eighths: u8) -> f64 {
-    eighths.clamp(1, 8) as f64 / 8.0
-}
-
-fn expanded_rect(rect: Rect) -> Rect {
-    const OVERLAP: f64 = 0.5;
-    Rect::new(
-        rect.x0 - OVERLAP,
-        rect.y0 - OVERLAP,
-        rect.x1 + OVERLAP,
-        rect.y1 + OVERLAP,
-    )
-}
-
-fn build_preedit_layout(text: Option<&str>) -> Option<PreeditLayout> {
-    let text = text.filter(|text| !text.is_empty())?;
-    let family = terminal_font_family();
-    let attrs = Attrs::new()
-        .color(Color::rgb8(233, 236, 242))
-        .family(&family)
-        .font_size(FONT_SIZE)
-        .line_height(floem::text::LineHeightValue::Px(LINE_HEIGHT as f32));
-    let mut layout = TextLayout::new();
-    layout.set_text(text, AttrsList::new(attrs));
-    Some(PreeditLayout {
-        text: layout,
-        columns: UnicodeWidthStr::width(text),
-    })
-}
-
-fn measured_cell_width() -> f64 {
-    let sample = "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm";
-    let family = terminal_font_family();
-    let attrs = Attrs::new()
-        .color(Color::rgb8(233, 236, 242))
-        .family(&family)
-        .font_size(FONT_SIZE)
-        .line_height(floem::text::LineHeightValue::Px(LINE_HEIGHT as f32));
-    let mut layout = TextLayout::new();
-    layout.set_text(sample, AttrsList::new(attrs));
-    let width = layout.size().width / sample.len() as f64;
-
-    if width.is_finite() && width > 1.0 {
-        width
-    } else {
-        FALLBACK_CELL_WIDTH
-    }
-}
-
-fn terminal_font_family() -> Vec<FamilyOwned> {
-    FamilyOwned::parse_list(HORIZON_FONT_FAMILY).collect()
-}
+#[cfg(test)]
+use input::cell_from_point as _test_cell_from_point;
+#[cfg(test)]
+use layout::{build_span_cells as _test_build_span_cells, BlockElement as _TestBlockElement};
+#[cfg(test)]
+use metrics::{
+    measured_cell_width as _test_measured_cell_width,
+    terminal_font_family as _test_terminal_font_family,
+};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use floem::text::FamilyOwned;
+    use horizon::terminal::TerminalSelectionPoint;
     use horizon::terminal::TerminalSpan;
 
     fn test_family() -> Vec<FamilyOwned> {
-        terminal_font_family()
+        _test_terminal_font_family()
     }
 
     #[test]
     fn measured_cell_width_is_usable() {
-        assert!(measured_cell_width() > 1.0);
+        assert!(_test_measured_cell_width() > 1.0);
     }
 
     #[test]
@@ -765,14 +363,14 @@ mod tests {
         };
 
         assert_eq!(
-            cell_from_point(Point::new(PADDING_X + 21.0, PADDING_Y + 41.0), metrics),
+            _test_cell_from_point(Point::new(PADDING_X + 21.0, PADDING_Y + 41.0), metrics),
             TerminalSelectionPoint { row: 2, col: 2 }
         );
     }
 
     #[test]
     fn span_cells_expand_spaces_as_invisible_cells() {
-        let cells = build_span_cells(
+        let cells = _test_build_span_cells(
             &TerminalSpan {
                 text: String::new(),
                 columns: 3,
@@ -789,7 +387,7 @@ mod tests {
 
     #[test]
     fn span_cells_preserve_wide_and_combining_columns() {
-        let cells = build_span_cells(
+        let cells = _test_build_span_cells(
             &TerminalSpan {
                 text: "A日e\u{301}".to_string(),
                 columns: 4,
@@ -809,7 +407,7 @@ mod tests {
 
     #[test]
     fn span_cells_mark_block_elements_for_rect_rendering() {
-        let cells = build_span_cells(
+        let cells = _test_build_span_cells(
             &TerminalSpan {
                 text: "█▄▀".to_string(),
                 columns: 3,
@@ -822,16 +420,16 @@ mod tests {
         assert_eq!(
             cells.iter().map(|cell| cell.block).collect::<Vec<_>>(),
             vec![
-                Some(BlockElement::Full),
-                Some(BlockElement::LowerFraction(4)),
-                Some(BlockElement::UpperFraction(4)),
+                Some(_TestBlockElement::Full),
+                Some(_TestBlockElement::LowerFraction(4)),
+                Some(_TestBlockElement::UpperFraction(4)),
             ]
         );
     }
 
     #[test]
     fn span_cells_mark_fractional_block_elements_for_rect_rendering() {
-        let cells = build_span_cells(
+        let cells = _test_build_span_cells(
             &TerminalSpan {
                 text: "▏▎▍▌▋▊▉▁▂▃▄▅▆▇".to_string(),
                 columns: 14,
@@ -844,20 +442,20 @@ mod tests {
         assert_eq!(
             cells.iter().map(|cell| cell.block).collect::<Vec<_>>(),
             vec![
-                Some(BlockElement::LeftFraction(1)),
-                Some(BlockElement::LeftFraction(2)),
-                Some(BlockElement::LeftFraction(3)),
-                Some(BlockElement::LeftFraction(4)),
-                Some(BlockElement::LeftFraction(5)),
-                Some(BlockElement::LeftFraction(6)),
-                Some(BlockElement::LeftFraction(7)),
-                Some(BlockElement::LowerFraction(1)),
-                Some(BlockElement::LowerFraction(2)),
-                Some(BlockElement::LowerFraction(3)),
-                Some(BlockElement::LowerFraction(4)),
-                Some(BlockElement::LowerFraction(5)),
-                Some(BlockElement::LowerFraction(6)),
-                Some(BlockElement::LowerFraction(7)),
+                Some(_TestBlockElement::LeftFraction(1)),
+                Some(_TestBlockElement::LeftFraction(2)),
+                Some(_TestBlockElement::LeftFraction(3)),
+                Some(_TestBlockElement::LeftFraction(4)),
+                Some(_TestBlockElement::LeftFraction(5)),
+                Some(_TestBlockElement::LeftFraction(6)),
+                Some(_TestBlockElement::LeftFraction(7)),
+                Some(_TestBlockElement::LowerFraction(1)),
+                Some(_TestBlockElement::LowerFraction(2)),
+                Some(_TestBlockElement::LowerFraction(3)),
+                Some(_TestBlockElement::LowerFraction(4)),
+                Some(_TestBlockElement::LowerFraction(5)),
+                Some(_TestBlockElement::LowerFraction(6)),
+                Some(_TestBlockElement::LowerFraction(7)),
             ]
         );
     }
