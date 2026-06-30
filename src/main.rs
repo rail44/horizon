@@ -13,6 +13,7 @@ use horizon::agent::{
     AgentCommand, AgentFrame, AgentInitialization, AgentProviderRegistry, AgentRuntimeStateStore,
     AgentToolCallId,
 };
+use horizon::agent_config::{AgentConfig, AgentPersistenceConfig};
 use horizon::agent_duckdb_state::DuckDbAgentStateStore;
 use horizon::agent_event_log::{read_agent_event_log, AgentEventLogWriterHandle};
 use horizon::agent_tools::process_agent_provider_event;
@@ -130,6 +131,7 @@ fn app_view() -> impl IntoView {
     let control_mode = RwSignal::new(ControlMode::Commands);
     let overview_selection = RwSignal::new(0_usize);
     let agent_state_status = RwSignal::new(None::<String>);
+    let agent_config = AgentConfig::from_env();
     let terminal_dump = std::env::var_os("HORIZON_TERMINAL_DUMP").map(PathBuf::from);
     let clipboard_dump = std::env::var_os("HORIZON_CLIPBOARD_DUMP").map(PathBuf::from);
     let status_dump = std::env::var_os("HORIZON_STATUS_DUMP").map(PathBuf::from);
@@ -144,7 +146,13 @@ fn app_view() -> impl IntoView {
         );
     }
     for session_id in workspace.with(|ws| ws.agent_session_ids()) {
-        spawn_agent_session(session_id, workspace, sessions, agent_state_status);
+        spawn_agent_session(
+            session_id,
+            workspace,
+            sessions,
+            agent_state_status,
+            agent_config.clone(),
+        );
     }
 
     stack((
@@ -162,6 +170,7 @@ fn app_view() -> impl IntoView {
                 palette_focus_request,
                 pane_focus_requests,
                 agent_drafts,
+                agent_config.clone(),
                 control_mode,
                 overview_selection,
                 terminal_dump.clone(),
@@ -180,6 +189,7 @@ fn app_view() -> impl IntoView {
             palette_focus_request,
             pane_focus_requests,
             agent_state_status,
+            agent_config.clone(),
             control_mode,
             overview_selection,
             terminal_dump.clone(),
@@ -268,6 +278,7 @@ fn app_view() -> impl IntoView {
                     overview_selection,
                     pane_focus_requests,
                     agent_state_status,
+                    agent_config.clone(),
                     terminal_dump.clone(),
                     clipboard_dump.clone(),
                 ) {
@@ -356,9 +367,16 @@ fn spawn_agent_session(
     workspace: RwSignal<Workspace>,
     sessions: RwSignal<SessionRegistry>,
     agent_state_status: RwSignal<Option<String>>,
+    agent_config: AgentConfig,
 ) {
-    let providers = AgentProviderRegistry::builtin();
+    let providers = AgentProviderRegistry::builtin_with_config(agent_config.clone());
     let provider_id = providers.default_provider_id();
+    let runtime_state = open_agent_runtime_state_store(
+        session_id,
+        provider_id.clone(),
+        agent_state_status,
+        &agent_config.persistence,
+    );
     let Some(handle) = providers.start_session(&provider_id, session_id) else {
         workspace.update(|ws| {
             ws.update_agent_frame(
@@ -383,8 +401,6 @@ fn spawn_agent_session(
         }));
     }
 
-    let runtime_state =
-        open_agent_runtime_state_store(session_id, provider_id.clone(), agent_state_status);
     create_effect(move |_| {
         if let Some(event) = events.get() {
             let processing = workspace.with_untracked(|ws| process_agent_provider_event(ws, event));
@@ -405,14 +421,15 @@ fn open_agent_runtime_state_store(
     session_id: SessionId,
     provider_id: horizon::agent::AgentProviderId,
     agent_state_status: RwSignal<Option<String>>,
+    persistence_config: &AgentPersistenceConfig,
 ) -> AgentRuntimeStateStore {
-    let event_log = match open_agent_event_log() {
+    let event_log = match open_agent_event_log(persistence_config) {
         Ok((writer, status)) => {
             let mut messages = Vec::new();
             if let Some(status) = status {
                 messages.push(status);
             }
-            if let Err(error) = rebuild_agent_duckdb_from_event_log_once() {
+            if let Err(error) = rebuild_agent_duckdb_from_event_log_once(persistence_config) {
                 messages.push(format!(
                     "Agent DuckDB projection rebuild unavailable: {error}"
                 ));
@@ -437,7 +454,9 @@ fn open_agent_runtime_state_store(
     }
 }
 
-fn open_agent_event_log() -> anyhow::Result<(AgentEventLogWriterHandle, Option<String>)> {
+fn open_agent_event_log(
+    persistence_config: &AgentPersistenceConfig,
+) -> anyhow::Result<(AgentEventLogWriterHandle, Option<String>)> {
     let writer_cell = AGENT_EVENT_LOG_WRITER.get_or_init(|| Mutex::new(None));
     let mut writer = writer_cell
         .lock()
@@ -446,21 +465,16 @@ fn open_agent_event_log() -> anyhow::Result<(AgentEventLogWriterHandle, Option<S
         return Ok((writer.clone(), None));
     }
 
-    let Some(path) = std::env::var_os("HORIZON_AGENT_EVENT_LOG").map(PathBuf::from) else {
-        let path = std::env::temp_dir().join("horizon-agent-events.jsonl");
-        let status = Some(format!("Agent event log: {}", path.display()));
-        let handle = AgentEventLogWriterHandle::open(path)?;
-        *writer = Some(handle.clone());
-        return Ok((handle, status));
-    };
-
+    let path = persistence_config.event_log_path.clone();
     let status = Some(format!("Agent event log: {}", path.display()));
     let handle = AgentEventLogWriterHandle::open(path)?;
     *writer = Some(handle.clone());
     Ok((handle, status))
 }
 
-fn rebuild_agent_duckdb_from_event_log_once() -> anyhow::Result<()> {
+fn rebuild_agent_duckdb_from_event_log_once(
+    persistence_config: &AgentPersistenceConfig,
+) -> anyhow::Result<()> {
     let rebuild_done = AGENT_DUCKDB_REBUILD_DONE.get_or_init(|| Mutex::new(false));
     let mut rebuild_done = rebuild_done
         .lock()
@@ -469,18 +483,18 @@ fn rebuild_agent_duckdb_from_event_log_once() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    rebuild_agent_duckdb_from_event_log()?;
+    rebuild_agent_duckdb_from_event_log(persistence_config)?;
     *rebuild_done = true;
     Ok(())
 }
 
-fn rebuild_agent_duckdb_from_event_log() -> anyhow::Result<()> {
-    let Some(db_path) = std::env::var_os("HORIZON_AGENT_STATE_DB").map(PathBuf::from) else {
+fn rebuild_agent_duckdb_from_event_log(
+    persistence_config: &AgentPersistenceConfig,
+) -> anyhow::Result<()> {
+    let Some(db_path) = persistence_config.duckdb_path.clone() else {
         return Ok(());
     };
-    let Some(log_path) = std::env::var_os("HORIZON_AGENT_EVENT_LOG").map(PathBuf::from) else {
-        return Ok(());
-    };
+    let log_path = persistence_config.event_log_path.clone();
 
     let report = read_agent_event_log(&log_path)?;
 
@@ -504,6 +518,7 @@ fn command_palette(
     palette_focus_request: RwSignal<u64>,
     pane_focus_requests: PaneFocusRequests,
     agent_state_status: RwSignal<Option<String>>,
+    agent_config: AgentConfig,
     control_mode: RwSignal<ControlMode>,
     overview_selection: RwSignal<usize>,
     terminal_dump: Option<PathBuf>,
@@ -541,6 +556,7 @@ fn command_palette(
                 0,
                 pane_focus_requests,
                 agent_state_status,
+                agent_config.clone(),
                 terminal_dump.clone(),
                 clipboard_dump.clone(),
             ),
@@ -553,6 +569,7 @@ fn command_palette(
                 1,
                 pane_focus_requests,
                 agent_state_status,
+                agent_config.clone(),
                 terminal_dump.clone(),
                 clipboard_dump.clone(),
             ),
@@ -565,6 +582,7 @@ fn command_palette(
                 2,
                 pane_focus_requests,
                 agent_state_status,
+                agent_config.clone(),
                 terminal_dump.clone(),
                 clipboard_dump.clone(),
             ),
@@ -577,6 +595,7 @@ fn command_palette(
                 3,
                 pane_focus_requests,
                 agent_state_status,
+                agent_config.clone(),
                 terminal_dump.clone(),
                 clipboard_dump.clone(),
             ),
@@ -589,6 +608,7 @@ fn command_palette(
                 4,
                 pane_focus_requests,
                 agent_state_status,
+                agent_config.clone(),
                 terminal_dump.clone(),
                 clipboard_dump.clone(),
             ),
@@ -601,6 +621,7 @@ fn command_palette(
                 5,
                 pane_focus_requests,
                 agent_state_status,
+                agent_config.clone(),
                 terminal_dump,
                 clipboard_dump,
             ),
@@ -624,6 +645,7 @@ fn command_palette(
                 overview_selection,
                 pane_focus_requests,
                 agent_state_status,
+                agent_config.clone(),
                 terminal_dump_for_key.clone(),
                 clipboard_dump_for_key.clone(),
             ) {
@@ -705,6 +727,7 @@ fn palette_row(
     index: usize,
     pane_focus_requests: PaneFocusRequests,
     agent_state_status: RwSignal<Option<String>>,
+    agent_config: AgentConfig,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) -> impl IntoView {
@@ -770,6 +793,7 @@ fn palette_row(
             palette_selection,
             pane_focus_requests,
             agent_state_status,
+            agent_config.clone(),
             terminal_dump.clone(),
             clipboard_dump.clone(),
         );
@@ -974,6 +998,7 @@ fn execute_command(
     sessions: RwSignal<SessionRegistry>,
     pane_focus_requests: PaneFocusRequests,
     agent_state_status: RwSignal<Option<String>>,
+    agent_config: AgentConfig,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) {
@@ -991,7 +1016,13 @@ fn execute_command(
             clipboard_dump,
         ),
         CommandId::NewAgent => {
-            open_agent_tab(workspace, sessions, pane_focus_requests, agent_state_status);
+            open_agent_tab(
+                workspace,
+                sessions,
+                pane_focus_requests,
+                agent_state_status,
+                agent_config,
+            );
         }
         CommandId::SplitActivePane => {
             split_active_pane(
@@ -999,6 +1030,7 @@ fn execute_command(
                 sessions,
                 pane_focus_requests,
                 agent_state_status,
+                agent_config,
                 terminal_dump,
                 clipboard_dump,
             );
@@ -1030,6 +1062,7 @@ fn handle_palette_key(
     palette_selection: RwSignal<usize>,
     pane_focus_requests: PaneFocusRequests,
     agent_state_status: RwSignal<Option<String>>,
+    agent_config: AgentConfig,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) -> bool {
@@ -1047,6 +1080,7 @@ fn handle_palette_key(
                 palette_selection,
                 pane_focus_requests,
                 agent_state_status,
+                agent_config,
                 terminal_dump,
                 clipboard_dump,
             );
@@ -1093,6 +1127,7 @@ fn handle_control_key(
     overview_selection: RwSignal<usize>,
     pane_focus_requests: PaneFocusRequests,
     agent_state_status: RwSignal<Option<String>>,
+    agent_config: AgentConfig,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) -> bool {
@@ -1111,6 +1146,7 @@ fn handle_control_key(
             palette_selection,
             pane_focus_requests,
             agent_state_status,
+            agent_config,
             terminal_dump,
             clipboard_dump,
         ),
@@ -1541,6 +1577,7 @@ fn execute_palette_selection(
     palette_selection: RwSignal<usize>,
     pane_focus_requests: PaneFocusRequests,
     agent_state_status: RwSignal<Option<String>>,
+    agent_config: AgentConfig,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) {
@@ -1569,6 +1606,7 @@ fn execute_palette_selection(
             sessions,
             pane_focus_requests,
             agent_state_status,
+            agent_config,
             terminal_dump,
             clipboard_dump,
         ),
@@ -1654,12 +1692,19 @@ fn open_agent_tab(
     sessions: RwSignal<SessionRegistry>,
     pane_focus_requests: PaneFocusRequests,
     agent_state_status: RwSignal<Option<String>>,
+    agent_config: AgentConfig,
 ) {
     let session_id = SessionId::new();
     workspace.update(|ws| {
         ws.open_tab(PaneKind::Agent, Some(session_id));
     });
-    spawn_agent_session(session_id, workspace, sessions, agent_state_status);
+    spawn_agent_session(
+        session_id,
+        workspace,
+        sessions,
+        agent_state_status,
+        agent_config,
+    );
     request_active_pane_focus(workspace, pane_focus_requests);
 }
 
@@ -1668,6 +1713,7 @@ fn split_active_pane(
     sessions: RwSignal<SessionRegistry>,
     pane_focus_requests: PaneFocusRequests,
     agent_state_status: RwSignal<Option<String>>,
+    agent_config: AgentConfig,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) {
@@ -1696,7 +1742,13 @@ fn split_active_pane(
             clipboard_dump,
         );
     } else if let Some(session_id) = workspace.with_untracked(|ws| ws.active_session_id()) {
-        spawn_agent_session(session_id, workspace, sessions, agent_state_status);
+        spawn_agent_session(
+            session_id,
+            workspace,
+            sessions,
+            agent_state_status,
+            agent_config,
+        );
     }
     request_active_pane_focus(workspace, pane_focus_requests);
 }
@@ -1964,6 +2016,7 @@ fn workspace_view(
     palette_focus_request: RwSignal<u64>,
     pane_focus_requests: PaneFocusRequests,
     agent_drafts: AgentDrafts,
+    agent_config: AgentConfig,
     control_mode: RwSignal<ControlMode>,
     overview_selection: RwSignal<usize>,
     terminal_dump: Option<PathBuf>,
@@ -1985,6 +2038,7 @@ fn workspace_view(
             pane_focus_requests[0],
             pane_focus_requests,
             agent_drafts,
+            agent_config.clone(),
             control_mode,
             overview_selection,
             terminal_dump.clone(),
@@ -2005,6 +2059,7 @@ fn workspace_view(
             pane_focus_requests[1],
             pane_focus_requests,
             agent_drafts,
+            agent_config.clone(),
             control_mode,
             overview_selection,
             terminal_dump.clone(),
@@ -2025,6 +2080,7 @@ fn workspace_view(
             pane_focus_requests[2],
             pane_focus_requests,
             agent_drafts,
+            agent_config.clone(),
             control_mode,
             overview_selection,
             terminal_dump.clone(),
@@ -2045,6 +2101,7 @@ fn workspace_view(
             pane_focus_requests[3],
             pane_focus_requests,
             agent_drafts,
+            agent_config,
             control_mode,
             overview_selection,
             terminal_dump,
@@ -2079,6 +2136,7 @@ fn pane_view(
     focus_request: RwSignal<u64>,
     pane_focus_requests: PaneFocusRequests,
     agent_drafts: AgentDrafts,
+    agent_config: AgentConfig,
     control_mode: RwSignal<ControlMode>,
     overview_selection: RwSignal<usize>,
     terminal_dump: Option<PathBuf>,
@@ -2247,6 +2305,7 @@ fn pane_view(
                     overview_selection,
                     pane_focus_requests,
                     agent_state_status,
+                    agent_config.clone(),
                     terminal_dump.clone(),
                     clipboard_dump.clone(),
                 ) {

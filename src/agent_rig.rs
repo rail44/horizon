@@ -1,4 +1,5 @@
 use std::{
+    path::PathBuf,
     thread,
     time::{Duration, Instant},
 };
@@ -23,7 +24,9 @@ use crate::{
         AgentToolCallId, AgentToolCallRequest, AgentToolCallResult, AgentToolPermission,
         StartAgentSession,
     },
+    agent_config::RigAgentConfig,
     agent_tools::{agent_tool_definitions, AgentToolDefinition},
+    workspace::SessionId,
 };
 
 const RIG_PROVIDER_PAYLOAD_SCHEMA: &str = "horizon.rig.provider_payload";
@@ -31,33 +34,42 @@ const RIG_PROVIDER_PAYLOAD_VERSION: u32 = 1;
 const STREAM_FLUSH_INTERVAL: Duration = Duration::from_millis(100);
 const STREAM_FLUSH_CHARS: usize = 320;
 
-pub struct RigSpikeAgentProvider;
+pub struct RigAgentProvider {
+    config: RigAgentConfig,
+    memory_duckdb_path: Option<PathBuf>,
+}
 
-impl RigSpikeAgentProvider {
-    pub fn new() -> Self {
-        Self
+impl RigAgentProvider {
+    pub fn new(config: RigAgentConfig, memory_duckdb_path: Option<PathBuf>) -> Self {
+        Self {
+            config,
+            memory_duckdb_path,
+        }
     }
 }
 
-impl AgentProvider for RigSpikeAgentProvider {
+impl AgentProvider for RigAgentProvider {
     fn provider_id(&self) -> AgentProviderId {
-        AgentProviderId("spike.agent.rig-core".to_string())
+        AgentProviderId("builtin.agent.rig".to_string())
     }
 
     fn start_session(&self, request: StartAgentSession) -> AgentSessionHandle {
         let (commands_tx, commands_rx) = unbounded();
         let (events_tx, events_rx) = unbounded::<AgentProviderEvent>();
         let provider_id = request.provider_id;
+        let config = self.config.clone();
+        let memory_duckdb_path = self.memory_duckdb_path.clone();
+        let session_id = request.session_id;
 
         thread::spawn(move || {
             let runtime = tokio::runtime::Runtime::new().ok();
-            let mut rig_history = Vec::<Message>::new();
+            let mut rig_history = load_rig_history(memory_duckdb_path.as_deref(), session_id);
 
             let _ = events_tx.send(AgentEvent::StateChanged(AgentSessionState::Created).into());
             let _ = events_tx.send(
                 AgentEvent::MessageCommitted(AgentMessage {
                     role: AgentMessageRole::Assistant,
-                    text: rig_initialization_message(&provider_id),
+                    text: rig_initialization_message(&provider_id, &config, rig_history.len()),
                 })
                 .into(),
             );
@@ -86,6 +98,7 @@ impl AgentProvider for RigSpikeAgentProvider {
 
                         let contains_tool_call = complete_rig_turn(
                             runtime.as_ref(),
+                            &config,
                             &mut rig_history,
                             Message::user(text.clone()),
                             &events_tx,
@@ -102,6 +115,7 @@ impl AgentProvider for RigSpikeAgentProvider {
                             .send(AgentEvent::StateChanged(AgentSessionState::Running).into());
                         let contains_tool_call = complete_rig_turn(
                             runtime.as_ref(),
+                            &config,
                             &mut rig_history,
                             rig_tool_result_message(&result),
                             &events_tx,
@@ -129,31 +143,41 @@ impl AgentProvider for RigSpikeAgentProvider {
     }
 }
 
-fn rig_initialization_message(provider_id: &AgentProviderId) -> String {
-    if rig_live_openai_enabled() {
+fn rig_initialization_message(
+    provider_id: &AgentProviderId,
+    config: &RigAgentConfig,
+    loaded_history_messages: usize,
+) -> String {
+    let memory = if loaded_history_messages == 0 {
+        String::new()
+    } else {
+        format!(" Loaded {loaded_history_messages} persisted Rig history message(s).")
+    };
+    if config.openai_enabled {
         format!(
-            "Rig provider `{}` initialized with OpenAI model `{}`.",
-            provider_id.0,
-            rig_openai_model()
+            "Rig provider `{}` initialized with OpenAI model `{}`.{}",
+            provider_id.0, config.model, memory
         )
     } else {
         format!(
-            "Rig provider `{}` initialized in deterministic fallback mode.",
-            provider_id.0
+            "Rig provider `{}` initialized in deterministic fallback mode.{}",
+            provider_id.0, memory
         )
     }
 }
 
 fn complete_rig_turn(
     runtime: Option<&tokio::runtime::Runtime>,
+    config: &RigAgentConfig,
     rig_history: &mut Vec<Message>,
     prompt: Message,
     events_tx: &Sender<AgentProviderEvent>,
     fallback: impl FnOnce() -> Message,
 ) -> bool {
-    if rig_live_openai_enabled() {
+    if config.openai_enabled {
         if let Some(runtime) = runtime {
             match runtime.block_on(rig_openai_turn_streaming(
+                config,
                 prompt.clone(),
                 rig_history.clone(),
                 events_tx.clone(),
@@ -197,12 +221,13 @@ fn complete_rig_turn(
 }
 
 async fn rig_openai_turn_streaming(
+    config: &RigAgentConfig,
     prompt: Message,
     history: Vec<Message>,
     events_tx: Sender<AgentProviderEvent>,
 ) -> anyhow::Result<(Message, bool)> {
     let client = openai::CompletionsClient::from_env()?;
-    let model = client.completion_model(rig_openai_model());
+    let model = client.completion_model(&config.model);
     let mut stream = model
         .completion_request(prompt)
         .messages(history)
@@ -349,16 +374,18 @@ impl StreamDeltaBuffer {
     }
 }
 
-fn rig_live_openai_enabled() -> bool {
-    std::env::var_os("OPENAI_API_KEY").is_some()
-}
-
-fn rig_openai_model() -> String {
-    std::env::var("HORIZON_RIG_MODEL").unwrap_or_else(|_| openai::GPT_4O_MINI.to_string())
-}
-
 fn rig_system_preamble() -> String {
     "You are the Horizon agent. Use available tools when workspace state is needed. Return concise, directly useful answers.".to_string()
+}
+
+fn load_rig_history(path: Option<&std::path::Path>, session_id: SessionId) -> Vec<Message> {
+    let Some(path) = path else {
+        return Vec::new();
+    };
+
+    crate::agent_duckdb_state::DuckDbAgentStateStore::open(path)
+        .and_then(|store| store.rig_messages_for_session(session_id))
+        .unwrap_or_default()
 }
 
 fn rig_tool_definitions() -> Vec<ToolDefinition> {
@@ -565,7 +592,7 @@ fn rig_workspace_snapshot_call_with_provider_metadata() -> ToolCall {
         call_id: Some("provider-call-1".to_string()),
         signature: Some("signature-1".to_string()),
         additional_params: Some(serde_json::json!({
-            "provider": "rig-spike",
+            "provider": "rig",
             "reasoning_ref": "reasoning-1"
         })),
         ..rig_workspace_snapshot_call()
@@ -689,7 +716,7 @@ mod tests {
             .append_event(crate::agent_duckdb_state::AppendAgentEvent {
                 session_id,
                 turn_id: Some("turn-1".to_string()),
-                provider_id: Some(AgentProviderId("spike.agent.rig-core".to_string())),
+                provider_id: Some(AgentProviderId("builtin.agent.rig".to_string())),
                 event,
                 provider_payload: Some(provider_payload.clone()),
             })
@@ -698,7 +725,7 @@ mod tests {
         let events = store.events_for_session(session_id).expect("events");
         assert_eq!(
             events[0].provider_id,
-            Some(AgentProviderId("spike.agent.rig-core".to_string()))
+            Some(AgentProviderId("builtin.agent.rig".to_string()))
         );
         assert_eq!(events[0].provider_payload, Some(provider_payload));
         assert_eq!(
@@ -766,6 +793,49 @@ mod tests {
     }
 
     #[test]
+    fn loads_initial_rig_history_from_duckdb_projection() {
+        let path = std::env::temp_dir().join(format!(
+            "horizon-rig-memory-{}.duckdb",
+            uuid::Uuid::new_v4()
+        ));
+        let session_id = crate::workspace::SessionId::new();
+        let events = vec![
+            AgentEvent::MessageCommitted(AgentMessage {
+                role: AgentMessageRole::User,
+                text: "hello".to_string(),
+            }),
+            AgentEvent::AssistantTextDelta(crate::agent::AgentMessageDelta {
+                role: AgentMessageRole::Assistant,
+                text: "streaming ignored".to_string(),
+            }),
+            AgentEvent::MessageCommitted(AgentMessage {
+                role: AgentMessageRole::Assistant,
+                text: "hi".to_string(),
+            }),
+        ];
+
+        {
+            let store =
+                crate::agent_duckdb_state::DuckDbAgentStateStore::open(&path).expect("open store");
+            store
+                .append_events(
+                    session_id,
+                    Some(AgentProviderId("builtin.agent.rig".to_string())),
+                    events.clone(),
+                )
+                .expect("append events");
+        }
+
+        let history = load_rig_history(Some(&path), session_id);
+        assert_eq!(
+            history,
+            rig_message_json_roundtrip(rig_messages_from_horizon_events(&events))
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn horizon_mediated_tool_result_can_continue_as_rig_history() {
         let tool_call = rig_workspace_snapshot_call();
         let mut events = horizon_events_from_rig_message(Message::from(tool_call));
@@ -795,5 +865,15 @@ mod tests {
         assert!(matches!(&messages[1], Message::User { content }
             if matches!(content.first_ref(), UserContent::ToolResult(result)
                 if result.id == request.call_id.0)));
+    }
+
+    fn rig_message_json_roundtrip(messages: Vec<Message>) -> Vec<Message> {
+        messages
+            .into_iter()
+            .map(|message| {
+                let json = serde_json::to_string(&message).expect("serialize Rig message");
+                serde_json::from_str(&json).expect("deserialize Rig message")
+            })
+            .collect()
     }
 }

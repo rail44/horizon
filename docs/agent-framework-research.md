@@ -244,7 +244,7 @@ builtin provider can be prototyped twice:
 - `MockAgentProvider` for lifecycle and UI.
 - `RigAgentProvider` or `GenaiAgentProvider` for real LLM behavior.
 
-## Spike Result
+## Provider Result
 
 Implementation date: 2026-06-29
 
@@ -254,13 +254,13 @@ as research context.
 
 Implemented files:
 
-- `src/agent_rig_spike.rs`
+- `src/agent_rig.rs`
 
 Registry behavior:
 
 - Default builds register both `MockAgentProvider` and
-  `spike.agent.rig-core`.
-- `spike.agent.rig-core` is the default Agent pane provider.
+  `builtin.agent.rig`.
+- `builtin.agent.rig` is the default Agent pane provider.
 
 Validation commands:
 
@@ -283,11 +283,10 @@ Current interpretation:
   explicit and inspectable.
 - `rig-core` remains the stronger fit if the builtin provider should lean on an
   agentic framework for orchestration, tools, memory, and future RAG.
-- The next meaningful spike is a real provider turn with streaming, using an API
-  key or a local OpenAI-compatible endpoint, while preserving the same adapter
-  boundary.
+- The next meaningful implementation step is wiring persisted Rig-compatible
+  memory into provider turns, while preserving the same adapter boundary.
 
-## Rig Compatibility Spike
+## Rig Compatibility
 
 Implementation date: 2026-06-29
 
@@ -295,7 +294,7 @@ Before committing to a DuckDB-backed Horizon agent store, we checked whether the
 provider-neutral `AgentEvent` transcript can still participate in Rig's
 ecosystem.
 
-Added to `src/agent_rig_spike.rs`:
+Added to `src/agent_rig.rs`:
 
 - `rig_messages_from_horizon_events`
 - tests that rebuild Rig `completion::Message` history from Horizon events
@@ -379,10 +378,11 @@ is a derived projection.
 
 Implementation date: 2026-06-29
 
-The first Rig-backed provider loop is implemented in `src/agent_rig_spike.rs`.
-Horizon uses `spike.agent.rig-core` as the default Agent pane provider.
+The first Rig-backed provider loop is implemented in `src/agent_rig.rs`.
+Horizon uses `builtin.agent.rig` as the default Agent pane provider.
 
-The MVP intentionally avoids a configuration layer:
+Configuration is currently environment-backed and normalized through
+`AgentConfig`:
 
 - If `OPENAI_API_KEY` is set, the provider creates a Rig OpenAI client and
   runs a real completion turn.

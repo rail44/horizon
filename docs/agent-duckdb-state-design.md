@@ -121,9 +121,10 @@ database file instead of using an in-memory store. The file should conventionall
 use a `.duckdb` extension. It is a DuckDB-native binary database file containing
 the Horizon agent tables, not JSONL, Parquet, or SQLite.
 
-If the configured file cannot be opened, Horizon falls back to an in-memory
-DuckDB store so the pane can still run. This fallback is intentionally lossy and
-is surfaced through the status bar and `HORIZON_STATUS_DUMP`. Successful
+If the configured file cannot be opened for rebuild or memory loading, Horizon
+continues with an empty in-memory provider history so the pane can still run.
+This fallback is intentionally lossy and is surfaced through the status bar and
+`HORIZON_STATUS_DUMP` when it affects projection rebuild. Successful
 file-backed state also reports the active DuckDB path there.
 
 It provides:

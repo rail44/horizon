@@ -717,7 +717,7 @@ impl DuckDbAgentStateStore {
         event_kind: &str,
         event: &AgentEvent,
     ) -> Result<()> {
-        for message in crate::agent_rig_spike::rig_messages_from_horizon_events(&[event.clone()]) {
+        for message in crate::agent_rig::rig_messages_from_horizon_events(&[event.clone()]) {
             let rig_message_json =
                 serde_json::to_string(&message).context("serialize Rig conversation message")?;
             self.conn.execute(
@@ -915,7 +915,7 @@ mod tests {
         store
             .append_events(
                 session_id,
-                Some(AgentProviderId("spike.agent.rig-core".to_string())),
+                Some(AgentProviderId("builtin.agent.rig".to_string())),
                 [
                     AgentEvent::StateChanged(AgentSessionState::Running),
                     AgentEvent::MessageCommitted(AgentMessage {
@@ -1010,7 +1010,7 @@ mod tests {
             .append_event(AppendAgentEvent {
                 session_id,
                 turn_id: Some("turn-1".to_string()),
-                provider_id: Some(AgentProviderId("spike.agent.rig-core".to_string())),
+                provider_id: Some(AgentProviderId("builtin.agent.rig".to_string())),
                 event: AgentEvent::MessageCommitted(AgentMessage {
                     role: AgentMessageRole::Assistant,
                     text: "with provider payload".to_string(),
@@ -1023,7 +1023,7 @@ mod tests {
         assert_eq!(events[0].turn_id.as_deref(), Some("turn-1"));
         assert_eq!(
             events[0].provider_id,
-            Some(AgentProviderId("spike.agent.rig-core".to_string()))
+            Some(AgentProviderId("builtin.agent.rig".to_string()))
         );
         assert_eq!(events[0].provider_payload, Some(provider_payload));
     }
@@ -1121,7 +1121,7 @@ mod tests {
             store
                 .append_events(
                     second_session_id,
-                    Some(AgentProviderId("spike.agent.rig-core".to_string())),
+                    Some(AgentProviderId("builtin.agent.rig".to_string())),
                     [AgentEvent::MessageCommitted(AgentMessage {
                         role: AgentMessageRole::Assistant,
                         text: "ready".to_string(),
@@ -1149,7 +1149,7 @@ mod tests {
             .expect("second session snapshot");
         assert_eq!(
             second.session.provider_id,
-            Some(AgentProviderId("spike.agent.rig-core".to_string()))
+            Some(AgentProviderId("builtin.agent.rig".to_string()))
         );
         assert_eq!(second.message_count, 1);
         assert_eq!(second.tool_call_count, 0);
@@ -1193,7 +1193,7 @@ mod tests {
         store
             .append_events(
                 second_session_id,
-                Some(AgentProviderId("spike.agent.rig-core".to_string())),
+                Some(AgentProviderId("builtin.agent.rig".to_string())),
                 [AgentEvent::MessageCommitted(AgentMessage {
                     role: AgentMessageRole::Assistant,
                     text: "ready".to_string(),
@@ -1268,7 +1268,7 @@ mod tests {
                 sequence: 0,
                 session_id,
                 turn_id: Some("turn-1".to_string()),
-                provider_id: Some(AgentProviderId("spike.agent.rig-core".to_string())),
+                provider_id: Some(AgentProviderId("builtin.agent.rig".to_string())),
                 event_kind: agent_event_kind(&AgentEvent::MessageCommitted(AgentMessage {
                     role: AgentMessageRole::User,
                     text: "snapshot".to_string(),
@@ -1288,7 +1288,7 @@ mod tests {
                 sequence: 1,
                 session_id,
                 turn_id: Some("turn-1".to_string()),
-                provider_id: Some(AgentProviderId("spike.agent.rig-core".to_string())),
+                provider_id: Some(AgentProviderId("builtin.agent.rig".to_string())),
                 event_kind: agent_event_kind(&AgentEvent::ToolCallRequested(
                     AgentToolCallRequest {
                         call_id: call_id.clone(),
@@ -1312,7 +1312,7 @@ mod tests {
                 sequence: 2,
                 session_id,
                 turn_id: Some("turn-1".to_string()),
-                provider_id: Some(AgentProviderId("spike.agent.rig-core".to_string())),
+                provider_id: Some(AgentProviderId("builtin.agent.rig".to_string())),
                 event_kind: agent_event_kind(&AgentEvent::ToolCallFinished(AgentToolCallResult {
                     call_id: call_id.clone(),
                     output: serde_json::json!({ "ok": true }),
@@ -1405,7 +1405,7 @@ mod tests {
         store
             .append_events(
                 session_id,
-                Some(AgentProviderId("spike.agent.rig-core".to_string())),
+                Some(AgentProviderId("builtin.agent.rig".to_string())),
                 events.clone(),
             )
             .expect("append events");
@@ -1427,9 +1427,9 @@ mod tests {
             .expect("rig messages");
         assert_eq!(
             rig_messages,
-            rig_message_json_roundtrip(crate::agent_rig_spike::rig_messages_from_horizon_events(
-                &events,
-            ))
+            rig_message_json_roundtrip(
+                crate::agent_rig::rig_messages_from_horizon_events(&events,)
+            )
         );
     }
 
@@ -1462,7 +1462,7 @@ mod tests {
                     sequence: index as u64,
                     session_id,
                     turn_id: Some("turn-1".to_string()),
-                    provider_id: Some(AgentProviderId("spike.agent.rig-core".to_string())),
+                    provider_id: Some(AgentProviderId("builtin.agent.rig".to_string())),
                     event_kind: agent_event_kind(event).to_string(),
                     event: event.clone(),
                     provider_payload: None,
@@ -1481,9 +1481,9 @@ mod tests {
         assert_eq!(rig_messages.len(), 2);
         assert_eq!(
             rig_messages,
-            rig_message_json_roundtrip(crate::agent_rig_spike::rig_messages_from_horizon_events(
-                &events,
-            ))
+            rig_message_json_roundtrip(
+                crate::agent_rig::rig_messages_from_horizon_events(&events,)
+            )
         );
     }
 

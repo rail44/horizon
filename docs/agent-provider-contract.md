@@ -39,9 +39,9 @@ SessionProvider
 For the builtin agent:
 
 ```text
-provider id: builtin.agent
+provider id: builtin.agent.rig
 capability: agent_session
-implementation: MockAgentProvider, RigAgentProvider, GenaiAgentProvider, etc.
+implementation: RigAgentProvider
 ```
 
 For a wasm plugin:

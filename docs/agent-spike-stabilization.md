@@ -3,16 +3,15 @@
 Date: 2026-06-30
 
 This note records the stabilization pass after the first Agent pane, Rig, and
-DuckDB spikes. It separates measured facts from design implications so the next
-implementation step does not continue from guesswork.
+DuckDB implementation passes. It separates measured facts from design
+implications so the next implementation step does not continue from guesswork.
 
 ## Current Implementation Shape
 
-The current agent stack is still spike-shaped in several places:
+The current agent stack has these primary pieces:
 
 - `src/agent.rs` is the Horizon-owned command/event/frame contract.
-- `src/agent_rig_spike.rs` is the current Rig provider bridge, but still named
-  and structured as a spike.
+- `src/agent_rig.rs` is the current Rig provider bridge.
 - `src/agent_event_log.rs` is the JSONL durable event log.
 - `src/agent_duckdb_state.rs` is the derived DuckDB projection layer.
 - `src/agent_view.rs` is the first rich Agent pane renderer.
@@ -126,7 +125,7 @@ the normalized Horizon event stream for live rendering and policy execution.
 
 ## Recommended Next Step
 
-Before renaming spike modules, stabilize the event persistence boundary.
+The event persistence boundary is now stable enough to build on.
 
 The preferred design is now:
 
@@ -192,7 +191,7 @@ Suggested line schema:
   "sequence": 123,
   "session_id": "uuid",
   "turn_id": "turn-uuid-or-null",
-  "provider_id": "spike.agent.rig-core",
+  "provider_id": "builtin.agent.rig",
   "event_kind": "assistant_text_delta",
   "event": {},
   "provider_payload": null,
@@ -320,5 +319,5 @@ This keeps failure recovery simple:
 4. Add DuckDB rebuild-from-JSONL path for existing event/message/tool/approval
    projections.
 5. Add `agent_conversation_messages` projection for Rig-compatible memory.
-6. Only after this boundary is stable, rename `agent_rig_spike.rs` toward a
-   non-spike provider module.
+6. Continue factoring `agent_rig.rs` by provider runtime, mapping, payload, and
+   memory responsibilities as those areas grow.

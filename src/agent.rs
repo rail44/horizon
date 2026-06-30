@@ -3,6 +3,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc, thread};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use serde::{Deserialize, Serialize};
 
+use crate::agent_config::AgentConfig;
 use crate::agent_tools::tool_result_message;
 use crate::workspace::SessionId;
 
@@ -280,11 +281,16 @@ pub struct AgentProviderRegistry {
 
 impl AgentProviderRegistry {
     pub fn builtin() -> Self {
+        Self::builtin_with_config(AgentConfig::from_env())
+    }
+
+    pub fn builtin_with_config(config: AgentConfig) -> Self {
         let mut registry = Self::default();
         registry.insert(Arc::new(MockAgentProvider::new()));
-        registry.insert(Arc::new(
-            crate::agent_rig_spike::RigSpikeAgentProvider::new(),
-        ));
+        registry.insert(Arc::new(crate::agent_rig::RigAgentProvider::new(
+            config.rig,
+            config.persistence.duckdb_path,
+        )));
         registry
     }
 
@@ -293,7 +299,7 @@ impl AgentProviderRegistry {
     }
 
     pub fn default_provider_id(&self) -> AgentProviderId {
-        AgentProviderId("spike.agent.rig-core".to_string())
+        AgentProviderId("builtin.agent.rig".to_string())
     }
 
     pub fn start_session(
@@ -1082,7 +1088,7 @@ mod tests {
         );
         let store = AgentRuntimeStateStore::with_duckdb_state(
             session_id,
-            Some(AgentProviderId("spike.agent.rig-core".to_string())),
+            Some(AgentProviderId("builtin.agent.rig".to_string())),
             duckdb.clone(),
         );
         let provider_payload = serde_json::json!({
@@ -1112,7 +1118,7 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         let session_id = SessionId::new();
-        let provider_id = AgentProviderId("spike.agent.rig-core".to_string());
+        let provider_id = AgentProviderId("builtin.agent.rig".to_string());
         let writer =
             crate::agent_event_log::AgentEventLogWriterHandle::open(&path).expect("event log");
         let store = AgentRuntimeStateStore::with_event_log(
