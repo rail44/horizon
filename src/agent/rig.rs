@@ -1,6 +1,6 @@
-use std::{path::PathBuf, thread};
+use std::path::PathBuf;
 
-use crossbeam_channel::{unbounded, Sender};
+use crossbeam_channel::Sender;
 use futures_util::StreamExt;
 use rig_core::client::{CompletionClient, ProviderClient};
 use rig_core::{
@@ -11,12 +11,14 @@ use rig_core::{
 };
 
 mod mapping;
+mod session;
 mod stream;
 
 use mapping::{
     horizon_provider_events_from_rig_message, rig_tool_call_request, rig_tool_result_message,
     rig_workspace_snapshot_call,
 };
+use session::spawn_rig_session;
 use stream::{StreamDeltaBuffer, StreamDeltaKind};
 
 pub use mapping::{
@@ -27,9 +29,8 @@ pub use mapping::{
 use crate::{
     agent::{
         tools::{agent_tool_definitions, AgentToolDefinition},
-        AgentCommand, AgentEvent, AgentMessage, AgentMessageRole, AgentProvider,
-        AgentProviderEvent, AgentProviderId, AgentSessionHandle, AgentSessionState,
-        AgentToolCallResult, StartAgentSession,
+        AgentEvent, AgentMessage, AgentMessageRole, AgentProvider, AgentProviderEvent,
+        AgentProviderId, AgentSessionHandle, AgentToolCallResult, StartAgentSession,
     },
     agent_config::RigAgentConfig,
     workspace::SessionId,
@@ -55,96 +56,15 @@ impl AgentProvider for RigAgentProvider {
     }
 
     fn start_session(&self, request: StartAgentSession) -> AgentSessionHandle {
-        let (commands_tx, commands_rx) = unbounded();
-        let (events_tx, events_rx) = unbounded::<AgentProviderEvent>();
-        let provider_id = request.provider_id;
-        let config = self.config.clone();
-        let memory_duckdb_path = self.memory_duckdb_path.clone();
-        let session_id = request.session_id;
-
-        thread::spawn(move || {
-            let runtime = tokio::runtime::Runtime::new().ok();
-            let mut rig_history = load_rig_history(memory_duckdb_path.as_deref(), session_id);
-
-            let _ = events_tx.send(AgentEvent::StateChanged(AgentSessionState::Created).into());
-            let _ = events_tx.send(
-                AgentEvent::MessageCommitted(AgentMessage {
-                    role: AgentMessageRole::Assistant,
-                    text: rig_initialization_message(&provider_id, &config, rig_history.len()),
-                })
-                .into(),
-            );
-            let _ =
-                events_tx.send(AgentEvent::StateChanged(AgentSessionState::WaitingForUser).into());
-
-            while let Ok(command) = commands_rx.recv() {
-                match command {
-                    AgentCommand::Initialize(_) => {
-                        let _ = events_tx
-                            .send(AgentEvent::StateChanged(AgentSessionState::Running).into());
-                        let _ = events_tx.send(
-                            AgentEvent::StateChanged(AgentSessionState::WaitingForUser).into(),
-                        );
-                    }
-                    AgentCommand::UserMessage { text } => {
-                        let _ = events_tx
-                            .send(AgentEvent::StateChanged(AgentSessionState::Running).into());
-                        let _ = events_tx.send(
-                            AgentEvent::MessageCommitted(AgentMessage {
-                                role: AgentMessageRole::User,
-                                text: text.clone(),
-                            })
-                            .into(),
-                        );
-
-                        let contains_tool_call = complete_rig_turn(
-                            runtime.as_ref(),
-                            &config,
-                            &mut rig_history,
-                            Message::user(text.clone()),
-                            &events_tx,
-                            || deterministic_rig_response(&text),
-                        );
-                        if !contains_tool_call {
-                            let _ = events_tx.send(
-                                AgentEvent::StateChanged(AgentSessionState::WaitingForUser).into(),
-                            );
-                        }
-                    }
-                    AgentCommand::ToolCallResult(result) => {
-                        let _ = events_tx
-                            .send(AgentEvent::StateChanged(AgentSessionState::Running).into());
-                        let contains_tool_call = complete_rig_turn(
-                            runtime.as_ref(),
-                            &config,
-                            &mut rig_history,
-                            rig_tool_result_message(&result),
-                            &events_tx,
-                            || deterministic_tool_result_response(&result),
-                        );
-                        if !contains_tool_call {
-                            let _ = events_tx.send(
-                                AgentEvent::StateChanged(AgentSessionState::WaitingForUser).into(),
-                            );
-                        }
-                    }
-                    AgentCommand::Shutdown => {
-                        let _ = events_tx
-                            .send(AgentEvent::StateChanged(AgentSessionState::Terminated).into());
-                        break;
-                    }
-                    AgentCommand::Cancel { .. }
-                    | AgentCommand::ApproveToolCall { .. }
-                    | AgentCommand::DenyToolCall { .. } => {}
-                }
-            }
-        });
-
-        AgentSessionHandle::new(commands_tx, events_rx)
+        spawn_rig_session(
+            request,
+            self.config.clone(),
+            self.memory_duckdb_path.clone(),
+        )
     }
 }
 
-fn rig_initialization_message(
+pub(super) fn rig_initialization_message(
     provider_id: &AgentProviderId,
     config: &RigAgentConfig,
     loaded_history_messages: usize,
@@ -167,7 +87,7 @@ fn rig_initialization_message(
     }
 }
 
-fn complete_rig_turn(
+pub(super) fn complete_rig_turn(
     runtime: Option<&tokio::runtime::Runtime>,
     config: &RigAgentConfig,
     rig_history: &mut Vec<Message>,
@@ -312,7 +232,10 @@ fn rig_system_preamble() -> String {
     "You are the Horizon agent. Use available tools when workspace state is needed. Return concise, directly useful answers.".to_string()
 }
 
-fn load_rig_history(path: Option<&std::path::Path>, session_id: SessionId) -> Vec<Message> {
+pub(super) fn load_rig_history(
+    path: Option<&std::path::Path>,
+    session_id: SessionId,
+) -> Vec<Message> {
     let Some(path) = path else {
         return Vec::new();
     };
@@ -337,7 +260,7 @@ fn rig_tool_definition_from_horizon(definition: AgentToolDefinition) -> ToolDefi
     }
 }
 
-fn deterministic_rig_response(text: &str) -> Message {
+pub(super) fn deterministic_rig_response(text: &str) -> Message {
     if text.to_ascii_lowercase().contains("snapshot") {
         Message::Assistant {
             id: None,
@@ -353,7 +276,7 @@ fn deterministic_rig_response(text: &str) -> Message {
     }
 }
 
-fn deterministic_tool_result_response(result: &AgentToolCallResult) -> Message {
+pub(super) fn deterministic_tool_result_response(result: &AgentToolCallResult) -> Message {
     Message::Assistant {
         id: None,
         content: OneOrMany::one(AssistantContent::Text(Text::new(format!(
