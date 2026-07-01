@@ -1,3 +1,4 @@
+use crate::ui::theme;
 use floem::prelude::*;
 
 pub(super) fn chrome_close_button(
@@ -16,7 +17,7 @@ pub(super) fn chrome_close_button(
                 .items_center()
                 .justify_center()
                 .font_size(13)
-                .color(floem::peniko::Color::rgb8(170, 178, 190))
+                .color(theme::text_muted())
                 .background(floem::peniko::Color::rgb8(35, 39, 48))
                 .border(1.0)
                 .border_color(floem::peniko::Color::rgb8(57, 64, 76))
@@ -30,16 +31,12 @@ pub(super) fn pane_header(
     on_close: impl Fn() + 'static + Copy,
 ) -> impl IntoView {
     h_stack((
-        label(title).style(|s| {
-            s.min_width(0.0)
-                .font_size(13)
-                .color(floem::peniko::Color::rgb8(233, 236, 242))
-        }),
+        label(title).style(|s| s.min_width(0.0).font_size(13).color(theme::text_primary())),
         chrome_close_button(closeable, on_close),
     ))
     .style(move |s| {
         let background = if active() {
-            floem::peniko::Color::rgb8(39, 44, 54)
+            theme::surface_selected()
         } else {
             floem::peniko::Color::rgb8(32, 36, 45)
         };

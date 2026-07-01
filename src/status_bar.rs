@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use floem::prelude::*;
+use horizon::ui::theme;
 use horizon::workspace::Workspace;
 
 pub(crate) fn status_bar(
@@ -24,8 +25,8 @@ pub(crate) fn status_bar(
             .padding_horiz(10)
             .items_center()
             .font_size(12)
-            .color(floem::peniko::Color::rgb8(178, 185, 198))
-            .background(floem::peniko::Color::rgb8(31, 34, 41))
+            .color(theme::text_muted())
+            .background(theme::surface_raised())
     })
 }
 

@@ -6,6 +6,7 @@ use crate::control_surface::ControlMode;
 use crate::session::Frames;
 use crate::session::Registry;
 use crate::terminal::TerminalCommand;
+use crate::ui::theme;
 use crate::workspace::Workspace;
 use floem::peniko::kurbo::{Point, Size};
 use floem::prelude::*;
@@ -165,6 +166,6 @@ pub fn workspace_view(
             .flex_grow(1.0)
             .gap(1)
             .padding(1)
-            .background(floem::peniko::Color::rgb8(42, 46, 55))
+            .background(theme::border_subtle())
     })
 }

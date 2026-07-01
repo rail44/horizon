@@ -11,6 +11,7 @@ use crate::input::{
 };
 use crate::session::{Frames, Registry};
 use crate::terminal::{TerminalCommand, TerminalFrame};
+use crate::ui::theme;
 use crate::workspace::{PaneKind, Workspace};
 use floem::prelude::*;
 use floem::{
@@ -324,15 +325,15 @@ pub(super) fn pane_view(
         }
 
         let border = if active() {
-            floem::peniko::Color::rgb8(132, 220, 198)
+            theme::accent()
         } else {
-            floem::peniko::Color::rgb8(54, 59, 70)
+            theme::surface_selected()
         };
         s.height_full()
             .min_width(0.0)
             .flex_basis(0.0)
             .flex_grow(1.0)
-            .background(floem::peniko::Color::rgb8(24, 27, 32))
+            .background(theme::surface_panel())
             .border(1.0)
             .border_color(border)
     })

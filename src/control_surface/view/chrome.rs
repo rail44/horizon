@@ -1,4 +1,5 @@
 use crate::control_surface::ControlMode;
+use crate::ui::theme;
 use floem::prelude::*;
 
 pub(super) fn control_mode_tabs(control_mode: RwSignal<ControlMode>) -> impl IntoView {
@@ -12,7 +13,7 @@ pub(super) fn control_mode_tabs(control_mode: RwSignal<ControlMode>) -> impl Int
             .items_center()
             .gap(8)
             .padding_horiz(12)
-            .background(floem::peniko::Color::rgb8(25, 28, 34))
+            .background(theme::surface_chrome())
     })
 }
 
@@ -28,14 +29,14 @@ fn control_mode_tab(
         .style(move |s| {
             let active = control_mode.get() == mode;
             let color = if active {
-                floem::peniko::Color::rgb8(233, 236, 242)
+                theme::text_primary()
             } else {
-                floem::peniko::Color::rgb8(178, 185, 198)
+                theme::text_muted()
             };
             let border = if active {
-                floem::peniko::Color::rgb8(132, 220, 198)
+                theme::accent()
             } else {
-                floem::peniko::Color::rgb8(54, 59, 70)
+                theme::border_default()
             };
 
             s.height(24)

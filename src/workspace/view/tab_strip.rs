@@ -1,5 +1,6 @@
 use crate::app::commands::close_tab;
 use crate::session::Registry;
+use crate::ui::theme;
 use crate::workspace::Workspace;
 use floem::prelude::*;
 
@@ -20,7 +21,7 @@ pub fn tab_strip(workspace: RwSignal<Workspace>, sessions: RwSignal<Registry>) -
             .items_center()
             .gap(6)
             .padding_horiz(10)
-            .background(floem::peniko::Color::rgb8(21, 24, 30))
+            .background(theme::surface_base())
     })
 }
 
@@ -55,11 +56,7 @@ fn tab_chip(
     let closeable = move || workspace.with(|ws| ws.tab_count() > 1);
 
     h_stack((
-        label(title).style(|s| {
-            s.max_width(170)
-                .font_size(12)
-                .color(floem::peniko::Color::rgb8(233, 236, 242))
-        }),
+        label(title).style(|s| s.max_width(170).font_size(12).color(theme::text_primary())),
         chrome_close_button(
             move || closeable(),
             move || close_tab(workspace, sessions, index),
@@ -76,14 +73,14 @@ fn tab_chip(
         }
 
         let background = if active() {
-            floem::peniko::Color::rgb8(39, 44, 54)
+            theme::surface_selected()
         } else {
-            floem::peniko::Color::rgb8(21, 24, 30)
+            theme::surface_base()
         };
         let border = if active() {
-            floem::peniko::Color::rgb8(132, 220, 198)
+            theme::accent()
         } else {
-            floem::peniko::Color::rgb8(42, 46, 55)
+            theme::border_subtle()
         };
         s.height(27)
             .min_width(0.0)

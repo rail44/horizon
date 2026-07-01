@@ -179,6 +179,8 @@ cross-domain `ui` module:
 - `ui` is reserved for domain-neutral UI primitives and components that are
   intentionally reused across multiple domain views, such as future code/diff
   rendering, scroll helpers, text primitives, or theme tokens;
+- `ui::theme` owns the first cross-domain visual tokens, currently shared
+  colors for text, accent, surfaces, selection, and borders;
 - `app` remains the composition and runtime wiring layer, not the default home
   for reusable UI components.
 

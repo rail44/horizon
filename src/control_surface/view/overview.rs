@@ -1,4 +1,5 @@
 use crate::control_surface::{overview_items, overview_visible_start, ControlMode};
+use crate::ui::theme;
 use crate::workspace::Workspace;
 use floem::event::{Event, EventListener, EventPropagation};
 use floem::prelude::*;
@@ -18,11 +19,8 @@ pub fn workspace_overview(
         v_stack((
             control_mode_tabs(control_mode),
             v_stack((
-                label(|| "Workspace Overview".to_string()).style(|s| {
-                    s.width_full()
-                        .font_size(16)
-                        .color(floem::peniko::Color::rgb8(233, 236, 242))
-                }),
+                label(|| "Workspace Overview".to_string())
+                    .style(|s| s.width_full().font_size(16).color(theme::text_primary())),
                 label(move || {
                     workspace.with(|ws| {
                         format!(
@@ -34,18 +32,14 @@ pub fn workspace_overview(
                         )
                     })
                 })
-                .style(|s| {
-                    s.width_full()
-                        .font_size(12)
-                        .color(floem::peniko::Color::rgb8(178, 185, 198))
-                }),
+                .style(|s| s.width_full().font_size(12).color(theme::text_muted())),
             ))
             .style(|s| {
                 s.width_full()
                     .padding_horiz(14)
                     .padding_vert(12)
                     .gap(4)
-                    .background(floem::peniko::Color::rgb8(31, 34, 41))
+                    .background(theme::surface_raised())
             }),
             overview_row(workspace, palette_open, overview_selection, 0),
             overview_row(workspace, palette_open, overview_selection, 1),
@@ -88,8 +82,8 @@ pub fn workspace_overview(
             .width(680)
             .z_index(10)
             .border(1.0)
-            .border_color(floem::peniko::Color::rgb8(132, 220, 198))
-            .background(floem::peniko::Color::rgb8(22, 24, 29))
+            .border_color(theme::accent())
+            .background(theme::surface_base())
     })
 }
 
@@ -130,16 +124,10 @@ fn overview_row(
                 .color(item.kind_color())
         }),
         v_stack((
-            label(move || item().map(|item| item.title()).unwrap_or_default()).style(|s| {
-                s.width_full()
-                    .font_size(13)
-                    .color(floem::peniko::Color::rgb8(233, 236, 242))
-            }),
-            label(move || item().map(|item| item.description()).unwrap_or_default()).style(|s| {
-                s.width_full()
-                    .font_size(11)
-                    .color(floem::peniko::Color::rgb8(178, 185, 198))
-            }),
+            label(move || item().map(|item| item.title()).unwrap_or_default())
+                .style(|s| s.width_full().font_size(13).color(theme::text_primary())),
+            label(move || item().map(|item| item.description()).unwrap_or_default())
+                .style(|s| s.width_full().font_size(11).color(theme::text_muted())),
         ))
         .style(|s| {
             s.flex()
@@ -159,9 +147,9 @@ fn overview_row(
         };
 
         let background = if selected() {
-            floem::peniko::Color::rgb8(54, 59, 70)
+            theme::surface_selected()
         } else {
-            floem::peniko::Color::rgb8(22, 24, 29)
+            theme::surface_base()
         };
 
         s.width_full()
