@@ -27,6 +27,9 @@ below.
   DuckDB projection store.
 - `app::runtime` is the composition layer that wires domain runtimes into Floem
   state. Agent and terminal runtime registry abstractions can come later.
+- `app::runtime` is split by current built-in session runtime (`agent` and
+  `terminal`) while keeping the public spawn functions re-exported from
+  `app::runtime`.
 
 ## Target Shape
 
@@ -146,3 +149,19 @@ Do in one larger cleanup:
 - Do not restore workspace/session state on startup.
 - Do not make DuckDB the primary durable append path.
 - Do not add compatibility re-exports solely for old module paths.
+
+## Runtime Registry Follow-up
+
+The next runtime abstraction should be driven by the first additional session
+kind beyond the built-in agent and terminal, most likely plugin-provided
+sessions. Until then, `app::runtime::{agent, terminal}` remains the concrete
+composition layer:
+
+- domains provide runtime handles and provider/session capabilities,
+- `app::runtime` wires those handles into Floem signals, `session::Registry`,
+  and `session::Frames`,
+- `workspace::SessionKind` and `WorkspaceSession` remain workspace attachment
+  metadata until runtime factories need a shared session-kind registry.
+
+When a registry is introduced, it should register factories for session kinds
+rather than move Floem signal code into the agent or terminal domains.

@@ -58,22 +58,27 @@ permission defaults, not the session model.
 
 ## Core Types
 
-The future Rust API should be shaped around these Horizon-owned concepts:
+The Rust API is shaped around these Horizon-owned concepts. Current modules use
+namespace-oriented names:
 
 ```rust
-struct AgentProviderId(String);
-struct AgentSessionId(SessionId);
-struct AgentRequestId(String);
-struct AgentToolCallId(String);
+session::SessionId;
 
-trait AgentProvider {
-    fn provider_id(&self) -> AgentProviderId;
-    fn start_session(&self, request: StartAgentSession) -> AgentSessionHandle;
+agent::contract::ProviderId;
+agent::contract::RequestId;
+agent::contract::ToolCallId;
+
+trait agent::contract::Provider {
+    fn provider_id(&self) -> agent::contract::ProviderId;
+    fn start_session(
+        &self,
+        request: agent::contract::StartSession,
+    ) -> agent::contract::SessionHandle;
 }
 
-struct AgentSessionHandle {
-    commands: Sender<AgentCommand>,
-    events: Receiver<AgentEvent>,
+struct agent::contract::SessionHandle {
+    commands: Sender<agent::contract::Command>,
+    events: Receiver<agent::contract::ProviderEvent>,
 }
 ```
 
@@ -83,17 +88,17 @@ host calls. The pane and workspace should see the same command/event model.
 
 ## Commands Into An Agent Session
 
-`AgentCommand` is Horizon-to-provider.
+`agent::contract::Command` is Horizon-to-provider.
 
 Initial command set:
 
 ```rust
-enum AgentCommand {
-    Initialize(AgentInitialization),
+enum Command {
+    Initialize(Initialization),
     UserMessage { text: String },
-    Cancel { request_id: Option<AgentRequestId> },
-    ApproveToolCall { call_id: AgentToolCallId },
-    DenyToolCall { call_id: AgentToolCallId, reason: Option<String> },
+    Cancel { request_id: Option<RequestId> },
+    ApproveToolCall { call_id: ToolCallId },
+    DenyToolCall { call_id: ToolCallId, reason: Option<String> },
     Shutdown,
 }
 ```
@@ -109,22 +114,22 @@ Notes:
 
 ## Events From An Agent Session
 
-`AgentEvent` is provider-to-Horizon.
+`agent::contract::Event` is provider-to-Horizon.
 
 Initial event set:
 
 ```rust
-enum AgentEvent {
-    StateChanged(AgentSessionState),
-    ReasoningDelta(AgentMessageDelta),
-    AssistantTextDelta(AgentMessageDelta),
-    MessageCommitted(AgentMessage),
-    ToolCallRequested(AgentToolCallRequest),
-    ToolCallStarted(AgentToolCallId),
-    ToolCallFinished(AgentToolCallResult),
-    ApprovalRequested(AgentApprovalRequest),
-    Error(AgentError),
-    Exited(AgentExit),
+enum Event {
+    StateChanged(SessionState),
+    ReasoningDelta(MessageDelta),
+    AssistantTextDelta(MessageDelta),
+    MessageCommitted(Message),
+    ToolCallRequested(ToolCallRequest),
+    ToolCallStarted(ToolCallId),
+    ToolCallFinished(ToolCallResult),
+    ApprovalRequested(ApprovalRequest),
+    Error(Error),
+    Exited(Exit),
 }
 ```
 
@@ -141,17 +146,23 @@ Notes:
 Provider runtime transport uses an event envelope:
 
 ```rust
-struct AgentProviderEvent {
-    event: AgentEvent,
+struct ProviderEvent {
+    event: Event,
     provider_payload: Option<serde_json::Value>,
 }
 ```
 
 `event` is the Horizon-owned contract used by UI, policy, tools, and replay.
 `provider_payload` is provider-owned opaque JSON for replay or migration
-metadata. The Agent pane should render from `AgentEvent`, not from provider
-payload. This keeps the agent flow usable without the Horizon frontend while
-letting Horizon persist provider-specific details when present.
+metadata. The Agent pane should render from `agent::contract::Event`, not from
+provider payload. This keeps the agent flow usable without the Horizon frontend
+while letting Horizon persist provider-specific details when present.
+
+Persistence layers store provider payloads but do not interpret them.
+Provider-specific history reconstruction belongs to each provider. For example,
+the Rig provider converts stored Horizon events into Rig messages under
+`agent::providers::rig`; the DuckDB projection store only supplies neutral
+ordered events and preserves opaque payload JSON.
 
 ## Standalone Flow Boundary
 
@@ -160,10 +171,10 @@ of provider-native execution. A provider should be able to run its agent loop
 outside the Horizon UI as long as it can exchange the same normalized commands
 and events:
 
-- `AgentCommand` is the input contract from Horizon or another host.
-- `AgentEvent` is the portable output contract for UI, policy, tools, and
+- `agent::contract::Command` is the input contract from Horizon or another host.
+- `agent::contract::Event` is the portable output contract for UI, policy, tools, and
   replay.
-- `AgentProviderEvent.provider_payload` is optional host-persisted metadata,
+- `agent::contract::ProviderEvent.provider_payload` is optional host-persisted metadata,
   not a dependency for normal pane rendering.
 
 This keeps richer Agent pane rendering open while avoiding a PTY-like
@@ -176,7 +187,7 @@ stream plus optional persisted payloads.
 Horizon should normalize provider-specific state into a small set:
 
 ```rust
-enum AgentSessionState {
+enum SessionState {
     Created,
     Running,
     WaitingForUser,
@@ -223,15 +234,15 @@ Agent tools are Horizon-owned operations exposed to providers.
 Initial tool definition:
 
 ```rust
-struct AgentToolDefinition {
+struct agent::tools::Definition {
     id: String,
     title: String,
     description: String,
     input_schema: serde_json::Value,
-    permission: AgentToolPermission,
+    permission: ToolPermission,
 }
 
-enum AgentToolPermission {
+enum ToolPermission {
     AutoAllowRead,
     AutoAllowUi,
     RequireApproval,

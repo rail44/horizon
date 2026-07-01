@@ -12,7 +12,7 @@ substrate.
 
 Decisions:
 
-- Persist provider-neutral `AgentEvent` records to JSONL as the primary durable
+- Persist provider-neutral `agent::contract::Event` records to JSONL as the primary durable
   audit layer.
 - Preserve optional `provider_payload_json` for framework-specific replay and
   migration safety.
@@ -48,7 +48,8 @@ for a local state/query substrate in this codebase family.
 ## Store Shape
 
 The state layer uses JSONL as the durable source of truth and
-`DuckDbAgentStateStore` as a derived projection/read-model backend.
+`agent::persistence::projection::duckdb::Store` as a derived
+projection/read-model backend.
 
 Primary event table:
 
@@ -84,9 +85,9 @@ agent_tool_results
 agent_approvals
 ```
 
-The projections are intentionally derived from `AgentEvent`. If a projection
-needs to change, it can be rebuilt from `agent_events` without changing the
-provider contract.
+The projections are intentionally derived from `agent::contract::Event`. If a
+projection needs to change, it can be rebuilt from `agent_events` without
+changing the provider contract.
 
 ## Provider Payload Boundary
 
@@ -111,6 +112,12 @@ Rig provider payloads are versioned opaque JSON values. The current schema is
 `horizon.rig.provider_payload` version `1`. The DuckDB store only preserves the
 JSON value alongside the provider-neutral event.
 
+DuckDB does not interpret provider payloads. Provider-specific replay, history
+reconstruction, and migration logic belongs to the provider implementation. For
+the builtin Rig provider, `agent::providers::rig` loads ordered Horizon events
+from the DuckDB projection store and converts them into Rig messages in provider
+code.
+
 ## Runtime Boundary
 
 Runtime persistence writes normalized Horizon events to the JSONL event log.
@@ -129,7 +136,7 @@ file-backed state also reports the active DuckDB path there.
 
 It provides:
 
-- append APIs for `AgentEvent`,
+- append APIs for `agent::contract::Event`,
 - session metadata listing through `agent_sessions`,
 - ordered event replay per session,
 - `AgentFrame` reconstruction from stored events,
@@ -154,6 +161,7 @@ primary durable source while allowing read-model tables to evolve.
 It deliberately does not yet move these concerns into DuckDB:
 
 - live provider channels,
+- provider-specific conversation replay,
 - pane focus and tab/split attachment state,
 - pending in-memory command delivery,
 - provider process lifecycle,
@@ -172,8 +180,9 @@ eventually plugin-provided agents.
 Recommended next steps:
 
 1. Keep JSONL as the primary durable log and DuckDB as a rebuildable projection.
-2. Continue writing provider payloads for loss-prone Rig
-   fields and verify Rig history reconstruction from stored events.
+2. Continue writing provider payloads for loss-prone Rig fields.
+3. Keep Rig history reconstruction in `agent::providers::rig`, fed by neutral
+   ordered event reads from DuckDB.
 
 ## Non-goals
 
