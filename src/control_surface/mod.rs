@@ -1,5 +1,6 @@
 mod query;
 mod types;
+pub mod view;
 mod visibility;
 
 pub use types::{

@@ -1,8 +1,8 @@
+use crate::fonts::HORIZON_FONT_FAMILY;
 use floem::{
     peniko::Color,
     text::{Attrs, AttrsList, FamilyOwned, TextLayout},
 };
-use horizon::fonts::HORIZON_FONT_FAMILY;
 
 use super::{FALLBACK_CELL_WIDTH, FONT_SIZE, LINE_HEIGHT};
 

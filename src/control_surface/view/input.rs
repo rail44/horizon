@@ -1,14 +1,14 @@
 use std::path::PathBuf;
 
+use crate::agent_config::AgentConfig;
+use crate::app::commands::PaneFocusRequests;
+use crate::control_surface::ControlMode;
+use crate::input::palette_accepts_text_input;
+use crate::session::Frames;
+use crate::session::Registry;
+use crate::workspace::Workspace;
 use floem::keyboard::{Key, KeyEvent, NamedKey};
 use floem::prelude::*;
-use horizon::agent_config::AgentConfig;
-use horizon::app::commands::PaneFocusRequests;
-use horizon::control_surface::ControlMode;
-use horizon::input::palette_accepts_text_input;
-use horizon::session::Frames;
-use horizon::session::Registry;
-use horizon::workspace::Workspace;
 
 use super::actions::{
     close_control_surface, close_palette, execute_overview_selection, execute_palette_selection,
@@ -80,7 +80,7 @@ fn handle_palette_key(
     }
 }
 
-pub(crate) fn handle_control_key(
+pub fn handle_control_key(
     key_event: &KeyEvent,
     workspace: RwSignal<Workspace>,
     frames: RwSignal<Frames>,

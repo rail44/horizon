@@ -143,4 +143,4 @@ code blocks. Removing `**` or heading markers from plain text is not enough.
 - Rig completion response: `/home/satoshi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rig-core-0.39.0/src/completion/request.rs`
 - Rig OpenAI Responses conversion: `/home/satoshi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rig-core-0.39.0/src/providers/openai/responses_api/mod.rs`
 - Horizon Rig bridge: `src/agent/rig.rs`
-- Horizon Agent view: `src/agent_view.rs`
+- Horizon Agent view: `src/agent/view/mod.rs`

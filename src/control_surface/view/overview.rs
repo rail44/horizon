@@ -1,13 +1,13 @@
+use crate::control_surface::{overview_items, overview_visible_start, ControlMode};
+use crate::workspace::Workspace;
 use floem::event::{Event, EventListener, EventPropagation};
 use floem::prelude::*;
-use horizon::control_surface::{overview_items, overview_visible_start, ControlMode};
-use horizon::workspace::Workspace;
 
 use super::actions::execute_overview_selection;
 use super::chrome::control_mode_tabs;
 use super::input::handle_workspace_control_key;
 
-pub(crate) fn workspace_overview(
+pub fn workspace_overview(
     workspace: RwSignal<Workspace>,
     palette_open: RwSignal<bool>,
     control_mode: RwSignal<ControlMode>,

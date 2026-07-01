@@ -8,4 +8,5 @@ pub mod input;
 pub mod plugins;
 pub mod session;
 pub mod terminal;
+pub mod ui;
 pub mod workspace;

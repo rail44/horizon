@@ -17,17 +17,15 @@ use horizon::terminal::TerminalCommand;
 use horizon::workspace::Workspace;
 use std::path::PathBuf;
 
-mod agent_view;
-mod control_surface_view;
 mod status_bar;
-mod terminal_view;
-mod workspace_view;
 
-use control_surface_view::{command_palette, handle_control_key, open_palette, workspace_overview};
-use status_bar::status_bar;
-use workspace_view::{
+use horizon::control_surface::view::{
+    command_palette, handle_control_key, open_palette, workspace_overview,
+};
+use horizon::workspace::view::{
     active_agent_draft, active_terminal_sender, tab_strip, trace_ime, workspace_view,
 };
+use status_bar::status_bar;
 
 fn main() {
     Application::new()

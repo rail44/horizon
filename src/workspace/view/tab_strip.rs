@@ -1,14 +1,11 @@
+use crate::app::commands::close_tab;
+use crate::session::Registry;
+use crate::workspace::Workspace;
 use floem::prelude::*;
-use horizon::app::commands::close_tab;
-use horizon::session::Registry;
-use horizon::workspace::Workspace;
 
 use super::chrome::chrome_close_button;
 
-pub(crate) fn tab_strip(
-    workspace: RwSignal<Workspace>,
-    sessions: RwSignal<Registry>,
-) -> impl IntoView {
+pub fn tab_strip(workspace: RwSignal<Workspace>, sessions: RwSignal<Registry>) -> impl IntoView {
     h_stack((
         tab_chip(workspace, sessions, 0),
         tab_chip(workspace, sessions, 1),

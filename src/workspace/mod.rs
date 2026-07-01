@@ -1,6 +1,7 @@
 mod layout;
 mod operations;
 mod types;
+pub mod view;
 
 pub use types::{
     LayoutNode, Pane, PaneId, PaneKind, PaneSummary, SessionKind, SessionSummary, SplitAxis, Tab,

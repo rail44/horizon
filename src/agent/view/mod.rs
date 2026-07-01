@@ -1,8 +1,8 @@
+use crate::agent::frame::AgentFrame;
+use crate::fonts::HORIZON_FONT_FAMILY;
 use floem::event::{Event, EventListener, EventPropagation};
 use floem::peniko::{kurbo::Point, Color};
 use floem::prelude::*;
-use horizon::agent::frame::AgentFrame;
-use horizon::fonts::HORIZON_FONT_FAMILY;
 
 mod labels;
 mod markdown;
@@ -218,8 +218,8 @@ fn markdown_line_view(line: MarkdownLine, tone: TranscriptTone) -> impl IntoView
 #[cfg(test)]
 mod tests {
     use super::*;
-    use horizon::agent::contract::{Message, MessageDelta, MessageRole, SessionState};
-    use horizon::agent::frame::AgentFrameItem;
+    use crate::agent::contract::{Message, MessageDelta, MessageRole, SessionState};
+    use crate::agent::frame::AgentFrameItem;
 
     #[test]
     fn transcript_blocks_keep_full_assistant_text() {

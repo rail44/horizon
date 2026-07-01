@@ -14,7 +14,7 @@ The current agent stack has these primary pieces:
 - `src/agent/rig.rs` is the current Rig provider bridge.
 - `src/agent/event_log.rs` is the JSONL durable event log.
 - `src/agent/duckdb_state.rs` is the derived DuckDB projection layer.
-- `src/agent_view.rs` is the first rich Agent pane renderer.
+- `src/agent/view/mod.rs` is the first rich Agent pane renderer.
 - The genai spike has been removed; genai remains only as comparative research
   material in historical notes.
 

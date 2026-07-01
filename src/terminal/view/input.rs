@@ -1,5 +1,5 @@
+use crate::terminal::{TerminalMouseButton, TerminalMouseModifiers, TerminalSelectionPoint};
 use floem::{peniko::kurbo::Point, pointer::PointerButton};
-use horizon::terminal::{TerminalMouseButton, TerminalMouseModifiers, TerminalSelectionPoint};
 
 use super::metrics::TerminalMetrics;
 use super::{PADDING_X, PADDING_Y};

@@ -1,6 +1,7 @@
 mod core;
 mod session;
 mod types;
+pub mod view;
 
 pub use core::{TerminalCore, TerminalEvents};
 pub use session::{

@@ -1,3 +1,7 @@
+use crate::terminal::{
+    TerminalCommand, TerminalFrame, TerminalMouseButton, TerminalMouseKind, TerminalMouseReport,
+    TerminalScroll, TerminalSize,
+};
 use crossbeam_channel::Sender;
 use floem::{
     action::set_ime_cursor_area,
@@ -11,10 +15,6 @@ use floem::{
     View, ViewId,
 };
 use floem_renderer::Renderer;
-use horizon::terminal::{
-    TerminalCommand, TerminalFrame, TerminalMouseButton, TerminalMouseKind, TerminalMouseReport,
-    TerminalScroll, TerminalSize,
-};
 
 mod input;
 mod layout;
@@ -342,9 +342,9 @@ use metrics::{
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminal::TerminalSelectionPoint;
+    use crate::terminal::TerminalSpan;
     use floem::text::FamilyOwned;
-    use horizon::terminal::TerminalSelectionPoint;
-    use horizon::terminal::TerminalSpan;
 
     fn test_family() -> Vec<FamilyOwned> {
         _test_terminal_font_family()

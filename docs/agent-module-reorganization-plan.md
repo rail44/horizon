@@ -82,6 +82,8 @@ src/
     mod.rs
     frames.rs
     registry.rs
+  ui/
+    mod.rs
 ```
 
 ## Naming
@@ -165,3 +167,26 @@ composition layer:
 
 When a registry is introduced, it should register factories for session kinds
 rather than move Floem signal code into the agent or terminal domains.
+
+## View Placement
+
+Horizon UI should be organized around domain-colocated views plus a small
+cross-domain `ui` module:
+
+- domain view modules live next to the domain state and operations they render,
+  such as `agent::view`, `terminal::view`, `workspace::view`, and
+  `control_surface::view`;
+- `ui` is reserved for domain-neutral UI primitives and components that are
+  intentionally reused across multiple domain views, such as future code/diff
+  rendering, scroll helpers, text primitives, or theme tokens;
+- `app` remains the composition and runtime wiring layer, not the default home
+  for reusable UI components.
+
+Use this split as the placement test:
+
+- if a view knows domain state, commands, or flow, keep it under that domain's
+  `view` module;
+- if a component is useful to agent, future git/diff, plugin, or other domain
+  views without knowing their domain model, put it under `ui`;
+- if code starts sessions, wires Floem signals into runtime handles, or owns
+  global shell composition, put it under `app`.

@@ -1,5 +1,5 @@
+use crate::control_surface::ControlMode;
 use floem::prelude::*;
-use horizon::control_surface::ControlMode;
 
 pub(super) fn control_mode_tabs(control_mode: RwSignal<ControlMode>) -> impl IntoView {
     h_stack((

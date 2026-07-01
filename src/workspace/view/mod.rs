@@ -1,14 +1,14 @@
 use std::path::PathBuf;
 
+use crate::agent_config::AgentConfig;
+use crate::app::commands::{active_agent, PaneFocusRequests, MAX_VISIBLE_PANES};
+use crate::control_surface::ControlMode;
+use crate::session::Frames;
+use crate::session::Registry;
+use crate::terminal::TerminalCommand;
+use crate::workspace::Workspace;
 use floem::peniko::kurbo::{Point, Size};
 use floem::prelude::*;
-use horizon::agent_config::AgentConfig;
-use horizon::app::commands::{active_agent, PaneFocusRequests, MAX_VISIBLE_PANES};
-use horizon::control_surface::ControlMode;
-use horizon::session::Frames;
-use horizon::session::Registry;
-use horizon::terminal::TerminalCommand;
-use horizon::workspace::Workspace;
 
 mod agent_controls;
 mod chrome;
@@ -16,11 +16,11 @@ mod pane;
 mod tab_strip;
 mod terminal_output;
 
-pub(crate) use tab_strip::tab_strip;
+pub use tab_strip::tab_strip;
 
-pub(super) type AgentDrafts = [RwSignal<String>; MAX_VISIBLE_PANES];
+pub type AgentDrafts = [RwSignal<String>; MAX_VISIBLE_PANES];
 
-pub(crate) fn active_agent_draft(
+pub fn active_agent_draft(
     workspace: RwSignal<Workspace>,
     agent_drafts: AgentDrafts,
 ) -> Option<RwSignal<String>> {
@@ -32,7 +32,7 @@ pub(crate) fn active_agent_draft(
     agent_drafts.get(index).copied()
 }
 
-pub(crate) fn active_terminal_sender(
+pub fn active_terminal_sender(
     workspace: RwSignal<Workspace>,
     sessions: RwSignal<Registry>,
 ) -> Option<crossbeam_channel::Sender<TerminalCommand>> {
@@ -40,13 +40,13 @@ pub(crate) fn active_terminal_sender(
     sessions.with_untracked(|registry| registry.terminal_sender(session_id))
 }
 
-pub(crate) fn trace_ime(message: &str) {
+pub fn trace_ime(message: &str) {
     if std::env::var_os("HORIZON_IME_TRACE").is_some() {
         eprintln!("horizon ime: {message}");
     }
 }
 
-pub(crate) fn workspace_view(
+pub fn workspace_view(
     workspace: RwSignal<Workspace>,
     frames: RwSignal<Frames>,
     sessions: RwSignal<Registry>,

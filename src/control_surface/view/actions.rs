@@ -1,15 +1,15 @@
 use std::path::PathBuf;
 
+use crate::agent_config::AgentConfig;
+use crate::app::commands::{execute_command, request_active_pane_focus, PaneFocusRequests};
+use crate::commands::clamp_palette_selection;
+use crate::control_surface::{overview_items, palette_items, OverviewItem, PaletteItem};
+use crate::session::Frames;
+use crate::session::Registry;
+use crate::workspace::Workspace;
 use floem::prelude::*;
-use horizon::agent_config::AgentConfig;
-use horizon::app::commands::{execute_command, request_active_pane_focus, PaneFocusRequests};
-use horizon::commands::clamp_palette_selection;
-use horizon::control_surface::{overview_items, palette_items, OverviewItem, PaletteItem};
-use horizon::session::Frames;
-use horizon::session::Registry;
-use horizon::workspace::Workspace;
 
-pub(crate) fn open_palette(
+pub fn open_palette(
     palette_open: RwSignal<bool>,
     palette_query: RwSignal<String>,
     palette_selection: RwSignal<usize>,

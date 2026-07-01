@@ -1,5 +1,5 @@
-use horizon::agent::contract::{Message, MessageRole, SessionState};
-use horizon::agent::frame::{AgentFrame, AgentFrameItem};
+use crate::agent::contract::{Message, MessageRole, SessionState};
+use crate::agent::frame::{AgentFrame, AgentFrameItem};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) struct TranscriptBlock {

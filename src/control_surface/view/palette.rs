@@ -1,19 +1,19 @@
 use std::path::PathBuf;
 
+use crate::agent_config::AgentConfig;
+use crate::app::commands::PaneFocusRequests;
+use crate::control_surface::{palette_items, palette_visible_start, ControlMode};
+use crate::session::Frames;
+use crate::session::Registry;
+use crate::workspace::Workspace;
 use floem::event::{Event, EventListener, EventPropagation};
 use floem::prelude::*;
-use horizon::agent_config::AgentConfig;
-use horizon::app::commands::PaneFocusRequests;
-use horizon::control_surface::{palette_items, palette_visible_start, ControlMode};
-use horizon::session::Frames;
-use horizon::session::Registry;
-use horizon::workspace::Workspace;
 
 use super::actions::execute_palette_selection;
 use super::chrome::control_mode_tabs;
 use super::input::handle_control_key;
 
-pub(crate) fn command_palette(
+pub fn command_palette(
     workspace: RwSignal<Workspace>,
     frames: RwSignal<Frames>,
     sessions: RwSignal<Registry>,

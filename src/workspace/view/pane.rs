@@ -1,5 +1,17 @@
 use std::path::PathBuf;
 
+use crate::agent::contract::Command;
+use crate::agent::frame::AgentFrame;
+use crate::agent_config::AgentConfig;
+use crate::app::commands::{close_visible_pane, PaneFocusRequests};
+use crate::control_surface::ControlMode;
+use crate::input::{
+    is_palette_open_key, is_terminal_copy_key, is_terminal_paste_key, terminal_input_from_key,
+    terminal_key_from_key, termwiz_modifiers,
+};
+use crate::session::{Frames, Registry};
+use crate::terminal::{TerminalCommand, TerminalFrame};
+use crate::workspace::{PaneKind, Workspace};
 use floem::prelude::*;
 use floem::{
     action::set_ime_allowed,
@@ -8,21 +20,9 @@ use floem::{
     peniko::kurbo::{Point, Size},
     Clipboard,
 };
-use horizon::agent::contract::Command;
-use horizon::agent::frame::AgentFrame;
-use horizon::agent_config::AgentConfig;
-use horizon::app::commands::{close_visible_pane, PaneFocusRequests};
-use horizon::control_surface::ControlMode;
-use horizon::input::{
-    is_palette_open_key, is_terminal_copy_key, is_terminal_paste_key, terminal_input_from_key,
-    terminal_key_from_key, termwiz_modifiers,
-};
-use horizon::session::{Frames, Registry};
-use horizon::terminal::{TerminalCommand, TerminalFrame};
-use horizon::workspace::{PaneKind, Workspace};
 
-use crate::agent_view;
-use crate::control_surface_view::{handle_control_key, open_palette};
+use crate::agent::view as agent_view;
+use crate::control_surface::view::{handle_control_key, open_palette};
 
 use super::agent_controls::{agent_approval_actions, agent_composer, handle_agent_key};
 use super::chrome::pane_header;

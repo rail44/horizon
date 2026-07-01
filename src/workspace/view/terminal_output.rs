@@ -1,8 +1,8 @@
+use crate::terminal::{TerminalCommand, TerminalFrame};
 use floem::peniko::kurbo::{Point, Size};
 use floem::prelude::*;
-use horizon::terminal::{TerminalCommand, TerminalFrame};
 
-use crate::terminal_view;
+use crate::terminal::view as terminal_view;
 
 pub(super) fn terminal_output(
     output: impl Fn() -> TerminalFrame + Copy + 'static,

@@ -5,6 +5,7 @@ pub mod persistence;
 pub mod policy;
 pub mod providers;
 pub mod tools;
+pub mod view;
 
 #[cfg(test)]
 mod tests {

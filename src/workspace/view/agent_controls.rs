@@ -1,14 +1,14 @@
+use crate::agent::contract::{Command, ToolCallId};
+use crate::fonts::HORIZON_FONT_FAMILY;
+use crate::input::{
+    agent_draft_action, is_terminal_paste_key, pop_last_grapheme_approx, AgentDraftAction,
+};
 use floem::prelude::*;
 use floem::{
     action::set_ime_cursor_area,
     keyboard::KeyEvent,
     peniko::kurbo::{Point, Size},
     Clipboard,
-};
-use horizon::agent::contract::{Command, ToolCallId};
-use horizon::fonts::HORIZON_FONT_FAMILY;
-use horizon::input::{
-    agent_draft_action, is_terminal_paste_key, pop_last_grapheme_approx, AgentDraftAction,
 };
 
 pub(super) fn agent_composer(

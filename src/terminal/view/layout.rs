@@ -1,8 +1,8 @@
+use crate::terminal::TerminalFrame;
 use floem::{
     peniko::Color,
     text::{Attrs, AttrsList, FamilyOwned, TextLayout},
 };
-use horizon::terminal::TerminalFrame;
 use unicode_width::UnicodeWidthChar;
 
 use super::metrics::terminal_font_family;
@@ -49,7 +49,7 @@ pub(super) fn build_line_layouts(frame: &TerminalFrame) -> Vec<Vec<CellLayout>> 
 }
 
 pub(super) fn build_span_cells(
-    span: &horizon::terminal::TerminalSpan,
+    span: &crate::terminal::TerminalSpan,
     family: &[FamilyOwned],
 ) -> Vec<CellLayout> {
     if span.text.is_empty() {
