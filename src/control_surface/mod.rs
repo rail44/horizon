@@ -1,12 +1,10 @@
 mod query;
 mod types;
 pub mod view;
-mod visibility;
 
 pub use types::{
     ControlMode, OverviewItem, PaletteItem, OVERVIEW_VISIBLE_ROWS, PALETTE_VISIBLE_ROWS,
 };
-pub use visibility::{overview_visible_start, palette_visible_start};
 
 use crate::commands::{command_entries, filter_command_entries, CommandState};
 use crate::control_surface::query::{normalize_palette_query, palette_matches, session_kind_label};
@@ -249,27 +247,5 @@ mod tests {
                 tab_active: true,
             } if title == "Terminal #2"
         ));
-    }
-
-    #[test]
-    fn overview_visible_start_keeps_selection_in_rendered_rows() {
-        assert_eq!(overview_visible_start(0, 12), 0);
-        assert_eq!(overview_visible_start(7, 12), 0);
-        assert_eq!(overview_visible_start(8, 12), 1);
-        assert_eq!(overview_visible_start(11, 12), 4);
-    }
-
-    #[test]
-    fn palette_visible_start_keeps_selection_in_rendered_rows() {
-        assert_eq!(palette_visible_start(0, 10), 0);
-        assert_eq!(palette_visible_start(5, 10), 0);
-        assert_eq!(palette_visible_start(6, 10), 1);
-        assert_eq!(palette_visible_start(9, 10), 4);
-    }
-
-    #[test]
-    fn palette_visible_start_handles_short_lists() {
-        assert_eq!(palette_visible_start(0, 0), 0);
-        assert_eq!(palette_visible_start(3, 4), 0);
     }
 }

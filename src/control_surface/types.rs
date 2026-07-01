@@ -15,7 +15,7 @@ pub enum ControlMode {
     Workspace,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum PaletteItem {
     Command(CommandEntry),
     DetachedSession {
@@ -32,7 +32,7 @@ pub enum PaletteItem {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum OverviewItem {
     Tab {
         index: usize,
