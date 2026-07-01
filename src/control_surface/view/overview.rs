@@ -1,12 +1,22 @@
-use crate::control_surface::{overview_items, overview_visible_start, ControlMode};
+use crate::control_surface::{overview_items, ControlMode, OVERVIEW_VISIBLE_ROWS};
+use crate::ui::list_row::{list_row, ListRow, ListRowStyle};
+use crate::ui::selectable_list::selectable_list;
 use crate::ui::theme;
 use crate::workspace::Workspace;
 use floem::event::{Event, EventListener, EventPropagation};
 use floem::prelude::*;
+use floem::reactive::create_memo;
 
 use super::actions::execute_overview_selection;
 use super::chrome::control_mode_tabs;
 use super::input::handle_workspace_control_key;
+
+const OVERVIEW_ROW_HEIGHT: f64 = 52.0;
+const OVERVIEW_ROW_STYLE: ListRowStyle = ListRowStyle {
+    badge_width: 86.0,
+    row_height: OVERVIEW_ROW_HEIGHT,
+    padding_horiz: 14.0,
+};
 
 pub fn workspace_overview(
     workspace: RwSignal<Workspace>,
@@ -15,6 +25,37 @@ pub fn workspace_overview(
     overview_selection: RwSignal<usize>,
     palette_focus_request: RwSignal<u64>,
 ) -> impl IntoView {
+    let items = create_memo(move |_| workspace.with(|ws| overview_items(ws)));
+
+    let list = selectable_list(
+        move || items.with(|items| items.len()),
+        move || overview_selection.get(),
+        move |index| {
+            let row = move || {
+                items.with(|items| {
+                    items.get(index).map(|item| ListRow {
+                        badge: item.kind_label(),
+                        badge_color: item.kind_color(),
+                        title: item.title(),
+                        description: item.description(),
+                        enabled: true,
+                    })
+                })
+            };
+
+            list_row(
+                row,
+                move || overview_selection.get() == index,
+                OVERVIEW_ROW_STYLE,
+                move || {
+                    overview_selection.set(index);
+                    execute_overview_selection(workspace, palette_open, overview_selection);
+                },
+            )
+        },
+        OVERVIEW_VISIBLE_ROWS as f64 * OVERVIEW_ROW_HEIGHT,
+    );
+
     container(
         v_stack((
             control_mode_tabs(control_mode),
@@ -41,14 +82,7 @@ pub fn workspace_overview(
                     .gap(4)
                     .background(theme::surface_raised())
             }),
-            overview_row(workspace, palette_open, overview_selection, 0),
-            overview_row(workspace, palette_open, overview_selection, 1),
-            overview_row(workspace, palette_open, overview_selection, 2),
-            overview_row(workspace, palette_open, overview_selection, 3),
-            overview_row(workspace, palette_open, overview_selection, 4),
-            overview_row(workspace, palette_open, overview_selection, 5),
-            overview_row(workspace, palette_open, overview_selection, 6),
-            overview_row(workspace, palette_open, overview_selection, 7),
+            list,
         ))
         .style(|s| s.width_full()),
     )
@@ -84,80 +118,5 @@ pub fn workspace_overview(
             .border(1.0)
             .border_color(theme::accent())
             .background(theme::surface_base())
-    })
-}
-
-fn overview_row(
-    workspace: RwSignal<Workspace>,
-    palette_open: RwSignal<bool>,
-    overview_selection: RwSignal<usize>,
-    index: usize,
-) -> impl IntoView {
-    let item = move || {
-        workspace.with(|ws| {
-            let items = overview_items(ws);
-            let start = overview_visible_start(overview_selection.get(), items.len());
-            items.get(start + index).cloned()
-        })
-    };
-    let item_index = move || {
-        workspace.with(|ws| {
-            let item_count = overview_items(ws).len();
-            overview_visible_start(overview_selection.get(), item_count) + index
-        })
-    };
-    let selected = move || overview_selection.get() == item_index();
-
-    h_stack((
-        label(move || item().map(|item| item.kind_label()).unwrap_or_default()).style(move |s| {
-            let Some(item) = item() else {
-                return s.hide();
-            };
-
-            s.width(86)
-                .height(22)
-                .items_center()
-                .justify_center()
-                .font_size(10)
-                .border(1.0)
-                .border_color(item.kind_color())
-                .color(item.kind_color())
-        }),
-        v_stack((
-            label(move || item().map(|item| item.title()).unwrap_or_default())
-                .style(|s| s.width_full().font_size(13).color(theme::text_primary())),
-            label(move || item().map(|item| item.description()).unwrap_or_default())
-                .style(|s| s.width_full().font_size(11).color(theme::text_muted())),
-        ))
-        .style(|s| {
-            s.flex()
-                .flex_col()
-                .min_width(0.0)
-                .flex_basis(0.0)
-                .flex_grow(1.0)
-        }),
-    ))
-    .on_click_stop(move |_| {
-        overview_selection.set(item_index());
-        execute_overview_selection(workspace, palette_open, overview_selection);
-    })
-    .style(move |s| {
-        let Some(_) = item() else {
-            return s.hide();
-        };
-
-        let background = if selected() {
-            theme::surface_selected()
-        } else {
-            theme::surface_base()
-        };
-
-        s.width_full()
-            .height(52)
-            .items_center()
-            .gap(10)
-            .padding_horiz(14)
-            .padding_vert(6)
-            .background(background)
     })
 }

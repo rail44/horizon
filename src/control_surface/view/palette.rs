@@ -2,18 +2,29 @@ use std::path::PathBuf;
 
 use crate::agent_config::AgentConfig;
 use crate::app::commands::PaneFocusRequests;
-use crate::control_surface::{palette_items, palette_visible_start, ControlMode};
+use crate::control_surface::{palette_items, ControlMode, PALETTE_VISIBLE_ROWS};
 use crate::session::Frames;
 use crate::session::Registry;
+use crate::ui::list_row::{list_row, ListRow, ListRowStyle};
+use crate::ui::selectable_list::selectable_list;
 use crate::ui::theme;
 use crate::workspace::Workspace;
 use floem::event::{Event, EventListener, EventPropagation};
 use floem::prelude::*;
+use floem::reactive::create_memo;
 
 use super::actions::execute_palette_selection;
 use super::chrome::control_mode_tabs;
 use super::input::handle_control_key;
 
+const PALETTE_ROW_HEIGHT: f64 = 48.0;
+const PALETTE_ROW_STYLE: ListRowStyle = ListRowStyle {
+    badge_width: 72.0,
+    row_height: PALETTE_ROW_HEIGHT,
+    padding_horiz: 12.0,
+};
+
+#[allow(clippy::too_many_arguments)]
 pub fn command_palette(
     workspace: RwSignal<Workspace>,
     frames: RwSignal<Frames>,
@@ -32,6 +43,57 @@ pub fn command_palette(
 ) -> impl IntoView {
     let terminal_dump_for_key = terminal_dump.clone();
     let clipboard_dump_for_key = clipboard_dump.clone();
+    let agent_config_for_key = agent_config.clone();
+
+    let items = create_memo(move |_| {
+        let query = palette_query.get();
+        workspace.with(|ws| palette_items(ws, &query))
+    });
+
+    let list = selectable_list(
+        move || items.with(|items| items.len()),
+        move || palette_selection.get(),
+        move |index| {
+            let row = move || {
+                items.with(|items| {
+                    items.get(index).map(|item| ListRow {
+                        badge: item.kind_label(),
+                        badge_color: item.kind_color(),
+                        title: item.title(),
+                        description: item.description(),
+                        enabled: item.enabled(),
+                    })
+                })
+            };
+
+            let agent_config = agent_config.clone();
+            let terminal_dump = terminal_dump.clone();
+            let clipboard_dump = clipboard_dump.clone();
+
+            list_row(
+                row,
+                move || palette_selection.get() == index,
+                PALETTE_ROW_STYLE,
+                move || {
+                    palette_selection.set(index);
+                    execute_palette_selection(
+                        workspace,
+                        frames,
+                        sessions,
+                        palette_open,
+                        palette_query,
+                        palette_selection,
+                        pane_focus_requests,
+                        agent_state_status,
+                        agent_config.clone(),
+                        terminal_dump.clone(),
+                        clipboard_dump.clone(),
+                    );
+                },
+            )
+        },
+        PALETTE_VISIBLE_ROWS as f64 * PALETTE_ROW_HEIGHT,
+    );
 
     container(
         v_stack((
@@ -53,90 +115,7 @@ pub fn command_palette(
                     .color(theme::text_primary())
                     .background(theme::surface_raised())
             }),
-            palette_row(
-                workspace,
-                frames,
-                sessions,
-                palette_open,
-                palette_query,
-                palette_selection,
-                0,
-                pane_focus_requests,
-                agent_state_status,
-                agent_config.clone(),
-                terminal_dump.clone(),
-                clipboard_dump.clone(),
-            ),
-            palette_row(
-                workspace,
-                frames,
-                sessions,
-                palette_open,
-                palette_query,
-                palette_selection,
-                1,
-                pane_focus_requests,
-                agent_state_status,
-                agent_config.clone(),
-                terminal_dump.clone(),
-                clipboard_dump.clone(),
-            ),
-            palette_row(
-                workspace,
-                frames,
-                sessions,
-                palette_open,
-                palette_query,
-                palette_selection,
-                2,
-                pane_focus_requests,
-                agent_state_status,
-                agent_config.clone(),
-                terminal_dump.clone(),
-                clipboard_dump.clone(),
-            ),
-            palette_row(
-                workspace,
-                frames,
-                sessions,
-                palette_open,
-                palette_query,
-                palette_selection,
-                3,
-                pane_focus_requests,
-                agent_state_status,
-                agent_config.clone(),
-                terminal_dump.clone(),
-                clipboard_dump.clone(),
-            ),
-            palette_row(
-                workspace,
-                frames,
-                sessions,
-                palette_open,
-                palette_query,
-                palette_selection,
-                4,
-                pane_focus_requests,
-                agent_state_status,
-                agent_config.clone(),
-                terminal_dump.clone(),
-                clipboard_dump.clone(),
-            ),
-            palette_row(
-                workspace,
-                frames,
-                sessions,
-                palette_open,
-                palette_query,
-                palette_selection,
-                5,
-                pane_focus_requests,
-                agent_state_status,
-                agent_config.clone(),
-                terminal_dump,
-                clipboard_dump,
-            ),
+            list,
         ))
         .style(|s| s.width_full()),
     )
@@ -158,7 +137,7 @@ pub fn command_palette(
                 overview_selection,
                 pane_focus_requests,
                 agent_state_status,
-                agent_config.clone(),
+                agent_config_for_key.clone(),
                 terminal_dump_for_key.clone(),
                 clipboard_dump_for_key.clone(),
             ) {
@@ -181,108 +160,5 @@ pub fn command_palette(
             .border(1.0)
             .border_color(theme::accent())
             .background(theme::surface_base())
-    })
-}
-
-fn palette_row(
-    workspace: RwSignal<Workspace>,
-    frames: RwSignal<Frames>,
-    sessions: RwSignal<Registry>,
-    palette_open: RwSignal<bool>,
-    palette_query: RwSignal<String>,
-    palette_selection: RwSignal<usize>,
-    index: usize,
-    pane_focus_requests: PaneFocusRequests,
-    agent_state_status: RwSignal<Option<String>>,
-    agent_config: AgentConfig,
-    terminal_dump: Option<PathBuf>,
-    clipboard_dump: Option<PathBuf>,
-) -> impl IntoView {
-    let item = move || {
-        let query = palette_query.get();
-        workspace.with(|ws| {
-            let items = palette_items(ws, &query);
-            let start = palette_visible_start(palette_selection.get(), items.len());
-            items.get(start + index).cloned()
-        })
-    };
-    let item_index = move || {
-        let query = palette_query.get();
-        workspace.with(|ws| {
-            let item_count = palette_items(ws, &query).len();
-            palette_visible_start(palette_selection.get(), item_count) + index
-        })
-    };
-    let selected = move || palette_selection.get() == item_index();
-
-    h_stack((
-        label(move || item().map(|item| item.kind_label()).unwrap_or_default()).style(move |s| {
-            let Some(item) = item() else {
-                return s.hide();
-            };
-
-            s.width(72)
-                .height(22)
-                .items_center()
-                .justify_center()
-                .font_size(10)
-                .border(1.0)
-                .border_color(item.kind_color())
-                .color(item.kind_color())
-        }),
-        v_stack((
-            label(move || item().map(|item| item.title()).unwrap_or_default())
-                .style(|s| s.width_full().font_size(13).color(theme::text_primary())),
-            label(move || item().map(|item| item.description()).unwrap_or_default())
-                .style(|s| s.width_full().font_size(11).color(theme::text_muted())),
-        ))
-        .style(|s| {
-            s.flex()
-                .flex_col()
-                .min_width(0.0)
-                .flex_basis(0.0)
-                .flex_grow(1.0)
-        }),
-    ))
-    .on_click_stop(move |_| {
-        palette_selection.set(item_index());
-        execute_palette_selection(
-            workspace,
-            frames,
-            sessions,
-            palette_open,
-            palette_query,
-            palette_selection,
-            pane_focus_requests,
-            agent_state_status,
-            agent_config.clone(),
-            terminal_dump.clone(),
-            clipboard_dump.clone(),
-        );
-    })
-    .style(move |s| {
-        let Some(item) = item() else {
-            return s.hide();
-        };
-
-        let background = if selected() {
-            theme::surface_selected()
-        } else {
-            theme::surface_base()
-        };
-        let text_color = if item.enabled() {
-            theme::text_primary()
-        } else {
-            theme::text_subtle()
-        };
-
-        s.width_full()
-            .height(48)
-            .items_center()
-            .gap(10)
-            .padding_horiz(12)
-            .padding_vert(6)
-            .background(background)
-            .color(text_color)
     })
 }

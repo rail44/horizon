@@ -181,6 +181,13 @@ cross-domain `ui` module:
   rendering, scroll helpers, text primitives, or theme tokens;
 - `ui::theme` owns the first cross-domain visual tokens, currently shared
   colors for text, accent, surfaces, selection, and borders;
+- `ui::list_row` and `ui::selectable_list` are the first shared components: a
+  domain-neutral selectable row plus a scrolling list built on Floem's
+  `dyn_stack` and `scroll_to_view`. The overview and command palette both
+  render through them instead of hand-unrolling fixed rows and windowing the
+  viewport by hand;
+- prefer Floem's own list/scroll primitives when a view needs a scrollable,
+  selectable collection, rather than reimplementing viewport math in the view;
 - `app` remains the composition and runtime wiring layer, not the default home
   for reusable UI components.
 
