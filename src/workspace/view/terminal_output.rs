@@ -1,4 +1,5 @@
 use crate::terminal::{TerminalCommand, TerminalFrame};
+use crate::ui::style::StyleExt;
 use floem::peniko::kurbo::{Point, Size};
 use floem::prelude::*;
 
@@ -21,10 +22,6 @@ pub(super) fn terminal_output(
     )
     .on_move(move |origin| terminal_origin.set(origin))
     .style(move |s| {
-        if !visible() {
-            return s.hide();
-        }
-
         s.absolute()
             .inset_left(0.0)
             .inset_right(0.0)
@@ -36,5 +33,6 @@ pub(super) fn terminal_output(
             .min_height(0.0)
             .flex_basis(0.0)
             .flex_grow(1.0)
+            .shown(visible())
     })
 }

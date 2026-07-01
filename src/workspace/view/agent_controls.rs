@@ -3,6 +3,7 @@ use crate::fonts::HORIZON_FONT_FAMILY;
 use crate::input::{
     agent_draft_action, is_terminal_paste_key, pop_last_grapheme_approx, AgentDraftAction,
 };
+use crate::ui::style::StyleExt;
 use floem::prelude::*;
 use floem::{
     action::set_ime_cursor_area,
@@ -30,10 +31,6 @@ pub(super) fn agent_composer(
         }
     })
     .style(move |s| {
-        if !visible() {
-            return s.hide();
-        }
-
         let border = if active() {
             floem::peniko::Color::rgb8(132, 220, 198)
         } else {
@@ -59,6 +56,7 @@ pub(super) fn agent_composer(
             .background(floem::peniko::Color::rgb8(21, 24, 30))
             .border(1.0)
             .border_color(border)
+            .shown(visible())
     })
     .on_move(move |origin| {
         if active() && visible() {
@@ -95,10 +93,6 @@ pub(super) fn agent_approval_actions(
         ),
     ))
     .style(move |s| {
-        if !visible() || pending_approval().is_none() {
-            return s.hide();
-        }
-
         s.width_full()
             .height(30)
             .min_height(30)
@@ -106,6 +100,7 @@ pub(super) fn agent_approval_actions(
             .justify_end()
             .padding_horiz(8)
             .gap(8)
+            .shown(visible() && pending_approval().is_some())
     })
 }
 
@@ -124,10 +119,6 @@ fn agent_approval_button(
             }
         })
         .style(move |s| {
-            if !visible() || pending_approval().is_none() {
-                return s.hide();
-            }
-
             s.height(26)
                 .padding_horiz(12)
                 .items_center()
@@ -138,6 +129,7 @@ fn agent_approval_button(
                 .background(background)
                 .border(1.0)
                 .border_color(border)
+                .shown(visible() && pending_approval().is_some())
         })
 }
 

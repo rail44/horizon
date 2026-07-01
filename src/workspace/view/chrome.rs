@@ -1,3 +1,4 @@
+use crate::ui::style::StyleExt;
 use crate::ui::theme;
 use floem::prelude::*;
 
@@ -8,10 +9,6 @@ pub(super) fn chrome_close_button(
     label(|| "×".to_string())
         .on_click_stop(move |_| on_close())
         .style(move |s| {
-            if !visible() {
-                return s.hide();
-            }
-
             s.width(20)
                 .height(20)
                 .items_center()
@@ -21,6 +18,7 @@ pub(super) fn chrome_close_button(
                 .background(floem::peniko::Color::rgb8(35, 39, 48))
                 .border(1.0)
                 .border_color(floem::peniko::Color::rgb8(57, 64, 76))
+                .shown(visible())
         })
 }
 

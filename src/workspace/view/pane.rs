@@ -11,6 +11,7 @@ use crate::input::{
 };
 use crate::session::{Frames, Registry};
 use crate::terminal::{TerminalCommand, TerminalFrame};
+use crate::ui::style::StyleExt;
 use crate::ui::theme;
 use crate::workspace::{PaneKind, Workspace};
 use floem::prelude::*;
@@ -320,10 +321,6 @@ pub(super) fn pane_view(
         EventPropagation::Continue
     })
     .style(move |s| {
-        if !exists() {
-            return s.hide();
-        }
-
         let border = if active() {
             theme::accent()
         } else {
@@ -336,5 +333,6 @@ pub(super) fn pane_view(
             .background(theme::surface_panel())
             .border(1.0)
             .border_color(border)
+            .shown(exists())
     })
 }

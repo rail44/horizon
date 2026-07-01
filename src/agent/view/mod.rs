@@ -1,5 +1,6 @@
 use crate::agent::frame::AgentFrame;
 use crate::fonts::HORIZON_FONT_FAMILY;
+use crate::ui::style::StyleExt;
 use floem::event::{Event, EventListener, EventPropagation};
 use floem::peniko::{kurbo::Point, Color};
 use floem::prelude::*;
@@ -48,15 +49,12 @@ pub fn agent_frame_view(
         })
         .scroll_style(|s| s.shrink_to_fit().overflow_clip(true))
         .style(move |s| {
-            if !visible() {
-                return s.hide();
-            }
-
             s.width_full()
                 .flex_basis(0.0)
                 .flex_grow(1.0)
                 .min_height(0.0)
                 .background(Color::rgb8(24, 27, 32))
+                .shown(visible())
         })
         .on_event(EventListener::PointerWheel, move |event| {
             if let Event::PointerWheel(pointer) = event {
@@ -94,11 +92,10 @@ fn transcript_block_view(
 
     h_stack((
         label(|| String::new()).style(move |s| {
-            if tone == TranscriptTone::User {
-                s.flex_basis(0.0).flex_grow(1.0).min_width(40.0)
-            } else {
-                s.hide()
-            }
+            s.flex_basis(0.0)
+                .flex_grow(1.0)
+                .min_width(40.0)
+                .shown(tone == TranscriptTone::User)
         }),
         v_stack((
             label(move || block_label(&block_for_label, expanded.get()))
@@ -108,10 +105,6 @@ fn transcript_block_view(
                     }
                 })
                 .style(move |s| {
-                    if !shows_label(tone) {
-                        return s.hide();
-                    }
-
                     let (background, border) = block_colors(tone);
                     let s = s
                         .width_full()
@@ -127,11 +120,13 @@ fn transcript_block_view(
                         .border(1.0)
                         .border_color(border);
 
-                    if expanded.get() && tone == TranscriptTone::Thinking {
+                    let s = if expanded.get() && tone == TranscriptTone::Thinking {
                         s.border_bottom(0.0)
                     } else {
                         s
-                    }
+                    };
+
+                    s.shown(shows_label(tone))
                 }),
             markdown_block_view(block.clone(), expanded, frame),
         ))
@@ -176,15 +171,12 @@ fn markdown_block_view(
         move |line| markdown_line_view(line, tone),
     )
     .style(move |s| {
-        if tone == TranscriptTone::Thinking && !expanded.get() {
-            return s.hide();
-        }
-
         s.width_full()
             .flex_col()
             .gap(3)
             .padding_horiz(14)
             .padding_vert(10)
+            .shown(tone != TranscriptTone::Thinking || expanded.get())
     })
 }
 

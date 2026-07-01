@@ -1,5 +1,6 @@
 use crate::app::commands::close_tab;
 use crate::session::Registry;
+use crate::ui::style::StyleExt;
 use crate::ui::theme;
 use crate::workspace::Workspace;
 use floem::prelude::*;
@@ -68,10 +69,6 @@ fn tab_chip(
         });
     })
     .style(move |s| {
-        if !exists() {
-            return s.hide();
-        }
-
         let background = if active() {
             theme::surface_selected()
         } else {
@@ -91,5 +88,6 @@ fn tab_chip(
             .background(background)
             .border(1.0)
             .border_color(border)
+            .shown(exists())
     })
 }

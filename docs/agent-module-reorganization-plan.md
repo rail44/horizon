@@ -188,6 +188,10 @@ cross-domain `ui` module:
   viewport by hand;
 - prefer Floem's own list/scroll primitives when a view needs a scrollable,
   selectable collection, rather than reimplementing viewport math in the view;
+- `ui::style` collects cross-domain `Style` extensions; `StyleExt::shown`
+  replaces the `if !visible { return s.hide(); }` guard repeated across agent,
+  workspace, and control-surface views, expressing visibility as one step in
+  the normal style chain;
 - `app` remains the composition and runtime wiring layer, not the default home
   for reusable UI components.
 

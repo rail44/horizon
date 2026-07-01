@@ -1,6 +1,7 @@
 use crate::control_surface::{overview_items, ControlMode, OVERVIEW_VISIBLE_ROWS};
 use crate::ui::list_row::{list_row, ListRow, ListRowStyle};
 use crate::ui::selectable_list::selectable_list;
+use crate::ui::style::StyleExt;
 use crate::ui::theme;
 use crate::workspace::Workspace;
 use floem::event::{Event, EventListener, EventPropagation};
@@ -106,10 +107,6 @@ pub fn workspace_overview(
         EventPropagation::Stop
     })
     .style(move |s| {
-        if !palette_open.get() || control_mode.get() != ControlMode::Workspace {
-            return s.hide();
-        }
-
         s.absolute()
             .inset_top(74.0)
             .inset_left(240.0)
@@ -118,5 +115,6 @@ pub fn workspace_overview(
             .border(1.0)
             .border_color(theme::accent())
             .background(theme::surface_base())
+            .shown(palette_open.get() && control_mode.get() == ControlMode::Workspace)
     })
 }
