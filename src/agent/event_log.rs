@@ -1,24 +1,20 @@
-use std::{
-    fs::{File, OpenOptions},
-    io::{BufWriter, Read, Write},
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-    thread,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{fs::File, io::Read, path::Path};
 
 use anyhow::{Context, Result};
-use crossbeam_channel::{unbounded, Receiver, Sender};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::{
-    agent::{
-        agent_event_kind, AgentEvent, AgentMessageRole, AgentProviderEvent, AgentProviderId,
-        AgentSessionState,
-    },
+    agent::{AgentEvent, AgentProviderId},
     workspace::SessionId,
 };
+
+mod appender;
+mod turn;
+mod writer;
+
+pub use appender::AgentEventLogAppender;
+pub use turn::AgentTurnTracker;
+pub use writer::AgentEventLogWriterHandle;
 
 pub const AGENT_EVENT_LOG_SCHEMA: &str = "horizon.agent.event_log";
 pub const AGENT_EVENT_LOG_VERSION: u32 = 1;
@@ -43,96 +39,6 @@ pub struct AgentEventLogReadReport {
     pub records: Vec<AgentEventLogRecord>,
     pub corrupt_line_count: usize,
     pub ignored_partial_line: bool,
-}
-
-#[derive(Clone)]
-pub struct AgentEventLogWriterHandle {
-    tx: Sender<AgentEventLogWriterCommand>,
-    next_sequence: Arc<Mutex<u64>>,
-}
-
-impl AgentEventLogWriterHandle {
-    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let path = path.as_ref();
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent).with_context(|| {
-                    format!("create agent event log directory {}", parent.display())
-                })?;
-            }
-        }
-
-        let next_sequence = read_agent_event_log(path)?
-            .records
-            .iter()
-            .map(|record| record.sequence)
-            .max()
-            .map(|sequence| sequence + 1)
-            .unwrap_or(0);
-        let (tx, rx) = unbounded();
-        let writer_path = path.to_path_buf();
-        thread::spawn(move || run_writer(writer_path, rx));
-
-        Ok(Self {
-            tx,
-            next_sequence: Arc::new(Mutex::new(next_sequence)),
-        })
-    }
-
-    pub fn append(&self, mut record: AgentEventLogRecord) -> Result<()> {
-        {
-            let mut next_sequence = self
-                .next_sequence
-                .lock()
-                .map_err(|_| anyhow::anyhow!("agent event log sequence lock poisoned"))?;
-            record.sequence = *next_sequence;
-            *next_sequence += 1;
-        }
-        self.tx
-            .send(AgentEventLogWriterCommand::Append(record))
-            .context("enqueue agent event log record")
-    }
-
-    #[cfg(test)]
-    pub fn flush_for_tests(&self) -> Result<()> {
-        let (tx, rx) = crossbeam_channel::bounded(1);
-        self.tx
-            .send(AgentEventLogWriterCommand::Flush(tx))
-            .context("enqueue agent event log flush")?;
-        rx.recv().context("wait for agent event log flush")?
-    }
-}
-
-enum AgentEventLogWriterCommand {
-    Append(AgentEventLogRecord),
-    #[cfg(test)]
-    Flush(Sender<Result<()>>),
-}
-
-fn run_writer(path: PathBuf, rx: Receiver<AgentEventLogWriterCommand>) {
-    let Ok(file) = OpenOptions::new().create(true).append(true).open(&path) else {
-        return;
-    };
-    let mut writer = BufWriter::new(file);
-
-    while let Ok(command) = rx.recv() {
-        match command {
-            AgentEventLogWriterCommand::Append(record) => {
-                if serde_json::to_writer(&mut writer, &record).is_ok() {
-                    let _ = writer.write_all(b"\n");
-                }
-            }
-            #[cfg(test)]
-            AgentEventLogWriterCommand::Flush(reply) => {
-                let result = writer
-                    .flush()
-                    .with_context(|| format!("flush agent event log {}", path.display()));
-                let _ = reply.send(result);
-            }
-        }
-    }
-
-    let _ = writer.flush();
 }
 
 pub fn read_agent_event_log(path: impl AsRef<Path>) -> Result<AgentEventLogReadReport> {
@@ -178,98 +84,13 @@ pub fn read_agent_event_log(path: impl AsRef<Path>) -> Result<AgentEventLogReadR
     })
 }
 
-pub struct AgentEventLogAppender {
-    writer: AgentEventLogWriterHandle,
-    session_id: SessionId,
-    provider_id: Option<AgentProviderId>,
-    turn_tracker: AgentTurnTracker,
-}
-
-impl AgentEventLogAppender {
-    pub fn new(
-        writer: AgentEventLogWriterHandle,
-        session_id: SessionId,
-        provider_id: Option<AgentProviderId>,
-    ) -> Self {
-        Self {
-            writer,
-            session_id,
-            provider_id,
-            turn_tracker: AgentTurnTracker::new(),
-        }
-    }
-
-    pub fn append_provider_events(&mut self, events: Vec<AgentProviderEvent>) -> Result<()> {
-        for event in events {
-            let turn_id = self.turn_tracker.turn_id_for_event(&event.event);
-            let record = AgentEventLogRecord {
-                schema: AGENT_EVENT_LOG_SCHEMA.to_string(),
-                version: AGENT_EVENT_LOG_VERSION,
-                event_id: Uuid::new_v4().to_string(),
-                sequence: 0,
-                session_id: self.session_id,
-                turn_id,
-                provider_id: self.provider_id.clone(),
-                event_kind: agent_event_kind(&event.event).to_string(),
-                event: event.event,
-                provider_payload: event.provider_payload,
-                created_at_unix_ms: unix_time_ms(),
-            };
-            self.writer.append(record)?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct AgentTurnTracker {
-    current_turn_id: Option<String>,
-}
-
-impl AgentTurnTracker {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn turn_id_for_event(&mut self, event: &AgentEvent) -> Option<String> {
-        if matches!(
-            event,
-            AgentEvent::MessageCommitted(message) if message.role == AgentMessageRole::User
-        ) {
-            self.current_turn_id = Some(Uuid::new_v4().to_string());
-        }
-
-        let turn_id = self.current_turn_id.clone();
-
-        if matches!(
-            event,
-            AgentEvent::StateChanged(
-                AgentSessionState::WaitingForUser
-                    | AgentSessionState::WaitingForApproval
-                    | AgentSessionState::Failed
-                    | AgentSessionState::Terminated
-            )
-        ) {
-            self.current_turn_id = None;
-        }
-
-        turn_id
-    }
-}
-
-fn unix_time_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::{AgentMessage, AgentMessageDelta, AgentSessionState};
+    use crate::agent::{
+        AgentMessage, AgentMessageDelta, AgentMessageRole, AgentProviderEvent, AgentSessionState,
+    };
+    use uuid::Uuid;
 
     #[test]
     fn writes_and_reads_jsonl_records() {
