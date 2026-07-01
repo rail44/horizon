@@ -7,12 +7,12 @@ use floem::{
     Application,
 };
 use horizon::agent_config::AgentConfig;
-use horizon::app_commands::{active_agent, active_text_input_pane};
-use horizon::app_runtime::{spawn_agent_session, spawn_terminal_session};
+use horizon::app::commands::{active_agent, active_text_input_pane};
+use horizon::app::runtime::{spawn_agent_session, spawn_terminal_session};
 use horizon::control_surface::ControlMode;
 use horizon::input::is_palette_open_key;
-use horizon::session::SessionRegistry;
-use horizon::session_frames::SessionFrames;
+use horizon::session::Frames;
+use horizon::session::Registry;
 use horizon::terminal::TerminalCommand;
 use horizon::workspace::Workspace;
 use std::path::PathBuf;
@@ -46,8 +46,8 @@ fn main() {
 
 fn app_view() -> impl IntoView {
     let workspace = RwSignal::new(Workspace::mvp());
-    let frames = RwSignal::new(SessionFrames::default());
-    let sessions = RwSignal::new(SessionRegistry::default());
+    let frames = RwSignal::new(Frames::default());
+    let sessions = RwSignal::new(Registry::default());
     let ime_composing = RwSignal::new(false);
     let ime_preedit = RwSignal::new(None::<String>);
     let ime_cursor_area = RwSignal::new((Point::new(12.0, 64.0), Size::new(8.0, 18.0)));

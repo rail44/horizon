@@ -1,11 +1,10 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
-pub struct PaneId(Uuid);
+use crate::session::SessionId;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
-pub struct SessionId(Uuid);
+pub struct PaneId(Uuid);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 pub struct TabId(Uuid);
@@ -101,12 +100,6 @@ pub enum SessionKind {
 
 impl PaneId {
     pub(super) fn new() -> Self {
-        Self(Uuid::new_v4())
-    }
-}
-
-impl SessionId {
-    pub fn new() -> Self {
         Self(Uuid::new_v4())
     }
 }

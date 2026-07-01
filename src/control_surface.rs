@@ -118,7 +118,8 @@ pub fn palette_items(workspace: &Workspace, query: &str) -> Vec<PaletteItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::{PaneKind, SessionId, SessionKind};
+    use crate::session::SessionId;
+    use crate::workspace::{PaneKind, SessionKind};
 
     #[test]
     fn command_state_reflects_workspace_counts() {

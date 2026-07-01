@@ -1,7 +1,7 @@
 use floem::event::{Event, EventListener, EventPropagation};
 use floem::peniko::{kurbo::Point, Color};
 use floem::prelude::*;
-use horizon::agent::AgentFrame;
+use horizon::agent::frame::AgentFrame;
 use horizon::fonts::HORIZON_FONT_FAMILY;
 
 mod labels;
@@ -218,17 +218,16 @@ fn markdown_line_view(line: MarkdownLine, tone: TranscriptTone) -> impl IntoView
 #[cfg(test)]
 mod tests {
     use super::*;
-    use horizon::agent::{
-        AgentFrameItem, AgentMessage, AgentMessageDelta, AgentMessageRole, AgentSessionState,
-    };
+    use horizon::agent::contract::{Message, MessageDelta, MessageRole, SessionState};
+    use horizon::agent::frame::AgentFrameItem;
 
     #[test]
     fn transcript_blocks_keep_full_assistant_text() {
         let text = "long assistant response ".repeat(80);
         let frame = AgentFrame {
             state: None,
-            items: vec![AgentFrameItem::Message(AgentMessage {
-                role: AgentMessageRole::Assistant,
+            items: vec![AgentFrameItem::Message(Message {
+                role: MessageRole::Assistant,
                 text: text.clone(),
             })],
         };
@@ -243,7 +242,7 @@ mod tests {
     #[test]
     fn transcript_blocks_append_ephemeral_status() {
         let frame = AgentFrame {
-            state: Some(AgentSessionState::Running),
+            state: Some(SessionState::Running),
             items: Vec::new(),
         };
 
@@ -257,9 +256,9 @@ mod tests {
     #[test]
     fn transcript_blocks_hide_reply_status_after_stream_starts() {
         let frame = AgentFrame {
-            state: Some(AgentSessionState::Running),
-            items: vec![AgentFrameItem::ReasoningDelta(AgentMessageDelta {
-                role: AgentMessageRole::Assistant,
+            state: Some(SessionState::Running),
+            items: vec![AgentFrameItem::ReasoningDelta(MessageDelta {
+                role: MessageRole::Assistant,
                 text: "thinking".to_string(),
             })],
         };

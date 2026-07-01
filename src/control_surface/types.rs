@@ -1,7 +1,8 @@
 use floem::peniko::Color;
 
 use crate::commands::CommandEntry;
-use crate::workspace::{PaneKind, PaneSummary, SessionId, SessionKind};
+use crate::session::SessionId;
+use crate::workspace::{PaneKind, PaneSummary, SessionKind};
 
 use super::query::{pane_kind_label, session_kind_label};
 

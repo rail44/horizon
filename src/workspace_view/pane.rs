@@ -8,16 +8,16 @@ use floem::{
     peniko::kurbo::{Point, Size},
     Clipboard,
 };
-use horizon::agent::{AgentCommand, AgentFrame};
+use horizon::agent::contract::Command;
+use horizon::agent::frame::AgentFrame;
 use horizon::agent_config::AgentConfig;
-use horizon::app_commands::{close_visible_pane, PaneFocusRequests};
+use horizon::app::commands::{close_visible_pane, PaneFocusRequests};
 use horizon::control_surface::ControlMode;
 use horizon::input::{
     is_palette_open_key, is_terminal_copy_key, is_terminal_paste_key, terminal_input_from_key,
     terminal_key_from_key, termwiz_modifiers,
 };
-use horizon::session::SessionRegistry;
-use horizon::session_frames::SessionFrames;
+use horizon::session::{Frames, Registry};
 use horizon::terminal::{TerminalCommand, TerminalFrame};
 use horizon::workspace::{PaneKind, Workspace};
 
@@ -31,7 +31,7 @@ use super::AgentDrafts;
 
 fn pane_terminal_sender(
     workspace: RwSignal<Workspace>,
-    sessions: RwSignal<SessionRegistry>,
+    sessions: RwSignal<Registry>,
     index: usize,
 ) -> Option<crossbeam_channel::Sender<TerminalCommand>> {
     let session_id = workspace.with_untracked(|ws| ws.visible_terminal_session_id(index))?;
@@ -40,17 +40,17 @@ fn pane_terminal_sender(
 
 fn pane_agent_sender(
     workspace: RwSignal<Workspace>,
-    sessions: RwSignal<SessionRegistry>,
+    sessions: RwSignal<Registry>,
     index: usize,
-) -> Option<crossbeam_channel::Sender<AgentCommand>> {
+) -> Option<crossbeam_channel::Sender<Command>> {
     let session_id = workspace.with_untracked(|ws| ws.visible_agent_session_id(index))?;
     sessions.with_untracked(|registry| registry.agent_sender(session_id))
 }
 
 pub(super) fn pane_view(
     workspace: RwSignal<Workspace>,
-    frames: RwSignal<SessionFrames>,
-    sessions: RwSignal<SessionRegistry>,
+    frames: RwSignal<Frames>,
+    sessions: RwSignal<Registry>,
     ime_composing: RwSignal<bool>,
     ime_preedit: RwSignal<Option<String>>,
     ime_cursor_area: RwSignal<(Point, Size)>,
@@ -135,12 +135,12 @@ pub(super) fn pane_view(
             pending_approval,
             move |call_id| {
                 if let Some(tx) = pane_agent_sender(workspace, sessions, index) {
-                    let _ = tx.send(AgentCommand::ApproveToolCall { call_id });
+                    let _ = tx.send(Command::ApproveToolCall { call_id });
                 }
             },
             move |call_id| {
                 if let Some(tx) = pane_agent_sender(workspace, sessions, index) {
-                    let _ = tx.send(AgentCommand::DenyToolCall {
+                    let _ = tx.send(Command::DenyToolCall {
                         call_id,
                         reason: Some("Denied by user".to_string()),
                     });

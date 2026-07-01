@@ -1,46 +1,42 @@
-pub mod duckdb_state;
-pub mod event_log;
+pub mod contract;
 pub mod frame;
-pub mod mock;
-pub mod provider;
-pub mod rig;
-pub mod runtime_state;
+pub mod live;
+pub mod persistence;
+pub mod policy;
+pub mod providers;
 pub mod tools;
-pub mod types;
-
-pub use frame::*;
-pub use mock::*;
-pub use provider::*;
-pub use runtime_state::*;
-pub use types::*;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::workspace::SessionId;
+    use crate::agent::{contract as agent, frame::*, policy::horizon_events_for_provider_event};
+    use crate::session::SessionId;
 
     #[test]
     fn mock_agent_emits_initial_session_events() {
-        let provider = MockAgentProvider::new();
-        let handle = provider.start_session(StartAgentSession {
-            session_id: SessionId::new(),
-            provider_id: provider.provider_id(),
-        });
+        let provider = crate::agent::providers::mock::MockProvider::new();
+        let handle = agent::Provider::start_session(
+            &provider,
+            agent::StartSession {
+                session_id: SessionId::new(),
+                provider_id: agent::Provider::provider_id(&provider),
+            },
+        );
 
         let first = handle.events().recv().expect("first event");
         assert_eq!(
             first.event,
-            AgentEvent::StateChanged(AgentSessionState::Created)
+            agent::Event::StateChanged(agent::SessionState::Created)
         );
         assert_eq!(first.provider_payload, None);
     }
 
     #[test]
     fn transcript_renderer_keeps_provider_neutral_messages() {
-        let transcript = render_agent_transcript(&[AgentEvent::MessageCommitted(AgentMessage {
-            role: AgentMessageRole::Assistant,
-            text: "ready".to_string(),
-        })]);
+        let transcript =
+            render_agent_transcript(&[agent::Event::MessageCommitted(agent::Message {
+                role: agent::MessageRole::Assistant,
+                text: "ready".to_string(),
+            })]);
 
         assert!(transcript.contains("assistant: ready"));
     }
@@ -48,18 +44,18 @@ mod tests {
     #[test]
     fn agent_frame_keeps_state_and_structured_messages() {
         let frame = agent_frame_from_events(&[
-            AgentEvent::StateChanged(AgentSessionState::Running),
-            AgentEvent::MessageCommitted(AgentMessage {
-                role: AgentMessageRole::Assistant,
+            agent::Event::StateChanged(agent::SessionState::Running),
+            agent::Event::MessageCommitted(agent::Message {
+                role: agent::MessageRole::Assistant,
                 text: "ready".to_string(),
             }),
         ]);
 
-        assert_eq!(frame.state, Some(AgentSessionState::Running));
+        assert_eq!(frame.state, Some(agent::SessionState::Running));
         assert_eq!(
             frame.items,
-            vec![AgentFrameItem::Message(AgentMessage {
-                role: AgentMessageRole::Assistant,
+            vec![AgentFrameItem::Message(agent::Message {
+                role: agent::MessageRole::Assistant,
                 text: "ready".to_string(),
             })]
         );
@@ -68,20 +64,20 @@ mod tests {
     #[test]
     fn agent_frame_coalesces_consecutive_reasoning_deltas() {
         let frame = agent_frame_from_events(&[
-            AgentEvent::ReasoningDelta(AgentMessageDelta {
-                role: AgentMessageRole::Assistant,
+            agent::Event::ReasoningDelta(agent::MessageDelta {
+                role: agent::MessageRole::Assistant,
                 text: "think ".to_string(),
             }),
-            AgentEvent::ReasoningDelta(AgentMessageDelta {
-                role: AgentMessageRole::Assistant,
+            agent::Event::ReasoningDelta(agent::MessageDelta {
+                role: agent::MessageRole::Assistant,
                 text: "more".to_string(),
             }),
         ]);
 
         assert_eq!(
             frame.items,
-            vec![AgentFrameItem::ReasoningDelta(AgentMessageDelta {
-                role: AgentMessageRole::Assistant,
+            vec![AgentFrameItem::ReasoningDelta(agent::MessageDelta {
+                role: agent::MessageRole::Assistant,
                 text: "think more".to_string(),
             })]
         );
@@ -90,20 +86,20 @@ mod tests {
     #[test]
     fn agent_frame_coalesces_consecutive_assistant_text_deltas() {
         let frame = agent_frame_from_events(&[
-            AgentEvent::AssistantTextDelta(AgentMessageDelta {
-                role: AgentMessageRole::Assistant,
+            agent::Event::AssistantTextDelta(agent::MessageDelta {
+                role: agent::MessageRole::Assistant,
                 text: "hello ".to_string(),
             }),
-            AgentEvent::AssistantTextDelta(AgentMessageDelta {
-                role: AgentMessageRole::Assistant,
+            agent::Event::AssistantTextDelta(agent::MessageDelta {
+                role: agent::MessageRole::Assistant,
                 text: "world".to_string(),
             }),
         ]);
 
         assert_eq!(
             frame.items,
-            vec![AgentFrameItem::AssistantTextDelta(AgentMessageDelta {
-                role: AgentMessageRole::Assistant,
+            vec![AgentFrameItem::AssistantTextDelta(agent::MessageDelta {
+                role: agent::MessageRole::Assistant,
                 text: "hello world".to_string(),
             })]
         );
@@ -112,24 +108,24 @@ mod tests {
     #[test]
     fn agent_frame_coalesces_interleaved_stream_deltas_within_turn() {
         let frame = agent_frame_from_events(&[
-            AgentEvent::MessageCommitted(AgentMessage {
-                role: AgentMessageRole::User,
+            agent::Event::MessageCommitted(agent::Message {
+                role: agent::MessageRole::User,
                 text: "question".to_string(),
             }),
-            AgentEvent::ReasoningDelta(AgentMessageDelta {
-                role: AgentMessageRole::Assistant,
+            agent::Event::ReasoningDelta(agent::MessageDelta {
+                role: agent::MessageRole::Assistant,
                 text: "think ".to_string(),
             }),
-            AgentEvent::AssistantTextDelta(AgentMessageDelta {
-                role: AgentMessageRole::Assistant,
+            agent::Event::AssistantTextDelta(agent::MessageDelta {
+                role: agent::MessageRole::Assistant,
                 text: "answer ".to_string(),
             }),
-            AgentEvent::ReasoningDelta(AgentMessageDelta {
-                role: AgentMessageRole::Assistant,
+            agent::Event::ReasoningDelta(agent::MessageDelta {
+                role: agent::MessageRole::Assistant,
                 text: "more".to_string(),
             }),
-            AgentEvent::AssistantTextDelta(AgentMessageDelta {
-                role: AgentMessageRole::Assistant,
+            agent::Event::AssistantTextDelta(agent::MessageDelta {
+                role: agent::MessageRole::Assistant,
                 text: "done".to_string(),
             }),
         ]);
@@ -137,16 +133,16 @@ mod tests {
         assert_eq!(
             frame.items,
             vec![
-                AgentFrameItem::Message(AgentMessage {
-                    role: AgentMessageRole::User,
+                AgentFrameItem::Message(agent::Message {
+                    role: agent::MessageRole::User,
                     text: "question".to_string(),
                 }),
-                AgentFrameItem::ReasoningDelta(AgentMessageDelta {
-                    role: AgentMessageRole::Assistant,
+                AgentFrameItem::ReasoningDelta(agent::MessageDelta {
+                    role: agent::MessageRole::Assistant,
                     text: "think more".to_string(),
                 }),
-                AgentFrameItem::AssistantTextDelta(AgentMessageDelta {
-                    role: AgentMessageRole::Assistant,
+                AgentFrameItem::AssistantTextDelta(agent::MessageDelta {
+                    role: agent::MessageRole::Assistant,
                     text: "answer done".to_string(),
                 }),
             ]
@@ -155,16 +151,16 @@ mod tests {
 
     #[test]
     fn runtime_state_store_accumulates_events_into_frame() {
-        let store = AgentRuntimeStateStore::new();
+        let store = crate::agent::live::LiveState::new();
         let frame = store.extend_events([
-            AgentEvent::StateChanged(AgentSessionState::Running),
-            AgentEvent::MessageCommitted(AgentMessage {
-                role: AgentMessageRole::Assistant,
+            agent::Event::StateChanged(agent::SessionState::Running),
+            agent::Event::MessageCommitted(agent::Message {
+                role: agent::MessageRole::Assistant,
                 text: "ready".to_string(),
             }),
         ]);
 
-        assert_eq!(frame.state, Some(AgentSessionState::Running));
+        assert_eq!(frame.state, Some(agent::SessionState::Running));
         assert_eq!(store.frame(), frame);
     }
 
@@ -175,23 +171,23 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         let session_id = SessionId::new();
-        let provider_id = AgentProviderId("builtin.agent.rig".to_string());
+        let provider_id = agent::ProviderId("builtin.agent.rig".to_string());
         let writer =
-            crate::agent::event_log::AgentEventLogWriterHandle::open(&path).expect("event log");
-        let store = AgentRuntimeStateStore::with_event_log(
+            crate::agent::persistence::event_log::WriterHandle::open(&path).expect("event log");
+        let store = crate::agent::live::LiveState::with_event_log(
             session_id,
             Some(provider_id.clone()),
             writer.clone(),
         );
 
         store.extend_provider_events([
-            AgentProviderEvent::from(AgentEvent::MessageCommitted(AgentMessage {
-                role: AgentMessageRole::User,
+            agent::ProviderEvent::from(agent::Event::MessageCommitted(agent::Message {
+                role: agent::MessageRole::User,
                 text: "hello".to_string(),
             })),
-            AgentProviderEvent::with_provider_payload(
-                AgentEvent::AssistantTextDelta(AgentMessageDelta {
-                    role: AgentMessageRole::Assistant,
+            agent::ProviderEvent::with_provider_payload(
+                agent::Event::AssistantTextDelta(agent::MessageDelta {
+                    role: agent::MessageRole::Assistant,
                     text: "hi".to_string(),
                 }),
                 serde_json::json!({ "delta": true }),
@@ -199,7 +195,7 @@ mod tests {
         ]);
         writer.flush_for_tests().expect("flush");
 
-        let report = crate::agent::event_log::read_agent_event_log(&path).expect("read log");
+        let report = crate::agent::persistence::event_log::read(&path).expect("read log");
         assert_eq!(report.records.len(), 2);
         assert_eq!(report.records[0].session_id, session_id);
         assert_eq!(report.records[0].provider_id, Some(provider_id));
@@ -217,11 +213,11 @@ mod tests {
 
     #[test]
     fn agent_frame_tracks_pending_approval_until_tool_finishes() {
-        let call_id = AgentToolCallId("call-1".to_string());
+        let call_id = agent::ToolCallId("call-1".to_string());
         let mut frame = AgentFrame::empty();
         frame
             .items
-            .push(AgentFrameItem::ApprovalRequested(AgentApprovalRequest {
+            .push(AgentFrameItem::ApprovalRequested(agent::ApprovalRequest {
                 call_id: call_id.clone(),
                 reason: "needs approval".to_string(),
             }));
@@ -230,7 +226,7 @@ mod tests {
 
         frame
             .items
-            .push(AgentFrameItem::ToolCallFinished(AgentToolCallResult {
+            .push(AgentFrameItem::ToolCallFinished(agent::ToolCallResult {
                 call_id,
                 output: serde_json::json!({ "ok": true }),
             }));
@@ -240,9 +236,9 @@ mod tests {
 
     #[test]
     fn horizon_policy_adds_approval_for_requested_tool() {
-        let call_id = AgentToolCallId("call-1".to_string());
-        let events = horizon_events_for_provider_event(&AgentEvent::ToolCallRequested(
-            AgentToolCallRequest {
+        let call_id = agent::ToolCallId("call-1".to_string());
+        let events = horizon_events_for_provider_event(&agent::Event::ToolCallRequested(
+            agent::ToolCallRequest {
                 call_id: call_id.clone(),
                 tool_id: "mock.approval_required".to_string(),
                 input: serde_json::json!({}),
@@ -251,28 +247,31 @@ mod tests {
 
         assert!(events.iter().any(|event| matches!(
             event,
-            AgentEvent::ApprovalRequested(request) if request.call_id == call_id
+            agent::Event::ApprovalRequested(request) if request.call_id == call_id
         )));
         assert!(events.iter().any(|event| {
             matches!(
                 event,
-                AgentEvent::StateChanged(AgentSessionState::WaitingForApproval)
+                agent::Event::StateChanged(agent::SessionState::WaitingForApproval)
             )
         }));
     }
 
     #[test]
     fn mock_agent_accepts_tool_call_result_command() {
-        let provider = MockAgentProvider::new();
-        let handle = provider.start_session(StartAgentSession {
-            session_id: SessionId::new(),
-            provider_id: provider.provider_id(),
-        });
+        let provider = crate::agent::providers::mock::MockProvider::new();
+        let handle = agent::Provider::start_session(
+            &provider,
+            agent::StartSession {
+                session_id: SessionId::new(),
+                provider_id: agent::Provider::provider_id(&provider),
+            },
+        );
         let tx = handle.sender();
         let rx = handle.events();
 
-        let _ = tx.send(AgentCommand::ToolCallResult(AgentToolCallResult {
-            call_id: AgentToolCallId("call-1".to_string()),
+        let _ = tx.send(agent::Command::ToolCallResult(agent::ToolCallResult {
+            call_id: agent::ToolCallId("call-1".to_string()),
             output: serde_json::json!({ "ok": true }),
         }));
 
@@ -282,8 +281,8 @@ mod tests {
                 .any(|provider_event| {
                     matches!(
                         provider_event.event,
-                        AgentEvent::MessageCommitted(AgentMessage {
-                            role: AgentMessageRole::Assistant,
+                        agent::Event::MessageCommitted(agent::Message {
+                            role: agent::MessageRole::Assistant,
                             text,
                         }) if text.contains("Tool result received")
                     )
@@ -294,7 +293,7 @@ mod tests {
 
     #[test]
     fn provider_registry_starts_builtin_provider() {
-        let registry = AgentProviderRegistry::builtin();
+        let registry = agent::ProviderRegistry::builtin();
         let provider_id = registry.default_provider_id();
         let handle = registry
             .start_session(&provider_id, SessionId::new())
@@ -303,7 +302,7 @@ mod tests {
         let first = handle.events().recv().expect("first event");
         assert_eq!(
             first.event,
-            AgentEvent::StateChanged(AgentSessionState::Created)
+            agent::Event::StateChanged(agent::SessionState::Created)
         );
     }
 }

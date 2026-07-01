@@ -2,11 +2,11 @@ use std::path::PathBuf;
 
 use floem::prelude::*;
 use horizon::agent_config::AgentConfig;
-use horizon::app_commands::{execute_command, request_active_pane_focus, PaneFocusRequests};
+use horizon::app::commands::{execute_command, request_active_pane_focus, PaneFocusRequests};
 use horizon::commands::clamp_palette_selection;
 use horizon::control_surface::{overview_items, palette_items, OverviewItem, PaletteItem};
-use horizon::session::SessionRegistry;
-use horizon::session_frames::SessionFrames;
+use horizon::session::Frames;
+use horizon::session::Registry;
 use horizon::workspace::Workspace;
 
 pub(crate) fn open_palette(
@@ -84,8 +84,8 @@ pub(super) fn move_overview_selection(
 
 pub(super) fn execute_palette_selection(
     workspace: RwSignal<Workspace>,
-    frames: RwSignal<SessionFrames>,
-    sessions: RwSignal<SessionRegistry>,
+    frames: RwSignal<Frames>,
+    sessions: RwSignal<Registry>,
     palette_open: RwSignal<bool>,
     palette_query: RwSignal<String>,
     palette_selection: RwSignal<usize>,

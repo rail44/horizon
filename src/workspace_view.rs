@@ -3,10 +3,10 @@ use std::path::PathBuf;
 use floem::peniko::kurbo::{Point, Size};
 use floem::prelude::*;
 use horizon::agent_config::AgentConfig;
-use horizon::app_commands::{active_agent, PaneFocusRequests, MAX_VISIBLE_PANES};
+use horizon::app::commands::{active_agent, PaneFocusRequests, MAX_VISIBLE_PANES};
 use horizon::control_surface::ControlMode;
-use horizon::session::SessionRegistry;
-use horizon::session_frames::SessionFrames;
+use horizon::session::Frames;
+use horizon::session::Registry;
 use horizon::terminal::TerminalCommand;
 use horizon::workspace::Workspace;
 
@@ -34,7 +34,7 @@ pub(crate) fn active_agent_draft(
 
 pub(crate) fn active_terminal_sender(
     workspace: RwSignal<Workspace>,
-    sessions: RwSignal<SessionRegistry>,
+    sessions: RwSignal<Registry>,
 ) -> Option<crossbeam_channel::Sender<TerminalCommand>> {
     let session_id = workspace.with_untracked(|ws| ws.active_terminal_session_id())?;
     sessions.with_untracked(|registry| registry.terminal_sender(session_id))
@@ -48,8 +48,8 @@ pub(crate) fn trace_ime(message: &str) {
 
 pub(crate) fn workspace_view(
     workspace: RwSignal<Workspace>,
-    frames: RwSignal<SessionFrames>,
-    sessions: RwSignal<SessionRegistry>,
+    frames: RwSignal<Frames>,
+    sessions: RwSignal<Registry>,
     ime_composing: RwSignal<bool>,
     ime_preedit: RwSignal<Option<String>>,
     ime_cursor_area: RwSignal<(Point, Size)>,

@@ -3,11 +3,11 @@ use std::path::PathBuf;
 use floem::keyboard::{Key, KeyEvent, NamedKey};
 use floem::prelude::*;
 use horizon::agent_config::AgentConfig;
-use horizon::app_commands::PaneFocusRequests;
+use horizon::app::commands::PaneFocusRequests;
 use horizon::control_surface::ControlMode;
 use horizon::input::palette_accepts_text_input;
-use horizon::session::SessionRegistry;
-use horizon::session_frames::SessionFrames;
+use horizon::session::Frames;
+use horizon::session::Registry;
 use horizon::workspace::Workspace;
 
 use super::actions::{
@@ -18,8 +18,8 @@ use super::actions::{
 fn handle_palette_key(
     key_event: &KeyEvent,
     workspace: RwSignal<Workspace>,
-    frames: RwSignal<SessionFrames>,
-    sessions: RwSignal<SessionRegistry>,
+    frames: RwSignal<Frames>,
+    sessions: RwSignal<Registry>,
     palette_open: RwSignal<bool>,
     palette_query: RwSignal<String>,
     palette_selection: RwSignal<usize>,
@@ -83,8 +83,8 @@ fn handle_palette_key(
 pub(crate) fn handle_control_key(
     key_event: &KeyEvent,
     workspace: RwSignal<Workspace>,
-    frames: RwSignal<SessionFrames>,
-    sessions: RwSignal<SessionRegistry>,
+    frames: RwSignal<Frames>,
+    sessions: RwSignal<Registry>,
     palette_open: RwSignal<bool>,
     palette_query: RwSignal<String>,
     palette_selection: RwSignal<usize>,

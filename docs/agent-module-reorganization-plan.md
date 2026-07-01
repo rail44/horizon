@@ -1,0 +1,148 @@
+# Agent Module Reorganization Plan
+
+Design date: 2026-07-01
+
+## Goal
+
+Reshape Horizon's current module layout around domain boundaries instead of
+mechanical implementation splits.
+
+The codebase is pre-alpha, so this migration should prefer the final shape over
+temporary compatibility layers. Behavior should remain the same unless noted
+below.
+
+## Decisions
+
+- `SessionId` belongs to the session domain, not the workspace domain.
+- Workspace keeps tab, pane, layout, attachment, and workspace session summary
+  state.
+- Agent contract types should be read through their module namespace instead of
+  carrying the `Agent` prefix everywhere.
+- `agent::mod` should expose modules, not broad wildcard re-exports.
+- DuckDB stores provider-neutral Horizon events and optional provider-owned
+  payloads. DuckDB does not interpret provider payloads.
+- Provider-specific replay, history reconstruction, and migration logic belongs
+  to the provider implementation.
+- Rig history reconstruction belongs under the Rig provider, not under the
+  DuckDB projection store.
+- `app::runtime` is the composition layer that wires domain runtimes into Floem
+  state. Agent and terminal runtime registry abstractions can come later.
+
+## Target Shape
+
+```text
+src/
+  app/
+    mod.rs
+    commands.rs
+    runtime/
+      mod.rs
+      agent.rs
+      terminal.rs
+  agent/
+    mod.rs
+    contract.rs
+    frame.rs
+    live.rs
+    policy.rs
+    tools/
+      mod.rs
+      workspace.rs
+    persistence/
+      mod.rs
+      event_log/
+        mod.rs
+        appender.rs
+        turn.rs
+        writer.rs
+      projection/
+        mod.rs
+        duckdb/
+          mod.rs
+          append.rs
+          import.rs
+          projection.rs
+          query.rs
+          records.rs
+          schema.rs
+    providers/
+      mod.rs
+      mock.rs
+      rig/
+        mod.rs
+        completion.rs
+        history.rs
+        mapping.rs
+        session.rs
+        stream.rs
+  session/
+    mod.rs
+    frames.rs
+    registry.rs
+```
+
+## Naming
+
+Types should assume their module path provides context:
+
+```rust
+agent::contract::Event
+agent::contract::Command
+agent::contract::ProviderEvent
+agent::contract::SessionState
+agent::contract::Provider
+agent::contract::SessionHandle
+
+agent::tools::Definition
+agent::tools::Execution
+agent::tools::Processing
+agent::tools::Permission
+
+agent::persistence::event_log::Record
+agent::persistence::event_log::ReadReport
+agent::persistence::event_log::Appender
+agent::persistence::event_log::WriterHandle
+agent::persistence::event_log::TurnTracker
+
+agent::persistence::projection::duckdb::Store
+agent::persistence::projection::duckdb::StoredEvent
+agent::persistence::projection::duckdb::StoredSession
+
+session::SessionId
+session::Registry
+session::Frames
+```
+
+Call sites can alias modules or types when local readability needs it:
+
+```rust
+use crate::agent::contract as agent;
+use crate::agent::persistence::projection::duckdb;
+
+let event: agent::Event = ...;
+let store = duckdb::Store::open(path)?;
+```
+
+## Current Migration Scope
+
+Do in one larger cleanup:
+
+1. Add the target module directories.
+2. Move `SessionId` into `session`.
+3. Move app command/runtime code under `app`.
+4. Move agent persistence, provider, tool, policy, contract, and live-state code
+   under the target shape.
+5. Rename the most important public types to namespace-oriented names.
+6. Move Rig history reconstruction out of DuckDB projection code and into the
+   Rig provider.
+7. Move Rig-specific tests out of DuckDB projection tests when they test Rig
+   reconstruction rather than neutral storage.
+8. Run the full test suite.
+
+## Explicit Non-goals
+
+- Do not introduce an app runtime registry or factory trait yet.
+- Do not introduce a typed provider payload wrapper yet.
+- Do not restore workspace/session state on startup.
+- Do not make DuckDB the primary durable append path.
+- Do not add compatibility re-exports solely for old module paths.

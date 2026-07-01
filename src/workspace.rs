@@ -3,13 +3,14 @@ mod operations;
 mod types;
 
 pub use types::{
-    LayoutNode, Pane, PaneId, PaneKind, PaneSummary, SessionId, SessionKind, SessionSummary,
-    SplitAxis, Tab, TabId, TabSummary, Workspace, WorkspaceSession,
+    LayoutNode, Pane, PaneId, PaneKind, PaneSummary, SessionKind, SessionSummary, SplitAxis, Tab,
+    TabId, TabSummary, Workspace, WorkspaceSession,
 };
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::SessionId;
 
     #[test]
     fn terminal_pane_references_top_level_session() {

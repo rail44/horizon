@@ -1,13 +1,11 @@
 pub mod agent;
 pub mod agent_config;
-pub mod app_commands;
-pub mod app_runtime;
+pub mod app;
 pub mod commands;
 pub mod control_surface;
 pub mod fonts;
 pub mod input;
 pub mod plugins;
 pub mod session;
-pub mod session_frames;
 pub mod terminal;
 pub mod workspace;

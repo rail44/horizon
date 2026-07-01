@@ -3,10 +3,10 @@ use std::path::PathBuf;
 use floem::event::{Event, EventListener, EventPropagation};
 use floem::prelude::*;
 use horizon::agent_config::AgentConfig;
-use horizon::app_commands::PaneFocusRequests;
+use horizon::app::commands::PaneFocusRequests;
 use horizon::control_surface::{palette_items, palette_visible_start, ControlMode};
-use horizon::session::SessionRegistry;
-use horizon::session_frames::SessionFrames;
+use horizon::session::Frames;
+use horizon::session::Registry;
 use horizon::workspace::Workspace;
 
 use super::actions::execute_palette_selection;
@@ -15,8 +15,8 @@ use super::input::handle_control_key;
 
 pub(crate) fn command_palette(
     workspace: RwSignal<Workspace>,
-    frames: RwSignal<SessionFrames>,
-    sessions: RwSignal<SessionRegistry>,
+    frames: RwSignal<Frames>,
+    sessions: RwSignal<Registry>,
     palette_open: RwSignal<bool>,
     palette_query: RwSignal<String>,
     palette_selection: RwSignal<usize>,
@@ -185,8 +185,8 @@ pub(crate) fn command_palette(
 
 fn palette_row(
     workspace: RwSignal<Workspace>,
-    frames: RwSignal<SessionFrames>,
-    sessions: RwSignal<SessionRegistry>,
+    frames: RwSignal<Frames>,
+    sessions: RwSignal<Registry>,
     palette_open: RwSignal<bool>,
     palette_query: RwSignal<String>,
     palette_selection: RwSignal<usize>,

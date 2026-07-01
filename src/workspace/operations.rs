@@ -1,7 +1,8 @@
 use super::types::{
-    LayoutNode, Pane, PaneId, PaneKind, PaneSummary, SessionId, SessionKind, SessionSummary,
-    SplitAxis, Tab, TabId, TabSummary, Workspace, WorkspaceSession,
+    LayoutNode, Pane, PaneId, PaneKind, PaneSummary, SessionKind, SessionSummary, SplitAxis, Tab,
+    TabId, TabSummary, Workspace, WorkspaceSession,
 };
+use crate::session::SessionId;
 
 impl Workspace {
     pub fn mvp() -> Self {

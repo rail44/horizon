@@ -1,0 +1,39 @@
+use uuid::Uuid;
+
+use crate::agent::contract::{Event, MessageRole, SessionState};
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TurnTracker {
+    current_turn_id: Option<String>,
+}
+
+impl TurnTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn turn_id_for_event(&mut self, event: &Event) -> Option<String> {
+        if matches!(
+            event,
+            Event::MessageCommitted(message) if message.role == MessageRole::User
+        ) {
+            self.current_turn_id = Some(Uuid::new_v4().to_string());
+        }
+
+        let turn_id = self.current_turn_id.clone();
+
+        if matches!(
+            event,
+            Event::StateChanged(
+                SessionState::WaitingForUser
+                    | SessionState::WaitingForApproval
+                    | SessionState::Failed
+                    | SessionState::Terminated
+            )
+        ) {
+            self.current_turn_id = None;
+        }
+
+        turn_id
+    }
+}

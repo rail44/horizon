@@ -1,13 +1,13 @@
 use floem::prelude::*;
-use horizon::app_commands::close_tab;
-use horizon::session::SessionRegistry;
+use horizon::app::commands::close_tab;
+use horizon::session::Registry;
 use horizon::workspace::Workspace;
 
 use super::chrome::chrome_close_button;
 
 pub(crate) fn tab_strip(
     workspace: RwSignal<Workspace>,
-    sessions: RwSignal<SessionRegistry>,
+    sessions: RwSignal<Registry>,
 ) -> impl IntoView {
     h_stack((
         tab_chip(workspace, sessions, 0),
@@ -29,7 +29,7 @@ pub(crate) fn tab_strip(
 
 fn tab_chip(
     workspace: RwSignal<Workspace>,
-    sessions: RwSignal<SessionRegistry>,
+    sessions: RwSignal<Registry>,
     index: usize,
 ) -> impl IntoView {
     let exists = move || workspace.with(|ws| ws.tab_summaries().get(index).is_some());

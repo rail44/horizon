@@ -5,7 +5,7 @@ use floem::{
     peniko::kurbo::{Point, Size},
     Clipboard,
 };
-use horizon::agent::{AgentCommand, AgentToolCallId};
+use horizon::agent::contract::{Command, ToolCallId};
 use horizon::fonts::HORIZON_FONT_FAMILY;
 use horizon::input::{
     agent_draft_action, is_terminal_paste_key, pop_last_grapheme_approx, AgentDraftAction,
@@ -72,9 +72,9 @@ pub(super) fn agent_composer(
 
 pub(super) fn agent_approval_actions(
     visible: impl Fn() -> bool + 'static + Copy,
-    pending_approval: impl Fn() -> Option<AgentToolCallId> + 'static + Copy,
-    on_approve: impl Fn(AgentToolCallId) + 'static + Copy,
-    on_deny: impl Fn(AgentToolCallId) + 'static + Copy,
+    pending_approval: impl Fn() -> Option<ToolCallId> + 'static + Copy,
+    on_approve: impl Fn(ToolCallId) + 'static + Copy,
+    on_deny: impl Fn(ToolCallId) + 'static + Copy,
 ) -> impl IntoView {
     h_stack((
         agent_approval_button(
@@ -112,8 +112,8 @@ pub(super) fn agent_approval_actions(
 fn agent_approval_button(
     text: &'static str,
     visible: impl Fn() -> bool + 'static + Copy,
-    pending_approval: impl Fn() -> Option<AgentToolCallId> + 'static + Copy,
-    on_click: impl Fn(AgentToolCallId) + 'static + Copy,
+    pending_approval: impl Fn() -> Option<ToolCallId> + 'static + Copy,
+    on_click: impl Fn(ToolCallId) + 'static + Copy,
     background: floem::peniko::Color,
     border: floem::peniko::Color,
 ) -> impl IntoView {
@@ -144,7 +144,7 @@ fn agent_approval_button(
 pub(super) fn handle_agent_key(
     event: &KeyEvent,
     draft: RwSignal<String>,
-    agent_tx: Option<crossbeam_channel::Sender<AgentCommand>>,
+    agent_tx: Option<crossbeam_channel::Sender<Command>>,
 ) -> bool {
     if is_terminal_paste_key(event) {
         if let Ok(text) = Clipboard::get_contents() {
@@ -170,7 +170,7 @@ pub(super) fn handle_agent_key(
                 return true;
             }
             if let Some(tx) = agent_tx {
-                let command = AgentCommand::UserMessage { text };
+                let command = Command::UserMessage { text };
                 let _ = tx.send(command);
                 draft.set(String::new());
             }

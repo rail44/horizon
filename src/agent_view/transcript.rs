@@ -1,6 +1,5 @@
-use horizon::agent::{
-    AgentFrame, AgentFrameItem, AgentMessage, AgentMessageRole, AgentSessionState,
-};
+use horizon::agent::contract::{Message, MessageRole, SessionState};
+use horizon::agent::frame::{AgentFrame, AgentFrameItem};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) struct TranscriptBlock {
@@ -136,10 +135,10 @@ fn transcript_block(id: usize, item: &AgentFrameItem) -> Option<TranscriptBlock>
     }
 }
 
-fn message_block(id: usize, message: &AgentMessage) -> TranscriptBlock {
+fn message_block(id: usize, message: &Message) -> TranscriptBlock {
     let tone = match message.role {
-        AgentMessageRole::User => TranscriptTone::User,
-        AgentMessageRole::Assistant => TranscriptTone::Assistant,
+        MessageRole::User => TranscriptTone::User,
+        MessageRole::Assistant => TranscriptTone::Assistant,
     };
 
     TranscriptBlock {
@@ -151,18 +150,18 @@ fn message_block(id: usize, message: &AgentMessage) -> TranscriptBlock {
 }
 
 fn status_block(
-    state: Option<AgentSessionState>,
+    state: Option<SessionState>,
     id: usize,
     last_block: Option<&TranscriptBlock>,
 ) -> Option<TranscriptBlock> {
     let text = match state? {
-        AgentSessionState::Running => {
+        SessionState::Running => {
             if !should_show_initial_reply_status(last_block) {
                 return None;
             }
             "Agent is replying..."
         }
-        AgentSessionState::ToolRunning => {
+        SessionState::ToolRunning => {
             if matches!(
                 last_block.map(|block| block.tone),
                 Some(TranscriptTone::Tool | TranscriptTone::Assistant | TranscriptTone::Thinking)
@@ -171,7 +170,7 @@ fn status_block(
             }
             "Running tool..."
         }
-        AgentSessionState::WaitingForApproval => {
+        SessionState::WaitingForApproval => {
             if matches!(
                 last_block.map(|block| block.tone),
                 Some(TranscriptTone::Approval)
@@ -180,11 +179,11 @@ fn status_block(
             }
             "Approval required"
         }
-        AgentSessionState::Failed => "Agent failed",
-        AgentSessionState::Terminated => "Agent terminated",
-        AgentSessionState::Created
-        | AgentSessionState::WaitingForUser
-        | AgentSessionState::Completed => return None,
+        SessionState::Failed => "Agent failed",
+        SessionState::Terminated => "Agent terminated",
+        SessionState::Created | SessionState::WaitingForUser | SessionState::Completed => {
+            return None
+        }
     };
 
     Some(TranscriptBlock {

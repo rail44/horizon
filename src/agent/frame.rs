@@ -1,22 +1,22 @@
-use super::types::*;
+use crate::agent::contract::*;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentFrame {
-    pub state: Option<AgentSessionState>,
+    pub state: Option<SessionState>,
     pub items: Vec<AgentFrameItem>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AgentFrameItem {
-    Message(AgentMessage),
-    ReasoningDelta(AgentMessageDelta),
-    AssistantTextDelta(AgentMessageDelta),
-    ToolCallRequested(AgentToolCallRequest),
-    ToolCallStarted(AgentToolCallId),
-    ToolCallFinished(AgentToolCallResult),
-    ApprovalRequested(AgentApprovalRequest),
-    Error(AgentError),
-    Exited(AgentExit),
+    Message(Message),
+    ReasoningDelta(MessageDelta),
+    AssistantTextDelta(MessageDelta),
+    ToolCallRequested(ToolCallRequest),
+    ToolCallStarted(ToolCallId),
+    ToolCallFinished(ToolCallResult),
+    ApprovalRequested(ApprovalRequest),
+    Error(Error),
+    Exited(Exit),
 }
 
 impl AgentFrame {
@@ -27,8 +27,8 @@ impl AgentFrame {
         }
     }
 
-    pub fn pending_approval_call_id(&self) -> Option<AgentToolCallId> {
-        let mut pending = Vec::<AgentToolCallId>::new();
+    pub fn pending_approval_call_id(&self) -> Option<ToolCallId> {
+        let mut pending = Vec::<ToolCallId>::new();
         for item in &self.items {
             match item {
                 AgentFrameItem::ApprovalRequested(request) => {
@@ -47,51 +47,51 @@ impl AgentFrame {
     }
 }
 
-pub fn render_agent_transcript(events: &[AgentEvent]) -> String {
+pub fn render_agent_transcript(events: &[Event]) -> String {
     let mut lines = vec!["Agent session".to_string(), String::new()];
 
     for event in events {
         match event {
-            AgentEvent::StateChanged(state) => lines.push(format!("state: {state:?}")),
-            AgentEvent::ReasoningDelta(delta) => {
+            Event::StateChanged(state) => lines.push(format!("state: {state:?}")),
+            Event::ReasoningDelta(delta) => {
                 lines.push(format!("{}: {}", role_label(delta.role), delta.text));
             }
-            AgentEvent::AssistantTextDelta(delta) => {
+            Event::AssistantTextDelta(delta) => {
                 lines.push(format!("{} delta: {}", role_label(delta.role), delta.text));
             }
-            AgentEvent::MessageCommitted(message) => {
+            Event::MessageCommitted(message) => {
                 lines.push(format!("{}: {}", role_label(message.role), message.text));
             }
-            AgentEvent::ToolCallRequested(request) => {
+            Event::ToolCallRequested(request) => {
                 lines.push(format!(
                     "tool requested: {} ({})",
                     request.tool_id, request.call_id.0
                 ));
             }
-            AgentEvent::ToolCallStarted(call_id) => {
+            Event::ToolCallStarted(call_id) => {
                 lines.push(format!("tool started: {}", call_id.0));
             }
-            AgentEvent::ToolCallFinished(result) => {
+            Event::ToolCallFinished(result) => {
                 lines.push(format!(
                     "tool finished: {} {}",
                     result.call_id.0, result.output
                 ));
             }
-            AgentEvent::ApprovalRequested(request) => {
+            Event::ApprovalRequested(request) => {
                 lines.push(format!(
                     "approval requested: {} {}",
                     request.call_id.0, request.reason
                 ));
             }
-            AgentEvent::Error(error) => lines.push(format!("error: {}", error.message)),
-            AgentEvent::Exited(exit) => lines.push(format!("exited: {}", exit.reason)),
+            Event::Error(error) => lines.push(format!("error: {}", error.message)),
+            Event::Exited(exit) => lines.push(format!("exited: {}", exit.reason)),
         }
     }
 
     lines.join("\n")
 }
 
-pub fn agent_frame_from_events(events: &[AgentEvent]) -> AgentFrame {
+pub fn agent_frame_from_events(events: &[Event]) -> AgentFrame {
     let mut frame = AgentFrame::empty();
 
     for event in events {
@@ -101,10 +101,10 @@ pub fn agent_frame_from_events(events: &[AgentEvent]) -> AgentFrame {
     frame
 }
 
-pub(crate) fn apply_agent_event_to_frame(frame: &mut AgentFrame, event: &AgentEvent) {
+pub(crate) fn apply_agent_event_to_frame(frame: &mut AgentFrame, event: &Event) {
     match event {
-        AgentEvent::StateChanged(state) => frame.state = Some(*state),
-        AgentEvent::ReasoningDelta(delta) => {
+        Event::StateChanged(state) => frame.state = Some(*state),
+        Event::ReasoningDelta(delta) => {
             if let Some(AgentFrameItem::ReasoningDelta(existing)) =
                 last_current_turn_item_mut(frame, |item| {
                     matches!(item, AgentFrameItem::ReasoningDelta(_))
@@ -119,7 +119,7 @@ pub(crate) fn apply_agent_event_to_frame(frame: &mut AgentFrame, event: &AgentEv
                 .items
                 .push(AgentFrameItem::ReasoningDelta(delta.clone()));
         }
-        AgentEvent::AssistantTextDelta(delta) => {
+        Event::AssistantTextDelta(delta) => {
             if let Some(AgentFrameItem::AssistantTextDelta(existing)) =
                 last_current_turn_item_mut(frame, |item| {
                     matches!(item, AgentFrameItem::AssistantTextDelta(_))
@@ -134,7 +134,7 @@ pub(crate) fn apply_agent_event_to_frame(frame: &mut AgentFrame, event: &AgentEv
                 .items
                 .push(AgentFrameItem::AssistantTextDelta(delta.clone()));
         }
-        AgentEvent::MessageCommitted(message) => {
+        Event::MessageCommitted(message) => {
             if let Some(index) = last_current_turn_item_index(frame, |item| {
                 matches!(item, AgentFrameItem::AssistantTextDelta(_))
             }) {
@@ -157,28 +157,28 @@ pub(crate) fn apply_agent_event_to_frame(frame: &mut AgentFrame, event: &AgentEv
             }
             frame.items.push(AgentFrameItem::Message(message.clone()));
         }
-        AgentEvent::ToolCallRequested(request) => {
+        Event::ToolCallRequested(request) => {
             frame
                 .items
                 .push(AgentFrameItem::ToolCallRequested(request.clone()));
         }
-        AgentEvent::ToolCallStarted(call_id) => {
+        Event::ToolCallStarted(call_id) => {
             frame
                 .items
                 .push(AgentFrameItem::ToolCallStarted(call_id.clone()));
         }
-        AgentEvent::ToolCallFinished(result) => {
+        Event::ToolCallFinished(result) => {
             frame
                 .items
                 .push(AgentFrameItem::ToolCallFinished(result.clone()));
         }
-        AgentEvent::ApprovalRequested(request) => {
+        Event::ApprovalRequested(request) => {
             frame
                 .items
                 .push(AgentFrameItem::ApprovalRequested(request.clone()));
         }
-        AgentEvent::Error(error) => frame.items.push(AgentFrameItem::Error(error.clone())),
-        AgentEvent::Exited(exit) => frame.items.push(AgentFrameItem::Exited(exit.clone())),
+        Event::Error(error) => frame.items.push(AgentFrameItem::Error(error.clone())),
+        Event::Exited(exit) => frame.items.push(AgentFrameItem::Exited(exit.clone())),
     }
 }
 
@@ -209,8 +209,8 @@ fn last_current_turn_item_index(
 fn is_turn_boundary_item(item: &AgentFrameItem) -> bool {
     matches!(
         item,
-        AgentFrameItem::Message(AgentMessage {
-            role: AgentMessageRole::User,
+        AgentFrameItem::Message(Message {
+            role: MessageRole::User,
             ..
         }) | AgentFrameItem::ToolCallRequested(_)
             | AgentFrameItem::ToolCallStarted(_)
@@ -271,9 +271,9 @@ pub fn render_agent_transcript_from_frame(frame: &AgentFrame) -> String {
     lines.join("\n")
 }
 
-fn role_label(role: AgentMessageRole) -> &'static str {
+fn role_label(role: MessageRole) -> &'static str {
     match role {
-        AgentMessageRole::User => "user",
-        AgentMessageRole::Assistant => "assistant",
+        MessageRole::User => "user",
+        MessageRole::Assistant => "assistant",
     }
 }
