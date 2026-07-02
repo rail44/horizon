@@ -3,10 +3,10 @@ use std::path::PathBuf;
 use floem::prelude::*;
 
 use crate::agent_config::AgentConfig;
-use crate::app::runtime::{spawn_agent_session, spawn_terminal_session};
+use crate::app::runtime::{spawn_session, SessionRuntimeState};
 use crate::commands::{command_enabled, CommandId};
 use crate::control_surface::command_state;
-use crate::session::{Frames, Registry, SessionId};
+use crate::session::{Frames, Registry};
 use crate::workspace::{request_active_pane_focus, PaneFocusRequests, PaneKind, Workspace};
 
 #[derive(Clone)]
@@ -19,6 +19,20 @@ pub(crate) struct CommandActionState {
     pub(crate) agent_config: AgentConfig,
     pub(crate) terminal_dump: Option<PathBuf>,
     pub(crate) clipboard_dump: Option<PathBuf>,
+}
+
+impl CommandActionState {
+    fn session_runtime_state(&self) -> SessionRuntimeState {
+        SessionRuntimeState {
+            workspace: self.workspace,
+            frames: self.frames,
+            sessions: self.sessions,
+            agent_state_status: self.agent_state_status,
+            agent_config: self.agent_config.clone(),
+            terminal_dump: self.terminal_dump.clone(),
+            clipboard_dump: self.clipboard_dump.clone(),
+        }
+    }
 }
 
 pub(crate) fn execute_command(command_id: CommandId, state: CommandActionState) {
@@ -63,28 +77,8 @@ fn open_tab(state: CommandActionState, kind: PaneKind) {
         session_id = Some(ws.open_tab_with_new_session(kind));
     });
     let session_id = session_id.expect("new session");
-    spawn_session(kind, session_id, &state);
+    spawn_session(kind, session_id, &state.session_runtime_state());
     request_active_pane_focus(workspace, state.pane_focus_requests);
-}
-
-fn spawn_session(kind: PaneKind, session_id: SessionId, state: &CommandActionState) {
-    match kind {
-        PaneKind::Terminal => spawn_terminal_session(
-            session_id,
-            state.frames,
-            state.sessions,
-            state.terminal_dump.clone(),
-            state.clipboard_dump.clone(),
-        ),
-        PaneKind::Agent => spawn_agent_session(
-            session_id,
-            state.workspace,
-            state.frames,
-            state.sessions,
-            state.agent_state_status,
-            state.agent_config.clone(),
-        ),
-    }
 }
 
 fn split_active_pane(state: CommandActionState) {
@@ -97,7 +91,7 @@ fn split_active_pane(state: CommandActionState) {
     let Some((kind, session_id)) = split else {
         return;
     };
-    spawn_session(kind, session_id, &state);
+    spawn_session(kind, session_id, &state.session_runtime_state());
     request_active_pane_focus(workspace, state.pane_focus_requests);
 }
 
