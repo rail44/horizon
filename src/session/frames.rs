@@ -5,39 +5,39 @@ use crate::session::SessionId;
 use crate::terminal::{initial_terminal_text, TerminalFrame};
 
 #[derive(Clone, Debug, Default)]
-pub struct Frames {
+pub(crate) struct Frames {
     terminal: HashMap<SessionId, TerminalFrame>,
     agent: HashMap<SessionId, AgentFrame>,
 }
 
 impl Frames {
-    pub fn terminal_frame(&self, session_id: SessionId) -> TerminalFrame {
+    pub(crate) fn terminal_frame(&self, session_id: SessionId) -> TerminalFrame {
         self.terminal
             .get(&session_id)
             .cloned()
             .unwrap_or_else(|| TerminalFrame::from_text(initial_terminal_text()))
     }
 
-    pub fn update_terminal_output(&mut self, session_id: SessionId, output: String) {
+    pub(crate) fn update_terminal_output(&mut self, session_id: SessionId, output: String) {
         self.update_terminal_frame(session_id, TerminalFrame::from_text(output));
     }
 
-    pub fn update_terminal_frame(&mut self, session_id: SessionId, frame: TerminalFrame) {
+    pub(crate) fn update_terminal_frame(&mut self, session_id: SessionId, frame: TerminalFrame) {
         self.terminal.insert(session_id, frame);
     }
 
-    pub fn agent_frame(&self, session_id: SessionId) -> AgentFrame {
+    pub(crate) fn agent_frame(&self, session_id: SessionId) -> AgentFrame {
         self.agent
             .get(&session_id)
             .cloned()
             .unwrap_or_else(AgentFrame::empty)
     }
 
-    pub fn update_agent_frame(&mut self, session_id: SessionId, frame: AgentFrame) {
+    pub(crate) fn update_agent_frame(&mut self, session_id: SessionId, frame: AgentFrame) {
         self.agent.insert(session_id, frame);
     }
 
-    pub fn remove_session(&mut self, session_id: SessionId) {
+    pub(crate) fn remove_session(&mut self, session_id: SessionId) {
         self.terminal.remove(&session_id);
         self.agent.remove(&session_id);
     }

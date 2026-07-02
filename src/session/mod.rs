@@ -4,8 +4,8 @@ mod registry;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub use frames::Frames;
-pub use registry::Registry;
+pub(crate) use frames::Frames;
+pub(crate) use registry::Registry;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 pub struct SessionId(Uuid);
