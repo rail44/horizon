@@ -3,13 +3,12 @@ use floem::event::{Event, EventPropagation};
 use floem::prelude::*;
 
 use crate::app::commands::{active_agent, active_text_input_pane};
-use crate::control_surface::{
-    handle_control_key, open_palette, ControlInputState, ControlMode, OpenPaletteState,
-};
+use crate::control_surface::{handle_control_key, open_palette, ControlMode};
 use crate::input::is_palette_open_key;
 use crate::terminal::TerminalCommand;
 use crate::workspace::{active_agent_draft, active_terminal_sender, trace_ime};
 
+use super::context::{control_input_state, open_palette_state};
 use super::state::AppState;
 
 #[derive(Clone)]
@@ -110,32 +109,5 @@ impl AppInput {
         }
 
         EventPropagation::Continue
-    }
-}
-
-fn open_palette_state(state: &AppState) -> OpenPaletteState {
-    OpenPaletteState {
-        palette_open: state.palette_open,
-        palette_query: state.palette_query,
-        palette_selection: state.palette_selection,
-        palette_focus_request: state.palette_focus_request,
-    }
-}
-
-fn control_input_state(state: &AppState) -> ControlInputState {
-    ControlInputState {
-        workspace: state.workspace,
-        frames: state.frames,
-        sessions: state.sessions,
-        palette_open: state.palette_open,
-        palette_query: state.palette_query,
-        palette_selection: state.palette_selection,
-        control_mode: state.control_mode,
-        overview_selection: state.overview_selection,
-        pane_focus_requests: state.pane_focus_requests,
-        agent_state_status: state.agent_state_status,
-        agent_config: state.agent_config.clone(),
-        terminal_dump: state.terminal_dump.clone(),
-        clipboard_dump: state.clipboard_dump.clone(),
     }
 }

@@ -1,11 +1,10 @@
 use floem::event::EventListener;
 use floem::prelude::*;
 
-use crate::control_surface::view::{
-    command_palette, workspace_overview, CommandPaletteState, WorkspaceOverviewState,
-};
-use crate::workspace::view::{tab_strip, workspace_view, WorkspaceViewState};
+use crate::control_surface::view::{command_palette, workspace_overview};
+use crate::workspace::view::{tab_strip, workspace_view};
 
+use super::context::{command_palette_state, workspace_overview_state, workspace_view_state};
 use super::input::AppInput;
 use super::state::AppState;
 use super::status_bar::status_bar;
@@ -65,56 +64,4 @@ fn app_content(state: AppState) -> impl IntoView {
         command_palette(command_palette_state(&state)),
         workspace_overview(workspace_overview_state(&state)),
     ))
-}
-
-fn workspace_view_state(state: &AppState) -> WorkspaceViewState {
-    WorkspaceViewState {
-        workspace: state.workspace,
-        frames: state.frames,
-        sessions: state.sessions,
-        ime_composing: state.ime_composing,
-        ime_preedit: state.ime_preedit,
-        ime_cursor_area: state.ime_cursor_area,
-        palette_open: state.palette_open,
-        palette_query: state.palette_query,
-        palette_selection: state.palette_selection,
-        palette_focus_request: state.palette_focus_request,
-        pane_focus_requests: state.pane_focus_requests,
-        agent_drafts: state.agent_drafts,
-        agent_config: state.agent_config.clone(),
-        control_mode: state.control_mode,
-        overview_selection: state.overview_selection,
-        terminal_dump: state.terminal_dump.clone(),
-        clipboard_dump: state.clipboard_dump.clone(),
-        agent_state_status: state.agent_state_status,
-    }
-}
-
-fn command_palette_state(state: &AppState) -> CommandPaletteState {
-    CommandPaletteState {
-        workspace: state.workspace,
-        frames: state.frames,
-        sessions: state.sessions,
-        palette_open: state.palette_open,
-        palette_query: state.palette_query,
-        palette_selection: state.palette_selection,
-        palette_focus_request: state.palette_focus_request,
-        pane_focus_requests: state.pane_focus_requests,
-        agent_state_status: state.agent_state_status,
-        agent_config: state.agent_config.clone(),
-        control_mode: state.control_mode,
-        overview_selection: state.overview_selection,
-        terminal_dump: state.terminal_dump.clone(),
-        clipboard_dump: state.clipboard_dump.clone(),
-    }
-}
-
-fn workspace_overview_state(state: &AppState) -> WorkspaceOverviewState {
-    WorkspaceOverviewState {
-        workspace: state.workspace,
-        palette_open: state.palette_open,
-        control_mode: state.control_mode,
-        overview_selection: state.overview_selection,
-        palette_focus_request: state.palette_focus_request,
-    }
 }

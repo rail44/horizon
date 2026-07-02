@@ -1,4 +1,5 @@
 pub mod commands;
+mod context;
 mod input;
 pub mod runtime;
 mod state;
