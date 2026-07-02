@@ -2,7 +2,7 @@ use floem::event::EventListener;
 use floem::prelude::*;
 
 use crate::control_surface::view::{command_palette, workspace_overview};
-use crate::workspace::view::{tab_strip, workspace_view};
+use crate::workspace::view::{tab_strip, workspace_view, WorkspaceViewState};
 
 use super::input::AppInput;
 use super::state::AppState;
@@ -72,7 +72,7 @@ fn app_content(state: AppState) -> impl IntoView {
     stack((
         v_stack((
             tab_strip(workspace, sessions),
-            workspace_view(
+            workspace_view(WorkspaceViewState {
                 workspace,
                 frames,
                 sessions,
@@ -85,13 +85,13 @@ fn app_content(state: AppState) -> impl IntoView {
                 palette_focus_request,
                 pane_focus_requests,
                 agent_drafts,
-                agent_config.clone(),
+                agent_config: agent_config.clone(),
                 control_mode,
                 overview_selection,
-                terminal_dump.clone(),
-                clipboard_dump.clone(),
+                terminal_dump: terminal_dump.clone(),
+                clipboard_dump: clipboard_dump.clone(),
                 agent_state_status,
-            ),
+            }),
             status_bar(workspace, agent_state_status, status_dump),
         ))
         .style(|s| s.size_full().flex().flex_col()),
