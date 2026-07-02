@@ -68,7 +68,7 @@ pub fn app_view() -> impl IntoView {
         );
     }
 
-    let input = AppInput {
+    let input = AppInput::new(
         workspace,
         frames,
         sessions,
@@ -84,10 +84,10 @@ pub fn app_view() -> impl IntoView {
         control_mode,
         overview_selection,
         agent_state_status,
-        agent_config: agent_config.clone(),
-        terminal_dump: terminal_dump.clone(),
-        clipboard_dump: clipboard_dump.clone(),
-    };
+        agent_config.clone(),
+        terminal_dump.clone(),
+        clipboard_dump.clone(),
+    );
 
     let focus_input = input.clone();
     let ime_enabled_input = input.clone();

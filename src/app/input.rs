@@ -16,27 +16,70 @@ use crate::workspace::{
 
 #[derive(Clone)]
 pub struct AppInput {
-    pub workspace: RwSignal<Workspace>,
-    pub frames: RwSignal<Frames>,
-    pub sessions: RwSignal<Registry>,
-    pub ime_composing: RwSignal<bool>,
-    pub ime_preedit: RwSignal<Option<String>>,
-    pub ime_cursor_area: RwSignal<(floem::peniko::kurbo::Point, floem::peniko::kurbo::Size)>,
-    pub palette_open: RwSignal<bool>,
-    pub palette_query: RwSignal<String>,
-    pub palette_selection: RwSignal<usize>,
-    pub palette_focus_request: RwSignal<u64>,
-    pub pane_focus_requests: PaneFocusRequests,
-    pub agent_drafts: AgentDrafts,
-    pub control_mode: RwSignal<ControlMode>,
-    pub overview_selection: RwSignal<usize>,
-    pub agent_state_status: RwSignal<Option<String>>,
-    pub agent_config: AgentConfig,
-    pub terminal_dump: Option<PathBuf>,
-    pub clipboard_dump: Option<PathBuf>,
+    workspace: RwSignal<Workspace>,
+    frames: RwSignal<Frames>,
+    sessions: RwSignal<Registry>,
+    ime_composing: RwSignal<bool>,
+    ime_preedit: RwSignal<Option<String>>,
+    ime_cursor_area: RwSignal<(floem::peniko::kurbo::Point, floem::peniko::kurbo::Size)>,
+    palette_open: RwSignal<bool>,
+    palette_query: RwSignal<String>,
+    palette_selection: RwSignal<usize>,
+    palette_focus_request: RwSignal<u64>,
+    pane_focus_requests: PaneFocusRequests,
+    agent_drafts: AgentDrafts,
+    control_mode: RwSignal<ControlMode>,
+    overview_selection: RwSignal<usize>,
+    agent_state_status: RwSignal<Option<String>>,
+    agent_config: AgentConfig,
+    terminal_dump: Option<PathBuf>,
+    clipboard_dump: Option<PathBuf>,
 }
 
 impl AppInput {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        workspace: RwSignal<Workspace>,
+        frames: RwSignal<Frames>,
+        sessions: RwSignal<Registry>,
+        ime_composing: RwSignal<bool>,
+        ime_preedit: RwSignal<Option<String>>,
+        ime_cursor_area: RwSignal<(floem::peniko::kurbo::Point, floem::peniko::kurbo::Size)>,
+        palette_open: RwSignal<bool>,
+        palette_query: RwSignal<String>,
+        palette_selection: RwSignal<usize>,
+        palette_focus_request: RwSignal<u64>,
+        pane_focus_requests: PaneFocusRequests,
+        agent_drafts: AgentDrafts,
+        control_mode: RwSignal<ControlMode>,
+        overview_selection: RwSignal<usize>,
+        agent_state_status: RwSignal<Option<String>>,
+        agent_config: AgentConfig,
+        terminal_dump: Option<PathBuf>,
+        clipboard_dump: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            workspace,
+            frames,
+            sessions,
+            ime_composing,
+            ime_preedit,
+            ime_cursor_area,
+            palette_open,
+            palette_query,
+            palette_selection,
+            palette_focus_request,
+            pane_focus_requests,
+            agent_drafts,
+            control_mode,
+            overview_selection,
+            agent_state_status,
+            agent_config,
+            terminal_dump,
+            clipboard_dump,
+        }
+    }
+
     pub fn handle_window_focus(&self) -> EventPropagation {
         set_ime_allowed(active_text_input_pane(self.workspace));
         let (position, size) = self.ime_cursor_area.get_untracked();
