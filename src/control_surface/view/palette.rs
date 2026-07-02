@@ -1,13 +1,7 @@
-use std::path::PathBuf;
-
-use crate::agent_config::AgentConfig;
 use crate::control_surface::{palette_items, ControlInputState, ControlMode, PALETTE_VISIBLE_ROWS};
-use crate::session::Frames;
-use crate::session::Registry;
 use crate::ui::list_row::{list_row, ListRowStyle};
 use crate::ui::selectable_list::selectable_list;
 use crate::ui::theme;
-use crate::workspace::{PaneFocusRequests, Workspace};
 use floem::event::{Event, EventListener, EventPropagation};
 use floem::prelude::*;
 use floem::reactive::create_memo;
@@ -26,39 +20,13 @@ const PALETTE_ROW_STYLE: ListRowStyle = ListRowStyle {
 
 #[derive(Clone)]
 pub struct CommandPaletteState {
-    pub workspace: RwSignal<Workspace>,
-    pub frames: RwSignal<Frames>,
-    pub sessions: RwSignal<Registry>,
-    pub palette_open: RwSignal<bool>,
-    pub palette_query: RwSignal<String>,
-    pub palette_selection: RwSignal<usize>,
+    pub control_input: ControlInputState,
     pub palette_focus_request: RwSignal<u64>,
-    pub pane_focus_requests: PaneFocusRequests,
-    pub agent_state_status: RwSignal<Option<String>>,
-    pub agent_config: AgentConfig,
-    pub control_mode: RwSignal<ControlMode>,
-    pub overview_selection: RwSignal<usize>,
-    pub terminal_dump: Option<PathBuf>,
-    pub clipboard_dump: Option<PathBuf>,
 }
 
 impl CommandPaletteState {
     fn control_input_state(&self) -> ControlInputState {
-        ControlInputState {
-            workspace: self.workspace,
-            frames: self.frames,
-            sessions: self.sessions,
-            palette_open: self.palette_open,
-            palette_query: self.palette_query,
-            palette_selection: self.palette_selection,
-            control_mode: self.control_mode,
-            overview_selection: self.overview_selection,
-            pane_focus_requests: self.pane_focus_requests,
-            agent_state_status: self.agent_state_status,
-            agent_config: self.agent_config.clone(),
-            terminal_dump: self.terminal_dump.clone(),
-            clipboard_dump: self.clipboard_dump.clone(),
-        }
+        self.control_input.clone()
     }
 
     fn palette_action_state(&self) -> PaletteActionState {
@@ -70,12 +38,12 @@ pub fn command_palette(state: CommandPaletteState) -> impl IntoView {
     let control_input = state.control_input_state();
     let palette_action = state.palette_action_state();
 
-    let workspace = state.workspace;
-    let palette_open = state.palette_open;
-    let palette_query = state.palette_query;
-    let palette_selection = state.palette_selection;
+    let workspace = control_input.workspace;
+    let palette_open = control_input.palette_open;
+    let palette_query = control_input.palette_query;
+    let palette_selection = control_input.palette_selection;
     let palette_focus_request = state.palette_focus_request;
-    let control_mode = state.control_mode;
+    let control_mode = control_input.control_mode;
 
     let items = create_memo(move |_| {
         let query = palette_query.get();

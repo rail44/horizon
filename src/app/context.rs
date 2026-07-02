@@ -29,20 +29,8 @@ pub(super) fn workspace_view_state(state: &AppState) -> WorkspaceViewState {
 
 pub(super) fn command_palette_state(state: &AppState) -> CommandPaletteState {
     CommandPaletteState {
-        workspace: state.workspace,
-        frames: state.frames,
-        sessions: state.sessions,
-        palette_open: state.palette_open,
-        palette_query: state.palette_query,
-        palette_selection: state.palette_selection,
+        control_input: control_input_state(state),
         palette_focus_request: state.palette_focus_request,
-        pane_focus_requests: state.pane_focus_requests,
-        agent_state_status: state.agent_state_status,
-        agent_config: state.agent_config.clone(),
-        control_mode: state.control_mode,
-        overview_selection: state.overview_selection,
-        terminal_dump: state.terminal_dump.clone(),
-        clipboard_dump: state.clipboard_dump.clone(),
     }
 }
 
