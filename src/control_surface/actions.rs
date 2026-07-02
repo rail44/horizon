@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
 use crate::agent_config::AgentConfig;
-use crate::app::commands::{execute_command, request_active_pane_focus, PaneFocusRequests};
+use crate::app::commands::{
+    execute_command, request_active_pane_focus, CommandActionState, PaneFocusRequests,
+};
 use crate::commands::clamp_palette_selection;
 use crate::control_surface::{overview_items, palette_items, OverviewItem, PaletteItem};
 use crate::session::Frames;
@@ -132,14 +134,16 @@ pub(crate) fn execute_palette_selection(state: PaletteActionState) {
     match item {
         PaletteItem::Command(entry) => execute_command(
             entry.spec.id,
-            workspace,
-            state.frames,
-            state.sessions,
-            state.pane_focus_requests,
-            state.agent_state_status,
-            state.agent_config,
-            state.terminal_dump,
-            state.clipboard_dump,
+            CommandActionState {
+                workspace,
+                frames: state.frames,
+                sessions: state.sessions,
+                pane_focus_requests: state.pane_focus_requests,
+                agent_state_status: state.agent_state_status,
+                agent_config: state.agent_config,
+                terminal_dump: state.terminal_dump,
+                clipboard_dump: state.clipboard_dump,
+            },
         ),
         PaletteItem::DetachedSession { session_id, .. } => {
             workspace.update(|ws| {

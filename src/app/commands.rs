@@ -14,120 +14,86 @@ pub const MAX_VISIBLE_PANES: usize = 4;
 
 pub type PaneFocusRequests = [RwSignal<u64>; MAX_VISIBLE_PANES];
 
-pub fn execute_command(
-    command_id: CommandId,
-    workspace: RwSignal<Workspace>,
-    frames: RwSignal<Frames>,
-    sessions: RwSignal<Registry>,
-    pane_focus_requests: PaneFocusRequests,
-    agent_state_status: RwSignal<Option<String>>,
-    agent_config: AgentConfig,
-    terminal_dump: Option<PathBuf>,
-    clipboard_dump: Option<PathBuf>,
-) {
-    let state = workspace.with_untracked(command_state);
-    if !command_enabled(command_id, state) {
+#[derive(Clone)]
+pub struct CommandActionState {
+    pub workspace: RwSignal<Workspace>,
+    pub frames: RwSignal<Frames>,
+    pub sessions: RwSignal<Registry>,
+    pub pane_focus_requests: PaneFocusRequests,
+    pub agent_state_status: RwSignal<Option<String>>,
+    pub agent_config: AgentConfig,
+    pub terminal_dump: Option<PathBuf>,
+    pub clipboard_dump: Option<PathBuf>,
+}
+
+pub fn execute_command(command_id: CommandId, state: CommandActionState) {
+    let workspace = state.workspace;
+    let command_state = workspace.with_untracked(command_state);
+    if !command_enabled(command_id, command_state) {
         return;
     }
 
     match command_id {
-        CommandId::NewTerminal => open_terminal_tab(
-            workspace,
-            frames,
-            sessions,
-            pane_focus_requests,
-            terminal_dump,
-            clipboard_dump,
-        ),
+        CommandId::NewTerminal => open_terminal_tab(state),
         CommandId::NewAgent => {
-            open_agent_tab(
-                workspace,
-                frames,
-                sessions,
-                pane_focus_requests,
-                agent_state_status,
-                agent_config,
-            );
+            open_agent_tab(state);
         }
         CommandId::SplitActivePane => {
-            split_active_pane(
-                workspace,
-                frames,
-                sessions,
-                pane_focus_requests,
-                agent_state_status,
-                agent_config,
-                terminal_dump,
-                clipboard_dump,
-            );
+            split_active_pane(state);
         }
         CommandId::FocusNextPane => {
             workspace.update(Workspace::focus_next);
-            request_active_pane_focus(workspace, pane_focus_requests);
+            request_active_pane_focus(workspace, state.pane_focus_requests);
         }
         CommandId::CloseActivePane => {
             let index = workspace.with_untracked(|ws| ws.active_visible_index());
-            close_visible_pane(workspace, sessions, index);
+            close_visible_pane(workspace, state.sessions, index);
         }
         CommandId::CloseActiveTab => {
             let index = workspace.with_untracked(|ws| ws.active_tab_index());
-            close_tab(workspace, sessions, index);
+            close_tab(workspace, state.sessions, index);
         }
         CommandId::TerminateActiveSession => {
-            terminate_active_session(workspace, frames, sessions);
+            terminate_active_session(workspace, state.frames, state.sessions);
         }
     }
 }
 
-pub fn open_terminal_tab(
-    workspace: RwSignal<Workspace>,
-    frames: RwSignal<Frames>,
-    sessions: RwSignal<Registry>,
-    pane_focus_requests: PaneFocusRequests,
-    terminal_dump: Option<PathBuf>,
-    clipboard_dump: Option<PathBuf>,
-) {
+pub fn open_terminal_tab(state: CommandActionState) {
     let session_id = SessionId::new();
+    let workspace = state.workspace;
     workspace.update(|ws| {
         ws.open_tab(PaneKind::Terminal, Some(session_id));
     });
-    spawn_terminal_session(session_id, frames, sessions, terminal_dump, clipboard_dump);
-    request_active_pane_focus(workspace, pane_focus_requests);
+    spawn_terminal_session(
+        session_id,
+        state.frames,
+        state.sessions,
+        state.terminal_dump,
+        state.clipboard_dump,
+    );
+    request_active_pane_focus(workspace, state.pane_focus_requests);
 }
 
-pub fn open_agent_tab(
-    workspace: RwSignal<Workspace>,
-    frames: RwSignal<Frames>,
-    sessions: RwSignal<Registry>,
-    pane_focus_requests: PaneFocusRequests,
-    agent_state_status: RwSignal<Option<String>>,
-    agent_config: AgentConfig,
-) {
+pub fn open_agent_tab(state: CommandActionState) {
     let session_id = SessionId::new();
+    let workspace = state.workspace;
     workspace.update(|ws| {
         ws.open_tab(PaneKind::Agent, Some(session_id));
     });
     spawn_agent_session(
         session_id,
         workspace,
-        frames,
-        sessions,
-        agent_state_status,
-        agent_config,
+        state.frames,
+        state.sessions,
+        state.agent_state_status,
+        state.agent_config,
     );
-    request_active_pane_focus(workspace, pane_focus_requests);
+    request_active_pane_focus(workspace, state.pane_focus_requests);
 }
 
-pub fn split_active_pane(
-    workspace: RwSignal<Workspace>,
-    frames: RwSignal<Frames>,
-    sessions: RwSignal<Registry>,
-    pane_focus_requests: PaneFocusRequests,
-    agent_state_status: RwSignal<Option<String>>,
-    agent_config: AgentConfig,
-    terminal_dump: Option<PathBuf>,
-    clipboard_dump: Option<PathBuf>,
-) {
+pub fn split_active_pane(state: CommandActionState) {
+    let workspace = state.workspace;
     let kind = workspace.with_untracked(|ws| {
         ws.active_terminal_session_id()
             .map(|_| PaneKind::Terminal)
@@ -145,18 +111,24 @@ pub fn split_active_pane(
         else {
             return;
         };
-        spawn_terminal_session(session_id, frames, sessions, terminal_dump, clipboard_dump);
+        spawn_terminal_session(
+            session_id,
+            state.frames,
+            state.sessions,
+            state.terminal_dump,
+            state.clipboard_dump,
+        );
     } else if let Some(session_id) = workspace.with_untracked(|ws| ws.active_session_id()) {
         spawn_agent_session(
             session_id,
             workspace,
-            frames,
-            sessions,
-            agent_state_status,
-            agent_config,
+            state.frames,
+            state.sessions,
+            state.agent_state_status,
+            state.agent_config,
         );
     }
-    request_active_pane_focus(workspace, pane_focus_requests);
+    request_active_pane_focus(workspace, state.pane_focus_requests);
 }
 
 pub fn request_active_pane_focus(
