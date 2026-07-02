@@ -39,6 +39,30 @@ mod tests {
     }
 
     #[test]
+    fn split_active_with_new_session_uses_active_pane_kind() {
+        let mut workspace = Workspace::mvp();
+
+        let (terminal_kind, terminal_session_id) = workspace
+            .split_active_with_new_session()
+            .expect("terminal split");
+        assert_eq!(terminal_kind, PaneKind::Terminal);
+        assert_eq!(
+            workspace.visible_terminal_session_id(1),
+            Some(terminal_session_id)
+        );
+
+        workspace.open_tab(PaneKind::Agent, Some(SessionId::new()));
+        let (agent_kind, agent_session_id) = workspace
+            .split_active_with_new_session()
+            .expect("agent split");
+        assert_eq!(agent_kind, PaneKind::Agent);
+        assert_eq!(
+            workspace.visible_agent_session_id(1),
+            Some(agent_session_id)
+        );
+    }
+
+    #[test]
     fn detach_reports_session_and_removes_reference() {
         let mut workspace = Workspace::mvp();
         let session_id = SessionId::new();

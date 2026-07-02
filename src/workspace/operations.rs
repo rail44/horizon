@@ -58,6 +58,13 @@ impl Workspace {
         pane_id
     }
 
+    pub fn split_active_with_new_session(&mut self) -> Option<(PaneKind, SessionId)> {
+        let kind = self.visible_pane_kind(self.active_visible_index())?;
+        let session_id = SessionId::new();
+        self.split_active(kind, Some(session_id));
+        Some((kind, session_id))
+    }
+
     pub fn attach_session_to_new_tab(&mut self, session_id: SessionId) -> PaneId {
         self.open_tab(PaneKind::Terminal, Some(session_id))
     }

@@ -94,23 +94,15 @@ fn open_agent_tab(state: CommandActionState) {
 
 fn split_active_pane(state: CommandActionState) {
     let workspace = state.workspace;
-    let kind = workspace.with_untracked(|ws| {
-        ws.active_terminal_session_id()
-            .map(|_| PaneKind::Terminal)
-            .unwrap_or(PaneKind::Agent)
-    });
+    let mut split = None;
     workspace.update(|ws| {
-        if kind == PaneKind::Terminal {
-            ws.split_active(PaneKind::Terminal, Some(SessionId::new()));
-        } else {
-            ws.split_active(PaneKind::Agent, Some(SessionId::new()));
-        }
+        split = ws.split_active_with_new_session();
     });
+
+    let Some((kind, session_id)) = split else {
+        return;
+    };
     if kind == PaneKind::Terminal {
-        let Some(session_id) = workspace.with_untracked(|ws| ws.active_terminal_session_id())
-        else {
-            return;
-        };
         spawn_terminal_session(
             session_id,
             state.frames,
@@ -118,7 +110,7 @@ fn split_active_pane(state: CommandActionState) {
             state.terminal_dump,
             state.clipboard_dump,
         );
-    } else if let Some(session_id) = workspace.with_untracked(|ws| ws.active_session_id()) {
+    } else {
         spawn_agent_session(
             session_id,
             workspace,
