@@ -5,7 +5,7 @@ mod types;
 pub mod view;
 
 pub use input::{
-    active_agent_draft, active_terminal_sender, handle_agent_key, handle_terminal_key, trace_ime,
+    active_agent_draft, active_terminal_sender, handle_active_pane_key, trace_ime,
     visible_agent_sender, visible_terminal_sender, AgentDrafts,
 };
 pub use types::{

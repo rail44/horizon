@@ -6,8 +6,8 @@ use crate::input::{
 };
 use crate::session::Registry;
 use crate::terminal::TerminalCommand;
-use crate::workspace::Workspace;
-use floem::keyboard::KeyEvent;
+use crate::workspace::{PaneKind, Workspace};
+use floem::keyboard::{Key, KeyEvent};
 use floem::prelude::*;
 use floem::Clipboard;
 
@@ -51,7 +51,7 @@ pub fn visible_agent_sender(
     sessions.with_untracked(|registry| registry.agent_sender(session_id))
 }
 
-pub fn handle_terminal_key(
+fn handle_terminal_key(
     key_event: &KeyEvent,
     terminal_tx: Option<crossbeam_channel::Sender<TerminalCommand>>,
 ) -> bool {
@@ -88,7 +88,7 @@ pub fn handle_terminal_key(
     false
 }
 
-pub fn handle_agent_key(
+fn handle_agent_key(
     key_event: &KeyEvent,
     draft: RwSignal<String>,
     agent_tx: Option<crossbeam_channel::Sender<Command>>,
@@ -125,6 +125,36 @@ pub fn handle_agent_key(
         }
         None => false,
     }
+}
+
+pub fn handle_active_pane_key(
+    key_event: &KeyEvent,
+    workspace: RwSignal<Workspace>,
+    sessions: RwSignal<Registry>,
+    index: usize,
+    ime_composing: RwSignal<bool>,
+    agent_draft: RwSignal<String>,
+) -> bool {
+    if ime_composing.get_untracked() && matches!(key_event.key.logical_key, Key::Character(_)) {
+        return true;
+    }
+
+    if workspace.with(|ws| ws.active_visible_pane_is(index, PaneKind::Agent)) {
+        return handle_agent_key(
+            key_event,
+            agent_draft,
+            visible_agent_sender(workspace, sessions, index),
+        );
+    }
+
+    if workspace.with(|ws| ws.active_visible_pane_is(index, PaneKind::Terminal)) {
+        return handle_terminal_key(
+            key_event,
+            visible_terminal_sender(workspace, sessions, index),
+        );
+    }
+
+    false
 }
 
 pub fn trace_ime(message: &str) {

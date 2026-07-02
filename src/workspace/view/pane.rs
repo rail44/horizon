@@ -10,14 +10,13 @@ use crate::session::{Frames, Registry};
 use crate::terminal::TerminalFrame;
 use crate::ui::theme;
 use crate::workspace::{
-    handle_agent_key, handle_terminal_key, visible_agent_sender, visible_terminal_sender,
-    AgentDrafts, PaneKind, Workspace,
+    handle_active_pane_key, visible_agent_sender, visible_terminal_sender, AgentDrafts, PaneKind,
+    Workspace,
 };
 use floem::prelude::*;
 use floem::{
     action::set_ime_allowed,
     event::{Event, EventListener, EventPropagation},
-    keyboard::Key,
     peniko::kurbo::{Point, Size},
 };
 
@@ -199,37 +198,14 @@ pub(super) fn pane_view(
             }
         }
 
-        if !workspace.with(|ws| ws.active_visible_pane_is(index, PaneKind::Terminal)) {
-            if let Event::KeyDown(key_event) = event {
-                if ime_composing.get_untracked()
-                    && matches!(key_event.key.logical_key, Key::Character(_))
-                {
-                    return EventPropagation::Stop;
-                }
-
-                if workspace.with(|ws| ws.active_visible_pane_is(index, PaneKind::Agent))
-                    && handle_agent_key(
-                        key_event,
-                        agent_draft,
-                        visible_agent_sender(workspace, sessions, index),
-                    )
-                {
-                    return EventPropagation::Stop;
-                }
-            }
-            return EventPropagation::Continue;
-        }
-
         if let Event::KeyDown(key_event) = event {
-            if ime_composing.get_untracked()
-                && matches!(key_event.key.logical_key, Key::Character(_))
-            {
-                return EventPropagation::Stop;
-            }
-
-            if handle_terminal_key(
+            if handle_active_pane_key(
                 key_event,
-                visible_terminal_sender(workspace, sessions, index),
+                workspace,
+                sessions,
+                index,
+                ime_composing,
+                agent_draft,
             ) {
                 return EventPropagation::Stop;
             }
