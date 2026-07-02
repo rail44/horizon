@@ -9,7 +9,7 @@ use floem::{
 use horizon::agent_config::AgentConfig;
 use horizon::app::commands::{active_agent, active_text_input_pane};
 use horizon::app::runtime::{spawn_agent_session, spawn_terminal_session};
-use horizon::control_surface::{open_palette, ControlMode};
+use horizon::control_surface::{handle_control_key, open_palette, ControlMode};
 use horizon::input::is_palette_open_key;
 use horizon::session::Frames;
 use horizon::session::Registry;
@@ -19,7 +19,7 @@ use std::path::PathBuf;
 
 mod status_bar;
 
-use horizon::control_surface::view::{command_palette, handle_control_key, workspace_overview};
+use horizon::control_surface::view::{command_palette, workspace_overview};
 use horizon::workspace::view::{
     active_agent_draft, active_terminal_sender, tab_strip, trace_ime, workspace_view,
 };

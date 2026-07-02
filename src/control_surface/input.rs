@@ -126,7 +126,7 @@ pub fn handle_control_key(
     }
 }
 
-pub(super) fn handle_workspace_control_key(
+pub(crate) fn handle_workspace_control_key(
     key_event: &KeyEvent,
     workspace: RwSignal<Workspace>,
     palette_open: RwSignal<bool>,

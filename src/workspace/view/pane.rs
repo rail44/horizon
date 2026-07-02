@@ -4,7 +4,7 @@ use crate::agent::contract::Command;
 use crate::agent::frame::AgentFrame;
 use crate::agent_config::AgentConfig;
 use crate::app::commands::{close_visible_pane, PaneFocusRequests};
-use crate::control_surface::{open_palette, ControlMode};
+use crate::control_surface::{handle_control_key, open_palette, ControlMode};
 use crate::input::{
     is_palette_open_key, is_terminal_copy_key, is_terminal_paste_key, terminal_input_from_key,
     terminal_key_from_key, termwiz_modifiers,
@@ -22,13 +22,11 @@ use floem::{
     Clipboard,
 };
 
-use crate::agent::view as agent_view;
-use crate::control_surface::view::handle_control_key;
-
 use super::agent_controls::{agent_approval_actions, agent_composer, handle_agent_key};
 use super::chrome::pane_header;
 use super::terminal_output::terminal_output;
 use super::AgentDrafts;
+use crate::agent::view as agent_view;
 
 fn pane_terminal_sender(
     workspace: RwSignal<Workspace>,

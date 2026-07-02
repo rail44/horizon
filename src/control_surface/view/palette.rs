@@ -14,9 +14,9 @@ use floem::prelude::*;
 use floem::reactive::create_memo;
 
 use super::chrome::control_mode_tabs;
-use super::input::handle_control_key;
 use super::row::palette_item_row;
 use crate::control_surface::actions::execute_palette_selection;
+use crate::control_surface::handle_control_key;
 
 const PALETTE_ROW_HEIGHT: f64 = 48.0;
 const PALETTE_ROW_STYLE: ListRowStyle = ListRowStyle {
