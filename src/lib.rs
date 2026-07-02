@@ -2,7 +2,7 @@ pub mod agent;
 pub mod agent_config;
 pub(crate) mod app;
 pub mod commands;
-pub mod control_surface;
+pub(crate) mod control_surface;
 pub mod fonts;
 pub mod input;
 pub(crate) mod plugins;
