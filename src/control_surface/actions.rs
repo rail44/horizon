@@ -96,7 +96,7 @@ pub(crate) fn move_overview_selection(
 
 pub(crate) fn execute_palette_selection(state: PaletteActionState) {
     let command = state.command;
-    let workspace = command.runtime.workspace;
+    let workspace = command.workspace();
     let palette_query = state.palette_query;
     let palette_selection = state.palette_selection;
 

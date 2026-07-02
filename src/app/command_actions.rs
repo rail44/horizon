@@ -12,8 +12,22 @@ pub(crate) struct CommandActionState {
     pub(crate) pane_focus_requests: PaneFocusRequests,
 }
 
+impl CommandActionState {
+    pub(crate) fn workspace(&self) -> RwSignal<Workspace> {
+        self.runtime.workspace
+    }
+
+    pub(crate) fn frames(&self) -> RwSignal<Frames> {
+        self.runtime.frames
+    }
+
+    pub(crate) fn sessions(&self) -> RwSignal<Registry> {
+        self.runtime.sessions
+    }
+}
+
 pub(crate) fn execute_command(command_id: CommandId, state: CommandActionState) {
-    let workspace = state.runtime.workspace;
+    let workspace = state.workspace();
     let command_state = workspace.with_untracked(command_state);
     if !command_enabled(command_id, command_state) {
         return;
@@ -42,13 +56,13 @@ pub(crate) fn execute_command(command_id: CommandId, state: CommandActionState) 
             });
         }
         CommandId::TerminateActiveSession => {
-            terminate_active_session(workspace, state.runtime.frames, state.runtime.sessions);
+            terminate_active_session(workspace, state.frames(), state.sessions());
         }
     }
 }
 
 fn open_tab(state: CommandActionState, kind: PaneKind) {
-    let workspace = state.runtime.workspace;
+    let workspace = state.workspace();
     let mut session_id = None;
     workspace.update(|ws| {
         session_id = Some(ws.open_tab_with_new_session(kind));
@@ -59,7 +73,7 @@ fn open_tab(state: CommandActionState, kind: PaneKind) {
 }
 
 fn split_active_pane(state: CommandActionState) {
-    let workspace = state.runtime.workspace;
+    let workspace = state.workspace();
     let mut split = None;
     workspace.update(|ws| {
         split = ws.split_active_with_new_session();

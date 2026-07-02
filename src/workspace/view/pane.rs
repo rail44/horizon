@@ -49,9 +49,9 @@ pub(super) fn pane_view(
     let control_input = state.control_input_state();
     let open_palette_state = state.open_palette_state();
 
-    let workspace = control_input.command.runtime.workspace;
-    let frames = control_input.command.runtime.frames;
-    let sessions = control_input.command.runtime.sessions;
+    let workspace = control_input.command.workspace();
+    let frames = control_input.command.frames();
+    let sessions = control_input.command.sessions();
     let ime_composing = state.ime_composing;
     let ime_preedit = state.ime_preedit;
     let ime_cursor_area = state.ime_cursor_area;

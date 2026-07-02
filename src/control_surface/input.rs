@@ -33,7 +33,7 @@ impl ControlInputState {
 
     pub(crate) fn workspace_control_state(&self) -> WorkspaceControlState {
         WorkspaceControlState {
-            workspace: self.command.runtime.workspace,
+            workspace: self.command.workspace(),
             palette_open: self.palette_open,
             control_mode: self.control_mode,
             overview_selection: self.overview_selection,
@@ -60,7 +60,7 @@ impl WorkspaceControlState {
 }
 
 fn handle_palette_key(key_event: &KeyEvent, state: ControlInputState) -> bool {
-    let workspace = state.command.runtime.workspace;
+    let workspace = state.command.workspace();
     match &key_event.key.logical_key {
         Key::Named(NamedKey::Escape) => {
             close_palette(state.palette_open, state.palette_query);
