@@ -10,8 +10,8 @@ use crate::session::{Frames, Registry};
 use crate::terminal::TerminalFrame;
 use crate::ui::theme;
 use crate::workspace::{
-    handle_terminal_key, visible_agent_sender, visible_terminal_sender, AgentDrafts, PaneKind,
-    Workspace,
+    handle_agent_key, handle_terminal_key, visible_agent_sender, visible_terminal_sender,
+    AgentDrafts, PaneKind, Workspace,
 };
 use floem::prelude::*;
 use floem::{
@@ -21,7 +21,7 @@ use floem::{
     peniko::kurbo::{Point, Size},
 };
 
-use super::agent_controls::{agent_approval_actions, agent_composer, handle_agent_key};
+use super::agent_controls::{agent_approval_actions, agent_composer};
 use super::chrome::pane_header;
 use super::terminal_output::terminal_output;
 use crate::agent::view as agent_view;

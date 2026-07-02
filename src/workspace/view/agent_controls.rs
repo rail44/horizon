@@ -1,14 +1,9 @@
-use crate::agent::contract::{Command, ToolCallId};
+use crate::agent::contract::ToolCallId;
 use crate::fonts::HORIZON_FONT_FAMILY;
-use crate::input::{
-    agent_draft_action, is_terminal_paste_key, pop_last_grapheme_approx, AgentDraftAction,
-};
 use floem::prelude::*;
 use floem::{
     action::set_ime_cursor_area,
-    keyboard::KeyEvent,
     peniko::kurbo::{Point, Size},
-    Clipboard,
 };
 
 pub(super) fn agent_composer(
@@ -139,43 +134,4 @@ fn agent_approval_button(
                 .border(1.0)
                 .border_color(border)
         })
-}
-
-pub(super) fn handle_agent_key(
-    event: &KeyEvent,
-    draft: RwSignal<String>,
-    agent_tx: Option<crossbeam_channel::Sender<Command>>,
-) -> bool {
-    if is_terminal_paste_key(event) {
-        if let Ok(text) = Clipboard::get_contents() {
-            draft.update(|draft| draft.push_str(&text));
-            return true;
-        }
-    }
-
-    match agent_draft_action(&event.key.logical_key, event.modifiers) {
-        Some(AgentDraftAction::Insert(text)) => {
-            draft.update(|draft| draft.push_str(&text));
-            true
-        }
-        Some(AgentDraftAction::Backspace) => {
-            draft.update(|draft| {
-                pop_last_grapheme_approx(draft);
-            });
-            true
-        }
-        Some(AgentDraftAction::Submit) => {
-            let text = draft.with_untracked(|draft| draft.trim().to_string());
-            if text.is_empty() {
-                return true;
-            }
-            if let Some(tx) = agent_tx {
-                let command = Command::UserMessage { text };
-                let _ = tx.send(command);
-                draft.set(String::new());
-            }
-            true
-        }
-        None => false,
-    }
 }

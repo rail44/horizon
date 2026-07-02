@@ -1,8 +1,8 @@
 use crate::agent::contract::Command;
 use crate::app::commands::{active_agent, MAX_VISIBLE_PANES};
 use crate::input::{
-    is_terminal_copy_key, is_terminal_paste_key, terminal_input_from_key, terminal_key_from_key,
-    termwiz_modifiers,
+    agent_draft_action, is_terminal_copy_key, is_terminal_paste_key, pop_last_grapheme_approx,
+    terminal_input_from_key, terminal_key_from_key, termwiz_modifiers, AgentDraftAction,
 };
 use crate::session::Registry;
 use crate::terminal::TerminalCommand;
@@ -86,6 +86,45 @@ pub fn handle_terminal_key(
     }
 
     false
+}
+
+pub fn handle_agent_key(
+    key_event: &KeyEvent,
+    draft: RwSignal<String>,
+    agent_tx: Option<crossbeam_channel::Sender<Command>>,
+) -> bool {
+    if is_terminal_paste_key(key_event) {
+        if let Ok(text) = Clipboard::get_contents() {
+            draft.update(|draft| draft.push_str(&text));
+            return true;
+        }
+    }
+
+    match agent_draft_action(&key_event.key.logical_key, key_event.modifiers) {
+        Some(AgentDraftAction::Insert(text)) => {
+            draft.update(|draft| draft.push_str(&text));
+            true
+        }
+        Some(AgentDraftAction::Backspace) => {
+            draft.update(|draft| {
+                pop_last_grapheme_approx(draft);
+            });
+            true
+        }
+        Some(AgentDraftAction::Submit) => {
+            let text = draft.with_untracked(|draft| draft.trim().to_string());
+            if text.is_empty() {
+                return true;
+            }
+            if let Some(tx) = agent_tx {
+                let command = Command::UserMessage { text };
+                let _ = tx.send(command);
+                draft.set(String::new());
+            }
+            true
+        }
+        None => false,
+    }
 }
 
 pub fn trace_ime(message: &str) {
