@@ -6,7 +6,7 @@ use crate::agent_config::AgentConfig;
 use crate::app::runtime::{spawn_agent_session, spawn_terminal_session};
 use crate::commands::{command_enabled, CommandId};
 use crate::control_surface::command_state;
-use crate::session::{Frames, Registry};
+use crate::session::{Frames, Registry, SessionId};
 use crate::workspace::{request_active_pane_focus, PaneFocusRequests, PaneKind, Workspace};
 
 #[derive(Clone)]
@@ -29,9 +29,9 @@ pub(crate) fn execute_command(command_id: CommandId, state: CommandActionState) 
     }
 
     match command_id {
-        CommandId::NewTerminal => open_terminal_tab(state),
+        CommandId::NewTerminal => open_tab(state, PaneKind::Terminal),
         CommandId::NewAgent => {
-            open_agent_tab(state);
+            open_tab(state, PaneKind::Agent);
         }
         CommandId::SplitActivePane => {
             split_active_pane(state);
@@ -56,39 +56,35 @@ pub(crate) fn execute_command(command_id: CommandId, state: CommandActionState) 
     }
 }
 
-fn open_terminal_tab(state: CommandActionState) {
+fn open_tab(state: CommandActionState, kind: PaneKind) {
     let workspace = state.workspace;
     let mut session_id = None;
     workspace.update(|ws| {
-        session_id = Some(ws.open_tab_with_new_session(PaneKind::Terminal));
+        session_id = Some(ws.open_tab_with_new_session(kind));
     });
-    let session_id = session_id.expect("new terminal session");
-    spawn_terminal_session(
-        session_id,
-        state.frames,
-        state.sessions,
-        state.terminal_dump,
-        state.clipboard_dump,
-    );
+    let session_id = session_id.expect("new session");
+    spawn_session(kind, session_id, &state);
     request_active_pane_focus(workspace, state.pane_focus_requests);
 }
 
-fn open_agent_tab(state: CommandActionState) {
-    let workspace = state.workspace;
-    let mut session_id = None;
-    workspace.update(|ws| {
-        session_id = Some(ws.open_tab_with_new_session(PaneKind::Agent));
-    });
-    let session_id = session_id.expect("new agent session");
-    spawn_agent_session(
-        session_id,
-        workspace,
-        state.frames,
-        state.sessions,
-        state.agent_state_status,
-        state.agent_config,
-    );
-    request_active_pane_focus(workspace, state.pane_focus_requests);
+fn spawn_session(kind: PaneKind, session_id: SessionId, state: &CommandActionState) {
+    match kind {
+        PaneKind::Terminal => spawn_terminal_session(
+            session_id,
+            state.frames,
+            state.sessions,
+            state.terminal_dump.clone(),
+            state.clipboard_dump.clone(),
+        ),
+        PaneKind::Agent => spawn_agent_session(
+            session_id,
+            state.workspace,
+            state.frames,
+            state.sessions,
+            state.agent_state_status,
+            state.agent_config.clone(),
+        ),
+    }
 }
 
 fn split_active_pane(state: CommandActionState) {
@@ -101,24 +97,7 @@ fn split_active_pane(state: CommandActionState) {
     let Some((kind, session_id)) = split else {
         return;
     };
-    if kind == PaneKind::Terminal {
-        spawn_terminal_session(
-            session_id,
-            state.frames,
-            state.sessions,
-            state.terminal_dump,
-            state.clipboard_dump,
-        );
-    } else {
-        spawn_agent_session(
-            session_id,
-            workspace,
-            state.frames,
-            state.sessions,
-            state.agent_state_status,
-            state.agent_config,
-        );
-    }
+    spawn_session(kind, session_id, &state);
     request_active_pane_focus(workspace, state.pane_focus_requests);
 }
 
