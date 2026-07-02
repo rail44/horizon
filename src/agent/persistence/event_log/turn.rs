@@ -3,16 +3,16 @@ use uuid::Uuid;
 use crate::agent::contract::{Event, MessageRole, SessionState};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct TurnTracker {
+pub(super) struct TurnTracker {
     current_turn_id: Option<String>,
 }
 
 impl TurnTracker {
-    pub fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self::default()
     }
 
-    pub fn turn_id_for_event(&mut self, event: &Event) -> Option<String> {
+    pub(super) fn turn_id_for_event(&mut self, event: &Event) -> Option<String> {
         if matches!(
             event,
             Event::MessageCommitted(message) if message.role == MessageRole::User

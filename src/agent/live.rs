@@ -71,7 +71,7 @@ impl LiveState {
             .extend_events(events.into_iter().map(|event| event.event))
     }
 
-    pub fn with_event_log(
+    pub(crate) fn with_event_log(
         session_id: SessionId,
         provider_id: Option<ProviderId>,
         writer: event_log::WriterHandle,

@@ -4,19 +4,24 @@ use duckdb::params;
 use crate::agent::contract::{
     ApprovalRequest, Event, Message, MessageDelta, MessageRole, ToolCallRequest, ToolCallResult,
 };
+#[cfg(test)]
 use crate::session::SessionId;
 
-use super::{schema::PROJECTION_TABLES, session_id_text, Store};
+use super::Store;
+#[cfg(test)]
+use super::{schema::PROJECTION_TABLES, session_id_text};
 
 impl Store {
-    pub fn rebuild_projections(&self) -> Result<()> {
+    #[cfg(test)]
+    pub(crate) fn rebuild_projections(&self) -> Result<()> {
         for session in self.sessions()? {
             self.rebuild_projections_for_session(session.session_id)?;
         }
         Ok(())
     }
 
-    pub fn rebuild_projections_for_session(&self, session_id: SessionId) -> Result<()> {
+    #[cfg(test)]
+    pub(crate) fn rebuild_projections_for_session(&self, session_id: SessionId) -> Result<()> {
         let session_id_text = session_id_text(session_id)?;
         let events = self.events_for_session(session_id)?;
         self.clear_projections_for_session(&session_id_text)?;
@@ -34,6 +39,7 @@ impl Store {
         Ok(())
     }
 
+    #[cfg(test)]
     fn clear_projections_for_session(&self, session_id: &str) -> Result<()> {
         for table in PROJECTION_TABLES {
             self.conn.execute(

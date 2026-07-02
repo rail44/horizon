@@ -1,83 +1,91 @@
 use serde_json::Value;
 
-use crate::{
-    agent::contract::{Event, MessageRole, ProviderId, ToolCallId},
-    agent::frame::AgentFrame,
-    session::SessionId,
-};
+use crate::agent::contract::{Event, ProviderId};
+#[cfg(test)]
+use crate::agent::contract::{MessageRole, ToolCallId};
+#[cfg(test)]
+use crate::agent::frame::AgentFrame;
+use crate::session::SessionId;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AgentStoredSession {
-    pub session_id: SessionId,
-    pub provider_id: Option<ProviderId>,
-    pub last_sequence: i64,
-    pub updated_at: String,
+#[cfg(test)]
+pub(crate) struct AgentStoredSession {
+    pub(crate) session_id: SessionId,
+    pub(crate) provider_id: Option<ProviderId>,
+    pub(crate) last_sequence: i64,
+    pub(crate) updated_at: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AgentStoredSessionSnapshot {
-    pub session: AgentStoredSession,
-    pub frame: AgentFrame,
-    pub message_count: usize,
-    pub tool_call_count: usize,
-    pub approval_count: usize,
+#[cfg(test)]
+pub(crate) struct AgentStoredSessionSnapshot {
+    pub(crate) session: AgentStoredSession,
+    pub(crate) frame: AgentFrame,
+    pub(crate) message_count: usize,
+    pub(crate) tool_call_count: usize,
+    pub(crate) approval_count: usize,
 }
 
 #[derive(Clone, Debug)]
-pub struct AppendEvent {
-    pub session_id: SessionId,
-    pub turn_id: Option<String>,
-    pub provider_id: Option<ProviderId>,
-    pub event: Event,
-    pub provider_payload: Option<Value>,
+#[cfg(test)]
+pub(crate) struct AppendEvent {
+    pub(crate) session_id: SessionId,
+    pub(crate) turn_id: Option<String>,
+    pub(crate) provider_id: Option<ProviderId>,
+    pub(crate) event: Event,
+    pub(crate) provider_payload: Option<Value>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AgentStoredEvent {
-    pub event_id: String,
-    pub session_id: SessionId,
-    pub turn_id: Option<String>,
-    pub sequence: i64,
-    pub event_kind: String,
-    pub event: Event,
-    pub provider_id: Option<ProviderId>,
-    pub provider_payload: Option<Value>,
+pub(crate) struct AgentStoredEvent {
+    pub(crate) event_id: String,
+    pub(crate) session_id: SessionId,
+    pub(crate) turn_id: Option<String>,
+    pub(crate) sequence: i64,
+    pub(crate) event_kind: String,
+    pub(crate) event: Event,
+    pub(crate) provider_id: Option<ProviderId>,
+    pub(crate) provider_payload: Option<Value>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AgentStoredMessage {
-    pub event_id: String,
-    pub session_id: SessionId,
-    pub sequence: i64,
-    pub role: MessageRole,
-    pub text: String,
-    pub is_delta: bool,
+#[cfg(test)]
+pub(crate) struct AgentStoredMessage {
+    pub(crate) event_id: String,
+    pub(crate) session_id: SessionId,
+    pub(crate) sequence: i64,
+    pub(crate) role: MessageRole,
+    pub(crate) text: String,
+    pub(crate) is_delta: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AgentStoredToolCall {
-    pub event_id: String,
-    pub session_id: SessionId,
-    pub sequence: i64,
-    pub call_id: ToolCallId,
-    pub tool_id: String,
-    pub input: Value,
+#[cfg(test)]
+pub(crate) struct AgentStoredToolCall {
+    pub(crate) event_id: String,
+    pub(crate) session_id: SessionId,
+    pub(crate) sequence: i64,
+    pub(crate) call_id: ToolCallId,
+    pub(crate) tool_id: String,
+    pub(crate) input: Value,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AgentStoredToolResult {
-    pub event_id: String,
-    pub session_id: SessionId,
-    pub sequence: i64,
-    pub call_id: ToolCallId,
-    pub output: Value,
+#[cfg(test)]
+pub(crate) struct AgentStoredToolResult {
+    pub(crate) event_id: String,
+    pub(crate) session_id: SessionId,
+    pub(crate) sequence: i64,
+    pub(crate) call_id: ToolCallId,
+    pub(crate) output: Value,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AgentStoredApproval {
-    pub event_id: String,
-    pub session_id: SessionId,
-    pub sequence: i64,
-    pub call_id: ToolCallId,
-    pub reason: String,
+#[cfg(test)]
+pub(crate) struct AgentStoredApproval {
+    pub(crate) event_id: String,
+    pub(crate) session_id: SessionId,
+    pub(crate) sequence: i64,
+    pub(crate) call_id: ToolCallId,
+    pub(crate) reason: String,
 }

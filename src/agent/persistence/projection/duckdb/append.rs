@@ -1,16 +1,24 @@
-use anyhow::{Context, Result};
-use duckdb::{params, OptionalExt};
+#[cfg(test)]
+use anyhow::Context;
+use anyhow::Result;
+use duckdb::params;
+#[cfg(test)]
+use duckdb::OptionalExt;
+#[cfg(test)]
 use uuid::Uuid;
 
-use crate::{
-    agent::contract::{event_kind, Event, ProviderId},
-    session::SessionId,
-};
+#[cfg(test)]
+use crate::agent::contract::{event_kind, Event, ProviderId};
+#[cfg(test)]
+use crate::session::SessionId;
 
-use super::{session_id_text, AgentStoredEvent, AppendEvent, Store};
+use super::Store;
+#[cfg(test)]
+use super::{session_id_text, AgentStoredEvent, AppendEvent};
 
 impl Store {
-    pub fn append_event(&self, record: AppendEvent) -> Result<AgentStoredEvent> {
+    #[cfg(test)]
+    pub(crate) fn append_event(&self, record: AppendEvent) -> Result<AgentStoredEvent> {
         let session_id_text = session_id_text(record.session_id)?;
         let sequence = self.next_sequence(&session_id_text)?;
         let event_id = Uuid::new_v4().to_string();
@@ -70,7 +78,8 @@ impl Store {
         })
     }
 
-    pub fn append_events(
+    #[cfg(test)]
+    pub(crate) fn append_events(
         &self,
         session_id: SessionId,
         provider_id: Option<ProviderId>,
@@ -90,6 +99,7 @@ impl Store {
             .collect()
     }
 
+    #[cfg(test)]
     fn next_sequence(&self, session_id: &str) -> Result<i64> {
         self.conn
             .query_row(

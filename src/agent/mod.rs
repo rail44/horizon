@@ -1,7 +1,7 @@
 pub mod contract;
 pub mod frame;
 pub mod live;
-pub mod persistence;
+pub(crate) mod persistence;
 pub(crate) mod policy;
 pub mod providers;
 pub(crate) mod tools;

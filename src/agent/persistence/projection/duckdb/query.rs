@@ -1,18 +1,25 @@
 use anyhow::{Context, Result};
 use duckdb::params;
+#[cfg(test)]
 use serde_json::Value;
 
-use crate::agent::contract::{MessageRole, ProviderId, ToolCallId};
+use crate::agent::contract::ProviderId;
+#[cfg(test)]
+use crate::agent::contract::{MessageRole, ToolCallId};
+#[cfg(test)]
 use crate::agent::frame::{agent_frame_from_events, AgentFrame};
 use crate::session::SessionId;
 
+use super::{session_id_text, AgentStoredEvent, Store};
+#[cfg(test)]
 use super::{
-    session_id_text, AgentStoredApproval, AgentStoredEvent, AgentStoredMessage, AgentStoredSession,
-    AgentStoredSessionSnapshot, AgentStoredToolCall, AgentStoredToolResult, Store,
+    AgentStoredApproval, AgentStoredMessage, AgentStoredSession, AgentStoredSessionSnapshot,
+    AgentStoredToolCall, AgentStoredToolResult,
 };
 
 impl Store {
-    pub fn sessions(&self) -> Result<Vec<AgentStoredSession>> {
+    #[cfg(test)]
+    pub(crate) fn sessions(&self) -> Result<Vec<AgentStoredSession>> {
         let mut stmt = self.conn.prepare(
             "SELECT session_id, provider_id, last_sequence, updated_at::TEXT
              FROM agent_sessions
@@ -31,7 +38,8 @@ impl Store {
             .context("query agent sessions")
     }
 
-    pub fn session_snapshots(&self) -> Result<Vec<AgentStoredSessionSnapshot>> {
+    #[cfg(test)]
+    pub(crate) fn session_snapshots(&self) -> Result<Vec<AgentStoredSessionSnapshot>> {
         self.sessions()?
             .into_iter()
             .map(|session| {
@@ -47,7 +55,10 @@ impl Store {
             .collect()
     }
 
-    pub fn events_for_session(&self, session_id: SessionId) -> Result<Vec<AgentStoredEvent>> {
+    pub(crate) fn events_for_session(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Vec<AgentStoredEvent>> {
         let session_id_text = session_id_text(session_id)?;
         let mut stmt = self.conn.prepare(
             "SELECT
@@ -97,7 +108,8 @@ impl Store {
             .context("query agent events")
     }
 
-    pub fn frame_for_session(&self, session_id: SessionId) -> Result<AgentFrame> {
+    #[cfg(test)]
+    pub(crate) fn frame_for_session(&self, session_id: SessionId) -> Result<AgentFrame> {
         let events = self
             .events_for_session(session_id)?
             .into_iter()
@@ -106,7 +118,11 @@ impl Store {
         Ok(agent_frame_from_events(&events))
     }
 
-    pub fn messages_for_session(&self, session_id: SessionId) -> Result<Vec<AgentStoredMessage>> {
+    #[cfg(test)]
+    pub(crate) fn messages_for_session(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Vec<AgentStoredMessage>> {
         let session_id_text = session_id_text(session_id)?;
         let mut stmt = self.conn.prepare(
             "SELECT event_id, sequence, role, text, is_delta
@@ -129,7 +145,8 @@ impl Store {
             .context("query agent messages")
     }
 
-    pub fn tool_calls_for_session(
+    #[cfg(test)]
+    pub(crate) fn tool_calls_for_session(
         &self,
         session_id: SessionId,
     ) -> Result<Vec<AgentStoredToolCall>> {
@@ -156,7 +173,8 @@ impl Store {
             .context("query agent tool calls")
     }
 
-    pub fn tool_results_for_session(
+    #[cfg(test)]
+    pub(crate) fn tool_results_for_session(
         &self,
         session_id: SessionId,
     ) -> Result<Vec<AgentStoredToolResult>> {
@@ -182,7 +200,11 @@ impl Store {
             .context("query agent tool results")
     }
 
-    pub fn approvals_for_session(&self, session_id: SessionId) -> Result<Vec<AgentStoredApproval>> {
+    #[cfg(test)]
+    pub(crate) fn approvals_for_session(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Vec<AgentStoredApproval>> {
         let session_id_text = session_id_text(session_id)?;
         let mut stmt = self.conn.prepare(
             "SELECT event_id, sequence, call_id, reason
@@ -205,6 +227,7 @@ impl Store {
     }
 }
 
+#[cfg(test)]
 fn parse_role(value: &str) -> MessageRole {
     match value {
         "user" => MessageRole::User,
@@ -213,6 +236,7 @@ fn parse_role(value: &str) -> MessageRole {
     }
 }
 
+#[cfg(test)]
 fn parse_session_id_column(column: usize, value: &str) -> duckdb::Result<SessionId> {
     let json = serde_json::Value::String(value.to_string());
     serde_json::from_value(json).map_err(|err| {
@@ -220,6 +244,7 @@ fn parse_session_id_column(column: usize, value: &str) -> duckdb::Result<Session
     })
 }
 
+#[cfg(test)]
 fn parse_json_column(column: usize, json: &str) -> duckdb::Result<Value> {
     serde_json::from_str(json).map_err(|err| {
         duckdb::Error::FromSqlConversionFailure(column, duckdb::types::Type::Text, Box::new(err))

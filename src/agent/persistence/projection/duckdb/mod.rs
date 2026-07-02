@@ -14,17 +14,21 @@ mod schema;
 
 use schema::INITIALIZE_SCHEMA_SQL;
 
-pub use records::{
-    AgentStoredApproval, AgentStoredEvent, AgentStoredMessage, AgentStoredSession,
-    AgentStoredSessionSnapshot, AgentStoredToolCall, AgentStoredToolResult, AppendEvent,
+use records::AgentStoredEvent;
+
+#[cfg(test)]
+pub(crate) use records::{
+    AgentStoredApproval, AgentStoredMessage, AgentStoredSession, AgentStoredSessionSnapshot,
+    AgentStoredToolCall, AgentStoredToolResult, AppendEvent,
 };
 
-pub struct Store {
+pub(crate) struct Store {
     conn: Connection,
 }
 
 impl Store {
-    pub fn open_in_memory() -> Result<Self> {
+    #[cfg(test)]
+    pub(crate) fn open_in_memory() -> Result<Self> {
         let store = Self {
             conn: Connection::open_in_memory().context("open in-memory DuckDB agent store")?,
         };
@@ -32,7 +36,7 @@ impl Store {
         Ok(store)
     }
 
-    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+    pub(crate) fn open(path: impl AsRef<Path>) -> Result<Self> {
         let store = Self {
             conn: Connection::open(path).context("open DuckDB agent store")?,
         };

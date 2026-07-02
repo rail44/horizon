@@ -10,7 +10,7 @@ use crate::{
 
 use super::{Record, TurnTracker, WriterHandle, AGENT_EVENT_LOG_SCHEMA, AGENT_EVENT_LOG_VERSION};
 
-pub struct Appender {
+pub(crate) struct Appender {
     writer: WriterHandle,
     session_id: SessionId,
     provider_id: Option<ProviderId>,
@@ -18,7 +18,7 @@ pub struct Appender {
 }
 
 impl Appender {
-    pub fn new(
+    pub(crate) fn new(
         writer: WriterHandle,
         session_id: SessionId,
         provider_id: Option<ProviderId>,
@@ -31,7 +31,7 @@ impl Appender {
         }
     }
 
-    pub fn append_provider_events(&mut self, events: Vec<ProviderEvent>) -> Result<()> {
+    pub(crate) fn append_provider_events(&mut self, events: Vec<ProviderEvent>) -> Result<()> {
         for event in events {
             let turn_id = self.turn_tracker.turn_id_for_event(&event.event);
             let record = Record {

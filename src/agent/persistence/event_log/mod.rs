@@ -12,36 +12,36 @@ mod appender;
 mod turn;
 mod writer;
 
-pub use appender::Appender;
-pub use turn::TurnTracker;
-pub use writer::WriterHandle;
+pub(crate) use appender::Appender;
+use turn::TurnTracker;
+pub(crate) use writer::WriterHandle;
 
-pub const AGENT_EVENT_LOG_SCHEMA: &str = "horizon.agent.event_log";
-pub const AGENT_EVENT_LOG_VERSION: u32 = 1;
+pub(crate) const AGENT_EVENT_LOG_SCHEMA: &str = "horizon.agent.event_log";
+pub(crate) const AGENT_EVENT_LOG_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub struct Record {
-    pub schema: String,
-    pub version: u32,
-    pub event_id: String,
-    pub sequence: u64,
-    pub session_id: SessionId,
-    pub turn_id: Option<String>,
-    pub provider_id: Option<ProviderId>,
-    pub event_kind: String,
-    pub event: Event,
-    pub provider_payload: Option<serde_json::Value>,
-    pub created_at_unix_ms: u64,
+pub(crate) struct Record {
+    pub(crate) schema: String,
+    pub(crate) version: u32,
+    pub(crate) event_id: String,
+    pub(crate) sequence: u64,
+    pub(crate) session_id: SessionId,
+    pub(crate) turn_id: Option<String>,
+    pub(crate) provider_id: Option<ProviderId>,
+    pub(crate) event_kind: String,
+    pub(crate) event: Event,
+    pub(crate) provider_payload: Option<serde_json::Value>,
+    pub(crate) created_at_unix_ms: u64,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct ReadReport {
-    pub records: Vec<Record>,
-    pub corrupt_line_count: usize,
-    pub ignored_partial_line: bool,
+pub(crate) struct ReadReport {
+    pub(crate) records: Vec<Record>,
+    pub(crate) corrupt_line_count: usize,
+    pub(crate) ignored_partial_line: bool,
 }
 
-pub fn read(path: impl AsRef<Path>) -> Result<ReadReport> {
+pub(crate) fn read(path: impl AsRef<Path>) -> Result<ReadReport> {
     let path = path.as_ref();
     if !path.exists() {
         return Ok(ReadReport::default());

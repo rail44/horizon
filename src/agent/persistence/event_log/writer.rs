@@ -11,13 +11,13 @@ use crossbeam_channel::{unbounded, Receiver, Sender};
 use super::{read, Record};
 
 #[derive(Clone)]
-pub struct WriterHandle {
+pub(crate) struct WriterHandle {
     tx: Sender<AgentEventLogWriterCommand>,
     next_sequence: Arc<Mutex<u64>>,
 }
 
 impl WriterHandle {
-    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+    pub(crate) fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -44,7 +44,7 @@ impl WriterHandle {
         })
     }
 
-    pub fn append(&self, mut record: Record) -> Result<()> {
+    pub(crate) fn append(&self, mut record: Record) -> Result<()> {
         {
             let mut next_sequence = self
                 .next_sequence

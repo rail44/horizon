@@ -6,7 +6,7 @@ use crate::agent::persistence::event_log::Record;
 use super::{schema::CLEAR_ALL_AGENT_STATE_SQL, session_id_text, Store};
 
 impl Store {
-    pub fn replace_from_event_log_records(
+    pub(crate) fn replace_from_event_log_records(
         &self,
         records: impl IntoIterator<Item = Record>,
     ) -> Result<()> {

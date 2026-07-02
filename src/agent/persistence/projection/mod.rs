@@ -1,1 +1,1 @@
-pub mod duckdb;
+pub(crate) mod duckdb;

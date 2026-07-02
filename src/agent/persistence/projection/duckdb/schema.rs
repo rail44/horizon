@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS agent_approvals (
 
 ";
 
+#[cfg(test)]
 pub(super) const PROJECTION_TABLES: &[&str] = &[
     "agent_messages",
     "agent_tool_calls",
