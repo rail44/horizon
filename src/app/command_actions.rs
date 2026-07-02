@@ -41,15 +41,13 @@ pub(crate) fn execute_command(command_id: CommandId, state: CommandActionState) 
             request_active_pane_focus(workspace, state.pane_focus_requests);
         }
         CommandId::CloseActivePane => {
-            let index = workspace.with_untracked(|ws| ws.active_visible_index());
             workspace.update(|ws| {
-                ws.close_visible_pane(index);
+                ws.close_active_pane();
             });
         }
         CommandId::CloseActiveTab => {
-            let index = workspace.with_untracked(|ws| ws.active_tab_index());
             workspace.update(|ws| {
-                ws.close_tab_index(index);
+                ws.close_active_tab();
             });
         }
         CommandId::TerminateActiveSession => {

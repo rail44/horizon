@@ -217,6 +217,14 @@ impl Workspace {
         self.detach_pane(pane_id)
     }
 
+    pub fn close_active_pane(&mut self) -> Option<SessionId> {
+        self.close_visible_pane(self.active_visible_index())
+    }
+
+    pub fn close_active_tab(&mut self) -> Vec<SessionId> {
+        self.close_tab_index(self.active_tab_index())
+    }
+
     pub fn session_is_referenced(&self, session_id: SessionId) -> bool {
         self.panes
             .iter()

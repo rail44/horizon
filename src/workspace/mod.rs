@@ -277,6 +277,29 @@ mod tests {
     }
 
     #[test]
+    fn close_active_pane_detaches_active_session() {
+        let mut workspace = Workspace::mvp();
+        let second_session = SessionId::new();
+        workspace.attach_session_to_split(second_session);
+
+        assert_eq!(workspace.close_active_pane(), Some(second_session));
+        assert_eq!(workspace.visible_panes().len(), 1);
+        assert_eq!(workspace.detached_session_count(), 1);
+    }
+
+    #[test]
+    fn close_active_tab_returns_active_tab_sessions() {
+        let mut workspace = Workspace::mvp();
+        let first_session = workspace.active_terminal_session_id().expect("session");
+        let second_session = SessionId::new();
+        workspace.open_tab(PaneKind::Terminal, Some(second_session));
+
+        assert_eq!(workspace.close_active_tab(), vec![second_session]);
+        assert_eq!(workspace.tab_count(), 1);
+        assert_eq!(workspace.active_terminal_session_id(), Some(first_session));
+    }
+
+    #[test]
     fn close_active_tab_activates_neighbor() {
         let mut workspace = Workspace::mvp();
         workspace.open_tab(PaneKind::Agent, None);
