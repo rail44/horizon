@@ -1,4 +1,4 @@
-use crate::app::commands::CommandActionState;
+use crate::app::command_actions::CommandActionState;
 use crate::control_surface::ControlMode;
 use crate::input::palette_accepts_text_input;
 use crate::workspace::Workspace;

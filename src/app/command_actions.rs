@@ -10,7 +10,7 @@ use crate::session::{Frames, Registry, SessionId};
 use crate::workspace::{request_active_pane_focus, PaneFocusRequests, PaneKind, Workspace};
 
 #[derive(Clone)]
-pub struct CommandActionState {
+pub(crate) struct CommandActionState {
     pub(crate) workspace: RwSignal<Workspace>,
     pub(crate) frames: RwSignal<Frames>,
     pub(crate) sessions: RwSignal<Registry>,
@@ -21,7 +21,7 @@ pub struct CommandActionState {
     pub(crate) clipboard_dump: Option<PathBuf>,
 }
 
-pub fn execute_command(command_id: CommandId, state: CommandActionState) {
+pub(crate) fn execute_command(command_id: CommandId, state: CommandActionState) {
     let workspace = state.workspace;
     let command_state = workspace.with_untracked(command_state);
     if !command_enabled(command_id, command_state) {

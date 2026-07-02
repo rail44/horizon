@@ -1,4 +1,4 @@
-use crate::app::commands::CommandActionState;
+use crate::app::command_actions::CommandActionState;
 use crate::control_surface::view::{CommandPaletteState, WorkspaceOverviewState};
 use crate::control_surface::{ControlInputState, OpenPaletteState};
 use crate::workspace::view::WorkspaceViewState;
