@@ -19,13 +19,22 @@ const OVERVIEW_ROW_STYLE: ListRowStyle = ListRowStyle {
     padding_horiz: 14.0,
 };
 
-pub fn workspace_overview(
-    workspace: RwSignal<Workspace>,
-    palette_open: RwSignal<bool>,
-    control_mode: RwSignal<ControlMode>,
-    overview_selection: RwSignal<usize>,
-    palette_focus_request: RwSignal<u64>,
-) -> impl IntoView {
+#[derive(Clone)]
+pub struct WorkspaceOverviewState {
+    pub workspace: RwSignal<Workspace>,
+    pub palette_open: RwSignal<bool>,
+    pub control_mode: RwSignal<ControlMode>,
+    pub overview_selection: RwSignal<usize>,
+    pub palette_focus_request: RwSignal<u64>,
+}
+
+pub fn workspace_overview(state: WorkspaceOverviewState) -> impl IntoView {
+    let workspace = state.workspace;
+    let palette_open = state.palette_open;
+    let control_mode = state.control_mode;
+    let overview_selection = state.overview_selection;
+    let palette_focus_request = state.palette_focus_request;
+
     let items = create_memo(move |_| workspace.with(|ws| overview_items(ws)));
 
     let list = selectable_list(

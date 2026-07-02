@@ -25,23 +25,40 @@ const PALETTE_ROW_STYLE: ListRowStyle = ListRowStyle {
     padding_horiz: 12.0,
 };
 
-#[allow(clippy::too_many_arguments)]
-pub fn command_palette(
-    workspace: RwSignal<Workspace>,
-    frames: RwSignal<Frames>,
-    sessions: RwSignal<Registry>,
-    palette_open: RwSignal<bool>,
-    palette_query: RwSignal<String>,
-    palette_selection: RwSignal<usize>,
-    palette_focus_request: RwSignal<u64>,
-    pane_focus_requests: PaneFocusRequests,
-    agent_state_status: RwSignal<Option<String>>,
-    agent_config: AgentConfig,
-    control_mode: RwSignal<ControlMode>,
-    overview_selection: RwSignal<usize>,
-    terminal_dump: Option<PathBuf>,
-    clipboard_dump: Option<PathBuf>,
-) -> impl IntoView {
+#[derive(Clone)]
+pub struct CommandPaletteState {
+    pub workspace: RwSignal<Workspace>,
+    pub frames: RwSignal<Frames>,
+    pub sessions: RwSignal<Registry>,
+    pub palette_open: RwSignal<bool>,
+    pub palette_query: RwSignal<String>,
+    pub palette_selection: RwSignal<usize>,
+    pub palette_focus_request: RwSignal<u64>,
+    pub pane_focus_requests: PaneFocusRequests,
+    pub agent_state_status: RwSignal<Option<String>>,
+    pub agent_config: AgentConfig,
+    pub control_mode: RwSignal<ControlMode>,
+    pub overview_selection: RwSignal<usize>,
+    pub terminal_dump: Option<PathBuf>,
+    pub clipboard_dump: Option<PathBuf>,
+}
+
+pub fn command_palette(state: CommandPaletteState) -> impl IntoView {
+    let workspace = state.workspace;
+    let frames = state.frames;
+    let sessions = state.sessions;
+    let palette_open = state.palette_open;
+    let palette_query = state.palette_query;
+    let palette_selection = state.palette_selection;
+    let palette_focus_request = state.palette_focus_request;
+    let pane_focus_requests = state.pane_focus_requests;
+    let agent_state_status = state.agent_state_status;
+    let agent_config = state.agent_config;
+    let control_mode = state.control_mode;
+    let overview_selection = state.overview_selection;
+    let terminal_dump = state.terminal_dump;
+    let clipboard_dump = state.clipboard_dump;
+
     let terminal_dump_for_key = terminal_dump.clone();
     let clipboard_dump_for_key = clipboard_dump.clone();
     let agent_config_for_key = agent_config.clone();
