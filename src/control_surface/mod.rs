@@ -7,7 +7,7 @@ pub use types::{
 };
 
 use crate::commands::{command_entries, filter_command_entries, CommandState};
-use crate::control_surface::query::{normalize_palette_query, palette_matches, session_kind_label};
+use crate::control_surface::query::{normalize_palette_query, palette_matches};
 use crate::workspace::Workspace;
 
 pub fn command_state(workspace: &Workspace) -> CommandState {
@@ -79,7 +79,7 @@ pub fn palette_items(workspace: &Workspace, query: &str) -> Vec<PaletteItem> {
                         "detached",
                         "session",
                         session.title.as_str(),
-                        session_kind_label(session.kind),
+                        session.kind.label(),
                         display_number.as_str(),
                     ],
                 )

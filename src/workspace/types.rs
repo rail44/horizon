@@ -139,6 +139,24 @@ impl From<SessionKind> for PaneKind {
     }
 }
 
+impl PaneKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Terminal => "terminal",
+            Self::Agent => "agent",
+        }
+    }
+}
+
+impl SessionKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Terminal => "terminal",
+            Self::Agent => "agent",
+        }
+    }
+}
+
 impl Pane {
     pub(super) fn new(kind: PaneKind, session_id: Option<SessionId>) -> Self {
         Self {

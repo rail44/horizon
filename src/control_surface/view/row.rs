@@ -3,8 +3,6 @@ use floem::peniko::Color;
 use crate::control_surface::{OverviewItem, PaletteItem};
 use crate::ui::list_row::ListRow;
 
-use super::super::query::{pane_kind_label, session_kind_label};
-
 pub(super) fn palette_item_row(item: &PaletteItem) -> ListRow {
     ListRow {
         badge: palette_kind_label(item).to_string(),
@@ -58,7 +56,7 @@ fn palette_description(item: &PaletteItem) -> String {
             ..
         } => format!(
             "Detached {} session #{}; attach to the active tab as a split.",
-            session_kind_label(*kind),
+            kind.label(),
             display_number
         ),
         PaletteItem::Tab {
@@ -119,7 +117,7 @@ fn overview_description(item: &OverviewItem) -> String {
             ..
         } => format!(
             "Detached {} session #{} · Enter attaches as split",
-            session_kind_label(*kind),
+            kind.label(),
             display_number
         ),
         OverviewItem::Pane {
@@ -135,7 +133,7 @@ fn overview_description(item: &OverviewItem) -> String {
             } else {
                 "Pane in inactive tab"
             };
-            format!("{state} · {} pane", pane_kind_label(*kind))
+            format!("{state} · {} pane", kind.label())
         }
     }
 }
