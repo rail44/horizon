@@ -15,7 +15,7 @@ use floem::reactive::create_memo;
 
 use super::chrome::control_mode_tabs;
 use super::row::palette_item_row;
-use crate::control_surface::actions::execute_palette_selection;
+use crate::control_surface::actions::{execute_palette_selection, PaletteActionState};
 use crate::control_surface::handle_control_key;
 
 const PALETTE_ROW_HEIGHT: f64 = 48.0;
@@ -43,38 +43,40 @@ pub struct CommandPaletteState {
     pub clipboard_dump: Option<PathBuf>,
 }
 
+impl CommandPaletteState {
+    fn control_input_state(&self) -> ControlInputState {
+        ControlInputState {
+            workspace: self.workspace,
+            frames: self.frames,
+            sessions: self.sessions,
+            palette_open: self.palette_open,
+            palette_query: self.palette_query,
+            palette_selection: self.palette_selection,
+            control_mode: self.control_mode,
+            overview_selection: self.overview_selection,
+            pane_focus_requests: self.pane_focus_requests,
+            agent_state_status: self.agent_state_status,
+            agent_config: self.agent_config.clone(),
+            terminal_dump: self.terminal_dump.clone(),
+            clipboard_dump: self.clipboard_dump.clone(),
+        }
+    }
+
+    fn palette_action_state(&self) -> PaletteActionState {
+        self.control_input_state().palette_action_state()
+    }
+}
+
 pub fn command_palette(state: CommandPaletteState) -> impl IntoView {
+    let control_input = state.control_input_state();
+    let palette_action = state.palette_action_state();
+
     let workspace = state.workspace;
-    let frames = state.frames;
-    let sessions = state.sessions;
     let palette_open = state.palette_open;
     let palette_query = state.palette_query;
     let palette_selection = state.palette_selection;
     let palette_focus_request = state.palette_focus_request;
-    let pane_focus_requests = state.pane_focus_requests;
-    let agent_state_status = state.agent_state_status;
-    let agent_config = state.agent_config;
     let control_mode = state.control_mode;
-    let overview_selection = state.overview_selection;
-    let terminal_dump = state.terminal_dump;
-    let clipboard_dump = state.clipboard_dump;
-
-    let control_input = ControlInputState {
-        workspace,
-        frames,
-        sessions,
-        palette_open,
-        palette_query,
-        palette_selection,
-        control_mode,
-        overview_selection,
-        pane_focus_requests,
-        agent_state_status,
-        agent_config: agent_config.clone(),
-        terminal_dump: terminal_dump.clone(),
-        clipboard_dump: clipboard_dump.clone(),
-    };
-    let palette_action = control_input.clone().palette_action_state();
 
     let items = create_memo(move |_| {
         let query = palette_query.get();

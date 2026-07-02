@@ -28,19 +28,26 @@ pub struct WorkspaceOverviewState {
     pub palette_focus_request: RwSignal<u64>,
 }
 
+impl WorkspaceOverviewState {
+    fn workspace_control_state(&self) -> WorkspaceControlState {
+        WorkspaceControlState {
+            workspace: self.workspace,
+            palette_open: self.palette_open,
+            control_mode: self.control_mode,
+            overview_selection: self.overview_selection,
+        }
+    }
+}
+
 pub fn workspace_overview(state: WorkspaceOverviewState) -> impl IntoView {
+    let workspace_control = state.workspace_control_state();
+    let overview_action = workspace_control.overview_action_state();
+
     let workspace = state.workspace;
     let palette_open = state.palette_open;
     let control_mode = state.control_mode;
     let overview_selection = state.overview_selection;
     let palette_focus_request = state.palette_focus_request;
-    let workspace_control = WorkspaceControlState {
-        workspace,
-        palette_open,
-        control_mode,
-        overview_selection,
-    };
-    let overview_action = workspace_control.overview_action_state();
 
     let items = create_memo(move |_| workspace.with(|ws| overview_items(ws)));
 
