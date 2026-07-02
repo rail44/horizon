@@ -5,45 +5,26 @@ use crate::agent::frame::AgentFrame;
 use crate::agent_config::AgentConfig;
 use crate::app::commands::{close_visible_pane, PaneFocusRequests};
 use crate::control_surface::{handle_control_key, open_palette, ControlMode};
-use crate::input::{
-    is_palette_open_key, is_terminal_copy_key, is_terminal_paste_key, terminal_input_from_key,
-    terminal_key_from_key, termwiz_modifiers,
-};
+use crate::input::is_palette_open_key;
 use crate::session::{Frames, Registry};
-use crate::terminal::{TerminalCommand, TerminalFrame};
+use crate::terminal::TerminalFrame;
 use crate::ui::theme;
-use crate::workspace::{AgentDrafts, PaneKind, Workspace};
+use crate::workspace::{
+    handle_terminal_key, visible_agent_sender, visible_terminal_sender, AgentDrafts, PaneKind,
+    Workspace,
+};
 use floem::prelude::*;
 use floem::{
     action::set_ime_allowed,
     event::{Event, EventListener, EventPropagation},
     keyboard::Key,
     peniko::kurbo::{Point, Size},
-    Clipboard,
 };
 
 use super::agent_controls::{agent_approval_actions, agent_composer, handle_agent_key};
 use super::chrome::pane_header;
 use super::terminal_output::terminal_output;
 use crate::agent::view as agent_view;
-
-fn pane_terminal_sender(
-    workspace: RwSignal<Workspace>,
-    sessions: RwSignal<Registry>,
-    index: usize,
-) -> Option<crossbeam_channel::Sender<TerminalCommand>> {
-    let session_id = workspace.with_untracked(|ws| ws.visible_terminal_session_id(index))?;
-    sessions.with_untracked(|registry| registry.terminal_sender(session_id))
-}
-
-fn pane_agent_sender(
-    workspace: RwSignal<Workspace>,
-    sessions: RwSignal<Registry>,
-    index: usize,
-) -> Option<crossbeam_channel::Sender<Command>> {
-    let session_id = workspace.with_untracked(|ws| ws.visible_agent_session_id(index))?;
-    sessions.with_untracked(|registry| registry.agent_sender(session_id))
-}
 
 pub(super) fn pane_view(
     workspace: RwSignal<Workspace>,
@@ -123,7 +104,7 @@ pub(super) fn pane_view(
                     None
                 }
             },
-            pane_terminal_sender(workspace, sessions, index),
+            visible_terminal_sender(workspace, sessions, index),
             ime_cursor_area,
             is_terminal,
         ),
@@ -132,12 +113,12 @@ pub(super) fn pane_view(
             is_agent,
             pending_approval,
             move |call_id| {
-                if let Some(tx) = pane_agent_sender(workspace, sessions, index) {
+                if let Some(tx) = visible_agent_sender(workspace, sessions, index) {
                     let _ = tx.send(Command::ApproveToolCall { call_id });
                 }
             },
             move |call_id| {
-                if let Some(tx) = pane_agent_sender(workspace, sessions, index) {
+                if let Some(tx) = visible_agent_sender(workspace, sessions, index) {
                     let _ = tx.send(Command::DenyToolCall {
                         call_id,
                         reason: Some("Denied by user".to_string()),
@@ -263,7 +244,7 @@ pub(super) fn pane_view(
                 }) && handle_agent_key(
                     key_event,
                     agent_draft,
-                    pane_agent_sender(workspace, sessions, index),
+                    visible_agent_sender(workspace, sessions, index),
                 ) {
                     return EventPropagation::Stop;
                 }
@@ -278,39 +259,11 @@ pub(super) fn pane_view(
                 return EventPropagation::Stop;
             }
 
-            if is_terminal_paste_key(key_event) {
-                if let (Some(tx), Ok(text)) = (
-                    pane_terminal_sender(workspace, sessions, index),
-                    Clipboard::get_contents(),
-                ) {
-                    let _ = tx.send(TerminalCommand::Paste(text));
-                    return EventPropagation::Stop;
-                }
-            }
-
-            if is_terminal_copy_key(key_event) {
-                if let Some(tx) = pane_terminal_sender(workspace, sessions, index) {
-                    let _ = tx.send(TerminalCommand::CopySelection);
-                    return EventPropagation::Stop;
-                }
-            }
-
-            if let Some(key) = terminal_key_from_key(key_event) {
-                if let Some(tx) = pane_terminal_sender(workspace, sessions, index) {
-                    let _ = tx.send(TerminalCommand::Key {
-                        key,
-                        modifiers: termwiz_modifiers(key_event.modifiers),
-                        is_down: true,
-                    });
-                    return EventPropagation::Stop;
-                }
-            }
-
-            if let Some(bytes) = terminal_input_from_key(key_event) {
-                if let Some(tx) = pane_terminal_sender(workspace, sessions, index) {
-                    let _ = tx.send(TerminalCommand::Input(bytes));
-                    return EventPropagation::Stop;
-                }
+            if handle_terminal_key(
+                key_event,
+                visible_terminal_sender(workspace, sessions, index),
+            ) {
+                return EventPropagation::Stop;
             }
         }
 
