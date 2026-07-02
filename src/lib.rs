@@ -9,6 +9,6 @@ pub(crate) mod plugins;
 pub mod session;
 pub(crate) mod terminal;
 pub mod ui;
-pub mod workspace;
+pub(crate) mod workspace;
 
 pub use app::view::app_view;
