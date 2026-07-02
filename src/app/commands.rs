@@ -206,21 +206,13 @@ pub fn close_tab(workspace: RwSignal<Workspace>, _sessions: RwSignal<Registry>, 
 }
 
 pub fn active_terminal(workspace: RwSignal<Workspace>) -> bool {
-    workspace.with(|ws| {
-        ws.visible_panes()
-            .get(ws.active_visible_index())
-            .is_some_and(|pane| pane.kind == PaneKind::Terminal)
-    })
+    workspace.with(|ws| ws.active_pane_is(PaneKind::Terminal))
 }
 
 pub fn active_agent(workspace: RwSignal<Workspace>) -> bool {
-    workspace.with(|ws| {
-        ws.visible_panes()
-            .get(ws.active_visible_index())
-            .is_some_and(|pane| pane.kind == PaneKind::Agent)
-    })
+    workspace.with(|ws| ws.active_pane_is(PaneKind::Agent))
 }
 
 pub fn active_text_input_pane(workspace: RwSignal<Workspace>) -> bool {
-    active_terminal(workspace) || active_agent(workspace)
+    workspace.with(|ws| ws.active_pane_accepts_text_input())
 }

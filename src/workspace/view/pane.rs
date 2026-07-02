@@ -69,22 +69,12 @@ pub(super) fn pane_view(
     };
 
     let active = move || workspace.with(|ws| ws.active_visible_index() == index);
-    let exists = move || workspace.with(|ws| ws.visible_panes().get(index).is_some());
+    let exists = move || workspace.with(|ws| ws.visible_pane_kind(index).is_some());
     let closeable = move || workspace.with(|ws| ws.visible_panes().len() > 1);
-    let is_agent = move || {
-        workspace.with(|ws| {
-            ws.visible_panes()
-                .get(index)
-                .is_some_and(|pane| pane.kind == PaneKind::Agent)
-        })
-    };
-    let is_terminal = move || {
-        workspace.with(|ws| {
-            ws.visible_panes()
-                .get(index)
-                .is_some_and(|pane| pane.kind == PaneKind::Terminal)
-        })
-    };
+    let is_agent =
+        move || workspace.with(|ws| ws.visible_pane_kind(index) == Some(PaneKind::Agent));
+    let is_terminal =
+        move || workspace.with(|ws| ws.visible_pane_kind(index) == Some(PaneKind::Terminal));
     let pending_approval = move || {
         let session_id = workspace.with(|ws| ws.visible_agent_session_id(index))?;
         frames.with(|frames| frames.agent_frame(session_id).pending_approval_call_id())
@@ -156,25 +146,13 @@ pub(super) fn pane_view(
         workspace.update(|ws| {
             ws.activate_visible_pane(index);
         });
-        if workspace.with(|ws| {
-            ws.active_visible_index() == index
-                && ws
-                    .visible_panes()
-                    .get(index)
-                    .is_some_and(|pane| matches!(pane.kind, PaneKind::Terminal | PaneKind::Agent))
-        }) {
+        if workspace.with(|ws| ws.active_visible_pane_accepts_text_input(index)) {
             set_ime_allowed(true);
         }
         EventPropagation::Stop
     })
     .on_event(EventListener::FocusGained, move |_| {
-        set_ime_allowed(workspace.with(|ws| {
-            ws.active_visible_index() == index
-                && ws
-                    .visible_panes()
-                    .get(index)
-                    .is_some_and(|pane| matches!(pane.kind, PaneKind::Terminal | PaneKind::Agent))
-        }));
+        set_ime_allowed(workspace.with(|ws| ws.active_visible_pane_accepts_text_input(index)));
         EventPropagation::Continue
     })
     .on_event(EventListener::FocusLost, move |_| {
@@ -221,13 +199,7 @@ pub(super) fn pane_view(
             }
         }
 
-        if !workspace.with(|ws| {
-            ws.active_visible_index() == index
-                && ws
-                    .visible_panes()
-                    .get(index)
-                    .is_some_and(|pane| pane.kind == PaneKind::Terminal)
-        }) {
+        if !workspace.with(|ws| ws.active_visible_pane_is(index, PaneKind::Terminal)) {
             if let Event::KeyDown(key_event) = event {
                 if ime_composing.get_untracked()
                     && matches!(key_event.key.logical_key, Key::Character(_))
@@ -235,17 +207,13 @@ pub(super) fn pane_view(
                     return EventPropagation::Stop;
                 }
 
-                if workspace.with(|ws| {
-                    ws.active_visible_index() == index
-                        && ws
-                            .visible_panes()
-                            .get(index)
-                            .is_some_and(|pane| pane.kind == PaneKind::Agent)
-                }) && handle_agent_key(
-                    key_event,
-                    agent_draft,
-                    visible_agent_sender(workspace, sessions, index),
-                ) {
+                if workspace.with(|ws| ws.active_visible_pane_is(index, PaneKind::Agent))
+                    && handle_agent_key(
+                        key_event,
+                        agent_draft,
+                        visible_agent_sender(workspace, sessions, index),
+                    )
+                {
                     return EventPropagation::Stop;
                 }
             }

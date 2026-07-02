@@ -360,6 +360,33 @@ impl Workspace {
             .collect()
     }
 
+    pub fn visible_pane_kind(&self, index: usize) -> Option<PaneKind> {
+        self.visible_panes().get(index).map(|pane| pane.kind)
+    }
+
+    pub fn active_pane_is(&self, kind: PaneKind) -> bool {
+        self.visible_pane_kind(self.active_visible_index()) == Some(kind)
+    }
+
+    pub fn active_visible_pane_is(&self, index: usize, kind: PaneKind) -> bool {
+        self.active_visible_index() == index && self.visible_pane_kind(index) == Some(kind)
+    }
+
+    pub fn active_pane_accepts_text_input(&self) -> bool {
+        matches!(
+            self.visible_pane_kind(self.active_visible_index()),
+            Some(PaneKind::Terminal | PaneKind::Agent)
+        )
+    }
+
+    pub fn active_visible_pane_accepts_text_input(&self, index: usize) -> bool {
+        self.active_visible_index() == index
+            && matches!(
+                self.visible_pane_kind(index),
+                Some(PaneKind::Terminal | PaneKind::Agent)
+            )
+    }
+
     pub fn active_visible_index(&self) -> usize {
         let active = self.active_tab().map(|tab| tab.active);
         self.visible_pane_ids()
