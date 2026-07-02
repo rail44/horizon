@@ -25,28 +25,52 @@ use super::chrome::pane_header;
 use super::terminal_output::terminal_output;
 use crate::agent::view as agent_view;
 
+#[derive(Clone)]
+pub(super) struct PaneViewState {
+    pub(super) workspace: RwSignal<Workspace>,
+    pub(super) frames: RwSignal<Frames>,
+    pub(super) sessions: RwSignal<Registry>,
+    pub(super) ime_composing: RwSignal<bool>,
+    pub(super) ime_preedit: RwSignal<Option<String>>,
+    pub(super) ime_cursor_area: RwSignal<(Point, Size)>,
+    pub(super) palette_open: RwSignal<bool>,
+    pub(super) palette_query: RwSignal<String>,
+    pub(super) palette_selection: RwSignal<usize>,
+    pub(super) palette_focus_request: RwSignal<u64>,
+    pub(super) pane_focus_requests: PaneFocusRequests,
+    pub(super) agent_drafts: AgentDrafts,
+    pub(super) agent_config: AgentConfig,
+    pub(super) control_mode: RwSignal<ControlMode>,
+    pub(super) overview_selection: RwSignal<usize>,
+    pub(super) terminal_dump: Option<PathBuf>,
+    pub(super) clipboard_dump: Option<PathBuf>,
+    pub(super) agent_state_status: RwSignal<Option<String>>,
+}
+
 pub(super) fn pane_view(
-    workspace: RwSignal<Workspace>,
-    frames: RwSignal<Frames>,
-    sessions: RwSignal<Registry>,
-    ime_composing: RwSignal<bool>,
-    ime_preedit: RwSignal<Option<String>>,
-    ime_cursor_area: RwSignal<(Point, Size)>,
+    state: PaneViewState,
     index: usize,
-    palette_open: RwSignal<bool>,
-    palette_query: RwSignal<String>,
-    palette_selection: RwSignal<usize>,
-    palette_focus_request: RwSignal<u64>,
     focus_request: RwSignal<u64>,
-    pane_focus_requests: PaneFocusRequests,
-    agent_drafts: AgentDrafts,
-    agent_config: AgentConfig,
-    control_mode: RwSignal<ControlMode>,
-    overview_selection: RwSignal<usize>,
-    terminal_dump: Option<PathBuf>,
-    clipboard_dump: Option<PathBuf>,
-    agent_state_status: RwSignal<Option<String>>,
 ) -> impl IntoView {
+    let workspace = state.workspace;
+    let frames = state.frames;
+    let sessions = state.sessions;
+    let ime_composing = state.ime_composing;
+    let ime_preedit = state.ime_preedit;
+    let ime_cursor_area = state.ime_cursor_area;
+    let palette_open = state.palette_open;
+    let palette_query = state.palette_query;
+    let palette_selection = state.palette_selection;
+    let palette_focus_request = state.palette_focus_request;
+    let pane_focus_requests = state.pane_focus_requests;
+    let agent_drafts = state.agent_drafts;
+    let agent_config = state.agent_config;
+    let control_mode = state.control_mode;
+    let overview_selection = state.overview_selection;
+    let terminal_dump = state.terminal_dump;
+    let clipboard_dump = state.clipboard_dump;
+    let agent_state_status = state.agent_state_status;
+
     let terminal_frame = move || {
         let Some(session_id) = workspace.with(|ws| ws.visible_terminal_session_id(index)) else {
             return TerminalFrame::from_text("No split yet".to_string());
