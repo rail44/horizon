@@ -8,7 +8,7 @@ use crate::app::runtime::{spawn_agent_session, spawn_terminal_session};
 use crate::commands::{command_enabled, CommandId};
 use crate::control_surface::command_state;
 use crate::session::{Frames, Registry, SessionId};
-use crate::workspace::{PaneKind, Workspace};
+use crate::workspace::{active_text_input_pane, PaneKind, Workspace};
 
 pub const MAX_VISIBLE_PANES: usize = 4;
 
@@ -171,16 +171,4 @@ pub fn close_tab(workspace: RwSignal<Workspace>, index: usize) {
     workspace.update(|ws| {
         ws.close_tab_index(index);
     });
-}
-
-pub fn active_terminal(workspace: RwSignal<Workspace>) -> bool {
-    workspace.with(|ws| ws.active_pane_is(PaneKind::Terminal))
-}
-
-pub fn active_agent(workspace: RwSignal<Workspace>) -> bool {
-    workspace.with(|ws| ws.active_pane_is(PaneKind::Agent))
-}
-
-pub fn active_text_input_pane(workspace: RwSignal<Workspace>) -> bool {
-    workspace.with(|ws| ws.active_pane_accepts_text_input())
 }

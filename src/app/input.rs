@@ -2,11 +2,12 @@ use floem::action::{set_ime_allowed, set_ime_cursor_area};
 use floem::event::{Event, EventPropagation};
 use floem::prelude::*;
 
-use crate::app::commands::{active_agent, active_text_input_pane};
 use crate::control_surface::{handle_control_key, open_palette, ControlMode};
 use crate::input::is_palette_open_key;
 use crate::terminal::TerminalCommand;
-use crate::workspace::{active_agent_draft, active_terminal_sender, trace_ime};
+use crate::workspace::{
+    active_agent, active_agent_draft, active_terminal_sender, active_text_input_pane, trace_ime,
+};
 
 use super::context::{control_input_state, open_palette_state};
 use super::state::AppState;
