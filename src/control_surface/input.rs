@@ -12,7 +12,8 @@ use floem::prelude::*;
 
 use crate::control_surface::actions::{
     close_control_surface, close_palette, execute_overview_selection, execute_palette_selection,
-    move_overview_selection, move_palette_selection, update_palette_query, PaletteActionState,
+    move_overview_selection, move_palette_selection, update_palette_query, OverviewActionState,
+    PaletteActionState,
 };
 
 #[derive(Clone)]
@@ -30,6 +31,14 @@ pub struct ControlInputState {
     pub agent_config: AgentConfig,
     pub terminal_dump: Option<PathBuf>,
     pub clipboard_dump: Option<PathBuf>,
+}
+
+#[derive(Clone)]
+pub(crate) struct WorkspaceControlState {
+    pub(crate) workspace: RwSignal<Workspace>,
+    pub(crate) palette_open: RwSignal<bool>,
+    pub(crate) control_mode: RwSignal<ControlMode>,
+    pub(crate) overview_selection: RwSignal<usize>,
 }
 
 fn handle_palette_key(key_event: &KeyEvent, state: ControlInputState) -> bool {
@@ -121,46 +130,56 @@ pub fn handle_control_key(key_event: &KeyEvent, state: ControlInputState) -> boo
 
     match state.control_mode.get_untracked() {
         ControlMode::Commands => handle_palette_key(key_event, state),
-        ControlMode::Workspace => handle_workspace_control_key(
-            key_event,
-            state.workspace,
-            state.palette_open,
-            state.control_mode,
-            state.overview_selection,
-        ),
+        ControlMode::Workspace => {
+            handle_workspace_control_key(key_event, workspace_control_state(&state))
+        }
+    }
+}
+
+fn workspace_control_state(state: &ControlInputState) -> WorkspaceControlState {
+    WorkspaceControlState {
+        workspace: state.workspace,
+        palette_open: state.palette_open,
+        control_mode: state.control_mode,
+        overview_selection: state.overview_selection,
     }
 }
 
 pub(crate) fn handle_workspace_control_key(
     key_event: &KeyEvent,
-    workspace: RwSignal<Workspace>,
-    palette_open: RwSignal<bool>,
-    control_mode: RwSignal<ControlMode>,
-    overview_selection: RwSignal<usize>,
+    state: WorkspaceControlState,
 ) -> bool {
     if is_control_mode_switch_key(key_event) {
-        switch_control_mode(control_mode);
+        switch_control_mode(state.control_mode);
         return true;
     }
 
     match &key_event.key.logical_key {
         Key::Named(NamedKey::Escape) => {
-            close_control_surface(palette_open);
+            close_control_surface(state.palette_open);
             true
         }
         Key::Named(NamedKey::Enter) => {
-            execute_overview_selection(workspace, palette_open, overview_selection);
+            execute_overview_selection(overview_action_state(&state));
             true
         }
         Key::Named(NamedKey::ArrowUp) => {
-            move_overview_selection(workspace, overview_selection, -1);
+            move_overview_selection(state.workspace, state.overview_selection, -1);
             true
         }
         Key::Named(NamedKey::ArrowDown) => {
-            move_overview_selection(workspace, overview_selection, 1);
+            move_overview_selection(state.workspace, state.overview_selection, 1);
             true
         }
         _ => false,
+    }
+}
+
+fn overview_action_state(state: &WorkspaceControlState) -> OverviewActionState {
+    OverviewActionState {
+        workspace: state.workspace,
+        palette_open: state.palette_open,
+        overview_selection: state.overview_selection,
     }
 }
 

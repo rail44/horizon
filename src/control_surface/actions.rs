@@ -24,6 +24,13 @@ pub(crate) struct PaletteActionState {
     pub(crate) clipboard_dump: Option<PathBuf>,
 }
 
+#[derive(Clone)]
+pub(crate) struct OverviewActionState {
+    pub(crate) workspace: RwSignal<Workspace>,
+    pub(crate) palette_open: RwSignal<bool>,
+    pub(crate) overview_selection: RwSignal<usize>,
+}
+
 pub fn open_palette(
     palette_open: RwSignal<bool>,
     palette_query: RwSignal<String>,
@@ -45,11 +52,10 @@ pub(crate) fn close_control_surface(palette_open: RwSignal<bool>) {
     palette_open.set(false);
 }
 
-pub(crate) fn execute_overview_selection(
-    workspace: RwSignal<Workspace>,
-    palette_open: RwSignal<bool>,
-    overview_selection: RwSignal<usize>,
-) {
+pub(crate) fn execute_overview_selection(state: OverviewActionState) {
+    let workspace = state.workspace;
+    let overview_selection = state.overview_selection;
+
     let selection = overview_selection.get_untracked();
     let item = workspace.with_untracked(|ws| {
         let items = overview_items(ws);
@@ -62,7 +68,7 @@ pub(crate) fn execute_overview_selection(
         return;
     };
 
-    close_control_surface(palette_open);
+    close_control_surface(state.palette_open);
     workspace.update(|ws| match item {
         OverviewItem::Tab { index, .. } => {
             ws.activate_tab_index(index);

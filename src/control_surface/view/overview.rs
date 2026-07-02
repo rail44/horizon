@@ -9,8 +9,8 @@ use floem::reactive::create_memo;
 
 use super::chrome::control_mode_tabs;
 use super::row::overview_item_row;
-use crate::control_surface::actions::execute_overview_selection;
-use crate::control_surface::input::handle_workspace_control_key;
+use crate::control_surface::actions::{execute_overview_selection, OverviewActionState};
+use crate::control_surface::input::{handle_workspace_control_key, WorkspaceControlState};
 
 const OVERVIEW_ROW_HEIGHT: f64 = 52.0;
 const OVERVIEW_ROW_STYLE: ListRowStyle = ListRowStyle {
@@ -34,6 +34,17 @@ pub fn workspace_overview(state: WorkspaceOverviewState) -> impl IntoView {
     let control_mode = state.control_mode;
     let overview_selection = state.overview_selection;
     let palette_focus_request = state.palette_focus_request;
+    let workspace_control = WorkspaceControlState {
+        workspace,
+        palette_open,
+        control_mode,
+        overview_selection,
+    };
+    let overview_action = OverviewActionState {
+        workspace,
+        palette_open,
+        overview_selection,
+    };
 
     let items = create_memo(move |_| workspace.with(|ws| overview_items(ws)));
 
@@ -42,6 +53,7 @@ pub fn workspace_overview(state: WorkspaceOverviewState) -> impl IntoView {
         move || overview_selection.get(),
         move |index| {
             let row = move || items.with(|items| items.get(index).map(overview_item_row));
+            let overview_action = overview_action.clone();
 
             list_row(
                 row,
@@ -49,7 +61,7 @@ pub fn workspace_overview(state: WorkspaceOverviewState) -> impl IntoView {
                 OVERVIEW_ROW_STYLE,
                 move || {
                     overview_selection.set(index);
-                    execute_overview_selection(workspace, palette_open, overview_selection);
+                    execute_overview_selection(overview_action.clone());
                 },
             )
         },
@@ -92,13 +104,7 @@ pub fn workspace_overview(state: WorkspaceOverviewState) -> impl IntoView {
     })
     .on_event(EventListener::KeyDown, move |event| {
         if let Event::KeyDown(key_event) = event {
-            if handle_workspace_control_key(
-                key_event,
-                workspace,
-                palette_open,
-                control_mode,
-                overview_selection,
-            ) {
+            if handle_workspace_control_key(key_event, workspace_control.clone()) {
                 return EventPropagation::Stop;
             }
         }
