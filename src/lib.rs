@@ -5,7 +5,7 @@ pub mod commands;
 pub mod control_surface;
 pub mod fonts;
 pub mod input;
-pub mod plugins;
+pub(crate) mod plugins;
 pub mod session;
 pub mod terminal;
 pub mod ui;
