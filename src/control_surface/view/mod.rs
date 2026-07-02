@@ -3,5 +3,5 @@ mod overview;
 mod palette;
 mod row;
 
-pub use overview::{workspace_overview, WorkspaceOverviewState};
-pub use palette::{command_palette, CommandPaletteState};
+pub(crate) use overview::{workspace_overview, WorkspaceOverviewState};
+pub(crate) use palette::{command_palette, CommandPaletteState};
