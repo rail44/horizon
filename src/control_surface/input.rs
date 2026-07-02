@@ -52,7 +52,7 @@ impl ControlInputState {
         }
     }
 
-    fn workspace_control_state(&self) -> WorkspaceControlState {
+    pub(crate) fn workspace_control_state(&self) -> WorkspaceControlState {
         WorkspaceControlState {
             workspace: self.workspace,
             palette_open: self.palette_open,

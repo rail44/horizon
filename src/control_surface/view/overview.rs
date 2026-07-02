@@ -2,7 +2,6 @@ use crate::control_surface::{overview_items, ControlMode, OVERVIEW_VISIBLE_ROWS}
 use crate::ui::list_row::{list_row, ListRowStyle};
 use crate::ui::selectable_list::selectable_list;
 use crate::ui::theme;
-use crate::workspace::Workspace;
 use floem::event::{Event, EventListener, EventPropagation};
 use floem::prelude::*;
 use floem::reactive::create_memo;
@@ -21,21 +20,13 @@ const OVERVIEW_ROW_STYLE: ListRowStyle = ListRowStyle {
 
 #[derive(Clone)]
 pub struct WorkspaceOverviewState {
-    pub workspace: RwSignal<Workspace>,
-    pub palette_open: RwSignal<bool>,
-    pub control_mode: RwSignal<ControlMode>,
-    pub overview_selection: RwSignal<usize>,
+    pub(crate) workspace_control: WorkspaceControlState,
     pub palette_focus_request: RwSignal<u64>,
 }
 
 impl WorkspaceOverviewState {
     fn workspace_control_state(&self) -> WorkspaceControlState {
-        WorkspaceControlState {
-            workspace: self.workspace,
-            palette_open: self.palette_open,
-            control_mode: self.control_mode,
-            overview_selection: self.overview_selection,
-        }
+        self.workspace_control.clone()
     }
 }
 
@@ -43,10 +34,10 @@ pub fn workspace_overview(state: WorkspaceOverviewState) -> impl IntoView {
     let workspace_control = state.workspace_control_state();
     let overview_action = workspace_control.overview_action_state();
 
-    let workspace = state.workspace;
-    let palette_open = state.palette_open;
-    let control_mode = state.control_mode;
-    let overview_selection = state.overview_selection;
+    let workspace = workspace_control.workspace;
+    let palette_open = workspace_control.palette_open;
+    let control_mode = workspace_control.control_mode;
+    let overview_selection = workspace_control.overview_selection;
     let palette_focus_request = state.palette_focus_request;
 
     let items = create_memo(move |_| workspace.with(|ws| overview_items(ws)));

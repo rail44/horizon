@@ -36,10 +36,7 @@ pub(super) fn command_palette_state(state: &AppState) -> CommandPaletteState {
 
 pub(super) fn workspace_overview_state(state: &AppState) -> WorkspaceOverviewState {
     WorkspaceOverviewState {
-        workspace: state.workspace,
-        palette_open: state.palette_open,
-        control_mode: state.control_mode,
-        overview_selection: state.overview_selection,
+        workspace_control: control_input_state(state).workspace_control_state(),
         palette_focus_request: state.palette_focus_request,
     }
 }
