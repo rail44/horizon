@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::agent_config::AgentConfig;
 use crate::app::commands::PaneFocusRequests;
-use crate::control_surface::{palette_items, ControlMode, PALETTE_VISIBLE_ROWS};
+use crate::control_surface::{palette_items, ControlInputState, ControlMode, PALETTE_VISIBLE_ROWS};
 use crate::session::Frames;
 use crate::session::Registry;
 use crate::ui::list_row::{list_row, ListRowStyle};
@@ -59,9 +59,21 @@ pub fn command_palette(state: CommandPaletteState) -> impl IntoView {
     let terminal_dump = state.terminal_dump;
     let clipboard_dump = state.clipboard_dump;
 
-    let terminal_dump_for_key = terminal_dump.clone();
-    let clipboard_dump_for_key = clipboard_dump.clone();
-    let agent_config_for_key = agent_config.clone();
+    let control_input = ControlInputState {
+        workspace,
+        frames,
+        sessions,
+        palette_open,
+        palette_query,
+        palette_selection,
+        control_mode,
+        overview_selection,
+        pane_focus_requests,
+        agent_state_status,
+        agent_config: agent_config.clone(),
+        terminal_dump: terminal_dump.clone(),
+        clipboard_dump: clipboard_dump.clone(),
+    };
 
     let items = create_memo(move |_| {
         let query = palette_query.get();
@@ -133,22 +145,7 @@ pub fn command_palette(state: CommandPaletteState) -> impl IntoView {
     })
     .on_event(EventListener::KeyDown, move |event| {
         if let Event::KeyDown(key_event) = event {
-            if handle_control_key(
-                key_event,
-                workspace,
-                frames,
-                sessions,
-                palette_open,
-                palette_query,
-                palette_selection,
-                control_mode,
-                overview_selection,
-                pane_focus_requests,
-                agent_state_status,
-                agent_config_for_key.clone(),
-                terminal_dump_for_key.clone(),
-                clipboard_dump_for_key.clone(),
-            ) {
+            if handle_control_key(key_event, control_input.clone()) {
                 return EventPropagation::Stop;
             }
         }

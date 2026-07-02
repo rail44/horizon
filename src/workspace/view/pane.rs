@@ -4,7 +4,7 @@ use crate::agent::contract::Command;
 use crate::agent::frame::AgentFrame;
 use crate::agent_config::AgentConfig;
 use crate::app::commands::{close_visible_pane, PaneFocusRequests};
-use crate::control_surface::{handle_control_key, open_palette, ControlMode};
+use crate::control_surface::{handle_control_key, open_palette, ControlInputState, ControlMode};
 use crate::input::is_palette_open_key;
 use crate::session::{Frames, Registry};
 use crate::terminal::TerminalFrame;
@@ -70,6 +70,21 @@ pub(super) fn pane_view(
     let terminal_dump = state.terminal_dump;
     let clipboard_dump = state.clipboard_dump;
     let agent_state_status = state.agent_state_status;
+    let control_input = ControlInputState {
+        workspace,
+        frames,
+        sessions,
+        palette_open,
+        palette_query,
+        palette_selection,
+        control_mode,
+        overview_selection,
+        pane_focus_requests,
+        agent_state_status,
+        agent_config,
+        terminal_dump,
+        clipboard_dump,
+    };
 
     let terminal_frame = move || {
         let Some(session_id) = workspace.with(|ws| ws.visible_terminal_session_id(index)) else {
@@ -187,22 +202,7 @@ pub(super) fn pane_view(
     .on_event(EventListener::KeyDown, move |event| {
         if let Event::KeyDown(key_event) = event {
             if palette_open.get_untracked() {
-                if handle_control_key(
-                    key_event,
-                    workspace,
-                    frames,
-                    sessions,
-                    palette_open,
-                    palette_query,
-                    palette_selection,
-                    control_mode,
-                    overview_selection,
-                    pane_focus_requests,
-                    agent_state_status,
-                    agent_config.clone(),
-                    terminal_dump.clone(),
-                    clipboard_dump.clone(),
-                ) {
+                if handle_control_key(key_event, control_input.clone()) {
                     return EventPropagation::Stop;
                 }
             }

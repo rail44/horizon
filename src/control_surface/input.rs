@@ -15,113 +15,114 @@ use crate::control_surface::actions::{
     move_overview_selection, move_palette_selection, update_palette_query,
 };
 
-fn handle_palette_key(
-    key_event: &KeyEvent,
-    workspace: RwSignal<Workspace>,
-    frames: RwSignal<Frames>,
-    sessions: RwSignal<Registry>,
-    palette_open: RwSignal<bool>,
-    palette_query: RwSignal<String>,
-    palette_selection: RwSignal<usize>,
-    pane_focus_requests: PaneFocusRequests,
-    agent_state_status: RwSignal<Option<String>>,
-    agent_config: AgentConfig,
-    terminal_dump: Option<PathBuf>,
-    clipboard_dump: Option<PathBuf>,
-) -> bool {
+#[derive(Clone)]
+pub struct ControlInputState {
+    pub workspace: RwSignal<Workspace>,
+    pub frames: RwSignal<Frames>,
+    pub sessions: RwSignal<Registry>,
+    pub palette_open: RwSignal<bool>,
+    pub palette_query: RwSignal<String>,
+    pub palette_selection: RwSignal<usize>,
+    pub control_mode: RwSignal<ControlMode>,
+    pub overview_selection: RwSignal<usize>,
+    pub pane_focus_requests: PaneFocusRequests,
+    pub agent_state_status: RwSignal<Option<String>>,
+    pub agent_config: AgentConfig,
+    pub terminal_dump: Option<PathBuf>,
+    pub clipboard_dump: Option<PathBuf>,
+}
+
+fn handle_palette_key(key_event: &KeyEvent, state: ControlInputState) -> bool {
     match &key_event.key.logical_key {
         Key::Named(NamedKey::Escape) => {
-            close_palette(palette_open, palette_query);
+            close_palette(state.palette_open, state.palette_query);
             true
         }
         Key::Named(NamedKey::Enter) => {
             execute_palette_selection(
-                workspace,
-                frames,
-                sessions,
-                palette_open,
-                palette_query,
-                palette_selection,
-                pane_focus_requests,
-                agent_state_status,
-                agent_config,
-                terminal_dump,
-                clipboard_dump,
+                state.workspace,
+                state.frames,
+                state.sessions,
+                state.palette_open,
+                state.palette_query,
+                state.palette_selection,
+                state.pane_focus_requests,
+                state.agent_state_status,
+                state.agent_config,
+                state.terminal_dump,
+                state.clipboard_dump,
             );
             true
         }
         Key::Named(NamedKey::ArrowUp) => {
-            move_palette_selection(workspace, palette_query, palette_selection, -1);
+            move_palette_selection(
+                state.workspace,
+                state.palette_query,
+                state.palette_selection,
+                -1,
+            );
             true
         }
         Key::Named(NamedKey::ArrowDown) => {
-            move_palette_selection(workspace, palette_query, palette_selection, 1);
+            move_palette_selection(
+                state.workspace,
+                state.palette_query,
+                state.palette_selection,
+                1,
+            );
             true
         }
         Key::Named(NamedKey::Backspace) => {
-            update_palette_query(workspace, palette_query, palette_selection, |query| {
-                query.pop();
-            });
+            update_palette_query(
+                state.workspace,
+                state.palette_query,
+                state.palette_selection,
+                |query| {
+                    query.pop();
+                },
+            );
             true
         }
         Key::Named(NamedKey::Space) => {
-            update_palette_query(workspace, palette_query, palette_selection, |query| {
-                query.push(' ');
-            });
+            update_palette_query(
+                state.workspace,
+                state.palette_query,
+                state.palette_selection,
+                |query| {
+                    query.push(' ');
+                },
+            );
             true
         }
         Key::Character(text) if palette_accepts_text_input(key_event.modifiers) => {
-            update_palette_query(workspace, palette_query, palette_selection, |query| {
-                query.push_str(text.as_str());
-            });
+            update_palette_query(
+                state.workspace,
+                state.palette_query,
+                state.palette_selection,
+                |query| {
+                    query.push_str(text.as_str());
+                },
+            );
             true
         }
         _ => false,
     }
 }
 
-pub fn handle_control_key(
-    key_event: &KeyEvent,
-    workspace: RwSignal<Workspace>,
-    frames: RwSignal<Frames>,
-    sessions: RwSignal<Registry>,
-    palette_open: RwSignal<bool>,
-    palette_query: RwSignal<String>,
-    palette_selection: RwSignal<usize>,
-    control_mode: RwSignal<ControlMode>,
-    overview_selection: RwSignal<usize>,
-    pane_focus_requests: PaneFocusRequests,
-    agent_state_status: RwSignal<Option<String>>,
-    agent_config: AgentConfig,
-    terminal_dump: Option<PathBuf>,
-    clipboard_dump: Option<PathBuf>,
-) -> bool {
+pub fn handle_control_key(key_event: &KeyEvent, state: ControlInputState) -> bool {
     if is_control_mode_switch_key(key_event) {
-        switch_control_mode(control_mode);
+        switch_control_mode(state.control_mode);
         return true;
     }
 
-    match control_mode.get_untracked() {
-        ControlMode::Commands => handle_palette_key(
-            key_event,
-            workspace,
-            frames,
-            sessions,
-            palette_open,
-            palette_query,
-            palette_selection,
-            pane_focus_requests,
-            agent_state_status,
-            agent_config,
-            terminal_dump,
-            clipboard_dump,
-        ),
+    match state.control_mode.get_untracked() {
+        ControlMode::Commands => handle_palette_key(key_event, state),
         ControlMode::Workspace => handle_workspace_control_key(
             key_event,
-            workspace,
-            palette_open,
-            control_mode,
-            overview_selection,
+            state.workspace,
+            state.palette_open,
+            state.control_mode,
+            state.overview_selection,
         ),
     }
 }

@@ -3,7 +3,7 @@ use floem::event::{Event, EventPropagation};
 use floem::prelude::*;
 
 use crate::app::commands::{active_agent, active_text_input_pane};
-use crate::control_surface::{handle_control_key, open_palette, ControlMode};
+use crate::control_surface::{handle_control_key, open_palette, ControlInputState, ControlMode};
 use crate::input::is_palette_open_key;
 use crate::terminal::TerminalCommand;
 use crate::workspace::{active_agent_draft, active_terminal_sender, trace_ime};
@@ -92,22 +92,7 @@ impl AppInput {
     pub fn handle_key_down(&self, event: &Event) -> EventPropagation {
         if let Event::KeyDown(key_event) = event {
             if self.state.palette_open.get_untracked()
-                && handle_control_key(
-                    key_event,
-                    self.state.workspace,
-                    self.state.frames,
-                    self.state.sessions,
-                    self.state.palette_open,
-                    self.state.palette_query,
-                    self.state.palette_selection,
-                    self.state.control_mode,
-                    self.state.overview_selection,
-                    self.state.pane_focus_requests,
-                    self.state.agent_state_status,
-                    self.state.agent_config.clone(),
-                    self.state.terminal_dump.clone(),
-                    self.state.clipboard_dump.clone(),
-                )
+                && handle_control_key(key_event, control_input_state(&self.state))
             {
                 return EventPropagation::Stop;
             }
@@ -128,5 +113,23 @@ impl AppInput {
         }
 
         EventPropagation::Continue
+    }
+}
+
+fn control_input_state(state: &AppState) -> ControlInputState {
+    ControlInputState {
+        workspace: state.workspace,
+        frames: state.frames,
+        sessions: state.sessions,
+        palette_open: state.palette_open,
+        palette_query: state.palette_query,
+        palette_selection: state.palette_selection,
+        control_mode: state.control_mode,
+        overview_selection: state.overview_selection,
+        pane_focus_requests: state.pane_focus_requests,
+        agent_state_status: state.agent_state_status,
+        agent_config: state.agent_config.clone(),
+        terminal_dump: state.terminal_dump.clone(),
+        clipboard_dump: state.clipboard_dump.clone(),
     }
 }
