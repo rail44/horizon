@@ -67,14 +67,14 @@ impl AppState {
     }
 
     pub(super) fn session_runtime_state(&self) -> SessionRuntimeState {
-        SessionRuntimeState {
-            workspace: self.workspace,
-            frames: self.frames,
-            sessions: self.sessions,
-            agent_state_status: self.agent_state_status,
-            agent_config: self.agent_config.clone(),
-            terminal_dump: self.terminal_dump.clone(),
-            clipboard_dump: self.clipboard_dump.clone(),
-        }
+        SessionRuntimeState::new(
+            self.workspace,
+            self.frames,
+            self.sessions,
+            self.agent_state_status,
+            self.agent_config.clone(),
+            self.terminal_dump.clone(),
+            self.clipboard_dump.clone(),
+        )
     }
 }

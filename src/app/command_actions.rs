@@ -14,15 +14,15 @@ pub(crate) struct CommandActionState {
 
 impl CommandActionState {
     pub(crate) fn workspace(&self) -> RwSignal<Workspace> {
-        self.runtime.workspace
+        self.runtime.workspace()
     }
 
     pub(crate) fn frames(&self) -> RwSignal<Frames> {
-        self.runtime.frames
+        self.runtime.frames()
     }
 
     pub(crate) fn sessions(&self) -> RwSignal<Registry> {
-        self.runtime.sessions
+        self.runtime.sessions()
     }
 }
 

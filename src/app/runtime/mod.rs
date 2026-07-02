@@ -14,13 +14,47 @@ use terminal::spawn_terminal_session;
 
 #[derive(Clone)]
 pub(crate) struct SessionRuntimeState {
-    pub(crate) workspace: RwSignal<Workspace>,
-    pub(crate) frames: RwSignal<Frames>,
-    pub(crate) sessions: RwSignal<Registry>,
-    pub(crate) agent_state_status: RwSignal<Option<String>>,
-    pub(crate) agent_config: AgentConfig,
-    pub(crate) terminal_dump: Option<PathBuf>,
-    pub(crate) clipboard_dump: Option<PathBuf>,
+    workspace: RwSignal<Workspace>,
+    frames: RwSignal<Frames>,
+    sessions: RwSignal<Registry>,
+    agent_state_status: RwSignal<Option<String>>,
+    agent_config: AgentConfig,
+    terminal_dump: Option<PathBuf>,
+    clipboard_dump: Option<PathBuf>,
+}
+
+impl SessionRuntimeState {
+    pub(crate) fn new(
+        workspace: RwSignal<Workspace>,
+        frames: RwSignal<Frames>,
+        sessions: RwSignal<Registry>,
+        agent_state_status: RwSignal<Option<String>>,
+        agent_config: AgentConfig,
+        terminal_dump: Option<PathBuf>,
+        clipboard_dump: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            workspace,
+            frames,
+            sessions,
+            agent_state_status,
+            agent_config,
+            terminal_dump,
+            clipboard_dump,
+        }
+    }
+
+    pub(crate) fn workspace(&self) -> RwSignal<Workspace> {
+        self.workspace
+    }
+
+    pub(crate) fn frames(&self) -> RwSignal<Frames> {
+        self.frames
+    }
+
+    pub(crate) fn sessions(&self) -> RwSignal<Registry> {
+        self.sessions
+    }
 }
 
 pub(crate) fn spawn_session(kind: PaneKind, session_id: SessionId, state: &SessionRuntimeState) {
