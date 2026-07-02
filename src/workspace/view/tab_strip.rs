@@ -1,19 +1,18 @@
 use crate::app::commands::close_tab;
-use crate::session::Registry;
 use crate::ui::theme;
 use crate::workspace::Workspace;
 use floem::prelude::*;
 
 use super::chrome::chrome_close_button;
 
-pub fn tab_strip(workspace: RwSignal<Workspace>, sessions: RwSignal<Registry>) -> impl IntoView {
+pub fn tab_strip(workspace: RwSignal<Workspace>) -> impl IntoView {
     h_stack((
-        tab_chip(workspace, sessions, 0),
-        tab_chip(workspace, sessions, 1),
-        tab_chip(workspace, sessions, 2),
-        tab_chip(workspace, sessions, 3),
-        tab_chip(workspace, sessions, 4),
-        tab_chip(workspace, sessions, 5),
+        tab_chip(workspace, 0),
+        tab_chip(workspace, 1),
+        tab_chip(workspace, 2),
+        tab_chip(workspace, 3),
+        tab_chip(workspace, 4),
+        tab_chip(workspace, 5),
     ))
     .style(|s| {
         s.width_full()
@@ -25,11 +24,7 @@ pub fn tab_strip(workspace: RwSignal<Workspace>, sessions: RwSignal<Registry>) -
     })
 }
 
-fn tab_chip(
-    workspace: RwSignal<Workspace>,
-    sessions: RwSignal<Registry>,
-    index: usize,
-) -> impl IntoView {
+fn tab_chip(workspace: RwSignal<Workspace>, index: usize) -> impl IntoView {
     let exists = move || workspace.with(|ws| ws.tab_summaries().get(index).is_some());
     let active = move || {
         workspace.with(|ws| {
@@ -57,10 +52,7 @@ fn tab_chip(
 
     h_stack((
         label(title).style(|s| s.max_width(170).font_size(12).color(theme::text_primary())),
-        chrome_close_button(
-            move || closeable(),
-            move || close_tab(workspace, sessions, index),
-        ),
+        chrome_close_button(move || closeable(), move || close_tab(workspace, index)),
     ))
     .on_click_stop(move |_| {
         workspace.update(|ws| {

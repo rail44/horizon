@@ -129,7 +129,7 @@ pub(super) fn pane_view(
 
     v_stack((
         pane_header(title, active, closeable, move || {
-            close_visible_pane(workspace, sessions, index)
+            close_visible_pane(workspace, index)
         }),
         terminal_output(
             terminal_frame,

@@ -52,13 +52,12 @@ pub fn app_view() -> impl IntoView {
 
 fn app_content(state: AppState) -> impl IntoView {
     let workspace = state.workspace;
-    let sessions = state.sessions;
     let agent_state_status = state.agent_state_status;
     let status_dump = state.status_dump.clone();
 
     stack((
         v_stack((
-            tab_strip(workspace, sessions),
+            tab_strip(workspace),
             workspace_view(workspace_view_state(&state)),
             status_bar(workspace, agent_state_status, status_dump),
         ))
