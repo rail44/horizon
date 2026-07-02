@@ -5,10 +5,10 @@ use crossbeam_channel::unbounded;
 use crate::agent::contract::*;
 use crate::agent::tools::tool_result_message;
 
-pub struct MockProvider;
+pub(crate) struct MockProvider;
 
 impl MockProvider {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self
     }
 }

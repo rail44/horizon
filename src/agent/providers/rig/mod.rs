@@ -27,13 +27,13 @@ use crate::{
     agent_config::RigAgentConfig,
 };
 
-pub struct Provider {
+pub(crate) struct Provider {
     config: RigAgentConfig,
     memory_duckdb_path: Option<PathBuf>,
 }
 
 impl Provider {
-    pub fn new(config: RigAgentConfig, memory_duckdb_path: Option<PathBuf>) -> Self {
+    pub(crate) fn new(config: RigAgentConfig, memory_duckdb_path: Option<PathBuf>) -> Self {
         Self {
             config,
             memory_duckdb_path,

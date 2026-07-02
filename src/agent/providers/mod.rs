@@ -1,2 +1,2 @@
-pub mod mock;
-pub mod rig;
+pub(crate) mod mock;
+pub(crate) mod rig;
