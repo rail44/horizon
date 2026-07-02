@@ -19,7 +19,7 @@ const PALETTE_ROW_STYLE: ListRowStyle = ListRowStyle {
 };
 
 #[derive(Clone)]
-pub struct CommandPaletteState {
+pub(crate) struct CommandPaletteState {
     pub(crate) control_input: ControlInputState,
     pub(crate) palette_focus_request: RwSignal<u64>,
 }
@@ -34,7 +34,7 @@ impl CommandPaletteState {
     }
 }
 
-pub fn command_palette(state: CommandPaletteState) -> impl IntoView {
+pub(crate) fn command_palette(state: CommandPaletteState) -> impl IntoView {
     let control_input = state.control_input_state();
     let palette_action = state.palette_action_state();
 

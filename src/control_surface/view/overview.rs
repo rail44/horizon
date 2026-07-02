@@ -19,7 +19,7 @@ const OVERVIEW_ROW_STYLE: ListRowStyle = ListRowStyle {
 };
 
 #[derive(Clone)]
-pub struct WorkspaceOverviewState {
+pub(crate) struct WorkspaceOverviewState {
     pub(crate) workspace_control: WorkspaceControlState,
     pub(crate) palette_focus_request: RwSignal<u64>,
 }
@@ -30,7 +30,7 @@ impl WorkspaceOverviewState {
     }
 }
 
-pub fn workspace_overview(state: WorkspaceOverviewState) -> impl IntoView {
+pub(crate) fn workspace_overview(state: WorkspaceOverviewState) -> impl IntoView {
     let workspace_control = state.workspace_control_state();
     let overview_action = workspace_control.overview_action_state();
 

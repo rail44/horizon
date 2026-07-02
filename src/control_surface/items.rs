@@ -3,7 +3,7 @@ use crate::control_surface::query::{normalize_palette_query, palette_matches};
 use crate::control_surface::{OverviewItem, PaletteItem};
 use crate::workspace::Workspace;
 
-pub fn command_state(workspace: &Workspace) -> CommandState {
+pub(crate) fn command_state(workspace: &Workspace) -> CommandState {
     CommandState {
         tab_count: workspace.tab_count(),
         visible_pane_count: workspace.visible_panes().len(),
@@ -11,7 +11,7 @@ pub fn command_state(workspace: &Workspace) -> CommandState {
     }
 }
 
-pub fn overview_items(workspace: &Workspace) -> Vec<OverviewItem> {
+pub(crate) fn overview_items(workspace: &Workspace) -> Vec<OverviewItem> {
     let tabs = workspace.tab_summaries();
     let panes = workspace.pane_summaries();
     let mut items = Vec::new();
@@ -52,7 +52,7 @@ pub fn overview_items(workspace: &Workspace) -> Vec<OverviewItem> {
     items
 }
 
-pub fn palette_items(workspace: &Workspace, query: &str) -> Vec<PaletteItem> {
+pub(crate) fn palette_items(workspace: &Workspace, query: &str) -> Vec<PaletteItem> {
     let mut items: Vec<_> =
         filter_command_entries(command_entries(command_state(workspace)), query)
             .into_iter()

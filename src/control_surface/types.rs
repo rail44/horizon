@@ -2,17 +2,17 @@ use crate::commands::CommandEntry;
 use crate::session::SessionId;
 use crate::workspace::{PaneKind, PaneSummary, SessionKind};
 
-pub const PALETTE_VISIBLE_ROWS: usize = 6;
-pub const OVERVIEW_VISIBLE_ROWS: usize = 8;
+pub(crate) const PALETTE_VISIBLE_ROWS: usize = 6;
+pub(crate) const OVERVIEW_VISIBLE_ROWS: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ControlMode {
+pub(crate) enum ControlMode {
     Commands,
     Workspace,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum PaletteItem {
+pub(crate) enum PaletteItem {
     Command(CommandEntry),
     DetachedSession {
         session_id: SessionId,
@@ -29,7 +29,7 @@ pub enum PaletteItem {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum OverviewItem {
+pub(crate) enum OverviewItem {
     Tab {
         index: usize,
         title: String,
@@ -53,7 +53,7 @@ pub enum OverviewItem {
 }
 
 impl PaletteItem {
-    pub fn enabled(&self) -> bool {
+    pub(crate) fn enabled(&self) -> bool {
         match self {
             Self::Command(entry) => entry.enabled,
             Self::DetachedSession { .. } | Self::Tab { .. } => true,

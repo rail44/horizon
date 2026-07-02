@@ -4,7 +4,7 @@ use floem::prelude::*;
 
 use super::chrome::chrome_close_button;
 
-pub fn tab_strip(workspace: RwSignal<Workspace>) -> impl IntoView {
+pub(crate) fn tab_strip(workspace: RwSignal<Workspace>) -> impl IntoView {
     h_stack((
         tab_chip(workspace, 0),
         tab_chip(workspace, 1),

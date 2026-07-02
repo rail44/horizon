@@ -7,21 +7,21 @@ use crate::ui::theme;
 /// a title/description pair. Domain views materialize their items into this so
 /// the row itself stays domain-neutral.
 #[derive(Clone)]
-pub struct ListRow {
-    pub badge: String,
-    pub badge_color: Color,
-    pub title: String,
-    pub description: String,
-    pub enabled: bool,
+pub(crate) struct ListRow {
+    pub(crate) badge: String,
+    pub(crate) badge_color: Color,
+    pub(crate) title: String,
+    pub(crate) description: String,
+    pub(crate) enabled: bool,
 }
 
 /// Per-surface sizing so overview and palette can share one row while keeping
 /// their own badge width and row height.
 #[derive(Clone, Copy)]
-pub struct ListRowStyle {
-    pub badge_width: f64,
-    pub row_height: f64,
-    pub padding_horiz: f64,
+pub(crate) struct ListRowStyle {
+    pub(crate) badge_width: f64,
+    pub(crate) row_height: f64,
+    pub(crate) padding_horiz: f64,
 }
 
 /// A domain-neutral selectable row.
@@ -30,7 +30,7 @@ pub struct ListRowStyle {
 /// underlying list is filtered (returning `None` hides the row), `selected`
 /// drives the highlight independently of rebuilds, and `on_select` fires on
 /// click.
-pub fn list_row(
+pub(crate) fn list_row(
     row: impl Fn() -> Option<ListRow> + Copy + 'static,
     selected: impl Fn() -> bool + 'static,
     style: ListRowStyle,

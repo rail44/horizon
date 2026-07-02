@@ -42,7 +42,7 @@ pub(crate) fn terminal_text_view(
     terminal_tx: Option<Sender<TerminalCommand>>,
     window_origin: impl Fn() -> Point + 'static,
     update_ime_cursor_area: impl Fn(Point, Size) + 'static,
-) -> TerminalTextView {
+) -> impl floem::IntoView {
     let id = ViewId::new();
     let initial = create_updater(
         move || TerminalViewState {
@@ -60,7 +60,7 @@ pub(crate) fn terminal_text_view(
     )
 }
 
-pub struct TerminalTextView {
+struct TerminalTextView {
     id: ViewId,
     frame: TerminalFrame,
     lines: Vec<Vec<CellLayout>>,

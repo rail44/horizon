@@ -12,7 +12,7 @@ use crate::control_surface::actions::{
 };
 
 #[derive(Clone)]
-pub struct ControlInputState {
+pub(crate) struct ControlInputState {
     pub(crate) command: CommandActionState,
     pub(crate) palette_open: RwSignal<bool>,
     pub(crate) palette_query: RwSignal<String>,
@@ -115,7 +115,7 @@ fn handle_palette_key(key_event: &KeyEvent, state: ControlInputState) -> bool {
     }
 }
 
-pub fn handle_control_key(key_event: &KeyEvent, state: ControlInputState) -> bool {
+pub(crate) fn handle_control_key(key_event: &KeyEvent, state: ControlInputState) -> bool {
     if is_control_mode_switch_key(key_event) {
         switch_control_mode(state.control_mode);
         return true;

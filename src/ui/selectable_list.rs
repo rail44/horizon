@@ -12,7 +12,7 @@ use floem::ViewId;
 /// `row` builds the view for a given index; it should read its own item and
 /// selection state reactively so rows update in place without rebuilding the
 /// whole list.
-pub fn selectable_list<V>(
+pub(crate) fn selectable_list<V>(
     count: impl Fn() -> usize + 'static,
     selection: impl Fn() -> usize + Copy + 'static,
     row: impl Fn(usize) -> V + 'static,
