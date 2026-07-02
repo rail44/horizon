@@ -1,8 +1,10 @@
+mod input;
 mod layout;
 mod operations;
 mod types;
 pub mod view;
 
+pub use input::{active_agent_draft, active_terminal_sender, trace_ime, AgentDrafts};
 pub use types::{
     LayoutNode, Pane, PaneId, PaneKind, PaneSummary, SessionKind, SessionSummary, SplitAxis, Tab,
     TabId, TabSummary, Workspace, WorkspaceSession,

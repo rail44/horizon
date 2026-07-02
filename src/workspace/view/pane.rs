@@ -12,7 +12,7 @@ use crate::input::{
 use crate::session::{Frames, Registry};
 use crate::terminal::{TerminalCommand, TerminalFrame};
 use crate::ui::theme;
-use crate::workspace::{PaneKind, Workspace};
+use crate::workspace::{AgentDrafts, PaneKind, Workspace};
 use floem::prelude::*;
 use floem::{
     action::set_ime_allowed,
@@ -25,7 +25,6 @@ use floem::{
 use super::agent_controls::{agent_approval_actions, agent_composer, handle_agent_key};
 use super::chrome::pane_header;
 use super::terminal_output::terminal_output;
-use super::AgentDrafts;
 use crate::agent::view as agent_view;
 
 fn pane_terminal_sender(

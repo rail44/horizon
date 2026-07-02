@@ -14,15 +14,13 @@ use horizon::input::is_palette_open_key;
 use horizon::session::Frames;
 use horizon::session::Registry;
 use horizon::terminal::TerminalCommand;
-use horizon::workspace::Workspace;
+use horizon::workspace::{active_agent_draft, active_terminal_sender, trace_ime, Workspace};
 use std::path::PathBuf;
 
 mod status_bar;
 
 use horizon::control_surface::view::{command_palette, workspace_overview};
-use horizon::workspace::view::{
-    active_agent_draft, active_terminal_sender, tab_strip, trace_ime, workspace_view,
-};
+use horizon::workspace::view::{tab_strip, workspace_view};
 use status_bar::status_bar;
 
 fn main() {
