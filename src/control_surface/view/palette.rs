@@ -38,7 +38,7 @@ pub fn command_palette(state: CommandPaletteState) -> impl IntoView {
     let control_input = state.control_input_state();
     let palette_action = state.palette_action_state();
 
-    let workspace = control_input.workspace;
+    let workspace = control_input.command.workspace;
     let palette_open = control_input.palette_open;
     let palette_query = control_input.palette_query;
     let palette_selection = control_input.palette_selection;

@@ -1,12 +1,7 @@
-use std::path::PathBuf;
-
-use crate::agent_config::AgentConfig;
 use crate::app::commands::CommandActionState;
 use crate::control_surface::ControlMode;
 use crate::input::palette_accepts_text_input;
-use crate::session::Frames;
-use crate::session::Registry;
-use crate::workspace::{PaneFocusRequests, Workspace};
+use crate::workspace::Workspace;
 use floem::keyboard::{Key, KeyEvent, NamedKey};
 use floem::prelude::*;
 
@@ -18,34 +13,18 @@ use crate::control_surface::actions::{
 
 #[derive(Clone)]
 pub struct ControlInputState {
-    pub workspace: RwSignal<Workspace>,
-    pub frames: RwSignal<Frames>,
-    pub sessions: RwSignal<Registry>,
+    pub command: CommandActionState,
     pub palette_open: RwSignal<bool>,
     pub palette_query: RwSignal<String>,
     pub palette_selection: RwSignal<usize>,
     pub control_mode: RwSignal<ControlMode>,
     pub overview_selection: RwSignal<usize>,
-    pub pane_focus_requests: PaneFocusRequests,
-    pub agent_state_status: RwSignal<Option<String>>,
-    pub agent_config: AgentConfig,
-    pub terminal_dump: Option<PathBuf>,
-    pub clipboard_dump: Option<PathBuf>,
 }
 
 impl ControlInputState {
     pub(crate) fn palette_action_state(self) -> PaletteActionState {
         PaletteActionState {
-            command: CommandActionState {
-                workspace: self.workspace,
-                frames: self.frames,
-                sessions: self.sessions,
-                pane_focus_requests: self.pane_focus_requests,
-                agent_state_status: self.agent_state_status,
-                agent_config: self.agent_config,
-                terminal_dump: self.terminal_dump,
-                clipboard_dump: self.clipboard_dump,
-            },
+            command: self.command,
             palette_open: self.palette_open,
             palette_query: self.palette_query,
             palette_selection: self.palette_selection,
@@ -54,7 +33,7 @@ impl ControlInputState {
 
     pub(crate) fn workspace_control_state(&self) -> WorkspaceControlState {
         WorkspaceControlState {
-            workspace: self.workspace,
+            workspace: self.command.workspace,
             palette_open: self.palette_open,
             control_mode: self.control_mode,
             overview_selection: self.overview_selection,
@@ -81,6 +60,7 @@ impl WorkspaceControlState {
 }
 
 fn handle_palette_key(key_event: &KeyEvent, state: ControlInputState) -> bool {
+    let workspace = state.command.workspace;
     match &key_event.key.logical_key {
         Key::Named(NamedKey::Escape) => {
             close_palette(state.palette_open, state.palette_query);
@@ -91,26 +71,16 @@ fn handle_palette_key(key_event: &KeyEvent, state: ControlInputState) -> bool {
             true
         }
         Key::Named(NamedKey::ArrowUp) => {
-            move_palette_selection(
-                state.workspace,
-                state.palette_query,
-                state.palette_selection,
-                -1,
-            );
+            move_palette_selection(workspace, state.palette_query, state.palette_selection, -1);
             true
         }
         Key::Named(NamedKey::ArrowDown) => {
-            move_palette_selection(
-                state.workspace,
-                state.palette_query,
-                state.palette_selection,
-                1,
-            );
+            move_palette_selection(workspace, state.palette_query, state.palette_selection, 1);
             true
         }
         Key::Named(NamedKey::Backspace) => {
             update_palette_query(
-                state.workspace,
+                workspace,
                 state.palette_query,
                 state.palette_selection,
                 |query| {
@@ -121,7 +91,7 @@ fn handle_palette_key(key_event: &KeyEvent, state: ControlInputState) -> bool {
         }
         Key::Named(NamedKey::Space) => {
             update_palette_query(
-                state.workspace,
+                workspace,
                 state.palette_query,
                 state.palette_selection,
                 |query| {
@@ -132,7 +102,7 @@ fn handle_palette_key(key_event: &KeyEvent, state: ControlInputState) -> bool {
         }
         Key::Character(text) if palette_accepts_text_input(key_event.modifiers) => {
             update_palette_query(
-                state.workspace,
+                workspace,
                 state.palette_query,
                 state.palette_selection,
                 |query| {

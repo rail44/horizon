@@ -1,3 +1,4 @@
+use crate::app::commands::CommandActionState;
 use crate::control_surface::view::{CommandPaletteState, WorkspaceOverviewState};
 use crate::control_surface::{ControlInputState, OpenPaletteState};
 use crate::workspace::view::WorkspaceViewState;
@@ -40,14 +41,20 @@ pub(super) fn open_palette_state(state: &AppState) -> OpenPaletteState {
 
 pub(super) fn control_input_state(state: &AppState) -> ControlInputState {
     ControlInputState {
-        workspace: state.workspace,
-        frames: state.frames,
-        sessions: state.sessions,
+        command: command_action_state(state),
         palette_open: state.palette_open,
         palette_query: state.palette_query,
         palette_selection: state.palette_selection,
         control_mode: state.control_mode,
         overview_selection: state.overview_selection,
+    }
+}
+
+fn command_action_state(state: &AppState) -> CommandActionState {
+    CommandActionState {
+        workspace: state.workspace,
+        frames: state.frames,
+        sessions: state.sessions,
         pane_focus_requests: state.pane_focus_requests,
         agent_state_status: state.agent_state_status,
         agent_config: state.agent_config.clone(),

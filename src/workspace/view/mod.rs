@@ -37,7 +37,7 @@ impl WorkspaceViewState {
 }
 
 pub fn workspace_view(state: WorkspaceViewState) -> impl IntoView {
-    let pane_focus_requests = state.control_input.pane_focus_requests;
+    let pane_focus_requests = state.control_input.command.pane_focus_requests;
     let pane_state = state.pane_view_state();
     h_stack((
         pane::pane_view(pane_state.clone(), 0, pane_focus_requests[0]),
