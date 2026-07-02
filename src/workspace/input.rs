@@ -11,20 +11,20 @@ use floem::keyboard::{Key, KeyEvent};
 use floem::prelude::*;
 use floem::Clipboard;
 
-pub const MAX_VISIBLE_PANES: usize = 4;
+pub(crate) const MAX_VISIBLE_PANES: usize = 4;
 
-pub type AgentDrafts = [RwSignal<String>; MAX_VISIBLE_PANES];
-pub type PaneFocusRequests = [RwSignal<u64>; MAX_VISIBLE_PANES];
+pub(crate) type AgentDrafts = [RwSignal<String>; MAX_VISIBLE_PANES];
+pub(crate) type PaneFocusRequests = [RwSignal<u64>; MAX_VISIBLE_PANES];
 
-pub fn active_agent(workspace: RwSignal<Workspace>) -> bool {
+pub(crate) fn active_agent(workspace: RwSignal<Workspace>) -> bool {
     workspace.with(|ws| ws.active_pane_is(PaneKind::Agent))
 }
 
-pub fn active_text_input_pane(workspace: RwSignal<Workspace>) -> bool {
+pub(crate) fn active_text_input_pane(workspace: RwSignal<Workspace>) -> bool {
     workspace.with(|ws| ws.active_pane_accepts_text_input())
 }
 
-pub fn request_active_pane_focus(
+pub(crate) fn request_active_pane_focus(
     workspace: RwSignal<Workspace>,
     pane_focus_requests: PaneFocusRequests,
 ) {
@@ -35,7 +35,7 @@ pub fn request_active_pane_focus(
     set_ime_allowed(active_text_input_pane(workspace));
 }
 
-pub fn active_agent_draft(
+pub(crate) fn active_agent_draft(
     workspace: RwSignal<Workspace>,
     agent_drafts: AgentDrafts,
 ) -> Option<RwSignal<String>> {
@@ -47,7 +47,7 @@ pub fn active_agent_draft(
     agent_drafts.get(index).copied()
 }
 
-pub fn active_terminal_sender(
+pub(crate) fn active_terminal_sender(
     workspace: RwSignal<Workspace>,
     sessions: RwSignal<Registry>,
 ) -> Option<crossbeam_channel::Sender<TerminalCommand>> {
@@ -55,7 +55,7 @@ pub fn active_terminal_sender(
     sessions.with_untracked(|registry| registry.terminal_sender(session_id))
 }
 
-pub fn visible_terminal_sender(
+pub(crate) fn visible_terminal_sender(
     workspace: RwSignal<Workspace>,
     sessions: RwSignal<Registry>,
     index: usize,
@@ -64,7 +64,7 @@ pub fn visible_terminal_sender(
     sessions.with_untracked(|registry| registry.terminal_sender(session_id))
 }
 
-pub fn visible_agent_sender(
+pub(crate) fn visible_agent_sender(
     workspace: RwSignal<Workspace>,
     sessions: RwSignal<Registry>,
     index: usize,
@@ -149,7 +149,7 @@ fn handle_agent_key(
     }
 }
 
-pub fn handle_active_pane_key(
+pub(crate) fn handle_active_pane_key(
     key_event: &KeyEvent,
     workspace: RwSignal<Workspace>,
     sessions: RwSignal<Registry>,
@@ -179,7 +179,7 @@ pub fn handle_active_pane_key(
     false
 }
 
-pub fn trace_ime(message: &str) {
+pub(crate) fn trace_ime(message: &str) {
     if std::env::var_os("HORIZON_IME_TRACE").is_some() {
         eprintln!("horizon ime: {message}");
     }
