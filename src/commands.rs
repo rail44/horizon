@@ -1,5 +1,5 @@
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum CommandId {
+pub(crate) enum CommandId {
     NewTerminal,
     NewAgent,
     SplitActivePane,
@@ -10,34 +10,34 @@ pub enum CommandId {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CommandCategory {
+pub(crate) enum CommandCategory {
     Workspace,
     Terminal,
     Agent,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CommandSpec {
-    pub id: CommandId,
-    pub title: &'static str,
-    pub category: CommandCategory,
-    pub description: &'static str,
+pub(crate) struct CommandSpec {
+    pub(crate) id: CommandId,
+    pub(crate) title: &'static str,
+    pub(crate) category: CommandCategory,
+    pub(crate) description: &'static str,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CommandState {
-    pub tab_count: usize,
-    pub visible_pane_count: usize,
-    pub has_active_session: bool,
+pub(crate) struct CommandState {
+    pub(crate) tab_count: usize,
+    pub(crate) visible_pane_count: usize,
+    pub(crate) has_active_session: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CommandEntry {
-    pub spec: CommandSpec,
-    pub enabled: bool,
+pub(crate) struct CommandEntry {
+    pub(crate) spec: CommandSpec,
+    pub(crate) enabled: bool,
 }
 
-pub fn core_commands() -> Vec<CommandSpec> {
+pub(crate) fn core_commands() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
             id: CommandId::NewTerminal,
@@ -84,7 +84,7 @@ pub fn core_commands() -> Vec<CommandSpec> {
     ]
 }
 
-pub fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
+pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
     match command_id {
         CommandId::NewTerminal
         | CommandId::NewAgent
@@ -96,7 +96,7 @@ pub fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
     }
 }
 
-pub fn command_entries(state: CommandState) -> Vec<CommandEntry> {
+pub(crate) fn command_entries(state: CommandState) -> Vec<CommandEntry> {
     core_commands()
         .into_iter()
         .map(|spec| CommandEntry {
@@ -106,7 +106,7 @@ pub fn command_entries(state: CommandState) -> Vec<CommandEntry> {
         .collect()
 }
 
-pub fn filter_command_entries(entries: Vec<CommandEntry>, query: &str) -> Vec<CommandEntry> {
+pub(crate) fn filter_command_entries(entries: Vec<CommandEntry>, query: &str) -> Vec<CommandEntry> {
     let query = normalize_query(query);
     entries
         .into_iter()
@@ -123,7 +123,7 @@ pub fn filter_command_entries(entries: Vec<CommandEntry>, query: &str) -> Vec<Co
         .collect()
 }
 
-pub fn clamp_palette_selection(selection: usize, item_count: usize) -> usize {
+pub(crate) fn clamp_palette_selection(selection: usize, item_count: usize) -> usize {
     if item_count == 0 {
         return 0;
     }

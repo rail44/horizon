@@ -2,13 +2,13 @@ use floem::keyboard::{Key, KeyEvent, Modifiers, NamedKey};
 use termwiz::input::{KeyCode as TermKeyCode, Modifiers as TermModifiers};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum AgentDraftAction {
+pub(crate) enum AgentDraftAction {
     Insert(String),
     Backspace,
     Submit,
 }
 
-pub fn pop_last_grapheme_approx(text: &mut String) {
+pub(crate) fn pop_last_grapheme_approx(text: &mut String) {
     while let Some(ch) = text.pop() {
         if !is_combining_mark(ch) {
             break;
@@ -16,7 +16,7 @@ pub fn pop_last_grapheme_approx(text: &mut String) {
     }
 }
 
-pub fn agent_draft_action(key: &Key, modifiers: Modifiers) -> Option<AgentDraftAction> {
+pub(crate) fn agent_draft_action(key: &Key, modifiers: Modifiers) -> Option<AgentDraftAction> {
     match key {
         Key::Named(NamedKey::Enter) => Some(AgentDraftAction::Submit),
         Key::Named(NamedKey::Backspace) => Some(AgentDraftAction::Backspace),
@@ -30,7 +30,7 @@ pub fn agent_draft_action(key: &Key, modifiers: Modifiers) -> Option<AgentDraftA
     }
 }
 
-pub fn terminal_input_from_key(event: &KeyEvent) -> Option<Vec<u8>> {
+pub(crate) fn terminal_input_from_key(event: &KeyEvent) -> Option<Vec<u8>> {
     match &event.key.logical_key {
         Key::Character(text) => character_input(text.as_str(), event.modifiers),
         Key::Named(NamedKey::Enter) => Some(b"\r".to_vec()),
@@ -51,11 +51,11 @@ pub fn terminal_input_from_key(event: &KeyEvent) -> Option<Vec<u8>> {
     }
 }
 
-pub fn terminal_key_from_key(event: &KeyEvent) -> Option<TermKeyCode> {
+pub(crate) fn terminal_key_from_key(event: &KeyEvent) -> Option<TermKeyCode> {
     terminal_key_from_input(&event.key.logical_key)
 }
 
-pub fn terminal_key_from_input(key: &Key) -> Option<TermKeyCode> {
+pub(crate) fn terminal_key_from_input(key: &Key) -> Option<TermKeyCode> {
     match key {
         Key::Named(NamedKey::Enter) => Some(TermKeyCode::Enter),
         Key::Named(NamedKey::Tab) => Some(TermKeyCode::Tab),
@@ -74,7 +74,7 @@ pub fn terminal_key_from_input(key: &Key) -> Option<TermKeyCode> {
     }
 }
 
-pub fn termwiz_modifiers(modifiers: Modifiers) -> TermModifiers {
+pub(crate) fn termwiz_modifiers(modifiers: Modifiers) -> TermModifiers {
     let mut term_modifiers = TermModifiers::NONE;
     if modifiers.shift() {
         term_modifiers |= TermModifiers::SHIFT;
@@ -91,22 +91,22 @@ pub fn termwiz_modifiers(modifiers: Modifiers) -> TermModifiers {
     term_modifiers
 }
 
-pub fn is_terminal_paste_key(event: &KeyEvent) -> bool {
+pub(crate) fn is_terminal_paste_key(event: &KeyEvent) -> bool {
     is_terminal_paste_input(&event.key.logical_key, event.modifiers)
 }
 
-pub fn is_palette_open_key(event: &KeyEvent) -> bool {
+pub(crate) fn is_palette_open_key(event: &KeyEvent) -> bool {
     match &event.key.logical_key {
         Key::Character(text) => event.modifiers.control() && text.eq_ignore_ascii_case("p"),
         _ => false,
     }
 }
 
-pub fn palette_accepts_text_input(modifiers: Modifiers) -> bool {
+pub(crate) fn palette_accepts_text_input(modifiers: Modifiers) -> bool {
     !modifiers.control() && !modifiers.alt() && !modifiers.meta()
 }
 
-pub fn is_terminal_copy_key(event: &KeyEvent) -> bool {
+pub(crate) fn is_terminal_copy_key(event: &KeyEvent) -> bool {
     is_terminal_copy_input(&event.key.logical_key, event.modifiers)
 }
 
