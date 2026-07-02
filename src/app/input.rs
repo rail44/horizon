@@ -13,7 +13,7 @@ use super::context::{control_input_state, open_palette_state};
 use super::state::AppState;
 
 #[derive(Clone)]
-pub struct AppInput {
+pub(crate) struct AppInput {
     state: AppState,
 }
 
@@ -24,24 +24,24 @@ impl AppInput {
         }
     }
 
-    pub fn handle_window_focus(&self) -> EventPropagation {
+    pub(crate) fn handle_window_focus(&self) -> EventPropagation {
         set_ime_allowed(active_text_input_pane(self.state.workspace));
         let (position, size) = self.state.ime_cursor_area.get_untracked();
         set_ime_cursor_area(position, size);
         EventPropagation::Continue
     }
 
-    pub fn handle_ime_enabled(&self) -> EventPropagation {
+    pub(crate) fn handle_ime_enabled(&self) -> EventPropagation {
         trace_ime("enabled");
         EventPropagation::Continue
     }
 
-    pub fn handle_ime_disabled(&self) -> EventPropagation {
+    pub(crate) fn handle_ime_disabled(&self) -> EventPropagation {
         trace_ime("disabled");
         EventPropagation::Continue
     }
 
-    pub fn handle_ime_preedit(&self, event: &Event) -> EventPropagation {
+    pub(crate) fn handle_ime_preedit(&self, event: &Event) -> EventPropagation {
         if !active_text_input_pane(self.state.workspace) {
             return EventPropagation::Continue;
         }
@@ -63,7 +63,7 @@ impl AppInput {
         EventPropagation::Continue
     }
 
-    pub fn handle_ime_commit(&self, event: &Event) -> EventPropagation {
+    pub(crate) fn handle_ime_commit(&self, event: &Event) -> EventPropagation {
         if !active_text_input_pane(self.state.workspace) {
             return EventPropagation::Continue;
         }
@@ -91,7 +91,7 @@ impl AppInput {
         EventPropagation::Continue
     }
 
-    pub fn handle_key_down(&self, event: &Event) -> EventPropagation {
+    pub(crate) fn handle_key_down(&self, event: &Event) -> EventPropagation {
         if let Event::KeyDown(key_event) = event {
             if self.state.palette_open.get_untracked()
                 && handle_control_key(key_event, control_input_state(&self.state))
