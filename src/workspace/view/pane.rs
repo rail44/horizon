@@ -4,7 +4,9 @@ use crate::agent::contract::Command;
 use crate::agent::frame::AgentFrame;
 use crate::agent_config::AgentConfig;
 use crate::app::commands::{close_visible_pane, PaneFocusRequests};
-use crate::control_surface::{handle_control_key, open_palette, ControlInputState, ControlMode};
+use crate::control_surface::{
+    handle_control_key, open_palette, ControlInputState, ControlMode, OpenPaletteState,
+};
 use crate::input::is_palette_open_key;
 use crate::session::{Frames, Registry};
 use crate::terminal::TerminalFrame;
@@ -84,6 +86,12 @@ pub(super) fn pane_view(
         agent_config,
         terminal_dump,
         clipboard_dump,
+    };
+    let open_palette_state = OpenPaletteState {
+        palette_open,
+        palette_query,
+        palette_selection,
+        palette_focus_request,
     };
 
     let terminal_frame = move || {
@@ -212,12 +220,7 @@ pub(super) fn pane_view(
                 ime_preedit.set(None);
                 set_ime_allowed(false);
                 control_mode.set(ControlMode::Commands);
-                open_palette(
-                    palette_open,
-                    palette_query,
-                    palette_selection,
-                    palette_focus_request,
-                );
+                open_palette(open_palette_state);
                 return EventPropagation::Stop;
             }
         }

@@ -31,16 +31,19 @@ pub(crate) struct OverviewActionState {
     pub(crate) overview_selection: RwSignal<usize>,
 }
 
-pub fn open_palette(
-    palette_open: RwSignal<bool>,
-    palette_query: RwSignal<String>,
-    palette_selection: RwSignal<usize>,
-    palette_focus_request: RwSignal<u64>,
-) {
-    palette_query.set(String::new());
-    palette_selection.set(0);
-    palette_open.set(true);
-    palette_focus_request.update(|request| *request += 1);
+#[derive(Clone, Copy)]
+pub struct OpenPaletteState {
+    pub palette_open: RwSignal<bool>,
+    pub palette_query: RwSignal<String>,
+    pub palette_selection: RwSignal<usize>,
+    pub palette_focus_request: RwSignal<u64>,
+}
+
+pub fn open_palette(state: OpenPaletteState) {
+    state.palette_query.set(String::new());
+    state.palette_selection.set(0);
+    state.palette_open.set(true);
+    state.palette_focus_request.update(|request| *request += 1);
 }
 
 pub(crate) fn close_palette(palette_open: RwSignal<bool>, palette_query: RwSignal<String>) {

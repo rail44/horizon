@@ -3,7 +3,9 @@ use floem::event::{Event, EventPropagation};
 use floem::prelude::*;
 
 use crate::app::commands::{active_agent, active_text_input_pane};
-use crate::control_surface::{handle_control_key, open_palette, ControlInputState, ControlMode};
+use crate::control_surface::{
+    handle_control_key, open_palette, ControlInputState, ControlMode, OpenPaletteState,
+};
 use crate::input::is_palette_open_key;
 use crate::terminal::TerminalCommand;
 use crate::workspace::{active_agent_draft, active_terminal_sender, trace_ime};
@@ -102,17 +104,21 @@ impl AppInput {
                 self.state.ime_preedit.set(None);
                 set_ime_allowed(false);
                 self.state.control_mode.set(ControlMode::Commands);
-                open_palette(
-                    self.state.palette_open,
-                    self.state.palette_query,
-                    self.state.palette_selection,
-                    self.state.palette_focus_request,
-                );
+                open_palette(open_palette_state(&self.state));
                 return EventPropagation::Stop;
             }
         }
 
         EventPropagation::Continue
+    }
+}
+
+fn open_palette_state(state: &AppState) -> OpenPaletteState {
+    OpenPaletteState {
+        palette_open: state.palette_open,
+        palette_query: state.palette_query,
+        palette_selection: state.palette_selection,
+        palette_focus_request: state.palette_focus_request,
     }
 }
 
