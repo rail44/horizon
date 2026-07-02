@@ -5,7 +5,7 @@ use crate::app::commands::PaneFocusRequests;
 use crate::control_surface::{palette_items, ControlMode, PALETTE_VISIBLE_ROWS};
 use crate::session::Frames;
 use crate::session::Registry;
-use crate::ui::list_row::{list_row, ListRow, ListRowStyle};
+use crate::ui::list_row::{list_row, ListRowStyle};
 use crate::ui::selectable_list::selectable_list;
 use crate::ui::theme;
 use crate::workspace::Workspace;
@@ -16,6 +16,7 @@ use floem::reactive::create_memo;
 use super::actions::execute_palette_selection;
 use super::chrome::control_mode_tabs;
 use super::input::handle_control_key;
+use super::row::palette_item_row;
 
 const PALETTE_ROW_HEIGHT: f64 = 48.0;
 const PALETTE_ROW_STYLE: ListRowStyle = ListRowStyle {
@@ -54,17 +55,7 @@ pub fn command_palette(
         move || items.with(|items| items.len()),
         move || palette_selection.get(),
         move |index| {
-            let row = move || {
-                items.with(|items| {
-                    items.get(index).map(|item| ListRow {
-                        badge: item.kind_label(),
-                        badge_color: item.kind_color(),
-                        title: item.title(),
-                        description: item.description(),
-                        enabled: item.enabled(),
-                    })
-                })
-            };
+            let row = move || items.with(|items| items.get(index).map(palette_item_row));
 
             let agent_config = agent_config.clone();
             let terminal_dump = terminal_dump.clone();

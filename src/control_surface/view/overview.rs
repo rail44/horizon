@@ -1,5 +1,5 @@
 use crate::control_surface::{overview_items, ControlMode, OVERVIEW_VISIBLE_ROWS};
-use crate::ui::list_row::{list_row, ListRow, ListRowStyle};
+use crate::ui::list_row::{list_row, ListRowStyle};
 use crate::ui::selectable_list::selectable_list;
 use crate::ui::theme;
 use crate::workspace::Workspace;
@@ -10,6 +10,7 @@ use floem::reactive::create_memo;
 use super::actions::execute_overview_selection;
 use super::chrome::control_mode_tabs;
 use super::input::handle_workspace_control_key;
+use super::row::overview_item_row;
 
 const OVERVIEW_ROW_HEIGHT: f64 = 52.0;
 const OVERVIEW_ROW_STYLE: ListRowStyle = ListRowStyle {
@@ -31,17 +32,7 @@ pub fn workspace_overview(
         move || items.with(|items| items.len()),
         move || overview_selection.get(),
         move |index| {
-            let row = move || {
-                items.with(|items| {
-                    items.get(index).map(|item| ListRow {
-                        badge: item.kind_label(),
-                        badge_color: item.kind_color(),
-                        title: item.title(),
-                        description: item.description(),
-                        enabled: true,
-                    })
-                })
-            };
+            let row = move || items.with(|items| items.get(index).map(overview_item_row));
 
             list_row(
                 row,

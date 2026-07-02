@@ -186,6 +186,9 @@ cross-domain `ui` module:
   `dyn_stack` and `scroll_to_view`. The overview and command palette both
   render through them instead of hand-unrolling fixed rows and windowing the
   viewport by hand;
+- control-surface items describe selectable actions and targets. View-specific
+  row text, badges, colors, and descriptions are mapped under
+  `control_surface::view`, not on the item types themselves;
 - prefer Floem's own list/scroll primitives when a view needs a scrollable,
   selectable collection, rather than reimplementing viewport math in the view;
 - `app` remains the composition and runtime wiring layer, not the default home
