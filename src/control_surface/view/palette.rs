@@ -15,7 +15,7 @@ use floem::reactive::create_memo;
 
 use super::chrome::control_mode_tabs;
 use super::row::palette_item_row;
-use crate::control_surface::actions::execute_palette_selection;
+use crate::control_surface::actions::{execute_palette_selection, PaletteActionState};
 use crate::control_surface::handle_control_key;
 
 const PALETTE_ROW_HEIGHT: f64 = 48.0;
@@ -74,6 +74,19 @@ pub fn command_palette(state: CommandPaletteState) -> impl IntoView {
         terminal_dump: terminal_dump.clone(),
         clipboard_dump: clipboard_dump.clone(),
     };
+    let palette_action = PaletteActionState {
+        workspace,
+        frames,
+        sessions,
+        palette_open,
+        palette_query,
+        palette_selection,
+        pane_focus_requests,
+        agent_state_status,
+        agent_config,
+        terminal_dump,
+        clipboard_dump,
+    };
 
     let items = create_memo(move |_| {
         let query = palette_query.get();
@@ -85,10 +98,7 @@ pub fn command_palette(state: CommandPaletteState) -> impl IntoView {
         move || palette_selection.get(),
         move |index| {
             let row = move || items.with(|items| items.get(index).map(palette_item_row));
-
-            let agent_config = agent_config.clone();
-            let terminal_dump = terminal_dump.clone();
-            let clipboard_dump = clipboard_dump.clone();
+            let palette_action = palette_action.clone();
 
             list_row(
                 row,
@@ -96,19 +106,7 @@ pub fn command_palette(state: CommandPaletteState) -> impl IntoView {
                 PALETTE_ROW_STYLE,
                 move || {
                     palette_selection.set(index);
-                    execute_palette_selection(
-                        workspace,
-                        frames,
-                        sessions,
-                        palette_open,
-                        palette_query,
-                        palette_selection,
-                        pane_focus_requests,
-                        agent_state_status,
-                        agent_config.clone(),
-                        terminal_dump.clone(),
-                        clipboard_dump.clone(),
-                    );
+                    execute_palette_selection(palette_action.clone());
                 },
             )
         },

@@ -9,6 +9,21 @@ use crate::session::Registry;
 use crate::workspace::Workspace;
 use floem::prelude::*;
 
+#[derive(Clone)]
+pub(crate) struct PaletteActionState {
+    pub(crate) workspace: RwSignal<Workspace>,
+    pub(crate) frames: RwSignal<Frames>,
+    pub(crate) sessions: RwSignal<Registry>,
+    pub(crate) palette_open: RwSignal<bool>,
+    pub(crate) palette_query: RwSignal<String>,
+    pub(crate) palette_selection: RwSignal<usize>,
+    pub(crate) pane_focus_requests: PaneFocusRequests,
+    pub(crate) agent_state_status: RwSignal<Option<String>>,
+    pub(crate) agent_config: AgentConfig,
+    pub(crate) terminal_dump: Option<PathBuf>,
+    pub(crate) clipboard_dump: Option<PathBuf>,
+}
+
 pub fn open_palette(
     palette_open: RwSignal<bool>,
     palette_query: RwSignal<String>,
@@ -82,19 +97,11 @@ pub(crate) fn move_overview_selection(
     });
 }
 
-pub(crate) fn execute_palette_selection(
-    workspace: RwSignal<Workspace>,
-    frames: RwSignal<Frames>,
-    sessions: RwSignal<Registry>,
-    palette_open: RwSignal<bool>,
-    palette_query: RwSignal<String>,
-    palette_selection: RwSignal<usize>,
-    pane_focus_requests: PaneFocusRequests,
-    agent_state_status: RwSignal<Option<String>>,
-    agent_config: AgentConfig,
-    terminal_dump: Option<PathBuf>,
-    clipboard_dump: Option<PathBuf>,
-) {
+pub(crate) fn execute_palette_selection(state: PaletteActionState) {
+    let workspace = state.workspace;
+    let palette_query = state.palette_query;
+    let palette_selection = state.palette_selection;
+
     let query = palette_query.get_untracked();
     let selection = palette_selection.get_untracked();
     let item = workspace.with_untracked(|ws| {
@@ -112,30 +119,30 @@ pub(crate) fn execute_palette_selection(
         return;
     }
 
-    close_palette(palette_open, palette_query);
+    close_palette(state.palette_open, palette_query);
     match item {
         PaletteItem::Command(entry) => execute_command(
             entry.spec.id,
             workspace,
-            frames,
-            sessions,
-            pane_focus_requests,
-            agent_state_status,
-            agent_config,
-            terminal_dump,
-            clipboard_dump,
+            state.frames,
+            state.sessions,
+            state.pane_focus_requests,
+            state.agent_state_status,
+            state.agent_config,
+            state.terminal_dump,
+            state.clipboard_dump,
         ),
         PaletteItem::DetachedSession { session_id, .. } => {
             workspace.update(|ws| {
                 ws.attach_existing_session_to_split(session_id);
             });
-            request_active_pane_focus(workspace, pane_focus_requests);
+            request_active_pane_focus(workspace, state.pane_focus_requests);
         }
         PaletteItem::Tab { index, .. } => {
             workspace.update(|ws| {
                 ws.activate_tab_index(index);
             });
-            request_active_pane_focus(workspace, pane_focus_requests);
+            request_active_pane_focus(workspace, state.pane_focus_requests);
         }
     }
 }

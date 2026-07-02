@@ -12,7 +12,7 @@ use floem::prelude::*;
 
 use crate::control_surface::actions::{
     close_control_surface, close_palette, execute_overview_selection, execute_palette_selection,
-    move_overview_selection, move_palette_selection, update_palette_query,
+    move_overview_selection, move_palette_selection, update_palette_query, PaletteActionState,
 };
 
 #[derive(Clone)]
@@ -39,19 +39,7 @@ fn handle_palette_key(key_event: &KeyEvent, state: ControlInputState) -> bool {
             true
         }
         Key::Named(NamedKey::Enter) => {
-            execute_palette_selection(
-                state.workspace,
-                state.frames,
-                state.sessions,
-                state.palette_open,
-                state.palette_query,
-                state.palette_selection,
-                state.pane_focus_requests,
-                state.agent_state_status,
-                state.agent_config,
-                state.terminal_dump,
-                state.clipboard_dump,
-            );
+            execute_palette_selection(palette_action_state(state));
             true
         }
         Key::Named(NamedKey::ArrowUp) => {
@@ -106,6 +94,22 @@ fn handle_palette_key(key_event: &KeyEvent, state: ControlInputState) -> bool {
             true
         }
         _ => false,
+    }
+}
+
+fn palette_action_state(state: ControlInputState) -> PaletteActionState {
+    PaletteActionState {
+        workspace: state.workspace,
+        frames: state.frames,
+        sessions: state.sessions,
+        palette_open: state.palette_open,
+        palette_query: state.palette_query,
+        palette_selection: state.palette_selection,
+        pane_focus_requests: state.pane_focus_requests,
+        agent_state_status: state.agent_state_status,
+        agent_config: state.agent_config,
+        terminal_dump: state.terminal_dump,
+        clipboard_dump: state.clipboard_dump,
     }
 }
 
