@@ -7,6 +7,6 @@ pub mod fonts;
 pub mod input;
 pub(crate) mod plugins;
 pub mod session;
-pub mod terminal;
+pub(crate) mod terminal;
 pub mod ui;
 pub mod workspace;

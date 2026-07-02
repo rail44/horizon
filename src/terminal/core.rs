@@ -19,10 +19,10 @@ use super::types::{
 };
 
 #[derive(Clone, Debug, Default)]
-pub struct TerminalEvents {
-    pub pty_writes: Vec<Vec<u8>>,
-    pub title: Option<String>,
-    pub bell_count: usize,
+pub(crate) struct TerminalEvents {
+    pub(crate) pty_writes: Vec<Vec<u8>>,
+    pub(crate) title: Option<String>,
+    pub(crate) bell_count: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -49,7 +49,7 @@ impl EventListener for EventSink {
     }
 }
 
-pub struct TerminalCore {
+pub(crate) struct TerminalCore {
     term: Term<EventSink>,
     parser: Processor,
     events: EventSink,
@@ -57,7 +57,7 @@ pub struct TerminalCore {
 }
 
 impl TerminalCore {
-    pub fn new(size: TerminalSize) -> Self {
+    pub(crate) fn new(size: TerminalSize) -> Self {
         let events = EventSink::default();
         let config = TermConfig {
             kitty_keyboard: true,
@@ -73,21 +73,21 @@ impl TerminalCore {
         }
     }
 
-    pub fn write_vt(&mut self, bytes: &[u8]) -> TerminalEvents {
+    pub(crate) fn write_vt(&mut self, bytes: &[u8]) -> TerminalEvents {
         self.parser.advance(&mut self.term, bytes);
         self.events.drain()
     }
 
-    pub fn resize(&mut self, size: TerminalSize) {
+    pub(crate) fn resize(&mut self, size: TerminalSize) {
         self.size = size;
         self.term.resize(size);
     }
 
-    pub fn scroll_display(&mut self, lines: i32) {
+    pub(crate) fn scroll_display(&mut self, lines: i32) {
         self.term.scroll_display(Scroll::Delta(lines));
     }
 
-    pub fn handle_scroll(&mut self, scroll: TerminalScroll) -> Option<Vec<u8>> {
+    pub(crate) fn handle_scroll(&mut self, scroll: TerminalScroll) -> Option<Vec<u8>> {
         if self.application_scroll_mode() {
             return Some(self.scroll_input(scroll));
         }
@@ -96,7 +96,7 @@ impl TerminalCore {
         None
     }
 
-    pub fn handle_mouse_report(&self, report: TerminalMouseReport) -> Option<Vec<u8>> {
+    pub(crate) fn handle_mouse_report(&self, report: TerminalMouseReport) -> Option<Vec<u8>> {
         let mode = *self.term.mode();
         if !mode.intersects(TermMode::MOUSE_MODE) || !mode.contains(TermMode::SGR_MOUSE) {
             return None;
@@ -111,7 +111,7 @@ impl TerminalCore {
         Some(sgr_mouse_input(report))
     }
 
-    pub fn paste_input(&self, text: &str) -> Vec<u8> {
+    pub(crate) fn paste_input(&self, text: &str) -> Vec<u8> {
         if self.term.mode().contains(TermMode::BRACKETED_PASTE) {
             let mut input = Vec::with_capacity(text.len() + 12);
             input.extend_from_slice(b"\x1b[200~");
@@ -123,19 +123,21 @@ impl TerminalCore {
         }
     }
 
-    pub fn display_offset(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn display_offset(&self) -> usize {
         self.term.grid().display_offset()
     }
 
-    pub fn alternate_screen(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn alternate_screen(&self) -> bool {
         self.term.mode().contains(TermMode::ALT_SCREEN)
     }
 
-    pub fn snapshot_text(&self) -> String {
+    pub(crate) fn snapshot_text(&self) -> String {
         self.snapshot_frame().text
     }
 
-    pub fn snapshot_frame(&self) -> TerminalFrame {
+    pub(crate) fn snapshot_frame(&self) -> TerminalFrame {
         let mut rows = vec![String::new(); self.size.rows as usize];
         let mut styled_rows = vec![TerminalLine { spans: Vec::new() }; self.size.rows as usize];
         let content = self.term.renderable_content();
@@ -196,28 +198,28 @@ impl TerminalCore {
         }
     }
 
-    pub fn encode_key(&self, key: KeyCode, mods: Modifiers, is_down: bool) -> String {
+    pub(crate) fn encode_key(&self, key: KeyCode, mods: Modifiers, is_down: bool) -> String {
         key.encode(mods, self.encode_modes(), is_down)
             .unwrap_or_default()
     }
 
-    pub fn key_input(&self, key: KeyCode, mods: Modifiers, is_down: bool) -> Vec<u8> {
+    pub(crate) fn key_input(&self, key: KeyCode, mods: Modifiers, is_down: bool) -> Vec<u8> {
         self.encode_key(key, mods, is_down).into_bytes()
     }
 
-    pub fn start_selection(&mut self, point: TerminalSelectionPoint) {
+    pub(crate) fn start_selection(&mut self, point: TerminalSelectionPoint) {
         let point = self.selection_point(point);
         self.term.selection = Some(Selection::new(SelectionType::Simple, point, Side::Left));
     }
 
-    pub fn update_selection(&mut self, point: TerminalSelectionPoint) {
+    pub(crate) fn update_selection(&mut self, point: TerminalSelectionPoint) {
         let point = self.selection_point(point);
         if let Some(selection) = self.term.selection.as_mut() {
             selection.update(point, Side::Right);
         }
     }
 
-    pub fn selected_text(&self) -> Option<String> {
+    pub(crate) fn selected_text(&self) -> Option<String> {
         self.term.selection_to_string()
     }
 

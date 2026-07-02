@@ -50,7 +50,7 @@ const TERMINAL_ENV_REMOVE: &[&str] = &[
 ];
 
 #[derive(Debug, Error)]
-pub enum TerminalSessionError {
+pub(crate) enum TerminalSessionError {
     #[error("failed to create PTY pair")]
     Pty(#[from] anyhow::Error),
     #[error("failed to clone PTY reader")]
@@ -62,7 +62,7 @@ pub enum TerminalSessionError {
 }
 
 #[derive(Clone, Debug)]
-pub enum TerminalCommand {
+pub(crate) enum TerminalCommand {
     Input(Vec<u8>),
     Key {
         key: KeyCode,
@@ -80,7 +80,7 @@ pub enum TerminalCommand {
 }
 
 #[derive(Clone, Debug)]
-pub enum TerminalUpdate {
+pub(crate) enum TerminalUpdate {
     Snapshot(TerminalFrame),
     Title(Option<String>),
     Bell,
@@ -89,13 +89,13 @@ pub enum TerminalUpdate {
     Error(String),
 }
 
-pub struct TerminalSession {
+pub(crate) struct TerminalSession {
     tx: Sender<TerminalCommand>,
     rx: Receiver<TerminalUpdate>,
 }
 
 impl TerminalSession {
-    pub fn spawn(size: TerminalSize) -> Result<Self, TerminalSessionError> {
+    pub(crate) fn spawn(size: TerminalSize) -> Result<Self, TerminalSessionError> {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtySize {
             rows: size.rows,
@@ -170,16 +170,16 @@ impl TerminalSession {
         })
     }
 
-    pub fn sender(&self) -> Sender<TerminalCommand> {
+    pub(crate) fn sender(&self) -> Sender<TerminalCommand> {
         self.tx.clone()
     }
 
-    pub fn updates(&self) -> Receiver<TerminalUpdate> {
+    pub(crate) fn updates(&self) -> Receiver<TerminalUpdate> {
         self.rx.clone()
     }
 }
 
-pub fn initial_terminal_text() -> String {
+pub(crate) fn initial_terminal_text() -> String {
     let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     let mut core = TerminalCore::default();
     core.write_vt(

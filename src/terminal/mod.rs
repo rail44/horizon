@@ -3,14 +3,12 @@ mod session;
 mod types;
 pub(crate) mod view;
 
-pub use core::{TerminalCore, TerminalEvents};
-pub use session::{
-    initial_terminal_text, TerminalCommand, TerminalSession, TerminalSessionError, TerminalUpdate,
-};
-pub use types::{
-    TerminalCursor, TerminalFrame, TerminalLine, TerminalMouseButton, TerminalMouseKind,
-    TerminalMouseModifiers, TerminalMouseReport, TerminalScroll, TerminalSelectionPoint,
-    TerminalSize, TerminalSpan,
+#[cfg(test)]
+pub(crate) use core::TerminalCore;
+pub(crate) use session::{initial_terminal_text, TerminalCommand, TerminalSession, TerminalUpdate};
+pub(crate) use types::{
+    TerminalFrame, TerminalMouseButton, TerminalMouseKind, TerminalMouseModifiers,
+    TerminalMouseReport, TerminalScroll, TerminalSelectionPoint, TerminalSize, TerminalSpan,
 };
 
 #[cfg(test)]

@@ -9,9 +9,9 @@ const DEFAULT_COLS: u16 = 100;
 const DEFAULT_ROWS: u16 = 32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct TerminalSize {
-    pub cols: u16,
-    pub rows: u16,
+pub(crate) struct TerminalSize {
+    pub(crate) cols: u16,
+    pub(crate) rows: u16,
 }
 
 impl Default for TerminalSize {
@@ -46,75 +46,75 @@ impl Dimensions for TerminalSize {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TerminalFrame {
-    pub text: String,
-    pub lines: Vec<TerminalLine>,
-    pub cursor: Option<TerminalCursor>,
-    pub mouse_reporting: bool,
+pub(crate) struct TerminalFrame {
+    pub(crate) text: String,
+    pub(crate) lines: Vec<TerminalLine>,
+    pub(crate) cursor: Option<TerminalCursor>,
+    pub(crate) mouse_reporting: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TerminalLine {
-    pub spans: Vec<TerminalSpan>,
+pub(crate) struct TerminalLine {
+    pub(crate) spans: Vec<TerminalSpan>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TerminalSpan {
-    pub text: String,
-    pub columns: usize,
-    pub fg: [u8; 3],
-    pub bg: [u8; 3],
+pub(crate) struct TerminalSpan {
+    pub(crate) text: String,
+    pub(crate) columns: usize,
+    pub(crate) fg: [u8; 3],
+    pub(crate) bg: [u8; 3],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct TerminalCursor {
-    pub row: usize,
-    pub col: usize,
+pub(crate) struct TerminalCursor {
+    pub(crate) row: usize,
+    pub(crate) col: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct TerminalSelectionPoint {
-    pub row: usize,
-    pub col: usize,
+pub(crate) struct TerminalSelectionPoint {
+    pub(crate) row: usize,
+    pub(crate) col: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct TerminalMouseReport {
-    pub kind: TerminalMouseKind,
-    pub button: TerminalMouseButton,
-    pub point: TerminalSelectionPoint,
-    pub modifiers: TerminalMouseModifiers,
+pub(crate) struct TerminalMouseReport {
+    pub(crate) kind: TerminalMouseKind,
+    pub(crate) button: TerminalMouseButton,
+    pub(crate) point: TerminalSelectionPoint,
+    pub(crate) modifiers: TerminalMouseModifiers,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TerminalMouseKind {
+pub(crate) enum TerminalMouseKind {
     Press,
     Release,
     Drag,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TerminalMouseButton {
+pub(crate) enum TerminalMouseButton {
     Left,
     Middle,
     Right,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct TerminalMouseModifiers {
-    pub shift: bool,
-    pub alt: bool,
-    pub control: bool,
+pub(crate) struct TerminalMouseModifiers {
+    pub(crate) shift: bool,
+    pub(crate) alt: bool,
+    pub(crate) control: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct TerminalScroll {
-    pub lines: i32,
-    pub point: TerminalSelectionPoint,
+pub(crate) struct TerminalScroll {
+    pub(crate) lines: i32,
+    pub(crate) point: TerminalSelectionPoint,
 }
 
 impl TerminalFrame {
-    pub fn from_text(text: String) -> Self {
+    pub(crate) fn from_text(text: String) -> Self {
         let lines = text
             .lines()
             .map(|line| TerminalLine {

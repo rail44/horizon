@@ -48,7 +48,10 @@ pub(super) fn spawn_terminal_session(
                                 );
                             });
                         }
-                        TerminalUpdate::Title(_) | TerminalUpdate::Bell => {}
+                        TerminalUpdate::Title(title) => {
+                            let _ = title;
+                        }
+                        TerminalUpdate::Bell => {}
                         TerminalUpdate::Clipboard(text) => {
                             if let Some(path) = &clipboard_dump {
                                 let _ = std::fs::write(path, &text);
