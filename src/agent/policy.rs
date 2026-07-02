@@ -1,6 +1,6 @@
 use crate::agent::contract::{ApprovalRequest, Error, Event, SessionState, ToolPermission};
 
-pub fn horizon_events_for_provider_event(event: &Event) -> Vec<Event> {
+pub(crate) fn horizon_events_for_provider_event(event: &Event) -> Vec<Event> {
     let mut events = vec![event.clone()];
     if let Event::ToolCallRequested(request) = event {
         match crate::agent::tools::permission_for_tool(&request.tool_id)
