@@ -52,73 +52,70 @@ pub fn app_view() -> impl IntoView {
 
 fn app_content(state: AppState) -> impl IntoView {
     let workspace = state.workspace;
-    let frames = state.frames;
     let sessions = state.sessions;
-    let ime_composing = state.ime_composing;
-    let ime_preedit = state.ime_preedit;
-    let ime_cursor_area = state.ime_cursor_area;
-    let palette_open = state.palette_open;
-    let palette_query = state.palette_query;
-    let palette_selection = state.palette_selection;
-    let palette_focus_request = state.palette_focus_request;
-    let pane_focus_requests = state.pane_focus_requests;
-    let agent_drafts = state.agent_drafts;
-    let agent_config = state.agent_config.clone();
-    let control_mode = state.control_mode;
-    let overview_selection = state.overview_selection;
-    let terminal_dump = state.terminal_dump.clone();
-    let clipboard_dump = state.clipboard_dump.clone();
     let agent_state_status = state.agent_state_status;
     let status_dump = state.status_dump.clone();
 
     stack((
         v_stack((
             tab_strip(workspace, sessions),
-            workspace_view(WorkspaceViewState {
-                workspace,
-                frames,
-                sessions,
-                ime_composing,
-                ime_preedit,
-                ime_cursor_area,
-                palette_open,
-                palette_query,
-                palette_selection,
-                palette_focus_request,
-                pane_focus_requests,
-                agent_drafts,
-                agent_config: agent_config.clone(),
-                control_mode,
-                overview_selection,
-                terminal_dump: terminal_dump.clone(),
-                clipboard_dump: clipboard_dump.clone(),
-                agent_state_status,
-            }),
+            workspace_view(workspace_view_state(&state)),
             status_bar(workspace, agent_state_status, status_dump),
         ))
         .style(|s| s.size_full().flex().flex_col()),
-        command_palette(CommandPaletteState {
-            workspace,
-            frames,
-            sessions,
-            palette_open,
-            palette_query,
-            palette_selection,
-            palette_focus_request,
-            pane_focus_requests,
-            agent_state_status,
-            agent_config: agent_config.clone(),
-            control_mode,
-            overview_selection,
-            terminal_dump: terminal_dump.clone(),
-            clipboard_dump: clipboard_dump.clone(),
-        }),
-        workspace_overview(WorkspaceOverviewState {
-            workspace,
-            palette_open,
-            control_mode,
-            overview_selection,
-            palette_focus_request,
-        }),
+        command_palette(command_palette_state(&state)),
+        workspace_overview(workspace_overview_state(&state)),
     ))
+}
+
+fn workspace_view_state(state: &AppState) -> WorkspaceViewState {
+    WorkspaceViewState {
+        workspace: state.workspace,
+        frames: state.frames,
+        sessions: state.sessions,
+        ime_composing: state.ime_composing,
+        ime_preedit: state.ime_preedit,
+        ime_cursor_area: state.ime_cursor_area,
+        palette_open: state.palette_open,
+        palette_query: state.palette_query,
+        palette_selection: state.palette_selection,
+        palette_focus_request: state.palette_focus_request,
+        pane_focus_requests: state.pane_focus_requests,
+        agent_drafts: state.agent_drafts,
+        agent_config: state.agent_config.clone(),
+        control_mode: state.control_mode,
+        overview_selection: state.overview_selection,
+        terminal_dump: state.terminal_dump.clone(),
+        clipboard_dump: state.clipboard_dump.clone(),
+        agent_state_status: state.agent_state_status,
+    }
+}
+
+fn command_palette_state(state: &AppState) -> CommandPaletteState {
+    CommandPaletteState {
+        workspace: state.workspace,
+        frames: state.frames,
+        sessions: state.sessions,
+        palette_open: state.palette_open,
+        palette_query: state.palette_query,
+        palette_selection: state.palette_selection,
+        palette_focus_request: state.palette_focus_request,
+        pane_focus_requests: state.pane_focus_requests,
+        agent_state_status: state.agent_state_status,
+        agent_config: state.agent_config.clone(),
+        control_mode: state.control_mode,
+        overview_selection: state.overview_selection,
+        terminal_dump: state.terminal_dump.clone(),
+        clipboard_dump: state.clipboard_dump.clone(),
+    }
+}
+
+fn workspace_overview_state(state: &AppState) -> WorkspaceOverviewState {
+    WorkspaceOverviewState {
+        workspace: state.workspace,
+        palette_open: state.palette_open,
+        control_mode: state.control_mode,
+        overview_selection: state.overview_selection,
+        palette_focus_request: state.palette_focus_request,
+    }
 }
