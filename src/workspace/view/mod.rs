@@ -41,29 +41,34 @@ pub struct WorkspaceViewState {
     pub agent_state_status: RwSignal<Option<String>>,
 }
 
+impl WorkspaceViewState {
+    fn pane_view_state(&self) -> PaneViewState {
+        PaneViewState {
+            workspace: self.workspace,
+            frames: self.frames,
+            sessions: self.sessions,
+            ime_composing: self.ime_composing,
+            ime_preedit: self.ime_preedit,
+            ime_cursor_area: self.ime_cursor_area,
+            palette_open: self.palette_open,
+            palette_query: self.palette_query,
+            palette_selection: self.palette_selection,
+            palette_focus_request: self.palette_focus_request,
+            pane_focus_requests: self.pane_focus_requests,
+            agent_drafts: self.agent_drafts,
+            agent_config: self.agent_config.clone(),
+            control_mode: self.control_mode,
+            overview_selection: self.overview_selection,
+            terminal_dump: self.terminal_dump.clone(),
+            clipboard_dump: self.clipboard_dump.clone(),
+            agent_state_status: self.agent_state_status,
+        }
+    }
+}
+
 pub fn workspace_view(state: WorkspaceViewState) -> impl IntoView {
     let pane_focus_requests = state.pane_focus_requests;
-    let pane_state = PaneViewState {
-        workspace: state.workspace,
-        frames: state.frames,
-        sessions: state.sessions,
-        ime_composing: state.ime_composing,
-        ime_preedit: state.ime_preedit,
-        ime_cursor_area: state.ime_cursor_area,
-        palette_open: state.palette_open,
-        palette_query: state.palette_query,
-        palette_selection: state.palette_selection,
-        palette_focus_request: state.palette_focus_request,
-        pane_focus_requests,
-        agent_drafts: state.agent_drafts,
-        agent_config: state.agent_config,
-        control_mode: state.control_mode,
-        overview_selection: state.overview_selection,
-        terminal_dump: state.terminal_dump,
-        clipboard_dump: state.clipboard_dump,
-        agent_state_status: state.agent_state_status,
-    };
-
+    let pane_state = state.pane_view_state();
     h_stack((
         pane::pane_view(pane_state.clone(), 0, pane_focus_requests[0]),
         pane::pane_view(pane_state.clone(), 1, pane_focus_requests[1]),
