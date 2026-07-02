@@ -4,7 +4,7 @@ use floem::peniko::kurbo::{Point, Size};
 use floem::prelude::*;
 
 use crate::agent_config::AgentConfig;
-use crate::app::runtime::{spawn_agent_session, spawn_terminal_session};
+use crate::app::runtime::{spawn_session, SessionRuntimeState};
 use crate::control_surface::ControlMode;
 use crate::session::{Frames, Registry};
 use crate::workspace::{AgentDrafts, PaneFocusRequests, Workspace, MAX_VISIBLE_PANES};
@@ -58,24 +58,23 @@ impl AppState {
     }
 
     pub(super) fn spawn_initial_sessions(&self) {
-        for session_id in self.workspace.with(|ws| ws.terminal_session_ids()) {
-            spawn_terminal_session(
-                session_id,
-                self.frames,
-                self.sessions,
-                self.terminal_dump.clone(),
-                self.clipboard_dump.clone(),
-            );
+        let runtime = self.session_runtime_state();
+        for session in self.workspace.with(|ws| ws.session_summaries()) {
+            if session.attached {
+                spawn_session(session.kind.into(), session.id, &runtime);
+            }
         }
-        for session_id in self.workspace.with(|ws| ws.agent_session_ids()) {
-            spawn_agent_session(
-                session_id,
-                self.workspace,
-                self.frames,
-                self.sessions,
-                self.agent_state_status,
-                self.agent_config.clone(),
-            );
+    }
+
+    pub(super) fn session_runtime_state(&self) -> SessionRuntimeState {
+        SessionRuntimeState {
+            workspace: self.workspace,
+            frames: self.frames,
+            sessions: self.sessions,
+            agent_state_status: self.agent_state_status,
+            agent_config: self.agent_config.clone(),
+            terminal_dump: self.terminal_dump.clone(),
+            clipboard_dump: self.clipboard_dump.clone(),
         }
     }
 }

@@ -9,8 +9,8 @@ use crate::agent_config::AgentConfig;
 use crate::session::{Frames, Registry, SessionId};
 use crate::workspace::{PaneKind, Workspace};
 
-pub use agent::spawn_agent_session;
-pub use terminal::spawn_terminal_session;
+use agent::spawn_agent_session;
+use terminal::spawn_terminal_session;
 
 #[derive(Clone)]
 pub(crate) struct SessionRuntimeState {
