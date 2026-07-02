@@ -289,22 +289,6 @@ impl Workspace {
             .and_then(|pane| pane.session_id)
     }
 
-    pub fn terminal_session_ids(&self) -> Vec<SessionId> {
-        self.sessions
-            .iter()
-            .filter(|session| session.kind == SessionKind::Terminal)
-            .map(|session| session.id)
-            .collect()
-    }
-
-    pub fn agent_session_ids(&self) -> Vec<SessionId> {
-        self.sessions
-            .iter()
-            .filter(|session| session.kind == SessionKind::Agent)
-            .map(|session| session.id)
-            .collect()
-    }
-
     pub fn session_count(&self) -> usize {
         self.sessions.len()
     }

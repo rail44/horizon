@@ -23,7 +23,7 @@ mod tests {
     fn terminal_pane_references_top_level_session() {
         let workspace = Workspace::mvp();
 
-        assert_eq!(workspace.terminal_session_ids().len(), 1);
+        assert_eq!(workspace.session_summaries()[0].kind, SessionKind::Terminal);
         assert!(workspace.active_terminal_session_id().is_some());
         assert_eq!(workspace.session_count(), 1);
     }
