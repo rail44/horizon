@@ -32,7 +32,7 @@ mod tests {
     fn split_creates_new_attachment_for_session() {
         let mut workspace = Workspace::mvp();
         let session_id = SessionId::new();
-        let pane_id = workspace.attach_session_to_split(session_id);
+        let pane_id = workspace.split_active(PaneKind::Terminal, Some(session_id));
 
         assert_eq!(workspace.visible_pane_id(1), Some(pane_id));
         assert_eq!(workspace.visible_terminal_session_id(1), Some(session_id));
@@ -67,7 +67,7 @@ mod tests {
     fn detach_reports_session_and_removes_reference() {
         let mut workspace = Workspace::mvp();
         let session_id = SessionId::new();
-        let pane_id = workspace.attach_session_to_split(session_id);
+        let pane_id = workspace.split_active(PaneKind::Terminal, Some(session_id));
 
         assert_eq!(workspace.detach_pane(pane_id), Some(session_id));
         assert!(!workspace.session_is_referenced(session_id));
@@ -95,7 +95,7 @@ mod tests {
     fn close_visible_pane_detaches_when_another_pane_remains() {
         let mut workspace = Workspace::mvp();
         let session_id = SessionId::new();
-        workspace.attach_session_to_split(session_id);
+        workspace.split_active(PaneKind::Terminal, Some(session_id));
 
         assert_eq!(workspace.close_visible_pane(1), Some(session_id));
         assert_eq!(workspace.visible_panes().len(), 1);
@@ -108,7 +108,7 @@ mod tests {
     fn detached_session_summaries_list_unattached_sessions() {
         let mut workspace = Workspace::mvp();
         let session_id = SessionId::new();
-        workspace.attach_session_to_split(session_id);
+        workspace.split_active(PaneKind::Terminal, Some(session_id));
         workspace.close_visible_pane(1);
 
         assert_eq!(
@@ -128,7 +128,7 @@ mod tests {
         let mut workspace = Workspace::mvp();
         let attached_session = workspace.active_terminal_session_id().expect("session");
         let detached_session = SessionId::new();
-        workspace.attach_session_to_split(detached_session);
+        workspace.split_active(PaneKind::Terminal, Some(detached_session));
         workspace.close_visible_pane(1);
 
         assert_eq!(
@@ -156,7 +156,7 @@ mod tests {
     fn session_identity_survives_detach_and_reattach() {
         let mut workspace = Workspace::mvp();
         let session_id = SessionId::new();
-        workspace.attach_session_to_split(session_id);
+        workspace.split_active(PaneKind::Terminal, Some(session_id));
 
         assert_eq!(
             workspace.visible_pane_title(1),
@@ -182,11 +182,11 @@ mod tests {
     fn session_display_numbers_are_not_reused_after_terminate() {
         let mut workspace = Workspace::mvp();
         let second_session = SessionId::new();
-        workspace.attach_session_to_split(second_session);
+        workspace.split_active(PaneKind::Terminal, Some(second_session));
         workspace.terminate_session(second_session);
 
         let third_session = SessionId::new();
-        workspace.attach_session_to_split(third_session);
+        workspace.split_active(PaneKind::Terminal, Some(third_session));
 
         assert_eq!(
             workspace.visible_pane_title(1),
@@ -291,7 +291,7 @@ mod tests {
     fn close_active_pane_detaches_active_session() {
         let mut workspace = Workspace::mvp();
         let second_session = SessionId::new();
-        workspace.attach_session_to_split(second_session);
+        workspace.split_active(PaneKind::Terminal, Some(second_session));
 
         assert_eq!(workspace.close_active_pane(), Some(second_session));
         assert_eq!(workspace.visible_panes().len(), 1);
@@ -338,7 +338,7 @@ mod tests {
     #[test]
     fn activate_visible_pane_switches_active_pane() {
         let mut workspace = Workspace::mvp();
-        workspace.attach_session_to_split(SessionId::new());
+        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
 
         assert_eq!(workspace.active_visible_index(), 1);
         assert!(workspace.activate_visible_pane(0));
@@ -350,7 +350,7 @@ mod tests {
     #[test]
     fn pane_summaries_include_split_panes_by_tab() {
         let mut workspace = Workspace::mvp();
-        workspace.attach_session_to_split(SessionId::new());
+        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
 
         assert_eq!(
             workspace.pane_summaries(),
@@ -378,7 +378,7 @@ mod tests {
     #[test]
     fn activate_pane_index_switches_tab_and_pane() {
         let mut workspace = Workspace::mvp();
-        workspace.attach_session_to_split(SessionId::new());
+        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
         workspace.open_tab(PaneKind::Agent, None);
 
         assert_eq!(workspace.active_tab_index(), 1);
@@ -406,7 +406,7 @@ mod tests {
         let mut workspace = Workspace::mvp();
         let first_session = workspace.active_terminal_session_id().expect("session");
         let second_session = SessionId::new();
-        workspace.attach_session_to_split(second_session);
+        workspace.split_active(PaneKind::Terminal, Some(second_session));
 
         assert!(workspace.terminate_session(second_session));
         assert_eq!(workspace.session_count(), 1);
@@ -420,7 +420,7 @@ mod tests {
         let mut workspace = Workspace::mvp();
         let first_session = workspace.active_terminal_session_id().expect("session");
         let second_session = SessionId::new();
-        workspace.attach_session_to_split(second_session);
+        workspace.split_active(PaneKind::Terminal, Some(second_session));
 
         assert_eq!(workspace.terminate_active_session(), Some(second_session));
         assert_eq!(workspace.session_count(), 1);

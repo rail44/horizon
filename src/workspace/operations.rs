@@ -71,14 +71,6 @@ impl Workspace {
         Some((kind, session_id))
     }
 
-    pub fn attach_session_to_new_tab(&mut self, session_id: SessionId) -> PaneId {
-        self.open_tab(PaneKind::Terminal, Some(session_id))
-    }
-
-    pub fn attach_session_to_split(&mut self, session_id: SessionId) -> PaneId {
-        self.split_active(PaneKind::Terminal, Some(session_id))
-    }
-
     pub fn attach_existing_session_to_split(&mut self, session_id: SessionId) -> Option<PaneId> {
         let kind = self.session_pane_kind(session_id)?;
         Some(self.split_active(kind, Some(session_id)))
