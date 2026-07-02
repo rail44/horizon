@@ -1,8 +1,5 @@
-use std::path::PathBuf;
-
 use floem::prelude::*;
 
-use crate::agent_config::AgentConfig;
 use crate::app::runtime::{spawn_session, SessionRuntimeState};
 use crate::commands::{command_enabled, CommandId};
 use crate::control_surface::command_state;
@@ -11,32 +8,12 @@ use crate::workspace::{request_active_pane_focus, PaneFocusRequests, PaneKind, W
 
 #[derive(Clone)]
 pub(crate) struct CommandActionState {
-    pub(crate) workspace: RwSignal<Workspace>,
-    pub(crate) frames: RwSignal<Frames>,
-    pub(crate) sessions: RwSignal<Registry>,
+    pub(crate) runtime: SessionRuntimeState,
     pub(crate) pane_focus_requests: PaneFocusRequests,
-    pub(crate) agent_state_status: RwSignal<Option<String>>,
-    pub(crate) agent_config: AgentConfig,
-    pub(crate) terminal_dump: Option<PathBuf>,
-    pub(crate) clipboard_dump: Option<PathBuf>,
-}
-
-impl CommandActionState {
-    fn session_runtime_state(&self) -> SessionRuntimeState {
-        SessionRuntimeState {
-            workspace: self.workspace,
-            frames: self.frames,
-            sessions: self.sessions,
-            agent_state_status: self.agent_state_status,
-            agent_config: self.agent_config.clone(),
-            terminal_dump: self.terminal_dump.clone(),
-            clipboard_dump: self.clipboard_dump.clone(),
-        }
-    }
 }
 
 pub(crate) fn execute_command(command_id: CommandId, state: CommandActionState) {
-    let workspace = state.workspace;
+    let workspace = state.runtime.workspace;
     let command_state = workspace.with_untracked(command_state);
     if !command_enabled(command_id, command_state) {
         return;
@@ -65,24 +42,24 @@ pub(crate) fn execute_command(command_id: CommandId, state: CommandActionState) 
             });
         }
         CommandId::TerminateActiveSession => {
-            terminate_active_session(workspace, state.frames, state.sessions);
+            terminate_active_session(workspace, state.runtime.frames, state.runtime.sessions);
         }
     }
 }
 
 fn open_tab(state: CommandActionState, kind: PaneKind) {
-    let workspace = state.workspace;
+    let workspace = state.runtime.workspace;
     let mut session_id = None;
     workspace.update(|ws| {
         session_id = Some(ws.open_tab_with_new_session(kind));
     });
     let session_id = session_id.expect("new session");
-    spawn_session(kind, session_id, &state.session_runtime_state());
+    spawn_session(kind, session_id, &state.runtime);
     request_active_pane_focus(workspace, state.pane_focus_requests);
 }
 
 fn split_active_pane(state: CommandActionState) {
-    let workspace = state.workspace;
+    let workspace = state.runtime.workspace;
     let mut split = None;
     workspace.update(|ws| {
         split = ws.split_active_with_new_session();
@@ -91,7 +68,7 @@ fn split_active_pane(state: CommandActionState) {
     let Some((kind, session_id)) = split else {
         return;
     };
-    spawn_session(kind, session_id, &state.session_runtime_state());
+    spawn_session(kind, session_id, &state.runtime);
     request_active_pane_focus(workspace, state.pane_focus_requests);
 }
 

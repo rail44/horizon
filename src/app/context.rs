@@ -52,13 +52,7 @@ pub(super) fn control_input_state(state: &AppState) -> ControlInputState {
 
 fn command_action_state(state: &AppState) -> CommandActionState {
     CommandActionState {
-        workspace: state.workspace,
-        frames: state.frames,
-        sessions: state.sessions,
+        runtime: state.session_runtime_state(),
         pane_focus_requests: state.pane_focus_requests,
-        agent_state_status: state.agent_state_status,
-        agent_config: state.agent_config.clone(),
-        terminal_dump: state.terminal_dump.clone(),
-        clipboard_dump: state.clipboard_dump.clone(),
     }
 }
