@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::agent_config::AgentConfig;
-use crate::app::commands::{CommandActionState, PaneFocusRequests};
+use crate::app::commands::PaneFocusRequests;
 use crate::control_surface::{palette_items, ControlInputState, ControlMode, PALETTE_VISIBLE_ROWS};
 use crate::session::Frames;
 use crate::session::Registry;
@@ -15,7 +15,7 @@ use floem::reactive::create_memo;
 
 use super::chrome::control_mode_tabs;
 use super::row::palette_item_row;
-use crate::control_surface::actions::{execute_palette_selection, PaletteActionState};
+use crate::control_surface::actions::execute_palette_selection;
 use crate::control_surface::handle_control_key;
 
 const PALETTE_ROW_HEIGHT: f64 = 48.0;
@@ -74,21 +74,7 @@ pub fn command_palette(state: CommandPaletteState) -> impl IntoView {
         terminal_dump: terminal_dump.clone(),
         clipboard_dump: clipboard_dump.clone(),
     };
-    let palette_action = PaletteActionState {
-        command: CommandActionState {
-            workspace,
-            frames,
-            sessions,
-            pane_focus_requests,
-            agent_state_status,
-            agent_config,
-            terminal_dump,
-            clipboard_dump,
-        },
-        palette_open,
-        palette_query,
-        palette_selection,
-    };
+    let palette_action = control_input.clone().palette_action_state();
 
     let items = create_memo(move |_| {
         let query = palette_query.get();

@@ -33,12 +33,51 @@ pub struct ControlInputState {
     pub clipboard_dump: Option<PathBuf>,
 }
 
+impl ControlInputState {
+    pub(crate) fn palette_action_state(self) -> PaletteActionState {
+        PaletteActionState {
+            command: CommandActionState {
+                workspace: self.workspace,
+                frames: self.frames,
+                sessions: self.sessions,
+                pane_focus_requests: self.pane_focus_requests,
+                agent_state_status: self.agent_state_status,
+                agent_config: self.agent_config,
+                terminal_dump: self.terminal_dump,
+                clipboard_dump: self.clipboard_dump,
+            },
+            palette_open: self.palette_open,
+            palette_query: self.palette_query,
+            palette_selection: self.palette_selection,
+        }
+    }
+
+    fn workspace_control_state(&self) -> WorkspaceControlState {
+        WorkspaceControlState {
+            workspace: self.workspace,
+            palette_open: self.palette_open,
+            control_mode: self.control_mode,
+            overview_selection: self.overview_selection,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct WorkspaceControlState {
     pub(crate) workspace: RwSignal<Workspace>,
     pub(crate) palette_open: RwSignal<bool>,
     pub(crate) control_mode: RwSignal<ControlMode>,
     pub(crate) overview_selection: RwSignal<usize>,
+}
+
+impl WorkspaceControlState {
+    pub(crate) fn overview_action_state(&self) -> OverviewActionState {
+        OverviewActionState {
+            workspace: self.workspace,
+            palette_open: self.palette_open,
+            overview_selection: self.overview_selection,
+        }
+    }
 }
 
 fn handle_palette_key(key_event: &KeyEvent, state: ControlInputState) -> bool {
@@ -48,7 +87,7 @@ fn handle_palette_key(key_event: &KeyEvent, state: ControlInputState) -> bool {
             true
         }
         Key::Named(NamedKey::Enter) => {
-            execute_palette_selection(palette_action_state(state));
+            execute_palette_selection(state.palette_action_state());
             true
         }
         Key::Named(NamedKey::ArrowUp) => {
@@ -106,24 +145,6 @@ fn handle_palette_key(key_event: &KeyEvent, state: ControlInputState) -> bool {
     }
 }
 
-fn palette_action_state(state: ControlInputState) -> PaletteActionState {
-    PaletteActionState {
-        command: CommandActionState {
-            workspace: state.workspace,
-            frames: state.frames,
-            sessions: state.sessions,
-            pane_focus_requests: state.pane_focus_requests,
-            agent_state_status: state.agent_state_status,
-            agent_config: state.agent_config,
-            terminal_dump: state.terminal_dump,
-            clipboard_dump: state.clipboard_dump,
-        },
-        palette_open: state.palette_open,
-        palette_query: state.palette_query,
-        palette_selection: state.palette_selection,
-    }
-}
-
 pub fn handle_control_key(key_event: &KeyEvent, state: ControlInputState) -> bool {
     if is_control_mode_switch_key(key_event) {
         switch_control_mode(state.control_mode);
@@ -133,17 +154,8 @@ pub fn handle_control_key(key_event: &KeyEvent, state: ControlInputState) -> boo
     match state.control_mode.get_untracked() {
         ControlMode::Commands => handle_palette_key(key_event, state),
         ControlMode::Workspace => {
-            handle_workspace_control_key(key_event, workspace_control_state(&state))
+            handle_workspace_control_key(key_event, state.workspace_control_state())
         }
-    }
-}
-
-fn workspace_control_state(state: &ControlInputState) -> WorkspaceControlState {
-    WorkspaceControlState {
-        workspace: state.workspace,
-        palette_open: state.palette_open,
-        control_mode: state.control_mode,
-        overview_selection: state.overview_selection,
     }
 }
 
@@ -162,7 +174,7 @@ pub(crate) fn handle_workspace_control_key(
             true
         }
         Key::Named(NamedKey::Enter) => {
-            execute_overview_selection(overview_action_state(&state));
+            execute_overview_selection(state.overview_action_state());
             true
         }
         Key::Named(NamedKey::ArrowUp) => {
@@ -174,14 +186,6 @@ pub(crate) fn handle_workspace_control_key(
             true
         }
         _ => false,
-    }
-}
-
-fn overview_action_state(state: &WorkspaceControlState) -> OverviewActionState {
-    OverviewActionState {
-        workspace: state.workspace,
-        palette_open: state.palette_open,
-        overview_selection: state.overview_selection,
     }
 }
 

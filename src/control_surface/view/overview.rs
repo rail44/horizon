@@ -9,7 +9,7 @@ use floem::reactive::create_memo;
 
 use super::chrome::control_mode_tabs;
 use super::row::overview_item_row;
-use crate::control_surface::actions::{execute_overview_selection, OverviewActionState};
+use crate::control_surface::actions::execute_overview_selection;
 use crate::control_surface::input::{handle_workspace_control_key, WorkspaceControlState};
 
 const OVERVIEW_ROW_HEIGHT: f64 = 52.0;
@@ -40,11 +40,7 @@ pub fn workspace_overview(state: WorkspaceOverviewState) -> impl IntoView {
         control_mode,
         overview_selection,
     };
-    let overview_action = OverviewActionState {
-        workspace,
-        palette_open,
-        overview_selection,
-    };
+    let overview_action = workspace_control.overview_action_state();
 
     let items = create_memo(move |_| workspace.with(|ws| overview_items(ws)));
 
