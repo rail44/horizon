@@ -52,10 +52,22 @@ pub fn list_row(
                 .color(r.badge_color)
         }),
         v_stack((
-            label(move || row().map(|r| r.title).unwrap_or_default())
-                .style(|s| s.width_full().font_size(13).color(theme::text_primary())),
-            label(move || row().map(|r| r.description).unwrap_or_default())
-                .style(|s| s.width_full().font_size(11).color(theme::text_muted())),
+            label(move || row().map(|r| r.title).unwrap_or_default()).style(move |s| {
+                let color = row()
+                    .filter(|r| r.enabled)
+                    .map(|_| theme::text_primary())
+                    .unwrap_or_else(theme::text_subtle);
+
+                s.width_full().font_size(13).color(color)
+            }),
+            label(move || row().map(|r| r.description).unwrap_or_default()).style(move |s| {
+                let color = row()
+                    .filter(|r| r.enabled)
+                    .map(|_| theme::text_muted())
+                    .unwrap_or_else(theme::text_subtle);
+
+                s.width_full().font_size(11).color(color)
+            }),
         ))
         .style(|s| {
             s.flex()
