@@ -49,11 +49,43 @@ pub(super) struct PaneViewState {
     pub(super) agent_state_status: RwSignal<Option<String>>,
 }
 
+impl PaneViewState {
+    fn control_input_state(&self) -> ControlInputState {
+        ControlInputState {
+            workspace: self.workspace,
+            frames: self.frames,
+            sessions: self.sessions,
+            palette_open: self.palette_open,
+            palette_query: self.palette_query,
+            palette_selection: self.palette_selection,
+            control_mode: self.control_mode,
+            overview_selection: self.overview_selection,
+            pane_focus_requests: self.pane_focus_requests,
+            agent_state_status: self.agent_state_status,
+            agent_config: self.agent_config.clone(),
+            terminal_dump: self.terminal_dump.clone(),
+            clipboard_dump: self.clipboard_dump.clone(),
+        }
+    }
+
+    fn open_palette_state(&self) -> OpenPaletteState {
+        OpenPaletteState {
+            palette_open: self.palette_open,
+            palette_query: self.palette_query,
+            palette_selection: self.palette_selection,
+            palette_focus_request: self.palette_focus_request,
+        }
+    }
+}
+
 pub(super) fn pane_view(
     state: PaneViewState,
     index: usize,
     focus_request: RwSignal<u64>,
 ) -> impl IntoView {
+    let control_input = state.control_input_state();
+    let open_palette_state = state.open_palette_state();
+
     let workspace = state.workspace;
     let frames = state.frames;
     let sessions = state.sessions;
@@ -61,38 +93,8 @@ pub(super) fn pane_view(
     let ime_preedit = state.ime_preedit;
     let ime_cursor_area = state.ime_cursor_area;
     let palette_open = state.palette_open;
-    let palette_query = state.palette_query;
-    let palette_selection = state.palette_selection;
-    let palette_focus_request = state.palette_focus_request;
-    let pane_focus_requests = state.pane_focus_requests;
     let agent_drafts = state.agent_drafts;
-    let agent_config = state.agent_config;
     let control_mode = state.control_mode;
-    let overview_selection = state.overview_selection;
-    let terminal_dump = state.terminal_dump;
-    let clipboard_dump = state.clipboard_dump;
-    let agent_state_status = state.agent_state_status;
-    let control_input = ControlInputState {
-        workspace,
-        frames,
-        sessions,
-        palette_open,
-        palette_query,
-        palette_selection,
-        control_mode,
-        overview_selection,
-        pane_focus_requests,
-        agent_state_status,
-        agent_config,
-        terminal_dump,
-        clipboard_dump,
-    };
-    let open_palette_state = OpenPaletteState {
-        palette_open,
-        palette_query,
-        palette_selection,
-        palette_focus_request,
-    };
 
     let terminal_frame = move || {
         let Some(session_id) = workspace.with(|ws| ws.visible_terminal_session_id(index)) else {
