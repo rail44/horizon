@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use floem::action::{set_ime_allowed, set_ime_cursor_area};
 use floem::event::{Event, EventPropagation};
 use floem::prelude::*;
@@ -13,6 +11,8 @@ use crate::terminal::TerminalCommand;
 use crate::workspace::{
     active_agent_draft, active_terminal_sender, trace_ime, AgentDrafts, Workspace,
 };
+
+use super::state::AppState;
 
 #[derive(Clone)]
 pub struct AppInput {
@@ -32,51 +32,31 @@ pub struct AppInput {
     overview_selection: RwSignal<usize>,
     agent_state_status: RwSignal<Option<String>>,
     agent_config: AgentConfig,
-    terminal_dump: Option<PathBuf>,
-    clipboard_dump: Option<PathBuf>,
+    terminal_dump: Option<std::path::PathBuf>,
+    clipboard_dump: Option<std::path::PathBuf>,
 }
 
 impl AppInput {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        workspace: RwSignal<Workspace>,
-        frames: RwSignal<Frames>,
-        sessions: RwSignal<Registry>,
-        ime_composing: RwSignal<bool>,
-        ime_preedit: RwSignal<Option<String>>,
-        ime_cursor_area: RwSignal<(floem::peniko::kurbo::Point, floem::peniko::kurbo::Size)>,
-        palette_open: RwSignal<bool>,
-        palette_query: RwSignal<String>,
-        palette_selection: RwSignal<usize>,
-        palette_focus_request: RwSignal<u64>,
-        pane_focus_requests: PaneFocusRequests,
-        agent_drafts: AgentDrafts,
-        control_mode: RwSignal<ControlMode>,
-        overview_selection: RwSignal<usize>,
-        agent_state_status: RwSignal<Option<String>>,
-        agent_config: AgentConfig,
-        terminal_dump: Option<PathBuf>,
-        clipboard_dump: Option<PathBuf>,
-    ) -> Self {
+    pub(super) fn new(state: &AppState) -> Self {
         Self {
-            workspace,
-            frames,
-            sessions,
-            ime_composing,
-            ime_preedit,
-            ime_cursor_area,
-            palette_open,
-            palette_query,
-            palette_selection,
-            palette_focus_request,
-            pane_focus_requests,
-            agent_drafts,
-            control_mode,
-            overview_selection,
-            agent_state_status,
-            agent_config,
-            terminal_dump,
-            clipboard_dump,
+            workspace: state.workspace,
+            frames: state.frames,
+            sessions: state.sessions,
+            ime_composing: state.ime_composing,
+            ime_preedit: state.ime_preedit,
+            ime_cursor_area: state.ime_cursor_area,
+            palette_open: state.palette_open,
+            palette_query: state.palette_query,
+            palette_selection: state.palette_selection,
+            palette_focus_request: state.palette_focus_request,
+            pane_focus_requests: state.pane_focus_requests,
+            agent_drafts: state.agent_drafts,
+            control_mode: state.control_mode,
+            overview_selection: state.overview_selection,
+            agent_state_status: state.agent_state_status,
+            agent_config: state.agent_config.clone(),
+            terminal_dump: state.terminal_dump.clone(),
+            clipboard_dump: state.clipboard_dump.clone(),
         }
     }
 

@@ -1,93 +1,37 @@
-use std::path::PathBuf;
-
+use floem::event::EventListener;
 use floem::prelude::*;
-use floem::{
-    event::EventListener,
-    peniko::kurbo::{Point, Size},
-};
 
-use crate::agent_config::AgentConfig;
-use crate::app::runtime::{spawn_agent_session, spawn_terminal_session};
 use crate::control_surface::view::{command_palette, workspace_overview};
-use crate::control_surface::ControlMode;
-use crate::session::{Frames, Registry};
 use crate::workspace::view::{tab_strip, workspace_view};
-use crate::workspace::Workspace;
 
 use super::input::AppInput;
+use super::state::AppState;
 use super::status_bar::status_bar;
 
 pub fn app_view() -> impl IntoView {
-    let workspace = RwSignal::new(Workspace::mvp());
-    let frames = RwSignal::new(Frames::default());
-    let sessions = RwSignal::new(Registry::default());
-    let ime_composing = RwSignal::new(false);
-    let ime_preedit = RwSignal::new(None::<String>);
-    let ime_cursor_area = RwSignal::new((Point::new(12.0, 64.0), Size::new(8.0, 18.0)));
-    let palette_open = RwSignal::new(false);
-    let palette_query = RwSignal::new(String::new());
-    let palette_selection = RwSignal::new(0_usize);
-    let palette_focus_request = RwSignal::new(0_u64);
-    let pane_focus_requests = [
-        RwSignal::new(0_u64),
-        RwSignal::new(0_u64),
-        RwSignal::new(0_u64),
-        RwSignal::new(0_u64),
-    ];
-    let agent_drafts = [
-        RwSignal::new(String::new()),
-        RwSignal::new(String::new()),
-        RwSignal::new(String::new()),
-        RwSignal::new(String::new()),
-    ];
-    let control_mode = RwSignal::new(ControlMode::Commands);
-    let overview_selection = RwSignal::new(0_usize);
-    let agent_state_status = RwSignal::new(None::<String>);
-    let agent_config = AgentConfig::from_env();
-    let terminal_dump = std::env::var_os("HORIZON_TERMINAL_DUMP").map(PathBuf::from);
-    let clipboard_dump = std::env::var_os("HORIZON_CLIPBOARD_DUMP").map(PathBuf::from);
-    let status_dump = std::env::var_os("HORIZON_STATUS_DUMP").map(PathBuf::from);
+    let state = AppState::new();
+    state.spawn_initial_sessions();
 
-    for session_id in workspace.with(|ws| ws.terminal_session_ids()) {
-        spawn_terminal_session(
-            session_id,
-            frames,
-            sessions,
-            terminal_dump.clone(),
-            clipboard_dump.clone(),
-        );
-    }
-    for session_id in workspace.with(|ws| ws.agent_session_ids()) {
-        spawn_agent_session(
-            session_id,
-            workspace,
-            frames,
-            sessions,
-            agent_state_status,
-            agent_config.clone(),
-        );
-    }
-
-    let input = AppInput::new(
-        workspace,
-        frames,
-        sessions,
-        ime_composing,
-        ime_preedit,
-        ime_cursor_area,
-        palette_open,
-        palette_query,
-        palette_selection,
-        palette_focus_request,
-        pane_focus_requests,
-        agent_drafts,
-        control_mode,
-        overview_selection,
-        agent_state_status,
-        agent_config.clone(),
-        terminal_dump.clone(),
-        clipboard_dump.clone(),
-    );
+    let input = AppInput::new(&state);
+    let workspace = state.workspace;
+    let frames = state.frames;
+    let sessions = state.sessions;
+    let ime_composing = state.ime_composing;
+    let ime_preedit = state.ime_preedit;
+    let ime_cursor_area = state.ime_cursor_area;
+    let palette_open = state.palette_open;
+    let palette_query = state.palette_query;
+    let palette_selection = state.palette_selection;
+    let palette_focus_request = state.palette_focus_request;
+    let pane_focus_requests = state.pane_focus_requests;
+    let agent_drafts = state.agent_drafts;
+    let agent_config = state.agent_config.clone();
+    let control_mode = state.control_mode;
+    let overview_selection = state.overview_selection;
+    let terminal_dump = state.terminal_dump.clone();
+    let clipboard_dump = state.clipboard_dump.clone();
+    let agent_state_status = state.agent_state_status;
+    let status_dump = state.status_dump.clone();
 
     let focus_input = input.clone();
     let ime_enabled_input = input.clone();
