@@ -4,7 +4,7 @@ pub mod live;
 pub mod persistence;
 pub mod policy;
 pub mod providers;
-pub mod tools;
+pub(crate) mod tools;
 pub(crate) mod view;
 
 #[cfg(test)]

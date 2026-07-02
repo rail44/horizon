@@ -9,10 +9,10 @@ pub(crate) use input::{
     handle_active_pane_key, request_active_pane_focus, trace_ime, visible_agent_sender,
     visible_terminal_sender, AgentDrafts, PaneFocusRequests, MAX_VISIBLE_PANES,
 };
-pub use types::{
-    LayoutNode, Pane, PaneId, PaneKind, PaneSummary, SessionKind, SessionSummary, SplitAxis, Tab,
-    TabId, TabSummary, Workspace, WorkspaceSession,
-};
+pub(crate) use types::{PaneKind, PaneSummary, SessionKind, Workspace};
+
+#[cfg(test)]
+use types::{SessionSummary, TabSummary};
 
 #[cfg(test)]
 mod tests {

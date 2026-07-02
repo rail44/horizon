@@ -5,7 +5,7 @@ use super::types::{
 use crate::session::SessionId;
 
 impl Workspace {
-    pub fn mvp() -> Self {
+    pub(crate) fn mvp() -> Self {
         let session_id = SessionId::new();
         let terminal = Pane::new(PaneKind::Terminal, Some(session_id));
         let active = terminal.id;
@@ -25,7 +25,7 @@ impl Workspace {
         }
     }
 
-    pub fn open_tab(&mut self, kind: PaneKind, session_id: Option<SessionId>) -> PaneId {
+    pub(crate) fn open_tab(&mut self, kind: PaneKind, session_id: Option<SessionId>) -> PaneId {
         self.ensure_session(kind, session_id);
         let pane = Pane::new(kind, session_id);
         let pane_id = pane.id;
@@ -40,13 +40,13 @@ impl Workspace {
         pane_id
     }
 
-    pub fn open_tab_with_new_session(&mut self, kind: PaneKind) -> SessionId {
+    pub(crate) fn open_tab_with_new_session(&mut self, kind: PaneKind) -> SessionId {
         let session_id = SessionId::new();
         self.open_tab(kind, Some(session_id));
         session_id
     }
 
-    pub fn split_active(&mut self, kind: PaneKind, session_id: Option<SessionId>) -> PaneId {
+    pub(crate) fn split_active(&mut self, kind: PaneKind, session_id: Option<SessionId>) -> PaneId {
         self.ensure_session(kind, session_id);
         let pane = Pane::new(kind, session_id);
         let pane_id = pane.id;
@@ -64,19 +64,22 @@ impl Workspace {
         pane_id
     }
 
-    pub fn split_active_with_new_session(&mut self) -> Option<(PaneKind, SessionId)> {
+    pub(crate) fn split_active_with_new_session(&mut self) -> Option<(PaneKind, SessionId)> {
         let kind = self.visible_pane_kind(self.active_visible_index())?;
         let session_id = SessionId::new();
         self.split_active(kind, Some(session_id));
         Some((kind, session_id))
     }
 
-    pub fn attach_existing_session_to_split(&mut self, session_id: SessionId) -> Option<PaneId> {
+    pub(crate) fn attach_existing_session_to_split(
+        &mut self,
+        session_id: SessionId,
+    ) -> Option<PaneId> {
         let kind = self.session_pane_kind(session_id)?;
         Some(self.split_active(kind, Some(session_id)))
     }
 
-    pub fn activate_tab_index(&mut self, index: usize) -> bool {
+    pub(crate) fn activate_tab_index(&mut self, index: usize) -> bool {
         let Some(tab) = self.tabs.get(index) else {
             return false;
         };
@@ -84,7 +87,7 @@ impl Workspace {
         true
     }
 
-    pub fn activate_pane_index(&mut self, tab_index: usize, pane_index: usize) -> bool {
+    pub(crate) fn activate_pane_index(&mut self, tab_index: usize, pane_index: usize) -> bool {
         let Some(tab) = self.tabs.get(tab_index) else {
             return false;
         };
@@ -102,7 +105,7 @@ impl Workspace {
         false
     }
 
-    pub fn close_tab_index(&mut self, index: usize) -> Vec<SessionId> {
+    pub(crate) fn close_tab_index(&mut self, index: usize) -> Vec<SessionId> {
         if self.tabs.len() <= 1 {
             return Vec::new();
         }
@@ -136,7 +139,7 @@ impl Workspace {
         session_ids
     }
 
-    pub fn terminate_session(&mut self, session_id: SessionId) -> bool {
+    pub(crate) fn terminate_session(&mut self, session_id: SessionId) -> bool {
         let Some(_) = self
             .sessions
             .iter()
@@ -160,12 +163,12 @@ impl Workspace {
         true
     }
 
-    pub fn terminate_active_session(&mut self) -> Option<SessionId> {
+    pub(crate) fn terminate_active_session(&mut self) -> Option<SessionId> {
         let session_id = self.active_session_id()?;
         self.terminate_session(session_id).then_some(session_id)
     }
 
-    pub fn activate_visible_pane(&mut self, index: usize) -> bool {
+    pub(crate) fn activate_visible_pane(&mut self, index: usize) -> bool {
         let Some(pane_id) = self.visible_pane_id(index) else {
             return false;
         };
@@ -176,7 +179,7 @@ impl Workspace {
         true
     }
 
-    pub fn detach_pane(&mut self, pane_id: PaneId) -> Option<SessionId> {
+    pub(crate) fn detach_pane(&mut self, pane_id: PaneId) -> Option<SessionId> {
         let session_id = self
             .panes
             .iter()
@@ -206,7 +209,7 @@ impl Workspace {
         session_id
     }
 
-    pub fn close_visible_pane(&mut self, index: usize) -> Option<SessionId> {
+    pub(crate) fn close_visible_pane(&mut self, index: usize) -> Option<SessionId> {
         if self.visible_pane_ids().len() <= 1 {
             return None;
         }
@@ -215,21 +218,21 @@ impl Workspace {
         self.detach_pane(pane_id)
     }
 
-    pub fn close_active_pane(&mut self) -> Option<SessionId> {
+    pub(crate) fn close_active_pane(&mut self) -> Option<SessionId> {
         self.close_visible_pane(self.active_visible_index())
     }
 
-    pub fn close_active_tab(&mut self) -> Vec<SessionId> {
+    pub(crate) fn close_active_tab(&mut self) -> Vec<SessionId> {
         self.close_tab_index(self.active_tab_index())
     }
 
-    pub fn session_is_referenced(&self, session_id: SessionId) -> bool {
+    pub(crate) fn session_is_referenced(&self, session_id: SessionId) -> bool {
         self.panes
             .iter()
             .any(|pane| pane.session_id == Some(session_id))
     }
 
-    pub fn focus_next(&mut self) {
+    pub(crate) fn focus_next(&mut self) {
         let visible = self.visible_pane_ids();
         if visible.is_empty() {
             return;
@@ -245,11 +248,11 @@ impl Workspace {
         }
     }
 
-    pub fn visible_pane_id(&self, index: usize) -> Option<PaneId> {
+    pub(crate) fn visible_pane_id(&self, index: usize) -> Option<PaneId> {
         self.visible_pane_ids().get(index).copied()
     }
 
-    pub fn active_terminal_session_id(&self) -> Option<SessionId> {
+    pub(crate) fn active_terminal_session_id(&self) -> Option<SessionId> {
         let active = self.active_tab()?.active;
         self.panes
             .iter()
@@ -257,7 +260,7 @@ impl Workspace {
             .and_then(|pane| pane.session_id)
     }
 
-    pub fn active_session_id(&self) -> Option<SessionId> {
+    pub(crate) fn active_session_id(&self) -> Option<SessionId> {
         let active = self.active_tab()?.active;
         self.panes
             .iter()
@@ -265,7 +268,7 @@ impl Workspace {
             .and_then(|pane| pane.session_id)
     }
 
-    pub fn visible_terminal_session_id(&self, index: usize) -> Option<SessionId> {
+    pub(crate) fn visible_terminal_session_id(&self, index: usize) -> Option<SessionId> {
         let pane_id = self.visible_pane_id(index)?;
         self.panes
             .iter()
@@ -273,7 +276,7 @@ impl Workspace {
             .and_then(|pane| pane.session_id)
     }
 
-    pub fn visible_agent_session_id(&self, index: usize) -> Option<SessionId> {
+    pub(crate) fn visible_agent_session_id(&self, index: usize) -> Option<SessionId> {
         let pane_id = self.visible_pane_id(index)?;
         self.panes
             .iter()
@@ -281,25 +284,25 @@ impl Workspace {
             .and_then(|pane| pane.session_id)
     }
 
-    pub fn session_count(&self) -> usize {
+    pub(crate) fn session_count(&self) -> usize {
         self.sessions.len()
     }
 
-    pub fn detached_session_count(&self) -> usize {
+    pub(crate) fn detached_session_count(&self) -> usize {
         self.sessions
             .iter()
             .filter(|session| !self.session_is_referenced(session.id))
             .count()
     }
 
-    pub fn detached_session_summaries(&self) -> Vec<SessionSummary> {
+    pub(crate) fn detached_session_summaries(&self) -> Vec<SessionSummary> {
         self.session_summaries()
             .into_iter()
             .filter(|session| !session.attached)
             .collect()
     }
 
-    pub fn session_summaries(&self) -> Vec<SessionSummary> {
+    pub(crate) fn session_summaries(&self) -> Vec<SessionSummary> {
         self.sessions
             .iter()
             .map(|session| SessionSummary {
@@ -312,7 +315,7 @@ impl Workspace {
             .collect()
     }
 
-    pub fn tab_summaries(&self) -> Vec<TabSummary> {
+    pub(crate) fn tab_summaries(&self) -> Vec<TabSummary> {
         self.tabs
             .iter()
             .enumerate()
@@ -326,7 +329,7 @@ impl Workspace {
             .collect()
     }
 
-    pub fn pane_summaries(&self) -> Vec<PaneSummary> {
+    pub(crate) fn pane_summaries(&self) -> Vec<PaneSummary> {
         self.tabs
             .iter()
             .enumerate()
@@ -350,11 +353,11 @@ impl Workspace {
             .collect()
     }
 
-    pub fn tab_count(&self) -> usize {
+    pub(crate) fn tab_count(&self) -> usize {
         self.tabs.len()
     }
 
-    pub fn visible_panes(&self) -> Vec<&Pane> {
+    pub(crate) fn visible_panes(&self) -> Vec<&Pane> {
         let visible = self.visible_pane_ids();
         visible
             .iter()
@@ -362,26 +365,26 @@ impl Workspace {
             .collect()
     }
 
-    pub fn visible_pane_kind(&self, index: usize) -> Option<PaneKind> {
+    pub(crate) fn visible_pane_kind(&self, index: usize) -> Option<PaneKind> {
         self.visible_panes().get(index).map(|pane| pane.kind)
     }
 
-    pub fn active_pane_is(&self, kind: PaneKind) -> bool {
+    pub(crate) fn active_pane_is(&self, kind: PaneKind) -> bool {
         self.visible_pane_kind(self.active_visible_index()) == Some(kind)
     }
 
-    pub fn active_visible_pane_is(&self, index: usize, kind: PaneKind) -> bool {
+    pub(crate) fn active_visible_pane_is(&self, index: usize, kind: PaneKind) -> bool {
         self.active_visible_index() == index && self.visible_pane_kind(index) == Some(kind)
     }
 
-    pub fn active_pane_accepts_text_input(&self) -> bool {
+    pub(crate) fn active_pane_accepts_text_input(&self) -> bool {
         matches!(
             self.visible_pane_kind(self.active_visible_index()),
             Some(PaneKind::Terminal | PaneKind::Agent)
         )
     }
 
-    pub fn active_visible_pane_accepts_text_input(&self, index: usize) -> bool {
+    pub(crate) fn active_visible_pane_accepts_text_input(&self, index: usize) -> bool {
         self.active_visible_index() == index
             && matches!(
                 self.visible_pane_kind(index),
@@ -389,7 +392,7 @@ impl Workspace {
             )
     }
 
-    pub fn active_visible_index(&self) -> usize {
+    pub(crate) fn active_visible_index(&self) -> usize {
         let active = self.active_tab().map(|tab| tab.active);
         self.visible_pane_ids()
             .iter()
@@ -397,14 +400,14 @@ impl Workspace {
             .unwrap_or(0)
     }
 
-    pub fn active_tab_index(&self) -> usize {
+    pub(crate) fn active_tab_index(&self) -> usize {
         self.tabs
             .iter()
             .position(|tab| tab.id == self.active_tab)
             .unwrap_or(0)
     }
 
-    pub fn active_title(&self) -> String {
+    pub(crate) fn active_title(&self) -> String {
         let active = self.active_tab().map(|tab| tab.active);
         self.panes
             .iter()
@@ -413,7 +416,7 @@ impl Workspace {
             .unwrap_or_else(|| "none".to_string())
     }
 
-    pub fn visible_pane_title(&self, index: usize) -> Option<String> {
+    pub(crate) fn visible_pane_title(&self, index: usize) -> Option<String> {
         self.visible_panes()
             .get(index)
             .map(|pane| self.pane_title(pane))

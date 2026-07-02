@@ -1,20 +1,24 @@
 use rig_core::completion::{
     message::{ToolCall, ToolFunction},
-    AssistantContent, Message, ToolDefinition,
+    AssistantContent, Message,
 };
 
-use crate::agent::{
-    contract::{
-        Event, Message as AgentMessage, MessageDelta, MessageRole, ProviderEvent, ToolCallId,
-        ToolCallRequest, ToolCallResult, ToolPermission,
-    },
-    tools::Definition,
+use crate::agent::contract::{
+    Event, Message as AgentMessage, MessageDelta, MessageRole, ProviderEvent, ToolCallId,
+    ToolCallRequest, ToolCallResult,
 };
+
+#[cfg(test)]
+use rig_core::completion::ToolDefinition;
+
+#[cfg(test)]
+use crate::agent::{contract::ToolPermission, tools::Definition};
 
 pub(super) const RIG_PROVIDER_PAYLOAD_SCHEMA: &str = "horizon.rig.provider_payload";
 pub(super) const RIG_PROVIDER_PAYLOAD_VERSION: u32 = 1;
 
-pub fn horizon_events_from_rig_message(message: Message) -> Vec<Event> {
+#[cfg(test)]
+pub(super) fn horizon_events_from_rig_message(message: Message) -> Vec<Event> {
     horizon_provider_events_from_rig_message(message)
         .into_iter()
         .map(|event| event.event)
@@ -82,7 +86,8 @@ pub fn horizon_provider_events_from_rig_message(message: Message) -> Vec<Provide
     }
 }
 
-pub fn horizon_tool_definition_from_rig(
+#[cfg(test)]
+pub(super) fn horizon_tool_definition_from_rig(
     definition: ToolDefinition,
     permission: ToolPermission,
 ) -> Definition {

@@ -14,11 +14,13 @@ use mapping::{rig_tool_call_request, rig_tool_result_message, rig_workspace_snap
 use session::spawn_rig_session;
 use stream::{StreamDeltaBuffer, StreamDeltaKind};
 
-pub use mapping::{
-    horizon_events_from_rig_message, horizon_provider_events_from_rig_message,
-    horizon_tool_definition_from_rig, rig_messages_from_horizon_events,
+pub(crate) use mapping::{
+    horizon_provider_events_from_rig_message, rig_messages_from_horizon_events,
     rig_tool_call_provider_payload,
 };
+
+#[cfg(test)]
+use mapping::{horizon_events_from_rig_message, horizon_tool_definition_from_rig};
 
 use crate::{
     agent::contract::{Provider as AgentProvider, ProviderId, SessionHandle, StartSession},

@@ -9,16 +9,16 @@ use crate::agent::policy::horizon_events_for_provider_event;
 use crate::workspace::Workspace;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Definition {
-    pub id: String,
-    pub title: String,
-    pub description: String,
-    pub input_schema: serde_json::Value,
-    pub permission: ToolPermission,
+pub(crate) struct Definition {
+    pub(crate) id: String,
+    pub(crate) title: String,
+    pub(crate) description: String,
+    pub(crate) input_schema: serde_json::Value,
+    pub(crate) permission: ToolPermission,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Execution {
+pub(crate) enum Execution {
     Auto(Vec<Event>),
     RequiresApproval,
     Denied(Vec<Event>),
@@ -26,12 +26,12 @@ pub enum Execution {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Processing {
-    pub horizon_events: Vec<ProviderEvent>,
-    pub provider_commands: Vec<Command>,
+pub(crate) struct Processing {
+    pub(crate) horizon_events: Vec<ProviderEvent>,
+    pub(crate) provider_commands: Vec<Command>,
 }
 
-pub fn definitions() -> Vec<Definition> {
+pub(crate) fn definitions() -> Vec<Definition> {
     vec![
         Definition {
             id: "workspace.snapshot".to_string(),
@@ -57,14 +57,14 @@ pub fn definitions() -> Vec<Definition> {
     ]
 }
 
-pub fn permission_for_tool(tool_id: &str) -> Option<ToolPermission> {
+pub(crate) fn permission_for_tool(tool_id: &str) -> Option<ToolPermission> {
     definitions()
         .into_iter()
         .find(|definition| definition.id == tool_id)
         .map(|definition| definition.permission)
 }
 
-pub fn execute_agent_tool(workspace: &Workspace, request: &ToolCallRequest) -> Execution {
+pub(crate) fn execute_agent_tool(workspace: &Workspace, request: &ToolCallRequest) -> Execution {
     match permission_for_tool(&request.tool_id) {
         Some(ToolPermission::AutoAllowRead | ToolPermission::AutoAllowUi) => {
             Execution::Auto(execute_auto_tool(workspace, request))
@@ -79,7 +79,7 @@ pub fn execute_agent_tool(workspace: &Workspace, request: &ToolCallRequest) -> E
     }
 }
 
-pub fn process_agent_provider_event(
+pub(crate) fn process_agent_provider_event(
     workspace: &Workspace,
     provider_event: impl Into<ProviderEvent>,
 ) -> Processing {
@@ -144,7 +144,7 @@ fn execute_auto_tool(workspace: &Workspace, request: &ToolCallRequest) -> Vec<Ev
     }
 }
 
-pub fn workspace_snapshot(workspace: &Workspace) -> serde_json::Value {
+pub(crate) fn workspace_snapshot(workspace: &Workspace) -> serde_json::Value {
     json!({
         "tab_count": workspace.tab_count(),
         "detached_session_count": workspace.detached_session_count(),
@@ -187,7 +187,7 @@ pub fn workspace_snapshot(workspace: &Workspace) -> serde_json::Value {
     })
 }
 
-pub fn tool_result_message(result: &ToolCallResult) -> Event {
+pub(crate) fn tool_result_message(result: &ToolCallResult) -> Event {
     Event::MessageCommitted(Message {
         role: MessageRole::Assistant,
         text: format!("Tool result received for {}.", result.call_id.0),

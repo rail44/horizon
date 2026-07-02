@@ -4,13 +4,13 @@ use uuid::Uuid;
 use crate::session::SessionId;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
-pub struct PaneId(Uuid);
+pub(crate) struct PaneId(Uuid);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
-pub struct TabId(Uuid);
+pub(crate) struct TabId(Uuid);
 
 #[derive(Clone, Debug)]
-pub struct Workspace {
+pub(crate) struct Workspace {
     pub(super) tabs: Vec<Tab>,
     pub(super) panes: Vec<Pane>,
     pub(super) sessions: Vec<WorkspaceSession>,
@@ -20,50 +20,50 @@ pub struct Workspace {
 }
 
 #[derive(Clone, Debug)]
-pub struct Tab {
-    pub id: TabId,
-    pub root: LayoutNode,
-    pub active: PaneId,
+pub(crate) struct Tab {
+    pub(crate) id: TabId,
+    pub(crate) root: LayoutNode,
+    pub(crate) active: PaneId,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TabSummary {
-    pub index: usize,
-    pub title: String,
-    pub active: bool,
-    pub pane_count: usize,
-    pub active_session_id: Option<SessionId>,
+pub(crate) struct TabSummary {
+    pub(crate) index: usize,
+    pub(crate) title: String,
+    pub(crate) active: bool,
+    pub(crate) pane_count: usize,
+    pub(crate) active_session_id: Option<SessionId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SessionSummary {
-    pub id: SessionId,
-    pub kind: SessionKind,
-    pub display_number: usize,
-    pub title: String,
-    pub attached: bool,
+pub(crate) struct SessionSummary {
+    pub(crate) id: SessionId,
+    pub(crate) kind: SessionKind,
+    pub(crate) display_number: usize,
+    pub(crate) title: String,
+    pub(crate) attached: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PaneSummary {
-    pub tab_index: usize,
-    pub pane_index: usize,
-    pub title: String,
-    pub kind: PaneKind,
-    pub active: bool,
-    pub tab_active: bool,
+pub(crate) struct PaneSummary {
+    pub(crate) tab_index: usize,
+    pub(crate) pane_index: usize,
+    pub(crate) title: String,
+    pub(crate) kind: PaneKind,
+    pub(crate) active: bool,
+    pub(crate) tab_active: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WorkspaceSession {
-    pub id: SessionId,
-    pub kind: SessionKind,
-    pub display_number: usize,
-    pub title: String,
+pub(crate) struct WorkspaceSession {
+    pub(crate) id: SessionId,
+    pub(crate) kind: SessionKind,
+    pub(crate) display_number: usize,
+    pub(crate) title: String,
 }
 
 #[derive(Clone, Debug)]
-pub enum LayoutNode {
+pub(crate) enum LayoutNode {
     Pane(PaneId),
     Split {
         axis: SplitAxis,
@@ -74,26 +74,25 @@ pub enum LayoutNode {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SplitAxis {
+pub(crate) enum SplitAxis {
     Horizontal,
-    Vertical,
 }
 
 #[derive(Clone, Debug)]
-pub struct Pane {
-    pub id: PaneId,
-    pub kind: PaneKind,
-    pub session_id: Option<SessionId>,
+pub(crate) struct Pane {
+    pub(crate) id: PaneId,
+    pub(crate) kind: PaneKind,
+    pub(crate) session_id: Option<SessionId>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PaneKind {
+pub(crate) enum PaneKind {
     Terminal,
     Agent,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SessionKind {
+pub(crate) enum SessionKind {
     Terminal,
     Agent,
 }
@@ -140,7 +139,7 @@ impl From<SessionKind> for PaneKind {
 }
 
 impl PaneKind {
-    pub fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Terminal => "terminal",
             Self::Agent => "agent",
@@ -149,7 +148,7 @@ impl PaneKind {
 }
 
 impl SessionKind {
-    pub fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Terminal => "terminal",
             Self::Agent => "agent",
@@ -166,7 +165,7 @@ impl Pane {
         }
     }
 
-    pub fn title(&self) -> String {
+    pub(crate) fn title(&self) -> String {
         pane_kind_title(self.kind).to_string()
     }
 }
