@@ -1,7 +1,7 @@
-use crate::app::commands::{execute_command, request_active_pane_focus, CommandActionState};
+use crate::app::commands::{execute_command, CommandActionState};
 use crate::commands::clamp_palette_selection;
 use crate::control_surface::{overview_items, palette_items, OverviewItem, PaletteItem};
-use crate::workspace::Workspace;
+use crate::workspace::{request_active_pane_focus, Workspace};
 use floem::prelude::*;
 
 #[derive(Clone)]

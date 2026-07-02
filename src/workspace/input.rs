@@ -6,6 +6,7 @@ use crate::input::{
 use crate::session::Registry;
 use crate::terminal::TerminalCommand;
 use crate::workspace::{PaneKind, Workspace};
+use floem::action::set_ime_allowed;
 use floem::keyboard::{Key, KeyEvent};
 use floem::prelude::*;
 use floem::Clipboard;
@@ -21,6 +22,17 @@ pub fn active_agent(workspace: RwSignal<Workspace>) -> bool {
 
 pub fn active_text_input_pane(workspace: RwSignal<Workspace>) -> bool {
     workspace.with(|ws| ws.active_pane_accepts_text_input())
+}
+
+pub fn request_active_pane_focus(
+    workspace: RwSignal<Workspace>,
+    pane_focus_requests: PaneFocusRequests,
+) {
+    let index = workspace.with_untracked(|ws| ws.active_visible_index());
+    if let Some(focus_request) = pane_focus_requests.get(index) {
+        focus_request.update(|request| *request += 1);
+    }
+    set_ime_allowed(active_text_input_pane(workspace));
 }
 
 pub fn active_agent_draft(

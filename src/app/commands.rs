@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use floem::action::set_ime_allowed;
 use floem::prelude::*;
 
 use crate::agent_config::AgentConfig;
@@ -8,7 +7,7 @@ use crate::app::runtime::{spawn_agent_session, spawn_terminal_session};
 use crate::commands::{command_enabled, CommandId};
 use crate::control_surface::command_state;
 use crate::session::{Frames, Registry, SessionId};
-use crate::workspace::{active_text_input_pane, PaneFocusRequests, PaneKind, Workspace};
+use crate::workspace::{request_active_pane_focus, PaneFocusRequests, PaneKind, Workspace};
 
 #[derive(Clone)]
 pub struct CommandActionState {
@@ -121,17 +120,6 @@ fn split_active_pane(state: CommandActionState) {
         );
     }
     request_active_pane_focus(workspace, state.pane_focus_requests);
-}
-
-pub fn request_active_pane_focus(
-    workspace: RwSignal<Workspace>,
-    pane_focus_requests: PaneFocusRequests,
-) {
-    let index = workspace.with_untracked(|ws| ws.active_visible_index());
-    if let Some(focus_request) = pane_focus_requests.get(index) {
-        focus_request.update(|request| *request += 1);
-    }
-    set_ime_allowed(active_text_input_pane(workspace));
 }
 
 fn terminate_active_session(
