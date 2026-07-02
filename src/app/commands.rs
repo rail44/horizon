@@ -11,14 +11,14 @@ use crate::workspace::{request_active_pane_focus, PaneFocusRequests, PaneKind, W
 
 #[derive(Clone)]
 pub struct CommandActionState {
-    pub workspace: RwSignal<Workspace>,
-    pub frames: RwSignal<Frames>,
-    pub sessions: RwSignal<Registry>,
-    pub pane_focus_requests: PaneFocusRequests,
-    pub agent_state_status: RwSignal<Option<String>>,
-    pub agent_config: AgentConfig,
-    pub terminal_dump: Option<PathBuf>,
-    pub clipboard_dump: Option<PathBuf>,
+    pub(crate) workspace: RwSignal<Workspace>,
+    pub(crate) frames: RwSignal<Frames>,
+    pub(crate) sessions: RwSignal<Registry>,
+    pub(crate) pane_focus_requests: PaneFocusRequests,
+    pub(crate) agent_state_status: RwSignal<Option<String>>,
+    pub(crate) agent_config: AgentConfig,
+    pub(crate) terminal_dump: Option<PathBuf>,
+    pub(crate) clipboard_dump: Option<PathBuf>,
 }
 
 pub fn execute_command(command_id: CommandId, state: CommandActionState) {

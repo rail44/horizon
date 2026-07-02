@@ -21,7 +21,7 @@ const OVERVIEW_ROW_STYLE: ListRowStyle = ListRowStyle {
 #[derive(Clone)]
 pub struct WorkspaceOverviewState {
     pub(crate) workspace_control: WorkspaceControlState,
-    pub palette_focus_request: RwSignal<u64>,
+    pub(crate) palette_focus_request: RwSignal<u64>,
 }
 
 impl WorkspaceOverviewState {

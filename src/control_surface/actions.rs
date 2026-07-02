@@ -21,10 +21,10 @@ pub(crate) struct OverviewActionState {
 
 #[derive(Clone, Copy)]
 pub struct OpenPaletteState {
-    pub palette_open: RwSignal<bool>,
-    pub palette_query: RwSignal<String>,
-    pub palette_selection: RwSignal<usize>,
-    pub palette_focus_request: RwSignal<u64>,
+    pub(crate) palette_open: RwSignal<bool>,
+    pub(crate) palette_query: RwSignal<String>,
+    pub(crate) palette_selection: RwSignal<usize>,
+    pub(crate) palette_focus_request: RwSignal<u64>,
 }
 
 pub fn open_palette(state: OpenPaletteState) {

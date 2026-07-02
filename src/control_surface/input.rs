@@ -13,12 +13,12 @@ use crate::control_surface::actions::{
 
 #[derive(Clone)]
 pub struct ControlInputState {
-    pub command: CommandActionState,
-    pub palette_open: RwSignal<bool>,
-    pub palette_query: RwSignal<String>,
-    pub palette_selection: RwSignal<usize>,
-    pub control_mode: RwSignal<ControlMode>,
-    pub overview_selection: RwSignal<usize>,
+    pub(crate) command: CommandActionState,
+    pub(crate) palette_open: RwSignal<bool>,
+    pub(crate) palette_query: RwSignal<String>,
+    pub(crate) palette_selection: RwSignal<usize>,
+    pub(crate) control_mode: RwSignal<ControlMode>,
+    pub(crate) overview_selection: RwSignal<usize>,
 }
 
 impl ControlInputState {

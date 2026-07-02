@@ -15,12 +15,12 @@ pub use tab_strip::tab_strip;
 
 #[derive(Clone)]
 pub struct WorkspaceViewState {
-    pub control_input: ControlInputState,
-    pub open_palette: OpenPaletteState,
-    pub ime_composing: RwSignal<bool>,
-    pub ime_preedit: RwSignal<Option<String>>,
-    pub ime_cursor_area: RwSignal<(Point, Size)>,
-    pub agent_drafts: AgentDrafts,
+    pub(crate) control_input: ControlInputState,
+    pub(crate) open_palette: OpenPaletteState,
+    pub(crate) ime_composing: RwSignal<bool>,
+    pub(crate) ime_preedit: RwSignal<Option<String>>,
+    pub(crate) ime_cursor_area: RwSignal<(Point, Size)>,
+    pub(crate) agent_drafts: AgentDrafts,
 }
 
 impl WorkspaceViewState {

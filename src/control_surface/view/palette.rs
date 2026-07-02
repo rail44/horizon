@@ -20,8 +20,8 @@ const PALETTE_ROW_STYLE: ListRowStyle = ListRowStyle {
 
 #[derive(Clone)]
 pub struct CommandPaletteState {
-    pub control_input: ControlInputState,
-    pub palette_focus_request: RwSignal<u64>,
+    pub(crate) control_input: ControlInputState,
+    pub(crate) palette_focus_request: RwSignal<u64>,
 }
 
 impl CommandPaletteState {
