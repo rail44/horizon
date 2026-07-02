@@ -2,22 +2,19 @@ use std::path::PathBuf;
 
 use floem::prelude::*;
 use floem::{
-    action::{set_ime_allowed, set_ime_cursor_area},
-    event::{Event, EventListener, EventPropagation},
+    event::EventListener,
     peniko::kurbo::{Point, Size},
 };
 
 use crate::agent_config::AgentConfig;
-use crate::app::commands::{active_agent, active_text_input_pane};
 use crate::app::runtime::{spawn_agent_session, spawn_terminal_session};
 use crate::control_surface::view::{command_palette, workspace_overview};
-use crate::control_surface::{handle_control_key, open_palette, ControlMode};
-use crate::input::is_palette_open_key;
+use crate::control_surface::ControlMode;
 use crate::session::{Frames, Registry};
-use crate::terminal::TerminalCommand;
 use crate::workspace::view::{tab_strip, workspace_view};
-use crate::workspace::{active_agent_draft, active_terminal_sender, trace_ime, Workspace};
+use crate::workspace::Workspace;
 
+use super::input::AppInput;
 use super::status_bar::status_bar;
 
 pub fn app_view() -> impl IntoView {
@@ -71,6 +68,34 @@ pub fn app_view() -> impl IntoView {
         );
     }
 
+    let input = AppInput {
+        workspace,
+        frames,
+        sessions,
+        ime_composing,
+        ime_preedit,
+        ime_cursor_area,
+        palette_open,
+        palette_query,
+        palette_selection,
+        palette_focus_request,
+        pane_focus_requests,
+        agent_drafts,
+        control_mode,
+        overview_selection,
+        agent_state_status,
+        agent_config: agent_config.clone(),
+        terminal_dump: terminal_dump.clone(),
+        clipboard_dump: clipboard_dump.clone(),
+    };
+
+    let focus_input = input.clone();
+    let ime_enabled_input = input.clone();
+    let ime_disabled_input = input.clone();
+    let ime_preedit_input = input.clone();
+    let ime_commit_input = input.clone();
+    let key_input = input.clone();
+
     stack((
         v_stack((
             tab_strip(workspace, sessions),
@@ -122,104 +147,23 @@ pub fn app_view() -> impl IntoView {
         ),
     ))
     .on_event(EventListener::WindowGotFocus, move |_| {
-        set_ime_allowed(active_text_input_pane(workspace));
-        let (position, size) = ime_cursor_area.get_untracked();
-        set_ime_cursor_area(position, size);
-        EventPropagation::Continue
+        focus_input.handle_window_focus()
     })
     .on_event(EventListener::ImeEnabled, move |_| {
-        trace_ime("enabled");
-        EventPropagation::Continue
+        ime_enabled_input.handle_ime_enabled()
     })
     .on_event(EventListener::ImeDisabled, move |_| {
-        trace_ime("disabled");
-        EventPropagation::Continue
+        ime_disabled_input.handle_ime_disabled()
     })
     .on_event(EventListener::ImePreedit, move |event| {
-        if !active_text_input_pane(workspace) {
-            return EventPropagation::Continue;
-        }
-
-        if let Event::ImePreedit { text, cursor } = event {
-            let (position, size) = ime_cursor_area.get_untracked();
-            set_ime_cursor_area(position, size);
-            trace_ime(&format!("preedit text={text:?} cursor={cursor:?}"));
-            if text.is_empty() {
-                ime_composing.set(false);
-                ime_preedit.set(None);
-            } else {
-                ime_composing.set(true);
-                ime_preedit.set(Some(text.clone()));
-            }
-            return EventPropagation::Stop;
-        }
-
-        EventPropagation::Continue
+        ime_preedit_input.handle_ime_preedit(event)
     })
     .on_event(EventListener::ImeCommit, move |event| {
-        if !active_text_input_pane(workspace) {
-            return EventPropagation::Continue;
-        }
-
-        if let Event::ImeCommit(text) = event {
-            let (position, size) = ime_cursor_area.get_untracked();
-            set_ime_cursor_area(position, size);
-            trace_ime(&format!("commit text={text:?}"));
-            ime_composing.set(false);
-            ime_preedit.set(None);
-            if active_agent(workspace) {
-                if let Some(draft) = active_agent_draft(workspace, agent_drafts) {
-                    draft.update(|draft| draft.push_str(text));
-                    return EventPropagation::Stop;
-                }
-            }
-            if let Some(tx) = active_terminal_sender(workspace, sessions) {
-                let _ = tx.send(TerminalCommand::Input(text.as_bytes().to_vec()));
-                return EventPropagation::Stop;
-            }
-        }
-
-        EventPropagation::Continue
+        ime_commit_input.handle_ime_commit(event)
     })
     .keyboard_navigable()
     .on_event(EventListener::KeyDown, move |event| {
-        if let Event::KeyDown(key_event) = event {
-            if palette_open.get_untracked() {
-                if handle_control_key(
-                    key_event,
-                    workspace,
-                    frames,
-                    sessions,
-                    palette_open,
-                    palette_query,
-                    palette_selection,
-                    control_mode,
-                    overview_selection,
-                    pane_focus_requests,
-                    agent_state_status,
-                    agent_config.clone(),
-                    terminal_dump.clone(),
-                    clipboard_dump.clone(),
-                ) {
-                    return EventPropagation::Stop;
-                }
-            }
-
-            if is_palette_open_key(key_event) {
-                ime_composing.set(false);
-                ime_preedit.set(None);
-                set_ime_allowed(false);
-                control_mode.set(ControlMode::Commands);
-                open_palette(
-                    palette_open,
-                    palette_query,
-                    palette_selection,
-                    palette_focus_request,
-                );
-                return EventPropagation::Stop;
-            }
-        }
-        EventPropagation::Continue
+        key_input.handle_key_down(event)
     })
     .style(move |s| {
         s.size_full()
