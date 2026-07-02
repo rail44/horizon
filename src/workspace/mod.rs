@@ -382,6 +382,19 @@ mod tests {
     }
 
     #[test]
+    fn terminate_active_session_returns_removed_session() {
+        let mut workspace = Workspace::mvp();
+        let first_session = workspace.active_terminal_session_id().expect("session");
+        let second_session = SessionId::new();
+        workspace.attach_session_to_split(second_session);
+
+        assert_eq!(workspace.terminate_active_session(), Some(second_session));
+        assert_eq!(workspace.session_count(), 1);
+        assert!(!workspace.session_is_referenced(second_session));
+        assert!(workspace.session_is_referenced(first_session));
+    }
+
+    #[test]
     fn terminate_unknown_session_is_noop() {
         let mut workspace = Workspace::mvp();
 

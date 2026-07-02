@@ -127,13 +127,14 @@ fn terminate_active_session(
     frames: RwSignal<Frames>,
     sessions: RwSignal<Registry>,
 ) {
-    let Some(session_id) = workspace.with_untracked(|ws| ws.active_session_id()) else {
+    let mut terminated = None;
+    workspace.update(|ws| {
+        terminated = ws.terminate_active_session();
+    });
+
+    let Some(session_id) = terminated else {
         return;
     };
-
-    workspace.update(|ws| {
-        ws.terminate_session(session_id);
-    });
     sessions.update(|registry| {
         registry.shutdown_terminal(session_id);
         registry.shutdown_agent(session_id);

@@ -162,6 +162,11 @@ impl Workspace {
         true
     }
 
+    pub fn terminate_active_session(&mut self) -> Option<SessionId> {
+        let session_id = self.active_session_id()?;
+        self.terminate_session(session_id).then_some(session_id)
+    }
+
     pub fn activate_visible_pane(&mut self, index: usize) -> bool {
         let Some(pane_id) = self.visible_pane_id(index) else {
             return false;
