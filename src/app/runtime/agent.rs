@@ -15,7 +15,7 @@ use crate::workspace::Workspace;
 static AGENT_EVENT_LOG_WRITER: OnceLock<Mutex<Option<WriterHandle>>> = OnceLock::new();
 static AGENT_DUCKDB_REBUILD_DONE: OnceLock<Mutex<bool>> = OnceLock::new();
 
-pub fn spawn_agent_session(
+pub(super) fn spawn_agent_session(
     session_id: SessionId,
     workspace: RwSignal<Workspace>,
     frames: RwSignal<Frames>,

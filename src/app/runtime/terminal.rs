@@ -8,7 +8,7 @@ use floem::Clipboard;
 use crate::session::{Frames, Registry, SessionId};
 use crate::terminal::{TerminalSession, TerminalSize, TerminalUpdate};
 
-pub fn spawn_terminal_session(
+pub(super) fn spawn_terminal_session(
     session_id: SessionId,
     frames: RwSignal<Frames>,
     sessions: RwSignal<Registry>,
