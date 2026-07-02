@@ -40,6 +40,12 @@ impl Workspace {
         pane_id
     }
 
+    pub fn open_tab_with_new_session(&mut self, kind: PaneKind) -> SessionId {
+        let session_id = SessionId::new();
+        self.open_tab(kind, Some(session_id));
+        session_id
+    }
+
     pub fn split_active(&mut self, kind: PaneKind, session_id: Option<SessionId>) -> PaneId {
         self.ensure_session(kind, session_id);
         let pane = Pane::new(kind, session_id);

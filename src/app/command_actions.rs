@@ -6,7 +6,7 @@ use crate::agent_config::AgentConfig;
 use crate::app::runtime::{spawn_agent_session, spawn_terminal_session};
 use crate::commands::{command_enabled, CommandId};
 use crate::control_surface::command_state;
-use crate::session::{Frames, Registry, SessionId};
+use crate::session::{Frames, Registry};
 use crate::workspace::{request_active_pane_focus, PaneFocusRequests, PaneKind, Workspace};
 
 #[derive(Clone)]
@@ -57,11 +57,12 @@ pub(crate) fn execute_command(command_id: CommandId, state: CommandActionState) 
 }
 
 fn open_terminal_tab(state: CommandActionState) {
-    let session_id = SessionId::new();
     let workspace = state.workspace;
+    let mut session_id = None;
     workspace.update(|ws| {
-        ws.open_tab(PaneKind::Terminal, Some(session_id));
+        session_id = Some(ws.open_tab_with_new_session(PaneKind::Terminal));
     });
+    let session_id = session_id.expect("new terminal session");
     spawn_terminal_session(
         session_id,
         state.frames,
@@ -73,11 +74,12 @@ fn open_terminal_tab(state: CommandActionState) {
 }
 
 fn open_agent_tab(state: CommandActionState) {
-    let session_id = SessionId::new();
     let workspace = state.workspace;
+    let mut session_id = None;
     workspace.update(|ws| {
-        ws.open_tab(PaneKind::Agent, Some(session_id));
+        session_id = Some(ws.open_tab_with_new_session(PaneKind::Agent));
     });
+    let session_id = session_id.expect("new agent session");
     spawn_agent_session(
         session_id,
         workspace,

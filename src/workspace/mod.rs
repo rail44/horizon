@@ -212,6 +212,17 @@ mod tests {
     }
 
     #[test]
+    fn open_tab_with_new_session_attaches_requested_kind() {
+        let mut workspace = Workspace::mvp();
+
+        let session_id = workspace.open_tab_with_new_session(PaneKind::Agent);
+
+        assert_eq!(workspace.visible_agent_session_id(0), Some(session_id));
+        assert_eq!(workspace.visible_panes()[0].kind, PaneKind::Agent);
+        assert!(workspace.session_is_referenced(session_id));
+    }
+
+    #[test]
     fn opening_tab_is_reflected_in_tab_summaries() {
         let mut workspace = Workspace::mvp();
         let first_session = workspace.active_terminal_session_id().expect("session");
