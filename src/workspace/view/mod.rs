@@ -1,12 +1,11 @@
 use std::path::PathBuf;
 
 use crate::agent_config::AgentConfig;
-use crate::app::commands::PaneFocusRequests;
 use crate::control_surface::ControlMode;
 use crate::session::Frames;
 use crate::session::Registry;
 use crate::ui::theme;
-use crate::workspace::{AgentDrafts, Workspace};
+use crate::workspace::{AgentDrafts, PaneFocusRequests, Workspace};
 use floem::peniko::kurbo::{Point, Size};
 use floem::prelude::*;
 

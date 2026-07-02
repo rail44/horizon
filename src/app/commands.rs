@@ -8,11 +8,7 @@ use crate::app::runtime::{spawn_agent_session, spawn_terminal_session};
 use crate::commands::{command_enabled, CommandId};
 use crate::control_surface::command_state;
 use crate::session::{Frames, Registry, SessionId};
-use crate::workspace::{active_text_input_pane, PaneKind, Workspace};
-
-pub const MAX_VISIBLE_PANES: usize = 4;
-
-pub type PaneFocusRequests = [RwSignal<u64>; MAX_VISIBLE_PANES];
+use crate::workspace::{active_text_input_pane, PaneFocusRequests, PaneKind, Workspace};
 
 #[derive(Clone)]
 pub struct CommandActionState {
@@ -47,11 +43,15 @@ pub fn execute_command(command_id: CommandId, state: CommandActionState) {
         }
         CommandId::CloseActivePane => {
             let index = workspace.with_untracked(|ws| ws.active_visible_index());
-            close_visible_pane(workspace, index);
+            workspace.update(|ws| {
+                ws.close_visible_pane(index);
+            });
         }
         CommandId::CloseActiveTab => {
             let index = workspace.with_untracked(|ws| ws.active_tab_index());
-            close_tab(workspace, index);
+            workspace.update(|ws| {
+                ws.close_tab_index(index);
+            });
         }
         CommandId::TerminateActiveSession => {
             terminate_active_session(workspace, state.frames, state.sessions);
@@ -151,16 +151,4 @@ fn terminate_active_session(
         registry.shutdown_agent(session_id);
     });
     frames.update(|frames| frames.remove_session(session_id));
-}
-
-pub fn close_visible_pane(workspace: RwSignal<Workspace>, index: usize) {
-    workspace.update(|ws| {
-        ws.close_visible_pane(index);
-    });
-}
-
-pub fn close_tab(workspace: RwSignal<Workspace>, index: usize) {
-    workspace.update(|ws| {
-        ws.close_tab_index(index);
-    });
 }

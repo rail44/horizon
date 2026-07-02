@@ -4,11 +4,10 @@ use floem::peniko::kurbo::{Point, Size};
 use floem::prelude::*;
 
 use crate::agent_config::AgentConfig;
-use crate::app::commands::{PaneFocusRequests, MAX_VISIBLE_PANES};
 use crate::app::runtime::{spawn_agent_session, spawn_terminal_session};
 use crate::control_surface::ControlMode;
 use crate::session::{Frames, Registry};
-use crate::workspace::{AgentDrafts, Workspace};
+use crate::workspace::{AgentDrafts, PaneFocusRequests, Workspace, MAX_VISIBLE_PANES};
 
 #[derive(Clone)]
 pub(super) struct AppState {

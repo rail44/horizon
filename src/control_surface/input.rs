@@ -1,12 +1,12 @@
 use std::path::PathBuf;
 
 use crate::agent_config::AgentConfig;
-use crate::app::commands::{CommandActionState, PaneFocusRequests};
+use crate::app::commands::CommandActionState;
 use crate::control_surface::ControlMode;
 use crate::input::palette_accepts_text_input;
 use crate::session::Frames;
 use crate::session::Registry;
-use crate::workspace::Workspace;
+use crate::workspace::{PaneFocusRequests, Workspace};
 use floem::keyboard::{Key, KeyEvent, NamedKey};
 use floem::prelude::*;
 

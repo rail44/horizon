@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use crate::agent::contract::Command;
 use crate::agent::frame::AgentFrame;
 use crate::agent_config::AgentConfig;
-use crate::app::commands::{close_visible_pane, PaneFocusRequests};
 use crate::control_surface::{
     handle_control_key, open_palette, ControlInputState, ControlMode, OpenPaletteState,
 };
@@ -12,8 +11,8 @@ use crate::session::{Frames, Registry};
 use crate::terminal::TerminalFrame;
 use crate::ui::theme;
 use crate::workspace::{
-    handle_active_pane_key, visible_agent_sender, visible_terminal_sender, AgentDrafts, PaneKind,
-    Workspace,
+    handle_active_pane_key, visible_agent_sender, visible_terminal_sender, AgentDrafts,
+    PaneFocusRequests, PaneKind, Workspace,
 };
 use floem::prelude::*;
 use floem::{
@@ -131,7 +130,9 @@ pub(super) fn pane_view(
 
     v_stack((
         pane_header(title, active, closeable, move || {
-            close_visible_pane(workspace, index)
+            workspace.update(|ws| {
+                ws.close_visible_pane(index);
+            });
         }),
         terminal_output(
             terminal_frame,

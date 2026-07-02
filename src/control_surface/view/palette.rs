@@ -1,14 +1,13 @@
 use std::path::PathBuf;
 
 use crate::agent_config::AgentConfig;
-use crate::app::commands::PaneFocusRequests;
 use crate::control_surface::{palette_items, ControlInputState, ControlMode, PALETTE_VISIBLE_ROWS};
 use crate::session::Frames;
 use crate::session::Registry;
 use crate::ui::list_row::{list_row, ListRowStyle};
 use crate::ui::selectable_list::selectable_list;
 use crate::ui::theme;
-use crate::workspace::Workspace;
+use crate::workspace::{PaneFocusRequests, Workspace};
 use floem::event::{Event, EventListener, EventPropagation};
 use floem::prelude::*;
 use floem::reactive::create_memo;

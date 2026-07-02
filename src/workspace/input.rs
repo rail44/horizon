@@ -1,5 +1,4 @@
 use crate::agent::contract::Command;
-use crate::app::commands::MAX_VISIBLE_PANES;
 use crate::input::{
     agent_draft_action, is_terminal_copy_key, is_terminal_paste_key, pop_last_grapheme_approx,
     terminal_input_from_key, terminal_key_from_key, termwiz_modifiers, AgentDraftAction,
@@ -11,7 +10,10 @@ use floem::keyboard::{Key, KeyEvent};
 use floem::prelude::*;
 use floem::Clipboard;
 
+pub const MAX_VISIBLE_PANES: usize = 4;
+
 pub type AgentDrafts = [RwSignal<String>; MAX_VISIBLE_PANES];
+pub type PaneFocusRequests = [RwSignal<u64>; MAX_VISIBLE_PANES];
 
 pub fn active_agent(workspace: RwSignal<Workspace>) -> bool {
     workspace.with(|ws| ws.active_pane_is(PaneKind::Agent))
