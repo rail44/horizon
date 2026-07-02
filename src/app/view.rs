@@ -13,6 +13,42 @@ pub fn app_view() -> impl IntoView {
     state.spawn_initial_sessions();
 
     let input = AppInput::new(&state);
+    let content = app_content(state);
+
+    let focus_input = input.clone();
+    let ime_enabled_input = input.clone();
+    let ime_disabled_input = input.clone();
+    let ime_preedit_input = input.clone();
+    let ime_commit_input = input.clone();
+    let key_input = input.clone();
+
+    content
+        .on_event(EventListener::WindowGotFocus, move |_| {
+            focus_input.handle_window_focus()
+        })
+        .on_event(EventListener::ImeEnabled, move |_| {
+            ime_enabled_input.handle_ime_enabled()
+        })
+        .on_event(EventListener::ImeDisabled, move |_| {
+            ime_disabled_input.handle_ime_disabled()
+        })
+        .on_event(EventListener::ImePreedit, move |event| {
+            ime_preedit_input.handle_ime_preedit(event)
+        })
+        .on_event(EventListener::ImeCommit, move |event| {
+            ime_commit_input.handle_ime_commit(event)
+        })
+        .keyboard_navigable()
+        .on_event(EventListener::KeyDown, move |event| {
+            key_input.handle_key_down(event)
+        })
+        .style(move |s| {
+            s.size_full()
+                .background(floem::peniko::Color::rgb8(22, 24, 29))
+        })
+}
+
+fn app_content(state: AppState) -> impl IntoView {
     let workspace = state.workspace;
     let frames = state.frames;
     let sessions = state.sessions;
@@ -32,13 +68,6 @@ pub fn app_view() -> impl IntoView {
     let clipboard_dump = state.clipboard_dump.clone();
     let agent_state_status = state.agent_state_status;
     let status_dump = state.status_dump.clone();
-
-    let focus_input = input.clone();
-    let ime_enabled_input = input.clone();
-    let ime_disabled_input = input.clone();
-    let ime_preedit_input = input.clone();
-    let ime_commit_input = input.clone();
-    let key_input = input.clone();
 
     stack((
         v_stack((
@@ -90,27 +119,4 @@ pub fn app_view() -> impl IntoView {
             palette_focus_request,
         ),
     ))
-    .on_event(EventListener::WindowGotFocus, move |_| {
-        focus_input.handle_window_focus()
-    })
-    .on_event(EventListener::ImeEnabled, move |_| {
-        ime_enabled_input.handle_ime_enabled()
-    })
-    .on_event(EventListener::ImeDisabled, move |_| {
-        ime_disabled_input.handle_ime_disabled()
-    })
-    .on_event(EventListener::ImePreedit, move |event| {
-        ime_preedit_input.handle_ime_preedit(event)
-    })
-    .on_event(EventListener::ImeCommit, move |event| {
-        ime_commit_input.handle_ime_commit(event)
-    })
-    .keyboard_navigable()
-    .on_event(EventListener::KeyDown, move |event| {
-        key_input.handle_key_down(event)
-    })
-    .style(move |s| {
-        s.size_full()
-            .background(floem::peniko::Color::rgb8(22, 24, 29))
-    })
 }
