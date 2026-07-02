@@ -193,6 +193,9 @@ cross-domain `ui` module:
   selectable collection, rather than reimplementing viewport math in the view;
 - `app` remains the composition and runtime wiring layer, not the default home
   for reusable UI components.
+- `app::view` owns the application shell: root Floem signal wiring, startup
+  session spawning, window-level IME/key routing, and composition of domain
+  views. The binary `main.rs` should stay as application startup only.
 
 Use this split as the placement test:
 

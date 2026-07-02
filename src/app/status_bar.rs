@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
+use crate::ui::theme;
+use crate::workspace::Workspace;
 use floem::prelude::*;
-use horizon::ui::theme;
-use horizon::workspace::Workspace;
 
-pub(crate) fn status_bar(
+pub(super) fn status_bar(
     workspace: RwSignal<Workspace>,
     agent_state_status: RwSignal<Option<String>>,
     status_dump: Option<PathBuf>,
