@@ -1,29 +1,15 @@
-use std::path::PathBuf;
-
-use crate::agent_config::AgentConfig;
-use crate::app::commands::{
-    execute_command, request_active_pane_focus, CommandActionState, PaneFocusRequests,
-};
+use crate::app::commands::{execute_command, request_active_pane_focus, CommandActionState};
 use crate::commands::clamp_palette_selection;
 use crate::control_surface::{overview_items, palette_items, OverviewItem, PaletteItem};
-use crate::session::Frames;
-use crate::session::Registry;
 use crate::workspace::Workspace;
 use floem::prelude::*;
 
 #[derive(Clone)]
 pub(crate) struct PaletteActionState {
-    pub(crate) workspace: RwSignal<Workspace>,
-    pub(crate) frames: RwSignal<Frames>,
-    pub(crate) sessions: RwSignal<Registry>,
+    pub(crate) command: CommandActionState,
     pub(crate) palette_open: RwSignal<bool>,
     pub(crate) palette_query: RwSignal<String>,
     pub(crate) palette_selection: RwSignal<usize>,
-    pub(crate) pane_focus_requests: PaneFocusRequests,
-    pub(crate) agent_state_status: RwSignal<Option<String>>,
-    pub(crate) agent_config: AgentConfig,
-    pub(crate) terminal_dump: Option<PathBuf>,
-    pub(crate) clipboard_dump: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -109,7 +95,8 @@ pub(crate) fn move_overview_selection(
 }
 
 pub(crate) fn execute_palette_selection(state: PaletteActionState) {
-    let workspace = state.workspace;
+    let command = state.command;
+    let workspace = command.workspace;
     let palette_query = state.palette_query;
     let palette_selection = state.palette_selection;
 
@@ -132,30 +119,18 @@ pub(crate) fn execute_palette_selection(state: PaletteActionState) {
 
     close_palette(state.palette_open, palette_query);
     match item {
-        PaletteItem::Command(entry) => execute_command(
-            entry.spec.id,
-            CommandActionState {
-                workspace,
-                frames: state.frames,
-                sessions: state.sessions,
-                pane_focus_requests: state.pane_focus_requests,
-                agent_state_status: state.agent_state_status,
-                agent_config: state.agent_config,
-                terminal_dump: state.terminal_dump,
-                clipboard_dump: state.clipboard_dump,
-            },
-        ),
+        PaletteItem::Command(entry) => execute_command(entry.spec.id, command),
         PaletteItem::DetachedSession { session_id, .. } => {
             workspace.update(|ws| {
                 ws.attach_existing_session_to_split(session_id);
             });
-            request_active_pane_focus(workspace, state.pane_focus_requests);
+            request_active_pane_focus(workspace, command.pane_focus_requests);
         }
         PaletteItem::Tab { index, .. } => {
             workspace.update(|ws| {
                 ws.activate_tab_index(index);
             });
-            request_active_pane_focus(workspace, state.pane_focus_requests);
+            request_active_pane_focus(workspace, command.pane_focus_requests);
         }
     }
 }

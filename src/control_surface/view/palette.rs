@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::agent_config::AgentConfig;
-use crate::app::commands::PaneFocusRequests;
+use crate::app::commands::{CommandActionState, PaneFocusRequests};
 use crate::control_surface::{palette_items, ControlInputState, ControlMode, PALETTE_VISIBLE_ROWS};
 use crate::session::Frames;
 use crate::session::Registry;
@@ -75,17 +75,19 @@ pub fn command_palette(state: CommandPaletteState) -> impl IntoView {
         clipboard_dump: clipboard_dump.clone(),
     };
     let palette_action = PaletteActionState {
-        workspace,
-        frames,
-        sessions,
+        command: CommandActionState {
+            workspace,
+            frames,
+            sessions,
+            pane_focus_requests,
+            agent_state_status,
+            agent_config,
+            terminal_dump,
+            clipboard_dump,
+        },
         palette_open,
         palette_query,
         palette_selection,
-        pane_focus_requests,
-        agent_state_status,
-        agent_config,
-        terminal_dump,
-        clipboard_dump,
     };
 
     let items = create_memo(move |_| {

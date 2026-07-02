@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::agent_config::AgentConfig;
-use crate::app::commands::PaneFocusRequests;
+use crate::app::commands::{CommandActionState, PaneFocusRequests};
 use crate::control_surface::ControlMode;
 use crate::input::palette_accepts_text_input;
 use crate::session::Frames;
@@ -108,17 +108,19 @@ fn handle_palette_key(key_event: &KeyEvent, state: ControlInputState) -> bool {
 
 fn palette_action_state(state: ControlInputState) -> PaletteActionState {
     PaletteActionState {
-        workspace: state.workspace,
-        frames: state.frames,
-        sessions: state.sessions,
+        command: CommandActionState {
+            workspace: state.workspace,
+            frames: state.frames,
+            sessions: state.sessions,
+            pane_focus_requests: state.pane_focus_requests,
+            agent_state_status: state.agent_state_status,
+            agent_config: state.agent_config,
+            terminal_dump: state.terminal_dump,
+            clipboard_dump: state.clipboard_dump,
+        },
         palette_open: state.palette_open,
         palette_query: state.palette_query,
         palette_selection: state.palette_selection,
-        pane_focus_requests: state.pane_focus_requests,
-        agent_state_status: state.agent_state_status,
-        agent_config: state.agent_config,
-        terminal_dump: state.terminal_dump,
-        clipboard_dump: state.clipboard_dump,
     }
 }
 
