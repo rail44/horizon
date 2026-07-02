@@ -1,5 +1,5 @@
 use floem::{window::WindowConfig, Application};
-use horizon::app::view::app_view;
+use horizon::app_view;
 
 fn main() {
     Application::new()

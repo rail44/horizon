@@ -1,10 +1,11 @@
 use floem::prelude::*;
 
-use crate::app::runtime::{spawn_session, SessionRuntimeState};
 use crate::commands::{command_enabled, CommandId};
 use crate::control_surface::command_state;
 use crate::session::{Frames, Registry};
 use crate::workspace::{request_active_pane_focus, PaneFocusRequests, PaneKind, Workspace};
+
+use super::runtime::{spawn_session, SessionRuntimeState};
 
 #[derive(Clone)]
 pub(crate) struct CommandActionState {

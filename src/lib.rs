@@ -1,6 +1,6 @@
 pub mod agent;
 pub mod agent_config;
-pub mod app;
+pub(crate) mod app;
 pub mod commands;
 pub mod control_surface;
 pub mod fonts;
@@ -10,3 +10,5 @@ pub mod session;
 pub(crate) mod terminal;
 pub mod ui;
 pub mod workspace;
+
+pub use app::view::app_view;
