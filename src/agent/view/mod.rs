@@ -16,7 +16,7 @@ use transcript::{
     current_block_text, transcript_blocks, transcript_revision, TranscriptBlock, TranscriptTone,
 };
 
-pub fn agent_frame_view(
+pub(crate) fn agent_frame_view(
     frame: impl Fn() -> AgentFrame + Copy + 'static,
     visible: impl Fn() -> bool + Copy + 'static,
 ) -> impl IntoView {

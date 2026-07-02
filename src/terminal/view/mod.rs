@@ -36,7 +36,7 @@ const PADDING_X: f64 = 12.0;
 const PADDING_Y: f64 = 12.0;
 const FALLBACK_CELL_WIDTH: f64 = 8.0;
 
-pub fn terminal_text_view(
+pub(crate) fn terminal_text_view(
     frame: impl Fn() -> TerminalFrame + 'static,
     preedit: impl Fn() -> Option<String> + 'static,
     terminal_tx: Option<Sender<TerminalCommand>>,

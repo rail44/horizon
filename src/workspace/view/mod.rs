@@ -11,10 +11,10 @@ mod tab_strip;
 mod terminal_output;
 
 use pane::PaneViewState;
-pub use tab_strip::tab_strip;
+pub(crate) use tab_strip::tab_strip;
 
 #[derive(Clone)]
-pub struct WorkspaceViewState {
+pub(crate) struct WorkspaceViewState {
     pub(crate) control_input: ControlInputState,
     pub(crate) open_palette: OpenPaletteState,
     pub(crate) ime_composing: RwSignal<bool>,
@@ -36,7 +36,7 @@ impl WorkspaceViewState {
     }
 }
 
-pub fn workspace_view(state: WorkspaceViewState) -> impl IntoView {
+pub(crate) fn workspace_view(state: WorkspaceViewState) -> impl IntoView {
     let pane_focus_requests = state.control_input.command.pane_focus_requests;
     let pane_state = state.pane_view_state();
     h_stack((

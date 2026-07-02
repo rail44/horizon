@@ -2,7 +2,7 @@ mod input;
 mod layout;
 mod operations;
 mod types;
-pub mod view;
+pub(crate) mod view;
 
 pub(crate) use input::{
     active_agent, active_agent_draft, active_terminal_sender, active_text_input_pane,
