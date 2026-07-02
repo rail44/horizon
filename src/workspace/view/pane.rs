@@ -1,18 +1,13 @@
-use std::path::PathBuf;
-
 use crate::agent::contract::Command;
 use crate::agent::frame::AgentFrame;
-use crate::agent_config::AgentConfig;
 use crate::control_surface::{
     handle_control_key, open_palette, ControlInputState, ControlMode, OpenPaletteState,
 };
 use crate::input::is_palette_open_key;
-use crate::session::{Frames, Registry};
 use crate::terminal::TerminalFrame;
 use crate::ui::theme;
 use crate::workspace::{
-    handle_active_pane_key, visible_agent_sender, visible_terminal_sender, AgentDrafts,
-    PaneFocusRequests, PaneKind, Workspace,
+    handle_active_pane_key, visible_agent_sender, visible_terminal_sender, AgentDrafts, PaneKind,
 };
 use floem::prelude::*;
 use floem::{
@@ -28,52 +23,21 @@ use crate::agent::view as agent_view;
 
 #[derive(Clone)]
 pub(super) struct PaneViewState {
-    pub(super) workspace: RwSignal<Workspace>,
-    pub(super) frames: RwSignal<Frames>,
-    pub(super) sessions: RwSignal<Registry>,
+    pub(super) control_input: ControlInputState,
+    pub(super) open_palette: OpenPaletteState,
     pub(super) ime_composing: RwSignal<bool>,
     pub(super) ime_preedit: RwSignal<Option<String>>,
     pub(super) ime_cursor_area: RwSignal<(Point, Size)>,
-    pub(super) palette_open: RwSignal<bool>,
-    pub(super) palette_query: RwSignal<String>,
-    pub(super) palette_selection: RwSignal<usize>,
-    pub(super) palette_focus_request: RwSignal<u64>,
-    pub(super) pane_focus_requests: PaneFocusRequests,
     pub(super) agent_drafts: AgentDrafts,
-    pub(super) agent_config: AgentConfig,
-    pub(super) control_mode: RwSignal<ControlMode>,
-    pub(super) overview_selection: RwSignal<usize>,
-    pub(super) terminal_dump: Option<PathBuf>,
-    pub(super) clipboard_dump: Option<PathBuf>,
-    pub(super) agent_state_status: RwSignal<Option<String>>,
 }
 
 impl PaneViewState {
     fn control_input_state(&self) -> ControlInputState {
-        ControlInputState {
-            workspace: self.workspace,
-            frames: self.frames,
-            sessions: self.sessions,
-            palette_open: self.palette_open,
-            palette_query: self.palette_query,
-            palette_selection: self.palette_selection,
-            control_mode: self.control_mode,
-            overview_selection: self.overview_selection,
-            pane_focus_requests: self.pane_focus_requests,
-            agent_state_status: self.agent_state_status,
-            agent_config: self.agent_config.clone(),
-            terminal_dump: self.terminal_dump.clone(),
-            clipboard_dump: self.clipboard_dump.clone(),
-        }
+        self.control_input.clone()
     }
 
     fn open_palette_state(&self) -> OpenPaletteState {
-        OpenPaletteState {
-            palette_open: self.palette_open,
-            palette_query: self.palette_query,
-            palette_selection: self.palette_selection,
-            palette_focus_request: self.palette_focus_request,
-        }
+        self.open_palette
     }
 }
 
@@ -85,15 +49,15 @@ pub(super) fn pane_view(
     let control_input = state.control_input_state();
     let open_palette_state = state.open_palette_state();
 
-    let workspace = state.workspace;
-    let frames = state.frames;
-    let sessions = state.sessions;
+    let workspace = control_input.workspace;
+    let frames = control_input.frames;
+    let sessions = control_input.sessions;
     let ime_composing = state.ime_composing;
     let ime_preedit = state.ime_preedit;
     let ime_cursor_area = state.ime_cursor_area;
-    let palette_open = state.palette_open;
+    let palette_open = control_input.palette_open;
     let agent_drafts = state.agent_drafts;
-    let control_mode = state.control_mode;
+    let control_mode = control_input.control_mode;
 
     let terminal_frame = move || {
         let Some(session_id) = workspace.with(|ws| ws.visible_terminal_session_id(index)) else {

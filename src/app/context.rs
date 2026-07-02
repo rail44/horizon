@@ -6,24 +6,12 @@ use super::state::AppState;
 
 pub(super) fn workspace_view_state(state: &AppState) -> WorkspaceViewState {
     WorkspaceViewState {
-        workspace: state.workspace,
-        frames: state.frames,
-        sessions: state.sessions,
+        control_input: control_input_state(state),
+        open_palette: open_palette_state(state),
         ime_composing: state.ime_composing,
         ime_preedit: state.ime_preedit,
         ime_cursor_area: state.ime_cursor_area,
-        palette_open: state.palette_open,
-        palette_query: state.palette_query,
-        palette_selection: state.palette_selection,
-        palette_focus_request: state.palette_focus_request,
-        pane_focus_requests: state.pane_focus_requests,
         agent_drafts: state.agent_drafts,
-        agent_config: state.agent_config.clone(),
-        control_mode: state.control_mode,
-        overview_selection: state.overview_selection,
-        terminal_dump: state.terminal_dump.clone(),
-        clipboard_dump: state.clipboard_dump.clone(),
-        agent_state_status: state.agent_state_status,
     }
 }
 
