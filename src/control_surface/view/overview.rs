@@ -7,10 +7,10 @@ use floem::event::{Event, EventListener, EventPropagation};
 use floem::prelude::*;
 use floem::reactive::create_memo;
 
-use super::actions::execute_overview_selection;
 use super::chrome::control_mode_tabs;
 use super::input::handle_workspace_control_key;
 use super::row::overview_item_row;
+use crate::control_surface::actions::execute_overview_selection;
 
 const OVERVIEW_ROW_HEIGHT: f64 = 52.0;
 const OVERVIEW_ROW_STYLE: ListRowStyle = ListRowStyle {

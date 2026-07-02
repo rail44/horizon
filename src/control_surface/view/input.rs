@@ -10,7 +10,7 @@ use crate::workspace::Workspace;
 use floem::keyboard::{Key, KeyEvent, NamedKey};
 use floem::prelude::*;
 
-use super::actions::{
+use crate::control_surface::actions::{
     close_control_surface, close_palette, execute_overview_selection, execute_palette_selection,
     move_overview_selection, move_palette_selection, update_palette_query,
 };

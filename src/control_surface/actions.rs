@@ -21,16 +21,16 @@ pub fn open_palette(
     palette_focus_request.update(|request| *request += 1);
 }
 
-pub(super) fn close_palette(palette_open: RwSignal<bool>, palette_query: RwSignal<String>) {
+pub(crate) fn close_palette(palette_open: RwSignal<bool>, palette_query: RwSignal<String>) {
     palette_open.set(false);
     palette_query.set(String::new());
 }
 
-pub(super) fn close_control_surface(palette_open: RwSignal<bool>) {
+pub(crate) fn close_control_surface(palette_open: RwSignal<bool>) {
     palette_open.set(false);
 }
 
-pub(super) fn execute_overview_selection(
+pub(crate) fn execute_overview_selection(
     workspace: RwSignal<Workspace>,
     palette_open: RwSignal<bool>,
     overview_selection: RwSignal<usize>,
@@ -65,7 +65,7 @@ pub(super) fn execute_overview_selection(
     });
 }
 
-pub(super) fn move_overview_selection(
+pub(crate) fn move_overview_selection(
     workspace: RwSignal<Workspace>,
     overview_selection: RwSignal<usize>,
     delta: isize,
@@ -82,7 +82,7 @@ pub(super) fn move_overview_selection(
     });
 }
 
-pub(super) fn execute_palette_selection(
+pub(crate) fn execute_palette_selection(
     workspace: RwSignal<Workspace>,
     frames: RwSignal<Frames>,
     sessions: RwSignal<Registry>,
@@ -140,7 +140,7 @@ pub(super) fn execute_palette_selection(
     }
 }
 
-pub(super) fn update_palette_query(
+pub(crate) fn update_palette_query(
     workspace: RwSignal<Workspace>,
     palette_query: RwSignal<String>,
     palette_selection: RwSignal<usize>,
@@ -162,7 +162,7 @@ fn clamp_current_palette_selection(
     });
 }
 
-pub(super) fn move_palette_selection(
+pub(crate) fn move_palette_selection(
     workspace: RwSignal<Workspace>,
     palette_query: RwSignal<String>,
     palette_selection: RwSignal<usize>,
