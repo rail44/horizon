@@ -8,7 +8,7 @@ pub mod input;
 pub(crate) mod plugins;
 pub(crate) mod session;
 pub(crate) mod terminal;
-pub mod ui;
+pub(crate) mod ui;
 pub(crate) mod workspace;
 
 pub use app::view::app_view;
