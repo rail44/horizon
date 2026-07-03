@@ -20,8 +20,11 @@ use crate::{
 };
 
 use super::{
-    horizon_provider_events_from_rig_message, rig_tool_call_provider_payload,
-    rig_tool_call_request, rig_workspace_snapshot_call, StreamDeltaBuffer, StreamDeltaKind,
+    mapping::{
+        horizon_provider_events_from_rig_message, rig_tool_call_provider_payload,
+        rig_tool_call_request,
+    },
+    rig_workspace_snapshot_call, StreamDeltaBuffer, StreamDeltaKind,
 };
 
 pub(super) fn complete_rig_turn(

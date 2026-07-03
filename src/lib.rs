@@ -1,9 +1,9 @@
-pub mod agent;
-pub mod agent_config;
+pub(crate) mod agent;
+pub(crate) mod agent_config;
 pub(crate) mod app;
 pub(crate) mod commands;
 pub(crate) mod control_surface;
-pub mod fonts;
+pub(crate) mod fonts;
 pub(crate) mod input;
 pub(crate) mod plugins;
 pub(crate) mod session;

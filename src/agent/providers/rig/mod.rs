@@ -10,14 +10,9 @@ use completion::{
     complete_rig_turn, deterministic_rig_response, deterministic_tool_result_response,
 };
 use history::load_rig_history;
-use mapping::{rig_tool_call_request, rig_tool_result_message, rig_workspace_snapshot_call};
+use mapping::{rig_tool_result_message, rig_workspace_snapshot_call};
 use session::spawn_rig_session;
 use stream::{StreamDeltaBuffer, StreamDeltaKind};
-
-pub(crate) use mapping::{
-    horizon_provider_events_from_rig_message, rig_messages_from_horizon_events,
-    rig_tool_call_provider_payload,
-};
 
 #[cfg(test)]
 use mapping::{horizon_events_from_rig_message, horizon_tool_definition_from_rig};
@@ -81,6 +76,8 @@ pub(super) fn rig_initialization_message(
 #[cfg(test)]
 mod tests {
     use super::mapping::{
+        horizon_provider_events_from_rig_message, rig_messages_from_horizon_events,
+        rig_tool_call_provider_payload, rig_tool_call_request,
         rig_workspace_snapshot_call_with_provider_metadata, RIG_PROVIDER_PAYLOAD_SCHEMA,
         RIG_PROVIDER_PAYLOAD_VERSION,
     };

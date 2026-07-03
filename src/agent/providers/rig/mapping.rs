@@ -25,7 +25,7 @@ pub(super) fn horizon_events_from_rig_message(message: Message) -> Vec<Event> {
         .collect()
 }
 
-pub fn horizon_provider_events_from_rig_message(message: Message) -> Vec<ProviderEvent> {
+pub(super) fn horizon_provider_events_from_rig_message(message: Message) -> Vec<ProviderEvent> {
     match message {
         Message::System { content } => vec![Event::MessageCommitted(AgentMessage {
             role: MessageRole::Assistant,
@@ -100,7 +100,7 @@ pub(super) fn horizon_tool_definition_from_rig(
     }
 }
 
-pub fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message> {
+pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message> {
     events
         .iter()
         .filter_map(|event| match event {
@@ -131,7 +131,7 @@ pub(super) fn rig_tool_call_request(call: ToolCall) -> ToolCallRequest {
     }
 }
 
-pub fn rig_tool_call_provider_payload(call: &ToolCall) -> serde_json::Value {
+pub(super) fn rig_tool_call_provider_payload(call: &ToolCall) -> serde_json::Value {
     serde_json::json!({
         "schema": RIG_PROVIDER_PAYLOAD_SCHEMA,
         "version": RIG_PROVIDER_PAYLOAD_VERSION,

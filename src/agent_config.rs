@@ -3,13 +3,13 @@ use std::path::PathBuf;
 use rig_core::providers::openai;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AgentConfig {
-    pub rig: RigAgentConfig,
-    pub persistence: AgentPersistenceConfig,
+pub(crate) struct AgentConfig {
+    pub(crate) rig: RigAgentConfig,
+    pub(crate) persistence: AgentPersistenceConfig,
 }
 
 impl AgentConfig {
-    pub fn from_env() -> Self {
+    pub(crate) fn from_env() -> Self {
         Self {
             rig: RigAgentConfig::from_env(),
             persistence: AgentPersistenceConfig::from_env(),
@@ -18,13 +18,13 @@ impl AgentConfig {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RigAgentConfig {
-    pub openai_enabled: bool,
-    pub model: String,
+pub(crate) struct RigAgentConfig {
+    pub(crate) openai_enabled: bool,
+    pub(crate) model: String,
 }
 
 impl RigAgentConfig {
-    pub fn from_env() -> Self {
+    pub(crate) fn from_env() -> Self {
         Self {
             openai_enabled: std::env::var_os("OPENAI_API_KEY").is_some(),
             model: std::env::var("HORIZON_RIG_MODEL")
@@ -34,13 +34,13 @@ impl RigAgentConfig {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AgentPersistenceConfig {
-    pub event_log_path: PathBuf,
-    pub duckdb_path: Option<PathBuf>,
+pub(crate) struct AgentPersistenceConfig {
+    pub(crate) event_log_path: PathBuf,
+    pub(crate) duckdb_path: Option<PathBuf>,
 }
 
 impl AgentPersistenceConfig {
-    pub fn from_env() -> Self {
+    pub(crate) fn from_env() -> Self {
         Self {
             event_log_path: std::env::var_os("HORIZON_AGENT_EVENT_LOG")
                 .map(PathBuf::from)

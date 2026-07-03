@@ -7,20 +7,20 @@ use crate::session::SessionId;
 use super::frame::{agent_frame_from_events, apply_agent_event_to_frame, AgentFrame};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct State {
+pub(crate) struct State {
     events: Vec<Event>,
     frame: AgentFrame,
 }
 
 impl State {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             events: Vec::new(),
             frame: agent_frame_from_events(&[]),
         }
     }
 
-    pub fn extend_events(&mut self, events: impl IntoIterator<Item = Event>) -> AgentFrame {
+    pub(crate) fn extend_events(&mut self, events: impl IntoIterator<Item = Event>) -> AgentFrame {
         for event in events {
             apply_agent_event_to_frame(&mut self.frame, &event);
             self.events.push(event);
@@ -28,11 +28,8 @@ impl State {
         self.frame.clone()
     }
 
-    pub fn events(&self) -> &[Event] {
-        &self.events
-    }
-
-    pub fn frame(&self) -> &AgentFrame {
+    #[cfg(test)]
+    pub(crate) fn frame(&self) -> &AgentFrame {
         &self.frame
     }
 }
@@ -44,21 +41,23 @@ impl Default for State {
 }
 
 #[derive(Clone, Default)]
-pub struct LiveState {
+pub(crate) struct LiveState {
     inner: Rc<RefCell<State>>,
     persistence: Option<Rc<Persistence>>,
 }
 
 impl LiveState {
-    pub fn new() -> Self {
+    #[cfg(test)]
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    pub fn extend_events(&self, events: impl IntoIterator<Item = Event>) -> AgentFrame {
+    #[cfg(test)]
+    pub(crate) fn extend_events(&self, events: impl IntoIterator<Item = Event>) -> AgentFrame {
         self.extend_provider_events(events.into_iter().map(ProviderEvent::from))
     }
 
-    pub fn extend_provider_events(
+    pub(crate) fn extend_provider_events(
         &self,
         events: impl IntoIterator<Item = ProviderEvent>,
     ) -> AgentFrame {
@@ -84,14 +83,15 @@ impl LiveState {
         }
     }
 
-    pub fn with_disabled_persistence() -> Self {
+    pub(crate) fn with_disabled_persistence() -> Self {
         Self {
             inner: Rc::new(RefCell::new(State::new())),
             persistence: Some(Rc::new(Persistence::Disabled)),
         }
     }
 
-    pub fn frame(&self) -> AgentFrame {
+    #[cfg(test)]
+    pub(crate) fn frame(&self) -> AgentFrame {
         self.inner.borrow().frame().clone()
     }
 }

@@ -7,22 +7,22 @@ use crate::agent_config::AgentConfig;
 use crate::session::SessionId;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
-pub struct ProviderId(pub String);
+pub(crate) struct ProviderId(pub(crate) String);
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
-pub struct RequestId(pub String);
+pub(crate) struct RequestId(pub(crate) String);
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
-pub struct ToolCallId(pub String);
+pub(crate) struct ToolCallId(pub(crate) String);
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub struct StartSession {
-    pub session_id: SessionId,
-    pub provider_id: ProviderId,
+pub(crate) struct StartSession {
+    pub(crate) session_id: SessionId,
+    pub(crate) provider_id: ProviderId,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub enum Command {
+pub(crate) enum Command {
     Initialize(Initialization),
     UserMessage {
         text: String,
@@ -42,13 +42,13 @@ pub enum Command {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub struct Initialization {
-    pub session_id: SessionId,
-    pub provider_id: ProviderId,
+pub(crate) struct Initialization {
+    pub(crate) session_id: SessionId,
+    pub(crate) provider_id: ProviderId,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub enum Event {
+pub(crate) enum Event {
     StateChanged(SessionState),
     ReasoningDelta(MessageDelta),
     AssistantTextDelta(MessageDelta),
@@ -61,7 +61,7 @@ pub enum Event {
     Exited(Exit),
 }
 
-pub fn event_kind(event: &Event) -> &'static str {
+pub(crate) fn event_kind(event: &Event) -> &'static str {
     match event {
         Event::StateChanged(_) => "state_changed",
         Event::ReasoningDelta(_) => "reasoning_delta",
@@ -77,20 +77,20 @@ pub fn event_kind(event: &Event) -> &'static str {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub struct ProviderEvent {
-    pub event: Event,
-    pub provider_payload: Option<serde_json::Value>,
+pub(crate) struct ProviderEvent {
+    pub(crate) event: Event,
+    pub(crate) provider_payload: Option<serde_json::Value>,
 }
 
 impl ProviderEvent {
-    pub fn new(event: Event) -> Self {
+    pub(crate) fn new(event: Event) -> Self {
         Self {
             event,
             provider_payload: None,
         }
     }
 
-    pub fn with_provider_payload(event: Event, provider_payload: serde_json::Value) -> Self {
+    pub(crate) fn with_provider_payload(event: Event, provider_payload: serde_json::Value) -> Self {
         Self {
             event,
             provider_payload: Some(provider_payload),
@@ -105,7 +105,7 @@ impl From<Event> for ProviderEvent {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub enum SessionState {
+pub(crate) enum SessionState {
     Created,
     Running,
     WaitingForUser,
@@ -117,44 +117,44 @@ pub enum SessionState {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub struct Message {
-    pub role: MessageRole,
-    pub text: String,
+pub(crate) struct Message {
+    pub(crate) role: MessageRole,
+    pub(crate) text: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub enum MessageRole {
+pub(crate) enum MessageRole {
     User,
     Assistant,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub struct MessageDelta {
-    pub role: MessageRole,
-    pub text: String,
+pub(crate) struct MessageDelta {
+    pub(crate) role: MessageRole,
+    pub(crate) text: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub struct ToolCallRequest {
-    pub call_id: ToolCallId,
-    pub tool_id: String,
-    pub input: serde_json::Value,
+pub(crate) struct ToolCallRequest {
+    pub(crate) call_id: ToolCallId,
+    pub(crate) tool_id: String,
+    pub(crate) input: serde_json::Value,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub struct ToolCallResult {
-    pub call_id: ToolCallId,
-    pub output: serde_json::Value,
+pub(crate) struct ToolCallResult {
+    pub(crate) call_id: ToolCallId,
+    pub(crate) output: serde_json::Value,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub struct ApprovalRequest {
-    pub call_id: ToolCallId,
-    pub reason: String,
+pub(crate) struct ApprovalRequest {
+    pub(crate) call_id: ToolCallId,
+    pub(crate) reason: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub enum ToolPermission {
+pub(crate) enum ToolPermission {
     AutoAllowRead,
     AutoAllowUi,
     RequireApproval,
@@ -162,51 +162,52 @@ pub enum ToolPermission {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub struct Error {
-    pub message: String,
+pub(crate) struct Error {
+    pub(crate) message: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub struct Exit {
-    pub reason: String,
+pub(crate) struct Exit {
+    pub(crate) reason: String,
 }
 
 #[derive(Clone)]
-pub struct SessionHandle {
+pub(crate) struct SessionHandle {
     commands: Sender<Command>,
     events: Receiver<ProviderEvent>,
 }
 
 impl SessionHandle {
-    pub fn new(commands: Sender<Command>, events: Receiver<ProviderEvent>) -> Self {
+    pub(crate) fn new(commands: Sender<Command>, events: Receiver<ProviderEvent>) -> Self {
         Self { commands, events }
     }
 
-    pub fn sender(&self) -> Sender<Command> {
+    pub(crate) fn sender(&self) -> Sender<Command> {
         self.commands.clone()
     }
 
-    pub fn events(&self) -> Receiver<ProviderEvent> {
+    pub(crate) fn events(&self) -> Receiver<ProviderEvent> {
         self.events.clone()
     }
 }
 
-pub trait Provider: Send + Sync {
+pub(crate) trait Provider: Send + Sync {
     fn provider_id(&self) -> ProviderId;
     fn start_session(&self, request: StartSession) -> SessionHandle;
 }
 
 #[derive(Clone, Default)]
-pub struct ProviderRegistry {
+pub(crate) struct ProviderRegistry {
     providers: HashMap<ProviderId, Arc<dyn Provider>>,
 }
 
 impl ProviderRegistry {
-    pub fn builtin() -> Self {
+    #[cfg(test)]
+    pub(crate) fn builtin() -> Self {
         Self::builtin_with_config(AgentConfig::from_env())
     }
 
-    pub fn builtin_with_config(config: AgentConfig) -> Self {
+    pub(crate) fn builtin_with_config(config: AgentConfig) -> Self {
         let mut registry = Self::default();
         registry.insert(Arc::new(crate::agent::providers::mock::MockProvider::new()));
         registry.insert(Arc::new(crate::agent::providers::rig::Provider::new(
@@ -216,15 +217,15 @@ impl ProviderRegistry {
         registry
     }
 
-    pub fn insert(&mut self, provider: Arc<dyn Provider>) {
+    pub(crate) fn insert(&mut self, provider: Arc<dyn Provider>) {
         self.providers.insert(provider.provider_id(), provider);
     }
 
-    pub fn default_provider_id(&self) -> ProviderId {
+    pub(crate) fn default_provider_id(&self) -> ProviderId {
         ProviderId("builtin.agent.rig".to_string())
     }
 
-    pub fn start_session(
+    pub(crate) fn start_session(
         &self,
         provider_id: &ProviderId,
         session_id: SessionId,

@@ -3,7 +3,7 @@ use rig_core::completion::Message;
 use crate::agent::persistence::projection::duckdb;
 use crate::session::SessionId;
 
-use super::rig_messages_from_horizon_events;
+use super::mapping::rig_messages_from_horizon_events;
 
 pub(super) fn load_rig_history(
     path: Option<&std::path::Path>,

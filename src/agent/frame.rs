@@ -1,13 +1,13 @@
 use crate::agent::contract::*;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AgentFrame {
-    pub state: Option<SessionState>,
-    pub items: Vec<AgentFrameItem>,
+pub(crate) struct AgentFrame {
+    pub(crate) state: Option<SessionState>,
+    pub(crate) items: Vec<AgentFrameItem>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum AgentFrameItem {
+pub(crate) enum AgentFrameItem {
     Message(Message),
     ReasoningDelta(MessageDelta),
     AssistantTextDelta(MessageDelta),
@@ -20,14 +20,14 @@ pub enum AgentFrameItem {
 }
 
 impl AgentFrame {
-    pub fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
             state: None,
             items: Vec::new(),
         }
     }
 
-    pub fn pending_approval_call_id(&self) -> Option<ToolCallId> {
+    pub(crate) fn pending_approval_call_id(&self) -> Option<ToolCallId> {
         let mut pending = Vec::<ToolCallId>::new();
         for item in &self.items {
             match item {
@@ -47,7 +47,8 @@ impl AgentFrame {
     }
 }
 
-pub fn render_agent_transcript(events: &[Event]) -> String {
+#[cfg(test)]
+pub(crate) fn render_agent_transcript(events: &[Event]) -> String {
     let mut lines = vec!["Agent session".to_string(), String::new()];
 
     for event in events {
@@ -91,7 +92,7 @@ pub fn render_agent_transcript(events: &[Event]) -> String {
     lines.join("\n")
 }
 
-pub fn agent_frame_from_events(events: &[Event]) -> AgentFrame {
+pub(crate) fn agent_frame_from_events(events: &[Event]) -> AgentFrame {
     let mut frame = AgentFrame::empty();
 
     for event in events {
@@ -221,56 +222,7 @@ fn is_turn_boundary_item(item: &AgentFrameItem) -> bool {
     )
 }
 
-pub fn render_agent_transcript_from_frame(frame: &AgentFrame) -> String {
-    let mut lines = vec!["Agent session".to_string(), String::new()];
-    if let Some(state) = frame.state {
-        lines.push(format!("state: {state:?}"));
-    }
-
-    for item in &frame.items {
-        match item {
-            AgentFrameItem::Message(message) => {
-                lines.push(format!("{}: {}", role_label(message.role), message.text));
-            }
-            AgentFrameItem::ReasoningDelta(delta) => {
-                lines.push(format!(
-                    "{} reasoning: {}",
-                    role_label(delta.role),
-                    delta.text
-                ));
-            }
-            AgentFrameItem::AssistantTextDelta(delta) => {
-                lines.push(format!("{} delta: {}", role_label(delta.role), delta.text));
-            }
-            AgentFrameItem::ToolCallRequested(request) => {
-                lines.push(format!(
-                    "tool requested: {} ({})",
-                    request.tool_id, request.call_id.0
-                ));
-            }
-            AgentFrameItem::ToolCallStarted(call_id) => {
-                lines.push(format!("tool started: {}", call_id.0));
-            }
-            AgentFrameItem::ToolCallFinished(result) => {
-                lines.push(format!(
-                    "tool finished: {} {}",
-                    result.call_id.0, result.output
-                ));
-            }
-            AgentFrameItem::ApprovalRequested(request) => {
-                lines.push(format!(
-                    "approval requested: {} {}",
-                    request.call_id.0, request.reason
-                ));
-            }
-            AgentFrameItem::Error(error) => lines.push(format!("error: {}", error.message)),
-            AgentFrameItem::Exited(exit) => lines.push(format!("exited: {}", exit.reason)),
-        }
-    }
-
-    lines.join("\n")
-}
-
+#[cfg(test)]
 fn role_label(role: MessageRole) -> &'static str {
     match role {
         MessageRole::User => "user",
