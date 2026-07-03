@@ -1,5 +1,6 @@
 use floem::prelude::*;
 
+use crate::agent::tools::unregister_session_runtime;
 use crate::app::commands::{command_enabled, CommandId};
 use crate::control_surface::command_state;
 use crate::session::{Frames, Registry};
@@ -104,5 +105,9 @@ fn terminate_active_session(
         registry.shutdown_terminal(session_id);
         registry.shutdown_agent(session_id);
     });
+    // No-op for terminal sessions; for agent sessions this drops the
+    // per-session tool state so a stale approval click can no longer
+    // execute against a terminated session.
+    unregister_session_runtime(session_id);
     frames.update(|frames| frames.remove_session(session_id));
 }

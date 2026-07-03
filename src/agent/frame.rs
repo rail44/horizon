@@ -45,6 +45,44 @@ impl AgentFrame {
 
         pending.last().cloned()
     }
+
+    /// The most recent `ToolCallRequested` item for `call_id`, if any. Used
+    /// to recover a pending tool call's `tool_id`/`input` at approval time,
+    /// since the approve/deny UI only carries the `call_id` forward.
+    pub(crate) fn tool_call_request(&self, call_id: &ToolCallId) -> Option<&ToolCallRequest> {
+        self.items.iter().rev().find_map(|item| match item {
+            AgentFrameItem::ToolCallRequested(request) if &request.call_id == call_id => {
+                Some(request)
+            }
+            _ => None,
+        })
+    }
+
+    /// Whether a turn is currently in flight (streaming, running a tool, or
+    /// waiting on tool-call approval) and therefore cancellable.
+    pub(crate) fn is_turn_in_flight(&self) -> bool {
+        matches!(
+            self.state,
+            Some(
+                SessionState::Running
+                    | SessionState::WaitingForApproval
+                    | SessionState::ToolRunning
+            )
+        )
+    }
+
+    /// Whether `call_id` already has a terminal `ToolCallFinished` in the
+    /// frame — from an earlier approve/deny short-circuit, a genuine result,
+    /// or a cancellation that finished the call. Used to guard against
+    /// double-folding a late result that arrives after the call already
+    /// resolved: `agent::tools::approval`'s `ApprovalOutcome::AlreadyResolved`
+    /// check, and the bash tool's async completion delivery
+    /// (`app/runtime/agent.rs`), both key off this.
+    pub(crate) fn has_tool_call_finished(&self, call_id: &ToolCallId) -> bool {
+        self.items.iter().any(|item| {
+            matches!(item, AgentFrameItem::ToolCallFinished(result) if &result.call_id == call_id)
+        })
+    }
 }
 
 #[cfg(test)]

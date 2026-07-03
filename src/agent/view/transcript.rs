@@ -179,6 +179,7 @@ fn status_block(
             }
             "Approval required"
         }
+        SessionState::Cancelled => "Turn cancelled",
         SessionState::Failed => "Agent failed",
         SessionState::Terminated => "Agent terminated",
         SessionState::Created | SessionState::WaitingForUser | SessionState::Completed => {

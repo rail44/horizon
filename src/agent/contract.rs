@@ -111,6 +111,7 @@ pub(crate) enum SessionState {
     WaitingForUser,
     WaitingForApproval,
     ToolRunning,
+    Cancelled,
     Completed,
     Failed,
     Terminated,

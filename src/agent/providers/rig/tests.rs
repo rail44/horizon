@@ -1,3 +1,6 @@
+use std::collections::{HashMap, HashSet};
+
+use super::completion::partial_assistant_message;
 use super::mapping::{
     horizon_events_from_rig_message, horizon_provider_events_from_rig_message,
     horizon_tool_definition_from_rig, rig_messages_from_horizon_events,
@@ -5,18 +8,30 @@ use super::mapping::{
     rig_workspace_snapshot_call_with_provider_metadata, RIG_PROVIDER_PAYLOAD_SCHEMA,
     RIG_PROVIDER_PAYLOAD_VERSION,
 };
-use super::*;
-use crate::agent::contract::{
-    Event, Message as AgentMessage, MessageDelta, MessageRole, ProviderEvent, ProviderId,
-    ToolCallId, ToolCallRequest, ToolCallResult, ToolPermission,
+use super::session::{
+    append_cancelled_tool_results_to_history, halt_turn_loop, tool_result_fingerprint, GuardHalt,
+    TurnLoopGuard, DOOM_LOOP_WINDOW, TOOL_TURN_ITERATION_CAP,
 };
+use super::*;
+use crate::agent::config::RigAgentConfig;
+use crate::agent::contract::{
+    Command, Event, Message as AgentMessage, MessageDelta, MessageRole, Provider as AgentProvider,
+    ProviderEvent, ProviderId, SessionState, StartSession, ToolCallId, ToolCallRequest,
+    ToolCallResult, ToolPermission,
+};
+use crate::session::SessionId;
 use rig_core::{
     completion::{
-        message::{Text, ToolResultContent, UserContent},
+        message::{Text, ToolCall, ToolFunction, ToolResultContent, UserContent},
         AssistantContent, Message as RigMessage, ToolDefinition,
     },
     OneOrMany,
 };
+
+fn recv(rx: &crossbeam_channel::Receiver<ProviderEvent>) -> ProviderEvent {
+    rx.recv_timeout(std::time::Duration::from_secs(1))
+        .expect("expected a provider event within timeout")
+}
 
 #[test]
 fn converts_rig_assistant_text_to_horizon_message() {
@@ -276,4 +291,420 @@ fn horizon_mediated_tool_result_can_continue_as_rig_history() {
     assert!(matches!(&messages[1], RigMessage::User { content }
         if matches!(content.first_ref(), UserContent::ToolResult(result)
             if result.id == request.call_id.0)));
+}
+
+#[test]
+fn appends_cancelled_tool_results_after_assistant_tool_call_message() {
+    let tool_call = rig_workspace_snapshot_call();
+    let call_id = ToolCallId(tool_call.id.clone());
+    let mut history = vec![
+        RigMessage::user("snapshot please"),
+        RigMessage::Assistant {
+            id: None,
+            content: OneOrMany::one(AssistantContent::ToolCall(tool_call)),
+        },
+    ];
+
+    append_cancelled_tool_results_to_history(&mut history, std::slice::from_ref(&call_id));
+
+    // The assistant tool_calls message must be followed by one tool-result
+    // message per cancelled call, or the next API request is rejected.
+    assert_eq!(history.len(), 3);
+    assert!(matches!(&history[2], RigMessage::User { content }
+        if matches!(content.first_ref(), UserContent::ToolResult(result)
+            if result.id == call_id.0
+                && matches!(result.content.first_ref(), ToolResultContent::Text(text)
+                    if text.text.contains("cancelled")))));
+}
+
+#[test]
+fn cancel_without_tool_calls_appends_no_history_tool_results() {
+    let mut history = vec![
+        RigMessage::user("hello"),
+        RigMessage::assistant("partial answer"),
+    ];
+
+    append_cancelled_tool_results_to_history(&mut history, &[]);
+
+    assert_eq!(history.len(), 2);
+    assert!(matches!(&history[1], RigMessage::Assistant { content, .. }
+        if matches!(content.first_ref(), AssistantContent::Text(text)
+            if text.text == "partial answer")));
+}
+
+#[test]
+fn cancelled_partial_assistant_message_keeps_streamed_text_and_tool_calls() {
+    let message =
+        partial_assistant_message(None, "partial text", vec![rig_workspace_snapshot_call()]);
+
+    let RigMessage::Assistant { content, .. } = message else {
+        panic!("expected an assistant message");
+    };
+    let items = content.into_iter().collect::<Vec<_>>();
+    assert_eq!(items.len(), 2);
+    assert!(matches!(&items[0], AssistantContent::Text(text) if text.text == "partial text"));
+    assert!(matches!(&items[1], AssistantContent::ToolCall(call)
+        if call.id == "rig-workspace-snapshot-1"));
+}
+
+// --- Turn-loop guards -------------------------------------------------
+
+#[test]
+fn turn_loop_guard_iteration_cap_triggers_at_boundary() {
+    let mut guard = TurnLoopGuard::new();
+
+    for _ in 0..TOOL_TURN_ITERATION_CAP {
+        assert_eq!(guard.record_tool_turn(), None);
+    }
+
+    assert_eq!(
+        guard.record_tool_turn(),
+        Some(GuardHalt::IterationCapExceeded)
+    );
+}
+
+#[test]
+fn turn_loop_guard_iteration_cap_resets_on_reset() {
+    let mut guard = TurnLoopGuard::new();
+    for _ in 0..TOOL_TURN_ITERATION_CAP {
+        guard.record_tool_turn();
+    }
+
+    guard.reset();
+
+    for _ in 0..TOOL_TURN_ITERATION_CAP {
+        assert_eq!(guard.record_tool_turn(), None);
+    }
+    assert_eq!(
+        guard.record_tool_turn(),
+        Some(GuardHalt::IterationCapExceeded)
+    );
+}
+
+#[test]
+fn turn_loop_guard_fingerprint_triggers_on_three_identical() {
+    let mut guard = TurnLoopGuard::new();
+    let fingerprint = 0xABCDu64;
+
+    assert_eq!(guard.record_fingerprint(fingerprint), None);
+    assert_eq!(guard.record_fingerprint(fingerprint), None);
+    assert_eq!(
+        guard.record_fingerprint(fingerprint),
+        Some(GuardHalt::DoomLoopDetected)
+    );
+}
+
+#[test]
+fn turn_loop_guard_fingerprint_does_not_trigger_on_varying_fingerprints() {
+    let mut guard = TurnLoopGuard::new();
+
+    for fingerprint in 0..(DOOM_LOOP_WINDOW as u64 * 2) {
+        assert_eq!(guard.record_fingerprint(fingerprint), None);
+    }
+}
+
+#[test]
+fn turn_loop_guard_reset_clears_fingerprint_window() {
+    let mut guard = TurnLoopGuard::new();
+    let fingerprint = 42u64;
+    guard.record_fingerprint(fingerprint);
+    guard.record_fingerprint(fingerprint);
+
+    guard.reset();
+
+    // If the window had survived the reset, this third identical
+    // fingerprint would immediately trip the guard; it must not.
+    assert_eq!(guard.record_fingerprint(fingerprint), None);
+    assert_eq!(guard.record_fingerprint(fingerprint), None);
+    assert_eq!(
+        guard.record_fingerprint(fingerprint),
+        Some(GuardHalt::DoomLoopDetected)
+    );
+}
+
+#[test]
+fn halt_turn_loop_records_real_result_and_cancels_only_other_pending_calls() {
+    // Assistant turn requested two tool calls: A (whose real result just
+    // arrived and tripped the guard) and B (still outstanding).
+    let call_a = rig_workspace_snapshot_call();
+    let call_b = ToolCall::new(
+        "call-b".to_string(),
+        ToolFunction::new("fs.read".to_string(), serde_json::json!({ "path": "/x" })),
+    );
+    let id_a = ToolCallId(call_a.id.clone());
+    let id_b = ToolCallId(call_b.id.clone());
+    let mut history = vec![
+        RigMessage::user("snapshot please"),
+        RigMessage::Assistant {
+            id: None,
+            content: OneOrMany::many(vec![
+                AssistantContent::ToolCall(call_a),
+                AssistantContent::ToolCall(call_b),
+            ])
+            .expect("assistant content"),
+        },
+    ];
+    // The session loop removes the arrived call from pending (to look up
+    // its descriptor) before halting; only B is still pending here.
+    let mut pending: HashMap<ToolCallId, ToolCallDescriptor> = HashMap::from([(
+        id_b.clone(),
+        ToolCallDescriptor {
+            tool_id: "fs.read".to_string(),
+            args: serde_json::json!({ "path": "/x" }),
+        },
+    )]);
+    let mut cancelled: HashSet<ToolCallId> = HashSet::new();
+    let arrived = ToolCallResult {
+        call_id: id_a.clone(),
+        output: serde_json::json!({ "tab_count": 2 }),
+    };
+    let mut guard = TurnLoopGuard::new();
+    for _ in 0..=TOOL_TURN_ITERATION_CAP {
+        guard.record_tool_turn();
+    }
+    let (tx, rx) = crossbeam_channel::unbounded();
+
+    halt_turn_loop(
+        GuardHalt::IterationCapExceeded,
+        &mut guard,
+        &tx,
+        &mut history,
+        &arrived,
+        &mut pending,
+        &mut cancelled,
+    );
+
+    // History stays API-valid: the assistant tool_calls message is followed
+    // by one result per call. The arrived result keeps its REAL output (the
+    // tool already executed — falsifying it as cancelled would misrepresent
+    // e.g. a write already on disk); only B gets a synthetic cancelled one.
+    assert_eq!(history.len(), 4);
+    assert!(matches!(&history[2], RigMessage::User { content }
+        if matches!(content.first_ref(), UserContent::ToolResult(result)
+            if result.id == id_a.0
+                && matches!(result.content.first_ref(), ToolResultContent::Text(text)
+                    if text.text.contains("tab_count") && !text.text.contains("cancelled")))));
+    assert!(matches!(&history[3], RigMessage::User { content }
+        if matches!(content.first_ref(), UserContent::ToolResult(result)
+            if result.id == id_b.0
+                && matches!(result.content.first_ref(), ToolResultContent::Text(text)
+                    if text.text.contains("cancelled")))));
+
+    assert!(pending.is_empty());
+    assert!(cancelled.contains(&id_b));
+    assert!(
+        !cancelled.contains(&id_a),
+        "the real, already-executed result must not be marked cancelled"
+    );
+
+    match recv(&rx).event {
+        Event::Error(error) => assert!(error.message.contains("consecutive tool-driven turns")),
+        other => panic!("expected an Error event, got {other:?}"),
+    }
+    match recv(&rx).event {
+        Event::ToolCallFinished(result) => {
+            assert_eq!(
+                result.call_id, id_b,
+                "no contradictory cancelled ToolCallFinished for the arrived result"
+            );
+            assert_eq!(result.output["cancelled"], true);
+        }
+        other => panic!("expected ToolCallFinished, got {other:?}"),
+    }
+    assert_eq!(
+        recv(&rx).event,
+        Event::StateChanged(SessionState::WaitingForUser)
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "halt must emit exactly Error, one cancelled finish for B, and WaitingForUser"
+    );
+
+    // The guard was reset: a fresh allowance of tool turns is available.
+    for _ in 0..TOOL_TURN_ITERATION_CAP {
+        assert_eq!(guard.record_tool_turn(), None);
+    }
+}
+
+fn start_fallback_rig_session() -> (
+    crossbeam_channel::Sender<Command>,
+    crossbeam_channel::Receiver<ProviderEvent>,
+) {
+    let provider = Provider::new(
+        RigAgentConfig {
+            openai_enabled: false,
+            model: "unused-in-fallback-mode".to_string(),
+        },
+        None,
+    );
+    let handle = provider.start_session(StartSession {
+        session_id: SessionId::new(),
+        provider_id: AgentProvider::provider_id(&provider),
+    });
+    let tx = handle.sender();
+    let rx = handle.events();
+
+    // Drain session-startup events (Created, init message, WaitingForUser).
+    for _ in 0..3 {
+        recv(&rx);
+    }
+    (tx, rx)
+}
+
+#[test]
+fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
+    let (tx, rx) = start_fallback_rig_session();
+
+    // "snapshot" makes the deterministic fallback request a tool call, so
+    // the session has a genuinely pending call to feed results into.
+    let _ = tx.send(Command::UserMessage {
+        text: "snapshot please".to_string(),
+    });
+    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            ..
+        })
+    ));
+    let call_id = match recv(&rx).event {
+        Event::ToolCallRequested(request) => request.call_id,
+        other => panic!("expected a tool call request, got {other:?}"),
+    };
+
+    // Each result asks the fallback responder (via `loop_again`) to request
+    // the tool again — a self-sustaining tool loop, exactly what the cap
+    // exists to stop. Distinct outputs keep doom-loop detection out of the
+    // way so the iteration cap is what trips.
+    for i in 0..TOOL_TURN_ITERATION_CAP {
+        let _ = tx.send(Command::ToolCallResult(ToolCallResult {
+            call_id: call_id.clone(),
+            output: serde_json::json!({ "loop_again": true, "n": i }),
+        }));
+        assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+        assert!(matches!(
+            recv(&rx).event,
+            Event::ToolCallRequested(request) if request.call_id == call_id
+        ));
+    }
+
+    // The next tool-driven turn exceeds the cap: the session halts instead
+    // of running it. The arrived result's REAL output goes into rig_history
+    // (asserted directly in the halt_turn_loop unit test — history is not
+    // observable through the session handle) and, since it already finished
+    // for real app-side, no contradictory cancelled ToolCallFinished may be
+    // emitted for it: the halt is exactly Error then WaitingForUser.
+    let _ = tx.send(Command::ToolCallResult(ToolCallResult {
+        call_id: call_id.clone(),
+        output: serde_json::json!({ "loop_again": true, "n": "final" }),
+    }));
+    match recv(&rx).event {
+        Event::Error(error) => assert!(error.message.contains("consecutive tool-driven turns")),
+        other => panic!("expected the iteration-cap error, got {other:?}"),
+    }
+    assert_eq!(
+        recv(&rx).event,
+        Event::StateChanged(SessionState::WaitingForUser),
+        "no cancelled ToolCallFinished may be emitted for the real, already-executed result"
+    );
+
+    // The session is still usable: a fresh user message runs a normal turn.
+    let _ = tx.send(Command::UserMessage {
+        text: "hello again".to_string(),
+    });
+    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            text,
+        }) if text == "hello again"
+    ));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::Assistant,
+            ..
+        })
+    ));
+    assert_eq!(
+        recv(&rx).event,
+        Event::StateChanged(SessionState::WaitingForUser)
+    );
+}
+
+#[test]
+fn rig_session_drops_unsolicited_tool_result_without_running_a_turn() {
+    let (tx, rx) = start_fallback_rig_session();
+
+    // No tool call was ever requested, so this result is unsolicited: it
+    // must not start a turn (which would append an orphan tool-result
+    // message to rig_history) and must not advance the loop guards.
+    let _ = tx.send(Command::ToolCallResult(ToolCallResult {
+        call_id: ToolCallId("never-requested".to_string()),
+        output: serde_json::json!({ "ok": true }),
+    }));
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(200))
+            .is_err(),
+        "an unsolicited tool result must be dropped silently, producing no events"
+    );
+
+    // The session is unaffected: a normal user turn still works.
+    let _ = tx.send(Command::UserMessage {
+        text: "hello".to_string(),
+    });
+    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            text,
+        }) if text == "hello"
+    ));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::Assistant,
+            ..
+        })
+    ));
+    assert_eq!(
+        recv(&rx).event,
+        Event::StateChanged(SessionState::WaitingForUser)
+    );
+}
+
+#[test]
+fn doom_loop_does_not_trip_on_identical_outputs_with_different_args() {
+    let mut guard = TurnLoopGuard::new();
+    let empty_matches = serde_json::json!({ "matches": [] });
+
+    // Three distinct greps that all found nothing: identical outputs, but
+    // different args — productive, non-looping calls per the design doc's
+    // (tool, args, result) fingerprint.
+    for pattern in ["alpha", "beta", "gamma"] {
+        let fingerprint = tool_result_fingerprint(
+            "fs.grep",
+            &serde_json::json!({ "pattern": pattern }),
+            &empty_matches,
+        );
+        assert_eq!(guard.record_fingerprint(fingerprint), None);
+    }
+}
+
+#[test]
+fn doom_loop_trips_on_three_identical_tool_args_output_fingerprints() {
+    let mut guard = TurnLoopGuard::new();
+    let args = serde_json::json!({ "pattern": "alpha" });
+    let output = serde_json::json!({ "matches": [] });
+
+    let fingerprint = tool_result_fingerprint("fs.grep", &args, &output);
+    assert_eq!(guard.record_fingerprint(fingerprint), None);
+    assert_eq!(guard.record_fingerprint(fingerprint), None);
+    assert_eq!(
+        guard.record_fingerprint(fingerprint),
+        Some(GuardHalt::DoomLoopDetected)
+    );
 }

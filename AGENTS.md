@@ -32,21 +32,12 @@ git config core.hooksPath hooks
 
 ## GUI Verification
 
-Agents cannot see the GUI directly. Use the scripted harnesses:
-
-- `scripts/check-terminal-visual.sh` — starts Horizon on an isolated Xvfb
-  display, writes the terminal model to `terminal.txt`, captures the window to
-  `screenshot.png`, and leaves artifacts under `/tmp/horizon-visual-*`.
-  Driven by env vars: `HORIZON_TEST_TEXT`, `HORIZON_TEST_XDOTOOL`,
-  `HORIZON_EXPECT_DUMP_CONTAINS`, `HORIZON_EXPECT_STATUS_CONTAINS`, etc.
-  (read the script for the full set).
-- `scripts/run-terminal-smoke.sh` — scenario suite (shell input, new-terminal
-  focus, split-pane status, ANSI color, nvim screen) built on the script above.
-  Artifacts land under `/tmp/horizon-terminal-smoke-*`, one directory per
-  scenario with `terminal.txt`, `status.txt`, `screenshot.png`, and logs.
-
-Required system deps: `Xvfb`, `xdotool`, `xwd`, ImageMagick (`magick` or
-`convert`); `nvim` is optional (its scenario is skipped when missing).
+Agents cannot see the GUI directly. Two scripts drive it headlessly:
+`scripts/check-terminal-visual.sh` runs a one-shot visual check (terminal
+dump + screenshot), and `scripts/run-terminal-smoke.sh` runs the full
+scenario suite on top of it. Authoritative details — env vars, artifact
+paths, system deps, and caveats — live in the `gui-verify` skill
+(`.claude/skills/gui-verify/SKILL.md`); read it before using either script.
 
 Manual smoke after `cargo run`: `Ctrl+Shift+P` opens the control surface;
 `Tab` toggles between Commands and Workspace modes. See README.md for the

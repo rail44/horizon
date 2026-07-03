@@ -1,10 +1,12 @@
 use serde_json::json;
 
 use crate::agent::contract::{
-    Error, Event, Message, MessageRole, SessionState, ToolCallRequest, ToolCallResult,
+    Error, Event, Message, MessageRole, SessionState, ToolCallId, ToolCallRequest, ToolCallResult,
     ToolPermission,
 };
+use crate::agent::tools::fs;
 use crate::agent::tools::permission_for_tool;
+use crate::agent::tools::state::ToolSessionState;
 use crate::workspace::Workspace;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -15,10 +17,14 @@ pub(crate) enum Execution {
     Unknown(Vec<Event>),
 }
 
-pub(crate) fn execute_agent_tool(workspace: &Workspace, request: &ToolCallRequest) -> Execution {
+pub(crate) fn execute_agent_tool(
+    workspace: &Workspace,
+    tool_state: &ToolSessionState,
+    request: &ToolCallRequest,
+) -> Execution {
     match permission_for_tool(&request.tool_id) {
         Some(ToolPermission::AutoAllowRead | ToolPermission::AutoAllowUi) => {
-            Execution::Auto(execute_auto_tool(workspace, request))
+            Execution::Auto(execute_auto_tool(workspace, tool_state, request))
         }
         Some(ToolPermission::RequireApproval) => Execution::RequiresApproval,
         Some(ToolPermission::Deny) => Execution::Denied(vec![Event::Error(Error {
@@ -30,24 +36,35 @@ pub(crate) fn execute_agent_tool(workspace: &Workspace, request: &ToolCallReques
     }
 }
 
-fn execute_auto_tool(workspace: &Workspace, request: &ToolCallRequest) -> Vec<Event> {
-    match request.tool_id.as_str() {
-        "workspace.snapshot" => vec![
-            Event::StateChanged(SessionState::ToolRunning),
-            Event::ToolCallStarted(request.call_id.clone()),
-            Event::ToolCallFinished(ToolCallResult {
-                call_id: request.call_id.clone(),
-                output: workspace_snapshot(workspace),
-            }),
-            Event::StateChanged(SessionState::WaitingForUser),
-        ],
-        _ => vec![Event::Error(Error {
-            message: format!(
-                "Tool `{}` cannot be executed automatically.",
-                request.tool_id
-            ),
-        })],
-    }
+fn execute_auto_tool(
+    workspace: &Workspace,
+    tool_state: &ToolSessionState,
+    request: &ToolCallRequest,
+) -> Vec<Event> {
+    let output = match request.tool_id.as_str() {
+        "workspace.snapshot" => workspace_snapshot(workspace),
+        _ => match fs::execute_auto(tool_state, &request.tool_id, &request.input) {
+            Some(output) => output,
+            None => {
+                return vec![Event::Error(Error {
+                    message: format!(
+                        "Tool `{}` cannot be executed automatically.",
+                        request.tool_id
+                    ),
+                })]
+            }
+        },
+    };
+
+    vec![
+        Event::StateChanged(SessionState::ToolRunning),
+        Event::ToolCallStarted(request.call_id.clone()),
+        Event::ToolCallFinished(ToolCallResult {
+            call_id: request.call_id.clone(),
+            output,
+        }),
+        Event::StateChanged(SessionState::WaitingForUser),
+    ]
 }
 
 pub(crate) fn workspace_snapshot(workspace: &Workspace) -> serde_json::Value {
@@ -98,4 +115,14 @@ pub(crate) fn tool_result_message(result: &ToolCallResult) -> Event {
         role: MessageRole::Assistant,
         text: format!("Tool result received for {}.", result.call_id.0),
     })
+}
+
+/// A synthetic tool result marking a pending tool call as cancelled, so a
+/// pending approval belonging to a cancelled turn resolves to a terminal
+/// (non-error) outcome instead of hanging forever.
+pub(crate) fn cancelled_tool_call_result(call_id: ToolCallId) -> ToolCallResult {
+    ToolCallResult {
+        call_id,
+        output: json!({ "cancelled": true }),
+    }
 }

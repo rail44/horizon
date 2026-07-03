@@ -1,5 +1,6 @@
 use std::sync::{Mutex, OnceLock};
 
+use crossbeam_channel::unbounded;
 use floem::ext_event::create_signal_from_channel;
 use floem::prelude::*;
 use floem::reactive::create_effect;
@@ -7,7 +8,10 @@ use floem::reactive::create_effect;
 use crate::agent::config::{AgentConfig, AgentPersistenceConfig};
 use crate::agent::persistence::event_log::{read, WriterHandle};
 use crate::agent::persistence::projection::duckdb::Store;
-use crate::agent::tools::process_agent_provider_event;
+use crate::agent::tools::{
+    process_agent_provider_event, register_session_runtime, should_fold_completion, BashCompletion,
+    ToolSessionState,
+};
 use crate::agent::{contract as agent, frame::AgentFrame, live::LiveState};
 use crate::session::{Frames, Registry, SessionId};
 use crate::workspace::Workspace;
@@ -48,6 +52,23 @@ pub(super) fn spawn_agent_session(
         registry.insert_agent(session_id, handle);
     });
 
+    let tool_state = ToolSessionState::for_current_dir();
+    // `bash` calls run on a dedicated background thread and can take up to
+    // their timeout, so their result can't fold into `LiveState`/`Frames`
+    // synchronously the way `fs.write`/`fs.edit` do (those are UI-thread-
+    // confined — see `agent::live::LiveState`). This channel is the
+    // cross-thread-to-UI delivery seam for that result: the same
+    // `crossbeam_channel` + `create_signal_from_channel` bridge used just
+    // above for `handle.events()`, the provider's own event stream.
+    let (bash_results_tx, bash_results_rx) = unbounded::<BashCompletion>();
+    let bash_completions = create_signal_from_channel(bash_results_rx);
+    register_session_runtime(
+        session_id,
+        tool_state.clone(),
+        runtime_state.clone(),
+        bash_results_tx,
+    );
+
     if let Some(sender) = sessions.with_untracked(|registry| registry.agent_sender(session_id)) {
         let _ = sender.send(agent::Command::Initialize(agent::Initialization {
             session_id,
@@ -55,9 +76,11 @@ pub(super) fn spawn_agent_session(
         }));
     }
 
+    let bash_runtime_state = runtime_state.clone();
     create_effect(move |_| {
         if let Some(event) = events.get() {
-            let processing = workspace.with_untracked(|ws| process_agent_provider_event(ws, event));
+            let processing =
+                workspace.with_untracked(|ws| process_agent_provider_event(ws, &tool_state, event));
             for command in processing.provider_commands {
                 if let Some(sender) =
                     sessions.with_untracked(|registry| registry.agent_sender(session_id))
@@ -69,6 +92,55 @@ pub(super) fn spawn_agent_session(
             frames.update(|frames| frames.update_agent_frame(session_id, frame));
         }
     });
+
+    create_effect(move |_| {
+        if let Some(completion) = bash_completions.get() {
+            fold_bash_completion(
+                &bash_runtime_state,
+                frames,
+                sessions,
+                session_id,
+                completion,
+            );
+        }
+    });
+}
+
+/// Folds a finished bash call's result into the session's frame and
+/// forwards it to the provider — the async-execution analogue of
+/// `agent::tools::approval::ApprovalOutcome::Executed`'s synchronous fold,
+/// which the click handler in `workspace/view/pane.rs` does directly.
+///
+/// Guards against double-folding a late result the same way `agent::tools::
+/// approval` guards a double approve/deny: if the call already has a
+/// `ToolCallFinished` — because a turn cancellation raced this completion
+/// and got there first (see `agent::tools::processing::
+/// process_agent_provider_event`, which kills the child but can't stop a
+/// result that was already in flight on this channel) — the result is
+/// accepted and discarded here, matching the provider's own contract for a
+/// `ToolCallResult` arriving after cancel.
+fn fold_bash_completion(
+    runtime_state: &LiveState,
+    frames: RwSignal<Frames>,
+    sessions: RwSignal<Registry>,
+    session_id: SessionId,
+    completion: BashCompletion,
+) {
+    let result = completion.result;
+    if !should_fold_completion(&runtime_state.frame(), &result.call_id) {
+        return;
+    }
+
+    let events = [
+        agent::Event::ToolCallFinished(result.clone()),
+        agent::Event::StateChanged(agent::SessionState::WaitingForUser),
+    ];
+    let frame = runtime_state.extend_provider_events(events.into_iter().map(Into::into));
+    frames.update(|frames| frames.update_agent_frame(session_id, frame));
+
+    if let Some(sender) = sessions.with_untracked(|registry| registry.agent_sender(session_id)) {
+        let _ = sender.send(agent::Command::ToolCallResult(result));
+    }
 }
 
 fn open_agent_runtime_state_store(

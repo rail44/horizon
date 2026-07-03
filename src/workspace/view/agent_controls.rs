@@ -104,6 +104,57 @@ pub(super) fn agent_approval_actions(
     })
 }
 
+pub(super) fn agent_cancel_action(
+    visible: impl Fn() -> bool + 'static + Copy,
+    turn_in_flight: impl Fn() -> bool + 'static + Copy,
+    on_cancel: impl Fn() + 'static + Copy,
+) -> impl IntoView {
+    label(|| "Cancel turn".to_string())
+        .on_click_stop(move |_| {
+            if turn_in_flight() {
+                on_cancel();
+            }
+        })
+        .style(move |s| {
+            if !visible() || !turn_in_flight() {
+                return s.hide();
+            }
+
+            s.width_full()
+                .height(30)
+                .min_height(30)
+                .items_center()
+                .justify_end()
+                .padding_horiz(20)
+                .font_family(HORIZON_FONT_FAMILY.to_string())
+                .font_size(12)
+                .color(floem::peniko::Color::rgb8(233, 236, 242))
+                .background(floem::peniko::Color::rgb8(74, 60, 40))
+                .border(1.0)
+                .border_color(floem::peniko::Color::rgb8(224, 176, 108))
+        })
+}
+
+/// Gates the pane's pending approval behind its "cancel requested" latch.
+///
+/// Once the user clicks Cancel, approve/deny must go dead immediately — not
+/// after the provider's cancel events round-trip. In that window the call
+/// still looks pending in the frame, and an Approve click would really
+/// execute the tool while history records the call as cancelled. The latch
+/// is set the instant the cancel action fires and cleared when the frame's
+/// session state next changes (by then the cancelled call has resolved, or
+/// the cancel was ignored and the approval is genuinely still pending).
+pub(super) fn gate_pending_approval(
+    cancel_requested: bool,
+    pending: Option<ToolCallId>,
+) -> Option<ToolCallId> {
+    if cancel_requested {
+        None
+    } else {
+        pending
+    }
+}
+
 fn agent_approval_button(
     text: &'static str,
     visible: impl Fn() -> bool + 'static + Copy,
@@ -134,4 +185,24 @@ fn agent_approval_button(
                 .border(1.0)
                 .border_color(border)
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::gate_pending_approval;
+    use crate::agent::contract::ToolCallId;
+
+    #[test]
+    fn cancel_request_gates_pending_approval() {
+        let pending = Some(ToolCallId("call-1".to_string()));
+        assert_eq!(gate_pending_approval(true, pending), None);
+        assert_eq!(gate_pending_approval(true, None), None);
+    }
+
+    #[test]
+    fn pending_approval_passes_through_without_cancel_request() {
+        let pending = Some(ToolCallId("call-1".to_string()));
+        assert_eq!(gate_pending_approval(false, pending.clone()), pending);
+        assert_eq!(gate_pending_approval(false, None), None);
+    }
 }

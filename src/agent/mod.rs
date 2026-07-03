@@ -4,6 +4,7 @@ pub(crate) mod frame;
 pub(crate) mod live;
 pub(crate) mod persistence;
 pub(crate) mod policy;
+pub(crate) mod prompt;
 pub(crate) mod providers;
 pub(crate) mod tools;
 pub(crate) mod view;

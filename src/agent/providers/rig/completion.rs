@@ -1,20 +1,27 @@
+use std::collections::HashMap;
+
 use crossbeam_channel::Sender;
 use futures_util::StreamExt;
 use rig_core::client::{CompletionClient, ProviderClient};
 use rig_core::{
-    completion::{message::Text, AssistantContent, CompletionModel, Message, ToolDefinition},
+    completion::{
+        message::{Text, ToolCall},
+        AssistantContent, CompletionModel, Message, ToolDefinition,
+    },
     providers::openai,
     streaming::StreamedAssistantContent,
     OneOrMany,
 };
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     agent::config::RigAgentConfig,
     agent::{
         contract::{
             Error, Event, Message as AgentMessage, MessageDelta, MessageRole, ProviderEvent,
-            ToolCallResult,
+            ToolCallId, ToolCallResult,
         },
+        prompt::{system_prompt, SessionEnvironment},
         tools::{definitions, Definition},
     },
 };
@@ -27,78 +34,108 @@ use super::{
     rig_workspace_snapshot_call, StreamDeltaBuffer, StreamDeltaKind,
 };
 
-pub(super) fn complete_rig_turn(
-    runtime: Option<&tokio::runtime::Runtime>,
+/// What the session loop must remember about a requested tool call while
+/// its result is outstanding: the tool id and the call's arguments.
+/// Together with the eventual output they form the (tool, args, result)
+/// doom-loop fingerprint in `session.rs` — args included per the design
+/// doc, so distinct calls that happen to produce identical output (e.g.
+/// greps for different patterns, each with zero matches) are not mistaken
+/// for a loop.
+#[derive(Clone, Debug, Default)]
+pub(super) struct ToolCallDescriptor {
+    pub(super) tool_id: String,
+    pub(super) args: serde_json::Value,
+}
+
+/// Outcome of a single turn: which tool calls (if any) it requested (with
+/// a descriptor per call id, for the doom-loop fingerprint in
+/// `session.rs`), and whether it ended via cancellation rather than running
+/// to completion. Cancellation is a stop reason, not an error — the caller
+/// still gets a well-formed outcome, just with `cancelled: true`.
+#[derive(Debug, Default)]
+pub(super) struct TurnCompletion {
+    pub(super) requested_tool_call_ids: Vec<ToolCallId>,
+    pub(super) requested_tool_calls: HashMap<ToolCallId, ToolCallDescriptor>,
+    pub(super) cancelled: bool,
+}
+
+pub(super) async fn complete_rig_turn(
     config: &RigAgentConfig,
+    environment: &SessionEnvironment,
     rig_history: &mut Vec<Message>,
     prompt: Message,
     events_tx: &Sender<ProviderEvent>,
     fallback: impl FnOnce() -> Message,
-) -> bool {
+    token: &CancellationToken,
+) -> TurnCompletion {
     if config.openai_enabled {
-        if let Some(runtime) = runtime {
-            match runtime.block_on(rig_openai_turn_streaming(
-                config,
-                prompt.clone(),
-                rig_history.clone(),
-                events_tx.clone(),
-            )) {
-                Ok((assistant_message, contains_tool_call)) => {
-                    rig_history.push(prompt);
-                    rig_history.push(assistant_message);
-                    return contains_tool_call;
-                }
-                Err(error) => {
-                    let _ = events_tx.send(
-                        Event::Error(Error {
-                            message: format!("Rig OpenAI completion failed: {error}"),
-                        })
-                        .into(),
-                    );
-                    return false;
-                }
+        match rig_openai_turn_streaming(
+            config,
+            environment,
+            prompt.clone(),
+            rig_history.clone(),
+            events_tx.clone(),
+            token,
+        )
+        .await
+        {
+            Ok((assistant_message, completion)) => {
+                rig_history.push(prompt);
+                rig_history.push(assistant_message);
+                return completion;
+            }
+            Err(error) => {
+                let _ = events_tx.send(
+                    Event::Error(Error {
+                        message: format!("Rig OpenAI completion failed: {error}"),
+                    })
+                    .into(),
+                );
+                return TurnCompletion::default();
             }
         }
-
-        let _ = events_tx.send(
-            Event::Error(Error {
-                message: "Rig OpenAI completion unavailable: failed to create Tokio runtime."
-                    .to_string(),
-            })
-            .into(),
-        );
-        return false;
     }
 
     let assistant_message = fallback();
     rig_history.push(prompt);
     rig_history.push(assistant_message.clone());
     let events = horizon_provider_events_from_rig_message(assistant_message);
-    let contains_tool_call = events_contain_tool_call(&events);
+    let requested = tool_call_requests_from_events(&events);
+    let requested_tool_call_ids = requested.iter().map(|(id, _)| id.clone()).collect();
+    let requested_tool_calls = requested.into_iter().collect();
     for event in events {
         let _ = events_tx.send(event);
     }
-    contains_tool_call
+    TurnCompletion {
+        requested_tool_call_ids,
+        requested_tool_calls,
+        cancelled: false,
+    }
 }
 
 async fn rig_openai_turn_streaming(
     config: &RigAgentConfig,
+    environment: &SessionEnvironment,
     prompt: Message,
     history: Vec<Message>,
     events_tx: Sender<ProviderEvent>,
-) -> anyhow::Result<(Message, bool)> {
+    token: &CancellationToken,
+) -> anyhow::Result<(Message, TurnCompletion)> {
     let client = openai::CompletionsClient::from_env()?;
     let model = client.completion_model(&config.model);
     let mut stream = model
         .completion_request(prompt)
         .messages(history)
         .tools(rig_tool_definitions())
-        .preamble(rig_system_preamble())
+        .preamble(system_prompt(environment))
         .stream()
         .await?;
 
     let mut text = String::new();
-    let mut contains_tool_call = false;
+    let mut requested_tool_call_ids = Vec::new();
+    let mut requested_tool_calls = HashMap::new();
+    let mut tool_calls: Vec<ToolCall> = Vec::new();
+    let mut cancelled = false;
     let mut text_buffer = StreamDeltaBuffer::new(
         events_tx.clone(),
         StreamDeltaKind::AssistantText,
@@ -110,7 +147,18 @@ async fn rig_openai_turn_streaming(
         MessageRole::Assistant,
     );
 
-    while let Some(chunk) = stream.next().await {
+    loop {
+        let chunk = tokio::select! {
+            _ = token.cancelled() => {
+                cancelled = true;
+                break;
+            }
+            chunk = stream.next() => chunk,
+        };
+        let Some(chunk) = chunk else {
+            break;
+        };
+
         match chunk? {
             StreamedAssistantContent::Text(delta) => {
                 text.push_str(&delta.text);
@@ -135,11 +183,20 @@ async fn rig_openai_turn_streaming(
             StreamedAssistantContent::ToolCall { tool_call, .. } => {
                 reasoning_buffer.flush();
                 text_buffer.flush();
-                contains_tool_call = true;
+                let request = rig_tool_call_request(tool_call.clone());
+                requested_tool_call_ids.push(request.call_id.clone());
+                requested_tool_calls.insert(
+                    request.call_id.clone(),
+                    ToolCallDescriptor {
+                        tool_id: request.tool_id.clone(),
+                        args: request.input.clone(),
+                    },
+                );
                 let _ = events_tx.send(ProviderEvent::with_provider_payload(
-                    Event::ToolCallRequested(rig_tool_call_request(tool_call.clone())),
+                    Event::ToolCallRequested(request),
                     rig_tool_call_provider_payload(&tool_call),
                 ));
+                tool_calls.push(tool_call);
             }
             StreamedAssistantContent::ToolCallDelta { .. } | StreamedAssistantContent::Final(_) => {
             }
@@ -153,19 +210,55 @@ async fn rig_openai_turn_streaming(
         let _ = events_tx.send(
             Event::MessageCommitted(AgentMessage {
                 role: MessageRole::Assistant,
-                text,
+                text: text.clone(),
             })
             .into(),
         );
     }
 
-    Ok((
+    // `stream.choice` is only aggregated when the stream runs to its end;
+    // on cancellation it is still the empty placeholder, so the history
+    // message must be assembled from the chunks observed before the cancel —
+    // otherwise the streamed partial (text and especially tool calls) would
+    // be lost from history and cancelled tool results would dangle.
+    let assistant_message = if cancelled {
+        partial_assistant_message(stream.message_id.clone(), &text, tool_calls)
+    } else {
         Message::Assistant {
             id: stream.message_id.clone(),
             content: stream.choice.clone(),
+        }
+    };
+
+    Ok((
+        assistant_message,
+        TurnCompletion {
+            requested_tool_call_ids,
+            requested_tool_calls,
+            cancelled,
         },
-        contains_tool_call,
     ))
+}
+
+/// Builds the assistant history message for a cancelled turn from whatever
+/// streamed before cancellation: the accumulated text (if any) followed by
+/// the tool calls that were already emitted as `ToolCallRequested` events.
+pub(super) fn partial_assistant_message(
+    message_id: Option<String>,
+    text: &str,
+    tool_calls: Vec<ToolCall>,
+) -> Message {
+    let mut content = Vec::new();
+    if !text.is_empty() {
+        content.push(AssistantContent::Text(Text::new(text.to_string())));
+    }
+    content.extend(tool_calls.into_iter().map(AssistantContent::ToolCall));
+
+    Message::Assistant {
+        id: message_id,
+        content: OneOrMany::many(content)
+            .unwrap_or_else(|_| OneOrMany::one(AssistantContent::Text(Text::new(String::new())))),
+    }
 }
 
 pub(super) fn deterministic_rig_response(text: &str) -> Message {
@@ -185,6 +278,17 @@ pub(super) fn deterministic_rig_response(text: &str) -> Message {
 }
 
 pub(super) fn deterministic_tool_result_response(result: &ToolCallResult) -> Message {
+    // Deterministic hook for exercising the tool-call loop without a
+    // network provider: a result whose output sets `"loop_again": true`
+    // makes the fallback responder request the snapshot tool again, so
+    // tests can drive consecutive tool-driven turns (e.g. the
+    // iteration-cap guard). Real tool outputs never carry this key.
+    if result.output.get("loop_again") == Some(&serde_json::Value::Bool(true)) {
+        return Message::Assistant {
+            id: None,
+            content: OneOrMany::one(AssistantContent::ToolCall(rig_workspace_snapshot_call())),
+        };
+    }
     Message::Assistant {
         id: None,
         content: OneOrMany::one(AssistantContent::Text(Text::new(format!(
@@ -192,10 +296,6 @@ pub(super) fn deterministic_tool_result_response(result: &ToolCallResult) -> Mes
             result.call_id.0
         )))),
     }
-}
-
-fn rig_system_preamble() -> String {
-    "You are the Horizon agent. Use available tools when workspace state is needed. Return concise, directly useful answers.".to_string()
 }
 
 fn rig_tool_definitions() -> Vec<ToolDefinition> {
@@ -213,8 +313,20 @@ fn rig_tool_definition_from_horizon(definition: Definition) -> ToolDefinition {
     }
 }
 
-fn events_contain_tool_call(events: &[ProviderEvent]) -> bool {
+fn tool_call_requests_from_events(
+    events: &[ProviderEvent],
+) -> Vec<(ToolCallId, ToolCallDescriptor)> {
     events
         .iter()
-        .any(|event| matches!(event.event, Event::ToolCallRequested(_)))
+        .filter_map(|event| match &event.event {
+            Event::ToolCallRequested(request) => Some((
+                request.call_id.clone(),
+                ToolCallDescriptor {
+                    tool_id: request.tool_id.clone(),
+                    args: request.input.clone(),
+                },
+            )),
+            _ => None,
+        })
+        .collect()
 }

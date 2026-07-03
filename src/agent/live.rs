@@ -28,7 +28,6 @@ impl State {
         self.frame.clone()
     }
 
-    #[cfg(test)]
     pub(crate) fn frame(&self) -> &AgentFrame {
         &self.frame
     }
@@ -90,7 +89,11 @@ impl LiveState {
         }
     }
 
-    #[cfg(test)]
+    /// The session's current accumulated frame. Used outside tests too: the
+    /// bash-completion effect in `app/runtime/agent.rs` reads this to check
+    /// whether a call already has a `ToolCallFinished` before folding a late
+    /// result — the async-execution analogue of `agent::tools::approval`'s
+    /// `ApprovalOutcome::AlreadyResolved` guard.
     pub(crate) fn frame(&self) -> AgentFrame {
         self.inner.borrow().frame().clone()
     }

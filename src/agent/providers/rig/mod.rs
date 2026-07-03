@@ -8,6 +8,7 @@ mod stream;
 
 use completion::{
     complete_rig_turn, deterministic_rig_response, deterministic_tool_result_response,
+    ToolCallDescriptor, TurnCompletion,
 };
 use history::load_rig_history;
 use mapping::{rig_tool_result_message, rig_workspace_snapshot_call};

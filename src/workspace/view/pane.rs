@@ -1,22 +1,28 @@
-use crate::agent::contract::Command;
+use crate::agent::contract::{Command, SessionState, ToolCallId};
 use crate::agent::frame::AgentFrame;
+use crate::agent::tools::{resolve_approval, ApprovalDecision, ApprovalOutcome};
 use crate::app::keymap::is_palette_open_key;
 use crate::control_surface::{
     handle_control_key, open_palette, ControlInputState, ControlMode, OpenPaletteState,
 };
+use crate::session::{Frames, Registry};
 use crate::terminal::TerminalFrame;
 use crate::ui::theme;
 use crate::workspace::{
     handle_active_pane_key, visible_agent_sender, visible_terminal_sender, AgentDrafts, PaneKind,
+    Workspace,
 };
 use floem::prelude::*;
+use floem::reactive::create_effect;
 use floem::{
     action::set_ime_allowed,
     event::{Event, EventListener, EventPropagation},
     peniko::kurbo::{Point, Size},
 };
 
-use super::agent_controls::{agent_approval_actions, agent_composer};
+use super::agent_controls::{
+    agent_approval_actions, agent_cancel_action, agent_composer, gate_pending_approval,
+};
 use super::chrome::pane_header;
 use super::terminal_output::terminal_output;
 use crate::agent::view as agent_view;
@@ -86,9 +92,35 @@ pub(super) fn pane_view(
         move || workspace.with(|ws| ws.visible_pane_kind(index) == Some(PaneKind::Agent));
     let is_terminal =
         move || workspace.with(|ws| ws.visible_pane_kind(index) == Some(PaneKind::Terminal));
+    // Set the instant the cancel action fires, cleared when the session
+    // state next changes; while set, approve/deny are dead (see
+    // `gate_pending_approval`) so an approval click can't race an
+    // in-flight cancellation into executing the tool anyway.
+    let cancel_requested = RwSignal::new(false);
+    let agent_session_state = move || {
+        let session_id = workspace.with(|ws| ws.visible_agent_session_id(index))?;
+        frames.with(|frames| frames.agent_frame(session_id).state)
+    };
+    create_effect(move |previous: Option<Option<SessionState>>| {
+        let state = agent_session_state();
+        if let Some(previous) = previous {
+            if previous != state && cancel_requested.get_untracked() {
+                cancel_requested.set(false);
+            }
+        }
+        state
+    });
     let pending_approval = move || {
         let session_id = workspace.with(|ws| ws.visible_agent_session_id(index))?;
-        frames.with(|frames| frames.agent_frame(session_id).pending_approval_call_id())
+        let pending =
+            frames.with(|frames| frames.agent_frame(session_id).pending_approval_call_id());
+        gate_pending_approval(cancel_requested.get(), pending)
+    };
+    let turn_in_flight = move || {
+        let Some(session_id) = workspace.with(|ws| ws.visible_agent_session_id(index)) else {
+            return false;
+        };
+        frames.with(|frames| frames.agent_frame(session_id).is_turn_in_flight())
     };
     let agent_draft = agent_drafts[index];
 
@@ -116,19 +148,34 @@ pub(super) fn pane_view(
             is_agent,
             pending_approval,
             move |call_id| {
-                if let Some(tx) = visible_agent_sender(workspace, sessions, index) {
-                    let _ = tx.send(Command::ApproveToolCall { call_id });
-                }
+                resolve_and_send_approval(
+                    workspace,
+                    frames,
+                    sessions,
+                    index,
+                    call_id,
+                    ApprovalDecision::Approve,
+                )
             },
             move |call_id| {
-                if let Some(tx) = visible_agent_sender(workspace, sessions, index) {
-                    let _ = tx.send(Command::DenyToolCall {
-                        call_id,
+                resolve_and_send_approval(
+                    workspace,
+                    frames,
+                    sessions,
+                    index,
+                    call_id,
+                    ApprovalDecision::Deny {
                         reason: Some("Denied by user".to_string()),
-                    });
-                }
+                    },
+                )
             },
         ),
+        agent_cancel_action(is_agent, turn_in_flight, move || {
+            cancel_requested.set(true);
+            if let Some(tx) = visible_agent_sender(workspace, sessions, index) {
+                let _ = tx.send(Command::Cancel { request_id: None });
+            }
+        }),
         agent_composer(
             is_agent,
             active,
@@ -224,4 +271,49 @@ pub(super) fn pane_view(
             .border(1.0)
             .border_color(border)
     })
+}
+
+/// Resolves the user's approve/deny click for the visible pane's pending
+/// tool call and sends the resulting command to the provider.
+///
+/// `fs.write`/`fs.edit`/`bash` are executed by Horizon itself on approval —
+/// see `agent::tools::resolve_approval` — so this also folds the execution
+/// (or, for `bash`, the running-state) result into the session's frame
+/// before sending. Every other approval-gated tool (e.g.
+/// `mock.approval_required`) falls back to forwarding `ApproveToolCall`/
+/// `DenyToolCall` to the provider unchanged.
+fn resolve_and_send_approval(
+    workspace: RwSignal<Workspace>,
+    frames: RwSignal<Frames>,
+    sessions: RwSignal<Registry>,
+    index: usize,
+    call_id: ToolCallId,
+    decision: ApprovalDecision,
+) {
+    let Some(session_id) = workspace.with_untracked(|ws| ws.visible_agent_session_id(index)) else {
+        return;
+    };
+    let frame = frames.with_untracked(|frames| frames.agent_frame(session_id));
+    let command = match resolve_approval(&frame, session_id, call_id, decision) {
+        ApprovalOutcome::Executed { frame, command } => {
+            frames.update(|frames| frames.update_agent_frame(session_id, frame));
+            command
+        }
+        // `bash` on approve: the running-state frame is ready to publish,
+        // but the tool is executing off the UI thread and hasn't produced a
+        // result yet. Nothing to send to the provider here — the eventual
+        // `Command::ToolCallResult` is sent later by the effect
+        // `app/runtime/agent.rs::spawn_agent_session` sets up for it.
+        ApprovalOutcome::Started { frame } => {
+            frames.update(|frames| frames.update_agent_frame(session_id, frame));
+            return;
+        }
+        ApprovalOutcome::Forward(command) => command,
+        // Duplicate click on a call that already resolved (double-approve,
+        // or approve racing an earlier result) — nothing to run or send.
+        ApprovalOutcome::AlreadyResolved => return,
+    };
+    if let Some(tx) = visible_agent_sender(workspace, sessions, index) {
+        let _ = tx.send(command);
+    }
 }

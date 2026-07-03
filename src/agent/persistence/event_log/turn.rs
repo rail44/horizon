@@ -27,6 +27,7 @@ impl TurnTracker {
             Event::StateChanged(
                 SessionState::WaitingForUser
                     | SessionState::WaitingForApproval
+                    | SessionState::Cancelled
                     | SessionState::Failed
                     | SessionState::Terminated
             )
