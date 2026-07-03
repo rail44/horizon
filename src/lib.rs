@@ -4,7 +4,7 @@ pub(crate) mod app;
 pub(crate) mod commands;
 pub(crate) mod control_surface;
 pub mod fonts;
-pub mod input;
+pub(crate) mod input;
 pub(crate) mod plugins;
 pub(crate) mod session;
 pub(crate) mod terminal;
