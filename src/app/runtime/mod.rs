@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use floem::prelude::*;
 
-use crate::agent_config::AgentConfig;
+use crate::agent::config::AgentConfig;
 use crate::session::{Frames, Registry, SessionId};
 use crate::workspace::{PaneKind, Workspace};
 

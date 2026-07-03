@@ -1,5 +1,5 @@
 use crate::agent::contract::Command;
-use crate::input::{
+use crate::app::keymap::{
     agent_draft_action, is_terminal_copy_key, is_terminal_paste_key, pop_last_grapheme_approx,
     terminal_input_from_key, terminal_key_from_key, termwiz_modifiers, AgentDraftAction,
 };

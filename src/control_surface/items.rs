@@ -1,4 +1,4 @@
-use crate::commands::{command_entries, filter_command_entries, CommandState};
+use crate::app::commands::{command_entries, filter_command_entries, CommandState};
 use crate::control_surface::query::{normalize_palette_query, palette_matches};
 use crate::control_surface::{OverviewItem, PaletteItem};
 use crate::workspace::Workspace;

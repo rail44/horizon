@@ -1,5 +1,5 @@
 use crate::agent::frame::AgentFrame;
-use crate::fonts::HORIZON_FONT_FAMILY;
+use crate::ui::fonts::HORIZON_FONT_FAMILY;
 use floem::event::{Event, EventListener, EventPropagation};
 use floem::peniko::{kurbo::Point, Color};
 use floem::prelude::*;

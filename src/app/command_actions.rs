@@ -1,6 +1,6 @@
 use floem::prelude::*;
 
-use crate::commands::{command_enabled, CommandId};
+use crate::app::commands::{command_enabled, CommandId};
 use crate::control_surface::command_state;
 use crate::session::{Frames, Registry};
 use crate::workspace::{request_active_pane_focus, PaneFocusRequests, PaneKind, Workspace};

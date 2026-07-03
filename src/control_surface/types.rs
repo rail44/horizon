@@ -1,4 +1,4 @@
-use crate::commands::CommandEntry;
+use crate::app::commands::CommandEntry;
 use crate::session::SessionId;
 use crate::workspace::{PaneKind, PaneSummary, SessionKind};
 

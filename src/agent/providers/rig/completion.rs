@@ -9,6 +9,7 @@ use rig_core::{
 };
 
 use crate::{
+    agent::config::RigAgentConfig,
     agent::{
         contract::{
             Error, Event, Message as AgentMessage, MessageDelta, MessageRole, ProviderEvent,
@@ -16,7 +17,6 @@ use crate::{
         },
         tools::{definitions, Definition},
     },
-    agent_config::RigAgentConfig,
 };
 
 use super::{

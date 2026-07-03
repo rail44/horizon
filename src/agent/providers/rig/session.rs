@@ -4,11 +4,11 @@ use crossbeam_channel::unbounded;
 use rig_core::completion::Message;
 
 use crate::{
+    agent::config::RigAgentConfig,
     agent::contract::{
         Command, Event, Message as AgentMessage, MessageRole, ProviderEvent, SessionHandle,
         SessionState, StartSession, ToolCallResult,
     },
-    agent_config::RigAgentConfig,
 };
 
 use super::{

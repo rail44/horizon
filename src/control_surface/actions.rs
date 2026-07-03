@@ -1,5 +1,5 @@
 use crate::app::command_actions::{execute_command, CommandActionState};
-use crate::commands::clamp_palette_selection;
+use crate::app::commands::clamp_palette_selection;
 use crate::control_surface::{overview_items, palette_items, OverviewItem, PaletteItem};
 use crate::workspace::{request_active_pane_focus, Workspace};
 use floem::prelude::*;

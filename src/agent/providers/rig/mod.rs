@@ -18,8 +18,8 @@ use stream::{StreamDeltaBuffer, StreamDeltaKind};
 use mapping::{horizon_events_from_rig_message, horizon_tool_definition_from_rig};
 
 use crate::{
+    agent::config::RigAgentConfig,
     agent::contract::{Provider as AgentProvider, ProviderId, SessionHandle, StartSession},
-    agent_config::RigAgentConfig,
 };
 
 pub(crate) struct Provider {

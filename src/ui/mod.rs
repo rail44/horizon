@@ -4,6 +4,7 @@
 //! UI building blocks that are intentionally domain-neutral and reused across
 //! multiple domain views.
 
+pub(crate) mod fonts;
 pub(crate) mod list_row;
 pub(crate) mod selectable_list;
 pub(crate) mod theme;

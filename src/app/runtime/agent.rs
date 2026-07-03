@@ -4,11 +4,11 @@ use floem::ext_event::create_signal_from_channel;
 use floem::prelude::*;
 use floem::reactive::create_effect;
 
+use crate::agent::config::{AgentConfig, AgentPersistenceConfig};
 use crate::agent::persistence::event_log::{read, WriterHandle};
 use crate::agent::persistence::projection::duckdb::Store;
 use crate::agent::tools::process_agent_provider_event;
 use crate::agent::{contract as agent, frame::AgentFrame, live::LiveState};
-use crate::agent_config::{AgentConfig, AgentPersistenceConfig};
 use crate::session::{Frames, Registry, SessionId};
 use crate::workspace::Workspace;
 

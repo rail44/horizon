@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use floem::peniko::kurbo::{Point, Size};
 use floem::prelude::*;
 
-use crate::agent_config::AgentConfig;
+use crate::agent::config::AgentConfig;
 use crate::control_surface::ControlMode;
 use crate::session::{Frames, Registry};
 use crate::workspace::{AgentDrafts, PaneFocusRequests, Workspace, MAX_VISIBLE_PANES};

@@ -1,9 +1,9 @@
 use crate::agent::contract::Command;
 use crate::agent::frame::AgentFrame;
+use crate::app::keymap::is_palette_open_key;
 use crate::control_surface::{
     handle_control_key, open_palette, ControlInputState, ControlMode, OpenPaletteState,
 };
-use crate::input::is_palette_open_key;
 use crate::terminal::TerminalFrame;
 use crate::ui::theme;
 use crate::workspace::{

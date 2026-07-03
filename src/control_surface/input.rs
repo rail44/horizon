@@ -1,6 +1,6 @@
 use crate::app::command_actions::CommandActionState;
+use crate::app::keymap::palette_accepts_text_input;
 use crate::control_surface::ControlMode;
-use crate::input::palette_accepts_text_input;
 use crate::workspace::Workspace;
 use floem::keyboard::{Key, KeyEvent, NamedKey};
 use floem::prelude::*;

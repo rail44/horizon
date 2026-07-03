@@ -1,5 +1,5 @@
 use crate::agent::contract::ToolCallId;
-use crate::fonts::HORIZON_FONT_FAMILY;
+use crate::ui::fonts::HORIZON_FONT_FAMILY;
 use floem::prelude::*;
 use floem::{
     action::set_ime_cursor_area,

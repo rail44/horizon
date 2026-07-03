@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use crossbeam_channel::{Receiver, Sender};
 
-use crate::agent_config::AgentConfig;
+use crate::agent::config::AgentConfig;
 use crate::session::SessionId;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]

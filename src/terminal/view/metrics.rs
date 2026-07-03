@@ -1,4 +1,4 @@
-use crate::fonts::HORIZON_FONT_FAMILY;
+use crate::ui::fonts::HORIZON_FONT_FAMILY;
 use floem::{
     peniko::Color,
     text::{Attrs, AttrsList, FamilyOwned, TextLayout},
