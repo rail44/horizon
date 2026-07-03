@@ -51,14 +51,11 @@ fn tab_chip(workspace: RwSignal<Workspace>, index: usize) -> impl IntoView {
 
     h_stack((
         label(title).style(|s| s.max_width(170).font_size(12).color(theme::text_primary())),
-        chrome_close_button(
-            move || closeable(),
-            move || {
-                workspace.update(|ws| {
-                    ws.close_tab_index(index);
-                });
-            },
-        ),
+        chrome_close_button(closeable, move || {
+            workspace.update(|ws| {
+                ws.close_tab_index(index);
+            });
+        }),
     ))
     .on_click_stop(move |_| {
         workspace.update(|ws| {

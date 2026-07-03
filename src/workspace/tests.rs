@@ -298,10 +298,10 @@ fn close_active_tab_activates_neighbor() {
     workspace.open_tab(PaneKind::Agent, None);
     workspace.open_tab(PaneKind::Terminal, Some(SessionId::new()));
 
-    assert_eq!(workspace.tab_summaries()[2].active, true);
+    assert!(workspace.tab_summaries()[2].active);
     assert_eq!(workspace.close_tab_index(2).len(), 1);
     assert_eq!(workspace.tab_count(), 2);
-    assert_eq!(workspace.tab_summaries()[1].active, true);
+    assert!(workspace.tab_summaries()[1].active);
     assert_eq!(workspace.active_title(), "AI Agent");
 }
 

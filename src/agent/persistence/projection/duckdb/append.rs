@@ -14,7 +14,7 @@ use crate::session::SessionId;
 
 use super::Store;
 #[cfg(test)]
-use super::{session_id_text, AgentStoredEvent, AppendEvent};
+use super::{projection::EventRecordRef, session_id_text, AgentStoredEvent, AppendEvent};
 
 impl Store {
     #[cfg(test)]
@@ -56,15 +56,12 @@ impl Store {
         )?;
 
         self.upsert_session(&session_id_text, provider_id_text.as_deref(), sequence)?;
-        self.project_event(
-            &event_id,
-            &session_id_text,
-            record.turn_id.as_deref(),
-            provider_id_text.as_deref(),
+        self.project_event(EventRecordRef {
+            event_id: &event_id,
+            session_id: &session_id_text,
             sequence,
-            &event_kind,
-            &record.event,
-        )?;
+            event: &record.event,
+        })?;
 
         Ok(AgentStoredEvent {
             event_id,

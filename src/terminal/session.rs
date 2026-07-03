@@ -8,7 +8,7 @@ use thiserror::Error;
 pub(crate) use self::contract::{TerminalCommand, TerminalUpdate};
 #[cfg(test)]
 pub(crate) use self::environment::terminal_command;
-use self::runtime::{read_pty, run_terminal_core, run_writer};
+use self::runtime::{read_pty, run_terminal_core, run_writer, CoreReceivers, CoreSenders};
 use super::core::TerminalCore;
 use super::types::TerminalSize;
 
@@ -76,31 +76,26 @@ impl TerminalSession {
             read_pty(&mut *reader, pty_tx, read_update_tx);
         });
         thread::spawn(move || {
-            run_terminal_core(
-                size,
-                pty_rx,
+            let receivers = CoreReceivers {
                 resize_rx,
                 scroll_rx,
                 mouse_rx,
                 paste_rx,
                 key_rx,
                 selection_rx,
-                response_tx,
-                update_tx,
-            );
+            };
+            run_terminal_core(size, pty_rx, receivers, response_tx, update_tx);
         });
         thread::spawn(move || {
-            run_writer(
-                master,
-                &mut *writer,
-                command_rx,
+            let senders = CoreSenders {
                 resize_tx,
                 scroll_tx,
                 mouse_tx,
                 paste_tx,
                 key_tx,
                 selection_tx,
-            );
+            };
+            run_writer(master, &mut *writer, command_rx, senders);
         });
 
         Ok(Self {

@@ -14,7 +14,7 @@ pub(super) fn draw_block_element(
 ) {
     let color = Color::rgb8(fg[0], fg[1], fg[2]);
     match block {
-        BlockElement::Full => cx.fill(&expanded_rect(cell_rect), &color, 0.0),
+        BlockElement::Full => cx.fill(&expanded_rect(cell_rect), color, 0.0),
         BlockElement::UpperFraction(eighths) => {
             let rect = Rect::new(
                 cell_rect.x0,
@@ -22,7 +22,7 @@ pub(super) fn draw_block_element(
                 cell_rect.x1,
                 cell_rect.y0 + cell_rect.height() * fraction(eighths),
             );
-            cx.fill(&expanded_rect(rect), &color, 0.0);
+            cx.fill(&expanded_rect(rect), color, 0.0);
         }
         BlockElement::LowerFraction(eighths) => {
             let rect = Rect::new(
@@ -31,7 +31,7 @@ pub(super) fn draw_block_element(
                 cell_rect.x1,
                 cell_rect.y1,
             );
-            cx.fill(&expanded_rect(rect), &color, 0.0);
+            cx.fill(&expanded_rect(rect), color, 0.0);
         }
         BlockElement::LeftFraction(eighths) => {
             let rect = Rect::new(
@@ -40,7 +40,7 @@ pub(super) fn draw_block_element(
                 cell_rect.x0 + cell_rect.width() * fraction(eighths),
                 cell_rect.y1,
             );
-            cx.fill(&expanded_rect(rect), &color, 0.0);
+            cx.fill(&expanded_rect(rect), color, 0.0);
         }
         BlockElement::RightFraction(eighths) => {
             let rect = Rect::new(
@@ -49,7 +49,7 @@ pub(super) fn draw_block_element(
                 cell_rect.x1,
                 cell_rect.y1,
             );
-            cx.fill(&expanded_rect(rect), &color, 0.0);
+            cx.fill(&expanded_rect(rect), color, 0.0);
         }
         BlockElement::Quadrants {
             upper_left,
@@ -62,28 +62,28 @@ pub(super) fn draw_block_element(
             if upper_left {
                 cx.fill(
                     &expanded_rect(Rect::new(cell_rect.x0, cell_rect.y0, mid_x, mid_y)),
-                    &color,
+                    color,
                     0.0,
                 );
             }
             if upper_right {
                 cx.fill(
                     &expanded_rect(Rect::new(mid_x, cell_rect.y0, cell_rect.x1, mid_y)),
-                    &color,
+                    color,
                     0.0,
                 );
             }
             if lower_left {
                 cx.fill(
                     &expanded_rect(Rect::new(cell_rect.x0, mid_y, mid_x, cell_rect.y1)),
-                    &color,
+                    color,
                     0.0,
                 );
             }
             if lower_right {
                 cx.fill(
                     &expanded_rect(Rect::new(mid_x, mid_y, cell_rect.x1, cell_rect.y1)),
-                    &color,
+                    color,
                     0.0,
                 );
             }

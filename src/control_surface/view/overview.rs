@@ -40,7 +40,7 @@ pub(crate) fn workspace_overview(state: WorkspaceOverviewState) -> impl IntoView
     let overview_selection = workspace_control.overview_selection;
     let palette_focus_request = state.palette_focus_request;
 
-    let items = create_memo(move |_| workspace.with(|ws| overview_items(ws)));
+    let items = create_memo(move |_| workspace.with(overview_items));
 
     let list = selectable_list(
         move || items.with(|items| items.len()),

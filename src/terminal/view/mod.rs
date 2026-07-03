@@ -246,7 +246,7 @@ impl View for TerminalTextView {
                 if cell.bg != [24, 27, 32] {
                     cx.fill(
                         &expanded_rect(bg_rect),
-                        &Color::rgb8(cell.bg[0], cell.bg[1], cell.bg[2]),
+                        Color::rgb8(cell.bg[0], cell.bg[1], cell.bg[2]),
                         0.0,
                     );
                 }
@@ -286,7 +286,7 @@ impl View for TerminalTextView {
                     let preedit_width = preedit.columns.max(1).min(max_cols - cursor.col);
                     let preedit_rect =
                         Rect::new(x, y, x + preedit_width as f64 * cell_width, y + line_height);
-                    cx.fill(&preedit_rect, &Color::rgb8(52, 58, 70), 0.0);
+                    cx.fill(&preedit_rect, Color::rgb8(52, 58, 70), 0.0);
                     cx.draw_text(&preedit.text, Point::new(x, y));
                     let underline = Rect::new(
                         x,
@@ -294,10 +294,10 @@ impl View for TerminalTextView {
                         x + preedit_width as f64 * cell_width,
                         y + line_height - 1.0,
                     );
-                    cx.fill(&underline, &Color::rgb8(132, 220, 198), 0.0);
+                    cx.fill(&underline, Color::rgb8(132, 220, 198), 0.0);
                 } else {
                     let rect = Rect::new(x, y, x + cell_width, y + line_height);
-                    cx.fill(&rect, &Color::rgba8(132, 220, 198, 150), 0.0);
+                    cx.fill(&rect, Color::rgba8(132, 220, 198, 150), 0.0);
                 }
             }
         }

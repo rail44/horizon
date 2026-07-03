@@ -54,7 +54,7 @@ impl WriterHandle {
             *next_sequence += 1;
         }
         self.tx
-            .send(AgentEventLogWriterCommand::Append(record))
+            .send(AgentEventLogWriterCommand::Append(Box::new(record)))
             .context("enqueue agent event log record")
     }
 
@@ -69,7 +69,7 @@ impl WriterHandle {
 }
 
 enum AgentEventLogWriterCommand {
-    Append(Record),
+    Append(Box<Record>),
     #[cfg(test)]
     Flush(Sender<Result<()>>),
 }

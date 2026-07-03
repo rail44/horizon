@@ -21,3 +21,6 @@ tokio = { version = "1.52", features = ["rt-multi-thread"] }
 unicode-width = "0.2"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 wasmtime = "46.0.1"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

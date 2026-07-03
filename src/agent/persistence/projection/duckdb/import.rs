@@ -3,7 +3,9 @@ use duckdb::params;
 
 use crate::agent::persistence::event_log::Record;
 
-use super::{schema::CLEAR_ALL_AGENT_STATE_SQL, session_id_text, Store};
+use super::{
+    projection::EventRecordRef, schema::CLEAR_ALL_AGENT_STATE_SQL, session_id_text, Store,
+};
 
 impl Store {
     pub(crate) fn replace_from_event_log_records(
@@ -58,15 +60,12 @@ impl Store {
         )?;
 
         self.upsert_session(&session_id_text, provider_id_text.as_deref(), sequence)?;
-        self.project_event(
-            &record.event_id,
-            &session_id_text,
-            record.turn_id.as_deref(),
-            provider_id_text.as_deref(),
+        self.project_event(EventRecordRef {
+            event_id: &record.event_id,
+            session_id: &session_id_text,
             sequence,
-            &record.event_kind,
-            &record.event,
-        )?;
+            event: &record.event,
+        })?;
         Ok(())
     }
 }

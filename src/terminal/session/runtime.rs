@@ -34,18 +34,39 @@ pub(super) fn read_pty(
     }
 }
 
+pub(super) struct CoreReceivers {
+    pub(super) resize_rx: Receiver<TerminalSize>,
+    pub(super) scroll_rx: Receiver<TerminalScroll>,
+    pub(super) mouse_rx: Receiver<TerminalMouseReport>,
+    pub(super) paste_rx: Receiver<String>,
+    pub(super) key_rx: Receiver<(KeyCode, Modifiers, bool)>,
+    pub(super) selection_rx: Receiver<SelectionCommand>,
+}
+
+pub(super) struct CoreSenders {
+    pub(super) resize_tx: Sender<TerminalSize>,
+    pub(super) scroll_tx: Sender<TerminalScroll>,
+    pub(super) mouse_tx: Sender<TerminalMouseReport>,
+    pub(super) paste_tx: Sender<String>,
+    pub(super) key_tx: Sender<(KeyCode, Modifiers, bool)>,
+    pub(super) selection_tx: Sender<SelectionCommand>,
+}
+
 pub(super) fn run_terminal_core(
     size: TerminalSize,
     pty_rx: Receiver<Vec<u8>>,
-    resize_rx: Receiver<TerminalSize>,
-    scroll_rx: Receiver<TerminalScroll>,
-    mouse_rx: Receiver<TerminalMouseReport>,
-    paste_rx: Receiver<String>,
-    key_rx: Receiver<(KeyCode, Modifiers, bool)>,
-    selection_rx: Receiver<SelectionCommand>,
+    receivers: CoreReceivers,
     command_tx: Sender<TerminalCommand>,
     update_tx: Sender<TerminalUpdate>,
 ) {
+    let CoreReceivers {
+        resize_rx,
+        scroll_rx,
+        mouse_rx,
+        paste_rx,
+        key_rx,
+        selection_rx,
+    } = receivers;
     let mut core = TerminalCore::new(size);
 
     loop {
@@ -136,13 +157,16 @@ pub(super) fn run_writer(
     master: Box<dyn MasterPty + Send>,
     writer: &mut dyn Write,
     command_rx: Receiver<TerminalCommand>,
-    resize_tx: Sender<TerminalSize>,
-    scroll_tx: Sender<TerminalScroll>,
-    mouse_tx: Sender<TerminalMouseReport>,
-    paste_tx: Sender<String>,
-    key_tx: Sender<(KeyCode, Modifiers, bool)>,
-    selection_tx: Sender<SelectionCommand>,
+    senders: CoreSenders,
 ) {
+    let CoreSenders {
+        resize_tx,
+        scroll_tx,
+        mouse_tx,
+        paste_tx,
+        key_tx,
+        selection_tx,
+    } = senders;
     while let Ok(command) = command_rx.recv() {
         match command {
             TerminalCommand::Input(bytes) => {

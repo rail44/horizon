@@ -620,7 +620,7 @@ mod tests {
     }
 
     fn bench_delta_event(index: usize) -> Event {
-        if index % 2 == 0 {
+        if index.is_multiple_of(2) {
             Event::ReasoningDelta(MessageDelta {
                 role: MessageRole::Assistant,
                 text: format!("reasoning delta {index}\n"),
@@ -643,7 +643,7 @@ mod tests {
                 role: MessageRole::Assistant,
                 text: format!("thinking chunk {index}\n"),
             }),
-            3 | 4 | 5 => Event::AssistantTextDelta(MessageDelta {
+            3..=5 => Event::AssistantTextDelta(MessageDelta {
                 role: MessageRole::Assistant,
                 text: format!("assistant chunk {index}\n"),
             }),

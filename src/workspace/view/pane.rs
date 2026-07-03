@@ -176,10 +176,9 @@ pub(super) fn pane_view(
     })
     .on_event(EventListener::KeyDown, move |event| {
         if let Event::KeyDown(key_event) = event {
-            if palette_open.get_untracked() {
-                if handle_control_key(key_event, control_input.clone()) {
-                    return EventPropagation::Stop;
-                }
+            if palette_open.get_untracked() && handle_control_key(key_event, control_input.clone())
+            {
+                return EventPropagation::Stop;
             }
 
             if is_palette_open_key(key_event) {

@@ -11,6 +11,13 @@ use super::Store;
 #[cfg(test)]
 use super::{schema::PROJECTION_TABLES, session_id_text};
 
+pub(super) struct EventRecordRef<'a> {
+    pub(super) event_id: &'a str,
+    pub(super) session_id: &'a str,
+    pub(super) sequence: i64,
+    pub(super) event: &'a Event,
+}
+
 impl Store {
     #[cfg(test)]
     pub(crate) fn rebuild_projections(&self) -> Result<()> {
@@ -26,15 +33,12 @@ impl Store {
         let events = self.events_for_session(session_id)?;
         self.clear_projections_for_session(&session_id_text)?;
         for record in events {
-            self.project_event(
-                &record.event_id,
-                &session_id_text,
-                record.turn_id.as_deref(),
-                record.provider_id.as_ref().map(|id| id.0.as_str()),
-                record.sequence,
-                &record.event_kind,
-                &record.event,
-            )?;
+            self.project_event(EventRecordRef {
+                event_id: &record.event_id,
+                session_id: &session_id_text,
+                sequence: record.sequence,
+                event: &record.event,
+            })?;
         }
         Ok(())
     }
@@ -50,16 +54,13 @@ impl Store {
         Ok(())
     }
 
-    pub(super) fn project_event(
-        &self,
-        event_id: &str,
-        session_id: &str,
-        _turn_id: Option<&str>,
-        _provider_id: Option<&str>,
-        sequence: i64,
-        _event_kind: &str,
-        event: &Event,
-    ) -> Result<()> {
+    pub(super) fn project_event(&self, record: EventRecordRef) -> Result<()> {
+        let EventRecordRef {
+            event_id,
+            session_id,
+            sequence,
+            event,
+        } = record;
         match event {
             Event::MessageCommitted(message) => {
                 self.insert_message(event_id, session_id, sequence, message, false)

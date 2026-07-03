@@ -93,7 +93,7 @@ fn transcript_block_view(
     let block_for_label = block.clone();
 
     h_stack((
-        label(|| String::new()).style(move |s| {
+        label(String::new).style(move |s| {
             if tone == TranscriptTone::User {
                 s.flex_basis(0.0).flex_grow(1.0).min_width(40.0)
             } else {
@@ -101,7 +101,7 @@ fn transcript_block_view(
             }
         }),
         v_stack((
-            label(move || block_label(&block_for_label, expanded.get()))
+            label(move || block_label(&block_for_label))
                 .on_click_stop(move |_| {
                     if tone == TranscriptTone::Thinking {
                         expanded.update(|expanded| *expanded = !*expanded);
