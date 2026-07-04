@@ -64,6 +64,42 @@ impl Provider for MockProvider {
                             .into(),
                         );
                         let lower_text = text.to_ascii_lowercase();
+                        if lower_text.contains("streaming tool") {
+                            // Manual test hook for tool-call-argument
+                            // streaming feedback (see `ToolCallProgressBuffer`
+                            // in the rig provider): simulates a slow-to-
+                            // stream tool call by emitting a few
+                            // `ToolCallProgress` ticks — first the tool name,
+                            // then growing byte counts — before the real
+                            // `ToolCallRequested`, so the pane header/
+                            // transcript "preparing a tool call…" feedback is
+                            // exercisable without a network provider.
+                            let call_id = ToolCallId("mock-streaming-tool-1".to_string());
+                            pending_tool_call = Some(call_id.clone());
+                            for (bytes, tool_id) in [
+                                (0usize, Some("mock.approval_required".to_string())),
+                                (64, None),
+                                (512, None),
+                            ] {
+                                let _ = events_tx.send(ProviderEvent::tool_call_progress(
+                                    ToolCallProgress {
+                                        key: call_id.0.clone(),
+                                        tool_id,
+                                        bytes,
+                                    },
+                                ));
+                                thread::sleep(MOCK_STREAM_CHUNK_TICK);
+                            }
+                            let _ = events_tx.send(
+                                Event::ToolCallRequested(ToolCallRequest {
+                                    call_id,
+                                    tool_id: "mock.approval_required".to_string(),
+                                    input: serde_json::json!({ "message": text }),
+                                })
+                                .into(),
+                            );
+                            continue;
+                        }
                         if lower_text.contains("snapshot") {
                             let call_id = ToolCallId("workspace-snapshot-1".to_string());
                             pending_tool_call = Some(call_id.clone());

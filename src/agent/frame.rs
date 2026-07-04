@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use crate::agent::contract::*;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -15,8 +17,56 @@ pub(crate) enum AgentFrameItem {
     ToolCallStarted(ToolCallId),
     ToolCallFinished(ToolCallResult),
     ApprovalRequested(ApprovalRequest),
+    /// Ephemeral tool-call-argument-streaming progress (see
+    /// [`ToolCallProgress`]): folded in place by
+    /// [`apply_tool_call_progress_to_frame`] while arguments stream, and
+    /// superseded in place once the real `ToolCallRequested` arrives (see
+    /// the `Event::ToolCallRequested` arm in
+    /// [`apply_agent_event_to_frame`]). Never produced by
+    /// `agent_frame_from_events`/persisted replay — it never reaches the
+    /// event log in the first place (`ProviderEvent::tool_call_progress`).
+    ToolCallPreparing(ToolCallProgress),
     Error(Error),
     Exited(Exit),
+}
+
+/// Tracks how long an [`AgentFrame`]'s `state` has held its current value,
+/// for pane headers that show elapsed time in the current state (see
+/// `docs/ux-principles.md`'s Persistent UI Requirement to show pane state).
+///
+/// `AgentFrame` itself doesn't carry this: its two-field shape is relied on
+/// by callers that construct it as a plain struct literal, so timestamping
+/// lives in this sidecar instead — callers that need it per session (see
+/// `session::Frames`) keep one alongside the frame and call [`Self::advance`]
+/// every time they observe a new frame.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct StateEntry {
+    pub(crate) state: Option<SessionState>,
+    entered_at: Instant,
+}
+
+impl StateEntry {
+    pub(crate) fn initial(state: Option<SessionState>) -> Self {
+        Self {
+            state,
+            entered_at: Instant::now(),
+        }
+    }
+
+    /// Returns the entry that should be current after observing `state`:
+    /// unchanged (same `entered_at`) if `state` matches, otherwise a fresh
+    /// entry timestamped now.
+    pub(crate) fn advance(self, state: Option<SessionState>) -> Self {
+        if self.state == state {
+            self
+        } else {
+            Self::initial(state)
+        }
+    }
+
+    pub(crate) fn entered_at(&self) -> Instant {
+        self.entered_at
+    }
 }
 
 impl AgentFrame {
@@ -197,6 +247,17 @@ pub(crate) fn apply_agent_event_to_frame(frame: &mut AgentFrame, event: &Event) 
             frame.items.push(AgentFrameItem::Message(message.clone()));
         }
         Event::ToolCallRequested(request) => {
+            // Supersede a pending `ToolCallPreparing` progress item in
+            // place, the same way `MessageCommitted` above replaces a
+            // streaming `AssistantTextDelta` — otherwise the ephemeral
+            // "preparing…" block would linger in the transcript right next
+            // to the real tool-call block it was standing in for.
+            if let Some(index) = last_current_turn_item_index(frame, |item| {
+                matches!(item, AgentFrameItem::ToolCallPreparing(_))
+            }) {
+                frame.items[index] = AgentFrameItem::ToolCallRequested(request.clone());
+                return;
+            }
             frame
                 .items
                 .push(AgentFrameItem::ToolCallRequested(request.clone()));
@@ -219,6 +280,30 @@ pub(crate) fn apply_agent_event_to_frame(frame: &mut AgentFrame, event: &Event) 
         Event::Error(error) => frame.items.push(AgentFrameItem::Error(error.clone())),
         Event::Exited(exit) => frame.items.push(AgentFrameItem::Exited(exit.clone())),
     }
+}
+
+/// Folds one [`ToolCallProgress`] tick into the frame: updates the matching
+/// in-flight `ToolCallPreparing` item in place (by `key`) if the current
+/// turn already has one, otherwise starts a new one. Deliberately mirrors
+/// the `ReasoningDelta`/`AssistantTextDelta` accumulation pattern in
+/// [`apply_agent_event_to_frame`] — `ToolCallPreparing` is not a turn
+/// boundary (see [`is_turn_boundary_item`]) for the same reason those
+/// aren't: this needs to keep matching the same item across repeated calls
+/// while it is the most recent thing in the turn.
+pub(crate) fn apply_tool_call_progress_to_frame(
+    frame: &mut AgentFrame,
+    progress: ToolCallProgress,
+) {
+    if let Some(AgentFrameItem::ToolCallPreparing(existing)) = last_current_turn_item_mut(
+        frame,
+        |item| matches!(item, AgentFrameItem::ToolCallPreparing(existing) if existing.key == progress.key),
+    ) {
+        *existing = progress;
+        return;
+    }
+    frame
+        .items
+        .push(AgentFrameItem::ToolCallPreparing(progress));
 }
 
 fn last_current_turn_item_mut(

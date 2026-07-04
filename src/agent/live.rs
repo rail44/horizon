@@ -4,7 +4,10 @@ use crate::agent::contract::{Event, ProviderEvent, ProviderId};
 use crate::agent::persistence::event_log;
 use crate::session::SessionId;
 
-use super::frame::{agent_frame_from_events, apply_agent_event_to_frame, AgentFrame};
+use super::frame::{
+    agent_frame_from_events, apply_agent_event_to_frame, apply_tool_call_progress_to_frame,
+    AgentFrame,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct State {
@@ -20,10 +23,26 @@ impl State {
         }
     }
 
-    pub(crate) fn extend_events(&mut self, events: impl IntoIterator<Item = Event>) -> AgentFrame {
+    /// Folds one batch of provider events into the frame. A
+    /// [`ProviderEvent`] carrying `tool_call_progress` is ephemeral
+    /// tool-call-argument-streaming feedback: it folds straight into
+    /// `frame.items` via `apply_tool_call_progress_to_frame` and — unlike
+    /// every other event — is never pushed to `self.events`, since it isn't
+    /// part of the conversation history replayed from that log (e.g.
+    /// `rig::mapping::rig_messages_from_horizon_events`). Every other event
+    /// goes through the normal `apply_agent_event_to_frame` reducer,
+    /// unchanged.
+    pub(crate) fn extend_provider_events(
+        &mut self,
+        events: impl IntoIterator<Item = ProviderEvent>,
+    ) -> AgentFrame {
         for event in events {
-            apply_agent_event_to_frame(&mut self.frame, &event);
-            self.events.push(event);
+            if let Some(progress) = event.tool_call_progress {
+                apply_tool_call_progress_to_frame(&mut self.frame, progress);
+                continue;
+            }
+            apply_agent_event_to_frame(&mut self.frame, &event.event);
+            self.events.push(event.event);
         }
         self.frame.clone()
     }
@@ -62,11 +81,20 @@ impl LiveState {
     ) -> AgentFrame {
         let events = events.into_iter().collect::<Vec<_>>();
         if let Some(persistence) = &self.persistence {
-            let _ = persistence.append_events(events.clone());
+            // Ephemeral tool-call progress (`tool_call_progress.is_some()`)
+            // never reaches the event log — this is the exclusion point:
+            // everything else about it (folding into the frame, skipping
+            // conversation history) happens in `State::extend_provider_events`.
+            let persistable = events
+                .iter()
+                .filter(|event| event.tool_call_progress.is_none())
+                .cloned()
+                .collect::<Vec<_>>();
+            if !persistable.is_empty() {
+                let _ = persistence.append_events(persistable);
+            }
         }
-        self.inner
-            .borrow_mut()
-            .extend_events(events.into_iter().map(|event| event.event))
+        self.inner.borrow_mut().extend_provider_events(events)
     }
 
     pub(crate) fn with_event_log(

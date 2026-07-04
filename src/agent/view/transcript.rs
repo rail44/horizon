@@ -72,6 +72,7 @@ pub(super) fn transcript_revision(frame: &AgentFrame) -> usize {
             AgentFrameItem::ToolCallRequested(request) => request.tool_id.len(),
             AgentFrameItem::ToolCallStarted(call_id) => call_id.0.len(),
             AgentFrameItem::ToolCallFinished(result) => result.call_id.0.len(),
+            AgentFrameItem::ToolCallPreparing(progress) => progress.bytes,
             AgentFrameItem::ApprovalRequested(request) => request.reason.len(),
             AgentFrameItem::Error(error) => error.message.len(),
             AgentFrameItem::Exited(exit) => exit.reason.len(),
@@ -112,6 +113,12 @@ fn transcript_block(id: usize, item: &AgentFrameItem) -> Option<TranscriptBlock>
             id,
             label: Some("tool result"),
             text: tool_result_summary(result.call_id.0.as_str(), &result.output),
+            tone: TranscriptTone::Tool,
+        }),
+        AgentFrameItem::ToolCallPreparing(progress) => Some(TranscriptBlock {
+            id,
+            label: Some("preparing"),
+            text: tool_call_preparing_summary(progress),
             tone: TranscriptTone::Tool,
         }),
         AgentFrameItem::ApprovalRequested(request) => Some(TranscriptBlock {
@@ -200,6 +207,24 @@ fn should_show_initial_reply_status(last_block: Option<&TranscriptBlock>) -> boo
         last_block.map(|block| block.tone),
         None | Some(TranscriptTone::User)
     )
+}
+
+/// Renders the ephemeral "arguments are still streaming in" feedback for a
+/// [`crate::agent::contract::ToolCallProgress`] tick — see
+/// `ToolCallProgressBuffer` in the rig provider for where these come from.
+fn tool_call_preparing_summary(progress: &crate::agent::contract::ToolCallProgress) -> String {
+    match &progress.tool_id {
+        Some(tool_id) => format!(
+            "preparing `{tool_id}`… ({} byte{} so far)",
+            progress.bytes,
+            if progress.bytes == 1 { "" } else { "s" }
+        ),
+        None => format!(
+            "preparing a tool call… ({} byte{} so far)",
+            progress.bytes,
+            if progress.bytes == 1 { "" } else { "s" }
+        ),
+    }
 }
 
 fn tool_result_summary(call_id: &str, output: &serde_json::Value) -> String {

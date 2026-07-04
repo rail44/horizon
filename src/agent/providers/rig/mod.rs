@@ -13,7 +13,7 @@ use completion::{
 use history::load_rig_history;
 use mapping::{rig_tool_result_message, rig_workspace_snapshot_call};
 use session::spawn_rig_session;
-use stream::{StreamDeltaBuffer, StreamDeltaKind};
+use stream::{StreamDeltaBuffer, StreamDeltaKind, ToolCallProgressBuffer};
 
 use crate::{
     agent::config::RigAgentConfig,

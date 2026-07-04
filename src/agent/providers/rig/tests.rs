@@ -126,9 +126,47 @@ fn converts_rig_tool_call_to_provider_event_with_payload() {
         [ProviderEvent {
             event: Event::ToolCallRequested(request),
             provider_payload: Some(payload),
+            ..
         }] if request.call_id.0 == "provider-call-1"
             && payload["schema"] == RIG_PROVIDER_PAYLOAD_SCHEMA
             && payload["rig"]["tool_call"]["id"] == "rig-workspace-snapshot-1"
+    ));
+}
+
+#[test]
+fn tool_call_delta_buffer_emits_progress_and_final_tool_call_still_works_unchanged() {
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let mut buffer = ToolCallProgressBuffer::new(tx);
+
+    // A name chunk flushes immediately, before any arguments have streamed.
+    buffer.note_name("internal-call-1", "fs.write".to_string());
+    let progress = recv(&rx)
+        .tool_call_progress
+        .expect("name chunk produces a progress tick");
+    assert_eq!(progress.key, "internal-call-1");
+    assert_eq!(progress.tool_id.as_deref(), Some("fs.write"));
+    assert_eq!(progress.bytes, 0);
+
+    // Argument chunks accumulate bytes; `flush_for_tests` bypasses the
+    // normal time-gated cadence so the test doesn't need to sleep.
+    buffer.note_delta("internal-call-1", "{\"path\":\"/tmp/x\"}");
+    buffer.flush_for_tests();
+    let progress = recv(&rx)
+        .tool_call_progress
+        .expect("delta chunk produces a progress tick");
+    assert_eq!(progress.tool_id.as_deref(), Some("fs.write"));
+    assert_eq!(progress.bytes, "{\"path\":\"/tmp/x\"}".len());
+
+    // The buffer is purely a side channel: a complete, non-streamed tool
+    // call still maps to a normal `Event::ToolCallRequested`, not a
+    // progress event.
+    let events = horizon_events_from_rig_message(RigMessage::Assistant {
+        id: None,
+        content: OneOrMany::one(AssistantContent::ToolCall(rig_workspace_snapshot_call())),
+    });
+    assert!(matches!(
+        events.as_slice(),
+        [Event::ToolCallRequested(request)] if request.tool_id == "workspace.snapshot"
     ));
 }
 

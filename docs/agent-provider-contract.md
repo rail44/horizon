@@ -149,6 +149,7 @@ Provider runtime transport uses an event envelope:
 struct ProviderEvent {
     event: Event,
     provider_payload: Option<serde_json::Value>,
+    tool_call_progress: Option<ToolCallProgress>,
 }
 ```
 
@@ -157,6 +158,23 @@ struct ProviderEvent {
 metadata. The Agent pane should render from `agent::contract::Event`, not from
 provider payload. This keeps the agent flow usable without the Horizon frontend
 while letting Horizon persist provider-specific details when present.
+
+`tool_call_progress` is a deliberate exception to "one envelope, one `Event`":
+it carries ephemeral tool-call-argument-streaming feedback (rig's
+`StreamedAssistantContent::ToolCallDelta` — a tool call's name and JSON
+arguments streamed piecemeal before it's complete) so the pane can show
+"preparing a tool call… (N bytes)" instead of going silent while a large
+argument (e.g. a multi-KB `fs.write`) streams in. It is **not** a new `Event`
+variant, on purpose: `Event` is matched exhaustively across the persisted
+event log (`persistence::event_log`, `persistence::projection::duckdb`), so
+every new variant is a durable schema commitment. `tool_call_progress`
+piggybacks on the existing `ProviderEvent` envelope instead — `event` is an
+unused placeholder whenever it's set — so this "kind of event" never touches
+that exhaustive matching or the log schema at all. `agent::live::LiveState`
+enforces both halves of that: it folds `tool_call_progress` straight into the
+`AgentFrame` (as an `AgentFrameItem::ToolCallPreparing`, superseded once the
+real `ToolCallRequested` arrives) and excludes it from what reaches the event
+log, so per-chunk ticks can't bloat persisted history.
 
 Persistence layers store provider payloads but do not interpret them.
 Provider-specific history reconstruction belongs to each provider. For example,

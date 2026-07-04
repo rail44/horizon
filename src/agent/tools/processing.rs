@@ -17,6 +17,19 @@ pub(crate) fn process_agent_provider_event(
     provider_event: impl Into<ProviderEvent>,
 ) -> Processing {
     let provider_event = provider_event.into();
+
+    // Ephemeral tool-call progress (`ProviderEvent::tool_call_progress`)
+    // carries a placeholder `event` — see its doc comment — so it must not
+    // reach the approval/bash-kill/tool-execution logic below, which
+    // assumes `event` is real. Pass it through untouched; `LiveState` folds
+    // it into the frame and keeps it out of the persisted log.
+    if provider_event.tool_call_progress.is_some() {
+        return Processing {
+            horizon_events: vec![provider_event],
+            provider_commands: Vec::new(),
+        };
+    }
+
     let event = provider_event.event.clone();
 
     // A provider-originated `ToolCallFinished` is the turn-cancellation (or
@@ -40,6 +53,7 @@ pub(crate) fn process_agent_provider_event(
                 ProviderEvent {
                     event,
                     provider_payload: provider_event.provider_payload.clone(),
+                    tool_call_progress: None,
                 }
             } else {
                 event.into()

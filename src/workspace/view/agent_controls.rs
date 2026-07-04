@@ -1,4 +1,6 @@
-use crate::agent::contract::ToolCallId;
+use std::time::Duration;
+
+use crate::agent::contract::{SessionState, ToolCallId};
 use crate::ui::fonts::HORIZON_FONT_FAMILY;
 use floem::prelude::*;
 use floem::{
@@ -135,6 +137,34 @@ pub(super) fn agent_cancel_action(
         })
 }
 
+/// Compact pane-header label for an agent session's current state, e.g.
+/// `"considering · 12s"` while a turn is in flight or plain `"cancelled"`
+/// once it's settled. `elapsed` is `Some` only while ticking makes sense
+/// (see the pane's `turn_in_flight`-gated timer) — otherwise the state name
+/// is shown on its own. Satisfies `docs/ux-principles.md`'s Persistent UI
+/// Requirement that the pane header show pane state.
+pub(super) fn agent_pane_status_label(state: SessionState, elapsed: Option<Duration>) -> String {
+    let label = agent_state_label(state);
+    match elapsed {
+        Some(elapsed) => format!("{label} · {}s", elapsed.as_secs()),
+        None => label.to_string(),
+    }
+}
+
+fn agent_state_label(state: SessionState) -> &'static str {
+    match state {
+        SessionState::Created => "starting",
+        SessionState::Running => "considering",
+        SessionState::WaitingForUser => "idle",
+        SessionState::WaitingForApproval => "waiting for approval",
+        SessionState::ToolRunning => "running tool",
+        SessionState::Cancelled => "cancelled",
+        SessionState::Completed => "done",
+        SessionState::Failed => "failed",
+        SessionState::Terminated => "terminated",
+    }
+}
+
 /// Gates the pane's pending approval behind its "cancel requested" latch.
 ///
 /// Once the user clicks Cancel, approve/deny must go dead immediately — not
@@ -189,8 +219,25 @@ fn agent_approval_button(
 
 #[cfg(test)]
 mod tests {
-    use super::gate_pending_approval;
-    use crate::agent::contract::ToolCallId;
+    use super::{agent_pane_status_label, gate_pending_approval};
+    use crate::agent::contract::{SessionState, ToolCallId};
+    use std::time::Duration;
+
+    #[test]
+    fn agent_pane_status_label_appends_elapsed_when_present() {
+        assert_eq!(
+            agent_pane_status_label(SessionState::Running, Some(Duration::from_secs(12))),
+            "considering · 12s"
+        );
+    }
+
+    #[test]
+    fn agent_pane_status_label_omits_elapsed_when_absent() {
+        assert_eq!(
+            agent_pane_status_label(SessionState::Cancelled, None),
+            "cancelled"
+        );
+    }
 
     #[test]
     fn cancel_request_gates_pending_approval() {

@@ -9,7 +9,7 @@ use rig_core::{
         AssistantContent, CompletionModel, Message, ToolDefinition,
     },
     providers::openai,
-    streaming::StreamedAssistantContent,
+    streaming::{StreamedAssistantContent, ToolCallDeltaContent},
     OneOrMany,
 };
 use tokio_util::sync::CancellationToken;
@@ -31,7 +31,7 @@ use super::{
         horizon_provider_events_from_rig_message, rig_tool_call_provider_payload,
         rig_tool_call_request,
     },
-    rig_workspace_snapshot_call, StreamDeltaBuffer, StreamDeltaKind,
+    rig_workspace_snapshot_call, StreamDeltaBuffer, StreamDeltaKind, ToolCallProgressBuffer,
 };
 
 /// What the session loop must remember about a requested tool call while
@@ -146,6 +146,7 @@ async fn rig_openai_turn_streaming(
         StreamDeltaKind::Reasoning,
         MessageRole::Assistant,
     );
+    let mut tool_call_progress = ToolCallProgressBuffer::new(events_tx.clone());
 
     loop {
         let chunk = tokio::select! {
@@ -198,8 +199,26 @@ async fn rig_openai_turn_streaming(
                 ));
                 tool_calls.push(tool_call);
             }
-            StreamedAssistantContent::ToolCallDelta { .. } | StreamedAssistantContent::Final(_) => {
-            }
+            // Tool-call arguments can arrive as many small chunks (a 4.7KB
+            // `fs.write` argument produced 13s of otherwise-silent
+            // streaming — see the design note on `ToolCallProgressBuffer`).
+            // These were previously dropped entirely; now they surface as
+            // coalesced, ephemeral `ToolCallProgress` ticks so the pane can
+            // show "preparing a tool call… (N bytes)" instead of going
+            // quiet mid-turn.
+            StreamedAssistantContent::ToolCallDelta {
+                internal_call_id,
+                content,
+                ..
+            } => match content {
+                ToolCallDeltaContent::Name(name) => {
+                    tool_call_progress.note_name(&internal_call_id, name);
+                }
+                ToolCallDeltaContent::Delta(delta) => {
+                    tool_call_progress.note_delta(&internal_call_id, &delta);
+                }
+            },
+            StreamedAssistantContent::Final(_) => {}
         }
     }
 

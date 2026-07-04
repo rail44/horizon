@@ -188,7 +188,7 @@ fn runtime_state_store_enqueues_events_to_jsonl_log() {
             serde_json::json!({ "delta": true }),
         ),
     ]);
-    writer.flush_for_tests().expect("flush");
+    writer.flush().expect("flush");
 
     let report = crate::agent::persistence::event_log::read(&path).expect("read log");
     assert_eq!(report.records.len(), 2);
@@ -204,6 +204,126 @@ fn runtime_state_store_enqueues_events_to_jsonl_log() {
     assert!(report.records[0].turn_id.is_some());
 
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn runtime_state_store_folds_tool_call_progress_but_excludes_it_from_the_jsonl_log() {
+    let path = std::env::temp_dir().join(format!(
+        "horizon-agent-runtime-progress-log-{}.jsonl",
+        uuid::Uuid::new_v4()
+    ));
+    let session_id = SessionId::new();
+    let writer =
+        crate::agent::persistence::event_log::WriterHandle::open(&path).expect("event log");
+    let store = crate::agent::live::LiveState::with_event_log(session_id, None, writer.clone());
+
+    let frame = store.extend_provider_events([
+        agent::ProviderEvent::tool_call_progress(agent::ToolCallProgress {
+            key: "call-1".to_string(),
+            tool_id: Some("fs.write".to_string()),
+            bytes: 128,
+        }),
+        agent::ProviderEvent::from(agent::Event::MessageCommitted(agent::Message {
+            role: agent::MessageRole::User,
+            text: "hello".to_string(),
+        })),
+    ]);
+    writer.flush().expect("flush");
+
+    // It folds into the frame as an ephemeral `ToolCallPreparing` item...
+    assert!(frame.items.iter().any(|item| matches!(
+        item,
+        AgentFrameItem::ToolCallPreparing(progress)
+            if progress.key == "call-1" && progress.bytes == 128
+    )));
+
+    // ...but only the real event reaches the persisted log.
+    let report = crate::agent::persistence::event_log::read(&path).expect("read log");
+    assert_eq!(report.records.len(), 1);
+    assert_eq!(report.records[0].event_kind, "message_committed");
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn tool_call_progress_updates_in_place_then_is_superseded_by_the_real_request() {
+    let mut frame = AgentFrame::empty();
+
+    apply_tool_call_progress_to_frame(
+        &mut frame,
+        agent::ToolCallProgress {
+            key: "call-1".to_string(),
+            tool_id: None,
+            bytes: 16,
+        },
+    );
+    assert_eq!(frame.items.len(), 1);
+    assert!(matches!(
+        &frame.items[0],
+        AgentFrameItem::ToolCallPreparing(progress) if progress.bytes == 16
+    ));
+
+    // A second tick for the same call updates the existing item in place
+    // rather than appending a new one.
+    apply_tool_call_progress_to_frame(
+        &mut frame,
+        agent::ToolCallProgress {
+            key: "call-1".to_string(),
+            tool_id: Some("fs.write".to_string()),
+            bytes: 96,
+        },
+    );
+    assert_eq!(frame.items.len(), 1);
+    assert!(matches!(
+        &frame.items[0],
+        AgentFrameItem::ToolCallPreparing(progress)
+            if progress.bytes == 96 && progress.tool_id.as_deref() == Some("fs.write")
+    ));
+
+    // Once the real tool call arrives, it replaces the preparing item
+    // rather than leaving it dangling in the transcript.
+    apply_agent_event_to_frame(
+        &mut frame,
+        &agent::Event::ToolCallRequested(agent::ToolCallRequest {
+            call_id: agent::ToolCallId("call-1".to_string()),
+            tool_id: "fs.write".to_string(),
+            input: serde_json::json!({ "path": "/tmp/x" }),
+        }),
+    );
+    assert_eq!(frame.items.len(), 1);
+    assert!(matches!(
+        &frame.items[0],
+        AgentFrameItem::ToolCallRequested(request) if request.tool_id == "fs.write"
+    ));
+}
+
+#[test]
+fn state_entry_advance_keeps_timestamp_until_state_changes() {
+    let entry = StateEntry::initial(Some(agent::SessionState::Running));
+    let entered_at = entry.entered_at();
+
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let same_state = entry.advance(Some(agent::SessionState::Running));
+    assert_eq!(same_state.entered_at(), entered_at);
+
+    let changed_state = entry.advance(Some(agent::SessionState::WaitingForUser));
+    assert!(changed_state.entered_at() > entered_at);
+    assert_eq!(
+        changed_state.state,
+        Some(agent::SessionState::WaitingForUser)
+    );
+}
+
+#[test]
+fn state_entry_elapsed_grows_with_time() {
+    // Mirrors how `workspace::view::pane` computes the pane header's
+    // elapsed-time display: `Instant::now() - entered_at`, driven by a
+    // periodic tick rather than a method on `StateEntry` itself.
+    let entry = StateEntry::initial(Some(agent::SessionState::ToolRunning));
+    std::thread::sleep(std::time::Duration::from_millis(15));
+
+    let elapsed = std::time::Instant::now().saturating_duration_since(entry.entered_at());
+    assert!(elapsed >= std::time::Duration::from_millis(10));
 }
 
 #[test]

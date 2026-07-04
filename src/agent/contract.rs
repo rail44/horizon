@@ -80,6 +80,38 @@ pub(crate) fn event_kind(event: &Event) -> &'static str {
 pub(crate) struct ProviderEvent {
     pub(crate) event: Event,
     pub(crate) provider_payload: Option<serde_json::Value>,
+    /// Ephemeral tool-call-argument-streaming progress (see
+    /// [`ToolCallProgress`]), set only via
+    /// [`ProviderEvent::tool_call_progress`]. `event` is an unused
+    /// placeholder whenever this is `Some`: `agent::live::State`'s reducer
+    /// folds this field straight into the frame and never reads `event` for
+    /// it, and `agent::live::LiveState::extend_provider_events` excludes it
+    /// from the persisted event log before it reaches `Appender`. Piggy-
+    /// backing on the existing `ProviderEvent` struct (rather than adding a
+    /// new `Event` variant) means this "kind of event" never has to touch
+    /// the event log's exhaustive `Event` matches in
+    /// `persistence::projection::duckdb`.
+    pub(crate) tool_call_progress: Option<ToolCallProgress>,
+}
+
+/// Tool-call-argument-streaming progress observed mid-turn, before the
+/// provider's tool call is complete (rig's
+/// `StreamedAssistantContent::ToolCallDelta`). Purely a UI feedback signal:
+/// never folded into conversation history and never persisted — see
+/// [`ProviderEvent::tool_call_progress`].
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub(crate) struct ToolCallProgress {
+    /// Rig's `internal_call_id`: stable across every delta for one tool
+    /// call from the very first chunk, unlike the provider's own tool-call
+    /// id which may not be known yet. Used only to fold repeated deltas for
+    /// the same call into a single frame item — this is not the eventual
+    /// `ToolCallId` the eventual `ToolCallRequested` carries.
+    pub(crate) key: String,
+    /// The tool/function name, once a `ToolCallDeltaContent::Name` chunk
+    /// has been observed for this call.
+    pub(crate) tool_id: Option<String>,
+    /// Cumulative argument bytes streamed so far for this call.
+    pub(crate) bytes: usize,
 }
 
 impl ProviderEvent {
@@ -87,6 +119,7 @@ impl ProviderEvent {
         Self {
             event,
             provider_payload: None,
+            tool_call_progress: None,
         }
     }
 
@@ -94,6 +127,19 @@ impl ProviderEvent {
         Self {
             event,
             provider_payload: Some(provider_payload),
+            tool_call_progress: None,
+        }
+    }
+
+    /// Wraps ephemeral tool-call progress for delivery over the same
+    /// `Sender<ProviderEvent>` used for real provider events
+    /// (`SessionHandle::events`) — see [`ToolCallProgress`] for why `event`
+    /// here is an unused placeholder rather than a new `Event` variant.
+    pub(crate) fn tool_call_progress(progress: ToolCallProgress) -> Self {
+        Self {
+            event: Event::StateChanged(SessionState::Running),
+            provider_payload: None,
+            tool_call_progress: Some(progress),
         }
     }
 }

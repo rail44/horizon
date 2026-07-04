@@ -21,7 +21,8 @@ use floem::{
 };
 
 use super::agent_controls::{
-    agent_approval_actions, agent_cancel_action, agent_composer, gate_pending_approval,
+    agent_approval_actions, agent_cancel_action, agent_composer, agent_pane_status_label,
+    gate_pending_approval,
 };
 use super::chrome::pane_header;
 use super::terminal_output::terminal_output;
@@ -122,10 +123,48 @@ pub(super) fn pane_view(
         };
         frames.with(|frames| frames.agent_frame(session_id).is_turn_in_flight())
     };
+    // Drives the pane header's elapsed-time display ("running · 12s") while
+    // a turn is in flight. Nothing else in the frame changes while the
+    // model is silently thinking/streaming tool arguments, so without this
+    // the header would never refresh during exactly the invisible-waiting
+    // windows it exists to make legible. `schedule_tick` re-arms itself via
+    // `exec_after` — floem's one-shot timer primitive — only as long as
+    // `turn_in_flight()` still holds, so it self-terminates the instant the
+    // turn ends rather than ticking forever in the background.
+    let now_tick = RwSignal::new(std::time::Instant::now());
+    fn schedule_tick(
+        now_tick: RwSignal<std::time::Instant>,
+        turn_in_flight: impl Fn() -> bool + 'static + Copy,
+    ) {
+        floem::action::exec_after(std::time::Duration::from_secs(1), move |_| {
+            now_tick.set(std::time::Instant::now());
+            if turn_in_flight() {
+                schedule_tick(now_tick, turn_in_flight);
+            }
+        });
+    }
+    create_effect(move |was_in_flight: Option<bool>| {
+        let in_flight = turn_in_flight();
+        if in_flight && was_in_flight != Some(true) {
+            schedule_tick(now_tick, turn_in_flight);
+        }
+        in_flight
+    });
+    let agent_status_text = move || {
+        if !is_agent() {
+            return None;
+        }
+        let state = agent_session_state()?;
+        let session_id = workspace.with(|ws| ws.visible_agent_session_id(index))?;
+        let entered_at = frames.with(|frames| frames.agent_state_entered_at(session_id))?;
+        let elapsed =
+            turn_in_flight().then(|| now_tick.get().saturating_duration_since(entered_at));
+        Some(agent_pane_status_label(state, elapsed))
+    };
     let agent_draft = agent_drafts[index];
 
     v_stack((
-        pane_header(title, active, closeable, move || {
+        pane_header(title, agent_status_text, active, closeable, move || {
             workspace.update(|ws| {
                 ws.close_visible_pane(index);
             });
