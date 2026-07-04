@@ -21,14 +21,16 @@ macOS. Instantiate/drop also gives safe hot reload. Consequences:
   line (the current pin is a non-LTS release outside its patch window).
 
 **2. Trusted but fast-churning code (the agent mechanism) → keep it behind
-the provider contract seam; in-process today, process boundary available
-later.** The agent mechanism (contract, providers, tools, persistence) is
-intended as a reusable asset that does not require Horizon as its frontend.
-The contract is already message-shaped and the event log is the source of
-truth, so moving the runtime out of process later (restart + replay) is a
-placement change, not a redesign — and an ACP adapter would let any
-frontend drive the same runtime. Near-term discipline: no Horizon-specific
-types leak into the agent core (Horizon-coupled tools like
+the provider contract seam; in-process today, process boundary decided as
+the next architecture milestone (2026-07-04).** The agent mechanism
+(contract, providers, tools, persistence) is intended as a reusable asset
+that does not require Horizon as its frontend. The contract is already
+message-shaped and the event log is the source of truth, so moving the
+runtime to a child process is a placement change, not a redesign — restart
+the child and replay from the log, and agent-code hot reload falls out for
+free (the daily-driver dogfooding requirement). An ACP adapter would let
+any frontend drive the same runtime. Near-term discipline: no
+Horizon-specific types leak into the agent core (Horizon-coupled tools like
 `workspace.snapshot` stay pluggable catalog entries). Future enforcement:
 split the mechanism into its own crate when convenient.
 
@@ -36,10 +38,18 @@ Dylib-based hot reload was considered and rejected for this tier: Rust has
 no stable ABI, unloading is unsound in practice, and a crash is not
 isolated — the worst fit for the fastest-changing component.
 
-**3. Trusted hot-path code (terminal emulation) → in-process native.**
+**3. Trusted hot-path code (terminal emulation) → native, in one process.**
 PTY output interpretation and grid rendering are latency- and
-bandwidth-sensitive; pushing frames across a wasm or process boundary buys
-little and costs a protocol. Iterate via normal rebuilds.
+bandwidth-sensitive; a wasm boundary inside that path buys little and costs
+a protocol. Revised 2026-07-04: an earlier version of this entry also
+dismissed a *process* boundary — that dismissal does not survive the
+daily-driver requirement. Sessions must outlive UI restarts, which points
+at a tmux-style split: a session daemon owns PTYs (and agent runtimes), a
+freely-restartable UI client renders. That is a session-survival argument,
+not a hot-reload one, and it is the long-term shape to design together
+with the delegation milestone (the daemon is also the natural home for
+delegated agent sessions). Until then: UI iteration happens in a dev
+instance nested inside the stable one.
 
 ## Dependency stances (from the 2026-07 audit)
 
