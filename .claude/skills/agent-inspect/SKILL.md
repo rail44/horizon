@@ -13,15 +13,17 @@ about *reading* that history, not the app's live runtime.
 ## Where the data lives
 
 - **JSONL event log** (the durable source of truth): path from the
-  `HORIZON_AGENT_EVENT_LOG` env var, falling back to `<temp dir>/horizon-agent-events.jsonl`
-  (commonly `/tmp/horizon-agent-events.jsonl` on Linux) — see
-  `src/agent/config.rs`'s `AgentPersistenceConfig`. One file, one background
-  writer thread, shared by every agent session in the process — sessions
-  interleave in it, distinguished by `session_id`.
+  `HORIZON_AGENT_EVENT_LOG` env var, then `config.toml`'s `[agent].event_log_path`,
+  falling back to `$XDG_DATA_HOME/horizon/agent-events.jsonl` (commonly
+  `~/.local/share/horizon/agent-events.jsonl` on Linux if `XDG_DATA_HOME` is
+  unset) — see `src/agent/config.rs`'s `AgentPersistenceConfig`. One file, one
+  background writer thread, shared by every agent session in the process —
+  sessions interleave in it, distinguished by `session_id`.
 - **DuckDB projection** (optional, rebuildable, *not* the source of truth):
-  exists only if `HORIZON_AGENT_STATE_DB` was set to a file path (conventionally
-  `*.duckdb`) when Horizon last started; unset means no DuckDB file at all.
-  Neither path has a `config.toml` key — both are env-var only.
+  exists only if `HORIZON_AGENT_STATE_DB` (or `config.toml`'s
+  `[agent].state_db_path`) was set to a file path (conventionally `*.duckdb`)
+  when Horizon last started; unset means no DuckDB file at all — this one has
+  no built-in default path.
 - **Bash tool output spill files**: every `bash` tool call writes its full,
   uncapped output to `<temp dir>/horizon-bash-<uuid>.log`, referenced by the
   tool result's `output_file` field — always, regardless of whether the
@@ -72,7 +74,7 @@ Always parse tolerantly first, then slurp for anything that needs
 cross-record work:
 
 ```sh
-LOG=/tmp/horizon-agent-events.jsonl   # or $HORIZON_AGENT_EVENT_LOG
+LOG=~/.local/share/horizon/agent-events.jsonl   # or $HORIZON_AGENT_EVENT_LOG
 
 # Sanity check: how many lines actually parse?
 jq -R 'fromjson? // empty' "$LOG" | jq -s 'length'

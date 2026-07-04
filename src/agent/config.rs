@@ -34,13 +34,27 @@ const RIG_MODEL_VAR: &str = "HORIZON_RIG_MODEL";
 const OPENAI_BASE_URL_VAR: &str = "OPENAI_BASE_URL";
 
 /// Overrides the path of the append-only agent event log (JSONL). Falls
-/// back to a fixed path under the OS temp directory.
+/// back to `$XDG_DATA_HOME/horizon/agent-events.jsonl` (see
+/// [`default_event_log_path_from`]). A leading `~/` is expanded against
+/// `$HOME`, same as a `[agent].event_log_path` value from the config file.
 const EVENT_LOG_PATH_VAR: &str = "HORIZON_AGENT_EVENT_LOG";
 
 /// Overrides the path of the DuckDB projection database used to replay
 /// per-session rig history. Unset means no persisted memory: sessions
-/// start with empty history and nothing is written.
+/// start with empty history and nothing is written. A leading `~/` is
+/// expanded against `$HOME`, same as `event_log_path` above.
 const STATE_DB_PATH_VAR: &str = "HORIZON_AGENT_STATE_DB";
+
+/// `$HOME`, read once per resolution call to expand a leading `~/` in a
+/// path-typed config value (`event_log_path`/`state_db_path`) and, absent
+/// `$XDG_DATA_HOME`, to build the event log's default path — see
+/// [`default_event_log_path_from`].
+const HOME_VAR: &str = "HOME";
+
+/// XDG base-directory spec's data-home var, used only for the event log's
+/// built-in default path (`AgentPersistenceConfig`'s `duckdb_path` has no
+/// built-in default at all — see [`STATE_DB_PATH_VAR`]'s doc comment).
+const XDG_DATA_HOME_VAR: &str = "XDG_DATA_HOME";
 
 // --- built-in defaults for the `[agent]` tuning knobs ----------------------
 //
@@ -252,37 +266,77 @@ impl AgentPersistenceConfig {
     }
 
     fn from_env_and_file(file: &RawConfig) -> Self {
+        let home = std::env::var(HOME_VAR).ok();
         Self {
             event_log_path: resolve_event_log_path(
-                std::env::var_os(EVENT_LOG_PATH_VAR).map(PathBuf::from),
+                std::env::var(EVENT_LOG_PATH_VAR).ok(),
                 file.agent.event_log_path.clone(),
+                std::env::var(XDG_DATA_HOME_VAR).ok(),
+                home.clone(),
             ),
             duckdb_path: resolve_state_db_path(
-                std::env::var_os(STATE_DB_PATH_VAR).map(PathBuf::from),
+                std::env::var(STATE_DB_PATH_VAR).ok(),
                 file.agent.state_db_path.clone(),
+                home,
             ),
         }
     }
 }
 
 /// Pure precedence resolution for the event log path: `HORIZON_AGENT_EVENT_LOG`
-/// wins, then the config file's `[agent].event_log_path`, then a fixed path
-/// under the OS temp directory. Kept free of I/O (the env read happens at
-/// the call site) for the same testability reason as [`resolve_model`].
-fn resolve_event_log_path(env_value: Option<PathBuf>, file_value: Option<String>) -> PathBuf {
+/// wins, then the config file's `[agent].event_log_path`, then
+/// [`default_event_log_path_from`]'s XDG-based built-in default. Both an env
+/// and a file value get a leading `~/` expanded against `home` (see
+/// `crate::config::expand_tilde`). Kept free of I/O (env/file reads happen
+/// at the call site) for the same testability reason as [`resolve_model`].
+fn resolve_event_log_path(
+    env_value: Option<String>,
+    file_value: Option<String>,
+    xdg_data_home: Option<String>,
+    home: Option<String>,
+) -> PathBuf {
     env_value
-        .or_else(|| file_value.map(PathBuf::from))
-        .unwrap_or_else(|| std::env::temp_dir().join("horizon-agent-events.jsonl"))
+        .or(file_value)
+        .map(|value| crate::config::expand_tilde(&value, home.as_deref()))
+        .unwrap_or_else(|| default_event_log_path_from(xdg_data_home, home))
+}
+
+/// The event log's built-in default when neither the env var nor the
+/// config file sets a path: `$XDG_DATA_HOME/horizon/agent-events.jsonl`,
+/// falling back to `~/.local/share/horizon/agent-events.jsonl` when
+/// `XDG_DATA_HOME` is unset or empty, and further to the OS temp dir
+/// (namespaced under a `horizon` subdirectory, so it doesn't collide with
+/// unrelated temp files) if even `$HOME` is unset. Durable across reboots
+/// in the common case — unlike the OS temp dir this replaced, which
+/// contradicted the event log's role as the source of truth for agent
+/// session history (see `agent::persistence`). The writer
+/// (`agent::persistence::event_log::writer`) already creates the path's
+/// parent directories on first write, so this can name a path that doesn't
+/// exist yet.
+fn default_event_log_path_from(xdg_data_home: Option<String>, home: Option<String>) -> PathBuf {
+    let non_empty = |value: Option<String>| value.filter(|value| !value.is_empty());
+    let data_home = match non_empty(xdg_data_home) {
+        Some(dir) => PathBuf::from(dir),
+        None => match non_empty(home) {
+            Some(home) => PathBuf::from(home).join(".local").join("share"),
+            None => std::env::temp_dir(),
+        },
+    };
+    data_home.join("horizon").join("agent-events.jsonl")
 }
 
 /// Same precedence as [`resolve_event_log_path`], for the DuckDB state
 /// path. `None` means "no persisted memory" — there is no built-in default
-/// path to fall back to.
+/// path to fall back to. Same tilde-expansion treatment as
+/// `resolve_event_log_path`.
 fn resolve_state_db_path(
-    env_value: Option<PathBuf>,
+    env_value: Option<String>,
     file_value: Option<String>,
+    home: Option<String>,
 ) -> Option<PathBuf> {
-    env_value.or_else(|| file_value.map(PathBuf::from))
+    env_value
+        .or(file_value)
+        .map(|value| crate::config::expand_tilde(&value, home.as_deref()))
 }
 
 /// `[agent]` tuning for the bash and fs tools — see each field's doc
@@ -507,18 +561,83 @@ mod tests {
     fn event_log_path_prefers_env_over_file_over_default() {
         assert_eq!(
             resolve_event_log_path(
-                Some(PathBuf::from("/env/log.jsonl")),
-                Some("/file/log.jsonl".to_string())
+                Some("/env/log.jsonl".to_string()),
+                Some("/file/log.jsonl".to_string()),
+                Some("/xdg/data".to_string()),
+                Some("/home/user".to_string()),
             ),
             PathBuf::from("/env/log.jsonl")
         );
         assert_eq!(
-            resolve_event_log_path(None, Some("/file/log.jsonl".to_string())),
+            resolve_event_log_path(
+                None,
+                Some("/file/log.jsonl".to_string()),
+                Some("/xdg/data".to_string()),
+                Some("/home/user".to_string()),
+            ),
             PathBuf::from("/file/log.jsonl")
         );
         assert_eq!(
-            resolve_event_log_path(None, None),
-            std::env::temp_dir().join("horizon-agent-events.jsonl")
+            resolve_event_log_path(None, None, Some("/xdg/data".to_string()), None),
+            PathBuf::from("/xdg/data/horizon/agent-events.jsonl")
+        );
+    }
+
+    #[test]
+    fn event_log_path_defaults_to_xdg_data_home_when_env_and_file_are_unset() {
+        assert_eq!(
+            default_event_log_path_from(
+                Some("/xdg/data".to_string()),
+                Some("/home/user".to_string())
+            ),
+            PathBuf::from("/xdg/data/horizon/agent-events.jsonl")
+        );
+    }
+
+    #[test]
+    fn event_log_path_falls_back_to_home_dot_local_share_without_xdg_data_home() {
+        assert_eq!(
+            default_event_log_path_from(None, Some("/home/user".to_string())),
+            PathBuf::from("/home/user/.local/share/horizon/agent-events.jsonl")
+        );
+        // An empty (but present) XDG_DATA_HOME is treated the same as unset.
+        assert_eq!(
+            default_event_log_path_from(Some(String::new()), Some("/home/user".to_string())),
+            PathBuf::from("/home/user/.local/share/horizon/agent-events.jsonl")
+        );
+    }
+
+    #[test]
+    fn event_log_path_falls_back_to_temp_dir_when_home_and_xdg_data_home_are_both_unset() {
+        assert_eq!(
+            default_event_log_path_from(None, None),
+            std::env::temp_dir()
+                .join("horizon")
+                .join("agent-events.jsonl")
+        );
+    }
+
+    #[test]
+    fn event_log_path_expands_leading_tilde_from_file_and_env_sources() {
+        assert_eq!(
+            resolve_event_log_path(
+                None,
+                Some("~/logs/agent-events.jsonl".to_string()),
+                None,
+                Some("/home/user".to_string()),
+            ),
+            PathBuf::from("/home/user/logs/agent-events.jsonl"),
+            "a config-file event_log_path must expand a leading ~/ against HOME"
+        );
+        assert_eq!(
+            resolve_event_log_path(
+                Some("~/logs/agent-events.jsonl".to_string()),
+                None,
+                None,
+                Some("/home/user".to_string()),
+            ),
+            PathBuf::from("/home/user/logs/agent-events.jsonl"),
+            "HORIZON_AGENT_EVENT_LOG must expand a leading ~/ against HOME too"
         );
     }
 
@@ -526,16 +645,41 @@ mod tests {
     fn state_db_path_prefers_env_over_file_and_is_none_by_default() {
         assert_eq!(
             resolve_state_db_path(
-                Some(PathBuf::from("/env/state.duckdb")),
-                Some("/file/state.duckdb".to_string())
+                Some("/env/state.duckdb".to_string()),
+                Some("/file/state.duckdb".to_string()),
+                Some("/home/user".to_string()),
             ),
             Some(PathBuf::from("/env/state.duckdb"))
         );
         assert_eq!(
-            resolve_state_db_path(None, Some("/file/state.duckdb".to_string())),
+            resolve_state_db_path(
+                None,
+                Some("/file/state.duckdb".to_string()),
+                Some("/home/user".to_string()),
+            ),
             Some(PathBuf::from("/file/state.duckdb"))
         );
-        assert_eq!(resolve_state_db_path(None, None), None);
+        assert_eq!(resolve_state_db_path(None, None, None), None);
+    }
+
+    #[test]
+    fn state_db_path_expands_leading_tilde_from_file_and_env_sources() {
+        assert_eq!(
+            resolve_state_db_path(
+                None,
+                Some("~/state/agent.duckdb".to_string()),
+                Some("/home/user".to_string()),
+            ),
+            Some(PathBuf::from("/home/user/state/agent.duckdb"))
+        );
+        assert_eq!(
+            resolve_state_db_path(
+                Some("~/state/agent.duckdb".to_string()),
+                None,
+                Some("/home/user".to_string()),
+            ),
+            Some(PathBuf::from("/home/user/state/agent.duckdb"))
+        );
     }
 
     #[test]
@@ -676,12 +820,40 @@ mod tests {
             parsed.agent.pane_status_tick_secs,
             Some(DEFAULT_PANE_STATUS_TICK_SECS)
         );
-        // `event_log_path`/`state_db_path` have no fixed built-in default
-        // worth documenting as a live value (the real default is "a temp
-        // path"/"no persisted memory"), so they ship commented out, same as
-        // [provider]'s `model`/`base_url` below.
+        // `event_log_path`/`state_db_path` ship commented out (the real
+        // default depends on the environment -- `$XDG_DATA_HOME`/`$HOME` for
+        // the former, "no persisted memory" for the latter -- so there's no
+        // single literal value worth showing "live"), same as [provider]'s
+        // `model`/`base_url` below.
+        //
+        // Strengthened past a plain `None` check: resolve the parsed value
+        // through the same precedence function production code uses
+        // (`resolve_event_log_path`/`resolve_state_db_path`, with no env
+        // override, since this test is only about the *file* value) and
+        // assert the result equals the real built-in default. This is what
+        // actually catches an active placeholder line like
+        // `event_log_path = "/path/to/horizon-agent-events.jsonl"`: such a
+        // line would parse to `Some(..)`, resolve to that literal path
+        // (after tilde-expansion, a no-op here), and mismatch the XDG-based
+        // default computed by `default_event_log_path_from` -- whereas a
+        // bare `None`-equality check on the raw field alone doesn't prove
+        // anything about what the value resolves to if a maintainer ever
+        // changes the placeholder without also updating a hardcoded `None`
+        // assertion.
         assert_eq!(parsed.agent.event_log_path, None);
+        assert_eq!(
+            resolve_event_log_path(None, parsed.agent.event_log_path.clone(), None, None),
+            default_event_log_path_from(None, None),
+            "config.example.toml's event_log_path must stay commented out (or, if ever \
+             made live, resolve to the real built-in default -- not a placeholder path)"
+        );
         assert_eq!(parsed.agent.state_db_path, None);
+        assert_eq!(
+            resolve_state_db_path(None, parsed.agent.state_db_path.clone(), None),
+            None,
+            "config.example.toml's state_db_path must stay commented out -- the built-in \
+             default is \"no persisted memory\" (None), not a placeholder path"
+        );
 
         // [provider]/[keybindings]/[theme] ship commented out in the example
         // (they layer on top of other defaults, not simple constants) —

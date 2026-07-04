@@ -135,6 +135,42 @@ fn load_from_path_parses_a_well_formed_file() {
     let _ = std::fs::remove_file(&path);
 }
 
+// --- tilde expansion -----------------------------------------------------
+
+#[test]
+fn expand_tilde_expands_a_leading_tilde_slash_against_home() {
+    assert_eq!(
+        expand_tilde("~/logs/agent-events.jsonl", Some("/home/user")),
+        PathBuf::from("/home/user/logs/agent-events.jsonl")
+    );
+}
+
+#[test]
+fn expand_tilde_leaves_values_without_a_leading_tilde_slash_unchanged() {
+    assert_eq!(
+        expand_tilde("/absolute/path", Some("/home/user")),
+        PathBuf::from("/absolute/path")
+    );
+    assert_eq!(
+        expand_tilde("relative/path", Some("/home/user")),
+        PathBuf::from("relative/path")
+    );
+    // A bare `~` (no trailing slash) is left alone -- only `~/` is expanded.
+    assert_eq!(expand_tilde("~", Some("/home/user")), PathBuf::from("~"));
+}
+
+#[test]
+fn expand_tilde_leaves_tilde_slash_unchanged_without_a_home() {
+    assert_eq!(
+        expand_tilde("~/logs/agent-events.jsonl", None),
+        PathBuf::from("~/logs/agent-events.jsonl")
+    );
+    assert_eq!(
+        expand_tilde("~/logs/agent-events.jsonl", Some("")),
+        PathBuf::from("~/logs/agent-events.jsonl")
+    );
+}
+
 #[test]
 fn a_file_with_only_some_knobs_set_leaves_the_rest_none() {
     let path = std::env::temp_dir().join(format!(

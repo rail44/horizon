@@ -88,16 +88,18 @@ stream_flush_chars = 320
 # elapsed-time display ("running · 12s") re-renders.
 pane_status_tick_secs = 1
 
-# Overrides the append-only agent event log (JSONL) path. Commented out: the
-# real default is a fixed path under the OS temp directory, not a value
-# worth documenting as "live". `HORIZON_AGENT_EVENT_LOG`, if set, wins over
-# this.
-# event_log_path = "/path/to/horizon-agent-events.jsonl"
+# Overrides the append-only agent event log (JSONL) path. Commented out:
+# the real default is $XDG_DATA_HOME/horizon/agent-events.jsonl, falling
+# back to ~/.local/share/horizon/agent-events.jsonl if XDG_DATA_HOME is
+# unset -- computed at startup, not a single literal value worth
+# hardcoding here as "live". `HORIZON_AGENT_EVENT_LOG`, if set, wins over
+# this. A leading "~/" (here or in the env var) is expanded against $HOME.
+# event_log_path = "~/.local/share/horizon/agent-events.jsonl"
 # Overrides the DuckDB projection database path used to replay per-session
 # rig history. Commented out: unset (here and via env) means no persisted
 # memory, which is the default. `HORIZON_AGENT_STATE_DB`, if set, wins over
-# this.
-# state_db_path = "/path/to/horizon-agent-state.duckdb"
+# this. Same "~/" expansion as event_log_path above.
+# state_db_path = "~/.local/share/horizon/agent-state.duckdb"
 
 # ---------------------------------------------------------------------------
 # [provider] — the built-in rig/OpenAI provider's model and base URL.
