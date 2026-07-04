@@ -1,12 +1,13 @@
 use std::sync::{Mutex, OnceLock};
+use std::thread;
 
-use crossbeam_channel::unbounded;
+use crossbeam_channel::{unbounded, Receiver};
 use floem::ext_event::create_signal_from_channel;
 use floem::prelude::*;
 use floem::reactive::create_effect;
 
 use crate::agent::config::{AgentConfig, AgentPersistenceConfig};
-use crate::agent::persistence::event_log::{read, ReadReport, WriterHandle};
+use crate::agent::persistence::event_log::{read, ReadReport, WriterHandle, WriterInit};
 use crate::agent::persistence::projection::duckdb::Store;
 use crate::agent::tools::{
     process_agent_provider_event, register_session_runtime, should_fold_completion, BashCompletion,
@@ -51,7 +52,6 @@ use crate::workspace::Workspace;
 /// the failure mode the evidence pointed to (two sessions, one process) and
 /// is out of scope here.
 static AGENT_EVENT_LOG_WRITER: OnceLock<Mutex<Option<WriterHandle>>> = OnceLock::new();
-static AGENT_DUCKDB_REBUILD_DONE: OnceLock<Mutex<bool>> = OnceLock::new();
 
 /// Flushes the process-global writer (if one was ever opened) so that
 /// records enqueued but not yet written survive a normal app exit. Wired
@@ -207,105 +207,143 @@ fn open_agent_runtime_state_store(
     agent_state_status: RwSignal<Option<String>>,
     persistence_config: &AgentPersistenceConfig,
 ) -> LiveState {
-    let event_log = match open_agent_event_log(persistence_config) {
-        Ok((writer, status, initial_read)) => {
-            let mut messages = Vec::new();
-            if let Some(status) = status {
-                messages.push(status);
+    match open_agent_event_log(persistence_config) {
+        Ok((writer, init_rx)) => {
+            if let Some(init_rx) = init_rx {
+                spawn_persistence_initialization(
+                    persistence_config.clone(),
+                    agent_state_status,
+                    init_rx,
+                );
             }
-            match rebuild_agent_duckdb_from_event_log_once(persistence_config, initial_read) {
-                Ok(Some(skipped_summary)) => {
-                    messages.push(format!("Agent event log: {skipped_summary}"));
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    messages.push(format!(
-                        "Agent DuckDB projection rebuild unavailable: {error}"
-                    ));
-                }
-            }
-            if !messages.is_empty() {
-                agent_state_status.set(Some(messages.join(" | ")));
-            }
-            Some(writer)
+            LiveState::with_event_log(session_id, Some(provider_id), writer)
         }
         Err(error) => {
             agent_state_status.set(Some(format!(
                 "Agent event log unavailable ({error}); persistence disabled"
             )));
-            None
+            LiveState::with_disabled_persistence()
         }
-    };
-
-    if let Some(event_log) = event_log {
-        LiveState::with_event_log(session_id, Some(provider_id), event_log)
-    } else {
-        LiveState::with_disabled_persistence()
     }
 }
 
-/// Opens the process-global event log writer, returning the `ReadReport`
-/// from the read `WriterHandle::open` performs to compute its starting
-/// sequence number — but only on the call that actually opens the file
-/// (`Some`); a call that hits the cache (`None`) reused an already-open
-/// writer and did no reading at all. The one caller,
-/// `open_agent_runtime_state_store`, threads this straight into
-/// `rebuild_agent_duckdb_from_event_log_once` so the DuckDB replay doesn't
-/// read the same file a second time right after this one read it.
+/// Opens the process-global event log writer, returning the receiver for
+/// its one-time startup-read outcome ([`WriterInit`]) — but only on the
+/// call that actually creates the writer (`Some`); a call that hits the
+/// cache (`None`) reused an already-open writer and has no new
+/// initialization to observe. `WriterHandle::open` never blocks the caller
+/// on the read itself (see its doc comment for the ordering guarantee), so
+/// this function — and therefore `open_agent_runtime_state_store` and
+/// `spawn_agent_session` above it — never performs the read on the
+/// caller's thread either. The one caller that gets `Some`,
+/// `open_agent_runtime_state_store`, hands the receiver to
+/// `spawn_persistence_initialization` to drive the DuckDB replay and the
+/// `agent_state_status` update once the background read completes.
 fn open_agent_event_log(
     persistence_config: &AgentPersistenceConfig,
-) -> anyhow::Result<(WriterHandle, Option<String>, Option<ReadReport>)> {
+) -> anyhow::Result<(WriterHandle, Option<Receiver<WriterInit>>)> {
     let writer_cell = AGENT_EVENT_LOG_WRITER.get_or_init(|| Mutex::new(None));
     let mut writer = writer_cell
         .lock()
         .map_err(|_| anyhow::anyhow!("agent event log writer lock poisoned"))?;
     if let Some(writer) = writer.as_ref() {
-        return Ok((writer.clone(), None, None));
+        return Ok((writer.clone(), None));
     }
 
     let path = persistence_config.event_log_path.clone();
-    let status = Some(format!("Agent event log: {}", path.display()));
-    let (handle, report) = WriterHandle::open(path)?;
+    let (handle, init_rx) = WriterHandle::open(path);
     *writer = Some(handle.clone());
-    Ok((handle, status, Some(report)))
+    Ok((handle, Some(init_rx)))
 }
 
-/// Runs [`rebuild_agent_duckdb_from_event_log`] at most once per process.
-/// Returns the skipped-line summary from that one rebuild (`Ok(None)` when
-/// either the rebuild was already done by an earlier call, or it ran and
-/// found nothing to skip).
-///
-/// `initial_read` is `open_agent_event_log`'s `ReadReport`, when it has one
-/// (i.e. this call is the one that actually opened the writer). Since that
-/// open and this rebuild are gated by separate `OnceLock`s but always
-/// happen together on the process's first `open_agent_runtime_state_store`
-/// call, `initial_read` is `Some` on precisely the call where a rebuild is
-/// about to actually run — `rebuild_agent_duckdb_from_event_log` still
-/// tolerates `None` by reading the file itself, purely as a defensive
-/// fallback should that alignment ever change.
-fn rebuild_agent_duckdb_from_event_log_once(
-    persistence_config: &AgentPersistenceConfig,
-    initial_read: Option<ReadReport>,
-) -> anyhow::Result<Option<String>> {
-    let rebuild_done = AGENT_DUCKDB_REBUILD_DONE.get_or_init(|| Mutex::new(false));
-    let mut rebuild_done = rebuild_done
-        .lock()
-        .map_err(|_| anyhow::anyhow!("agent DuckDB rebuild lock poisoned"))?;
-    if *rebuild_done {
-        return Ok(None);
-    }
+/// Kicked off exactly once per process, by the one call to
+/// `open_agent_event_log` that actually creates the writer (see its doc
+/// comment) — i.e. the process's first agent pane. Shows a "catching up"
+/// status immediately (synchronously, on the caller's thread — the UI
+/// thread, for every real caller, since `RwSignal::set` must only ever be
+/// touched from there) and then hands the rest off to a background
+/// thread: waiting for the writer's startup read to finish and running the
+/// DuckDB replay (`finish_persistence_initialization`), which can itself
+/// be expensive for a large accumulated history. The result is bridged
+/// back with `create_signal_from_channel` + `create_effect` — the same
+/// cross-thread-to-UI pattern `spawn_agent_session` uses for provider
+/// events and bash completions — so the eventual `agent_state_status`
+/// update also happens on the UI thread. A failed startup read is
+/// surfaced the same way instead of silently leaving persistence broken
+/// with no explanation.
+fn spawn_persistence_initialization(
+    persistence_config: AgentPersistenceConfig,
+    agent_state_status: RwSignal<Option<String>>,
+    init_rx: Receiver<WriterInit>,
+) {
+    agent_state_status.set(Some(format!(
+        "Agent persistence: catching up on {}",
+        persistence_config.event_log_path.display()
+    )));
 
-    let skipped_summary = rebuild_agent_duckdb_from_event_log(persistence_config, initial_read)?;
-    *rebuild_done = true;
-    Ok(skipped_summary)
+    let (outcome_tx, outcome_rx) = unbounded::<Option<String>>();
+    thread::spawn(move || {
+        let Ok(init) = init_rx.recv() else {
+            // The writer's background thread is gone without ever sending
+            // an outcome (it would have to have panicked before reaching
+            // either `send` in `WriterHandle::open_with_reader`). Leave
+            // whatever status is currently showing rather than guessing.
+            return;
+        };
+        let outcome = resolve_persistence_init_outcome(&persistence_config, init);
+        let _ = outcome_tx.send(outcome);
+    });
+
+    let outcome_signal = create_signal_from_channel(outcome_rx);
+    create_effect(move |_| {
+        if let Some(outcome) = outcome_signal.get() {
+            agent_state_status.set(outcome);
+        }
+    });
+}
+
+/// Maps a [`WriterInit`] outcome to the `agent_state_status` message that
+/// should replace `spawn_persistence_initialization`'s "catching up"
+/// status: `None` clears it (nothing to report), `Some(..)` replaces it
+/// with a skipped-lines/rebuild-failure/read-failure message. Kept
+/// separate from `spawn_persistence_initialization` so both branches are
+/// directly testable without any floem or thread involved.
+fn resolve_persistence_init_outcome(
+    persistence_config: &AgentPersistenceConfig,
+    init: WriterInit,
+) -> Option<String> {
+    match init {
+        WriterInit::Ready(report) => finish_persistence_initialization(persistence_config, report),
+        WriterInit::Failed(error) => Some(format!(
+            "Agent event log unavailable ({error}); persistence disabled"
+        )),
+    }
+}
+
+/// The actual one-time initialization work for the success path: replays
+/// the event log's `ReadReport` (already produced by the writer's startup
+/// read — see `WriterInit::Ready`) into the DuckDB projection via
+/// `rebuild_agent_duckdb_from_event_log`, and summarizes the outcome as
+/// described on [`resolve_persistence_init_outcome`].
+fn finish_persistence_initialization(
+    persistence_config: &AgentPersistenceConfig,
+    report: ReadReport,
+) -> Option<String> {
+    match rebuild_agent_duckdb_from_event_log(persistence_config, Some(report)) {
+        Ok(Some(skipped_summary)) => Some(format!("Agent event log: {skipped_summary}")),
+        Ok(None) => None,
+        Err(error) => Some(format!(
+            "Agent DuckDB projection rebuild unavailable: {error}"
+        )),
+    }
 }
 
 /// Replays the JSONL event log into the DuckDB projection, from `report` if
 /// the caller already read one (the normal case — see
-/// `rebuild_agent_duckdb_from_event_log_once`) or by reading the file
-/// itself otherwise. `event_log::read` already skips corrupt/torn lines
-/// rather than failing (see `ReadReport::skipped_summary`); this only adds
-/// a warning-style log so the skip isn't silently swallowed, and hands the
+/// `finish_persistence_initialization`) or by reading the file itself
+/// otherwise. `event_log::read` already skips corrupt/torn lines rather
+/// than failing (see `ReadReport::skipped_summary`); this only adds a
+/// warning-style log so the skip isn't silently swallowed, and hands the
 /// summary back so the caller can surface it in the UI status line too.
 fn rebuild_agent_duckdb_from_event_log(
     persistence_config: &AgentPersistenceConfig,
@@ -365,33 +403,29 @@ mod tests {
             duckdb_path: None,
         };
 
-        let (first, first_status, first_report) =
+        let (first, first_init_rx) =
             open_agent_event_log(&persistence_config).expect("open event log");
-        assert!(
-            first_status.is_some(),
-            "the session that actually opens the file should report where it lives"
-        );
-        assert!(
-            first_report.is_some(),
-            "the call that actually opens the file has already read it, and should \
-             hand that report back so the caller doesn't read it again"
+        let first_init_rx = first_init_rx.expect(
+            "the call that actually opens the file should get a receiver for its \
+             startup-read outcome",
         );
 
-        let (second, second_status, second_report) =
+        let (second, second_init_rx) =
             open_agent_event_log(&persistence_config).expect("reopen event log");
         assert!(
-            second_status.is_none(),
-            "a cached reuse should not repeat the status message"
-        );
-        assert!(
-            second_report.is_none(),
-            "a cached reuse did no reading, so it has no report to hand back"
+            second_init_rx.is_none(),
+            "a cached reuse did no new initialization, so it has no outcome to hand back"
         );
         assert!(
             first.same_channel(&second),
             "two sessions in one process must share one writer thread, not \
              create a second writer racing on the same file"
         );
+
+        match first_init_rx.recv().expect("writer init outcome") {
+            WriterInit::Ready(_) => {}
+            WriterInit::Failed(error) => panic!("unexpected startup failure: {error}"),
+        }
 
         let _ = std::fs::remove_file(path);
     }
@@ -524,5 +558,175 @@ mod tests {
         assert_eq!(sessions[0].session_id, session_id);
 
         let _ = std::fs::remove_file(db_path);
+    }
+
+    /// The success half of the background initialization pipeline: once
+    /// the writer's startup read hands back a clean `ReadReport`,
+    /// `finish_persistence_initialization` must both project its records
+    /// into DuckDB and clear the "catching up" status (`None`) rather than
+    /// leaving it showing forever.
+    #[test]
+    fn finish_persistence_initialization_projects_records_and_clears_status_when_clean() {
+        let db_path = std::env::temp_dir().join(format!(
+            "horizon-agent-finish-init-{}.duckdb",
+            Uuid::new_v4()
+        ));
+        let session_id = SessionId::new();
+        let record = Record {
+            schema: AGENT_EVENT_LOG_SCHEMA.to_string(),
+            version: AGENT_EVENT_LOG_VERSION,
+            event_id: "event-1".to_string(),
+            sequence: 0,
+            session_id,
+            turn_id: None,
+            provider_id: None,
+            event_kind: "message_committed".to_string(),
+            event: Event::MessageCommitted(Message {
+                role: MessageRole::User,
+                text: "hello".to_string(),
+            }),
+            provider_payload: None,
+            created_at_unix_ms: 1,
+        };
+        let report = crate::agent::persistence::event_log::ReadReport {
+            records: vec![record],
+            corrupt_line_count: 0,
+            ignored_partial_line: false,
+        };
+        let persistence_config = AgentPersistenceConfig {
+            // Never written to disk: `report` is passed through directly,
+            // exactly as `spawn_persistence_initialization` does with the
+            // writer's own `WriterInit::Ready` report.
+            event_log_path: std::env::temp_dir().join(format!(
+                "horizon-agent-finish-init-log-{}.jsonl",
+                Uuid::new_v4()
+            )),
+            duckdb_path: Some(db_path.clone()),
+        };
+
+        let status = finish_persistence_initialization(&persistence_config, report);
+        assert_eq!(
+            status, None,
+            "a clean rebuild should clear the catching-up status, not leave a stale message"
+        );
+
+        let store = Store::open(&db_path).expect("reopen duckdb store");
+        let sessions = store.sessions().expect("sessions");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, session_id);
+
+        let _ = std::fs::remove_file(db_path);
+    }
+
+    /// Skipped lines in the startup read must still surface as a status
+    /// message rather than disappearing once the rebuild completes.
+    #[test]
+    fn finish_persistence_initialization_surfaces_skipped_lines_in_status() {
+        let db_path = std::env::temp_dir().join(format!(
+            "horizon-agent-finish-init-skips-{}.duckdb",
+            Uuid::new_v4()
+        ));
+        let persistence_config = AgentPersistenceConfig {
+            event_log_path: std::env::temp_dir().join(format!(
+                "horizon-agent-finish-init-skips-log-{}.jsonl",
+                Uuid::new_v4()
+            )),
+            duckdb_path: Some(db_path.clone()),
+        };
+        let report = crate::agent::persistence::event_log::ReadReport {
+            records: Vec::new(),
+            corrupt_line_count: 2,
+            ignored_partial_line: true,
+        };
+
+        let status = finish_persistence_initialization(&persistence_config, report);
+        assert_eq!(
+            status.as_deref(),
+            Some("Agent event log: skipped 2 corrupt lines and a torn trailing line")
+        );
+
+        let _ = std::fs::remove_file(db_path);
+    }
+
+    /// A DuckDB rebuild failure (here: the configured path is a directory,
+    /// so `Store::open` can't open it as a database file) must surface in
+    /// the status instead of failing silently.
+    #[test]
+    fn finish_persistence_initialization_surfaces_duckdb_rebuild_failures_in_status() {
+        let db_path = std::env::temp_dir().join(format!(
+            "horizon-agent-finish-init-bad-db-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&db_path).expect("create directory standing in for the db path");
+        let persistence_config = AgentPersistenceConfig {
+            event_log_path: std::env::temp_dir().join(format!(
+                "horizon-agent-finish-init-bad-db-log-{}.jsonl",
+                Uuid::new_v4()
+            )),
+            duckdb_path: Some(db_path.clone()),
+        };
+
+        let status = finish_persistence_initialization(
+            &persistence_config,
+            crate::agent::persistence::event_log::ReadReport::default(),
+        );
+        assert!(
+            matches!(
+                &status,
+                Some(message) if message.starts_with("Agent DuckDB projection rebuild unavailable:")
+            ),
+            "a rebuild failure must surface in the status instead of failing silently, got {status:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(db_path);
+    }
+
+    /// The other half of `resolve_persistence_init_outcome`: a startup-read
+    /// failure must surface in the status too, not just rebuild failures.
+    #[test]
+    fn resolve_persistence_init_outcome_surfaces_startup_read_failures_in_status() {
+        let persistence_config = AgentPersistenceConfig {
+            event_log_path: std::env::temp_dir().join("horizon-agent-unused.jsonl"),
+            duckdb_path: None,
+        };
+
+        let status = resolve_persistence_init_outcome(
+            &persistence_config,
+            WriterInit::Failed(anyhow::anyhow!("permission denied")),
+        );
+        assert_eq!(
+            status.as_deref(),
+            Some("Agent event log unavailable (permission denied); persistence disabled")
+        );
+    }
+
+    /// `spawn_persistence_initialization` must show a "catching up" status
+    /// immediately, synchronously, on the caller's thread — the whole point
+    /// is that a session can render its pane right away while background
+    /// initialization is still in flight, rather than the status bar
+    /// staying blank (or worse, the caller blocking) until it finishes.
+    /// The receiver here is never sent to, so this only exercises the
+    /// synchronous part; the background thread just waits forever, which
+    /// is harmless for the lifetime of this test.
+    #[test]
+    fn spawn_persistence_initialization_immediately_shows_a_catching_up_status() {
+        let agent_state_status: RwSignal<Option<String>> = RwSignal::new(None);
+        let persistence_config = AgentPersistenceConfig {
+            event_log_path: std::env::temp_dir().join("horizon-agent-catching-up.jsonl"),
+            duckdb_path: None,
+        };
+        let (_init_tx, init_rx) = crossbeam_channel::unbounded::<WriterInit>();
+
+        spawn_persistence_initialization(persistence_config, agent_state_status, init_rx);
+
+        let status = agent_state_status.get_untracked();
+        assert!(
+            status
+                .as_deref()
+                .is_some_and(|status| status.contains("catching up")),
+            "opening the writer should immediately surface a catching-up status instead \
+             of leaving the status bar silent while the background read/rebuild runs, \
+             got {status:?}"
+        );
     }
 }

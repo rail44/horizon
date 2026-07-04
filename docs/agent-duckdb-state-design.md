@@ -131,8 +131,19 @@ the Horizon agent tables, not JSONL, Parquet, or SQLite.
 If the configured file cannot be opened for rebuild or memory loading, Horizon
 continues with an empty in-memory provider history so the pane can still run.
 This fallback is intentionally lossy and is surfaced through the status bar and
-`HORIZON_STATUS_DUMP` when it affects projection rebuild. Successful
-file-backed state also reports the active DuckDB path there.
+`HORIZON_STATUS_DUMP` when it affects projection rebuild.
+
+The JSONL read that seeds sequence numbers and the DuckDB rebuild are both
+one-time, process-global costs that grow with total accumulated history, so
+neither runs on the UI thread: `event_log::WriterHandle::open` hands back a
+usable handle immediately and performs the read on a background thread (see
+its "Ordering guarantee" doc comment for how appends made before that read
+finishes still get correct sequence numbers), and `app::runtime::agent`
+chains the DuckDB rebuild onto that same background initialization. The
+status bar shows a transient "catching up" message while this runs, which
+clears on success or is replaced by a skipped-lines/failure message —
+persistence problems are never silent, but a clean rebuild leaves no
+permanent status line behind.
 
 It provides:
 
