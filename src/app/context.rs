@@ -50,7 +50,7 @@ pub(super) fn control_input_state(state: &AppState) -> ControlInputState {
     }
 }
 
-fn command_action_state(state: &AppState) -> CommandActionState {
+pub(super) fn command_action_state(state: &AppState) -> CommandActionState {
     CommandActionState {
         runtime: state.session_runtime_state(),
         pane_focus_requests: state.pane_focus_requests,

@@ -4,7 +4,9 @@ use floem::prelude::*;
 use crate::control_surface::view::{command_palette, workspace_overview};
 use crate::workspace::view::{tab_strip, workspace_view};
 
-use super::context::{command_palette_state, workspace_overview_state, workspace_view_state};
+use super::context::{
+    command_action_state, command_palette_state, workspace_overview_state, workspace_view_state,
+};
 use super::input::AppInput;
 use super::state::AppState;
 use super::status_bar::status_bar;
@@ -56,7 +58,7 @@ fn app_content(state: AppState) -> impl IntoView {
 
     stack((
         v_stack((
-            tab_strip(workspace),
+            tab_strip(command_action_state(&state)),
             workspace_view(workspace_view_state(&state)),
             status_bar(workspace, agent_state_status, status_dump),
         ))

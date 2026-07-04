@@ -161,10 +161,14 @@ pub(super) fn pane_view(
     let agent_draft = agent_drafts[index];
 
     v_stack((
-        pane_header(title, agent_status_text, active, closeable, move || {
-            workspace.update(|ws| {
-                ws.close_visible_pane(index);
-            });
+        pane_header(title, agent_status_text, active, closeable, {
+            let command_state = command_state.clone();
+            move || {
+                execute_command(
+                    CommandInvocation::ClosePane { index },
+                    command_state.clone(),
+                );
+            }
         }),
         terminal_output(
             terminal_frame,

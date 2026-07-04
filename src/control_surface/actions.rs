@@ -2,7 +2,7 @@ use crate::app::command_actions::{execute_command, CommandActionState, CommandIn
 use crate::app::commands::clamp_palette_selection;
 use crate::control_surface::{overview_items, palette_items, OverviewItem, PaletteItem};
 use crate::session::Frames;
-use crate::workspace::{request_active_pane_focus, Workspace};
+use crate::workspace::Workspace;
 use floem::prelude::*;
 
 #[derive(Clone)]
@@ -15,7 +15,7 @@ pub(crate) struct PaletteActionState {
 
 #[derive(Clone)]
 pub(crate) struct OverviewActionState {
-    pub(crate) workspace: RwSignal<Workspace>,
+    pub(crate) command: CommandActionState,
     pub(crate) palette_open: RwSignal<bool>,
     pub(crate) overview_selection: RwSignal<usize>,
 }
@@ -45,7 +45,8 @@ pub(crate) fn close_control_surface(palette_open: RwSignal<bool>) {
 }
 
 pub(crate) fn execute_overview_selection(state: OverviewActionState) {
-    let workspace = state.workspace;
+    let command = state.command;
+    let workspace = command.workspace();
     let overview_selection = state.overview_selection;
 
     let selection = overview_selection.get_untracked();
@@ -61,21 +62,27 @@ pub(crate) fn execute_overview_selection(state: OverviewActionState) {
     };
 
     close_control_surface(state.palette_open);
-    workspace.update(|ws| match item {
+    match item {
         OverviewItem::Tab { index, .. } => {
-            ws.activate_tab_index(index);
+            execute_command(CommandInvocation::ActivateTab { index }, command);
         }
         OverviewItem::DetachedSession { session_id, .. } => {
-            ws.attach_existing_session_to_split(session_id);
+            execute_command(CommandInvocation::AttachSession { session_id }, command);
         }
         OverviewItem::Pane {
             tab_index,
             pane_index,
             ..
         } => {
-            ws.activate_pane_index(tab_index, pane_index);
+            execute_command(
+                CommandInvocation::ActivatePane {
+                    tab_index,
+                    pane_index,
+                },
+                command,
+            );
         }
-    });
+    }
 }
 
 pub(crate) fn move_overview_selection(
@@ -127,16 +134,13 @@ pub(crate) fn execute_palette_selection(state: PaletteActionState) {
             execute_command(CommandInvocation::Simple(entry.spec.id), command)
         }
         PaletteItem::DetachedSession { session_id, .. } => {
-            workspace.update(|ws| {
-                ws.attach_existing_session_to_split(session_id);
-            });
-            request_active_pane_focus(workspace, command.pane_focus_requests);
+            execute_command(CommandInvocation::AttachSession { session_id }, command);
         }
         PaletteItem::Tab { index, .. } => {
-            workspace.update(|ws| {
-                ws.activate_tab_index(index);
-            });
-            request_active_pane_focus(workspace, command.pane_focus_requests);
+            execute_command(CommandInvocation::ActivateTab { index }, command);
+        }
+        PaletteItem::TerminateSession { session_id, .. } => {
+            execute_command(CommandInvocation::TerminateSession { session_id }, command);
         }
     }
 }

@@ -2,6 +2,7 @@ use floem::peniko::Color;
 
 use crate::control_surface::{OverviewItem, PaletteItem};
 use crate::ui::list_row::ListRow;
+use crate::ui::theme;
 
 pub(super) fn palette_item_row(item: &PaletteItem) -> ListRow {
     ListRow {
@@ -35,6 +36,13 @@ fn palette_is_destructive(item: &PaletteItem) -> bool {
     match item {
         PaletteItem::Command(entry) => entry.spec.destructive,
         PaletteItem::DetachedSession { .. } | PaletteItem::Tab { .. } => false,
+        // Same "destructive" treatment as `Command`'s
+        // `CommandSpec::destructive`-marked rows (see
+        // `docs/ux-principles.md`'s termination-must-be-visually-distinct
+        // requirement) — this row isn't backed by a `CommandSpec` since
+        // it's parameterized per session rather than catalog-based, but it
+        // ends a session just the same, so it gets the same styling.
+        PaletteItem::TerminateSession { .. } => true,
     }
 }
 
@@ -43,6 +51,7 @@ fn palette_kind_label(item: &PaletteItem) -> &'static str {
         PaletteItem::Command(_) => "COMMAND",
         PaletteItem::DetachedSession { .. } => "SESSION",
         PaletteItem::Tab { .. } => "TAB",
+        PaletteItem::TerminateSession { .. } => "TERMINATE",
     }
 }
 
@@ -51,6 +60,9 @@ fn palette_kind_color(item: &PaletteItem) -> Color {
         PaletteItem::Command(_) => Color::from_rgb8(132, 220, 198),
         PaletteItem::DetachedSession { .. } => Color::from_rgb8(126, 170, 255),
         PaletteItem::Tab { .. } => Color::from_rgb8(224, 184, 104),
+        // Overridden by `effective_badge_color` since this row is always
+        // destructive, but still a real value in case that changes.
+        PaletteItem::TerminateSession { .. } => theme::danger(),
     }
 }
 
@@ -59,6 +71,7 @@ fn palette_title(item: &PaletteItem) -> String {
         PaletteItem::Command(entry) => entry.spec.title.to_string(),
         PaletteItem::DetachedSession { title, .. } => format!("Attach {title}"),
         PaletteItem::Tab { index, title, .. } => format!("Tab {}: {title}", index + 1),
+        PaletteItem::TerminateSession { title, .. } => format!("Terminate {title}"),
     }
 }
 
@@ -83,6 +96,15 @@ fn palette_description(item: &PaletteItem) -> String {
                 format!("Switch to tab with {pane_count} pane(s).")
             }
         }
+        PaletteItem::TerminateSession {
+            kind,
+            display_number,
+            ..
+        } => format!(
+            "End the {} session #{} — this stops the session, not just a pane.",
+            kind.label(),
+            display_number
+        ),
     }
 }
 
@@ -198,6 +220,18 @@ mod tests {
 
         assert!(!palette_item_row(&session).destructive);
         assert!(!palette_item_row(&tab).destructive);
+    }
+
+    #[test]
+    fn palette_row_for_terminate_session_is_destructive() {
+        let terminate = PaletteItem::TerminateSession {
+            session_id: crate::session::SessionId::new(),
+            kind: crate::workspace::SessionKind::Terminal,
+            display_number: 2,
+            title: "Terminal #2".to_string(),
+        };
+
+        assert!(palette_item_row(&terminate).destructive);
     }
 
     #[test]

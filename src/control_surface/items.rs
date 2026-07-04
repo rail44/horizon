@@ -112,6 +112,34 @@ pub(crate) fn palette_items(
             }),
     );
 
+    let active_session_id = workspace.active_session_id();
+    items.extend(
+        workspace
+            .session_summaries()
+            .into_iter()
+            .filter(|session| Some(session.id) != active_session_id)
+            .filter(|session| {
+                let display_number = session.display_number.to_string();
+                palette_matches(
+                    &query,
+                    &[
+                        "terminate",
+                        "kill",
+                        "end session",
+                        session.title.as_str(),
+                        session.kind.label(),
+                        display_number.as_str(),
+                    ],
+                )
+            })
+            .map(|session| PaletteItem::TerminateSession {
+                session_id: session.id,
+                kind: session.kind,
+                display_number: session.display_number,
+                title: session.title,
+            }),
+    );
+
     items
 }
 
@@ -183,6 +211,30 @@ mod tests {
                 active: false,
                 ..
             } if title == "Terminal #1"
+        )));
+    }
+
+    #[test]
+    fn palette_items_offer_terminate_for_non_active_sessions_but_not_the_active_one() {
+        let mut workspace = Workspace::mvp();
+        let active_session = workspace.active_terminal_session_id().expect("session");
+        let other_session = SessionId::new();
+        workspace.split_active(PaneKind::Terminal, Some(other_session));
+        workspace.close_visible_pane(1);
+
+        let items = palette_items(&workspace, &Frames::default(), "terminate");
+
+        assert!(items.iter().any(|item| matches!(
+            item,
+            PaletteItem::TerminateSession {
+                session_id: id,
+                kind: SessionKind::Terminal,
+                ..
+            } if *id == other_session
+        )));
+        assert!(!items.iter().any(|item| matches!(
+            item,
+            PaletteItem::TerminateSession { session_id: id, .. } if *id == active_session
         )));
     }
 

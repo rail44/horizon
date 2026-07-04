@@ -1,7 +1,6 @@
 use crate::app::command_actions::CommandActionState;
 use crate::app::keymap::palette_accepts_text_input;
 use crate::control_surface::ControlMode;
-use crate::workspace::Workspace;
 use floem::keyboard::{Key, KeyEvent, NamedKey};
 use floem::prelude::*;
 
@@ -33,7 +32,7 @@ impl ControlInputState {
 
     pub(crate) fn workspace_control_state(&self) -> WorkspaceControlState {
         WorkspaceControlState {
-            workspace: self.command.workspace(),
+            command: self.command.clone(),
             palette_open: self.palette_open,
             control_mode: self.control_mode,
             overview_selection: self.overview_selection,
@@ -43,7 +42,7 @@ impl ControlInputState {
 
 #[derive(Clone)]
 pub(crate) struct WorkspaceControlState {
-    pub(crate) workspace: RwSignal<Workspace>,
+    pub(crate) command: CommandActionState,
     pub(crate) palette_open: RwSignal<bool>,
     pub(crate) control_mode: RwSignal<ControlMode>,
     pub(crate) overview_selection: RwSignal<usize>,
@@ -52,7 +51,7 @@ pub(crate) struct WorkspaceControlState {
 impl WorkspaceControlState {
     pub(crate) fn overview_action_state(&self) -> OverviewActionState {
         OverviewActionState {
-            workspace: self.workspace,
+            command: self.command.clone(),
             palette_open: self.palette_open,
             overview_selection: self.overview_selection,
         }
@@ -164,11 +163,11 @@ pub(crate) fn handle_workspace_control_key(
             true
         }
         Key::Named(NamedKey::ArrowUp) => {
-            move_overview_selection(state.workspace, state.overview_selection, -1);
+            move_overview_selection(state.command.workspace(), state.overview_selection, -1);
             true
         }
         Key::Named(NamedKey::ArrowDown) => {
-            move_overview_selection(state.workspace, state.overview_selection, 1);
+            move_overview_selection(state.command.workspace(), state.overview_selection, 1);
             true
         }
         _ => false,

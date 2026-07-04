@@ -34,7 +34,7 @@ pub(crate) fn workspace_overview(state: WorkspaceOverviewState) -> impl IntoView
     let workspace_control = state.workspace_control_state();
     let overview_action = workspace_control.overview_action_state();
 
-    let workspace = workspace_control.workspace;
+    let workspace = workspace_control.command.workspace();
     let palette_open = workspace_control.palette_open;
     let control_mode = workspace_control.control_mode;
     let overview_selection = workspace_control.overview_selection;

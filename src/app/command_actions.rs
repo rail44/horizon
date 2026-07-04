@@ -41,11 +41,22 @@ impl CommandActionState {
 /// A command ready to run. `Simple` is a catalog command with no inherent
 /// target — used by the palette, which resolves a target for it on the fly
 /// (see `find_pending_agent_approval`/`find_agent_turn_in_flight` below).
-/// The other three variants carry an exact session id and are used by
-/// direct UI bindings (e.g. a pane's approve/deny/cancel controls) that
-/// already know which session they mean, so they skip target resolution
-/// entirely — this is what lets an approval on a *detached* session (no
-/// pane showing it) resolve at all.
+/// Every other variant carries an explicit target and is used by direct UI
+/// bindings (a pane's approve/deny/cancel controls, a pane/tab close
+/// button, a tab chip click, a palette/overview row) that already know
+/// which pane/tab/session they mean, so they skip target resolution
+/// entirely — this is what lets, e.g., an approval or a terminate on a
+/// *detached* session (no pane showing it) resolve at all.
+///
+/// `ClosePane`/`CloseTab`/`ActivateTab`/`ActivatePane` target a visible
+/// index rather than a stable id: the workspace model only tracks
+/// `PaneId`/`TabId` internally (see `workspace::types::id`), and every
+/// `Workspace` method backing these operations already takes a visible
+/// index (`close_visible_pane`, `close_tab_index`, `activate_tab_index`,
+/// `activate_pane_index`), so there is no stable id available to prefer at
+/// the call sites this enum serves today. `AttachSession` and
+/// `TerminateSession` target a `SessionId` instead, since that's stable
+/// across attach/detach and is what the workspace already keys sessions by.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CommandInvocation {
     Simple(CommandId),
@@ -59,6 +70,37 @@ pub(crate) enum CommandInvocation {
         reason: Option<String>,
     },
     CancelAgentTurn {
+        session_id: SessionId,
+    },
+    /// Close a specific visible pane (pane header's × button), whether or
+    /// not it's the active pane.
+    ClosePane {
+        index: usize,
+    },
+    /// Close a specific tab (tab chip's × button), whether or not it's the
+    /// active tab.
+    CloseTab {
+        index: usize,
+    },
+    /// Activate a specific tab (tab chip click, palette tab row, overview
+    /// tab row).
+    ActivateTab {
+        index: usize,
+    },
+    /// Activate a specific pane within a specific tab (overview pane row).
+    ActivatePane {
+        tab_index: usize,
+        pane_index: usize,
+    },
+    /// Attach a detached session to a new split in the active tab (palette
+    /// or overview detached-session row).
+    AttachSession {
+        session_id: SessionId,
+    },
+    /// Terminate a session by id, whether or not it's the active session or
+    /// attached to any pane — reuses the same registry/frame cleanup as
+    /// `Simple(CommandId::TerminateActiveSession)`.
+    TerminateSession {
         session_id: SessionId,
     },
 }
@@ -81,6 +123,48 @@ pub(crate) fn execute_command(invocation: CommandInvocation, state: CommandActio
             ApprovalDecision::Deny { reason },
         ),
         CommandInvocation::CancelAgentTurn { session_id } => cancel_agent_turn(state, session_id),
+        CommandInvocation::ClosePane { index } => {
+            state.workspace().update(|ws| {
+                ws.close_visible_pane(index);
+            });
+        }
+        CommandInvocation::CloseTab { index } => {
+            state.workspace().update(|ws| {
+                ws.close_tab_index(index);
+            });
+        }
+        CommandInvocation::ActivateTab { index } => {
+            let workspace = state.workspace();
+            workspace.update(|ws| {
+                ws.activate_tab_index(index);
+            });
+            request_active_pane_focus(workspace, state.pane_focus_requests);
+        }
+        CommandInvocation::ActivatePane {
+            tab_index,
+            pane_index,
+        } => {
+            let workspace = state.workspace();
+            workspace.update(|ws| {
+                ws.activate_pane_index(tab_index, pane_index);
+            });
+            request_active_pane_focus(workspace, state.pane_focus_requests);
+        }
+        CommandInvocation::AttachSession { session_id } => {
+            let workspace = state.workspace();
+            workspace.update(|ws| {
+                ws.attach_existing_session_to_split(session_id);
+            });
+            request_active_pane_focus(workspace, state.pane_focus_requests);
+        }
+        CommandInvocation::TerminateSession { session_id } => {
+            terminate_session_by_id(
+                state.workspace(),
+                state.frames(),
+                state.sessions(),
+                session_id,
+            );
+        }
     }
 }
 
@@ -188,6 +272,38 @@ fn terminate_active_session(
     let Some(session_id) = terminated else {
         return;
     };
+    cleanup_terminated_session(session_id, frames, sessions);
+}
+
+/// Same effect as `terminate_active_session` but targets an explicit
+/// session id via `Workspace::terminate_session` rather than
+/// `Workspace::terminate_active_session` — this is what lets
+/// `CommandInvocation::TerminateSession` end a *detached* session (no pane
+/// referencing it, so it isn't reachable through the workspace's notion of
+/// "active") without first reattaching it.
+fn terminate_session_by_id(
+    workspace: RwSignal<Workspace>,
+    frames: RwSignal<Frames>,
+    sessions: RwSignal<Registry>,
+    session_id: SessionId,
+) {
+    let mut terminated = false;
+    workspace.update(|ws| {
+        terminated = ws.terminate_session(session_id);
+    });
+
+    if !terminated {
+        return;
+    }
+    cleanup_terminated_session(session_id, frames, sessions);
+}
+
+/// Registry/frame cleanup shared by both terminate paths above.
+fn cleanup_terminated_session(
+    session_id: SessionId,
+    frames: RwSignal<Frames>,
+    sessions: RwSignal<Registry>,
+) {
     sessions.update(|registry| {
         registry.shutdown_terminal(session_id);
         registry.shutdown_agent(session_id);
@@ -381,6 +497,25 @@ mod tests {
         (state, session_id, call_id, rx)
     }
 
+    /// A minimal `CommandActionState` wrapping the given workspace, with
+    /// empty frames/sessions — for tests of the targeted-index/session
+    /// invocations below that don't need a running session behind them.
+    fn test_command_action_state(workspace: Workspace) -> CommandActionState {
+        let runtime = SessionRuntimeState::new(
+            RwSignal::new(workspace),
+            RwSignal::new(Frames::default()),
+            RwSignal::new(Registry::default()),
+            RwSignal::new(None),
+            test_agent_config(),
+            None,
+            None,
+        );
+        CommandActionState {
+            runtime,
+            pane_focus_requests: std::array::from_fn(|_| RwSignal::new(0_u64)),
+        }
+    }
+
     #[test]
     fn approve_tool_call_resolves_for_session_with_no_pane_attached() {
         let (state, session_id, call_id, rx) = detached_pending_approval_fixture();
@@ -417,5 +552,139 @@ mod tests {
             rx.try_recv(),
             Ok(Command::ApproveToolCall { call_id: received }) if received == call_id
         ));
+    }
+
+    #[test]
+    fn close_pane_invocation_closes_the_targeted_pane() {
+        let mut workspace = Workspace::mvp();
+        let second_session = SessionId::new();
+        workspace.split_active(PaneKind::Terminal, Some(second_session));
+        let state = test_command_action_state(workspace);
+
+        execute_command(CommandInvocation::ClosePane { index: 1 }, state.clone());
+
+        assert_eq!(
+            state
+                .workspace()
+                .with_untracked(|ws| ws.visible_panes().len()),
+            1
+        );
+        assert!(state
+            .workspace()
+            .with_untracked(|ws| ws.detached_session_summaries())
+            .iter()
+            .any(|session| session.id == second_session));
+    }
+
+    #[test]
+    fn close_tab_invocation_closes_the_targeted_tab() {
+        let mut workspace = Workspace::mvp();
+        workspace.open_tab(PaneKind::Agent, None);
+        let state = test_command_action_state(workspace);
+        assert_eq!(state.workspace().with_untracked(|ws| ws.tab_count()), 2);
+
+        execute_command(CommandInvocation::CloseTab { index: 0 }, state.clone());
+
+        assert_eq!(state.workspace().with_untracked(|ws| ws.tab_count()), 1);
+    }
+
+    #[test]
+    fn activate_tab_invocation_switches_the_active_tab() {
+        let mut workspace = Workspace::mvp();
+        workspace.open_tab(PaneKind::Agent, None);
+        let state = test_command_action_state(workspace);
+        assert_eq!(
+            state.workspace().with_untracked(|ws| ws.active_tab_index()),
+            1
+        );
+
+        execute_command(CommandInvocation::ActivateTab { index: 0 }, state.clone());
+
+        assert_eq!(
+            state.workspace().with_untracked(|ws| ws.active_tab_index()),
+            0
+        );
+    }
+
+    #[test]
+    fn activate_pane_invocation_switches_tab_and_pane() {
+        let mut workspace = Workspace::mvp();
+        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        workspace.open_tab(PaneKind::Agent, None);
+        let state = test_command_action_state(workspace);
+        assert_eq!(
+            state.workspace().with_untracked(|ws| ws.active_tab_index()),
+            1
+        );
+
+        execute_command(
+            CommandInvocation::ActivatePane {
+                tab_index: 0,
+                pane_index: 0,
+            },
+            state.clone(),
+        );
+
+        assert_eq!(
+            state.workspace().with_untracked(|ws| ws.active_tab_index()),
+            0
+        );
+        assert_eq!(
+            state
+                .workspace()
+                .with_untracked(|ws| ws.active_visible_index()),
+            0
+        );
+    }
+
+    #[test]
+    fn attach_session_invocation_reattaches_a_detached_session() {
+        let mut workspace = Workspace::mvp();
+        let session_id = SessionId::new();
+        workspace.split_active(PaneKind::Terminal, Some(session_id));
+        workspace.close_visible_pane(1);
+        let state = test_command_action_state(workspace);
+        assert_eq!(
+            state
+                .workspace()
+                .with_untracked(|ws| ws.detached_session_count()),
+            1
+        );
+
+        execute_command(
+            CommandInvocation::AttachSession { session_id },
+            state.clone(),
+        );
+
+        assert_eq!(
+            state
+                .workspace()
+                .with_untracked(|ws| ws.detached_session_count()),
+            0
+        );
+        assert_eq!(
+            state
+                .workspace()
+                .with_untracked(|ws| ws.visible_panes().len()),
+            2
+        );
+    }
+
+    #[test]
+    fn terminate_session_ends_a_detached_session() {
+        let (state, session_id, _call_id, rx) = detached_pending_approval_fixture();
+        let workspace = state.workspace();
+        let sessions = state.sessions();
+
+        execute_command(CommandInvocation::TerminateSession { session_id }, state);
+
+        assert!(!workspace
+            .with_untracked(|ws| ws.session_summaries())
+            .iter()
+            .any(|session| session.id == session_id));
+        assert!(sessions
+            .with_untracked(|registry| registry.agent_sender(session_id))
+            .is_none());
+        assert!(matches!(rx.try_recv(), Ok(Command::Shutdown)));
     }
 }

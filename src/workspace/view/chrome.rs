@@ -3,7 +3,7 @@ use floem::prelude::*;
 
 pub(super) fn chrome_close_button(
     visible: impl Fn() -> bool + 'static + Copy,
-    on_close: impl Fn() + 'static + Copy,
+    on_close: impl Fn() + 'static,
 ) -> impl IntoView {
     label(|| "×".to_string())
         .on_click_stop(move |_| on_close())
@@ -35,7 +35,7 @@ pub(super) fn pane_header(
     status: impl Fn() -> Option<String> + 'static + Copy,
     active: impl Fn() -> bool + 'static + Copy,
     closeable: impl Fn() -> bool + 'static + Copy,
-    on_close: impl Fn() + 'static + Copy,
+    on_close: impl Fn() + 'static,
 ) -> impl IntoView {
     h_stack((
         label(title).style(|s| s.min_width(0.0).font_size(13).color(theme::text_primary())),

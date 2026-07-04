@@ -26,6 +26,18 @@ pub(crate) enum PaletteItem {
         pane_count: usize,
         active: bool,
     },
+    /// A non-active session offered for direct termination — see
+    /// `docs/ux-principles.md`'s Close/Detach/Terminate distinction:
+    /// `Simple(CommandId::TerminateActiveSession)` only ever targets the
+    /// active session, so this is what lets the palette end any other
+    /// session (attached-but-inactive, or fully detached) without first
+    /// activating or reattaching it.
+    TerminateSession {
+        session_id: SessionId,
+        kind: SessionKind,
+        display_number: usize,
+        title: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -56,7 +68,7 @@ impl PaletteItem {
     pub(crate) fn enabled(&self) -> bool {
         match self {
             Self::Command(entry) => entry.enabled,
-            Self::DetachedSession { .. } | Self::Tab { .. } => true,
+            Self::DetachedSession { .. } | Self::Tab { .. } | Self::TerminateSession { .. } => true,
         }
     }
 }
