@@ -193,26 +193,6 @@ fn non_empty(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.is_empty())
 }
 
-/// Expands a leading `~/` in a path-typed config value against `home`,
-/// mirroring shell tilde-expansion for the common case
-/// (`[agent].event_log_path`/`state_db_path` in `agent::config`, applied
-/// uniformly whether the value came from the config file or its overriding
-/// env var). A value without a leading `~/` (including a bare `~`) passes
-/// through unchanged, as does a `~/`-prefixed value when `home` is `None`
-/// or empty — there being nothing to expand it against. Takes `home` as a
-/// parameter rather than reading `$HOME` itself so callers stay
-/// unit-testable without mutating process environment — see
-/// [`resolve_config_path_from`]'s doc comment for why.
-pub(crate) fn expand_tilde(value: &str, home: Option<&str>) -> PathBuf {
-    match value.strip_prefix("~/") {
-        Some(rest) => match home.filter(|home| !home.is_empty()) {
-            Some(home) => PathBuf::from(home).join(rest),
-            None => PathBuf::from(value),
-        },
-        None => PathBuf::from(value),
-    }
-}
-
 fn load_from_path(path: Option<&Path>) -> RawConfig {
     let Some(path) = path else {
         return RawConfig::default();

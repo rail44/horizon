@@ -2348,26 +2348,39 @@ dependencies = [
  "alacritty_terminal",
  "anyhow",
  "crossbeam-channel",
- "duckdb",
  "floem",
  "floem_renderer",
- "futures-util",
- "globset",
- "libc",
+ "horizon-agent",
  "portable-pty",
- "regex",
- "rig-core",
  "serde",
  "serde_json",
  "termwiz",
  "thiserror 2.0.18",
- "tokio",
- "tokio-util",
  "toml 0.8.23",
  "unicode-width 0.2.2",
  "uuid",
- "walkdir",
  "wasmtime",
+]
+
+[[package]]
+name = "horizon-agent"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossbeam-channel",
+ "duckdb",
+ "futures-util",
+ "globset",
+ "libc",
+ "regex",
+ "rig-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "uuid",
+ "walkdir",
 ]
 
 [[package]]

@@ -107,3 +107,48 @@ must stay a bindings problem, not a redesign. Six rules keep it that way:
 Terminals in the daemon (the long-term shape; this split must not preclude
 it — the single host, the socket, and the client-capability channel are
 the compatibility guarantees), MCP, multiple simultaneous clients.
+
+## Step 1 implementation notes
+
+Landed as `crates/horizon-agent` (a `[workspace]` member; `horizon` depends
+on it by path). Boundary decisions the design above didn't fully pin down:
+
+- **`HostTools` trait** (`horizon_agent::tools::HostTools`, one method:
+  `execute_auto(tool_id, input) -> Option<Value>`) is the tool-catalog seam.
+  `execute_agent_tool`/`process_agent_provider_event` take `&dyn HostTools`
+  instead of `&Workspace`; Horizon implements it in `agent::host_tools`
+  (`WorkspaceHostTools`, wrapping `&Workspace`) and passes it in at the one
+  call site (`app/runtime/agent.rs`). `workspace_snapshot` itself (the
+  function that reads `Workspace`) moved to `agent::host_tools`, tested
+  there as a horizon-side integration test of the seam.
+- **Config**: the crate mirrors the `[agent]`/`[provider]` subset of
+  Horizon's config schema as `config::AgentFileConfig` (plain data, no
+  serde-from-file — Horizon still owns parsing). Horizon converts its
+  `RawConfig` into this shape in `agent::mod`'s
+  `agent_file_config_from_raw`, the one seam-crossing point. The crate's
+  `*_::from_env()` convenience wrappers (which used to call Horizon's
+  `crate::config::load()`) were removed; callers now resolve
+  `AgentFileConfig` first and pass it to `*_::from_env_and_file`/
+  `AgentConfig::from_env_and_file`. `ToolSessionState::for_current_dir` and
+  `pane_status_tick_secs` gained an explicit config parameter for the same
+  reason. agentd's own config loading (step 2) still needs its own answer —
+  parse straight into `AgentFileConfig`, or something richer.
+- **SessionId**: the crate defines `contract::SessionId` (a `Uuid` newtype,
+  serde-transparent). `agent::mod` in Horizon holds the `From` impls both
+  ways, round-tripping through `Uuid` (`SessionId::as_uuid`/`from_uuid` on
+  both types, added to Horizon's `session::SessionId` too). Every call from
+  Horizon into the crate converts with `.into()` at the call site.
+- **Cross-crate `cfg(test)`**: a downstream crate's test build can't trigger
+  an upstream crate's `cfg(test)`, so a few items the crate previously
+  gated as test-only had to become real API because Horizon's *own* tests
+  need them: `persistence::projection::duckdb::{Store::sessions,
+  AgentStoredSession}`, `persistence::event_log::WriterHandle::same_channel`.
+  Everything else that stayed test-only in the crate (most of the DuckDB
+  query surface, `AppendEvent`, etc.) is only ever exercised by the crate's
+  own `tests.rs`/inline test modules, which moved with the code.
+- Visibility inside the crate: former `pub(crate)` (crate-wide in the old
+  single-crate `horizon`) became `pub` only where Horizon or the new
+  crate-external boundary actually needs it (contract types, provider
+  registry, tool/persistence entry points, config types); purely
+  crate-internal pieces (`MockProvider`, the rig `Provider` struct,
+  `policy`, `providers`) stayed `pub(crate)`.

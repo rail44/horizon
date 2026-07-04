@@ -13,7 +13,7 @@ use crate::agent::tools::{
     process_agent_provider_event, register_session_runtime, should_fold_completion, BashCompletion,
     ToolSessionState,
 };
-use crate::agent::{contract as agent, frame::AgentFrame, live::LiveState};
+use crate::agent::{contract as agent, frame::AgentFrame, live::LiveState, WorkspaceHostTools};
 use crate::session::{Frames, Registry, SessionId};
 use crate::workspace::Workspace;
 
@@ -93,7 +93,7 @@ pub(super) fn spawn_agent_session(
         agent_state_status,
         &agent_config.persistence,
     );
-    let Some(handle) = providers.start_session(&provider_id, session_id) else {
+    let Some(handle) = providers.start_session(&provider_id, session_id.into()) else {
         frames.update(|frames| {
             frames.update_agent_frame(
                 session_id,
@@ -110,7 +110,7 @@ pub(super) fn spawn_agent_session(
         registry.insert_agent(session_id, handle);
     });
 
-    let tool_state = ToolSessionState::for_current_dir();
+    let tool_state = ToolSessionState::for_current_dir(agent_config.tools);
     // `bash` calls run on a dedicated background thread and can take up to
     // their timeout, so their result can't fold into `LiveState`/`Frames`
     // synchronously the way `fs.write`/`fs.edit` do (those are UI-thread-
@@ -121,7 +121,7 @@ pub(super) fn spawn_agent_session(
     let (bash_results_tx, bash_results_rx) = unbounded::<BashCompletion>();
     let bash_completions = create_signal_from_channel(bash_results_rx);
     register_session_runtime(
-        session_id,
+        session_id.into(),
         tool_state.clone(),
         runtime_state.clone(),
         bash_results_tx,
@@ -129,7 +129,7 @@ pub(super) fn spawn_agent_session(
 
     if let Some(sender) = sessions.with_untracked(|registry| registry.agent_sender(session_id)) {
         let _ = sender.send(agent::Command::Initialize(agent::Initialization {
-            session_id,
+            session_id: session_id.into(),
             provider_id: provider_id.clone(),
         }));
     }
@@ -137,8 +137,9 @@ pub(super) fn spawn_agent_session(
     let bash_runtime_state = runtime_state.clone();
     create_effect(move |_| {
         if let Some(event) = events.get() {
-            let processing =
-                workspace.with_untracked(|ws| process_agent_provider_event(ws, &tool_state, event));
+            let processing = workspace.with_untracked(|ws| {
+                process_agent_provider_event(&WorkspaceHostTools(ws), &tool_state, event)
+            });
             for command in processing.provider_commands {
                 if let Some(sender) =
                     sessions.with_untracked(|registry| registry.agent_sender(session_id))
@@ -216,7 +217,7 @@ fn open_agent_runtime_state_store(
                     init_rx,
                 );
             }
-            LiveState::with_event_log(session_id, Some(provider_id), writer)
+            LiveState::with_event_log(session_id.into(), Some(provider_id), writer)
         }
         Err(error) => {
             agent_state_status.set(Some(format!(
@@ -442,7 +443,7 @@ mod tests {
         ));
         let db_path =
             std::env::temp_dir().join(format!("horizon-agent-rebuild-{}.duckdb", Uuid::new_v4()));
-        let session_id = SessionId::new();
+        let session_id = agent::SessionId::new();
         let record = Record {
             schema: AGENT_EVENT_LOG_SCHEMA.to_string(),
             version: AGENT_EVENT_LOG_VERSION,
@@ -510,7 +511,7 @@ mod tests {
             "horizon-agent-rebuild-no-reread-{}.duckdb",
             Uuid::new_v4()
         ));
-        let session_id = SessionId::new();
+        let session_id = agent::SessionId::new();
         let record = Record {
             schema: AGENT_EVENT_LOG_SCHEMA.to_string(),
             version: AGENT_EVENT_LOG_VERSION,
@@ -571,7 +572,7 @@ mod tests {
             "horizon-agent-finish-init-{}.duckdb",
             Uuid::new_v4()
         ));
-        let session_id = SessionId::new();
+        let session_id = agent::SessionId::new();
         let record = Record {
             schema: AGENT_EVENT_LOG_SCHEMA.to_string(),
             version: AGENT_EVENT_LOG_VERSION,

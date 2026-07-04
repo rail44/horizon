@@ -311,7 +311,7 @@ fn cleanup_terminated_session(
     // No-op for terminal sessions; for agent sessions this drops the
     // per-session tool state so a stale approval click can no longer
     // execute against a terminated session.
-    unregister_session_runtime(session_id);
+    unregister_session_runtime(session_id.into());
     frames.update(|frames| frames.remove_session(session_id));
 }
 
@@ -336,7 +336,7 @@ fn resolve_and_send_approval(
     let frames = state.frames();
     let sessions = state.sessions();
     let frame = frames.with_untracked(|frames| frames.agent_frame(session_id));
-    let command = match resolve_approval(&frame, session_id, call_id, decision) {
+    let command = match resolve_approval(&frame, session_id.into(), call_id, decision) {
         ApprovalOutcome::Executed { frame, command } => {
             frames.update(|frames| frames.update_agent_frame(session_id, frame));
             command

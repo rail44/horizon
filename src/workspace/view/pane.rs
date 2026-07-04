@@ -133,8 +133,7 @@ pub(super) fn pane_view(
         now_tick: RwSignal<std::time::Instant>,
         turn_in_flight: impl Fn() -> bool + 'static + Copy,
     ) {
-        let interval =
-            std::time::Duration::from_secs(crate::agent::config::pane_status_tick_secs());
+        let interval = std::time::Duration::from_secs(crate::agent::pane_status_tick_secs());
         floem::action::exec_after(interval, move |_| {
             now_tick.set(std::time::Instant::now());
             if turn_in_flight() {

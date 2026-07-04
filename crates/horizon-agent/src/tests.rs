@@ -1,0 +1,741 @@
+use crate::contract::SessionId;
+use crate::prompt::{system_prompt, SessionEnvironment};
+use crate::{contract as agent, frame::*, policy::horizon_events_for_provider_event};
+
+fn recv_event(rx: &crossbeam_channel::Receiver<agent::ProviderEvent>) -> agent::ProviderEvent {
+    rx.recv_timeout(std::time::Duration::from_secs(1))
+        .expect("expected a provider event within timeout")
+}
+
+#[test]
+fn mock_agent_emits_initial_session_events() {
+    let provider = crate::providers::mock::MockProvider::new();
+    let handle = agent::Provider::start_session(
+        &provider,
+        agent::StartSession {
+            session_id: SessionId::new(),
+            provider_id: agent::Provider::provider_id(&provider),
+        },
+    );
+
+    let first = handle.events().recv().expect("first event");
+    assert_eq!(
+        first.event,
+        agent::Event::StateChanged(agent::SessionState::Created)
+    );
+    assert_eq!(first.provider_payload, None);
+}
+
+#[test]
+fn transcript_renderer_keeps_provider_neutral_messages() {
+    let transcript = render_agent_transcript(&[agent::Event::MessageCommitted(agent::Message {
+        role: agent::MessageRole::Assistant,
+        text: "ready".to_string(),
+    })]);
+
+    assert!(transcript.contains("assistant: ready"));
+}
+
+#[test]
+fn agent_frame_keeps_state_and_structured_messages() {
+    let frame = agent_frame_from_events(&[
+        agent::Event::StateChanged(agent::SessionState::Running),
+        agent::Event::MessageCommitted(agent::Message {
+            role: agent::MessageRole::Assistant,
+            text: "ready".to_string(),
+        }),
+    ]);
+
+    assert_eq!(frame.state, Some(agent::SessionState::Running));
+    assert_eq!(
+        frame.items,
+        vec![AgentFrameItem::Message(agent::Message {
+            role: agent::MessageRole::Assistant,
+            text: "ready".to_string(),
+        })]
+    );
+}
+
+#[test]
+fn agent_frame_coalesces_consecutive_reasoning_deltas() {
+    let frame = agent_frame_from_events(&[
+        agent::Event::ReasoningDelta(agent::MessageDelta {
+            role: agent::MessageRole::Assistant,
+            text: "think ".to_string(),
+        }),
+        agent::Event::ReasoningDelta(agent::MessageDelta {
+            role: agent::MessageRole::Assistant,
+            text: "more".to_string(),
+        }),
+    ]);
+
+    assert_eq!(
+        frame.items,
+        vec![AgentFrameItem::ReasoningDelta(agent::MessageDelta {
+            role: agent::MessageRole::Assistant,
+            text: "think more".to_string(),
+        })]
+    );
+}
+
+#[test]
+fn agent_frame_coalesces_consecutive_assistant_text_deltas() {
+    let frame = agent_frame_from_events(&[
+        agent::Event::AssistantTextDelta(agent::MessageDelta {
+            role: agent::MessageRole::Assistant,
+            text: "hello ".to_string(),
+        }),
+        agent::Event::AssistantTextDelta(agent::MessageDelta {
+            role: agent::MessageRole::Assistant,
+            text: "world".to_string(),
+        }),
+    ]);
+
+    assert_eq!(
+        frame.items,
+        vec![AgentFrameItem::AssistantTextDelta(agent::MessageDelta {
+            role: agent::MessageRole::Assistant,
+            text: "hello world".to_string(),
+        })]
+    );
+}
+
+#[test]
+fn agent_frame_coalesces_interleaved_stream_deltas_within_turn() {
+    let frame = agent_frame_from_events(&[
+        agent::Event::MessageCommitted(agent::Message {
+            role: agent::MessageRole::User,
+            text: "question".to_string(),
+        }),
+        agent::Event::ReasoningDelta(agent::MessageDelta {
+            role: agent::MessageRole::Assistant,
+            text: "think ".to_string(),
+        }),
+        agent::Event::AssistantTextDelta(agent::MessageDelta {
+            role: agent::MessageRole::Assistant,
+            text: "answer ".to_string(),
+        }),
+        agent::Event::ReasoningDelta(agent::MessageDelta {
+            role: agent::MessageRole::Assistant,
+            text: "more".to_string(),
+        }),
+        agent::Event::AssistantTextDelta(agent::MessageDelta {
+            role: agent::MessageRole::Assistant,
+            text: "done".to_string(),
+        }),
+    ]);
+
+    assert_eq!(
+        frame.items,
+        vec![
+            AgentFrameItem::Message(agent::Message {
+                role: agent::MessageRole::User,
+                text: "question".to_string(),
+            }),
+            AgentFrameItem::ReasoningDelta(agent::MessageDelta {
+                role: agent::MessageRole::Assistant,
+                text: "think more".to_string(),
+            }),
+            AgentFrameItem::AssistantTextDelta(agent::MessageDelta {
+                role: agent::MessageRole::Assistant,
+                text: "answer done".to_string(),
+            }),
+        ]
+    );
+}
+
+#[test]
+fn runtime_state_store_accumulates_events_into_frame() {
+    let store = crate::live::LiveState::new();
+    let frame = store.extend_events([
+        agent::Event::StateChanged(agent::SessionState::Running),
+        agent::Event::MessageCommitted(agent::Message {
+            role: agent::MessageRole::Assistant,
+            text: "ready".to_string(),
+        }),
+    ]);
+
+    assert_eq!(frame.state, Some(agent::SessionState::Running));
+    assert_eq!(store.frame(), frame);
+}
+
+#[test]
+fn runtime_state_store_enqueues_events_to_jsonl_log() {
+    let path = std::env::temp_dir().join(format!(
+        "horizon-agent-runtime-log-{}.jsonl",
+        uuid::Uuid::new_v4()
+    ));
+    let session_id = SessionId::new();
+    let provider_id = agent::ProviderId("builtin.agent.rig".to_string());
+    let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
+    let store = crate::live::LiveState::with_event_log(
+        session_id,
+        Some(provider_id.clone()),
+        writer.clone(),
+    );
+
+    store.extend_provider_events([
+        agent::ProviderEvent::from(agent::Event::MessageCommitted(agent::Message {
+            role: agent::MessageRole::User,
+            text: "hello".to_string(),
+        })),
+        agent::ProviderEvent::with_provider_payload(
+            agent::Event::AssistantTextDelta(agent::MessageDelta {
+                role: agent::MessageRole::Assistant,
+                text: "hi".to_string(),
+            }),
+            serde_json::json!({ "delta": true }),
+        ),
+    ]);
+    writer.flush().expect("flush");
+
+    let report = crate::persistence::event_log::read(&path).expect("read log");
+    assert_eq!(report.records.len(), 2);
+    assert_eq!(report.records[0].session_id, session_id);
+    assert_eq!(report.records[0].provider_id, Some(provider_id));
+    assert_eq!(report.records[0].event_kind, "message_committed");
+    assert_eq!(report.records[1].event_kind, "assistant_text_delta");
+    assert_eq!(
+        report.records[1].provider_payload,
+        Some(serde_json::json!({ "delta": true }))
+    );
+    assert_eq!(report.records[0].turn_id, report.records[1].turn_id);
+    assert!(report.records[0].turn_id.is_some());
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn runtime_state_store_folds_tool_call_progress_but_excludes_it_from_the_jsonl_log() {
+    let path = std::env::temp_dir().join(format!(
+        "horizon-agent-runtime-progress-log-{}.jsonl",
+        uuid::Uuid::new_v4()
+    ));
+    let session_id = SessionId::new();
+    let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
+    let store = crate::live::LiveState::with_event_log(session_id, None, writer.clone());
+
+    let frame = store.extend_provider_events([
+        agent::ProviderEvent::tool_call_progress(agent::ToolCallProgress {
+            key: "call-1".to_string(),
+            tool_id: Some("fs.write".to_string()),
+            bytes: 128,
+        }),
+        agent::ProviderEvent::from(agent::Event::MessageCommitted(agent::Message {
+            role: agent::MessageRole::User,
+            text: "hello".to_string(),
+        })),
+    ]);
+    writer.flush().expect("flush");
+
+    // It folds into the frame as an ephemeral `ToolCallPreparing` item...
+    assert!(frame.items.iter().any(|item| matches!(
+        item,
+        AgentFrameItem::ToolCallPreparing(progress)
+            if progress.key == "call-1" && progress.bytes == 128
+    )));
+
+    // ...but only the real event reaches the persisted log.
+    let report = crate::persistence::event_log::read(&path).expect("read log");
+    assert_eq!(report.records.len(), 1);
+    assert_eq!(report.records[0].event_kind, "message_committed");
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn tool_call_progress_updates_in_place_then_is_superseded_by_the_real_request() {
+    let mut frame = AgentFrame::empty();
+
+    apply_tool_call_progress_to_frame(
+        &mut frame,
+        agent::ToolCallProgress {
+            key: "call-1".to_string(),
+            tool_id: None,
+            bytes: 16,
+        },
+    );
+    assert_eq!(frame.items.len(), 1);
+    assert!(matches!(
+        &frame.items[0],
+        AgentFrameItem::ToolCallPreparing(progress) if progress.bytes == 16
+    ));
+
+    // A second tick for the same call updates the existing item in place
+    // rather than appending a new one.
+    apply_tool_call_progress_to_frame(
+        &mut frame,
+        agent::ToolCallProgress {
+            key: "call-1".to_string(),
+            tool_id: Some("fs.write".to_string()),
+            bytes: 96,
+        },
+    );
+    assert_eq!(frame.items.len(), 1);
+    assert!(matches!(
+        &frame.items[0],
+        AgentFrameItem::ToolCallPreparing(progress)
+            if progress.bytes == 96 && progress.tool_id.as_deref() == Some("fs.write")
+    ));
+
+    // Once the real tool call arrives, it replaces the preparing item
+    // rather than leaving it dangling in the transcript.
+    apply_agent_event_to_frame(
+        &mut frame,
+        &agent::Event::ToolCallRequested(agent::ToolCallRequest {
+            call_id: agent::ToolCallId("call-1".to_string()),
+            tool_id: "fs.write".to_string(),
+            input: serde_json::json!({ "path": "/tmp/x" }),
+        }),
+    );
+    assert_eq!(frame.items.len(), 1);
+    assert!(matches!(
+        &frame.items[0],
+        AgentFrameItem::ToolCallRequested(request) if request.tool_id == "fs.write"
+    ));
+}
+
+#[test]
+fn state_entry_advance_keeps_timestamp_until_state_changes() {
+    let entry = StateEntry::initial(Some(agent::SessionState::Running));
+    let entered_at = entry.entered_at();
+
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let same_state = entry.advance(Some(agent::SessionState::Running));
+    assert_eq!(same_state.entered_at(), entered_at);
+
+    let changed_state = entry.advance(Some(agent::SessionState::WaitingForUser));
+    assert!(changed_state.entered_at() > entered_at);
+    assert_eq!(
+        changed_state.state,
+        Some(agent::SessionState::WaitingForUser)
+    );
+}
+
+#[test]
+fn state_entry_elapsed_grows_with_time() {
+    // Mirrors how `workspace::view::pane` computes the pane header's
+    // elapsed-time display: `Instant::now() - entered_at`, driven by a
+    // periodic tick rather than a method on `StateEntry` itself.
+    let entry = StateEntry::initial(Some(agent::SessionState::ToolRunning));
+    std::thread::sleep(std::time::Duration::from_millis(15));
+
+    let elapsed = std::time::Instant::now().saturating_duration_since(entry.entered_at());
+    assert!(elapsed >= std::time::Duration::from_millis(10));
+}
+
+#[test]
+fn agent_frame_tracks_pending_approval_until_tool_finishes() {
+    let call_id = agent::ToolCallId("call-1".to_string());
+    let mut frame = AgentFrame::empty();
+    frame
+        .items
+        .push(AgentFrameItem::ApprovalRequested(agent::ApprovalRequest {
+            call_id: call_id.clone(),
+            reason: "needs approval".to_string(),
+        }));
+
+    assert_eq!(frame.pending_approval_call_id(), Some(call_id.clone()));
+
+    frame
+        .items
+        .push(AgentFrameItem::ToolCallFinished(agent::ToolCallResult {
+            call_id,
+            output: serde_json::json!({ "ok": true }),
+        }));
+
+    assert_eq!(frame.pending_approval_call_id(), None);
+}
+
+#[test]
+fn horizon_policy_adds_approval_for_requested_tool() {
+    let call_id = agent::ToolCallId("call-1".to_string());
+    let events = horizon_events_for_provider_event(&agent::Event::ToolCallRequested(
+        agent::ToolCallRequest {
+            call_id: call_id.clone(),
+            tool_id: "mock.approval_required".to_string(),
+            input: serde_json::json!({}),
+        },
+    ));
+
+    assert!(events.iter().any(|event| matches!(
+        event,
+        agent::Event::ApprovalRequested(request) if request.call_id == call_id
+    )));
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            agent::Event::StateChanged(agent::SessionState::WaitingForApproval)
+        )
+    }));
+}
+
+#[test]
+fn mock_agent_accepts_tool_call_result_command() {
+    let provider = crate::providers::mock::MockProvider::new();
+    let handle = agent::Provider::start_session(
+        &provider,
+        agent::StartSession {
+            session_id: SessionId::new(),
+            provider_id: agent::Provider::provider_id(&provider),
+        },
+    );
+    let tx = handle.sender();
+    let rx = handle.events();
+
+    let _ = tx.send(agent::Command::ToolCallResult(agent::ToolCallResult {
+        call_id: agent::ToolCallId("call-1".to_string()),
+        output: serde_json::json!({ "ok": true }),
+    }));
+
+    let saw_ack = std::iter::from_fn(|| rx.recv_timeout(std::time::Duration::from_millis(50)).ok())
+        .take(5)
+        .any(|provider_event| {
+            matches!(
+                provider_event.event,
+                agent::Event::MessageCommitted(agent::Message {
+                    role: agent::MessageRole::Assistant,
+                    text,
+                }) if text.contains("Tool result received")
+            )
+        });
+
+    assert!(saw_ack);
+}
+
+#[test]
+fn mock_agent_cancel_mid_turn_keeps_partial_and_marks_cancelled() {
+    let provider = crate::providers::mock::MockProvider::new();
+    let handle = agent::Provider::start_session(
+        &provider,
+        agent::StartSession {
+            session_id: SessionId::new(),
+            provider_id: agent::Provider::provider_id(&provider),
+        },
+    );
+    let tx = handle.sender();
+    let rx = handle.events();
+
+    // Drain session-startup events (Created, init message, WaitingForUser).
+    for _ in 0..3 {
+        recv_event(&rx);
+    }
+
+    let _ = tx.send(agent::Command::UserMessage {
+        text: "slow please".to_string(),
+    });
+
+    assert_eq!(
+        recv_event(&rx).event,
+        agent::Event::StateChanged(agent::SessionState::Running)
+    );
+    assert!(matches!(
+        recv_event(&rx).event,
+        agent::Event::MessageCommitted(agent::Message {
+            role: agent::MessageRole::User,
+            ..
+        })
+    ));
+
+    // The provider-request lifecycle markers (see `Event::ProviderRequestSent`'s
+    // doc comment) bracket the turn before any streamed content: sent, then
+    // first token, matching the order asserted end-to-end in
+    // `mock_agent_slow_turn_emits_provider_request_lifecycle_in_order`.
+    match recv_event(&rx).event {
+        agent::Event::ProviderRequestSent(sent) => assert_eq!(sent.model, "mock"),
+        other => panic!("expected ProviderRequestSent, got {other:?}"),
+    }
+    assert_eq!(
+        recv_event(&rx).event,
+        agent::Event::ProviderRequestFirstToken
+    );
+
+    // Cancel as soon as the first streamed chunk arrives, well before the
+    // mock's simulated turn would finish on its own.
+    assert!(matches!(
+        recv_event(&rx).event,
+        agent::Event::AssistantTextDelta(_)
+    ));
+    let _ = tx.send(agent::Command::Cancel { request_id: None });
+
+    let mut partial_commit = None;
+    let mut saw_cancelled_state = false;
+    let mut saw_request_finished = false;
+    loop {
+        match recv_event(&rx).event {
+            agent::Event::AssistantTextDelta(_) => {}
+            agent::Event::ProviderRequestFinished => saw_request_finished = true,
+            agent::Event::MessageCommitted(agent::Message {
+                role: agent::MessageRole::Assistant,
+                text,
+            }) => partial_commit = Some(text),
+            agent::Event::StateChanged(agent::SessionState::Cancelled) => {
+                saw_cancelled_state = true;
+            }
+            agent::Event::StateChanged(agent::SessionState::WaitingForUser) => break,
+            agent::Event::Error(error) => {
+                panic!(
+                    "cancellation must not surface as an error: {}",
+                    error.message
+                )
+            }
+            other => panic!("unexpected event during cancellation: {other:?}"),
+        }
+    }
+
+    assert!(saw_cancelled_state, "expected a Cancelled state transition");
+    assert!(
+        saw_request_finished,
+        "expected a ProviderRequestFinished marker even when cancelled mid-turn"
+    );
+    let partial = partial_commit.expect("partial assistant text committed on cancel");
+    assert!(!partial.is_empty());
+    let full_response = "Mock response: slow please";
+    assert!(
+        full_response.starts_with(&partial) && partial != full_response,
+        "expected a strict partial prefix of {full_response:?}, got {partial:?}"
+    );
+}
+
+#[test]
+fn mock_agent_slow_turn_emits_provider_request_lifecycle_in_order() {
+    let provider = crate::providers::mock::MockProvider::new();
+    let handle = agent::Provider::start_session(
+        &provider,
+        agent::StartSession {
+            session_id: SessionId::new(),
+            provider_id: agent::Provider::provider_id(&provider),
+        },
+    );
+    let tx = handle.sender();
+    let rx = handle.events();
+
+    // Drain session-startup events (Created, init message, WaitingForUser).
+    for _ in 0..3 {
+        recv_event(&rx);
+    }
+
+    let _ = tx.send(agent::Command::UserMessage {
+        text: "slow please".to_string(),
+    });
+
+    #[derive(Debug, PartialEq)]
+    enum Marker {
+        Sent,
+        FirstToken,
+        Finished,
+    }
+
+    let mut markers = Vec::new();
+    loop {
+        match recv_event(&rx).event {
+            agent::Event::ProviderRequestSent(sent) => {
+                assert_eq!(sent.model, "mock");
+                markers.push(Marker::Sent);
+            }
+            agent::Event::ProviderRequestFirstToken => markers.push(Marker::FirstToken),
+            agent::Event::ProviderRequestFinished => markers.push(Marker::Finished),
+            agent::Event::StateChanged(agent::SessionState::WaitingForUser) => break,
+            _ => {}
+        }
+    }
+
+    assert_eq!(
+        markers,
+        vec![Marker::Sent, Marker::FirstToken, Marker::Finished],
+        "a turn must report the provider request lifecycle in sent -> first-token -> \
+         finished order, exactly once each"
+    );
+}
+
+#[test]
+fn mock_agent_cancel_marks_pending_approval_cancelled_and_recovers() {
+    let provider = crate::providers::mock::MockProvider::new();
+    let handle = agent::Provider::start_session(
+        &provider,
+        agent::StartSession {
+            session_id: SessionId::new(),
+            provider_id: agent::Provider::provider_id(&provider),
+        },
+    );
+    let tx = handle.sender();
+    let rx = handle.events();
+
+    for _ in 0..3 {
+        recv_event(&rx);
+    }
+
+    let _ = tx.send(agent::Command::UserMessage {
+        text: "please use a tool".to_string(),
+    });
+    assert_eq!(
+        recv_event(&rx).event,
+        agent::Event::StateChanged(agent::SessionState::Running)
+    );
+    assert!(matches!(
+        recv_event(&rx).event,
+        agent::Event::MessageCommitted(agent::Message {
+            role: agent::MessageRole::User,
+            ..
+        })
+    ));
+    let call_id = match recv_event(&rx).event {
+        agent::Event::ToolCallRequested(request) => {
+            assert_eq!(request.tool_id, "mock.approval_required");
+            request.call_id
+        }
+        other => panic!("expected a tool call request, got {other:?}"),
+    };
+
+    // Cancel while the approval is still pending.
+    let _ = tx.send(agent::Command::Cancel { request_id: None });
+
+    match recv_event(&rx).event {
+        agent::Event::ToolCallFinished(result) => {
+            assert_eq!(result.call_id, call_id);
+            assert_eq!(result.output["cancelled"], true);
+        }
+        other => panic!("expected the pending tool call to finish as cancelled, got {other:?}"),
+    }
+    assert_eq!(
+        recv_event(&rx).event,
+        agent::Event::StateChanged(agent::SessionState::Cancelled)
+    );
+    assert_eq!(
+        recv_event(&rx).event,
+        agent::Event::StateChanged(agent::SessionState::WaitingForUser)
+    );
+
+    // A tool result arriving late for the cancelled call is accepted and
+    // silently dropped — no further events are produced for it.
+    let _ = tx.send(agent::Command::ToolCallResult(agent::ToolCallResult {
+        call_id,
+        output: serde_json::json!({ "ignored": true }),
+    }));
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(200))
+            .is_err(),
+        "a late tool call result after cancel must be silently dropped"
+    );
+
+    // The session still accepts a new user message after the cancelled turn.
+    let _ = tx.send(agent::Command::UserMessage {
+        text: "hello again".to_string(),
+    });
+    assert_eq!(
+        recv_event(&rx).event,
+        agent::Event::StateChanged(agent::SessionState::Running)
+    );
+    assert!(matches!(
+        recv_event(&rx).event,
+        agent::Event::MessageCommitted(agent::Message {
+            role: agent::MessageRole::User,
+            text,
+        }) if text == "hello again"
+    ));
+    assert!(matches!(
+        recv_event(&rx).event,
+        agent::Event::MessageCommitted(agent::Message {
+            role: agent::MessageRole::Assistant,
+            text,
+        }) if text == "Mock response: hello again"
+    ));
+    assert_eq!(
+        recv_event(&rx).event,
+        agent::Event::StateChanged(agent::SessionState::WaitingForUser)
+    );
+}
+
+#[test]
+fn system_prompt_reports_environment_facts() {
+    let environment = SessionEnvironment {
+        cwd: std::path::PathBuf::from("/home/user/project"),
+        os: "linux",
+        git_repo: true,
+    };
+
+    let prompt = system_prompt(&environment);
+
+    assert!(prompt.contains("/home/user/project"));
+    assert!(prompt.contains("linux"));
+    assert!(prompt.contains("Git repository: yes"));
+}
+
+#[test]
+fn system_prompt_reports_non_git_directory() {
+    let environment = SessionEnvironment {
+        cwd: std::path::PathBuf::from("/tmp"),
+        os: "macos",
+        git_repo: false,
+    };
+
+    let prompt = system_prompt(&environment);
+
+    assert!(prompt.contains("Git repository: no"));
+}
+
+#[test]
+fn system_prompt_stays_within_line_budget() {
+    // docs/agent-tools-design.md's "System Prompt" section calls for a lean
+    // prompt (~30 lines) — no step-by-step workflow prescriptions.
+    const LINE_BUDGET: usize = 30;
+    let environment = SessionEnvironment {
+        cwd: std::path::PathBuf::from("/home/user/project"),
+        os: "linux",
+        git_repo: true,
+    };
+
+    let line_count = system_prompt(&environment).lines().count();
+
+    assert!(
+        line_count <= LINE_BUDGET,
+        "system prompt grew to {line_count} lines, budget is {LINE_BUDGET}"
+    );
+}
+
+#[test]
+fn system_prompt_carries_tool_policy_and_retry_nudge() {
+    let prompt = system_prompt(&SessionEnvironment {
+        cwd: std::path::PathBuf::from("/repo"),
+        os: "linux",
+        git_repo: true,
+    });
+
+    let lower = prompt.to_ascii_lowercase();
+    assert!(lower.contains("absolute path"));
+    assert!(lower.contains("retry"));
+}
+
+#[test]
+fn system_prompt_carries_destructive_action_caution() {
+    let prompt = system_prompt(&SessionEnvironment {
+        cwd: std::path::PathBuf::from("/repo"),
+        os: "linux",
+        git_repo: true,
+    });
+
+    assert!(prompt.to_ascii_lowercase().contains("destructive"));
+}
+
+#[test]
+fn current_environment_reports_this_process_cwd() {
+    let environment = SessionEnvironment::current();
+
+    assert_eq!(environment.cwd, std::env::current_dir().unwrap());
+    assert_eq!(environment.os, std::env::consts::OS);
+}
+
+#[test]
+fn provider_registry_starts_builtin_provider() {
+    let registry = agent::ProviderRegistry::builtin();
+    let provider_id = registry.default_provider_id();
+    let handle = registry
+        .start_session(&provider_id, SessionId::new())
+        .expect("builtin provider");
+
+    let first = handle.events().recv().expect("first event");
+    assert_eq!(
+        first.event,
+        agent::Event::StateChanged(agent::SessionState::Created)
+    );
+}

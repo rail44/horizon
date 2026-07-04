@@ -16,7 +16,7 @@ about *reading* that history, not the app's live runtime.
   `HORIZON_AGENT_EVENT_LOG` env var, then `config.toml`'s `[agent].event_log_path`,
   falling back to `$XDG_DATA_HOME/horizon/agent-events.jsonl` (commonly
   `~/.local/share/horizon/agent-events.jsonl` on Linux if `XDG_DATA_HOME` is
-  unset) — see `src/agent/config.rs`'s `AgentPersistenceConfig`. One file, one
+  unset) — see `crates/horizon-agent/src/config.rs`'s `AgentPersistenceConfig`. One file, one
   background writer thread, shared by every agent session in the process —
   sessions interleave in it, distinguished by `session_id`.
 - **DuckDB projection** (optional, rebuildable, *not* the source of truth):
@@ -27,11 +27,11 @@ about *reading* that history, not the app's live runtime.
 - **Bash tool output spill files**: every `bash` tool call writes its full,
   uncapped output to `<temp dir>/horizon-bash-<uuid>.log`, referenced by the
   tool result's `output_file` field — always, regardless of whether the
-  in-context output was truncated (`src/agent/tools/bash/output.rs`).
+  in-context output was truncated (`crates/horizon-agent/src/tools/bash/output.rs`).
 
 ## JSONL record shape
 
-Each line is one `agent::persistence::event_log::Record` (`src/agent/persistence/event_log/mod.rs`):
+Each line is one `agent::persistence::event_log::Record` (`crates/horizon-agent/src/persistence/event_log/mod.rs`):
 
 | field | meaning |
 |---|---|
@@ -207,7 +207,7 @@ with Horizon and must be installed independently. Only useful if
 `HORIZON_AGENT_STATE_DB` was set the last time Horizon started; there is
 nothing to inspect if the file doesn't exist.
 
-Schema (`src/agent/persistence/projection/duckdb/schema.rs`):
+Schema (`crates/horizon-agent/src/persistence/projection/duckdb/schema.rs`):
 
 ```
 agent_sessions(session_id PK, provider_id, last_sequence, updated_at)

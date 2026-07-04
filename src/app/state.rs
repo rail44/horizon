@@ -51,7 +51,7 @@ impl AppState {
             control_mode: RwSignal::new(ControlMode::Commands),
             overview_selection: RwSignal::new(0_usize),
             agent_state_status: RwSignal::new(None::<String>),
-            agent_config: AgentConfig::from_env(),
+            agent_config: crate::agent::load_agent_config(),
             terminal_dump: std::env::var_os("HORIZON_TERMINAL_DUMP").map(PathBuf::from),
             clipboard_dump: std::env::var_os("HORIZON_CLIPBOARD_DUMP").map(PathBuf::from),
             status_dump: std::env::var_os("HORIZON_STATUS_DUMP").map(PathBuf::from),
