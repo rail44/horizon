@@ -48,9 +48,9 @@ fn palette_kind_label(item: &PaletteItem) -> &'static str {
 
 fn palette_kind_color(item: &PaletteItem) -> Color {
     match item {
-        PaletteItem::Command(_) => Color::rgb8(132, 220, 198),
-        PaletteItem::DetachedSession { .. } => Color::rgb8(126, 170, 255),
-        PaletteItem::Tab { .. } => Color::rgb8(224, 184, 104),
+        PaletteItem::Command(_) => Color::from_rgb8(132, 220, 198),
+        PaletteItem::DetachedSession { .. } => Color::from_rgb8(126, 170, 255),
+        PaletteItem::Tab { .. } => Color::from_rgb8(224, 184, 104),
     }
 }
 
@@ -96,9 +96,9 @@ fn overview_kind_label(item: &OverviewItem) -> &'static str {
 
 fn overview_kind_color(item: &OverviewItem) -> Color {
     match item {
-        OverviewItem::Tab { .. } => Color::rgb8(224, 184, 104),
-        OverviewItem::DetachedSession { .. } => Color::rgb8(126, 170, 255),
-        OverviewItem::Pane { .. } => Color::rgb8(132, 220, 198),
+        OverviewItem::Tab { .. } => Color::from_rgb8(224, 184, 104),
+        OverviewItem::DetachedSession { .. } => Color::from_rgb8(126, 170, 255),
+        OverviewItem::Pane { .. } => Color::from_rgb8(132, 220, 198),
     }
 }
 

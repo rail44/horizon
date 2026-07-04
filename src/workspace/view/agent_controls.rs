@@ -32,14 +32,14 @@ pub(super) fn agent_composer(
         }
 
         let border = if active() {
-            floem::peniko::Color::rgb8(132, 220, 198)
+            floem::peniko::Color::from_rgb8(132, 220, 198)
         } else {
-            floem::peniko::Color::rgb8(57, 64, 76)
+            floem::peniko::Color::from_rgb8(57, 64, 76)
         };
         let color = if draft.with(|text| text.is_empty()) && preedit().is_none() {
-            floem::peniko::Color::rgb8(115, 122, 136)
+            floem::peniko::Color::from_rgb8(115, 122, 136)
         } else {
-            floem::peniko::Color::rgb8(233, 236, 242)
+            floem::peniko::Color::from_rgb8(233, 236, 242)
         };
 
         s.width_full()
@@ -53,7 +53,7 @@ pub(super) fn agent_composer(
             .font_size(12)
             .line_height(1.2)
             .color(color)
-            .background(floem::peniko::Color::rgb8(21, 24, 30))
+            .background(floem::peniko::Color::from_rgb8(21, 24, 30))
             .border(1.0)
             .border_color(border)
     })
@@ -79,16 +79,16 @@ pub(super) fn agent_approval_actions(
             visible,
             pending_approval,
             on_approve,
-            floem::peniko::Color::rgb8(48, 84, 75),
-            floem::peniko::Color::rgb8(132, 220, 198),
+            floem::peniko::Color::from_rgb8(48, 84, 75),
+            floem::peniko::Color::from_rgb8(132, 220, 198),
         ),
         agent_approval_button(
             "Deny",
             visible,
             pending_approval,
             on_deny,
-            floem::peniko::Color::rgb8(80, 50, 54),
-            floem::peniko::Color::rgb8(246, 137, 146),
+            floem::peniko::Color::from_rgb8(80, 50, 54),
+            floem::peniko::Color::from_rgb8(246, 137, 146),
         ),
     ))
     .style(move |s| {
@@ -130,10 +130,10 @@ pub(super) fn agent_cancel_action(
                 .padding_horiz(20)
                 .font_family(HORIZON_FONT_FAMILY.to_string())
                 .font_size(12)
-                .color(floem::peniko::Color::rgb8(233, 236, 242))
-                .background(floem::peniko::Color::rgb8(74, 60, 40))
+                .color(floem::peniko::Color::from_rgb8(233, 236, 242))
+                .background(floem::peniko::Color::from_rgb8(74, 60, 40))
                 .border(1.0)
-                .border_color(floem::peniko::Color::rgb8(224, 176, 108))
+                .border_color(floem::peniko::Color::from_rgb8(224, 176, 108))
         })
 }
 
@@ -210,7 +210,7 @@ fn agent_approval_button(
                 .justify_center()
                 .font_family(HORIZON_FONT_FAMILY.to_string())
                 .font_size(12)
-                .color(floem::peniko::Color::rgb8(233, 236, 242))
+                .color(floem::peniko::Color::from_rgb8(233, 236, 242))
                 .background(background)
                 .border(1.0)
                 .border_color(border)

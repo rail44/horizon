@@ -16,12 +16,12 @@ pub(super) fn build_preedit_layout(text: Option<&str>) -> Option<PreeditLayout> 
     let text = text.filter(|text| !text.is_empty())?;
     let family = terminal_font_family();
     let attrs = Attrs::new()
-        .color(Color::rgb8(233, 236, 242))
+        .color(Color::from_rgb8(233, 236, 242))
         .family(&family)
         .font_size(FONT_SIZE)
         .line_height(floem::text::LineHeightValue::Px(LINE_HEIGHT as f32));
     let mut layout = TextLayout::new();
-    layout.set_text(text, AttrsList::new(attrs));
+    layout.set_text(text, AttrsList::new(attrs), None);
     Some(PreeditLayout {
         text: layout,
         columns: UnicodeWidthStr::width(text),

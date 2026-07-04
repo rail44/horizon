@@ -56,7 +56,7 @@ pub(crate) fn agent_frame_view(
                 .flex_basis(0.0)
                 .flex_grow(1.0)
                 .min_height(0.0)
-                .background(Color::rgb8(24, 27, 32))
+                .background(Color::from_rgb8(24, 27, 32))
         })
         .on_event(EventListener::PointerWheel, move |event| {
             if let Event::PointerWheel(pointer) = event {
@@ -204,9 +204,9 @@ fn markdown_line_view(line: MarkdownLine, tone: TranscriptTone) -> impl IntoView
                 .font_size(12)
                 .padding_horiz(8)
                 .padding_vert(3)
-                .background(Color::rgb8(20, 23, 28))
+                .background(Color::from_rgb8(20, 23, 28))
                 .border(1.0)
-                .border_color(Color::rgb8(43, 49, 60)),
+                .border_color(Color::from_rgb8(43, 49, 60)),
             MarkdownLineKind::Blank => s.font_size(6).height(6),
             MarkdownLineKind::Paragraph => s.font_size(12),
         };

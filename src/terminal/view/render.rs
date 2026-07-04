@@ -12,7 +12,7 @@ pub(super) fn draw_block_element(
     cell_rect: Rect,
     fg: [u8; 3],
 ) {
-    let color = Color::rgb8(fg[0], fg[1], fg[2]);
+    let color = Color::from_rgb8(fg[0], fg[1], fg[2]);
     match block {
         BlockElement::Full => cx.fill(&expanded_rect(cell_rect), color, 0.0),
         BlockElement::UpperFraction(eighths) => {

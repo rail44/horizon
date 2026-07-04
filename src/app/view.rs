@@ -45,7 +45,7 @@ pub fn app_view() -> impl IntoView {
         })
         .style(move |s| {
             s.size_full()
-                .background(floem::peniko::Color::rgb8(22, 24, 29))
+                .background(floem::peniko::Color::from_rgb8(22, 24, 29))
         })
 }
 

@@ -90,6 +90,14 @@ fi
 
 echo "window_id=$window_id" >> "$metadata"
 
+# Accepted upstream input-readiness regression (see docs/trust-boundaries.md,
+# "floem" entry): for ~0.3-0.5s after the window appears, the Lapce git pin
+# silently drops all input. Settle before sending any xdotool input
+# (window moves/resizes, focus click, typed text) so interactions are
+# reliable. Override with HORIZON_INPUT_SETTLE; set to 0 to disable.
+input_settle="${HORIZON_INPUT_SETTLE:-0.7}"
+sleep "$input_settle"
+
 DISPLAY="$client_display" xdotool windowmove "$window_id" 0 0
 DISPLAY="$client_display" xdotool windowsize "$window_id" 1100 720
 DISPLAY="$client_display" xdotool windowfocus "$window_id" 2>/dev/null || true

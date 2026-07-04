@@ -113,12 +113,12 @@ fn text_cell(
     family: &[FamilyOwned],
 ) -> CellLayout {
     let attrs = Attrs::new()
-        .color(Color::rgb8(fg[0], fg[1], fg[2]))
+        .color(Color::from_rgb8(fg[0], fg[1], fg[2]))
         .family(family)
         .font_size(FONT_SIZE)
         .line_height(floem::text::LineHeightValue::Px(LINE_HEIGHT as f32));
     let mut layout = TextLayout::new();
-    layout.set_text(&text, AttrsList::new(attrs));
+    layout.set_text(&text, AttrsList::new(attrs), None);
     let block = block_element(text.as_str());
     CellLayout {
         text: layout,

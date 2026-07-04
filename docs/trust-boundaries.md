@@ -57,7 +57,15 @@ little and costs a protocol. Iterate via normal rebuilds.
   split: output interpretation / keyboard input encoding (incl. the kitty
   protocol; alacritty_terminal exposes no input-encoding API) / PTY and
   process I/O. Not redundant; keep.
-- **floem** — currently pinned to crates.io 0.2.0. A migration spike to
-  Lapce's git pin measured the compile-level cost as small (72 errors in
-  three mechanical categories). The move decision is pending the runtime
-  findings of the evaluation spike; record it here when made.
+- **floem** — moved (2026-07-04) from crates.io 0.2.0 to Lapce's git pin
+  (`31fa8f44`), the only rev battle-tested by a production app; strategy is
+  to bump when Lapce bumps and never track `main`. Compile-side cost was
+  small (71 errors, two mechanical categories); glyph rendering is
+  pixel-identical (that rev still uses cosmic-text, not Parley). **Known
+  accepted regression:** for ~0.3-0.5s after the window appears, all input
+  is silently dropped (absent on 0.2.0; likely the windowing-layer switch
+  from the floem-winit fork to a direct winit rev). Accepted by the owner
+  for a solo daily driver; the headless verification scripts compensate
+  with a post-window settle delay. Re-check at each Lapce bump whether the
+  window disappears; a reproducible 5/5 bisection exists if we choose to
+  report it upstream.

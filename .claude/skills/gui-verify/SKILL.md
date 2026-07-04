@@ -114,3 +114,15 @@ scenarios never execute and `index.txt` only lists completed ones.
   overridable) and unsets `WAYLAND_DISPLAY` so rendering works headless.
 - The window is resized to 1100x720 and clicked at (20, 90) to focus the
   terminal pane before any typing.
+- `xdotool type` silently drops non-ASCII characters (CJK, emoji,
+  box-drawing) in this headless setup rather than erroring. To verify such
+  glyphs, write them to a UTF-8 file and drive `cat <file>` through
+  `HORIZON_TEST_TEXT` instead of typing them directly.
+- Floem's git pin has an accepted input-readiness regression: for ~0.3-0.5s
+  after the window appears, all input is silently dropped (see
+  `docs/trust-boundaries.md`, "floem" entry). `check-terminal-visual.sh`
+  sleeps `HORIZON_INPUT_SETTLE` (default `0.7`) right after the window is
+  found and before any xdotool input (moves, focus click, typed text) to
+  compensate. `run-terminal-smoke.sh` inherits this since it drives the same
+  script; raise it if a scenario still flakes, or set it to `0` once/if the
+  regression is fixed upstream.

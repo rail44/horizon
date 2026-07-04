@@ -4,19 +4,19 @@ use std::sync::OnceLock;
 use floem::peniko::Color;
 
 pub(crate) fn text_primary() -> Color {
-    resolve("text_primary", Color::rgb8(233, 236, 242))
+    resolve("text_primary", Color::from_rgb8(233, 236, 242))
 }
 
 pub(crate) fn text_muted() -> Color {
-    resolve("text_muted", Color::rgb8(178, 185, 198))
+    resolve("text_muted", Color::from_rgb8(178, 185, 198))
 }
 
 pub(crate) fn text_subtle() -> Color {
-    resolve("text_subtle", Color::rgb8(115, 122, 136))
+    resolve("text_subtle", Color::from_rgb8(115, 122, 136))
 }
 
 pub(crate) fn accent() -> Color {
-    resolve("accent", Color::rgb8(132, 220, 198))
+    resolve("accent", Color::from_rgb8(132, 220, 198))
 }
 
 /// The app's one destructive/danger accent — the same red used for the
@@ -25,35 +25,35 @@ pub(crate) fn accent() -> Color {
 /// "reject this" and "this ends something" read as the same kind of
 /// warning.
 pub(crate) fn danger() -> Color {
-    resolve("danger", Color::rgb8(246, 137, 146))
+    resolve("danger", Color::from_rgb8(246, 137, 146))
 }
 
 pub(crate) fn surface_base() -> Color {
-    resolve("surface_base", Color::rgb8(22, 24, 29))
+    resolve("surface_base", Color::from_rgb8(22, 24, 29))
 }
 
 pub(crate) fn surface_panel() -> Color {
-    resolve("surface_panel", Color::rgb8(24, 27, 32))
+    resolve("surface_panel", Color::from_rgb8(24, 27, 32))
 }
 
 pub(crate) fn surface_raised() -> Color {
-    resolve("surface_raised", Color::rgb8(31, 34, 41))
+    resolve("surface_raised", Color::from_rgb8(31, 34, 41))
 }
 
 pub(crate) fn surface_chrome() -> Color {
-    resolve("surface_chrome", Color::rgb8(25, 28, 34))
+    resolve("surface_chrome", Color::from_rgb8(25, 28, 34))
 }
 
 pub(crate) fn surface_selected() -> Color {
-    resolve("surface_selected", Color::rgb8(54, 59, 70))
+    resolve("surface_selected", Color::from_rgb8(54, 59, 70))
 }
 
 pub(crate) fn border_default() -> Color {
-    resolve("border_default", Color::rgb8(54, 59, 70))
+    resolve("border_default", Color::from_rgb8(54, 59, 70))
 }
 
 pub(crate) fn border_subtle() -> Color {
-    resolve("border_subtle", Color::rgb8(42, 46, 55))
+    resolve("border_subtle", Color::from_rgb8(42, 46, 55))
 }
 
 // --- config-driven overrides --------------------------------------------
@@ -143,7 +143,7 @@ fn parse_hex_color(input: &str) -> Result<Color, String> {
         _ => None,
     };
 
-    rgb.map(|(r, g, b)| Color::rgb8(r, g, b))
+    rgb.map(|(r, g, b)| Color::from_rgb8(r, g, b))
         .ok_or_else(|| format!("invalid hex color `{input}`: expected `#rgb` or `#rrggbb`"))
 }
 
@@ -153,17 +153,23 @@ mod tests {
 
     #[test]
     fn parses_six_digit_hex_with_hash() {
-        assert_eq!(parse_hex_color("#84dcc6"), Ok(Color::rgb8(132, 220, 198)));
+        assert_eq!(
+            parse_hex_color("#84dcc6"),
+            Ok(Color::from_rgb8(132, 220, 198))
+        );
     }
 
     #[test]
     fn parses_six_digit_hex_without_hash() {
-        assert_eq!(parse_hex_color("84DCC6"), Ok(Color::rgb8(132, 220, 198)));
+        assert_eq!(
+            parse_hex_color("84DCC6"),
+            Ok(Color::from_rgb8(132, 220, 198))
+        );
     }
 
     #[test]
     fn parses_three_digit_shorthand_hex() {
-        assert_eq!(parse_hex_color("#0f0"), Ok(Color::rgb8(0, 255, 0)));
+        assert_eq!(parse_hex_color("#0f0"), Ok(Color::from_rgb8(0, 255, 0)));
     }
 
     #[test]
@@ -183,7 +189,10 @@ mod tests {
 
         let overrides = build_overrides(&entries);
 
-        assert_eq!(overrides.get("accent"), Some(&Color::rgb8(255, 0, 255)));
+        assert_eq!(
+            overrides.get("accent"),
+            Some(&Color::from_rgb8(255, 0, 255))
+        );
     }
 
     #[test]

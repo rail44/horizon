@@ -18,9 +18,9 @@ pub(super) fn chrome_close_button(
                 .justify_center()
                 .font_size(13)
                 .color(theme::text_muted())
-                .background(floem::peniko::Color::rgb8(35, 39, 48))
+                .background(floem::peniko::Color::from_rgb8(35, 39, 48))
                 .border(1.0)
-                .border_color(floem::peniko::Color::rgb8(57, 64, 76))
+                .border_color(floem::peniko::Color::from_rgb8(57, 64, 76))
         })
 }
 
@@ -52,7 +52,7 @@ pub(super) fn pane_header(
         let background = if active() {
             theme::surface_selected()
         } else {
-            floem::peniko::Color::rgb8(32, 36, 45)
+            floem::peniko::Color::from_rgb8(32, 36, 45)
         };
 
         s.width_full()

@@ -25,12 +25,12 @@ pub(super) fn measured_cell_width() -> f64 {
     let sample = "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm";
     let family = terminal_font_family();
     let attrs = Attrs::new()
-        .color(Color::rgb8(233, 236, 242))
+        .color(Color::from_rgb8(233, 236, 242))
         .family(&family)
         .font_size(FONT_SIZE)
         .line_height(floem::text::LineHeightValue::Px(LINE_HEIGHT as f32));
     let mut layout = TextLayout::new();
-    layout.set_text(sample, AttrsList::new(attrs));
+    layout.set_text(sample, AttrsList::new(attrs), None);
     let width = layout.size().width / sample.len() as f64;
 
     if width.is_finite() && width > 1.0 {

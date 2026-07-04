@@ -132,7 +132,7 @@ mod tests {
     fn row(destructive: bool) -> ListRow {
         ListRow {
             badge: "COMMAND".to_string(),
-            badge_color: Color::rgb8(132, 220, 198),
+            badge_color: Color::from_rgb8(132, 220, 198),
             title: "Terminate Active Session".to_string(),
             description: "Terminate the active session and close its panes.".to_string(),
             enabled: true,
