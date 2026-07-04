@@ -4,6 +4,7 @@ mod grep;
 mod read;
 mod safety;
 mod staleness;
+mod traverse;
 mod write;
 
 use serde_json::Value;

@@ -13,6 +13,11 @@ pub(crate) struct ListRow {
     pub(crate) title: String,
     pub(crate) description: String,
     pub(crate) enabled: bool,
+    /// Marks a destructive command row (see `app::commands::CommandSpec::
+    /// destructive`) so it renders with a distinct, danger-colored badge —
+    /// `docs/ux-principles.md` requires termination to be "visually
+    /// distinct from closing a surface".
+    pub(crate) destructive: bool,
 }
 
 /// Per-surface sizing so overview and palette can share one row while keeping
@@ -41,6 +46,7 @@ pub(crate) fn list_row(
             let Some(r) = row() else {
                 return s.hide();
             };
+            let badge_color = effective_badge_color(&r);
 
             s.width(style.badge_width)
                 .height(22)
@@ -48,8 +54,8 @@ pub(crate) fn list_row(
                 .justify_center()
                 .font_size(10)
                 .border(1.0)
-                .border_color(r.badge_color)
-                .color(r.badge_color)
+                .border_color(badge_color)
+                .color(badge_color)
         }),
         v_stack((
             label(move || row().map(|r| r.title).unwrap_or_default()).style(move |s| {
@@ -103,4 +109,45 @@ pub(crate) fn list_row(
             .background(background)
             .color(text_color)
     })
+}
+
+/// The badge color a row actually renders with: `row.badge_color` (the
+/// item-kind color, e.g. teal for a command) unless the row is marked
+/// `destructive`, in which case the danger accent overrides it regardless
+/// of kind — a destructive command should read as a warning first.
+fn effective_badge_color(row: &ListRow) -> Color {
+    if row.destructive {
+        theme::danger()
+    } else {
+        row.badge_color
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{effective_badge_color, ListRow};
+    use crate::ui::theme;
+    use floem::peniko::Color;
+
+    fn row(destructive: bool) -> ListRow {
+        ListRow {
+            badge: "COMMAND".to_string(),
+            badge_color: Color::rgb8(132, 220, 198),
+            title: "Terminate Active Session".to_string(),
+            description: "Terminate the active session and close its panes.".to_string(),
+            enabled: true,
+            destructive,
+        }
+    }
+
+    #[test]
+    fn destructive_row_overrides_badge_color_with_danger_accent() {
+        assert_eq!(effective_badge_color(&row(true)), theme::danger());
+    }
+
+    #[test]
+    fn non_destructive_row_keeps_its_own_badge_color() {
+        let row = row(false);
+        assert_eq!(effective_badge_color(&row), row.badge_color);
+    }
 }

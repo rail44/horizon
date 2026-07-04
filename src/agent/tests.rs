@@ -167,7 +167,7 @@ fn runtime_state_store_enqueues_events_to_jsonl_log() {
     ));
     let session_id = SessionId::new();
     let provider_id = agent::ProviderId("builtin.agent.rig".to_string());
-    let writer =
+    let (writer, _report) =
         crate::agent::persistence::event_log::WriterHandle::open(&path).expect("event log");
     let store = crate::agent::live::LiveState::with_event_log(
         session_id,
@@ -213,7 +213,7 @@ fn runtime_state_store_folds_tool_call_progress_but_excludes_it_from_the_jsonl_l
         uuid::Uuid::new_v4()
     ));
     let session_id = SessionId::new();
-    let writer =
+    let (writer, _report) =
         crate::agent::persistence::event_log::WriterHandle::open(&path).expect("event log");
     let store = crate::agent::live::LiveState::with_event_log(session_id, None, writer.clone());
 

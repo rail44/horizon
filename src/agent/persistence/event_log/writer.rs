@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
-use super::{read, Record};
+use super::{read, ReadReport, Record};
 
 /// A single append-only JSONL event log file must have **at most one**
 /// `WriterHandle` alive per process. Each handle owns its own background
@@ -39,7 +39,14 @@ pub(crate) struct WriterHandle {
 }
 
 impl WriterHandle {
-    pub(crate) fn open(path: impl AsRef<Path>) -> Result<Self> {
+    /// Opens (or creates) the event log at `path`. This has to read the
+    /// whole file to compute `next_sequence` (one past the highest sequence
+    /// already on disk), so the resulting [`ReadReport`] is handed back
+    /// alongside the handle — callers that also need the log's contents
+    /// (e.g. replaying it into the DuckDB projection, in
+    /// `app::runtime::agent::rebuild_agent_duckdb_from_event_log`) reuse
+    /// this report instead of reading the file a second time.
+    pub(crate) fn open(path: impl AsRef<Path>) -> Result<(Self, ReadReport)> {
         let path = path.as_ref();
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -67,10 +74,11 @@ impl WriterHandle {
         let writer_path = path.to_path_buf();
         thread::spawn(move || run_writer(writer_path, rx));
 
-        Ok(Self {
+        let handle = Self {
             tx,
             next_sequence: Arc::new(Mutex::new(next_sequence)),
-        })
+        };
+        Ok((handle, report))
     }
 
     pub(crate) fn append(&self, mut record: Record) -> Result<()> {

@@ -1,9 +1,9 @@
 use globset::Glob;
 use serde_json::{json, Value};
-use walkdir::WalkDir;
 
 use super::error_output;
 use super::safety::resolve_path;
+use super::traverse::{self, MAX_VISITED_FILES};
 use crate::agent::tools::state::ToolSessionState;
 
 /// Default number of matches returned when the caller doesn't pass `limit`.
@@ -38,14 +38,17 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
 
     let mut matches = Vec::new();
     let mut total_matches = 0usize;
-    for entry in WalkDir::new(&base)
-        .into_iter()
-        .filter_entry(|entry| entry.file_name().to_str() != Some(".git"))
-        .filter_map(Result::ok)
-    {
+    let mut visited = 0usize;
+    let mut scan_truncated = false;
+    for entry in traverse::walk(&base) {
         if !entry.file_type().is_file() {
             continue;
         }
+        if visited >= MAX_VISITED_FILES {
+            scan_truncated = true;
+            break;
+        }
+        visited += 1;
         let relative = entry.path().strip_prefix(&base).unwrap_or(entry.path());
         if !matcher.is_match(relative) {
             continue;
@@ -56,12 +59,16 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
         }
     }
 
-    json!({
+    let mut output = json!({
         "base_path": base_arg,
         "pattern": pattern,
         "matches": matches,
         "returned_count": matches.len(),
         "total_matches": total_matches,
         "truncated": total_matches > matches.len(),
-    })
+    });
+    if scan_truncated {
+        output["note"] = json!(traverse::scan_truncated_note(visited));
+    }
+    output
 }

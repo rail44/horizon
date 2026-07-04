@@ -22,6 +22,13 @@ pub(crate) struct CommandSpec {
     pub(crate) title: &'static str,
     pub(crate) category: CommandCategory,
     pub(crate) description: &'static str,
+    /// Marks a command as destructive (ends a session, discards state, ...)
+    /// so surfaces that list commands (the palette) can give it a visually
+    /// distinct treatment, per `docs/ux-principles.md`'s "termination should
+    /// be explicit and visually distinct from closing a surface". Carried on
+    /// the spec rather than matched off `title` so future destructive
+    /// commands inherit the treatment automatically.
+    pub(crate) destructive: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -44,42 +51,49 @@ pub(crate) fn core_commands() -> Vec<CommandSpec> {
             title: "New Terminal",
             category: CommandCategory::Terminal,
             description: "Open a new terminal tab.",
+            destructive: false,
         },
         CommandSpec {
             id: CommandId::NewAgent,
             title: "New Agent",
             category: CommandCategory::Agent,
             description: "Open a new agent tab.",
+            destructive: false,
         },
         CommandSpec {
             id: CommandId::SplitActivePane,
             title: "Split Active Pane",
             category: CommandCategory::Workspace,
             description: "Split the active pane in the current tab.",
+            destructive: false,
         },
         CommandSpec {
             id: CommandId::FocusNextPane,
             title: "Focus Next Pane",
             category: CommandCategory::Workspace,
             description: "Move focus to the next pane in the active tab.",
+            destructive: false,
         },
         CommandSpec {
             id: CommandId::CloseActivePane,
             title: "Close Active Pane",
             category: CommandCategory::Workspace,
             description: "Close the active pane when another pane remains.",
+            destructive: false,
         },
         CommandSpec {
             id: CommandId::CloseActiveTab,
             title: "Close Active Tab",
             category: CommandCategory::Workspace,
             description: "Close the active tab when another tab remains.",
+            destructive: false,
         },
         CommandSpec {
             id: CommandId::TerminateActiveSession,
             title: "Terminate Active Session",
             category: CommandCategory::Workspace,
             description: "Terminate the active session and close its panes.",
+            destructive: true,
         },
     ]
 }
@@ -155,6 +169,18 @@ mod tests {
         for command in core_commands() {
             assert!(!command.title.is_empty());
             assert!(!command.description.is_empty());
+        }
+    }
+
+    #[test]
+    fn only_terminate_active_session_is_marked_destructive() {
+        for command in core_commands() {
+            assert_eq!(
+                command.destructive,
+                command.id == CommandId::TerminateActiveSession,
+                "{:?} should only be destructive if it's Terminate Active Session",
+                command.id
+            );
         }
     }
 

@@ -42,7 +42,10 @@ pub(super) fn spawn_rig_session(
         // session's lifetime.
         let environment = SessionEnvironment::current();
 
-        let Ok(runtime) = tokio::runtime::Runtime::new() else {
+        let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        else {
             let _ = events_tx.send(
                 Event::Error(Error {
                     message: "Rig session unavailable: failed to create Tokio runtime.".to_string(),

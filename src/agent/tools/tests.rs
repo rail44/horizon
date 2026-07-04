@@ -569,6 +569,122 @@ fn fs_grep_rejects_invalid_regex() {
     assert!(is_error(&output));
 }
 
+/// Populates `root` with one visible file and one file each under `.git`,
+/// `target`, and `node_modules` — the default traversal skip list.
+fn populate_with_skipped_dirs(root: &Path) {
+    fs::write(root.join("keep.txt"), "content").unwrap();
+    for skipped_dir in [".git", "target", "node_modules"] {
+        let dir = root.join(skipped_dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("hidden.txt"), "content").unwrap();
+    }
+}
+
+#[test]
+fn fs_glob_skips_default_ignored_directories() {
+    let root = temp_workspace("glob-skip-dirs");
+    populate_with_skipped_dirs(&root);
+    let tool_state = ToolSessionState::new(root.clone());
+
+    let output = fs_tools::execute_auto(
+        &tool_state,
+        "fs.glob",
+        &json!({ "base_path": root.display().to_string(), "pattern": "*.txt" }),
+    )
+    .expect("fs.glob is auto-executed");
+
+    assert!(!is_error(&output));
+    assert_eq!(output["total_matches"], 1);
+    assert_eq!(
+        output["matches"][0].as_str().unwrap(),
+        root.join("keep.txt").display().to_string()
+    );
+}
+
+#[test]
+fn fs_grep_skips_default_ignored_directories() {
+    let root = temp_workspace("grep-skip-dirs");
+    populate_with_skipped_dirs(&root);
+    let tool_state = ToolSessionState::new(root.clone());
+
+    let output = fs_tools::execute_auto(
+        &tool_state,
+        "fs.grep",
+        &json!({ "base_path": root.display().to_string(), "pattern": "content" }),
+    )
+    .expect("fs.grep is auto-executed");
+
+    assert!(!is_error(&output));
+    assert_eq!(output["total_matches"], 1);
+    assert_eq!(
+        output["matches"][0]["path"].as_str().unwrap(),
+        root.join("keep.txt").display().to_string()
+    );
+}
+
+// The file-count and (grep-only) byte-count traversal caps below are
+// shrunk under `cfg(test)` (see `fs::traverse::MAX_VISITED_FILES` and
+// `fs::grep::MAX_GREP_BYTES`) specifically so these tests can trip them
+// without creating tens of thousands of files or dozens of megabytes of
+// content on disk.
+
+#[test]
+fn fs_glob_stops_at_file_count_cap_and_notes_truncation() {
+    let root = temp_workspace("glob-file-cap");
+    for index in 0..25 {
+        fs::write(root.join(format!("file-{index}.txt")), "content").unwrap();
+    }
+    let tool_state = ToolSessionState::new(root.clone());
+
+    let output = fs_tools::execute_auto(
+        &tool_state,
+        "fs.glob",
+        &json!({ "base_path": root.display().to_string(), "pattern": "*.txt" }),
+    )
+    .expect("fs.glob is auto-executed");
+
+    assert!(!is_error(&output));
+    let total_matches = output["total_matches"].as_u64().unwrap();
+    assert!(
+        total_matches < 25,
+        "expected the file-count cap to stop the scan early, got {total_matches}"
+    );
+    assert!(output["note"]
+        .as_str()
+        .expect("note present when the scan is truncated")
+        .contains("scan truncated"));
+}
+
+#[test]
+fn fs_grep_stops_at_byte_cap_and_notes_truncation() {
+    let root = temp_workspace("grep-byte-cap");
+    // Ten files well under the (test-shrunk) file-count cap, but whose
+    // combined content exceeds the (test-shrunk) byte cap — isolating the
+    // byte cap from the file-count cap.
+    for index in 0..10 {
+        fs::write(root.join(format!("file-{index}.txt")), "x".repeat(200)).unwrap();
+    }
+    let tool_state = ToolSessionState::new(root.clone());
+
+    let output = fs_tools::execute_auto(
+        &tool_state,
+        "fs.grep",
+        &json!({ "base_path": root.display().to_string(), "pattern": "x" }),
+    )
+    .expect("fs.grep is auto-executed");
+
+    assert!(!is_error(&output));
+    let total_matches = output["total_matches"].as_u64().unwrap();
+    assert!(
+        total_matches < 10,
+        "expected the byte cap to stop the scan before reading every file, got {total_matches}"
+    );
+    assert!(output["note"]
+        .as_str()
+        .expect("note present when the scan is truncated")
+        .contains("scan truncated"));
+}
+
 // --- approval wiring -----------------------------------------------------
 
 fn requested_frame(call_id: &ToolCallId, tool_id: &str, input: serde_json::Value) -> AgentFrame {

@@ -3,14 +3,24 @@ use std::fs;
 use globset::Glob;
 use regex::Regex;
 use serde_json::{json, Value};
-use walkdir::WalkDir;
 
 use super::error_output;
 use super::safety::resolve_path;
+use super::traverse::{self, MAX_VISITED_FILES};
 use crate::agent::tools::state::ToolSessionState;
 
 /// Default number of matches returned when the caller doesn't pass `limit`.
 const DEFAULT_LIMIT: usize = 100;
+
+/// Maximum total bytes of file content `fs.grep` will read in a single
+/// traversal before it stops opening further files. Bounds worst-case I/O
+/// independent of match count, on top of the `MAX_VISITED_FILES` cap.
+///
+/// Shrunk under `cfg(test)` — see `traverse::MAX_VISITED_FILES`.
+#[cfg(not(test))]
+const MAX_GREP_BYTES: u64 = 64 * 1024 * 1024;
+#[cfg(test)]
+const MAX_GREP_BYTES: u64 = 1024;
 
 pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
     let Some(base_arg) = input.get("base_path").and_then(Value::as_str) else {
@@ -52,14 +62,18 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
 
     let mut matches = Vec::new();
     let mut total_matches = 0usize;
-    for entry in WalkDir::new(&base)
-        .into_iter()
-        .filter_entry(|entry| entry.file_name().to_str() != Some(".git"))
-        .filter_map(Result::ok)
-    {
+    let mut visited = 0usize;
+    let mut bytes_read = 0u64;
+    let mut scan_truncated = false;
+    for entry in traverse::walk(&base) {
         if !entry.file_type().is_file() {
             continue;
         }
+        if visited >= MAX_VISITED_FILES || bytes_read >= MAX_GREP_BYTES {
+            scan_truncated = true;
+            break;
+        }
+        visited += 1;
         let relative = entry.path().strip_prefix(&base).unwrap_or(entry.path());
         if let Some(matcher) = &matcher {
             if !matcher.is_match(relative) {
@@ -69,6 +83,7 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
         let Ok(content) = fs::read_to_string(entry.path()) else {
             continue; // Skip binary/non-UTF-8 files rather than erroring.
         };
+        bytes_read += content.len() as u64;
         for (line_number, line) in content.lines().enumerate() {
             if !regex.is_match(line) {
                 continue;
@@ -84,12 +99,16 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
         }
     }
 
-    json!({
+    let mut output = json!({
         "base_path": base_arg,
         "pattern": pattern,
         "matches": matches,
         "returned_count": matches.len(),
         "total_matches": total_matches,
         "truncated": total_matches > matches.len(),
-    })
+    });
+    if scan_truncated {
+        output["note"] = json!(traverse::scan_truncated_note(visited));
+    }
+    output
 }

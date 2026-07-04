@@ -10,6 +10,7 @@ pub(super) fn palette_item_row(item: &PaletteItem) -> ListRow {
         title: palette_title(item),
         description: palette_description(item),
         enabled: item.enabled(),
+        destructive: palette_is_destructive(item),
     }
 }
 
@@ -20,6 +21,20 @@ pub(super) fn overview_item_row(item: &OverviewItem) -> ListRow {
         title: overview_title(item),
         description: overview_description(item),
         enabled: true,
+        // The overview lists tabs/sessions/panes, never commands directly —
+        // nothing here is a destructive action in its own right.
+        destructive: false,
+    }
+}
+
+/// A palette row is destructive exactly when it wraps a command marked so
+/// on its `CommandSpec` (see `app::commands::CommandSpec::destructive`) —
+/// never matched off the title, so future destructive commands inherit the
+/// styling automatically.
+fn palette_is_destructive(item: &PaletteItem) -> bool {
+    match item {
+        PaletteItem::Command(entry) => entry.spec.destructive,
+        PaletteItem::DetachedSession { .. } | PaletteItem::Tab { .. } => false,
     }
 }
 
@@ -135,5 +150,65 @@ fn overview_description(item: &OverviewItem) -> String {
             };
             format!("{state} · {} pane", kind.label())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::commands::{CommandCategory, CommandEntry, CommandId, CommandSpec};
+
+    fn command_item(destructive: bool) -> PaletteItem {
+        PaletteItem::Command(CommandEntry {
+            spec: CommandSpec {
+                id: CommandId::TerminateActiveSession,
+                title: "Terminate Active Session",
+                category: CommandCategory::Workspace,
+                description: "Terminate the active session and close its panes.",
+                destructive,
+            },
+            enabled: true,
+        })
+    }
+
+    #[test]
+    fn palette_row_for_destructive_command_is_marked_destructive() {
+        assert!(palette_item_row(&command_item(true)).destructive);
+    }
+
+    #[test]
+    fn palette_row_for_non_destructive_command_is_not_marked_destructive() {
+        assert!(!palette_item_row(&command_item(false)).destructive);
+    }
+
+    #[test]
+    fn palette_rows_for_sessions_and_tabs_are_never_destructive() {
+        let session = PaletteItem::DetachedSession {
+            session_id: crate::session::SessionId::new(),
+            kind: crate::workspace::SessionKind::Terminal,
+            display_number: 1,
+            title: "Terminal #1".to_string(),
+        };
+        let tab = PaletteItem::Tab {
+            index: 0,
+            title: "Terminal #1".to_string(),
+            pane_count: 1,
+            active: true,
+        };
+
+        assert!(!palette_item_row(&session).destructive);
+        assert!(!palette_item_row(&tab).destructive);
+    }
+
+    #[test]
+    fn overview_rows_are_never_destructive() {
+        let tab = OverviewItem::Tab {
+            index: 0,
+            title: "Terminal #1".to_string(),
+            pane_count: 1,
+            active: true,
+        };
+
+        assert!(!overview_item_row(&tab).destructive);
     }
 }

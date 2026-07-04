@@ -125,7 +125,7 @@ mod tests {
     fn writes_and_reads_jsonl_records() {
         let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
         let session_id = SessionId::new();
-        let writer = WriterHandle::open(&path).expect("writer");
+        let (writer, _report) = WriterHandle::open(&path).expect("writer");
         let mut appender = Appender::new(
             writer.clone(),
             session_id,
@@ -256,7 +256,7 @@ mod tests {
     fn flush_makes_pending_records_durable_before_shutdown() {
         let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
         let session_id = SessionId::new();
-        let writer = WriterHandle::open(&path).expect("writer");
+        let (writer, _report) = WriterHandle::open(&path).expect("writer");
         let mut appender = Appender::new(writer.clone(), session_id, None);
 
         appender
@@ -298,7 +298,7 @@ mod tests {
     #[test]
     fn concurrent_appenders_share_one_writer_without_tearing() {
         let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
-        let writer = WriterHandle::open(&path).expect("writer");
+        let (writer, _report) = WriterHandle::open(&path).expect("writer");
 
         let session_ids: Vec<SessionId> = (0..4).map(|_| SessionId::new()).collect();
         let events_per_session = 25_usize;

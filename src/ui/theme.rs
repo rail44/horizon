@@ -16,6 +16,15 @@ pub(crate) fn accent() -> Color {
     Color::rgb8(132, 220, 198)
 }
 
+/// The app's one destructive/danger accent — the same red used for the
+/// agent pane's "Deny" approval action (`workspace/view/agent_controls.rs`).
+/// Reused here for destructive command styling (`ui/list_row.rs`) so both
+/// "reject this" and "this ends something" read as the same kind of
+/// warning.
+pub(crate) fn danger() -> Color {
+    Color::rgb8(246, 137, 146)
+}
+
 pub(crate) fn surface_base() -> Color {
     Color::rgb8(22, 24, 29)
 }

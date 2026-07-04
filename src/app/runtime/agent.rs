@@ -6,7 +6,7 @@ use floem::prelude::*;
 use floem::reactive::create_effect;
 
 use crate::agent::config::{AgentConfig, AgentPersistenceConfig};
-use crate::agent::persistence::event_log::{read, WriterHandle};
+use crate::agent::persistence::event_log::{read, ReadReport, WriterHandle};
 use crate::agent::persistence::projection::duckdb::Store;
 use crate::agent::tools::{
     process_agent_provider_event, register_session_runtime, should_fold_completion, BashCompletion,
@@ -208,12 +208,12 @@ fn open_agent_runtime_state_store(
     persistence_config: &AgentPersistenceConfig,
 ) -> LiveState {
     let event_log = match open_agent_event_log(persistence_config) {
-        Ok((writer, status)) => {
+        Ok((writer, status, initial_read)) => {
             let mut messages = Vec::new();
             if let Some(status) = status {
                 messages.push(status);
             }
-            match rebuild_agent_duckdb_from_event_log_once(persistence_config) {
+            match rebuild_agent_duckdb_from_event_log_once(persistence_config, initial_read) {
                 Ok(Some(skipped_summary)) => {
                     messages.push(format!("Agent event log: {skipped_summary}"));
                 }
@@ -244,30 +244,48 @@ fn open_agent_runtime_state_store(
     }
 }
 
+/// Opens the process-global event log writer, returning the `ReadReport`
+/// from the read `WriterHandle::open` performs to compute its starting
+/// sequence number — but only on the call that actually opens the file
+/// (`Some`); a call that hits the cache (`None`) reused an already-open
+/// writer and did no reading at all. The one caller,
+/// `open_agent_runtime_state_store`, threads this straight into
+/// `rebuild_agent_duckdb_from_event_log_once` so the DuckDB replay doesn't
+/// read the same file a second time right after this one read it.
 fn open_agent_event_log(
     persistence_config: &AgentPersistenceConfig,
-) -> anyhow::Result<(WriterHandle, Option<String>)> {
+) -> anyhow::Result<(WriterHandle, Option<String>, Option<ReadReport>)> {
     let writer_cell = AGENT_EVENT_LOG_WRITER.get_or_init(|| Mutex::new(None));
     let mut writer = writer_cell
         .lock()
         .map_err(|_| anyhow::anyhow!("agent event log writer lock poisoned"))?;
     if let Some(writer) = writer.as_ref() {
-        return Ok((writer.clone(), None));
+        return Ok((writer.clone(), None, None));
     }
 
     let path = persistence_config.event_log_path.clone();
     let status = Some(format!("Agent event log: {}", path.display()));
-    let handle = WriterHandle::open(path)?;
+    let (handle, report) = WriterHandle::open(path)?;
     *writer = Some(handle.clone());
-    Ok((handle, status))
+    Ok((handle, status, Some(report)))
 }
 
 /// Runs [`rebuild_agent_duckdb_from_event_log`] at most once per process.
 /// Returns the skipped-line summary from that one rebuild (`Ok(None)` when
 /// either the rebuild was already done by an earlier call, or it ran and
 /// found nothing to skip).
+///
+/// `initial_read` is `open_agent_event_log`'s `ReadReport`, when it has one
+/// (i.e. this call is the one that actually opened the writer). Since that
+/// open and this rebuild are gated by separate `OnceLock`s but always
+/// happen together on the process's first `open_agent_runtime_state_store`
+/// call, `initial_read` is `Some` on precisely the call where a rebuild is
+/// about to actually run — `rebuild_agent_duckdb_from_event_log` still
+/// tolerates `None` by reading the file itself, purely as a defensive
+/// fallback should that alignment ever change.
 fn rebuild_agent_duckdb_from_event_log_once(
     persistence_config: &AgentPersistenceConfig,
+    initial_read: Option<ReadReport>,
 ) -> anyhow::Result<Option<String>> {
     let rebuild_done = AGENT_DUCKDB_REBUILD_DONE.get_or_init(|| Mutex::new(false));
     let mut rebuild_done = rebuild_done
@@ -277,25 +295,31 @@ fn rebuild_agent_duckdb_from_event_log_once(
         return Ok(None);
     }
 
-    let skipped_summary = rebuild_agent_duckdb_from_event_log(persistence_config)?;
+    let skipped_summary = rebuild_agent_duckdb_from_event_log(persistence_config, initial_read)?;
     *rebuild_done = true;
     Ok(skipped_summary)
 }
 
-/// Replays the JSONL event log into the DuckDB projection. `event_log::read`
-/// already skips corrupt/torn lines rather than failing (see
-/// `ReadReport::skipped_summary`); this only adds a warning-style log so the
-/// skip isn't silently swallowed, and hands the summary back so the caller
-/// can surface it in the UI status line too.
+/// Replays the JSONL event log into the DuckDB projection, from `report` if
+/// the caller already read one (the normal case — see
+/// `rebuild_agent_duckdb_from_event_log_once`) or by reading the file
+/// itself otherwise. `event_log::read` already skips corrupt/torn lines
+/// rather than failing (see `ReadReport::skipped_summary`); this only adds
+/// a warning-style log so the skip isn't silently swallowed, and hands the
+/// summary back so the caller can surface it in the UI status line too.
 fn rebuild_agent_duckdb_from_event_log(
     persistence_config: &AgentPersistenceConfig,
+    initial_read: Option<ReadReport>,
 ) -> anyhow::Result<Option<String>> {
     let Some(db_path) = persistence_config.duckdb_path.clone() else {
         return Ok(None);
     };
-    let log_path = persistence_config.event_log_path.clone();
+    let log_path = &persistence_config.event_log_path;
 
-    let report = read(&log_path)?;
+    let report = match initial_read {
+        Some(report) => report,
+        None => read(log_path)?,
+    };
     let skipped_summary = report.skipped_summary();
     if let Some(summary) = &skipped_summary {
         eprintln!(
@@ -341,18 +365,27 @@ mod tests {
             duckdb_path: None,
         };
 
-        let (first, first_status) =
+        let (first, first_status, first_report) =
             open_agent_event_log(&persistence_config).expect("open event log");
         assert!(
             first_status.is_some(),
             "the session that actually opens the file should report where it lives"
         );
+        assert!(
+            first_report.is_some(),
+            "the call that actually opens the file has already read it, and should \
+             hand that report back so the caller doesn't read it again"
+        );
 
-        let (second, second_status) =
+        let (second, second_status, second_report) =
             open_agent_event_log(&persistence_config).expect("reopen event log");
         assert!(
             second_status.is_none(),
             "a cached reuse should not repeat the status message"
+        );
+        assert!(
+            second_report.is_none(),
+            "a cached reuse did no reading, so it has no report to hand back"
         );
         assert!(
             first.same_channel(&second),
@@ -405,7 +438,10 @@ mod tests {
             duckdb_path: Some(db_path.clone()),
         };
 
-        let skipped_summary = rebuild_agent_duckdb_from_event_log(&persistence_config)
+        // No `initial_read` supplied: exercises the defensive fallback that
+        // reads the file itself (see the doc comment on
+        // `rebuild_agent_duckdb_from_event_log`).
+        let skipped_summary = rebuild_agent_duckdb_from_event_log(&persistence_config, None)
             .expect("rebuild from event log");
         assert_eq!(
             skipped_summary.as_deref(),
@@ -418,6 +454,75 @@ mod tests {
         assert_eq!(sessions[0].session_id, session_id);
 
         let _ = std::fs::remove_file(log_path);
+        let _ = std::fs::remove_file(db_path);
+    }
+
+    /// The whole point of threading `ReadReport` through: when the caller
+    /// already read the log (as `open_agent_event_log` does via
+    /// `WriterHandle::open`), the rebuild must use those records rather
+    /// than reading the file again. Proven here by deleting the file before
+    /// calling the rebuild — `event_log::read` treats a missing file as
+    /// "no records" rather than an error, so a stray second read would
+    /// silently succeed with zero records instead of failing loudly; the
+    /// only way this test's session ends up in the rebuilt DuckDB store is
+    /// if the passed-through report was used instead.
+    #[test]
+    fn rebuild_agent_duckdb_from_event_log_uses_passed_through_report_without_rereading_the_file() {
+        let log_path = std::env::temp_dir().join(format!(
+            "horizon-agent-rebuild-no-reread-log-{}.jsonl",
+            Uuid::new_v4()
+        ));
+        let db_path = std::env::temp_dir().join(format!(
+            "horizon-agent-rebuild-no-reread-{}.duckdb",
+            Uuid::new_v4()
+        ));
+        let session_id = SessionId::new();
+        let record = Record {
+            schema: AGENT_EVENT_LOG_SCHEMA.to_string(),
+            version: AGENT_EVENT_LOG_VERSION,
+            event_id: "event-1".to_string(),
+            sequence: 0,
+            session_id,
+            turn_id: None,
+            provider_id: None,
+            event_kind: "message_committed".to_string(),
+            event: Event::MessageCommitted(Message {
+                role: MessageRole::User,
+                text: "hello".to_string(),
+            }),
+            provider_payload: None,
+            created_at_unix_ms: 1,
+        };
+        let initial_read = crate::agent::persistence::event_log::ReadReport {
+            records: vec![record],
+            corrupt_line_count: 0,
+            ignored_partial_line: false,
+        };
+
+        // Deliberately never written, so any re-read would see "file does
+        // not exist" and silently come back with zero records.
+        assert!(!log_path.exists());
+
+        let persistence_config = AgentPersistenceConfig {
+            event_log_path: log_path.clone(),
+            duckdb_path: Some(db_path.clone()),
+        };
+
+        let skipped_summary =
+            rebuild_agent_duckdb_from_event_log(&persistence_config, Some(initial_read))
+                .expect("rebuild from passed-through report");
+        assert_eq!(skipped_summary, None);
+
+        let store = Store::open(&db_path).expect("reopen duckdb store");
+        let sessions = store.sessions().expect("sessions");
+        assert_eq!(
+            sessions.len(),
+            1,
+            "the passed-through report's session should have made it into the \
+             rebuilt store even though the log file was never on disk"
+        );
+        assert_eq!(sessions[0].session_id, session_id);
+
         let _ = std::fs::remove_file(db_path);
     }
 }
