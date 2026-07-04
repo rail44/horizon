@@ -6,6 +6,11 @@ a keyboard-first command workspace where terminals, AI agent sessions, and
 direction is recorded in `docs/ux-principles.md`; the implementation plan is
 `docs/roadmap.md`, a living document — update it when decisions change.
 
+This file records only low-churn facts: commands, conventions, and pointers.
+State the repo itself expresses — module contents, public API surfaces, phase
+progress — is intentionally not duplicated here; read the source or the
+pointed-to document instead.
+
 ## Commands
 
 ```sh
@@ -45,33 +50,26 @@ manual command checklist (`new terminal`, `split`, `detached`, ...).
 
 ## Module Map (`src/`)
 
-- `workspace/` — the core domain: tabs, panes, layout tree, session
-  attachments, workspace operations and queries, pane input routing, and the
-  workspace views (tab strip, pane chrome, agent controls, terminal output).
-- `terminal/` — PTY-backed terminal session: `core/` (alacritty_terminal +
-  termwiz emulation, events, rendering), `session/` (portable-pty runtime and
-  contract), `types/` (frames, sizes, mouse), `view/` (Floem rendering, input,
-  IME preedit, metrics).
-- `agent/` — AI agent sessions: `contract.rs` (Horizon-owned provider
-  command/event/frame contract), `live.rs` (running session), `providers/`
-  (rig-based and mock providers), `tools/` (agent tool catalog/execution),
-  `policy.rs`, `persistence/` (DuckDB-backed event log and projection),
-  `view/` (transcript, markdown, styling).
-- `session/` — shared session primitives: `SessionId`, session `Registry`,
-  and `Frames` shared across session kinds.
-- `app/` — composition root: app state and view, `commands.rs`
-  (`CommandId`/`CommandSpec` definitions), `command_actions.rs`
-  (`execute_command`), `keymap.rs`, input routing, `runtime/` (terminal/agent
-  session spawning), status bar.
-- `control_surface/` — the Ctrl+Shift+P surface: command palette and
-  workspace overview (modes, query filtering, items, actions, views).
-- `ui/` — cross-domain UI primitives only (fonts, theme, list rows,
-  selectable list). Domain-specific views live next to their domains.
-- `plugins/` — WASM plugin manifests and wasmtime validation; the future path
-  for hot-reloadable panes. Not yet wired into the app shell.
+Domain responsibilities (stable); browse each directory for its current
+contents:
 
-`src/lib.rs` exposes only `app_view` and `SessionId`; everything else is
-`pub(crate)`.
+- `workspace/` — the core domain: tabs, panes, layout tree, session
+  attachments, operations/queries, pane input routing, and workspace views.
+- `terminal/` — PTY-backed terminal sessions (emulation core, session
+  runtime, rendering/input/IME views).
+- `agent/` — AI agent sessions: the Horizon-owned provider contract
+  (`contract.rs`), providers, tools, persistence, and agent views.
+- `session/` — shared session primitives (`SessionId`, `Registry`, `Frames`)
+  used across session kinds.
+- `app/` — composition root: the command model (`commands.rs` defines
+  `CommandId`, `command_actions.rs` executes), keymap, session spawning,
+  app-level state and view.
+- `control_surface/` — the Ctrl+Shift+P surface: command palette and
+  workspace overview.
+- `ui/` — cross-domain UI primitives only. Domain-specific views live next
+  to their domains.
+- `plugins/` — WASM plugin groundwork; the future path for hot-reloadable
+  panes. Not yet wired into the app shell.
 
 ## Conventions
 
@@ -98,10 +96,6 @@ manual command checklist (`new terminal`, `split`, `detached`, ...).
 
 ## Open Work
 
-Check `docs/roadmap.md` for current phases. Phases 1–4 (command model,
-palette MVP, toolbar de-scaffolding, close semantics) are done; Phase 5
-(typed palette expansion) is partially done; Phase 6 (recursive layout
-rendering), Phase 7 (plugin view MVP), and Phase 8 (agent session MVP
-completion) are open. The README "Next Integration Points" section lists
-nearer-term items such as workspace persistence and recursive split
-rendering.
+Check `docs/roadmap.md` for current phases and their status, and the README
+"Next Integration Points" section for nearer-term items. Phase status is not
+duplicated here.
