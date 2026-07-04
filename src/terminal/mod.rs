@@ -1,3 +1,4 @@
+mod config;
 mod core;
 mod session;
 mod types;

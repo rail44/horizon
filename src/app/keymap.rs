@@ -100,11 +100,11 @@ pub(crate) fn is_terminal_paste_key(event: &KeyEvent) -> bool {
     is_terminal_paste_input(&event.key.logical_key, event.modifiers)
 }
 
+/// Whether `event` matches the chord that opens the command palette — the
+/// `[keybindings]` entry for the reserved `"open-palette"` pseudo-command
+/// (see [`Keymap::from_entries`]), falling back to `ctrl+p` when unset.
 pub(crate) fn is_palette_open_key(event: &KeyEvent) -> bool {
-    match &event.key.logical_key {
-        Key::Character(text) => event.modifiers.control() && text.eq_ignore_ascii_case("p"),
-        _ => false,
-    }
+    Keymap::global().is_palette_open(event)
 }
 
 pub(crate) fn palette_accepts_text_input(modifiers: Modifiers) -> bool {
@@ -195,6 +195,11 @@ fn control_input(c: char) -> Option<Vec<u8>> {
 // explicit target. Entries layer on top of `default_bindings` below,
 // overriding a default bound to the same chord or adding a new one.
 //
+// The reserved value `"open-palette"` is special: it isn't a `CommandId`
+// (the palette can't list or run "open the palette" as an operation on
+// itself), so it overrides `Keymap::palette_chord` instead of adding to
+// `Keymap::bindings` — see `Keymap::from_entries`.
+//
 // An entry that doesn't parse (bad chord syntax, unknown command id) is
 // warned about on stderr and skipped — never a startup failure, matching
 // the config file's overall "never crash on a bad file" policy
@@ -214,6 +219,16 @@ fn default_bindings() -> &'static [(&'static str, CommandId)] {
         ("ctrl+shift+x", CommandId::CloseActiveTab),
     ]
 }
+
+/// The reserved `[keybindings]` value that overrides the command-palette
+/// open chord — not a real `CommandId` (opening the palette isn't an
+/// operation the palette itself can list or run), so it's resolved
+/// separately from `command_id_from_str`/`Keymap::bindings` below. See
+/// [`Keymap::from_entries`].
+const OPEN_PALETTE_PSEUDO_COMMAND: &str = "open-palette";
+/// Built-in default chord for [`OPEN_PALETTE_PSEUDO_COMMAND`] — unchanged
+/// from the hardcoded `Ctrl+P` this replaces.
+const DEFAULT_PALETTE_CHORD: &str = "ctrl+p";
 
 fn command_id_from_str(id: &str) -> Option<CommandId> {
     match id {
@@ -402,8 +417,12 @@ fn parse_chord(spec: &str) -> Result<Chord, String> {
 
 /// The resolved set of key chord -> command bindings: Horizon's built-in
 /// defaults with the config file's `[keybindings]` table layered on top.
+/// The command-palette open chord is tracked separately (`palette_chord`)
+/// rather than through `bindings`, since it isn't a `CommandId` — see
+/// [`Keymap::from_entries`].
 pub(crate) struct Keymap {
     bindings: Vec<(Chord, CommandId)>,
+    palette_chord: Chord,
 }
 
 impl Keymap {
@@ -425,6 +444,8 @@ impl Keymap {
                 )
             })
             .collect();
+        let mut palette_chord =
+            parse_chord(DEFAULT_PALETTE_CHORD).expect("built-in default key chord must parse");
 
         for (chord_spec, command_spec) in entries {
             let chord = match parse_chord(chord_spec) {
@@ -437,6 +458,10 @@ impl Keymap {
                     continue;
                 }
             };
+            if command_spec == OPEN_PALETTE_PSEUDO_COMMAND {
+                palette_chord = chord;
+                continue;
+            }
             let Some(command_id) = command_id_from_str(command_spec) else {
                 eprintln!(
                     "horizon config: skipping keybinding `{chord_spec}` = `{command_spec}`: \
@@ -451,7 +476,10 @@ impl Keymap {
             bindings.push((chord, command_id));
         }
 
-        Keymap { bindings }
+        Keymap {
+            bindings,
+            palette_chord,
+        }
     }
 
     /// The `CommandId` bound to `event`'s chord, if any.
@@ -460,6 +488,12 @@ impl Keymap {
             .iter()
             .find(|(chord, _)| chord.matches(event.modifiers, &event.key.logical_key))
             .map(|(_, command_id)| *command_id)
+    }
+
+    /// Whether `event` matches the command-palette open chord.
+    pub(crate) fn is_palette_open(&self, event: &KeyEvent) -> bool {
+        self.palette_chord
+            .matches(event.modifiers, &event.key.logical_key)
     }
 }
 
@@ -695,6 +729,26 @@ mod tests {
     #[test]
     fn default_bindings_are_present_when_config_is_empty() {
         let keymap = Keymap::from_entries(&HashMap::new());
+        assert_eq!(keymap.bindings.len(), default_bindings().len());
+    }
+
+    // --- palette-open pseudo-command ------------------------------------
+
+    #[test]
+    fn palette_chord_defaults_to_ctrl_p_when_config_is_empty() {
+        let keymap = Keymap::from_entries(&HashMap::new());
+        assert_eq!(keymap.palette_chord, parse_chord("ctrl+p").unwrap());
+    }
+
+    #[test]
+    fn open_palette_entry_overrides_the_default_palette_chord() {
+        let mut entries = HashMap::new();
+        entries.insert("ctrl+shift+p".to_string(), "open-palette".to_string());
+
+        let keymap = Keymap::from_entries(&entries);
+
+        assert_eq!(keymap.palette_chord, parse_chord("ctrl+shift+p").unwrap());
+        // Not a real command id, so it never lands in `bindings`.
         assert_eq!(keymap.bindings.len(), default_bindings().len());
     }
 }

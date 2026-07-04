@@ -137,6 +137,8 @@ async fn rig_openai_turn_streaming(
         .messages(history)
         .tools(rig_tool_definitions())
         .preamble(system_prompt(environment))
+        .temperature_opt(config.temperature)
+        .max_tokens_opt(config.max_tokens)
         .stream()
         .await?;
 
@@ -150,13 +152,15 @@ async fn rig_openai_turn_streaming(
         events_tx.clone(),
         StreamDeltaKind::AssistantText,
         MessageRole::Assistant,
+        config,
     );
     let mut reasoning_buffer = StreamDeltaBuffer::new(
         events_tx.clone(),
         StreamDeltaKind::Reasoning,
         MessageRole::Assistant,
+        config,
     );
-    let mut tool_call_progress = ToolCallProgressBuffer::new(events_tx.clone());
+    let mut tool_call_progress = ToolCallProgressBuffer::new(events_tx.clone(), config);
 
     loop {
         let chunk = tokio::select! {

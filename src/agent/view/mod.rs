@@ -1,5 +1,5 @@
 use crate::agent::frame::AgentFrame;
-use crate::ui::fonts::HORIZON_FONT_FAMILY;
+use crate::ui::fonts::font_family;
 use floem::event::{Event, EventListener, EventPropagation};
 use floem::peniko::{kurbo::Point, Color};
 use floem::prelude::*;
@@ -119,7 +119,7 @@ fn transcript_block_view(
                         .items_center()
                         .padding_horiz(10)
                         .padding_vert(5)
-                        .font_family(HORIZON_FONT_FAMILY.to_string())
+                        .font_family(font_family().to_string())
                         .font_size(block_label_size(tone))
                         .line_height(1.35)
                         .color(block_text_color(tone))
@@ -193,7 +193,7 @@ fn markdown_line_view(line: MarkdownLine, tone: TranscriptTone) -> impl IntoView
         let mut s = s
             .width_full()
             .min_width(0.0)
-            .font_family(HORIZON_FONT_FAMILY.to_string())
+            .font_family(font_family().to_string())
             .line_height(1.42)
             .color(block_text_color(tone));
 

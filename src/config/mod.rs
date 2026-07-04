@@ -46,8 +46,13 @@ const HOME_VAR: &str = "HOME";
 pub(crate) struct RawConfig {
     pub(crate) agent: RawAgentConfig,
     pub(crate) provider: RawProviderConfig,
+    pub(crate) terminal: RawTerminalConfig,
+    pub(crate) ui: RawUiConfig,
     /// Key chord string (e.g. `"ctrl+shift+t"`) to `CommandId` string (e.g.
-    /// `"new-terminal"`) — parsed and validated by `app::keymap`.
+    /// `"new-terminal"`) — parsed and validated by `app::keymap`. Also
+    /// accepts the reserved pseudo-command `"open-palette"` (not a real
+    /// `CommandId`), which overrides the chord that opens the command
+    /// palette itself.
     pub(crate) keybindings: HashMap<String, String>,
     /// Palette name (matching a `ui::theme` accessor, e.g. `"accent"`) to a
     /// `#rrggbb`/`#rgb` hex string — parsed and validated by `ui::theme`.
@@ -67,17 +72,85 @@ pub(crate) struct RawAgentConfig {
     pub(crate) fs_read_line_cap: Option<usize>,
     pub(crate) fs_grep_max_bytes: Option<u64>,
     pub(crate) fs_traversal_max_files: Option<usize>,
+    /// Default number of matches `fs.grep` returns when a call doesn't pass
+    /// its own `limit` — distinct from `fs_grep_max_bytes`/
+    /// `fs_traversal_max_files` above, which cap how much of the tree a
+    /// single traversal *scans*, not how many of the matches found get
+    /// returned.
+    pub(crate) fs_grep_result_limit: Option<usize>,
+    /// Same idea as `fs_grep_result_limit`, for `fs.glob`.
+    pub(crate) fs_glob_result_limit: Option<usize>,
     pub(crate) iteration_cap: Option<u32>,
     pub(crate) doom_loop_window: Option<usize>,
+    /// How often, in milliseconds, streamed assistant-text/reasoning deltas
+    /// and tool-call-argument progress are coalesced into an emitted event.
+    /// See `providers::rig::stream`'s `StreamDeltaBuffer`/
+    /// `ToolCallProgressBuffer`.
+    pub(crate) stream_flush_interval_ms: Option<u64>,
+    /// Character count that forces an early flush of a streamed
+    /// assistant-text/reasoning delta, ahead of the time-based flush above.
+    pub(crate) stream_flush_chars: Option<usize>,
+    /// How often, in seconds, the workspace pane header's agent
+    /// turn-in-flight elapsed-time display ("running · 12s") re-renders.
+    /// See `workspace::view::pane`'s `schedule_tick`.
+    pub(crate) pane_status_tick_secs: Option<u64>,
+    /// Overrides the append-only agent event log (JSONL) path. The
+    /// `HORIZON_AGENT_EVENT_LOG` env var, if set, wins over this.
+    pub(crate) event_log_path: Option<String>,
+    /// Overrides the DuckDB projection database path used to replay
+    /// per-session rig history. The `HORIZON_AGENT_STATE_DB` env var, if
+    /// set, wins over this. Unset (here and via env) means no persisted
+    /// memory.
+    pub(crate) state_db_path: Option<String>,
 }
 
-/// `[provider]`: model selection and base URL for the built-in rig/OpenAI
-/// provider. Never a place for secrets — see the module doc.
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+/// `[provider]`: model selection, base URL, and request parameters for the
+/// built-in rig/OpenAI provider. Never a place for secrets — see the module
+/// doc.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub(crate) struct RawProviderConfig {
     pub(crate) model: Option<String>,
     pub(crate) base_url: Option<String>,
+    /// Sampling temperature passed to rig's completion request. Unset (the
+    /// default) means "let the provider use its own default" — rig never
+    /// sends the field at all in that case.
+    pub(crate) temperature: Option<f64>,
+    /// Max output tokens passed to rig's completion request. Unset (the
+    /// default) means "let the provider use its own default".
+    pub(crate) max_tokens: Option<u64>,
+}
+
+/// `[terminal]`: cell rendering metrics, scrollback, the spawned shell, and
+/// the `TERM` identity presented to it. See `terminal::config` for the
+/// built-in defaults each field falls back to when unset here.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub(crate) struct RawTerminalConfig {
+    pub(crate) font_size: Option<f32>,
+    pub(crate) line_height: Option<f64>,
+    pub(crate) scrollback_lines: Option<usize>,
+    /// Overrides the spawned shell program. The `SHELL` env var, if set,
+    /// wins over this (matching the existing "existing env vars keep
+    /// winning" precedence rule).
+    pub(crate) shell: Option<String>,
+    /// Extra argv entries passed to the spawned shell (e.g. `["-l"]` for a
+    /// login shell). No corresponding env var.
+    pub(crate) shell_args: Option<Vec<String>>,
+    /// The `TERM` value presented to the spawned shell.
+    pub(crate) term: Option<String>,
+}
+
+/// `[ui]`: cross-domain UI primitives — the app-wide font family (shared by
+/// the terminal, agent transcript, and workspace agent controls) and the
+/// window's initial size. See `ui::fonts` and `app::config` for the
+/// built-in defaults.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub(crate) struct RawUiConfig {
+    pub(crate) font_family: Option<String>,
+    pub(crate) window_width: Option<f64>,
+    pub(crate) window_height: Option<f64>,
 }
 
 /// Loads and caches the config file for the lifetime of the process. Config

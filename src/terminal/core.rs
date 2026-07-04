@@ -28,8 +28,10 @@ pub(crate) struct TerminalCore {
 impl TerminalCore {
     pub(crate) fn new(size: TerminalSize) -> Self {
         let events = EventSink::default();
+        let terminal_config = super::config::TerminalConfig::from_env();
         let config = TermConfig {
             kitty_keyboard: true,
+            scrolling_history: terminal_config.scrollback_lines,
             ..TermConfig::default()
         };
         let term = Term::new(config, &size, events.clone());

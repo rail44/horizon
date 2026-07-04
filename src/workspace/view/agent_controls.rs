@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::agent::contract::{SessionState, ToolCallId};
-use crate::ui::fonts::HORIZON_FONT_FAMILY;
+use crate::ui::fonts::font_family;
 use floem::prelude::*;
 use floem::{
     action::set_ime_cursor_area,
@@ -49,7 +49,7 @@ pub(super) fn agent_composer(
             .padding_horiz(10)
             .margin_horiz(8)
             .margin_bottom(7)
-            .font_family(HORIZON_FONT_FAMILY.to_string())
+            .font_family(font_family().to_string())
             .font_size(12)
             .line_height(1.2)
             .color(color)
@@ -128,7 +128,7 @@ pub(super) fn agent_cancel_action(
                 .items_center()
                 .justify_end()
                 .padding_horiz(20)
-                .font_family(HORIZON_FONT_FAMILY.to_string())
+                .font_family(font_family().to_string())
                 .font_size(12)
                 .color(floem::peniko::Color::from_rgb8(233, 236, 242))
                 .background(floem::peniko::Color::from_rgb8(74, 60, 40))
@@ -208,7 +208,7 @@ fn agent_approval_button(
                 .padding_horiz(12)
                 .items_center()
                 .justify_center()
-                .font_family(HORIZON_FONT_FAMILY.to_string())
+                .font_family(font_family().to_string())
                 .font_size(12)
                 .color(floem::peniko::Color::from_rgb8(233, 236, 242))
                 .background(background)

@@ -1,5 +1,6 @@
 pub(crate) mod command_actions;
 pub(crate) mod commands;
+pub(crate) mod config;
 mod context;
 mod input;
 pub(crate) mod keymap;
@@ -17,4 +18,13 @@ pub(crate) mod view;
 /// dropped when `main` returns).
 pub fn shutdown() {
     runtime::shutdown();
+}
+
+/// The window's initial size (`[ui].window_width`/`window_height` in
+/// Horizon's config file), for `main.rs`'s `WindowConfig::size`. Exposed
+/// publicly for the same reason as [`shutdown`]: `main.rs` is a separate
+/// binary crate that only sees this library's `pub` surface.
+pub fn window_size() -> (f64, f64) {
+    let config = config::WindowConfig::from_env();
+    (config.width, config.height)
 }

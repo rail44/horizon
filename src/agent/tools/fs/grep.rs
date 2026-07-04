@@ -9,9 +9,6 @@ use super::safety::resolve_path;
 use super::traverse;
 use crate::agent::tools::state::ToolSessionState;
 
-/// Default number of matches returned when the caller doesn't pass `limit`.
-const DEFAULT_LIMIT: usize = 100;
-
 pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
     let Some(base_arg) = input.get("base_path").and_then(Value::as_str) else {
         return error_output("fs.grep requires a `base_path` string argument");
@@ -24,7 +21,7 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
         .get("limit")
         .and_then(Value::as_u64)
         .map(|limit| limit as usize)
-        .unwrap_or(DEFAULT_LIMIT)
+        .unwrap_or(tool_state.tools_config().fs.grep_result_limit)
         .max(1);
 
     let base = match resolve_path(tool_state, base_arg) {

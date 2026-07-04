@@ -64,6 +64,12 @@ fs_grep_max_bytes = 67108864
 # Maximum number of files a single `fs.glob`/`fs.grep` traversal will visit
 # before stopping early, independent of match count.
 fs_traversal_max_files = 20000
+# Default number of matches `fs.grep`/`fs.glob` *return* when a call doesn't
+# pass its own `limit` — distinct from the traversal caps above, which
+# bound how much of the tree gets scanned, not how many of the matches
+# found get returned.
+fs_grep_result_limit = 100
+fs_glob_result_limit = 200
 
 # Consecutive tool-driven turns (since the last user message) the agent may
 # run before Horizon halts it as a likely runaway loop.
@@ -71,6 +77,27 @@ iteration_cap = 25
 # Consecutive identical (tool, args, output) fingerprints that trip the
 # doom-loop guard.
 doom_loop_window = 3
+
+# How often, in milliseconds, streamed assistant-text/reasoning deltas and
+# tool-call-argument progress are coalesced into an emitted event.
+stream_flush_interval_ms = 100
+# Character count that forces an early flush of a streamed delta, ahead of
+# the time-based flush above.
+stream_flush_chars = 320
+# How often, in seconds, the workspace pane header's agent turn-in-flight
+# elapsed-time display ("running · 12s") re-renders.
+pane_status_tick_secs = 1
+
+# Overrides the append-only agent event log (JSONL) path. Commented out: the
+# real default is a fixed path under the OS temp directory, not a value
+# worth documenting as "live". `HORIZON_AGENT_EVENT_LOG`, if set, wins over
+# this.
+# event_log_path = "/path/to/horizon-agent-events.jsonl"
+# Overrides the DuckDB projection database path used to replay per-session
+# rig history. Commented out: unset (here and via env) means no persisted
+# memory, which is the default. `HORIZON_AGENT_STATE_DB`, if set, wins over
+# this.
+# state_db_path = "/path/to/horizon-agent-state.duckdb"
 
 # ---------------------------------------------------------------------------
 # [provider] — the built-in rig/OpenAI provider's model and base URL.
@@ -83,6 +110,46 @@ doom_loop_window = 3
 [provider]
 # model = "gpt-4o-mini"
 # base_url = "https://api.openai.com/v1"
+# Sampling temperature and max output tokens passed to the completion
+# request. Commented out: unset means "don't send the field at all", letting
+# the provider apply its own default.
+# temperature = 0.7
+# max_tokens = 4096
+
+# ---------------------------------------------------------------------------
+# [terminal] — cell rendering metrics, scrollback, the spawned shell, and
+# the `TERM` identity presented to it.
+#
+# `shell`/`shell_args` are commented out below: the real default for `shell`
+# is "whatever the `SHELL` env var says" (falling back to `/bin/sh` if even
+# that is unset), not a value worth documenting as "live" — and `SHELL`, if
+# set, keeps winning over `shell` here either way. `shell_args` defaults to
+# no extra arguments.
+# ---------------------------------------------------------------------------
+[terminal]
+# Font size (px) used to measure terminal cell width and lay out terminal
+# text.
+font_size = 13.0
+# Line height (px) for the same text.
+line_height = 18.0
+# Maximum scrollback lines kept per terminal session.
+scrollback_lines = 10000
+# The `TERM` value presented to the spawned shell.
+term = "xterm-kitty"
+# Overrides the spawned shell program when `SHELL` is unset.
+# shell = "/bin/zsh"
+# Extra argv entries passed to the spawned shell (e.g. a login shell).
+# shell_args = ["-l"]
+
+# ---------------------------------------------------------------------------
+# [ui] — cross-domain UI: the app-wide font family (shared by the terminal,
+# agent transcript, and workspace agent controls) and the window's initial
+# size.
+# ---------------------------------------------------------------------------
+[ui]
+font_family = "Iosevka Nerd Font Mono, Symbols Nerd Font Mono, Noto Sans Mono CJK JP, monospace, Noto Sans CJK JP"
+window_width = 1100.0
+window_height = 720.0
 
 # ---------------------------------------------------------------------------
 # [keybindings] — key chord string -> command id, layered on top of
@@ -98,13 +165,17 @@ doom_loop_window = 3
 # Command ids (see `src/app/commands.rs`'s `CommandId`): new-terminal,
 # new-agent, split-active-pane, focus-next-pane, close-active-pane,
 # close-active-tab, terminate-active-session, approve-tool-call,
-# deny-tool-call, cancel-agent-turn.
+# deny-tool-call, cancel-agent-turn. The reserved pseudo-command
+# `open-palette` is also accepted here — it isn't a real `CommandId` (opening
+# the palette isn't an operation the palette itself can list or run), and
+# overrides the chord that opens the command palette (`ctrl+p` by default).
 #
 # An unparsable chord or an unrecognized command id is warned about on
 # stderr and skipped — never a startup failure.
 # ---------------------------------------------------------------------------
 [keybindings]
 # "ctrl+shift+t" = "new-terminal"
+# "ctrl+p" = "open-palette"
 
 # ---------------------------------------------------------------------------
 # [theme] — named color overrides for the workspace palette, as

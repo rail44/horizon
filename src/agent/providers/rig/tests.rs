@@ -143,7 +143,7 @@ fn converts_rig_tool_call_to_provider_event_with_payload() {
 #[test]
 fn tool_call_delta_buffer_emits_progress_and_final_tool_call_still_works_unchanged() {
     let (tx, rx) = crossbeam_channel::unbounded();
-    let mut buffer = ToolCallProgressBuffer::new(tx);
+    let mut buffer = ToolCallProgressBuffer::new(tx, &RigAgentConfig::default());
 
     // A name chunk flushes immediately, before any arguments have streamed.
     buffer.note_name("internal-call-1", "fs.write".to_string());

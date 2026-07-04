@@ -64,8 +64,25 @@ const DEFAULT_BASH_TIMEOUT_MAX_SECS: u64 = 600;
 const DEFAULT_BASH_OUTPUT_CAP_CHARS: usize = 30_000;
 const DEFAULT_BASH_DRAIN_GRACE_SECS: u64 = 2;
 const DEFAULT_FS_READ_LINE_CAP: usize = 2000;
+/// Default number of matches `fs.grep` returns when a call doesn't pass its
+/// own `limit`. Was `fs::grep`'s `DEFAULT_LIMIT`.
+const DEFAULT_FS_GREP_RESULT_LIMIT: usize = 100;
+/// Same idea as [`DEFAULT_FS_GREP_RESULT_LIMIT`], for `fs.glob`. Was
+/// `fs::glob`'s `DEFAULT_LIMIT`.
+const DEFAULT_FS_GLOB_RESULT_LIMIT: usize = 200;
 const DEFAULT_ITERATION_CAP: u32 = 25;
 const DEFAULT_DOOM_LOOP_WINDOW: usize = 3;
+/// Was `providers::rig::stream`'s `STREAM_FLUSH_INTERVAL`.
+const DEFAULT_STREAM_FLUSH_INTERVAL_MS: u64 = 100;
+/// Was `providers::rig::stream`'s `STREAM_FLUSH_CHARS`.
+const DEFAULT_STREAM_FLUSH_CHARS: usize = 320;
+/// Was `workspace::view::pane`'s hardcoded `Duration::from_secs(1)` in
+/// `schedule_tick`. Resolved via the standalone [`pane_status_tick_secs`]
+/// function below rather than through [`AgentConfig`] — the consumer
+/// (`workspace::view::pane`) isn't otherwise wired to any agent config
+/// struct, and this is the one place `[agent]`'s built-in defaults are
+/// named (see the module doc).
+const DEFAULT_PANE_STATUS_TICK_SECS: u64 = 1;
 
 const FS_GREP_MAX_BYTES_PRODUCTION_DEFAULT: u64 = 64 * 1024 * 1024;
 const FS_TRAVERSAL_MAX_FILES_PRODUCTION_DEFAULT: usize = 20_000;
@@ -92,7 +109,7 @@ fn default_fs_traversal_max_files() -> usize {
     FS_TRAVERSAL_MAX_FILES_TEST_DEFAULT
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AgentConfig {
     pub(crate) rig: RigAgentConfig,
     pub(crate) persistence: AgentPersistenceConfig,
@@ -109,11 +126,14 @@ impl AgentConfig {
     }
 }
 
-/// Rig provider configuration: model/base-URL selection (`[provider]`, plus
-/// the env vars above) and the turn-loop guard tuning (`[agent]`
-/// `iteration_cap`/`doom_loop_window`) — see `providers::rig::session`'s
-/// `TurnLoopGuard`, which this is threaded into unchanged.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// Rig provider configuration: model/base-URL/request-param selection
+/// (`[provider]`, plus the env vars above), the turn-loop guard tuning
+/// (`[agent]` `iteration_cap`/`doom_loop_window`) — see
+/// `providers::rig::session`'s `TurnLoopGuard`, which this is threaded into
+/// unchanged — and the streamed-delta coalescing cadence (`[agent]`
+/// `stream_flush_interval_ms`/`stream_flush_chars`) used by
+/// `providers::rig::stream`.
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RigAgentConfig {
     /// Whether `OPENAI_API_KEY` is set. When `false`, the rig provider
     /// answers with a deterministic fallback responder instead of calling
@@ -126,6 +146,13 @@ pub(crate) struct RigAgentConfig {
     /// `providers::rig::completion`'s client construction for how this is
     /// applied via the client builder's `.base_url(..)`.
     pub(crate) base_url: Option<String>,
+    /// Sampling temperature for the completion request. `None` means "don't
+    /// send the field at all" — see `providers::rig::completion`'s
+    /// `.temperature_opt(..)` call.
+    pub(crate) temperature: Option<f64>,
+    /// Max output tokens for the completion request. `None` means "don't
+    /// send the field at all".
+    pub(crate) max_tokens: Option<u64>,
     /// Consecutive-tool-turn iteration cap (`docs/agent-tools-design.md`,
     /// "Error Model and Loop Guards"). Was the hardcoded
     /// `TOOL_TURN_ITERATION_CAP` constant in `providers::rig::session`.
@@ -134,6 +161,13 @@ pub(crate) struct RigAgentConfig {
     /// Was the hardcoded `DOOM_LOOP_WINDOW` constant in
     /// `providers::rig::session`.
     pub(crate) doom_loop_window: usize,
+    /// How often, in milliseconds, streamed deltas are coalesced into an
+    /// emitted event. Was `providers::rig::stream`'s
+    /// `STREAM_FLUSH_INTERVAL`.
+    pub(crate) stream_flush_interval_ms: u64,
+    /// Character count that forces an early flush ahead of the interval
+    /// above. Was `providers::rig::stream`'s `STREAM_FLUSH_CHARS`.
+    pub(crate) stream_flush_chars: usize,
 }
 
 impl Default for RigAgentConfig {
@@ -142,8 +176,12 @@ impl Default for RigAgentConfig {
             openai_enabled: false,
             model: openai::GPT_4O_MINI.to_string(),
             base_url: None,
+            temperature: None,
+            max_tokens: None,
             iteration_cap: DEFAULT_ITERATION_CAP,
             doom_loop_window: DEFAULT_DOOM_LOOP_WINDOW,
+            stream_flush_interval_ms: DEFAULT_STREAM_FLUSH_INTERVAL_MS,
+            stream_flush_chars: DEFAULT_STREAM_FLUSH_CHARS,
         }
     }
 }
@@ -164,11 +202,21 @@ impl RigAgentConfig {
                 std::env::var(OPENAI_BASE_URL_VAR).ok(),
                 file.provider.base_url.clone(),
             ),
+            temperature: file.provider.temperature,
+            max_tokens: file.provider.max_tokens,
             iteration_cap: file.agent.iteration_cap.unwrap_or(DEFAULT_ITERATION_CAP),
             doom_loop_window: file
                 .agent
                 .doom_loop_window
                 .unwrap_or(DEFAULT_DOOM_LOOP_WINDOW),
+            stream_flush_interval_ms: file
+                .agent
+                .stream_flush_interval_ms
+                .unwrap_or(DEFAULT_STREAM_FLUSH_INTERVAL_MS),
+            stream_flush_chars: file
+                .agent
+                .stream_flush_chars
+                .unwrap_or(DEFAULT_STREAM_FLUSH_CHARS),
         }
     }
 }
@@ -200,13 +248,41 @@ pub(crate) struct AgentPersistenceConfig {
 
 impl AgentPersistenceConfig {
     pub(crate) fn from_env() -> Self {
+        Self::from_env_and_file(crate::config::load())
+    }
+
+    fn from_env_and_file(file: &RawConfig) -> Self {
         Self {
-            event_log_path: std::env::var_os(EVENT_LOG_PATH_VAR)
-                .map(PathBuf::from)
-                .unwrap_or_else(|| std::env::temp_dir().join("horizon-agent-events.jsonl")),
-            duckdb_path: std::env::var_os(STATE_DB_PATH_VAR).map(PathBuf::from),
+            event_log_path: resolve_event_log_path(
+                std::env::var_os(EVENT_LOG_PATH_VAR).map(PathBuf::from),
+                file.agent.event_log_path.clone(),
+            ),
+            duckdb_path: resolve_state_db_path(
+                std::env::var_os(STATE_DB_PATH_VAR).map(PathBuf::from),
+                file.agent.state_db_path.clone(),
+            ),
         }
     }
+}
+
+/// Pure precedence resolution for the event log path: `HORIZON_AGENT_EVENT_LOG`
+/// wins, then the config file's `[agent].event_log_path`, then a fixed path
+/// under the OS temp directory. Kept free of I/O (the env read happens at
+/// the call site) for the same testability reason as [`resolve_model`].
+fn resolve_event_log_path(env_value: Option<PathBuf>, file_value: Option<String>) -> PathBuf {
+    env_value
+        .or_else(|| file_value.map(PathBuf::from))
+        .unwrap_or_else(|| std::env::temp_dir().join("horizon-agent-events.jsonl"))
+}
+
+/// Same precedence as [`resolve_event_log_path`], for the DuckDB state
+/// path. `None` means "no persisted memory" — there is no built-in default
+/// path to fall back to.
+fn resolve_state_db_path(
+    env_value: Option<PathBuf>,
+    file_value: Option<String>,
+) -> Option<PathBuf> {
+    env_value.or_else(|| file_value.map(PathBuf::from))
 }
 
 /// `[agent]` tuning for the bash and fs tools — see each field's doc
@@ -253,6 +329,14 @@ pub(crate) struct FsToolConfig {
     /// Maximum files a single `fs.glob`/`fs.grep` traversal visits. Was
     /// `fs::traverse`'s `MAX_VISITED_FILES`.
     pub(crate) traversal_max_files: usize,
+    /// Default number of matches `fs.grep` *returns* when a call doesn't
+    /// pass its own `limit` — distinct from `grep_max_bytes`/
+    /// `traversal_max_files` above, which cap how much of the tree a single
+    /// traversal scans. Was `fs::grep`'s `DEFAULT_LIMIT`.
+    pub(crate) grep_result_limit: usize,
+    /// Same idea as `grep_result_limit`, for `fs.glob`. Was `fs::glob`'s
+    /// `DEFAULT_LIMIT`.
+    pub(crate) glob_result_limit: usize,
 }
 
 impl Default for AgentToolsConfig {
@@ -299,9 +383,28 @@ impl AgentToolsConfig {
                     .agent
                     .fs_traversal_max_files
                     .unwrap_or_else(default_fs_traversal_max_files),
+                grep_result_limit: file
+                    .agent
+                    .fs_grep_result_limit
+                    .unwrap_or(DEFAULT_FS_GREP_RESULT_LIMIT),
+                glob_result_limit: file
+                    .agent
+                    .fs_glob_result_limit
+                    .unwrap_or(DEFAULT_FS_GLOB_RESULT_LIMIT),
             },
         }
     }
+}
+
+/// How often, in seconds, the workspace pane header's agent turn-in-flight
+/// elapsed-time display re-renders (`workspace::view::pane`'s
+/// `schedule_tick`). Standalone rather than part of [`AgentConfig`] — see
+/// [`DEFAULT_PANE_STATUS_TICK_SECS`].
+pub(crate) fn pane_status_tick_secs() -> u64 {
+    crate::config::load()
+        .agent
+        .pane_status_tick_secs
+        .unwrap_or(DEFAULT_PANE_STATUS_TICK_SECS)
 }
 
 #[cfg(test)]
@@ -367,6 +470,97 @@ mod tests {
         assert_eq!(config.iteration_cap, DEFAULT_ITERATION_CAP);
         assert_eq!(config.doom_loop_window, DEFAULT_DOOM_LOOP_WINDOW);
         assert_eq!(config.base_url, None);
+        assert_eq!(config.temperature, None);
+        assert_eq!(config.max_tokens, None);
+        assert_eq!(
+            config.stream_flush_interval_ms,
+            DEFAULT_STREAM_FLUSH_INTERVAL_MS
+        );
+        assert_eq!(config.stream_flush_chars, DEFAULT_STREAM_FLUSH_CHARS);
+    }
+
+    #[test]
+    fn rig_agent_config_reads_provider_request_params_and_stream_flush_from_file() {
+        let file = RawConfig {
+            provider: RawProviderConfig {
+                temperature: Some(0.5),
+                max_tokens: Some(4096),
+                ..Default::default()
+            },
+            agent: RawAgentConfig {
+                stream_flush_interval_ms: Some(50),
+                stream_flush_chars: Some(80),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let config = RigAgentConfig::from_env_and_file(&file);
+
+        assert_eq!(config.temperature, Some(0.5));
+        assert_eq!(config.max_tokens, Some(4096));
+        assert_eq!(config.stream_flush_interval_ms, 50);
+        assert_eq!(config.stream_flush_chars, 80);
+    }
+
+    #[test]
+    fn event_log_path_prefers_env_over_file_over_default() {
+        assert_eq!(
+            resolve_event_log_path(
+                Some(PathBuf::from("/env/log.jsonl")),
+                Some("/file/log.jsonl".to_string())
+            ),
+            PathBuf::from("/env/log.jsonl")
+        );
+        assert_eq!(
+            resolve_event_log_path(None, Some("/file/log.jsonl".to_string())),
+            PathBuf::from("/file/log.jsonl")
+        );
+        assert_eq!(
+            resolve_event_log_path(None, None),
+            std::env::temp_dir().join("horizon-agent-events.jsonl")
+        );
+    }
+
+    #[test]
+    fn state_db_path_prefers_env_over_file_and_is_none_by_default() {
+        assert_eq!(
+            resolve_state_db_path(
+                Some(PathBuf::from("/env/state.duckdb")),
+                Some("/file/state.duckdb".to_string())
+            ),
+            Some(PathBuf::from("/env/state.duckdb"))
+        );
+        assert_eq!(
+            resolve_state_db_path(None, Some("/file/state.duckdb".to_string())),
+            Some(PathBuf::from("/file/state.duckdb"))
+        );
+        assert_eq!(resolve_state_db_path(None, None), None);
+    }
+
+    #[test]
+    fn agent_persistence_config_reads_paths_from_file() {
+        let file = RawConfig {
+            agent: RawAgentConfig {
+                event_log_path: Some("/file/log.jsonl".to_string()),
+                state_db_path: Some("/file/state.duckdb".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let config = AgentPersistenceConfig::from_env_and_file(&file);
+
+        assert_eq!(config.event_log_path, PathBuf::from("/file/log.jsonl"));
+        assert_eq!(
+            config.duckdb_path,
+            Some(PathBuf::from("/file/state.duckdb"))
+        );
+    }
+
+    #[test]
+    fn pane_status_tick_secs_defaults_when_file_is_absent() {
+        assert_eq!(pane_status_tick_secs(), DEFAULT_PANE_STATUS_TICK_SECS);
     }
 
     #[test]
@@ -380,6 +574,8 @@ mod tests {
                 fs_read_line_cap: Some(5),
                 fs_grep_max_bytes: Some(6),
                 fs_traversal_max_files: Some(7),
+                fs_grep_result_limit: Some(8),
+                fs_glob_result_limit: Some(9),
                 ..Default::default()
             },
             ..Default::default()
@@ -394,6 +590,8 @@ mod tests {
         assert_eq!(config.fs.read_line_cap, 5);
         assert_eq!(config.fs.grep_max_bytes, 6);
         assert_eq!(config.fs.traversal_max_files, 7);
+        assert_eq!(config.fs.grep_result_limit, 8);
+        assert_eq!(config.fs.glob_result_limit, 9);
     }
 
     #[test]
@@ -408,6 +606,8 @@ mod tests {
         assert_eq!(config.bash.output_cap_chars, DEFAULT_BASH_OUTPUT_CAP_CHARS);
         assert_eq!(config.bash.drain_grace_secs, DEFAULT_BASH_DRAIN_GRACE_SECS);
         assert_eq!(config.fs.read_line_cap, DEFAULT_FS_READ_LINE_CAP);
+        assert_eq!(config.fs.grep_result_limit, DEFAULT_FS_GREP_RESULT_LIMIT);
+        assert_eq!(config.fs.glob_result_limit, DEFAULT_FS_GLOB_RESULT_LIMIT);
     }
 
     // --- guards template drift: config.example.toml's [agent] values must --
@@ -456,6 +656,32 @@ mod tests {
             parsed.agent.doom_loop_window,
             Some(DEFAULT_DOOM_LOOP_WINDOW)
         );
+        assert_eq!(
+            parsed.agent.fs_grep_result_limit,
+            Some(DEFAULT_FS_GREP_RESULT_LIMIT)
+        );
+        assert_eq!(
+            parsed.agent.fs_glob_result_limit,
+            Some(DEFAULT_FS_GLOB_RESULT_LIMIT)
+        );
+        assert_eq!(
+            parsed.agent.stream_flush_interval_ms,
+            Some(DEFAULT_STREAM_FLUSH_INTERVAL_MS)
+        );
+        assert_eq!(
+            parsed.agent.stream_flush_chars,
+            Some(DEFAULT_STREAM_FLUSH_CHARS)
+        );
+        assert_eq!(
+            parsed.agent.pane_status_tick_secs,
+            Some(DEFAULT_PANE_STATUS_TICK_SECS)
+        );
+        // `event_log_path`/`state_db_path` have no fixed built-in default
+        // worth documenting as a live value (the real default is "a temp
+        // path"/"no persisted memory"), so they ship commented out, same as
+        // [provider]'s `model`/`base_url` below.
+        assert_eq!(parsed.agent.event_log_path, None);
+        assert_eq!(parsed.agent.state_db_path, None);
 
         // [provider]/[keybindings]/[theme] ship commented out in the example
         // (they layer on top of other defaults, not simple constants) —

@@ -2,10 +2,8 @@ use std::time::Instant;
 
 use crossbeam_channel::Sender;
 
+use crate::agent::config::RigAgentConfig;
 use crate::agent::contract::{Event, MessageDelta, MessageRole, ProviderEvent, ToolCallProgress};
-
-const STREAM_FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
-const STREAM_FLUSH_CHARS: usize = 320;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum StreamDeltaKind {
@@ -19,6 +17,8 @@ pub(super) struct StreamDeltaBuffer {
     role: MessageRole,
     text: String,
     last_flush: Instant,
+    flush_interval: std::time::Duration,
+    flush_chars: usize,
 }
 
 impl StreamDeltaBuffer {
@@ -26,6 +26,7 @@ impl StreamDeltaBuffer {
         events_tx: Sender<ProviderEvent>,
         kind: StreamDeltaKind,
         role: MessageRole,
+        config: &RigAgentConfig,
     ) -> Self {
         Self {
             events_tx,
@@ -33,6 +34,8 @@ impl StreamDeltaBuffer {
             role,
             text: String::new(),
             last_flush: Instant::now(),
+            flush_interval: std::time::Duration::from_millis(config.stream_flush_interval_ms),
+            flush_chars: config.stream_flush_chars,
         }
     }
 
@@ -42,9 +45,9 @@ impl StreamDeltaBuffer {
         }
 
         let should_flush = text.contains('\n')
-            || self.text.chars().count() + text.chars().count() >= STREAM_FLUSH_CHARS;
+            || self.text.chars().count() + text.chars().count() >= self.flush_chars;
         self.text.push_str(&text);
-        if should_flush || self.last_flush.elapsed() >= STREAM_FLUSH_INTERVAL {
+        if should_flush || self.last_flush.elapsed() >= self.flush_interval {
             self.flush();
         }
     }
@@ -87,16 +90,18 @@ pub(super) struct ToolCallProgressBuffer {
     tool_id: Option<String>,
     bytes: usize,
     last_flush: Instant,
+    flush_interval: std::time::Duration,
 }
 
 impl ToolCallProgressBuffer {
-    pub(super) fn new(events_tx: Sender<ProviderEvent>) -> Self {
+    pub(super) fn new(events_tx: Sender<ProviderEvent>, config: &RigAgentConfig) -> Self {
         Self {
             events_tx,
             key: None,
             tool_id: None,
             bytes: 0,
             last_flush: Instant::now(),
+            flush_interval: std::time::Duration::from_millis(config.stream_flush_interval_ms),
         }
     }
 
@@ -112,7 +117,7 @@ impl ToolCallProgressBuffer {
         }
         self.ensure_key(key);
         self.bytes += chunk.len();
-        if self.last_flush.elapsed() >= STREAM_FLUSH_INTERVAL {
+        if self.last_flush.elapsed() >= self.flush_interval {
             self.flush_now();
         }
     }

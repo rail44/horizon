@@ -43,8 +43,13 @@ impl TerminalSession {
             pixel_height: 0,
         })?;
 
-        let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-        let cmd = environment::terminal_command(&shell);
+        let terminal_config = super::config::TerminalConfig::from_env();
+        let shell = super::config::resolve_shell(env::var("SHELL").ok(), terminal_config.shell);
+        let cmd = environment::terminal_command(
+            &shell,
+            &terminal_config.shell_args,
+            &terminal_config.term,
+        );
         pair.slave
             .spawn_command(cmd)
             .map_err(TerminalSessionError::Spawn)?;

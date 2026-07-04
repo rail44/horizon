@@ -223,7 +223,7 @@ fn selection_to_string_uses_alacritty_selection() {
 
 #[test]
 fn terminal_command_sanitizes_emulator_environment() {
-    let cmd = terminal_command("/bin/sh");
+    let cmd = terminal_command("/bin/sh", &[], "xterm-kitty");
 
     assert_eq!(
         cmd.get_env("TERM").and_then(|v| v.to_str()),

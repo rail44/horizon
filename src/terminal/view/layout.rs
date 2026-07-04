@@ -6,7 +6,7 @@ use floem::{
 use unicode_width::UnicodeWidthChar;
 
 use super::metrics::terminal_font_family;
-use super::{FONT_SIZE, LINE_HEIGHT};
+use super::{font_size, line_height};
 
 pub(super) struct CellLayout {
     pub(super) text: TextLayout,
@@ -115,8 +115,8 @@ fn text_cell(
     let attrs = Attrs::new()
         .color(Color::from_rgb8(fg[0], fg[1], fg[2]))
         .family(family)
-        .font_size(FONT_SIZE)
-        .line_height(floem::text::LineHeightValue::Px(LINE_HEIGHT as f32));
+        .font_size(font_size())
+        .line_height(floem::text::LineHeightValue::Px(line_height() as f32));
     let mut layout = TextLayout::new();
     layout.set_text(&text, AttrsList::new(attrs), None);
     let block = block_element(text.as_str());

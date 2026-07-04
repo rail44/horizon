@@ -30,11 +30,20 @@ use metrics::TerminalMetrics;
 use preedit::{build_preedit_layout, PreeditLayout};
 use render::{draw_block_element, expanded_rect};
 
-const FONT_SIZE: f32 = 13.0;
-const LINE_HEIGHT: f64 = 18.0;
 const PADDING_X: f64 = 12.0;
 const PADDING_Y: f64 = 12.0;
 const FALLBACK_CELL_WIDTH: f64 = 8.0;
+
+/// `[terminal].font_size`, resolved from Horizon's config file — see
+/// `terminal::config::TerminalConfig`.
+fn font_size() -> f32 {
+    crate::terminal::config::TerminalConfig::from_env().font_size
+}
+
+/// `[terminal].line_height`, same source as [`font_size`].
+fn line_height() -> f64 {
+    crate::terminal::config::TerminalConfig::from_env().line_height
+}
 
 pub(crate) fn terminal_text_view(
     frame: impl Fn() -> TerminalFrame + 'static,

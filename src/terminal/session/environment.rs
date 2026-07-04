@@ -39,17 +39,18 @@ const TERMINAL_ENV_REMOVE: &[&str] = &[
     "XDG_ACTIVATION_TOKEN",
 ];
 
-pub(crate) fn terminal_command(shell: &str) -> CommandBuilder {
+pub(crate) fn terminal_command(shell: &str, args: &[String], term: &str) -> CommandBuilder {
     let mut cmd = CommandBuilder::new(shell);
-    configure_terminal_environment(&mut cmd);
+    cmd.args(args);
+    configure_terminal_environment(&mut cmd, term);
     cmd
 }
 
-fn configure_terminal_environment(cmd: &mut CommandBuilder) {
+fn configure_terminal_environment(cmd: &mut CommandBuilder, term: &str) {
     for key in TERMINAL_ENV_REMOVE {
         cmd.env_remove(key);
     }
-    cmd.env("TERM", "xterm-kitty");
+    cmd.env("TERM", term);
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TERM_PROGRAM", "horizon");
     cmd.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));

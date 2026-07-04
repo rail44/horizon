@@ -1,5 +1,5 @@
 use floem::{window::WindowConfig, AppEvent, Application};
-use horizon::app_view;
+use horizon::{app_view, window_size};
 
 fn main() {
     Application::new()
@@ -18,7 +18,7 @@ fn main() {
             Some(
                 WindowConfig::default()
                     .title("Horizon")
-                    .size((1100.0, 720.0))
+                    .size(window_size())
                     .show_titlebar(true)
                     .undecorated(false),
             ),

@@ -10,4 +10,5 @@ pub(crate) mod workspace;
 
 pub use app::shutdown;
 pub use app::view::app_view;
+pub use app::window_size;
 pub use session::SessionId;
