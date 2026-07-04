@@ -57,6 +57,24 @@ pub(crate) enum Event {
     ToolCallStarted(ToolCallId),
     ToolCallFinished(ToolCallResult),
     ApprovalRequested(ApprovalRequest),
+    /// A turn's completion request left Horizon for the provider (e.g. the
+    /// rig OpenAI streaming call in `providers::rig::completion`). Marks the
+    /// start of the "waiting on the model" window so persisted history can
+    /// attribute silence between a user message and the first delta to
+    /// provider latency rather than local processing — see
+    /// `docs/agent-duckdb-state-design.md`. Carries the model id so replay
+    /// doesn't need to cross-reference config.
+    ProviderRequestSent(ProviderRequestSent),
+    /// The first chunk of any kind (text, reasoning, tool-call delta, or an
+    /// error frame) arrived from the provider for the request marked by the
+    /// most recent [`Event::ProviderRequestSent`]. Ends the "waiting on the
+    /// model" window; the gap between the two is provider time-to-first-byte.
+    ProviderRequestFirstToken,
+    /// The provider's response stream for the most recent
+    /// [`Event::ProviderRequestSent`] ended (normally or via cancellation).
+    /// Emitted before any resulting `MessageCommitted`/`ToolCallRequested`
+    /// events, so replay can bound the request's total wall-clock span.
+    ProviderRequestFinished,
     Error(Error),
     Exited(Exit),
 }
@@ -71,6 +89,9 @@ pub(crate) fn event_kind(event: &Event) -> &'static str {
         Event::ToolCallStarted(_) => "tool_call_started",
         Event::ToolCallFinished(_) => "tool_call_finished",
         Event::ApprovalRequested(_) => "approval_requested",
+        Event::ProviderRequestSent(_) => "provider_request_sent",
+        Event::ProviderRequestFirstToken => "provider_request_first_token",
+        Event::ProviderRequestFinished => "provider_request_finished",
         Event::Error(_) => "error",
         Event::Exited(_) => "exited",
     }
@@ -198,6 +219,15 @@ pub(crate) struct ToolCallResult {
 pub(crate) struct ApprovalRequest {
     pub(crate) call_id: ToolCallId,
     pub(crate) reason: String,
+}
+
+/// Payload for [`Event::ProviderRequestSent`]: the model id the provider was
+/// asked to complete against, so the persisted event log doesn't depend on
+/// separately-stored config to answer "which model was this turn waiting
+/// on?".
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub(crate) struct ProviderRequestSent {
+    pub(crate) model: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]

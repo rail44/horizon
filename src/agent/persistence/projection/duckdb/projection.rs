@@ -77,8 +77,17 @@ impl Store {
             Event::ApprovalRequested(request) => {
                 self.insert_approval(event_id, session_id, sequence, request)
             }
+            // No projection table wants these yet: they're timing markers
+            // for replay/inspection (see their doc comments on `Event`),
+            // not transcript/tool/approval state. They still land in
+            // `agent_events` via the caller's insert before `project_event`
+            // runs, so `agent_events` remains the durable source a future
+            // projection could be built from.
             Event::StateChanged(_)
             | Event::ToolCallStarted(_)
+            | Event::ProviderRequestSent(_)
+            | Event::ProviderRequestFirstToken
+            | Event::ProviderRequestFinished
             | Event::Error(_)
             | Event::Exited(_) => Ok(()),
         }

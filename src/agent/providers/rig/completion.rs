@@ -19,7 +19,7 @@ use crate::{
     agent::{
         contract::{
             Error, Event, Message as AgentMessage, MessageDelta, MessageRole, ProviderEvent,
-            ToolCallId, ToolCallResult,
+            ProviderRequestSent, ToolCallId, ToolCallResult,
         },
         prompt::{system_prompt, SessionEnvironment},
         tools::{definitions, Definition},
@@ -123,6 +123,15 @@ async fn rig_openai_turn_streaming(
 ) -> anyhow::Result<(Message, TurnCompletion)> {
     let client = openai_completions_client(config)?;
     let model = client.completion_model(&config.model);
+    // Marks the request leaving Horizon for the provider, before the
+    // (possibly slow) network call below — see `Event::ProviderRequestSent`'s
+    // doc comment for why this is persisted rather than only observed live.
+    let _ = events_tx.send(
+        Event::ProviderRequestSent(ProviderRequestSent {
+            model: config.model.clone(),
+        })
+        .into(),
+    );
     let mut stream = model
         .completion_request(prompt)
         .messages(history)
@@ -131,6 +140,7 @@ async fn rig_openai_turn_streaming(
         .stream()
         .await?;
 
+    let mut first_token_seen = false;
     let mut text = String::new();
     let mut requested_tool_call_ids = Vec::new();
     let mut requested_tool_calls = HashMap::new();
@@ -159,6 +169,13 @@ async fn rig_openai_turn_streaming(
         let Some(chunk) = chunk else {
             break;
         };
+        if !first_token_seen {
+            first_token_seen = true;
+            // The gap between `ProviderRequestSent` above and this event is
+            // provider time-to-first-byte, regardless of what kind of chunk
+            // arrived first (text, reasoning, or a tool-call delta).
+            let _ = events_tx.send(Event::ProviderRequestFirstToken.into());
+        }
 
         match chunk? {
             StreamedAssistantContent::Text(delta) => {
@@ -221,6 +238,11 @@ async fn rig_openai_turn_streaming(
             StreamedAssistantContent::Final(_) => {}
         }
     }
+
+    // The provider's response stream is done, either exhausted normally or
+    // cut short by cancellation — either way, the request's wall-clock span
+    // ends here, before the resulting message/tool-call events below.
+    let _ = events_tx.send(Event::ProviderRequestFinished.into());
 
     reasoning_buffer.flush();
     text_buffer.flush();

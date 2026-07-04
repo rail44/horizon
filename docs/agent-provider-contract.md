@@ -128,6 +128,9 @@ enum Event {
     ToolCallStarted(ToolCallId),
     ToolCallFinished(ToolCallResult),
     ApprovalRequested(ApprovalRequest),
+    ProviderRequestSent(ProviderRequestSent),
+    ProviderRequestFirstToken,
+    ProviderRequestFinished,
     Error(Error),
     Exited(Exit),
 }
@@ -141,6 +144,15 @@ Notes:
 - `ToolCallRequested` is not execution. It is a request for Horizon to evaluate.
 - `ApprovalRequested` is a provider-visible reason to block until user or
   policy response.
+- `ProviderRequestSent`/`ProviderRequestFirstToken`/`ProviderRequestFinished`
+  mark a turn's completion request leaving Horizon for the provider, the
+  first chunk of any kind arriving back, and the response stream ending.
+  They exist so persisted history can attribute the silence between a user
+  message and the first delta to provider latency rather than local
+  processing (see `docs/agent-duckdb-state-design.md` and the
+  `agent-inspect` skill). `ProviderRequestSent` carries the model id;
+  Horizon renders none of the three in the transcript — they are pure
+  timing markers for replay/inspection, folded into the frame as no-ops.
 - `Exited` is runtime lifecycle, distinct from detached pane state.
 
 Provider runtime transport uses an event envelope:

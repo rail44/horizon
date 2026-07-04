@@ -63,7 +63,7 @@ mod tests {
     use super::*;
     use crate::agent::contract::{
         event_kind, ApprovalRequest, Event, Message, MessageDelta, MessageRole, ProviderId,
-        SessionState, ToolCallId, ToolCallRequest, ToolCallResult,
+        ProviderRequestSent, SessionState, ToolCallId, ToolCallRequest, ToolCallResult,
     };
     use std::time::{Duration, Instant};
     use uuid::Uuid;
@@ -152,6 +152,62 @@ mod tests {
 
         let results = store.tool_results_for_session(session_id).expect("results");
         assert_eq!(results[0].output["ok"], true);
+    }
+
+    /// The provider-request lifecycle markers have no dedicated projection
+    /// table (`projection::project_event`'s exhaustive match treats them as
+    /// a documented no-op passthrough) but must still round-trip through
+    /// `agent_events` — that table, not a projection, is what the
+    /// `agent-inspect` skill's replay/gap-attribution recipes read.
+    #[test]
+    fn persists_provider_request_lifecycle_events_without_a_dedicated_projection() {
+        let store = Store::open_in_memory().expect("store");
+        let session_id = SessionId::new();
+
+        store
+            .append_events(
+                session_id,
+                Some(ProviderId("builtin.agent.rig".to_string())),
+                [
+                    Event::ProviderRequestSent(ProviderRequestSent {
+                        model: "gpt-4o-mini".to_string(),
+                    }),
+                    Event::ProviderRequestFirstToken,
+                    Event::ProviderRequestFinished,
+                ],
+            )
+            .expect("append events");
+
+        let events = store.events_for_session(session_id).expect("events");
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].event_kind, "provider_request_sent");
+        assert_eq!(
+            events[0].event,
+            Event::ProviderRequestSent(ProviderRequestSent {
+                model: "gpt-4o-mini".to_string(),
+            })
+        );
+        assert_eq!(events[1].event_kind, "provider_request_first_token");
+        assert_eq!(events[1].event, Event::ProviderRequestFirstToken);
+        assert_eq!(events[2].event_kind, "provider_request_finished");
+        assert_eq!(events[2].event, Event::ProviderRequestFinished);
+
+        assert!(store
+            .messages_for_session(session_id)
+            .expect("messages")
+            .is_empty());
+        assert!(store
+            .tool_calls_for_session(session_id)
+            .expect("tool calls")
+            .is_empty());
+        assert!(store
+            .tool_results_for_session(session_id)
+            .expect("tool results")
+            .is_empty());
+        assert!(store
+            .approvals_for_session(session_id)
+            .expect("approvals")
+            .is_empty());
     }
 
     #[test]

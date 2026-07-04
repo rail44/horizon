@@ -118,6 +118,9 @@ pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message>
             | Event::AssistantTextDelta(_)
             | Event::ToolCallStarted(_)
             | Event::ApprovalRequested(_)
+            | Event::ProviderRequestSent(_)
+            | Event::ProviderRequestFirstToken
+            | Event::ProviderRequestFinished
             | Event::Exited(_) => None,
         })
         .collect()

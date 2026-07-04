@@ -437,6 +437,19 @@ fn mock_agent_cancel_mid_turn_keeps_partial_and_marks_cancelled() {
         })
     ));
 
+    // The provider-request lifecycle markers (see `Event::ProviderRequestSent`'s
+    // doc comment) bracket the turn before any streamed content: sent, then
+    // first token, matching the order asserted end-to-end in
+    // `mock_agent_slow_turn_emits_provider_request_lifecycle_in_order`.
+    match recv_event(&rx).event {
+        agent::Event::ProviderRequestSent(sent) => assert_eq!(sent.model, "mock"),
+        other => panic!("expected ProviderRequestSent, got {other:?}"),
+    }
+    assert_eq!(
+        recv_event(&rx).event,
+        agent::Event::ProviderRequestFirstToken
+    );
+
     // Cancel as soon as the first streamed chunk arrives, well before the
     // mock's simulated turn would finish on its own.
     assert!(matches!(
@@ -447,9 +460,11 @@ fn mock_agent_cancel_mid_turn_keeps_partial_and_marks_cancelled() {
 
     let mut partial_commit = None;
     let mut saw_cancelled_state = false;
+    let mut saw_request_finished = false;
     loop {
         match recv_event(&rx).event {
             agent::Event::AssistantTextDelta(_) => {}
+            agent::Event::ProviderRequestFinished => saw_request_finished = true,
             agent::Event::MessageCommitted(agent::Message {
                 role: agent::MessageRole::Assistant,
                 text,
@@ -469,12 +484,67 @@ fn mock_agent_cancel_mid_turn_keeps_partial_and_marks_cancelled() {
     }
 
     assert!(saw_cancelled_state, "expected a Cancelled state transition");
+    assert!(
+        saw_request_finished,
+        "expected a ProviderRequestFinished marker even when cancelled mid-turn"
+    );
     let partial = partial_commit.expect("partial assistant text committed on cancel");
     assert!(!partial.is_empty());
     let full_response = "Mock response: slow please";
     assert!(
         full_response.starts_with(&partial) && partial != full_response,
         "expected a strict partial prefix of {full_response:?}, got {partial:?}"
+    );
+}
+
+#[test]
+fn mock_agent_slow_turn_emits_provider_request_lifecycle_in_order() {
+    let provider = crate::agent::providers::mock::MockProvider::new();
+    let handle = agent::Provider::start_session(
+        &provider,
+        agent::StartSession {
+            session_id: SessionId::new(),
+            provider_id: agent::Provider::provider_id(&provider),
+        },
+    );
+    let tx = handle.sender();
+    let rx = handle.events();
+
+    // Drain session-startup events (Created, init message, WaitingForUser).
+    for _ in 0..3 {
+        recv_event(&rx);
+    }
+
+    let _ = tx.send(agent::Command::UserMessage {
+        text: "slow please".to_string(),
+    });
+
+    #[derive(Debug, PartialEq)]
+    enum Marker {
+        Sent,
+        FirstToken,
+        Finished,
+    }
+
+    let mut markers = Vec::new();
+    loop {
+        match recv_event(&rx).event {
+            agent::Event::ProviderRequestSent(sent) => {
+                assert_eq!(sent.model, "mock");
+                markers.push(Marker::Sent);
+            }
+            agent::Event::ProviderRequestFirstToken => markers.push(Marker::FirstToken),
+            agent::Event::ProviderRequestFinished => markers.push(Marker::Finished),
+            agent::Event::StateChanged(agent::SessionState::WaitingForUser) => break,
+            _ => {}
+        }
+    }
+
+    assert_eq!(
+        markers,
+        vec![Marker::Sent, Marker::FirstToken, Marker::Finished],
+        "a turn must report the provider request lifecycle in sent -> first-token -> \
+         finished order, exactly once each"
     );
 }
 

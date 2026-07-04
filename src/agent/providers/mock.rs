@@ -131,6 +131,17 @@ impl Provider for MockProvider {
                             // enough to be interrupted, so cancellation
                             // semantics are testable without a network
                             // provider (see docs/agent-tools-design.md).
+                            // Also the cheap, deterministic stand-in for the
+                            // rig streaming path's provider-request lifecycle
+                            // markers (see `Event::ProviderRequestSent`'s doc
+                            // comment) so ordering is unit-testable without a
+                            // network provider.
+                            let _ = events_tx.send(
+                                Event::ProviderRequestSent(ProviderRequestSent {
+                                    model: "mock".to_string(),
+                                })
+                                .into(),
+                            );
                             match run_cancellable_mock_turn(&commands_rx, &events_tx, &text) {
                                 MockTurnOutcome::Completed => {
                                     let _ = events_tx.send(
@@ -277,10 +288,12 @@ fn run_cancellable_mock_turn(
 ) -> MockTurnOutcome {
     let full_response = format!("Mock response: {text}");
     let mut streamed = String::new();
+    let mut first_token_sent = false;
 
     for word in full_response.split_inclusive(' ') {
         match commands_rx.recv_timeout(MOCK_STREAM_CHUNK_TICK) {
             Ok(Command::Cancel { .. }) => {
+                let _ = events_tx.send(Event::ProviderRequestFinished.into());
                 if !streamed.is_empty() {
                     let _ = events_tx.send(
                         Event::MessageCommitted(Message {
@@ -295,6 +308,7 @@ fn run_cancellable_mock_turn(
                 return MockTurnOutcome::Cancelled;
             }
             Ok(Command::Shutdown) => {
+                let _ = events_tx.send(Event::ProviderRequestFinished.into());
                 if !streamed.is_empty() {
                     let _ = events_tx.send(
                         Event::MessageCommitted(Message {
@@ -314,6 +328,10 @@ fn run_cancellable_mock_turn(
             Err(RecvTimeoutError::Disconnected) => break,
         }
 
+        if !first_token_sent {
+            first_token_sent = true;
+            let _ = events_tx.send(Event::ProviderRequestFirstToken.into());
+        }
         streamed.push_str(word);
         let _ = events_tx.send(
             Event::AssistantTextDelta(MessageDelta {
@@ -324,6 +342,7 @@ fn run_cancellable_mock_turn(
         );
     }
 
+    let _ = events_tx.send(Event::ProviderRequestFinished.into());
     let _ = events_tx.send(
         Event::MessageCommitted(Message {
             role: MessageRole::Assistant,

@@ -89,6 +89,16 @@ The projections are intentionally derived from `agent::contract::Event`. If a
 projection needs to change, it can be rebuilt from `agent_events` without
 changing the provider contract.
 
+Not every event needs a projection to be useful. `ProviderRequestSent`/
+`ProviderRequestFirstToken`/`ProviderRequestFinished` (see
+`docs/agent-provider-contract.md`) are pure timing markers bracketing a
+turn's round trip to the provider; they land in `agent_events` like any other
+event (with `created_at_unix_ms` in the JSONL record and `created_at` in the
+DuckDB row) but `project_event`'s exhaustive match treats them as a no-op —
+no dedicated table claims them. Querying `agent_events` directly by
+`event_kind` is the intended way to reconstruct provider-latency gaps; see
+the `agent-inspect` skill for the jq/SQL recipes.
+
 ## Provider Payload Boundary
 
 `horizon_event_json` is the durable Horizon contract. It is used for normal

@@ -172,6 +172,15 @@ pub(crate) fn render_agent_transcript(events: &[Event]) -> String {
                     request.call_id.0, request.reason
                 ));
             }
+            Event::ProviderRequestSent(sent) => {
+                lines.push(format!("provider request sent: {}", sent.model));
+            }
+            Event::ProviderRequestFirstToken => {
+                lines.push("provider request first token".to_string());
+            }
+            Event::ProviderRequestFinished => {
+                lines.push("provider request finished".to_string());
+            }
             Event::Error(error) => lines.push(format!("error: {}", error.message)),
             Event::Exited(exit) => lines.push(format!("exited: {}", exit.reason)),
         }
@@ -277,6 +286,14 @@ pub(crate) fn apply_agent_event_to_frame(frame: &mut AgentFrame, event: &Event) 
                 .items
                 .push(AgentFrameItem::ApprovalRequested(request.clone()));
         }
+        // Provider request lifecycle markers are timing-only (see their doc
+        // comments on `Event`): they exist for persisted replay/inspection,
+        // not for pane rendering, so they leave the frame untouched — the
+        // same treatment `Event::StateChanged` gives `frame.state` without
+        // an item, just with nothing to set.
+        Event::ProviderRequestSent(_)
+        | Event::ProviderRequestFirstToken
+        | Event::ProviderRequestFinished => {}
         Event::Error(error) => frame.items.push(AgentFrameItem::Error(error.clone())),
         Event::Exited(exit) => frame.items.push(AgentFrameItem::Exited(exit.clone())),
     }

@@ -117,7 +117,7 @@ pub(crate) fn read(path: impl AsRef<Path>) -> Result<ReadReport> {
 mod tests {
     use super::*;
     use crate::agent::contract::{
-        Event, Message, MessageDelta, MessageRole, ProviderEvent, SessionState,
+        Event, Message, MessageDelta, MessageRole, ProviderEvent, ProviderRequestSent, SessionState,
     };
     use uuid::Uuid;
 
@@ -155,6 +155,76 @@ mod tests {
         assert_eq!(
             report.records[0].provider_payload,
             Some(serde_json::json!({ "provider": true }))
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// Round-trips the provider-request lifecycle markers
+    /// (`Event::ProviderRequestSent`/`ProviderRequestFirstToken`/
+    /// `ProviderRequestFinished`) through the JSONL log: correct
+    /// `event_kind` strings, the sent event's `model` field surviving
+    /// serialization, and — since `TurnTracker` groups them like any other
+    /// event — all three sharing the turn id opened by the preceding user
+    /// message, so replay can attribute them to the turn they bracket.
+    #[test]
+    fn writes_and_reads_provider_request_lifecycle_events_with_shared_turn_id() {
+        let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
+        let session_id = SessionId::new();
+        let (writer, _init_rx) = WriterHandle::open(&path);
+        let mut appender = Appender::new(
+            writer.clone(),
+            session_id,
+            Some(ProviderId("builtin.agent.rig".to_string())),
+        );
+
+        appender
+            .append_provider_events(vec![
+                ProviderEvent::from(Event::MessageCommitted(Message {
+                    role: MessageRole::User,
+                    text: "hello".to_string(),
+                })),
+                ProviderEvent::from(Event::ProviderRequestSent(ProviderRequestSent {
+                    model: "gpt-4o-mini".to_string(),
+                })),
+                ProviderEvent::from(Event::ProviderRequestFirstToken),
+                ProviderEvent::from(Event::ProviderRequestFinished),
+            ])
+            .expect("append");
+        writer.flush().expect("flush");
+
+        let report = read(&path).expect("read");
+        assert_eq!(report.records.len(), 4);
+
+        let kinds: Vec<&str> = report
+            .records
+            .iter()
+            .map(|record| record.event_kind.as_str())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "message_committed",
+                "provider_request_sent",
+                "provider_request_first_token",
+                "provider_request_finished",
+            ]
+        );
+        assert_eq!(
+            report.records[1].event,
+            Event::ProviderRequestSent(ProviderRequestSent {
+                model: "gpt-4o-mini".to_string(),
+            })
+        );
+
+        let turn_id = report.records[0].turn_id.clone();
+        assert!(turn_id.is_some(), "the user message must open a turn");
+        assert!(
+            report
+                .records
+                .iter()
+                .all(|record| record.turn_id == turn_id),
+            "provider request lifecycle markers must share the turn they bracket"
         );
 
         let _ = std::fs::remove_file(path);
