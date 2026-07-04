@@ -13,6 +13,7 @@
 //! owns the event-log writer — stays local to Horizon; see `agent::view`
 //! and `app::runtime::agent`.
 
+pub(crate) mod agentd_client;
 mod host_tools;
 pub(crate) mod view;
 
@@ -204,5 +205,9 @@ mod tests {
         assert_eq!(parsed.provider, crate::config::RawProviderConfig::default());
         assert!(parsed.keybindings.is_empty());
         assert!(parsed.theme.is_empty());
+        assert!(
+            !parsed.agent.agentd,
+            "agentd must stay commented out (default false) in the example file"
+        );
     }
 }

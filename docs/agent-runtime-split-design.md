@@ -152,3 +152,106 @@ on it by path). Boundary decisions the design above didn't fully pin down:
   registry, tool/persistence entry points, config types); purely
   crate-internal pieces (`MockProvider`, the rig `Provider` struct,
   `policy`, `providers`) stayed `pub(crate)`.
+
+## Step 2 implementation notes
+
+Landed as `horizon_agent::wire` (framing), `horizon_agent::socket` (the
+default socket path), and a new workspace member `crates/horizon-agentd`
+(the daemon binary). Sessions still run entirely in-process inside Horizon —
+`horizon-agentd` answers only the connection-global control messages this
+step calls for; nothing routes a real session through it yet.
+
+- **Envelope and `CONTRACT_VERSION`**: `wire::Envelope { v, session_id,
+  body: EnvelopeBody }`, `EnvelopeBody::{Command, Event, Control}`
+  (adjacently tagged as `{"kind":..,"payload":..}`). `wire::CONTRACT_VERSION:
+  u32 = 1` lives in `wire`, not `contract` — it stamps every envelope's `v`
+  field *and* is echoed by `Hello::contract_version`, but the two checks are
+  independent (see next bullet), which only made sense to keep next to the
+  framing code that performs the structural one. Deserializing is
+  hand-rolled (`wire::parse_line`) rather than derived, so an unrecognized
+  `kind` or a `v` this build doesn't speak return `WireError::UnknownKind`/
+  `WireError::VersionMismatch` instead of a generic serde error — both
+  non-panicking, per the deliverable. Unknown top-level JSON fields are
+  tolerated for free (no `deny_unknown_fields` anywhere in the envelope
+  types).
+- **Two version checks, not one.** `wire::read_envelope` rejects a
+  structurally-incompatible envelope (`v != CONTRACT_VERSION`) before it
+  even looks at `kind`/`payload` — this is `wire`'s own job, since decoding
+  `payload` into today's `Command`/`Event`/`Control` shapes assumes today's
+  envelope schema. Separately, `Hello::contract_version` is compared by
+  *handshake* logic (`horizon-agentd`'s connection handler, `horizon`'s
+  `agent::agentd_client::handshake`) — deliberately not folded into `wire`,
+  because a transport without an envelope at all (ACP's JSON-RPC over
+  stdio, guardrail 2) has no `v` field to check, so the semantic version has
+  to travel inside the payload independently of the wire format.
+- **`Control::HandshakeRejected(String)` — a deviation from the design's
+  literal control-message list.** The design names `hello`, `session_list`,
+  `session_new`, `session_load`, `host_tool_request`/`_response`, `ping`,
+  `drain` but no explicit rejection/error payload. Step 2 needed one:
+  `horizon-agentd` must make a `contract_version` mismatch observable on the
+  wire (not just close the socket, which is a weak, easily-misread signal)
+  so both the real client (`agent::agentd_client`) and the e2e test can
+  assert on a concrete reason string. `horizon-agentd` sends this instead of
+  a normal `hello` reply and then closes the connection; it does not
+  validate a client's claimed version any further than that one check.
+- **`horizon_agent::socket::default_socket_path`** (`$XDG_RUNTIME_DIR/
+  horizon/agentd.sock`, else `/tmp/horizon-agentd-$UID.sock`) is shared
+  between `horizon-agentd` (bind default) and Horizon's `agentd_client`
+  (connect default) specifically so the two independently agree on the same
+  path without either depending on the other. Kept out of `wire` (which
+  must stay transport-agnostic per guardrail 2) as its own tiny module.
+- **`horizon-agentd`** (`crates/horizon-agentd`, bin-only crate, package
+  name doubles as the binary name so `env!("CARGO_BIN_EXE_horizon-agentd")`
+  works from its own integration test). `--socket <path>` overrides the
+  default. Accepts one connection at a time by construction (the accept
+  loop `await`s a connection's full handler before accepting the next —
+  multi-client is out of scope per the design). Stale-socket recovery: if
+  the path exists but connecting to it fails, removes it and rebinds; if
+  something *is* accepting, refuses to steal the path. `SIGTERM` breaks the
+  accept loop, removes the socket file, and returns normally. `drain`
+  flushes the write half and calls `std::process::exit(0)` immediately
+  (mid-connection, not just closing the one connection) per the design's
+  "drain → agentd flushes and exits" wording.
+- **`horizon_agent::config::load_file_config`**: a minimal `toml`+`serde`
+  loader added to `horizon-agent` for `AgentFileConfig`, duplicating
+  Horizon's `HORIZON_CONFIG` > `$XDG_CONFIG_HOME/horizon/config.toml` >
+  `~/.config/horizon/config.toml` > built-in-default resolution verbatim
+  (own copies of the same env var names/logic — this crate still can't
+  depend on `horizon`'s loader). Parses Horizon's *actual* config file:
+  `AgentFileConfig`'s `#[serde(default)]` (no `deny_unknown_fields`) means
+  the file's other sections (`[terminal]`, `[ui]`, `[keybindings]`,
+  `[theme]`) parse fine and are silently ignored, so `horizon-agentd` only
+  ever sees `[agent]`/`[provider]`. No `[agentd]`-specific section exists —
+  see the next bullet for where that switch actually lives.
+- **Horizon-side gating**: `[agent].agentd` (bool, default `false`) in
+  Horizon's own `RawAgentConfig` — this is a Horizon-only "should Horizon
+  try to talk to agentd at all" switch, not part of the contract/file
+  schema `horizon-agent` mirrors, so it was added to `crate::config`
+  directly rather than threaded through `AgentFileConfig`.
+  `agent::agentd_client::agentd_enabled()` reads it;
+  `agent::agentd_client::maybe_connect_at_startup()` is the one production
+  call site (`app::view::app_view`, right after `spawn_initial_sessions`) —
+  a no-op when the flag is `false` (the default, so default behavior is
+  unchanged), and otherwise a fire-and-forget connection attempt on a
+  background OS thread (Horizon has no tokio runtime of its own; floem
+  drives its own event loop) that only logs the outcome. No session routes
+  through this connection yet — that is step 4.
+- **Testing scope / a gap worth naming**: `horizon-agent`'s `wire` tests
+  round-trip every envelope kind (including every `Control` variant) over
+  `tokio::io::duplex`, plus torn-line, unknown-kind, wire-version-mismatch,
+  and unknown-field-tolerance cases. `horizon-agentd`'s `tests/e2e.rs` spawns
+  the real binary (`CARGO_BIN_EXE_horizon-agentd`, available because the
+  test lives in the same package as the bin target) and drives
+  hello/ping/session_list/drain plus the `HandshakeRejected` path over the
+  real socket. Horizon's `agent::agentd_client` tests exercise the
+  `handshake` function itself (generic over `AsyncRead + AsyncWrite`, so
+  testable over `tokio::io::duplex` against an in-test fake peer) for the
+  success, version-mismatch, rejection, and closed-before-reply cases —
+  but *not* the actual `connect_or_spawn` subprocess-spawn path, since
+  `CARGO_BIN_EXE_horizon-agentd` is only set for `horizon-agentd`'s own
+  integration tests, not for a different package's (`horizon`'s) test
+  binary. `spawn_agentd`/`retry_connect` are implemented per the design and
+  reachable from `maybe_connect_at_startup`, but only manually verified
+  (run Horizon with `[agent].agentd = true` and no socket present); a
+  cross-package integration test for the cold-start spawn path is left for
+  a later step if it proves worth the setup.

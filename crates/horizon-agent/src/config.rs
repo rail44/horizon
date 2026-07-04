@@ -18,21 +18,29 @@
 //! loading (split step 2) will need an analogous conversion, or may parse
 //! its file directly into this shape.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use rig_core::providers::openai;
+use serde::Deserialize;
 
 /// Mirrors the `[agent]`/`[provider]` sections of Horizon's config-file
 /// schema (`crate::config::RawConfig` in the `horizon` binary crate) — see
-/// the module doc for why this crate can't use that type directly.
-#[derive(Clone, Debug, Default, PartialEq)]
+/// the module doc for why this crate can't use that type directly. Derives
+/// `Deserialize` (used by [`load_file_config`], `horizon-agentd`'s own
+/// loader) with `#[serde(default)]` throughout so a file missing the
+/// `[agent]`/`[provider]` sections entirely, or Horizon's full config file
+/// (with its other sections this crate doesn't model at all -- `[terminal]`,
+/// `[ui]`, `[keybindings]`, `[theme]`), both parse fine.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct AgentFileConfig {
     pub agent: AgentFileAgentConfig,
     pub provider: AgentFileProviderConfig,
 }
 
 /// Mirrors `RawAgentConfig`'s fields one-to-one — see [`AgentFileConfig`].
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(default)]
 pub struct AgentFileAgentConfig {
     pub bash_timeout_default_secs: Option<u64>,
     pub bash_timeout_max_secs: Option<u64>,
@@ -53,12 +61,98 @@ pub struct AgentFileAgentConfig {
 }
 
 /// Mirrors `RawProviderConfig`'s fields one-to-one — see [`AgentFileConfig`].
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct AgentFileProviderConfig {
     pub model: Option<String>,
     pub base_url: Option<String>,
     pub temperature: Option<f64>,
     pub max_tokens: Option<u64>,
+}
+
+// --- loading AgentFileConfig from Horizon's config file (horizon-agentd) --
+//
+// `horizon-agentd` can't depend on the `horizon` binary crate's own loader
+// (`crate::config::load()` there, gated behind Horizon's UI/workspace
+// dependencies), so it needs its own copy of the file-location logic. This
+// duplicates Horizon's `HORIZON_CONFIG` > `$XDG_CONFIG_HOME/horizon/
+// config.toml` > `~/.config/horizon/config.toml` > built-in-default
+// resolution verbatim -- see `docs/agent-runtime-split-design.md`'s "Step 2
+// implementation notes" for why a small duplication (rather than a shared
+// third crate just for this) was accepted. Parsing the *same* file Horizon
+// reads is intentional: [`AgentFileConfig`]'s `#[serde(default)]` (no
+// `deny_unknown_fields`) means Horizon's other top-level sections
+// (`[terminal]`, `[ui]`, `[keybindings]`, `[theme]`) parse here too, just
+// silently ignored, so `horizon-agentd` only ever sees `[agent]`/
+// `[provider]`.
+
+/// Overrides the config file path outright -- the same variable Horizon's
+/// own loader honors (`crate::config::CONFIG_PATH_VAR` there); duplicated as
+/// its own constant here since this crate can't reference that one.
+const CONFIG_PATH_VAR: &str = "HORIZON_CONFIG";
+const XDG_CONFIG_HOME_VAR: &str = "XDG_CONFIG_HOME";
+
+/// Loads `[agent]`/`[provider]` from Horizon's single config file, for
+/// standalone use by `horizon-agentd`. A missing file (the common case) or
+/// a present-but-unparsable one both fall back to
+/// [`AgentFileConfig::default()`] -- the latter with a warning on stderr --
+/// matching Horizon's own "never crash on a bad config file" policy
+/// (`crate::config`'s module doc, on the `horizon` side).
+pub fn load_file_config() -> AgentFileConfig {
+    load_file_config_from_path(resolve_config_file_path().as_deref())
+}
+
+fn resolve_config_file_path() -> Option<PathBuf> {
+    resolve_config_file_path_from(
+        std::env::var(CONFIG_PATH_VAR).ok(),
+        std::env::var(XDG_CONFIG_HOME_VAR).ok(),
+        std::env::var(HOME_VAR).ok(),
+    )
+}
+
+/// Pure path-resolution logic, factored out for the same unit-testability
+/// reason as [`resolve_model`] below.
+fn resolve_config_file_path_from(
+    horizon_config: Option<String>,
+    xdg_config_home: Option<String>,
+    home: Option<String>,
+) -> Option<PathBuf> {
+    let non_empty = |value: Option<String>| value.filter(|value| !value.is_empty());
+    if let Some(path) = non_empty(horizon_config) {
+        return Some(PathBuf::from(path));
+    }
+    let config_home = match non_empty(xdg_config_home) {
+        Some(dir) => PathBuf::from(dir),
+        None => PathBuf::from(non_empty(home)?).join(".config"),
+    };
+    Some(config_home.join("horizon").join("config.toml"))
+}
+
+fn load_file_config_from_path(path: Option<&Path>) -> AgentFileConfig {
+    let Some(path) = path else {
+        return AgentFileConfig::default();
+    };
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        // No file written yet is the common case, not a warning.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return AgentFileConfig::default()
+        }
+        Err(error) => {
+            eprintln!(
+                "horizon-agent: could not read {}: {error} -- using built-in defaults",
+                path.display()
+            );
+            return AgentFileConfig::default();
+        }
+    };
+    toml::from_str(&contents).unwrap_or_else(|error| {
+        eprintln!(
+            "horizon-agent: could not parse {}: {error} -- using built-in defaults",
+            path.display()
+        );
+        AgentFileConfig::default()
+    })
 }
 
 /// Presence gates the OpenAI-backed rig completion path (see
@@ -806,5 +900,100 @@ mod tests {
         assert_eq!(config.fs.read_line_cap, DEFAULT_FS_READ_LINE_CAP);
         assert_eq!(config.fs.grep_result_limit, DEFAULT_FS_GREP_RESULT_LIMIT);
         assert_eq!(config.fs.glob_result_limit, DEFAULT_FS_GLOB_RESULT_LIMIT);
+    }
+
+    // --- horizon-agentd's standalone file-config loader ---------------------
+
+    #[test]
+    fn resolves_config_file_path_env_over_xdg_over_home_fallback() {
+        assert_eq!(
+            resolve_config_file_path_from(
+                Some("/env/config.toml".to_string()),
+                Some("/xdg/config".to_string()),
+                Some("/home/user".to_string()),
+            ),
+            Some(PathBuf::from("/env/config.toml"))
+        );
+        assert_eq!(
+            resolve_config_file_path_from(
+                None,
+                Some("/xdg/config".to_string()),
+                Some("/home/user".to_string())
+            ),
+            Some(PathBuf::from("/xdg/config/horizon/config.toml"))
+        );
+        assert_eq!(
+            resolve_config_file_path_from(None, None, Some("/home/user".to_string())),
+            Some(PathBuf::from("/home/user/.config/horizon/config.toml"))
+        );
+        assert_eq!(resolve_config_file_path_from(None, None, None), None);
+    }
+
+    #[test]
+    fn load_file_config_from_path_defaults_when_path_is_none() {
+        assert_eq!(load_file_config_from_path(None), AgentFileConfig::default());
+    }
+
+    #[test]
+    fn load_file_config_from_path_defaults_when_file_is_missing() {
+        let missing = std::env::temp_dir().join(format!(
+            "horizon-agent-missing-config-{}.toml",
+            uuid::Uuid::new_v4()
+        ));
+        assert_eq!(
+            load_file_config_from_path(Some(&missing)),
+            AgentFileConfig::default()
+        );
+    }
+
+    #[test]
+    fn load_file_config_from_path_parses_agent_and_provider_sections() {
+        let path = std::env::temp_dir().join(format!(
+            "horizon-agent-test-config-{}.toml",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(
+            &path,
+            "[agent]\niteration_cap = 9\n\n[provider]\nmodel = \"test-model\"\n",
+        )
+        .unwrap();
+
+        let config = load_file_config_from_path(Some(&path));
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(config.agent.iteration_cap, Some(9));
+        assert_eq!(config.provider.model, Some("test-model".to_string()));
+    }
+
+    #[test]
+    fn load_file_config_from_path_ignores_horizons_other_top_level_sections() {
+        let path = std::env::temp_dir().join(format!(
+            "horizon-agent-test-config-other-{}.toml",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(
+            &path,
+            "[terminal]\nfont_size = 14.0\n\n[agent]\niteration_cap = 3\n",
+        )
+        .unwrap();
+
+        let config = load_file_config_from_path(Some(&path));
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(config.agent.iteration_cap, Some(3));
+    }
+
+    #[test]
+    fn load_file_config_from_path_falls_back_to_default_on_unparsable_toml() {
+        let path = std::env::temp_dir().join(format!(
+            "horizon-agent-test-config-bad-{}.toml",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&path, "not valid toml {{{").unwrap();
+
+        let config = load_file_config_from_path(Some(&path));
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(config, AgentFileConfig::default());
     }
 }

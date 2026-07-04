@@ -14,6 +14,7 @@ use super::status_bar::status_bar;
 pub fn app_view() -> impl IntoView {
     let state = AppState::new();
     state.spawn_initial_sessions();
+    crate::agent::agentd_client::maybe_connect_at_startup();
 
     let input = AppInput::new(&state);
     let content = app_content(state);

@@ -2356,6 +2356,7 @@ dependencies = [
  "serde_json",
  "termwiz",
  "thiserror 2.0.18",
+ "tokio",
  "toml 0.8.23",
  "unicode-width 0.2.2",
  "uuid",
@@ -2379,8 +2380,20 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
+ "toml 0.8.23",
  "uuid",
  "walkdir",
+]
+
+[[package]]
+name = "horizon-agentd"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "horizon-agent",
+ "libc",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

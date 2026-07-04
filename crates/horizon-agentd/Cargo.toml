@@ -1,0 +1,16 @@
+[package]
+name = "horizon-agentd"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+horizon-agent = { path = "../horizon-agent" }
+libc = "0.2"
+tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-util", "signal", "time"] }
+
+[dev-dependencies]
+uuid = { version = "1.18", features = ["v4"] }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
