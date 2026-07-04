@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use super::completion::partial_assistant_message;
+use super::completion::{partial_assistant_message, MULTI_TOOL_TEST_BATCH_SIZE};
 use super::mapping::{
     horizon_events_from_rig_message, horizon_provider_events_from_rig_message,
     horizon_tool_definition_from_rig, rig_messages_from_horizon_events,
@@ -9,8 +9,8 @@ use super::mapping::{
     RIG_PROVIDER_PAYLOAD_VERSION,
 };
 use super::session::{
-    append_cancelled_tool_results_to_history, halt_turn_loop, tool_result_fingerprint, GuardHalt,
-    TurnLoopGuard,
+    append_cancelled_tool_results_to_history, fold_batched_tool_result, halt_turn_loop,
+    tool_result_fingerprint, BatchStep, GuardHalt, TurnLoopGuard,
 };
 use super::*;
 use crate::agent::config::RigAgentConfig;
@@ -575,14 +575,20 @@ fn start_fallback_rig_session() -> (
     crossbeam_channel::Sender<Command>,
     crossbeam_channel::Receiver<ProviderEvent>,
 ) {
-    let provider = Provider::new(
-        RigAgentConfig {
-            openai_enabled: false,
-            model: "unused-in-fallback-mode".to_string(),
-            ..Default::default()
-        },
-        None,
-    );
+    start_fallback_rig_session_with_config(RigAgentConfig {
+        openai_enabled: false,
+        model: "unused-in-fallback-mode".to_string(),
+        ..Default::default()
+    })
+}
+
+fn start_fallback_rig_session_with_config(
+    config: RigAgentConfig,
+) -> (
+    crossbeam_channel::Sender<Command>,
+    crossbeam_channel::Receiver<ProviderEvent>,
+) {
+    let provider = Provider::new(config, None);
     let handle = provider.start_session(StartSession {
         session_id: SessionId::new(),
         provider_id: AgentProvider::provider_id(&provider),
@@ -752,5 +758,378 @@ fn doom_loop_trips_on_three_identical_tool_args_output_fingerprints() {
     assert_eq!(
         guard.record_fingerprint(fingerprint),
         Some(GuardHalt::DoomLoopDetected)
+    );
+}
+
+// --- Parallel tool-call batching ---------------------------------------
+//
+// Regression coverage for the production incident (session 3aef2770) where
+// a single completion requesting several parallel tool calls (MiniMax
+// routinely requests 4 parallel `fs.read`s) made the session loop run one
+// completion per *arriving result* instead of waiting for the whole batch:
+// protocol-malformed history, a burst of stray "anything else?" turns, and
+// the iteration-cap guard burning N times faster than intended.
+
+#[test]
+fn fold_batched_tool_result_holds_non_last_results_and_leaves_the_last_for_the_caller() {
+    let call_a = ToolCallId("call-a".to_string());
+    let call_b = ToolCallId("call-b".to_string());
+    let call_c = ToolCallId("call-c".to_string());
+    let mut history = vec![
+        RigMessage::user("multi tool please"),
+        RigMessage::Assistant {
+            id: None,
+            content: OneOrMany::many(vec![
+                AssistantContent::ToolCall(ToolCall::new(
+                    call_a.0.clone(),
+                    ToolFunction::new("fs.read".to_string(), serde_json::json!({ "path": "/a" })),
+                )),
+                AssistantContent::ToolCall(ToolCall::new(
+                    call_b.0.clone(),
+                    ToolFunction::new("fs.read".to_string(), serde_json::json!({ "path": "/b" })),
+                )),
+                AssistantContent::ToolCall(ToolCall::new(
+                    call_c.0.clone(),
+                    ToolFunction::new("fs.read".to_string(), serde_json::json!({ "path": "/c" })),
+                )),
+            ])
+            .expect("assistant content"),
+        },
+    ];
+    let mut pending: HashMap<ToolCallId, ToolCallDescriptor> = HashMap::from([
+        (
+            call_a.clone(),
+            ToolCallDescriptor {
+                tool_id: "fs.read".to_string(),
+                args: serde_json::json!({ "path": "/a" }),
+            },
+        ),
+        (
+            call_b.clone(),
+            ToolCallDescriptor {
+                tool_id: "fs.read".to_string(),
+                args: serde_json::json!({ "path": "/b" }),
+            },
+        ),
+        (
+            call_c.clone(),
+            ToolCallDescriptor {
+                tool_id: "fs.read".to_string(),
+                args: serde_json::json!({ "path": "/c" }),
+            },
+        ),
+    ]);
+
+    // First of three: two more calls are still outstanding, so the result
+    // is folded directly into history (in arrival order) and no turn runs.
+    pending.remove(&call_a);
+    let result_a = ToolCallResult {
+        call_id: call_a.clone(),
+        output: serde_json::json!({ "contents": "a" }),
+    };
+    assert_eq!(
+        fold_batched_tool_result(&mut history, &pending, &result_a),
+        BatchStep::Continue
+    );
+    assert_eq!(history.len(), 3);
+
+    // Second of three: same story.
+    pending.remove(&call_b);
+    let result_b = ToolCallResult {
+        call_id: call_b.clone(),
+        output: serde_json::json!({ "contents": "b" }),
+    };
+    assert_eq!(
+        fold_batched_tool_result(&mut history, &pending, &result_b),
+        BatchStep::Continue
+    );
+    assert_eq!(history.len(), 4);
+
+    // Third and last: pending is now empty, so the caller must run a turn
+    // with `result_c` as the prompt message — this function deliberately
+    // leaves it out of history, so the normal turn plumbing
+    // (`run_cancellable_turn`/`complete_rig_turn`) appends it right before
+    // the resulting assistant message.
+    pending.remove(&call_c);
+    let result_c = ToolCallResult {
+        call_id: call_c.clone(),
+        output: serde_json::json!({ "contents": "c" }),
+    };
+    assert_eq!(
+        fold_batched_tool_result(&mut history, &pending, &result_c),
+        BatchStep::RunTurn
+    );
+    assert_eq!(
+        history.len(),
+        4,
+        "the last result is left for the caller to append via the normal turn plumbing"
+    );
+
+    // The two folded-in-advance results land in arrival order, right after
+    // the assistant's tool_calls message.
+    assert!(matches!(&history[2], RigMessage::User { content }
+        if matches!(content.first_ref(), UserContent::ToolResult(result)
+            if result.id == call_a.0
+                && matches!(result.content.first_ref(), ToolResultContent::Text(text)
+                    if text.text.contains("\"a\"")))));
+    assert!(matches!(&history[3], RigMessage::User { content }
+        if matches!(content.first_ref(), UserContent::ToolResult(result)
+            if result.id == call_b.0
+                && matches!(result.content.first_ref(), ToolResultContent::Text(text)
+                    if text.text.contains("\"b\"")))));
+}
+
+#[test]
+fn rig_session_batches_parallel_tool_results_into_one_follow_up_completion() {
+    let (tx, rx) = start_fallback_rig_session();
+
+    let _ = tx.send(Command::UserMessage {
+        text: "multi tool please".to_string(),
+    });
+    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            ..
+        })
+    ));
+
+    let mut call_ids = Vec::new();
+    for _ in 0..MULTI_TOOL_TEST_BATCH_SIZE {
+        match recv(&rx).event {
+            Event::ToolCallRequested(request) => call_ids.push(request.call_id),
+            other => panic!("expected a tool call request, got {other:?}"),
+        }
+    }
+    assert_eq!(call_ids.len(), MULTI_TOOL_TEST_BATCH_SIZE);
+
+    // Deliver all but the batch's last result: no completion may run while
+    // any of the batch is still outstanding.
+    for call_id in &call_ids[..call_ids.len() - 1] {
+        let _ = tx.send(Command::ToolCallResult(ToolCallResult {
+            call_id: call_id.clone(),
+            output: serde_json::json!({ "ok": true }),
+        }));
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(200))
+                .is_err(),
+            "no completion should run while results are still outstanding"
+        );
+    }
+
+    // The batch's last result completes it: exactly one follow-up
+    // completion fires.
+    let _ = tx.send(Command::ToolCallResult(ToolCallResult {
+        call_id: call_ids[call_ids.len() - 1].clone(),
+        output: serde_json::json!({ "ok": true }),
+    }));
+    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::Assistant,
+            ..
+        })
+    ));
+    assert_eq!(
+        recv(&rx).event,
+        Event::StateChanged(SessionState::WaitingForUser)
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "exactly one follow-up completion should run for the whole batch"
+    );
+}
+
+#[test]
+fn rig_session_cancel_mid_batch_drops_remaining_results_and_recovers() {
+    let (tx, rx) = start_fallback_rig_session();
+
+    let _ = tx.send(Command::UserMessage {
+        text: "multi tool please".to_string(),
+    });
+    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            ..
+        })
+    ));
+
+    let mut call_ids = Vec::new();
+    for _ in 0..MULTI_TOOL_TEST_BATCH_SIZE {
+        match recv(&rx).event {
+            Event::ToolCallRequested(request) => call_ids.push(request.call_id),
+            other => panic!("expected a tool call request, got {other:?}"),
+        }
+    }
+
+    // Only the first of the batch resolves before the user cancels.
+    let _ = tx.send(Command::ToolCallResult(ToolCallResult {
+        call_id: call_ids[0].clone(),
+        output: serde_json::json!({ "ok": true }),
+    }));
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(200))
+            .is_err(),
+        "no completion should run with results still outstanding"
+    );
+
+    let _ = tx.send(Command::Cancel { request_id: None });
+    let remaining = &call_ids[1..];
+    let mut cancelled_ids: HashSet<ToolCallId> = HashSet::new();
+    for _ in remaining {
+        match recv(&rx).event {
+            Event::ToolCallFinished(result) => {
+                assert_eq!(result.output["cancelled"], true);
+                cancelled_ids.insert(result.call_id);
+            }
+            other => panic!("expected a cancelled ToolCallFinished, got {other:?}"),
+        }
+    }
+    let remaining_ids: HashSet<ToolCallId> = remaining.iter().cloned().collect();
+    assert_eq!(cancelled_ids, remaining_ids);
+    assert_eq!(
+        recv(&rx).event,
+        Event::StateChanged(SessionState::Cancelled)
+    );
+    assert_eq!(
+        recv(&rx).event,
+        Event::StateChanged(SessionState::WaitingForUser)
+    );
+
+    // The real results for the cancelled calls arrive late: accepted and
+    // dropped silently — no turn restart, nothing observable on the wire.
+    for call_id in remaining {
+        let _ = tx.send(Command::ToolCallResult(ToolCallResult {
+            call_id: call_id.clone(),
+            output: serde_json::json!({ "ok": true }),
+        }));
+    }
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(200))
+            .is_err(),
+        "late results for cancelled calls must drop silently"
+    );
+
+    // The session recovers: a fresh user message runs a normal turn.
+    let _ = tx.send(Command::UserMessage {
+        text: "hello again".to_string(),
+    });
+    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            text,
+        }) if text == "hello again"
+    ));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::Assistant,
+            ..
+        })
+    ));
+    assert_eq!(
+        recv(&rx).event,
+        Event::StateChanged(SessionState::WaitingForUser)
+    );
+}
+
+#[test]
+fn rig_session_iteration_cap_counts_one_tool_turn_per_batch() {
+    // A large `doom_loop_window` keeps doom-loop detection out of the way:
+    // the deterministic multi-tool fallback repeats the same (tool, args)
+    // pairs batch after batch, which would otherwise trip doom-loop
+    // detection first and mask what this test is actually checking.
+    let (tx, rx) = start_fallback_rig_session_with_config(RigAgentConfig {
+        openai_enabled: false,
+        model: "unused-in-fallback-mode".to_string(),
+        iteration_cap: 2,
+        doom_loop_window: 1000,
+        ..Default::default()
+    });
+
+    let _ = tx.send(Command::UserMessage {
+        text: "multi tool please".to_string(),
+    });
+    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            ..
+        })
+    ));
+
+    // Two consecutive batches (2 tool-driven completions total) must both
+    // succeed under `iteration_cap: 2`. If the guard counted per *result*
+    // instead of per *batch*, the very first 4-call batch would already
+    // exceed the cap by its 3rd result, well before that batch even
+    // finishes.
+    for _ in 0..2 {
+        let mut call_ids = Vec::new();
+        for _ in 0..MULTI_TOOL_TEST_BATCH_SIZE {
+            match recv(&rx).event {
+                Event::ToolCallRequested(request) => call_ids.push(request.call_id),
+                other => panic!("expected a tool call request, got {other:?}"),
+            }
+        }
+        for (index, call_id) in call_ids.iter().enumerate() {
+            let is_last = index == call_ids.len() - 1;
+            let output = if is_last {
+                serde_json::json!({ "loop_again_batch": MULTI_TOOL_TEST_BATCH_SIZE })
+            } else {
+                serde_json::json!({ "index": index })
+            };
+            let _ = tx.send(Command::ToolCallResult(ToolCallResult {
+                call_id: call_id.clone(),
+                output,
+            }));
+            if is_last {
+                assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+            } else {
+                assert!(
+                    rx.recv_timeout(std::time::Duration::from_millis(200))
+                        .is_err(),
+                    "no completion should run while results are still outstanding"
+                );
+            }
+        }
+    }
+
+    // The 3rd tool-driven completion exceeds the cap: it must halt instead
+    // of running.
+    let mut call_ids = Vec::new();
+    for _ in 0..MULTI_TOOL_TEST_BATCH_SIZE {
+        match recv(&rx).event {
+            Event::ToolCallRequested(request) => call_ids.push(request.call_id),
+            other => panic!("expected a tool call request, got {other:?}"),
+        }
+    }
+    for (index, call_id) in call_ids.iter().enumerate() {
+        let is_last = index == call_ids.len() - 1;
+        let _ = tx.send(Command::ToolCallResult(ToolCallResult {
+            call_id: call_id.clone(),
+            output: serde_json::json!({ "index": index }),
+        }));
+        if !is_last {
+            assert!(
+                rx.recv_timeout(std::time::Duration::from_millis(200))
+                    .is_err(),
+                "no completion should run while results are still outstanding"
+            );
+        }
+    }
+    match recv(&rx).event {
+        Event::Error(error) => assert!(error.message.contains("consecutive tool-driven turns")),
+        other => panic!("expected the iteration-cap error, got {other:?}"),
+    }
+    assert_eq!(
+        recv(&rx).event,
+        Event::StateChanged(SessionState::WaitingForUser)
     );
 }

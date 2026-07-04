@@ -28,8 +28,8 @@ use crate::{
 
 use super::{
     mapping::{
-        horizon_provider_events_from_rig_message, rig_tool_call_provider_payload,
-        rig_tool_call_request,
+        horizon_provider_events_from_rig_message, rig_multi_snapshot_calls,
+        rig_tool_call_provider_payload, rig_tool_call_request,
     },
     rig_workspace_snapshot_call, StreamDeltaBuffer, StreamDeltaKind, ToolCallProgressBuffer,
 };
@@ -331,7 +331,13 @@ pub(super) fn partial_assistant_message(
 }
 
 pub(super) fn deterministic_rig_response(text: &str) -> Message {
-    if text.to_ascii_lowercase().contains("snapshot") {
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("multi tool") {
+        // Deterministic hook for exercising a parallel-tool-call batch (see
+        // `rig_multi_snapshot_calls`'s doc comment) without a network
+        // provider.
+        multi_tool_call_message(MULTI_TOOL_TEST_BATCH_SIZE)
+    } else if lower.contains("snapshot") {
         Message::Assistant {
             id: None,
             content: OneOrMany::one(AssistantContent::ToolCall(rig_workspace_snapshot_call())),
@@ -346,6 +352,11 @@ pub(super) fn deterministic_rig_response(text: &str) -> Message {
     }
 }
 
+/// How many tool calls `deterministic_rig_response`'s "multi tool" trigger
+/// and `deterministic_tool_result_response`'s `loop_again_batch` hook
+/// request — arbitrary but fixed, so tests can assert an exact count.
+pub(super) const MULTI_TOOL_TEST_BATCH_SIZE: usize = 4;
+
 pub(super) fn deterministic_tool_result_response(result: &ToolCallResult) -> Message {
     // Deterministic hook for exercising the tool-call loop without a
     // network provider: a result whose output sets `"loop_again": true`
@@ -358,12 +369,36 @@ pub(super) fn deterministic_tool_result_response(result: &ToolCallResult) -> Mes
             content: OneOrMany::one(AssistantContent::ToolCall(rig_workspace_snapshot_call())),
         };
     }
+    // Same idea, but for a parallel batch: requests another
+    // `loop_again_batch`-many tool calls at once, so tests can drive
+    // consecutive tool-*batch* turns (e.g. asserting the iteration-cap guard
+    // counts one turn per batch, not one per result).
+    if let Some(count) = result
+        .output
+        .get("loop_again_batch")
+        .and_then(serde_json::Value::as_u64)
+    {
+        return multi_tool_call_message(count as usize);
+    }
     Message::Assistant {
         id: None,
         content: OneOrMany::one(AssistantContent::Text(Text::new(format!(
             "Tool result received for {}.",
             result.call_id.0
         )))),
+    }
+}
+
+fn multi_tool_call_message(count: usize) -> Message {
+    Message::Assistant {
+        id: None,
+        content: OneOrMany::many(
+            rig_multi_snapshot_calls(count)
+                .into_iter()
+                .map(AssistantContent::ToolCall)
+                .collect::<Vec<_>>(),
+        )
+        .expect("multi_tool_call_message is only ever called with count >= 1"),
     }
 }
 

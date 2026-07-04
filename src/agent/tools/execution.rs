@@ -63,7 +63,18 @@ fn execute_auto_tool(
             call_id: request.call_id.clone(),
             output,
         }),
-        Event::StateChanged(SessionState::WaitingForUser),
+        // No `StateChanged(WaitingForUser)` here: this call is only one
+        // member of whatever batch the originating completion requested (a
+        // single completion can request several parallel tool calls — see
+        // `providers::rig::session::fold_batched_tool_result`), and this
+        // executor has no visibility into whether sibling calls are still
+        // outstanding or a turn is still in flight. The session loop owns
+        // turn-level state and already emits its own accurate
+        // `WaitingForUser` once the whole batch has resolved and no
+        // follow-up turn is running; emitting it here too, per call, raced
+        // ahead of that (see the production incident this fix responds to)
+        // and could flip `AgentFrame::is_turn_in_flight` to `false` —
+        // disabling Cancel — while more results are still outstanding.
     ]
 }
 

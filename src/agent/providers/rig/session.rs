@@ -162,7 +162,12 @@ async fn run_session_loop(
             Command::ToolCallResult(result) => {
                 if cancelled_call_ids.remove(&result.call_id) {
                     // A result arriving after its turn was cancelled is
-                    // accepted and silently dropped, per contract.
+                    // accepted and silently dropped, per contract. This
+                    // also covers the rest of a cancelled batch: `Cancel`
+                    // drains every still-outstanding call id into
+                    // `cancelled_call_ids` (below), so each of their real
+                    // results, arriving later, lands here and is dropped
+                    // rather than starting a turn.
                     continue;
                 }
                 let Some(descriptor) = pending_tool_calls.remove(&result.call_id) else {
@@ -176,16 +181,40 @@ async fn run_session_loop(
                     continue;
                 };
 
+                // Doom-loop fingerprinting is per *result* (every call's
+                // outcome must be checked, not just the batch's last), so
+                // it runs unconditionally here — before deciding whether
+                // this is the last outstanding result of the current batch.
                 let fingerprint =
                     tool_result_fingerprint(&descriptor.tool_id, &descriptor.args, &result.output);
-                let halt = guard
-                    .record_tool_turn()
-                    .or_else(|| guard.record_fingerprint(fingerprint));
-                if let Some(halt) = halt {
+                if let Some(halt) = guard.record_fingerprint(fingerprint) {
                     // Stop instead of running another turn. The arrived
                     // result is real — its tool already executed — so it is
                     // recorded as-is; only *other* still-pending calls get
                     // the cancelled treatment.
+                    halt_turn_loop(
+                        halt,
+                        &mut guard,
+                        &events_tx,
+                        &mut rig_history,
+                        &result,
+                        &mut pending_tool_calls,
+                        &mut cancelled_call_ids,
+                    );
+                    continue;
+                }
+
+                if fold_batched_tool_result(&mut rig_history, &pending_tool_calls, &result)
+                    == BatchStep::Continue
+                {
+                    continue;
+                }
+
+                // The whole batch has landed: this is the one tool-driven
+                // turn the batch counts as, so the iteration-cap guard is
+                // recorded exactly once here — never per result, or an
+                // N-call batch would burn the cap N times faster.
+                if let Some(halt) = guard.record_tool_turn() {
                     halt_turn_loop(
                         halt,
                         &mut guard,
@@ -311,6 +340,52 @@ fn apply_turn_outcome(
         let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
     } else {
         pending_tool_calls.extend(outcome.requested_tool_calls);
+    }
+}
+
+/// What the `Command::ToolCallResult` arm should do next for a landed batch
+/// member, once [`fold_batched_tool_result`] has decided whether the rest of
+/// the batch is still outstanding.
+#[derive(Debug, Eq, PartialEq)]
+pub(super) enum BatchStep {
+    /// More of the batch is still outstanding. The result has already been
+    /// folded into `rig_history`, in arrival order — the caller just keeps
+    /// consuming commands, without emitting `Running` or running a turn.
+    Continue,
+    /// The whole batch has landed (this was its last outstanding call), so
+    /// a follow-up completion should run. The result is deliberately *not*
+    /// yet in `rig_history` — the caller runs the turn with it as the
+    /// prompt message, which appends it right before the resulting
+    /// assistant message (`run_cancellable_turn`/`complete_rig_turn`),
+    /// keeping a single unbroken "tool_calls, then all N results, then the
+    /// assistant's reply" run in history.
+    RunTurn,
+}
+
+/// Decides what a landed `Command::ToolCallResult` should do, per the
+/// "batching" fix in `run_session_loop`'s `Command::ToolCallResult` arm: a
+/// single completion can request several parallel tool calls (e.g. MiniMax
+/// routinely requesting 4 parallel `fs.read`s), each of which arrives as its
+/// own `Command::ToolCallResult`. Running a follow-up completion per result
+/// would send the model a protocol-malformed history (an assistant
+/// `tool_calls` message missing most of its results) for every
+/// still-outstanding call, and burn the iteration-cap guard once per result
+/// instead of once per batch.
+///
+/// The caller must have already removed `result`'s call id from
+/// `pending_tool_calls` (to look up its descriptor for the doom-loop
+/// fingerprint) before calling this — so an empty `pending_tool_calls` here
+/// means `result` was the batch's last outstanding call.
+pub(super) fn fold_batched_tool_result(
+    rig_history: &mut Vec<Message>,
+    pending_tool_calls: &HashMap<ToolCallId, ToolCallDescriptor>,
+    result: &ToolCallResult,
+) -> BatchStep {
+    if pending_tool_calls.is_empty() {
+        BatchStep::RunTurn
+    } else {
+        rig_history.push(rig_tool_result_message(result));
+        BatchStep::Continue
     }
 }
 

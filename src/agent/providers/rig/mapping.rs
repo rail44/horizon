@@ -171,6 +171,28 @@ pub(super) fn rig_workspace_snapshot_call() -> ToolCall {
     )
 }
 
+/// `count` distinct `workspace.snapshot` calls (a fresh call id and an
+/// index in the arguments per call, so each has its own doom-loop
+/// fingerprint) — the deterministic fallback's hook for exercising a
+/// parallel-tool-call batch (e.g. `deterministic_rig_response`'s "multi
+/// tool" trigger) without a network provider. Mirrors the shape of a real
+/// completion that requests several tool calls at once (the production
+/// incident this covers: a MiniMax completion routinely requesting 4
+/// parallel `fs.read`s).
+pub(super) fn rig_multi_snapshot_calls(count: usize) -> Vec<ToolCall> {
+    (1..=count)
+        .map(|index| {
+            ToolCall::new(
+                format!("rig-multi-snapshot-{index}"),
+                ToolFunction::new(
+                    "workspace.snapshot".to_string(),
+                    serde_json::json!({ "n": index }),
+                ),
+            )
+        })
+        .collect()
+}
+
 #[cfg(test)]
 pub(super) fn rig_workspace_snapshot_call_with_provider_metadata() -> ToolCall {
     ToolCall {

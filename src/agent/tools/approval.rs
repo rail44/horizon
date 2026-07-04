@@ -176,7 +176,13 @@ fn synchronous_result(
         events.push(Event::ToolCallStarted(call_id.clone()));
     }
     events.push(Event::ToolCallFinished(result.clone()));
-    events.push(Event::StateChanged(SessionState::WaitingForUser));
+    // No `StateChanged(WaitingForUser)` here: like `execution::
+    // execute_auto_tool`'s equivalent removal, this call may be only one
+    // member of a batch the originating completion requested, and this
+    // approve/deny path has no visibility into whether sibling calls are
+    // still outstanding or a turn is in flight. The session loop owns
+    // turn-level state and emits its own accurate `WaitingForUser` once the
+    // batch is fully resolved.
 
     let frame = runtime
         .live_state
