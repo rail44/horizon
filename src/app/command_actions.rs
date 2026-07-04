@@ -337,7 +337,7 @@ fn resolve_and_send_approval(
     let sessions = state.sessions();
     let frame = frames.with_untracked(|frames| frames.agent_frame(session_id));
     let command = match resolve_approval(&frame, session_id.into(), call_id, decision) {
-        ApprovalOutcome::Executed { frame, command } => {
+        ApprovalOutcome::Executed { frame, command, .. } => {
             frames.update(|frames| frames.update_agent_frame(session_id, frame));
             command
         }
@@ -346,7 +346,7 @@ fn resolve_and_send_approval(
         // result yet. Nothing to send to the provider here — the eventual
         // `Command::ToolCallResult` is sent later by the effect
         // `app/runtime/agent.rs::spawn_agent_session` sets up for it.
-        ApprovalOutcome::Started { frame } => {
+        ApprovalOutcome::Started { frame, .. } => {
             frames.update(|frames| frames.update_agent_frame(session_id, frame));
             return;
         }
@@ -488,6 +488,7 @@ mod tests {
             test_agent_config(),
             None,
             None,
+            None,
         );
         let state = CommandActionState {
             runtime,
@@ -507,6 +508,7 @@ mod tests {
             RwSignal::new(Registry::default()),
             RwSignal::new(None),
             test_agent_config(),
+            None,
             None,
             None,
         );

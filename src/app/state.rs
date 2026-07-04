@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use floem::peniko::kurbo::{Point, Size};
 use floem::prelude::*;
 
+use crate::agent::agentd_runtime::AgentdConnection;
 use crate::agent::config::AgentConfig;
 use crate::control_surface::ControlMode;
 use crate::session::{Frames, Registry};
@@ -28,6 +29,11 @@ pub(super) struct AppState {
     pub(super) overview_selection: RwSignal<usize>,
     pub(super) agent_state_status: RwSignal<Option<String>>,
     pub(super) agent_config: AgentConfig,
+    /// `Some` only when `[agent].agentd` is on and the startup connection
+    /// succeeded (see `agent::agentd_client::connect_agentd_at_startup`) --
+    /// `None` (including the default, flag-off case) means every agent
+    /// session spawns fully in-process, unchanged from before step 3.
+    pub(super) agentd_connection: Option<AgentdConnection>,
     pub(super) terminal_dump: Option<PathBuf>,
     pub(super) clipboard_dump: Option<PathBuf>,
     pub(super) status_dump: Option<PathBuf>,
@@ -35,8 +41,17 @@ pub(super) struct AppState {
 
 impl AppState {
     pub(super) fn new() -> Self {
+        // Built before the rest of the struct so `connect_agentd_at_startup`
+        // (which wires its host-tool responder against this same signal)
+        // can be given it -- a struct literal's fields can't reference each
+        // other, and `spawn_initial_sessions` (called right after `new`
+        // returns) needs `agentd_connection` already populated in case an
+        // initial pane is an agent session.
+        let workspace = RwSignal::new(Workspace::mvp());
+        let agentd_connection = crate::agent::agentd_client::connect_agentd_at_startup(workspace);
         Self {
-            workspace: RwSignal::new(Workspace::mvp()),
+            workspace,
+            agentd_connection,
             frames: RwSignal::new(Frames::default()),
             sessions: RwSignal::new(Registry::default()),
             ime_composing: RwSignal::new(false),
@@ -76,6 +91,7 @@ impl AppState {
             self.agent_config.clone(),
             self.terminal_dump.clone(),
             self.clipboard_dump.clone(),
+            self.agentd_connection.clone(),
         )
     }
 }

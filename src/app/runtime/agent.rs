@@ -6,6 +6,7 @@ use floem::ext_event::create_signal_from_channel;
 use floem::prelude::*;
 use floem::reactive::create_effect;
 
+use crate::agent::agentd_runtime::AgentdConnection;
 use crate::agent::config::{AgentConfig, AgentPersistenceConfig};
 use crate::agent::persistence::event_log::{read, ReadReport, WriterHandle, WriterInit};
 use crate::agent::persistence::projection::duckdb::Store;
@@ -16,6 +17,41 @@ use crate::agent::tools::{
 use crate::agent::{contract as agent, frame::AgentFrame, live::LiveState, WorkspaceHostTools};
 use crate::session::{Frames, Registry, SessionId};
 use crate::workspace::Workspace;
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only call counter for [`open_agent_event_log`] -- the seam-level
+    /// proof that agentd mode never opens Horizon's own copy of the event
+    /// log (decision 3, "Persistence moves": agentd owns the writer,
+    /// Horizon must not double-write). Two things make a naive "did it get
+    /// called" check harder than it looks, both handled here:
+    ///
+    /// `AGENT_EVENT_LOG_WRITER` below is a genuinely process-global
+    /// `OnceLock` shared by every test in this binary, so asserting "the
+    /// log file at this fresh path was never created" is not reliable on
+    /// its own (an earlier test may have already warmed the cache against
+    /// a *different* path, in which case a wrongly reintroduced call here
+    /// would silently reuse that other writer instead of ever touching
+    /// ours) -- counting calls to the function that owns the cache
+    /// sidesteps that.
+    ///
+    /// `cargo test`'s default harness runs tests concurrently on separate
+    /// threads, so a plain process-global counter would still be flaky:
+    /// another test calling `open_agent_event_log` between this test's
+    /// "before" read and its assertion would look identical to a real
+    /// regression. `thread_local!` avoids that too -- every real call in
+    /// this test happens synchronously on the test's own thread
+    /// (`spawn_agent_session_via_agentd`'s only spawned thread just
+    /// forwards commands over a channel, never touches this), so counting
+    /// per-thread makes the result independent of whatever other tests are
+    /// doing concurrently.
+    static OPEN_AGENT_EVENT_LOG_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn open_agent_event_log_call_count() -> usize {
+    OPEN_AGENT_EVENT_LOG_CALLS.with(std::cell::Cell::get)
+}
 
 /// The process-global cache that makes this the *only* call site that
 /// constructs a [`WriterHandle`] outside of tests (see [`open_agent_event_log`]).
@@ -84,7 +120,21 @@ pub(super) fn spawn_agent_session(
     sessions: RwSignal<Registry>,
     agent_state_status: RwSignal<Option<String>>,
     agent_config: AgentConfig,
+    agentd_connection: Option<&AgentdConnection>,
 ) {
+    // Step 3 routing (`docs/agent-runtime-split-design.md`): when Horizon
+    // successfully connected to `horizon-agentd` at startup, every agent
+    // session hosts there instead -- tools, approvals, and persistence all
+    // move with it (see `spawn_agent_session_via_agentd`'s doc comment).
+    // `agentd_connection` is `None` both when `[agent].agentd` is off (the
+    // default) and when the flag was on but the startup connection failed,
+    // so this one check keeps every existing in-process call below
+    // completely unchanged for both of those cases.
+    if let Some(connection) = agentd_connection {
+        spawn_agent_session_via_agentd(session_id, frames, sessions, connection);
+        return;
+    }
+
     let providers = agent::ProviderRegistry::builtin_with_config(agent_config.clone());
     let provider_id = providers.default_provider_id();
     let runtime_state = open_agent_runtime_state_store(
@@ -161,6 +211,50 @@ pub(super) fn spawn_agent_session(
                 session_id,
                 completion,
             );
+        }
+    });
+}
+
+/// The agentd-routed counterpart of `spawn_agent_session` above (step 3):
+/// tool execution, approval resolution, and persistence all moved into
+/// `horizon-agentd` (see `horizon-agentd`'s `session` module), so this side
+/// only has to do what's left -- ask agentd to host the session
+/// (`AgentdConnection::start_session`, which sends `session_new` and hands
+/// back a `SessionHandle` indistinguishable from an in-process one at every
+/// other call site) and fold the resulting event stream into the frame the
+/// pane renders.
+///
+/// That fold is deliberately the *same* `LiveState::extend_provider_events`
+/// and `Frames::update_agent_frame` step `spawn_agent_session`'s own effect
+/// uses — "the fold must not know which transport delivered the events" —
+/// just without the `process_agent_provider_event` call in front of it: the
+/// events arriving over the wire already went through that pipeline in
+/// agentd, so running it again here would re-execute already-executed tool
+/// calls. `LiveState::with_disabled_persistence()` is deliberate too, not a
+/// placeholder: decision 3 in `docs/agent-runtime-split-design.md` ("the
+/// child owns the event log") means Horizon must not append its own copy —
+/// see [`open_agent_event_log_call_count`]'s doc comment for how that
+/// guarantee is tested, and note this function never calls
+/// `open_agent_runtime_state_store`/`open_agent_event_log` at all, unlike
+/// the in-process path above.
+pub(super) fn spawn_agent_session_via_agentd(
+    session_id: SessionId,
+    frames: RwSignal<Frames>,
+    sessions: RwSignal<Registry>,
+    connection: &AgentdConnection,
+) {
+    let provider_id = agent::ProviderRegistry::default().default_provider_id();
+    let handle = connection.start_session(session_id.into(), provider_id);
+    let events = create_signal_from_channel(handle.events());
+    sessions.update(|registry| {
+        registry.insert_agent(session_id, handle);
+    });
+
+    let runtime_state = LiveState::with_disabled_persistence();
+    create_effect(move |_| {
+        if let Some(event) = events.get() {
+            let frame = runtime_state.extend_provider_events(std::iter::once(event));
+            frames.update(|frames| frames.update_agent_frame(session_id, frame));
         }
     });
 }
@@ -243,6 +337,9 @@ fn open_agent_runtime_state_store(
 fn open_agent_event_log(
     persistence_config: &AgentPersistenceConfig,
 ) -> anyhow::Result<(WriterHandle, Option<Receiver<WriterInit>>)> {
+    #[cfg(test)]
+    OPEN_AGENT_EVENT_LOG_CALLS.with(|calls| calls.set(calls.get() + 1));
+
     let writer_cell = AGENT_EVENT_LOG_WRITER.get_or_init(|| Mutex::new(None));
     let mut writer = writer_cell
         .lock()
@@ -386,6 +483,42 @@ mod tests {
         Record, AGENT_EVENT_LOG_SCHEMA, AGENT_EVENT_LOG_VERSION,
     };
     use uuid::Uuid;
+
+    /// Seam-level proof for step 3's "no double-write" requirement
+    /// (`docs/agent-runtime-split-design.md`, "Persistence moves"): when
+    /// `spawn_agent_session` is given a live `agentd_connection`, it must
+    /// route to `spawn_agent_session_via_agentd` and never call
+    /// `open_agent_event_log` -- persistence is owned entirely by agentd in
+    /// that mode. Asserted via a call counter rather than checking whether
+    /// some fresh path's file got created, because `AGENT_EVENT_LOG_WRITER`
+    /// is a real process-global `OnceLock` shared by every test in this
+    /// binary (see `open_agent_event_log_reuses_process_global_writer`
+    /// just below) -- a file-existence check could pass for the wrong
+    /// reason if an earlier test already warmed that cache against a
+    /// different path. Counting calls to the function that owns the cache
+    /// is unaffected by that.
+    #[test]
+    fn agentd_mode_never_opens_horizons_own_event_log() {
+        let calls_before = open_agent_event_log_call_count();
+        let connection = AgentdConnection::for_test();
+
+        spawn_agent_session(
+            SessionId::new(),
+            RwSignal::new(Workspace::mvp()),
+            RwSignal::new(Frames::default()),
+            RwSignal::new(Registry::default()),
+            RwSignal::new(None),
+            AgentConfig::from_env_and_file(&crate::agent::config::AgentFileConfig::default()),
+            Some(&connection),
+        );
+
+        assert_eq!(
+            open_agent_event_log_call_count(),
+            calls_before,
+            "agentd mode must not open Horizon's own copy of the event log -- persistence is \
+             owned entirely by horizon-agentd in this mode"
+        );
+    }
 
     /// Regression test for the actual corruption incident: two sessions
     /// opening the event log must not each get their own writer thread.

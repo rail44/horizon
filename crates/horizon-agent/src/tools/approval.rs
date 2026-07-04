@@ -19,22 +19,37 @@ pub enum ApprovalDecision {
 #[derive(Debug)]
 pub enum ApprovalOutcome {
     /// Horizon executed (or, for a deny, short-circuited) the tool
-    /// app-side, synchronously. `frame` is the session's updated live
-    /// frame — already folded through the session's `LiveState`, so it's
-    /// ready to publish via `Frames::update_agent_frame` — and `command` is
-    /// the `Command::ToolCallResult` to forward to the provider.
-    Executed { frame: AgentFrame, command: Command },
+    /// app-side, synchronously. `events` are exactly the events that were
+    /// just folded into the session's `LiveState` (in order) — a caller that
+    /// only needs to publish the whole updated frame locally (e.g. the
+    /// in-process pane, via `Frames::update_agent_frame`) can ignore this
+    /// and use `frame` directly; a caller relaying over a transport that
+    /// expects a discrete event stream (`horizon-agentd`, forwarding to
+    /// Horizon over the wire — see `docs/agent-runtime-split-design.md`
+    /// step 3) forwards `events` instead, since a whole-frame snapshot isn't
+    /// the wire's event-envelope shape. `frame` is the session's updated
+    /// live frame — already folded through the session's `LiveState` — and
+    /// `command` is the `Command::ToolCallResult` to forward to the
+    /// provider.
+    Executed {
+        events: Vec<Event>,
+        frame: AgentFrame,
+        command: Command,
+    },
     /// Horizon started executing the tool app-side, but off the UI thread —
     /// currently just `bash` on approve, since a command can run for up to
-    /// its timeout (`docs/agent-tools-design.md`, "Bash Semantics"). `frame`
-    /// already has the running-state events (`ToolRunning`/
-    /// `ToolCallStarted`) folded in, ready to publish via
-    /// `Frames::update_agent_frame` — but there is no `command` yet. The
-    /// eventual result arrives later on `SessionRuntime::bash_results` and
-    /// is folded (and forwarded to the provider) by the effect
-    /// `app/runtime/agent.rs::spawn_agent_session` sets up for it, not by
-    /// this call.
-    Started { frame: AgentFrame },
+    /// its timeout (`docs/agent-tools-design.md`, "Bash Semantics"). `events`/
+    /// `frame` are the running-state events (`ToolRunning`/`ToolCallStarted`)
+    /// already folded in — see `Executed`'s doc comment for why both are
+    /// exposed — but there is no `command` yet. The eventual result arrives
+    /// later on `SessionRuntime::bash_results` and is folded (and forwarded
+    /// to the provider) by the effect `app/runtime/agent.rs::
+    /// spawn_agent_session` (or, in agentd mode, the equivalent session-loop
+    /// code in `horizon-agentd`) sets up for it, not by this call.
+    Started {
+        events: Vec<Event>,
+        frame: AgentFrame,
+    },
     /// Not a tool Horizon executes on approval (or no runtime is registered
     /// for the session) — forward the original `ApproveToolCall`/
     /// `DenyToolCall` command to the provider, exactly as before this
@@ -124,13 +139,13 @@ fn resolve_bash(
     match decision {
         ApprovalDecision::Approve => {
             let call_id = request.call_id.clone();
-            let events = [
+            let events = vec![
                 Event::StateChanged(SessionState::ToolRunning),
                 Event::ToolCallStarted(call_id.clone()),
             ];
             let frame = runtime
                 .live_state
-                .extend_provider_events(events.into_iter().map(Into::into));
+                .extend_provider_events(events.clone().into_iter().map(Into::into));
 
             bash::spawn(
                 call_id,
@@ -140,7 +155,7 @@ fn resolve_bash(
                 runtime.bash_results.clone(),
             );
 
-            ApprovalOutcome::Started { frame }
+            ApprovalOutcome::Started { events, frame }
         }
         ApprovalDecision::Deny { .. } => {
             synchronous_result(runtime, &request.call_id, denied_output(), false)
@@ -184,9 +199,10 @@ fn synchronous_result(
 
     let frame = runtime
         .live_state
-        .extend_provider_events(events.into_iter().map(Into::into));
+        .extend_provider_events(events.clone().into_iter().map(Into::into));
 
     ApprovalOutcome::Executed {
+        events,
         frame,
         command: Command::ToolCallResult(result),
     }

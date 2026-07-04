@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use floem::prelude::*;
 
+use crate::agent::agentd_runtime::AgentdConnection;
 use crate::agent::config::AgentConfig;
 use crate::session::{Frames, Registry, SessionId};
 use crate::workspace::{PaneKind, Workspace};
@@ -21,9 +22,11 @@ pub(crate) struct SessionRuntimeState {
     agent_config: AgentConfig,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
+    agentd_connection: Option<AgentdConnection>,
 }
 
 impl SessionRuntimeState {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         workspace: RwSignal<Workspace>,
         frames: RwSignal<Frames>,
@@ -32,6 +35,7 @@ impl SessionRuntimeState {
         agent_config: AgentConfig,
         terminal_dump: Option<PathBuf>,
         clipboard_dump: Option<PathBuf>,
+        agentd_connection: Option<AgentdConnection>,
     ) -> Self {
         Self {
             workspace,
@@ -41,6 +45,7 @@ impl SessionRuntimeState {
             agent_config,
             terminal_dump,
             clipboard_dump,
+            agentd_connection,
         }
     }
 
@@ -82,6 +87,7 @@ pub(crate) fn spawn_session(kind: PaneKind, session_id: SessionId, state: &Sessi
             state.sessions,
             state.agent_state_status,
             state.agent_config.clone(),
+            state.agentd_connection.as_ref(),
         ),
     }
 }

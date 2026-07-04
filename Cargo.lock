@@ -2390,8 +2390,10 @@ name = "horizon-agentd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "crossbeam-channel",
  "horizon-agent",
  "libc",
+ "serde_json",
  "tokio",
  "uuid",
 ]

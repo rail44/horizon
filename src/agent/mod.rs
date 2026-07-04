@@ -14,6 +14,7 @@
 //! and `app::runtime::agent`.
 
 pub(crate) mod agentd_client;
+pub(crate) mod agentd_runtime;
 mod host_tools;
 pub(crate) mod view;
 

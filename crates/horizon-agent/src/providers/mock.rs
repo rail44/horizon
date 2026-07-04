@@ -113,6 +113,25 @@ impl Provider for MockProvider {
                             );
                             continue;
                         }
+                        if lower_text.contains("bash") {
+                            // Manual test hook for exercising the *real*
+                            // `bash` approval/execution path (not just the
+                            // approval-only `mock.approval_required` tool)
+                            // without a network provider -- used by
+                            // `horizon-agentd`'s e2e suite to prove bash
+                            // actually runs agentd-side.
+                            let call_id = ToolCallId("mock-bash-1".to_string());
+                            pending_tool_call = Some(call_id.clone());
+                            let _ = events_tx.send(
+                                Event::ToolCallRequested(ToolCallRequest {
+                                    call_id,
+                                    tool_id: "bash".to_string(),
+                                    input: serde_json::json!({ "command": "echo agentd-bash-ok" }),
+                                })
+                                .into(),
+                            );
+                            continue;
+                        }
                         if lower_text.contains("tool") {
                             let call_id = ToolCallId("mock-tool-1".to_string());
                             pending_tool_call = Some(call_id.clone());

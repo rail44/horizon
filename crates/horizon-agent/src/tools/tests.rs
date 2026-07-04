@@ -723,7 +723,7 @@ fn resolve_approval_executes_fs_write_on_approve() {
         ApprovalDecision::Approve,
     );
 
-    let ApprovalOutcome::Executed { frame, command } = outcome else {
+    let ApprovalOutcome::Executed { frame, command, .. } = outcome else {
         panic!("expected fs.write to be executed by Horizon");
     };
     assert!(matches!(
@@ -908,7 +908,7 @@ fn resolve_approval_starts_bash_on_approve_and_delivers_its_result() {
         ApprovalDecision::Approve,
     );
 
-    let ApprovalOutcome::Started { frame } = outcome else {
+    let ApprovalOutcome::Started { frame, .. } = outcome else {
         panic!("approving bash should start it, not finish it synchronously");
     };
     assert!(frame

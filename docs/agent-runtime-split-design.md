@@ -255,3 +255,175 @@ step calls for; nothing routes a real session through it yet.
   (run Horizon with `[agent].agentd = true` and no socket present); a
   cross-package integration test for the cold-start spawn path is left for
   a later step if it proves worth the setup.
+
+## Step 3 implementation notes
+
+Landed: `horizon-agentd` hosts real sessions (`crates/horizon-agentd/src/
+session.rs`), tools (including `bash`) execute there, and it owns the event
+log + DuckDB projection. Horizon's `spawn_agent_session` routes to a live
+`horizon-agentd` connection when one exists; `agent::agentd_client::
+maybe_connect_at_startup` was replaced by a blocking startup connect
+(`connect_agentd_at_startup`) so that connection is ready before the first
+session might need it. Default (`[agent].agentd = false`) behavior is
+unchanged — every new code path added this step is reached only through
+`Option<AgentdConnection>` being `Some`, which it never is by default.
+
+- **One dedicated OS thread per session in `horizon-agentd`, not an async
+  task.** `LiveState`/`ToolSessionState` are `Rc`-based and `tools::state::
+  SESSION_RUNTIMES` is a `thread_local!` — both assume everything for one
+  session runs on a single, consistent thread, the role Horizon's floem UI
+  thread played in-process. `session::run_session` reproduces that: it
+  registers the session's runtime and processes every provider event / bash
+  completion / inbound command in a single synchronous loop
+  (`crossbeam_channel::select!`) on its own thread, so a later `approve`/
+  `deny` command's `resolve_approval` call finds the same thread-local entry
+  `register_session_runtime` put there. This also makes the host-tool round
+  trip trivial: `AgentdHostTools::execute_auto` really does block this one
+  thread on a channel recv while Horizon answers over the wire (`host_tool_
+  request`/`_response`, matched by a `request_id` -> reply-channel map) —
+  harmless because nothing else needs this thread, but would deadlock a
+  single-threaded async runtime.
+- **`process_agent_provider_event` reused as-is, unchanged.** agentd's
+  `session::handle_provider_event` calls the exact function `app::runtime::
+  agent`'s in-process effect used to call, passing `AgentdHostTools` where
+  Horizon passed `WorkspaceHostTools` — the `HostTools` seam from step 1 is
+  exactly what made tool execution relocatable without touching the tool
+  catalog. The resulting `Processing::horizon_events` are folded into
+  agentd's own `LiveState` (persisting them) and — filtered to drop items
+  carrying ephemeral `tool_call_progress` — forwarded to Horizon as ordinary
+  event envelopes.
+- **`ApprovalOutcome::Executed`/`Started` gained an `events: Vec<Event>`
+  field** (`crates/horizon-agent/src/tools/approval.rs`) — the one crate API
+  change this step needed. Both variants already carried the resulting
+  whole `AgentFrame`, which is what Horizon's in-process pane click handler
+  (`app::command_actions::resolve_and_send_approval`) wants (a whole-frame
+  replace via `Frames::update_agent_frame`); agentd instead needs the
+  discrete events that produced that frame, to forward as wire event
+  envelopes. Additive only — Horizon's existing match arms picked up a
+  trailing `..` and are otherwise untouched. Approval resolution itself
+  (decision 2: "resolved in agentd") is `session::resolve_and_forward`,
+  structurally identical to Horizon's own `resolve_and_send_approval` minus
+  the local `Frames` update.
+- **Horizon-side transport transparency.** `agent::agentd_runtime::
+  AgentdConnection::start_session` hands back a `contract::SessionHandle` —
+  the exact type `providers::ProviderRegistry::start_session` returns
+  in-process — whose `Sender<Command>` forwards each command as a `command`
+  envelope (via a small per-session draining thread; commands arrive from
+  the UI thread, which isn't async) and whose `Receiver<ProviderEvent>` is
+  fed by the connection's demultiplexer. Every existing call site
+  (`Registry::agent_sender`, the pane's approve/deny/cancel commands, the
+  bash-completion effect's sibling) needed zero changes: they already only
+  depend on `SessionHandle`'s shape. `spawn_agent_session_via_agentd`
+  (`app/runtime/agent.rs`) is correspondingly small: ask agentd to host the
+  session, then fold its event stream through `LiveState::
+  extend_provider_events` + `Frames::update_agent_frame` — the same fold
+  `spawn_agent_session`'s own effect uses, just without the
+  `process_agent_provider_event` step in front of it (that already ran in
+  agentd; running it again here would re-execute already-executed tool
+  calls). "The fold must not know which transport delivered the events" —
+  the design's phrasing — turned out to extend to commands too, for free,
+  once `SessionHandle` was the seam.
+- **No-double-write, tested at the call-count seam, not by file
+  existence.** `AGENT_EVENT_LOG_WRITER` (`app::runtime::agent`) is a
+  process-global `OnceLock` shared by every test in the `horizon` binary's
+  test process; asserting "the log file at a fresh path was never created"
+  is not reliable on its own (an earlier test may have already warmed the
+  cache against a *different* path, so a wrongly-reintroduced call would
+  silently reuse that writer instead of ever touching the fresh path,
+  passing the assertion for the wrong reason). Instead,
+  `open_agent_event_log_reuses_process_global_writer`'s neighbor test
+  (`agentd_mode_never_opens_horizons_own_event_log`) asserts a `thread_
+  local!` call counter on `open_agent_event_log` is unchanged after
+  `spawn_agent_session` is given a live (test-only, socket-less)
+  `AgentdConnection` — thread-local rather than process-global so it's also
+  immune to `cargo test`'s default concurrent test execution. In production,
+  `spawn_agent_session_via_agentd` simply never references
+  `AgentPersistenceConfig`/`open_agent_event_log` at all.
+- **agentd's own persistence open is eager and blocking, at startup, not
+  lazy-on-first-session.** Unlike Horizon's `open_agent_event_log` (cached,
+  opened on the first agent pane, with the startup read kept off the UI
+  thread so pane render never blocks), `horizon-agentd::build_agentd_state`
+  opens the writer and waits for its startup-read outcome synchronously in
+  `main`, before the accept loop starts, then rebuilds the DuckDB
+  projection from that same read if `state_db_path` is configured — a small
+  duplication of `app::runtime::agent::rebuild_agent_duckdb_from_event_log`'s
+  logic, accepted for the same reason `config::load_file_config`'s
+  duplication was in step 2 (no shared third crate for this yet). There is
+  no UI to avoid blocking in this binary, so the simpler synchronous wait
+  was preferred over threading a `WriterInit` channel through `main`.
+  **Skipped-lines status reporting is omitted**: a corrupt/torn-line summary
+  is logged to stderr but not surfaced anywhere a human using Horizon would
+  see it (Horizon's own `agent_state_status` bar has no equivalent
+  connection to agentd's startup read) — worth wiring once there's a
+  concrete signal agentd can push to Horizon for "startup diagnostics", not
+  invented here.
+- **Connection loss surfaces an `Event::Error` per affected session, no
+  auto-reconnect** (in scope for this step; reconnect is step 4).
+  `agent::agentd_runtime::run_connection`'s read loop, on EOF or a
+  malformed message, pushes a synthetic error event into every
+  currently-registered session's event channel so it folds through the
+  ordinary path and appears in that session's transcript, then returns —
+  the write task independently notices the same failure on its next send
+  and stops. Sessions are **not** killed or moved to a reconnect-pending
+  state; the next connection attempt is a fresh `Horizon` process launch.
+- **Sessions are scoped to the connection that created them, in
+  `horizon-agentd` too.** `session::Connection`'s `sessions`/
+  `pending_host_tool_requests` maps are constructed fresh per accepted
+  connection (`main::run_session_hosting_loop`), not held at the
+  `AgentdState` (process) level. Since `session_load`/reconnect don't exist
+  yet and agentd serves one connection at a time by construction, this
+  keeps the lifetime story simple: a session's thread has nowhere to send
+  events once its connection is gone (the `outgoing` channel's receiver is
+  dropped with the connection) and is not explicitly torn down — it idles
+  until the process exits. Revisit once step 4 defines what a live session
+  should do across a reconnect; moving these maps to `AgentdState` is the
+  likely shape of that change.
+- **The streaming tool-call-argument-preview feature
+  (`ToolCallProgress`/`ToolCallPreparing`) does not cross the wire.**
+  `session::handle_provider_event` filters out any `ProviderEvent` carrying
+  `tool_call_progress` before forwarding (it folds into agentd's own local
+  frame, which nothing reads, and is then dropped) rather than inventing a
+  wire representation for it — the design's wire `Event` is `contract::
+  Event`, which has no variant for this ephemeral, log-excluded signal. In
+  agentd mode, a tool call's arguments simply appear once fully formed
+  instead of streaming in; a real gap, not called out as in-scope to close
+  in this step.
+- **`horizon-agentd`'s connection handling is two-phase**: a fully
+  sequential hello handshake (unchanged from step 2 — must complete, with a
+  deterministic reply-then-close on rejection, before anything concurrent
+  starts) followed by `run_session_hosting_loop`, which spawns a writer
+  task and keeps reading — needed because a hosted session can push events
+  (or a `host_tool_request`) at any time, not just in reply to something
+  Horizon just sent. The writer task is deliberately never awaited on
+  disconnect (session threads from `Connection::sessions` may outlive the
+  connection and still hold `outgoing` senders — see above — so awaiting it
+  to completion could hang the accept loop against ever serving a next
+  connection); it is left to run detached until its next send to the dead
+  socket fails on its own.
+- **Testing scope**: `horizon-agentd`'s `tests/e2e.rs` gained `session_new`
+  -> `UserMessage` -> ordered-transcript assertions (mock provider);
+  `session_list` reflecting a live session; an auto-allow *host* tool
+  (`workspace.snapshot`) round-tripping a real `host_tool_request`/
+  `_response` over the socket; an approval round trip (`ApprovalRequested`
+  out, `ApproveToolCall` in, `ToolCallFinished` out) via a new mock-provider
+  trigger; and `bash` actually spawning a subprocess agentd-side and
+  reporting its result back over the wire, via another new mock trigger
+  (`crates/horizon-agent/src/providers/mock.rs` gained a `"bash"` trigger
+  requesting the real `bash` tool, alongside the pre-existing
+  `mock.approval_required`/`workspace.snapshot`/streaming triggers). All of
+  it needed the test harness to stop reading the *developer's own*
+  `~/.config/horizon/config.toml` and `~/.local/share/horizon/agent-*`
+  files — a pre-existing hermeticity gap that step 2's tests never
+  surfaced (nothing opened persistence yet); `AgentdProcess::spawn` now
+  passes `HORIZON_CONFIG` (nonexistent path) and `HORIZON_AGENT_EVENT_LOG`
+  (fresh temp path) explicitly. Horizon-side: `agentd_mode_never_opens_
+  horizons_own_event_log` (see above) is the no-double-write proof; every
+  pre-existing suite (`cargo test --workspace`) stays green with `[agent].
+  agentd` at its default `false`, unexercised by any of this step's new
+  code paths.
+- **Left for step 4, explicitly**: reconnect, `session_load`, replay/
+  bootstrap of an agentd session Horizon didn't create in this run, and the
+  `Reload Agent Runtime` command. `AgentdConnection::connect`'s blocking
+  startup call and `horizon-agentd`'s per-connection session scoping (above)
+  are both shaped for a single Horizon-process-lifetime connection, not a
+  reconnect — expect both to change.

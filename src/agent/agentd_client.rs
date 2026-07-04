@@ -5,23 +5,32 @@
 //! by name: "surfaced to the user as reload required").
 //!
 //! Gated behind `[agent].agentd` in Horizon's config file (default `false`,
-//! see [`agentd_enabled`]) -- production agent sessions stay fully
-//! in-process until step 4 wires this connection into anything. This
-//! module is therefore a `pub(crate)` API exercised by its own tests plus
-//! one real (but inert-by-default) call site, [`maybe_connect_at_startup`],
-//! rather than anything users can currently observe.
+//! see [`agentd_enabled`]). As of step 3, [`connect_and_split`] is the real
+//! production entry point -- `agent::agentd_runtime::AgentdConnection::
+//! connect` calls it to get a live, handshaken connection it then keeps
+//! multiplexing sessions over; this module itself stays limited to
+//! connect-or-spawn plus the handshake.
 //!
 //! Horizon has no async runtime of its own (floem drives its own event
-//! loop, not tokio); [`maybe_connect_at_startup`] spins up a throwaway
-//! current-thread tokio runtime on a background OS thread so a slow or
-//! failing `horizon-agentd` never blocks window startup.
+//! loop, not tokio); callers that need to run this module's `async` fns
+//! from plain (non-async) Horizon code spin up their own throwaway tokio
+//! runtime on a background OS thread (see `agentd_runtime::AgentdConnection
+//! ::connect`) so a slow or failing `horizon-agentd` never blocks window
+//! startup.
 
 use std::path::Path;
 use std::time::Duration;
 
+use floem::prelude::RwSignal;
 use horizon_agent::wire::{self, Control, Envelope, EnvelopeBody, Hello, CONTRACT_VERSION};
-use tokio::io::{AsyncRead, AsyncWrite, BufReader};
+#[cfg(test)]
+use tokio::io::AsyncRead;
+use tokio::io::{AsyncBufRead, AsyncWrite, BufReader};
+use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::UnixStream;
+
+use crate::agent::agentd_runtime::AgentdConnection;
+use crate::workspace::Workspace;
 
 const RETRY_ATTEMPTS: u32 = 40;
 const RETRY_DELAY: Duration = Duration::from_millis(50);
@@ -32,44 +41,57 @@ pub(crate) fn agentd_enabled() -> bool {
     crate::config::load().agent.agentd
 }
 
-/// Best-effort, fire-and-forget connection attempt at startup, only when
-/// [`agentd_enabled`]. Logs the outcome to stderr; nothing else observes it
-/// yet (see the module doc) -- this exists so the plumbing in this module
-/// is exercised end to end (including the actual spawn-or-connect dance)
-/// ahead of step 4 wiring it to anything real.
-pub(crate) fn maybe_connect_at_startup() {
+/// Connects to `horizon-agentd` at startup when [`agentd_enabled`], wiring
+/// up the host-tool responder (`agentd_runtime::wire_host_tool_responder`)
+/// against `workspace` on success. The one production call site is
+/// `app::state::AppState::new`, which stores the result and threads it into
+/// every agent session's spawn path (`app::runtime::SessionRuntimeState`).
+///
+/// Returns `None` both when the flag is off (the default -- byte-for-byte
+/// unchanged behavior) and when the connection attempt failed (logged to
+/// stderr): either way, `app::runtime::agent::spawn_agent_session` falls
+/// back to running every session fully in-process, exactly as if agentd
+/// didn't exist.
+pub(crate) fn connect_agentd_at_startup(
+    workspace: RwSignal<Workspace>,
+) -> Option<AgentdConnection> {
     if !agentd_enabled() {
-        return;
+        return None;
     }
     let socket_path = horizon_agent::socket::default_socket_path();
-    std::thread::spawn(move || {
-        let runtime = match tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        {
-            Ok(runtime) => runtime,
-            Err(err) => {
-                eprintln!("horizon: could not start a runtime for horizon-agentd: {err}");
-                return;
-            }
-        };
-        match runtime.block_on(connect(&socket_path)) {
-            Ok(hello) => eprintln!(
-                "horizon: connected to horizon-agentd (binary_id={})",
-                hello.binary_id
-            ),
-            Err(err) => eprintln!("horizon: could not connect to horizon-agentd: {err}"),
+    match AgentdConnection::connect(&socket_path) {
+        Ok((connection, host_tool_requests)) => {
+            eprintln!("horizon: connected to horizon-agentd");
+            crate::agent::agentd_runtime::wire_host_tool_responder(
+                connection.clone(),
+                host_tool_requests,
+                workspace,
+            );
+            Some(connection)
         }
-    });
+        Err(err) => {
+            eprintln!(
+                "horizon: could not connect to horizon-agentd ({err}); agent sessions will run \
+                 in-process for this run"
+            );
+            None
+        }
+    }
 }
 
 /// Connects to `horizon-agentd` at `socket_path` (spawning it if nothing is
-/// listening yet) and completes the hello handshake, returning agentd's
-/// [`Hello`] on success or a human-readable error string -- a version
-/// mismatch or an explicit [`Control::HandshakeRejected`] included.
-pub(crate) async fn connect(socket_path: &Path) -> Result<Hello, String> {
+/// listening yet), completes the hello handshake, and hands back the split
+/// halves ready for the session-hosting traffic that follows a successful
+/// handshake -- the production entry point `agentd_runtime::AgentdConnection
+/// ::connect` builds its read/write tasks on top of.
+pub(crate) async fn connect_and_split(
+    socket_path: &Path,
+) -> Result<(BufReader<OwnedReadHalf>, OwnedWriteHalf, Hello), String> {
     let stream = connect_or_spawn(socket_path).await?;
-    handshake(stream).await
+    let (read_half, mut write_half) = stream.into_split();
+    let mut reader = BufReader::new(read_half);
+    let hello = handshake_over(&mut reader, &mut write_half).await?;
+    Ok((reader, write_half, hello))
 }
 
 async fn connect_or_spawn(socket_path: &Path) -> Result<UnixStream, String> {
@@ -106,26 +128,39 @@ async fn retry_connect(socket_path: &Path) -> Result<UnixStream, String> {
 /// framing-over-any-stream guardrail `horizon_agent::wire` follows) so it's
 /// directly testable over `tokio::io::duplex` without a real socket -- see
 /// this module's tests.
+#[cfg(test)]
 async fn handshake<S>(stream: S) -> Result<Hello, String>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let (read_half, mut write_half) = tokio::io::split(stream);
     let mut reader = BufReader::new(read_half);
+    handshake_over(&mut reader, &mut write_half).await
+}
 
+/// The hello exchange itself, generic over an already-split `AsyncBufRead`/
+/// `AsyncWrite` pair rather than owning the whole stream -- so a caller that
+/// needs the connection to keep living past a successful handshake (
+/// [`connect_and_split`], which hands the same halves back to its caller)
+/// doesn't lose them the way owning-and-splitting internally would. `handshake`
+/// above is the same exchange over an owned, not-yet-split stream, kept for
+/// this module's tests (which construct a single `tokio::io::duplex` stream
+/// directly) so they don't need to juggle split halves themselves.
+async fn handshake_over<R, W>(reader: &mut R, writer: &mut W) -> Result<Hello, String>
+where
+    R: AsyncBufRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
     let our_hello = Hello {
         contract_version: CONTRACT_VERSION,
         binary_id: env!("CARGO_PKG_VERSION").to_string(),
         capabilities: Vec::new(),
     };
-    wire::write_envelope(
-        &mut write_half,
-        &Envelope::control(Control::Hello(our_hello)),
-    )
-    .await
-    .map_err(|err| format!("failed to send hello to horizon-agentd: {err}"))?;
+    wire::write_envelope(writer, &Envelope::control(Control::Hello(our_hello)))
+        .await
+        .map_err(|err| format!("failed to send hello to horizon-agentd: {err}"))?;
 
-    let envelope = wire::read_envelope(&mut reader)
+    let envelope = wire::read_envelope(reader)
         .await
         .map_err(|err| format!("failed to read horizon-agentd's hello reply: {err}"))?
         .ok_or_else(|| {
