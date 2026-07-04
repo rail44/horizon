@@ -31,7 +31,6 @@ pub(super) fn terminal_output(
             .inset_top(34.0)
             .inset_bottom(0.0)
             .width_full()
-            .height_full()
             .min_width(0.0)
             .min_height(0.0)
             .flex_basis(0.0)
