@@ -1,13 +1,17 @@
+use crate::app::command_actions::{find_agent_turn_in_flight, find_pending_agent_approval};
 use crate::app::commands::{command_entries, filter_command_entries, CommandState};
 use crate::control_surface::query::{normalize_palette_query, palette_matches};
 use crate::control_surface::{OverviewItem, PaletteItem};
+use crate::session::Frames;
 use crate::workspace::Workspace;
 
-pub(crate) fn command_state(workspace: &Workspace) -> CommandState {
+pub(crate) fn command_state(workspace: &Workspace, frames: &Frames) -> CommandState {
     CommandState {
         tab_count: workspace.tab_count(),
         visible_pane_count: workspace.visible_panes().len(),
         has_active_session: workspace.active_session_id().is_some(),
+        has_pending_approval: find_pending_agent_approval(workspace, frames).is_some(),
+        has_turn_in_flight: find_agent_turn_in_flight(workspace, frames).is_some(),
     }
 }
 
@@ -52,9 +56,13 @@ pub(crate) fn overview_items(workspace: &Workspace) -> Vec<OverviewItem> {
     items
 }
 
-pub(crate) fn palette_items(workspace: &Workspace, query: &str) -> Vec<PaletteItem> {
+pub(crate) fn palette_items(
+    workspace: &Workspace,
+    frames: &Frames,
+    query: &str,
+) -> Vec<PaletteItem> {
     let mut items: Vec<_> =
-        filter_command_entries(command_entries(command_state(workspace)), query)
+        filter_command_entries(command_entries(command_state(workspace, frames)), query)
             .into_iter()
             .map(PaletteItem::Command)
             .collect();
@@ -116,22 +124,27 @@ mod tests {
     #[test]
     fn command_state_reflects_workspace_counts() {
         let mut workspace = Workspace::mvp();
+        let frames = Frames::default();
         assert_eq!(
-            command_state(&workspace),
+            command_state(&workspace, &frames),
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_active_session: true,
+                has_pending_approval: false,
+                has_turn_in_flight: false,
             }
         );
 
         workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
         assert_eq!(
-            command_state(&workspace),
+            command_state(&workspace, &frames),
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 2,
                 has_active_session: true,
+                has_pending_approval: false,
+                has_turn_in_flight: false,
             }
         );
     }
@@ -143,7 +156,7 @@ mod tests {
         workspace.split_active(PaneKind::Terminal, Some(session_id));
         workspace.close_visible_pane(1);
 
-        let items = palette_items(&workspace, "detached");
+        let items = palette_items(&workspace, &Frames::default(), "detached");
 
         assert!(items.iter().any(|item| matches!(
             item,
@@ -160,7 +173,7 @@ mod tests {
         let mut workspace = Workspace::mvp();
         workspace.open_tab(PaneKind::Agent, None);
 
-        let items = palette_items(&workspace, "tab 1");
+        let items = palette_items(&workspace, &Frames::default(), "tab 1");
 
         assert!(items.iter().any(|item| matches!(
             item,

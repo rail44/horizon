@@ -61,6 +61,7 @@ impl WorkspaceControlState {
 
 fn handle_palette_key(key_event: &KeyEvent, state: ControlInputState) -> bool {
     let workspace = state.command.workspace();
+    let frames = state.command.frames();
     match &key_event.key.logical_key {
         Key::Named(NamedKey::Escape) => {
             close_palette(state.palette_open, state.palette_query);
@@ -71,16 +72,29 @@ fn handle_palette_key(key_event: &KeyEvent, state: ControlInputState) -> bool {
             true
         }
         Key::Named(NamedKey::ArrowUp) => {
-            move_palette_selection(workspace, state.palette_query, state.palette_selection, -1);
+            move_palette_selection(
+                workspace,
+                frames,
+                state.palette_query,
+                state.palette_selection,
+                -1,
+            );
             true
         }
         Key::Named(NamedKey::ArrowDown) => {
-            move_palette_selection(workspace, state.palette_query, state.palette_selection, 1);
+            move_palette_selection(
+                workspace,
+                frames,
+                state.palette_query,
+                state.palette_selection,
+                1,
+            );
             true
         }
         Key::Named(NamedKey::Backspace) => {
             update_palette_query(
                 workspace,
+                frames,
                 state.palette_query,
                 state.palette_selection,
                 |query| {
@@ -92,6 +106,7 @@ fn handle_palette_key(key_event: &KeyEvent, state: ControlInputState) -> bool {
         Key::Named(NamedKey::Space) => {
             update_palette_query(
                 workspace,
+                frames,
                 state.palette_query,
                 state.palette_selection,
                 |query| {
@@ -103,6 +118,7 @@ fn handle_palette_key(key_event: &KeyEvent, state: ControlInputState) -> bool {
         Key::Character(text) if palette_accepts_text_input(key_event.modifiers) => {
             update_palette_query(
                 workspace,
+                frames,
                 state.palette_query,
                 state.palette_selection,
                 |query| {

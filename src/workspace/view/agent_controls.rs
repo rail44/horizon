@@ -70,8 +70,8 @@ pub(super) fn agent_composer(
 pub(super) fn agent_approval_actions(
     visible: impl Fn() -> bool + 'static + Copy,
     pending_approval: impl Fn() -> Option<ToolCallId> + 'static + Copy,
-    on_approve: impl Fn(ToolCallId) + 'static + Copy,
-    on_deny: impl Fn(ToolCallId) + 'static + Copy,
+    on_approve: impl Fn(ToolCallId) + 'static,
+    on_deny: impl Fn(ToolCallId) + 'static,
 ) -> impl IntoView {
     h_stack((
         agent_approval_button(
@@ -109,7 +109,7 @@ pub(super) fn agent_approval_actions(
 pub(super) fn agent_cancel_action(
     visible: impl Fn() -> bool + 'static + Copy,
     turn_in_flight: impl Fn() -> bool + 'static + Copy,
-    on_cancel: impl Fn() + 'static + Copy,
+    on_cancel: impl Fn() + 'static,
 ) -> impl IntoView {
     label(|| "Cancel turn".to_string())
         .on_click_stop(move |_| {
@@ -189,7 +189,7 @@ fn agent_approval_button(
     text: &'static str,
     visible: impl Fn() -> bool + 'static + Copy,
     pending_approval: impl Fn() -> Option<ToolCallId> + 'static + Copy,
-    on_click: impl Fn(ToolCallId) + 'static + Copy,
+    on_click: impl Fn(ToolCallId) + 'static,
     background: floem::peniko::Color,
     border: floem::peniko::Color,
 ) -> impl IntoView {

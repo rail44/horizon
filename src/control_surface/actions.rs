@@ -1,6 +1,7 @@
-use crate::app::command_actions::{execute_command, CommandActionState};
+use crate::app::command_actions::{execute_command, CommandActionState, CommandInvocation};
 use crate::app::commands::clamp_palette_selection;
 use crate::control_surface::{overview_items, palette_items, OverviewItem, PaletteItem};
+use crate::session::Frames;
 use crate::workspace::{request_active_pane_focus, Workspace};
 use floem::prelude::*;
 
@@ -97,16 +98,19 @@ pub(crate) fn move_overview_selection(
 pub(crate) fn execute_palette_selection(state: PaletteActionState) {
     let command = state.command;
     let workspace = command.workspace();
+    let frames = command.frames();
     let palette_query = state.palette_query;
     let palette_selection = state.palette_selection;
 
     let query = palette_query.get_untracked();
     let selection = palette_selection.get_untracked();
     let item = workspace.with_untracked(|ws| {
-        let items = palette_items(ws, &query);
-        items
-            .get(clamp_palette_selection(selection, items.len()))
-            .cloned()
+        frames.with_untracked(|fr| {
+            let items = palette_items(ws, fr, &query);
+            items
+                .get(clamp_palette_selection(selection, items.len()))
+                .cloned()
+        })
     });
 
     let Some(item) = item else {
@@ -119,7 +123,9 @@ pub(crate) fn execute_palette_selection(state: PaletteActionState) {
 
     close_palette(state.palette_open, palette_query);
     match item {
-        PaletteItem::Command(entry) => execute_command(entry.spec.id, command),
+        PaletteItem::Command(entry) => {
+            execute_command(CommandInvocation::Simple(entry.spec.id), command)
+        }
         PaletteItem::DetachedSession { session_id, .. } => {
             workspace.update(|ws| {
                 ws.attach_existing_session_to_split(session_id);
@@ -137,21 +143,24 @@ pub(crate) fn execute_palette_selection(state: PaletteActionState) {
 
 pub(crate) fn update_palette_query(
     workspace: RwSignal<Workspace>,
+    frames: RwSignal<Frames>,
     palette_query: RwSignal<String>,
     palette_selection: RwSignal<usize>,
     update: impl FnOnce(&mut String),
 ) {
     palette_query.update(update);
-    clamp_current_palette_selection(workspace, palette_query, palette_selection);
+    clamp_current_palette_selection(workspace, frames, palette_query, palette_selection);
 }
 
 fn clamp_current_palette_selection(
     workspace: RwSignal<Workspace>,
+    frames: RwSignal<Frames>,
     palette_query: RwSignal<String>,
     palette_selection: RwSignal<usize>,
 ) {
     let query = palette_query.get_untracked();
-    let item_count = workspace.with_untracked(|ws| palette_items(ws, &query).len());
+    let item_count = workspace
+        .with_untracked(|ws| frames.with_untracked(|fr| palette_items(ws, fr, &query).len()));
     palette_selection.update(|selection| {
         *selection = clamp_palette_selection(*selection, item_count);
     });
@@ -159,12 +168,14 @@ fn clamp_current_palette_selection(
 
 pub(crate) fn move_palette_selection(
     workspace: RwSignal<Workspace>,
+    frames: RwSignal<Frames>,
     palette_query: RwSignal<String>,
     palette_selection: RwSignal<usize>,
     delta: isize,
 ) {
     let query = palette_query.get_untracked();
-    let item_count = workspace.with_untracked(|ws| palette_items(ws, &query).len());
+    let item_count = workspace
+        .with_untracked(|ws| frames.with_untracked(|fr| palette_items(ws, fr, &query).len()));
     if item_count == 0 {
         palette_selection.set(0);
         return;

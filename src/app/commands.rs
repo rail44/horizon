@@ -7,6 +7,9 @@ pub(crate) enum CommandId {
     CloseActivePane,
     CloseActiveTab,
     TerminateActiveSession,
+    ApproveToolCall,
+    DenyToolCall,
+    CancelAgentTurn,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -36,6 +39,8 @@ pub(crate) struct CommandState {
     pub(crate) tab_count: usize,
     pub(crate) visible_pane_count: usize,
     pub(crate) has_active_session: bool,
+    pub(crate) has_pending_approval: bool,
+    pub(crate) has_turn_in_flight: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -95,6 +100,27 @@ pub(crate) fn core_commands() -> Vec<CommandSpec> {
             description: "Terminate the active session and close its panes.",
             destructive: true,
         },
+        CommandSpec {
+            id: CommandId::ApproveToolCall,
+            title: "Approve Pending Tool Call",
+            category: CommandCategory::Agent,
+            description: "Approve the pending tool call awaiting approval.",
+            destructive: false,
+        },
+        CommandSpec {
+            id: CommandId::DenyToolCall,
+            title: "Deny Pending Tool Call",
+            category: CommandCategory::Agent,
+            description: "Deny the pending tool call awaiting approval.",
+            destructive: false,
+        },
+        CommandSpec {
+            id: CommandId::CancelAgentTurn,
+            title: "Cancel Agent Turn",
+            category: CommandCategory::Agent,
+            description: "Cancel the agent turn currently in flight.",
+            destructive: false,
+        },
     ]
 }
 
@@ -107,6 +133,8 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
         CommandId::CloseActivePane => state.visible_pane_count > 1,
         CommandId::CloseActiveTab => state.tab_count > 1,
         CommandId::TerminateActiveSession => state.has_active_session,
+        CommandId::ApproveToolCall | CommandId::DenyToolCall => state.has_pending_approval,
+        CommandId::CancelAgentTurn => state.has_turn_in_flight,
     }
 }
 
@@ -157,7 +185,7 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 7);
+        assert_eq!(commands.len(), 10);
         assert_eq!(commands[0].id, CommandId::NewTerminal);
         assert_eq!(commands[0].title, "New Terminal");
         assert_eq!(commands[6].id, CommandId::TerminateActiveSession);
@@ -190,6 +218,8 @@ mod tests {
             tab_count: 1,
             visible_pane_count: 1,
             has_active_session: true,
+            has_pending_approval: false,
+            has_turn_in_flight: false,
         });
 
         let close_pane = entries
@@ -212,6 +242,8 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 2,
                 has_active_session: true,
+                has_pending_approval: false,
+                has_turn_in_flight: false,
             }
         ));
         assert!(command_enabled(
@@ -220,6 +252,8 @@ mod tests {
                 tab_count: 2,
                 visible_pane_count: 1,
                 has_active_session: true,
+                has_pending_approval: false,
+                has_turn_in_flight: false,
             }
         ));
     }
@@ -232,6 +266,8 @@ mod tests {
                 tab_count: 0,
                 visible_pane_count: 0,
                 has_active_session: false,
+                has_pending_approval: false,
+                has_turn_in_flight: false,
             }
         ));
         assert!(command_enabled(
@@ -240,6 +276,76 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_active_session: true,
+                has_pending_approval: false,
+                has_turn_in_flight: false,
+            }
+        ));
+    }
+
+    #[test]
+    fn approve_and_deny_tool_call_require_pending_approval() {
+        assert!(!command_enabled(
+            CommandId::ApproveToolCall,
+            CommandState {
+                tab_count: 1,
+                visible_pane_count: 1,
+                has_active_session: true,
+                has_pending_approval: false,
+                has_turn_in_flight: false,
+            }
+        ));
+        assert!(command_enabled(
+            CommandId::ApproveToolCall,
+            CommandState {
+                tab_count: 1,
+                visible_pane_count: 1,
+                has_active_session: true,
+                has_pending_approval: true,
+                has_turn_in_flight: false,
+            }
+        ));
+        assert!(!command_enabled(
+            CommandId::DenyToolCall,
+            CommandState {
+                tab_count: 1,
+                visible_pane_count: 1,
+                has_active_session: true,
+                has_pending_approval: false,
+                has_turn_in_flight: false,
+            }
+        ));
+        assert!(command_enabled(
+            CommandId::DenyToolCall,
+            CommandState {
+                tab_count: 1,
+                visible_pane_count: 1,
+                has_active_session: true,
+                has_pending_approval: true,
+                has_turn_in_flight: false,
+            }
+        ));
+    }
+
+    #[test]
+    fn cancel_agent_turn_requires_turn_in_flight() {
+        assert!(!command_enabled(
+            CommandId::CancelAgentTurn,
+            CommandState {
+                tab_count: 1,
+                visible_pane_count: 1,
+                has_active_session: true,
+                has_pending_approval: false,
+                has_turn_in_flight: false,
+            }
+        ));
+        assert!(command_enabled(
+            CommandId::CancelAgentTurn,
+            CommandState {
+                tab_count: 1,
+                visible_pane_count: 1,
+                has_active_session: true,
+                has_pending_approval: false,
+                has_turn_in_flight: true,
             }
         ));
     }
@@ -250,6 +356,8 @@ mod tests {
             tab_count: 2,
             visible_pane_count: 2,
             has_active_session: true,
+            has_pending_approval: false,
+            has_turn_in_flight: false,
         });
 
         let terminal = filter_command_entries(entries.clone(), "terminal");

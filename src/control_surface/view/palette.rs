@@ -39,6 +39,7 @@ pub(crate) fn command_palette(state: CommandPaletteState) -> impl IntoView {
     let palette_action = state.palette_action_state();
 
     let workspace = control_input.command.workspace();
+    let frames = control_input.command.frames();
     let palette_open = control_input.palette_open;
     let palette_query = control_input.palette_query;
     let palette_selection = control_input.palette_selection;
@@ -47,7 +48,7 @@ pub(crate) fn command_palette(state: CommandPaletteState) -> impl IntoView {
 
     let items = create_memo(move |_| {
         let query = palette_query.get();
-        workspace.with(|ws| palette_items(ws, &query))
+        workspace.with(|ws| frames.with(|fr| palette_items(ws, fr, &query)))
     });
 
     let list = selectable_list(

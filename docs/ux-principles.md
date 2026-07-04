@@ -62,6 +62,20 @@ Horizon is command-oriented.
 - The command palette is the primary command discovery and execution surface.
 - Agents should use the same command/tool model when operating Horizon.
 
+### What Becomes A Command
+
+A command is a discrete operation that:
+
+- Can take a target as an argument — a pane, tab, session, pending tool call, etc.
+- Could meaningfully be exposed to agents under permission.
+- Makes sense to invoke from the palette or bind to a key.
+
+Not commands:
+
+- Continuous or positional input: typing, scrolling, selection drags, IME composition.
+- Pure display state: what's highlighted, expanded, or hovered.
+- The palette's own argument-collection mechanics: query text, list navigation, selection index.
+
 Persistent UI should not become a complete command surface. It should show
 workspace state and expose only a small set of contextual affordances.
 
