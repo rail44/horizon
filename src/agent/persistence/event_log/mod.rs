@@ -41,6 +41,35 @@ pub(crate) struct ReadReport {
     pub(crate) ignored_partial_line: bool,
 }
 
+impl ReadReport {
+    /// A short human-readable summary of lines `read` had to skip, or
+    /// `None` when the file parsed cleanly. Every consumer of the raw JSONL
+    /// (the writer's own startup re-read in `event_log::writer`, the DuckDB
+    /// replay in `app::runtime::agent`) reports this instead of silently
+    /// discarding evidence that the file has corrupt or torn lines.
+    pub(crate) fn skipped_summary(&self) -> Option<String> {
+        if self.corrupt_line_count == 0 && !self.ignored_partial_line {
+            return None;
+        }
+        let mut parts = Vec::new();
+        if self.corrupt_line_count > 0 {
+            parts.push(format!(
+                "{} corrupt line{}",
+                self.corrupt_line_count,
+                if self.corrupt_line_count == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            ));
+        }
+        if self.ignored_partial_line {
+            parts.push("a torn trailing line".to_string());
+        }
+        Some(format!("skipped {}", parts.join(" and ")))
+    }
+}
+
 pub(crate) fn read(path: impl AsRef<Path>) -> Result<ReadReport> {
     let path = path.as_ref();
     if !path.exists() {
@@ -112,7 +141,7 @@ mod tests {
                 serde_json::json!({ "provider": true }),
             )])
             .expect("append");
-        writer.flush_for_tests().expect("flush");
+        writer.flush().expect("flush");
 
         let report = read(&path).expect("read");
         assert_eq!(report.records.len(), 1);
@@ -159,6 +188,170 @@ mod tests {
         assert_eq!(report.records, vec![record]);
         assert_eq!(report.corrupt_line_count, 1);
         assert!(report.ignored_partial_line);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// Fixture-style regression test for the real corruption this module was
+    /// hardened against: a line torn in the *middle* of the file (an
+    /// interleaved/truncated concurrent write, not just garbage text) and a
+    /// torn *final* line (the app closing mid-write, no shutdown flush).
+    /// `read` must skip both, keep the valid records either side of them,
+    /// and report a skip count instead of failing the whole replay.
+    #[test]
+    fn read_reports_skip_counts_for_torn_middle_and_tail_lines() {
+        let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
+        let session_id = SessionId::new();
+        let record_at = |sequence: u64, event_id: &str| Record {
+            schema: AGENT_EVENT_LOG_SCHEMA.to_string(),
+            version: AGENT_EVENT_LOG_VERSION,
+            event_id: event_id.to_string(),
+            sequence,
+            session_id,
+            turn_id: None,
+            provider_id: None,
+            event_kind: "state_changed".to_string(),
+            event: Event::StateChanged(SessionState::Running),
+            provider_payload: None,
+            created_at_unix_ms: sequence + 1,
+        };
+        let first = record_at(0, "event-1");
+        let second = record_at(1, "event-2");
+        // A write that got interleaved with another writer mid-object: valid
+        // JSON prefix, cut off before the closing brace, sitting between two
+        // otherwise-valid lines.
+        let torn_middle =
+            "{\"schema\":\"horizon.agent.event_log\",\"version\":1,\"event_id\":\"torn-mid";
+        // The final line of the file with no trailing newline, as if the
+        // process was killed mid-write.
+        let torn_tail =
+            "{\"schema\":\"horizon.agent.event_log\",\"version\":1,\"event_id\":\"torn-tail\"";
+
+        let contents = format!(
+            "{}\n{}\n{}\n{}",
+            serde_json::to_string(&first).expect("serialize first"),
+            torn_middle,
+            serde_json::to_string(&second).expect("serialize second"),
+            torn_tail,
+        );
+        std::fs::write(&path, contents).expect("write fixture");
+
+        let report = read(&path).expect("read");
+        assert_eq!(report.records, vec![first, second]);
+        assert_eq!(report.corrupt_line_count, 1);
+        assert!(report.ignored_partial_line);
+        assert_eq!(
+            report.skipped_summary().as_deref(),
+            Some("skipped 1 corrupt line and a torn trailing line")
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// Models the app's normal-exit shutdown path (`app::shutdown`, wired to
+    /// floem's `AppEvent::WillTerminate` in `main.rs`): flush the writer
+    /// before the process tears the background thread down, and confirm
+    /// whatever was enqueued beforehand actually reached disk.
+    #[test]
+    fn flush_makes_pending_records_durable_before_shutdown() {
+        let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
+        let session_id = SessionId::new();
+        let writer = WriterHandle::open(&path).expect("writer");
+        let mut appender = Appender::new(writer.clone(), session_id, None);
+
+        appender
+            .append_provider_events(vec![ProviderEvent::from(Event::MessageCommitted(
+                Message {
+                    role: MessageRole::User,
+                    text: "durable before shutdown".to_string(),
+                },
+            ))])
+            .expect("append");
+
+        // The shutdown signal: everything enqueued above must be on disk
+        // once this returns, with no explicit `Drop` involved (the real
+        // `WriterHandle` lives in a process-global static and is never
+        // dropped during a normal run).
+        writer.flush().expect("shutdown flush");
+
+        let report = read(&path).expect("read after shutdown flush");
+        assert_eq!(report.records.len(), 1);
+        assert_eq!(
+            report.records[0].event,
+            Event::MessageCommitted(Message {
+                role: MessageRole::User,
+                text: "durable before shutdown".to_string(),
+            })
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// Proves the chosen design: a single process-global `WriterHandle`
+    /// shared by every session (see the doc comment on `WriterHandle` and on
+    /// `AGENT_EVENT_LOG_WRITER` in `app::runtime::agent`) cannot tear lines
+    /// no matter how many "sessions" hammer it concurrently, because all
+    /// appends funnel through one channel to one thread with one open file.
+    /// Payloads are sized well past the 4KiB `PIPE_BUF` figure cited in the
+    /// real corruption report to exercise the same code path that tore
+    /// lines when two independent writers raced on the same file.
+    #[test]
+    fn concurrent_appenders_share_one_writer_without_tearing() {
+        let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
+        let writer = WriterHandle::open(&path).expect("writer");
+
+        let session_ids: Vec<SessionId> = (0..4).map(|_| SessionId::new()).collect();
+        let events_per_session = 25_usize;
+        let large_payload = "x".repeat(6_000);
+
+        let handles: Vec<_> = session_ids
+            .iter()
+            .copied()
+            .map(|session_id| {
+                let writer = writer.clone();
+                let large_payload = large_payload.clone();
+                std::thread::spawn(move || {
+                    let mut appender = Appender::new(
+                        writer,
+                        session_id,
+                        Some(ProviderId("test.provider".to_string())),
+                    );
+                    for index in 0..events_per_session {
+                        appender
+                            .append_provider_events(vec![ProviderEvent::from(
+                                Event::AssistantTextDelta(MessageDelta {
+                                    role: MessageRole::Assistant,
+                                    text: format!("{large_payload}-{index}"),
+                                }),
+                            )])
+                            .expect("append from concurrent session");
+                    }
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().expect("session writer thread panicked");
+        }
+        writer.flush().expect("flush");
+
+        let report = read(&path).expect("read");
+        assert_eq!(report.corrupt_line_count, 0);
+        assert!(!report.ignored_partial_line);
+        assert_eq!(report.records.len(), session_ids.len() * events_per_session);
+
+        let mut sequences: Vec<u64> = report
+            .records
+            .iter()
+            .map(|record| record.sequence)
+            .collect();
+        sequences.sort_unstable();
+        sequences.dedup();
+        assert_eq!(
+            sequences.len(),
+            report.records.len(),
+            "every record must have a unique sequence number"
+        );
 
         let _ = std::fs::remove_file(path);
     }

@@ -57,6 +57,15 @@ impl SessionRuntimeState {
     }
 }
 
+/// Flushes any runtime state that buffers writes in memory before the app
+/// exits normally. Currently that's just the agent event log's
+/// process-global writer thread (see `agent::shutdown_agent_event_log` and
+/// the design comment on `agent::AGENT_EVENT_LOG_WRITER`); terminal
+/// sessions have no equivalent buffered-write concern today.
+pub(crate) fn shutdown() {
+    agent::shutdown_agent_event_log();
+}
+
 pub(crate) fn spawn_session(kind: PaneKind, session_id: SessionId, state: &SessionRuntimeState) {
     match kind {
         PaneKind::Terminal => spawn_terminal_session(

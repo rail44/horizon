@@ -16,8 +16,66 @@ use crate::agent::{contract as agent, frame::AgentFrame, live::LiveState};
 use crate::session::{Frames, Registry, SessionId};
 use crate::workspace::Workspace;
 
+/// The process-global cache that makes this the *only* call site that
+/// constructs a [`WriterHandle`] outside of tests (see [`open_agent_event_log`]).
+///
+/// Design choice for "eliminate concurrent same-file appends": a single
+/// shared writer per process, rather than one JSONL file per session.
+///
+/// - **Chosen — process-global shared writer.** `open_agent_event_log`
+///   opens the event log file at most once per process and every agent
+///   session spawned afterwards (`spawn_agent_session`, regardless of how
+///   many panes/tabs are opened or how close together) reuses the same
+///   [`WriterHandle`] clone. A `WriterHandle` is one background thread
+///   holding one open `File` and one `BufWriter`; cloning it only clones a
+///   channel `Sender`, so every session's appends funnel through the same
+///   thread and get serialized by the channel itself — concurrent writers
+///   to the file become structurally impossible within this process. This
+///   is precisely the bug that produced the torn lines in
+///   `/tmp/horizon-agent-events.jsonl`: two sessions opened moments apart
+///   each got their own `WriterHandle` (own thread, own `File`), and their
+///   independent buffered writes interleaved on disk.
+/// - **Rejected — per-session log files.** Giving each session its own file
+///   (e.g. `agent-events-<session_id>.jsonl`) also prevents same-file
+///   races, but pushes the complexity onto the read side: `event_log::read`
+///   and the DuckDB replay below would need to discover every file in a
+///   directory, open each one, and merge-sort records across files by
+///   `sequence`/`created_at_unix_ms` instead of reading one file top to
+///   bottom. The shared-writer design keeps that path exactly as simple as
+///   it is today — a single `read(path)` — at the cost of a small
+///   process-global cache here.
+///
+/// Caveat: this guards against concurrent writers *within this process*.
+/// Horizon has no single-instance enforcement, so two separate OS processes
+/// both pointed at the same `event_log_path` could still race; that is not
+/// the failure mode the evidence pointed to (two sessions, one process) and
+/// is out of scope here.
 static AGENT_EVENT_LOG_WRITER: OnceLock<Mutex<Option<WriterHandle>>> = OnceLock::new();
 static AGENT_DUCKDB_REBUILD_DONE: OnceLock<Mutex<bool>> = OnceLock::new();
+
+/// Flushes the process-global writer (if one was ever opened) so that
+/// records enqueued but not yet written survive a normal app exit. Wired
+/// from `main.rs` via floem's `AppEvent::WillTerminate` through
+/// `app::shutdown` — see that call chain for why this can't just be a
+/// `Drop` impl: the writer lives in a `OnceLock` static, which is never
+/// dropped when `main` returns normally.
+///
+/// A hard kill (SIGKILL, crash) bypasses this entirely and can still leave
+/// a torn final line on disk; `event_log::read` tolerates that rather than
+/// failing replay (see `ReadReport::ignored_partial_line`).
+pub(crate) fn shutdown_agent_event_log() {
+    let Some(writer_cell) = AGENT_EVENT_LOG_WRITER.get() else {
+        return;
+    };
+    let Ok(writer) = writer_cell.lock() else {
+        return;
+    };
+    if let Some(writer) = writer.as_ref() {
+        if let Err(error) = writer.flush() {
+            eprintln!("horizon agent event log: shutdown flush failed: {error}");
+        }
+    }
+}
 
 pub(super) fn spawn_agent_session(
     session_id: SessionId,
@@ -155,10 +213,16 @@ fn open_agent_runtime_state_store(
             if let Some(status) = status {
                 messages.push(status);
             }
-            if let Err(error) = rebuild_agent_duckdb_from_event_log_once(persistence_config) {
-                messages.push(format!(
-                    "Agent DuckDB projection rebuild unavailable: {error}"
-                ));
+            match rebuild_agent_duckdb_from_event_log_once(persistence_config) {
+                Ok(Some(skipped_summary)) => {
+                    messages.push(format!("Agent event log: {skipped_summary}"));
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    messages.push(format!(
+                        "Agent DuckDB projection rebuild unavailable: {error}"
+                    ));
+                }
             }
             if !messages.is_empty() {
                 agent_state_status.set(Some(messages.join(" | ")));
@@ -198,31 +262,47 @@ fn open_agent_event_log(
     Ok((handle, status))
 }
 
+/// Runs [`rebuild_agent_duckdb_from_event_log`] at most once per process.
+/// Returns the skipped-line summary from that one rebuild (`Ok(None)` when
+/// either the rebuild was already done by an earlier call, or it ran and
+/// found nothing to skip).
 fn rebuild_agent_duckdb_from_event_log_once(
     persistence_config: &AgentPersistenceConfig,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<String>> {
     let rebuild_done = AGENT_DUCKDB_REBUILD_DONE.get_or_init(|| Mutex::new(false));
     let mut rebuild_done = rebuild_done
         .lock()
         .map_err(|_| anyhow::anyhow!("agent DuckDB rebuild lock poisoned"))?;
     if *rebuild_done {
-        return Ok(());
+        return Ok(None);
     }
 
-    rebuild_agent_duckdb_from_event_log(persistence_config)?;
+    let skipped_summary = rebuild_agent_duckdb_from_event_log(persistence_config)?;
     *rebuild_done = true;
-    Ok(())
+    Ok(skipped_summary)
 }
 
+/// Replays the JSONL event log into the DuckDB projection. `event_log::read`
+/// already skips corrupt/torn lines rather than failing (see
+/// `ReadReport::skipped_summary`); this only adds a warning-style log so the
+/// skip isn't silently swallowed, and hands the summary back so the caller
+/// can surface it in the UI status line too.
 fn rebuild_agent_duckdb_from_event_log(
     persistence_config: &AgentPersistenceConfig,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<String>> {
     let Some(db_path) = persistence_config.duckdb_path.clone() else {
-        return Ok(());
+        return Ok(None);
     };
     let log_path = persistence_config.event_log_path.clone();
 
     let report = read(&log_path)?;
+    let skipped_summary = report.skipped_summary();
+    if let Some(summary) = &skipped_summary {
+        eprintln!(
+            "horizon agent event log: {summary} while replaying {}",
+            log_path.display()
+        );
+    }
 
     if let Some(parent) = db_path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -232,5 +312,112 @@ fn rebuild_agent_duckdb_from_event_log(
 
     let store = Store::open(db_path)?;
     store.replace_from_event_log_records(report.records)?;
-    Ok(())
+    Ok(skipped_summary)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::contract::{Event, Message, MessageRole};
+    use crate::agent::persistence::event_log::{
+        Record, AGENT_EVENT_LOG_SCHEMA, AGENT_EVENT_LOG_VERSION,
+    };
+    use uuid::Uuid;
+
+    /// Regression test for the actual corruption incident: two sessions
+    /// opening the event log must not each get their own writer thread.
+    /// `open_agent_event_log` is the process-global cache described on
+    /// `AGENT_EVENT_LOG_WRITER`; this asserts a second call reuses the
+    /// first session's `WriterHandle` (same background thread) instead of
+    /// silently constructing a second one that would race on the file.
+    #[test]
+    fn open_agent_event_log_reuses_process_global_writer() {
+        let path = std::env::temp_dir().join(format!(
+            "horizon-agent-open-event-log-{}.jsonl",
+            Uuid::new_v4()
+        ));
+        let persistence_config = AgentPersistenceConfig {
+            event_log_path: path.clone(),
+            duckdb_path: None,
+        };
+
+        let (first, first_status) =
+            open_agent_event_log(&persistence_config).expect("open event log");
+        assert!(
+            first_status.is_some(),
+            "the session that actually opens the file should report where it lives"
+        );
+
+        let (second, second_status) =
+            open_agent_event_log(&persistence_config).expect("reopen event log");
+        assert!(
+            second_status.is_none(),
+            "a cached reuse should not repeat the status message"
+        );
+        assert!(
+            first.same_channel(&second),
+            "two sessions in one process must share one writer thread, not \
+             create a second writer racing on the same file"
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// The DuckDB replay path must not fail outright when the JSONL has
+    /// corrupt or torn lines — it should skip them (via `event_log::read`)
+    /// and report how many, so the caller can surface a warning instead of
+    /// losing the whole session history.
+    #[test]
+    fn rebuild_agent_duckdb_from_event_log_reports_skipped_lines() {
+        let log_path = std::env::temp_dir().join(format!(
+            "horizon-agent-rebuild-log-{}.jsonl",
+            Uuid::new_v4()
+        ));
+        let db_path =
+            std::env::temp_dir().join(format!("horizon-agent-rebuild-{}.duckdb", Uuid::new_v4()));
+        let session_id = SessionId::new();
+        let record = Record {
+            schema: AGENT_EVENT_LOG_SCHEMA.to_string(),
+            version: AGENT_EVENT_LOG_VERSION,
+            event_id: "event-1".to_string(),
+            sequence: 0,
+            session_id,
+            turn_id: None,
+            provider_id: None,
+            event_kind: "message_committed".to_string(),
+            event: Event::MessageCommitted(Message {
+                role: MessageRole::User,
+                text: "hello".to_string(),
+            }),
+            provider_payload: None,
+            created_at_unix_ms: 1,
+        };
+        let contents = format!(
+            "{}\n{}\n{}",
+            serde_json::to_string(&record).expect("serialize record"),
+            "not valid json",
+            "{\"schema\":\"horizon.agent.event_log\",\"version\":1,\"event_id\":\"torn-tail\"",
+        );
+        std::fs::write(&log_path, contents).expect("write fixture log");
+
+        let persistence_config = AgentPersistenceConfig {
+            event_log_path: log_path.clone(),
+            duckdb_path: Some(db_path.clone()),
+        };
+
+        let skipped_summary = rebuild_agent_duckdb_from_event_log(&persistence_config)
+            .expect("rebuild from event log");
+        assert_eq!(
+            skipped_summary.as_deref(),
+            Some("skipped 1 corrupt line and a torn trailing line")
+        );
+
+        let store = Store::open(&db_path).expect("reopen duckdb store");
+        let sessions = store.sessions().expect("sessions");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, session_id);
+
+        let _ = std::fs::remove_file(log_path);
+        let _ = std::fs::remove_file(db_path);
+    }
 }

@@ -7,5 +7,6 @@ pub(crate) mod terminal;
 pub(crate) mod ui;
 pub(crate) mod workspace;
 
+pub use app::shutdown;
 pub use app::view::app_view;
 pub use session::SessionId;
