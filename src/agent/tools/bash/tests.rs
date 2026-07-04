@@ -4,11 +4,16 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 
+use crate::agent::config::BashToolConfig;
 use crate::agent::contract::{ToolCallId, ToolCallResult};
 use crate::agent::frame::{AgentFrame, AgentFrameItem};
 
 fn cwd_handle(path: PathBuf) -> Arc<Mutex<PathBuf>> {
     Arc::new(Mutex::new(path))
+}
+
+fn config() -> BashToolConfig {
+    BashToolConfig::default()
 }
 
 // --- basic execution ------------------------------------------------------
@@ -18,7 +23,12 @@ fn echo_round_trip_reports_output_and_exit_zero() {
     let cwd = cwd_handle(std::env::temp_dir());
     let call_id = ToolCallId("echo-1".to_string());
 
-    let output = super::exec::run(&call_id, &json!({ "command": "echo hello" }), &cwd);
+    let output = super::exec::run(
+        &call_id,
+        &json!({ "command": "echo hello" }),
+        &cwd,
+        &config(),
+    );
 
     assert_eq!(output["exit_code"], 0);
     assert_eq!(output["output"], "hello\n");
@@ -32,7 +42,7 @@ fn non_zero_exit_is_a_normal_result_carrying_the_code() {
     let cwd = cwd_handle(std::env::temp_dir());
     let call_id = ToolCallId("exit-7".to_string());
 
-    let output = super::exec::run(&call_id, &json!({ "command": "exit 7" }), &cwd);
+    let output = super::exec::run(&call_id, &json!({ "command": "exit 7" }), &cwd, &config());
 
     assert!(
         output.get("is_error").is_none(),
@@ -53,6 +63,7 @@ fn timeout_kills_the_process_and_reports_captured_partial_output() {
         &call_id,
         &json!({ "command": "echo start; sleep 5", "timeout_secs": 1 }),
         &cwd,
+        &config(),
     );
 
     assert!(
@@ -91,6 +102,7 @@ fn background_child_holding_the_pipe_does_not_hang_the_call() {
         &json!({ "command": "echo visible; sleep 30 &" }),
         &cwd,
         Duration::from_millis(200),
+        &config(),
     );
 
     assert!(
@@ -124,6 +136,7 @@ fn truncation_preserves_head_and_tail_and_spills_full_output() {
         &call_id,
         &json!({ "command": "head -c 40000 /dev/zero | tr '\\0' 'a'" }),
         &cwd,
+        &config(),
     );
 
     assert_eq!(output["truncated"], true);
@@ -153,6 +166,7 @@ fn cwd_tracking_persists_a_cd_across_calls_with_no_sentinel_leakage() {
         &ToolCallId("cwd-1".to_string()),
         &json!({ "command": "cd sub && pwd" }),
         &cwd,
+        &config(),
     );
     assert_eq!(first["exit_code"], 0);
     let first_output = first["output"].as_str().expect("first output");
@@ -166,6 +180,7 @@ fn cwd_tracking_persists_a_cd_across_calls_with_no_sentinel_leakage() {
         &ToolCallId("cwd-2".to_string()),
         &json!({ "command": "pwd" }),
         &cwd,
+        &config(),
     );
     let second_output = second["output"].as_str().expect("second output");
     assert_eq!(
@@ -187,6 +202,7 @@ fn cwd_tracking_leaves_cwd_unchanged_when_the_command_never_cds() {
         &ToolCallId("cwd-noop".to_string()),
         &json!({ "command": "echo hi" }),
         &cwd,
+        &config(),
     );
 
     assert_eq!(*cwd.lock().unwrap(), base);
@@ -201,7 +217,13 @@ fn kill_registry_entry_is_removed_after_normal_completion() {
     let call_id = ToolCallId("registry-normal".to_string());
     let (tx, rx) = crossbeam_channel::unbounded();
 
-    super::spawn(call_id.clone(), json!({ "command": "true" }), cwd, tx);
+    super::spawn(
+        call_id.clone(),
+        json!({ "command": "true" }),
+        cwd,
+        config(),
+        tx,
+    );
 
     let completion = rx
         .recv_timeout(Duration::from_secs(5))
@@ -220,6 +242,7 @@ fn kill_registry_kills_a_running_child_and_removes_its_entry() {
         call_id.clone(),
         json!({ "command": "sleep 10", "timeout_secs": 30 }),
         cwd,
+        config(),
         tx,
     );
 
@@ -274,7 +297,12 @@ fn lossy_non_utf8_output_does_not_panic() {
     let cwd = cwd_handle(std::env::temp_dir());
     let call_id = ToolCallId("non-utf8".to_string());
 
-    let output = super::exec::run(&call_id, &json!({ "command": r"printf 'a\xffb'" }), &cwd);
+    let output = super::exec::run(
+        &call_id,
+        &json!({ "command": r"printf 'a\xffb'" }),
+        &cwd,
+        &config(),
+    );
 
     assert_eq!(output["exit_code"], 0);
     let shown = output["output"]

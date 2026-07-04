@@ -6,21 +6,11 @@ use serde_json::{json, Value};
 
 use super::error_output;
 use super::safety::resolve_path;
-use super::traverse::{self, MAX_VISITED_FILES};
+use super::traverse;
 use crate::agent::tools::state::ToolSessionState;
 
 /// Default number of matches returned when the caller doesn't pass `limit`.
 const DEFAULT_LIMIT: usize = 100;
-
-/// Maximum total bytes of file content `fs.grep` will read in a single
-/// traversal before it stops opening further files. Bounds worst-case I/O
-/// independent of match count, on top of the `MAX_VISITED_FILES` cap.
-///
-/// Shrunk under `cfg(test)` — see `traverse::MAX_VISITED_FILES`.
-#[cfg(not(test))]
-const MAX_GREP_BYTES: u64 = 64 * 1024 * 1024;
-#[cfg(test)]
-const MAX_GREP_BYTES: u64 = 1024;
 
 pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
     let Some(base_arg) = input.get("base_path").and_then(Value::as_str) else {
@@ -60,6 +50,7 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
         None => None,
     };
 
+    let fs_config = tool_state.tools_config().fs;
     let mut matches = Vec::new();
     let mut total_matches = 0usize;
     let mut visited = 0usize;
@@ -69,7 +60,7 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
         if !entry.file_type().is_file() {
             continue;
         }
-        if visited >= MAX_VISITED_FILES || bytes_read >= MAX_GREP_BYTES {
+        if visited >= fs_config.traversal_max_files || bytes_read >= fs_config.grep_max_bytes {
             scan_truncated = true;
             break;
         }

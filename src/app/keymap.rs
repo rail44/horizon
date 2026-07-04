@@ -1,5 +1,10 @@
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
 use floem::keyboard::{Key, KeyEvent, Modifiers, NamedKey};
 use termwiz::input::{KeyCode as TermKeyCode, Modifiers as TermModifiers};
+
+use crate::app::commands::CommandId;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AgentDraftAction {
@@ -181,6 +186,283 @@ fn control_input(c: char) -> Option<Vec<u8>> {
     Some(vec![byte])
 }
 
+// --- command keybindings ----------------------------------------------
+//
+// `[keybindings]` in Horizon's config file (`crate::config`) maps a key
+// chord string (e.g. `"ctrl+shift+t"`) to a `CommandId` string (e.g.
+// `"new-terminal"`) for the *simple* commands — the ones `app::
+// command_actions::CommandInvocation::Simple` can run without an
+// explicit target. Entries layer on top of `default_bindings` below,
+// overriding a default bound to the same chord or adding a new one.
+//
+// An entry that doesn't parse (bad chord syntax, unknown command id) is
+// warned about on stderr and skipped — never a startup failure, matching
+// the config file's overall "never crash on a bad file" policy
+// (`crate::config`'s module doc).
+
+/// Horizon's built-in keyboard shortcuts. Deliberately small: creation and
+/// basic layout operations that are safe to fire globally. Destructive
+/// (`TerminateActiveSession`) and contextual (approve/deny/cancel, which
+/// already have pane-local buttons) commands are left unbound by default —
+/// add a `[keybindings]` entry for them if wanted.
+fn default_bindings() -> &'static [(&'static str, CommandId)] {
+    &[
+        ("ctrl+shift+t", CommandId::NewTerminal),
+        ("ctrl+shift+a", CommandId::NewAgent),
+        ("ctrl+shift+d", CommandId::SplitActivePane),
+        ("ctrl+shift+w", CommandId::CloseActivePane),
+        ("ctrl+shift+x", CommandId::CloseActiveTab),
+    ]
+}
+
+fn command_id_from_str(id: &str) -> Option<CommandId> {
+    match id {
+        "new-terminal" => Some(CommandId::NewTerminal),
+        "new-agent" => Some(CommandId::NewAgent),
+        "split-active-pane" => Some(CommandId::SplitActivePane),
+        "focus-next-pane" => Some(CommandId::FocusNextPane),
+        "close-active-pane" => Some(CommandId::CloseActivePane),
+        "close-active-tab" => Some(CommandId::CloseActiveTab),
+        "terminate-active-session" => Some(CommandId::TerminateActiveSession),
+        "approve-tool-call" => Some(CommandId::ApproveToolCall),
+        "deny-tool-call" => Some(CommandId::DenyToolCall),
+        "cancel-agent-turn" => Some(CommandId::CancelAgentTurn),
+        _ => None,
+    }
+}
+
+/// A parsed key chord: an exact modifier set plus a key. Matching is exact
+/// on modifiers (not "at least") — the same convention most desktop apps
+/// use, and the simplest one to reason about when defaults and config
+/// entries interact.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct Chord {
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+    meta: bool,
+    key: ChordKey,
+}
+
+impl Chord {
+    /// Takes `modifiers`/`key` rather than a whole `KeyEvent` so this stays
+    /// testable without constructing one — floem's `KeyEvent` wraps a winit
+    /// type with a private platform-specific field, so it can't be built
+    /// from a plain struct literal outside that crate.
+    fn matches(&self, modifiers: Modifiers, key: &Key) -> bool {
+        self.ctrl == modifiers.control()
+            && self.shift == modifiers.shift()
+            && self.alt == modifiers.alt()
+            && self.meta == modifiers.meta()
+            && self.key.matches(key)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum ChordKey {
+    Char(char),
+    Named(NamedChordKey),
+}
+
+impl ChordKey {
+    fn parse(token: &str) -> Option<Self> {
+        let lower = token.to_ascii_lowercase();
+        if let Some(named) = NamedChordKey::parse(&lower) {
+            return Some(ChordKey::Named(named));
+        }
+        let mut chars = lower.chars();
+        let first = chars.next()?;
+        if chars.next().is_some() {
+            return None; // not a single character, and not a recognized named key
+        }
+        Some(ChordKey::Char(first))
+    }
+
+    fn matches(self, key: &Key) -> bool {
+        match (self, key) {
+            (ChordKey::Char(expected), Key::Character(text)) => {
+                let mut chars = text.chars();
+                match (chars.next(), chars.next()) {
+                    (Some(only), None) => only.to_ascii_lowercase() == expected,
+                    _ => false,
+                }
+            }
+            (ChordKey::Named(expected), Key::Named(named)) => expected.matches(*named),
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum NamedChordKey {
+    Enter,
+    Escape,
+    Tab,
+    Space,
+    Backspace,
+    Delete,
+    ArrowUp,
+    ArrowDown,
+    ArrowLeft,
+    ArrowRight,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+}
+
+impl NamedChordKey {
+    fn parse(lower: &str) -> Option<Self> {
+        Some(match lower {
+            "enter" | "return" => Self::Enter,
+            "escape" | "esc" => Self::Escape,
+            "tab" => Self::Tab,
+            "space" | "spacebar" => Self::Space,
+            "backspace" => Self::Backspace,
+            "delete" | "del" => Self::Delete,
+            "up" | "arrowup" => Self::ArrowUp,
+            "down" | "arrowdown" => Self::ArrowDown,
+            "left" | "arrowleft" => Self::ArrowLeft,
+            "right" | "arrowright" => Self::ArrowRight,
+            "home" => Self::Home,
+            "end" => Self::End,
+            "pageup" => Self::PageUp,
+            "pagedown" => Self::PageDown,
+            _ => return None,
+        })
+    }
+
+    fn matches(self, named: NamedKey) -> bool {
+        matches!(
+            (self, named),
+            (Self::Enter, NamedKey::Enter)
+                | (Self::Escape, NamedKey::Escape)
+                | (Self::Tab, NamedKey::Tab)
+                | (Self::Space, NamedKey::Space)
+                | (Self::Backspace, NamedKey::Backspace)
+                | (Self::Delete, NamedKey::Delete)
+                | (Self::ArrowUp, NamedKey::ArrowUp)
+                | (Self::ArrowDown, NamedKey::ArrowDown)
+                | (Self::ArrowLeft, NamedKey::ArrowLeft)
+                | (Self::ArrowRight, NamedKey::ArrowRight)
+                | (Self::Home, NamedKey::Home)
+                | (Self::End, NamedKey::End)
+                | (Self::PageUp, NamedKey::PageUp)
+                | (Self::PageDown, NamedKey::PageDown)
+        )
+    }
+}
+
+/// Parses a key chord string like `"ctrl+shift+t"`: modifiers joined by
+/// `+`, ending in the key itself. Modifier names are case-insensitive and
+/// accept a couple of aliases (`control`/`ctrl`, `option`/`alt`,
+/// `cmd`/`command`/`super`/`win`/`meta`). Returns an error message (never
+/// panics) for anything unparsable, so a bad `[keybindings]` entry can be
+/// warned about and skipped rather than crashing startup.
+fn parse_chord(spec: &str) -> Result<Chord, String> {
+    let parts: Vec<&str> = spec
+        .split('+')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parts.is_empty() {
+        return Err(format!("empty key chord `{spec}`"));
+    }
+
+    let mut ctrl = false;
+    let mut shift = false;
+    let mut alt = false;
+    let mut meta = false;
+    let mut key_token = None;
+
+    for (index, part) in parts.iter().enumerate() {
+        let is_last = index == parts.len() - 1;
+        match part.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => ctrl = true,
+            "shift" => shift = true,
+            "alt" | "option" => alt = true,
+            "meta" | "cmd" | "command" | "super" | "win" => meta = true,
+            _ if is_last => key_token = Some(*part),
+            other => return Err(format!("unknown modifier `{other}` in key chord `{spec}`")),
+        }
+    }
+
+    let key_token = key_token.ok_or_else(|| format!("key chord `{spec}` has no key"))?;
+    let key = ChordKey::parse(key_token)
+        .ok_or_else(|| format!("unrecognized key `{key_token}` in key chord `{spec}`"))?;
+
+    Ok(Chord {
+        ctrl,
+        shift,
+        alt,
+        meta,
+        key,
+    })
+}
+
+/// The resolved set of key chord -> command bindings: Horizon's built-in
+/// defaults with the config file's `[keybindings]` table layered on top.
+pub(crate) struct Keymap {
+    bindings: Vec<(Chord, CommandId)>,
+}
+
+impl Keymap {
+    /// The process-wide keymap, built once from Horizon's config file
+    /// (applied at startup only — see `AGENTS.md`) and cached for the rest
+    /// of the run.
+    pub(crate) fn global() -> &'static Keymap {
+        static KEYMAP: OnceLock<Keymap> = OnceLock::new();
+        KEYMAP.get_or_init(|| Keymap::from_entries(&crate::config::load().keybindings))
+    }
+
+    fn from_entries(entries: &HashMap<String, String>) -> Self {
+        let mut bindings: Vec<(Chord, CommandId)> = default_bindings()
+            .iter()
+            .map(|(spec, command_id)| {
+                (
+                    parse_chord(spec).expect("built-in default key chord must parse"),
+                    *command_id,
+                )
+            })
+            .collect();
+
+        for (chord_spec, command_spec) in entries {
+            let chord = match parse_chord(chord_spec) {
+                Ok(chord) => chord,
+                Err(error) => {
+                    eprintln!(
+                        "horizon config: skipping keybinding `{chord_spec}` = \
+                         `{command_spec}`: {error}"
+                    );
+                    continue;
+                }
+            };
+            let Some(command_id) = command_id_from_str(command_spec) else {
+                eprintln!(
+                    "horizon config: skipping keybinding `{chord_spec}` = `{command_spec}`: \
+                     unknown command id `{command_spec}`"
+                );
+                continue;
+            };
+            // A config entry for a chord already bound (by a default, or by
+            // an earlier entry) replaces it rather than adding a second,
+            // unreachable binding for the same chord.
+            bindings.retain(|(existing, _)| existing != &chord);
+            bindings.push((chord, command_id));
+        }
+
+        Keymap { bindings }
+    }
+
+    /// The `CommandId` bound to `event`'s chord, if any.
+    pub(crate) fn command_for(&self, event: &KeyEvent) -> Option<CommandId> {
+        self.bindings
+            .iter()
+            .find(|(chord, _)| chord.matches(event.modifiers, &event.key.logical_key))
+            .map(|(_, command_id)| *command_id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,5 +564,137 @@ mod tests {
             termwiz_modifiers(Modifiers::CONTROL | Modifiers::SHIFT),
             TermModifiers::CTRL | TermModifiers::SHIFT
         );
+    }
+
+    // --- key chord parsing --------------------------------------------
+
+    #[test]
+    fn parses_a_multi_modifier_chord_case_insensitively() {
+        let chord = parse_chord("Ctrl+Shift+T").expect("valid chord");
+        assert_eq!(
+            chord,
+            Chord {
+                ctrl: true,
+                shift: true,
+                alt: false,
+                meta: false,
+                key: ChordKey::Char('t'),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_a_named_key_chord() {
+        let chord = parse_chord("alt+enter").expect("valid chord");
+        assert_eq!(chord.key, ChordKey::Named(NamedChordKey::Enter));
+        assert!(chord.alt);
+    }
+
+    #[test]
+    fn rejects_a_chord_with_no_key() {
+        assert!(parse_chord("ctrl+shift").is_err());
+    }
+
+    #[test]
+    fn rejects_an_empty_chord() {
+        assert!(parse_chord("").is_err());
+    }
+
+    #[test]
+    fn rejects_an_unknown_modifier() {
+        assert!(parse_chord("hyper+t").is_err());
+    }
+
+    #[test]
+    fn chord_matches_exact_modifiers_only() {
+        let chord = parse_chord("ctrl+shift+t").expect("valid chord");
+        let key = Key::Character("t".into());
+
+        assert!(chord.matches(Modifiers::CONTROL | Modifiers::SHIFT, &key));
+        assert!(!chord.matches(Modifiers::CONTROL, &key));
+        assert!(!chord.matches(Modifiers::CONTROL | Modifiers::SHIFT | Modifiers::ALT, &key));
+    }
+
+    #[test]
+    fn chord_key_matching_is_case_insensitive_and_single_char_only() {
+        let key_lower = Key::Character("t".into());
+        let key_upper = Key::Character("T".into());
+        let multi_char = Key::Character("th".into());
+
+        assert!(ChordKey::Char('t').matches(&key_lower));
+        assert!(ChordKey::Char('t').matches(&key_upper));
+        assert!(!ChordKey::Char('t').matches(&multi_char));
+    }
+
+    // --- keymap resolution: defaults + config precedence ----------------
+
+    #[test]
+    fn config_entry_overrides_a_default_bound_to_the_same_chord() {
+        let mut entries = HashMap::new();
+        entries.insert("ctrl+shift+t".to_string(), "new-agent".to_string());
+
+        let keymap = Keymap::from_entries(&entries);
+        let chord = parse_chord("ctrl+shift+t").unwrap();
+
+        assert_eq!(
+            keymap
+                .bindings
+                .iter()
+                .find(|(bound, _)| *bound == chord)
+                .map(|(_, id)| *id),
+            Some(CommandId::NewAgent)
+        );
+    }
+
+    #[test]
+    fn config_entry_adds_a_new_binding() {
+        let mut entries = HashMap::new();
+        entries.insert(
+            "ctrl+shift+q".to_string(),
+            "terminate-active-session".to_string(),
+        );
+
+        let keymap = Keymap::from_entries(&entries);
+        let chord = parse_chord("ctrl+shift+q").unwrap();
+
+        assert_eq!(
+            keymap
+                .bindings
+                .iter()
+                .find(|(bound, _)| *bound == chord)
+                .map(|(_, id)| *id),
+            Some(CommandId::TerminateActiveSession)
+        );
+    }
+
+    #[test]
+    fn invalid_chord_is_skipped_without_dropping_other_entries() {
+        let mut entries = HashMap::new();
+        entries.insert("not a chord".to_string(), "new-agent".to_string());
+        entries.insert(
+            "ctrl+shift+q".to_string(),
+            "terminate-active-session".to_string(),
+        );
+
+        let keymap = Keymap::from_entries(&entries);
+
+        assert!(command_id_from_str("new-agent").is_some());
+        assert_eq!(keymap.bindings.len(), default_bindings().len() + 1);
+    }
+
+    #[test]
+    fn unknown_command_id_is_skipped_without_dropping_other_entries() {
+        let mut entries = HashMap::new();
+        entries.insert("ctrl+shift+z".to_string(), "not-a-real-command".to_string());
+
+        let keymap = Keymap::from_entries(&entries);
+
+        assert_eq!(keymap.bindings.len(), default_bindings().len());
+    }
+
+    #[test]
+    fn default_bindings_are_present_when_config_is_empty() {
+        let keymap = Keymap::from_entries(&HashMap::new());
+        assert_eq!(keymap.bindings.len(), default_bindings().len());
     }
 }

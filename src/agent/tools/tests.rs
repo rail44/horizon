@@ -623,8 +623,9 @@ fn fs_grep_skips_default_ignored_directories() {
 }
 
 // The file-count and (grep-only) byte-count traversal caps below are
-// shrunk under `cfg(test)` (see `fs::traverse::MAX_VISITED_FILES` and
-// `fs::grep::MAX_GREP_BYTES`) specifically so these tests can trip them
+// shrunk under `cfg(test)` (see `agent::config`'s `default_fs_traversal_max_files`/
+// `default_fs_grep_max_bytes`, which back `ToolSessionState::new`'s
+// `AgentToolsConfig::default()`) specifically so these tests can trip them
 // without creating tens of thousands of files or dozens of megabytes of
 // content on disk.
 

@@ -111,7 +111,7 @@ async fn run_session_loop(
     // result as (tool, args, output) for doom-loop detection.
     let mut pending_tool_calls: HashMap<ToolCallId, ToolCallDescriptor> = HashMap::new();
     let mut cancelled_call_ids: HashSet<ToolCallId> = HashSet::new();
-    let mut guard = TurnLoopGuard::new();
+    let mut guard = TurnLoopGuard::new(config.iteration_cap, config.doom_loop_window);
 
     loop {
         let command = match inbox.pop_front() {
@@ -349,15 +349,6 @@ pub(super) fn append_cancelled_tool_results_to_history(
 // I/O), so its counting and fingerprinting logic is unit-tested directly in
 // `tests.rs`.
 
-/// Consecutive-tool-turn iteration cap. A "tool-driven turn" is one
-/// triggered by `Command::ToolCallResult`, as opposed to a fresh
-/// `Command::UserMessage`.
-pub(super) const TOOL_TURN_ITERATION_CAP: u32 = 25;
-
-/// Doom-loop detection window: this many consecutive identical
-/// (tool, args, output) fingerprints trip the guard.
-pub(super) const DOOM_LOOP_WINDOW: usize = 3;
-
 /// Why the turn loop halted itself rather than running another turn.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum GuardHalt {
@@ -366,15 +357,19 @@ pub(super) enum GuardHalt {
 }
 
 impl GuardHalt {
-    fn message(self) -> String {
+    /// `iteration_cap`/`doom_loop_window` are the same config-sourced
+    /// values (`agent::config::RigAgentConfig`) the guard that tripped was
+    /// constructed with — threaded in explicitly here rather than read off
+    /// `self` so this stays a plain, dependency-free enum method.
+    fn message(self, iteration_cap: u32, doom_loop_window: usize) -> String {
         match self {
             GuardHalt::IterationCapExceeded => format!(
-                "Stopped after {TOOL_TURN_ITERATION_CAP} consecutive tool-driven turns without a \
+                "Stopped after {iteration_cap} consecutive tool-driven turns without a \
                  new user message. The agent may be stuck in a loop — send a new message to \
                  continue."
             ),
             GuardHalt::DoomLoopDetected => format!(
-                "Stopped after {DOOM_LOOP_WINDOW} consecutive identical tool results. The agent \
+                "Stopped after {doom_loop_window} consecutive identical tool results. The agent \
                  appears to be repeating the same tool call without making progress — send a new \
                  message to continue."
             ),
@@ -387,15 +382,27 @@ impl GuardHalt {
 /// fingerprints to detect a doom loop. Free of I/O so it can be tested
 /// directly as a small unit, independent of the session's channels and
 /// async plumbing.
-#[derive(Debug, Default)]
+///
+/// `iteration_cap`/`doom_loop_window` come from `agent::config::
+/// RigAgentConfig` (formerly the hardcoded `TOOL_TURN_ITERATION_CAP`/
+/// `DOOM_LOOP_WINDOW` constants) and are fixed for the guard's lifetime;
+/// `reset` only clears the running counters below, never these.
+#[derive(Debug)]
 pub(super) struct TurnLoopGuard {
+    iteration_cap: u32,
+    doom_loop_window: usize,
     consecutive_tool_turns: u32,
     recent_fingerprints: VecDeque<u64>,
 }
 
 impl TurnLoopGuard {
-    pub(super) fn new() -> Self {
-        Self::default()
+    pub(super) fn new(iteration_cap: u32, doom_loop_window: usize) -> Self {
+        Self {
+            iteration_cap,
+            doom_loop_window,
+            consecutive_tool_turns: 0,
+            recent_fingerprints: VecDeque::new(),
+        }
     }
 
     /// Resets both the iteration count and the fingerprint window. Called
@@ -407,22 +414,22 @@ impl TurnLoopGuard {
 
     /// Records that a tool-driven turn is about to run. Returns
     /// `Some(GuardHalt::IterationCapExceeded)` once the cap is exceeded
-    /// (i.e. on the `TOOL_TURN_ITERATION_CAP + 1`-th consecutive call).
+    /// (i.e. on the `iteration_cap + 1`-th consecutive call).
     pub(super) fn record_tool_turn(&mut self) -> Option<GuardHalt> {
         self.consecutive_tool_turns += 1;
-        (self.consecutive_tool_turns > TOOL_TURN_ITERATION_CAP)
+        (self.consecutive_tool_turns > self.iteration_cap)
             .then_some(GuardHalt::IterationCapExceeded)
     }
 
     /// Records an incoming tool result's fingerprint. Returns
-    /// `Some(GuardHalt::DoomLoopDetected)` once the last `DOOM_LOOP_WINDOW`
+    /// `Some(GuardHalt::DoomLoopDetected)` once the last `doom_loop_window`
     /// fingerprints are all identical.
     pub(super) fn record_fingerprint(&mut self, fingerprint: u64) -> Option<GuardHalt> {
         self.recent_fingerprints.push_back(fingerprint);
-        if self.recent_fingerprints.len() > DOOM_LOOP_WINDOW {
+        if self.recent_fingerprints.len() > self.doom_loop_window {
             self.recent_fingerprints.pop_front();
         }
-        let is_doom_loop = self.recent_fingerprints.len() == DOOM_LOOP_WINDOW
+        let is_doom_loop = self.recent_fingerprints.len() == self.doom_loop_window
             && self.recent_fingerprints.iter().all(|fp| *fp == fingerprint);
         is_doom_loop.then_some(GuardHalt::DoomLoopDetected)
     }
@@ -477,7 +484,7 @@ pub(super) fn halt_turn_loop(
 
     let _ = events_tx.send(
         Event::Error(Error {
-            message: halt.message(),
+            message: halt.message(guard.iteration_cap, guard.doom_loop_window),
         })
         .into(),
     );

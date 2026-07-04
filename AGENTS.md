@@ -35,6 +35,16 @@ per clone:
 git config core.hooksPath hooks
 ```
 
+## Configuration
+
+Horizon reads one optional TOML file: `$XDG_CONFIG_HOME/horizon/config.toml`
+(falling back to `~/.config/horizon/config.toml`), overridable via
+`HORIZON_CONFIG`. Precedence is env var > config file > built-in default;
+existing env vars keep winning. Secrets (`OPENAI_API_KEY`) are
+environment-only and never read from the file. Config is applied at startup
+only — restart Horizon after editing it. See `config.example.toml` at the
+repo root for every knob, and `src/config/` for the loader.
+
 ## GUI Verification
 
 Agents cannot see the GUI directly. Two scripts drive it headlessly:

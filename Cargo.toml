@@ -22,6 +22,7 @@ termwiz = "0.23.3"
 thiserror = "2.0"
 tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "process", "time"] }
 tokio-util = "0.7"
+toml = "0.8"
 unicode-width = "0.2"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 walkdir = "2"

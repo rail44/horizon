@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crossbeam_channel::Sender;
 use futures_util::StreamExt;
-use rig_core::client::{CompletionClient, ProviderClient};
+use rig_core::client::CompletionClient;
 use rig_core::{
     completion::{
         message::{Text, ToolCall},
@@ -121,7 +121,7 @@ async fn rig_openai_turn_streaming(
     events_tx: Sender<ProviderEvent>,
     token: &CancellationToken,
 ) -> anyhow::Result<(Message, TurnCompletion)> {
-    let client = openai::CompletionsClient::from_env()?;
+    let client = openai_completions_client(config)?;
     let model = client.completion_model(&config.model);
     let mut stream = model
         .completion_request(prompt)
@@ -257,6 +257,30 @@ async fn rig_openai_turn_streaming(
             cancelled,
         },
     ))
+}
+
+/// Builds the OpenAI Completions client for a turn.
+///
+/// The API key is always read straight from `OPENAI_API_KEY` — secrets
+/// never flow through the config file (`agent::config`'s module doc) — so
+/// this can't just call `openai::CompletionsClient::from_env()` the way it
+/// used to: that helper also reads `OPENAI_BASE_URL` itself, which would
+/// silently ignore Horizon's own precedence for the base URL. Instead the
+/// base URL comes from `config.base_url`, already resolved by
+/// `agent::config::RigAgentConfig::from_env` with the right precedence (env
+/// `OPENAI_BASE_URL` > `[provider].base_url` in the config file); `None`
+/// leaves rig's own default (`https://api.openai.com/v1`) in place by
+/// simply not calling `.base_url(..)` on the builder, mirroring exactly
+/// what `from_env()` did before.
+fn openai_completions_client(config: &RigAgentConfig) -> anyhow::Result<openai::CompletionsClient> {
+    let api_key = std::env::var(crate::agent::config::OPENAI_API_KEY_VAR)
+        .map_err(|_| anyhow::anyhow!("{} is not set", crate::agent::config::OPENAI_API_KEY_VAR))?;
+
+    let mut builder = openai::CompletionsClient::builder().api_key(&api_key);
+    if let Some(base_url) = &config.base_url {
+        builder = builder.base_url(base_url);
+    }
+    builder.build().map_err(Into::into)
 }
 
 /// Builds the assistant history message for a cancelled turn from whatever

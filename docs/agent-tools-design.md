@@ -95,8 +95,11 @@ actions. No step-by-step workflows.
 
 ## Config
 
-Provider/model selection and API key via environment variables through the
-existing rig provider path. No configuration UI in v1.
+Provider/model selection, base URL, and the bash/fs tool tuning and
+turn-loop guard values on this page all flow through Horizon's single TOML
+config file plus environment variables (env wins) — see `AGENTS.md`'s
+"Configuration" section and `config.example.toml` for the full precedence
+and knob list. The API key stays environment-only. No configuration UI.
 
 ## Where the Industry Diverges — Our Choices
 

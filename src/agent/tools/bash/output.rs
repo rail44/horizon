@@ -1,9 +1,5 @@
 use std::path::PathBuf;
 
-/// In-context output cap, in characters (`docs/agent-tools-design.md`,
-/// "Bash Semantics": "~30k chars, head+tail preserved").
-pub(super) const IN_CONTEXT_CAP_CHARS: usize = 30_000;
-
 /// The in-context view of a bash call's captured output: `shown` is what
 /// goes in the tool result (head+tail plus a truncation notice if `full`
 /// was over the cap), `truncated` says whether that happened.
@@ -12,22 +8,24 @@ pub(super) struct Capped {
     pub(super) truncated: bool,
 }
 
-/// Caps `full` to `IN_CONTEXT_CAP_CHARS`, preserving a head and a tail
-/// half with an explicit truncation notice in between — the "shipping
-/// standard across Claude Code, goose, Cline, Codex" per the design doc.
-/// Character-counted (not byte-counted) so multi-byte UTF-8 is never split
-/// mid-codepoint.
-pub(super) fn cap(full: &str) -> Capped {
+/// Caps `full` to `cap_chars` (`agent::config::BashToolConfig::
+/// output_cap_chars`, `[agent].bash_output_cap_chars` in the config file —
+/// defaults to 30k, `docs/agent-tools-design.md`'s "Bash Semantics": "~30k
+/// chars, head+tail preserved"), preserving a head and a tail half with an
+/// explicit truncation notice in between — the "shipping standard across
+/// Claude Code, goose, Cline, Codex" per the design doc. Character-counted
+/// (not byte-counted) so multi-byte UTF-8 is never split mid-codepoint.
+pub(super) fn cap(full: &str, cap_chars: usize) -> Capped {
     let chars: Vec<char> = full.chars().collect();
-    if chars.len() <= IN_CONTEXT_CAP_CHARS {
+    if chars.len() <= cap_chars {
         return Capped {
             shown: full.to_string(),
             truncated: false,
         };
     }
 
-    let head_len = IN_CONTEXT_CAP_CHARS / 2;
-    let tail_len = IN_CONTEXT_CAP_CHARS - head_len;
+    let head_len = cap_chars / 2;
+    let tail_len = cap_chars - head_len;
     let omitted = chars.len() - head_len - tail_len;
     let head: String = chars[..head_len].iter().collect();
     let tail: String = chars[chars.len() - tail_len..].iter().collect();

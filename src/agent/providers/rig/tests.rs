@@ -10,10 +10,17 @@ use super::mapping::{
 };
 use super::session::{
     append_cancelled_tool_results_to_history, halt_turn_loop, tool_result_fingerprint, GuardHalt,
-    TurnLoopGuard, DOOM_LOOP_WINDOW, TOOL_TURN_ITERATION_CAP,
+    TurnLoopGuard,
 };
 use super::*;
 use crate::agent::config::RigAgentConfig;
+
+/// Mirrors the built-in defaults in `agent::config` (`DEFAULT_ITERATION_CAP`/
+/// `DEFAULT_DOOM_LOOP_WINDOW`) for these guard-logic unit tests, which
+/// exercise `TurnLoopGuard` directly rather than through config precedence
+/// (that precedence is covered in `agent::config`'s own tests).
+const TEST_ITERATION_CAP: u32 = 25;
+const TEST_DOOM_LOOP_WINDOW: usize = 3;
 use crate::agent::contract::{
     Command, Event, Message as AgentMessage, MessageDelta, MessageRole, Provider as AgentProvider,
     ProviderEvent, ProviderId, SessionState, StartSession, ToolCallId, ToolCallRequest,
@@ -389,9 +396,9 @@ fn cancelled_partial_assistant_message_keeps_streamed_text_and_tool_calls() {
 
 #[test]
 fn turn_loop_guard_iteration_cap_triggers_at_boundary() {
-    let mut guard = TurnLoopGuard::new();
+    let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
 
-    for _ in 0..TOOL_TURN_ITERATION_CAP {
+    for _ in 0..TEST_ITERATION_CAP {
         assert_eq!(guard.record_tool_turn(), None);
     }
 
@@ -403,14 +410,14 @@ fn turn_loop_guard_iteration_cap_triggers_at_boundary() {
 
 #[test]
 fn turn_loop_guard_iteration_cap_resets_on_reset() {
-    let mut guard = TurnLoopGuard::new();
-    for _ in 0..TOOL_TURN_ITERATION_CAP {
+    let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
+    for _ in 0..TEST_ITERATION_CAP {
         guard.record_tool_turn();
     }
 
     guard.reset();
 
-    for _ in 0..TOOL_TURN_ITERATION_CAP {
+    for _ in 0..TEST_ITERATION_CAP {
         assert_eq!(guard.record_tool_turn(), None);
     }
     assert_eq!(
@@ -421,7 +428,7 @@ fn turn_loop_guard_iteration_cap_resets_on_reset() {
 
 #[test]
 fn turn_loop_guard_fingerprint_triggers_on_three_identical() {
-    let mut guard = TurnLoopGuard::new();
+    let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
     let fingerprint = 0xABCDu64;
 
     assert_eq!(guard.record_fingerprint(fingerprint), None);
@@ -434,16 +441,16 @@ fn turn_loop_guard_fingerprint_triggers_on_three_identical() {
 
 #[test]
 fn turn_loop_guard_fingerprint_does_not_trigger_on_varying_fingerprints() {
-    let mut guard = TurnLoopGuard::new();
+    let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
 
-    for fingerprint in 0..(DOOM_LOOP_WINDOW as u64 * 2) {
+    for fingerprint in 0..(TEST_DOOM_LOOP_WINDOW as u64 * 2) {
         assert_eq!(guard.record_fingerprint(fingerprint), None);
     }
 }
 
 #[test]
 fn turn_loop_guard_reset_clears_fingerprint_window() {
-    let mut guard = TurnLoopGuard::new();
+    let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
     let fingerprint = 42u64;
     guard.record_fingerprint(fingerprint);
     guard.record_fingerprint(fingerprint);
@@ -496,8 +503,8 @@ fn halt_turn_loop_records_real_result_and_cancels_only_other_pending_calls() {
         call_id: id_a.clone(),
         output: serde_json::json!({ "tab_count": 2 }),
     };
-    let mut guard = TurnLoopGuard::new();
-    for _ in 0..=TOOL_TURN_ITERATION_CAP {
+    let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
+    for _ in 0..=TEST_ITERATION_CAP {
         guard.record_tool_turn();
     }
     let (tx, rx) = crossbeam_channel::unbounded();
@@ -559,7 +566,7 @@ fn halt_turn_loop_records_real_result_and_cancels_only_other_pending_calls() {
     );
 
     // The guard was reset: a fresh allowance of tool turns is available.
-    for _ in 0..TOOL_TURN_ITERATION_CAP {
+    for _ in 0..TEST_ITERATION_CAP {
         assert_eq!(guard.record_tool_turn(), None);
     }
 }
@@ -572,6 +579,7 @@ fn start_fallback_rig_session() -> (
         RigAgentConfig {
             openai_enabled: false,
             model: "unused-in-fallback-mode".to_string(),
+            ..Default::default()
         },
         None,
     );
@@ -615,7 +623,7 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
     // the tool again — a self-sustaining tool loop, exactly what the cap
     // exists to stop. Distinct outputs keep doom-loop detection out of the
     // way so the iteration cap is what trips.
-    for i in 0..TOOL_TURN_ITERATION_CAP {
+    for i in 0..TEST_ITERATION_CAP {
         let _ = tx.send(Command::ToolCallResult(ToolCallResult {
             call_id: call_id.clone(),
             output: serde_json::json!({ "loop_again": true, "n": i }),
@@ -716,7 +724,7 @@ fn rig_session_drops_unsolicited_tool_result_without_running_a_turn() {
 
 #[test]
 fn doom_loop_does_not_trip_on_identical_outputs_with_different_args() {
-    let mut guard = TurnLoopGuard::new();
+    let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
     let empty_matches = serde_json::json!({ "matches": [] });
 
     // Three distinct greps that all found nothing: identical outputs, but
@@ -734,7 +742,7 @@ fn doom_loop_does_not_trip_on_identical_outputs_with_different_args() {
 
 #[test]
 fn doom_loop_trips_on_three_identical_tool_args_output_fingerprints() {
-    let mut guard = TurnLoopGuard::new();
+    let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
     let args = serde_json::json!({ "pattern": "alpha" });
     let output = serde_json::json!({ "matches": [] });
 

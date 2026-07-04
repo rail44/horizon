@@ -2,7 +2,8 @@ use floem::action::{set_ime_allowed, set_ime_cursor_area};
 use floem::event::{Event, EventPropagation};
 use floem::prelude::*;
 
-use crate::app::keymap::is_palette_open_key;
+use crate::app::command_actions::{execute_command, CommandActionState, CommandInvocation};
+use crate::app::keymap::{is_palette_open_key, Keymap};
 use crate::control_surface::{handle_control_key, open_palette, ControlMode};
 use crate::terminal::TerminalCommand;
 use crate::workspace::{
@@ -107,8 +108,32 @@ impl AppInput {
                 open_palette(open_palette_state(&self.state));
                 return EventPropagation::Stop;
             }
+
+            // Config-driven command keybindings (`[keybindings]`, see
+            // `app::keymap::Keymap`) — checked last, as a fallback under
+            // whatever the palette itself didn't already claim. Note this
+            // only ever sees a key that the active pane's own handler left
+            // unclaimed: a terminal pane in particular treats most Ctrl/Alt
+            // combinations as control input to the shell and consumes them
+            // before they can bubble up here (see `workspace::input::
+            // handle_terminal_key`) — the same reason only `Ctrl+P` above is
+            // special-cased at every layer today.
+            if let Some(command_id) = Keymap::global().command_for(key_event) {
+                execute_command(
+                    CommandInvocation::Simple(command_id),
+                    self.command_action_state(),
+                );
+                return EventPropagation::Stop;
+            }
         }
 
         EventPropagation::Continue
+    }
+
+    fn command_action_state(&self) -> CommandActionState {
+        CommandActionState {
+            runtime: self.state.session_runtime_state(),
+            pane_focus_requests: self.state.pane_focus_requests,
+        }
     }
 }

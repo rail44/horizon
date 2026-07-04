@@ -297,7 +297,9 @@ pub(crate) fn find_agent_turn_in_flight(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::config::{AgentConfig, AgentPersistenceConfig, RigAgentConfig};
+    use crate::agent::config::{
+        AgentConfig, AgentPersistenceConfig, AgentToolsConfig, RigAgentConfig,
+    };
     use crate::agent::contract::{ApprovalRequest, SessionHandle, SessionState};
     use crate::agent::frame::{AgentFrame, AgentFrameItem};
     use crate::workspace::PaneKind;
@@ -307,6 +309,7 @@ mod tests {
             rig: RigAgentConfig {
                 openai_enabled: false,
                 model: "test".to_string(),
+                ..Default::default()
             },
             persistence: AgentPersistenceConfig {
                 event_log_path: std::env::temp_dir().join(format!(
@@ -315,6 +318,7 @@ mod tests {
                 )),
                 duckdb_path: None,
             },
+            tools: AgentToolsConfig::default(),
         }
     }
 

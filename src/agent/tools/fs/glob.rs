@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 
 use super::error_output;
 use super::safety::resolve_path;
-use super::traverse::{self, MAX_VISITED_FILES};
+use super::traverse;
 use crate::agent::tools::state::ToolSessionState;
 
 /// Default number of matches returned when the caller doesn't pass `limit`.
@@ -36,6 +36,7 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
         Err(error) => return error_output(format!("invalid glob pattern `{pattern}`: {error}")),
     };
 
+    let traversal_max_files = tool_state.tools_config().fs.traversal_max_files;
     let mut matches = Vec::new();
     let mut total_matches = 0usize;
     let mut visited = 0usize;
@@ -44,7 +45,7 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
         if !entry.file_type().is_file() {
             continue;
         }
-        if visited >= MAX_VISITED_FILES {
+        if visited >= traversal_max_files {
             scan_truncated = true;
             break;
         }

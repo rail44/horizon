@@ -1,0 +1,153 @@
+//! Horizon's single configuration file.
+//!
+//! See `AGENTS.md`'s "Configuration" section for the user-facing summary
+//! and `config.example.toml` at the repo root for every knob with its
+//! default. This module owns locating and parsing the TOML file into a
+//! [`RawConfig`]; `agent::config`, `app::keymap`, and `ui::theme` each read
+//! the section relevant to them and apply their own env-var precedence and
+//! built-in defaults on top (env var > this file > built-in default).
+//!
+//! Design choices:
+//! - **One location, no layered merging.** Unlike tools that merge a
+//!   system/user/project config chain, Horizon reads exactly one file:
+//!   `$XDG_CONFIG_HOME/horizon/config.toml`, falling back to
+//!   `~/.config/horizon/config.toml`, overridable wholesale via
+//!   `HORIZON_CONFIG` (mainly for tests and for running more than one
+//!   Horizon configuration side by side). Simpler to reason about at this
+//!   project's size than a merged chain.
+//! - **Never crash on a bad file.** A missing file is the common case
+//!   (defaults apply, silently); a present-but-unparsable file falls back
+//!   to defaults with a warning on stderr — the same "warn and skip, never
+//!   fail startup" policy `app::keymap` and `ui::theme` apply per-entry to
+//!   an unrecognized keybinding or theme color.
+//! - **Applied at startup only.** Nothing here watches the file for
+//!   changes; restart Horizon to pick up edits.
+//! - **Secrets stay out.** Nothing under `[provider]` accepts an API key —
+//!   `OPENAI_API_KEY` (and any future provider secret) is environment-only.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+use serde::Deserialize;
+
+/// Overrides the config file path outright, bypassing the XDG/home lookup
+/// below entirely. Primarily for tests and for running multiple Horizon
+/// configurations side by side.
+const CONFIG_PATH_VAR: &str = "HORIZON_CONFIG";
+const XDG_CONFIG_HOME_VAR: &str = "XDG_CONFIG_HOME";
+const HOME_VAR: &str = "HOME";
+
+/// The config file's schema. Every field is optional (or an empty map) so
+/// that a file which only sets a handful of knobs is valid, and so is no
+/// file at all (`RawConfig::default()`).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub(crate) struct RawConfig {
+    pub(crate) agent: RawAgentConfig,
+    pub(crate) provider: RawProviderConfig,
+    /// Key chord string (e.g. `"ctrl+shift+t"`) to `CommandId` string (e.g.
+    /// `"new-terminal"`) — parsed and validated by `app::keymap`.
+    pub(crate) keybindings: HashMap<String, String>,
+    /// Palette name (matching a `ui::theme` accessor, e.g. `"accent"`) to a
+    /// `#rrggbb`/`#rgb` hex string — parsed and validated by `ui::theme`.
+    pub(crate) theme: HashMap<String, String>,
+}
+
+/// `[agent]`: tuning values for the bash/fs tools and the turn-loop guards.
+/// See `agent::config::AgentToolsConfig` and `RigAgentConfig` for the
+/// built-in defaults each field falls back to when unset here.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(default)]
+pub(crate) struct RawAgentConfig {
+    pub(crate) bash_timeout_default_secs: Option<u64>,
+    pub(crate) bash_timeout_max_secs: Option<u64>,
+    pub(crate) bash_output_cap_chars: Option<usize>,
+    pub(crate) bash_drain_grace_secs: Option<u64>,
+    pub(crate) fs_read_line_cap: Option<usize>,
+    pub(crate) fs_grep_max_bytes: Option<u64>,
+    pub(crate) fs_traversal_max_files: Option<usize>,
+    pub(crate) iteration_cap: Option<u32>,
+    pub(crate) doom_loop_window: Option<usize>,
+}
+
+/// `[provider]`: model selection and base URL for the built-in rig/OpenAI
+/// provider. Never a place for secrets — see the module doc.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(default)]
+pub(crate) struct RawProviderConfig {
+    pub(crate) model: Option<String>,
+    pub(crate) base_url: Option<String>,
+}
+
+/// Loads and caches the config file for the lifetime of the process. Config
+/// is applied at startup only, so every call after the first returns the
+/// same cached value instead of re-reading the file.
+pub(crate) fn load() -> &'static RawConfig {
+    static CONFIG: OnceLock<RawConfig> = OnceLock::new();
+    CONFIG.get_or_init(|| load_from_path(resolve_config_path().as_deref()))
+}
+
+fn resolve_config_path() -> Option<PathBuf> {
+    resolve_config_path_from(
+        std::env::var(CONFIG_PATH_VAR).ok(),
+        std::env::var(XDG_CONFIG_HOME_VAR).ok(),
+        std::env::var(HOME_VAR).ok(),
+    )
+}
+
+/// Pure path-resolution logic, factored out of [`resolve_config_path`] so it
+/// can be unit-tested without mutating process environment variables —
+/// `cargo test` runs tests in parallel within one process, so real env
+/// mutation in a test would race every other test reading the same
+/// variable.
+fn resolve_config_path_from(
+    horizon_config: Option<String>,
+    xdg_config_home: Option<String>,
+    home: Option<String>,
+) -> Option<PathBuf> {
+    if let Some(path) = non_empty(horizon_config) {
+        return Some(PathBuf::from(path));
+    }
+    let config_home = match non_empty(xdg_config_home) {
+        Some(dir) => PathBuf::from(dir),
+        None => PathBuf::from(non_empty(home)?).join(".config"),
+    };
+    Some(config_home.join("horizon").join("config.toml"))
+}
+
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.filter(|value| !value.is_empty())
+}
+
+fn load_from_path(path: Option<&Path>) -> RawConfig {
+    let Some(path) = path else {
+        return RawConfig::default();
+    };
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        // No file written yet is the common case, not a warning.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return RawConfig::default(),
+        Err(error) => {
+            eprintln!(
+                "horizon config: could not read {}: {error} -- using built-in defaults",
+                path.display()
+            );
+            return RawConfig::default();
+        }
+    };
+    parse(&contents).unwrap_or_else(|error| {
+        eprintln!(
+            "horizon config: could not parse {}: {error} -- using built-in defaults",
+            path.display()
+        );
+        RawConfig::default()
+    })
+}
+
+fn parse(contents: &str) -> Result<RawConfig, toml::de::Error> {
+    toml::from_str(contents)
+}
+
+#[cfg(test)]
+mod tests;

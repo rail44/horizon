@@ -7,36 +7,32 @@ use serde_json::{json, Value};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command as TokioCommand;
 
+use crate::agent::config::BashToolConfig;
 use crate::agent::contract::ToolCallId;
 
 use super::output::{self, Capped};
 use super::registry::RegistryGuard;
 
-/// Wall-clock timeout default, in seconds (`docs/agent-tools-design.md`,
-/// "Bash Semantics": "default 120s").
-const DEFAULT_TIMEOUT_SECS: u64 = 120;
-/// Hard cap on the per-call `timeout_secs` override.
-const MAX_TIMEOUT_SECS: u64 = 600;
-/// How long to keep draining the output pipes after the bash child itself
-/// has exited. The child exiting does not guarantee the pipes hit EOF: a
-/// background process it left behind (`some-server &`) inherits the write
-/// ends and can hold them open indefinitely — bash does not wait for
-/// background jobs. Without this bound, such a command would hang the call
-/// forever, *after* the point where cancellation can still kill anything
-/// (the child is already dead). On expiry the pump tasks are aborted and
-/// the call returns with whatever output was captured.
-const DRAIN_GRACE: Duration = Duration::from_secs(2);
-
 /// Runs one bash call to completion (or until it times out / fails to
 /// spawn), synchronously from the caller's point of view. Called on a
 /// dedicated background thread (see `bash::spawn`) — never on the UI
 /// thread, since a command may legitimately run for the whole timeout.
+/// `config` carries the timeout/output-cap/drain-grace knobs (`[agent]` in
+/// the config file, `agent::config::BashToolConfig`; see its fields'
+/// doc comments for the constants they replaced).
 pub(super) fn run(
     call_id: &ToolCallId,
     input: &Value,
     cwd_handle: &Arc<StdMutex<PathBuf>>,
+    config: &BashToolConfig,
 ) -> Value {
-    run_inner(call_id, input, cwd_handle, DRAIN_GRACE)
+    run_inner(
+        call_id,
+        input,
+        cwd_handle,
+        Duration::from_secs(config.drain_grace_secs),
+        config,
+    )
 }
 
 /// Test hook: `run` with a shortened post-exit drain bound, so tests of the
@@ -48,8 +44,9 @@ pub(super) fn run_with_drain_grace(
     input: &Value,
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     drain_grace: Duration,
+    config: &BashToolConfig,
 ) -> Value {
-    run_inner(call_id, input, cwd_handle, drain_grace)
+    run_inner(call_id, input, cwd_handle, drain_grace, config)
 }
 
 fn run_inner(
@@ -57,15 +54,16 @@ fn run_inner(
     input: &Value,
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     drain_grace: Duration,
+    config: &BashToolConfig,
 ) -> Value {
     let Some(command) = input.get("command").and_then(Value::as_str) else {
-        return error_output("bash requires a `command` string argument", None);
+        return error_output("bash requires a `command` string argument", None, config);
     };
     if command.trim().is_empty() {
-        return error_output("bash requires a non-empty `command` string", None);
+        return error_output("bash requires a non-empty `command` string", None, config);
     }
 
-    let timeout = resolve_timeout(input);
+    let timeout = resolve_timeout(input, config);
     let cwd = cwd_handle
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -78,6 +76,7 @@ fn run_inner(
         return error_output(
             "failed to start bash: could not create an async runtime",
             None,
+            config,
         );
     };
 
@@ -88,15 +87,16 @@ fn run_inner(
         drain_grace,
         &cwd,
         cwd_handle,
+        config,
     ))
 }
 
-fn resolve_timeout(input: &Value) -> Duration {
+fn resolve_timeout(input: &Value, config: &BashToolConfig) -> Duration {
     let secs = input
         .get("timeout_secs")
         .and_then(Value::as_u64)
-        .unwrap_or(DEFAULT_TIMEOUT_SECS);
-    Duration::from_secs(secs.clamp(1, MAX_TIMEOUT_SECS))
+        .unwrap_or(config.timeout_default_secs);
+    Duration::from_secs(secs.clamp(1, config.timeout_max_secs))
 }
 
 async fn run_async(
@@ -106,6 +106,7 @@ async fn run_async(
     drain_grace: Duration,
     cwd: &Path,
     cwd_handle: &Arc<StdMutex<PathBuf>>,
+    config: &BashToolConfig,
 ) -> Value {
     let script = wrapped_script(command);
     let mut cmd = TokioCommand::new("bash");
@@ -121,7 +122,7 @@ async fn run_async(
     let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(error) => {
-            return error_output(&format!("failed to start bash: {error}"), None);
+            return error_output(&format!("failed to start bash: {error}"), None, config);
         }
     };
 
@@ -183,7 +184,7 @@ async fn run_async(
     let raw_stderr = take(&stderr_buf);
 
     let mut value = if killed {
-        timeout_output(timeout, raw_stdout)
+        timeout_output(timeout, raw_stdout, config)
     } else {
         match outcome {
             // `status.code()` is `None` on unix when the process was
@@ -194,12 +195,13 @@ async fn run_async(
             // handled above via `killed`; this covers every other way the
             // child can end up signalled.
             Ok(Ok(status)) if status.code().is_some() => {
-                success_output(status, raw_stdout, raw_stderr, cwd_handle)
+                success_output(status, raw_stdout, raw_stderr, cwd_handle, config)
             }
-            Ok(Ok(status)) => terminated_output(status, raw_stdout),
+            Ok(Ok(status)) => terminated_output(status, raw_stdout, config),
             Ok(Err(wait_error)) => error_output(
                 &format!("failed to wait for bash: {wait_error}"),
                 Some(raw_stdout),
+                config,
             ),
             Err(_) => unreachable!("timeout path already handled above"),
         }
@@ -264,11 +266,12 @@ fn success_output(
     raw_stdout: Vec<u8>,
     raw_stderr: Vec<u8>,
     cwd_handle: &Arc<StdMutex<PathBuf>>,
+    config: &BashToolConfig,
 ) -> Value {
     let mut shown_source = String::from_utf8_lossy(&raw_stdout).into_owned();
     apply_cwd_report(&raw_stderr, cwd_handle, &mut shown_source);
 
-    let Capped { shown, truncated } = output::cap(&shown_source);
+    let Capped { shown, truncated } = output::cap(&shown_source, config.output_cap_chars);
     let output_file = output::spill(&shown_source);
 
     json!({
@@ -307,13 +310,14 @@ fn apply_cwd_report(
     shown_source.push_str(trimmed);
 }
 
-fn timeout_output(timeout: Duration, raw_stdout: Vec<u8>) -> Value {
+fn timeout_output(timeout: Duration, raw_stdout: Vec<u8>, config: &BashToolConfig) -> Value {
     error_output(
         &format!(
             "bash command timed out after {}s and was killed",
             timeout.as_secs()
         ),
         Some(raw_stdout),
+        config,
     )
 }
 
@@ -323,10 +327,11 @@ fn timeout_output(timeout: Duration, raw_stdout: Vec<u8>) -> Value {
 /// intentionally sends a process a fatal signal (see `bash::kill_if_running`
 /// and the process-group kill it performs, called for a still-running
 /// call whose turn was cancelled).
-fn terminated_output(status: ExitStatus, raw_stdout: Vec<u8>) -> Value {
+fn terminated_output(status: ExitStatus, raw_stdout: Vec<u8>, config: &BashToolConfig) -> Value {
     error_output(
         &format!("bash command was terminated{}", signal_suffix(status)),
         Some(raw_stdout),
+        config,
     )
 }
 
@@ -344,12 +349,12 @@ fn signal_suffix(_status: ExitStatus) -> String {
     String::new()
 }
 
-fn error_output(message: &str, partial_output: Option<Vec<u8>>) -> Value {
+fn error_output(message: &str, partial_output: Option<Vec<u8>>, config: &BashToolConfig) -> Value {
     match partial_output {
         None => json!({ "is_error": true, "message": message }),
         Some(raw) => {
             let source = String::from_utf8_lossy(&raw).into_owned();
-            let Capped { shown, truncated } = output::cap(&source);
+            let Capped { shown, truncated } = output::cap(&source, config.output_cap_chars);
             let output_file = output::spill(&source);
             json!({
                 "is_error": true,

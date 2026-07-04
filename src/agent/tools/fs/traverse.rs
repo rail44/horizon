@@ -8,18 +8,6 @@ use walkdir::{DirEntry, WalkDir};
 /// and often full of binary or generated content.
 pub(super) const SKIPPED_DIR_NAMES: &[&str] = &[".git", "target", "node_modules"];
 
-/// Maximum number of files a single `fs.glob`/`fs.grep` traversal will
-/// visit before stopping early, independent of how many results match or
-/// are returned. Bounds worst-case latency when `base_path` is broader than
-/// intended (e.g. a repo root instead of a subdirectory).
-///
-/// Shrunk under `cfg(test)` so the cap-tripping path can be exercised with a
-/// handful of files instead of creating tens of thousands of them on disk.
-#[cfg(not(test))]
-pub(super) const MAX_VISITED_FILES: usize = 20_000;
-#[cfg(test)]
-pub(super) const MAX_VISITED_FILES: usize = 20;
-
 /// The note surfaced in a tool result when a traversal cap (file count or,
 /// for `fs.grep`, total bytes read) cut a scan short, so the model can
 /// adapt — narrow `base_path`/`pattern` — instead of silently receiving
@@ -43,8 +31,9 @@ fn is_skipped_dir(entry: &DirEntry) -> bool {
 
 /// A `WalkDir` over `base` that prunes `SKIPPED_DIR_NAMES` directories
 /// (never descending into them at all). Callers are responsible for
-/// enforcing `MAX_VISITED_FILES` (and, for `fs.grep`, a byte budget) since
-/// only they know how to report which cap tripped.
+/// enforcing the traversal file-count cap (`agent::config::FsToolConfig::
+/// traversal_max_files`, and for `fs.grep` a byte budget too) since only
+/// they know how to report which cap tripped.
 pub(super) fn walk(base: &Path) -> impl Iterator<Item = DirEntry> {
     WalkDir::new(base)
         .into_iter()

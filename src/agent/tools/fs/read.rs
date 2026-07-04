@@ -6,8 +6,6 @@ use super::error_output;
 use super::safety::resolve_path;
 use crate::agent::tools::state::ToolSessionState;
 
-/// Default number of lines returned when the caller doesn't pass `limit`.
-const DEFAULT_LIMIT: usize = 2000;
 /// Per-line character cap, independent of `limit`, so one absurdly long
 /// line can't blow out the tool result.
 const MAX_LINE_LEN: usize = 2000;
@@ -50,7 +48,7 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
         .get("limit")
         .and_then(Value::as_u64)
         .map(|limit| limit as usize)
-        .unwrap_or(DEFAULT_LIMIT)
+        .unwrap_or(tool_state.tools_config().fs.read_line_cap)
         .max(1);
 
     let lines: Vec<&str> = content.lines().collect();

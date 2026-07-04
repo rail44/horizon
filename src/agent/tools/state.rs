@@ -7,13 +7,15 @@ use std::{
     time::SystemTime,
 };
 
+use crate::agent::config::{AgentToolsConfig, BashToolConfig};
 use crate::agent::live::LiveState;
 use crate::agent::tools::bash::BashCompletion;
 use crate::session::SessionId;
 
 /// Per-session file-tool state: the workspace root every absolute path is
-/// confined to, and the mtimes recorded by `fs.read`/`fs.write`/`fs.edit`
-/// for the staleness gate (`docs/agent-tools-design.md`, "Edit Semantics").
+/// confined to, the mtimes recorded by `fs.read`/`fs.write`/`fs.edit` for
+/// the staleness gate (`docs/agent-tools-design.md`, "Edit Semantics"), and
+/// the resolved `[agent]` tool tuning (`agent::config::AgentToolsConfig`).
 /// v1 confines every session to a single root: the process's current
 /// directory, canonicalized at session start (see `for_current_dir`).
 #[derive(Clone)]
@@ -36,22 +38,27 @@ struct Inner {
     /// `Send`-able out of this otherwise UI-thread-confined struct. Bash is
     /// deliberately not confined to `workspace_root`; approval is its gate.
     bash_cwd: Arc<Mutex<PathBuf>>,
+    /// Resolved `[agent]` tuning for the bash/fs tools, read once when this
+    /// state is created (config is applied at startup only — see
+    /// `AGENTS.md`). `Copy`, so cheap to store by value here and to clone
+    /// out via `tools_config`/`bash_config`.
+    tools: AgentToolsConfig,
 }
 
 impl ToolSessionState {
     #[cfg(test)]
     pub(crate) fn new(workspace_root: PathBuf) -> Self {
-        Self::with_root(Some(workspace_root))
+        Self::with_root(Some(workspace_root), AgentToolsConfig::default())
     }
 
     /// A session with no usable workspace root: every file-tool path
     /// resolution returns an `is_error` result.
     #[cfg(test)]
     pub(crate) fn without_root() -> Self {
-        Self::with_root(None)
+        Self::with_root(None, AgentToolsConfig::default())
     }
 
-    fn with_root(workspace_root: Option<PathBuf>) -> Self {
+    fn with_root(workspace_root: Option<PathBuf>, tools: AgentToolsConfig) -> Self {
         // Bash's initial tracked cwd is "the workspace root"
         // (`docs/agent-tools-design.md`); if no root could be established,
         // fall back to the raw (non-canonicalized) current directory, and
@@ -66,6 +73,7 @@ impl ToolSessionState {
                 workspace_root,
                 recorded_mtimes: RefCell::new(HashMap::new()),
                 bash_cwd: Arc::new(Mutex::new(bash_cwd)),
+                tools,
             }),
         }
     }
@@ -74,16 +82,33 @@ impl ToolSessionState {
     /// canonicalized. If the current directory can't be read or
     /// canonicalized, the session gets no root at all and every file-tool
     /// path is rejected with an actionable error — never a panic, and
-    /// never a fallback root that fails open.
+    /// never a fallback root that fails open. Also resolves `[agent]` tool
+    /// tuning from Horizon's config file/env (`AgentToolsConfig::from_env`)
+    /// — this is the one production call site
+    /// (`app/runtime/agent.rs::spawn_agent_session`), so config is read
+    /// once per agent session, applied at startup.
     pub(crate) fn for_current_dir() -> Self {
         let root = std::env::current_dir()
             .and_then(|dir| dir.canonicalize())
             .ok();
-        Self::with_root(root)
+        Self::with_root(root, AgentToolsConfig::from_env())
     }
 
     pub(crate) fn workspace_root(&self) -> Option<&Path> {
         self.inner.workspace_root.as_deref()
+    }
+
+    /// The resolved `[agent]` tool tuning for this session (bash + fs
+    /// knobs).
+    pub(crate) fn tools_config(&self) -> AgentToolsConfig {
+        self.inner.tools
+    }
+
+    /// Convenience accessor for just the bash slice of `tools_config` — the
+    /// value threaded onto the bash background thread by
+    /// `tools::approval::resolve_bash`.
+    pub(crate) fn bash_config(&self) -> BashToolConfig {
+        self.inner.tools.bash
     }
 
     pub(crate) fn record_mtime(&self, path: PathBuf, mtime: SystemTime) {

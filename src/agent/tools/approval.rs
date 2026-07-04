@@ -138,6 +138,7 @@ fn resolve_bash(
                 call_id,
                 request.input.clone(),
                 runtime.tool_state.bash_cwd_handle(),
+                runtime.tool_state.bash_config(),
                 runtime.bash_results.clone(),
             );
 

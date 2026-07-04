@@ -20,6 +20,7 @@ use std::sync::{Arc, Mutex};
 use crossbeam_channel::Sender;
 use serde_json::Value;
 
+use crate::agent::config::BashToolConfig;
 use crate::agent::contract::{ToolCallId, ToolCallResult};
 use crate::agent::frame::AgentFrame;
 
@@ -40,15 +41,20 @@ pub(crate) struct BashCompletion {
 /// bash_cwd_handle`) — read at the start of the call and updated in place
 /// if the command `cd`s, so the next call in this session picks it up.
 /// `result_tx` delivers the finished `BashCompletion` back to the UI
-/// thread; see the module doc for the full round trip.
+/// thread; see the module doc for the full round trip. `config` carries the
+/// timeout/output-cap/drain-grace knobs (`agent::config::BashToolConfig`,
+/// `[agent]` in the config file) — a plain `Copy` value rather than the
+/// `Rc`-based `ToolSessionState` it was read from, since it has to cross
+/// onto this background thread.
 pub(crate) fn spawn(
     call_id: ToolCallId,
     input: Value,
     cwd: Arc<Mutex<PathBuf>>,
+    config: BashToolConfig,
     result_tx: Sender<BashCompletion>,
 ) {
     std::thread::spawn(move || {
-        let output = exec::run(&call_id, &input, &cwd);
+        let output = exec::run(&call_id, &input, &cwd, &config);
         let _ = result_tx.send(BashCompletion {
             result: ToolCallResult { call_id, output },
         });

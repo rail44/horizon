@@ -1,0 +1,121 @@
+# Horizon configuration (example / template).
+#
+# Location: Horizon reads exactly one config file, from exactly one place —
+# there is no layered system/user/project merge.
+#
+#     $XDG_CONFIG_HOME/horizon/config.toml
+#     (falls back to ~/.config/horizon/config.toml if XDG_CONFIG_HOME is unset)
+#
+# Copy this file there to start customizing Horizon, or point HORIZON_CONFIG
+# at a file anywhere else (mainly useful for testing, or for running more
+# than one Horizon configuration side by side):
+#
+#     HORIZON_CONFIG=/path/to/my-config.toml horizon
+#
+# Precedence: environment variable > this file > built-in default. Existing
+# env vars (HORIZON_RIG_MODEL, OPENAI_API_KEY, OPENAI_BASE_URL, ...) keep
+# winning over whatever is set below.
+#
+# Applied at startup only — restart Horizon after editing this file. Nothing
+# here is watched for live changes.
+#
+# Secrets never go here. OPENAI_API_KEY (and any future provider secret) is
+# environment-only; there is no field for it anywhere in this file.
+#
+# Philosophy: this file exists for values that are still being tuned. A
+# value that proves stable over time is a candidate to graduate into a
+# plain built-in default in a later Horizon version — don't assume every
+# knob below stays configurable forever.
+#
+# An invalid entry in [keybindings] or [theme] is warned about on stderr and
+# skipped — it never crashes startup. The same is true of this whole file:
+# if it fails to parse, Horizon logs a warning and falls back to built-in
+# defaults everywhere.
+
+# ---------------------------------------------------------------------------
+# [agent] — tuning for the agent's bash/fs tools and turn-loop guards.
+#
+# These are active (uncommented) below because they're the current
+# production defaults, shown here as a live, editable reference — not
+# because you need to set them. Delete a line (or the whole section) to
+# fall back to the same built-in default.
+# ---------------------------------------------------------------------------
+[agent]
+# Wall-clock timeout applied to a `bash` call when it doesn't pass its own
+# `timeout_secs`, in seconds.
+bash_timeout_default_secs = 120
+# Hard cap on the `timeout_secs` a `bash` call may request, in seconds.
+bash_timeout_max_secs = 600
+# How much of a `bash` call's combined stdout+stderr is kept in-context
+# (head+tail, with the middle elided); the full output is always spilled to
+# a temp file regardless. In characters, not bytes.
+bash_output_cap_chars = 30000
+# How long, after a `bash` child process exits, Horizon keeps waiting for
+# its output pipes to hit EOF before giving up — covers a command that
+# backgrounds a process holding the pipe open (`some-server &`). In seconds.
+bash_drain_grace_secs = 2
+
+# Default number of lines `fs.read` returns when a call doesn't pass its own
+# `limit`.
+fs_read_line_cap = 2000
+# Maximum total bytes of file content a single `fs.grep` traversal will read
+# before stopping early, independent of match count.
+fs_grep_max_bytes = 67108864
+# Maximum number of files a single `fs.glob`/`fs.grep` traversal will visit
+# before stopping early, independent of match count.
+fs_traversal_max_files = 20000
+
+# Consecutive tool-driven turns (since the last user message) the agent may
+# run before Horizon halts it as a likely runaway loop.
+iteration_cap = 25
+# Consecutive identical (tool, args, output) fingerprints that trip the
+# doom-loop guard.
+doom_loop_window = 3
+
+# ---------------------------------------------------------------------------
+# [provider] — the built-in rig/OpenAI provider's model and base URL.
+#
+# Commented out below: both fall back to a built-in default (or, for
+# base_url, to rig's own default endpoint) when unset here. `HORIZON_RIG_MODEL`
+# and `OPENAI_BASE_URL` env vars, if set, win over whatever is set here.
+# Never put an API key in this file — see the header above.
+# ---------------------------------------------------------------------------
+[provider]
+# model = "gpt-4o-mini"
+# base_url = "https://api.openai.com/v1"
+
+# ---------------------------------------------------------------------------
+# [keybindings] — key chord string -> command id, layered on top of
+# Horizon's built-in default bindings (overriding a default bound to the
+# same chord, or adding a new one).
+#
+# Chord syntax: modifiers joined with `+`, ending in the key itself —
+# `ctrl`/`control`, `shift`, `alt`/`option`, `meta`/`cmd`/`command`/`super`/
+# `win`, then a single character (`t`, `1`, ...) or a named key (`enter`,
+# `escape`, `tab`, `space`, `backspace`, `delete`, `up`/`arrowup`, `down`,
+# `left`, `right`, `home`, `end`, `pageup`, `pagedown`). Case-insensitive.
+#
+# Command ids (see `src/app/commands.rs`'s `CommandId`): new-terminal,
+# new-agent, split-active-pane, focus-next-pane, close-active-pane,
+# close-active-tab, terminate-active-session, approve-tool-call,
+# deny-tool-call, cancel-agent-turn.
+#
+# An unparsable chord or an unrecognized command id is warned about on
+# stderr and skipped — never a startup failure.
+# ---------------------------------------------------------------------------
+[keybindings]
+# "ctrl+shift+t" = "new-terminal"
+
+# ---------------------------------------------------------------------------
+# [theme] — named color overrides for the workspace palette, as
+# `#rrggbb`/`#rgb` hex strings (case-insensitive, leading `#` optional).
+#
+# Names (see `src/ui/theme.rs`): text_primary, text_muted, text_subtle,
+# accent, danger, surface_base, surface_panel, surface_raised,
+# surface_chrome, surface_selected, border_default, border_subtle.
+#
+# An unrecognized name or an unparsable hex value is warned about on stderr
+# and skipped, leaving that color at its built-in default.
+# ---------------------------------------------------------------------------
+[theme]
+# accent = "#84dcc6"
