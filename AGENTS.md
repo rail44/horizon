@@ -37,11 +37,14 @@ any work — run it yourself and make sure all three are clean:
 ```sh
 cargo fmt
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo nextest run --workspace
 ```
 
-`--workspace` is load-bearing: bare `cargo clippy`/`cargo test` from the
-repo root silently skip the `horizon-agentd`/`horizon-agent` crates.
+`--workspace` is load-bearing: bare `cargo clippy`/`cargo nextest run`
+from the repo root silently skip the `horizon-agentd`/`horizon-agent`
+crates. nextest runs each test in its own process (no cross-test env
+leakage) but does not run doctests; the workspace currently has none —
+add `cargo test --doc` here if that changes.
 
 The same gate runs as a pre-commit hook (`hooks/pre-commit`). One-time setup
 per clone:

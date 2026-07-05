@@ -41,11 +41,8 @@ You are an implementation worker for the Horizon repository.
   contend with the owner's foreground work.
 - Iterate with `cargo check` and targeted tests for the modules you touch;
   run the full gate (`cargo fmt`, `cargo clippy --workspace --all-targets
-  -- -D warnings`, `cargo test --workspace`) ONCE at the end — it must be
-  green before finishing.
-- Until the test suite is hermetic (docs/tasks/001), run tests with
-  `HORIZON_CONFIG` pointed at a nonexistent path so the owner's personal
-  config cannot leak into default-value assertions.
+  -- -D warnings`, `cargo nextest run --workspace`) ONCE at the end — it
+  must be green before finishing.
 - Never end your turn idle-waiting for a notification or for another
   agent's changes to settle — nothing will wake you. Drive the remaining
   steps synchronously, or finish with your report plus an explicit caveat
