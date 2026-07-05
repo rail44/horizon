@@ -345,6 +345,12 @@ impl TerminalTextView {
     /// instead of depending on how fast a test happens to run relative to
     /// that window.
     fn resize_terminal_at(&mut self, cols: usize, rows: usize, now: Instant) {
+        // Recover a pending resize stuck behind a lost trailing timer
+        // *before* the `last_size` dedup below can swallow the identical
+        // repaint that would otherwise be the only sign anything is wrong
+        // — see `resize::ResizeDebounce::flush_if_overdue`.
+        ResizeDebounce::flush_if_overdue(&self.resize_debounce, now);
+
         let cols = cols.clamp(1, u16::MAX as usize) as u16;
         let rows = rows.clamp(1, u16::MAX as usize) as u16;
         let size = TerminalSize {
@@ -669,6 +675,131 @@ mod tests {
             Ok(TerminalCommand::Resize(size)) => assert_eq!(size.cols, 90),
             other => panic!("expected an immediate Resize once the window elapsed, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn resize_terminal_recovers_an_overdue_pending_size_on_the_next_identical_repaint() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut view = TerminalTextView::new(
+            ViewId::new(),
+            TerminalViewState {
+                frame: TerminalFrame::from_text(String::new()),
+                preedit: None,
+            },
+            Some(tx),
+            Box::new(|| Point::ZERO),
+            Box::new(|_, _| {}),
+        );
+        view.metrics = TerminalMetrics {
+            cell_width: 9.0,
+            line_height: 18.0,
+        };
+
+        let settled = Instant::now() + resize::INITIAL_SETTLE_WINDOW + Duration::from_millis(10);
+
+        // Leading edge: forwarded immediately, opening the debounce window.
+        view.resize_terminal_at(80, 24, settled);
+        assert!(matches!(rx.try_recv(), Ok(TerminalCommand::Resize(_))));
+
+        // A size change inside the debounce window is deferred rather than
+        // forwarded immediately (mirrors
+        // `resize_terminal_dedups_repeated_unchanged_dimensions`).
+        view.resize_terminal_at(100, 30, settled + Duration::from_millis(5));
+        assert!(
+            rx.try_recv().is_err(),
+            "a size change inside the debounce window must not be forwarded immediately"
+        );
+
+        // The trailing `exec_after` timer that would normally deliver it is
+        // never invoked here, simulating it being lost. Instead, a later
+        // layout pass (Floem re-runs layout, and so calls `resize_terminal`,
+        // on every repaint) calls in again with the *same* final size —
+        // without recovery this would be swallowed entirely by the
+        // `last_size` dedup, since `last_size` already reflects 100x30 from
+        // the deferred request above, permanently sticking the pane at
+        // whatever size it last actually forwarded.
+        let overdue = settled + Duration::from_millis(5) + Duration::from_millis(150);
+        view.resize_terminal_at(100, 30, overdue);
+
+        match rx.try_recv() {
+            Ok(TerminalCommand::Resize(size)) => {
+                assert_eq!(size.cols, 100);
+                assert_eq!(size.rows, 30);
+            }
+            other => panic!(
+                "expected the overdue pending size to be recovered and flushed, got {other:?}"
+            ),
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "the recovery must flush the overdue size exactly once"
+        );
+    }
+
+    #[test]
+    fn resize_terminal_recovering_an_overdue_pending_size_does_not_double_send_a_newer_one() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut view = TerminalTextView::new(
+            ViewId::new(),
+            TerminalViewState {
+                frame: TerminalFrame::from_text(String::new()),
+                preedit: None,
+            },
+            Some(tx),
+            Box::new(|| Point::ZERO),
+            Box::new(|_, _| {}),
+        );
+        view.metrics = TerminalMetrics {
+            cell_width: 9.0,
+            line_height: 18.0,
+        };
+
+        let settled = Instant::now() + resize::INITIAL_SETTLE_WINDOW + Duration::from_millis(10);
+
+        view.resize_terminal_at(80, 24, settled);
+        assert!(matches!(rx.try_recv(), Ok(TerminalCommand::Resize(_))));
+
+        // Same setup as the identical-size recovery case above: a size
+        // change lands inside the debounce window and is deferred, and its
+        // trailing flush is never driven (simulating a lost `exec_after`
+        // timer).
+        view.resize_terminal_at(100, 30, settled + Duration::from_millis(5));
+        assert!(rx.try_recv().is_err());
+
+        // Unlike that case, the next call to reach `resize_terminal` carries
+        // a genuinely new size — e.g. the pane resized again before the
+        // stale pending was ever recovered. The overdue 100x30 must still
+        // be recovered and sent (losing it would be the bug this guards
+        // against), but the new 120x40 must be queued as the fresh pending
+        // rather than *also* going out in the same call, which would
+        // double-send two distinct sizes for one repaint.
+        let overdue = settled + Duration::from_millis(5) + Duration::from_millis(150);
+        view.resize_terminal_at(120, 40, overdue);
+
+        match rx.try_recv() {
+            Ok(TerminalCommand::Resize(size)) => {
+                assert_eq!(size.cols, 100);
+                assert_eq!(size.rows, 30);
+            }
+            other => panic!("expected the overdue stale pending to be recovered, got {other:?}"),
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "the newer size must be queued as pending, not also sent in the same call"
+        );
+
+        // The newer size is still correctly pending, having superseded the
+        // recovered one — flushing (as the trailing timer normally would)
+        // delivers it next.
+        resize::ResizeDebounce::flush(&view.resize_debounce, overdue + Duration::from_millis(20));
+        match rx.try_recv() {
+            Ok(TerminalCommand::Resize(size)) => {
+                assert_eq!(size.cols, 120);
+                assert_eq!(size.rows, 40);
+            }
+            other => panic!("expected the superseding size to flush next, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
