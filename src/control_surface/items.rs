@@ -1,5 +1,5 @@
 use crate::app::command_actions::{find_agent_turn_in_flight, find_pending_agent_approval};
-use crate::app::commands::{command_entries, filter_command_entries, CommandState};
+use crate::app::commands::{command_entries, filter_command_entries, CommandId, CommandState};
 use crate::control_surface::query::{normalize_palette_query, palette_matches};
 use crate::control_surface::{OverviewItem, PaletteItem};
 use crate::session::Frames;
@@ -10,6 +10,7 @@ pub(crate) fn command_state(workspace: &Workspace, frames: &Frames) -> CommandSt
         tab_count: workspace.tab_count(),
         visible_pane_count: workspace.visible_panes().len(),
         has_active_session: workspace.active_session_id().is_some(),
+        detached_session_count: workspace.detached_session_count(),
         has_pending_approval: find_pending_agent_approval(workspace, frames).is_some(),
         has_turn_in_flight: find_agent_turn_in_flight(workspace, frames).is_some(),
     }
@@ -61,16 +62,43 @@ pub(crate) fn palette_items(
     frames: &Frames,
     query: &str,
 ) -> Vec<PaletteItem> {
+    // `TerminateAllDetachedSessions` is excluded from the generic mapping
+    // below: `PaletteItem::Command` only ever renders `spec.title` verbatim
+    // (a static string), but this row's title must show the live detached
+    // count, and it must not be listed at all when there is nothing to
+    // clean up. Both are handled by the dedicated
+    // `PaletteItem::TerminateAllDetached` row appended further down —
+    // mirroring how `PaletteItem::TerminateSession` carries a per-session
+    // label instead of going through `Command(CommandEntry)`.
     let mut items: Vec<_> =
         filter_command_entries(command_entries(command_state(workspace, frames)), query)
             .into_iter()
+            .filter(|entry| entry.spec.id != CommandId::TerminateAllDetachedSessions)
             .map(PaletteItem::Command)
             .collect();
     let query = normalize_palette_query(query);
 
+    let detached_sessions = workspace.detached_session_summaries();
+    if !detached_sessions.is_empty()
+        && palette_matches(
+            &query,
+            &[
+                "terminate",
+                "all",
+                "detached",
+                "sessions",
+                "cleanup",
+                "bulk",
+            ],
+        )
+    {
+        items.push(PaletteItem::TerminateAllDetached {
+            count: detached_sessions.len(),
+        });
+    }
+
     items.extend(
-        workspace
-            .detached_session_summaries()
+        detached_sessions
             .into_iter()
             .filter(|session| {
                 let display_number = session.display_number.to_string();
@@ -159,6 +187,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_active_session: true,
+                detached_session_count: 0,
                 has_pending_approval: false,
                 has_turn_in_flight: false,
             }
@@ -171,6 +200,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 2,
                 has_active_session: true,
+                detached_session_count: 0,
                 has_pending_approval: false,
                 has_turn_in_flight: false,
             }
@@ -193,6 +223,33 @@ mod tests {
                 kind: SessionKind::Terminal,
                 ..
             } if *id == session_id
+        )));
+    }
+
+    #[test]
+    fn palette_items_offer_terminate_all_with_live_count_only_when_sessions_are_detached() {
+        let mut workspace = Workspace::mvp();
+
+        assert!(!palette_items(&workspace, &Frames::default(), "cleanup")
+            .iter()
+            .any(|item| matches!(item, PaletteItem::TerminateAllDetached { .. })));
+
+        let first = SessionId::new();
+        workspace.split_active(PaneKind::Terminal, Some(first));
+        workspace.close_visible_pane(1);
+        let second = SessionId::new();
+        workspace.split_active(PaneKind::Agent, Some(second));
+        workspace.close_visible_pane(1);
+
+        let items = palette_items(&workspace, &Frames::default(), "cleanup");
+        assert!(items
+            .iter()
+            .any(|item| matches!(item, PaletteItem::TerminateAllDetached { count: 2 })));
+        // The catalog `Command` row for the same `CommandId` is never
+        // listed — the dynamic-count row above replaces it.
+        assert!(!items.iter().any(|item| matches!(
+            item,
+            PaletteItem::Command(entry) if entry.spec.id == CommandId::TerminateAllDetachedSessions
         )));
     }
 

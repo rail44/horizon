@@ -1,5 +1,5 @@
 use crate::app::command_actions::{execute_command, CommandActionState, CommandInvocation};
-use crate::app::commands::clamp_palette_selection;
+use crate::app::commands::{clamp_palette_selection, CommandId};
 use crate::control_surface::{overview_items, palette_items, OverviewItem, PaletteItem};
 use crate::session::Frames;
 use crate::workspace::Workspace;
@@ -141,6 +141,12 @@ pub(crate) fn execute_palette_selection(state: PaletteActionState) {
         }
         PaletteItem::TerminateSession { session_id, .. } => {
             execute_command(CommandInvocation::TerminateSession { session_id }, command);
+        }
+        PaletteItem::TerminateAllDetached { .. } => {
+            execute_command(
+                CommandInvocation::Simple(CommandId::TerminateAllDetachedSessions),
+                command,
+            );
         }
     }
 }

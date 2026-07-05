@@ -43,6 +43,11 @@ fn palette_is_destructive(item: &PaletteItem) -> bool {
         // it's parameterized per session rather than catalog-based, but it
         // ends a session just the same, so it gets the same styling.
         PaletteItem::TerminateSession { .. } => true,
+        // Backed by `CommandId::TerminateAllDetachedSessions`, whose
+        // `CommandSpec::destructive` is `true` — hardcoded here to match
+        // since this row bypasses `Command(CommandEntry)` for its dynamic
+        // count title (see `PaletteItem::TerminateAllDetached`'s doc comment).
+        PaletteItem::TerminateAllDetached { .. } => true,
     }
 }
 
@@ -51,7 +56,9 @@ fn palette_kind_label(item: &PaletteItem) -> &'static str {
         PaletteItem::Command(_) => "COMMAND",
         PaletteItem::DetachedSession { .. } => "SESSION",
         PaletteItem::Tab { .. } => "TAB",
-        PaletteItem::TerminateSession { .. } => "TERMINATE",
+        PaletteItem::TerminateSession { .. } | PaletteItem::TerminateAllDetached { .. } => {
+            "TERMINATE"
+        }
     }
 }
 
@@ -62,7 +69,9 @@ fn palette_kind_color(item: &PaletteItem) -> Color {
         PaletteItem::Tab { .. } => Color::from_rgb8(224, 184, 104),
         // Overridden by `effective_badge_color` since this row is always
         // destructive, but still a real value in case that changes.
-        PaletteItem::TerminateSession { .. } => theme::danger(),
+        PaletteItem::TerminateSession { .. } | PaletteItem::TerminateAllDetached { .. } => {
+            theme::danger()
+        }
     }
 }
 
@@ -72,6 +81,9 @@ fn palette_title(item: &PaletteItem) -> String {
         PaletteItem::DetachedSession { title, .. } => format!("Attach {title}"),
         PaletteItem::Tab { index, title, .. } => format!("Tab {}: {title}", index + 1),
         PaletteItem::TerminateSession { title, .. } => format!("Terminate {title}"),
+        PaletteItem::TerminateAllDetached { count } => {
+            format!("Terminate {count} detached session(s)")
+        }
     }
 }
 
@@ -105,6 +117,9 @@ fn palette_description(item: &PaletteItem) -> String {
             kind.label(),
             display_number
         ),
+        PaletteItem::TerminateAllDetached { count } => {
+            format!("End all {count} detached session(s) — this stops each one, not just its pane.")
+        }
     }
 }
 

@@ -7,6 +7,7 @@ pub(crate) enum CommandId {
     CloseActivePane,
     CloseActiveTab,
     TerminateActiveSession,
+    TerminateAllDetachedSessions,
     ApproveToolCall,
     DenyToolCall,
     CancelAgentTurn,
@@ -40,6 +41,7 @@ pub(crate) struct CommandState {
     pub(crate) tab_count: usize,
     pub(crate) visible_pane_count: usize,
     pub(crate) has_active_session: bool,
+    pub(crate) detached_session_count: usize,
     pub(crate) has_pending_approval: bool,
     pub(crate) has_turn_in_flight: bool,
 }
@@ -102,6 +104,13 @@ pub(crate) fn core_commands() -> Vec<CommandSpec> {
             destructive: true,
         },
         CommandSpec {
+            id: CommandId::TerminateAllDetachedSessions,
+            title: "Terminate All Detached Sessions",
+            category: CommandCategory::Workspace,
+            description: "Terminate every detached session (not attached to any pane).",
+            destructive: true,
+        },
+        CommandSpec {
             id: CommandId::ApproveToolCall,
             title: "Approve Pending Tool Call",
             category: CommandCategory::Agent,
@@ -142,6 +151,7 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
         CommandId::CloseActivePane => state.visible_pane_count > 1,
         CommandId::CloseActiveTab => state.tab_count > 1,
         CommandId::TerminateActiveSession => state.has_active_session,
+        CommandId::TerminateAllDetachedSessions => state.detached_session_count > 0,
         CommandId::ApproveToolCall | CommandId::DenyToolCall => state.has_pending_approval,
         CommandId::CancelAgentTurn => state.has_turn_in_flight,
     }
@@ -194,11 +204,13 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 11);
+        assert_eq!(commands.len(), 12);
         assert_eq!(commands[0].id, CommandId::NewTerminal);
         assert_eq!(commands[0].title, "New Terminal");
         assert_eq!(commands[6].id, CommandId::TerminateActiveSession);
         assert_eq!(commands[6].title, "Terminate Active Session");
+        assert_eq!(commands[7].id, CommandId::TerminateAllDetachedSessions);
+        assert_eq!(commands[7].title, "Terminate All Detached Sessions");
     }
 
     #[test]
@@ -210,12 +222,15 @@ mod tests {
     }
 
     #[test]
-    fn only_terminate_active_session_is_marked_destructive() {
+    fn only_terminate_commands_are_marked_destructive() {
         for command in core_commands() {
+            let expected = matches!(
+                command.id,
+                CommandId::TerminateActiveSession | CommandId::TerminateAllDetachedSessions
+            );
             assert_eq!(
-                command.destructive,
-                command.id == CommandId::TerminateActiveSession,
-                "{:?} should only be destructive if it's Terminate Active Session",
+                command.destructive, expected,
+                "{:?} should only be destructive if it terminates session(s)",
                 command.id
             );
         }
@@ -227,6 +242,7 @@ mod tests {
             tab_count: 1,
             visible_pane_count: 1,
             has_active_session: true,
+            detached_session_count: 0,
             has_pending_approval: false,
             has_turn_in_flight: false,
         });
@@ -251,6 +267,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 2,
                 has_active_session: true,
+                detached_session_count: 0,
                 has_pending_approval: false,
                 has_turn_in_flight: false,
             }
@@ -261,6 +278,7 @@ mod tests {
                 tab_count: 2,
                 visible_pane_count: 1,
                 has_active_session: true,
+                detached_session_count: 0,
                 has_pending_approval: false,
                 has_turn_in_flight: false,
             }
@@ -275,6 +293,7 @@ mod tests {
                 tab_count: 0,
                 visible_pane_count: 0,
                 has_active_session: false,
+                detached_session_count: 0,
                 has_pending_approval: false,
                 has_turn_in_flight: false,
             }
@@ -285,6 +304,33 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_active_session: true,
+                detached_session_count: 0,
+                has_pending_approval: false,
+                has_turn_in_flight: false,
+            }
+        ));
+    }
+
+    #[test]
+    fn terminate_all_detached_sessions_requires_detached_sessions() {
+        assert!(!command_enabled(
+            CommandId::TerminateAllDetachedSessions,
+            CommandState {
+                tab_count: 1,
+                visible_pane_count: 1,
+                has_active_session: true,
+                detached_session_count: 0,
+                has_pending_approval: false,
+                has_turn_in_flight: false,
+            }
+        ));
+        assert!(command_enabled(
+            CommandId::TerminateAllDetachedSessions,
+            CommandState {
+                tab_count: 1,
+                visible_pane_count: 1,
+                has_active_session: true,
+                detached_session_count: 2,
                 has_pending_approval: false,
                 has_turn_in_flight: false,
             }
@@ -299,6 +345,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_active_session: true,
+                detached_session_count: 0,
                 has_pending_approval: false,
                 has_turn_in_flight: false,
             }
@@ -309,6 +356,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_active_session: true,
+                detached_session_count: 0,
                 has_pending_approval: true,
                 has_turn_in_flight: false,
             }
@@ -319,6 +367,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_active_session: true,
+                detached_session_count: 0,
                 has_pending_approval: false,
                 has_turn_in_flight: false,
             }
@@ -329,6 +378,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_active_session: true,
+                detached_session_count: 0,
                 has_pending_approval: true,
                 has_turn_in_flight: false,
             }
@@ -343,6 +393,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_active_session: true,
+                detached_session_count: 0,
                 has_pending_approval: false,
                 has_turn_in_flight: false,
             }
@@ -353,6 +404,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_active_session: true,
+                detached_session_count: 0,
                 has_pending_approval: false,
                 has_turn_in_flight: true,
             }
@@ -365,6 +417,7 @@ mod tests {
             tab_count: 2,
             visible_pane_count: 2,
             has_active_session: true,
+            detached_session_count: 0,
             has_pending_approval: false,
             has_turn_in_flight: false,
         });

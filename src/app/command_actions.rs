@@ -210,6 +210,9 @@ fn execute_simple_command(command_id: CommandId, state: CommandActionState) {
         CommandId::TerminateActiveSession => {
             terminate_active_session(workspace, state.frames(), state.sessions());
         }
+        CommandId::TerminateAllDetachedSessions => {
+            terminate_all_detached_sessions(workspace, state.frames(), state.sessions());
+        }
         CommandId::ApproveToolCall => {
             let target = workspace.with_untracked(|ws| {
                 frames.with_untracked(|fr| find_pending_agent_approval(ws, fr))
@@ -325,6 +328,34 @@ fn terminate_session_by_id(
         return;
     }
     cleanup_terminated_session(session_id, frames, sessions);
+}
+
+/// `Simple(CommandId::TerminateAllDetachedSessions)`'s bulk cleanup: snapshots
+/// every currently-detached session id, then runs each through
+/// `terminate_session_by_id` — the exact same per-session machinery
+/// (`Workspace::terminate_session` + `cleanup_terminated_session`'s registry
+/// shutdown, runtime unregistration, and frame removal) that a single
+/// `CommandInvocation::TerminateSession` uses. The id list is snapshotted up
+/// front rather than recomputed each iteration, so a session detaching or
+/// attaching mid-loop (there is no way for one to today, since this all runs
+/// synchronously on the UI thread, but the snapshot makes it robust and
+/// matches the read-then-act shape `terminate_active_session` already uses)
+/// can't change which sessions this call targets. Attached sessions never
+/// appear in the snapshot, so they're left untouched.
+fn terminate_all_detached_sessions(
+    workspace: RwSignal<Workspace>,
+    frames: RwSignal<Frames>,
+    sessions: RwSignal<Registry>,
+) {
+    let detached_ids: Vec<SessionId> = workspace
+        .with_untracked(|ws| ws.detached_session_summaries())
+        .into_iter()
+        .map(|session| session.id)
+        .collect();
+
+    for session_id in detached_ids {
+        terminate_session_by_id(workspace, frames, sessions, session_id);
+    }
 }
 
 /// Registry/frame cleanup shared by both terminate paths above.
@@ -444,6 +475,7 @@ mod tests {
     use super::*;
     use crate::agent::contract::{ApprovalRequest, SessionHandle, SessionState};
     use crate::agent::frame::{AgentFrame, AgentFrameItem};
+    use crate::terminal::TerminalCommand;
     use crate::workspace::PaneKind;
 
     /// Builds a workspace with an agent session that has a pending approval
@@ -522,6 +554,78 @@ mod tests {
             runtime,
             pane_focus_requests: std::array::from_fn(|_| RwSignal::new(0_u64)),
         }
+    }
+
+    /// One attached terminal session plus two detached sessions (a terminal
+    /// and an agent) — the mixed fixture
+    /// `terminate_all_detached_sessions_ends_only_the_detached_sessions`
+    /// below needs to prove the bulk command leaves the attached session
+    /// alone. Registry entries mirror `detached_pending_approval_fixture`'s
+    /// channel setup so each session's cleanup (or lack of it) is
+    /// observable.
+    fn mixed_attached_and_detached_fixture() -> (
+        CommandActionState,
+        SessionId,
+        SessionId,
+        SessionId,
+        crossbeam_channel::Receiver<TerminalCommand>,
+        crossbeam_channel::Receiver<TerminalCommand>,
+        crossbeam_channel::Receiver<Command>,
+    ) {
+        let mut workspace = Workspace::mvp();
+        let attached_session = workspace
+            .active_terminal_session_id()
+            .expect("mvp() starts with an active terminal session");
+
+        let detached_terminal = SessionId::new();
+        workspace.split_active(PaneKind::Terminal, Some(detached_terminal));
+        workspace.close_visible_pane(1);
+
+        let detached_agent = SessionId::new();
+        workspace.split_active(PaneKind::Agent, Some(detached_agent));
+        workspace.close_visible_pane(1);
+
+        assert_eq!(
+            workspace.detached_session_count(),
+            2,
+            "fixture must start with exactly the two detached sessions under test"
+        );
+
+        let mut sessions = Registry::default();
+        let (attached_tx, attached_rx) = crossbeam_channel::unbounded();
+        sessions.insert_terminal(attached_session, attached_tx);
+        let (detached_terminal_tx, detached_terminal_rx) = crossbeam_channel::unbounded();
+        sessions.insert_terminal(detached_terminal, detached_terminal_tx);
+        let (detached_agent_tx, detached_agent_rx) = crossbeam_channel::unbounded();
+        let (_events_tx, events_rx) = crossbeam_channel::unbounded();
+        sessions.insert_agent(
+            detached_agent,
+            SessionHandle::new(detached_agent_tx, events_rx),
+        );
+
+        let runtime = SessionRuntimeState::new(
+            RwSignal::new(workspace),
+            RwSignal::new(Frames::default()),
+            RwSignal::new(sessions),
+            RwSignal::new(None),
+            None,
+            None,
+            RwSignal::new(None),
+        );
+        let state = CommandActionState {
+            runtime,
+            pane_focus_requests: std::array::from_fn(|_| RwSignal::new(0_u64)),
+        };
+
+        (
+            state,
+            attached_session,
+            detached_terminal,
+            detached_agent,
+            attached_rx,
+            detached_terminal_rx,
+            detached_agent_rx,
+        )
     }
 
     #[test]
@@ -694,5 +798,79 @@ mod tests {
             .with_untracked(|registry| registry.agent_sender(session_id))
             .is_none());
         assert!(matches!(rx.try_recv(), Ok(Command::Shutdown)));
+    }
+
+    #[test]
+    fn terminate_all_detached_sessions_ends_only_the_detached_sessions() {
+        let (
+            state,
+            attached_session,
+            detached_terminal,
+            detached_agent,
+            attached_rx,
+            detached_terminal_rx,
+            detached_agent_rx,
+        ) = mixed_attached_and_detached_fixture();
+        let workspace = state.workspace();
+        let sessions = state.sessions();
+
+        execute_command(
+            CommandInvocation::Simple(CommandId::TerminateAllDetachedSessions),
+            state,
+        );
+
+        // Both detached sessions are gone from the workspace, their
+        // registry senders are gone, and each received Shutdown.
+        let summaries = workspace.with_untracked(|ws| ws.session_summaries());
+        assert!(!summaries
+            .iter()
+            .any(|session| session.id == detached_terminal));
+        assert!(!summaries.iter().any(|session| session.id == detached_agent));
+        assert!(sessions
+            .with_untracked(|registry| registry.terminal_sender(detached_terminal))
+            .is_none());
+        assert!(sessions
+            .with_untracked(|registry| registry.agent_sender(detached_agent))
+            .is_none());
+        assert!(matches!(
+            detached_terminal_rx.try_recv(),
+            Ok(TerminalCommand::Shutdown)
+        ));
+        assert!(matches!(
+            detached_agent_rx.try_recv(),
+            Ok(Command::Shutdown)
+        ));
+
+        // The attached session survives untouched: still in the workspace
+        // and attached, its registry sender still live, no Shutdown sent.
+        assert!(summaries
+            .iter()
+            .any(|session| session.id == attached_session && session.attached));
+        assert!(sessions
+            .with_untracked(|registry| registry.terminal_sender(attached_session))
+            .is_some());
+        assert!(attached_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn terminate_all_detached_sessions_is_a_no_op_with_no_detached_sessions() {
+        let workspace = Workspace::mvp();
+        let active_session = workspace
+            .active_terminal_session_id()
+            .expect("mvp() starts with an active terminal session");
+        let state = test_command_action_state(workspace);
+
+        execute_command(
+            CommandInvocation::Simple(CommandId::TerminateAllDetachedSessions),
+            state.clone(),
+        );
+
+        assert_eq!(state.workspace().with_untracked(|ws| ws.session_count()), 1);
+        assert_eq!(
+            state
+                .workspace()
+                .with_untracked(|ws| ws.active_terminal_session_id()),
+            Some(active_session)
+        );
     }
 }

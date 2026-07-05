@@ -38,6 +38,18 @@ pub(crate) enum PaletteItem {
         display_number: usize,
         title: String,
     },
+    /// Bulk-terminate every detached session at once — the catalog
+    /// `CommandId::TerminateAllDetachedSessions`'s palette row. Its
+    /// `CommandSpec::title` is static ("Terminate All Detached Sessions"),
+    /// but the palette row must show the live count (e.g. "Terminate 3
+    /// detached session(s)"), so — like `TerminateSession` above — this is
+    /// its own variant carrying the dynamic value rather than
+    /// `Command(CommandEntry)`, which only ever renders `spec.title`
+    /// verbatim. `items::palette_items` only ever constructs this variant
+    /// when `count > 0`, so it is never shown as a dead/disabled row.
+    TerminateAllDetached {
+        count: usize,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -68,7 +80,10 @@ impl PaletteItem {
     pub(crate) fn enabled(&self) -> bool {
         match self {
             Self::Command(entry) => entry.enabled,
-            Self::DetachedSession { .. } | Self::Tab { .. } | Self::TerminateSession { .. } => true,
+            Self::DetachedSession { .. }
+            | Self::Tab { .. }
+            | Self::TerminateSession { .. }
+            | Self::TerminateAllDetached { .. } => true,
         }
     }
 }
