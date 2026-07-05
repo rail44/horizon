@@ -351,12 +351,10 @@ unchanged — every new code path added this step is reached only through
   duplication was in step 2 (no shared third crate for this yet). There is
   no UI to avoid blocking in this binary, so the simpler synchronous wait
   was preferred over threading a `WriterInit` channel through `main`.
-  **Skipped-lines status reporting is omitted**: a corrupt/torn-line summary
-  is logged to stderr but not surfaced anywhere a human using Horizon would
-  see it (Horizon's own `agent_state_status` bar has no equivalent
-  connection to agentd's startup read) — worth wiring once there's a
-  concrete signal agentd can push to Horizon for "startup diagnostics", not
-  invented here.
+  **Skipped-lines status reporting, later restored (see the trims-restored
+  addendum below)**: this step originally left the corrupt/torn-line
+  summary logged to stderr only, with no connection to Horizon's
+  `agent_state_status` bar.
 - **Connection loss surfaces an `Event::Error` per affected session, no
   auto-reconnect** (in scope for this step; reconnect is step 4).
   `agent::agentd_runtime::run_connection`'s read loop, on EOF or a
@@ -379,15 +377,15 @@ unchanged — every new code path added this step is reached only through
   should do across a reconnect; moving these maps to `AgentdState` is the
   likely shape of that change.
 - **The streaming tool-call-argument-preview feature
-  (`ToolCallProgress`/`ToolCallPreparing`) does not cross the wire.**
-  `session::handle_provider_event` filters out any `ProviderEvent` carrying
-  `tool_call_progress` before forwarding (it folds into agentd's own local
-  frame, which nothing reads, and is then dropped) rather than inventing a
+  (`ToolCallProgress`/`ToolCallPreparing`) originally did not cross the
+  wire, later restored (see the trims-restored addendum below).**
+  `session::handle_provider_event` filtered out any `ProviderEvent` carrying
+  `tool_call_progress` before forwarding (it folded into agentd's own local
+  frame, which nothing read, and was then dropped) rather than inventing a
   wire representation for it — the design's wire `Event` is `contract::
   Event`, which has no variant for this ephemeral, log-excluded signal. In
-  agentd mode, a tool call's arguments simply appear once fully formed
-  instead of streaming in; a real gap, not called out as in-scope to close
-  in this step.
+  agentd mode, a tool call's arguments simply appeared once fully formed
+  instead of streaming in.
 - **`horizon-agentd`'s connection handling is two-phase**: a fully
   sequential hello handshake (unchanged from step 2 — must complete, with a
   deterministic reply-then-close on rejection, before anything concurrent
@@ -427,6 +425,64 @@ unchanged — every new code path added this step is reached only through
   startup call and `horizon-agentd`'s per-connection session scoping (above)
   are both shaped for a single Horizon-process-lifetime connection, not a
   reconnect — expect both to change.
+
+### Step 3 trims, restored
+
+Both UX gaps this step's notes called out above were closed in a later pass
+(after step 4 landed), without reopening any of step 3's five landing
+decisions:
+
+- **Tool-call-argument streaming preview now crosses the wire.** Rather than
+  inventing a wire `Event` for something `contract::Event` deliberately
+  excludes (see above), the wire gained its own connection-message-shaped
+  payload: `wire::Control::ToolCallProgress(contract::ToolCallProgress)`,
+  session-scoped via the envelope's own `session_id` field (guardrail 1
+  holds — `wire` already depends on `contract` for every other `Control`
+  payload; this reuses `ToolCallProgress` as-is rather than mirroring it).
+  `session::handle_provider_event` now splits `Processing::horizon_events`
+  by whether `tool_call_progress` is `Some` instead of filtering it out:
+  progress ticks go out as `Control::ToolCallProgress` envelopes, everything
+  else as ordinary `Event` envelopes — both after the same
+  `LiveState::extend_provider_events` fold/persist call, unchanged.
+  Horizon's `agent::agentd_runtime::dispatch_incoming` answers a
+  `Control::ToolCallProgress` by reconstructing a `ProviderEvent` via
+  `ProviderEvent::tool_call_progress` and sending it down the same
+  `session_events` route an ordinary event takes — `fold_agent_session_events`
+  folds it through the exact same `apply_tool_call_progress_to_frame` path
+  a persisted event would, so the pane-side rendering code
+  (`AgentFrameItem::ToolCallPreparing`) needed no changes at all. Because
+  `contract::Event` still has no such variant, the persistence exclusion is
+  structural, not just tested: an agentd-hosted session's on-disk JSONL log
+  cannot represent this in the first place. Proven end to end (real socket,
+  real on-disk log file) by `horizon-agentd/tests/e2e.rs`'s
+  `streaming_tool_call_progress_reaches_the_client_but_never_the_event_log`.
+- **Skipped-lines status reporting now reaches Horizon's status bar.** A
+  second connection-global control message, `wire::Control::
+  SkippedLines(String)`, carries `persistence::event_log::ReadReport::
+  skipped_summary`'s human-readable text (already computed at startup by
+  `main::open_persistence`, previously only `eprintln!`'d). `AgentdState`
+  gained a `skipped_lines_summary` cell, set alongside `set_writer` in
+  `spawn_resume_task`, before `mark_resume_ready`. Sending it from inside
+  `Control::Hello`'s reply was rejected: hello must keep answering
+  immediately regardless of whether the background startup resume has
+  finished (the whole point of `main`'s bind-first ordering, and a property
+  `hello_answers_immediately_while_session_list_waits_for_a_slow_resume`
+  pins down) — folding a resume-dependent field into it would mean either
+  blocking hello on the same readiness gate `session_list`/`session_load`
+  use, or racily omitting the field. Instead, `main::
+  run_session_hosting_loop` spawns one detached task per connection that
+  awaits `wait_until_resume_ready()` (the same gate, just off hello's
+  critical path) and then sends `Control::SkippedLines` once, only if
+  there's something to report. Horizon's `agent::agentd_runtime::
+  dispatch_incoming` routes it to a dedicated `Receiver<String>` (threaded
+  out of `AgentdConnection::connect` alongside the existing host-tool
+  receiver, to both production call sites — startup and `Reload Agent
+  Runtime`'s reconnect) that `wire_skipped_lines_status` folds into
+  `agent_state_status` as `"Agent event log: {summary}"`. Proven by
+  `corrupt_event_log_lines_are_reported_to_the_client_once_per_connection`,
+  which pre-seeds a corrupt fixture log and asserts the very first envelope
+  a fresh connection receives (after `hello`) is the matching
+  `Control::SkippedLines`.
 
 ## Step 4 implementation notes
 

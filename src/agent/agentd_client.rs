@@ -52,24 +52,28 @@ const AGENTD_BINARY_NAME: &str = "horizon-agentd";
 
 /// Connects to `horizon-agentd` (spawning it if nothing is listening yet),
 /// wiring up the host-tool responder (`agentd_runtime::
-/// wire_host_tool_responder`) against `workspace` on success. Called both at
-/// Horizon startup (`app::state::AppState::new`) and by the `Reload Agent
-/// Runtime` command's reconnect phase (`agentd_runtime::reload_agent_runtime`)
-/// -- every agent session routes through the resulting connection, so a
-/// failure here means agent panes are unavailable until a retry (typically
-/// another `Reload Agent Runtime`) succeeds; there is no in-process fallback
-/// to fall back to (see the module doc).
+/// wire_host_tool_responder`) against `workspace` and the skipped-lines
+/// status bridge (`agentd_runtime::wire_skipped_lines_status`) against
+/// `agent_state_status` on success. Called both at Horizon startup
+/// (`app::state::AppState::new`) and by the `Reload Agent Runtime` command's
+/// reconnect phase (`agentd_runtime::reload_agent_runtime`) -- every agent
+/// session routes through the resulting connection, so a failure here means
+/// agent panes are unavailable until a retry (typically another `Reload
+/// Agent Runtime`) succeeds; there is no in-process fallback to fall back to
+/// (see the module doc).
 pub(crate) fn connect_agentd_at_startup(
     workspace: RwSignal<Workspace>,
+    agent_state_status: RwSignal<Option<String>>,
 ) -> Result<AgentdConnection, String> {
     let socket_path = horizon_agent::socket::default_socket_path();
-    let (connection, host_tool_requests) = AgentdConnection::connect(&socket_path)?;
+    let (connection, host_tool_requests, skipped_lines) = AgentdConnection::connect(&socket_path)?;
     eprintln!("horizon: connected to horizon-agentd");
     crate::agent::agentd_runtime::wire_host_tool_responder(
         connection.clone(),
         host_tool_requests,
         workspace,
     );
+    crate::agent::agentd_runtime::wire_skipped_lines_status(skipped_lines, agent_state_status);
     Ok(connection)
 }
 

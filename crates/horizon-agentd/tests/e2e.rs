@@ -34,6 +34,7 @@ struct AgentdProcess {
     child: Child,
     socket_path: PathBuf,
     event_log_path: PathBuf,
+    state_db_path: PathBuf,
 }
 
 impl AgentdProcess {
@@ -86,13 +87,26 @@ impl AgentdProcess {
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
+        // The DuckDB projection has no "unset = disabled" state any more
+        // (`resolve_state_db_path`'s doc comment) -- an unset
+        // `HORIZON_AGENT_STATE_DB` now resolves to a real default path
+        // (`$XDG_DATA_HOME/horizon/agent-state.duckdb`), which would make
+        // every test process fight over the *same* real file instead of
+        // each other's throwaway `event_log_path`. Point it at its own
+        // fresh temp path for the same hermeticity reason `event_log_path`
+        // already gets one.
+        let state_db_path = std::env::temp_dir().join(format!(
+            "horizon-agentd-e2e-state-{}-{}.duckdb",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
         let mut command = Command::new(env!("CARGO_BIN_EXE_horizon-agentd"));
         command
             .arg("--socket")
             .arg(&socket_path)
             .env("HORIZON_CONFIG", &missing_config_path)
             .env("HORIZON_AGENT_EVENT_LOG", &event_log_path)
-            .env_remove("HORIZON_AGENT_STATE_DB");
+            .env("HORIZON_AGENT_STATE_DB", &state_db_path);
         match resume_delay_ms {
             Some(delay_ms) => {
                 command.env(TEST_RESUME_DELAY_MS_VAR, delay_ms.to_string());
@@ -106,6 +120,7 @@ impl AgentdProcess {
             child,
             socket_path,
             event_log_path,
+            state_db_path,
         }
     }
 
@@ -131,6 +146,7 @@ impl Drop for AgentdProcess {
         let _ = self.child.wait();
         let _ = std::fs::remove_file(&self.socket_path);
         let _ = std::fs::remove_file(&self.event_log_path);
+        let _ = std::fs::remove_file(&self.state_db_path);
     }
 }
 
@@ -666,6 +682,158 @@ async fn bash_runs_agentd_side_and_reports_its_result_over_the_wire() {
     assert_eq!(result.output["output"], "agentd-bash-ok\n");
 }
 
+// --- step-3 trims restored: streaming preview + skipped-lines status -------
+//
+// `docs/agent-runtime-split-design.md`'s step-3 notes recorded two UX
+// features lost in the split: the tool-call-argument streaming preview
+// never crossed the wire (filtered out before forwarding), and agentd's
+// startup event-log corruption diagnostics were only ever printed to its
+// own stderr. Both are restored; these two tests prove it end to end over
+// the real socket, not just at the crate's own in-process seam (see
+// `crates/horizon-agent/src/tests.rs`'s
+// `runtime_state_store_folds_tool_call_progress_but_excludes_it_from_the_jsonl_log`
+// for that pre-existing in-process coverage).
+
+/// The mock provider's `"streaming tool"` trigger emits a few ephemeral
+/// `ProviderEvent::tool_call_progress` ticks before the real
+/// `ToolCallRequested` -- these must still reach a connected client (now as
+/// `Control::ToolCallProgress`, since `contract::Event` has no slot for
+/// them) even though tool execution/policy mapping moved into agentd, and
+/// they must never appear in the durable on-disk event log in any form.
+#[tokio::test]
+async fn streaming_tool_call_progress_reaches_the_client_but_never_the_event_log() {
+    let agentd = AgentdProcess::spawn();
+    let (mut reader, mut writer) = connect_and_handshake(&agentd.socket_path).await;
+
+    let session_id = SessionId::new();
+    send_session_new(&mut writer, session_id).await;
+    wire::write_envelope(
+        &mut writer,
+        &Envelope::command(
+            session_id,
+            AgentCommand::UserMessage {
+                text: "please use the streaming tool".to_string(),
+            },
+        ),
+    )
+    .await
+    .unwrap();
+
+    let mut progress_ticks = Vec::new();
+    let mut saw_tool_call_requested = false;
+    for _ in 0..200 {
+        let envelope = wire::read_envelope(&mut reader)
+            .await
+            .unwrap()
+            .expect("agentd should keep streaming events while the session is live");
+        assert_eq!(envelope.session_id, Some(session_id));
+        match envelope.body {
+            EnvelopeBody::Control(Control::ToolCallProgress(progress)) => {
+                progress_ticks.push(progress);
+            }
+            EnvelopeBody::Event(Event::ToolCallRequested(request)) => {
+                assert_eq!(request.tool_id, "mock.approval_required");
+                saw_tool_call_requested = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        saw_tool_call_requested,
+        "the real tool call request should follow the streamed preview"
+    );
+    assert!(
+        progress_ticks.len() >= 3,
+        "expected every mock streaming tick to reach the client as its own control message, \
+         got: {progress_ticks:?}"
+    );
+    assert!(
+        progress_ticks
+            .windows(2)
+            .all(|pair| pair[1].bytes >= pair[0].bytes),
+        "byte counts should grow monotonically as the mock provider streams, got: {progress_ticks:?}"
+    );
+
+    // The writer flushes after every append (step 4's durability fix), but
+    // appending itself is asynchronous -- `Appender::append_provider_events`
+    // just enqueues onto the writer's own background thread, which is what
+    // actually touches the file (see `WriterHandle::open`'s "Ordering
+    // guarantee" doc comment) -- so the on-disk write can trail the wire
+    // delivery this test just raced ahead on. Poll rather than read once,
+    // waiting for the real tool call request to actually land before
+    // asserting anything about the file's contents.
+    let mut report = None;
+    for _ in 0..100 {
+        let candidate = horizon_agent::persistence::event_log::read(&agentd.event_log_path)
+            .expect("the on-disk event log should parse cleanly");
+        let has_tool_call_requested = candidate.records.iter().any(|record| {
+            matches!(
+                &record.event,
+                Event::ToolCallRequested(request) if request.tool_id == "mock.approval_required"
+            )
+        });
+        if has_tool_call_requested {
+            report = Some(candidate);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let report = report.expect("the real tool call request should eventually be persisted");
+    assert_eq!(
+        report.corrupt_line_count, 0,
+        "every persisted line must still be a well-formed record, got: {report:?}"
+    );
+
+    let log_contents = std::fs::read_to_string(&agentd.event_log_path)
+        .expect("event log should exist and be readable");
+    assert!(
+        !log_contents
+            .to_ascii_lowercase()
+            .contains("tool_call_progress"),
+        "the persisted event log must never contain the ephemeral tool-call-progress preview, \
+         got:\n{log_contents}"
+    );
+}
+
+/// A corrupt line found during this process's own startup event-log read
+/// must be reported to a connecting client once, as a dedicated
+/// `Control::SkippedLines` message -- not just printed to agentd's stderr --
+/// so Horizon's status bar (`agent_state_status`) can surface it. Sent
+/// after `hello` (never blocking it -- see `main`'s bind-first ordering)
+/// but, for a log this small, well before anything else would arrive on a
+/// connection with no sessions in it, so the very next envelope after the
+/// handshake is deterministically the one under test.
+#[tokio::test]
+async fn corrupt_event_log_lines_are_reported_to_the_client_once_per_connection() {
+    let socket_path = std::env::temp_dir().join(format!(
+        "horizon-agentd-e2e-{}-{}.sock",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let event_log_path = std::env::temp_dir().join(format!(
+        "horizon-agentd-e2e-events-{}-{}.jsonl",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::write(&event_log_path, "not valid json\n").expect("write corrupt fixture log");
+
+    let agentd = AgentdProcess::spawn_at(socket_path, event_log_path);
+    let (mut reader, _writer) = connect_and_handshake(&agentd.socket_path).await;
+
+    let envelope = wire::read_envelope(&mut reader)
+        .await
+        .unwrap()
+        .expect("agentd should report its startup diagnostics rather than close the connection");
+    let EnvelopeBody::Control(Control::SkippedLines(summary)) = envelope.body else {
+        panic!(
+            "expected a SkippedLines control message, got {:?}",
+            envelope.body
+        );
+    };
+    assert_eq!(summary, "skipped 1 corrupt line");
+}
+
 // --- step 4: replay, reconnect, session_load --------------------------------
 
 async fn send_session_load(writer: &mut OwnedWriteHalf, session_id: SessionId) {
@@ -1157,12 +1325,22 @@ async fn second_agentd_against_a_live_socket_exits_before_reading_its_own_log() 
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
+    // Same hermeticity fix as `AgentdProcess::spawn_at_with_resume_delay`:
+    // an unset `HORIZON_AGENT_STATE_DB` now resolves to a real default path
+    // rather than "no DuckDB", so point it at its own throwaway path too --
+    // though this instance is expected to bail (see below) before ever
+    // reaching the code that would open it.
+    let state_db_path = std::env::temp_dir().join(format!(
+        "horizon-agentd-e2e-state-{}-{}.duckdb",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
     let mut second = Command::new(env!("CARGO_BIN_EXE_horizon-agentd"))
         .arg("--socket")
         .arg(&socket_path)
         .env("HORIZON_CONFIG", &missing_config_path)
         .env("HORIZON_AGENT_EVENT_LOG", &event_log_path)
-        .env_remove("HORIZON_AGENT_STATE_DB")
+        .env("HORIZON_AGENT_STATE_DB", &state_db_path)
         .env_remove(TEST_RESUME_DELAY_MS_VAR)
         .stderr(Stdio::piped())
         .spawn()

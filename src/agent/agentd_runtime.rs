@@ -48,6 +48,21 @@ use crate::workspace::{PaneKind, Workspace};
 
 type AgentSessionId = contract::SessionId;
 
+/// [`AgentdConnection::connect`]'s result: the connection plus the receivers
+/// [`wire_host_tool_responder`]/[`wire_skipped_lines_status`] need. Named
+/// purely to satisfy clippy's `type_complexity` lint at the two places this
+/// exact shape appears ([`AgentdConnection::connect`]'s return type and
+/// [`run_connection`]'s `outcome_tx` parameter) -- no semantic weight beyond
+/// that.
+type ConnectOutcome = Result<
+    (
+        AgentdConnection,
+        Receiver<HostToolRequestEnvelope>,
+        Receiver<String>,
+    ),
+    String,
+>;
+
 /// How long [`AgentdConnection::session_list`] waits for agentd's reply
 /// before giving up and treating it as "no sessions" -- a same-host Unix
 /// socket round trip, so generous relative to how long that should ever
@@ -95,12 +110,11 @@ impl AgentdConnection {
     /// read/write loop for the rest of the process's life; on failure,
     /// nothing is left running.
     ///
-    /// Returns the connection plus the receiver [`wire_host_tool_responder`]
-    /// needs -- kept separate from `Self` (see [`HostToolRequestEnvelope`]'s
-    /// doc comment) rather than exposed as a method callable more than once.
-    pub(crate) fn connect(
-        socket_path: &Path,
-    ) -> Result<(Self, Receiver<HostToolRequestEnvelope>), String> {
+    /// Returns the connection plus the receivers [`wire_host_tool_responder`]/
+    /// [`wire_skipped_lines_status`] need -- kept separate from `Self` (see
+    /// [`HostToolRequestEnvelope`]'s doc comment) rather than exposed as
+    /// methods callable more than once.
+    pub(crate) fn connect(socket_path: &Path) -> ConnectOutcome {
         let socket_path = socket_path.to_path_buf();
         let (outcome_tx, outcome_rx) = std::sync::mpsc::channel();
 
@@ -275,6 +289,27 @@ pub(crate) fn wire_host_tool_responder(
     });
 }
 
+/// Wires the Horizon side of the restored skipped-lines status feature
+/// (`docs/agent-runtime-split-design.md`'s step-3 notes, "Skipped-lines
+/// status reporting is omitted"): folds every `Control::SkippedLines`
+/// summary agentd sends over `skipped_lines` into `agent_state_status`, the
+/// same free-floating status the status bar (`app::status_bar`) already
+/// renders -- no new UI surface needed. Called once per connection
+/// (`agent::agentd_client::connect_agentd_at_startup` and
+/// [`reload_agent_runtime`]'s reconnect), mirroring
+/// [`wire_host_tool_responder`]'s channel-to-signal bridge shape.
+pub(crate) fn wire_skipped_lines_status(
+    skipped_lines: Receiver<String>,
+    agent_state_status: RwSignal<Option<String>>,
+) {
+    let summaries = create_signal_from_channel(skipped_lines);
+    create_effect(move |_| {
+        if let Some(summary) = summaries.get() {
+            agent_state_status.set(Some(format!("Agent event log: {summary}")));
+        }
+    });
+}
+
 /// The tool catalog this side of the host-tool channel answers -- today,
 /// just `workspace.snapshot` (the one Horizon-coupled tool that exists; see
 /// `agent::host_tools`). An unrecognized `tool_id` answers `null` rather
@@ -292,12 +327,7 @@ fn answer_host_tool_request(workspace: &Workspace, tool_id: &str) -> serde_json:
 /// Runs for the lifetime of a successful connection: completes the
 /// handshake, reports the outcome back to [`AgentdConnection::connect`]'s
 /// caller exactly once, then keeps reading/writing until the socket closes.
-async fn run_connection(
-    socket_path: &Path,
-    outcome_tx: std::sync::mpsc::Sender<
-        Result<(AgentdConnection, Receiver<HostToolRequestEnvelope>), String>,
-    >,
-) {
+async fn run_connection(socket_path: &Path, outcome_tx: std::sync::mpsc::Sender<ConnectOutcome>) {
     let (mut reader, mut writer, _hello) =
         match crate::agent::agentd_client::connect_and_split(socket_path).await {
             Ok(parts) => parts,
@@ -311,13 +341,17 @@ async fn run_connection(
     let session_events = Arc::new(Mutex::new(HashMap::new()));
     let pending_session_list = Arc::new(Mutex::new(None));
     let (host_tool_tx, host_tool_rx) = unbounded::<HostToolRequestEnvelope>();
+    let (skipped_lines_tx, skipped_lines_rx) = unbounded::<String>();
 
     let connection = AgentdConnection {
         outgoing: outgoing_tx,
         session_events: session_events.clone(),
         pending_session_list: pending_session_list.clone(),
     };
-    if outcome_tx.send(Ok((connection, host_tool_rx))).is_err() {
+    if outcome_tx
+        .send(Ok((connection, host_tool_rx, skipped_lines_rx)))
+        .is_err()
+    {
         // Nobody is waiting for this connection any more (the calling
         // thread gave up or the caller was dropped) -- nothing left to do.
         return;
@@ -338,6 +372,7 @@ async fn run_connection(
                     &session_events,
                     &pending_session_list,
                     &host_tool_tx,
+                    &skipped_lines_tx,
                 ),
                 Ok(None) | Err(_) => {
                     mark_connection_lost(&session_events);
@@ -355,15 +390,19 @@ async fn run_connection(
 
 /// Routes one incoming envelope: an event to the session it's scoped to
 /// (looked up in `session_events`, the connection-side twin of agentd's own
-/// session map), a `host_tool_request` to the responder effect's channel.
-/// Horizon never expects a `Command` or most `Control` variants from agentd
-/// -- silently ignored rather than treated as an error, matching
-/// `horizon-agentd`'s own tolerance for out-of-place messages.
+/// session map), a `host_tool_request` to the responder effect's channel, an
+/// ephemeral tool-call-progress tick to the same session-events route an
+/// ordinary event takes (see below), and a startup skipped-lines summary to
+/// its own dedicated channel. Horizon never expects a `Command` or most
+/// other `Control` variants from agentd -- silently ignored rather than
+/// treated as an error, matching `horizon-agentd`'s own tolerance for
+/// out-of-place messages.
 fn dispatch_incoming(
     envelope: Envelope,
     session_events: &Arc<Mutex<HashMap<AgentSessionId, Sender<ProviderEvent>>>>,
     pending_session_list: &Arc<Mutex<Option<Sender<Vec<SessionSummary>>>>>,
     host_tool_tx: &Sender<HostToolRequestEnvelope>,
+    skipped_lines_tx: &Sender<String>,
 ) {
     match envelope.body {
         EnvelopeBody::Event(event) => {
@@ -372,6 +411,21 @@ fn dispatch_incoming(
             };
             if let Some(sender) = session_events.lock().unwrap().get(&session_id) {
                 let _ = sender.send(ProviderEvent::from(event));
+            }
+        }
+        // Restores the step-3 trim (`docs/agent-runtime-split-design.md`):
+        // folded through `ProviderEvent::tool_call_progress` -> the exact
+        // same `apply_tool_call_progress_to_frame` path a persisted event
+        // would take in `fold_agent_session_events`/`State::
+        // extend_provider_events` -- this session-events route doesn't care
+        // whether the `ProviderEvent` it carries came from an `Event`
+        // envelope or a `Control::ToolCallProgress` one.
+        EnvelopeBody::Control(Control::ToolCallProgress(progress)) => {
+            let Some(session_id) = envelope.session_id else {
+                return;
+            };
+            if let Some(sender) = session_events.lock().unwrap().get(&session_id) {
+                let _ = sender.send(ProviderEvent::tool_call_progress(progress));
             }
         }
         EnvelopeBody::Control(Control::HostToolRequest(request)) => {
@@ -386,6 +440,9 @@ fn dispatch_incoming(
             if let Some(reply_tx) = pending_session_list.lock().unwrap().take() {
                 let _ = reply_tx.send(summaries);
             }
+        }
+        EnvelopeBody::Control(Control::SkippedLines(summary)) => {
+            let _ = skipped_lines_tx.send(summary);
         }
         _ => {}
     }
@@ -511,6 +568,7 @@ enum ReloadOutcome {
     Connected {
         connection: AgentdConnection,
         host_tool_requests: Receiver<HostToolRequestEnvelope>,
+        skipped_lines: Receiver<String>,
         summaries: Vec<SessionSummary>,
     },
     Failed(String),
@@ -553,11 +611,12 @@ pub(crate) fn reload_agent_runtime(
         thread::sleep(RELOAD_RESPAWN_DELAY);
         let socket_path = horizon_agent::socket::default_socket_path();
         let outcome = match AgentdConnection::connect(&socket_path) {
-            Ok((connection, host_tool_requests)) => {
+            Ok((connection, host_tool_requests, skipped_lines)) => {
                 let summaries = connection.session_list();
                 ReloadOutcome::Connected {
                     connection,
                     host_tool_requests,
+                    skipped_lines,
                     summaries,
                 }
             }
@@ -573,9 +632,11 @@ pub(crate) fn reload_agent_runtime(
                 ReloadOutcome::Connected {
                     connection,
                     host_tool_requests,
+                    skipped_lines,
                     summaries,
                 } => {
                     wire_host_tool_responder(connection.clone(), host_tool_requests, workspace);
+                    wire_skipped_lines_status(skipped_lines, agent_state_status);
                     attach_sessions(&connection, summaries, workspace, frames, sessions);
                     agentd_connection.set(Some(connection));
                     agent_state_status.set(Some("Agent runtime reloaded.".to_string()));

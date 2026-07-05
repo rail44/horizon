@@ -56,25 +56,27 @@ impl AppState {
         // `None` and latches an actionable status instead of silently
         // limping along -- there is no in-process fallback left to fall
         // back to.
-        let agentd_connection =
-            match crate::agent::agentd_client::connect_agentd_at_startup(workspace) {
-                Ok(connection) => {
-                    crate::agent::agentd_runtime::reconnect_all_sessions(
-                        &connection,
-                        workspace,
-                        frames,
-                        sessions,
-                    );
-                    Some(connection)
-                }
-                Err(error) => {
-                    eprintln!("horizon: could not connect to horizon-agentd ({error})");
-                    agent_state_status.set(Some(format!(
+        let agentd_connection = match crate::agent::agentd_client::connect_agentd_at_startup(
+            workspace,
+            agent_state_status,
+        ) {
+            Ok(connection) => {
+                crate::agent::agentd_runtime::reconnect_all_sessions(
+                    &connection,
+                    workspace,
+                    frames,
+                    sessions,
+                );
+                Some(connection)
+            }
+            Err(error) => {
+                eprintln!("horizon: could not connect to horizon-agentd ({error})");
+                agent_state_status.set(Some(format!(
                     "Agent runtime unavailable ({error}) -- use \"Reload Agent Runtime\" to retry"
                 )));
-                    None
-                }
-            };
+                None
+            }
+        };
 
         Self {
             workspace,

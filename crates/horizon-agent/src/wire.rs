@@ -18,7 +18,7 @@
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
-use crate::contract::{Command, Event, ProviderId, RequestId, SessionId};
+use crate::contract::{Command, Event, ProviderId, RequestId, SessionId, ToolCallProgress};
 
 /// The contract/wire version this build speaks. Carried both by every
 /// envelope's `v` field (checked structurally by [`read_envelope`] -- an
@@ -111,6 +111,35 @@ pub enum Control {
     /// `horizon-agentd`'s connection handler (sender) and
     /// `agent::agentd_client::handshake` in the `horizon` crate (receiver).
     HandshakeRejected(String),
+    /// Ephemeral tool-call-argument-streaming preview
+    /// (`contract::ProviderEvent::tool_call_progress`), session-scoped via
+    /// the envelope's own `session_id` (not this payload). `contract::Event`
+    /// deliberately has no variant for this -- it's UI-only feedback, never
+    /// part of conversation history and never persisted (see
+    /// [`ToolCallProgress`]'s own doc comment) -- so a step-3 pass filtered
+    /// it out entirely rather than invent a wire `Event` representation for
+    /// something the contract itself excludes. Restored here as its own
+    /// control message instead: reuses `contract::ToolCallProgress` as-is
+    /// (guardrail 1 is about the *direction* `wire` -> `contract` already
+    /// established by every other `Control` payload, not about which module
+    /// owns a struct). See `horizon-agentd`'s `session::handle_provider_event`
+    /// (sender) and `horizon`'s `agent::agentd_runtime::dispatch_incoming`
+    /// (receiver, which folds it through the exact same
+    /// `apply_tool_call_progress_to_frame` path a persisted event would).
+    ToolCallProgress(ToolCallProgress),
+    /// This process's own startup event-log corruption diagnostics
+    /// (`persistence::event_log::ReadReport::skipped_summary`), sent once
+    /// per connection -- after `horizon-agentd`'s startup resume finishes,
+    /// never blocking `Hello`'s immediate reply the way answering inside
+    /// `Hello` itself would (see `horizon-agentd::main`'s bind-first
+    /// ordering doc comment; `session_list`/`session_load` already block on
+    /// the same readiness gate for the same reason). Connection-global, like
+    /// [`Control::SessionList`] -- omitted entirely when nothing was
+    /// skipped. See `horizon-agentd`'s `main::run_session_hosting_loop`
+    /// (sender) and `horizon`'s `agent::agentd_runtime::dispatch_incoming`
+    /// (receiver, which folds it into `agent_state_status`, the status
+    /// bar's existing signal).
+    SkippedLines(String),
 }
 
 /// Sent by whichever side speaks first (Horizon's `agentd_client` connects
@@ -308,6 +337,12 @@ mod tests {
             Control::Pong,
             Control::Drain,
             Control::HandshakeRejected("contract version mismatch".to_string()),
+            Control::ToolCallProgress(ToolCallProgress {
+                key: "call-1".to_string(),
+                tool_id: Some("fs.read".to_string()),
+                bytes: 64,
+            }),
+            Control::SkippedLines("skipped 1 corrupt line".to_string()),
         ]
     }
 

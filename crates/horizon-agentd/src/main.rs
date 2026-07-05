@@ -101,8 +101,9 @@ fn spawn_resume_task(state: Arc<AgentdState>, agent_config: AgentConfig) {
         if let Some(delay) = test_resume_delay() {
             std::thread::sleep(delay);
         }
-        let (writer, records) = open_persistence(&agent_config);
+        let (writer, records, skipped_lines_summary) = open_persistence(&agent_config);
         state.set_writer(writer);
+        state.set_skipped_lines_summary(skipped_lines_summary);
         // Step 4: "agentd restart = read own log, rebuild rig_history, mark
         // turns that died mid-flight as cancelled ... sessions are live
         // again".
@@ -126,17 +127,25 @@ fn test_resume_delay() -> Option<Duration> {
 /// accept loop waits on (see the module doc). Also hands back the startup
 /// read's records (empty if persistence is disabled or there's nothing yet)
 /// so the caller can resume every session they belong to
-/// ([`session::resume_persisted_sessions`]).
+/// ([`session::resume_persisted_sessions`]), and the human-readable
+/// skipped-lines summary (if any corrupt/torn lines were found) so
+/// [`spawn_resume_task`] can stash it on [`AgentdState`] for `main::
+/// run_session_hosting_loop` to forward to a connecting client -- restoring
+/// the step-3 trim recorded in `docs/agent-runtime-split-design.md`
+/// ("Skipped-lines status reporting is omitted").
 ///
 /// Opens via [`WriterHandle::open_silently`] rather than [`WriterHandle::
 /// open`]: this function already prints its own `horizon-agentd`-prefixed
 /// skipped-lines summary just below, so the shared writer module's own
 /// generic summary line would otherwise double up in agentd's stderr.
-fn open_persistence(agent_config: &AgentConfig) -> (Option<WriterHandle>, Vec<Record>) {
+fn open_persistence(
+    agent_config: &AgentConfig,
+) -> (Option<WriterHandle>, Vec<Record>, Option<String>) {
     let (writer, init_rx) = WriterHandle::open_silently(&agent_config.persistence.event_log_path);
     match init_rx.recv() {
         Ok(WriterInit::Ready(report)) => {
-            if let Some(summary) = report.skipped_summary() {
+            let skipped_summary = report.skipped_summary();
+            if let Some(summary) = &skipped_summary {
                 eprintln!(
                     "horizon-agentd: {summary} while opening {}",
                     agent_config.persistence.event_log_path.display()
@@ -147,20 +156,20 @@ fn open_persistence(agent_config: &AgentConfig) -> (Option<WriterHandle>, Vec<Re
                     eprintln!("horizon-agentd: DuckDB projection rebuild failed: {error}");
                 }
             }
-            (Some(writer), report.records)
+            (Some(writer), report.records, skipped_summary)
         }
         Ok(WriterInit::Failed(error)) => {
             eprintln!(
                 "horizon-agentd: event log unavailable ({error}); persistence disabled for this run"
             );
-            (None, Vec::new())
+            (None, Vec::new(), None)
         }
         Err(_) => {
             eprintln!(
                 "horizon-agentd: event log writer thread exited before reporting startup status; \
                  persistence disabled for this run"
             );
-            (None, Vec::new())
+            (None, Vec::new(), None)
         }
     }
 }
@@ -305,6 +314,23 @@ async fn run_session_hosting_loop(
         }
     });
 
+    // Step-3 trim, restored: report this process's own startup event-log
+    // corruption diagnostics once for this connection, without blocking
+    // this function's own read loop (or `hello`, answered before this
+    // function ever runs) on the same readiness gate `SessionList`/
+    // `SessionLoad` already use -- see `AgentdState::skipped_lines_summary`'s
+    // doc comment and `docs/agent-runtime-split-design.md`'s step 3 notes.
+    {
+        let connection = connection.clone();
+        let outgoing_tx = outgoing_tx.clone();
+        tokio::spawn(async move {
+            connection.wait_until_resume_ready().await;
+            if let Some(summary) = connection.skipped_lines_summary() {
+                let _ = outgoing_tx.send(Envelope::control(Control::SkippedLines(summary)));
+            }
+        });
+    }
+
     loop {
         let envelope = match wire::read_envelope(&mut reader).await {
             Ok(Some(envelope)) => envelope,
@@ -335,6 +361,22 @@ async fn run_session_hosting_loop(
                 )));
             }
             EnvelopeBody::Control(Control::SessionNew(new)) => {
+                // Same readiness gate as `SessionList`/`SessionLoad` below,
+                // for a different reason: `run_session`'s persistence choice
+                // (`state.writer()` -- `LiveState::with_event_log_and_history`
+                // vs. `with_disabled_persistence`) is decided once, at spawn
+                // time. A `session_new` handled before `spawn_resume_task`
+                // finishes calling `AgentdState::set_writer` would silently
+                // spawn with persistence disabled for that session's entire
+                // lifetime -- unnoticeable over the wire (folding/forwarding
+                // happens either way) but permanently invisible to a later
+                // `kill -9`/respawn or `session_load`. This race was narrow
+                // enough to never trip in practice before `open_persistence`
+                // grew an unconditional DuckDB rebuild ahead of `set_writer`
+                // (the projection has no "disabled" state to opt into any
+                // more); a client issuing `session_new` immediately after
+                // connecting can now easily win it.
+                connection.wait_until_resume_ready().await;
                 connection.handle_session_new(new);
             }
             EnvelopeBody::Control(Control::SessionLoad(load)) => {

@@ -105,6 +105,14 @@ pub(crate) struct AgentdState {
     /// which is the whole point of binding first (see `main`).
     resume_ready: AtomicBool,
     resume_notify: Notify,
+    /// This process's own startup event-log corruption diagnostics
+    /// (`persistence::event_log::ReadReport::skipped_summary`), `None` until
+    /// [`Self::set_skipped_lines_summary`] runs (or forever, if the startup
+    /// read found nothing to skip) -- see [`Self::skipped_lines_summary`]
+    /// and `main::run_session_hosting_loop`, which reports this once per
+    /// connection restoring the step-3 trim recorded in
+    /// `docs/agent-runtime-split-design.md`.
+    skipped_lines_summary: Mutex<Option<String>>,
 }
 
 impl AgentdState {
@@ -122,6 +130,7 @@ impl AgentdState {
             outgoing: Mutex::new(None),
             resume_ready: AtomicBool::new(false),
             resume_notify: Notify::new(),
+            skipped_lines_summary: Mutex::new(None),
         }
     }
 
@@ -131,6 +140,18 @@ impl AgentdState {
 
     pub(crate) fn set_writer(&self, writer: Option<WriterHandle>) {
         *self.writer.lock().unwrap() = writer;
+    }
+
+    /// Called once from [`crate::spawn_resume_task`], alongside
+    /// [`Self::set_writer`] -- before [`Self::mark_resume_ready`], so a
+    /// connection's readiness-gated summary send (see `main::
+    /// run_session_hosting_loop`) always observes the final value.
+    pub(crate) fn set_skipped_lines_summary(&self, summary: Option<String>) {
+        *self.skipped_lines_summary.lock().unwrap() = summary;
+    }
+
+    pub(crate) fn skipped_lines_summary(&self) -> Option<String> {
+        self.skipped_lines_summary.lock().unwrap().clone()
     }
 
     /// Called exactly once, after [`resume_persisted_sessions`] returns --
@@ -412,6 +433,13 @@ impl Connection {
         self.state.wait_until_resume_ready().await;
     }
 
+    /// Delegates to [`AgentdState::skipped_lines_summary`] -- see `main::
+    /// run_session_hosting_loop`, which waits for [`Self::wait_until_resume_ready`]
+    /// first so this always reflects the finished startup read.
+    pub(crate) fn skipped_lines_summary(&self) -> Option<String> {
+        self.state.skipped_lines_summary()
+    }
+
     pub(crate) fn session_list(&self) -> Vec<SessionSummary> {
         self.state
             .sessions
@@ -638,12 +666,20 @@ fn run_session(
 /// (`process_agent_provider_event` for tool execution/policy mapping, then
 /// `LiveState::extend_provider_events` for the fold/persist) -- except the
 /// resulting frame isn't published to a local `Frames` signal, it's
-/// forwarded to Horizon as ordinary event envelopes. Ephemeral tool-call
-/// progress (`ProviderEvent::tool_call_progress`) is folded into the local
-/// frame (so a later `resolve_approval`'s `frame.tool_call_request` lookup
-/// stays correct) but not forwarded -- see the module's step 3 notes in
-/// `docs/agent-runtime-split-design.md` for why this trims the
-/// streaming-tool-call-argument-preview feature in agentd mode.
+/// forwarded to Horizon as event envelopes. Ephemeral tool-call progress
+/// (`ProviderEvent::tool_call_progress`) is folded into the local frame (so
+/// a later `resolve_approval`'s `frame.tool_call_request` lookup stays
+/// correct) exactly like every other event, but forwarded as its own
+/// `Control::ToolCallProgress` message rather than a `contract::Event` --
+/// there's no `Event` variant for it (it's never part of conversation
+/// history or the persisted log; see `ToolCallProgress`'s own doc comment),
+/// so wrapping it in `Envelope::event` isn't an option. This restores the
+/// streaming-tool-call-argument-preview feature the module's step 3 notes in
+/// `docs/agent-runtime-split-design.md` recorded as trimmed for agentd mode.
+/// `process_agent_provider_event` never mixes progress and real events in
+/// one `Processing` (a progress tick always comes back alone), so splitting
+/// `horizon_events` into the two forwarding shapes below is exhaustive in
+/// practice, not just by construction.
 fn handle_provider_event(
     host: &dyn HostTools,
     state: &Arc<AgentdState>,
@@ -658,13 +694,22 @@ fn handle_provider_event(
         let _ = commands_tx.send(command);
     }
 
-    let to_forward: Vec<Event> = processing
-        .horizon_events
-        .iter()
-        .filter(|event| event.tool_call_progress.is_none())
-        .map(|event| event.event.clone())
-        .collect();
+    let mut to_forward: Vec<Event> = Vec::new();
+    let mut progress_envelopes: Vec<Envelope> = Vec::new();
+    for event in &processing.horizon_events {
+        match &event.tool_call_progress {
+            Some(progress) => progress_envelopes.push(Envelope {
+                v: horizon_agent::wire::CONTRACT_VERSION,
+                session_id: Some(session_id),
+                body: EnvelopeBody::Control(Control::ToolCallProgress(progress.clone())),
+            }),
+            None => to_forward.push(event.event.clone()),
+        }
+    }
     let _ = live_state.extend_provider_events(processing.horizon_events);
+    for envelope in progress_envelopes {
+        send_envelope(&state.outgoing, envelope);
+    }
     for event in to_forward {
         send_envelope(&state.outgoing, Envelope::event(session_id, event));
     }
