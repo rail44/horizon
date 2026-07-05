@@ -8,7 +8,7 @@ pub(crate) mod view;
 pub(crate) use core::TerminalCore;
 pub(crate) use session::{initial_terminal_text, TerminalCommand, TerminalSession, TerminalUpdate};
 pub(crate) use types::{
-    TerminalFrame, TerminalMouseButton, TerminalMouseKind, TerminalMouseModifiers,
+    TerminalFrame, TerminalLine, TerminalMouseButton, TerminalMouseKind, TerminalMouseModifiers,
     TerminalMouseReport, TerminalScroll, TerminalSelectionPoint, TerminalSize, TerminalSpan,
 };
 

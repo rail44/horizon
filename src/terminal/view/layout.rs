@@ -1,4 +1,4 @@
-use crate::terminal::TerminalFrame;
+use crate::terminal::{TerminalFrame, TerminalLine};
 use floem::{
     peniko::Color,
     text::{Attrs, AttrsList, FamilyOwned, TextLayout},
@@ -33,19 +33,45 @@ pub(super) enum BlockElement {
 }
 
 pub(super) fn build_line_layouts(frame: &TerminalFrame) -> Vec<Vec<CellLayout>> {
+    let mut lines = Vec::new();
+    update_line_layouts(&mut lines, &[], &frame.lines);
+    lines
+}
+
+/// Row retention + partial rebuild: reuse a row's existing `CellLayout`s
+/// (and thus its shaped `TextLayout`s) when the row's content is unchanged
+/// since the last frame, and only rebuild rows whose `TerminalLine` differs.
+///
+/// `TerminalLine` already derives `PartialEq`, so this is a cheap
+/// cell-equality diff at the view rather than plumbing
+/// `alacritty_terminal`'s damage tracking through the snapshot/session
+/// boundary — the smaller of the two options for the same result, since it
+/// touches only this module instead of the core/session/contract layers.
+pub(super) fn update_line_layouts(
+    lines: &mut Vec<Vec<CellLayout>>,
+    old: &[TerminalLine],
+    new: &[TerminalLine],
+) {
     let family = terminal_font_family();
 
-    frame
-        .lines
-        .iter()
-        .map(|line| {
-            let mut cells = Vec::new();
-            for span in &line.spans {
-                cells.extend(build_span_cells(span, &family));
-            }
-            cells
-        })
-        .collect()
+    for (row, new_line) in new.iter().enumerate() {
+        let unchanged = row < lines.len() && old.get(row) == Some(new_line);
+        if unchanged {
+            continue;
+        }
+
+        let mut cells = Vec::new();
+        for span in &new_line.spans {
+            cells.extend(build_span_cells(span, &family));
+        }
+        if row < lines.len() {
+            lines[row] = cells;
+        } else {
+            lines.push(cells);
+        }
+    }
+
+    lines.truncate(new.len());
 }
 
 pub(super) fn build_span_cells(

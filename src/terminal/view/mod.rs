@@ -25,7 +25,7 @@ mod render;
 use input::{
     cell_from_point, scroll_lines_from_wheel, terminal_mouse_button, terminal_mouse_modifiers,
 };
-use layout::{build_line_layouts, CellLayout};
+use layout::{build_line_layouts, update_line_layouts, CellLayout};
 use metrics::TerminalMetrics;
 use preedit::{build_preedit_layout, PreeditLayout};
 use render::{draw_block_element, expanded_rect};
@@ -114,8 +114,8 @@ impl TerminalTextView {
     }
 
     fn set_state(&mut self, state: TerminalViewState) {
+        update_line_layouts(&mut self.lines, &self.frame.lines, &state.frame.lines);
         self.frame = state.frame;
-        self.lines = build_line_layouts(&self.frame);
         self.preedit = build_preedit_layout(state.preedit.as_deref());
         self.id.request_paint();
     }
@@ -341,7 +341,10 @@ impl TerminalTextView {
 #[cfg(test)]
 use input::cell_from_point as _test_cell_from_point;
 #[cfg(test)]
-use layout::{build_span_cells as _test_build_span_cells, BlockElement as _TestBlockElement};
+use layout::{
+    build_span_cells as _test_build_span_cells, update_line_layouts as _test_update_line_layouts,
+    BlockElement as _TestBlockElement,
+};
 #[cfg(test)]
 use metrics::{
     measured_cell_width as _test_measured_cell_width,
@@ -351,9 +354,21 @@ use metrics::{
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminal::TerminalLine;
     use crate::terminal::TerminalSelectionPoint;
     use crate::terminal::TerminalSpan;
     use floem::text::FamilyOwned;
+
+    fn test_line(text: &str) -> TerminalLine {
+        TerminalLine {
+            spans: vec![TerminalSpan {
+                text: text.to_string(),
+                columns: text.chars().count(),
+                fg: [1, 2, 3],
+                bg: [4, 5, 6],
+            }],
+        }
+    }
 
     fn test_family() -> Vec<FamilyOwned> {
         _test_terminal_font_family()
@@ -467,5 +482,39 @@ mod tests {
                 Some(_TestBlockElement::LowerFraction(7)),
             ]
         );
+    }
+
+    #[test]
+    fn update_line_layouts_rebuilds_only_changed_rows() {
+        let old = vec![test_line("aaa"), test_line("bbb")];
+        let mut lines = Vec::new();
+        _test_update_line_layouts(&mut lines, &[], &old);
+        assert_eq!(lines.len(), 2);
+
+        // Row 0 changes, row 1 stays identical: both rows must reflect the
+        // new content (rebuilt or retained), and the retained row's cell
+        // metadata must be untouched.
+        let new = vec![test_line("zzz"), test_line("bbb")];
+        _test_update_line_layouts(&mut lines, &old, &new);
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].len(), 3);
+        assert!(lines[0].iter().all(|cell| cell.visible));
+        assert_eq!(lines[1].len(), 3);
+        assert_eq!(lines[1].iter().map(|cell| cell.columns).sum::<usize>(), 3);
+    }
+
+    #[test]
+    fn update_line_layouts_grows_and_truncates_rows() {
+        let mut lines = Vec::new();
+        _test_update_line_layouts(&mut lines, &[], &[test_line("a")]);
+        assert_eq!(lines.len(), 1);
+
+        let grown = vec![test_line("a"), test_line("b"), test_line("c")];
+        _test_update_line_layouts(&mut lines, &[test_line("a")], &grown);
+        assert_eq!(lines.len(), 3);
+
+        _test_update_line_layouts(&mut lines, &grown, &[test_line("a")]);
+        assert_eq!(lines.len(), 1);
     }
 }
