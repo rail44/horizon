@@ -767,3 +767,86 @@ reversal, not the original plan.
   in this step. `reload_failure_status`'s string-mapping and the pre-
   existing `agentd_client::handshake` tests (version-mismatch, rejection,
   closed-before-reply) cover the pieces that don't need a real subprocess.
+
+### Step 4 addendum: readiness no longer waits on DuckDB, and reload is visible
+
+Landed after dogfooding surfaced two complaints: `Reload Agent Runtime`
+looked like it did nothing, and a restart with a nontrivial event log sat
+noticeably before `session_list`/`session_new` answered.
+
+- **The DuckDB rebuild moved off the resume-readiness path.** It used to run
+  synchronously inside `open_persistence`, *before* `set_writer`/
+  `resume_persisted_sessions`/`mark_resume_ready` — so every readiness-gated
+  request waited on a full rebuild of a derived, non-authoritative read
+  model that no session actually needs (sessions resume from the JSONL log
+  directly; nothing routes a live session through DuckDB). `main::
+  spawn_resume_task` now marks readiness right after resuming sessions and
+  only *then* kicks off `main::spawn_duckdb_rebuild_task` as its own
+  separate `spawn_blocking` task — `hello`/`session_list`/`session_load`/
+  `session_new` no longer wait on it at all. A rebuild failure keeps the
+  existing non-fatal stderr line and is also folded (appended, not
+  clobbered) into `AgentdState`'s skipped-lines-style status, so a client
+  that connects *after* the failure still learns about it via the existing
+  `Control::SkippedLines` channel.
+- **A cheap freshness check skips the rebuild on an unchanged log.**
+  `main::rebuild_duckdb_projection` opens the store, and — unless opening it
+  just migrated a legacy pre-`event_at` schema (`Store::
+  migrated_legacy_schema`, added for exactly this: a migration drops and
+  recreates `agent_events` without touching `agent_sessions`, so that
+  table's `last_sequence` values would otherwise look deceptively "current"
+  against a now-empty projection) — compares `Store::max_last_sequence`
+  (a single `MAX(last_sequence)` aggregate over `agent_sessions`) against
+  the log's own final record's sequence. `Record::sequence` is a single
+  counter global to the whole log, not per-session (`event_log::writer`'s
+  "Ordering guarantee"), and the startup read's records are already sorted
+  ascending, so the last element is the log's overall maximum — no
+  additional scan needed. Equal means the projection already reflects
+  everything on disk, so the (expensive) full rebuild is skipped entirely,
+  logged as a one-liner; any mismatch, migration, or error in the check
+  falls through to the same full rebuild as before. On a long-lived
+  daily-driver log this makes a clean restart's DuckDB work nearly free
+  instead of a full re-import every time.
+- **`Reload Agent Runtime` gained staged, short status messages** instead of
+  a single "waiting..." line followed by silence until success or failure:
+  `agent::agentd_runtime::ReloadStage`/`reload_stage_status` format
+  "agent runtime: draining…" → "…spawning…" → "…replaying N session(s)…" →
+  "…reconnected (X.Xs)", pushed through a dedicated progress channel (kept
+  separate from the existing `ReloadOutcome` channel, which still carries
+  the final `Connected`/`Failed` result) into the same `agent_state_status`
+  signal the status bar already renders.
+- **A real drain-timeout, where none existed before.** The old code sent
+  `Control::Drain` and unconditionally slept a fixed 200ms courtesy delay
+  before trying to reconnect — if the old process's drain somehow never
+  landed or never completed, `reload_agent_runtime` would eventually just
+  reconnect to whatever was listening, silently defeating the point of a
+  reload (or worse, racing a stale process). `agent::agentd_runtime::
+  wait_for_drain` now polls (bounded by `DRAIN_TIMEOUT`, 2s) until nothing
+  answers a connection on the socket path before proceeding to spawn-or-
+  connect; timing out surfaces as an ordinary `ReloadOutcome::Failed`
+  through the same `reload_failure_status` mapping every other reconnect
+  failure (spawn failure, handshake/contract-version mismatch) already
+  used, so none of reload's failure paths are silent.
+- **Testing.** `crates/horizon-agentd/tests/e2e.rs` gained: a rebuild-delay
+  test-only hook (`HORIZON_AGENTD_TEST_DUCKDB_REBUILD_DELAY_MS`, the DuckDB
+  analogue of the existing resume-delay hook) proving `hello`/`session_list`
+  answer promptly while a slow rebuild is still running; a skip-path test
+  (second spawn against an *unchanged*, already-terminated-session log
+  never re-runs the rebuild — observed via the rebuild-or-skip stderr
+  marker, polled for while the process is still alive, since nothing over
+  the wire signals it by design); and a stale-log test (a log that grew
+  between spawns still triggers a full rebuild). The existing legacy-schema
+  migration test continues to pass unchanged. `agent::agentd_runtime`'s
+  staged-status ordering and `wait_for_drain`'s timeout/short-circuit
+  behavior are unit-tested directly (message formatting/ordering, and a
+  real-but-local `UnixListener` for the timeout case) rather than end-to-end
+  through floem's signal plumbing against a real spawned `horizon-agentd` —
+  matching the precedent already accepted above for this same function's
+  spawn/reconnect orchestration.
+- **Pre-existing flake, unrelated to this addendum.** `killed_agentd_
+  respawns_and_replays_transcript_with_open_turn_cancelled` and `drained_
+  agentd_respawns_and_preserves_a_completed_session` intermittently fail
+  under heavy parallel `cargo test` load (confirmed present on unmodified
+  `main` too, via a stashed before/after comparison) — a race between the
+  JSONL writer's background flush and a `SIGKILL`/respawn happening fast
+  enough to race it, not anything this addendum touches. Worth a follow-up
+  if it proves disruptive.

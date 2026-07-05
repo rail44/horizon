@@ -42,6 +42,21 @@ impl Store {
             .context("query agent sessions")
     }
 
+    /// The projection's high-water mark: the largest `last_sequence` any
+    /// session has recorded, or `None` if `agent_sessions` is empty. Not
+    /// test-only: `horizon-agentd`'s startup rebuild-skip check (task 2 of
+    /// the readiness fix) compares this against the event log's own final
+    /// record sequence to decide whether the projection is already current
+    /// -- cheap enough to run before every rebuild decision since it's a
+    /// single aggregate over a small table, not a scan of `agent_events`.
+    pub fn max_last_sequence(&self) -> Result<Option<i64>> {
+        self.conn
+            .query_row("SELECT MAX(last_sequence) FROM agent_sessions", [], |row| {
+                row.get(0)
+            })
+            .context("query max agent session sequence")
+    }
+
     #[cfg(test)]
     pub fn session_snapshots(&self) -> Result<Vec<AgentStoredSessionSnapshot>> {
         self.sessions()?

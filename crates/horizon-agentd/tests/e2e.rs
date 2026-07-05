@@ -3,9 +3,11 @@
 //! the same package as the `[[bin]]` target) -- see
 //! `docs/agent-runtime-split-design.md`'s step 2 deliverables.
 
-use std::io::Read;
+use std::io::{BufRead, Read};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use horizon_agent::contract::{
@@ -27,6 +29,13 @@ use tokio::net::UnixStream;
 /// the constant of the same name. Test-only; never set outside this file.
 const TEST_RESUME_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_RESUME_DELAY_MS";
 
+/// The env var `horizon-agentd`'s `main` reads to artificially delay its
+/// background DuckDB rebuild task -- the DuckDB analogue of
+/// [`TEST_RESUME_DELAY_MS_VAR`], letting a test prove `hello`/`session_list`
+/// stay reachable while a slow rebuild is still running. Test-only; never
+/// set outside this file.
+const TEST_DUCKDB_REBUILD_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_DUCKDB_REBUILD_DELAY_MS";
+
 /// Owns the spawned `horizon-agentd` child and its socket path; kills the
 /// child and removes the socket file on drop so a failing assertion doesn't
 /// leak either across test runs.
@@ -35,6 +44,16 @@ struct AgentdProcess {
     socket_path: PathBuf,
     event_log_path: PathBuf,
     state_db_path: PathBuf,
+    /// Lines seen so far on this process's stderr, continuously drained by
+    /// a background thread -- `Some` only for a process spawned via
+    /// [`Self::spawn_at_with_duckdb_options`], which is the only
+    /// constructor that pipes (rather than inherits) stderr. Needed by
+    /// [`Self::wait_for_stderr_line`] to observe a spawn's own background
+    /// DuckDB rebuild-or-skip decision (task 2) *while the process is still
+    /// alive* -- there is no over-the-wire signal for it (task 1's whole
+    /// point is that nothing waits on it), so a test must poll stderr
+    /// before killing the process, not just read it all after the fact.
+    stderr_lines: Option<Arc<Mutex<Vec<String>>>>,
 }
 
 impl AgentdProcess {
@@ -121,7 +140,121 @@ impl AgentdProcess {
             socket_path,
             event_log_path,
             state_db_path,
+            stderr_lines: None,
         }
+    }
+
+    /// Same as [`Self::spawn_at`], but additionally sets `horizon-agentd`'s
+    /// test-only [`TEST_DUCKDB_REBUILD_DELAY_MS_VAR`] hook -- for proving
+    /// the DuckDB rebuild (task 1 of the readiness fix) no longer sits on
+    /// the resume-readiness path `hello`/`session_list` block on.
+    fn spawn_at_with_duckdb_rebuild_delay(
+        socket_path: PathBuf,
+        event_log_path: PathBuf,
+        rebuild_delay_ms: u64,
+    ) -> Self {
+        let missing_config_path = std::env::temp_dir().join(format!(
+            "horizon-agentd-e2e-no-such-config-{}-{}.toml",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let state_db_path = std::env::temp_dir().join(format!(
+            "horizon-agentd-e2e-state-{}-{}.duckdb",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let child = Command::new(env!("CARGO_BIN_EXE_horizon-agentd"))
+            .arg("--socket")
+            .arg(&socket_path)
+            .env("HORIZON_CONFIG", &missing_config_path)
+            .env("HORIZON_AGENT_EVENT_LOG", &event_log_path)
+            .env("HORIZON_AGENT_STATE_DB", &state_db_path)
+            .env_remove(TEST_RESUME_DELAY_MS_VAR)
+            .env(
+                TEST_DUCKDB_REBUILD_DELAY_MS_VAR,
+                rebuild_delay_ms.to_string(),
+            )
+            .spawn()
+            .expect("failed to spawn horizon-agentd");
+        Self {
+            child,
+            socket_path,
+            event_log_path,
+            state_db_path,
+            stderr_lines: None,
+        }
+    }
+
+    /// Same as [`Self::spawn_at`], but with an explicit `state_db_path`
+    /// (rather than the fresh random one every other constructor picks) and
+    /// piped, continuously drained stderr (see [`Self::wait_for_stderr_line`])
+    /// -- both needed only by task 2's skip/rebuild tests below: they must
+    /// point two successive spawns at the *same* DuckDB file to prove the
+    /// second one either skips or redoes the rebuild, and must observe that
+    /// spawn's own rebuild-or-skip decision before killing the process.
+    fn spawn_at_with_duckdb_options(
+        socket_path: PathBuf,
+        event_log_path: PathBuf,
+        state_db_path: PathBuf,
+    ) -> Self {
+        let missing_config_path = std::env::temp_dir().join(format!(
+            "horizon-agentd-e2e-no-such-config-{}-{}.toml",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-agentd"))
+            .arg("--socket")
+            .arg(&socket_path)
+            .env("HORIZON_CONFIG", &missing_config_path)
+            .env("HORIZON_AGENT_EVENT_LOG", &event_log_path)
+            .env("HORIZON_AGENT_STATE_DB", &state_db_path)
+            .env_remove(TEST_RESUME_DELAY_MS_VAR)
+            .env_remove(TEST_DUCKDB_REBUILD_DELAY_MS_VAR)
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn horizon-agentd");
+
+        let stderr_lines = Arc::new(Mutex::new(Vec::new()));
+        let reader_lines = stderr_lines.clone();
+        let pipe = child.stderr.take().expect("stderr should have been piped");
+        thread::spawn(move || {
+            let reader = std::io::BufReader::new(pipe);
+            for line in reader.lines().map_while(Result::ok) {
+                reader_lines.lock().unwrap().push(line);
+            }
+        });
+
+        Self {
+            child,
+            socket_path,
+            event_log_path,
+            state_db_path,
+            stderr_lines: Some(stderr_lines),
+        }
+    }
+
+    /// Polls this process's continuously drained stderr (see [`Self::
+    /// spawn_at_with_duckdb_options`]) until a line containing `needle`
+    /// appears, or panics after a generous timeout. Panics immediately if
+    /// this process wasn't spawned with stderr capture enabled.
+    async fn wait_for_stderr_line(&self, needle: &str) -> String {
+        let lines = self
+            .stderr_lines
+            .as_ref()
+            .expect("stderr capture must be enabled via spawn_at_with_duckdb_options");
+        for _ in 0..500 {
+            if let Some(line) = lines
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|line| line.contains(needle))
+                .cloned()
+            {
+                return line;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("gave up waiting for a stderr line containing {needle:?}");
     }
 
     /// Kills this process with `SIGKILL` (`Child::kill` sends `SIGKILL` on
@@ -1369,4 +1502,214 @@ async fn second_agentd_against_a_live_socket_exits_before_reading_its_own_log() 
     );
 
     drop(first);
+}
+
+// --- DuckDB rebuild off the readiness path + skip-when-current -------------
+//
+// Regression coverage for the two other diagnosed causes of a slow-feeling
+// `Reload Agent Runtime`/restart: the DuckDB projection rebuild used to run
+// synchronously *before* readiness (`hello`/`session_list`/`session_new`
+// all waited on it), and it always ran a full rebuild even when the log
+// hadn't changed since the projection was last built.
+
+/// Task 1: `hello`/`session_list` must both answer promptly even while an
+/// (artificially slowed) DuckDB rebuild is still running in its own
+/// background task -- proven with the same delay-hook shape
+/// `hello_answers_immediately_while_session_list_waits_for_a_slow_resume`
+/// uses for the resume phase, applied to the DuckDB rebuild instead.
+#[tokio::test]
+async fn duckdb_rebuild_delay_does_not_block_hello_or_session_list() {
+    let socket_path = std::env::temp_dir().join(format!(
+        "horizon-agentd-e2e-{}-{}.sock",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let event_log_path = std::env::temp_dir().join(format!(
+        "horizon-agentd-e2e-events-{}-{}.jsonl",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+
+    let live_session = SessionId::new();
+    write_session_fixture(
+        &event_log_path,
+        vec![(
+            live_session,
+            vec![
+                Event::StateChanged(SessionState::Created),
+                Event::StateChanged(SessionState::WaitingForUser),
+            ],
+        )],
+    );
+
+    const REBUILD_DELAY_MS: u64 = 2000;
+    let agentd = AgentdProcess::spawn_at_with_duckdb_rebuild_delay(
+        socket_path,
+        event_log_path,
+        REBUILD_DELAY_MS,
+    );
+
+    let hello_started = Instant::now();
+    let (mut reader, mut writer) = connect_and_handshake(&agentd.socket_path).await;
+    let hello_elapsed = hello_started.elapsed();
+    assert!(
+        hello_elapsed < Duration::from_millis(REBUILD_DELAY_MS / 2),
+        "hello should answer well before the artificial duckdb rebuild delay elapses, \
+         took {hello_elapsed:?}"
+    );
+
+    let session_list_started = Instant::now();
+    wire::write_envelope(&mut writer, &Envelope::control(Control::SessionList))
+        .await
+        .unwrap();
+    let reply = wire::read_envelope(&mut reader).await.unwrap().unwrap();
+    let session_list_elapsed = session_list_started.elapsed();
+    assert!(
+        session_list_elapsed < Duration::from_millis(REBUILD_DELAY_MS / 2),
+        "session_list must not wait on the (slow) duckdb rebuild, took {session_list_elapsed:?}"
+    );
+    assert_eq!(
+        reply.body,
+        EnvelopeBody::Control(Control::SessionListResult(vec![SessionSummary {
+            session_id: live_session,
+            provider_id: mock_provider_id(),
+        }])),
+    );
+}
+
+/// Task 2's skip path: a second spawn against an *unchanged* event log must
+/// skip the DuckDB rebuild entirely once the freshness check finds the
+/// existing projection's high-water mark already matches the log's tail --
+/// observed directly via the "already current, skipping rebuild" stderr
+/// marker `main::rebuild_duckdb_projection` logs, polled for while the
+/// process is still alive (there's no over-the-wire signal for this: task
+/// 1's whole point is that nothing waits on it).
+///
+/// The fixture's session must already be terminated: a *live* resumed
+/// session's own thread replays its startup burst (`Created`/init-message/
+/// `WaitingForUser`, per `session::resume_persisted_sessions`'s doc
+/// comment) and persists it like any other event, which would keep growing
+/// the log across every restart and make "unchanged" impossible to set up
+/// at all. A terminated session is skipped by `resume_persisted_sessions`
+/// entirely (see `session_is_dead`), so nothing appends to the log just
+/// from starting `horizon-agentd` -- exactly the genuinely-static-log case
+/// the skip optimization targets.
+#[tokio::test]
+async fn unchanged_log_skips_duckdb_rebuild_on_respawn() {
+    let socket_path = std::env::temp_dir().join(format!(
+        "horizon-agentd-e2e-{}-{}.sock",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let event_log_path = std::env::temp_dir().join(format!(
+        "horizon-agentd-e2e-events-{}-{}.jsonl",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let state_db_path = std::env::temp_dir().join(format!(
+        "horizon-agentd-e2e-state-{}-{}.duckdb",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+
+    let session_id = SessionId::new();
+    write_session_fixture(
+        &event_log_path,
+        vec![(
+            session_id,
+            vec![
+                Event::StateChanged(SessionState::Created),
+                Event::StateChanged(SessionState::WaitingForUser),
+                Event::StateChanged(SessionState::Terminated),
+            ],
+        )],
+    );
+
+    let first = AgentdProcess::spawn_at_with_duckdb_options(
+        socket_path.clone(),
+        event_log_path.clone(),
+        state_db_path.clone(),
+    );
+    connect_and_handshake(&first.socket_path).await;
+    first
+        .wait_for_stderr_line("DuckDB projection rebuilt (")
+        .await;
+    first.kill_and_wait();
+
+    let second =
+        AgentdProcess::spawn_at_with_duckdb_options(socket_path, event_log_path, state_db_path);
+    connect_and_handshake(&second.socket_path).await;
+    second
+        .wait_for_stderr_line("DuckDB projection already current, skipping rebuild")
+        .await;
+}
+
+/// Task 2's other half: a log that grew (or otherwise changed) since the
+/// projection was last built must still trigger a full rebuild -- the skip
+/// optimization must never cause stale data to look "current".
+#[tokio::test]
+async fn stale_log_triggers_duckdb_rebuild_on_respawn() {
+    let socket_path = std::env::temp_dir().join(format!(
+        "horizon-agentd-e2e-{}-{}.sock",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let event_log_path = std::env::temp_dir().join(format!(
+        "horizon-agentd-e2e-events-{}-{}.jsonl",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let state_db_path = std::env::temp_dir().join(format!(
+        "horizon-agentd-e2e-state-{}-{}.duckdb",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+
+    let first_session = SessionId::new();
+    write_session_fixture(
+        &event_log_path,
+        vec![(
+            first_session,
+            vec![
+                Event::StateChanged(SessionState::Created),
+                Event::StateChanged(SessionState::WaitingForUser),
+            ],
+        )],
+    );
+
+    let first = AgentdProcess::spawn_at_with_duckdb_options(
+        socket_path.clone(),
+        event_log_path.clone(),
+        state_db_path.clone(),
+    );
+    connect_and_handshake(&first.socket_path).await;
+    first
+        .wait_for_stderr_line("DuckDB projection rebuilt (")
+        .await;
+    first.kill_and_wait();
+
+    // Append a new session to the *same* log file while agentd is down --
+    // advances the log's tail sequence past what the projection recorded.
+    let second_session = SessionId::new();
+    write_session_fixture(
+        &event_log_path,
+        vec![(
+            second_session,
+            vec![
+                Event::StateChanged(SessionState::Created),
+                Event::StateChanged(SessionState::WaitingForUser),
+            ],
+        )],
+    );
+
+    let second =
+        AgentdProcess::spawn_at_with_duckdb_options(socket_path, event_log_path, state_db_path);
+    connect_and_handshake(&second.socket_path).await;
+    let rebuilt_line = second
+        .wait_for_stderr_line("DuckDB projection rebuilt (")
+        .await;
+    assert!(
+        !rebuilt_line.contains("skipping"),
+        "a stale (grown) log must trigger a fresh rebuild, not the skip path: {rebuilt_line}"
+    );
 }

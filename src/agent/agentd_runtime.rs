@@ -23,10 +23,11 @@
 //! sequence.
 
 use std::collections::HashMap;
+use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use floem::ext_event::create_signal_from_channel;
@@ -551,18 +552,83 @@ pub(crate) fn fold_agent_session_events(
     });
 }
 
-/// A courtesy delay before [`reload_agent_runtime`]'s background thread
-/// attempts to reconnect, giving a drained `horizon-agentd` a moment to
-/// actually exit -- not a correctness requirement: `horizon-agentd`'s own
-/// `bind_listener` stale-socket recovery and `agent::agentd_client::
-/// connect_or_spawn`'s retry loop both already tolerate the old process
-/// still shutting down.
-const RELOAD_RESPAWN_DELAY: Duration = Duration::from_millis(200);
+/// How long [`wait_for_drain`] polls for the old `horizon-agentd` to
+/// actually stop accepting connections before giving up and reporting a
+/// drain timeout -- generous for a same-host process that flushes a socket
+/// write and calls `std::process::exit` (should be near-instant), bounded so
+/// a genuinely wedged old process produces a loud, specific failure instead
+/// of `reload_agent_runtime` silently reconnecting to it (defeating the
+/// whole point of "reload") or hanging indefinitely.
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Poll interval for [`wait_for_drain`] -- fine-grained relative to
+/// [`DRAIN_TIMEOUT`] since a same-host Unix socket connect attempt is cheap.
+const DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Blocks (this is [`reload_agent_runtime`]'s own background thread, not the
+/// UI thread) until nothing answers a connection attempt on `socket_path`
+/// -- i.e. the drained old `horizon-agentd` has actually exited, whether or
+/// not it got around to unlinking the socket file itself (`Control::Drain`'s
+/// handler calls `std::process::exit` directly, skipping the normal-exit
+/// unlink path in `main::run` -- a stale file with nothing listening still
+/// fails to connect, which is all this needs to observe) -- or [`DRAIN_TIMEOUT`]
+/// elapses, in which case it's reported as a failure rather than silently
+/// falling through to a spawn-or-connect attempt that might reattach to a
+/// still-alive old process instead of the rebuilt binary. Synchronous
+/// (`std::os::unix::net`, not `tokio`): this thread has no async runtime of
+/// its own (see [`reload_agent_runtime`]'s doc comment).
+fn wait_for_drain(socket_path: &Path) -> Result<(), String> {
+    let deadline = Instant::now() + DRAIN_TIMEOUT;
+    loop {
+        if StdUnixStream::connect(socket_path).is_err() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "horizon-agentd did not drain within {:.1}s",
+                DRAIN_TIMEOUT.as_secs_f64()
+            ));
+        }
+        thread::sleep(DRAIN_POLL_INTERVAL);
+    }
+}
+
+/// One stage of `reload_agent_runtime`'s progress, formatted by
+/// [`reload_stage_status`] into the short strings that land in
+/// `agent_state_status` (the status bar) while a reload is in flight --
+/// separated from the sending/timing logic so the message text and its
+/// ordering are directly unit-testable without spinning up floem's signal
+/// plumbing or a real `horizon-agentd` process (see this module's tests).
+enum ReloadStage {
+    Draining,
+    Spawning,
+    Replaying(usize),
+    Reconnected(Duration),
+}
+
+/// Formats `stage` into the short status-bar text `reload_agent_runtime`
+/// pushes through `agent_state_status` at each point in the reload sequence
+/// -- kept under its own name/`…` ellipsis style so "still in progress" vs.
+/// "done" (`Reconnected`, no trailing ellipsis) reads unambiguously.
+fn reload_stage_status(stage: ReloadStage) -> String {
+    match stage {
+        ReloadStage::Draining => "agent runtime: draining…".to_string(),
+        ReloadStage::Spawning => "agent runtime: spawning…".to_string(),
+        ReloadStage::Replaying(count) => format!(
+            "agent runtime: replaying {count} session{}…",
+            if count == 1 { "" } else { "s" }
+        ),
+        ReloadStage::Reconnected(elapsed) => {
+            format!("agent runtime: reconnected ({:.1}s)", elapsed.as_secs_f64())
+        }
+    }
+}
 
 /// The result [`reload_agent_runtime`]'s background thread hands back to its
 /// `create_effect` callback -- everything needed to finish reconnecting on
 /// the UI thread (`Connected`), or the error string to surface
-/// (`Failed`, e.g. a contract-version mismatch's "reload required" text).
+/// (`Failed`, e.g. a contract-version mismatch's "reload required" text, or
+/// [`wait_for_drain`]'s timeout message).
 #[derive(Clone)]
 enum ReloadOutcome {
     Connected {
@@ -570,26 +636,33 @@ enum ReloadOutcome {
         host_tool_requests: Receiver<HostToolRequestEnvelope>,
         skipped_lines: Receiver<String>,
         summaries: Vec<SessionSummary>,
+        elapsed: Duration,
     },
     Failed(String),
 }
 
 /// The whole `Reload Agent Runtime` command (`app::commands::CommandId::
 /// ReloadAgentRuntime`, dispatched from `app::command_actions`): drain the
-/// current connection (if any), wait a beat, spawn-or-connect the (possibly
-/// just-rebuilt) binary, then run step 4's reconnect sequence against it --
-/// "drain -> agentd flushes and exits -> Horizon spawns the rebuilt binary
-/// -> reconnect -> session_load" per the design. `agentd_connection` is set
-/// to `None` immediately (so no session tries to route through the dying
-/// connection while this is in flight) and progress/results are reported
-/// through `agent_state_status`, the same free-floating status signal
-/// `app::status_bar` already renders.
+/// current connection (if any), wait for it to actually exit
+/// ([`wait_for_drain`]), spawn-or-connect the (possibly just-rebuilt)
+/// binary, then run step 4's reconnect sequence against it -- "drain ->
+/// agentd flushes and exits -> Horizon spawns the rebuilt binary ->
+/// reconnect -> session_load" per the design. `agentd_connection` is set to
+/// `None` immediately (so no session tries to route through the dying
+/// connection while this is in flight) and staged progress -- draining,
+/// spawning, replaying N sessions, reconnected -- is reported through
+/// `agent_state_status`, the same free-floating status signal `app::
+/// status_bar` already renders, so a reload that used to look like it did
+/// nothing until it either finished or failed now visibly moves through
+/// each phase. Every failure path (drain timeout, spawn failure, handshake
+/// failure) funnels through the same `ReloadOutcome::Failed` ->
+/// [`reload_failure_status`] mapping, so none of them are silent either.
 ///
-/// The blocking work (the respawn delay, `AgentdConnection::connect`,
+/// The blocking work (`wait_for_drain`, `AgentdConnection::connect`,
 /// `session_list`'s round trip) all runs on a background thread; only the
-/// `create_effect` callback that receives the result touches floem signals,
-/// so this never stalls the UI thread the way blocking at Horizon startup is
-/// allowed to.
+/// `create_effect` callbacks that receive progress/results touch floem
+/// signals, so this never stalls the UI thread the way blocking at Horizon
+/// startup is allowed to.
 pub(crate) fn reload_agent_runtime(
     current: Option<AgentdConnection>,
     workspace: RwSignal<Workspace>,
@@ -602,27 +675,43 @@ pub(crate) fn reload_agent_runtime(
         connection.drain();
     }
     agentd_connection.set(None);
-    agent_state_status.set(Some(
-        "Reloading agent runtime: waiting for horizon-agentd to exit...".to_string(),
-    ));
+    agent_state_status.set(Some(reload_stage_status(ReloadStage::Draining)));
 
+    let (progress_tx, progress_rx) = unbounded::<String>();
     let (outcome_tx, outcome_rx) = unbounded::<ReloadOutcome>();
     thread::spawn(move || {
-        thread::sleep(RELOAD_RESPAWN_DELAY);
+        let started = Instant::now();
         let socket_path = horizon_agent::socket::default_socket_path();
+
+        if let Err(error) = wait_for_drain(&socket_path) {
+            let _ = outcome_tx.send(ReloadOutcome::Failed(error));
+            return;
+        }
+
+        let _ = progress_tx.send(reload_stage_status(ReloadStage::Spawning));
         let outcome = match AgentdConnection::connect(&socket_path) {
             Ok((connection, host_tool_requests, skipped_lines)) => {
                 let summaries = connection.session_list();
+                let _ =
+                    progress_tx.send(reload_stage_status(ReloadStage::Replaying(summaries.len())));
                 ReloadOutcome::Connected {
                     connection,
                     host_tool_requests,
                     skipped_lines,
                     summaries,
+                    elapsed: started.elapsed(),
                 }
             }
             Err(error) => ReloadOutcome::Failed(error),
         };
         let _ = outcome_tx.send(outcome);
+    });
+
+    let progress_signal = create_signal_from_channel(progress_rx);
+    create_effect(move |_| {
+        if let Some(message) = progress_signal.get() {
+            agent_state_status.set(Some(message));
+        }
     });
 
     let outcome_signal = create_signal_from_channel(outcome_rx);
@@ -634,12 +723,14 @@ pub(crate) fn reload_agent_runtime(
                     host_tool_requests,
                     skipped_lines,
                     summaries,
+                    elapsed,
                 } => {
                     wire_host_tool_responder(connection.clone(), host_tool_requests, workspace);
                     wire_skipped_lines_status(skipped_lines, agent_state_status);
                     attach_sessions(&connection, summaries, workspace, frames, sessions);
                     agentd_connection.set(Some(connection));
-                    agent_state_status.set(Some("Agent runtime reloaded.".to_string()));
+                    agent_state_status
+                        .set(Some(reload_stage_status(ReloadStage::Reconnected(elapsed))));
                 }
                 ReloadOutcome::Failed(error) => {
                     agent_state_status.set(Some(reload_failure_status(&error)));
@@ -690,5 +781,116 @@ mod tests {
             "status was: {status}"
         );
         assert!(!status.to_ascii_lowercase().contains("reload required"));
+    }
+
+    /// A drain timeout's error text must flow through the same generic
+    /// failure mapping as any other reconnect failure -- proven directly
+    /// against [`wait_for_drain`]'s own message shape rather than the
+    /// timing behavior itself (see `wait_for_drain_...` below for that),
+    /// since this is the piece that decides what the status bar shows.
+    #[test]
+    fn reload_failure_status_reports_a_drain_timeout_generically() {
+        let status = reload_failure_status("horizon-agentd did not drain within 2.0s");
+        assert!(
+            status.starts_with("Agent runtime reload failed"),
+            "status was: {status}"
+        );
+    }
+
+    /// [`wait_for_drain`] must return immediately (well under its own
+    /// timeout) when nothing is listening on the socket path at all -- the
+    /// common case (a stale/nonexistent path, or a cleanly drained process
+    /// that already exited) -- rather than always waiting out the full
+    /// budget.
+    #[test]
+    fn wait_for_drain_returns_immediately_when_nothing_is_listening() {
+        let path = std::env::temp_dir().join(format!(
+            "horizon-agentd-runtime-test-no-such-socket-{}.sock",
+            uuid::Uuid::new_v4()
+        ));
+        let started = Instant::now();
+        wait_for_drain(&path).expect("nothing listening should be reported as drained");
+        assert!(
+            started.elapsed() < DRAIN_TIMEOUT / 2,
+            "wait_for_drain should not wait out its timeout when nothing is listening"
+        );
+    }
+
+    /// [`wait_for_drain`] must time out (rather than hang forever) against a
+    /// socket that keeps accepting connections the whole time -- modeling a
+    /// wedged old `horizon-agentd` that never actually drains.
+    #[test]
+    fn wait_for_drain_times_out_against_a_socket_that_keeps_accepting() {
+        let path = std::env::temp_dir().join(format!(
+            "horizon-agentd-runtime-test-live-socket-{}.sock",
+            uuid::Uuid::new_v4()
+        ));
+        let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind test listener");
+        // Accept (and immediately drop) connections in the background so
+        // `wait_for_drain`'s repeated connect attempts keep succeeding for
+        // its whole polling window, the way a still-alive process would.
+        let accepting = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let accepting_in_thread = accepting.clone();
+        let acceptor = thread::spawn(move || {
+            listener.set_nonblocking(true).expect("set nonblocking");
+            while accepting_in_thread.load(std::sync::atomic::Ordering::SeqCst) {
+                let _ = listener.accept();
+                thread::sleep(Duration::from_millis(5));
+            }
+        });
+
+        let error = wait_for_drain(&path).expect_err("a socket that never drains must time out");
+        assert!(
+            error.contains("did not drain"),
+            "error message was: {error}"
+        );
+
+        accepting.store(false, std::sync::atomic::Ordering::SeqCst);
+        acceptor.join().expect("acceptor thread should exit");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The four staged messages `reload_agent_runtime` pushes through
+    /// `agent_state_status` must be short, use the same "agent runtime: "
+    /// prefix, and -- since `agent_state_status` has no history, just a
+    /// latest-value label (`app::status_bar`) -- arrive in the same order
+    /// the reload sequence produces them: draining, spawning, replaying,
+    /// reconnected. Unit-tested at this message-formatting/ordering level
+    /// rather than end-to-end through floem's signal plumbing against a
+    /// real spawned `horizon-agentd`, matching the precedent already
+    /// accepted for this function's own spawn/reconnect orchestration (see
+    /// `docs/agent-runtime-split-design.md`'s step 4 testing-scope notes).
+    #[test]
+    fn reload_stage_status_messages_are_short_and_in_expected_order() {
+        let stages = vec![
+            ReloadStage::Draining,
+            ReloadStage::Spawning,
+            ReloadStage::Replaying(2),
+            ReloadStage::Reconnected(Duration::from_millis(1500)),
+        ];
+        let messages: Vec<String> = stages.into_iter().map(reload_stage_status).collect();
+        assert_eq!(
+            messages,
+            vec![
+                "agent runtime: draining…".to_string(),
+                "agent runtime: spawning…".to_string(),
+                "agent runtime: replaying 2 sessions…".to_string(),
+                "agent runtime: reconnected (1.5s)".to_string(),
+            ]
+        );
+        for message in &messages {
+            assert!(
+                message.len() < 60,
+                "status messages should stay short for the status bar, got: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn reload_stage_status_singularizes_a_single_session() {
+        assert_eq!(
+            reload_stage_status(ReloadStage::Replaying(1)),
+            "agent runtime: replaying 1 session…"
+        );
     }
 }

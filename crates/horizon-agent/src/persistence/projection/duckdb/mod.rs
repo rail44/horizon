@@ -25,30 +25,43 @@ pub use records::{
 
 pub struct Store {
     conn: Connection,
+    /// Whether opening this store had to migrate a pre-`event_at`
+    /// `agent_events` table (see [`Self::migrate_legacy_agent_events_schema`]).
+    /// Not test-only: `horizon-agentd`'s startup rebuild-skip check
+    /// (task 2 of the readiness fix) reads this via [`Self::
+    /// migrated_legacy_schema`] to know it must not trust the projection's
+    /// existing `agent_sessions.last_sequence` high-water mark -- a
+    /// migration just dropped and recreated `agent_events` (losing its
+    /// rows) without touching `agent_sessions`, so that table's numbers
+    /// would otherwise look deceptively "current" against an now-empty
+    /// projection.
+    migrated_legacy_schema: bool,
 }
 
 impl Store {
     #[cfg(test)]
     pub fn open_in_memory() -> Result<Self> {
-        let store = Self {
-            conn: Connection::open_in_memory().context("open in-memory DuckDB agent store")?,
-        };
-        store.initialize_schema()?;
-        Ok(store)
+        Self::from_connection(
+            Connection::open_in_memory().context("open in-memory DuckDB agent store")?,
+        )
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let store = Self {
-            conn: Connection::open(path).context("open DuckDB agent store")?,
-        };
-        store.initialize_schema()?;
-        Ok(store)
+        Self::from_connection(Connection::open(path).context("open DuckDB agent store")?)
     }
 
-    fn initialize_schema(&self) -> Result<()> {
-        self.migrate_legacy_agent_events_schema()?;
-        self.conn.execute_batch(INITIALIZE_SCHEMA_SQL)?;
-        Ok(())
+    fn from_connection(conn: Connection) -> Result<Self> {
+        let migrated_legacy_schema = Self::migrate_legacy_agent_events_schema(&conn)?;
+        conn.execute_batch(INITIALIZE_SCHEMA_SQL)?;
+        Ok(Self {
+            conn,
+            migrated_legacy_schema,
+        })
+    }
+
+    /// See the field's doc comment on [`Self::migrated_legacy_schema`].
+    pub fn migrated_legacy_schema(&self) -> bool {
+        self.migrated_legacy_schema
     }
 
     /// Migrates a pre-`event_at` `agent_events` table (created by a Horizon
@@ -66,18 +79,25 @@ impl Store {
     /// clears every table and reinserts all of it) -- the rebuild
     /// repopulates every row's `event_at` from the JSONL record's
     /// `created_at_unix_ms`, so nothing is lost by dropping first.
-    fn migrate_legacy_agent_events_schema(&self) -> Result<()> {
-        let has_event_at: i64 = self.conn.query_row(
+    ///
+    /// Returns whether a migration actually ran -- `true` both for a
+    /// genuine legacy file and for a brand-new one (where `agent_events`
+    /// doesn't exist yet either), which is harmless: [`Self::
+    /// migrated_legacy_schema`]'s one caller only uses `true` to skip an
+    /// optimization (trusting a freshness check), never to skip correctness
+    /// work.
+    fn migrate_legacy_agent_events_schema(conn: &Connection) -> Result<bool> {
+        let has_event_at: i64 = conn.query_row(
             "SELECT COUNT(*) FROM information_schema.columns
              WHERE table_name = 'agent_events' AND column_name = 'event_at'",
             [],
             |row| row.get(0),
         )?;
         if has_event_at == 0 {
-            self.conn
-                .execute_batch("DROP TABLE IF EXISTS agent_events;")?;
+            conn.execute_batch("DROP TABLE IF EXISTS agent_events;")?;
+            return Ok(true);
         }
-        Ok(())
+        Ok(false)
     }
 }
 
