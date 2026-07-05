@@ -63,19 +63,20 @@ impl TerminalCore {
             events.pty_writes.push(format(rgb).into_bytes());
         }
         for format in events.window_size_requests.drain(..) {
-            // Cell pixel dimensions aren't known at this layer (Horizon's
-            // terminal core is headless w.r.t. font metrics, which live in
-            // `terminal::view`), so we answer honestly with 0 rather than
-            // fabricate a value — still unblocks a caller polling for any
-            // response, at the cost of not actually answering the pixel
-            // question. `TerminalSize` would need real pixel dimensions
-            // threaded down from the view layer's font metrics to close
-            // this gap.
+            // The formatter (alacritty_terminal's `Term::text_area_size_pixels`)
+            // answers CSI 14t as `num_lines * cell_height` and
+            // `num_cols * cell_width`, i.e. it expects per-cell pixel size
+            // plus a grid count to multiply out. `TerminalSize` instead
+            // carries the *total* grid pixel size directly
+            // (`pixel_width`/`pixel_height`, mirroring `ws_xpixel`/
+            // `ws_ypixel`), so report a 1x1 "grid" with the totals as the
+            // "cell" size — an exact pass-through rather than dividing by
+            // cols/rows and losing precision on the way back out.
             let window_size = WindowSize {
-                num_lines: self.size.rows,
-                num_cols: self.size.cols,
-                cell_width: 0,
-                cell_height: 0,
+                num_lines: 1,
+                num_cols: 1,
+                cell_width: self.size.pixel_width,
+                cell_height: self.size.pixel_height,
             };
             events.pty_writes.push(format(window_size).into_bytes());
         }

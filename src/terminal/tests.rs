@@ -14,7 +14,7 @@ fn terminal_intro_mentions_backends() {
 
 #[test]
 fn vt_stream_updates_snapshot() {
-    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     core.write_vt(b"hello\r\n\x1b[31mred\x1b[0m");
 
     let snapshot = core.snapshot_text();
@@ -24,7 +24,7 @@ fn vt_stream_updates_snapshot() {
 
 #[test]
 fn kitty_keyboard_mode_switches_termwiz_encoding() {
-    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     core.write_vt(b"\x1b[>1u");
 
     let encoded = core.encode_key(KeyCode::Escape, Modifiers::NONE, true);
@@ -33,15 +33,15 @@ fn kitty_keyboard_mode_switches_termwiz_encoding() {
 
 #[test]
 fn key_up_events_do_not_emit_legacy_input() {
-    let core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    let core = TerminalCore::new(TerminalSize::new(20, 4));
     let encoded = core.encode_key(KeyCode::Char('a'), Modifiers::NONE, false);
     assert_eq!(encoded, "");
 }
 
 #[test]
 fn terminal_session_runs_shell_command() {
-    let session = TerminalSession::spawn(TerminalSize { cols: 80, rows: 12 })
-        .expect("terminal session should spawn");
+    let session =
+        TerminalSession::spawn(TerminalSize::new(80, 12)).expect("terminal session should spawn");
     let tx = session.sender();
     let rx = session.updates();
 
@@ -73,7 +73,7 @@ fn terminal_session_runs_shell_command() {
 
 #[test]
 fn vt_stream_preserves_ansi_foreground_color() {
-    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     core.write_vt(b"\x1b[31mred\x1b[0m plain");
 
     let frame = core.snapshot_frame();
@@ -90,7 +90,7 @@ fn vt_stream_preserves_ansi_foreground_color() {
 
 #[test]
 fn vt_stream_tracks_wide_character_columns() {
-    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     core.write_vt("日本語".as_bytes());
 
     let frame = core.snapshot_frame();
@@ -105,7 +105,7 @@ fn vt_stream_tracks_wide_character_columns() {
 
 #[test]
 fn scroll_display_uses_alacritty_history() {
-    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 3 });
+    let mut core = TerminalCore::new(TerminalSize::new(20, 3));
     core.write_vt(b"one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix\r\nseven");
 
     let bottom = core.snapshot_text();
@@ -123,7 +123,7 @@ fn scroll_display_uses_alacritty_history() {
 
 #[test]
 fn scroll_in_alternate_screen_sends_application_input() {
-    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 3 });
+    let mut core = TerminalCore::new(TerminalSize::new(20, 3));
     core.write_vt(b"\x1b[?1049h");
 
     assert!(core.alternate_screen());
@@ -136,7 +136,7 @@ fn scroll_in_alternate_screen_sends_application_input() {
 
 #[test]
 fn sgr_mouse_mode_scroll_sends_wheel_reports() {
-    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 3 });
+    let mut core = TerminalCore::new(TerminalSize::new(20, 3));
     core.write_vt(b"\x1b[?1000h\x1b[?1006h");
 
     assert_eq!(
@@ -151,7 +151,7 @@ fn sgr_mouse_mode_scroll_sends_wheel_reports() {
 
 #[test]
 fn mouse_report_is_ignored_until_mouse_mode_is_enabled() {
-    let core = TerminalCore::new(TerminalSize { cols: 20, rows: 3 });
+    let core = TerminalCore::new(TerminalSize::new(20, 3));
 
     assert_eq!(
         core.handle_mouse_report(test_mouse(TerminalMouseKind::Press)),
@@ -161,7 +161,7 @@ fn mouse_report_is_ignored_until_mouse_mode_is_enabled() {
 
 #[test]
 fn sgr_mouse_mode_click_sends_press_and_release_reports() {
-    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 3 });
+    let mut core = TerminalCore::new(TerminalSize::new(20, 3));
     core.write_vt(b"\x1b[?1000h\x1b[?1006h");
 
     assert_eq!(
@@ -176,7 +176,7 @@ fn sgr_mouse_mode_click_sends_press_and_release_reports() {
 
 #[test]
 fn sgr_mouse_drag_requires_drag_or_motion_mode() {
-    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 3 });
+    let mut core = TerminalCore::new(TerminalSize::new(20, 3));
     core.write_vt(b"\x1b[?1000h\x1b[?1006h");
 
     assert_eq!(
@@ -193,14 +193,14 @@ fn sgr_mouse_drag_requires_drag_or_motion_mode() {
 
 #[test]
 fn paste_is_plain_text_by_default() {
-    let core = TerminalCore::new(TerminalSize { cols: 20, rows: 3 });
+    let core = TerminalCore::new(TerminalSize::new(20, 3));
 
     assert_eq!(core.paste_input("hello\n"), b"hello\n".to_vec());
 }
 
 #[test]
 fn paste_wraps_text_when_bracketed_paste_is_enabled() {
-    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 3 });
+    let mut core = TerminalCore::new(TerminalSize::new(20, 3));
     core.write_vt(b"\x1b[?2004h");
 
     assert_eq!(
@@ -211,7 +211,7 @@ fn paste_wraps_text_when_bracketed_paste_is_enabled() {
 
 #[test]
 fn selection_to_string_uses_alacritty_selection() {
-    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 3 });
+    let mut core = TerminalCore::new(TerminalSize::new(20, 3));
     core.write_vt(b"hello world");
 
     core.start_selection(TerminalSelectionPoint { row: 0, col: 0 });
@@ -248,7 +248,7 @@ fn terminal_command_sanitizes_emulator_environment() {
 
 #[test]
 fn da1_query_reports_primary_device_attributes() {
-    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     let events = core.write_vt(b"\x1b[c");
 
     assert_eq!(events.pty_writes, vec![b"\x1b[?6c".to_vec()]);
@@ -256,7 +256,7 @@ fn da1_query_reports_primary_device_attributes() {
 
 #[test]
 fn da2_query_reports_secondary_device_attributes() {
-    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     let events = core.write_vt(b"\x1b[>c");
 
     assert_eq!(events.pty_writes.len(), 1);
@@ -267,7 +267,7 @@ fn da2_query_reports_secondary_device_attributes() {
 
 #[test]
 fn dsr_query_reports_device_status_ok() {
-    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     let events = core.write_vt(b"\x1b[5n");
 
     assert_eq!(events.pty_writes, vec![b"\x1b[0n".to_vec()]);
@@ -275,7 +275,7 @@ fn dsr_query_reports_device_status_ok() {
 
 #[test]
 fn cpr_query_reports_cursor_position() {
-    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     core.write_vt(b"ab\r\ncd");
     let events = core.write_vt(b"\x1b[6n");
 
@@ -284,7 +284,7 @@ fn cpr_query_reports_cursor_position() {
 
 #[test]
 fn kitty_keyboard_query_reports_pushed_flags() {
-    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     core.write_vt(b"\x1b[>5u");
     let events = core.write_vt(b"\x1b[?u");
 
@@ -293,7 +293,7 @@ fn kitty_keyboard_query_reports_pushed_flags() {
 
 #[test]
 fn xtwinops_18t_reports_size_in_characters() {
-    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     let events = core.write_vt(b"\x1b[18t");
 
     assert_eq!(events.pty_writes, vec![b"\x1b[8;4;20t".to_vec()]);
@@ -301,19 +301,32 @@ fn xtwinops_18t_reports_size_in_characters() {
 
 #[test]
 fn xtwinops_14t_reports_size_in_pixels_instead_of_hanging() {
-    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     let events = core.write_vt(b"\x1b[14t");
 
-    // Cell pixel dimensions aren't known at this layer (see `write_vt`), so
-    // the response is honest-but-degraded (0 pixels) rather than absent —
-    // the point of this test is that a response is sent at all, unblocking
-    // any caller polling for one.
+    // Pixel geometry isn't known until a real resize carries it in (see
+    // `TerminalSize::new`), so a freshly constructed core — never resized —
+    // still answers honestly with 0 rather than hanging the caller.
     assert_eq!(events.pty_writes, vec![b"\x1b[4;0;0t".to_vec()]);
 }
 
 #[test]
+fn xtwinops_14t_reports_real_pixel_dimensions_after_sized_resize() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.resize(TerminalSize {
+        cols: 20,
+        rows: 4,
+        pixel_width: 180,
+        pixel_height: 88,
+    });
+    let events = core.write_vt(b"\x1b[14t");
+
+    assert_eq!(events.pty_writes, vec![b"\x1b[4;88;180t".to_vec()]);
+}
+
+#[test]
 fn osc11_query_reports_configured_background_color() {
-    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     let events = core.write_vt(b"\x1b]11;?\x07");
 
     let bg = crate::terminal::config::resolved_colors().background;
@@ -326,7 +339,7 @@ fn osc11_query_reports_configured_background_color() {
 
 #[test]
 fn osc10_query_reports_configured_foreground_color() {
-    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     let events = core.write_vt(b"\x1b]10;?\x07");
 
     let fg = crate::terminal::config::resolved_colors().foreground;
@@ -339,7 +352,7 @@ fn osc10_query_reports_configured_foreground_color() {
 
 #[test]
 fn osc4_query_reports_overridden_palette_color_over_theme_default() {
-    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     core.write_vt(b"\x1b]4;1;#112233\x07");
     let events = core.write_vt(b"\x1b]4;1;?\x07");
 

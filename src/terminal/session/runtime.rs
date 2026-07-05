@@ -266,17 +266,11 @@ pub(super) fn run_writer(
                 let _ = paste_tx.send(text);
             }
             TerminalCommand::Resize(size) => {
-                // Same gap as the initial `openpty` call in `session.rs`:
-                // `TerminalSize` has no pixel geometry, so every resize
-                // re-zeros `ws_xpixel`/`ws_ypixel` via `TIOCSWINSZ` even if
-                // a previous writer (e.g. a peer terminal attached to the
-                // same PTY) had set real values — see the comment there
-                // for what's needed to fix this.
                 let _ = master.resize(PtySize {
                     rows: size.rows,
                     cols: size.cols,
-                    pixel_width: 0,
-                    pixel_height: 0,
+                    pixel_width: size.pixel_width,
+                    pixel_height: size.pixel_height,
                 });
                 let _ = resize_tx.send(size);
             }

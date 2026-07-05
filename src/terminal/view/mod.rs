@@ -329,9 +329,13 @@ impl View for TerminalTextView {
 
 impl TerminalTextView {
     fn resize_terminal(&mut self, cols: usize, rows: usize) {
+        let cols = cols.clamp(1, u16::MAX as usize) as u16;
+        let rows = rows.clamp(1, u16::MAX as usize) as u16;
         let size = TerminalSize {
-            cols: cols.clamp(1, u16::MAX as usize) as u16,
-            rows: rows.clamp(1, u16::MAX as usize) as u16,
+            cols,
+            rows,
+            pixel_width: pixel_dimension(cols, self.metrics.cell_width),
+            pixel_height: pixel_dimension(rows, self.metrics.line_height),
         };
         if self.last_size == Some(size) {
             return;
@@ -348,6 +352,16 @@ impl TerminalTextView {
             let _ = tx.send(command);
         }
     }
+}
+
+/// Total grid pixel size along one axis (`count * cell_extent`), clamped
+/// into `u16` for `TerminalSize::pixel_width`/`pixel_height` — see the
+/// field docs on `TerminalSize` for why the PTY needs this instead of the
+/// zeros it used to get.
+fn pixel_dimension(count: u16, cell_extent: f64) -> u16 {
+    (count as f64 * cell_extent)
+        .round()
+        .clamp(0.0, u16::MAX as f64) as u16
 }
 
 #[cfg(test)]
@@ -389,6 +403,37 @@ mod tests {
     #[test]
     fn measured_cell_width_is_usable() {
         assert!(_test_measured_cell_width() > 1.0);
+    }
+
+    #[test]
+    fn resize_terminal_derives_pixel_dimensions_from_metrics() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut view = TerminalTextView::new(
+            ViewId::new(),
+            TerminalViewState {
+                frame: TerminalFrame::from_text(String::new()),
+                preedit: None,
+            },
+            Some(tx),
+            Box::new(|| Point::ZERO),
+            Box::new(|_, _| {}),
+        );
+        view.metrics = TerminalMetrics {
+            cell_width: 9.0,
+            line_height: 18.0,
+        };
+
+        view.resize_terminal(80, 24);
+
+        match rx.try_recv() {
+            Ok(TerminalCommand::Resize(size)) => {
+                assert_eq!(size.cols, 80);
+                assert_eq!(size.rows, 24);
+                assert_eq!(size.pixel_width, 720);
+                assert_eq!(size.pixel_height, 432);
+            }
+            other => panic!("expected a Resize command, got {other:?}"),
+        }
     }
 
     #[test]
