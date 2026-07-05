@@ -2,6 +2,8 @@ use std::time::Duration;
 
 use crate::agent::contract::{SessionState, ToolCallId};
 use crate::ui::fonts::font_family;
+use crate::ui::hint_chip::key_hint;
+use crate::ui::theme;
 use floem::prelude::*;
 use floem::{
     action::set_ime_cursor_area,
@@ -67,29 +69,96 @@ pub(super) fn agent_composer(
     })
 }
 
-pub(super) fn agent_approval_actions(
+/// Which of an agent pane's two pane-internal focus targets currently owns
+/// the keyboard: the message-box composer, or the approval banner (see
+/// `agent_approval_banner` below). Only meaningful for agent panes --
+/// terminal panes have no banner and their pane never leaves `MessageBox`.
+///
+/// Design: the tool-approval interaction takes its "every interaction
+/// request visibly explains which key does what" cue from crush
+/// (charmbracelet's TUI) -- see `ui::hint_chip::key_hint` for the inline
+/// `[y] approve` bindings this drives, and `workspace::input::
+/// handle_agent_banner_key` for the key routing this focus state gates.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum AgentPaneFocus {
+    #[default]
+    MessageBox,
+    Banner,
+}
+
+/// Computes the pane's next approval-banner focus, if it should change,
+/// after the oldest pending tool-call approval (`AgentFrame::
+/// pending_approval_call_id`, gated by `gate_pending_approval`) goes from
+/// `previous_pending` to `pending`.
+///
+/// Returns `None` when the pending call id didn't actually change -- an
+/// unrelated frame update, or the same call still pending after the user
+/// pressed `Esc` to leave the banner early (a no-op refresh must not undo
+/// that). Otherwise: a *new* call becoming the oldest pending one (the
+/// session's first pending approval, or the next one in a queue once the
+/// previous oldest resolved) grabs the banner; no call pending any more
+/// releases it back to the message box. This covers both halves of the
+/// design -- the banner "takes... focus" the instant a request arrives, and
+/// "focus returns to the message box" the instant it resolves -- regardless
+/// of how the resolution happened, since a key, a click, and a palette
+/// action all converge on the same `pending_approval` signal.
+pub(super) fn next_agent_pane_focus(
+    previous_pending: Option<ToolCallId>,
+    pending: Option<ToolCallId>,
+) -> Option<AgentPaneFocus> {
+    if previous_pending == pending {
+        return None;
+    }
+    Some(if pending.is_some() {
+        AgentPaneFocus::Banner
+    } else {
+        AgentPaneFocus::MessageBox
+    })
+}
+
+/// The approval banner: renders only the oldest pending tool call's
+/// approve/deny controls (targeting discipline -- banner keys and buttons
+/// alike act on the oldest pending call only; cross-session approvals stay
+/// palette-only) with their key bindings spelled out inline
+/// (`ui::hint_chip::key_hint`). `extra_pending` is the count of additional
+/// calls queued behind the one shown, rendered as a "+N more" hint so a
+/// second or third pending approval isn't silently dropped from view.
+pub(super) fn agent_approval_banner(
     visible: impl Fn() -> bool + 'static + Copy,
     pending_approval: impl Fn() -> Option<ToolCallId> + 'static + Copy,
+    extra_pending: impl Fn() -> usize + 'static + Copy,
     on_approve: impl Fn(ToolCallId) + 'static,
     on_deny: impl Fn(ToolCallId) + 'static,
 ) -> impl IntoView {
     h_stack((
         agent_approval_button(
-            "Approve",
+            "y",
+            "approve",
             visible,
             pending_approval,
             on_approve,
             floem::peniko::Color::from_rgb8(48, 84, 75),
-            floem::peniko::Color::from_rgb8(132, 220, 198),
+            theme::accent(),
         ),
         agent_approval_button(
-            "Deny",
+            "n",
+            "deny",
             visible,
             pending_approval,
             on_deny,
             floem::peniko::Color::from_rgb8(80, 50, 54),
-            floem::peniko::Color::from_rgb8(246, 137, 146),
+            theme::danger(),
         ),
+        key_hint("esc", "back to draft"),
+        label(move || format!("+{} more", extra_pending())).style(move |s| {
+            if extra_pending() == 0 {
+                return s.hide();
+            }
+
+            s.font_family(font_family().to_string())
+                .font_size(11)
+                .color(theme::text_subtle())
+        }),
     ))
     .style(move |s| {
         if !visible() || pending_approval().is_none() {
@@ -102,39 +171,8 @@ pub(super) fn agent_approval_actions(
             .items_center()
             .justify_end()
             .padding_horiz(8)
-            .gap(8)
+            .gap(10)
     })
-}
-
-pub(super) fn agent_cancel_action(
-    visible: impl Fn() -> bool + 'static + Copy,
-    turn_in_flight: impl Fn() -> bool + 'static + Copy,
-    on_cancel: impl Fn() + 'static,
-) -> impl IntoView {
-    label(|| "Cancel turn".to_string())
-        .on_click_stop(move |_| {
-            if turn_in_flight() {
-                on_cancel();
-            }
-        })
-        .style(move |s| {
-            if !visible() || !turn_in_flight() {
-                return s.hide();
-            }
-
-            s.width_full()
-                .height(30)
-                .min_height(30)
-                .items_center()
-                .justify_end()
-                .padding_horiz(20)
-                .font_family(font_family().to_string())
-                .font_size(12)
-                .color(floem::peniko::Color::from_rgb8(233, 236, 242))
-                .background(floem::peniko::Color::from_rgb8(74, 60, 40))
-                .border(1.0)
-                .border_color(floem::peniko::Color::from_rgb8(224, 176, 108))
-        })
 }
 
 /// Compact pane-header label for an agent session's current state, e.g.
@@ -186,14 +224,15 @@ pub(super) fn gate_pending_approval(
 }
 
 fn agent_approval_button(
-    text: &'static str,
+    key_label: &'static str,
+    action_label: &'static str,
     visible: impl Fn() -> bool + 'static + Copy,
     pending_approval: impl Fn() -> Option<ToolCallId> + 'static + Copy,
     on_click: impl Fn(ToolCallId) + 'static,
     background: floem::peniko::Color,
     border: floem::peniko::Color,
 ) -> impl IntoView {
-    label(move || text.to_string())
+    key_hint(key_label, action_label)
         .on_click_stop(move |_| {
             if let Some(call_id) = pending_approval() {
                 on_click(call_id);
@@ -205,12 +244,9 @@ fn agent_approval_button(
             }
 
             s.height(26)
-                .padding_horiz(12)
+                .padding_horiz(10)
                 .items_center()
                 .justify_center()
-                .font_family(font_family().to_string())
-                .font_size(12)
-                .color(floem::peniko::Color::from_rgb8(233, 236, 242))
                 .background(background)
                 .border(1.0)
                 .border_color(border)
@@ -219,7 +255,9 @@ fn agent_approval_button(
 
 #[cfg(test)]
 mod tests {
-    use super::{agent_pane_status_label, gate_pending_approval};
+    use super::{
+        agent_pane_status_label, gate_pending_approval, next_agent_pane_focus, AgentPaneFocus,
+    };
     use crate::agent::contract::{SessionState, ToolCallId};
     use std::time::Duration;
 
@@ -251,5 +289,47 @@ mod tests {
         let pending = Some(ToolCallId("call-1".to_string()));
         assert_eq!(gate_pending_approval(false, pending.clone()), pending);
         assert_eq!(gate_pending_approval(false, None), None);
+    }
+
+    // --- approval banner focus transitions (`next_agent_pane_focus`) -----
+
+    #[test]
+    fn banner_auto_focuses_when_a_call_first_becomes_pending() {
+        let call = Some(ToolCallId("call-1".to_string()));
+        assert_eq!(
+            next_agent_pane_focus(None, call),
+            Some(AgentPaneFocus::Banner)
+        );
+    }
+
+    #[test]
+    fn banner_releases_focus_once_the_call_resolves() {
+        let call = Some(ToolCallId("call-1".to_string()));
+        assert_eq!(
+            next_agent_pane_focus(call, None),
+            Some(AgentPaneFocus::MessageBox)
+        );
+    }
+
+    #[test]
+    fn banner_stays_focused_when_the_oldest_pending_call_changes() {
+        // The previous oldest resolved, revealing the next one in the queue
+        // -- the banner should keep focus rather than release it.
+        let first = Some(ToolCallId("call-1".to_string()));
+        let second = Some(ToolCallId("call-2".to_string()));
+        assert_eq!(
+            next_agent_pane_focus(first, second),
+            Some(AgentPaneFocus::Banner)
+        );
+    }
+
+    #[test]
+    fn banner_focus_is_unchanged_when_the_pending_call_id_is_the_same() {
+        // Must be a true no-op: this is what lets `Esc` (which doesn't
+        // change the pending call, only the focus state) survive an
+        // unrelated frame refresh without being fought back to `Banner`.
+        let call = Some(ToolCallId("call-1".to_string()));
+        assert_eq!(next_agent_pane_focus(call.clone(), call), None);
+        assert_eq!(next_agent_pane_focus(None, None), None);
     }
 }

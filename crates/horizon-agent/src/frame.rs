@@ -77,7 +77,15 @@ impl AgentFrame {
         }
     }
 
-    pub fn pending_approval_call_id(&self) -> Option<ToolCallId> {
+    /// All currently-pending tool-call approvals, oldest request first (an
+    /// `ApprovalRequested` counts as pending until a matching
+    /// `ToolCallFinished` resolves it). Backs both `pending_approval_call_id`
+    /// below and the approval banner's queue depth
+    /// (`workspace::view::agent_controls::agent_approval_banner`), which
+    /// answers the oldest pending call first and shows a "+N more" hint for
+    /// the rest -- see the tool-approval interaction rework's "targeting
+    /// discipline" design note.
+    pub fn pending_approval_call_ids(&self) -> Vec<ToolCallId> {
         let mut pending = Vec::<ToolCallId>::new();
         for item in &self.items {
             match item {
@@ -93,7 +101,13 @@ impl AgentFrame {
             }
         }
 
-        pending.last().cloned()
+        pending
+    }
+
+    /// The next tool-call approval to act on: the oldest still-pending
+    /// request, if any. See [`Self::pending_approval_call_ids`].
+    pub fn pending_approval_call_id(&self) -> Option<ToolCallId> {
+        self.pending_approval_call_ids().into_iter().next()
     }
 
     /// The most recent `ToolCallRequested` item for `call_id`, if any. Used

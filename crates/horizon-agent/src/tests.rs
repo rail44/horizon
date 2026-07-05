@@ -396,6 +396,45 @@ fn agent_frame_tracks_pending_approval_until_tool_finishes() {
 }
 
 #[test]
+fn agent_frame_lists_multiple_pending_approvals_oldest_first() {
+    // Two calls request approval before either resolves -- the banner
+    // (`workspace::view::agent_controls::agent_approval_banner`) answers the
+    // oldest first and shows a "+N more" hint for the rest, so both the
+    // queue's order and its length matter here.
+    let first = agent::ToolCallId("call-1".to_string());
+    let second = agent::ToolCallId("call-2".to_string());
+    let mut frame = AgentFrame::empty();
+    frame
+        .items
+        .push(AgentFrameItem::ApprovalRequested(agent::ApprovalRequest {
+            call_id: first.clone(),
+            reason: "first".to_string(),
+        }));
+    frame
+        .items
+        .push(AgentFrameItem::ApprovalRequested(agent::ApprovalRequest {
+            call_id: second.clone(),
+            reason: "second".to_string(),
+        }));
+
+    assert_eq!(
+        frame.pending_approval_call_ids(),
+        vec![first.clone(), second.clone()]
+    );
+    assert_eq!(frame.pending_approval_call_id(), Some(first.clone()));
+
+    frame
+        .items
+        .push(AgentFrameItem::ToolCallFinished(agent::ToolCallResult {
+            call_id: first,
+            output: serde_json::json!({ "ok": true }),
+        }));
+
+    assert_eq!(frame.pending_approval_call_ids(), vec![second.clone()]);
+    assert_eq!(frame.pending_approval_call_id(), Some(second));
+}
+
+#[test]
 fn horizon_policy_adds_approval_for_requested_tool() {
     let call_id = agent::ToolCallId("call-1".to_string());
     let events = horizon_events_for_provider_event(&agent::Event::ToolCallRequested(

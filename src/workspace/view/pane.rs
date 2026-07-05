@@ -1,6 +1,8 @@
-use crate::agent::contract::SessionState;
+use crate::agent::contract::{SessionState, ToolCallId};
 use crate::agent::frame::AgentFrame;
-use crate::app::command_actions::{execute_command, CommandInvocation, DEFAULT_DENY_REASON};
+use crate::app::command_actions::{
+    execute_command, CommandActionState, CommandInvocation, DEFAULT_DENY_REASON,
+};
 use crate::app::keymap::is_palette_open_key;
 use crate::control_surface::{
     handle_control_key, open_palette, ControlInputState, ControlMode, OpenPaletteState,
@@ -8,8 +10,8 @@ use crate::control_surface::{
 use crate::terminal::TerminalFrame;
 use crate::ui::theme;
 use crate::workspace::{
-    handle_active_pane_key, handle_active_pane_key_release, visible_terminal_sender, AgentDrafts,
-    PaneKind,
+    handle_active_pane_key, handle_active_pane_key_release, handle_agent_banner_key,
+    visible_terminal_sender, AgentDrafts, BannerKeyAction, PaneKind, Workspace,
 };
 use floem::prelude::*;
 use floem::reactive::create_effect;
@@ -20,12 +22,54 @@ use floem::{
 };
 
 use super::agent_controls::{
-    agent_approval_actions, agent_cancel_action, agent_composer, agent_pane_status_label,
-    gate_pending_approval,
+    agent_approval_banner, agent_composer, agent_pane_status_label, gate_pending_approval,
+    next_agent_pane_focus, AgentPaneFocus,
 };
 use super::chrome::pane_header;
 use super::terminal_output::terminal_output;
 use crate::agent::view as agent_view;
+
+/// Approves `call_id` on the agent session currently occupying visible pane
+/// `index`, if any -- shared by the approval banner's `y`/click paths (see
+/// `pane_view`'s `KeyDown` handler and its `agent_approval_banner` call) so
+/// both dispatch through the exact same `CommandInvocation`.
+fn approve_pending(
+    workspace: RwSignal<Workspace>,
+    command_state: CommandActionState,
+    index: usize,
+    call_id: ToolCallId,
+) {
+    let Some(session_id) = workspace.with_untracked(|ws| ws.visible_agent_session_id(index)) else {
+        return;
+    };
+    execute_command(
+        CommandInvocation::ApproveToolCall {
+            session_id,
+            call_id,
+        },
+        command_state,
+    );
+}
+
+/// `n`/click counterpart to [`approve_pending`].
+fn deny_pending(
+    workspace: RwSignal<Workspace>,
+    command_state: CommandActionState,
+    index: usize,
+    call_id: ToolCallId,
+) {
+    let Some(session_id) = workspace.with_untracked(|ws| ws.visible_agent_session_id(index)) else {
+        return;
+    };
+    execute_command(
+        CommandInvocation::DenyToolCall {
+            session_id,
+            call_id,
+            reason: Some(DEFAULT_DENY_REASON.to_string()),
+        },
+        command_state,
+    );
+}
 
 #[derive(Clone)]
 pub(super) struct PaneViewState {
@@ -117,6 +161,38 @@ pub(super) fn pane_view(
             frames.with(|frames| frames.agent_frame(session_id).pending_approval_call_id());
         gate_pending_approval(cancel_requested.get(), pending)
     };
+    let pending_approval_extra = move || {
+        let Some(session_id) = workspace.with(|ws| ws.visible_agent_session_id(index)) else {
+            return 0;
+        };
+        frames
+            .with(|frames| {
+                frames
+                    .agent_frame(session_id)
+                    .pending_approval_call_ids()
+                    .len()
+            })
+            .saturating_sub(1)
+    };
+    // Which of the pane's two key-focus targets is live right now -- the
+    // message-box composer, or the approval banner (see `AgentPaneFocus`).
+    // Driven entirely by `pending_approval` transitions (`next_agent_pane_
+    // focus`): the banner grabs focus the instant a new call becomes the
+    // oldest pending one and releases it the instant none remain, however
+    // the resolution happened (`y`/`n`, a button click, or the palette all
+    // converge on the same `pending_approval` signal). `Esc` sets this
+    // directly (see the `KeyDown` handler below) without going through the
+    // pending-approval signal at all, so it survives an unrelated refresh.
+    let agent_pane_focus = RwSignal::new(AgentPaneFocus::default());
+    create_effect(move |previous: Option<Option<ToolCallId>>| {
+        let pending = pending_approval();
+        if let Some(previous) = previous {
+            if let Some(focus) = next_agent_pane_focus(previous, pending.clone()) {
+                agent_pane_focus.set(focus);
+            }
+        }
+        pending
+    });
     let turn_in_flight = move || {
         let Some(session_id) = workspace.with(|ws| ws.visible_agent_session_id(index)) else {
             return false;
@@ -164,16 +240,40 @@ pub(super) fn pane_view(
     };
     let agent_draft = agent_drafts[index];
 
+    let cancel_visible = move || is_agent() && turn_in_flight();
+
     v_stack((
-        pane_header(title, agent_status_text, active, closeable, {
-            let command_state = command_state.clone();
-            move || {
-                execute_command(
-                    CommandInvocation::ClosePane { index },
-                    command_state.clone(),
-                );
-            }
-        }),
+        pane_header(
+            title,
+            agent_status_text,
+            active,
+            closeable,
+            cancel_visible,
+            {
+                let command_state = command_state.clone();
+                move || {
+                    cancel_requested.set(true);
+                    let Some(session_id) =
+                        workspace.with_untracked(|ws| ws.visible_agent_session_id(index))
+                    else {
+                        return;
+                    };
+                    execute_command(
+                        CommandInvocation::CancelAgentTurn { session_id },
+                        command_state.clone(),
+                    );
+                }
+            },
+            {
+                let command_state = command_state.clone();
+                move || {
+                    execute_command(
+                        CommandInvocation::ClosePane { index },
+                        command_state.clone(),
+                    );
+                }
+            },
+        ),
         terminal_output(
             terminal_frame,
             move || {
@@ -188,57 +288,19 @@ pub(super) fn pane_view(
             is_terminal,
         ),
         agent_view::agent_frame_view(agent_frame, is_agent),
-        agent_approval_actions(
+        agent_approval_banner(
             is_agent,
             pending_approval,
+            pending_approval_extra,
             {
                 let command_state = command_state.clone();
-                move |call_id| {
-                    let Some(session_id) =
-                        workspace.with_untracked(|ws| ws.visible_agent_session_id(index))
-                    else {
-                        return;
-                    };
-                    execute_command(
-                        CommandInvocation::ApproveToolCall {
-                            session_id,
-                            call_id,
-                        },
-                        command_state.clone(),
-                    );
-                }
+                move |call_id| approve_pending(workspace, command_state.clone(), index, call_id)
             },
             {
                 let command_state = command_state.clone();
-                move |call_id| {
-                    let Some(session_id) =
-                        workspace.with_untracked(|ws| ws.visible_agent_session_id(index))
-                    else {
-                        return;
-                    };
-                    execute_command(
-                        CommandInvocation::DenyToolCall {
-                            session_id,
-                            call_id,
-                            reason: Some(DEFAULT_DENY_REASON.to_string()),
-                        },
-                        command_state.clone(),
-                    );
-                }
+                move |call_id| deny_pending(workspace, command_state.clone(), index, call_id)
             },
         ),
-        agent_cancel_action(is_agent, turn_in_flight, move || {
-            cancel_requested.set(true);
-            let Some(session_id) =
-                workspace.with_untracked(|ws| ws.visible_agent_session_id(index))
-            else {
-                return;
-            };
-            execute_command(
-                CommandInvocation::CancelAgentTurn { session_id },
-                command_state.clone(),
-            );
-        }),
         agent_composer(
             is_agent,
             active,
@@ -297,6 +359,38 @@ pub(super) fn pane_view(
                 set_ime_allowed(false);
                 control_mode.set(ControlMode::Commands);
                 open_palette(open_palette_state);
+                return EventPropagation::Stop;
+            }
+        }
+
+        // While the approval banner holds pane-internal focus, it answers
+        // for every key here (even ones bound to nothing -- see
+        // `BannerKeyAction::Swallow`) except the one soft-redirect path, so
+        // this must run before `handle_active_pane_key` ever sees the key
+        // (targeting discipline: only this pane's own session/call_id are
+        // ever touched, via `approve_pending`/`deny_pending` above).
+        if let Event::KeyDown(key_event) = event {
+            if is_agent() && agent_pane_focus.get_untracked() == AgentPaneFocus::Banner {
+                match handle_agent_banner_key(key_event, ime_composing, ime_preedit) {
+                    BannerKeyAction::Approve => {
+                        if let Some(call_id) = pending_approval() {
+                            approve_pending(workspace, command_state.clone(), index, call_id);
+                        }
+                    }
+                    BannerKeyAction::Deny => {
+                        if let Some(call_id) = pending_approval() {
+                            deny_pending(workspace, command_state.clone(), index, call_id);
+                        }
+                    }
+                    BannerKeyAction::ReleaseFocus => {
+                        agent_pane_focus.set(AgentPaneFocus::MessageBox);
+                    }
+                    BannerKeyAction::Redirect(text) => {
+                        agent_pane_focus.set(AgentPaneFocus::MessageBox);
+                        agent_draft.update(|draft| draft.push_str(&text));
+                    }
+                    BannerKeyAction::Swallow => {}
+                }
                 return EventPropagation::Stop;
             }
         }

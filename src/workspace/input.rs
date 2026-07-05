@@ -8,7 +8,7 @@ use crate::session::Registry;
 use crate::terminal::{KeyEventKind, TerminalCommand};
 use crate::workspace::{PaneKind, Workspace};
 use floem::action::set_ime_allowed;
-use floem::keyboard::{Key, KeyEvent};
+use floem::keyboard::{Key, KeyEvent, Modifiers, NamedKey};
 use floem::prelude::*;
 use floem::Clipboard;
 
@@ -205,6 +205,67 @@ fn composing_guard_swallows(
     matches!(key, Key::Character(_))
 }
 
+/// A banner-focused agent pane's response to one keystroke -- see
+/// `workspace::view::agent_controls::AgentPaneFocus` and `pane_view`'s
+/// `KeyDown` handler, which calls `handle_agent_banner_key` before falling
+/// through to `handle_active_pane_key` whenever the pane's approval banner
+/// currently holds pane-internal focus.
+///
+/// Mirrors the crush-inspired (charmbracelet's TUI) design: `y` approves,
+/// `n` denies, `Esc` backs out to the message box without answering, and any
+/// other printable character is delivered to the message box instead of
+/// being swallowed -- the banner must never be a modal trap for ordinary
+/// typing. Everything else (Enter, Backspace, arrows, a held modifier
+/// chord, ...) is swallowed outright: while the banner holds focus, keys
+/// must not leak to the terminal/message box except through that one
+/// soft-redirect path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BannerKeyAction {
+    Approve,
+    Deny,
+    /// Leave the banner without answering: pane-internal focus moves back
+    /// to the message box, the pending call is left untouched.
+    ReleaseFocus,
+    /// Deliver `.0` to the message box as if it had been typed there, and
+    /// move focus there too.
+    Redirect(String),
+    /// Consumed with no effect.
+    Swallow,
+}
+
+fn banner_key_action(key: &Key, modifiers: Modifiers) -> BannerKeyAction {
+    if modifiers.control() || modifiers.alt() || modifiers.meta() {
+        return BannerKeyAction::Swallow;
+    }
+
+    match key {
+        Key::Named(NamedKey::Escape) => BannerKeyAction::ReleaseFocus,
+        Key::Named(NamedKey::Space) => BannerKeyAction::Redirect(" ".to_string()),
+        Key::Character(text) => match text.as_str() {
+            "y" | "Y" => BannerKeyAction::Approve,
+            "n" | "N" => BannerKeyAction::Deny,
+            _ => BannerKeyAction::Redirect(text.to_string()),
+        },
+        _ => BannerKeyAction::Swallow,
+    }
+}
+
+/// `Event::KeyDown` entry point for a banner-focused agent pane. Applies the
+/// same IME composing guard as the message box/terminal
+/// (`composing_guard_swallows`) before considering the key at all, so a
+/// composing IME's own keystrokes never reach `y`/`n`/`Esc` handling
+/// half-composed.
+pub(crate) fn handle_agent_banner_key(
+    key_event: &KeyEvent,
+    ime_composing: RwSignal<bool>,
+    ime_preedit: RwSignal<Option<String>>,
+) -> BannerKeyAction {
+    if composing_guard_swallows(&key_event.key.logical_key, ime_composing, ime_preedit) {
+        return BannerKeyAction::Swallow;
+    }
+    banner_key_action(&key_event.key.logical_key, key_event.modifiers)
+}
+
 pub(crate) fn handle_active_pane_key(
     key_event: &KeyEvent,
     workspace: RwSignal<Workspace>,
@@ -369,5 +430,82 @@ mod tests {
             ime_composing,
             ime_preedit
         ));
+    }
+
+    // --- approval banner key routing (`banner_key_action`) ----------------
+
+    #[test]
+    fn banner_key_y_approves_case_insensitively() {
+        assert_eq!(
+            banner_key_action(&Key::Character("y".into()), Modifiers::default()),
+            BannerKeyAction::Approve
+        );
+        assert_eq!(
+            banner_key_action(&Key::Character("Y".into()), Modifiers::SHIFT),
+            BannerKeyAction::Approve
+        );
+    }
+
+    #[test]
+    fn banner_key_n_denies_case_insensitively() {
+        assert_eq!(
+            banner_key_action(&Key::Character("n".into()), Modifiers::default()),
+            BannerKeyAction::Deny
+        );
+        assert_eq!(
+            banner_key_action(&Key::Character("N".into()), Modifiers::SHIFT),
+            BannerKeyAction::Deny
+        );
+    }
+
+    #[test]
+    fn banner_key_escape_releases_focus_without_answering() {
+        assert_eq!(
+            banner_key_action(&Key::Named(NamedKey::Escape), Modifiers::default()),
+            BannerKeyAction::ReleaseFocus
+        );
+    }
+
+    #[test]
+    fn banner_key_other_printable_chars_redirect_to_the_message_box() {
+        assert_eq!(
+            banner_key_action(&Key::Character("h".into()), Modifiers::default()),
+            BannerKeyAction::Redirect("h".to_string())
+        );
+        assert_eq!(
+            banner_key_action(&Key::Named(NamedKey::Space), Modifiers::default()),
+            BannerKeyAction::Redirect(" ".to_string())
+        );
+    }
+
+    #[test]
+    fn banner_key_swallows_keys_bound_to_nothing() {
+        assert_eq!(
+            banner_key_action(&Key::Named(NamedKey::Enter), Modifiers::default()),
+            BannerKeyAction::Swallow
+        );
+        assert_eq!(
+            banner_key_action(&Key::Named(NamedKey::Backspace), Modifiers::default()),
+            BannerKeyAction::Swallow
+        );
+        assert_eq!(
+            banner_key_action(&Key::Named(NamedKey::ArrowLeft), Modifiers::default()),
+            BannerKeyAction::Swallow
+        );
+    }
+
+    #[test]
+    fn banner_key_swallows_modifier_held_chords_instead_of_redirecting() {
+        // A held Ctrl/Alt/Meta chord isn't ordinary typing -- and per the
+        // banner's "must not leak to the terminal/message box" rule it still
+        // must not fall through, so it's swallowed rather than redirected.
+        assert_eq!(
+            banner_key_action(&Key::Character("y".into()), Modifiers::CONTROL),
+            BannerKeyAction::Swallow
+        );
+        assert_eq!(
+            banner_key_action(&Key::Character("h".into()), Modifiers::ALT),
+            BannerKeyAction::Swallow
+        );
     }
 }
