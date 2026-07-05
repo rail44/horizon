@@ -83,10 +83,9 @@ fn vt_stream_preserves_ansi_foreground_color() {
         .spans
         .iter()
         .any(|span| { span.text == "r" && span.fg == [224, 108, 117] }));
-    assert!(first_line
-        .spans
-        .iter()
-        .any(|span| { span.text == "p" && span.fg == DEFAULT_FG }));
+    assert!(first_line.spans.iter().any(|span| {
+        span.text == "p" && span.fg == crate::terminal::config::resolved_colors().foreground
+    }));
 }
 
 #[test]
@@ -245,6 +244,109 @@ fn terminal_command_sanitizes_emulator_environment() {
     assert_eq!(cmd.get_env("KITTY_LISTEN_ON"), None);
     assert_eq!(cmd.get_env("WEZTERM_PANE"), None);
     assert_eq!(cmd.get_env("TMUX"), None);
+}
+
+#[test]
+fn da1_query_reports_primary_device_attributes() {
+    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    let events = core.write_vt(b"\x1b[c");
+
+    assert_eq!(events.pty_writes, vec![b"\x1b[?6c".to_vec()]);
+}
+
+#[test]
+fn da2_query_reports_secondary_device_attributes() {
+    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    let events = core.write_vt(b"\x1b[>c");
+
+    assert_eq!(events.pty_writes.len(), 1);
+    let response = String::from_utf8(events.pty_writes[0].clone()).unwrap();
+    assert!(response.starts_with("\x1b[>0;"));
+    assert!(response.ends_with(";1c"));
+}
+
+#[test]
+fn dsr_query_reports_device_status_ok() {
+    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    let events = core.write_vt(b"\x1b[5n");
+
+    assert_eq!(events.pty_writes, vec![b"\x1b[0n".to_vec()]);
+}
+
+#[test]
+fn cpr_query_reports_cursor_position() {
+    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    core.write_vt(b"ab\r\ncd");
+    let events = core.write_vt(b"\x1b[6n");
+
+    assert_eq!(events.pty_writes, vec![b"\x1b[2;3R".to_vec()]);
+}
+
+#[test]
+fn kitty_keyboard_query_reports_pushed_flags() {
+    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    core.write_vt(b"\x1b[>5u");
+    let events = core.write_vt(b"\x1b[?u");
+
+    assert_eq!(events.pty_writes, vec![b"\x1b[?5u".to_vec()]);
+}
+
+#[test]
+fn xtwinops_18t_reports_size_in_characters() {
+    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    let events = core.write_vt(b"\x1b[18t");
+
+    assert_eq!(events.pty_writes, vec![b"\x1b[8;4;20t".to_vec()]);
+}
+
+#[test]
+fn xtwinops_14t_reports_size_in_pixels_instead_of_hanging() {
+    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    let events = core.write_vt(b"\x1b[14t");
+
+    // Cell pixel dimensions aren't known at this layer (see `write_vt`), so
+    // the response is honest-but-degraded (0 pixels) rather than absent —
+    // the point of this test is that a response is sent at all, unblocking
+    // any caller polling for one.
+    assert_eq!(events.pty_writes, vec![b"\x1b[4;0;0t".to_vec()]);
+}
+
+#[test]
+fn osc11_query_reports_configured_background_color() {
+    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    let events = core.write_vt(b"\x1b]11;?\x07");
+
+    let bg = crate::terminal::config::resolved_colors().background;
+    let expected = format!(
+        "\x1b]11;rgb:{0:02x}{0:02x}/{1:02x}{1:02x}/{2:02x}{2:02x}\x07",
+        bg[0], bg[1], bg[2]
+    );
+    assert_eq!(events.pty_writes, vec![expected.into_bytes()]);
+}
+
+#[test]
+fn osc10_query_reports_configured_foreground_color() {
+    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    let events = core.write_vt(b"\x1b]10;?\x07");
+
+    let fg = crate::terminal::config::resolved_colors().foreground;
+    let expected = format!(
+        "\x1b]10;rgb:{0:02x}{0:02x}/{1:02x}{1:02x}/{2:02x}{2:02x}\x07",
+        fg[0], fg[1], fg[2]
+    );
+    assert_eq!(events.pty_writes, vec![expected.into_bytes()]);
+}
+
+#[test]
+fn osc4_query_reports_overridden_palette_color_over_theme_default() {
+    let mut core = TerminalCore::new(TerminalSize { cols: 20, rows: 4 });
+    core.write_vt(b"\x1b]4;1;#112233\x07");
+    let events = core.write_vt(b"\x1b]4;1;?\x07");
+
+    assert_eq!(
+        events.pty_writes,
+        vec![b"\x1b]4;1;rgb:1111/2222/3333\x07".to_vec()]
+    );
 }
 
 fn test_scroll(lines: i32) -> TerminalScroll {

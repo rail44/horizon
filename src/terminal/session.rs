@@ -36,6 +36,17 @@ pub(crate) struct TerminalSession {
 impl TerminalSession {
     pub(crate) fn spawn(size: TerminalSize) -> Result<Self, TerminalSessionError> {
         let pty_system = native_pty_system();
+        // `pixel_width`/`pixel_height` are hardcoded to 0 because
+        // `TerminalSize` doesn't carry cell-pixel geometry (only
+        // rows/cols); portable-pty forwards these straight into
+        // `ws_xpixel`/`ws_ypixel` on the `TIOCSWINSZ` ioctl, so every
+        // process reading the PTY's winsize (`TIOCGWINSZ`) — not just
+        // Horizon — sees zeroed pixel dimensions. Closing this needs
+        // `TerminalSize` to gain real pixel fields, populated in
+        // `terminal::view` from its font metrics (`cell_width`/
+        // `line_height`, already computed there) and threaded through
+        // here and through `TerminalCommand::Resize`'s handler in
+        // `session/runtime.rs`.
         let pair = pty_system.openpty(PtySize {
             rows: size.rows,
             cols: size.cols,

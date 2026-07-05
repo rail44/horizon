@@ -1,3 +1,4 @@
+use alacritty_terminal::event::WindowSize;
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::index::{Column, Line, Point as TermPoint, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
@@ -5,6 +6,7 @@ use alacritty_terminal::term::{Config as TermConfig, Term, TermMode};
 use alacritty_terminal::vte::ansi::Processor;
 use termwiz::input::{KeyCode, KeyCodeEncodeModes, KeyboardEncoding, Modifiers};
 
+use self::color::resolve_query_color;
 use self::events::{EventSink, TerminalEvents};
 use self::input::{
     arrow_scroll_input, kitty_flags_from_mode, sgr_mouse_input, sgr_mouse_wheel_input,
@@ -14,6 +16,7 @@ use super::types::{
     TerminalSize,
 };
 
+mod color;
 mod events;
 mod input;
 mod render;
@@ -46,7 +49,38 @@ impl TerminalCore {
 
     pub(crate) fn write_vt(&mut self, bytes: &[u8]) -> TerminalEvents {
         self.parser.advance(&mut self.term, bytes);
-        self.events.drain()
+        let mut events = self.events.drain();
+
+        // `Event::ColorRequest`/`Event::TextAreaSizeRequest` hand back a
+        // formatter instead of a ready `PtyWrite` because alacritty_terminal
+        // doesn't own the answer (the current theme, or our pixel geometry)
+        // — resolve them now that the parser call that produced them has
+        // released its borrow of `self.term`, and fold the result into
+        // `pty_writes` like any other response so callers only ever see one
+        // kind of outbound byte stream.
+        for (index, format) in events.color_requests.drain(..) {
+            let rgb = resolve_query_color(index, self.term.colors());
+            events.pty_writes.push(format(rgb).into_bytes());
+        }
+        for format in events.window_size_requests.drain(..) {
+            // Cell pixel dimensions aren't known at this layer (Horizon's
+            // terminal core is headless w.r.t. font metrics, which live in
+            // `terminal::view`), so we answer honestly with 0 rather than
+            // fabricate a value — still unblocks a caller polling for any
+            // response, at the cost of not actually answering the pixel
+            // question. `TerminalSize` would need real pixel dimensions
+            // threaded down from the view layer's font metrics to close
+            // this gap.
+            let window_size = WindowSize {
+                num_lines: self.size.rows,
+                num_cols: self.size.cols,
+                cell_width: 0,
+                cell_height: 0,
+            };
+            events.pty_writes.push(format(window_size).into_bytes());
+        }
+
+        events
     }
 
     pub(crate) fn resize(&mut self, size: TerminalSize) {
