@@ -437,6 +437,49 @@ mod tests {
     }
 
     #[test]
+    fn resize_terminal_dedups_repeated_unchanged_dimensions() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut view = TerminalTextView::new(
+            ViewId::new(),
+            TerminalViewState {
+                frame: TerminalFrame::from_text(String::new()),
+                preedit: None,
+            },
+            Some(tx),
+            Box::new(|| Point::ZERO),
+            Box::new(|_, _| {}),
+        );
+        view.metrics = TerminalMetrics {
+            cell_width: 9.0,
+            line_height: 18.0,
+        };
+
+        // Repeated calls with the same cols/rows (e.g. once per repaint on
+        // an idle or scrolling terminal, with no actual size change) must
+        // emit exactly one `Resize` — the first call establishes the
+        // baseline, every later identical call is a no-op.
+        for _ in 0..5 {
+            view.resize_terminal(80, 24);
+        }
+
+        assert!(matches!(rx.try_recv(), Ok(TerminalCommand::Resize(_))));
+        assert!(
+            rx.try_recv().is_err(),
+            "unchanged dimensions must not re-emit Resize"
+        );
+
+        // A genuine size change must still go through.
+        view.resize_terminal(100, 30);
+        match rx.try_recv() {
+            Ok(TerminalCommand::Resize(size)) => {
+                assert_eq!(size.cols, 100);
+                assert_eq!(size.rows, 30);
+            }
+            other => panic!("expected a Resize command for the changed size, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn cell_from_point_uses_terminal_metrics() {
         let metrics = TerminalMetrics {
             cell_width: 10.0,

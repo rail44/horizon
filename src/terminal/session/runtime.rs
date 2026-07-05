@@ -249,6 +249,11 @@ pub(super) fn run_writer(
         key_tx,
         selection_tx,
     } = senders;
+    // Belt-and-braces alongside the view-layer dedup in `terminal::view`:
+    // skip the `TIOCSWINSZ` syscall when the requested size matches the one
+    // already applied, so a duplicate `Resize` command (from this or any
+    // future caller) can't trigger a spurious `SIGWINCH` in the child.
+    let mut last_applied_size: Option<TerminalSize> = None;
     while let Ok(command) = command_rx.recv() {
         match command {
             TerminalCommand::Input(bytes) => {
@@ -266,12 +271,15 @@ pub(super) fn run_writer(
                 let _ = paste_tx.send(text);
             }
             TerminalCommand::Resize(size) => {
-                let _ = master.resize(PtySize {
-                    rows: size.rows,
-                    cols: size.cols,
-                    pixel_width: size.pixel_width,
-                    pixel_height: size.pixel_height,
-                });
+                if last_applied_size != Some(size) {
+                    last_applied_size = Some(size);
+                    let _ = master.resize(PtySize {
+                        rows: size.rows,
+                        cols: size.cols,
+                        pixel_width: size.pixel_width,
+                        pixel_height: size.pixel_height,
+                    });
+                }
                 let _ = resize_tx.send(size);
             }
             TerminalCommand::Scroll(scroll) => {
@@ -291,5 +299,87 @@ pub(super) fn run_writer(
             }
             TerminalCommand::Shutdown => return,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    /// Minimal `MasterPty` test double that only records `resize` calls;
+    /// every other method is unreachable from `run_writer`'s command loop.
+    struct CountingMaster {
+        resize_calls: Arc<Mutex<Vec<PtySize>>>,
+    }
+
+    impl MasterPty for CountingMaster {
+        fn resize(&self, size: PtySize) -> anyhow::Result<()> {
+            self.resize_calls.lock().unwrap().push(size);
+            Ok(())
+        }
+
+        fn get_size(&self) -> anyhow::Result<PtySize> {
+            unreachable!("not exercised by run_writer")
+        }
+
+        fn try_clone_reader(&self) -> anyhow::Result<Box<dyn Read + Send>> {
+            unreachable!("not exercised by run_writer")
+        }
+
+        fn take_writer(&self) -> anyhow::Result<Box<dyn Write + Send>> {
+            unreachable!("not exercised by run_writer")
+        }
+
+        #[cfg(unix)]
+        fn process_group_leader(&self) -> Option<i32> {
+            None
+        }
+
+        #[cfg(unix)]
+        fn as_raw_fd(&self) -> Option<std::os::unix::io::RawFd> {
+            None
+        }
+
+        #[cfg(unix)]
+        fn tty_name(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+
+    fn test_senders() -> CoreSenders {
+        CoreSenders {
+            resize_tx: crossbeam_channel::unbounded().0,
+            scroll_tx: crossbeam_channel::unbounded().0,
+            mouse_tx: crossbeam_channel::unbounded().0,
+            paste_tx: crossbeam_channel::unbounded().0,
+            key_tx: crossbeam_channel::unbounded().0,
+            selection_tx: crossbeam_channel::unbounded().0,
+        }
+    }
+
+    #[test]
+    fn duplicate_resize_commands_apply_pty_resize_once() {
+        let resize_calls = Arc::new(Mutex::new(Vec::new()));
+        let master: Box<dyn MasterPty + Send> = Box::new(CountingMaster {
+            resize_calls: resize_calls.clone(),
+        });
+        let mut writer: Vec<u8> = Vec::new();
+        let (command_tx, command_rx) = crossbeam_channel::unbounded();
+
+        let size = TerminalSize::new(80, 24);
+        command_tx.send(TerminalCommand::Resize(size)).unwrap();
+        command_tx.send(TerminalCommand::Resize(size)).unwrap();
+        command_tx.send(TerminalCommand::Resize(size)).unwrap();
+        let other = TerminalSize::new(90, 30);
+        command_tx.send(TerminalCommand::Resize(other)).unwrap();
+        drop(command_tx);
+
+        run_writer(master, &mut writer, command_rx, test_senders());
+
+        let calls = resize_calls.lock().unwrap();
+        assert_eq!(calls.len(), 2, "expected one resize per distinct size");
+        assert_eq!(calls[0].rows, 24);
+        assert_eq!(calls[1].rows, 30);
     }
 }
