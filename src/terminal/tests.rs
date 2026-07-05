@@ -431,7 +431,7 @@ fn test_mouse(kind: TerminalMouseKind) -> TerminalMouseReport {
 /// `DISAMBIGUATE_ESC_CODES` bit. A `~`-terminated sequence where a
 /// Kitty-aware reader expects `u` is a plausible way to wedge a client's own
 /// parser into swallowing everything that follows. See `kitty_override` in
-/// `terminal::core::input` for the fix.
+/// `terminal::protocol::kitty_keyboard` for the fix.
 ///
 /// Also covers the follow-up regression that first fix introduced: it made
 /// Shift+Enter fall all the way back to bare `\r` under disambiguate-only

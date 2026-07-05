@@ -8,10 +8,8 @@ use termwiz::input::{KeyCode, KeyCodeEncodeModes, KeyboardEncoding, Modifiers};
 
 use self::color::resolve_query_color;
 use self::events::{EventSink, TerminalEvents};
-use self::input::{
-    arrow_scroll_input, kitty_flags_from_mode, kitty_override, sgr_mouse_input,
-    sgr_mouse_wheel_input,
-};
+use self::input::{arrow_scroll_input, sgr_mouse_input, sgr_mouse_wheel_input};
+use super::protocol::kitty_keyboard;
 use super::types::{
     TerminalFrame, TerminalMouseKind, TerminalMouseReport, TerminalScroll, TerminalSelectionPoint,
     TerminalSize,
@@ -192,12 +190,30 @@ impl TerminalCore {
     }
 
     pub(crate) fn encode_key(&self, key: KeyCode, mods: Modifiers, is_down: bool) -> String {
-        if is_down {
-            let flags = kitty_flags_from_mode(*self.term.mode());
-            if let Some(bytes) = kitty_override(key, mods, flags) {
-                return String::from_utf8(bytes).unwrap_or_default();
-            }
+        // Key-up events never produce output (termwiz's own `KeyCode::encode`
+        // returns empty for `is_down == false` unconditionally, before ever
+        // consulting the encoding mode — checking it here up front means
+        // `kitty_keyboard::encode` never has to care about `is_down` at all).
+        if !is_down {
+            return String::new();
         }
+
+        let mode = *self.term.mode();
+        let flags = kitty_keyboard::flags_from_mode(mode);
+        if !flags.is_empty() {
+            // Any Kitty flag active: `terminal::protocol::kitty_keyboard`
+            // owns the encoding outright from here — see its module doc for
+            // why this no longer falls through to termwiz.
+            let bytes = kitty_keyboard::encode(
+                key,
+                mods,
+                flags,
+                mode.contains(TermMode::APP_CURSOR),
+                mode.contains(TermMode::LINE_FEED_NEW_LINE),
+            );
+            return String::from_utf8(bytes).unwrap_or_default();
+        }
+
         key.encode(mods, self.encode_modes(), is_down)
             .unwrap_or_default()
     }
@@ -222,27 +238,17 @@ impl TerminalCore {
         self.term.selection_to_string()
     }
 
+    /// Only reached from `encode_key`'s legacy branch, i.e. only when no
+    /// Kitty flag is active — `encoding` is therefore always `Xterm`.
+    /// `modify_other_keys` stays `None` unconditionally too: Horizon never
+    /// negotiates xterm's `modifyOtherKeys` extension independently (no
+    /// DECSET/DECRQM wiring for it exists at all).
     fn encode_modes(&self) -> KeyCodeEncodeModes {
         let mode = *self.term.mode();
-        let kitty_flags = kitty_flags_from_mode(mode);
-        let encoding = if kitty_flags.is_empty() {
-            KeyboardEncoding::Xterm
-        } else {
-            KeyboardEncoding::Kitty(kitty_flags)
-        };
-
         KeyCodeEncodeModes {
-            encoding,
+            encoding: KeyboardEncoding::Xterm,
             application_cursor_keys: mode.contains(TermMode::APP_CURSOR),
             newline_mode: mode.contains(TermMode::LINE_FEED_NEW_LINE),
-            // Horizon doesn't negotiate xterm's `modifyOtherKeys` extension
-            // independently of the Kitty keyboard protocol (no DECSET/DECRQM
-            // wiring for it exists), so this must never be derived from
-            // Kitty's `DISAMBIGUATE_ESC_CODES` bit — that conflation used to
-            // route Enter/Tab/Backspace/Escape-with-a-modifier through
-            // termwiz's `csi_u_encode` xterm fallback whenever Kitty flags
-            // were active. See `kitty_override` (`core/input.rs`) for the
-            // real Kitty `CSI u` handling those keys need instead.
             modify_other_keys: None,
         }
     }

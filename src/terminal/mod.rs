@@ -1,5 +1,6 @@
 mod config;
 mod core;
+mod protocol;
 mod session;
 mod types;
 pub(crate) mod view;
