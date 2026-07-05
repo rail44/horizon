@@ -9,7 +9,8 @@ use termwiz::input::{KeyCode, KeyCodeEncodeModes, KeyboardEncoding, Modifiers};
 use self::color::resolve_query_color;
 use self::events::{EventSink, TerminalEvents};
 use self::input::{
-    arrow_scroll_input, kitty_flags_from_mode, sgr_mouse_input, sgr_mouse_wheel_input,
+    arrow_scroll_input, kitty_flags_from_mode, kitty_override, sgr_mouse_input,
+    sgr_mouse_wheel_input,
 };
 use super::types::{
     TerminalFrame, TerminalMouseKind, TerminalMouseReport, TerminalScroll, TerminalSelectionPoint,
@@ -148,6 +149,12 @@ impl TerminalCore {
     }
 
     pub(crate) fn encode_key(&self, key: KeyCode, mods: Modifiers, is_down: bool) -> String {
+        if is_down {
+            let flags = kitty_flags_from_mode(*self.term.mode());
+            if let Some(bytes) = kitty_override(key, mods, flags) {
+                return String::from_utf8(bytes).unwrap_or_default();
+            }
+        }
         key.encode(mods, self.encode_modes(), is_down)
             .unwrap_or_default()
     }
@@ -185,7 +192,15 @@ impl TerminalCore {
             encoding,
             application_cursor_keys: mode.contains(TermMode::APP_CURSOR),
             newline_mode: mode.contains(TermMode::LINE_FEED_NEW_LINE),
-            modify_other_keys: mode.contains(TermMode::DISAMBIGUATE_ESC_CODES).then_some(2),
+            // Horizon doesn't negotiate xterm's `modifyOtherKeys` extension
+            // independently of the Kitty keyboard protocol (no DECSET/DECRQM
+            // wiring for it exists), so this must never be derived from
+            // Kitty's `DISAMBIGUATE_ESC_CODES` bit — that conflation used to
+            // route Enter/Tab/Backspace/Escape-with-a-modifier through
+            // termwiz's `csi_u_encode` xterm fallback whenever Kitty flags
+            // were active. See `kitty_override` (`core/input.rs`) for the
+            // real Kitty `CSI u` handling those keys need instead.
+            modify_other_keys: None,
         }
     }
 

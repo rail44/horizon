@@ -377,3 +377,135 @@ fn test_mouse(kind: TerminalMouseKind) -> TerminalMouseReport {
         modifiers: TerminalMouseModifiers::default(),
     }
 }
+
+/// Byte-for-byte truth table for `TerminalCore::key_input` across every
+/// meaningful Kitty progressive-enhancement flag combination, verified
+/// against <https://sw.kovidgoyal.net/kitty/keyboard-protocol/>. Flags are
+/// pushed via the real `CSI > flags u` sequence (not injected directly) so
+/// this exercises the exact path a foreground app like Claude Code drives.
+///
+/// This is the regression test for the "Shift+Enter kills all subsequent
+/// terminal input" bug: under any non-zero flag set, Horizon used to emit
+/// `\x1b[27;2;13~` for Shift+Enter — xterm's `modifyOtherKeys` format,
+/// `~`-terminated — instead of Kitty's own `\x1b[13;2u`, because termwiz
+/// 0.23.3's `KeyboardEncoding::Kitty(_)` variant is never actually matched
+/// inside `KeyCode::encode` (confirmed by reading termwiz's vendored
+/// source), and `TerminalCore::encode_modes` used to derive termwiz's
+/// unrelated `modify_other_keys` xterm setting from Kitty's own
+/// `DISAMBIGUATE_ESC_CODES` bit. A `~`-terminated sequence where a
+/// Kitty-aware reader expects `u` is a plausible way to wedge a client's own
+/// parser into swallowing everything that follows. See `kitty_override` in
+/// `terminal::core::input` for the fix.
+#[test]
+fn kitty_csi_u_truth_table() {
+    fn push_flags(core: &mut TerminalCore, flags: u32) {
+        if flags != 0 {
+            core.write_vt(format!("\x1b[>{flags}u").as_bytes());
+        }
+    }
+
+    // (Enter, Tab, Backspace, Escape) is the exact set termwiz's own
+    // encoder cannot express correctly once Kitty flags are active; arrows/
+    // Home/End/PageUp/PageDown/Delete already reuse xterm-compatible
+    // sequences Kitty itself specifies, so they're intentionally excluded
+    // here (see `kitty_override`'s doc comment).
+    let cases: &[(&str, KeyCode, Modifiers)] = &[
+        ("Enter", KeyCode::Enter, Modifiers::NONE),
+        ("Shift+Enter", KeyCode::Enter, Modifiers::SHIFT),
+        ("Ctrl+Enter", KeyCode::Enter, Modifiers::CTRL),
+        ("Alt+Enter", KeyCode::Enter, Modifiers::ALT),
+        ("Tab", KeyCode::Tab, Modifiers::NONE),
+        ("Shift+Tab", KeyCode::Tab, Modifiers::SHIFT),
+        ("Backspace", KeyCode::Backspace, Modifiers::NONE),
+        ("Esc", KeyCode::Escape, Modifiers::NONE),
+    ];
+
+    // flags = 0: no Kitty protocol negotiated at all. Byte-identical to
+    // Horizon's pre-existing (correct, untouched) behavior.
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    push_flags(&mut core, 0);
+    let expect = |core: &TerminalCore, key, mods, want: &[u8]| {
+        assert_eq!(core.key_input(key, mods, true), want.to_vec());
+    };
+    for (name, key, mods) in cases {
+        let expected: &[u8] = match *name {
+            "Enter" | "Shift+Enter" | "Ctrl+Enter" => b"\r",
+            "Alt+Enter" => b"\x1b\r",
+            "Tab" => b"\t",
+            "Shift+Tab" => b"\x1b[Z",
+            "Backspace" => b"\x7f",
+            "Esc" => b"\x1b",
+            other => panic!("unhandled case {other}"),
+        };
+        expect(&core, *key, *mods, expected);
+    }
+
+    // flags = 0b1 (disambiguate only) and 0b11 (+ report event types):
+    // spec's named exception keeps Enter/Tab/Backspace exactly as legacy
+    // mode, regardless of modifier; Esc alone is promoted to `CSI 27u`.
+    // Critically: no `CSI 27;mods;codepoint~` (the bug) anywhere.
+    for flags in [0b1u32, 0b11] {
+        let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+        push_flags(&mut core, flags);
+        for (name, key, mods) in cases {
+            let expected: &[u8] = match *name {
+                "Enter" | "Shift+Enter" | "Ctrl+Enter" => b"\r",
+                "Alt+Enter" => b"\x1b\r",
+                "Tab" => b"\t",
+                "Shift+Tab" => b"\x1b[Z",
+                "Backspace" => b"\x7f",
+                "Esc" => b"\x1b[27u",
+                other => panic!("unhandled case {other}"),
+            };
+            expect(&core, *key, *mods, expected);
+        }
+    }
+
+    // flags = 0b1111 and 0b11111 (report-all-keys-as-escape-codes active):
+    // every key, modified or not, becomes genuine Kitty `CSI u`.
+    for flags in [0b1111u32, 0b11111] {
+        let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+        push_flags(&mut core, flags);
+        for (name, key, mods) in cases {
+            let expected: &[u8] = match *name {
+                "Enter" => b"\x1b[13u",
+                "Shift+Enter" => b"\x1b[13;2u",
+                "Ctrl+Enter" => b"\x1b[13;5u",
+                "Alt+Enter" => b"\x1b[13;3u",
+                "Tab" => b"\x1b[9u",
+                "Shift+Tab" => b"\x1b[9;2u",
+                "Backspace" => b"\x1b[127u",
+                "Esc" => b"\x1b[27u",
+                other => panic!("unhandled case {other}"),
+            };
+            expect(&core, *key, *mods, expected);
+        }
+    }
+}
+
+/// Documents a known, pre-existing compliance gap that is NOT part of the
+/// Shift+Enter bug this module's truth table fixes: even with every Kitty
+/// flag active (including `REPORT_ALL_KEYS_AS_ESCAPE_CODES`, which per spec
+/// should turn *every* key, including plain letters, into `CSI u`), a
+/// shifted letter run through `TerminalCore::key_input` directly still
+/// yields the bare uppercased legacy byte — `kitty_override` doesn't
+/// special-case `KeyCode::Char`, and termwiz's own `Char` branch in
+/// `KeyCode::encode` ignores `modes.encoding` entirely once `mods` is empty
+/// (which it is here, after termwiz folds Shift into the uppercase letter
+/// and strips the modifier). In practice this path isn't reachable from
+/// Horizon's real UI anyway: `app::keymap::character_input` sends shifted
+/// letters as raw literal bytes without ever consulting the terminal's
+/// negotiated Kitty state, for every flag combination. Fixing "report all
+/// keys" for text keys would mean routing that separate path through the
+/// terminal's live mode, which is a larger change than this bug fix calls
+/// for.
+#[test]
+fn shift_letter_ignores_kitty_flags_even_with_report_all_keys_active() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt(b"\x1b[>31u");
+
+    assert_eq!(
+        core.key_input(KeyCode::Char('a'), Modifiers::SHIFT, true),
+        b"A".to_vec()
+    );
+}
