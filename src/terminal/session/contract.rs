@@ -1,7 +1,8 @@
 use termwiz::input::{KeyCode, Modifiers};
 
 use crate::terminal::types::{
-    TerminalFrame, TerminalMouseReport, TerminalScroll, TerminalSelectionPoint, TerminalSize,
+    KeyEventKind, TerminalFrame, TerminalMouseReport, TerminalScroll, TerminalSelectionPoint,
+    TerminalSize,
 };
 
 #[derive(Clone, Debug)]
@@ -10,7 +11,7 @@ pub(crate) enum TerminalCommand {
     Key {
         key: KeyCode,
         modifiers: Modifiers,
-        is_down: bool,
+        event: KeyEventKind,
     },
     Paste(String),
     Resize(TerminalSize),

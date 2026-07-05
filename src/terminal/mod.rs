@@ -9,8 +9,9 @@ pub(crate) mod view;
 pub(crate) use core::TerminalCore;
 pub(crate) use session::{initial_terminal_text, TerminalCommand, TerminalSession, TerminalUpdate};
 pub(crate) use types::{
-    TerminalFrame, TerminalLine, TerminalMouseButton, TerminalMouseKind, TerminalMouseModifiers,
-    TerminalMouseReport, TerminalScroll, TerminalSelectionPoint, TerminalSize, TerminalSpan,
+    KeyEventKind, TerminalFrame, TerminalLine, TerminalMouseButton, TerminalMouseKind,
+    TerminalMouseModifiers, TerminalMouseReport, TerminalScroll, TerminalSelectionPoint,
+    TerminalSize, TerminalSpan,
 };
 
 #[cfg(test)]

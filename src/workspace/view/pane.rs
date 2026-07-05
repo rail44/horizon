@@ -7,7 +7,10 @@ use crate::control_surface::{
 };
 use crate::terminal::TerminalFrame;
 use crate::ui::theme;
-use crate::workspace::{handle_active_pane_key, visible_terminal_sender, AgentDrafts, PaneKind};
+use crate::workspace::{
+    handle_active_pane_key, handle_active_pane_key_release, visible_terminal_sender, AgentDrafts,
+    PaneKind,
+};
 use floem::prelude::*;
 use floem::reactive::create_effect;
 use floem::{
@@ -306,6 +309,22 @@ pub(super) fn pane_view(
                 index,
                 ime_composing,
                 agent_draft,
+            ) {
+                return EventPropagation::Stop;
+            }
+        }
+
+        EventPropagation::Continue
+    })
+    .on_event(EventListener::KeyUp, move |event| {
+        if let Event::KeyUp(key_event) = event {
+            if handle_active_pane_key_release(
+                key_event,
+                workspace,
+                sessions,
+                index,
+                ime_composing,
+                palette_open,
             ) {
                 return EventPropagation::Stop;
             }

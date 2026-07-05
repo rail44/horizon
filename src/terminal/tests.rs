@@ -27,14 +27,14 @@ fn kitty_keyboard_mode_switches_termwiz_encoding() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     core.write_vt(b"\x1b[>1u");
 
-    let encoded = core.encode_key(KeyCode::Escape, Modifiers::NONE, true);
+    let encoded = core.encode_key(KeyCode::Escape, Modifiers::NONE, KeyEventKind::Press);
     assert!(!encoded.is_empty());
 }
 
 #[test]
 fn key_up_events_do_not_emit_legacy_input() {
     let core = TerminalCore::new(TerminalSize::new(20, 4));
-    let encoded = core.encode_key(KeyCode::Char('a'), Modifiers::NONE, false);
+    let encoded = core.encode_key(KeyCode::Char('a'), Modifiers::NONE, KeyEventKind::Release);
     assert_eq!(encoded, "");
 }
 
@@ -471,7 +471,10 @@ fn kitty_csi_u_truth_table() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     push_flags(&mut core, 0);
     let expect = |core: &TerminalCore, key, mods, want: &[u8]| {
-        assert_eq!(core.key_input(key, mods, true), want.to_vec());
+        assert_eq!(
+            core.key_input(key, mods, KeyEventKind::Press),
+            want.to_vec()
+        );
     };
     for (name, key, mods) in cases {
         let expected: &[u8] = match *name {
@@ -543,14 +546,18 @@ fn kitty_override_reports_super_modifier() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     core.write_vt(b"\x1b[>1u");
     assert_eq!(
-        core.key_input(KeyCode::Enter, Modifiers::SUPER, true),
+        core.key_input(KeyCode::Enter, Modifiers::SUPER, KeyEventKind::Press),
         b"\x1b[13;9u".to_vec()
     );
 
     let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     core.write_vt(b"\x1b[>31u");
     assert_eq!(
-        core.key_input(KeyCode::Enter, Modifiers::SUPER | Modifiers::SHIFT, true),
+        core.key_input(
+            KeyCode::Enter,
+            Modifiers::SUPER | Modifiers::SHIFT,
+            KeyEventKind::Press
+        ),
         b"\x1b[13;10u".to_vec()
     );
 }
@@ -586,7 +593,7 @@ fn navigation_keys_are_flag_invariant_and_spec_compliant() {
         }
         for (name, key, mods, want) in nav_cases {
             assert_eq!(
-                core.key_input(*key, *mods, true),
+                core.key_input(*key, *mods, KeyEventKind::Press),
                 want.to_vec(),
                 "flags={flags:#b} case={name}"
             );
@@ -594,33 +601,162 @@ fn navigation_keys_are_flag_invariant_and_spec_compliant() {
     }
 }
 
-/// UNIMPLEMENTED, structural: the Kitty spec's "report event types" flag
-/// (`0b10`) requires the terminal to report key-release events (`CSI
-/// ...;mods:3u`), and Horizon does route `is_down` through
-/// `TerminalCore::key_input`/`encode_key` down to `KeyCode::encode` — but
-/// termwiz 0.23.3's `KeyCode::encode` hardcodes `if !is_down { return
-/// Ok(String::new()) }` before it ever looks at `modes.encoding`, for every
-/// key without exception. There is no way to produce a release event
-/// through termwiz's encoder as vendored; it would need patching or
-/// replacing (a much larger change than a local override, since every key
-/// class would need its own release-event encoding, including the
-/// dedicated `event-type` sub-field of the general `CSI u` form). Compounding
-/// this: `workspace::input::handle_terminal_key` (owned by another agent,
-/// out of scope here) hardcodes `is_down: true` on every `TerminalCommand::
-/// Key` it sends, so even if termwiz were fixed, no key-up event is ever
-/// constructed from the real UI today. Effort estimate: medium (a few days)
-/// — fork or vendor termwiz's `KeyCode::encode` release-event path, or
-/// reimplement the whole `CSI u` general form locally instead of leaning on
-/// termwiz's legacy-oriented encoder; plus the app-layer wiring change.
+/// IMPLEMENTED (name kept for `TEST_REGISTRY`/`KITTY_COMPLIANCE`
+/// continuity, even though it now documents the opposite of what it once
+/// did): `TerminalCore::key_input`/`encode_key` now route a real
+/// `KeyEventKind` all the way down to `terminal::protocol::kitty_keyboard`,
+/// which owns `CSI u` encoding outright once any Kitty flag is active — it
+/// no longer leans on termwiz's `KeyCode::encode` (whose vendored
+/// `is_down == false` hardcode made a release genuinely unrepresentable)
+/// for that path at all. A release now produces the spec's `:3` event-type
+/// subfield (`;modifiers:3`) on any key already promoted to `CSI u`, once
+/// `REPORT_EVENT_TYPES` is negotiated. Plain 'a' specifically needs
+/// `REPORT_ALL_KEYS_AS_ESCAPE_CODES` too — a text key has no `CSI u` form
+/// to attach an event type to otherwise (see
+/// `kitty_keyboard::encode_text_key`'s doc comment) — so this pushes flags
+/// `1 (disambiguate) + 2 (report-event-types) + 8 (report-all-keys) = 11`,
+/// not report-event-types alone. See `csi_u_event_type_truth_table` for
+/// broader coverage (functional keys, un-promoted keys, repeats, and the
+/// legacy no-Kitty-flags case) and `KITTY_COMPLIANCE`'s "Report event
+/// types" rows for what's covered and what still isn't.
 #[test]
-#[ignore = "structural: termwiz's KeyCode::encode never emits release events regardless of Kitty flags; see report"]
 fn release_events_are_unimplemented_regardless_of_flags() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 4));
-    core.write_vt(b"\x1b[>3u"); // disambiguate + report-event-types
+    core.write_vt(b"\x1b[>11u"); // disambiguate + report-event-types + report-all-keys
     assert_eq!(
-        core.key_input(KeyCode::Char('a'), Modifiers::NONE, false),
+        core.key_input(KeyCode::Char('a'), Modifiers::NONE, KeyEventKind::Release),
         b"\x1b[97;1:3u".to_vec(),
-        "spec's release-event form for plain 'a'; termwiz always returns empty for is_down=false"
+        "spec's release-event form for plain 'a' once report-all-keys promotes it to CSI u"
+    );
+}
+
+/// Broader event-type coverage across representative flag/key-class
+/// combinations, extending `kitty_csi_u_truth_table`/`csi_u_text_key_truth_table`
+/// (both Press-only) with Repeat and Release. Verified against
+/// <https://sw.kovidgoyal.net/kitty/keyboard-protocol/>'s "event types"
+/// section: press omits the subfield entirely (value `1`, the implicit
+/// default), repeat is `:2`, release is `:3` — and per its own qualifier
+/// ("only key events represented as escape codes due to the other
+/// enhancements in effect will be affected"), the subfield only ever
+/// decorates a key already promoted to genuine `CSI u` by some other flag;
+/// an un-promoted key's repeat is byte-identical to its press, and its
+/// release produces nothing at all — the same rule `encode`/
+/// `encode_text_key`'s "not down and not promoted -> empty" fallback
+/// already encodes.
+#[test]
+fn csi_u_event_type_truth_table() {
+    // No Kitty flags negotiated at all: repeat is indistinguishable from
+    // press (termwiz's legacy encoder has no repeat/release concept), and
+    // release is always empty — regardless of REPORT_EVENT_TYPES, which by
+    // definition can't be set when `flags` is empty.
+    let core = TerminalCore::new(TerminalSize::new(20, 4));
+    assert_eq!(
+        core.key_input(KeyCode::Enter, Modifiers::NONE, KeyEventKind::Press),
+        b"\r".to_vec()
+    );
+    assert_eq!(
+        core.key_input(KeyCode::Enter, Modifiers::NONE, KeyEventKind::Repeat),
+        b"\r".to_vec(),
+        "repeat matches press with no Kitty flags active"
+    );
+    assert_eq!(
+        core.key_input(KeyCode::Enter, Modifiers::NONE, KeyEventKind::Release),
+        Vec::<u8>::new(),
+        "release is always empty with no Kitty flags active"
+    );
+
+    // Disambiguate + report-event-types (no report-all-keys): a *modified*
+    // Enter is promoted to CSI u under Horizon's own disambiguate-alone
+    // deviation (see `kitty_override`'s doc comment) and gains full
+    // event-type support the moment REPORT_EVENT_TYPES is active, even
+    // without report-all-keys.
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt(b"\x1b[>3u");
+    assert_eq!(
+        core.key_input(KeyCode::Enter, Modifiers::SHIFT, KeyEventKind::Press),
+        b"\x1b[13;2u".to_vec()
+    );
+    assert_eq!(
+        core.key_input(KeyCode::Enter, Modifiers::SHIFT, KeyEventKind::Repeat),
+        b"\x1b[13;2:2u".to_vec()
+    );
+    assert_eq!(
+        core.key_input(KeyCode::Enter, Modifiers::SHIFT, KeyEventKind::Release),
+        b"\x1b[13;2:3u".to_vec()
+    );
+    // Esc has no crash-recovery exception at all: disambiguate alone
+    // promotes it unmodified, so it gets the same treatment. The modifier
+    // field stays explicit (`;1`) even with no real modifier held, per
+    // spec: "If no modifiers are present, the modifiers field must have
+    // the value 1 and the event type sub-field the type of event."
+    assert_eq!(
+        core.key_input(KeyCode::Escape, Modifiers::NONE, KeyEventKind::Repeat),
+        b"\x1b[27;1:2u".to_vec()
+    );
+    assert_eq!(
+        core.key_input(KeyCode::Escape, Modifiers::NONE, KeyEventKind::Release),
+        b"\x1b[27;1:3u".to_vec()
+    );
+    // Bare Enter stays unpromoted at these flags (the crash-recovery
+    // carve-out — see `kitty_override`'s doc comment): repeat matches
+    // legacy press, and release has no representation to attach an event
+    // type to, so it's empty — exactly the spec's "Enter ... will not have
+    // release events unless report-all-keys is also set", which falls out
+    // of the promotion test rather than being special-cased.
+    assert_eq!(
+        core.key_input(KeyCode::Enter, Modifiers::NONE, KeyEventKind::Repeat),
+        b"\r".to_vec()
+    );
+    assert_eq!(
+        core.key_input(KeyCode::Enter, Modifiers::NONE, KeyEventKind::Release),
+        Vec::<u8>::new()
+    );
+    // Navigation keys never go through `kitty_override` at all, at any
+    // flags (see `KITTY_COMPLIANCE`'s "Functional key definitions:
+    // navigation keys" row) — repeat matches press, release is empty.
+    assert_eq!(
+        core.key_input(KeyCode::UpArrow, Modifiers::NONE, KeyEventKind::Repeat),
+        b"\x1b[A".to_vec()
+    );
+    assert_eq!(
+        core.key_input(KeyCode::UpArrow, Modifiers::NONE, KeyEventKind::Release),
+        Vec::<u8>::new()
+    );
+
+    // Report-event-types + report-all-keys (no disambiguate): text keys
+    // are promoted purely by report-all-keys (see `encode_text_key`'s doc
+    // comment), so this is enough on its own for their event types too.
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt(b"\x1b[>10u");
+    assert_eq!(
+        core.key_input(KeyCode::Char('a'), Modifiers::NONE, KeyEventKind::Press),
+        b"\x1b[97u".to_vec()
+    );
+    assert_eq!(
+        core.key_input(KeyCode::Char('a'), Modifiers::NONE, KeyEventKind::Repeat),
+        b"\x1b[97;1:2u".to_vec()
+    );
+    assert_eq!(
+        core.key_input(KeyCode::Char('a'), Modifiers::NONE, KeyEventKind::Release),
+        b"\x1b[97;1:3u".to_vec()
+    );
+
+    // Report-event-types alone (no report-all-keys): a text key has no
+    // CSI u form to decorate, so it behaves exactly like the no-flags
+    // case above — repeat matches legacy press, release is empty.
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt(b"\x1b[>2u");
+    assert_eq!(
+        core.key_input(KeyCode::Char('a'), Modifiers::NONE, KeyEventKind::Press),
+        b"a".to_vec()
+    );
+    assert_eq!(
+        core.key_input(KeyCode::Char('a'), Modifiers::NONE, KeyEventKind::Repeat),
+        b"a".to_vec()
+    );
+    assert_eq!(
+        core.key_input(KeyCode::Char('a'), Modifiers::NONE, KeyEventKind::Release),
+        Vec::<u8>::new()
     );
 }
 
@@ -649,7 +785,7 @@ fn very_high_function_keys_are_unimplemented() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     core.write_vt(b"\x1b[>1u");
     assert_eq!(
-        core.key_input(KeyCode::Function(25), Modifiers::NONE, true),
+        core.key_input(KeyCode::Function(25), Modifiers::NONE, KeyEventKind::Press),
         b"\x1b[57388u".to_vec()
     );
 }
@@ -671,7 +807,7 @@ fn standalone_modifier_keypresses_are_unimplemented() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     core.write_vt(b"\x1b[>1u");
     assert_eq!(
-        core.key_input(KeyCode::LeftShift, Modifiers::SHIFT, true),
+        core.key_input(KeyCode::LeftShift, Modifiers::SHIFT, KeyEventKind::Press),
         b"\x1b[57441u".to_vec()
     );
 }
@@ -697,7 +833,7 @@ fn keypad_keys_ignore_disambiguate_flag() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     core.write_vt(b"\x1b[>1u"); // disambiguate
     assert_eq!(
-        core.key_input(KeyCode::Numpad0, Modifiers::NONE, true),
+        core.key_input(KeyCode::Numpad0, Modifiers::NONE, KeyEventKind::Press),
         b"\x1b[57399u".to_vec()
     );
 }
@@ -721,7 +857,7 @@ fn shift_letter_produces_csi_u_under_report_all_keys() {
     core.write_vt(b"\x1b[>31u");
 
     assert_eq!(
-        core.key_input(KeyCode::Char('a'), Modifiers::SHIFT, true),
+        core.key_input(KeyCode::Char('a'), Modifiers::SHIFT, KeyEventKind::Press),
         b"\x1b[97:65;2u".to_vec()
     );
 }
@@ -762,7 +898,7 @@ fn csi_u_text_key_truth_table() {
     ];
     for (name, c, mods, expected) in cases {
         assert_eq!(
-            core.key_input(KeyCode::Char(*c), *mods, true),
+            core.key_input(KeyCode::Char(*c), *mods, KeyEventKind::Press),
             expected.to_vec(),
             "case={name}"
         );
@@ -779,12 +915,12 @@ fn csi_u_text_key_reports_alternate_for_shifted_letter_only() {
     core.write_vt(b"\x1b[>12u"); // report-alternate-keys (4) + report-all-keys (8)
 
     assert_eq!(
-        core.key_input(KeyCode::Char('a'), Modifiers::SHIFT, true),
+        core.key_input(KeyCode::Char('a'), Modifiers::SHIFT, KeyEventKind::Press),
         b"\x1b[97:65;2u".to_vec(),
         "shifted letter carries the alternate (shifted) codepoint"
     );
     assert_eq!(
-        core.key_input(KeyCode::Char('!'), Modifiers::SHIFT, true),
+        core.key_input(KeyCode::Char('!'), Modifiers::SHIFT, KeyEventKind::Press),
         b"\x1b[33;2u".to_vec(),
         "shifted punctuation has no known alternate, so none is reported"
     );
@@ -816,7 +952,7 @@ fn legacy_text_key_matches_pre_existing_bytes_over_printable_range_and_ctrl_tabl
 
     for c in ('a'..='z').chain('0'..='9') {
         assert_eq!(
-            core.key_input(KeyCode::Char(c), Modifiers::NONE, true),
+            core.key_input(KeyCode::Char(c), Modifiers::NONE, KeyEventKind::Press),
             vec![c as u8],
             "plain {c:?}"
         );
@@ -826,12 +962,12 @@ fn legacy_text_key_matches_pre_existing_bytes_over_printable_range_and_ctrl_tabl
             vec![c as u8]
         };
         assert_eq!(
-            core.key_input(KeyCode::Char(c), Modifiers::SHIFT, true),
+            core.key_input(KeyCode::Char(c), Modifiers::SHIFT, KeyEventKind::Press),
             shifted,
             "shift+{c:?}"
         );
         assert_eq!(
-            core.key_input(KeyCode::Char(c), Modifiers::ALT, true),
+            core.key_input(KeyCode::Char(c), Modifiers::ALT, KeyEventKind::Press),
             vec![0x1b, c as u8],
             "alt+{c:?}"
         );
@@ -839,7 +975,7 @@ fn legacy_text_key_matches_pre_existing_bytes_over_printable_range_and_ctrl_tabl
 
     for c in 'a'..='z' {
         assert_eq!(
-            core.key_input(KeyCode::Char(c), Modifiers::CTRL, true),
+            core.key_input(KeyCode::Char(c), Modifiers::CTRL, KeyEventKind::Press),
             vec![c as u8 - b'a' + 1],
             "ctrl+{c:?}"
         );
@@ -870,7 +1006,7 @@ fn legacy_text_key_matches_pre_existing_bytes_over_printable_range_and_ctrl_tabl
     ];
     for &(c, expected) in ctrl_cases {
         assert_eq!(
-            core.key_input(KeyCode::Char(c), Modifiers::CTRL, true),
+            core.key_input(KeyCode::Char(c), Modifiers::CTRL, KeyEventKind::Press),
             vec![expected],
             "ctrl+{c:?}"
         );
@@ -879,7 +1015,7 @@ fn legacy_text_key_matches_pre_existing_bytes_over_printable_range_and_ctrl_tabl
     // Not in `ctrl_mapping` either: silently swallowed, same as before.
     for c in ['0', '1', '9'] {
         assert!(
-            core.key_input(KeyCode::Char(c), Modifiers::CTRL, true)
+            core.key_input(KeyCode::Char(c), Modifiers::CTRL, KeyEventKind::Press)
                 .is_empty(),
             "ctrl+{c:?}"
         );
@@ -888,13 +1024,17 @@ fn legacy_text_key_matches_pre_existing_bytes_over_printable_range_and_ctrl_tabl
     // Ctrl+Alt: Alt is ignored entirely, matching `character_input`'s
     // pre-existing behavior (see doc comment above).
     assert_eq!(
-        core.key_input(KeyCode::Char('a'), Modifiers::CTRL | Modifiers::ALT, true),
+        core.key_input(
+            KeyCode::Char('a'),
+            Modifiers::CTRL | Modifiers::ALT,
+            KeyEventKind::Press
+        ),
         vec![0x01]
     );
 
     // Super/Cmd alone drops the key entirely (`character_input`'s
     // `modifiers.meta()` check).
     assert!(core
-        .key_input(KeyCode::Char('a'), Modifiers::SUPER, true)
+        .key_input(KeyCode::Char('a'), Modifiers::SUPER, KeyEventKind::Press)
         .is_empty());
 }

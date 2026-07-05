@@ -33,6 +33,8 @@ use alacritty_terminal::term::TermMode;
 use termwiz::escape::csi::KittyKeyboardFlags;
 use termwiz::input::{KeyCode, Modifiers, CSI, SS3};
 
+use crate::terminal::types::KeyEventKind;
+
 /// Read the terminal's negotiated Kitty progressive-enhancement flags off
 /// its live `TermMode` (set by `CSI > flags u` / `CSI = flags ; mode u`,
 /// handled upstream in `alacritty_terminal::Term`).
@@ -58,28 +60,40 @@ pub(crate) fn flags_from_mode(mode: TermMode) -> KittyKeyboardFlags {
     flags
 }
 
-/// Encode a key-down event while at least one Kitty flag is active (callers
-/// must check `flags.is_empty()` themselves and use termwiz's own encoder
-/// for the legacy case — see the module doc). `application_cursor_keys`
-/// (DECCKM) and `newline_mode` (LNM) are threaded through from the
-/// terminal's live `TermMode` because they still affect a handful of
-/// keys' *legacy* byte forms even while Kitty flags are active — the Kitty
-/// spec doesn't touch either mode, and Horizon's terminal doesn't stop
-/// tracking them just because Kitty is also negotiated.
+/// Encode a key event while at least one Kitty flag is active (callers must
+/// check `flags.is_empty()` themselves and use termwiz's own encoder for the
+/// legacy case — see the module doc). `application_cursor_keys` (DECCKM) and
+/// `newline_mode` (LNM) are threaded through from the terminal's live
+/// `TermMode` because they still affect a handful of keys' *legacy* byte
+/// forms even while Kitty flags are active — the Kitty spec doesn't touch
+/// either mode, and Horizon's terminal doesn't stop tracking them just
+/// because Kitty is also negotiated.
 ///
-/// Key-up events never reach here: `TerminalCore::encode_key` returns empty
-/// bytes for `is_down == false` before consulting Kitty state at all (see
-/// `KITTY_COMPLIANCE`'s "Report event types" row for why release events
-/// aren't supported regardless).
+/// `event` is only ever `Release` here when `REPORT_EVENT_TYPES` is active
+/// (`TerminalCore::encode_key` filters out every other release before this
+/// function is even called — see its doc comment). A release still only
+/// produces bytes for the handful of keys `kitty_override` promotes to
+/// genuine `CSI u` at these flags (Enter/Tab/Backspace/Escape): every other
+/// key here — arrows, Home/End, PageUp/PageDown, Delete, ... — stays on its
+/// flag-invariant legacy `CSI` form (see `KITTY_COMPLIANCE`'s "Functional
+/// key definitions: navigation keys" row), which this module doesn't extend
+/// with an event-type subfield, so a release for one of those has no
+/// representation to fall back to and must produce nothing — re-emitting
+/// the press bytes would read as a second press to any Kitty-aware client.
 pub(crate) fn encode(
     key: KeyCode,
     mods: Modifiers,
     flags: KittyKeyboardFlags,
+    event: KeyEventKind,
     application_cursor_keys: bool,
     newline_mode: bool,
 ) -> Vec<u8> {
-    if let Some(bytes) = kitty_override(key, mods, flags) {
+    if let Some(bytes) = kitty_override(key, mods, flags, event) {
         return bytes;
+    }
+
+    if !event.is_down() {
+        return Vec::new();
     }
 
     legacy_bytes(key, mods, application_cursor_keys, newline_mode).into_bytes()
@@ -124,7 +138,27 @@ pub(crate) fn encode(
 /// legacy-bytes reading was chosen to avoid. Bare Enter/Tab/Backspace still
 /// fall through to legacy bytes here, so the crash-recovery case is
 /// unaffected. See `KITTY_COMPLIANCE`'s "Enter/Tab/Backspace exception" row.
-fn kitty_override(key: KeyCode, mods: Modifiers, flags: KittyKeyboardFlags) -> Option<Vec<u8>> {
+///
+/// `event`'s only effect is the optional trailing event-type subfield (see
+/// `event_type_subfield`): the *promotion* decision above (whether this key
+/// reaches `CSI u` at all, at these flags) is identical for press, repeat
+/// and release. That symmetry is deliberate, not just convenient: the
+/// spec's own "Enter/Tab/Backspace won't have release events unless
+/// report-all-keys" carve-out (see `KITTY_COMPLIANCE`'s "Report event
+/// types" rows) falls out of it for free — a bare Enter/Tab/Backspace stays
+/// unpromoted (so its release produces nothing, via `encode`'s fallback)
+/// until report-all-keys promotes it, exactly like the spec says. Extending
+/// that same promotion test to release/repeat for the *modified* case this
+/// module already deviates on (previous paragraph) keeps a promoted press
+/// from ever having an orphan release with no representation at all, which
+/// re-deriving the spec's carve-out as its own separate condition here
+/// would have produced.
+fn kitty_override(
+    key: KeyCode,
+    mods: Modifiers,
+    flags: KittyKeyboardFlags,
+    event: KeyEventKind,
+) -> Option<Vec<u8>> {
     if flags.is_empty() {
         return None;
     }
@@ -166,12 +200,37 @@ fn kitty_override(key: KeyCode, mods: Modifiers, flags: KittyKeyboardFlags) -> O
         mod_bits |= 0b1000;
     }
     let mod_value = 1u32 + mod_bits;
+    let event_type = event_type_subfield(event, flags);
     let mut sequence = format!("\x1b[{codepoint}");
-    if mod_value != 1 {
+    if mod_value != 1 || event_type.is_some() {
         sequence.push_str(&format!(";{mod_value}"));
+        if let Some(event_type) = event_type {
+            sequence.push_str(&format!(":{event_type}"));
+        }
     }
     sequence.push('u');
     Some(sequence.into_bytes())
+}
+
+/// The Kitty spec's "event-type" subfield value for `event`
+/// (<https://sw.kovidgoyal.net/kitty/keyboard-protocol/>, "event types":
+/// "The press event type has value 1 and is the default if no event type
+/// sub field is present. The repeat type is 2 and the release type is 3"),
+/// or `None` when it should be omitted from the sequence entirely — either
+/// because `event` is a plain press (the implicit default) or because
+/// `REPORT_EVENT_TYPES` isn't negotiated, in which case a repeat must stay
+/// byte-for-byte indistinguishable from a press (a release never reaches
+/// either `CSI u` builder that calls this without the flag active —
+/// `TerminalCore::encode_key` filters it out first).
+fn event_type_subfield(event: KeyEventKind, flags: KittyKeyboardFlags) -> Option<u8> {
+    if !flags.contains(KittyKeyboardFlags::REPORT_EVENT_TYPES) {
+        return None;
+    }
+    match event {
+        KeyEventKind::Press => None,
+        KeyEventKind::Repeat => Some(2),
+        KeyEventKind::Release => Some(3),
+    }
 }
 
 /// Every key `kitty_override` doesn't (or, for
@@ -433,9 +492,27 @@ fn encode_char(c: char, mods: Modifiers) -> String {
 /// Disambiguate/report-event-types/report-alternate-keys/
 /// report-associated-text alone (or no flags at all) fall to
 /// `legacy_text_key`, unchanged from before this function existed.
-pub(crate) fn encode_text_key(c: char, mods: Modifiers, flags: KittyKeyboardFlags) -> Vec<u8> {
+///
+/// `event` only ever affects the promoted (`csi_u_text_key`) branch: plain
+/// UTF-8 text has no release/repeat representation at all short of
+/// promotion (spec: "Key events that result in text are reported as plain
+/// UTF-8 text, so events are not supported for them, unless the application
+/// requests key report mode"), so a release here (only ever reached once
+/// `REPORT_EVENT_TYPES` is active — see `TerminalCore::encode_key`) produces
+/// nothing rather than falling through to `legacy_text_key`, and a repeat
+/// falls through unchanged (identical bytes to a press, matching every
+/// other un-promoted key in this module).
+pub(crate) fn encode_text_key(
+    c: char,
+    mods: Modifiers,
+    flags: KittyKeyboardFlags,
+    event: KeyEventKind,
+) -> Vec<u8> {
     if flags.contains(KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES) {
-        return csi_u_text_key(c, mods, flags);
+        return csi_u_text_key(c, mods, flags, event);
+    }
+    if !event.is_down() {
+        return Vec::new();
     }
     legacy_text_key(c, mods)
 }
@@ -498,7 +575,17 @@ fn legacy_text_key(c: char, mods: Modifiers) -> Vec<u8> {
 /// `'A'`). Digits and punctuation have no algorithmic shift (Shift+1 -> '!'
 /// depends on keyboard layout, which Horizon doesn't have access to here —
 /// see `KITTY_COMPLIANCE`), so no alternate is reported for them.
-fn csi_u_text_key(c: char, mods: Modifiers, flags: KittyKeyboardFlags) -> Vec<u8> {
+///
+/// Also decorates the modifier field with the "event types" subfield (see
+/// `event_type_subfield`) — text keys have no exception analogous to
+/// Enter/Tab/Backspace's crash-recovery carve-out, so this applies
+/// unconditionally once promoted here.
+fn csi_u_text_key(
+    c: char,
+    mods: Modifiers,
+    flags: KittyKeyboardFlags,
+    event: KeyEventKind,
+) -> Vec<u8> {
     let mut mod_bits = u32::from(mods.encode_xterm());
     if mods.contains(Modifiers::SUPER) {
         mod_bits |= 0b1000;
@@ -512,8 +599,12 @@ fn csi_u_text_key(c: char, mods: Modifiers, flags: KittyKeyboardFlags) -> Vec<u8
     {
         sequence.push_str(&format!(":{}", c.to_ascii_uppercase() as u32));
     }
-    if mod_value != 1 {
+    let event_type = event_type_subfield(event, flags);
+    if mod_value != 1 || event_type.is_some() {
         sequence.push_str(&format!(";{mod_value}"));
+        if let Some(event_type) = event_type {
+            sequence.push_str(&format!(":{event_type}"));
+        }
     }
     sequence.push('u');
     sequence.into_bytes()
@@ -682,7 +773,11 @@ pub(crate) const KITTY_COMPLIANCE: &[FeatureEntry] = &[
         verdict: Verdict::Deviation(
             "promotes modified Enter/Tab/Backspace to CSI u under disambiguate alone, not just \
              under report-all-keys as the spec's exception text literally reads — verified \
-             against Claude Code 2.1.201's real negotiation; see kitty_override's doc comment",
+             against Claude Code 2.1.201's real negotiation; see kitty_override's doc comment. \
+             The same promotion test also gates release/repeat event-type reporting for these \
+             keys (see the \"Report event types\" rows below), which is how this deviation \
+             reproduces the spec's own \"no release without report-all-keys\" carve-out for the \
+             *bare* key without a second, separately-tracked condition.",
         ),
         tests: &["kitty_csi_u_truth_table"],
     },
@@ -722,16 +817,35 @@ pub(crate) const KITTY_COMPLIANCE: &[FeatureEntry] = &[
         tests: &["navigation_keys_are_flag_invariant_and_spec_compliant"],
     },
     FeatureEntry {
-        feature: "Report event types (key release)",
-        key_class: "all keys",
+        feature: "Report event types",
+        key_class: "Enter, Tab, Backspace, Escape",
+        verdict: Verdict::Compliant,
+        tests: &["csi_u_event_type_truth_table"],
+    },
+    FeatureEntry {
+        feature: "Report event types",
+        key_class: "text keys (letters, digits, punctuation)",
+        verdict: Verdict::Compliant,
+        tests: &[
+            "release_events_are_unimplemented_regardless_of_flags",
+            "csi_u_event_type_truth_table",
+        ],
+    },
+    FeatureEntry {
+        feature: "Report event types",
+        key_class: "navigation/legacy functional forms (arrows, Home, End, PageUp, PageDown, \
+                    Insert, Delete)",
         verdict: Verdict::Unimplemented(
-            "termwiz's KeyCode::encode hardcodes empty output for is_down == false before it \
-             ever looks at the encoding mode, for every key without exception; \
-             app::keymap::handle_terminal_key also hardcodes is_down: true on every key it \
-             sends, so no release event is even constructed today. Effort: medium — needs a \
-             from-scratch CSI u release-event encoder plus app-layer key-up wiring",
+            "the wider Kitty grammar extends the modifier:event-type sub-field to the legacy \
+             `CSI 1;mods<letter>` / `CSI n;mods~` forms these keys use too, not just the general \
+             `CSI u` form — but this module only decorates the CSI u sequences \
+             kitty_override/csi_u_text_key already produce, matching this feature's explicit \
+             scope. Effort: small-medium — thread the same event_type_subfield through \
+             legacy_bytes' nav-key arm, gated on flags being non-empty (that arm currently \
+             ignores flags entirely, by design — see \"Functional key definitions: navigation \
+             keys\"), plus deciding whether that changes those keys' 'flag-invariant' status",
         ),
-        tests: &["release_events_are_unimplemented_regardless_of_flags"],
+        tests: &[],
     },
     FeatureEntry {
         feature: "Functional key definitions: F13-F35",

@@ -5,6 +5,7 @@ use floem::keyboard::{Key, KeyEvent, Modifiers, NamedKey};
 use termwiz::input::{KeyCode as TermKeyCode, Modifiers as TermModifiers};
 
 use crate::app::commands::CommandId;
+use crate::terminal::KeyEventKind;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AgentDraftAction {
@@ -124,6 +125,25 @@ pub(crate) fn terminal_key_from_input(key: &Key) -> Option<TermKeyCode> {
         Key::Named(NamedKey::PageDown) => Some(TermKeyCode::PageDown),
         Key::Named(NamedKey::Delete) => Some(TermKeyCode::Delete),
         _ => None,
+    }
+}
+
+/// Classifies an `Event::KeyDown` as an initial press or an OS/winit-
+/// synthesized repeat (a held key), for `TerminalCommand::Key`'s Kitty
+/// "event type" subfield (`terminal::protocol::kitty_keyboard`).
+/// `Event::KeyUp` never goes through this function — a key-up is always
+/// `KeyEventKind::Release` outright, classified directly at its call site
+/// (see `workspace::input::handle_active_pane_key_release`) since winit
+/// never sets `repeat` on a release.
+pub(crate) fn terminal_key_event_kind(event: &KeyEvent) -> KeyEventKind {
+    key_event_kind_from_repeat(event.key.repeat)
+}
+
+fn key_event_kind_from_repeat(repeat: bool) -> KeyEventKind {
+    if repeat {
+        KeyEventKind::Repeat
+    } else {
+        KeyEventKind::Press
     }
 }
 
@@ -701,6 +721,12 @@ mod tests {
             terminal_key_from_character("a", Modifiers::CONTROL | Modifiers::META),
             Some(TermKeyCode::Char('a'))
         );
+    }
+
+    #[test]
+    fn key_event_kind_reflects_the_repeat_flag() {
+        assert_eq!(key_event_kind_from_repeat(false), KeyEventKind::Press);
+        assert_eq!(key_event_kind_from_repeat(true), KeyEventKind::Repeat);
     }
 
     #[test]

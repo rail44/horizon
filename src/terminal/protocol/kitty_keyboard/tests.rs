@@ -23,7 +23,11 @@ const TEST_REGISTRY: &[(&str, bool)] = &[
         "csi_u_text_key_reports_alternate_for_shifted_letter_only",
         false,
     ),
-    ("release_events_are_unimplemented_regardless_of_flags", true),
+    (
+        "release_events_are_unimplemented_regardless_of_flags",
+        false,
+    ),
+    ("csi_u_event_type_truth_table", false),
     ("very_high_function_keys_are_unimplemented", true),
     ("standalone_modifier_keypresses_are_unimplemented", true),
     ("keypad_keys_ignore_disambiguate_flag", true),

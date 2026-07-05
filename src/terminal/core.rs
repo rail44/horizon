@@ -4,6 +4,7 @@ use alacritty_terminal::index::{Column, Line, Point as TermPoint, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::{Config as TermConfig, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Processor, Timeout};
+use termwiz::escape::csi::KittyKeyboardFlags;
 use termwiz::input::{KeyCode, KeyCodeEncodeModes, KeyboardEncoding, Modifiers};
 
 use self::color::resolve_query_color;
@@ -11,8 +12,8 @@ use self::events::{EventSink, TerminalEvents};
 use self::input::{arrow_scroll_input, sgr_mouse_input, sgr_mouse_wheel_input};
 use super::protocol::kitty_keyboard;
 use super::types::{
-    TerminalFrame, TerminalMouseKind, TerminalMouseReport, TerminalScroll, TerminalSelectionPoint,
-    TerminalSize,
+    KeyEventKind, TerminalFrame, TerminalMouseKind, TerminalMouseReport, TerminalScroll,
+    TerminalSelectionPoint, TerminalSize,
 };
 
 mod color;
@@ -189,17 +190,23 @@ impl TerminalCore {
         render::snapshot_frame(&self.term, self.size)
     }
 
-    pub(crate) fn encode_key(&self, key: KeyCode, mods: Modifiers, is_down: bool) -> String {
-        // Key-up events never produce output (termwiz's own `KeyCode::encode`
-        // returns empty for `is_down == false` unconditionally, before ever
-        // consulting the encoding mode — checking it here up front means
-        // `kitty_keyboard::encode` never has to care about `is_down` at all).
-        if !is_down {
-            return String::new();
-        }
-
+    pub(crate) fn encode_key(&self, key: KeyCode, mods: Modifiers, event: KeyEventKind) -> String {
         let mode = *self.term.mode();
         let flags = kitty_keyboard::flags_from_mode(mode);
+
+        // A release only has a wire representation once REPORT_EVENT_TYPES
+        // is negotiated (<https://sw.kovidgoyal.net/kitty/keyboard-protocol/>:
+        // reporting repeat/release requires flag `0b10`) — without it there
+        // is no key-up concept at all, matching every legacy assumption
+        // that a key event is an ephemeral press (termwiz's own
+        // `KeyCode::encode` hardcodes empty output for `is_down == false`
+        // unconditionally). One gate here covers both the text-key path
+        // and the general `kitty_keyboard::encode` path below, so neither
+        // has to re-derive it.
+        if event == KeyEventKind::Release && !flags.contains(KittyKeyboardFlags::REPORT_EVENT_TYPES)
+        {
+            return String::new();
+        }
 
         // Text keys (letters/digits/punctuation) are handled by a
         // dedicated path, special-cased ahead of the `flags.is_empty()`
@@ -217,7 +224,7 @@ impl TerminalCore {
         // `legacy_bytes` (built for the four keys `kitty_override`
         // promotes, not text keys) has to reproduce it.
         if let KeyCode::Char(c) = key {
-            let bytes = kitty_keyboard::encode_text_key(c, mods, flags);
+            let bytes = kitty_keyboard::encode_text_key(c, mods, flags, event);
             return String::from_utf8(bytes).unwrap_or_default();
         }
 
@@ -229,18 +236,26 @@ impl TerminalCore {
                 key,
                 mods,
                 flags,
+                event,
                 mode.contains(TermMode::APP_CURSOR),
                 mode.contains(TermMode::LINE_FEED_NEW_LINE),
             );
             return String::from_utf8(bytes).unwrap_or_default();
         }
 
-        key.encode(mods, self.encode_modes(), is_down)
+        // Legacy path (no Kitty flag negotiated at all): by this point
+        // `event` can only be `Press` or `Repeat` (the gate above already
+        // returned for `Release`, since `flags` being entirely empty means
+        // it can't contain `REPORT_EVENT_TYPES` either), and termwiz's own
+        // encoder has no repeat/release concept regardless — `is_down` is
+        // always `true` here, so a repeat is byte-for-byte identical to a
+        // press.
+        key.encode(mods, self.encode_modes(), event.is_down())
             .unwrap_or_default()
     }
 
-    pub(crate) fn key_input(&self, key: KeyCode, mods: Modifiers, is_down: bool) -> Vec<u8> {
-        self.encode_key(key, mods, is_down).into_bytes()
+    pub(crate) fn key_input(&self, key: KeyCode, mods: Modifiers, event: KeyEventKind) -> Vec<u8> {
+        self.encode_key(key, mods, event).into_bytes()
     }
 
     pub(crate) fn start_selection(&mut self, point: TerminalSelectionPoint) {

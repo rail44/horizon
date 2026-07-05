@@ -1,10 +1,11 @@
 use crate::agent::contract::Command;
 use crate::app::keymap::{
     agent_draft_action, is_terminal_copy_key, is_terminal_paste_key, pop_last_grapheme_approx,
-    terminal_input_from_key, terminal_key_from_key, termwiz_modifiers, AgentDraftAction,
+    terminal_input_from_key, terminal_key_event_kind, terminal_key_from_key, termwiz_modifiers,
+    AgentDraftAction,
 };
 use crate::session::Registry;
-use crate::terminal::TerminalCommand;
+use crate::terminal::{KeyEventKind, TerminalCommand};
 use crate::workspace::{PaneKind, Workspace};
 use floem::action::set_ime_allowed;
 use floem::keyboard::{Key, KeyEvent};
@@ -76,6 +77,7 @@ pub(crate) fn visible_agent_sender(
 fn handle_terminal_key(
     key_event: &KeyEvent,
     terminal_tx: Option<crossbeam_channel::Sender<TerminalCommand>>,
+    event: KeyEventKind,
 ) -> bool {
     let Some(tx) = terminal_tx else {
         return false;
@@ -97,7 +99,7 @@ fn handle_terminal_key(
         let _ = tx.send(TerminalCommand::Key {
             key,
             modifiers: termwiz_modifiers(key_event.modifiers),
-            is_down: true,
+            event,
         });
         return true;
     }
@@ -108,6 +110,33 @@ fn handle_terminal_key(
     }
 
     false
+}
+
+/// Key-release counterpart to `handle_terminal_key`, called from
+/// `Event::KeyUp` (see `handle_active_pane_key_release`). Deliberately
+/// narrower: a release only ever means anything for a key that round-trips
+/// through `terminal_key_from_key`/`TerminalCommand::Key` — the
+/// paste/copy chords and `terminal_input_from_key`'s raw-bytes fallback
+/// (multi-character text, a Meta-held character, ...) have no "release"
+/// counterpart to send, so they're not checked here at all.
+fn handle_terminal_key_release(
+    key_event: &KeyEvent,
+    terminal_tx: Option<crossbeam_channel::Sender<TerminalCommand>>,
+) -> bool {
+    let Some(tx) = terminal_tx else {
+        return false;
+    };
+
+    let Some(key) = terminal_key_from_key(key_event) else {
+        return false;
+    };
+
+    let _ = tx.send(TerminalCommand::Key {
+        key,
+        modifiers: termwiz_modifiers(key_event.modifiers),
+        event: KeyEventKind::Release,
+    });
+    true
 }
 
 fn handle_agent_key(
@@ -173,10 +202,61 @@ pub(crate) fn handle_active_pane_key(
         return handle_terminal_key(
             key_event,
             visible_terminal_sender(workspace, sessions, index),
+            terminal_key_event_kind(key_event),
         );
     }
 
     false
+}
+
+/// `Event::KeyUp` counterpart to `handle_active_pane_key`. Deliberately much
+/// narrower than the press side: only the active pane's *terminal* — the
+/// one pane kind a key release means anything for at the protocol level
+/// (see `KITTY_COMPLIANCE`'s "Report event types" rows) — ever sees a
+/// release, and only through `handle_terminal_key_release`. Agent panes,
+/// the command palette, global chords (`app::input::AppInput::
+/// handle_key_down`) and `app::keymap::Keymap`'s config-driven bindings are
+/// never wired to `Event::KeyUp` at all, by construction — a chord already
+/// ran its command on the matching `KeyDown`, so there is nothing left for
+/// its release to (re-)trigger.
+pub(crate) fn handle_active_pane_key_release(
+    key_event: &KeyEvent,
+    workspace: RwSignal<Workspace>,
+    sessions: RwSignal<Registry>,
+    index: usize,
+    ime_composing: RwSignal<bool>,
+    palette_open: RwSignal<bool>,
+) -> bool {
+    if ime_composing.get_untracked() && matches!(key_event.key.logical_key, Key::Character(_)) {
+        return true;
+    }
+
+    if palette_open.get_untracked() {
+        // The palette intercepts most keys before `handle_active_pane_key`
+        // ever sees their *press* (see `pane_view`'s `KeyDown` handler,
+        // `handle_control_key` and `is_palette_open_key`) — most commonly
+        // its own open chord (`ctrl+p` by default), whose press the
+        // terminal never received. Forwarding that key's later release
+        // anyway would hand the PTY an orphan release with no matching
+        // press. This is coarser than mirroring the press side's exact
+        // dispatch (`control_surface::handle_palette_key`'s match doesn't
+        // claim every key — e.g. a held Ctrl-combo already falls through
+        // to the terminal even while the palette is open, so strictly it
+        // loses its matching release under this blanket check), but doing
+        // better would mean re-running the palette's own key dispatch here
+        // just to check whether it *would* have claimed the press, without
+        // triggering its side effects twice.
+        return true;
+    }
+
+    if !workspace.with(|ws| ws.active_visible_pane_is(index, PaneKind::Terminal)) {
+        return false;
+    }
+
+    handle_terminal_key_release(
+        key_event,
+        visible_terminal_sender(workspace, sessions, index),
+    )
 }
 
 pub(crate) fn trace_ime(message: &str) {

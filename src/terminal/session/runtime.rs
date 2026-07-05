@@ -8,7 +8,7 @@ use termwiz::input::{KeyCode, Modifiers};
 use crate::terminal::core::TerminalCore;
 use crate::terminal::session::contract::{SelectionCommand, TerminalCommand, TerminalUpdate};
 use crate::terminal::session::trace::PtyTrace;
-use crate::terminal::types::{TerminalMouseReport, TerminalScroll, TerminalSize};
+use crate::terminal::types::{KeyEventKind, TerminalMouseReport, TerminalScroll, TerminalSize};
 
 /// Read buffer size for the PTY reader thread. Matches alacritty's own tty
 /// reader pattern (`alacritty_terminal::event_loop::READ_BUFFER_SIZE`): one
@@ -53,7 +53,7 @@ pub(super) struct CoreReceivers {
     pub(super) scroll_rx: Receiver<TerminalScroll>,
     pub(super) mouse_rx: Receiver<TerminalMouseReport>,
     pub(super) paste_rx: Receiver<String>,
-    pub(super) key_rx: Receiver<(KeyCode, Modifiers, bool)>,
+    pub(super) key_rx: Receiver<(KeyCode, Modifiers, KeyEventKind)>,
     pub(super) selection_rx: Receiver<SelectionCommand>,
 }
 
@@ -62,7 +62,7 @@ pub(super) struct CoreSenders {
     pub(super) scroll_tx: Sender<TerminalScroll>,
     pub(super) mouse_tx: Sender<TerminalMouseReport>,
     pub(super) paste_tx: Sender<String>,
-    pub(super) key_tx: Sender<(KeyCode, Modifiers, bool)>,
+    pub(super) key_tx: Sender<(KeyCode, Modifiers, KeyEventKind)>,
     pub(super) selection_tx: Sender<SelectionCommand>,
 }
 
@@ -189,10 +189,10 @@ pub(super) fn run_terminal_core(
                 notify_snapshot(&core, &update_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
             }
             recv(key_rx) -> key => {
-                let Ok((key, modifiers, is_down)) = key else {
+                let Ok((key, modifiers, event)) = key else {
                     return;
                 };
-                let input = core.key_input(key, modifiers, is_down);
+                let input = core.key_input(key, modifiers, event);
                 if !input.is_empty() {
                     let _ = command_tx.send(TerminalCommand::Input(input));
                 }
@@ -274,9 +274,9 @@ pub(super) fn run_writer(
             TerminalCommand::Key {
                 key,
                 modifiers,
-                is_down,
+                event,
             } => {
-                let _ = key_tx.send((key, modifiers, is_down));
+                let _ = key_tx.send((key, modifiers, event));
             }
             TerminalCommand::Paste(text) => {
                 let _ = paste_tx.send(text);
