@@ -1,7 +1,6 @@
 use unicode_width::UnicodeWidthChar;
 
-pub(crate) const DEFAULT_FG: [u8; 3] = [222, 226, 234];
-pub(crate) const DEFAULT_BG: [u8; 3] = [24, 27, 32];
+use crate::terminal::config::resolved_colors;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TerminalFrame {
@@ -38,8 +37,8 @@ impl TerminalFrame {
                 spans: vec![TerminalSpan {
                     columns: line.chars().map(char_width).sum(),
                     text: line.to_string(),
-                    fg: DEFAULT_FG,
-                    bg: DEFAULT_BG,
+                    fg: resolved_colors().foreground,
+                    bg: resolved_colors().background,
                 }],
             })
             .collect();

@@ -3,6 +3,8 @@ use std::sync::OnceLock;
 
 use floem::peniko::Color;
 
+pub(crate) mod ansi;
+
 pub(crate) fn text_primary() -> Color {
     resolve("text_primary", Color::from_rgb8(233, 236, 242))
 }
@@ -56,6 +58,39 @@ pub(crate) fn border_subtle() -> Color {
     resolve("border_subtle", Color::from_rgb8(42, 46, 55))
 }
 
+// --- terminal roles ------------------------------------------------------
+//
+// The terminal is not a separate palette: its default foreground,
+// background, and cursor project from the same three roles chrome already
+// uses, so setting `[theme]` once recolors chrome AND the terminal
+// consistently (`terminal::config::resolved_colors` is the consumer). Each
+// also accepts its own explicit override name below, for a terminal look
+// that diverges from chrome without touching the shared roles.
+
+pub(crate) fn terminal_foreground() -> Color {
+    resolve_or("terminal_foreground", text_primary)
+}
+
+pub(crate) fn terminal_background() -> Color {
+    resolve_or("terminal_background", surface_base)
+}
+
+/// Cursor defaults to `accent()` — the two already share the same built-in
+/// value (`#84dcc6`), so this is a pixel-identical default, not a new one.
+pub(crate) fn terminal_cursor() -> Color {
+    resolve_or("terminal_cursor", accent)
+}
+
+/// Converts a resolved theme color to the `[u8; 3]` RGB triple the terminal
+/// renderer works in (`terminal::config::resolved_colors`) — the one
+/// conversion point between `ui::theme`'s `floem::peniko::Color` and the
+/// terminal's raw per-cell colors. Alpha is always opaque for every theme
+/// color used here, so it's dropped.
+pub(crate) fn to_rgb8(color: Color) -> [u8; 3] {
+    let rgba = color.to_rgba8();
+    [rgba.r, rgba.g, rgba.b]
+}
+
 // --- config-driven overrides --------------------------------------------
 //
 // `[theme]` in Horizon's config file (`crate::config`) maps one of the
@@ -63,10 +98,16 @@ pub(crate) fn border_subtle() -> Color {
 // built-in default above. An unrecognized name or an unparsable hex value
 // is warned about on stderr and skipped — never a startup failure, matching
 // the config file's overall "never crash on a bad file" policy
-// (`crate::config`'s module doc).
+// (`crate::config`'s module doc). The nested `[theme.ansi]` table (the 16
+// base ANSI slots) is handled the same way by the `ansi` submodule; a
+// future named-scheme layer would nest alongside `ansi` rather than
+// reshape either table's keys.
 
 /// Every name `[theme]` may override, matching this module's accessor
-/// functions above one-to-one.
+/// functions above one-to-one. `terminal_foreground`/`terminal_background`/
+/// `terminal_cursor` have no fixed built-in default of their own here (see
+/// `resolve_or`) but still need to be recognized names rather than rejected
+/// as unknown.
 const THEME_NAMES: &[&str] = &[
     "text_primary",
     "text_muted",
@@ -80,10 +121,21 @@ const THEME_NAMES: &[&str] = &[
     "surface_selected",
     "border_default",
     "border_subtle",
+    "terminal_foreground",
+    "terminal_background",
+    "terminal_cursor",
 ];
 
 fn resolve(name: &'static str, default: Color) -> Color {
     overrides().get(name).copied().unwrap_or(default)
+}
+
+/// Like [`resolve`], but the fallback is another role's resolved color
+/// (itself override-aware) rather than a fixed constant — how
+/// `terminal_foreground`/`terminal_background`/`terminal_cursor` derive
+/// from `text_primary`/`surface_base`/`accent` by default.
+fn resolve_or(name: &'static str, fallback: fn() -> Color) -> Color {
+    overrides().get(name).copied().unwrap_or_else(fallback)
 }
 
 /// The process-wide theme overrides, built once from Horizon's config file
@@ -91,7 +143,7 @@ fn resolve(name: &'static str, default: Color) -> Color {
 /// the run.
 fn overrides() -> &'static HashMap<&'static str, Color> {
     static OVERRIDES: OnceLock<HashMap<&'static str, Color>> = OnceLock::new();
-    OVERRIDES.get_or_init(|| build_overrides(&crate::config::load().theme))
+    OVERRIDES.get_or_init(|| build_overrides(&crate::config::load().theme.colors))
 }
 
 fn build_overrides(entries: &HashMap<String, String>) -> HashMap<&'static str, Color> {
@@ -116,7 +168,9 @@ fn build_overrides(entries: &HashMap<String, String>) -> HashMap<&'static str, C
 /// Parses a `#rrggbb` or `#rgb` hex color string (case-insensitive, leading
 /// `#` optional). Returns an error message (never panics) for anything
 /// else, so a malformed `[theme]` entry can be warned about and skipped
-/// rather than crashing startup.
+/// rather than crashing startup. Shared with the `ansi` submodule (private
+/// items here are visible to descendant modules) so hex parsing has exactly
+/// one implementation for the whole theme.
 fn parse_hex_color(input: &str) -> Result<Color, String> {
     let trimmed = input.trim().trim_start_matches('#');
 
@@ -196,6 +250,17 @@ mod tests {
     }
 
     #[test]
+    fn build_overrides_accepts_terminal_role_override_names() {
+        let mut entries = HashMap::new();
+        entries.insert("terminal_cursor".to_string(), "#ff00ff".to_string());
+
+        let overrides = build_overrides(&entries);
+
+        assert_eq!(overrides.len(), 1);
+        assert!(overrides.contains_key("terminal_cursor"));
+    }
+
+    #[test]
     fn build_overrides_skips_unknown_name_without_dropping_others() {
         let mut entries = HashMap::new();
         entries.insert("not_a_real_color".to_string(), "#ff00ff".to_string());
@@ -222,5 +287,34 @@ mod tests {
     #[test]
     fn build_overrides_is_empty_for_an_empty_config() {
         assert!(build_overrides(&HashMap::new()).is_empty());
+    }
+
+    #[test]
+    fn to_rgb8_drops_alpha_and_keeps_components() {
+        assert_eq!(to_rgb8(Color::from_rgb8(1, 2, 3)), [1, 2, 3]);
+    }
+
+    // --- terminal roles: unset falls back to the paired chrome role -----
+    //
+    // These call the live (cache-backed) accessors rather than a pure
+    // helper: whatever the process's real config resolves `text_primary`/
+    // `surface_base`/`accent` to, `terminal_foreground`/
+    // `terminal_background`/`terminal_cursor` must equal it exactly when
+    // left unset, because the fallback *is* that same call — this holds
+    // regardless of which config, if any, is active in the test process.
+
+    #[test]
+    fn terminal_foreground_falls_back_to_text_primary() {
+        assert_eq!(terminal_foreground(), text_primary());
+    }
+
+    #[test]
+    fn terminal_background_falls_back_to_surface_base() {
+        assert_eq!(terminal_background(), surface_base());
+    }
+
+    #[test]
+    fn terminal_cursor_falls_back_to_accent() {
+        assert_eq!(terminal_cursor(), accent());
     }
 }

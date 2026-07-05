@@ -14,8 +14,6 @@ pub(crate) use types::{
 
 #[cfg(test)]
 pub(crate) use session::terminal_command;
-#[cfg(test)]
-pub(crate) use types::DEFAULT_FG;
 
 #[cfg(test)]
 mod tests;

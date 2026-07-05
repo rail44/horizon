@@ -162,12 +162,14 @@ mod tests {
              default is \"no persisted memory\" (None), not a placeholder path"
         );
 
-        // [provider]/[keybindings]/[theme] ship commented out in the example
-        // (they layer on top of other defaults, not simple constants) —
-        // confirms the whole file still parses with them absent, rather
-        // than only the [agent] section being exercised above.
+        // [provider]/[keybindings]/[theme]'s flat color overrides ship
+        // commented out in the example (they layer on top of other
+        // defaults, not simple constants) — confirms the whole file still
+        // parses with them absent, rather than only the [agent] section
+        // being exercised above. [theme.ansi] is active (see
+        // `ui::theme::ansi`'s own drift guard for that table).
         assert_eq!(parsed.provider, crate::config::RawProviderConfig::default());
         assert!(parsed.keybindings.is_empty());
-        assert!(parsed.theme.is_empty());
+        assert!(parsed.theme.colors.is_empty());
     }
 }

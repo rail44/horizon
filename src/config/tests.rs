@@ -128,7 +128,7 @@ fn load_from_path_parses_a_well_formed_file() {
         Some("new-terminal")
     );
     assert_eq!(
-        loaded.theme.get("accent").map(String::as_str),
+        loaded.theme.colors.get("accent").map(String::as_str),
         Some("#ff00ff")
     );
 
@@ -149,7 +149,7 @@ fn a_file_with_only_some_knobs_set_leaves_the_rest_none() {
     assert_eq!(loaded.agent.doom_loop_window, None);
     assert_eq!(loaded.provider.model, None);
     assert!(loaded.keybindings.is_empty());
-    assert!(loaded.theme.is_empty());
+    assert_eq!(loaded.theme, crate::config::RawThemeConfig::default());
 
     let _ = std::fs::remove_file(&path);
 }

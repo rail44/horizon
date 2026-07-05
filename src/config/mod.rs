@@ -54,9 +54,8 @@ pub(crate) struct RawConfig {
     /// `CommandId`), which overrides the chord that opens the command
     /// palette itself.
     pub(crate) keybindings: HashMap<String, String>,
-    /// Palette name (matching a `ui::theme` accessor, e.g. `"accent"`) to a
-    /// `#rrggbb`/`#rgb` hex string — parsed and validated by `ui::theme`.
-    pub(crate) theme: HashMap<String, String>,
+    /// `[theme]`: the app's one color scheme. See [`RawThemeConfig`].
+    pub(crate) theme: RawThemeConfig,
 }
 
 /// `[agent]`: tuning values for the bash/fs tools and the turn-loop guards.
@@ -139,6 +138,50 @@ pub(crate) struct RawTerminalConfig {
     pub(crate) shell_args: Option<Vec<String>>,
     /// The `TERM` value presented to the spawned shell.
     pub(crate) term: Option<String>,
+}
+
+/// `[theme]`: the app's one color scheme — named role overrides for the
+/// chrome palette (flattened into this struct's `colors` map, e.g.
+/// `"accent"`, `"terminal_cursor"`) plus the nested `[theme.ansi]` table for
+/// the 16 base ANSI slots. Both are parsed and validated by `ui::theme`
+/// (`colors` against its accessor names, `ansi` field-by-field). Keeping
+/// `ansi` a named field alongside the flattened map — rather than putting
+/// everything in one flat namespace — leaves room for a future named-scheme
+/// layer (e.g. `[theme.schemes.dracula]`) to nest in the same way without
+/// reshaping either table's keys.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub(crate) struct RawThemeConfig {
+    pub(crate) ansi: RawThemeAnsiConfig,
+    /// Palette name (matching a `ui::theme` accessor, e.g. `"accent"`) to a
+    /// `#rrggbb`/`#rgb` hex string. Flattened so this and `ansi` above share
+    /// the same `[theme]` table in TOML.
+    #[serde(flatten)]
+    pub(crate) colors: HashMap<String, String>,
+}
+
+/// `[theme.ansi]`: the 16 base ANSI color slots, each an optional
+/// `#rrggbb`/`#rgb` hex string. See `ui::theme::ansi` for the built-in
+/// defaults each falls back to when unset here.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub(crate) struct RawThemeAnsiConfig {
+    pub(crate) black: Option<String>,
+    pub(crate) red: Option<String>,
+    pub(crate) green: Option<String>,
+    pub(crate) yellow: Option<String>,
+    pub(crate) blue: Option<String>,
+    pub(crate) magenta: Option<String>,
+    pub(crate) cyan: Option<String>,
+    pub(crate) white: Option<String>,
+    pub(crate) bright_black: Option<String>,
+    pub(crate) bright_red: Option<String>,
+    pub(crate) bright_green: Option<String>,
+    pub(crate) bright_yellow: Option<String>,
+    pub(crate) bright_blue: Option<String>,
+    pub(crate) bright_magenta: Option<String>,
+    pub(crate) bright_cyan: Option<String>,
+    pub(crate) bright_white: Option<String>,
 }
 
 /// `[ui]`: cross-domain UI primitives — the app-wide font family (shared by

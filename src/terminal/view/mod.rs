@@ -252,13 +252,20 @@ impl View for TerminalTextView {
                 let x = PADDING_X + col as f64 * cell_width;
                 let columns = cell.columns.min(max_cols - col);
                 let bg_rect = Rect::new(x, y, x + columns as f64 * cell_width, y + line_height);
-                if cell.bg != [24, 27, 32] {
-                    cx.fill(
-                        &expanded_rect(bg_rect),
-                        Color::from_rgb8(cell.bg[0], cell.bg[1], cell.bg[2]),
-                        0.0,
-                    );
-                }
+                // Always painted (no "skip when it matches the pane's
+                // ambient background" shortcut): that shortcut compared
+                // against a literal hardcoded color, which happened to
+                // match the terminal's old fixed default background. Now
+                // that the terminal's background projects from the app
+                // theme (`ui::theme::terminal_background`) and is
+                // configurable independently of the workspace pane's own
+                // theme, the resolved background must always be drawn
+                // explicitly to actually show up.
+                cx.fill(
+                    &expanded_rect(bg_rect),
+                    Color::from_rgb8(cell.bg[0], cell.bg[1], cell.bg[2]),
+                    0.0,
+                );
                 col += columns;
             }
         }
@@ -306,7 +313,12 @@ impl View for TerminalTextView {
                     cx.fill(&underline, Color::from_rgb8(132, 220, 198), 0.0);
                 } else {
                     let rect = Rect::new(x, y, x + cell_width, y + line_height);
-                    cx.fill(&rect, Color::from_rgba8(132, 220, 198, 150), 0.0);
+                    let cursor = crate::terminal::config::resolved_colors().cursor;
+                    cx.fill(
+                        &rect,
+                        Color::from_rgba8(cursor[0], cursor[1], cursor[2], 150),
+                        0.0,
+                    );
                 }
             }
         }

@@ -4,9 +4,10 @@ use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Rgb};
 use unicode_width::UnicodeWidthChar;
 
+use crate::terminal::config::{resolved_colors, TerminalColors};
 use crate::terminal::core::events::EventSink;
 use crate::terminal::types::{
-    TerminalCursor, TerminalFrame, TerminalLine, TerminalSize, TerminalSpan, DEFAULT_BG, DEFAULT_FG,
+    TerminalCursor, TerminalFrame, TerminalLine, TerminalSize, TerminalSpan,
 };
 
 pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> TerminalFrame {
@@ -40,7 +41,7 @@ pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> Term
             .as_ref()
             .is_some_and(|selection| selection.contains(indexed.point))
         {
-            (DEFAULT_BG, [132, 220, 198])
+            (resolved_colors().background, [132, 220, 198])
         } else {
             (fg, bg)
         };
@@ -128,12 +129,12 @@ fn cell_fg(color: AnsiColor, flags: Flags, colors: &Colors) -> [u8; 3] {
         color
     };
 
-    resolve_color(color, colors).unwrap_or(DEFAULT_FG)
+    resolve_color(color, colors).unwrap_or(resolved_colors().foreground)
 }
 
 fn cell_bg(color: AnsiColor, flags: Flags, colors: &Colors) -> [u8; 3] {
     let mut fg = cell_fg(AnsiColor::Named(NamedColor::Foreground), flags, colors);
-    let mut bg = resolve_color(color, colors).unwrap_or(DEFAULT_BG);
+    let mut bg = resolve_color(color, colors).unwrap_or(resolved_colors().background);
     if flags.contains(Flags::INVERSE) {
         std::mem::swap(&mut fg, &mut bg);
     }
@@ -148,62 +149,74 @@ fn cursor_position(row: i32, col: usize) -> Option<TerminalCursor> {
 }
 
 fn resolve_color(color: AnsiColor, colors: &Colors) -> Option<[u8; 3]> {
+    let scheme = resolved_colors();
     let rgb = match color {
         AnsiColor::Spec(rgb) => rgb,
-        AnsiColor::Indexed(index) => colors[index as usize].unwrap_or_else(|| indexed_rgb(index)),
-        AnsiColor::Named(named) => colors[named].unwrap_or_else(|| named_rgb(named)),
+        AnsiColor::Indexed(index) => {
+            colors[index as usize].unwrap_or_else(|| indexed_rgb(index, scheme))
+        }
+        AnsiColor::Named(named) => colors[named].unwrap_or_else(|| named_rgb(named, scheme)),
     };
     Some([rgb.r, rgb.g, rgb.b])
 }
 
-fn named_rgb(color: NamedColor) -> Rgb {
+/// Maps an `alacritty_terminal` named color to RGB, sourcing the 16 base
+/// ANSI slots plus foreground/background/cursor from the app theme
+/// (`scheme`, `terminal::config::resolved_colors`). `DimWhite` is the one
+/// exception: alacritty gives "dim white" its own distinct shade (unlike
+/// the other colors, whose `Dim*` variant just reuses the `Bright*` value),
+/// and there is no theme slot for it, so it stays hardcoded.
+fn named_rgb(color: NamedColor, scheme: &TerminalColors) -> Rgb {
     let [r, g, b] = match color {
-        NamedColor::Black => [35, 38, 46],
-        NamedColor::Red => [224, 108, 117],
-        NamedColor::Green => [152, 195, 121],
-        NamedColor::Yellow => [229, 192, 123],
-        NamedColor::Blue => [97, 175, 239],
-        NamedColor::Magenta => [198, 120, 221],
-        NamedColor::Cyan => [86, 182, 194],
-        NamedColor::White => [222, 226, 234],
+        NamedColor::Black => scheme.black,
+        NamedColor::Red => scheme.red,
+        NamedColor::Green => scheme.green,
+        NamedColor::Yellow => scheme.yellow,
+        NamedColor::Blue => scheme.blue,
+        NamedColor::Magenta => scheme.magenta,
+        NamedColor::Cyan => scheme.cyan,
+        NamedColor::White => scheme.white,
         NamedColor::DimWhite => [170, 176, 190],
-        NamedColor::BrightBlack | NamedColor::DimBlack => [95, 99, 112],
-        NamedColor::BrightRed | NamedColor::DimRed => [255, 123, 127],
-        NamedColor::BrightGreen | NamedColor::DimGreen => [181, 214, 140],
-        NamedColor::BrightYellow | NamedColor::DimYellow => [245, 211, 139],
-        NamedColor::BrightBlue | NamedColor::DimBlue => [120, 194, 255],
-        NamedColor::BrightMagenta | NamedColor::DimMagenta => [218, 140, 255],
-        NamedColor::BrightCyan | NamedColor::DimCyan => [103, 205, 216],
-        NamedColor::BrightWhite => [255, 255, 255],
+        NamedColor::BrightBlack | NamedColor::DimBlack => scheme.bright_black,
+        NamedColor::BrightRed | NamedColor::DimRed => scheme.bright_red,
+        NamedColor::BrightGreen | NamedColor::DimGreen => scheme.bright_green,
+        NamedColor::BrightYellow | NamedColor::DimYellow => scheme.bright_yellow,
+        NamedColor::BrightBlue | NamedColor::DimBlue => scheme.bright_blue,
+        NamedColor::BrightMagenta | NamedColor::DimMagenta => scheme.bright_magenta,
+        NamedColor::BrightCyan | NamedColor::DimCyan => scheme.bright_cyan,
+        NamedColor::BrightWhite => scheme.bright_white,
         NamedColor::Foreground | NamedColor::BrightForeground | NamedColor::DimForeground => {
-            DEFAULT_FG
+            scheme.foreground
         }
-        NamedColor::Background => DEFAULT_BG,
-        NamedColor::Cursor => [132, 220, 198],
+        NamedColor::Background => scheme.background,
+        NamedColor::Cursor => scheme.cursor,
     };
     Rgb { r, g, b }
 }
 
-fn indexed_rgb(index: u8) -> Rgb {
+fn indexed_rgb(index: u8, scheme: &TerminalColors) -> Rgb {
     if index < 16 {
-        return named_rgb(match index {
-            0 => NamedColor::Black,
-            1 => NamedColor::Red,
-            2 => NamedColor::Green,
-            3 => NamedColor::Yellow,
-            4 => NamedColor::Blue,
-            5 => NamedColor::Magenta,
-            6 => NamedColor::Cyan,
-            7 => NamedColor::White,
-            8 => NamedColor::BrightBlack,
-            9 => NamedColor::BrightRed,
-            10 => NamedColor::BrightGreen,
-            11 => NamedColor::BrightYellow,
-            12 => NamedColor::BrightBlue,
-            13 => NamedColor::BrightMagenta,
-            14 => NamedColor::BrightCyan,
-            _ => NamedColor::BrightWhite,
-        });
+        return named_rgb(
+            match index {
+                0 => NamedColor::Black,
+                1 => NamedColor::Red,
+                2 => NamedColor::Green,
+                3 => NamedColor::Yellow,
+                4 => NamedColor::Blue,
+                5 => NamedColor::Magenta,
+                6 => NamedColor::Cyan,
+                7 => NamedColor::White,
+                8 => NamedColor::BrightBlack,
+                9 => NamedColor::BrightRed,
+                10 => NamedColor::BrightGreen,
+                11 => NamedColor::BrightYellow,
+                12 => NamedColor::BrightBlue,
+                13 => NamedColor::BrightMagenta,
+                14 => NamedColor::BrightCyan,
+                _ => NamedColor::BrightWhite,
+            },
+            scheme,
+        );
     }
 
     if index < 232 {

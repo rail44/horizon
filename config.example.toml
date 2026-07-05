@@ -180,15 +180,53 @@ window_height = 720.0
 # "ctrl+p" = "open-palette"
 
 # ---------------------------------------------------------------------------
-# [theme] — named color overrides for the workspace palette, as
-# `#rrggbb`/`#rgb` hex strings (case-insensitive, leading `#` optional).
+# [theme] — the app's one color scheme: named role overrides for the chrome
+# palette, as `#rrggbb`/`#rgb` hex strings (case-insensitive, leading `#`
+# optional). The terminal is not a separate palette — its default
+# foreground/background/cursor project from text_primary/surface_base/
+# accent respectively, so setting [theme] once recolors chrome AND the
+# terminal consistently. The 16 base ANSI colors terminal output uses live
+# in the nested [theme.ansi] table below, part of this same scheme.
 #
-# Names (see `src/ui/theme.rs`): text_primary, text_muted, text_subtle,
+# Names (see `src/ui/theme/mod.rs`): text_primary, text_muted, text_subtle,
 # accent, danger, surface_base, surface_panel, surface_raised,
-# surface_chrome, surface_selected, border_default, border_subtle.
+# surface_chrome, surface_selected, border_default, border_subtle,
+# terminal_foreground (defaults to text_primary), terminal_background
+# (defaults to surface_base), terminal_cursor (defaults to accent).
 #
 # An unrecognized name or an unparsable hex value is warned about on stderr
 # and skipped, leaving that color at its built-in default.
 # ---------------------------------------------------------------------------
 [theme]
 # accent = "#84dcc6"
+# terminal_cursor = "#84dcc6"
+
+# ---------------------------------------------------------------------------
+# [theme.ansi] — the app-wide 16-slot ANSI palette (black…white,
+# bright_black…bright_white), as `#rrggbb`/`#rgb` hex strings. Used by the
+# terminal today (see `src/ui/theme/ansi.rs`); a future agent-transcript
+# renderer is expected to reuse this same palette.
+#
+# Active (uncommented) below because these are the current production
+# defaults, shown here as a live, editable reference — not because you need
+# to set them, matching [terminal] above. An unparsable hex value is warned
+# about on stderr and skipped, leaving that one slot at its built-in
+# default.
+# ---------------------------------------------------------------------------
+[theme.ansi]
+black = "#23262e"
+red = "#e06c75"
+green = "#98c379"
+yellow = "#e5c07b"
+blue = "#61afef"
+magenta = "#c678dd"
+cyan = "#56b6c2"
+white = "#dee2ea"
+bright_black = "#5f6370"
+bright_red = "#ff7b7f"
+bright_green = "#b5d68c"
+bright_yellow = "#f5d38b"
+bright_blue = "#78c2ff"
+bright_magenta = "#da8cff"
+bright_cyan = "#67cdd8"
+bright_white = "#ffffff"

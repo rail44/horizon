@@ -10,7 +10,10 @@
 //! those built-in defaults; see `config.example.toml` at the repo root for
 //! the full list.
 
+use std::sync::OnceLock;
+
 use crate::config::RawConfig;
+use crate::ui::theme;
 
 const DEFAULT_FONT_SIZE: f32 = 13.0;
 const DEFAULT_LINE_HEIGHT: f64 = 18.0;
@@ -84,6 +87,64 @@ pub(crate) fn resolve_shell(env_value: Option<String>, file_value: Option<String
     env_value
         .or(file_value)
         .unwrap_or_else(|| DEFAULT_SHELL.to_string())
+}
+
+/// The terminal's resolved color scheme — the 16 base ANSI slots plus the
+/// default foreground/background/cursor — bridged from the app-wide theme
+/// (`ui::theme`) into the `[u8; 3]` RGB triples `terminal::core::render`
+/// and `terminal::view` work in. Not a separate `[terminal.colors]` config
+/// section: every field here projects from `ui::theme`'s roles, so `[theme]`
+/// is the only place these are configured.
+pub(crate) struct TerminalColors {
+    pub(crate) foreground: [u8; 3],
+    pub(crate) background: [u8; 3],
+    pub(crate) cursor: [u8; 3],
+    pub(crate) black: [u8; 3],
+    pub(crate) red: [u8; 3],
+    pub(crate) green: [u8; 3],
+    pub(crate) yellow: [u8; 3],
+    pub(crate) blue: [u8; 3],
+    pub(crate) magenta: [u8; 3],
+    pub(crate) cyan: [u8; 3],
+    pub(crate) white: [u8; 3],
+    pub(crate) bright_black: [u8; 3],
+    pub(crate) bright_red: [u8; 3],
+    pub(crate) bright_green: [u8; 3],
+    pub(crate) bright_yellow: [u8; 3],
+    pub(crate) bright_blue: [u8; 3],
+    pub(crate) bright_magenta: [u8; 3],
+    pub(crate) bright_cyan: [u8; 3],
+    pub(crate) bright_white: [u8; 3],
+}
+
+/// The process-wide resolved terminal color scheme, built once (theme
+/// resolution is a `HashMap` lookup per role, and this is read for every
+/// cell of every rendered frame — `terminal::core::render::resolve_color`)
+/// and cached for the rest of the run, matching `ui::theme`'s own
+/// override-caching pattern.
+pub(crate) fn resolved_colors() -> &'static TerminalColors {
+    static COLORS: OnceLock<TerminalColors> = OnceLock::new();
+    COLORS.get_or_init(|| TerminalColors {
+        foreground: theme::to_rgb8(theme::terminal_foreground()),
+        background: theme::to_rgb8(theme::terminal_background()),
+        cursor: theme::to_rgb8(theme::terminal_cursor()),
+        black: theme::to_rgb8(theme::ansi::black()),
+        red: theme::to_rgb8(theme::ansi::red()),
+        green: theme::to_rgb8(theme::ansi::green()),
+        yellow: theme::to_rgb8(theme::ansi::yellow()),
+        blue: theme::to_rgb8(theme::ansi::blue()),
+        magenta: theme::to_rgb8(theme::ansi::magenta()),
+        cyan: theme::to_rgb8(theme::ansi::cyan()),
+        white: theme::to_rgb8(theme::ansi::white()),
+        bright_black: theme::to_rgb8(theme::ansi::bright_black()),
+        bright_red: theme::to_rgb8(theme::ansi::bright_red()),
+        bright_green: theme::to_rgb8(theme::ansi::bright_green()),
+        bright_yellow: theme::to_rgb8(theme::ansi::bright_yellow()),
+        bright_blue: theme::to_rgb8(theme::ansi::bright_blue()),
+        bright_magenta: theme::to_rgb8(theme::ansi::bright_magenta()),
+        bright_cyan: theme::to_rgb8(theme::ansi::bright_cyan()),
+        bright_white: theme::to_rgb8(theme::ansi::bright_white()),
+    })
 }
 
 #[cfg(test)]
