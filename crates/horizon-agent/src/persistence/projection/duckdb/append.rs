@@ -32,6 +32,11 @@ impl Store {
             .transpose()
             .context("serialize provider payload")?;
 
+        // Test-only path (see the `#[cfg(test)]` above): `AppendEvent` has no
+        // real-world timestamp to project (it models a single live append,
+        // not a JSONL replay), so `event_at` is just "now" here -- the
+        // rebuild path (`import::insert_event_log_record`) is what carries
+        // the real per-event time from `Record::created_at_unix_ms`.
         self.conn.execute(
             "INSERT INTO agent_events (
                 event_id,
@@ -41,8 +46,9 @@ impl Store {
                 event_kind,
                 horizon_event_json,
                 provider_id,
-                provider_payload_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                provider_payload_json,
+                event_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, now())",
             params![
                 &event_id,
                 &session_id_text,

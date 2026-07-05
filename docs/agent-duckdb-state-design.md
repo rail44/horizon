@@ -20,6 +20,8 @@ Decisions:
   results, and approval requests.
 - Keep the live runtime and pane rendering provider-neutral.
 - Keep DuckDB out of default builds until the runtime integration is ready.
+  (Superseded: the runtime integration is done and the projection now runs
+  by default -- see the "Runtime Boundary" section below.)
 
 This keeps Horizon's session and pane model independent from `rig-core`,
 `genai`, or a wasm plugin implementation, while still leaving room to preserve
@@ -133,10 +135,14 @@ code.
 Runtime persistence writes normalized Horizon events to the JSONL event log.
 DuckDB is rebuilt from JSONL and is not the primary append path.
 
-If `HORIZON_AGENT_STATE_DB` is set, the runtime rebuilds that path as a DuckDB
-database file instead of using an in-memory store. The file should conventionally
-use a `.duckdb` extension. It is a DuckDB-native binary database file containing
-the Horizon agent tables, not JSONL, Parquet, or SQLite.
+The projection runs by default now, at `$XDG_DATA_HOME/horizon/agent-state.duckdb`
+(falling back to `~/.local/share/horizon/agent-state.duckdb`) -- there is no
+"unset = disabled" state any more. `HORIZON_AGENT_STATE_DB` (or the config
+file's `[agent].state_db_path`), if set, relocates the file instead of
+turning the projection on; the runtime rebuilds whatever path resolves. The
+file should conventionally use a `.duckdb` extension. It is a DuckDB-native
+binary database file containing the Horizon agent tables, not JSONL,
+Parquet, or SQLite.
 
 If the configured file cannot be opened for rebuild or memory loading, Horizon
 continues with an empty in-memory provider history so the pane can still run.

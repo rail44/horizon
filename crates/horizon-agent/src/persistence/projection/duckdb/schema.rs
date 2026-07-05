@@ -6,6 +6,20 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
     updated_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
+-- `event_at` is the event's real wall-clock time, copied from the JSONL
+-- `Record::created_at_unix_ms` on insert/rebuild (via `epoch_ms(?)`) --
+-- *not* a `DEFAULT now()` insert-time stamp. A prior version of this table
+-- had exactly that (`created_at TIMESTAMP NOT NULL DEFAULT now()`), which
+-- made SQL timing analysis worthless: a full rebuild reinserts a session's
+-- entire history in ~1s, so every row got clustered within that second
+-- regardless of how many real days the events spanned (see the
+-- `agent-inspect` skill's DuckDB section). `created_at` was dropped rather
+-- than kept alongside `event_at`: it was never read through this crate's
+-- own API (only raw SQL saw it), and keeping a proven-misleading column
+-- next to the correct one just reintroduces the mistake for the next
+-- reader. See `Store::migrate_legacy_agent_events_schema` (`mod.rs`) for
+-- how a pre-`event_at` file gets migrated -- `CREATE TABLE IF NOT EXISTS`
+-- below is additive-only and does not by itself alter an existing table.
 CREATE TABLE IF NOT EXISTS agent_events (
     event_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
@@ -15,7 +29,7 @@ CREATE TABLE IF NOT EXISTS agent_events (
     horizon_event_json TEXT NOT NULL,
     provider_id TEXT,
     provider_payload_json TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    event_at TIMESTAMP NOT NULL,
     UNIQUE(session_id, sequence)
 );
 

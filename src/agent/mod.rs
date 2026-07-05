@@ -127,11 +127,14 @@ mod tests {
             parsed.agent.pane_status_tick_secs,
             Some(config::DEFAULT_PANE_STATUS_TICK_SECS)
         );
-        // `event_log_path`/`state_db_path` ship commented out (the real
-        // default depends on the environment -- `$XDG_DATA_HOME`/`$HOME` for
-        // the former, "no persisted memory" for the latter -- so there's no
-        // single literal value worth showing "live"), same as [provider]'s
-        // `model`/`base_url` below.
+        // `event_log_path`/`state_db_path` ship commented out (both
+        // built-in defaults depend on the environment -- `$XDG_DATA_HOME`/
+        // `$HOME` -- so there's no single literal value worth showing
+        // "live"), same as [provider]'s `model`/`base_url` below. Both
+        // always resolve to a real path now -- the DuckDB projection has no
+        // "unset = disabled" state to opt into any more (see
+        // `resolve_state_db_path`'s doc comment); setting either just
+        // relocates the file.
         //
         // Strengthened past a plain `None` check: resolve the parsed value
         // through the same precedence function production code uses
@@ -156,10 +159,10 @@ mod tests {
         );
         assert_eq!(parsed.agent.state_db_path, None);
         assert_eq!(
-            config::resolve_state_db_path(None, parsed.agent.state_db_path.clone(), None),
-            None,
-            "config.example.toml's state_db_path must stay commented out -- the built-in \
-             default is \"no persisted memory\" (None), not a placeholder path"
+            config::resolve_state_db_path(None, parsed.agent.state_db_path.clone(), None, None),
+            Some(config::default_state_db_path_from(None, None)),
+            "config.example.toml's state_db_path must stay commented out (or, if ever made \
+             live, resolve to the real built-in default -- not a placeholder path)"
         );
 
         // [provider]/[keybindings]/[theme]'s flat color overrides ship

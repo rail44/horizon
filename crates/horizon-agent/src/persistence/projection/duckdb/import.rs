@@ -35,6 +35,8 @@ impl Store {
             .map(serde_json::to_string)
             .transpose()
             .context("serialize provider payload")?;
+        let event_at_unix_ms =
+            i64::try_from(record.created_at_unix_ms).context("event timestamp overflow")?;
 
         self.conn.execute(
             "INSERT INTO agent_events (
@@ -45,8 +47,9 @@ impl Store {
                 event_kind,
                 horizon_event_json,
                 provider_id,
-                provider_payload_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                provider_payload_json,
+                event_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, epoch_ms(?))",
             params![
                 &record.event_id,
                 &session_id_text,
@@ -56,6 +59,7 @@ impl Store {
                 &event_json,
                 provider_id_text.as_deref(),
                 provider_payload_json.as_deref(),
+                event_at_unix_ms,
             ],
         )?;
 

@@ -96,9 +96,14 @@ pane_status_tick_secs = 1
 # this. A leading "~/" (here or in the env var) is expanded against $HOME.
 # event_log_path = "~/.local/share/horizon/agent-events.jsonl"
 # Overrides the DuckDB projection database path used to replay per-session
-# rig history. Commented out: unset (here and via env) means no persisted
-# memory, which is the default. `HORIZON_AGENT_STATE_DB`, if set, wins over
-# this. Same "~/" expansion as event_log_path above.
+# rig history. Commented out: the real default is
+# $XDG_DATA_HOME/horizon/agent-state.duckdb, falling back to
+# ~/.local/share/horizon/agent-state.duckdb if XDG_DATA_HOME is unset --
+# computed at startup, not a single literal value worth hardcoding here as
+# "live". The projection always runs (it's a rebuildable, non-authoritative
+# derived view of the JSONL log, not persisted state of its own); this only
+# relocates the file. `HORIZON_AGENT_STATE_DB`, if set, wins over this. Same
+# "~/" expansion as event_log_path above.
 # state_db_path = "~/.local/share/horizon/agent-state.duckdb"
 
 # ---------------------------------------------------------------------------

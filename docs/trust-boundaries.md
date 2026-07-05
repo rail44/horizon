@@ -59,10 +59,13 @@ instance nested inside the stable one.
   choose between rig's provider breadth and a direct OpenAI-compatible
   client. Until then, do not chase rig releases.
 - **duckdb** — kept, as the agent-knowledge-base bet. JSONL is the durable
-  log; the DuckDB projection is rebuildable and opt-in, so the exit cost
-  stays small. Note: `DUCKDB_DOWNLOAD_LIB` is a no-op under the `bundled`
-  feature (verified against libduckdb-sys 1.10504.0); relieving build cost
-  would require the non-bundled path and is not currently worth it.
+  log; the DuckDB projection is rebuildable and runs by default (no longer
+  opt-in -- see `docs/agent-duckdb-state-design.md`'s "Runtime Boundary"),
+  so the exit cost stays small: it's a derived view, not a second source of
+  truth, so dropping it is a rebuild-path removal, not a data migration.
+  Note: `DUCKDB_DOWNLOAD_LIB` is a no-op under the `bundled` feature
+  (verified against libduckdb-sys 1.10504.0); relieving build cost would
+  require the non-bundled path and is not currently worth it.
 - **alacritty_terminal + termwiz + portable-pty** — a deliberate three-way
   split: output interpretation / keyboard input encoding (incl. the kitty
   protocol; alacritty_terminal exposes no input-encoding API) / PTY and

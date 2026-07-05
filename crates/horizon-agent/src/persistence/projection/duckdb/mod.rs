@@ -46,7 +46,37 @@ impl Store {
     }
 
     fn initialize_schema(&self) -> Result<()> {
+        self.migrate_legacy_agent_events_schema()?;
         self.conn.execute_batch(INITIALIZE_SCHEMA_SQL)?;
+        Ok(())
+    }
+
+    /// Migrates a pre-`event_at` `agent_events` table (created by a Horizon
+    /// build before this column existed) so the `CREATE TABLE IF NOT
+    /// EXISTS` above can lay down the current schema. `CREATE TABLE IF NOT
+    /// EXISTS` is additive-only and never alters an existing table, and
+    /// DuckDB (confirmed against the bundled 1.10504.0) rejects `ALTER
+    /// TABLE ... ADD COLUMN` with an inline `NOT NULL` constraint
+    /// ("Adding columns with constraints not yet supported"), so a plain
+    /// `ADD COLUMN IF NOT EXISTS` can't get us to `event_at TIMESTAMP NOT
+    /// NULL` either. Dropping the stale table and letting the `CREATE
+    /// TABLE IF NOT EXISTS` recreate it is cheap and correct specifically
+    /// *because* the DuckDB projection is always fully rebuilt from the
+    /// JSONL log right after this runs (`replace_from_event_log_records`
+    /// clears every table and reinserts all of it) -- the rebuild
+    /// repopulates every row's `event_at` from the JSONL record's
+    /// `created_at_unix_ms`, so nothing is lost by dropping first.
+    fn migrate_legacy_agent_events_schema(&self) -> Result<()> {
+        let has_event_at: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM information_schema.columns
+             WHERE table_name = 'agent_events' AND column_name = 'event_at'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_event_at == 0 {
+            self.conn
+                .execute_batch("DROP TABLE IF EXISTS agent_events;")?;
+        }
         Ok(())
     }
 }
@@ -66,6 +96,7 @@ mod tests {
         event_kind, ApprovalRequest, Event, Message, MessageDelta, MessageRole, ProviderId,
         ProviderRequestSent, SessionState, ToolCallId, ToolCallRequest, ToolCallResult,
     };
+    use duckdb::params;
     use std::time::{Duration, Instant};
     use uuid::Uuid;
 
@@ -588,6 +619,177 @@ mod tests {
                 .output["ok"],
             true
         );
+    }
+
+    /// The bug this column fixes: a full rebuild used to stamp every row
+    /// with `DEFAULT now()` at (re)insert time, clustering a session's
+    /// entire history within about a second regardless of how far apart
+    /// the real events were. Spreads the fixture's timestamps across
+    /// several real days -- not milliseconds -- so that bug would be
+    /// obvious, not just a rounding error, and reads `event_at` back out
+    /// via `epoch_ms(event_at)` (DuckDB's own reverse of the `epoch_ms(?)`
+    /// conversion `import::insert_event_log_record` writes with) to prove
+    /// an exact round trip of `Record::created_at_unix_ms`.
+    #[test]
+    fn rebuild_projects_real_event_timestamps_into_event_at_column() {
+        let store = Store::open_in_memory().expect("store");
+        let session_id = SessionId::new();
+        let day_ms: u64 = 24 * 60 * 60 * 1000;
+        let timestamps: Vec<u64> = vec![
+            1_700_000_000_000,
+            1_700_000_000_000 + day_ms,
+            1_700_000_000_000 + 3 * day_ms,
+        ];
+        let records = timestamps
+            .iter()
+            .enumerate()
+            .map(
+                |(index, &created_at_unix_ms)| crate::persistence::event_log::Record {
+                    schema: crate::persistence::event_log::AGENT_EVENT_LOG_SCHEMA.to_string(),
+                    version: crate::persistence::event_log::AGENT_EVENT_LOG_VERSION,
+                    event_id: format!("event-{index}"),
+                    sequence: index as u64,
+                    session_id,
+                    turn_id: None,
+                    provider_id: None,
+                    event_kind: "state_changed".to_string(),
+                    event: Event::StateChanged(SessionState::Running),
+                    provider_payload: None,
+                    created_at_unix_ms,
+                },
+            )
+            .collect::<Vec<_>>();
+
+        store
+            .replace_from_event_log_records(records)
+            .expect("replace from records");
+
+        let session_id_text = session_id_text(session_id).expect("session id text");
+        let mut stmt = store
+            .conn
+            .prepare(
+                "SELECT event_id, epoch_ms(event_at) FROM agent_events
+                 WHERE session_id = ? ORDER BY sequence",
+            )
+            .expect("prepare");
+        let rows = stmt
+            .query_map(params![&session_id_text], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .expect("query_map")
+            .map(|row| row.expect("row"))
+            .collect::<Vec<_>>();
+
+        let expected = timestamps
+            .iter()
+            .enumerate()
+            .map(|(index, &ts)| (format!("event-{index}"), ts as i64))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows, expected,
+            "event_at must round-trip each record's real created_at_unix_ms exactly"
+        );
+    }
+
+    /// A `.duckdb` file from before `event_at` existed has `agent_events`
+    /// in its old shape (`created_at TIMESTAMP NOT NULL DEFAULT now()`, no
+    /// `event_at`). `CREATE TABLE IF NOT EXISTS` alone would leave it
+    /// exactly as-is; `Store::open` must detect the stale shape and
+    /// migrate it before the store is usable.
+    #[test]
+    fn migrates_pre_event_at_agent_events_table_on_open() {
+        let path = std::env::temp_dir().join(format!(
+            "horizon-agent-legacy-schema-{}.duckdb",
+            Uuid::new_v4()
+        ));
+        let session_id = SessionId::new();
+        let session_id_text = session_id_text(session_id).expect("session id text");
+
+        {
+            // Hand-build the pre-`event_at` schema (see `schema.rs`'s
+            // comment for the shape it replaced) and seed it with a stale
+            // row, modeling a real leftover file from an older Horizon
+            // build.
+            let legacy = Connection::open(&path).expect("open legacy connection");
+            legacy
+                .execute_batch(
+                    "CREATE TABLE agent_events (
+                        event_id TEXT PRIMARY KEY,
+                        session_id TEXT NOT NULL,
+                        turn_id TEXT,
+                        sequence BIGINT NOT NULL,
+                        event_kind TEXT NOT NULL,
+                        horizon_event_json TEXT NOT NULL,
+                        provider_id TEXT,
+                        provider_payload_json TEXT,
+                        created_at TIMESTAMP NOT NULL DEFAULT now(),
+                        UNIQUE(session_id, sequence)
+                    );",
+                )
+                .expect("create legacy table");
+            legacy
+                .execute(
+                    "INSERT INTO agent_events (
+                        event_id, session_id, turn_id, sequence, event_kind, horizon_event_json
+                    ) VALUES ('stale-event', ?, NULL, 0, 'state_changed', '\"stale\"')",
+                    params![&session_id_text],
+                )
+                .expect("seed legacy row");
+        }
+
+        // `Store::open` runs the migration before `INITIALIZE_SCHEMA_SQL`.
+        let store = Store::open(&path).expect("open store over legacy file");
+
+        let has_event_at: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM information_schema.columns
+                 WHERE table_name = 'agent_events' AND column_name = 'event_at'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("check migrated column");
+        assert_eq!(has_event_at, 1, "migration must add the event_at column");
+
+        let stale_row_count: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM agent_events", [], |row| row.get(0))
+            .expect("count rows after migration");
+        assert_eq!(
+            stale_row_count, 0,
+            "migration drops and recreates the stale table; the old row does not survive \
+             (the rebuild that always follows in production repopulates it from JSONL)"
+        );
+
+        // The store keeps working normally post-migration: a real rebuild
+        // still lands the JSONL record's real timestamp in `event_at`.
+        store
+            .replace_from_event_log_records([crate::persistence::event_log::Record {
+                schema: crate::persistence::event_log::AGENT_EVENT_LOG_SCHEMA.to_string(),
+                version: crate::persistence::event_log::AGENT_EVENT_LOG_VERSION,
+                event_id: "event-after-migration".to_string(),
+                sequence: 0,
+                session_id,
+                turn_id: None,
+                provider_id: None,
+                event_kind: "state_changed".to_string(),
+                event: Event::StateChanged(SessionState::Running),
+                provider_payload: None,
+                created_at_unix_ms: 1_700_000_000_000,
+            }])
+            .expect("replace from records after migration");
+
+        let event_at_ms: i64 = store
+            .conn
+            .query_row(
+                "SELECT epoch_ms(event_at) FROM agent_events WHERE event_id = 'event-after-migration'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query event_at after migration");
+        assert_eq!(event_at_ms, 1_700_000_000_000);
+
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

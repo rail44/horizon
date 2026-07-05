@@ -203,16 +203,21 @@ attribution the query above gives you): `ls -la "$(dirname "$LOG")"/horizon-bash
 ## DuckDB projection
 
 Requires the separate `duckdb` CLI (`command -v duckdb`) — it is not bundled
-with Horizon and must be installed independently. Only useful if
-`HORIZON_AGENT_STATE_DB` was set the last time Horizon started; there is
-nothing to inspect if the file doesn't exist.
+with Horizon and must be installed independently. The projection runs by
+default now (no more "unset = disabled"): `horizon-agentd` rebuilds it at
+`$XDG_DATA_HOME/horizon/agent-state.duckdb` (falling back to
+`~/.local/share/horizon/agent-state.duckdb`) every time it starts, unless
+`HORIZON_AGENT_STATE_DB` or the config file's `[agent].state_db_path`
+relocates it (`AgentPersistenceConfig`/`resolve_state_db_path` in
+`crates/horizon-agent/src/config.rs`). There is nothing to inspect only if
+`horizon-agentd` has never started, or the file was deleted since.
 
 Schema (`crates/horizon-agent/src/persistence/projection/duckdb/schema.rs`):
 
 ```
 agent_sessions(session_id PK, provider_id, last_sequence, updated_at)
 agent_events(event_id PK, session_id, turn_id, sequence, event_kind,
-             horizon_event_json, provider_id, provider_payload_json, created_at)
+             horizon_event_json, provider_id, provider_payload_json, event_at)
 agent_messages(event_id PK, session_id, sequence, role, text, is_delta)
 agent_tool_calls(event_id PK, session_id, sequence, call_id, tool_id, input_json)
 agent_tool_results(event_id PK, session_id, sequence, call_id, output_json)
@@ -225,24 +230,49 @@ but have no dedicated projection table — the exhaustive match in
 `projection::project_event` treats them as a documented no-op. Query
 `agent_events` directly for them, or use the JSONL recipes above.
 
-**Critical caveat, confirmed against a real rebuilt file:** `agent_events.created_at`
-is when the row was (re)inserted into DuckDB, *not* the event's real time.
-Horizon fully rebuilds the DuckDB file from the JSONL log once at startup
+**`agent_events.event_at` is the event's real wall-clock time**, copied from
+the JSONL record's `created_at_unix_ms` on every insert/rebuild (see
+`import::insert_event_log_record`) — unlike a prior version of this column
+(`created_at TIMESTAMP NOT NULL DEFAULT now()`), which stamped *insert* time
+instead. That made SQL timing analysis worthless: Horizon fully rebuilds the
+DuckDB file from the JSONL log once at startup
 (`replace_from_event_log_records` clears every table and reinserts all of
-it), and `created_at` gets DuckDB's own `DEFAULT now()` at that moment — the
-JSONL record's `created_at_unix_ms` is never copied into any DuckDB column.
-On a real capture, every row from one rebuild had `created_at` clustered
-within about a second of each other, even though the underlying events
-actually spanned several days. **Do gap/timing analysis against the JSONL
-log, not DuckDB.** Also note the file only reflects the JSONL as of the last
-app start; a session still running right now may not be in it yet.
+it), so every row from one rebuild landed within about a second of each
+other regardless of how many real days the underlying events spanned. Only
+`agent_messages`/`agent_tool_calls`/`agent_tool_results`/`agent_approvals`
+don't carry their own timestamp column — they already have `sequence` for
+relative ordering, and join back to `agent_events` on `event_id` for
+absolute time. `agent_sessions.updated_at` is still insert/rebuild time, not
+event time (unchanged by this fix; treat it as "last touched by a rebuild or
+live append", not "last real activity").
+
+Time a tool call end-to-end by joining `agent_tool_calls`/`agent_tool_results`
+back to `agent_events` for their `event_at` (verified against a real fixture
+`.duckdb` built with `tool_call_requested`/`tool_call_finished` 6300ms apart
+— `date_diff` returned exactly `6300`):
+
+```sh
+duckdb -readonly "$DB" -c "
+  SELECT c.call_id, c.tool_id,
+         date_diff('millisecond', req.event_at, res.event_at) AS latency_ms
+  FROM agent_tool_calls c
+  JOIN agent_events req ON req.event_id = c.event_id
+  JOIN agent_tool_results r ON r.call_id = c.call_id
+  JOIN agent_events res ON res.event_id = r.event_id
+  ORDER BY latency_ms DESC;"
+```
+
+The file only reflects the JSONL as of the last app start either way; a
+session still running right now may not be in it yet — for that, or for any
+gap analysis spanning more than one rebuild's worth of history, fall back to
+the JSONL recipes above.
 
 The rebuild's `Store`/`Connection` is closed again immediately after startup
 finishes, so it's safe to open the file while Horizon is running. Open
 read-only anyway, out of habit:
 
 ```sh
-DB=/tmp/horizon-agent-state.duckdb   # wherever HORIZON_AGENT_STATE_DB points
+DB=$XDG_DATA_HOME/horizon/agent-state.duckdb   # default; or wherever HORIZON_AGENT_STATE_DB points
 
 duckdb -readonly "$DB" -c "
   SELECT session_id, provider_id, last_sequence, updated_at
@@ -265,6 +295,11 @@ duckdb -readonly "$DB" -c "
 A pre-existing local `.duckdb` file may carry extra legacy tables/columns
 from an older Horizon version (confirmed on a real dev machine: an
 `agent_conversation_messages` table not in the current schema at all) —
-schema application is `CREATE TABLE IF NOT EXISTS`, additive only, and never
-migrates or drops stale tables. Treat `schema.rs` as authoritative for what's
-current; `.tables`/`DESCRIBE` may show more than that.
+schema application is `CREATE TABLE IF NOT EXISTS`, additive only, and by
+itself never migrates or drops stale tables. `agent_events` is the one
+exception: `Store::open` explicitly detects a pre-`event_at` `agent_events`
+table and drops it before recreating (`migrate_legacy_agent_events_schema`
+in `mod.rs`) — safe only because the rebuild that always follows
+repopulates it. Every other table is still additive-only, untouched by that
+migration. Treat `schema.rs` as authoritative for what's current;
+`.tables`/`DESCRIBE` may show more than that.

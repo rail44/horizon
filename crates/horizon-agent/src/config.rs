@@ -181,20 +181,22 @@ const OPENAI_BASE_URL_VAR: &str = "OPENAI_BASE_URL";
 const EVENT_LOG_PATH_VAR: &str = "HORIZON_AGENT_EVENT_LOG";
 
 /// Overrides the path of the DuckDB projection database used to replay
-/// per-session rig history. Unset means no persisted memory: sessions
-/// start with empty history and nothing is written. A leading `~/` is
-/// expanded against `$HOME`, same as `event_log_path` above.
+/// per-session rig history. The projection always runs now (see
+/// [`default_state_db_path_from`]) -- there is no "unset = disabled"
+/// state to opt into; setting this just relocates the file. A leading
+/// `~/` is expanded against `$HOME`, same as `event_log_path` above.
 const STATE_DB_PATH_VAR: &str = "HORIZON_AGENT_STATE_DB";
 
 /// `$HOME`, read once per resolution call to expand a leading `~/` in a
 /// path-typed config value (`event_log_path`/`state_db_path`) and, absent
-/// `$XDG_DATA_HOME`, to build the event log's default path — see
-/// [`default_event_log_path_from`].
+/// `$XDG_DATA_HOME`, to build the event log's and DuckDB projection's
+/// default paths — see [`default_event_log_path_from`] and
+/// [`default_state_db_path_from`].
 const HOME_VAR: &str = "HOME";
 
-/// XDG base-directory spec's data-home var, used only for the event log's
-/// built-in default path (`AgentPersistenceConfig`'s `duckdb_path` has no
-/// built-in default at all — see [`STATE_DB_PATH_VAR`]'s doc comment).
+/// XDG base-directory spec's data-home var, used for both the event log's
+/// and the DuckDB projection's built-in default paths — see
+/// [`default_event_log_path_from`] and [`default_state_db_path_from`].
 const XDG_DATA_HOME_VAR: &str = "XDG_DATA_HOME";
 
 // --- built-in defaults for the `[agent]` tuning knobs ----------------------
@@ -400,16 +402,18 @@ pub struct AgentPersistenceConfig {
 impl AgentPersistenceConfig {
     pub fn from_env_and_file(file: &AgentFileConfig) -> Self {
         let home = std::env::var(HOME_VAR).ok();
+        let xdg_data_home = std::env::var(XDG_DATA_HOME_VAR).ok();
         Self {
             event_log_path: resolve_event_log_path(
                 std::env::var(EVENT_LOG_PATH_VAR).ok(),
                 file.agent.event_log_path.clone(),
-                std::env::var(XDG_DATA_HOME_VAR).ok(),
+                xdg_data_home.clone(),
                 home.clone(),
             ),
             duckdb_path: resolve_state_db_path(
                 std::env::var(STATE_DB_PATH_VAR).ok(),
                 file.agent.state_db_path.clone(),
+                xdg_data_home,
                 home,
             ),
         }
@@ -434,6 +438,23 @@ pub fn resolve_event_log_path(
         .unwrap_or_else(|| default_event_log_path_from(xdg_data_home, home))
 }
 
+/// Resolves the `horizon` data directory shared by the event log's and the
+/// DuckDB projection's built-in defaults: `$XDG_DATA_HOME`, falling back
+/// to `~/.local/share` when `XDG_DATA_HOME` is unset or empty, and further
+/// to the OS temp dir if even `$HOME` is unset. Factored out of
+/// [`default_event_log_path_from`] so [`default_state_db_path_from`]
+/// mirrors its exact resolution shape instead of duplicating it.
+fn agent_data_home_from(xdg_data_home: Option<String>, home: Option<String>) -> PathBuf {
+    let non_empty = |value: Option<String>| value.filter(|value| !value.is_empty());
+    match non_empty(xdg_data_home) {
+        Some(dir) => PathBuf::from(dir),
+        None => match non_empty(home) {
+            Some(home) => PathBuf::from(home).join(".local").join("share"),
+            None => std::env::temp_dir(),
+        },
+    }
+}
+
 /// The event log's built-in default when neither the env var nor the
 /// config file sets a path: `$XDG_DATA_HOME/horizon/agent-events.jsonl`,
 /// falling back to `~/.local/share/horizon/agent-events.jsonl` when
@@ -447,29 +468,51 @@ pub fn resolve_event_log_path(
 /// directories on first write, so this can name a path that doesn't exist
 /// yet.
 pub fn default_event_log_path_from(xdg_data_home: Option<String>, home: Option<String>) -> PathBuf {
-    let non_empty = |value: Option<String>| value.filter(|value| !value.is_empty());
-    let data_home = match non_empty(xdg_data_home) {
-        Some(dir) => PathBuf::from(dir),
-        None => match non_empty(home) {
-            Some(home) => PathBuf::from(home).join(".local").join("share"),
-            None => std::env::temp_dir(),
-        },
-    };
-    data_home.join("horizon").join("agent-events.jsonl")
+    agent_data_home_from(xdg_data_home, home)
+        .join("horizon")
+        .join("agent-events.jsonl")
+}
+
+/// The DuckDB projection's built-in default when neither
+/// `HORIZON_AGENT_STATE_DB` nor the config file's `[agent].state_db_path`
+/// sets a path: `$XDG_DATA_HOME/horizon/agent-state.duckdb`, mirroring
+/// [`default_event_log_path_from`]'s exact fallback chain (same
+/// `$XDG_DATA_HOME` > `~/.local/share` > OS temp dir chain via
+/// [`agent_data_home_from`]), just under a different filename. The
+/// projection has no "unset = disabled" state any more: it is a
+/// rebuildable, non-authoritative derived view of the JSONL log (see
+/// `docs/agent-duckdb-state-design.md` and the `agent-inspect` skill), so
+/// there is no meaningful reason to leave it off by default. `Store::open`
+/// (`persistence::projection::duckdb`) creates the path's parent
+/// directories on first use, same as the event log's writer.
+pub fn default_state_db_path_from(xdg_data_home: Option<String>, home: Option<String>) -> PathBuf {
+    agent_data_home_from(xdg_data_home, home)
+        .join("horizon")
+        .join("agent-state.duckdb")
 }
 
 /// Same precedence as [`resolve_event_log_path`], for the DuckDB state
-/// path. `None` means "no persisted memory" — there is no built-in default
-/// path to fall back to. Same tilde-expansion treatment as
-/// `resolve_event_log_path`.
+/// path: `HORIZON_AGENT_STATE_DB` wins, then the config file's
+/// `[agent].state_db_path`, then [`default_state_db_path_from`]'s
+/// XDG-based built-in default. Same tilde-expansion treatment as
+/// `resolve_event_log_path`. Keeps returning `Option<PathBuf>` (it now
+/// always resolves to `Some` in practice) rather than switching to a bare
+/// `PathBuf`, so [`AgentPersistenceConfig::duckdb_path`]'s existing
+/// `Option<PathBuf>` shape -- and every `if let Some(duckdb_path) = ...`
+/// built on it (e.g. `horizon-agentd`'s startup rebuild) -- doesn't need
+/// to change shape along with this default.
 pub fn resolve_state_db_path(
     env_value: Option<String>,
     file_value: Option<String>,
+    xdg_data_home: Option<String>,
     home: Option<String>,
 ) -> Option<PathBuf> {
-    env_value
-        .or(file_value)
-        .map(|value| expand_tilde(&value, home.as_deref()))
+    Some(
+        env_value
+            .or(file_value)
+            .map(|value| expand_tilde(&value, home.as_deref()))
+            .unwrap_or_else(|| default_state_db_path_from(xdg_data_home, home)),
+    )
 }
 
 /// Expands a leading `~/` in a path-typed config value against `home`,
@@ -790,11 +833,12 @@ mod tests {
     }
 
     #[test]
-    fn state_db_path_prefers_env_over_file_and_is_none_by_default() {
+    fn state_db_path_prefers_env_over_file_over_default() {
         assert_eq!(
             resolve_state_db_path(
                 Some("/env/state.duckdb".to_string()),
                 Some("/file/state.duckdb".to_string()),
+                Some("/xdg/data".to_string()),
                 Some("/home/user".to_string()),
             ),
             Some(PathBuf::from("/env/state.duckdb"))
@@ -803,11 +847,49 @@ mod tests {
             resolve_state_db_path(
                 None,
                 Some("/file/state.duckdb".to_string()),
+                Some("/xdg/data".to_string()),
                 Some("/home/user".to_string()),
             ),
             Some(PathBuf::from("/file/state.duckdb"))
         );
-        assert_eq!(resolve_state_db_path(None, None, None), None);
+        assert_eq!(
+            resolve_state_db_path(None, None, Some("/xdg/data".to_string()), None),
+            Some(PathBuf::from("/xdg/data/horizon/agent-state.duckdb"))
+        );
+    }
+
+    #[test]
+    fn state_db_path_defaults_to_xdg_data_home_when_env_and_file_are_unset() {
+        assert_eq!(
+            default_state_db_path_from(
+                Some("/xdg/data".to_string()),
+                Some("/home/user".to_string())
+            ),
+            PathBuf::from("/xdg/data/horizon/agent-state.duckdb")
+        );
+    }
+
+    #[test]
+    fn state_db_path_falls_back_to_home_dot_local_share_without_xdg_data_home() {
+        assert_eq!(
+            default_state_db_path_from(None, Some("/home/user".to_string())),
+            PathBuf::from("/home/user/.local/share/horizon/agent-state.duckdb")
+        );
+        // An empty (but present) XDG_DATA_HOME is treated the same as unset.
+        assert_eq!(
+            default_state_db_path_from(Some(String::new()), Some("/home/user".to_string())),
+            PathBuf::from("/home/user/.local/share/horizon/agent-state.duckdb")
+        );
+    }
+
+    #[test]
+    fn state_db_path_falls_back_to_temp_dir_when_home_and_xdg_data_home_are_both_unset() {
+        assert_eq!(
+            default_state_db_path_from(None, None),
+            std::env::temp_dir()
+                .join("horizon")
+                .join("agent-state.duckdb")
+        );
     }
 
     #[test]
@@ -816,6 +898,7 @@ mod tests {
             resolve_state_db_path(
                 None,
                 Some("~/state/agent.duckdb".to_string()),
+                None,
                 Some("/home/user".to_string()),
             ),
             Some(PathBuf::from("/home/user/state/agent.duckdb"))
@@ -823,6 +906,7 @@ mod tests {
         assert_eq!(
             resolve_state_db_path(
                 Some("~/state/agent.duckdb".to_string()),
+                None,
                 None,
                 Some("/home/user".to_string()),
             ),
