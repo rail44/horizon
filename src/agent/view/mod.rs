@@ -4,6 +4,7 @@ use crate::ui::theme;
 use floem::event::{Event, EventListener, EventPropagation};
 use floem::peniko::kurbo::Point;
 use floem::prelude::*;
+use floem::reactive::create_memo;
 
 mod labels;
 mod markdown;
@@ -14,7 +15,8 @@ use labels::{block_label, shows_label};
 use markdown::{markdown_lines, MarkdownLine, MarkdownLineKind};
 use style::{block_colors, block_label_size, block_max_width, block_text_color};
 use transcript::{
-    current_block_text, transcript_blocks, transcript_revision, TranscriptBlock, TranscriptTone,
+    compute_transcript_window, current_block_text, TranscriptBlock, TranscriptTone,
+    TranscriptWindow,
 };
 
 pub(crate) fn agent_frame_view(
@@ -23,11 +25,28 @@ pub(crate) fn agent_frame_view(
 ) -> impl IntoView {
     let follow_latest = RwSignal::new(true);
     let viewport = RwSignal::new(None::<floem::peniko::kurbo::Rect>);
-    let content = dyn_stack(
-        move || transcript_blocks(&frame()),
-        move |block| (block.id, block.tone, block.label),
-        move |block| transcript_block_view(block, frame),
-    )
+    // Recomputed only when `transcript_revision` actually changes (see
+    // `compute_transcript_window`), so a reactive re-run caused by some
+    // *other* pane's agent frame updating the shared `Frames` signal is a
+    // cheap no-op here instead of re-walking this session's whole item log.
+    let window = create_memo(move |previous: Option<&TranscriptWindow>| {
+        compute_transcript_window(&frame(), previous)
+    });
+    let content = v_stack((
+        label(move || omitted_summary(window.with(|window| window.omitted))).style(move |s| {
+            if window.with(|window| window.omitted) == 0 {
+                return s.hide();
+            }
+
+            s.width_full().font_size(11).color(theme::text_muted())
+        }),
+        dyn_stack(
+            move || window.with(|window| window.blocks.clone()),
+            move |block| (block.id, block.tone, block.label),
+            move |block| transcript_block_view(block, frame),
+        )
+        .style(|s| s.width_full().flex_col().gap(8)),
+    ))
     .style(|s| s.width_full().flex_col().gap(8).padding(16));
     let content_id = content.id();
 
@@ -43,8 +62,11 @@ pub(crate) fn agent_frame_view(
                 return None;
             }
 
-            let frame = frame();
-            let _ = transcript_revision(&frame);
+            // Track the memoized revision (a `usize` copy) instead of
+            // calling `frame()` directly: this used to clone the whole
+            // `AgentFrame` on every scroll re-check just to derive the same
+            // revision the transcript memo above already computed.
+            let _ = window.with(|window| window.revision);
             Some(Point::new(0.0, 1_000_000_000.0))
         })
         .scroll_style(|s| s.shrink_to_fit().overflow_clip(true))
@@ -73,6 +95,13 @@ pub(crate) fn agent_frame_view(
             }
             EventPropagation::Continue
         })
+}
+
+fn omitted_summary(omitted: usize) -> String {
+    format!(
+        "{omitted} earlier item{} hidden",
+        if omitted == 1 { "" } else { "s" }
+    )
 }
 
 fn content_height(id: floem::ViewId) -> f64 {
@@ -221,6 +250,7 @@ mod tests {
     use super::*;
     use crate::agent::contract::{Message, MessageDelta, MessageRole, SessionState};
     use crate::agent::frame::AgentFrameItem;
+    use transcript::transcript_blocks;
 
     #[test]
     fn transcript_blocks_keep_full_assistant_text() {
@@ -268,5 +298,11 @@ mod tests {
 
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].tone, TranscriptTone::Thinking);
+    }
+
+    #[test]
+    fn omitted_summary_pluralizes_the_item_count() {
+        assert_eq!(omitted_summary(1), "1 earlier item hidden");
+        assert_eq!(omitted_summary(2), "2 earlier items hidden");
     }
 }

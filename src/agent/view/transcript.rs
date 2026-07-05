@@ -60,6 +60,63 @@ pub(super) fn current_block_text(
         .unwrap_or_default()
 }
 
+/// Caps how many transcript blocks `agent_frame_view`'s dyn_stack actually
+/// materializes as view nodes. Floem repaints by walking the whole view
+/// tree (`ViewId::request_paint` bubbles a dirty flag up to the root, and
+/// the paint pass then traverses down from there), so an unbounded
+/// transcript makes every repaint -- including ones triggered by unrelated
+/// state like message-box keystrokes -- cost O(session length). Blocks
+/// older than the trailing window are summarized instead of rendered; see
+/// [`compute_transcript_window`].
+pub(super) const TRANSCRIPT_WINDOW: usize = 200;
+
+/// A [`transcript_blocks`] result trimmed to the trailing [`TRANSCRIPT_WINDOW`]
+/// blocks, tagged with the [`transcript_revision`] it was computed from so
+/// [`compute_transcript_window`] can skip recomputation on a reactive
+/// re-run that isn't actually about this session's own frame (e.g. another
+/// pane's agent frame updating the shared `Frames` signal).
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct TranscriptWindow {
+    pub(super) revision: usize,
+    pub(super) omitted: usize,
+    pub(super) blocks: Vec<TranscriptBlock>,
+}
+
+/// Builds the windowed transcript for `frame`, reusing `previous` verbatim
+/// -- without re-walking `frame.items` or reallocating `blocks` -- when
+/// `frame`'s content hasn't changed since `previous` was computed. This is
+/// the memoization `agent_frame_view` wires through `create_memo`.
+pub(super) fn compute_transcript_window(
+    frame: &AgentFrame,
+    previous: Option<&TranscriptWindow>,
+) -> TranscriptWindow {
+    let revision = transcript_revision(frame);
+    if let Some(previous) = previous {
+        if previous.revision == revision {
+            return previous.clone();
+        }
+    }
+
+    let (omitted, blocks) = window_blocks(transcript_blocks(frame), TRANSCRIPT_WINDOW);
+    TranscriptWindow {
+        revision,
+        omitted,
+        blocks,
+    }
+}
+
+/// Splits `blocks` into (how many leading blocks fall outside `window`, the
+/// trailing `window` blocks to render) -- the oldest blocks are always the
+/// ones summarized, never the most recent ones.
+fn window_blocks(mut blocks: Vec<TranscriptBlock>, window: usize) -> (usize, Vec<TranscriptBlock>) {
+    if blocks.len() <= window {
+        return (0, blocks);
+    }
+
+    let omitted = blocks.len() - window;
+    (omitted, blocks.split_off(omitted))
+}
+
 pub(super) fn transcript_revision(frame: &AgentFrame) -> usize {
     let state = usize::from(frame.state.is_some());
     frame
@@ -247,5 +304,121 @@ fn tool_result_summary(call_id: &str, output: &serde_json::Value) -> String {
             format!("{call_id} completed ({} item array)", values.len())
         }
         _ => format!("{call_id} {output}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::contract::{Message, MessageRole};
+
+    fn message_frame(count: usize) -> AgentFrame {
+        AgentFrame {
+            state: None,
+            items: (0..count)
+                .map(|i| {
+                    AgentFrameItem::Message(Message {
+                        role: MessageRole::Assistant,
+                        text: format!("message {i}"),
+                    })
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn window_blocks_keeps_everything_under_the_window() {
+        let frame = message_frame(TRANSCRIPT_WINDOW - 1);
+        let (omitted, blocks) = window_blocks(transcript_blocks(&frame), TRANSCRIPT_WINDOW);
+
+        assert_eq!(omitted, 0);
+        assert_eq!(blocks.len(), TRANSCRIPT_WINDOW - 1);
+        assert_eq!(blocks[0].text, "message 0");
+    }
+
+    #[test]
+    fn window_blocks_keeps_everything_at_exactly_the_boundary() {
+        let frame = message_frame(TRANSCRIPT_WINDOW);
+        let (omitted, blocks) = window_blocks(transcript_blocks(&frame), TRANSCRIPT_WINDOW);
+
+        assert_eq!(omitted, 0);
+        assert_eq!(blocks.len(), TRANSCRIPT_WINDOW);
+        assert_eq!(blocks[0].text, "message 0");
+    }
+
+    #[test]
+    fn window_blocks_omits_the_oldest_blocks_past_the_boundary() {
+        let frame = message_frame(TRANSCRIPT_WINDOW + 1);
+        let (omitted, blocks) = window_blocks(transcript_blocks(&frame), TRANSCRIPT_WINDOW);
+
+        assert_eq!(omitted, 1);
+        assert_eq!(blocks.len(), TRANSCRIPT_WINDOW);
+        // The single omitted block is the oldest one ("message 0"); the
+        // trailing window keeps the most recent blocks, in order.
+        assert_eq!(blocks[0].text, "message 1");
+        assert_eq!(
+            blocks.last().unwrap().text,
+            format!("message {TRANSCRIPT_WINDOW}")
+        );
+    }
+
+    #[test]
+    fn window_blocks_omits_many_blocks_past_the_boundary() {
+        let extra = 350;
+        let frame = message_frame(TRANSCRIPT_WINDOW + extra);
+        let (omitted, blocks) = window_blocks(transcript_blocks(&frame), TRANSCRIPT_WINDOW);
+
+        assert_eq!(omitted, extra);
+        assert_eq!(blocks.len(), TRANSCRIPT_WINDOW);
+        assert_eq!(blocks[0].text, format!("message {extra}"));
+    }
+
+    #[test]
+    fn compute_transcript_window_reuses_previous_when_revision_matches() {
+        let frame = message_frame(3);
+        let revision = transcript_revision(&frame);
+        // Deliberately stale/wrong compared to what a fresh computation
+        // from `frame` would produce, so the assertion below can only pass
+        // if `compute_transcript_window` actually short-circuited on the
+        // matching revision instead of recomputing.
+        let stale_previous = TranscriptWindow {
+            revision,
+            omitted: 999,
+            blocks: Vec::new(),
+        };
+
+        let result = compute_transcript_window(&frame, Some(&stale_previous));
+
+        assert_eq!(
+            result, stale_previous,
+            "a matching revision must return the cached value verbatim"
+        );
+    }
+
+    #[test]
+    fn compute_transcript_window_recomputes_when_revision_differs() {
+        let frame = message_frame(3);
+        let stale_previous = TranscriptWindow {
+            revision: transcript_revision(&frame).wrapping_add(1),
+            omitted: 999,
+            blocks: Vec::new(),
+        };
+
+        let result = compute_transcript_window(&frame, Some(&stale_previous));
+
+        assert_eq!(result.revision, transcript_revision(&frame));
+        assert_eq!(result.omitted, 0);
+        assert_eq!(result.blocks.len(), 3);
+    }
+
+    #[test]
+    fn compute_transcript_window_recomputes_with_no_previous() {
+        let frame = message_frame(3);
+
+        let result = compute_transcript_window(&frame, None);
+
+        assert_eq!(result.revision, transcript_revision(&frame));
+        assert_eq!(result.omitted, 0);
+        assert_eq!(result.blocks.len(), 3);
     }
 }
