@@ -41,3 +41,12 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     referenced by the tool result's `output_file`, but the agent never
     reached for it. Candidates: keep head+tail instead of tail-only,
     and/or make the truncation notice point at the spill file loudly.
+12. **agentd leaks its `cargo run` environment into tool processes** —
+    when Horizon is launched via `cargo run`, agentd (and thus every
+    bash tool call an agent makes) inherits `CARGO_*`, `RUSTUP_*`, and
+    an `LD_LIBRARY_PATH` pointing into `target/debug/build/...`
+    (verified via `/proc/<agentd>/environ`, 2026-07-06). Harmless for
+    cargo fingerprints (tested), but processes the agent spawns can
+    resolve stale shared libraries from build dirs. agentd should
+    sanitize these when spawning tool processes; launching the built
+    binary directly instead of `cargo run` also sidesteps it.
