@@ -337,6 +337,14 @@ impl View for TerminalTextView {
 
 impl TerminalTextView {
     fn resize_terminal(&mut self, cols: usize, rows: usize) {
+        self.resize_terminal_at(cols, rows, Instant::now());
+    }
+
+    /// `resize_terminal`, parameterized on `now`. The test seam that lets
+    /// `resize::INITIAL_SETTLE_WINDOW` be exercised deterministically
+    /// instead of depending on how fast a test happens to run relative to
+    /// that window.
+    fn resize_terminal_at(&mut self, cols: usize, rows: usize, now: Instant) {
         let cols = cols.clamp(1, u16::MAX as usize) as u16;
         let rows = rows.clamp(1, u16::MAX as usize) as u16;
         let size = TerminalSize {
@@ -353,7 +361,7 @@ impl TerminalTextView {
         // Forwarding itself is debounced (see `resize::ResizeDebounce`): a
         // live drag calls this on every repaint, and only the leading edge
         // plus the final settled size should ever reach the pty writer.
-        ResizeDebounce::request(&self.resize_debounce, size, Instant::now());
+        ResizeDebounce::request(&self.resize_debounce, size, now);
     }
 
     fn send_selection_command(&self, command: TerminalCommand) {
@@ -464,12 +472,19 @@ mod tests {
             line_height: 18.0,
         };
 
+        // Prime past `resize::INITIAL_SETTLE_WINDOW` (see
+        // `resize_terminal_settling_window_forwards_every_size_immediately`
+        // for that window's own behavior in isolation) so the rest of this
+        // test exercises an already-mounted pane's steady-state dedup/defer
+        // behavior, not a brand-new one's settling burst.
+        let settled = Instant::now() + resize::INITIAL_SETTLE_WINDOW + Duration::from_millis(10);
+
         // Repeated calls with the same cols/rows (e.g. once per repaint on
         // an idle or scrolling terminal, with no actual size change) must
         // emit exactly one `Resize` — the first call establishes the
         // baseline, every later identical call is a no-op.
-        for _ in 0..5 {
-            view.resize_terminal(80, 24);
+        for i in 0..5 {
+            view.resize_terminal_at(80, 24, settled + Duration::from_millis(i));
         }
 
         assert!(matches!(rx.try_recv(), Ok(TerminalCommand::Resize(_))));
@@ -484,12 +499,12 @@ mod tests {
         // for that behavior in isolation), so it's deferred rather than
         // sent immediately; flushing (as the trailing `exec_after` timer
         // would) delivers it.
-        view.resize_terminal(100, 30);
+        view.resize_terminal_at(100, 30, settled + Duration::from_millis(5));
         assert!(
             rx.try_recv().is_err(),
             "a size change inside the debounce window must not be forwarded immediately"
         );
-        resize::ResizeDebounce::flush(&view.resize_debounce, Instant::now());
+        resize::ResizeDebounce::flush(&view.resize_debounce, settled + Duration::from_millis(120));
         match rx.try_recv() {
             Ok(TerminalCommand::Resize(size)) => {
                 assert_eq!(size.cols, 100);
@@ -497,6 +512,62 @@ mod tests {
             }
             other => panic!("expected a Resize command for the changed size, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn resize_terminal_settling_window_forwards_every_size_immediately() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut view = TerminalTextView::new(
+            ViewId::new(),
+            TerminalViewState {
+                frame: TerminalFrame::from_text(String::new()),
+                preedit: None,
+            },
+            Some(tx),
+            Box::new(|| Point::ZERO),
+            Box::new(|_, _| {}),
+        );
+        view.metrics = TerminalMetrics {
+            cell_width: 9.0,
+            line_height: 18.0,
+        };
+
+        // Mirrors a brand-new pane's layout settling across its first few
+        // frames: a burst of growing sizes, all within the first 100ms of
+        // the view's life (well inside `resize::INITIAL_SETTLE_WINDOW`).
+        // Unlike a live drag on an already-mounted pane (see
+        // `resize_terminal_debounces_a_burst_forwarding_only_the_leading_size`),
+        // this must not depend on the trailing `exec_after` flush at all —
+        // that dependency is exactly what caused the "new terminal opens
+        // stuck at an early size" regression `INITIAL_SETTLE_WINDOW` fixes.
+        //
+        // `created_at` is pinned explicitly (rather than trusting real
+        // construction time) because construction itself can take an
+        // unpredictable amount of wall time -- e.g. cold font loading on
+        // the first test in the process -- which would otherwise make
+        // "still within the settle window" flaky to simulate here.
+        let start = Instant::now();
+        resize::ResizeDebounce::set_created_at_for_test(&view.resize_debounce, start);
+        let sizes: [u16; 4] = [40, 60, 80, 100];
+        for (i, &cols) in sizes.iter().enumerate() {
+            view.resize_terminal_at(
+                cols as usize,
+                24,
+                start + Duration::from_millis(i as u64 * 20),
+            );
+        }
+
+        // Every distinct size must already have been forwarded — no flush
+        // call, simulating the timer, is needed for the final one to land.
+        for &cols in &sizes {
+            match rx.try_recv() {
+                Ok(TerminalCommand::Resize(size)) => assert_eq!(size.cols, cols),
+                other => panic!(
+                    "expected size {cols} to be forwarded immediately during settling, got {other:?}"
+                ),
+            }
+        }
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
@@ -524,9 +595,15 @@ mod tests {
         // inside a single 100ms debounce window in wall-clock terms, so
         // only the first (the leading edge, sent immediately per
         // "first-ever size still immediate") should reach the pty writer.
+        // The burst itself runs past `resize::INITIAL_SETTLE_WINDOW` (see
+        // `resize_terminal_settling_window_forwards_every_size_immediately`
+        // for that window in isolation) so it exercises a drag on an
+        // already-mounted pane, not a brand-new one's settling burst, which
+        // intentionally bypasses coalescing altogether.
+        let start = Instant::now() + resize::INITIAL_SETTLE_WINDOW + Duration::from_millis(10);
         let sizes: Vec<u16> = (101..=157).rev().collect();
-        for &cols in &sizes {
-            view.resize_terminal(cols as usize, 40);
+        for (i, &cols) in sizes.iter().enumerate() {
+            view.resize_terminal_at(cols as usize, 40, start + Duration::from_millis(i as u64));
         }
 
         match rx.try_recv() {
