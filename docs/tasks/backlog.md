@@ -33,3 +33,11 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
    pin; candidate for an upstream report (5/5 reproducible bisection).
 10. **Test knob for sync-update pump** — the 150ms failsafe constant is
     vte's; if TUIs ever need tuning here it should join `[terminal]`.
+11. **bash tool truncation hides the head of long outputs** — reported by
+    the agent that executed mission 001: `cargo test --workspace` output
+    was truncated from the front, so the first suite's results were
+    unverifiable in-context and it had to rerun `-p horizon` separately.
+    The full output *is* spilled to `horizon-bash-<uuid>.log` and
+    referenced by the tool result's `output_file`, but the agent never
+    reached for it. Candidates: keep head+tail instead of tail-only,
+    and/or make the truncation notice point at the spill file loudly.
