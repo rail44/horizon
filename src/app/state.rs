@@ -121,4 +121,34 @@ impl AppState {
             self.agentd_connection,
         )
     }
+
+    /// A state with no live `horizon-agentd` connection and no spawned
+    /// sessions -- for tests that only need the signals `AppInput` reads
+    /// and writes (`workspace`, `ime_composing`, `ime_preedit`, ...)
+    /// without `new()`'s real connect attempt. Mirrors
+    /// `AgentdConnection::for_test`'s rationale.
+    #[cfg(test)]
+    pub(super) fn for_test() -> Self {
+        Self {
+            workspace: RwSignal::new(Workspace::mvp()),
+            frames: RwSignal::new(Frames::default()),
+            sessions: RwSignal::new(Registry::default()),
+            agentd_connection: RwSignal::new(None),
+            ime_composing: RwSignal::new(false),
+            ime_preedit: RwSignal::new(None::<String>),
+            ime_cursor_area: RwSignal::new((Point::new(12.0, 64.0), Size::new(8.0, 18.0))),
+            palette_open: RwSignal::new(false),
+            palette_query: RwSignal::new(String::new()),
+            palette_selection: RwSignal::new(0_usize),
+            palette_focus_request: RwSignal::new(0_u64),
+            pane_focus_requests: [(); MAX_VISIBLE_PANES].map(|_| RwSignal::new(0_u64)),
+            agent_drafts: [(); MAX_VISIBLE_PANES].map(|_| RwSignal::new(String::new())),
+            control_mode: RwSignal::new(ControlMode::Commands),
+            overview_selection: RwSignal::new(0_usize),
+            agent_state_status: RwSignal::new(None::<String>),
+            terminal_dump: None,
+            clipboard_dump: None,
+            status_dump: None,
+        }
+    }
 }

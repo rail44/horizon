@@ -308,6 +308,7 @@ pub(super) fn pane_view(
                 sessions,
                 index,
                 ime_composing,
+                ime_preedit,
                 agent_draft,
             ) {
                 return EventPropagation::Stop;
@@ -324,6 +325,7 @@ pub(super) fn pane_view(
                 sessions,
                 index,
                 ime_composing,
+                ime_preedit,
                 palette_open,
             ) {
                 return EventPropagation::Stop;

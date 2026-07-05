@@ -178,15 +178,43 @@ fn handle_agent_key(
     }
 }
 
+/// Whether the IME composing guard should still swallow `key` here.
+///
+/// `ime_composing` and `ime_preedit` are always set together (see
+/// `app::input::AppInput`'s `handle_ime_preedit`/`handle_ime_commit`/
+/// `handle_ime_disabled`, which clear both on every path that ends
+/// composition). This is deliberate belt-and-braces on top of that: if
+/// `ime_composing` ever claims an active composition with no preedit text
+/// backing it -- a stuck flag desynced from its own preedit, from some
+/// future code path or platform quirk neither of us has seen yet -- the
+/// guard fails open right here by clearing the flag and letting the key
+/// through, instead of swallowing every Character key forever with no way
+/// back short of a pane focus change.
+fn composing_guard_swallows(
+    key: &Key,
+    ime_composing: RwSignal<bool>,
+    ime_preedit: RwSignal<Option<String>>,
+) -> bool {
+    if !ime_composing.get_untracked() {
+        return false;
+    }
+    if ime_preedit.with_untracked(Option::is_none) {
+        ime_composing.set(false);
+        return false;
+    }
+    matches!(key, Key::Character(_))
+}
+
 pub(crate) fn handle_active_pane_key(
     key_event: &KeyEvent,
     workspace: RwSignal<Workspace>,
     sessions: RwSignal<Registry>,
     index: usize,
     ime_composing: RwSignal<bool>,
+    ime_preedit: RwSignal<Option<String>>,
     agent_draft: RwSignal<String>,
 ) -> bool {
-    if ime_composing.get_untracked() && matches!(key_event.key.logical_key, Key::Character(_)) {
+    if composing_guard_swallows(&key_event.key.logical_key, ime_composing, ime_preedit) {
         return true;
     }
 
@@ -225,9 +253,10 @@ pub(crate) fn handle_active_pane_key_release(
     sessions: RwSignal<Registry>,
     index: usize,
     ime_composing: RwSignal<bool>,
+    ime_preedit: RwSignal<Option<String>>,
     palette_open: RwSignal<bool>,
 ) -> bool {
-    if ime_composing.get_untracked() && matches!(key_event.key.logical_key, Key::Character(_)) {
+    if composing_guard_swallows(&key_event.key.logical_key, ime_composing, ime_preedit) {
         return true;
     }
 
@@ -262,5 +291,83 @@ pub(crate) fn handle_active_pane_key_release(
 pub(crate) fn trace_ime(message: &str) {
     if std::env::var_os("HORIZON_IME_TRACE").is_some() {
         eprintln!("horizon ime: {message}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use floem::keyboard::NamedKey;
+
+    fn composing(preedit: Option<&str>) -> (RwSignal<bool>, RwSignal<Option<String>>) {
+        (
+            RwSignal::new(true),
+            RwSignal::new(preedit.map(str::to_string)),
+        )
+    }
+
+    #[test]
+    fn composing_guard_swallows_character_keys_during_active_composition() {
+        let (ime_composing, ime_preedit) = composing(Some("か"));
+
+        assert!(composing_guard_swallows(
+            &Key::Character("a".into()),
+            ime_composing,
+            ime_preedit
+        ));
+        // A genuinely active composition (preedit text still backing the
+        // flag) must not be cleared just because one key was swallowed.
+        assert!(ime_composing.get_untracked());
+    }
+
+    #[test]
+    fn composing_guard_lets_named_keys_through_even_while_composing() {
+        // Backspace, Enter, arrows, ... are never routed through the IME's
+        // own text -- an IME edits its own preedit directly, so a Named
+        // key reaching the app at all means the IME didn't want it. This
+        // also documents that a stuck `ime_composing` alone was never
+        // capable of blocking Backspace specifically through this guard:
+        // whatever a report describes as "Backspace stops working" has to
+        // be explained elsewhere (a frozen preedit overlay drawn over the
+        // terminal is the leading candidate -- see `ime_preedit`'s use in
+        // `workspace::view::pane`/`terminal_output`).
+        let (ime_composing, ime_preedit) = composing(Some("か"));
+
+        assert!(!composing_guard_swallows(
+            &Key::Named(NamedKey::Backspace),
+            ime_composing,
+            ime_preedit
+        ));
+        assert!(ime_composing.get_untracked());
+    }
+
+    #[test]
+    fn composing_guard_self_heals_a_stuck_flag_with_no_preedit_text() {
+        // `ime_composing` claiming an active composition with no preedit
+        // text behind it is exactly the stuck state this guard is meant to
+        // never produce (see `app::input::AppInput`'s Ime handlers, which
+        // always clear both together) -- but if it ever happens anyway,
+        // the very next KeyDown/KeyUp must self-heal instead of eating
+        // input forever.
+        let (ime_composing, ime_preedit) = composing(None);
+
+        assert!(!composing_guard_swallows(
+            &Key::Character("a".into()),
+            ime_composing,
+            ime_preedit
+        ));
+        assert!(!ime_composing.get_untracked(), "the stuck flag must clear");
+    }
+
+    #[test]
+    fn composing_guard_is_inactive_when_not_composing() {
+        let ime_composing = RwSignal::new(false);
+        let ime_preedit = RwSignal::new(None::<String>);
+
+        assert!(!composing_guard_swallows(
+            &Key::Character("a".into()),
+            ime_composing,
+            ime_preedit
+        ));
     }
 }
