@@ -1,10 +1,12 @@
-//! `horizon-agentd`: steps 2-3 of `docs/agent-runtime-split-design.md`'s
+//! `horizon-agentd`: steps 2-4 of `docs/agent-runtime-split-design.md`'s
 //! agent-runtime split. Owns the Unix socket, the `hello` handshake, and (as
 //! of step 3) real agent sessions: `session_new` spawns the provider/tool/
 //! persistence machinery this binary hosts (see `session::run_session`),
 //! command/event envelopes route by session id, and this process owns the
-//! event log + DuckDB projection -- Horizon no longer opens either when
-//! `[agent].agentd` is on.
+//! event log + DuckDB projection -- Horizon never opens either itself. As of
+//! step 4, every session found in the log at startup is resumed live (see
+//! `session::resume_persisted_sessions`) and `session_load` re-emits a
+//! session's committed events to a (re)connecting client.
 
 mod session;
 
@@ -42,7 +44,11 @@ async fn main() -> anyhow::Result<()> {
         agent_config.rig.model
     );
 
-    let state = Arc::new(build_agentd_state(agent_config));
+    let (state, records) = build_agentd_state(agent_config);
+    let state = Arc::new(state);
+    // Step 4: "agentd restart = read own log, rebuild rig_history, mark
+    // turns that died mid-flight as cancelled ... sessions are live again".
+    session::resume_persisted_sessions(&state, records);
     run(&socket_path, state).await
 }
 
@@ -53,23 +59,22 @@ async fn main() -> anyhow::Result<()> {
 /// binary's own config load (never Horizon's). Blocks on the writer's
 /// startup read: unlike Horizon's UI, there is no pane render to avoid
 /// blocking, so the simpler synchronous wait is preferable to threading the
-/// `WriterInit` channel through `main`.
+/// `WriterInit` channel through `main`. Also hands back the startup read's
+/// records (empty if persistence is disabled or there's nothing yet) so
+/// `main` can resume every session they belong to
+/// ([`session::resume_persisted_sessions`]).
 ///
 /// Skipped-lines status reporting (surfacing a corrupt/torn-line summary
 /// somewhere a human sees it) is omitted for now -- see
 /// `docs/agent-runtime-split-design.md`'s step 3 notes. A summary is still
 /// logged to stderr so the information isn't silently lost.
-fn build_agentd_state(agent_config: AgentConfig) -> AgentdState {
+fn build_agentd_state(agent_config: AgentConfig) -> (AgentdState, Vec<Record>) {
     let providers = ProviderRegistry::builtin_with_config(agent_config.clone());
-    let writer = open_persistence(&agent_config);
-    AgentdState {
-        providers,
-        agent_config,
-        writer,
-    }
+    let (writer, records) = open_persistence(&agent_config);
+    (AgentdState::new(providers, agent_config, writer), records)
 }
 
-fn open_persistence(agent_config: &AgentConfig) -> Option<WriterHandle> {
+fn open_persistence(agent_config: &AgentConfig) -> (Option<WriterHandle>, Vec<Record>) {
     let (writer, init_rx) = WriterHandle::open(&agent_config.persistence.event_log_path);
     match init_rx.recv() {
         Ok(WriterInit::Ready(report)) => {
@@ -80,24 +85,24 @@ fn open_persistence(agent_config: &AgentConfig) -> Option<WriterHandle> {
                 );
             }
             if let Some(duckdb_path) = &agent_config.persistence.duckdb_path {
-                if let Err(error) = rebuild_duckdb_projection(duckdb_path, report.records) {
+                if let Err(error) = rebuild_duckdb_projection(duckdb_path, report.records.clone()) {
                     eprintln!("horizon-agentd: DuckDB projection rebuild failed: {error}");
                 }
             }
-            Some(writer)
+            (Some(writer), report.records)
         }
         Ok(WriterInit::Failed(error)) => {
             eprintln!(
                 "horizon-agentd: event log unavailable ({error}); persistence disabled for this run"
             );
-            None
+            (None, Vec::new())
         }
         Err(_) => {
             eprintln!(
                 "horizon-agentd: event log writer thread exited before reporting startup status; \
                  persistence disabled for this run"
             );
-            None
+            (None, Vec::new())
         }
     }
 }
@@ -242,9 +247,13 @@ async fn run_session_hosting_loop(
     loop {
         let envelope = match wire::read_envelope(&mut reader).await {
             Ok(Some(envelope)) => envelope,
-            Ok(None) => return Ok(()),
+            Ok(None) => {
+                connection.disconnect();
+                return Ok(());
+            }
             Err(err) => {
                 eprintln!("horizon-agentd: malformed message, closing connection: {err}");
+                connection.disconnect();
                 return Ok(());
             }
         };
@@ -260,6 +269,17 @@ async fn run_session_hosting_loop(
             }
             EnvelopeBody::Control(Control::SessionNew(new)) => {
                 connection.handle_session_new(new);
+            }
+            EnvelopeBody::Control(Control::SessionLoad(load)) => {
+                // Step 4's "v1 bootstrap": re-emit the fold-relevant
+                // committed events for this session so the (re)connecting
+                // client can rebuild its frame. Awaited inline (not spawned
+                // detached) so these arrive before whatever the client sends
+                // next for this session, keeping replay ordering simple.
+                let events = connection.replay_events(load.session_id).await;
+                for event in events {
+                    let _ = outgoing_tx.send(Envelope::event(load.session_id, event));
+                }
             }
             EnvelopeBody::Control(Control::HostToolResponse(response)) => {
                 connection.handle_host_tool_response(response);

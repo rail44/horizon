@@ -13,7 +13,7 @@ use crate::{
     config::RigAgentConfig,
     contract::{
         Command, Error, Event, Message as AgentMessage, MessageRole, ProviderEvent, SessionHandle,
-        SessionState, StartSession, ToolCallId, ToolCallResult,
+        SessionState, StartSession, ToolCallId, ToolCallResult, TurnEndReason,
     },
     prompt::SessionEnvironment,
     tools::cancelled_tool_call_result,
@@ -262,6 +262,7 @@ async fn run_session_loop(
                     let _ = events_tx
                         .send(Event::ToolCallFinished(cancelled_tool_call_result(call_id)).into());
                 }
+                let _ = events_tx.send(Event::TurnEnded(TurnEndReason::Cancelled).into());
                 let _ = events_tx.send(Event::StateChanged(SessionState::Cancelled).into());
                 let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
             }
@@ -317,7 +318,16 @@ async fn run_cancellable_turn(
     }
 }
 
-fn apply_turn_outcome(
+/// Centralizes `Event::TurnEnded` emission for every turn-completion path
+/// that runs a rig turn (`run_cancellable_turn`/`complete_rig_turn`):
+/// completed, cancelled, and failed all funnel through here (the fourth stop
+/// reason, `Halted`, comes from the turn-loop guard's own
+/// [`halt_turn_loop`], which never calls this — a halt stops the loop
+/// *instead of* running another turn, so there's no `TurnCompletion` for it
+/// to inspect). `outcome.failed` is checked before the empty-tool-calls
+/// branch since a failed provider request also requests no tool calls —
+/// without the explicit flag the two would be indistinguishable.
+pub(super) fn apply_turn_outcome(
     outcome: TurnCompletion,
     events_tx: &Sender<ProviderEvent>,
     rig_history: &mut Vec<Message>,
@@ -331,12 +341,20 @@ fn apply_turn_outcome(
             let _ =
                 events_tx.send(Event::ToolCallFinished(cancelled_tool_call_result(call_id)).into());
         }
+        let _ = events_tx.send(Event::TurnEnded(TurnEndReason::Cancelled).into());
         let _ = events_tx.send(Event::StateChanged(SessionState::Cancelled).into());
         let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
         return;
     }
 
+    if outcome.failed {
+        let _ = events_tx.send(Event::TurnEnded(TurnEndReason::Failed).into());
+        let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
+        return;
+    }
+
     if outcome.requested_tool_call_ids.is_empty() {
+        let _ = events_tx.send(Event::TurnEnded(TurnEndReason::Completed).into());
         let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
     } else {
         pending_tool_calls.extend(outcome.requested_tool_calls);
@@ -572,5 +590,6 @@ pub(super) fn halt_turn_loop(
     }
 
     guard.reset();
+    let _ = events_tx.send(Event::TurnEnded(TurnEndReason::Halted).into());
     let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
 }

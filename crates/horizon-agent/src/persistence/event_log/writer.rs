@@ -249,6 +249,24 @@ fn run_writer(
                 next_sequence += 1;
                 if serde_json::to_writer(&mut writer, &record).is_ok() {
                     let _ = writer.write_all(b"\n");
+                    // Flushed immediately (not just batched in `BufWriter`'s
+                    // in-memory buffer) so a hard kill (SIGKILL, crash --
+                    // `horizon-agentd` has no signal handler for it and runs
+                    // no destructors) can only ever lose events that hadn't
+                    // arrived on this channel yet, never ones already
+                    // appended. This is what makes `docs/agent-runtime-
+                    // split-design.md` step 4's "agentd restart: read own
+                    // log, mark turns that died mid-flight as cancelled"
+                    // meaningful against a real `kill -9` — without this, a
+                    // session parked indefinitely in `WaitingForApproval`
+                    // (no further traffic to trigger a flush) could lose its
+                    // whole transcript to the process's own internal
+                    // buffering alone, with nothing to do with the kill
+                    // itself. Still not an `fsync` (see `WriterHandle::
+                    // flush`'s doc comment) -- a full machine crash / power
+                    // loss can still lose an unsynced page-cache write; that
+                    // tier of durability is out of scope here.
+                    let _ = writer.flush();
                 }
             }
             AgentEventLogWriterCommand::Flush(reply) => {

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use super::completion::{partial_assistant_message, MULTI_TOOL_TEST_BATCH_SIZE};
+use super::completion::{partial_assistant_message, TurnCompletion, MULTI_TOOL_TEST_BATCH_SIZE};
 use super::mapping::{
     horizon_events_from_rig_message, horizon_provider_events_from_rig_message,
     horizon_tool_definition_from_rig, rig_messages_from_horizon_events,
@@ -9,8 +9,8 @@ use super::mapping::{
     RIG_PROVIDER_PAYLOAD_VERSION,
 };
 use super::session::{
-    append_cancelled_tool_results_to_history, fold_batched_tool_result, halt_turn_loop,
-    tool_result_fingerprint, BatchStep, GuardHalt, TurnLoopGuard,
+    append_cancelled_tool_results_to_history, apply_turn_outcome, fold_batched_tool_result,
+    halt_turn_loop, tool_result_fingerprint, BatchStep, GuardHalt, TurnLoopGuard,
 };
 use super::*;
 use crate::config::RigAgentConfig;
@@ -25,7 +25,7 @@ use crate::contract::SessionId;
 use crate::contract::{
     Command, Event, Message as AgentMessage, MessageDelta, MessageRole, Provider as AgentProvider,
     ProviderEvent, ProviderId, SessionState, StartSession, ToolCallId, ToolCallRequest,
-    ToolCallResult, ToolPermission,
+    ToolCallResult, ToolPermission, TurnEndReason,
 };
 use rig_core::{
     completion::{
@@ -554,19 +554,59 @@ fn halt_turn_loop_records_real_result_and_cancels_only_other_pending_calls() {
         }
         other => panic!("expected ToolCallFinished, got {other:?}"),
     }
+    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Halted));
     assert_eq!(
         recv(&rx).event,
         Event::StateChanged(SessionState::WaitingForUser)
     );
     assert!(
         rx.try_recv().is_err(),
-        "halt must emit exactly Error, one cancelled finish for B, and WaitingForUser"
+        "halt must emit exactly Error, one cancelled finish for B, TurnEnded(Halted), and WaitingForUser"
     );
 
     // The guard was reset: a fresh allowance of tool turns is available.
     for _ in 0..TEST_ITERATION_CAP {
         assert_eq!(guard.record_tool_turn(), None);
     }
+}
+
+/// Unit coverage for `Event::TurnEnded`'s fourth stop reason (`Failed`) --
+/// the one path the other three (`Completed`/`Cancelled`/`Halted`) don't
+/// exercise through a live session handle above, since triggering it for
+/// real needs the rig OpenAI completion call to fail (`complete_rig_turn`'s
+/// `Err` branch), not something worth wiring a real/fake network call for
+/// here. `apply_turn_outcome` is where every rig turn's `TurnCompletion`
+/// funnels through regardless of *why* it produced `failed: true`, so
+/// driving it directly with that flag set proves the wiring
+/// (`TurnEnded(Failed)` then `WaitingForUser`, nothing else) without needing
+/// to reach the network-dependent code that sets the flag in production.
+#[test]
+fn apply_turn_outcome_emits_turn_ended_failed_for_a_failed_provider_request() {
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let mut rig_history = Vec::new();
+    let mut pending_tool_calls = HashMap::new();
+    let mut cancelled_call_ids = HashSet::new();
+
+    apply_turn_outcome(
+        TurnCompletion {
+            failed: true,
+            ..TurnCompletion::default()
+        },
+        &tx,
+        &mut rig_history,
+        &mut pending_tool_calls,
+        &mut cancelled_call_ids,
+    );
+
+    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Failed));
+    assert_eq!(
+        recv(&rx).event,
+        Event::StateChanged(SessionState::WaitingForUser)
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "a failed turn must emit exactly TurnEnded(Failed) then WaitingForUser"
+    );
 }
 
 fn start_fallback_rig_session() -> (
@@ -653,6 +693,7 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
         Event::Error(error) => assert!(error.message.contains("consecutive tool-driven turns")),
         other => panic!("expected the iteration-cap error, got {other:?}"),
     }
+    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Halted));
     assert_eq!(
         recv(&rx).event,
         Event::StateChanged(SessionState::WaitingForUser),
@@ -678,6 +719,7 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
             ..
         })
     ));
+    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Completed));
     assert_eq!(
         recv(&rx).event,
         Event::StateChanged(SessionState::WaitingForUser)
@@ -720,6 +762,7 @@ fn rig_session_drops_unsolicited_tool_result_without_running_a_turn() {
             ..
         })
     ));
+    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Completed));
     assert_eq!(
         recv(&rx).event,
         Event::StateChanged(SessionState::WaitingForUser)
@@ -930,6 +973,7 @@ fn rig_session_batches_parallel_tool_results_into_one_follow_up_completion() {
             ..
         })
     ));
+    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Completed));
     assert_eq!(
         recv(&rx).event,
         Event::StateChanged(SessionState::WaitingForUser)
@@ -989,6 +1033,7 @@ fn rig_session_cancel_mid_batch_drops_remaining_results_and_recovers() {
     }
     let remaining_ids: HashSet<ToolCallId> = remaining.iter().cloned().collect();
     assert_eq!(cancelled_ids, remaining_ids);
+    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Cancelled));
     assert_eq!(
         recv(&rx).event,
         Event::StateChanged(SessionState::Cancelled)
@@ -1031,6 +1076,7 @@ fn rig_session_cancel_mid_batch_drops_remaining_results_and_recovers() {
             ..
         })
     ));
+    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Completed));
     assert_eq!(
         recv(&rx).event,
         Event::StateChanged(SessionState::WaitingForUser)
@@ -1126,6 +1172,7 @@ fn rig_session_iteration_cap_counts_one_tool_turn_per_batch() {
         Event::Error(error) => assert!(error.message.contains("consecutive tool-driven turns")),
         other => panic!("expected the iteration-cap error, got {other:?}"),
     }
+    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Halted));
     assert_eq!(
         recv(&rx).event,
         Event::StateChanged(SessionState::WaitingForUser)

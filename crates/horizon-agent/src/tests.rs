@@ -159,6 +159,54 @@ fn runtime_state_store_accumulates_events_into_frame() {
     assert_eq!(store.frame(), frame);
 }
 
+/// `LiveState::with_event_log_and_history` is `horizon-agentd`'s seam for
+/// resuming a persisted session at startup (`docs/agent-runtime-split-
+/// design.md` step 4): the seeded history must show up in the very first
+/// frame (not just after a fresh event arrives) and in `events()` — the
+/// exact list `session_load` re-emits to a (re)connecting client.
+#[test]
+fn with_event_log_and_history_seeds_the_frame_and_events_up_front() {
+    let path = std::env::temp_dir().join(format!(
+        "horizon-agent-seeded-log-{}.jsonl",
+        uuid::Uuid::new_v4()
+    ));
+    let session_id = SessionId::new();
+    let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
+    let history = vec![
+        agent::Event::MessageCommitted(agent::Message {
+            role: agent::MessageRole::User,
+            text: "hello".to_string(),
+        }),
+        agent::Event::MessageCommitted(agent::Message {
+            role: agent::MessageRole::Assistant,
+            text: "hi there".to_string(),
+        }),
+    ];
+    let store = crate::live::LiveState::with_event_log_and_history(
+        session_id,
+        None,
+        writer.clone(),
+        history.clone(),
+    );
+
+    // Seeded up front, before any new event has been folded in.
+    assert_eq!(store.events(), history);
+    assert_eq!(
+        store.frame(),
+        crate::frame::agent_frame_from_events(&history)
+    );
+
+    // New events append on top of the seeded history, in both places.
+    let frame = store.extend_provider_events([agent::ProviderEvent::from(
+        agent::Event::StateChanged(agent::SessionState::WaitingForUser),
+    )]);
+    assert_eq!(frame.state, Some(agent::SessionState::WaitingForUser));
+    assert_eq!(store.events().len(), 3);
+    assert_eq!(store.events()[..2], history[..]);
+
+    let _ = std::fs::remove_file(path);
+}
+
 #[test]
 fn runtime_state_store_enqueues_events_to_jsonl_log() {
     let path = std::env::temp_dir().join(format!(

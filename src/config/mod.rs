@@ -102,14 +102,6 @@ pub(crate) struct RawAgentConfig {
     /// set, wins over this. Unset (here and via env) means no persisted
     /// memory.
     pub(crate) state_db_path: Option<String>,
-    /// **Experimental**, default `false`. When `true`, Horizon attempts to
-    /// connect to `horizon-agentd` at startup (spawning it if the socket
-    /// isn't already accepting connections) -- see
-    /// `docs/agent-runtime-split-design.md`. As of step 2, this only
-    /// exercises the hello handshake and logs the outcome; no agent session
-    /// routes through the connection yet, so leaving this unset (or `false`)
-    /// keeps Horizon's behavior completely unchanged.
-    pub(crate) agentd: bool,
 }
 
 /// `[provider]`: model selection, base URL, and request parameters for the

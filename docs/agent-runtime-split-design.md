@@ -427,3 +427,287 @@ unchanged — every new code path added this step is reached only through
   startup call and `horizon-agentd`'s per-connection session scoping (above)
   are both shaped for a single Horizon-process-lifetime connection, not a
   reconnect — expect both to change.
+
+## Step 4 implementation notes
+
+**Deviation reversed mid-step.** Step 4 was originally scoped with an
+agreed deviation: keep `[agent].agentd` at its default `false` and leave the
+in-process path in place, deferring the flip to a later, separate decision
+after dogfooding. That was superseded by a direct directive change partway
+through this step: retire the in-process path outright and delete the flag
+entirely. `horizon-agentd` is now the *only* place an agent session runs;
+there is no config knob and no fallback. Everything below reflects that
+reversal, not the original plan.
+
+- **`Event::TurnEnded(TurnEndReason)`** (`horizon_agent::contract`) — four
+  variants, named after the design's own wording verbatim: `Completed`,
+  `Cancelled`, `Failed`, `Halted`. Folds as a no-op everywhere a frame is
+  built (`frame::apply_agent_event_to_frame`) and projects as a no-op in the
+  DuckDB store (`persistence::projection::duckdb::projection`) — it exists
+  for persisted forensics/bootstrap, not pane rendering, matching the
+  provider-request-lifecycle markers' existing treatment.
+  - **Emission is centralized in `providers::rig::session`, not spread
+    across every `StateChanged` send site.** `apply_turn_outcome` (bumped
+    from private to `pub(super)` so `tests.rs` can drive it directly) is the
+    one function nearly every rig turn's outcome funnels through, and it now
+    emits `TurnEnded` for three of the four reasons (`Completed`/
+    `Cancelled`/`Failed`) based on `TurnCompletion`'s fields — including a
+    new `failed: bool` field, since a failed provider request and a
+    completion with nothing to do are otherwise indistinguishable (both:
+    not cancelled, no tool calls requested). The fourth reason, `Halted`
+    (the iteration-cap/doom-loop guard), is emitted from `halt_turn_loop`,
+    which stops the loop *instead of* producing a `TurnCompletion` for
+    `apply_turn_outcome` to see. The idle `Command::Cancel` arm (cancelling
+    while nothing is mid-stream, only pending tool calls) is the one other
+    site, mirroring `apply_turn_outcome`'s cancelled branch inline since it
+    never goes through a `TurnCompletion` at all.
+  - **`providers::mock` was deliberately left untouched.** It's exercised
+    entirely by tests, and every step-4 test that needs a turn to sit open
+    indefinitely (for the kill-mid-session scenarios below) uses mock's
+    tool-approval trigger — a genuinely open turn with no timer, not a race
+    against mock's word-by-word streaming. Nothing in step 4 needed mock to
+    emit `TurnEnded` on its own graceful paths; if a future step wants
+    provider parity for `TurnEnded` there, it's a small, separable addition.
+  - **Unit coverage**: the six pre-existing `providers::rig::tests` session
+    tests that assert exact event sequences all gained the new
+    `TurnEnded(..)` in their expected order (`Completed` before a normal
+    `WaitingForUser`, `Cancelled` before `StateChanged(Cancelled)`,
+    `Halted` before `halt_turn_loop`'s closing `WaitingForUser`). `Failed`
+    has no existing live-session test to extend (triggering it for real
+    needs the OpenAI completion call to error, which isn't worth wiring a
+    fake network client for here) — covered instead by a focused unit test
+    that drives `apply_turn_outcome` directly with `TurnCompletion { failed:
+    true, .. }`.
+
+- **Durability fix required to make replay meaningful against a real `kill
+  -9`.** `persistence::event_log::writer::run_writer` used to leave each
+  appended record sitting in `BufWriter`'s in-memory buffer until the next
+  explicit `flush()` (which `horizon-agentd` never called except on
+  `Control::Drain`, and even that is *tokio's* socket-write flush, not the
+  event log's). A session parked indefinitely (e.g. `WaitingForApproval`,
+  no timer to trigger more traffic) could lose its entire buffered
+  transcript to a hard kill with nothing to do with the kill itself —
+  discovered while writing the kill-mid-session e2e test below, which was
+  silently losing events until this was fixed. `run_writer` now flushes
+  after every append. Still not an `fsync` (page-cache durability only, per
+  `WriterHandle::flush`'s existing doc comment) — a full machine crash can
+  still lose an unsynced write; that tier is out of scope. This is a
+  crate-wide behavior change (`crates/horizon-agent`), not agentd-specific,
+  but agentd is the only remaining writer of this log.
+
+- **Replay on start: `horizon-agentd::session::resume_persisted_sessions`.**
+  Runs once, synchronously, in `main` right after the startup event-log read
+  and before the accept loop starts. Groups the startup read's records by
+  `session_id`, and for each session:
+  1. Folds its events into an `AgentFrame` (`agent_frame_from_events`) and
+     checks `AgentFrame::is_turn_in_flight()` — reusing the exact predicate
+     the palette's `Cancel Agent Turn` enablement already uses, rather than
+     re-deriving "was a turn open" from `persistence::event_log::turn`'s
+     `TurnTracker` state machine a second time.
+  2. If a turn is in flight, synthesizes and durably appends (via a fresh
+     `Appender` for that session) a `ToolCallFinished(cancelled)` for every
+     still-outstanding tool call (mirroring what a live `Command::Cancel`
+     does — without this, an interrupted `WaitingForApproval` call kept
+     reading as pending forever, since nothing else ever resolves it),
+     followed by `TurnEnded(Cancelled)` and `StateChanged(WaitingForUser)`.
+  3. Spawns the session's thread exactly as `Control::SessionNew` would
+     (`spawn_session_thread`, now shared by both call sites), seeded with
+     the full (possibly just-extended) event history.
+  - **Turn-id continuity is not preserved for the synthesized cancellation.**
+    The fixup's `Appender` starts a fresh `TurnTracker`, so the closing
+    events land with `turn_id: None` rather than the interrupted turn's own
+    id. Acceptable: `turn_id` is a persistence-forensics grouping aid (used
+    by the `agent-inspect` skill), not load-bearing for the frame fold or
+    for `is_turn_in_flight`, which don't look at it at all. Worth
+    revisiting only if turn-id-keyed forensics across a crash boundary
+    becomes a real need.
+  - **Every persisted session is resumed eagerly at startup, not lazily on
+    first `session_load`.** This is what makes "sessions are live again
+    (`WaitingForUser`), listed by `session_list`" literally true before any
+    client ever connects, and it sidesteps a much harder question (which
+    historical source — the startup read's records, or a since-spawned
+    thread's own `LiveState` — answers a `session_load` for a session
+    nobody's touched yet). The trade-off: a long-lived daily-driver
+    accumulating many past sessions means many resumed threads at every
+    agentd restart. Acceptable at this project's current (dogfooding)
+    scale; a lazy-resume-on-first-`session_load` design is the likely
+    follow-up if it ever isn't.
+  - **A restart's own "session started" banner becomes permanent history.**
+    Every resumed session's thread runs the same `Created`/init-message/
+    `WaitingForUser` startup burst a brand-new session gets, which gets
+    persisted like any other event. Over many restarts this adds a visible
+    "provider restarted" marker to the transcript every time — treated as
+    an accepted (arguably useful, forensically) consequence rather than
+    something to suppress, not a design goal in itself.
+
+- **`AgentdState` absorbed what used to be `Connection`'s own state**
+  (`sessions`, `pending_host_tool_requests`) **plus a new `outgoing` cell**
+  (`Mutex<Option<UnboundedSender<Envelope>>>`), exactly the shape step 3's
+  notes predicted ("moving these maps to `AgentdState` is the likely shape
+  of that change"). `Connection` is now a thin `Arc<AgentdState>` wrapper.
+  `outgoing` is what makes a session spawned before any connection exists
+  (a resumed session at startup) representable at all: every session thread
+  sends through this shared, swappable cell (`send_envelope`, which
+  silently no-ops when it's `None`) rather than owning a connection-specific
+  sender captured at spawn time; `Connection::new` installs the current
+  connection's sender into it, `Connection::disconnect` (called from
+  `main`'s two connection-loop exit points) clears it back to `None` so a
+  session doesn't keep "successfully" enqueueing into a writer task that's
+  already given up on a dead socket.
+
+- **`session_load` is answered by the session's own thread, not read out of
+  its `LiveState` from another thread.** `LiveState`'s internal `Rc<RefCell<
+  ..>>` is deliberately `!Send` (see its own doc comments), so it can't be
+  stashed in the cross-thread `AgentdState.sessions` map the way `inbound`
+  already is. Instead, `SessionEntry` gained a `replay: Sender<Sender<
+  Vec<Event>>>` — a tiny request/reply channel, agentd-internal only (not
+  part of the wire contract): `Connection::replay_events` sends a one-shot
+  reply channel down it and the session's own `run_session` loop answers
+  from a new fourth `select!` arm by calling `live_state.events()`
+  (`LiveState` gained this accessor — a plain clone of its internal event
+  vec, `Vec<Event>` being genuinely `Send`) on its own thread, no Rc
+  crossing threads at all. `Connection::replay_events` runs the blocking
+  wait inside `tokio::task::spawn_blocking` so a slow session can't stall
+  the connection's read loop for unrelated traffic, and `main`'s handling of
+  `Control::SessionLoad` awaits it inline (not spawned detached) so the
+  replay burst can't race a client's very next command for the same
+  session.
+  - **`LiveState::with_event_log_and_history`** (`with_event_log` now
+    delegates to it with an empty history) and **`State::from_history`**
+    are the crate-side seam this and `resume_persisted_sessions` both use to
+    seed a fresh `LiveState`/`State` with already-committed events so the
+    first fold reflects the whole transcript, not just what arrives after
+    construction.
+
+- **Horizon's `AgentdConnection` gained `attach_session` alongside
+  `start_session`**, both now built on a shared `register_session_routing`
+  (event-route registration + the command-draining thread) that neither
+  sends anything itself: `start_session` sends `session_new`,
+  `attach_session` sends `session_load`. This is the seam that makes a
+  reconnected/resumed session's handle indistinguishable from a brand-new
+  one at every existing call site, extending step 3's "the fold must not
+  know which transport delivered the events" to "...or whether this
+  session's history predates this connection."
+  - **`session_list` is a blocking round trip with no request id on the
+    wire**, deliberately: `AgentdConnection` gained a `pending_session_list:
+    Arc<Mutex<Option<Sender<Vec<SessionSummary>>>>>` cell (the same shape
+    `horizon-agentd`'s own host-tool-response routing uses, minus the id,
+    since Horizon only ever has one `session_list` round trip outstanding
+    at a time — startup, or a `Reload Agent Runtime` — never two
+    concurrently).
+  - **`agent::agentd_runtime::reconnect_all_sessions`/`attach_sessions`/
+    `fold_agent_session_events`** implement "on connect: `hello` ->
+    `session_list` -> `session_load` for every session": `attach_sessions`
+    calls `Workspace::register_detached_session` (new, `workspace::session`
+    — a thin wrapper around the existing `ensure_session` insertion, which
+    was already idempotent) unconditionally for every summary, then
+    `attach_session` + the shared fold. Idempotency does the rest: a
+    session Horizon already has a pane for is untouched by the
+    `register_detached_session` call (already known) and just gets its
+    frame/handle refreshed ("reattach seamlessly"); one Horizon has never
+    seen shows up as a brand-new detached session ("survival made
+    visible"). `app::state::AppState::new` calls this once, synchronously,
+    right after a successful startup connect — a fresh Horizon process has
+    no panes yet, so at startup every summary takes the "new detached
+    session" branch.
+  - **`workspace::session::register_detached_session` is the one edit this
+    step made outside its otherwise-declared `crates/**`/`src/agent/**`/
+    `src/app/**` ownership boundary.** It's a 3-line, purely additive
+    wrapper with no behavior change to anything it doesn't touch, added
+    because the "surface unknown sessions as detached" requirement has no
+    existing seam to hang off of otherwise; flagged here for visibility
+    since `workspace/` is nominally another area's territory.
+
+- **`Reload Agent Runtime`** (`CommandId::ReloadAgentRuntime`,
+  `command_actions::reload_agent_runtime` dispatching to
+  `agent::agentd_runtime::reload_agent_runtime`) implements "drain -> agentd
+  flushes and exits -> Horizon spawns the rebuilt binary -> reconnect ->
+  `session_load`" end to end: sends `Control::Drain` on the current
+  connection (best-effort), immediately sets `agentd_connection` to `None`
+  (so no new session tries to route through the dying connection while this
+  is in flight — already-attached panes get `mark_connection_lost`'s
+  synthetic `Event::Error` once the old connection's read loop notices it's
+  gone), then does the respawn-delay/`AgentdConnection::connect`/
+  `session_list` round trip on a background thread and only touches floem
+  signals from the `create_effect` callback that receives the result — the
+  same "blocking work off the UI thread, signals on it" split every other
+  cross-thread bridge in this codebase already uses
+  (`spawn_persistence_initialization` et al.). Progress and the outcome
+  surface through `agent_state_status`, the pane-independent status the
+  status bar already renders — no new UI surface needed.
+  - **`CommandId::ReloadAgentRuntime` is unconditionally enabled**, not
+    gated on "agentd mode" the way the task's original phrasing assumed —
+    once the in-process path was retired, there is no other mode to
+    contrast against, and gating it on "is there currently a live
+    connection" would need a new `CommandState` field that `control_surface`
+    (outside this step's ownership) would also have to learn to populate.
+    Reload is exactly the command you want available *while* the
+    connection is broken, so always-enabled is also the more correct
+    behavior, not just the smaller diff.
+  - **Version mismatch at hello surfaces as literally
+    `"agent runtime reload required: ..."`** in `agent_state_status`
+    (`reload_failure_status`, unit-tested against both the mismatch and a
+    generic-failure string) — never silent, per the design's own wording.
+  - **The dev-flow gotcha this step also had to close**: `agentd_client::
+    spawn_agentd` used to do a bare `Command::new("horizon-agentd")`, which
+    only resolves via `$PATH` — `cargo run` alone never puts
+    `target/debug` on `PATH`, so a workspace build that only ran `cargo
+    run` (not `cargo build --workspace`) would fail to spawn agentd with an
+    opaque "not found" error. `resolve_agentd_binary` now looks next to
+    Horizon's own `current_exe()` first (the directory `cargo build
+    --workspace`/`cargo run` both actually put both binaries in) before
+    falling back to a bare `PATH` lookup, and `spawn_agentd`'s error message
+    explicitly says to run `cargo build --workspace`. `AGENTS.md`'s
+    Commands section now lists `cargo build --workspace` as the canonical
+    build step for the same reason.
+
+- **In-process retirement — what actually got deleted.**
+  `app::runtime::agent` shrank from the full in-process session
+  loop/persistence-open/DuckDB-rebuild machinery (~800 lines, including its
+  own test suite covering the JSONL/DuckDB replay paths already covered by
+  `crates/horizon-agent`'s own tests) down to just `spawn_agent_session`
+  (agentd-routed) and an error-frame fallback for "no connection". Also
+  removed: `agent::load_agent_config`/`agent_file_config_from_raw` (no
+  longer any production caller — agentd resolves its own `AgentConfig`
+  independently and always has); `config::RawAgentConfig.agentd`;
+  `AppState.agent_config`/`SessionRuntimeState`'s `agent_config` parameter
+  (nothing downstream of the retired in-process path needed it).
+  `host_tools::WorkspaceHostTools` (the in-process `HostTools` impl) has no
+  production caller left either — demoted to `#[cfg(test)]`, still
+  exercising the same seam its tests always did, since
+  `host_tools::workspace_snapshot` (the function it wraps) is genuine
+  production code, called by `agent::agentd_runtime::answer_host_tool_request`
+  over the wire instead.
+  - **`app::runtime::shutdown`/`app::shutdown` are kept as no-ops** rather
+    than removed, since `main.rs` (outside this step's `src/app/`
+    ownership) wires `app::shutdown()` to floem's `AppEvent::WillTerminate`
+    and there's nothing gained by touching that call site just to delete a
+    now-empty function.
+
+- **Testing scope / gaps worth naming.** `horizon-agentd`'s `tests/e2e.rs`
+  gained: a hard-kill-mid-session scenario (parks a session in
+  `WaitingForApproval` — no timer, so no flakiness — kills the process,
+  respawns at the same socket/log paths, and asserts the transcript
+  survives, the interrupted turn shows `TurnEnded(Cancelled)`, the pending
+  approval no longer reads as pending, and a fresh message still works); a
+  same-running-process disconnect/reconnect scenario asserting
+  `session_load`'s replay folds to the *exact* frame a live connection saw
+  (not just "some events"); and a graceful-drain-then-respawn scenario
+  covering the clean-shutdown path `Reload Agent Runtime` actually drives
+  (distinct from the hard-kill scenario, which explicitly also proves that
+  a *cleanly completed* turn is never mis-marked as cancelled on resume).
+  All three reuse the mock provider and the same `AgentdProcess` harness,
+  extended with `spawn_at`/`kill_and_wait` for the respawn-at-same-paths
+  shape. **What's still only unit-tested or manually verified, matching the
+  precedent already accepted in steps 2-3**: `agent::agentd_runtime::
+  reload_agent_runtime`'s own spawn/reconnect orchestration (the
+  respawn-delay thread, `AgentdConnection::connect`'s cold-start spawn
+  path, `session_list`'s wire round trip) has no test exercising it against
+  a *real* spawned `horizon-agentd` from Horizon's own test binary —
+  `CARGO_BIN_EXE_horizon-agentd` is only set for `horizon-agentd`'s own
+  integration tests (a different package), so a cross-package test needs
+  its own setup (passing the binary path explicitly, or building it as a
+  test fixture) that wasn't judged worth adding on top of everything else
+  in this step. `reload_failure_status`'s string-mapping and the pre-
+  existing `agentd_client::handshake` tests (version-mismatch, rejection,
+  closed-before-reply) cover the pieces that don't need a real subprocess.

@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use floem::prelude::*;
 
 use crate::agent::agentd_runtime::AgentdConnection;
-use crate::agent::config::AgentConfig;
 use crate::session::{Frames, Registry, SessionId};
 use crate::workspace::{PaneKind, Workspace};
 
@@ -19,30 +18,26 @@ pub(crate) struct SessionRuntimeState {
     frames: RwSignal<Frames>,
     sessions: RwSignal<Registry>,
     agent_state_status: RwSignal<Option<String>>,
-    agent_config: AgentConfig,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
-    agentd_connection: Option<AgentdConnection>,
+    agentd_connection: RwSignal<Option<AgentdConnection>>,
 }
 
 impl SessionRuntimeState {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         workspace: RwSignal<Workspace>,
         frames: RwSignal<Frames>,
         sessions: RwSignal<Registry>,
         agent_state_status: RwSignal<Option<String>>,
-        agent_config: AgentConfig,
         terminal_dump: Option<PathBuf>,
         clipboard_dump: Option<PathBuf>,
-        agentd_connection: Option<AgentdConnection>,
+        agentd_connection: RwSignal<Option<AgentdConnection>>,
     ) -> Self {
         Self {
             workspace,
             frames,
             sessions,
             agent_state_status,
-            agent_config,
             terminal_dump,
             clipboard_dump,
             agentd_connection,
@@ -60,16 +55,25 @@ impl SessionRuntimeState {
     pub(crate) fn sessions(&self) -> RwSignal<Registry> {
         self.sessions
     }
+
+    pub(crate) fn agent_state_status(&self) -> RwSignal<Option<String>> {
+        self.agent_state_status
+    }
+
+    pub(crate) fn agentd_connection(&self) -> RwSignal<Option<AgentdConnection>> {
+        self.agentd_connection
+    }
 }
 
 /// Flushes any runtime state that buffers writes in memory before the app
-/// exits normally. Currently that's just the agent event log's
-/// process-global writer thread (see `agent::shutdown_agent_event_log` and
-/// the design comment on `agent::AGENT_EVENT_LOG_WRITER`); terminal
-/// sessions have no equivalent buffered-write concern today.
-pub(crate) fn shutdown() {
-    agent::shutdown_agent_event_log();
-}
+/// exits normally. A no-op since step 4: Horizon no longer owns any
+/// buffered writer itself -- the agent event log moved entirely into
+/// `horizon-agentd` in step 3, and step 4 retired the in-process agent
+/// runtime that used to open a copy of it here. Kept (rather than removed)
+/// so `app::shutdown`/`main.rs`'s `AppEvent::WillTerminate` wiring doesn't
+/// need to change; terminal sessions have no buffered-write concern of
+/// their own either.
+pub(crate) fn shutdown() {}
 
 pub(crate) fn spawn_session(kind: PaneKind, session_id: SessionId, state: &SessionRuntimeState) {
     match kind {
@@ -82,12 +86,10 @@ pub(crate) fn spawn_session(kind: PaneKind, session_id: SessionId, state: &Sessi
         ),
         PaneKind::Agent => spawn_agent_session(
             session_id,
-            state.workspace,
             state.frames,
             state.sessions,
             state.agent_state_status,
-            state.agent_config.clone(),
-            state.agentd_connection.as_ref(),
+            state.agentd_connection,
         ),
     }
 }

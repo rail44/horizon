@@ -89,7 +89,8 @@ impl Store {
             | Event::ProviderRequestFirstToken
             | Event::ProviderRequestFinished
             | Event::Error(_)
-            | Event::Exited(_) => Ok(()),
+            | Event::Exited(_)
+            | Event::TurnEnded(_) => Ok(()),
         }
     }
 

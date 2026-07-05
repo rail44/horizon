@@ -101,14 +101,6 @@ pane_status_tick_secs = 1
 # this. Same "~/" expansion as event_log_path above.
 # state_db_path = "~/.local/share/horizon/agent-state.duckdb"
 
-# Experimental, commented out: when true, Horizon attempts to connect to
-# horizon-agentd at startup (spawning it if nothing is listening yet) --
-# see docs/agent-runtime-split-design.md. As of this Horizon version this
-# only exercises the hello handshake and logs the outcome to stderr; no
-# agent session routes through the connection yet, so this is safe to leave
-# unset (the default is false either way).
-# agentd = false
-
 # ---------------------------------------------------------------------------
 # [provider] — the built-in rig/OpenAI provider's model and base URL.
 #

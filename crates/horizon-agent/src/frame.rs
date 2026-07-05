@@ -183,6 +183,7 @@ pub fn render_agent_transcript(events: &[Event]) -> String {
             }
             Event::Error(error) => lines.push(format!("error: {}", error.message)),
             Event::Exited(exit) => lines.push(format!("exited: {}", exit.reason)),
+            Event::TurnEnded(reason) => lines.push(format!("turn ended: {reason:?}")),
         }
     }
 
@@ -296,6 +297,10 @@ pub fn apply_agent_event_to_frame(frame: &mut AgentFrame, event: &Event) {
         | Event::ProviderRequestFinished => {}
         Event::Error(error) => frame.items.push(AgentFrameItem::Error(error.clone())),
         Event::Exited(exit) => frame.items.push(AgentFrameItem::Exited(exit.clone())),
+        // A turn-end marker, not a transcript item — see `Event::TurnEnded`'s
+        // doc comment. Folds as a no-op here, same treatment the provider
+        // request lifecycle markers get above.
+        Event::TurnEnded(_) => {}
     }
 }
 

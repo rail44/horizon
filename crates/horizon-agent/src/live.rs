@@ -17,10 +17,18 @@ pub struct State {
 
 impl State {
     pub fn new() -> Self {
-        Self {
-            events: Vec::new(),
-            frame: agent_frame_from_events(&[]),
-        }
+        Self::from_history(Vec::new())
+    }
+
+    /// Seeds a fresh `State` with already-committed history (see
+    /// [`LiveState::with_event_log_and_history`]): the frame is rebuilt from
+    /// `events` up front, exactly as `agent_frame_from_events` would for a
+    /// cold replay, so a session resumed from a persisted log looks
+    /// identical — from the very first fold onward — to one that had been
+    /// running the whole time.
+    pub fn from_history(events: Vec<Event>) -> Self {
+        let frame = agent_frame_from_events(&events);
+        Self { events, frame }
     }
 
     /// Folds one batch of provider events into the frame. A
@@ -102,8 +110,25 @@ impl LiveState {
         provider_id: Option<ProviderId>,
         writer: event_log::WriterHandle,
     ) -> Self {
+        Self::with_event_log_and_history(session_id, provider_id, writer, Vec::new())
+    }
+
+    /// Same as [`Self::with_event_log`], seeded with `history` (already-
+    /// committed events, e.g. read back from the JSONL log at
+    /// `horizon-agentd` startup) so a resumed session's very first fold
+    /// reflects the whole transcript, not just what arrives from here on —
+    /// `docs/agent-runtime-split-design.md` step 4's "agentd restart ...
+    /// sessions are live again". `history` itself is never re-appended (it's
+    /// already durable); only events folded in *after* this call go through
+    /// `writer`.
+    pub fn with_event_log_and_history(
+        session_id: SessionId,
+        provider_id: Option<ProviderId>,
+        writer: event_log::WriterHandle,
+        history: Vec<Event>,
+    ) -> Self {
         Self {
-            inner: Rc::new(RefCell::new(State::new())),
+            inner: Rc::new(RefCell::new(State::from_history(history))),
             persistence: Some(Rc::new(Persistence::EventLog(RefCell::new(
                 event_log::Appender::new(writer, session_id, provider_id),
             )))),
@@ -124,6 +149,18 @@ impl LiveState {
     /// `ApprovalOutcome::AlreadyResolved` guard.
     pub fn frame(&self) -> AgentFrame {
         self.inner.borrow().frame().clone()
+    }
+
+    /// Every fold-relevant event this session has accumulated so far
+    /// (already-committed history plus everything folded in since) — the
+    /// source `horizon-agentd`'s `session_load` handling re-emits to a
+    /// (re)connecting client (`docs/agent-runtime-split-design.md` step 4's
+    /// "agentd re-emits the fold-relevant committed events for that
+    /// session"). Deliberately the same list a fresh `agent_frame_from_events`
+    /// call over would rebuild the identical frame from, so a client's own
+    /// fold of the replayed events reproduces this session's frame exactly.
+    pub fn events(&self) -> Vec<Event> {
+        self.inner.borrow().events.clone()
     }
 }
 

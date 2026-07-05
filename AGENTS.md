@@ -15,9 +15,21 @@ pointed-to document instead.
 
 ```sh
 cargo check
+cargo build --workspace
 cargo test
 cargo run
 ```
+
+`cargo build --workspace` is the canonical build command: `cargo run` alone
+only rebuilds the root `horizon` binary, and Horizon's agent sessions run
+entirely inside `horizon-agentd` (`crates/horizon-agentd`), a separate
+workspace member Horizon spawns on demand (see
+`docs/agent-runtime-split-design.md`). If that binary was never built (or is
+stale after an agent-side change), `cargo run` still starts Horizon but
+agent panes fail to spawn a runtime — run `cargo build --workspace` first
+(and again after touching `crates/horizon-agent`/`crates/horizon-agentd`),
+or use `Reload Agent Runtime` from the command palette to retry after
+rebuilding.
 
 There is no CI. The local quality gate below is mandatory before finishing
 any work — run it yourself and make sure all three are clean:
@@ -67,8 +79,13 @@ contents:
   attachments, operations/queries, pane input routing, and workspace views.
 - `terminal/` — PTY-backed terminal sessions (emulation core, session
   runtime, rendering/input/IME views).
-- `agent/` — AI agent sessions: the Horizon-owned provider contract
-  (`contract.rs`), providers, tools, persistence, and agent views.
+- `agent/` — Horizon's seam onto AI agent sessions: the client/reconnect
+  logic for `horizon-agentd` (`agentd_client.rs`, `agentd_runtime.rs`) and
+  agent views. The provider contract, providers, tools, and persistence
+  themselves live in `crates/horizon-agent` (a library crate, no floem
+  dependency) and are hosted by `crates/horizon-agentd` (the daemon binary
+  every agent session actually runs in) — see
+  `docs/agent-runtime-split-design.md`.
 - `session/` — shared session primitives (`SessionId`, `Registry`, `Frames`)
   used across session kinds.
 - `app/` — composition root: the command model (`commands.rs` defines

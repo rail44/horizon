@@ -4,17 +4,28 @@
 //! `horizon-agent` can't depend on — see
 //! `docs/agent-runtime-split-design.md`'s "Tools execute in the child"
 //! guardrail, which calls tools like this one "host tools".
+//!
+//! [`workspace_snapshot`] itself is real production code -- it's what
+//! `agent::agentd_runtime::answer_host_tool_request` calls to answer a
+//! `host_tool_request` arriving from `horizon-agentd` (the wire-based
+//! seam, step 3-4). [`WorkspaceHostTools`], the in-process `HostTools` impl
+//! wrapping it, has no production caller left since step 4 retired
+//! Horizon's own in-process session loop -- kept `#[cfg(test)]` as a
+//! concrete `HostTools` this module's own tests (and nothing else) exercise
+//! the seam through.
 
 use serde_json::json;
 
+#[cfg(test)]
 use crate::agent::tools::HostTools;
 use crate::workspace::Workspace;
 
 /// Wraps a `&Workspace` so it can be passed wherever the agent crate wants
-/// a `&dyn HostTools` — see `app/runtime/agent.rs::spawn_agent_session`'s
-/// `create_effect` for the call site.
+/// a `&dyn HostTools` — see the module doc for why this is test-only now.
+#[cfg(test)]
 pub(crate) struct WorkspaceHostTools<'a>(pub(crate) &'a Workspace);
 
+#[cfg(test)]
 impl HostTools for WorkspaceHostTools<'_> {
     fn execute_auto(&self, tool_id: &str, _input: &serde_json::Value) -> Option<serde_json::Value> {
         match tool_id {

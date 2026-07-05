@@ -109,6 +109,29 @@ pub enum Event {
     ProviderRequestFinished,
     Error(Error),
     Exited(Exit),
+    /// A turn's explicit end, carrying why it ended — added in
+    /// `docs/agent-runtime-split-design.md`'s step 4 ("Turn end becomes an
+    /// explicit contract event") so bootstrap/replay never has to infer a
+    /// turn's fate from state churn, and so an ACP `session/prompt`
+    /// response's stop reason is derivable rather than inferred (guardrail
+    /// 3). Emitted by the session loop right before the `StateChanged` that
+    /// follows a turn's end (see `providers::rig::session`), so it still
+    /// carries the ending turn's `turn_id` under `persistence::event_log`'s
+    /// existing tracking. Folds as a no-op everywhere a frame is built from
+    /// events (see `frame::apply_agent_event_to_frame`) — it exists for
+    /// persisted forensics and bootstrap, not pane rendering.
+    TurnEnded(TurnEndReason),
+}
+
+/// Why a turn ended — see [`Event::TurnEnded`]. Named after the design doc's
+/// four stop reasons verbatim: "completed / cancelled / failed /
+/// halted-by-guard".
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub enum TurnEndReason {
+    Completed,
+    Cancelled,
+    Failed,
+    Halted,
 }
 
 pub fn event_kind(event: &Event) -> &'static str {
@@ -126,6 +149,7 @@ pub fn event_kind(event: &Event) -> &'static str {
         Event::ProviderRequestFinished => "provider_request_finished",
         Event::Error(_) => "error",
         Event::Exited(_) => "exited",
+        Event::TurnEnded(_) => "turn_ended",
     }
 }
 

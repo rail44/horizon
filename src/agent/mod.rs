@@ -5,21 +5,26 @@
 //! modules under the same `agent::*` paths the rest of Horizon already
 //! uses, and supplies the handful of things the crate deliberately can't
 //! hold itself: conversion between the crate's own `SessionId` and
-//! Horizon's shared `session::SessionId`, feeding Horizon's config file into
-//! the crate's config resolvers, and the `workspace.snapshot` host tool
-//! (`host_tools`), which needs `Workspace`.
+//! Horizon's shared `session::SessionId`, and the `workspace.snapshot` host
+//! tool (`host_tools`), which needs `Workspace`.
 //!
-//! Everything else — views, the app-runtime wiring that spawns sessions and
-//! owns the event-log writer — stays local to Horizon; see `agent::view`
-//! and `app::runtime::agent`.
+//! As of step 4, `horizon-agentd` is the only place a session's providers,
+//! tools, and persistence actually run -- Horizon never opens its own copy
+//! of the crate's config/persistence machinery any more (the config-file-
+//! feeding glue that used to build an in-process `AgentConfig` is gone;
+//! `host_tools::WorkspaceHostTools`, the in-process `HostTools` impl,
+//! survives only as a `#[cfg(test)]` exercise of the seam -- see
+//! `docs/agent-runtime-split-design.md`'s step 4 notes). Everything that's
+//! still local to Horizon — views, the app-runtime wiring that
+//! spawns/reconnects sessions — lives in `agent::view`,
+//! `agent::agentd_client`, `agent::agentd_runtime`, and `app::runtime::agent`.
 
 pub(crate) mod agentd_client;
 pub(crate) mod agentd_runtime;
 mod host_tools;
 pub(crate) mod view;
 
-pub(crate) use horizon_agent::{config, contract, frame, live, persistence, tools};
-pub(crate) use host_tools::WorkspaceHostTools;
+pub(crate) use horizon_agent::{config, contract, frame, live, tools};
 
 use contract::SessionId as AgentSessionId;
 
@@ -32,48 +37,6 @@ impl From<crate::session::SessionId> for AgentSessionId {
 impl From<AgentSessionId> for crate::session::SessionId {
     fn from(id: AgentSessionId) -> Self {
         Self::from_uuid(id.as_uuid())
-    }
-}
-
-/// Resolves the crate's [`config::AgentConfig`] from environment variables
-/// and Horizon's config file. The crate can't call `crate::config::load()`
-/// itself (see its `config` module's doc comment on the crate boundary);
-/// this is the one production call site, `app::state::AppState::new`.
-pub(crate) fn load_agent_config() -> config::AgentConfig {
-    config::AgentConfig::from_env_and_file(&agent_file_config_from_raw(crate::config::load()))
-}
-
-/// Converts Horizon's config-file schema into the crate's mirror of the
-/// `[agent]`/`[provider]` sections it reads — see
-/// [`config::AgentFileConfig`]'s doc comment for why the crate needs its
-/// own copy of this shape instead of depending on `crate::config::RawConfig`
-/// directly.
-fn agent_file_config_from_raw(raw: &crate::config::RawConfig) -> config::AgentFileConfig {
-    config::AgentFileConfig {
-        agent: config::AgentFileAgentConfig {
-            bash_timeout_default_secs: raw.agent.bash_timeout_default_secs,
-            bash_timeout_max_secs: raw.agent.bash_timeout_max_secs,
-            bash_output_cap_chars: raw.agent.bash_output_cap_chars,
-            bash_drain_grace_secs: raw.agent.bash_drain_grace_secs,
-            fs_read_line_cap: raw.agent.fs_read_line_cap,
-            fs_grep_max_bytes: raw.agent.fs_grep_max_bytes,
-            fs_traversal_max_files: raw.agent.fs_traversal_max_files,
-            fs_grep_result_limit: raw.agent.fs_grep_result_limit,
-            fs_glob_result_limit: raw.agent.fs_glob_result_limit,
-            iteration_cap: raw.agent.iteration_cap,
-            doom_loop_window: raw.agent.doom_loop_window,
-            stream_flush_interval_ms: raw.agent.stream_flush_interval_ms,
-            stream_flush_chars: raw.agent.stream_flush_chars,
-            pane_status_tick_secs: raw.agent.pane_status_tick_secs,
-            event_log_path: raw.agent.event_log_path.clone(),
-            state_db_path: raw.agent.state_db_path.clone(),
-        },
-        provider: config::AgentFileProviderConfig {
-            model: raw.provider.model.clone(),
-            base_url: raw.provider.base_url.clone(),
-            temperature: raw.provider.temperature,
-            max_tokens: raw.provider.max_tokens,
-        },
     }
 }
 
@@ -206,9 +169,5 @@ mod tests {
         assert_eq!(parsed.provider, crate::config::RawProviderConfig::default());
         assert!(parsed.keybindings.is_empty());
         assert!(parsed.theme.is_empty());
-        assert!(
-            !parsed.agent.agentd,
-            "agentd must stay commented out (default false) in the example file"
-        );
     }
 }

@@ -1,5 +1,6 @@
 use floem::prelude::*;
 
+use crate::agent::agentd_runtime::AgentdConnection;
 use crate::agent::contract::{Command, ToolCallId};
 use crate::agent::tools::{
     resolve_approval, unregister_session_runtime, ApprovalDecision, ApprovalOutcome,
@@ -35,6 +36,14 @@ impl CommandActionState {
 
     pub(crate) fn sessions(&self) -> RwSignal<Registry> {
         self.runtime.sessions()
+    }
+
+    pub(crate) fn agent_state_status(&self) -> RwSignal<Option<String>> {
+        self.runtime.agent_state_status()
+    }
+
+    pub(crate) fn agentd_connection(&self) -> RwSignal<Option<AgentdConnection>> {
+        self.runtime.agentd_connection()
     }
 }
 
@@ -231,7 +240,27 @@ fn execute_simple_command(command_id: CommandId, state: CommandActionState) {
                 cancel_agent_turn(state, session_id);
             }
         }
+        CommandId::ReloadAgentRuntime => reload_agent_runtime(state),
     }
+}
+
+/// `docs/agent-runtime-split-design.md` step 4's `Reload Agent Runtime`
+/// command: drain -> wait for exit -> spawn the (possibly rebuilt) binary ->
+/// reconnect -> `session_load` every session -- all implemented in
+/// `agent::agentd_runtime::reload_agent_runtime`, which this just gathers
+/// the right signals to call. Progress and the eventual result surface
+/// through `agent_state_status`, the same status the status bar already
+/// renders.
+fn reload_agent_runtime(state: CommandActionState) {
+    let current = state.agentd_connection().get_untracked();
+    crate::agent::agentd_runtime::reload_agent_runtime(
+        current,
+        state.workspace(),
+        state.frames(),
+        state.sessions(),
+        state.agentd_connection(),
+        state.agent_state_status(),
+    );
 }
 
 fn open_tab(state: CommandActionState, kind: PaneKind) {
@@ -413,30 +442,9 @@ pub(crate) fn find_agent_turn_in_flight(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::config::{
-        AgentConfig, AgentPersistenceConfig, AgentToolsConfig, RigAgentConfig,
-    };
     use crate::agent::contract::{ApprovalRequest, SessionHandle, SessionState};
     use crate::agent::frame::{AgentFrame, AgentFrameItem};
     use crate::workspace::PaneKind;
-
-    fn test_agent_config() -> AgentConfig {
-        AgentConfig {
-            rig: RigAgentConfig {
-                openai_enabled: false,
-                model: "test".to_string(),
-                ..Default::default()
-            },
-            persistence: AgentPersistenceConfig {
-                event_log_path: std::env::temp_dir().join(format!(
-                    "horizon-command-actions-test-{}.jsonl",
-                    uuid::Uuid::new_v4()
-                )),
-                duckdb_path: None,
-            },
-            tools: AgentToolsConfig::default(),
-        }
-    }
 
     /// Builds a workspace with an agent session that has a pending approval
     /// but is detached — no pane in the workspace references it — plus a
@@ -485,10 +493,9 @@ mod tests {
             RwSignal::new(frames),
             RwSignal::new(sessions),
             RwSignal::new(None),
-            test_agent_config(),
             None,
             None,
-            None,
+            RwSignal::new(None),
         );
         let state = CommandActionState {
             runtime,
@@ -507,10 +514,9 @@ mod tests {
             RwSignal::new(Frames::default()),
             RwSignal::new(Registry::default()),
             RwSignal::new(None),
-            test_agent_config(),
             None,
             None,
-            None,
+            RwSignal::new(None),
         );
         CommandActionState {
             runtime,

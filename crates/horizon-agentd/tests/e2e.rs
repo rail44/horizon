@@ -7,10 +7,13 @@ use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::time::Duration;
 
-use horizon_agent::contract::{Command as AgentCommand, Event, MessageRole, ProviderId, SessionId};
+use horizon_agent::contract::{
+    Command as AgentCommand, Event, MessageRole, ProviderId, SessionId, SessionState, TurnEndReason,
+};
+use horizon_agent::frame::agent_frame_from_events;
 use horizon_agent::wire::{
-    self, Control, Envelope, EnvelopeBody, Hello, HostToolRequest, HostToolResponse, SessionNew,
-    SessionSummary, CONTRACT_VERSION,
+    self, Control, Envelope, EnvelopeBody, Hello, HostToolRequest, HostToolResponse, SessionLoad,
+    SessionNew, SessionSummary, CONTRACT_VERSION,
 };
 use tokio::io::BufReader;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
@@ -47,6 +50,15 @@ impl AgentdProcess {
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
+        Self::spawn_at(socket_path, event_log_path)
+    }
+
+    /// Same as [`Self::spawn`], but pointed at caller-chosen paths -- the
+    /// seam [`Self::respawn_at_same_paths`] (step 4's "kill -9 mid-session,
+    /// respawn" tests) uses to bring up a *second* process against the
+    /// *first* process's own socket/event-log paths, simulating a real
+    /// restart.
+    fn spawn_at(socket_path: PathBuf, event_log_path: PathBuf) -> Self {
         let missing_config_path = std::env::temp_dir().join(format!(
             "horizon-agentd-e2e-no-such-config-{}-{}.toml",
             std::process::id(),
@@ -65,6 +77,21 @@ impl AgentdProcess {
             socket_path,
             event_log_path,
         }
+    }
+
+    /// Kills this process with `SIGKILL` (`Child::kill` sends `SIGKILL` on
+    /// Unix -- no graceful shutdown, no chance to flush or unlink the
+    /// socket) and waits for it to actually exit, so a caller that then
+    /// spawns a fresh process at the same paths (`Self::spawn_at`) isn't
+    /// racing the old one for the socket.
+    fn kill_and_wait(mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        // Consumed by value and left to leak its paths on disk deliberately
+        // (unlike `Drop`, which removes them) -- the caller is about to
+        // spawn a fresh process at these same paths and needs the event log
+        // file to still be there; `std::mem::forget` skips `Drop` entirely.
+        std::mem::forget(self);
     }
 }
 
@@ -578,4 +605,301 @@ async fn bash_runs_agentd_side_and_reports_its_result_over_the_wire() {
     };
     assert_eq!(result.output["exit_code"], 0);
     assert_eq!(result.output["output"], "agentd-bash-ok\n");
+}
+
+// --- step 4: replay, reconnect, session_load --------------------------------
+
+async fn send_session_load(writer: &mut OwnedWriteHalf, session_id: SessionId) {
+    wire::write_envelope(
+        writer,
+        &Envelope::control(Control::SessionLoad(SessionLoad { session_id })),
+    )
+    .await
+    .unwrap();
+}
+
+/// Reads envelopes scoped to `session_id` until none arrive for a while,
+/// returning them in order -- used for `session_load`'s replay burst, which
+/// (unlike `collect_events_until`'s callers) has no single terminal event to
+/// watch for: the reply is just "however many committed events this session
+/// has", full stop. A generous quiet window (bigger than a same-host
+/// loopback round trip needs) distinguishes "done replaying" from "still
+/// coming".
+async fn collect_replayed_events(
+    reader: &mut BufReader<OwnedReadHalf>,
+    session_id: SessionId,
+) -> Vec<Event> {
+    let mut events = Vec::new();
+    loop {
+        match tokio::time::timeout(Duration::from_millis(500), wire::read_envelope(reader)).await {
+            Ok(Ok(Some(envelope))) => {
+                assert_eq!(envelope.session_id, Some(session_id));
+                let EnvelopeBody::Event(event) = envelope.body else {
+                    panic!("expected an event envelope, got {:?}", envelope.body);
+                };
+                events.push(event);
+            }
+            Ok(Ok(None)) => panic!("connection closed while collecting replayed events"),
+            Ok(Err(err)) => panic!("wire error while collecting replayed events: {err}"),
+            Err(_timeout) => return events,
+        }
+    }
+}
+
+/// Step 4's headline scenario: `kill -9` a live `horizon-agentd` mid-session
+/// (while a turn is genuinely still open -- parked in `WaitingForApproval`
+/// with no timer to close it on its own), respawn a fresh process pointed at
+/// the same event log, and confirm replay does what the design promises:
+/// the transcript survives, the interrupted turn is committed as cancelled
+/// rather than left dangling, the session is immediately usable again
+/// (listed by `session_list`, answers a fresh `session_load`), and a new
+/// user message works normally.
+#[tokio::test]
+async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled() {
+    let agentd = AgentdProcess::spawn();
+    let socket_path = agentd.socket_path.clone();
+    let event_log_path = agentd.event_log_path.clone();
+    let (mut reader, mut writer) = connect_and_handshake(&socket_path).await;
+
+    let session_id = SessionId::new();
+    send_session_new(&mut writer, session_id).await;
+    wire::write_envelope(
+        &mut writer,
+        &Envelope::command(
+            session_id,
+            AgentCommand::UserMessage {
+                text: "please run a tool".to_string(),
+            },
+        ),
+    )
+    .await
+    .unwrap();
+
+    // Parks the session in `WaitingForApproval` indefinitely -- a genuinely
+    // open turn, not a race against a timer -- once this arrives.
+    collect_events_until(&mut reader, session_id, |event| {
+        matches!(event, Event::ApprovalRequested(_))
+    })
+    .await;
+
+    agentd.kill_and_wait();
+
+    // A fresh process, pointed at the same socket and event log paths --
+    // simulating a real restart (e.g. after a crash, or the binary being
+    // rebuilt), not a clean shutdown.
+    let respawned = AgentdProcess::spawn_at(socket_path, event_log_path);
+    let (mut reader, mut writer) = connect_and_handshake(&respawned.socket_path).await;
+
+    wire::write_envelope(&mut writer, &Envelope::control(Control::SessionList))
+        .await
+        .unwrap();
+    let reply = wire::read_envelope(&mut reader).await.unwrap().unwrap();
+    assert_eq!(
+        reply.body,
+        EnvelopeBody::Control(Control::SessionListResult(vec![SessionSummary {
+            session_id,
+            provider_id: mock_provider_id(),
+        }])),
+        "the resumed session must be listed as live again"
+    );
+
+    send_session_load(&mut writer, session_id).await;
+    let replayed = collect_replayed_events(&mut reader, session_id).await;
+
+    assert!(
+        replayed.iter().any(|event| matches!(
+            event,
+            Event::MessageCommitted(message)
+                if message.role == MessageRole::User && message.text == "please run a tool"
+        )),
+        "the pre-crash user message must survive replay, got: {replayed:?}"
+    );
+    assert!(
+        replayed
+            .iter()
+            .any(|event| matches!(event, Event::ApprovalRequested(_))),
+        "the pre-crash approval request must survive replay, got: {replayed:?}"
+    );
+    assert!(
+        replayed
+            .iter()
+            .any(|event| matches!(event, Event::TurnEnded(TurnEndReason::Cancelled))),
+        "the interrupted turn must be committed as cancelled on resume, got: {replayed:?}"
+    );
+    let frame = agent_frame_from_events(&replayed);
+    assert!(
+        !frame.is_turn_in_flight(),
+        "replay must leave the session ready for a new turn, got frame: {frame:?}"
+    );
+    assert!(
+        frame.pending_approval_call_id().is_none(),
+        "the cancelled approval must not still read as pending, got frame: {frame:?}"
+    );
+
+    // The session is genuinely live, not just listed: a fresh message works.
+    wire::write_envelope(
+        &mut writer,
+        &Envelope::command(
+            session_id,
+            AgentCommand::UserMessage {
+                text: "hello again".to_string(),
+            },
+        ),
+    )
+    .await
+    .unwrap();
+    let events = collect_events_until(&mut reader, session_id, |event| {
+        matches!(
+            event,
+            Event::MessageCommitted(message)
+                if message.role == MessageRole::Assistant && message.text == "Mock response: hello again"
+        )
+    })
+    .await;
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Event::MessageCommitted(message)
+            if message.role == MessageRole::User && message.text == "hello again"
+    )));
+}
+
+/// `session_load` bootstrap (no crash involved this time): a client that
+/// disconnects and reconnects to the *same* running `horizon-agentd` must
+/// see the session's frame come back identical to the one it had live,
+/// proving `session_load`'s replayed events are genuinely fold-equivalent
+/// to the events the client already saw -- not just "some events".
+#[tokio::test]
+async fn session_load_after_reconnect_rebuilds_an_equivalent_frame() {
+    let agentd = AgentdProcess::spawn();
+    let (mut reader, mut writer) = connect_and_handshake(&agentd.socket_path).await;
+
+    let session_id = SessionId::new();
+    send_session_new(&mut writer, session_id).await;
+    wire::write_envelope(
+        &mut writer,
+        &Envelope::command(
+            session_id,
+            AgentCommand::UserMessage {
+                text: "hello".to_string(),
+            },
+        ),
+    )
+    .await
+    .unwrap();
+
+    // Waits for the turn's actual closing event (`WaitingForUser` *after*
+    // the reply -- the session emits it a couple of other times during its
+    // own startup noise too), not just the assistant's reply that precedes
+    // it: otherwise this frame would be missing the final state transition
+    // `session_load`'s replay (read after the whole turn has long since
+    // committed) always includes, comparing two frames that were never
+    // really "the same point in time".
+    let mut seen_reply = false;
+    let live_events = collect_events_until(&mut reader, session_id, |event| {
+        if matches!(
+            event,
+            Event::MessageCommitted(message)
+                if message.role == MessageRole::Assistant && message.text == "Mock response: hello"
+        ) {
+            seen_reply = true;
+        }
+        seen_reply && matches!(event, Event::StateChanged(SessionState::WaitingForUser))
+    })
+    .await;
+    let live_frame = agent_frame_from_events(&live_events);
+
+    // Disconnect (drop both halves) without draining agentd -- the session
+    // keeps running; only this client's connection goes away.
+    drop(reader);
+    drop(writer);
+
+    let (mut reader, mut writer) = connect_and_handshake(&agentd.socket_path).await;
+    send_session_load(&mut writer, session_id).await;
+    let replayed_events = collect_replayed_events(&mut reader, session_id).await;
+    let replayed_frame = agent_frame_from_events(&replayed_events);
+
+    assert_eq!(
+        replayed_frame, live_frame,
+        "session_load's replay must fold to the exact same frame the live connection saw"
+    );
+}
+
+/// The server-side substance of the `Reload Agent Runtime` command
+/// (`agent::agentd_runtime::reload_agent_runtime` on the Horizon side, not
+/// exercisable from this crate's tests -- `CARGO_BIN_EXE_horizon-agentd` is
+/// only set for *this* package's own integration tests, per step 2's
+/// notes): drain a live session gracefully (not a crash this time), respawn
+/// against the same paths, and confirm the session survives with its
+/// transcript intact and ready for more traffic -- the same guarantee
+/// `killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled`
+/// proves for a hard kill, proven here for the clean-shutdown path the
+/// reload command actually drives.
+#[tokio::test]
+async fn drained_agentd_respawns_and_preserves_a_completed_session() {
+    let mut agentd = AgentdProcess::spawn();
+    let socket_path = agentd.socket_path.clone();
+    let event_log_path = agentd.event_log_path.clone();
+    let (mut reader, mut writer) = connect_and_handshake(&socket_path).await;
+
+    let session_id = SessionId::new();
+    send_session_new(&mut writer, session_id).await;
+    wire::write_envelope(
+        &mut writer,
+        &Envelope::command(
+            session_id,
+            AgentCommand::UserMessage {
+                text: "hello".to_string(),
+            },
+        ),
+    )
+    .await
+    .unwrap();
+    collect_events_until(&mut reader, session_id, |event| {
+        matches!(
+            event,
+            Event::MessageCommitted(message)
+                if message.role == MessageRole::Assistant && message.text == "Mock response: hello"
+        )
+    })
+    .await;
+
+    wire::write_envelope(&mut writer, &Envelope::control(Control::Drain))
+        .await
+        .unwrap();
+    let status = wait_for_exit(&mut agentd.child).await;
+    assert!(status.success(), "drain should exit 0, got {status:?}");
+
+    let respawned = AgentdProcess::spawn_at(socket_path, event_log_path);
+    let (mut reader, mut writer) = connect_and_handshake(&respawned.socket_path).await;
+
+    wire::write_envelope(&mut writer, &Envelope::control(Control::SessionList))
+        .await
+        .unwrap();
+    let reply = wire::read_envelope(&mut reader).await.unwrap().unwrap();
+    assert_eq!(
+        reply.body,
+        EnvelopeBody::Control(Control::SessionListResult(vec![SessionSummary {
+            session_id,
+            provider_id: mock_provider_id(),
+        }])),
+        "a gracefully drained session must resume too, not just a crashed one"
+    );
+
+    send_session_load(&mut writer, session_id).await;
+    let replayed = collect_replayed_events(&mut reader, session_id).await;
+    assert!(
+        replayed.iter().any(|event| matches!(
+            event,
+            Event::MessageCommitted(message)
+                if message.role == MessageRole::User && message.text == "hello"
+        )),
+        "the pre-drain transcript must survive, got: {replayed:?}"
+    );
+    assert!(
+        !replayed
+            .iter()
+            .any(|event| matches!(event, Event::TurnEnded(TurnEndReason::Cancelled))),
+        "a turn that had already completed cleanly before the drain must not be \
+         re-marked as cancelled on resume, got: {replayed:?}"
+    );
 }

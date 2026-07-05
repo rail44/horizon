@@ -55,6 +55,15 @@ pub(super) struct TurnCompletion {
     pub(super) requested_tool_call_ids: Vec<ToolCallId>,
     pub(super) requested_tool_calls: HashMap<ToolCallId, ToolCallDescriptor>,
     pub(super) cancelled: bool,
+    /// The provider request itself failed (e.g. the OpenAI completion call
+    /// returned an error) rather than the turn completing or being
+    /// cancelled — a third, distinct stop reason `apply_turn_outcome` (in
+    /// `session.rs`) maps to `Event::TurnEnded(TurnEndReason::Failed)`. An
+    /// `Error` event has already been sent by the time this is set (see the
+    /// `Err` branch below); this field only exists so the caller can tell
+    /// "failed" apart from "completed with nothing to do", which otherwise
+    /// look identical (empty tool calls, not cancelled).
+    pub(super) failed: bool,
 }
 
 pub(super) async fn complete_rig_turn(
@@ -89,7 +98,10 @@ pub(super) async fn complete_rig_turn(
                     })
                     .into(),
                 );
-                return TurnCompletion::default();
+                return TurnCompletion {
+                    failed: true,
+                    ..TurnCompletion::default()
+                };
             }
         }
     }
@@ -108,6 +120,7 @@ pub(super) async fn complete_rig_turn(
         requested_tool_call_ids,
         requested_tool_calls,
         cancelled: false,
+        failed: false,
     }
 }
 
@@ -279,6 +292,7 @@ async fn rig_openai_turn_streaming(
             requested_tool_call_ids,
             requested_tool_calls,
             cancelled,
+            failed: false,
         },
     ))
 }

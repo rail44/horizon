@@ -4,12 +4,14 @@
 //! silently ignored (the design's replay/reconnect section calls this out
 //! by name: "surfaced to the user as reload required").
 //!
-//! Gated behind `[agent].agentd` in Horizon's config file (default `false`,
-//! see [`agentd_enabled`]). As of step 3, [`connect_and_split`] is the real
-//! production entry point -- `agent::agentd_runtime::AgentdConnection::
-//! connect` calls it to get a live, handshaken connection it then keeps
-//! multiplexing sessions over; this module itself stays limited to
-//! connect-or-spawn plus the handshake.
+//! As of step 4, `horizon-agentd` is the *only* place agent sessions run --
+//! there is no in-process fallback and no `[agent].agentd` flag to gate this
+//! on (the flag was step 2/3 scaffolding, retired once agentd could host a
+//! session end to end; see `docs/agent-runtime-split-design.md`'s step 4
+//! notes). [`connect_and_split`] is the entry point `agentd_runtime::
+//! AgentdConnection::connect` calls to get a live, handshaken connection it
+//! then keeps multiplexing sessions over; this module itself stays limited
+//! to connect-or-spawn plus the handshake.
 //!
 //! Horizon has no async runtime of its own (floem drives its own event
 //! loop, not tokio); callers that need to run this module's `async` fns
@@ -18,7 +20,7 @@
 //! ::connect`) so a slow or failing `horizon-agentd` never blocks window
 //! startup.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use floem::prelude::RwSignal;
@@ -35,48 +37,31 @@ use crate::workspace::Workspace;
 const RETRY_ATTEMPTS: u32 = 40;
 const RETRY_DELAY: Duration = Duration::from_millis(50);
 
-/// Whether Horizon should attempt to connect to `horizon-agentd` at all --
-/// mirrors `[agent].agentd` in the config file (default `false`).
-pub(crate) fn agentd_enabled() -> bool {
-    crate::config::load().agent.agentd
-}
+/// The binary name `horizon-agentd` is spawned as/looked up as -- see
+/// [`resolve_agentd_binary`].
+const AGENTD_BINARY_NAME: &str = "horizon-agentd";
 
-/// Connects to `horizon-agentd` at startup when [`agentd_enabled`], wiring
-/// up the host-tool responder (`agentd_runtime::wire_host_tool_responder`)
-/// against `workspace` on success. The one production call site is
-/// `app::state::AppState::new`, which stores the result and threads it into
-/// every agent session's spawn path (`app::runtime::SessionRuntimeState`).
-///
-/// Returns `None` both when the flag is off (the default -- byte-for-byte
-/// unchanged behavior) and when the connection attempt failed (logged to
-/// stderr): either way, `app::runtime::agent::spawn_agent_session` falls
-/// back to running every session fully in-process, exactly as if agentd
-/// didn't exist.
+/// Connects to `horizon-agentd` (spawning it if nothing is listening yet),
+/// wiring up the host-tool responder (`agentd_runtime::
+/// wire_host_tool_responder`) against `workspace` on success. Called both at
+/// Horizon startup (`app::state::AppState::new`) and by the `Reload Agent
+/// Runtime` command's reconnect phase (`agentd_runtime::reload_agent_runtime`)
+/// -- every agent session routes through the resulting connection, so a
+/// failure here means agent panes are unavailable until a retry (typically
+/// another `Reload Agent Runtime`) succeeds; there is no in-process fallback
+/// to fall back to (see the module doc).
 pub(crate) fn connect_agentd_at_startup(
     workspace: RwSignal<Workspace>,
-) -> Option<AgentdConnection> {
-    if !agentd_enabled() {
-        return None;
-    }
+) -> Result<AgentdConnection, String> {
     let socket_path = horizon_agent::socket::default_socket_path();
-    match AgentdConnection::connect(&socket_path) {
-        Ok((connection, host_tool_requests)) => {
-            eprintln!("horizon: connected to horizon-agentd");
-            crate::agent::agentd_runtime::wire_host_tool_responder(
-                connection.clone(),
-                host_tool_requests,
-                workspace,
-            );
-            Some(connection)
-        }
-        Err(err) => {
-            eprintln!(
-                "horizon: could not connect to horizon-agentd ({err}); agent sessions will run \
-                 in-process for this run"
-            );
-            None
-        }
-    }
+    let (connection, host_tool_requests) = AgentdConnection::connect(&socket_path)?;
+    eprintln!("horizon: connected to horizon-agentd");
+    crate::agent::agentd_runtime::wire_host_tool_responder(
+        connection.clone(),
+        host_tool_requests,
+        workspace,
+    );
+    Ok(connection)
 }
 
 /// Connects to `horizon-agentd` at `socket_path` (spawning it if nothing is
@@ -103,12 +88,42 @@ async fn connect_or_spawn(socket_path: &Path) -> Result<UnixStream, String> {
 }
 
 fn spawn_agentd(socket_path: &Path) -> Result<(), String> {
-    std::process::Command::new("horizon-agentd")
+    let binary = resolve_agentd_binary();
+    std::process::Command::new(&binary)
         .arg("--socket")
         .arg(socket_path)
         .spawn()
         .map(|_child| ())
-        .map_err(|err| format!("failed to spawn horizon-agentd: {err}"))
+        .map_err(|err| {
+            format!(
+                "failed to spawn {} ({err}) -- run `cargo build --workspace` to build \
+                 horizon-agentd, then try again",
+                binary.display()
+            )
+        })
+}
+
+/// Where to look for the `horizon-agentd` binary: first, right next to
+/// Horizon's own executable (the shape `cargo build --workspace`/`cargo run`
+/// produces -- both binaries land in the same `target/debug` or
+/// `target/release` directory), falling back to a bare name resolved
+/// through `PATH` (an installed deployment, or a developer who's put it
+/// there themselves). The dev-flow gotcha this exists for: `cargo run`
+/// alone only rebuilds the `horizon` binary, and `target/debug` is not on
+/// `PATH` by default, so a bare `Command::new("horizon-agentd")` would
+/// reliably fail to find a workspace build even though one exists two
+/// directories away -- see [`spawn_agentd`]'s error message for the
+/// resulting actionable hint when neither location has it.
+fn resolve_agentd_binary() -> PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join(AGENTD_BINARY_NAME);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    PathBuf::from(AGENTD_BINARY_NAME)
 }
 
 async fn retry_connect(socket_path: &Path) -> Result<UnixStream, String> {

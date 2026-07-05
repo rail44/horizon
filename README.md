@@ -19,9 +19,16 @@ Horizon is a Floem desktop shell for tabbed and split-pane applications.
 
 ```sh
 cargo check
+cargo build --workspace
 cargo test
 cargo run
 ```
+
+`cargo run` alone only rebuilds the root `horizon` binary; agent sessions run
+in `horizon-agentd` (`crates/horizon-agentd`), a separate workspace member
+Horizon spawns on demand. Run `cargo build --workspace` at least once (and
+again after touching `crates/horizon-agent`/`crates/horizon-agentd`) or agent
+panes will fail to find a runtime to spawn.
 
 After `cargo run`, use `Ctrl+Shift+P` to open the control surface. Commands mode
 supports these manual smoke checks:
@@ -35,6 +42,9 @@ supports these manual smoke checks:
   selected session back into the active tab as a split.
 - `tab 1`, `tab 2`, ...: switches to the matching tab.
 - `terminate active session`: terminates the active session.
+- `reload agent runtime`: restarts `horizon-agentd` and reconnects every
+  agent session — use after rebuilding the agent crates, or to recover from
+  a lost connection.
 
 Use `Tab` while the control surface is open to switch between Commands and
 Workspace. The Workspace mode lists open tabs, panes inside split tabs, and

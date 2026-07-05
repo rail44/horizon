@@ -1,24 +1,32 @@
-//! Step 3 of `docs/agent-runtime-split-design.md`: the live, multiplexing
+//! Step 3-4 of `docs/agent-runtime-split-design.md`: the live, multiplexing
 //! connection to `horizon-agentd` -- "one per process" (decision 4) -- that
-//! [`AgentdConnection::start_session`] hands out a
-//! [`contract::SessionHandle`] against, indistinguishable at every existing
-//! call site (`session::Registry::agent_sender`, the pane's approve/deny/
-//! cancel commands, ...) from the in-process handle
-//! `providers::ProviderRegistry::start_session` returns. That's the point:
-//! "the fold must not know which transport delivered the events" extends to
-//! commands too, so nothing outside `app::runtime::agent` has to branch on
-//! whether agentd is in the picture.
+//! [`AgentdConnection::start_session`]/[`AgentdConnection::attach_session`]
+//! hand out a [`contract::SessionHandle`] against, indistinguishable at
+//! every existing call site (`session::Registry::agent_sender`, the pane's
+//! approve/deny/cancel commands, ...) from the in-process handle
+//! `providers::ProviderRegistry::start_session` used to return before step 4
+//! retired that path. That's the point: "the fold must not know which
+//! transport delivered the events" extends to commands too, so nothing
+//! outside `app::runtime::agent` has to know a session's history might have
+//! come from a replay rather than a live stream from the start.
 //!
 //! Also hosts the Horizon side of the host-tool channel (guardrail 4):
 //! [`wire_host_tool_responder`] answers `workspace.snapshot` requests
 //! arriving from agentd by reading Horizon's own `Workspace`, reusing
 //! `agent::host_tools::workspace_snapshot` -- the exact function Horizon's
-//! in-process `WorkspaceHostTools` calls today.
+//! former in-process `WorkspaceHostTools` used to call.
+//!
+//! Step 4 additions: [`AgentdConnection::session_list`]/[`reconnect_all_sessions`]
+//! implement "on connect: `hello` -> `session_list` -> `session_load` for
+//! every session" (startup, and the tail of a `Reload Agent Runtime`), and
+//! [`reload_agent_runtime`] is the command's whole drain/respawn/reconnect
+//! sequence.
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use floem::ext_event::create_signal_from_channel;
@@ -26,16 +34,25 @@ use floem::prelude::*;
 use floem::reactive::create_effect;
 
 use horizon_agent::wire::{
-    self, Control, Envelope, EnvelopeBody, HostToolRequest, HostToolResponse, SessionNew,
+    self, Control, Envelope, EnvelopeBody, HostToolRequest, HostToolResponse, SessionLoad,
+    SessionNew, SessionSummary,
 };
 
 use crate::agent::contract::{
     self, Command, Error as AgentError, Event, ProviderEvent, ProviderId,
 };
 use crate::agent::host_tools::workspace_snapshot;
-use crate::workspace::Workspace;
+use crate::agent::live::LiveState;
+use crate::session::{Frames, Registry, SessionId};
+use crate::workspace::{PaneKind, Workspace};
 
 type AgentSessionId = contract::SessionId;
+
+/// How long [`AgentdConnection::session_list`] waits for agentd's reply
+/// before giving up and treating it as "no sessions" -- a same-host Unix
+/// socket round trip, so generous relative to how long that should ever
+/// actually take.
+const SESSION_LIST_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A `host_tool_request` that arrived from agentd, paired with the session
 /// it's scoped to -- handed to [`wire_host_tool_responder`]'s effect via a
@@ -58,6 +75,14 @@ pub(crate) struct HostToolRequestEnvelope {
 pub(crate) struct AgentdConnection {
     outgoing: tokio::sync::mpsc::UnboundedSender<Envelope>,
     session_events: Arc<Mutex<HashMap<AgentSessionId, Sender<ProviderEvent>>>>,
+    /// Answers [`Self::session_list`]'s blocking round trip: set just before
+    /// sending `Control::SessionList`, taken (and replied to) by
+    /// `dispatch_incoming` when the matching `Control::SessionListResult`
+    /// arrives. `session_list` has no request id on the wire (unlike
+    /// host-tool requests) -- acceptable because Horizon only ever has one
+    /// such round trip outstanding at a time (startup, or a `Reload Agent
+    /// Runtime`), never issued concurrently with another.
+    pending_session_list: Arc<Mutex<Option<Sender<Vec<SessionSummary>>>>>,
 }
 
 impl AgentdConnection {
@@ -101,18 +126,50 @@ impl AgentdConnection {
     }
 
     /// Spawns a session over this connection: sends `session_new` and hands
-    /// back a [`contract::SessionHandle`] whose `sender()` forwards each
-    /// `Command` as a `command` envelope (via a small draining thread --
-    /// commands arrive from the UI thread, which isn't async) and whose
-    /// `events()` receives whatever this session's event envelopes
-    /// demultiplex to (see [`dispatch_incoming`]). Indistinguishable, from
-    /// the caller's side, from `providers::ProviderRegistry::start_session`'s
-    /// in-process handle.
+    /// back a [`contract::SessionHandle`] via [`Self::register_session_routing`].
+    /// Indistinguishable, from the caller's side, from `providers::
+    /// ProviderRegistry::start_session`'s former in-process handle.
     pub(crate) fn start_session(
         &self,
         session_id: AgentSessionId,
         provider_id: ProviderId,
     ) -> contract::SessionHandle {
+        let handle = self.register_session_routing(session_id);
+        let _ = self
+            .outgoing
+            .send(Envelope::control(Control::SessionNew(SessionNew {
+                session_id,
+                provider_id,
+                config_overrides: None,
+            })));
+        handle
+    }
+
+    /// Attaches to a session agentd already hosts (found via
+    /// [`Self::session_list`] -- either resumed from its own log at startup,
+    /// or left running from a session Horizon created earlier this
+    /// connection) rather than creating a new one: sends `session_load`
+    /// instead of `session_new`, so agentd replays the session's committed
+    /// events onto the handle this returns instead of starting it fresh.
+    /// The one production call site is [`reconnect_all_sessions`].
+    pub(crate) fn attach_session(&self, session_id: AgentSessionId) -> contract::SessionHandle {
+        let handle = self.register_session_routing(session_id);
+        let _ = self
+            .outgoing
+            .send(Envelope::control(Control::SessionLoad(SessionLoad {
+                session_id,
+            })));
+        handle
+    }
+
+    /// The plumbing [`Self::start_session`]/[`Self::attach_session`] share:
+    /// registers this session id's event route (so `dispatch_incoming` can
+    /// find it) and spawns the small draining thread that forwards the
+    /// resulting `SessionHandle`'s commands as `command` envelopes (commands
+    /// arrive from the UI thread, which isn't async). Doesn't itself send
+    /// anything session-starting -- that's the one line that differs
+    /// between the two callers.
+    fn register_session_routing(&self, session_id: AgentSessionId) -> contract::SessionHandle {
         let (command_tx, command_rx) = unbounded::<Command>();
         let (event_tx, event_rx) = unbounded::<ProviderEvent>();
         self.session_events
@@ -132,30 +189,52 @@ impl AgentdConnection {
             }
         });
 
-        let _ = self
-            .outgoing
-            .send(Envelope::control(Control::SessionNew(SessionNew {
-                session_id,
-                provider_id,
-                config_overrides: None,
-            })));
-
         contract::SessionHandle::new(command_tx, event_rx)
+    }
+
+    /// Asks agentd for every session it currently hosts (`docs/agent-
+    /// runtime-split-design.md` step 4's "`hello` -> `session_list` ->
+    /// `session_load` for every session"), blocking the calling thread for
+    /// up to [`SESSION_LIST_TIMEOUT`]. Callers that must not block the UI
+    /// thread (the `Reload Agent Runtime` command) call this from a
+    /// background thread, the same way `Self::connect` itself blocks only
+    /// its own dedicated thread.
+    pub(crate) fn session_list(&self) -> Vec<SessionSummary> {
+        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+        *self.pending_session_list.lock().unwrap() = Some(reply_tx);
+        if self
+            .outgoing
+            .send(Envelope::control(Control::SessionList))
+            .is_err()
+        {
+            return Vec::new();
+        }
+        reply_rx
+            .recv_timeout(SESSION_LIST_TIMEOUT)
+            .unwrap_or_default()
+    }
+
+    /// Asks agentd to drain: flush and exit (`main::run`'s `Control::Drain`
+    /// handling in `horizon-agentd`). Best-effort and fire-and-forget --
+    /// the caller (`reload_agent_runtime`) doesn't wait for a reply, just
+    /// for the old process to actually be gone (observed indirectly, by the
+    /// next connect attempt succeeding against a fresh process).
+    pub(crate) fn drain(&self) {
+        let _ = self.outgoing.send(Envelope::control(Control::Drain));
     }
 
     /// A connection with no live socket behind it: every outgoing envelope
     /// is silently dropped (the paired receiver is discarded immediately).
-    /// For tests that only need to prove *dispatch* -- does agentd-mode
-    /// code correctly route around Horizon's own persistence, does
-    /// `start_session` produce the right shape -- without spawning a real
-    /// `horizon-agentd` process (see `app::runtime::agent`'s no-double-write
-    /// test).
+    /// For tests that only need to prove *dispatch* -- does `start_session`
+    /// produce the right shape -- without spawning a real `horizon-agentd`
+    /// process.
     #[cfg(test)]
     pub(crate) fn for_test() -> Self {
         let (outgoing, _receiver) = tokio::sync::mpsc::unbounded_channel();
         Self {
             outgoing,
             session_events: Arc::new(Mutex::new(HashMap::new())),
+            pending_session_list: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -230,11 +309,13 @@ async fn run_connection(
 
     let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Envelope>();
     let session_events = Arc::new(Mutex::new(HashMap::new()));
+    let pending_session_list = Arc::new(Mutex::new(None));
     let (host_tool_tx, host_tool_rx) = unbounded::<HostToolRequestEnvelope>();
 
     let connection = AgentdConnection {
         outgoing: outgoing_tx,
         session_events: session_events.clone(),
+        pending_session_list: pending_session_list.clone(),
     };
     if outcome_tx.send(Ok((connection, host_tool_rx))).is_err() {
         // Nobody is waiting for this connection any more (the calling
@@ -252,7 +333,12 @@ async fn run_connection(
     let read_task = async move {
         loop {
             match wire::read_envelope(&mut reader).await {
-                Ok(Some(envelope)) => dispatch_incoming(envelope, &session_events, &host_tool_tx),
+                Ok(Some(envelope)) => dispatch_incoming(
+                    envelope,
+                    &session_events,
+                    &pending_session_list,
+                    &host_tool_tx,
+                ),
                 Ok(None) | Err(_) => {
                     mark_connection_lost(&session_events);
                     return;
@@ -276,6 +362,7 @@ async fn run_connection(
 fn dispatch_incoming(
     envelope: Envelope,
     session_events: &Arc<Mutex<HashMap<AgentSessionId, Sender<ProviderEvent>>>>,
+    pending_session_list: &Arc<Mutex<Option<Sender<Vec<SessionSummary>>>>>,
     host_tool_tx: &Sender<HostToolRequestEnvelope>,
 ) {
     match envelope.body {
@@ -295,27 +382,252 @@ fn dispatch_incoming(
                 });
             }
         }
+        EnvelopeBody::Control(Control::SessionListResult(summaries)) => {
+            if let Some(reply_tx) = pending_session_list.lock().unwrap().take() {
+                let _ = reply_tx.send(summaries);
+            }
+        }
         _ => {}
     }
 }
 
-/// The connection dropped (or a malformed message closed it) -- per this
-/// step's explicit scope ("if the connection drops, surface an error on
-/// affected sessions; no auto-reconnect"), pushes a synthetic `Event::Error`
-/// into every currently-registered session's event stream so it folds
-/// through the ordinary path and shows up in that session's transcript,
-/// rather than the pane silently going quiet.
+/// The connection dropped (or a malformed message closed it) -- per step
+/// 3's explicit scope ("if the connection drops, surface an error on
+/// affected sessions; no *automatic* reconnect" -- step 4 adds a *manual*
+/// one, `Reload Agent Runtime`), pushes a synthetic `Event::Error` into
+/// every currently-registered session's event stream so it folds through
+/// the ordinary path and shows up in that session's transcript, rather than
+/// the pane silently going quiet.
 fn mark_connection_lost(
     session_events: &Arc<Mutex<HashMap<AgentSessionId, Sender<ProviderEvent>>>>,
 ) {
     let senders: Vec<Sender<ProviderEvent>> =
         session_events.lock().unwrap().values().cloned().collect();
     let event = Event::Error(AgentError {
-        message: "Lost connection to horizon-agentd (no auto-reconnect in this build -- \
-                  restart Horizon to reconnect; see docs/agent-runtime-split-design.md)."
+        message: "Lost connection to horizon-agentd -- use \"Reload Agent Runtime\" to \
+                  reconnect (see docs/agent-runtime-split-design.md)."
             .to_string(),
     });
     for sender in senders {
         let _ = sender.send(ProviderEvent::from(event.clone()));
+    }
+}
+
+// --- step 4: reconnect and the `Reload Agent Runtime` command ---------------
+
+/// `docs/agent-runtime-split-design.md` step 4's "on connect: `hello` ->
+/// `session_list` -> `session_load` for every session". The one production
+/// call site is `app::state::AppState::new` (right after a successful
+/// `agentd_client::connect_agentd_at_startup`) -- a fresh Horizon process
+/// has no panes yet, so every session `session_list` reports surfaces as a
+/// newly-registered detached session ("survival made visible"). Blocks the
+/// calling thread on `AgentdConnection::session_list`'s round trip,
+/// acceptable at startup for the same reason `AgentdConnection::connect`
+/// itself is (see that method's doc comment); [`reload_agent_runtime`] does
+/// the equivalent work off the UI thread instead, since it can run at any
+/// point during a session.
+pub(crate) fn reconnect_all_sessions(
+    connection: &AgentdConnection,
+    workspace: RwSignal<Workspace>,
+    frames: RwSignal<Frames>,
+    sessions: RwSignal<Registry>,
+) {
+    attach_sessions(
+        connection,
+        connection.session_list(),
+        workspace,
+        frames,
+        sessions,
+    );
+}
+
+/// The per-summary half of [`reconnect_all_sessions`], factored out so
+/// [`reload_agent_runtime`] can fetch `session_list` on its own background
+/// thread (a blocking round trip) and run only this -- which touches floem
+/// signals and so must run on the UI thread -- once it has the answer.
+pub(crate) fn attach_sessions(
+    connection: &AgentdConnection,
+    summaries: Vec<SessionSummary>,
+    workspace: RwSignal<Workspace>,
+    frames: RwSignal<Frames>,
+    sessions: RwSignal<Registry>,
+) {
+    for summary in summaries {
+        let session_id: SessionId = summary.session_id.into();
+        // A no-op if the workspace already has a pane referencing this
+        // session ("sessions Horizon has panes for reattach seamlessly");
+        // otherwise registers it as a fresh detached session ("sessions
+        // Horizon didn't know about surface as detached sessions").
+        workspace.update(|ws| ws.register_detached_session(PaneKind::Agent, session_id));
+
+        let handle = connection.attach_session(summary.session_id);
+        fold_agent_session_events(session_id, handle, frames, sessions);
+    }
+}
+
+/// Folds one session's (re)connected event stream into `Frames`/`Registry` --
+/// the tail `app::runtime::agent::spawn_agent_session` and [`attach_sessions`]
+/// share, whether the handle came from a brand-new `session_new` or a
+/// `session_load` replay: either way, the events arriving on it already went
+/// through agentd's own `process_agent_provider_event` pipeline, so this
+/// side only has to fold and publish -- the same `LiveState::
+/// extend_provider_events` + `Frames::update_agent_frame` step every agentd-
+/// routed session has used since step 3, just shared explicitly now that
+/// there are two callers instead of one.
+pub(crate) fn fold_agent_session_events(
+    session_id: SessionId,
+    handle: contract::SessionHandle,
+    frames: RwSignal<Frames>,
+    sessions: RwSignal<Registry>,
+) {
+    let events = create_signal_from_channel(handle.events());
+    sessions.update(|registry| {
+        registry.insert_agent(session_id, handle);
+    });
+
+    let runtime_state = LiveState::with_disabled_persistence();
+    create_effect(move |_| {
+        if let Some(event) = events.get() {
+            let frame = runtime_state.extend_provider_events(std::iter::once(event));
+            frames.update(|frames| frames.update_agent_frame(session_id, frame));
+        }
+    });
+}
+
+/// A courtesy delay before [`reload_agent_runtime`]'s background thread
+/// attempts to reconnect, giving a drained `horizon-agentd` a moment to
+/// actually exit -- not a correctness requirement: `horizon-agentd`'s own
+/// `bind_listener` stale-socket recovery and `agent::agentd_client::
+/// connect_or_spawn`'s retry loop both already tolerate the old process
+/// still shutting down.
+const RELOAD_RESPAWN_DELAY: Duration = Duration::from_millis(200);
+
+/// The result [`reload_agent_runtime`]'s background thread hands back to its
+/// `create_effect` callback -- everything needed to finish reconnecting on
+/// the UI thread (`Connected`), or the error string to surface
+/// (`Failed`, e.g. a contract-version mismatch's "reload required" text).
+#[derive(Clone)]
+enum ReloadOutcome {
+    Connected {
+        connection: AgentdConnection,
+        host_tool_requests: Receiver<HostToolRequestEnvelope>,
+        summaries: Vec<SessionSummary>,
+    },
+    Failed(String),
+}
+
+/// The whole `Reload Agent Runtime` command (`app::commands::CommandId::
+/// ReloadAgentRuntime`, dispatched from `app::command_actions`): drain the
+/// current connection (if any), wait a beat, spawn-or-connect the (possibly
+/// just-rebuilt) binary, then run step 4's reconnect sequence against it --
+/// "drain -> agentd flushes and exits -> Horizon spawns the rebuilt binary
+/// -> reconnect -> session_load" per the design. `agentd_connection` is set
+/// to `None` immediately (so no session tries to route through the dying
+/// connection while this is in flight) and progress/results are reported
+/// through `agent_state_status`, the same free-floating status signal
+/// `app::status_bar` already renders.
+///
+/// The blocking work (the respawn delay, `AgentdConnection::connect`,
+/// `session_list`'s round trip) all runs on a background thread; only the
+/// `create_effect` callback that receives the result touches floem signals,
+/// so this never stalls the UI thread the way blocking at Horizon startup is
+/// allowed to.
+pub(crate) fn reload_agent_runtime(
+    current: Option<AgentdConnection>,
+    workspace: RwSignal<Workspace>,
+    frames: RwSignal<Frames>,
+    sessions: RwSignal<Registry>,
+    agentd_connection: RwSignal<Option<AgentdConnection>>,
+    agent_state_status: RwSignal<Option<String>>,
+) {
+    if let Some(connection) = &current {
+        connection.drain();
+    }
+    agentd_connection.set(None);
+    agent_state_status.set(Some(
+        "Reloading agent runtime: waiting for horizon-agentd to exit...".to_string(),
+    ));
+
+    let (outcome_tx, outcome_rx) = unbounded::<ReloadOutcome>();
+    thread::spawn(move || {
+        thread::sleep(RELOAD_RESPAWN_DELAY);
+        let socket_path = horizon_agent::socket::default_socket_path();
+        let outcome = match AgentdConnection::connect(&socket_path) {
+            Ok((connection, host_tool_requests)) => {
+                let summaries = connection.session_list();
+                ReloadOutcome::Connected {
+                    connection,
+                    host_tool_requests,
+                    summaries,
+                }
+            }
+            Err(error) => ReloadOutcome::Failed(error),
+        };
+        let _ = outcome_tx.send(outcome);
+    });
+
+    let outcome_signal = create_signal_from_channel(outcome_rx);
+    create_effect(move |_| {
+        if let Some(outcome) = outcome_signal.get() {
+            match outcome {
+                ReloadOutcome::Connected {
+                    connection,
+                    host_tool_requests,
+                    summaries,
+                } => {
+                    wire_host_tool_responder(connection.clone(), host_tool_requests, workspace);
+                    attach_sessions(&connection, summaries, workspace, frames, sessions);
+                    agentd_connection.set(Some(connection));
+                    agent_state_status.set(Some("Agent runtime reloaded.".to_string()));
+                }
+                ReloadOutcome::Failed(error) => {
+                    agent_state_status.set(Some(reload_failure_status(&error)));
+                }
+            }
+        }
+    });
+}
+
+/// Maps a failed reconnect attempt's error string to the
+/// `agent_state_status` message `reload_agent_runtime` shows -- a contract-
+/// version mismatch (the error text already contains "reload required",
+/// verbatim, from `agent::agentd_client::handshake_over`) is called out with
+/// the design's own wording ("agent runtime reload required") rather than a
+/// generic failure message, since the fix is specific (rebuild, don't just
+/// retry) and must never be silent.
+fn reload_failure_status(error: &str) -> String {
+    if error.contains("reload required") {
+        format!("agent runtime reload required: {error}")
+    } else {
+        format!("Agent runtime reload failed: {error}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reload_failure_status_calls_out_a_version_mismatch_as_reload_required() {
+        let status = reload_failure_status(
+            "horizon-agentd contract version mismatch: horizon speaks v1, agentd speaks v2 -- \
+             reload required",
+        );
+        assert!(
+            status.starts_with("agent runtime reload required"),
+            "status was: {status}"
+        );
+    }
+
+    #[test]
+    fn reload_failure_status_reports_other_failures_generically() {
+        let status = reload_failure_status(
+            "timed out waiting for horizon-agentd to accept connections on /tmp/x.sock",
+        );
+        assert!(
+            status.starts_with("Agent runtime reload failed"),
+            "status was: {status}"
+        );
+        assert!(!status.to_ascii_lowercase().contains("reload required"));
     }
 }

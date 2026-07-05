@@ -4,7 +4,6 @@ use floem::peniko::kurbo::{Point, Size};
 use floem::prelude::*;
 
 use crate::agent::agentd_runtime::AgentdConnection;
-use crate::agent::config::AgentConfig;
 use crate::control_surface::ControlMode;
 use crate::session::{Frames, Registry};
 use crate::workspace::{AgentDrafts, PaneFocusRequests, Workspace, MAX_VISIBLE_PANES};
@@ -28,12 +27,15 @@ pub(super) struct AppState {
     pub(super) control_mode: RwSignal<ControlMode>,
     pub(super) overview_selection: RwSignal<usize>,
     pub(super) agent_state_status: RwSignal<Option<String>>,
-    pub(super) agent_config: AgentConfig,
-    /// `Some` only when `[agent].agentd` is on and the startup connection
-    /// succeeded (see `agent::agentd_client::connect_agentd_at_startup`) --
-    /// `None` (including the default, flag-off case) means every agent
-    /// session spawns fully in-process, unchanged from before step 3.
-    pub(super) agentd_connection: Option<AgentdConnection>,
+    /// `Some` once Horizon has a live connection to `horizon-agentd` -- the
+    /// *only* place agent sessions run (step 4 retired the in-process
+    /// fallback; see `docs/agent-runtime-split-design.md`). `None` at
+    /// startup means the initial connect failed (a status message is
+    /// already latched into `agent_state_status` when that happens); a
+    /// `Reload Agent Runtime` command (`agent::agentd_runtime::
+    /// reload_agent_runtime`) is what can set this back to `Some` again,
+    /// which is why it's a signal rather than a plain field.
+    pub(super) agentd_connection: RwSignal<Option<AgentdConnection>>,
     pub(super) terminal_dump: Option<PathBuf>,
     pub(super) clipboard_dump: Option<PathBuf>,
     pub(super) status_dump: Option<PathBuf>,
@@ -41,19 +43,44 @@ pub(super) struct AppState {
 
 impl AppState {
     pub(super) fn new() -> Self {
-        // Built before the rest of the struct so `connect_agentd_at_startup`
-        // (which wires its host-tool responder against this same signal)
-        // can be given it -- a struct literal's fields can't reference each
-        // other, and `spawn_initial_sessions` (called right after `new`
-        // returns) needs `agentd_connection` already populated in case an
-        // initial pane is an agent session.
         let workspace = RwSignal::new(Workspace::mvp());
-        let agentd_connection = crate::agent::agentd_client::connect_agentd_at_startup(workspace);
+        let frames = RwSignal::new(Frames::default());
+        let sessions = RwSignal::new(Registry::default());
+        let agent_state_status = RwSignal::new(None::<String>);
+
+        // Step 4's "on connect: hello -> session_list -> session_load for
+        // every session" -- a fresh Horizon process has no panes yet, so
+        // every session agentd already hosts (resumed from its own log,
+        // possibly from a previous Horizon run entirely) surfaces as a
+        // detached session. A failed connect leaves `agentd_connection`
+        // `None` and latches an actionable status instead of silently
+        // limping along -- there is no in-process fallback left to fall
+        // back to.
+        let agentd_connection =
+            match crate::agent::agentd_client::connect_agentd_at_startup(workspace) {
+                Ok(connection) => {
+                    crate::agent::agentd_runtime::reconnect_all_sessions(
+                        &connection,
+                        workspace,
+                        frames,
+                        sessions,
+                    );
+                    Some(connection)
+                }
+                Err(error) => {
+                    eprintln!("horizon: could not connect to horizon-agentd ({error})");
+                    agent_state_status.set(Some(format!(
+                    "Agent runtime unavailable ({error}) -- use \"Reload Agent Runtime\" to retry"
+                )));
+                    None
+                }
+            };
+
         Self {
             workspace,
-            agentd_connection,
-            frames: RwSignal::new(Frames::default()),
-            sessions: RwSignal::new(Registry::default()),
+            frames,
+            sessions,
+            agentd_connection: RwSignal::new(agentd_connection),
             ime_composing: RwSignal::new(false),
             ime_preedit: RwSignal::new(None::<String>),
             ime_cursor_area: RwSignal::new((Point::new(12.0, 64.0), Size::new(8.0, 18.0))),
@@ -65,8 +92,7 @@ impl AppState {
             agent_drafts: [(); MAX_VISIBLE_PANES].map(|_| RwSignal::new(String::new())),
             control_mode: RwSignal::new(ControlMode::Commands),
             overview_selection: RwSignal::new(0_usize),
-            agent_state_status: RwSignal::new(None::<String>),
-            agent_config: crate::agent::load_agent_config(),
+            agent_state_status,
             terminal_dump: std::env::var_os("HORIZON_TERMINAL_DUMP").map(PathBuf::from),
             clipboard_dump: std::env::var_os("HORIZON_CLIPBOARD_DUMP").map(PathBuf::from),
             status_dump: std::env::var_os("HORIZON_STATUS_DUMP").map(PathBuf::from),
@@ -88,10 +114,9 @@ impl AppState {
             self.frames,
             self.sessions,
             self.agent_state_status,
-            self.agent_config.clone(),
             self.terminal_dump.clone(),
             self.clipboard_dump.clone(),
-            self.agentd_connection.clone(),
+            self.agentd_connection,
         )
     }
 }
