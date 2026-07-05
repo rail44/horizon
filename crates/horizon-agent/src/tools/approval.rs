@@ -55,10 +55,17 @@ pub enum ApprovalOutcome {
     /// `DenyToolCall` command to the provider, exactly as before this
     /// feature existed. This is `mock.approval_required`'s path today.
     Forward(Command),
-    /// A Horizon-executed tool call that already has a `ToolCallFinished`
-    /// in the frame (double-click, or a click racing the first result's
-    /// round-trip). Do nothing: re-running the tool would repeat its side
-    /// effects, and forwarding would emit a second `ToolCallResult`.
+    /// A Horizon-executed tool call that has already been resolved (a
+    /// `ToolCallFinished` in the frame) or is already running (a
+    /// `ToolCallStarted` with no `ToolCallFinished` yet — see
+    /// `AgentFrame::has_tool_call_started`'s doc comment for why `bash`
+    /// needs this half too): a double-click, a click racing the first
+    /// result's round trip, or a duplicate Approve/Deny for a call that's
+    /// still executing. Do nothing: re-running the tool would repeat its
+    /// side effects (or, for `bash`, spawn a second concurrent process for
+    /// the same call), and forwarding would emit a second `ToolCallResult`.
+    /// Every caller that reaches this logs the drop rather than silently
+    /// swallowing it — see `horizon-agentd`'s `session::resolve_and_forward`.
     AlreadyResolved,
 }
 
@@ -97,13 +104,21 @@ fn try_execute(
     if !is_horizon_executed_tool(&request.tool_id) {
         return None;
     }
-    if frame.has_tool_call_finished(call_id) {
+    // The pending -> resolved transition's atomic guard: once a call has
+    // *started* (bash) or *finished* (any of the three), every later
+    // Approve/Deny for the same call_id must be a no-op. Checked against
+    // `frame` at the top of this call, before anything else runs, so there
+    // is exactly one moment this can flip from "not yet decided" to
+    // "decided" per call_id -- see `AgentFrame::has_tool_call_started`'s
+    // doc comment for why `has_tool_call_finished` alone isn't enough for
+    // `bash`.
+    if frame.has_tool_call_finished(call_id) || frame.has_tool_call_started(call_id) {
         return Some(ApprovalOutcome::AlreadyResolved);
     }
     let runtime = session_runtime(session_id)?;
 
     Some(if request.tool_id == "bash" {
-        resolve_bash(&runtime, request, decision)
+        resolve_bash(session_id, &runtime, request, decision)
     } else {
         resolve_fs_tool(&runtime, request, decision)
     })
@@ -132,6 +147,7 @@ fn resolve_fs_tool(
 /// but an approve only *starts* the command — see `ApprovalOutcome::
 /// Started`.
 fn resolve_bash(
+    session_id: SessionId,
     runtime: &SessionRuntime,
     request: &ToolCallRequest,
     decision: &ApprovalDecision,
@@ -148,6 +164,7 @@ fn resolve_bash(
                 .extend_provider_events(events.clone().into_iter().map(Into::into));
 
             bash::spawn(
+                session_id,
                 call_id,
                 request.input.clone(),
                 runtime.tool_state.bash_cwd_handle(),

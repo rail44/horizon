@@ -815,6 +815,120 @@ async fn bash_runs_agentd_side_and_reports_its_result_over_the_wire() {
     assert_eq!(result.output["output"], "agentd-bash-ok\n");
 }
 
+/// Regression test for the 2026-07 repeated-approval OOM incident: a banner
+/// that didn't visibly react to a held `y` key re-sent `Approve` for the
+/// same still-running `bash` call 134 times in 29 seconds, spawning 134
+/// concurrent subprocesses and OOMing the machine. Sends 10 `ApproveToolCall`
+/// commands for the exact same `call_id` back-to-back, without waiting for
+/// any reply in between, and confirms the tool call started exactly once —
+/// both in the events this connection observed and in the persisted event
+/// log — regardless of how many duplicates arrived. This holds
+/// deterministically (not just "usually", given the real subprocess's own
+/// timing) because a session's commands are processed one at a time, in
+/// order, on its own dedicated thread (`session::run_session`): the first
+/// `Approve` folds `ToolCallStarted` synchronously before the second one is
+/// even dequeued.
+#[tokio::test]
+async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
+    let agentd = AgentdProcess::spawn();
+    let (mut reader, mut writer) = connect_and_handshake(&agentd.socket_path).await;
+
+    let session_id = SessionId::new();
+    send_session_new(&mut writer, session_id).await;
+    wire::write_envelope(
+        &mut writer,
+        &Envelope::command(
+            session_id,
+            AgentCommand::UserMessage {
+                text: "please run bash".to_string(),
+            },
+        ),
+    )
+    .await
+    .unwrap();
+
+    let events = collect_events_until(&mut reader, session_id, |event| {
+        matches!(event, Event::ApprovalRequested(_))
+    })
+    .await;
+    let call_id = events
+        .iter()
+        .find_map(|event| match event {
+            Event::ApprovalRequested(request) => Some(request.call_id.clone()),
+            _ => None,
+        })
+        .expect("bash should request approval before running");
+
+    // 10 rapid duplicate approvals for the exact same call, sent before
+    // waiting on any reply -- reproduces a banner keypress repeated while
+    // the round trip is still in flight.
+    for _ in 0..10 {
+        wire::write_envelope(
+            &mut writer,
+            &Envelope::command(
+                session_id,
+                AgentCommand::ApproveToolCall {
+                    call_id: call_id.clone(),
+                },
+            ),
+        )
+        .await
+        .unwrap();
+    }
+
+    let events = collect_events_until(
+        &mut reader,
+        session_id,
+        |event| matches!(event, Event::ToolCallFinished(result) if result.call_id == call_id),
+    )
+    .await;
+
+    let started_count = events
+        .iter()
+        .filter(|event| matches!(event, Event::ToolCallStarted(id) if id == &call_id))
+        .count();
+    assert_eq!(
+        started_count, 1,
+        "10 rapid duplicate approvals must start the tool call exactly once, got: {events:?}"
+    );
+    let finished_count = events
+        .iter()
+        .filter(
+            |event| matches!(event, Event::ToolCallFinished(result) if result.call_id == call_id),
+        )
+        .count();
+    assert_eq!(
+        finished_count, 1,
+        "a duplicate approval must never produce a second result, got: {events:?}"
+    );
+
+    // Confirm the same holds in the persisted on-disk log, not just what
+    // this connection happened to observe over the wire.
+    let mut report = None;
+    for _ in 0..100 {
+        let candidate = horizon_agent::persistence::event_log::read(&agentd.event_log_path)
+            .expect("the on-disk event log should parse cleanly");
+        if candidate.records.iter().any(|record| {
+            matches!(&record.event, Event::ToolCallFinished(result) if result.call_id == call_id)
+        }) {
+            report = Some(candidate);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let report = report.expect("the bash result should eventually be persisted");
+    let logged_started_count = report
+        .records
+        .iter()
+        .filter(|record| matches!(&record.event, Event::ToolCallStarted(id) if id == &call_id))
+        .count();
+    assert_eq!(
+        logged_started_count, 1,
+        "the persisted event log must contain exactly one ToolCallStarted for the call, got: {:?}",
+        report.records
+    );
+}
+
 // --- step-3 trims restored: streaming preview + skipped-lines status -------
 //
 // `docs/agent-runtime-split-design.md`'s step-3 notes recorded two UX

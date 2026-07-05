@@ -788,6 +788,9 @@ fn resolve_and_forward(
     call_id: ToolCallId,
     decision: ApprovalDecision,
 ) {
+    // `resolve_approval` moves `call_id`; keep a copy so the
+    // `AlreadyResolved` arm below can still name it in its log line.
+    let logged_call_id = call_id.clone();
     let frame = live_state.frame();
     match resolve_approval(&frame, session_id, call_id, decision) {
         ApprovalOutcome::Executed {
@@ -806,7 +809,20 @@ fn resolve_and_forward(
         ApprovalOutcome::Forward(command) => {
             let _ = commands_tx.send(command);
         }
-        ApprovalOutcome::AlreadyResolved => {}
+        // The pending -> resolved transition already happened for this
+        // call_id (started or finished) -- see `ApprovalOutcome::
+        // AlreadyResolved`'s doc comment. This is the guard that stops a
+        // burst of duplicate `Approve`/`Deny` commands (the 2026-07
+        // repeated-approval OOM incident) from re-executing anything: every
+        // one after the first lands here and is dropped, logged rather than
+        // silently swallowed so a runaway burst like that incident's is
+        // visible in agentd's own stderr.
+        ApprovalOutcome::AlreadyResolved => {
+            eprintln!(
+                "horizon-agentd: dropped duplicate approve/deny for session {session_id:?}, \
+                 call {logged_call_id:?} (already resolved)"
+            );
+        }
     }
 }
 

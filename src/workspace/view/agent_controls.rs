@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::agent::contract::{SessionState, ToolCallId};
+use crate::agent::contract::{SessionState, ToolCallId, ToolCallRequest};
 use crate::ui::fonts::font_family;
 use crate::ui::hint_chip::key_hint;
 use crate::ui::theme;
@@ -9,6 +9,7 @@ use floem::{
     action::set_ime_cursor_area,
     peniko::kurbo::{Point, Size},
 };
+use serde_json::Value;
 
 pub(super) fn agent_composer(
     visible: impl Fn() -> bool + 'static + Copy,
@@ -116,26 +117,152 @@ pub(super) fn next_agent_pane_focus(
     })
 }
 
+/// The call id the banner should currently treat as awaiting an answer:
+/// `pending` itself, unless it's already been answered locally (`answered`
+/// -- see the module doc below on the optimistic banner-state fix), in
+/// which case `None`. Backs both the render-time enablement of the y/n
+/// buttons/`esc` hint and the dispatch guard in `pane_view`'s `KeyDown`
+/// handler, so a key or click can never re-dispatch for a call that's
+/// already been locked in -- however long the resolution takes to round
+/// trip back. See the module doc on the 2026-07 repeated-approval OOM
+/// incident this closes the client-side half of (the authoritative,
+/// server-side half is `agent::tools::approval`'s idempotence guard).
+pub(super) fn awaiting_call(
+    pending: Option<ToolCallId>,
+    answered: Option<ToolCallId>,
+) -> Option<ToolCallId> {
+    match pending {
+        Some(call_id) if answered.as_ref() != Some(&call_id) => Some(call_id),
+        _ => None,
+    }
+}
+
+/// Whether the banner's pending call has already been answered locally and
+/// is now just waiting for the resolution to round-trip back -- the
+/// "answered -- running…" state that replaces the interactive y/n buttons.
+fn is_awaiting_resolution(pending: Option<ToolCallId>, answered: Option<ToolCallId>) -> bool {
+    match pending {
+        Some(call_id) => answered == Some(call_id),
+        None => false,
+    }
+}
+
+/// Computes the pane's next locally-recorded "answered" marker (the
+/// optimistic banner-state fix's memory of "a keypress/click already locked
+/// this call in") after the oldest pending approval goes from
+/// `previous_pending` to `pending`. Returns `None` when the pending call id
+/// is unchanged (a no-op refresh must leave a still-pending answered marker
+/// alone) -- otherwise always clears it to `Some(None)`: the call either
+/// resolved (no marker needed any more) or a new one just became pending
+/// (which must start in the normal, unanswered state). Mirrors
+/// `next_agent_pane_focus`'s exact shape, driven by the same
+/// `pending_approval` transitions -- `pane_view` folds both into the one
+/// effect.
+pub(super) fn next_answered_call(
+    previous_pending: Option<ToolCallId>,
+    pending: Option<ToolCallId>,
+) -> Option<Option<ToolCallId>> {
+    if previous_pending == pending {
+        None
+    } else {
+        Some(None)
+    }
+}
+
+const MAX_SUMMARY_LINES: usize = 3;
+const MAX_SUMMARY_CHARS: usize = 200;
+
+/// Renders the substance of a pending tool-call approval for the banner
+/// (`docs/agent-tools-design.md`'s "Show what is being approved"): the
+/// command line itself for `bash` (the first `MAX_SUMMARY_LINES` lines and
+/// `MAX_SUMMARY_CHARS` characters, whichever is hit first, with an ellipsis
+/// marker), or the target path for `fs.write`/`fs.edit`. Falls back to the
+/// bare tool id for anything else -- Horizon only ever gates these three
+/// tools behind approval today (`agent::tools::approval::
+/// is_horizon_executed_tool`), but the banner must still render *something*
+/// sane if that ever changes.
+pub(super) fn describe_pending_call(request: &ToolCallRequest) -> String {
+    match request.tool_id.as_str() {
+        "bash" => request
+            .input
+            .get("command")
+            .and_then(Value::as_str)
+            .map(truncate_summary)
+            .unwrap_or_else(|| request.tool_id.clone()),
+        "fs.write" | "fs.edit" => request
+            .input
+            .get("path")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| request.tool_id.clone()),
+        other => other.to_string(),
+    }
+}
+
+fn truncate_summary(text: &str) -> String {
+    let mut lines: Vec<&str> = text.lines().take(MAX_SUMMARY_LINES + 1).collect();
+    let line_truncated = lines.len() > MAX_SUMMARY_LINES;
+    lines.truncate(MAX_SUMMARY_LINES);
+    let mut joined = lines.join("\n");
+
+    let char_truncated = joined.chars().count() > MAX_SUMMARY_CHARS;
+    if char_truncated {
+        joined = joined.chars().take(MAX_SUMMARY_CHARS).collect();
+    }
+
+    if line_truncated || char_truncated {
+        joined.push('…');
+    }
+    joined
+}
+
 /// The approval banner: renders only the oldest pending tool call's
 /// approve/deny controls (targeting discipline -- banner keys and buttons
 /// alike act on the oldest pending call only; cross-session approvals stay
 /// palette-only) with their key bindings spelled out inline
-/// (`ui::hint_chip::key_hint`). `extra_pending` is the count of additional
-/// calls queued behind the one shown, rendered as a "+N more" hint so a
-/// second or third pending approval isn't silently dropped from view.
+/// (`ui::hint_chip::key_hint`), plus a summary of what's being approved
+/// (`describe_pending_call`) and a "+N more" hint (`extra_pending`) for
+/// additional calls queued behind the one shown.
+///
+/// **Optimistic banner state** (fix for the 2026-07 repeated-approval OOM
+/// incident: a banner that didn't visibly react to a held `y` key re-sent
+/// `Approve` for the same still-running `bash` call 134 times in 29
+/// seconds, spawning 134 concurrent processes). `answered` is the pane's
+/// locally-recorded "this call was already answered" marker
+/// (`next_answered_call` computes its transitions; `pane_view` owns the
+/// signal and clears it once the resolution round-trips back). While the
+/// pending call matches it, the y/n buttons and `esc` hint hide behind an
+/// "answered -- running…" label instead -- disabled regardless of how long
+/// the round trip takes, independent of `pane_view`'s keyboard-focus
+/// release (which only protects the *keyboard* path; a mouse click on a
+/// button is gated here).
 pub(super) fn agent_approval_banner(
     visible: impl Fn() -> bool + 'static + Copy,
     pending_approval: impl Fn() -> Option<ToolCallId> + 'static + Copy,
+    answered: impl Fn() -> Option<ToolCallId> + 'static + Copy,
+    pending_summary: impl Fn() -> Option<String> + 'static + Copy,
     extra_pending: impl Fn() -> usize + 'static + Copy,
     on_approve: impl Fn(ToolCallId) + 'static,
     on_deny: impl Fn(ToolCallId) + 'static,
 ) -> impl IntoView {
+    let awaiting_resolution = move || is_awaiting_resolution(pending_approval(), answered());
+
     h_stack((
+        label(move || pending_summary().unwrap_or_default()).style(move |s| {
+            if !visible() || pending_approval().is_none() {
+                return s.hide();
+            }
+
+            s.font_family(font_family().to_string())
+                .font_size(11)
+                .color(theme::text_subtle())
+        }),
         agent_approval_button(
             "y",
             "approve",
             visible,
             pending_approval,
+            answered,
             on_approve,
             floem::peniko::Color::from_rgb8(48, 84, 75),
             theme::accent(),
@@ -145,11 +272,26 @@ pub(super) fn agent_approval_banner(
             "deny",
             visible,
             pending_approval,
+            answered,
             on_deny,
             floem::peniko::Color::from_rgb8(80, 50, 54),
             theme::danger(),
         ),
-        key_hint("esc", "back to draft"),
+        key_hint("esc", "back to draft").style(move |s| {
+            if !visible() || pending_approval().is_none() || awaiting_resolution() {
+                return s.hide();
+            }
+            s
+        }),
+        label(|| "answered — running…".to_string()).style(move |s| {
+            if !visible() || !awaiting_resolution() {
+                return s.hide();
+            }
+
+            s.font_family(font_family().to_string())
+                .font_size(11)
+                .color(theme::text_subtle())
+        }),
         label(move || format!("+{} more", extra_pending())).style(move |s| {
             if extra_pending() == 0 {
                 return s.hide();
@@ -223,23 +365,25 @@ pub(super) fn gate_pending_approval(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn agent_approval_button(
     key_label: &'static str,
     action_label: &'static str,
     visible: impl Fn() -> bool + 'static + Copy,
     pending_approval: impl Fn() -> Option<ToolCallId> + 'static + Copy,
+    answered: impl Fn() -> Option<ToolCallId> + 'static + Copy,
     on_click: impl Fn(ToolCallId) + 'static,
     background: floem::peniko::Color,
     border: floem::peniko::Color,
 ) -> impl IntoView {
     key_hint(key_label, action_label)
         .on_click_stop(move |_| {
-            if let Some(call_id) = pending_approval() {
+            if let Some(call_id) = awaiting_call(pending_approval(), answered()) {
                 on_click(call_id);
             }
         })
         .style(move |s| {
-            if !visible() || pending_approval().is_none() {
+            if !visible() || awaiting_call(pending_approval(), answered()).is_none() {
                 return s.hide();
             }
 
@@ -256,9 +400,11 @@ fn agent_approval_button(
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_pane_status_label, gate_pending_approval, next_agent_pane_focus, AgentPaneFocus,
+        agent_pane_status_label, awaiting_call, describe_pending_call, gate_pending_approval,
+        is_awaiting_resolution, next_agent_pane_focus, next_answered_call, AgentPaneFocus,
+        MAX_SUMMARY_CHARS, MAX_SUMMARY_LINES,
     };
-    use crate::agent::contract::{SessionState, ToolCallId};
+    use crate::agent::contract::{SessionState, ToolCallId, ToolCallRequest};
     use std::time::Duration;
 
     #[test]
@@ -331,5 +477,132 @@ mod tests {
         let call = Some(ToolCallId("call-1".to_string()));
         assert_eq!(next_agent_pane_focus(call.clone(), call), None);
         assert_eq!(next_agent_pane_focus(None, None), None);
+    }
+
+    // --- optimistic banner state (`awaiting_call`/`next_answered_call`) --
+
+    #[test]
+    fn awaiting_call_is_the_pending_call_when_unanswered() {
+        let call = ToolCallId("call-1".to_string());
+        assert_eq!(awaiting_call(Some(call.clone()), None), Some(call));
+    }
+
+    #[test]
+    fn awaiting_call_is_none_once_the_pending_call_has_been_answered() {
+        let call = ToolCallId("call-1".to_string());
+        assert_eq!(awaiting_call(Some(call.clone()), Some(call)), None);
+    }
+
+    #[test]
+    fn awaiting_call_is_none_when_nothing_is_pending() {
+        assert_eq!(awaiting_call(None, None), None);
+    }
+
+    #[test]
+    fn awaiting_call_ignores_a_stale_answered_marker_for_a_different_call() {
+        // A previous call's answered marker must not gate a brand new
+        // pending call -- `next_answered_call` is what's responsible for
+        // clearing it, but this proves the render/dispatch guard itself is
+        // keyed by call id, not just by "something was answered".
+        let first = ToolCallId("call-1".to_string());
+        let second = ToolCallId("call-2".to_string());
+        assert_eq!(
+            awaiting_call(Some(second.clone()), Some(first)),
+            Some(second)
+        );
+    }
+
+    #[test]
+    fn next_answered_call_is_unchanged_when_pending_call_id_is_the_same() {
+        let call = Some(ToolCallId("call-1".to_string()));
+        assert_eq!(next_answered_call(call.clone(), call), None);
+        assert_eq!(next_answered_call(None, None), None);
+    }
+
+    #[test]
+    fn next_answered_call_clears_once_the_pending_call_resolves() {
+        let call = Some(ToolCallId("call-1".to_string()));
+        assert_eq!(next_answered_call(call, None), Some(None));
+    }
+
+    #[test]
+    fn next_answered_call_clears_when_a_new_call_takes_over() {
+        let first = Some(ToolCallId("call-1".to_string()));
+        let second = Some(ToolCallId("call-2".to_string()));
+        assert_eq!(next_answered_call(first, second), Some(None));
+    }
+
+    #[test]
+    fn is_awaiting_resolution_true_once_the_pending_call_matches_the_answered_marker() {
+        let call = ToolCallId("call-1".to_string());
+        assert!(is_awaiting_resolution(Some(call.clone()), Some(call)));
+    }
+
+    #[test]
+    fn is_awaiting_resolution_false_when_unanswered_or_nothing_pending() {
+        let call = ToolCallId("call-1".to_string());
+        assert!(!is_awaiting_resolution(Some(call), None));
+        assert!(!is_awaiting_resolution(None, None));
+    }
+
+    // --- banner substance (`describe_pending_call`) ------------------------
+
+    fn request(tool_id: &str, input: serde_json::Value) -> ToolCallRequest {
+        ToolCallRequest {
+            call_id: ToolCallId("call-1".to_string()),
+            tool_id: tool_id.to_string(),
+            input,
+        }
+    }
+
+    #[test]
+    fn describe_pending_call_shows_the_bash_command_line() {
+        let request = request("bash", serde_json::json!({ "command": "cargo test" }));
+        assert_eq!(describe_pending_call(&request), "cargo test");
+    }
+
+    #[test]
+    fn describe_pending_call_shows_the_fs_write_target_path() {
+        let request = request(
+            "fs.write",
+            serde_json::json!({ "path": "/tmp/example.rs", "content": "fn main() {}" }),
+        );
+        assert_eq!(describe_pending_call(&request), "/tmp/example.rs");
+    }
+
+    #[test]
+    fn describe_pending_call_shows_the_fs_edit_target_path() {
+        let request = request("fs.edit", serde_json::json!({ "path": "/tmp/example.rs" }));
+        assert_eq!(describe_pending_call(&request), "/tmp/example.rs");
+    }
+
+    #[test]
+    fn describe_pending_call_falls_back_to_the_tool_id_for_unknown_tools() {
+        let request = request("mock.approval_required", serde_json::json!({}));
+        assert_eq!(describe_pending_call(&request), "mock.approval_required");
+    }
+
+    #[test]
+    fn describe_pending_call_truncates_a_long_bash_command_by_char_count() {
+        let long = "a".repeat(MAX_SUMMARY_CHARS + 50);
+        let request = request("bash", serde_json::json!({ "command": long }));
+        let summary = describe_pending_call(&request);
+        assert!(summary.ends_with('…'));
+        assert!(summary.chars().count() <= MAX_SUMMARY_CHARS + 1);
+    }
+
+    #[test]
+    fn describe_pending_call_truncates_a_multi_line_bash_command_by_line_count() {
+        let command = "line1\nline2\nline3\nline4\nline5".to_string();
+        let request = request("bash", serde_json::json!({ "command": command }));
+        let summary = describe_pending_call(&request);
+        assert_eq!(summary.lines().count(), MAX_SUMMARY_LINES);
+        assert!(summary.ends_with('…'));
+    }
+
+    #[test]
+    fn describe_pending_call_leaves_a_short_bash_command_untouched() {
+        let request = request("bash", serde_json::json!({ "command": "ls -la" }));
+        assert_eq!(describe_pending_call(&request), "ls -la");
     }
 }

@@ -21,7 +21,7 @@ use crossbeam_channel::Sender;
 use serde_json::Value;
 
 use crate::config::BashToolConfig;
-use crate::contract::{ToolCallId, ToolCallResult};
+use crate::contract::{SessionId, ToolCallId, ToolCallResult};
 use crate::frame::AgentFrame;
 
 /// A bash call's outcome, delivered from the background thread that ran it
@@ -35,30 +35,41 @@ pub struct BashCompletion {
     pub result: ToolCallResult,
 }
 
-/// Kicks off a bash call on a dedicated background thread and returns
-/// immediately; the UI thread must not block waiting on this. `cwd` is the
-/// session's shared, tracked bash working directory (`ToolSessionState::
-/// bash_cwd_handle`) — read at the start of the call and updated in place
-/// if the command `cd`s, so the next call in this session picks it up.
-/// `result_tx` delivers the finished `BashCompletion` back to the UI
-/// thread; see the module doc for the full round trip. `config` carries the
-/// timeout/output-cap/drain-grace knobs (`agent::config::BashToolConfig`,
-/// `[agent]` in the config file) — a plain `Copy` value rather than the
-/// `Rc`-based `ToolSessionState` it was read from, since it has to cross
-/// onto this background thread.
+/// Kicks off a bash call and returns immediately; the UI thread must not
+/// block waiting on this. `cwd` is the session's shared, tracked bash
+/// working directory (`ToolSessionState::bash_cwd_handle`) — read at the
+/// start of the call and updated in place if the command `cd`s, so the next
+/// call in this session picks it up. `result_tx` delivers the finished
+/// `BashCompletion` back to the UI thread; see the module doc for the full
+/// round trip. `config` carries the timeout/output-cap/drain-grace knobs
+/// (`agent::config::BashToolConfig`, `[agent]` in the config file) — a
+/// plain `Copy` value rather than the `Rc`-based `ToolSessionState` it was
+/// read from, since it has to cross onto the background thread this
+/// eventually runs on.
+///
+/// Bash containment (`docs/agent-tools-design.md`, "Bash Containment"):
+/// rather than spawning a fresh thread unconditionally, this hands the call
+/// to `registry::enqueue`, which runs it immediately if `session_id` has no
+/// other bash call in flight, or queues it (FIFO) behind whatever is
+/// already running for that session — a session's bash calls never run
+/// concurrently with each other.
 pub fn spawn(
+    session_id: SessionId,
     call_id: ToolCallId,
     input: Value,
     cwd: Arc<Mutex<PathBuf>>,
     config: BashToolConfig,
     result_tx: Sender<BashCompletion>,
 ) {
-    std::thread::spawn(move || {
-        let output = exec::run(&call_id, &input, &cwd, &config);
-        let _ = result_tx.send(BashCompletion {
-            result: ToolCallResult { call_id, output },
-        });
-    });
+    registry::enqueue(
+        session_id,
+        Box::new(move || {
+            let output = exec::run(&call_id, &input, &cwd, &config);
+            let _ = result_tx.send(BashCompletion {
+                result: ToolCallResult { call_id, output },
+            });
+        }),
+    );
 }
 
 /// Kills the running child for `call_id`, if this session has one in

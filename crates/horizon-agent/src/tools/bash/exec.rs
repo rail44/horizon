@@ -13,6 +13,15 @@ use crate::contract::ToolCallId;
 use super::output::{self, Capped};
 use super::registry::RegistryGuard;
 
+/// Niceness applied to every spawned bash child (`docs/agent-tools-design.md`,
+/// "Bash Containment"). An agent-driven command must not contend with
+/// Horizon's own UI thread, or the machine owner's foreground work, for CPU
+/// time -- 10 is a conventional "background priority" level: felt, but not
+/// the maximum (19), since a bash call is work the agent is actively
+/// waiting on, not a fire-and-forget batch job.
+#[cfg(unix)]
+pub(super) const BASH_NICE_LEVEL: i32 = 10;
+
 /// Runs one bash call to completion (or until it times out / fails to
 /// spawn), synchronously from the caller's point of view. Called on a
 /// dedicated background thread (see `bash::spawn`) — never on the UI
@@ -118,6 +127,36 @@ async fn run_async(
         .stderr(Stdio::piped());
     #[cfg(unix)]
     cmd.process_group(0);
+
+    // Niceness must be set from *inside* the forked child, before it execs
+    // bash -- not via a post-spawn `setpriority(PRIO_PGRP, pgid, ...)` from
+    // this (the parent) process, which would race a fast-forking command
+    // that spawns grandchildren before the parent gets scheduled to make
+    // the call. `pre_exec` runs synchronously in the child, after `fork()`
+    // and before `exec()`, so by the time bash (and therefore every
+    // descendant it later forks -- nice is inherited across fork/exec)
+    // starts running, its niceness is already lowered: robust regardless of
+    // how quickly the command backgrounds work or spawns its own children.
+    #[cfg(unix)]
+    unsafe {
+        cmd.pre_exec(|| {
+            // SAFETY: `setpriority` is a thin syscall wrapper (no
+            // allocation, no locking), so it's safe to call from this
+            // post-fork, pre-exec context per `pre_exec`'s async-signal-
+            // safety contract. `PRIO_PROCESS` + pid 0 means "the calling
+            // process" -- this forked-but-not-yet-exec'd child.
+            //
+            // Best-effort, deliberately: a sandboxed or otherwise
+            // restricted environment that denies priority changes (seen
+            // under this very repo's own sandboxed dev environment) must
+            // never stop the command from running at all -- niceness is a
+            // hardening measure, not a correctness requirement. Failing
+            // the whole spawn over it would be a far worse regression than
+            // an unniced child.
+            let _ = libc::setpriority(libc::PRIO_PROCESS, 0, BASH_NICE_LEVEL);
+            Ok(())
+        });
+    }
 
     let mut child = match cmd.spawn() {
         Ok(child) => child,

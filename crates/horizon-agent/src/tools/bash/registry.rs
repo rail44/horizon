@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use crate::contract::ToolCallId;
+use crate::contract::{SessionId, ToolCallId};
 
 /// A handle capable of terminating a running bash child's entire process
 /// group (`docs/agent-tools-design.md`, "Bash Semantics": "Cancelling a turn
@@ -104,4 +104,80 @@ impl Drop for RegistryGuard {
 #[cfg(test)]
 pub(super) fn is_registered(call_id: &ToolCallId) -> bool {
     lock(table()).contains_key(call_id)
+}
+
+// --- per-session bash FIFO ---------------------------------------------
+//
+// `docs/agent-tools-design.md`, "Bash Containment": a session's approved
+// bash calls run one at a time. Chosen over a persistent per-session worker
+// thread because `bash::spawn` is already a "fresh thread per call" design
+// (see its own doc comment) -- reusing that per-job thread for the queued
+// case keeps this a pure ordering constraint layered on top of the existing
+// spawn shape, rather than a new thread lifecycle to manage across session
+// creation/teardown. A session's entry is created lazily on its first call
+// and removed the instant its queue drains, so this table never accumulates
+// entries for sessions that aren't actively running bash.
+
+type Job = Box<dyn FnOnce() + Send>;
+
+#[derive(Default)]
+struct SessionQueue {
+    /// `true` while a job for this session has been handed to a thread and
+    /// hasn't finished yet -- distinguishes "a job is running with nothing
+    /// queued behind it" from "nothing running at all" (the latter has no
+    /// entry in the table in the first place, once `advance` cleans it up).
+    running: bool,
+    jobs: VecDeque<Job>,
+}
+
+type SessionQueues = Mutex<HashMap<SessionId, SessionQueue>>;
+
+fn session_queues() -> &'static SessionQueues {
+    static QUEUES: OnceLock<SessionQueues> = OnceLock::new();
+    QUEUES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Runs `job` immediately if `session_id` has nothing currently running,
+/// otherwise appends it to that session's queue -- `advance` (below) hands
+/// it to a fresh thread the instant the job ahead of it finishes.
+pub(super) fn enqueue(session_id: SessionId, job: Job) {
+    let mut queues = session_queues()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let queue = queues.entry(session_id).or_default();
+    if queue.running {
+        queue.jobs.push_back(job);
+        return;
+    }
+    queue.running = true;
+    drop(queues);
+    run_job(session_id, job);
+}
+
+fn run_job(session_id: SessionId, job: Job) {
+    std::thread::spawn(move || {
+        job();
+        advance(session_id);
+    });
+}
+
+/// Called from a just-finished job's own thread: hands the next queued job
+/// (if any) to a fresh thread, or drops the session's entry entirely once
+/// nothing is left running or queued.
+fn advance(session_id: SessionId) {
+    let mut queues = session_queues()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let next = queues
+        .get_mut(&session_id)
+        .and_then(|queue| queue.jobs.pop_front());
+    match next {
+        Some(job) => {
+            drop(queues);
+            run_job(session_id, job);
+        }
+        None => {
+            queues.remove(&session_id);
+        }
+    }
 }

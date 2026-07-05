@@ -147,6 +147,26 @@ impl AgentFrame {
             matches!(item, AgentFrameItem::ToolCallFinished(result) if &result.call_id == call_id)
         })
     }
+
+    /// Whether `call_id` already has a `ToolCallStarted` in the frame —
+    /// true from the instant Horizon began executing it, not just once it
+    /// finished. For `fs.write`/`fs.edit` this is equivalent to
+    /// [`Self::has_tool_call_finished`] (both events are folded together,
+    /// synchronously, by `agent::tools::approval::synchronous_result`), but
+    /// `bash`'s approve path folds `ToolCallStarted` immediately and only
+    /// folds `ToolCallFinished` once the child actually exits — a window
+    /// that can last the tool's whole timeout. `agent::tools::approval::
+    /// try_execute`'s idempotence guard checks this *in addition to*
+    /// `has_tool_call_finished` so a call already running can't be started a
+    /// second time by a duplicate Approve arriving in that window (the
+    /// 2026-07 repeated-approval OOM incident: a banner that didn't
+    /// visibly react to a held-down `y` key each re-sent `Approve` for the
+    /// same still-running bash call).
+    pub fn has_tool_call_started(&self, call_id: &ToolCallId) -> bool {
+        self.items
+            .iter()
+            .any(|item| matches!(item, AgentFrameItem::ToolCallStarted(id) if id == call_id))
+    }
 }
 
 #[cfg(test)]

@@ -22,8 +22,9 @@ use floem::{
 };
 
 use super::agent_controls::{
-    agent_approval_banner, agent_composer, agent_pane_status_label, gate_pending_approval,
-    next_agent_pane_focus, AgentPaneFocus,
+    agent_approval_banner, agent_composer, agent_pane_status_label, awaiting_call,
+    describe_pending_call, gate_pending_approval, next_agent_pane_focus, next_answered_call,
+    AgentPaneFocus,
 };
 use super::chrome::pane_header;
 use super::terminal_output::terminal_output;
@@ -69,6 +70,27 @@ fn deny_pending(
         },
         command_state,
     );
+}
+
+/// Optimistically answers `call_id` locally (the fix for the 2026-07
+/// repeated-approval OOM incident -- see `agent_controls::agent_approval_
+/// banner`'s doc comment) before actually dispatching the decision: marks
+/// it answered so the banner can't be re-triggered for the same call
+/// regardless of round-trip latency, releases pane-internal keyboard focus
+/// back to the message box, then runs `dispatch`. Shared by the banner's
+/// button clicks and the `y`/`n` key handler below so both go through the
+/// exact same sequencing. Callers must gate on `awaiting_call` themselves
+/// before calling this -- it doesn't re-check, it just performs the "lock
+/// it in" side effects unconditionally.
+fn answer_pending(
+    answered_call: RwSignal<Option<ToolCallId>>,
+    agent_pane_focus: RwSignal<AgentPaneFocus>,
+    call_id: ToolCallId,
+    dispatch: impl FnOnce(ToolCallId),
+) {
+    answered_call.set(Some(call_id.clone()));
+    agent_pane_focus.set(AgentPaneFocus::MessageBox);
+    dispatch(call_id);
 }
 
 #[derive(Clone)]
@@ -174,6 +196,20 @@ pub(super) fn pane_view(
             })
             .saturating_sub(1)
     };
+    // What's being approved (`docs/agent-tools-design.md`'s "Show what is
+    // being approved"): the pending call's own request, rendered by
+    // `describe_pending_call` (the command line for `bash`, the target path
+    // for `fs.write`/`fs.edit`) -- shown next to the banner's key hints.
+    let pending_summary = move || {
+        let session_id = workspace.with(|ws| ws.visible_agent_session_id(index))?;
+        let call_id = pending_approval()?;
+        frames.with(|frames| {
+            frames
+                .agent_frame(session_id)
+                .tool_call_request(&call_id)
+                .map(describe_pending_call)
+        })
+    };
     // Which of the pane's two key-focus targets is live right now -- the
     // message-box composer, or the approval banner (see `AgentPaneFocus`).
     // Driven entirely by `pending_approval` transitions (`next_agent_pane_
@@ -184,11 +220,22 @@ pub(super) fn pane_view(
     // directly (see the `KeyDown` handler below) without going through the
     // pending-approval signal at all, so it survives an unrelated refresh.
     let agent_pane_focus = RwSignal::new(AgentPaneFocus::default());
+    // The pane's locally-recorded "this call was already answered" marker
+    // (the optimistic banner-state fix -- see `agent_controls::
+    // agent_approval_banner`'s doc comment): set the instant a keypress or
+    // click answers a call (`answer_pending`), cleared here the instant the
+    // resolution round-trips back (`next_answered_call`, driven by the same
+    // `pending_approval` transitions the focus effect above reacts to, so
+    // both update from the one effect below).
+    let answered_call = RwSignal::<Option<ToolCallId>>::new(None);
     create_effect(move |previous: Option<Option<ToolCallId>>| {
         let pending = pending_approval();
         if let Some(previous) = previous {
-            if let Some(focus) = next_agent_pane_focus(previous, pending.clone()) {
+            if let Some(focus) = next_agent_pane_focus(previous.clone(), pending.clone()) {
                 agent_pane_focus.set(focus);
+            }
+            if let Some(next_answered) = next_answered_call(previous, pending.clone()) {
+                answered_call.set(next_answered);
             }
         }
         pending
@@ -291,14 +338,24 @@ pub(super) fn pane_view(
         agent_approval_banner(
             is_agent,
             pending_approval,
+            move || answered_call.get(),
+            pending_summary,
             pending_approval_extra,
             {
                 let command_state = command_state.clone();
-                move |call_id| approve_pending(workspace, command_state.clone(), index, call_id)
+                move |call_id| {
+                    answer_pending(answered_call, agent_pane_focus, call_id, |call_id| {
+                        approve_pending(workspace, command_state.clone(), index, call_id)
+                    });
+                }
             },
             {
                 let command_state = command_state.clone();
-                move |call_id| deny_pending(workspace, command_state.clone(), index, call_id)
+                move |call_id| {
+                    answer_pending(answered_call, agent_pane_focus, call_id, |call_id| {
+                        deny_pending(workspace, command_state.clone(), index, call_id)
+                    });
+                }
             },
         ),
         agent_composer(
@@ -373,13 +430,21 @@ pub(super) fn pane_view(
             if is_agent() && agent_pane_focus.get_untracked() == AgentPaneFocus::Banner {
                 match handle_agent_banner_key(key_event, ime_composing, ime_preedit) {
                     BannerKeyAction::Approve => {
-                        if let Some(call_id) = pending_approval() {
-                            approve_pending(workspace, command_state.clone(), index, call_id);
+                        if let Some(call_id) =
+                            awaiting_call(pending_approval(), answered_call.get_untracked())
+                        {
+                            answer_pending(answered_call, agent_pane_focus, call_id, |call_id| {
+                                approve_pending(workspace, command_state.clone(), index, call_id);
+                            });
                         }
                     }
                     BannerKeyAction::Deny => {
-                        if let Some(call_id) = pending_approval() {
-                            deny_pending(workspace, command_state.clone(), index, call_id);
+                        if let Some(call_id) =
+                            awaiting_call(pending_approval(), answered_call.get_untracked())
+                        {
+                            answer_pending(answered_call, agent_pane_focus, call_id, |call_id| {
+                                deny_pending(workspace, command_state.clone(), index, call_id);
+                            });
                         }
                     }
                     BannerKeyAction::ReleaseFocus => {

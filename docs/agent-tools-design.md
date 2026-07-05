@@ -58,6 +58,41 @@ enforcement (Claude Code, Gemini CLI, OpenHands, goose, Cline):
   standard across Claude Code, goose, Cline, Codex.)
 - Cancelling a turn kills the process group of any in-flight command.
 
+## Bash Containment
+
+Hardening added after a 2026-07 incident: a tool-approval banner that didn't
+visibly react to a held `y` key let a user re-send `Approve` for the same
+still-running `bash` call 134 times in 29 seconds, spawning 134 concurrent
+`cargo test --workspace` runs and OOMing the machine. The approval
+idempotence fix (a call transitions pending -> resolved exactly once — see
+`agent::tools::approval`'s guard and `AgentFrame::has_tool_call_started`)
+closes the hole that let duplicates through in the first place; the two
+measures below are defense in depth against a session's bash calls
+otherwise piling up:
+
+- **Per-session serialization.** A session's approved `bash` calls run one
+  at a time: while one is executing, a later approved call for the *same*
+  session queues (simple FIFO) rather than spawning concurrently. A
+  persistent per-session worker thread was considered and rejected — bash
+  is already a "fresh thread per call" design (simplicity, no
+  long-lived-thread lifecycle to manage across session creation/teardown),
+  so the FIFO is layered on top of that as a pure ordering constraint
+  instead (`tools::bash::registry`'s session queue table).
+- **Low priority.** Every bash child is niced (`libc::setpriority`,
+  `PRIO_PROCESS`, level 10 — felt, but not maximal, since it's work the
+  agent is actively waiting on) from *inside* the forked child via
+  `pre_exec`, before it execs — not via a post-spawn `setpriority` call
+  from the parent, which would race a fast-forking command that spawns
+  grandchildren before the parent gets scheduled to make the call.
+  `pre_exec` guarantees the niceness is in place before bash (and every
+  descendant it later forks, since nice is inherited across fork/exec)
+  starts running, regardless of process-group shape.
+
+Neither measure caps memory directly (niceness affects CPU scheduling, not
+memory), so they don't replace the idempotence fix — they reduce the blast
+radius of any future bug that lets a session accumulate more than one
+in-flight bash call.
+
 ## Error Model and Loop Guards
 
 - Every tool failure returns an `is_error` tool result; the loop never

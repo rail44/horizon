@@ -964,6 +964,76 @@ fn resolve_approval_denies_bash_without_running_it() {
         .is_err());
 }
 
+/// Regression test for the 2026-07 repeated-approval OOM incident's root
+/// cause: `resolve_approval_second_approve_is_noop` (above) proves the
+/// `AlreadyResolved` guard for `fs.write`, whose `ToolCallStarted` and
+/// `ToolCallFinished` are always folded together -- but `bash`'s approve
+/// only folds `ToolCallStarted` immediately, leaving `ToolCallFinished` to
+/// arrive whenever the child actually exits. A duplicate Approve arriving
+/// in that window (a banner re-sending `Approve` on every repeated `y`
+/// keypress) must still be dropped, not spawn a second concurrent process
+/// for the same call. Proven by counting completions: exactly one must ever
+/// arrive on the results channel, even though `resolve_approval` was called
+/// twice with `Approve`.
+#[test]
+fn resolve_approval_second_approve_of_a_still_running_bash_call_is_noop() {
+    let tool_state = dummy_tool_state();
+    let session_id = SessionId::new();
+    let live_state = LiveState::new();
+    let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
+    register_session_runtime(session_id, tool_state, live_state.clone(), bash_results_tx);
+
+    let call_id = ToolCallId("bash-double-approve".to_string());
+    let frame = live_state.extend_events([Event::ToolCallRequested(ToolCallRequest {
+        call_id: call_id.clone(),
+        tool_id: "bash".to_string(),
+        input: json!({ "command": "echo first" }),
+    })]);
+
+    let first = resolve_approval(
+        &frame,
+        session_id,
+        call_id.clone(),
+        ApprovalDecision::Approve,
+    );
+    let ApprovalOutcome::Started {
+        frame: running_frame,
+        ..
+    } = first
+    else {
+        panic!("first approve should start bash");
+    };
+    // The frame the second approve would actually see (production folds
+    // this exact frame, e.g. `horizon-agentd`'s `resolve_and_forward` reads
+    // `live_state.frame()` fresh for every inbound command) already shows
+    // `ToolCallStarted` but not yet `ToolCallFinished` -- the vulnerable
+    // window.
+    assert!(running_frame.has_tool_call_started(&call_id));
+    assert!(!running_frame.has_tool_call_finished(&call_id));
+
+    let second = resolve_approval(
+        &running_frame,
+        session_id,
+        call_id.clone(),
+        ApprovalDecision::Approve,
+    );
+    assert!(
+        matches!(second, ApprovalOutcome::AlreadyResolved),
+        "a duplicate approve of a still-running bash call must be dropped, got: {second:?}"
+    );
+
+    // Exactly one completion ever arrives -- the duplicate approve never
+    // spawned its own bash child.
+    let completion = bash_results_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the single approved bash call should finish");
+    assert_eq!(completion.result.call_id, call_id);
+    assert!(
+        bash_results_rx.try_recv().is_err(),
+        "a duplicate approve must not have spawned a second bash process"
+    );
+}
+
 #[test]
 fn tool_session_state_seeds_bash_cwd_from_the_workspace_root() {
     let root = temp_workspace("bash-initial-cwd");

@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 
 use crate::config::BashToolConfig;
-use crate::contract::{ToolCallId, ToolCallResult};
+use crate::contract::{SessionId, ToolCallId, ToolCallResult};
 use crate::frame::{AgentFrame, AgentFrameItem};
 
 fn cwd_handle(path: PathBuf) -> Arc<Mutex<PathBuf>> {
@@ -218,6 +218,7 @@ fn kill_registry_entry_is_removed_after_normal_completion() {
     let (tx, rx) = crossbeam_channel::unbounded();
 
     super::spawn(
+        SessionId::new(),
         call_id.clone(),
         json!({ "command": "true" }),
         cwd,
@@ -239,6 +240,7 @@ fn kill_registry_kills_a_running_child_and_removes_its_entry() {
     let (tx, rx) = crossbeam_channel::unbounded();
 
     super::spawn(
+        SessionId::new(),
         call_id.clone(),
         json!({ "command": "sleep 10", "timeout_secs": 30 }),
         cwd,
@@ -266,6 +268,142 @@ fn kill_registry_kills_a_running_child_and_removes_its_entry() {
         .recv_timeout(Duration::from_secs(5))
         .expect("a killed bash call should still report a result promptly");
     assert_eq!(completion.result.output["is_error"], true);
+}
+
+// --- bash containment: per-session FIFO + niceness ------------------------
+
+/// Two approved bash calls for the *same* session must never run
+/// concurrently (`docs/agent-tools-design.md`, "Bash Containment"): the
+/// second must not even start until the first has fully finished. Proven
+/// without relying on timestamp precision: the first call creates a
+/// sentinel file, sleeps, then removes it; the second (enqueued immediately
+/// behind it, while the first is still "running") checks whether the
+/// sentinel exists the moment *it* actually starts. If serialization is
+/// broken, the second call starts concurrently and observes the sentinel
+/// still there.
+#[test]
+fn approved_bash_calls_for_the_same_session_are_serialized() {
+    let cwd = cwd_handle(std::env::temp_dir());
+    let session_id = SessionId::new();
+    let sentinel = std::env::temp_dir().join(format!("horizon-bash-fifo-{}", uuid::Uuid::new_v4()));
+    let sentinel_str = sentinel.display().to_string();
+    let (tx, rx) = crossbeam_channel::unbounded();
+
+    super::spawn(
+        session_id,
+        ToolCallId("fifo-first".to_string()),
+        json!({ "command": format!("touch '{sentinel_str}'; sleep 0.4; rm -f '{sentinel_str}'") }),
+        cwd.clone(),
+        config(),
+        tx.clone(),
+    );
+    // Enqueued immediately, while the first call is still (from the FIFO's
+    // point of view) running -- a broken implementation would start this
+    // concurrently.
+    super::spawn(
+        session_id,
+        ToolCallId("fifo-second".to_string()),
+        json!({ "command": format!("if [ -f '{sentinel_str}' ]; then echo OVERLAP; else echo OK; fi") }),
+        cwd,
+        config(),
+        tx,
+    );
+
+    let first = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the first call should finish");
+    let second = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the second call should finish");
+
+    // A session's bash calls run strictly one at a time, so completions
+    // must also arrive in submission order.
+    assert_eq!(first.result.call_id, ToolCallId("fifo-first".to_string()));
+    assert_eq!(second.result.call_id, ToolCallId("fifo-second".to_string()));
+    assert_eq!(second.result.output["output"], "OK\n");
+
+    let _ = std::fs::remove_file(&sentinel);
+}
+
+/// A different session's bash calls must not be held up by an unrelated
+/// session's FIFO -- serialization is per-session, not global.
+#[test]
+fn bash_calls_for_different_sessions_are_not_serialized_against_each_other() {
+    let cwd = cwd_handle(std::env::temp_dir());
+    let (tx, rx) = crossbeam_channel::unbounded();
+
+    let started = Instant::now();
+    super::spawn(
+        SessionId::new(),
+        ToolCallId("other-session-1".to_string()),
+        json!({ "command": "sleep 0.5" }),
+        cwd.clone(),
+        config(),
+        tx.clone(),
+    );
+    super::spawn(
+        SessionId::new(),
+        ToolCallId("other-session-2".to_string()),
+        json!({ "command": "sleep 0.5" }),
+        cwd,
+        config(),
+        tx,
+    );
+
+    let _ = rx.recv_timeout(Duration::from_secs(5)).expect("first call");
+    let _ = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("second call");
+    assert!(
+        started.elapsed() < Duration::from_millis(900),
+        "two different sessions' 0.5s calls should overlap, not serialize to ~1s: {:?}",
+        started.elapsed()
+    );
+}
+
+/// Every bash child runs at lowered scheduling priority
+/// (`docs/agent-tools-design.md`, "Bash Containment") -- read back via
+/// `/proc/self/stat`'s `nice` field (the 19th whitespace-separated field,
+/// per `man proc`) from a process the wrapped command itself spawns, so
+/// this proves the niceness is actually inherited by the command, not just
+/// set on some process nothing ever observes. `setpriority` inside
+/// `pre_exec` is deliberately best-effort (a sandboxed environment may deny
+/// it -- see that call site's doc comment, and this very repo's own
+/// sandboxed dev environment, where it *is* denied), so this accepts either
+/// the configured niceness or this test process's own ambient niceness
+/// (what an un-niced child would inherit) -- anything else is a real bug.
+#[cfg(unix)]
+#[test]
+fn bash_child_runs_at_the_configured_niceness_or_falls_back_gracefully() {
+    let cwd = cwd_handle(std::env::temp_dir());
+    let call_id = ToolCallId("nice-check".to_string());
+    // SAFETY: `getpriority` is a plain syscall wrapper with no
+    // preconditions; `PRIO_PROCESS` + pid 0 means "the calling process".
+    let ambient_nice = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
+
+    let output = super::exec::run(
+        &call_id,
+        &json!({ "command": "cat /proc/self/stat | awk '{print $19}'" }),
+        &cwd,
+        &config(),
+    );
+
+    assert_eq!(
+        output["exit_code"], 0,
+        "the command must still run even where niceness can't be changed: {output}"
+    );
+    let nice: i32 = output["output"]
+        .as_str()
+        .expect("output")
+        .trim()
+        .parse()
+        .expect("the nice field should be a plain integer");
+    assert!(
+        nice == super::exec::BASH_NICE_LEVEL || nice == ambient_nice,
+        "expected niceness {} (or this process's ambient niceness {ambient_nice}, if a \
+         sandbox denies setpriority), got {nice}",
+        super::exec::BASH_NICE_LEVEL
+    );
 }
 
 // --- late-result idempotence --------------------------------------------
