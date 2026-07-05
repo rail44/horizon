@@ -7,11 +7,37 @@
 //! step 4, every session found in the log at startup is resumed live (see
 //! `session::resume_persisted_sessions`) and `session_load` re-emits a
 //! session's committed events to a (re)connecting client.
+//!
+//! **Bind first (startup ordering).** [`main`] binds/listens on the socket
+//! as its first action after arg/config parsing -- before it ever reads the
+//! event log or resumes a single session. A large event log's read plus
+//! resuming many sessions can take real wall-clock time (seconds, not
+//! milliseconds), and the old ordering did all of that *before* binding: a
+//! client racing to connect during that window would time out its own
+//! retry budget, conclude nothing was listening, and spawn a second
+//! `horizon-agentd` -- which itself would replay the whole log a second
+//! time before discovering the first instance already owns the socket (see
+//! `bind_listener`'s stale-socket handling). Binding first makes that whole
+//! failure mode structurally impossible in the normal path: a client's
+//! `connect` succeeds (queued by the kernel) the instant `listen` returns,
+//! long before any persistence work starts, and a genuine second instance
+//! now hits `bind_listener`'s "already accepting" bail immediately, before
+//! it ever opens its own log.
+//!
+//! The event-log read, optional DuckDB rebuild, and session resume all move
+//! to a background task ([`spawn_resume_task`]) that races the accept loop.
+//! `hello`/`ping` never touch session state, so they're answered
+//! immediately regardless of whether that background work has finished;
+//! `session_list`/`session_load` would return an incomplete (or, right
+//! after bind, empty) view of history if answered too early, so they block
+//! on [`session::AgentdState::wait_until_resume_ready`] first -- a
+//! readiness gate, not a protocol change.
 
 mod session;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use horizon_agent::config::{self, AgentConfig};
 use horizon_agent::contract::ProviderRegistry;
@@ -31,6 +57,14 @@ use tokio::net::{
 /// carried separately in the same [`Hello`]).
 const BINARY_ID: &str = env!("CARGO_PKG_VERSION");
 
+/// Test-only hook (`crates/horizon-agentd/tests/e2e.rs`): when set to a
+/// number of milliseconds, [`spawn_resume_task`] sleeps that long before
+/// opening the event log, so a test can prove the bind-first ordering
+/// (hello answers well before this delay elapses; `session_list`/
+/// `session_load` don't) instead of relying on incidental timing. Never set
+/// in production.
+const TEST_RESUME_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_RESUME_DELAY_MS";
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let socket_path =
@@ -44,38 +78,62 @@ async fn main() -> anyhow::Result<()> {
         agent_config.rig.model
     );
 
-    let (state, records) = build_agentd_state(agent_config);
-    let state = Arc::new(state);
-    // Step 4: "agentd restart = read own log, rebuild rig_history, mark
-    // turns that died mid-flight as cancelled ... sessions are live again".
-    session::resume_persisted_sessions(&state, records);
-    run(&socket_path, state).await
+    // Bind-first (see the module doc): this is the first thing that touches
+    // the socket path, and it happens before the event log is even opened.
+    let listener = bind_listener(&socket_path).await?;
+
+    let providers = ProviderRegistry::builtin_with_config(agent_config.clone());
+    let state = Arc::new(AgentdState::new(providers, agent_config.clone(), None));
+
+    spawn_resume_task(state.clone(), agent_config);
+
+    run(listener, &socket_path, state).await
 }
 
-/// Builds the process-lifetime state every connection shares: the provider
-/// registry, and -- decision 3 in the design doc, "the child owns the event
-/// log and DuckDB projection" -- opens this process's own event log writer
-/// and (if configured) rebuilds the DuckDB projection from it, using this
-/// binary's own config load (never Horizon's). Blocks on the writer's
-/// startup read: unlike Horizon's UI, there is no pane render to avoid
-/// blocking, so the simpler synchronous wait is preferable to threading the
-/// `WriterInit` channel through `main`. Also hands back the startup read's
-/// records (empty if persistence is disabled or there's nothing yet) so
-/// `main` can resume every session they belong to
+/// Opens this process's own event log writer, resumes every session found
+/// in it, and marks `state` ready -- all on a background task that races
+/// the accept loop `main` starts right after this returns, per the
+/// module's bind-first fix. Decision 3 in the design doc ("the child owns
+/// the event log and DuckDB projection") still holds: this uses this
+/// binary's own config load, never Horizon's.
+fn spawn_resume_task(state: Arc<AgentdState>, agent_config: AgentConfig) {
+    tokio::task::spawn_blocking(move || {
+        if let Some(delay) = test_resume_delay() {
+            std::thread::sleep(delay);
+        }
+        let (writer, records) = open_persistence(&agent_config);
+        state.set_writer(writer);
+        // Step 4: "agentd restart = read own log, rebuild rig_history, mark
+        // turns that died mid-flight as cancelled ... sessions are live
+        // again".
+        session::resume_persisted_sessions(&state, records);
+        state.mark_resume_ready();
+    });
+}
+
+fn test_resume_delay() -> Option<Duration> {
+    std::env::var(TEST_RESUME_DELAY_MS_VAR)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+}
+
+/// Opens this process's own event log writer and (if configured) rebuilds
+/// the DuckDB projection from it, using this binary's own config load
+/// (never Horizon's). Blocks the calling (background, per
+/// [`spawn_resume_task`]) task on the writer's startup read -- simpler than
+/// threading the `WriterInit` channel further, and no longer something the
+/// accept loop waits on (see the module doc). Also hands back the startup
+/// read's records (empty if persistence is disabled or there's nothing yet)
+/// so the caller can resume every session they belong to
 /// ([`session::resume_persisted_sessions`]).
 ///
-/// Skipped-lines status reporting (surfacing a corrupt/torn-line summary
-/// somewhere a human sees it) is omitted for now -- see
-/// `docs/agent-runtime-split-design.md`'s step 3 notes. A summary is still
-/// logged to stderr so the information isn't silently lost.
-fn build_agentd_state(agent_config: AgentConfig) -> (AgentdState, Vec<Record>) {
-    let providers = ProviderRegistry::builtin_with_config(agent_config.clone());
-    let (writer, records) = open_persistence(&agent_config);
-    (AgentdState::new(providers, agent_config, writer), records)
-}
-
+/// Opens via [`WriterHandle::open_silently`] rather than [`WriterHandle::
+/// open`]: this function already prints its own `horizon-agentd`-prefixed
+/// skipped-lines summary just below, so the shared writer module's own
+/// generic summary line would otherwise double up in agentd's stderr.
 fn open_persistence(agent_config: &AgentConfig) -> (Option<WriterHandle>, Vec<Record>) {
-    let (writer, init_rx) = WriterHandle::open(&agent_config.persistence.event_log_path);
+    let (writer, init_rx) = WriterHandle::open_silently(&agent_config.persistence.event_log_path);
     match init_rx.recv() {
         Ok(WriterInit::Ready(report)) => {
             if let Some(summary) = report.skipped_summary() {
@@ -118,8 +176,11 @@ fn rebuild_duckdb_projection(path: &Path, records: Vec<Record>) -> anyhow::Resul
     Ok(())
 }
 
-async fn run(socket_path: &Path, state: Arc<AgentdState>) -> anyhow::Result<()> {
-    let listener = bind_listener(socket_path).await?;
+async fn run(
+    listener: UnixListener,
+    socket_path: &Path,
+    state: Arc<AgentdState>,
+) -> anyhow::Result<()> {
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
 
     loop {
@@ -263,6 +324,12 @@ async fn run_session_hosting_loop(
                 let _ = outgoing_tx.send(Envelope::control(Control::Pong));
             }
             EnvelopeBody::Control(Control::SessionList) => {
+                // Bind-first fix: block until `resume_persisted_sessions`
+                // has finished, so a client that connects while it's still
+                // running doesn't see an incomplete (or empty) session
+                // list -- see the module doc and `AgentdState::
+                // wait_until_resume_ready`.
+                connection.wait_until_resume_ready().await;
                 let _ = outgoing_tx.send(Envelope::control(Control::SessionListResult(
                     connection.session_list(),
                 )));
@@ -271,6 +338,11 @@ async fn run_session_hosting_loop(
                 connection.handle_session_new(new);
             }
             EnvelopeBody::Control(Control::SessionLoad(load)) => {
+                // Same readiness gate as `SessionList` above: a resumed
+                // session's thread may not exist yet while resume is still
+                // in flight, which would otherwise make this replay as
+                // "unknown session" (empty) instead of waiting for it.
+                connection.wait_until_resume_ready().await;
                 // Step 4's "v1 bootstrap": re-emit the fold-relevant
                 // committed events for this session so the (re)connecting
                 // client can rebuild its frame. Awaited inline (not spawned

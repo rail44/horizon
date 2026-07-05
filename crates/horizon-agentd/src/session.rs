@@ -36,6 +36,7 @@
 //! silently dropping events when it's `None` (no client to see them).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -59,6 +60,7 @@ use horizon_agent::wire::{
     Control, Envelope, EnvelopeBody, HostToolRequest, HostToolResponse, SessionNew, SessionSummary,
 };
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::Notify;
 
 /// How long a session thread waits for Horizon to answer a `host_tool_*`
 /// round trip before giving up. Generous but finite: a client that never
@@ -81,14 +83,28 @@ type SharedOutgoing = Mutex<Option<UnboundedSender<Envelope>>>;
 pub(crate) struct AgentdState {
     pub(crate) providers: ProviderRegistry,
     pub(crate) agent_config: AgentConfig,
-    /// `None` when the event log couldn't be opened at startup (mirrors
-    /// Horizon's own graceful degrade in `app::runtime::agent::
-    /// open_agent_runtime_state_store`): sessions still run, just without
-    /// persistence.
-    pub(crate) writer: Option<WriterHandle>,
+    /// `None` until [`Self::set_writer`] runs (or forever, if the event log
+    /// couldn't be opened -- mirrors Horizon's own graceful degrade in
+    /// `app::runtime::agent::open_agent_runtime_state_store`: sessions still
+    /// run, just without persistence). A `Mutex` rather than a plain field
+    /// because `main` now binds the socket and starts accepting connections
+    /// *before* the event log is opened (see the bind-first fix in `main`'s
+    /// doc comment) -- this is filled in once that finishes, on whatever
+    /// thread happens to be running by then.
+    writer: Mutex<Option<WriterHandle>>,
     sessions: Mutex<HashMap<SessionId, SessionEntry>>,
     pending_host_tool_requests: Mutex<HashMap<String, Sender<HostToolResponse>>>,
     outgoing: SharedOutgoing,
+    /// Flips once (see [`Self::mark_resume_ready`]) after
+    /// [`resume_persisted_sessions`] finishes populating `sessions` from the
+    /// log. `session_list`/`session_load` must not answer while this is
+    /// still false -- see [`Self::wait_until_resume_ready`] -- or a
+    /// (re)connecting client would see a partial (or, right after bind,
+    /// completely empty) view of sessions that genuinely exist. `hello`/
+    /// `ping` never check this: they don't depend on session state at all,
+    /// which is the whole point of binding first (see `main`).
+    resume_ready: AtomicBool,
+    resume_notify: Notify,
 }
 
 impl AgentdState {
@@ -100,10 +116,44 @@ impl AgentdState {
         Self {
             providers,
             agent_config,
-            writer,
+            writer: Mutex::new(writer),
             sessions: Mutex::new(HashMap::new()),
             pending_host_tool_requests: Mutex::new(HashMap::new()),
             outgoing: Mutex::new(None),
+            resume_ready: AtomicBool::new(false),
+            resume_notify: Notify::new(),
+        }
+    }
+
+    pub(crate) fn writer(&self) -> Option<WriterHandle> {
+        self.writer.lock().unwrap().clone()
+    }
+
+    pub(crate) fn set_writer(&self, writer: Option<WriterHandle>) {
+        *self.writer.lock().unwrap() = writer;
+    }
+
+    /// Called exactly once, after [`resume_persisted_sessions`] returns --
+    /// see `main`'s startup sequencing.
+    pub(crate) fn mark_resume_ready(&self) {
+        self.resume_ready.store(true, Ordering::SeqCst);
+        self.resume_notify.notify_waiters();
+    }
+
+    /// Blocks (async, so it only ever parks the calling connection's own
+    /// task -- see `main::run_session_hosting_loop`) until
+    /// [`Self::mark_resume_ready`] has run. Builds the `Notified` future
+    /// before re-checking the flag, per `tokio::sync::Notify`'s documented
+    /// pattern for "wait for a one-time event without a missed-wakeup race"
+    /// -- otherwise a `mark_resume_ready` landing between the flag check and
+    /// the `.await` would never be observed.
+    pub(crate) async fn wait_until_resume_ready(&self) {
+        loop {
+            let notified = self.resume_notify.notified();
+            if self.resume_ready.load(Ordering::SeqCst) {
+                return;
+            }
+            notified.await;
         }
     }
 }
@@ -165,8 +215,16 @@ fn spawn_session_thread(
 /// history so its first frame is complete. A no-op when there's no writer
 /// (persistence disabled for this run — nothing to resume from or write a
 /// fixup to).
+///
+/// Sessions whose log already ends in a terminal state ([`session_is_dead`])
+/// are skipped entirely rather than resumed: there is no live provider
+/// process left behind a terminated/exited session, so reviving its thread
+/// would just leave it parked forever, and doing this for *every* session
+/// ever created makes startup cost (and thread count) grow without bound
+/// with history -- exactly what was observed as "every historical session
+/// comes back as a ghost" before this filter existed.
 pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<Record>) {
-    let Some(writer) = state.writer.clone() else {
+    let Some(writer) = state.writer() else {
         return;
     };
 
@@ -191,6 +249,11 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
             .collect();
 
         let frame = agent_frame_from_events(&events);
+        if session_is_dead(&frame) {
+            eprintln!("horizon-agentd: skipping resume of {session_id:?} (already terminated)");
+            continue;
+        }
+
         if frame.is_turn_in_flight() {
             // Mirrors what a live `Command::Cancel` does (`providers::rig::
             // session`, `providers::mock`): finish every still-outstanding
@@ -223,6 +286,21 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
         );
         spawn_session_thread(state.clone(), session_id, provider_id, events);
     }
+}
+
+/// Whether `frame`'s folded state shows its session already dead: either
+/// `SessionState::Terminated` (the state `rig`'s `Command::Shutdown` path
+/// sends -- see `providers::rig::session`) or an `Event::Exited` item (the
+/// mock provider's shutdown path, `providers::mock`, pairs this with
+/// `Terminated`; checked independently here in case a future provider ever
+/// sends one without the other). Used by [`resume_persisted_sessions`] to
+/// decide which sessions are worth spawning a thread for at all.
+fn session_is_dead(frame: &AgentFrame) -> bool {
+    matches!(frame.state, Some(SessionState::Terminated))
+        || frame
+            .items
+            .iter()
+            .any(|item| matches!(item, AgentFrameItem::Exited(_)))
 }
 
 /// Every `ToolCallRequested` call id in `frame` that has no matching
@@ -323,6 +401,15 @@ impl Connection {
         if let Some(sender) = sender {
             let _ = sender.send(response);
         }
+    }
+
+    /// Delegates to [`AgentdState::wait_until_resume_ready`] -- see `main`'s
+    /// bind-first startup fix: `Control::SessionList`/`Control::SessionLoad`
+    /// must block on this before answering, so a client that connects while
+    /// `resume_persisted_sessions` is still running doesn't see an
+    /// incomplete (or, right after bind, empty) session list.
+    pub(crate) async fn wait_until_resume_ready(&self) {
+        self.state.wait_until_resume_ready().await;
     }
 
     pub(crate) fn session_list(&self) -> Vec<SessionSummary> {
@@ -476,11 +563,11 @@ fn run_session(
     };
 
     let tool_state = ToolSessionState::for_current_dir(state.agent_config.tools);
-    let live_state = match &state.writer {
+    let live_state = match state.writer() {
         Some(writer) => LiveState::with_event_log_and_history(
             session_id,
             Some(provider_id.clone()),
-            writer.clone(),
+            writer,
             history,
         ),
         None => LiveState::with_disabled_persistence(),
@@ -675,5 +762,72 @@ fn resolve_and_forward(
             let _ = commands_tx.send(command);
         }
         ApprovalOutcome::AlreadyResolved => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_agent::contract::Exit;
+
+    /// A session whose log ends in `SessionState::Terminated` (the state
+    /// `rig`'s `Command::Shutdown` path sends, with no accompanying
+    /// `Event::Exited` -- see `providers::rig::session`) must be treated as
+    /// dead.
+    #[test]
+    fn session_is_dead_when_the_frame_state_is_terminated() {
+        let events = vec![
+            Event::StateChanged(SessionState::Created),
+            Event::StateChanged(SessionState::WaitingForUser),
+            Event::StateChanged(SessionState::Terminated),
+        ];
+        let frame = agent_frame_from_events(&events);
+        assert!(session_is_dead(&frame));
+    }
+
+    /// The mock provider's shutdown path sends `Event::Exited` right after
+    /// `SessionState::Terminated`; either one alone must be enough to flag
+    /// the session as dead, so this covers `Exited` being present without
+    /// relying on the state check.
+    #[test]
+    fn session_is_dead_when_an_exited_event_is_present() {
+        let events = vec![
+            Event::StateChanged(SessionState::Created),
+            Event::StateChanged(SessionState::WaitingForUser),
+            Event::StateChanged(SessionState::Terminated),
+            Event::Exited(Exit {
+                reason: "shutdown".to_string(),
+            }),
+        ];
+        let frame = agent_frame_from_events(&events);
+        assert!(session_is_dead(&frame));
+    }
+
+    /// A session parked in an ordinary live state (here, waiting for the
+    /// next user message) must not be flagged as dead -- this is the
+    /// common case `resume_persisted_sessions` must keep resuming.
+    #[test]
+    fn session_is_not_dead_when_waiting_for_user() {
+        let events = vec![
+            Event::StateChanged(SessionState::Created),
+            Event::StateChanged(SessionState::WaitingForUser),
+        ];
+        let frame = agent_frame_from_events(&events);
+        assert!(!session_is_dead(&frame));
+    }
+
+    /// A session with a turn still genuinely in flight (e.g. parked on an
+    /// approval, as a `kill -9` mid-turn would leave it) is not dead either
+    /// -- `resume_persisted_sessions` handles that case by committing the
+    /// interrupted turn as cancelled, not by refusing to resume it.
+    #[test]
+    fn session_is_not_dead_when_a_turn_is_in_flight() {
+        let events = vec![
+            Event::StateChanged(SessionState::Created),
+            Event::StateChanged(SessionState::WaitingForUser),
+            Event::StateChanged(SessionState::WaitingForApproval),
+        ];
+        let frame = agent_frame_from_events(&events);
+        assert!(!session_is_dead(&frame));
     }
 }

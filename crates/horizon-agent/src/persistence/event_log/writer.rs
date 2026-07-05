@@ -109,6 +109,19 @@ impl WriterHandle {
         Self::open_with_reader(path, |path| read(path))
     }
 
+    /// Same as [`Self::open`], but suppresses this module's own
+    /// skipped-lines summary line to stderr (see [`start_up`]) -- for
+    /// `horizon-agentd`'s startup only, which already prints its own
+    /// differently-prefixed summary right after this call's `init_rx`
+    /// resolves (`horizon-agentd::main::open_persistence`). Without this,
+    /// agentd's stderr got the same summary twice per startup, once from
+    /// each of the two call sites. Every other caller (Horizon's own tests,
+    /// and any future direct caller) keeps getting the line via
+    /// [`Self::open`]/[`Self::open_with_reader`].
+    pub fn open_silently(path: impl AsRef<Path>) -> (Self, Receiver<WriterInit>) {
+        Self::open_inner(path, |path| read(path), false)
+    }
+
     /// Same mechanism as [`Self::open`], but lets a caller substitute the
     /// function that performs the startup read. Production code always
     /// goes through [`Self::open`] (which passes the real [`read`]); tests
@@ -120,11 +133,19 @@ impl WriterHandle {
         path: impl AsRef<Path>,
         reader: impl FnOnce(&Path) -> Result<ReadReport> + Send + 'static,
     ) -> (Self, Receiver<WriterInit>) {
+        Self::open_inner(path, reader, true)
+    }
+
+    fn open_inner(
+        path: impl AsRef<Path>,
+        reader: impl FnOnce(&Path) -> Result<ReadReport> + Send + 'static,
+        log_skipped_summary: bool,
+    ) -> (Self, Receiver<WriterInit>) {
         let path = path.as_ref().to_path_buf();
         let (tx, rx) = unbounded();
         let (init_tx, init_rx) = unbounded();
 
-        thread::spawn(move || match start_up(&path, reader) {
+        thread::spawn(move || match start_up(&path, reader, log_skipped_summary) {
             Ok((file, report, next_sequence)) => {
                 let _ = init_tx.send(WriterInit::Ready(report));
                 run_writer(file, &path, rx, next_sequence);
@@ -192,10 +213,13 @@ enum AgentEventLogWriterCommand {
 /// closure in tests — see [`WriterHandle::open_with_reader`]), computes the
 /// sequence number one past the highest already on disk, and opens the file
 /// for appending. Everything here runs on the writer's background thread,
-/// never on the caller of `open`.
+/// never on the caller of `open`. `log_skipped_summary` gates this
+/// function's own stderr line -- `false` only for
+/// [`WriterHandle::open_silently`] (see its doc comment for why).
 fn start_up(
     path: &Path,
     reader: impl FnOnce(&Path) -> Result<ReadReport>,
+    log_skipped_summary: bool,
 ) -> Result<(std::fs::File, ReadReport, u64)> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -206,11 +230,13 @@ fn start_up(
     }
 
     let report = reader(path)?;
-    if let Some(summary) = report.skipped_summary() {
-        eprintln!(
-            "horizon agent event log: {summary} while opening {}",
-            path.display()
-        );
+    if log_skipped_summary {
+        if let Some(summary) = report.skipped_summary() {
+            eprintln!(
+                "horizon agent event log: {summary} while opening {}",
+                path.display()
+            );
+        }
     }
     let next_sequence = report
         .records

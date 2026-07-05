@@ -3,14 +3,17 @@
 //! the same package as the `[[bin]]` target) -- see
 //! `docs/agent-runtime-split-design.md`'s step 2 deliverables.
 
+use std::io::Read;
 use std::path::PathBuf;
-use std::process::{Child, Command};
-use std::time::Duration;
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 
 use horizon_agent::contract::{
-    Command as AgentCommand, Event, MessageRole, ProviderId, SessionId, SessionState, TurnEndReason,
+    Command as AgentCommand, Event, Exit, MessageRole, ProviderEvent, ProviderId, SessionId,
+    SessionState, TurnEndReason,
 };
 use horizon_agent::frame::agent_frame_from_events;
+use horizon_agent::persistence::event_log::{Appender, WriterHandle, WriterInit};
 use horizon_agent::wire::{
     self, Control, Envelope, EnvelopeBody, Hello, HostToolRequest, HostToolResponse, SessionLoad,
     SessionNew, SessionSummary, CONTRACT_VERSION,
@@ -18,6 +21,11 @@ use horizon_agent::wire::{
 use tokio::io::BufReader;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::UnixStream;
+
+/// The env var `horizon-agentd`'s `main` reads to artificially delay its
+/// event-log-read-plus-resume phase -- see that binary's own doc comment on
+/// the constant of the same name. Test-only; never set outside this file.
+const TEST_RESUME_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_RESUME_DELAY_MS";
 
 /// Owns the spawned `horizon-agentd` child and its socket path; kills the
 /// child and removes the socket file on drop so a failing assertion doesn't
@@ -33,12 +41,12 @@ impl AgentdProcess {
     /// nonexistent config file -- **hermetic on purpose**: without this,
     /// the binary's own config loader (`horizon_agent::config::
     /// load_file_config`) falls back to this machine's real
-    /// `~/.config/horizon/config.toml`, and step 3's eager startup
-    /// persistence open (`build_agentd_state`/`open_persistence` in
-    /// `main.rs`) would then read/rebuild-from a real developer's
-    /// (potentially large, potentially concurrently-locked) event log and
-    /// DuckDB file. Every test gets its own fresh, empty log path so runs
-    /// are fast, deterministic, and never touch real user data.
+    /// `~/.config/horizon/config.toml`, and step 3's startup persistence
+    /// open (`spawn_resume_task`/`open_persistence` in `main.rs`) would then
+    /// read/rebuild-from a real developer's (potentially large, potentially
+    /// concurrently-locked) event log and DuckDB file. Every test gets its
+    /// own fresh, empty log path so runs are fast, deterministic, and never
+    /// touch real user data.
     fn spawn() -> Self {
         let socket_path = std::env::temp_dir().join(format!(
             "horizon-agentd-e2e-{}-{}.sock",
@@ -59,19 +67,41 @@ impl AgentdProcess {
     /// *first* process's own socket/event-log paths, simulating a real
     /// restart.
     fn spawn_at(socket_path: PathBuf, event_log_path: PathBuf) -> Self {
+        Self::spawn_at_with_resume_delay(socket_path, event_log_path, None)
+    }
+
+    /// Same as [`Self::spawn_at`], but additionally sets `horizon-agentd`'s
+    /// test-only [`TEST_RESUME_DELAY_MS_VAR`] hook when `resume_delay_ms` is
+    /// `Some` -- for the bind-first ordering test, which needs the
+    /// log-read-plus-resume phase to take long enough that hello answering
+    /// before it finishes (and `session_list` waiting for it) is provably a
+    /// consequence of the ordering fix, not incidental timing.
+    fn spawn_at_with_resume_delay(
+        socket_path: PathBuf,
+        event_log_path: PathBuf,
+        resume_delay_ms: Option<u64>,
+    ) -> Self {
         let missing_config_path = std::env::temp_dir().join(format!(
             "horizon-agentd-e2e-no-such-config-{}-{}.toml",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
-        let child = Command::new(env!("CARGO_BIN_EXE_horizon-agentd"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_horizon-agentd"));
+        command
             .arg("--socket")
             .arg(&socket_path)
             .env("HORIZON_CONFIG", &missing_config_path)
             .env("HORIZON_AGENT_EVENT_LOG", &event_log_path)
-            .env_remove("HORIZON_AGENT_STATE_DB")
-            .spawn()
-            .expect("failed to spawn horizon-agentd");
+            .env_remove("HORIZON_AGENT_STATE_DB");
+        match resume_delay_ms {
+            Some(delay_ms) => {
+                command.env(TEST_RESUME_DELAY_MS_VAR, delay_ms.to_string());
+            }
+            None => {
+                command.env_remove(TEST_RESUME_DELAY_MS_VAR);
+            }
+        }
+        let child = command.spawn().expect("failed to spawn horizon-agentd");
         Self {
             child,
             socket_path,
@@ -291,6 +321,35 @@ async fn a_hello_with_the_wrong_contract_version_is_rejected_with_a_reason() {
 
 fn mock_provider_id() -> ProviderId {
     ProviderId("builtin.agent.mock".to_string())
+}
+
+/// Writes a fixture event log directly at `path`, one session per
+/// `(SessionId, Vec<Event>)` pair, via the same `WriterHandle`/`Appender`
+/// machinery `horizon-agent`'s own event-log tests use -- for tests below
+/// that need a specific pre-existing log (particular sessions in particular
+/// terminal/live states) *before* `horizon-agentd` itself ever runs, rather
+/// than building one up by talking to a live process. Every record gets
+/// [`mock_provider_id`] as its provider id, matching what `send_session_new`
+/// uses, so resumed sessions' `SessionSummary`s are directly comparable to
+/// the ones the rest of this file already asserts against.
+fn write_session_fixture(path: &std::path::Path, sessions: Vec<(SessionId, Vec<Event>)>) {
+    let (writer, init_rx) = WriterHandle::open(path);
+    match init_rx
+        .recv()
+        .expect("fixture writer should report a startup outcome")
+    {
+        WriterInit::Ready(_) => {}
+        WriterInit::Failed(error) => {
+            panic!("fixture writer failed to open {}: {error}", path.display())
+        }
+    }
+    for (session_id, events) in sessions {
+        let mut appender = Appender::new(writer.clone(), session_id, Some(mock_provider_id()));
+        appender
+            .append_provider_events(events.into_iter().map(ProviderEvent::from).collect())
+            .expect("append fixture events");
+    }
+    writer.flush().expect("flush fixture events");
 }
 
 async fn send_session_new(writer: &mut OwnedWriteHalf, session_id: SessionId) {
@@ -902,4 +961,234 @@ async fn drained_agentd_respawns_and_preserves_a_completed_session() {
         "a turn that had already completed cleanly before the drain must not be \
          re-marked as cancelled on resume, got: {replayed:?}"
     );
+}
+
+// --- bind-first startup ordering + dead-session resume filter ---------------
+//
+// Regression coverage for a real startup failure: `horizon-agentd` used to
+// read its event log and resume every session it found *before* binding the
+// socket. On a big log this took long enough that Horizon's connect-retry
+// budget timed out, concluded nothing was listening, and spawned a second
+// `horizon-agentd` -- which itself replayed the whole log again before
+// discovering the first instance already owned the socket. Separately,
+// every session ever created (including long-dead ones) was being resumed
+// on every restart, growing startup cost with history forever.
+
+/// Fix 2: a session whose log already ends in a terminal state (`Terminated`
+/// or an `Exited` item) must not be resumed -- only a session with no such
+/// terminal marker at its tail should show up in `session_list` after
+/// startup.
+#[tokio::test]
+async fn resume_skips_sessions_whose_log_already_ended_in_a_terminal_state() {
+    let socket_path = std::env::temp_dir().join(format!(
+        "horizon-agentd-e2e-{}-{}.sock",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let event_log_path = std::env::temp_dir().join(format!(
+        "horizon-agentd-e2e-events-{}-{}.jsonl",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+
+    let terminated_session = SessionId::new();
+    let exited_session = SessionId::new();
+    let live_session = SessionId::new();
+    write_session_fixture(
+        &event_log_path,
+        vec![
+            (
+                terminated_session,
+                vec![
+                    Event::StateChanged(SessionState::Created),
+                    Event::StateChanged(SessionState::WaitingForUser),
+                    Event::StateChanged(SessionState::Terminated),
+                ],
+            ),
+            (
+                exited_session,
+                vec![
+                    Event::StateChanged(SessionState::Created),
+                    Event::StateChanged(SessionState::WaitingForUser),
+                    Event::StateChanged(SessionState::Terminated),
+                    Event::Exited(Exit {
+                        reason: "shutdown".to_string(),
+                    }),
+                ],
+            ),
+            (
+                live_session,
+                vec![
+                    Event::StateChanged(SessionState::Created),
+                    Event::StateChanged(SessionState::WaitingForUser),
+                ],
+            ),
+        ],
+    );
+
+    let agentd = AgentdProcess::spawn_at(socket_path, event_log_path);
+    let (mut reader, mut writer) = connect_and_handshake(&agentd.socket_path).await;
+
+    wire::write_envelope(&mut writer, &Envelope::control(Control::SessionList))
+        .await
+        .unwrap();
+    let reply = wire::read_envelope(&mut reader).await.unwrap().unwrap();
+    assert_eq!(
+        reply.body,
+        EnvelopeBody::Control(Control::SessionListResult(vec![SessionSummary {
+            session_id: live_session,
+            provider_id: mock_provider_id(),
+        }])),
+        "only the live session should have been resumed, got {reply:?}"
+    );
+}
+
+/// Fix 1: `hello` must answer well before a slow resume finishes, and
+/// `session_list` must wait for it rather than racing it -- proven here with
+/// the test-only resume-delay hook rather than relying on incidental timing,
+/// since a normal (empty or tiny) fixture log resumes too fast to
+/// distinguish "answered immediately" from "answered after a fast resume".
+#[tokio::test]
+async fn hello_answers_immediately_while_session_list_waits_for_a_slow_resume() {
+    let socket_path = std::env::temp_dir().join(format!(
+        "horizon-agentd-e2e-{}-{}.sock",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let event_log_path = std::env::temp_dir().join(format!(
+        "horizon-agentd-e2e-events-{}-{}.jsonl",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+
+    let live_session = SessionId::new();
+    write_session_fixture(
+        &event_log_path,
+        vec![(
+            live_session,
+            vec![
+                Event::StateChanged(SessionState::Created),
+                Event::StateChanged(SessionState::WaitingForUser),
+            ],
+        )],
+    );
+
+    const RESUME_DELAY_MS: u64 = 2000;
+    let agentd = AgentdProcess::spawn_at_with_resume_delay(
+        socket_path,
+        event_log_path,
+        Some(RESUME_DELAY_MS),
+    );
+
+    let hello_started = Instant::now();
+    let (mut reader, mut writer) = connect_and_handshake(&agentd.socket_path).await;
+    let hello_elapsed = hello_started.elapsed();
+    assert!(
+        hello_elapsed < Duration::from_millis(RESUME_DELAY_MS / 2),
+        "hello should answer well before the artificial resume delay elapses, took {hello_elapsed:?}"
+    );
+
+    let session_list_started = Instant::now();
+    wire::write_envelope(&mut writer, &Envelope::control(Control::SessionList))
+        .await
+        .unwrap();
+    let reply = wire::read_envelope(&mut reader).await.unwrap().unwrap();
+    let session_list_elapsed = session_list_started.elapsed();
+    assert!(
+        session_list_elapsed >= Duration::from_millis(RESUME_DELAY_MS) - Duration::from_millis(300),
+        "session_list should have waited for the (artificially slow) resume to finish, \
+         took {session_list_elapsed:?}"
+    );
+    assert_eq!(
+        reply.body,
+        EnvelopeBody::Control(Control::SessionListResult(vec![SessionSummary {
+            session_id: live_session,
+            provider_id: mock_provider_id(),
+        }])),
+    );
+}
+
+/// Fix 1's other half: a second `horizon-agentd` pointed at a socket path a
+/// live instance already owns must detect that and exit *before* it ever
+/// reads its own event log -- proven by asserting the second instance's
+/// stderr never mentions resuming a session, not just that it eventually
+/// exits non-zero (which the old, wrongly-ordered code also did, just after
+/// wastefully replaying the whole log first).
+#[tokio::test]
+async fn second_agentd_against_a_live_socket_exits_before_reading_its_own_log() {
+    let socket_path = std::env::temp_dir().join(format!(
+        "horizon-agentd-e2e-{}-{}.sock",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let event_log_path = std::env::temp_dir().join(format!(
+        "horizon-agentd-e2e-events-{}-{}.jsonl",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+
+    let live_session = SessionId::new();
+    write_session_fixture(
+        &event_log_path,
+        vec![(
+            live_session,
+            vec![
+                Event::StateChanged(SessionState::Created),
+                Event::StateChanged(SessionState::WaitingForUser),
+            ],
+        )],
+    );
+
+    let first = AgentdProcess::spawn_at(socket_path.clone(), event_log_path.clone());
+    // Wait for the first instance to be up and to have finished resuming
+    // (via `SessionList`'s own readiness gate) before racing a second one
+    // against it, so this test is only exercising the "socket already
+    // live" path, not an unrelated bind race between the two.
+    let (mut reader, mut writer) = connect_and_handshake(&first.socket_path).await;
+    wire::write_envelope(&mut writer, &Envelope::control(Control::SessionList))
+        .await
+        .unwrap();
+    wire::read_envelope(&mut reader).await.unwrap().unwrap();
+    drop(reader);
+    drop(writer);
+
+    let missing_config_path = std::env::temp_dir().join(format!(
+        "horizon-agentd-e2e-no-such-config-{}-{}.toml",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let mut second = Command::new(env!("CARGO_BIN_EXE_horizon-agentd"))
+        .arg("--socket")
+        .arg(&socket_path)
+        .env("HORIZON_CONFIG", &missing_config_path)
+        .env("HORIZON_AGENT_EVENT_LOG", &event_log_path)
+        .env_remove("HORIZON_AGENT_STATE_DB")
+        .env_remove(TEST_RESUME_DELAY_MS_VAR)
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn second horizon-agentd");
+
+    let status = wait_for_exit(&mut second).await;
+    assert!(
+        !status.success(),
+        "a second instance against a live socket must exit non-zero, got {status:?}"
+    );
+
+    let mut stderr = String::new();
+    second
+        .stderr
+        .take()
+        .expect("stderr should have been piped")
+        .read_to_string(&mut stderr)
+        .expect("read second instance's stderr");
+    assert!(
+        stderr.contains("already accepting connections"),
+        "expected the live-socket bail message, stderr was: {stderr}"
+    );
+    assert!(
+        !stderr.contains("resumed session"),
+        "the second instance must bail before reading/resuming its own log, stderr was: {stderr}"
+    );
+
+    drop(first);
 }

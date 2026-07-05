@@ -34,6 +34,15 @@ use tokio::net::UnixStream;
 use crate::agent::agentd_runtime::AgentdConnection;
 use crate::workspace::Workspace;
 
+/// Total retry-connect budget: `RETRY_ATTEMPTS * RETRY_DELAY` = 2s. Verified
+/// still generous after `horizon-agentd`'s bind-first startup fix (it binds
+/// the socket as its first action, before reading its event log or
+/// resuming any session -- see that binary's `main` module doc): a freshly
+/// spawned agentd's `connect` now succeeds within milliseconds of process
+/// start regardless of event-log size, since nothing before `bind_listener`
+/// touches the log. Before that fix, this budget had to cover the *entire*
+/// log-read-plus-resume duration too, which is what let a big log's replay
+/// exceed it and trigger a duplicate spawn.
 const RETRY_ATTEMPTS: u32 = 40;
 const RETRY_DELAY: Duration = Duration::from_millis(50);
 
