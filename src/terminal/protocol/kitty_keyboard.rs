@@ -361,12 +361,20 @@ fn legacy_bytes(
 
 /// `KeyCode::Char` handling, split out of `legacy_bytes` for readability.
 /// Mirrors termwiz's own `Char` handling exactly (shift-to-uppercase
-/// normalization first, then Ctrl/Alt-aware byte selection) — see
-/// `KITTY_COMPLIANCE`'s "Report all keys as escape codes (text keys)" row
-/// for the known, deliberately-unfixed gap this still leaves: a modified
-/// Char here never becomes genuine `CSI u`, matching termwiz's
-/// `Kitty(flags)`-is-really-`Xterm` behavior this whole module otherwise
-/// replaces.
+/// normalization first, then Ctrl/Alt-aware byte selection).
+///
+/// Dead in practice as of `encode_text_key`: `TerminalCore::encode_key`
+/// intercepts every `KeyCode::Char` before it ever reaches `encode`/
+/// `kitty_override`/`legacy_bytes`, so this function (and the `legacy_bytes`
+/// arm that calls it) is never actually invoked with a real key press —
+/// text keys have their own dedicated, Kitty-flag-aware path now (see
+/// `encode_text_key`'s doc comment for why it isn't simply routed through
+/// here: this port's Ctrl+Alt handling differs from
+/// `app::keymap::character_input`'s pre-existing algorithm, which
+/// `encode_text_key`'s legacy branch had to match exactly instead). Left in
+/// place, unmodified, as the still-correct byte-for-byte port of termwiz's
+/// real `Char` encoder it always was — `legacy_bytes` remains the active
+/// path for every other `KeyCode` variant.
 fn encode_char(c: char, mods: Modifiers) -> String {
     let c = if mods.contains(Modifiers::SHIFT) && c.is_ascii_lowercase() {
         c.to_ascii_uppercase()
@@ -404,6 +412,111 @@ fn encode_char(c: char, mods: Modifiers) -> String {
     }
     out.push(c);
     out
+}
+
+/// Entry point for `KeyCode::Char` — the only key class `TerminalCore::
+/// encode_key` special-cases ahead of `encode`/`kitty_override`/
+/// `legacy_bytes` (see its call site's doc comment). `c` follows termwiz's
+/// own `KeyCode::Char` convention, the same one `encode_char` above already
+/// assumes: the *base* (unshifted) character, with `Modifiers::SHIFT`
+/// carrying the shift state separately — e.g. `'a'` + `SHIFT`, not `'A'`,
+/// for a Shift+A press. `app::keymap::terminal_key_from_key` reconstructs
+/// that convention from winit's already-shifted `Key::Character` text
+/// before a real key event ever reaches here.
+///
+/// Dispatches purely on `REPORT_ALL_KEYS_AS_ESCAPE_CODES`: that is the only
+/// flag the Kitty spec ties to text-key promotion
+/// (<https://sw.kovidgoyal.net/kitty/keyboard-protocol/>, "Report all keys
+/// as escape codes": "turns on key reporting even for key events that
+/// generate text"; contrast "Disambiguate escape codes", which explicitly
+/// scopes its own promotion to "key events that do not generate text").
+/// Disambiguate/report-event-types/report-alternate-keys/
+/// report-associated-text alone (or no flags at all) fall to
+/// `legacy_text_key`, unchanged from before this function existed.
+pub(crate) fn encode_text_key(c: char, mods: Modifiers, flags: KittyKeyboardFlags) -> Vec<u8> {
+    if flags.contains(KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES) {
+        return csi_u_text_key(c, mods, flags);
+    }
+    legacy_text_key(c, mods)
+}
+
+/// Byte-identical port of `app::keymap::character_input`/`control_input`'s
+/// pre-existing algorithm — the exact raw bytes Horizon has always sent for
+/// a text key before this module owned the decision, preserved verbatim
+/// now that `terminal::core::TerminalCore` makes it instead of the app
+/// layer. Deliberately NOT `encode_char` above: that function faithfully
+/// mirrors termwiz's *real* `Char` encoder, which ESC-prefixes Ctrl+Alt
+/// combinations; `character_input`'s Ctrl branch returns before ever
+/// checking Alt, so Ctrl+Alt+<letter> has always produced Horizon's bare
+/// Ctrl byte with no `ESC` — a pre-existing mismatch between the two that
+/// this function preserves rather than "fixes", since fixing it here would
+/// be an observable legacy-output change this task doesn't call for.
+///
+/// One deliberate widening: Ctrl lookups go through `ctrl_mapping` below
+/// (the fuller, wezterm-derived table already used elsewhere in this file)
+/// rather than `control_input`'s smaller hand-written one, so e.g.
+/// Ctrl+Space now sends NUL instead of nothing — see `KITTY_COMPLIANCE`.
+fn legacy_text_key(c: char, mods: Modifiers) -> Vec<u8> {
+    if mods.contains(Modifiers::CTRL) {
+        return match ctrl_mapping(c) {
+            Some(mapped) => vec![mapped as u8],
+            None => Vec::new(),
+        };
+    }
+    if mods.contains(Modifiers::SUPER) {
+        return Vec::new();
+    }
+
+    let display = if mods.contains(Modifiers::SHIFT) && c.is_ascii_lowercase() {
+        c.to_ascii_uppercase()
+    } else {
+        c
+    };
+    let mut bytes = Vec::new();
+    if mods.contains(Modifiers::ALT) {
+        bytes.push(0x1b);
+    }
+    let mut buf = [0u8; 4];
+    bytes.extend_from_slice(display.encode_utf8(&mut buf).as_bytes());
+    bytes
+}
+
+/// Genuine Kitty `CSI u` for a text key once `REPORT_ALL_KEYS_AS_ESCAPE_CODES`
+/// is active. Per spec, the `unicode-key-code` is always the base
+/// (unshifted) codepoint, regardless of Shift or Ctrl — "the codepoint used
+/// is _always_ the lower-case (or more technically, un-shifted) version of
+/// the key... If the user presses, for example, ctrl+shift+a the escape
+/// code would be `CSI 97;<modifiers>u`. It _must not_ be `CSI
+/// 65;<modifiers>u`" — which `c` already is, per this module's `KeyCode::
+/// Char` convention (see `encode_text_key`'s doc comment), so it's used
+/// directly with no case-folding here (unlike `legacy_text_key`, which
+/// still needs the *display* form for its legacy bytes).
+///
+/// Also emits the "Report alternate keys" (`0b100`) subfield — the shifted
+/// codepoint — whenever it's cheaply knowable: exactly the ASCII-letter
+/// case termwiz's own `normalize_shift_to_upper_case` handles (`'a'` ->
+/// `'A'`). Digits and punctuation have no algorithmic shift (Shift+1 -> '!'
+/// depends on keyboard layout, which Horizon doesn't have access to here —
+/// see `KITTY_COMPLIANCE`), so no alternate is reported for them.
+fn csi_u_text_key(c: char, mods: Modifiers, flags: KittyKeyboardFlags) -> Vec<u8> {
+    let mut mod_bits = u32::from(mods.encode_xterm());
+    if mods.contains(Modifiers::SUPER) {
+        mod_bits |= 0b1000;
+    }
+    let mod_value = 1u32 + mod_bits;
+
+    let mut sequence = format!("\x1b[{}", c as u32);
+    if flags.contains(KittyKeyboardFlags::REPORT_ALTERNATE_KEYS)
+        && mods.contains(Modifiers::SHIFT)
+        && c.is_ascii_lowercase()
+    {
+        sequence.push_str(&format!(":{}", c.to_ascii_uppercase() as u32));
+    }
+    if mod_value != 1 {
+        sequence.push_str(&format!(";{mod_value}"));
+    }
+    sequence.push('u');
+    sequence.into_bytes()
 }
 
 /// `KeyCode::Function(n)` handling, split out of `legacy_bytes` for
@@ -535,7 +648,13 @@ pub(crate) enum Verdict {
     /// effort to close it.
     Unimplemented(&'static str),
     /// The real UI never drives this code path at all; names what bypasses
-    /// it.
+    /// it. No `KITTY_COMPLIANCE` row currently uses this verdict (the last
+    /// one, text keys, was fixed by routing them through
+    /// `kitty_keyboard::encode_text_key` — see `terminal_key_from_character`
+    /// in `app::keymap`), but the variant stays: it's part of this general
+    /// verdict vocabulary, not tied to any one feature, and a future gap
+    /// may well be an app-layer bypass again.
+    #[allow(dead_code)]
     Bypassed(&'static str),
 }
 
@@ -651,19 +770,39 @@ pub(crate) const KITTY_COMPLIANCE: &[FeatureEntry] = &[
     },
     FeatureEntry {
         feature: "Report all keys as escape codes (text keys)",
-        key_class: "shifted letters / printable text",
-        verdict: Verdict::Bypassed("app::keymap::character_input"),
-        tests: &["shift_letter_ignores_kitty_flags_even_with_report_all_keys_active"],
+        key_class: "plain/Shift/Ctrl/Alt letters, digits, punctuation",
+        verdict: Verdict::Compliant,
+        tests: &[
+            "csi_u_text_key_truth_table",
+            "shift_letter_produces_csi_u_under_report_all_keys",
+        ],
+    },
+    FeatureEntry {
+        feature: "Report all keys as escape codes (text keys): shifted digits/punctuation",
+        key_class: "Shift+digit, Shift+punctuation (e.g. Shift+1 -> '!')",
+        verdict: Verdict::Deviation(
+            "reports the actual shifted codepoint (e.g. 33 for '!') instead of the spec's \
+             mandated base/unshifted one (49 for '1'): the base isn't recoverable from winit's \
+             already-shifted `Key::Character` text without OS keyboard-layout support \
+             (`key_without_modifiers`, exposed by winit but unreachable here — floem's KeyEvent \
+             wraps a private platform-specific field so a full one can't be constructed in \
+             unit-testable code, see `app::keymap::Chord::matches`'s doc comment for the same \
+             constraint). ASCII letters (Shift+a -> reports 97, not 65) ARE inverted correctly \
+             since case-folding needs no layout knowledge — see `encode_text_key`/`csi_u_text_key`.",
+        ),
+        tests: &["csi_u_text_key_truth_table"],
     },
     FeatureEntry {
         feature: "Report alternate keys",
         key_class: "text keys",
-        verdict: Verdict::Unimplemented(
-            "the flag is tracked (flags_from_mode sets REPORT_ALTERNATE_KEYS from \
-             TermMode::REPORT_ALTERNATE_KEYS) but no code path ever emits the alternate-key CSI \
-             u subfield it requires; no test is possible without an implementation to test",
+        verdict: Verdict::Deviation(
+            "only emits the shifted-key subfield for ASCII letters (Shift+a -> `97:65`), the one \
+             case where the shifted codepoint is cheaply derivable (case-folding) without OS \
+             keyboard-layout data; digits and punctuation (Shift+1 -> '!') have no algorithmic \
+             shift and report no alternate at all — see the sibling \"shifted digits/punctuation\" \
+             row above",
         ),
-        tests: &[],
+        tests: &["csi_u_text_key_reports_alternate_for_shifted_letter_only"],
     },
     FeatureEntry {
         feature: "Report associated text",

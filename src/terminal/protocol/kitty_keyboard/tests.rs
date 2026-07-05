@@ -17,8 +17,10 @@ const TEST_REGISTRY: &[(&str, bool)] = &[
         "navigation_keys_are_flag_invariant_and_spec_compliant",
         false,
     ),
+    ("csi_u_text_key_truth_table", false),
+    ("shift_letter_produces_csi_u_under_report_all_keys", false),
     (
-        "shift_letter_ignores_kitty_flags_even_with_report_all_keys_active",
+        "csi_u_text_key_reports_alternate_for_shifted_letter_only",
         false,
     ),
     ("release_events_are_unimplemented_regardless_of_flags", true),

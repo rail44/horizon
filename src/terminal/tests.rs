@@ -702,29 +702,199 @@ fn keypad_keys_ignore_disambiguate_flag() {
     );
 }
 
-/// Documents a known, pre-existing compliance gap that is NOT part of the
-/// Shift+Enter bug this module's truth table fixes: even with every Kitty
-/// flag active (including `REPORT_ALL_KEYS_AS_ESCAPE_CODES`, which per spec
-/// should turn *every* key, including plain letters, into `CSI u`), a
-/// shifted letter run through `TerminalCore::key_input` directly still
-/// yields the bare uppercased legacy byte — `kitty_override` doesn't
-/// special-case `KeyCode::Char`, and termwiz's own `Char` branch in
-/// `KeyCode::encode` ignores `modes.encoding` entirely once `mods` is empty
-/// (which it is here, after termwiz folds Shift into the uppercase letter
-/// and strips the modifier). In practice this path isn't reachable from
-/// Horizon's real UI anyway: `app::keymap::character_input` sends shifted
-/// letters as raw literal bytes without ever consulting the terminal's
-/// negotiated Kitty state, for every flag combination. Fixing "report all
-/// keys" for text keys would mean routing that separate path through the
-/// terminal's live mode, which is a larger change than this bug fix calls
-/// for.
+/// Regression test for the fix to a known, pre-existing compliance gap:
+/// with every Kitty flag active (including `REPORT_ALL_KEYS_AS_ESCAPE_CODES`,
+/// which per spec turns *every* key, including plain letters, into `CSI u`),
+/// a shifted letter run through `TerminalCore::key_input` now produces
+/// genuine `CSI u` instead of the bare uppercased legacy byte this test used
+/// to document as a known gap (`shift_letter_ignores_kitty_flags_even_with_
+/// report_all_keys_active`, before `TerminalCore::encode_key` started
+/// special-casing `KeyCode::Char` through `kitty_keyboard::encode_text_key`
+/// — see its doc comment and `KITTY_COMPLIANCE`'s former "Report all keys
+/// as escape codes (text keys)" BYPASSED row). `97` is `'a'`, the base/
+/// unshifted codepoint the spec mandates; `65` (`'A'`) is the "report
+/// alternate keys" shifted-key subfield, included here since flags=31
+/// negotiates that flag too.
 #[test]
-fn shift_letter_ignores_kitty_flags_even_with_report_all_keys_active() {
+fn shift_letter_produces_csi_u_under_report_all_keys() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     core.write_vt(b"\x1b[>31u");
 
     assert_eq!(
         core.key_input(KeyCode::Char('a'), Modifiers::SHIFT, true),
-        b"A".to_vec()
+        b"\x1b[97:65;2u".to_vec()
     );
+}
+
+/// Truth table for `kitty_keyboard::encode_text_key`'s `CSI u` branch, spot
+/// verified against <https://sw.kovidgoyal.net/kitty/keyboard-protocol/>'s
+/// own worked example for the general escape code format ("If the user
+/// presses, for example, ctrl+shift+a the escape code would be `CSI
+/// 97;<modifiers>u`. It must not be `CSI 65;<modifiers>u`"). Only
+/// `REPORT_ALL_KEYS_AS_ESCAPE_CODES` (`0b1000`) is pushed — no
+/// `REPORT_ALTERNATE_KEYS`, so no key here carries the alternate-key
+/// subfield (see `csi_u_text_key_reports_alternate_for_shifted_letter_only`
+/// for that). `KeyCode::Char`'s `char` argument follows termwiz's own
+/// convention (base/unshifted char, Shift carried separately in
+/// `Modifiers`) — see `kitty_keyboard::encode_text_key`'s doc comment.
+#[test]
+fn csi_u_text_key_truth_table() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt(b"\x1b[>8u");
+
+    let cases: &[(&str, char, Modifiers, &[u8])] = &[
+        ("a", 'a', Modifiers::NONE, b"\x1b[97u"),
+        ("Shift+a", 'a', Modifiers::SHIFT, b"\x1b[97;2u"),
+        ("Ctrl+a", 'a', Modifiers::CTRL, b"\x1b[97;5u"),
+        (
+            "Ctrl+Shift+a",
+            'a',
+            Modifiers::CTRL | Modifiers::SHIFT,
+            b"\x1b[97;6u",
+        ),
+        ("Alt+a", 'a', Modifiers::ALT, b"\x1b[97;3u"),
+        ("1", '1', Modifiers::NONE, b"\x1b[49u"),
+        ("Ctrl+1", '1', Modifiers::CTRL, b"\x1b[49;5u"),
+        // Shifted digit: no base-codepoint inverse available (see
+        // KITTY_COMPLIANCE's "shifted digits/punctuation" row), so the
+        // shifted codepoint '!' (33) is reported as-is rather than '1' (49).
+        ("!", '!', Modifiers::SHIFT, b"\x1b[33;2u"),
+    ];
+    for (name, c, mods, expected) in cases {
+        assert_eq!(
+            core.key_input(KeyCode::Char(*c), *mods, true),
+            expected.to_vec(),
+            "case={name}"
+        );
+    }
+}
+
+/// "Report alternate keys" (`0b100`) only ever emits a shifted-key subfield
+/// for the ASCII-letter case (case-folding needs no keyboard-layout data);
+/// a shifted digit/punctuation key carries no alternate at all. See
+/// `KITTY_COMPLIANCE`'s "Report alternate keys" row.
+#[test]
+fn csi_u_text_key_reports_alternate_for_shifted_letter_only() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt(b"\x1b[>12u"); // report-alternate-keys (4) + report-all-keys (8)
+
+    assert_eq!(
+        core.key_input(KeyCode::Char('a'), Modifiers::SHIFT, true),
+        b"\x1b[97:65;2u".to_vec(),
+        "shifted letter carries the alternate (shifted) codepoint"
+    );
+    assert_eq!(
+        core.key_input(KeyCode::Char('!'), Modifiers::SHIFT, true),
+        b"\x1b[33;2u".to_vec(),
+        "shifted punctuation has no known alternate, so none is reported"
+    );
+}
+
+/// Regression guard for `kitty_keyboard::legacy_text_key`: byte-identical
+/// to `app::keymap::character_input`/`control_input`'s pre-existing
+/// algorithm, which computed these bytes independently in the app layer
+/// before routing moved the decision into `TerminalCore` (see
+/// `KITTY_COMPLIANCE`'s former "Report all keys as escape codes (text
+/// keys)" BYPASSED row). No Kitty flags are pushed here — this exercises
+/// exactly the "otherwise" branch `encode_text_key` falls to when
+/// `REPORT_ALL_KEYS_AS_ESCAPE_CODES` isn't negotiated, which is every shell
+/// that never opts into the Kitty protocol at all.
+///
+/// Covers the full printable ASCII range under plain/Shift/Alt, plus every
+/// entry in `ctrl_mapping`'s table (this module's canonical, wezterm-
+/// derived Ctrl table) under Ctrl — a strictly wider set than
+/// `control_input`'s own smaller hand-written table, so e.g. Ctrl+Space now
+/// sends NUL where it used to send nothing; letters agree between the two
+/// tables already. Also covers the one deliberate mismatch this port keeps
+/// rather than "fixes": Ctrl+Alt+<letter> sends the bare Ctrl byte with no
+/// `ESC` prefix, because `character_input`'s Ctrl branch returns before
+/// ever checking Alt — unlike termwiz's real `Char` encoder (`encode_char`
+/// in this file), which does ESC-prefix it.
+#[test]
+fn legacy_text_key_matches_pre_existing_bytes_over_printable_range_and_ctrl_table() {
+    let core = TerminalCore::new(TerminalSize::new(20, 4));
+
+    for c in ('a'..='z').chain('0'..='9') {
+        assert_eq!(
+            core.key_input(KeyCode::Char(c), Modifiers::NONE, true),
+            vec![c as u8],
+            "plain {c:?}"
+        );
+        let shifted = if c.is_ascii_lowercase() {
+            vec![c.to_ascii_uppercase() as u8]
+        } else {
+            vec![c as u8]
+        };
+        assert_eq!(
+            core.key_input(KeyCode::Char(c), Modifiers::SHIFT, true),
+            shifted,
+            "shift+{c:?}"
+        );
+        assert_eq!(
+            core.key_input(KeyCode::Char(c), Modifiers::ALT, true),
+            vec![0x1b, c as u8],
+            "alt+{c:?}"
+        );
+    }
+
+    for c in 'a'..='z' {
+        assert_eq!(
+            core.key_input(KeyCode::Char(c), Modifiers::CTRL, true),
+            vec![c as u8 - b'a' + 1],
+            "ctrl+{c:?}"
+        );
+    }
+
+    let ctrl_cases: &[(char, u8)] = &[
+        ('@', 0x00),
+        ('`', 0x00),
+        (' ', 0x00),
+        ('2', 0x00),
+        ('[', 0x1b),
+        ('3', 0x1b),
+        ('{', 0x1b),
+        ('\\', 0x1c),
+        ('4', 0x1c),
+        ('|', 0x1c),
+        (']', 0x1d),
+        ('5', 0x1d),
+        ('}', 0x1d),
+        ('^', 0x1e),
+        ('6', 0x1e),
+        ('~', 0x1e),
+        ('_', 0x1f),
+        ('7', 0x1f),
+        ('/', 0x1f),
+        ('8', 0x7f),
+        ('?', 0x7f),
+    ];
+    for &(c, expected) in ctrl_cases {
+        assert_eq!(
+            core.key_input(KeyCode::Char(c), Modifiers::CTRL, true),
+            vec![expected],
+            "ctrl+{c:?}"
+        );
+    }
+
+    // Not in `ctrl_mapping` either: silently swallowed, same as before.
+    for c in ['0', '1', '9'] {
+        assert!(
+            core.key_input(KeyCode::Char(c), Modifiers::CTRL, true)
+                .is_empty(),
+            "ctrl+{c:?}"
+        );
+    }
+
+    // Ctrl+Alt: Alt is ignored entirely, matching `character_input`'s
+    // pre-existing behavior (see doc comment above).
+    assert_eq!(
+        core.key_input(KeyCode::Char('a'), Modifiers::CTRL | Modifiers::ALT, true),
+        vec![0x01]
+    );
+
+    // Super/Cmd alone drops the key entirely (`character_input`'s
+    // `modifiers.meta()` check).
+    assert!(core
+        .key_input(KeyCode::Char('a'), Modifiers::SUPER, true)
+        .is_empty());
 }

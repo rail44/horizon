@@ -200,6 +200,27 @@ impl TerminalCore {
 
         let mode = *self.term.mode();
         let flags = kitty_keyboard::flags_from_mode(mode);
+
+        // Text keys (letters/digits/punctuation) are handled by a
+        // dedicated path, special-cased ahead of the `flags.is_empty()`
+        // branch below: unlike every other `KeyCode`, `Char` was never
+        // reachable through `TerminalCommand::Key` at all before this
+        // (`app::keymap::character_input`/`control_input` computed raw
+        // bytes independently and sent them as a pre-encoded
+        // `TerminalCommand::Input`, bypassing Kitty state entirely — see
+        // `KITTY_COMPLIANCE`'s former "Report all keys as escape codes
+        // (text keys)" BYPASSED row). `kitty_keyboard::encode_text_key`
+        // owns both its legacy and Kitty-promoted output so that neither
+        // real termwiz's `KeyCode::encode` (whose Ctrl fallback differs
+        // from `app::keymap`'s pre-existing algorithm for a few
+        // punctuation/digit combinations) nor this module's own
+        // `legacy_bytes` (built for the four keys `kitty_override`
+        // promotes, not text keys) has to reproduce it.
+        if let KeyCode::Char(c) = key {
+            let bytes = kitty_keyboard::encode_text_key(c, mods, flags);
+            return String::from_utf8(bytes).unwrap_or_default();
+        }
+
         if !flags.is_empty() {
             // Any Kitty flag active: `terminal::protocol::kitty_keyboard`
             // owns the encoding outright from here — see its module doc for

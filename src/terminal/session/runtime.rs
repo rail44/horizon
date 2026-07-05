@@ -396,4 +396,35 @@ mod tests {
         assert_eq!(calls[0].rows, 24);
         assert_eq!(calls[1].rows, 30);
     }
+
+    /// Regression guard for the IME/composed-text carve-out described in
+    /// `app::keymap::terminal_key_from_character`'s doc comment and
+    /// `app::input::handle_ime_commit`: a composed/committed string (e.g. a
+    /// CJK IME commit) is not a single keystroke, so it is never routed
+    /// through `TerminalCommand::Key`/`terminal::protocol::kitty_keyboard`
+    /// at all — `handle_ime_commit` sends it as `TerminalCommand::Input`
+    /// directly. This arm (`run_writer`'s `Input` match, exercised here
+    /// with no `TerminalCore` in the loop at all) writes bytes verbatim
+    /// with no encoding step, which is what makes that carve-out safe:
+    /// there is no Kitty flag check for a multi-character commit to bypass
+    /// incorrectly, by construction, regardless of what the terminal has
+    /// negotiated.
+    #[test]
+    fn ime_composed_text_is_written_verbatim() {
+        let master: Box<dyn MasterPty + Send> = Box::new(CountingMaster {
+            resize_calls: Arc::new(Mutex::new(Vec::new())),
+        });
+        let mut writer: Vec<u8> = Vec::new();
+        let (command_tx, command_rx) = crossbeam_channel::unbounded();
+
+        let committed = "日本語";
+        command_tx
+            .send(TerminalCommand::Input(committed.as_bytes().to_vec()))
+            .unwrap();
+        drop(command_tx);
+
+        run_writer(master, &mut writer, command_rx, test_senders(), "test0000");
+
+        assert_eq!(writer, committed.as_bytes());
+    }
 }

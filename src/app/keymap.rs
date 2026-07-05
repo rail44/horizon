@@ -57,7 +57,55 @@ pub(crate) fn terminal_input_from_key(event: &KeyEvent) -> Option<Vec<u8>> {
 }
 
 pub(crate) fn terminal_key_from_key(event: &KeyEvent) -> Option<TermKeyCode> {
+    if let Key::Character(text) = &event.key.logical_key {
+        return terminal_key_from_character(text.as_str(), event.modifiers);
+    }
     terminal_key_from_input(&event.key.logical_key)
+}
+
+/// Maps a single-keystroke printable character to `TermKeyCode::Char` so it
+/// routes through `TerminalCommand::Key` — and from there, `TerminalCore`'s
+/// live Kitty flags (`terminal::protocol::kitty_keyboard::encode_text_key`)
+/// — instead of `terminal_input_from_key`'s raw-bytes `character_input`
+/// path, which never consulted the terminal's negotiated Kitty state at all
+/// (see `KITTY_COMPLIANCE`'s former "Report all keys as escape codes (text
+/// keys)" BYPASSED row).
+///
+/// Two cases deliberately still fall through to the old path (return
+/// `None` here, exactly as `handle_terminal_key`'s call order already
+/// expects — see its comment): multi-character `text` (not IME — a
+/// composed/committed string arrives through `Event::ImeCommit`, handled
+/// entirely separately in `app::input::handle_ime_commit` — but the rare
+/// non-IME case of a single physical keystroke producing more than one
+/// `char`, e.g. some ligature-producing layouts, isn't a single keystroke
+/// `TermKeyCode::Char` can represent), and a Super/Cmd-held character with
+/// no Ctrl also held (preserving `character_input`'s existing "meta
+/// swallows the keystroke" behavior, which `terminal_input_from_key`'s
+/// `character_input` call still implements for whatever reaches it).
+///
+/// `first` is passed through as termwiz's own `KeyCode::Char` convention
+/// expects: the *base* (unshifted) character, undoing the ASCII case fold
+/// winit already applied to `text` for a Shift-held letter (`"A"` for
+/// Shift+A) — see `kitty_keyboard::encode_text_key`'s doc comment. Not
+/// possible for a shifted non-letter (Shift+1 -> `'!'` on a US layout, with
+/// no algorithmic inverse available here), so those pass through unchanged;
+/// see `KITTY_COMPLIANCE`.
+fn terminal_key_from_character(text: &str, modifiers: Modifiers) -> Option<TermKeyCode> {
+    let mut chars = text.chars();
+    let first = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+    if !modifiers.control() && modifiers.meta() {
+        return None;
+    }
+
+    let base = if modifiers.shift() && first.is_ascii_uppercase() {
+        first.to_ascii_lowercase()
+    } else {
+        first
+    };
+    Some(TermKeyCode::Char(base))
 }
 
 pub(crate) fn terminal_key_from_input(key: &Key) -> Option<TermKeyCode> {
@@ -590,6 +638,68 @@ mod tests {
         assert_eq!(
             terminal_key_from_input(&Key::Named(NamedKey::ArrowUp)),
             Some(TermKeyCode::UpArrow)
+        );
+    }
+
+    // --- text-key routing (`terminal_key_from_character`) ----------------
+    //
+    // `terminal_key_from_key` now claims single-character keystrokes for
+    // `TerminalCommand::Key` (routing them through the terminal's live
+    // Kitty state — see `terminal::protocol::kitty_keyboard::encode_text_key`)
+    // instead of leaving them to `terminal_input_from_key`'s
+    // `character_input` bypass. These tests cover the routing decision
+    // itself; `terminal::tests`' `legacy_text_key_matches_pre_existing_
+    // bytes_over_printable_range_and_ctrl_table` and `csi_u_text_key_*`
+    // cover the resulting bytes.
+
+    #[test]
+    fn terminal_key_from_character_unshifts_ascii_letters() {
+        // winit folds Shift into the text itself ("A" for a Shift+A press);
+        // termwiz's own `KeyCode::Char` convention expects the base
+        // (unshifted) character instead, with Shift carried in `Modifiers`
+        // — see `kitty_keyboard::encode_text_key`'s doc comment.
+        assert_eq!(
+            terminal_key_from_character("A", Modifiers::SHIFT),
+            Some(TermKeyCode::Char('a'))
+        );
+    }
+
+    #[test]
+    fn terminal_key_from_character_cannot_unshift_punctuation() {
+        // Shift+1 -> '!' on a US layout has no algorithmic base-codepoint
+        // inverse without OS keyboard-layout data, so it passes through as
+        // received — a documented deviation (see `KITTY_COMPLIANCE`).
+        assert_eq!(
+            terminal_key_from_character("!", Modifiers::SHIFT),
+            Some(TermKeyCode::Char('!'))
+        );
+    }
+
+    #[test]
+    fn terminal_key_from_character_falls_through_for_multi_char_text() {
+        // Not a single keystroke `TermKeyCode::Char` can represent —
+        // `handle_terminal_key` falls back to `terminal_input_from_key`/
+        // `character_input` for these, unchanged.
+        assert_eq!(
+            terminal_key_from_character("ab", Modifiers::default()),
+            None
+        );
+    }
+
+    #[test]
+    fn terminal_key_from_character_falls_through_for_meta_without_ctrl() {
+        // Preserves `character_input`'s existing "Super/Cmd swallows the
+        // keystroke" behavior for the case that still reaches it.
+        assert_eq!(terminal_key_from_character("a", Modifiers::META), None);
+    }
+
+    #[test]
+    fn terminal_key_from_character_claims_ctrl_meta_combo() {
+        // Ctrl takes priority over Meta, matching `character_input`'s Ctrl
+        // branch (which returns before ever checking Meta).
+        assert_eq!(
+            terminal_key_from_character("a", Modifiers::CONTROL | Modifiers::META),
+            Some(TermKeyCode::Char('a'))
         );
     }
 
