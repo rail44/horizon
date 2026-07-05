@@ -7,6 +7,7 @@ use termwiz::input::{KeyCode, Modifiers};
 
 use crate::terminal::core::TerminalCore;
 use crate::terminal::session::contract::{SelectionCommand, TerminalCommand, TerminalUpdate};
+use crate::terminal::session::trace::PtyTrace;
 use crate::terminal::types::{TerminalMouseReport, TerminalScroll, TerminalSize};
 
 /// Read buffer size for the PTY reader thread. Matches alacritty's own tty
@@ -20,7 +21,9 @@ pub(super) fn read_pty(
     reader: &mut dyn Read,
     pty_tx: Sender<Vec<u8>>,
     update_tx: Sender<TerminalUpdate>,
+    session_short_id: &str,
 ) {
+    let mut trace = PtyTrace::from_env(session_short_id);
     let mut buf = [0_u8; PTY_READ_BUFFER_SIZE];
 
     loop {
@@ -30,6 +33,9 @@ pub(super) fn read_pty(
                 return;
             }
             Ok(read) => {
+                if let Some(trace) = &mut trace {
+                    trace.record_out(&buf[..read]);
+                }
                 if pty_tx.send(buf[..read].to_vec()).is_err() {
                     return;
                 }
@@ -240,7 +246,9 @@ pub(super) fn run_writer(
     writer: &mut dyn Write,
     command_rx: Receiver<TerminalCommand>,
     senders: CoreSenders,
+    session_short_id: &str,
 ) {
+    let mut trace = PtyTrace::from_env(session_short_id);
     let CoreSenders {
         resize_tx,
         scroll_tx,
@@ -257,6 +265,9 @@ pub(super) fn run_writer(
     while let Ok(command) = command_rx.recv() {
         match command {
             TerminalCommand::Input(bytes) => {
+                if let Some(trace) = &mut trace {
+                    trace.record_in(&bytes);
+                }
                 let _ = writer.write_all(&bytes);
                 let _ = writer.flush();
             }
@@ -279,6 +290,9 @@ pub(super) fn run_writer(
                         pixel_width: size.pixel_width,
                         pixel_height: size.pixel_height,
                     });
+                    if let Some(trace) = &mut trace {
+                        trace.record_resize(size);
+                    }
                 }
                 let _ = resize_tx.send(size);
             }
@@ -375,7 +389,7 @@ mod tests {
         command_tx.send(TerminalCommand::Resize(other)).unwrap();
         drop(command_tx);
 
-        run_writer(master, &mut writer, command_rx, test_senders());
+        run_writer(master, &mut writer, command_rx, test_senders(), "test0000");
 
         let calls = resize_calls.lock().unwrap();
         assert_eq!(calls.len(), 2, "expected one resize per distinct size");

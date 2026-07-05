@@ -15,6 +15,7 @@ use super::types::TerminalSize;
 mod contract;
 mod environment;
 mod runtime;
+mod trace;
 
 #[derive(Debug, Error)]
 pub(crate) enum TerminalSessionError {
@@ -76,9 +77,14 @@ impl TerminalSession {
         let master = pair.master;
         let response_tx = command_tx.clone();
         let read_update_tx = update_tx.clone();
+        // Identifies this session's `HORIZON_PTY_TRACE` output file only;
+        // unrelated to the workspace-level `SessionId` (not available here)
+        // and not persisted anywhere else.
+        let trace_short_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
+        let reader_trace_id = trace_short_id.clone();
 
         thread::spawn(move || {
-            read_pty(&mut *reader, pty_tx, read_update_tx);
+            read_pty(&mut *reader, pty_tx, read_update_tx, &reader_trace_id);
         });
         thread::spawn(move || {
             let receivers = CoreReceivers {
@@ -100,7 +106,7 @@ impl TerminalSession {
                 key_tx,
                 selection_tx,
             };
-            run_writer(master, &mut *writer, command_rx, senders);
+            run_writer(master, &mut *writer, command_rx, senders, &trace_short_id);
         });
 
         Ok(Self {
