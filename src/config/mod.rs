@@ -34,8 +34,11 @@ use serde::Deserialize;
 /// Overrides the config file path outright, bypassing the XDG/home lookup
 /// below entirely. Primarily for tests and for running multiple Horizon
 /// configurations side by side.
+#[cfg(not(test))]
 const CONFIG_PATH_VAR: &str = "HORIZON_CONFIG";
+#[cfg(not(test))]
 const XDG_CONFIG_HOME_VAR: &str = "XDG_CONFIG_HOME";
+#[cfg(not(test))]
 const HOME_VAR: &str = "HOME";
 
 /// The config file's schema. Every field is optional (or an empty map) so
@@ -199,11 +202,26 @@ pub(crate) struct RawUiConfig {
 /// Loads and caches the config file for the lifetime of the process. Config
 /// is applied at startup only, so every call after the first returns the
 /// same cached value instead of re-reading the file.
+///
+/// Under `#[cfg(test)]` this resolves to built-in defaults unconditionally:
+/// tests assert about built-in defaults and must not be affected by the
+/// developer's personal config at `~/.config/horizon/config.toml`. Tests
+/// that genuinely need to parse a file use `load_from_path` directly (see
+/// `src/config/tests.rs`) or read `config.example.toml` by path (the
+/// example-file drift guards).
 pub(crate) fn load() -> &'static RawConfig {
     static CONFIG: OnceLock<RawConfig> = OnceLock::new();
-    CONFIG.get_or_init(|| load_from_path(resolve_config_path().as_deref()))
+    #[cfg(test)]
+    {
+        CONFIG.get_or_init(RawConfig::default)
+    }
+    #[cfg(not(test))]
+    {
+        CONFIG.get_or_init(|| load_from_path(resolve_config_path().as_deref()))
+    }
 }
 
+#[cfg(not(test))]
 fn resolve_config_path() -> Option<PathBuf> {
     resolve_config_path_from(
         std::env::var(CONFIG_PATH_VAR).ok(),

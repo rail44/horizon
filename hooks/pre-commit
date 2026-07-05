@@ -2,10 +2,6 @@
 # Local quality gate — same checks AGENTS.md requires before finishing work.
 set -e
 
-# Hermetic gate: never let a personal config leak into tests — assertions
-# about built-in defaults must hold on every machine.
-export HORIZON_CONFIG=/nonexistent/horizon-pre-commit-hermetic.toml
-
 echo "pre-commit: cargo fmt --check"
 cargo fmt --all -- --check
 

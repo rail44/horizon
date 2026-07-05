@@ -1,6 +1,6 @@
 # 001 — Make the test suite hermetic against personal config
 
-Status: todo
+Status: done
 
 ## Problem
 
@@ -39,3 +39,30 @@ of the developer's personal config.
   `config.example.toml`.
 - The full quality gate passes; append `## Result` here and flip Status
   per docs/tasks/README.md.
+
+## Result
+
+- Made `src/config/mod.rs::load()` hermetic under `#[cfg(test)]`:
+  - In test builds it now returns `RawConfig::default()` (built-in defaults)
+    unconditionally from the same `OnceLock`, so no personal config at
+    `~/.config/horizon/config.toml` can leak into tests.
+  - Non-test builds (`cargo run`, release, etc.) still resolve the real
+    `HORIZON_CONFIG` / XDG / home path and read the file as before.
+  - Path-resolution helpers and env-var constants are `#[cfg(not(test))]`
+    so the test build emits no dead-code warnings.
+- Verified the previously failing tests now pass with a populated personal
+  config present:
+  - `ui::theme::tests::terminal_cursor_falls_back_to_accent`
+  - `terminal::tests::vt_stream_preserves_ansi_foreground_color`
+- Verified config-file parsing is still exercised:
+  - `src/config/tests.rs` keeps calling `load_from_path` directly.
+  - Drift-guard tests in `src/terminal/config.rs`, `src/app/config.rs`,
+    `src/ui/theme/ansi.rs`, and `src/agent/mod.rs` still read
+    `config.example.toml` by path.
+- Removed the now-redundant `HORIZON_CONFIG=/nonexistent/...` export from
+  `hooks/pre-commit`; the compile-time seam makes the stopgate unnecessary.
+- Full quality gate passed on this machine with a real personal config in
+  place:
+  - `cargo fmt --all -- --check`
+  - `cargo clippy --workspace --all-targets -- -D warnings`
+  - `cargo test --workspace` (266 + 163 + 7 + 19 tests passed, 0 failed)
