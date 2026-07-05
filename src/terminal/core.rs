@@ -3,7 +3,7 @@ use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::index::{Column, Line, Point as TermPoint, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::{Config as TermConfig, Term, TermMode};
-use alacritty_terminal::vte::ansi::Processor;
+use alacritty_terminal::vte::ansi::{Processor, Timeout};
 use termwiz::input::{KeyCode, KeyCodeEncodeModes, KeyboardEncoding, Modifiers};
 
 use self::color::resolve_query_color;
@@ -21,6 +21,36 @@ mod color;
 mod events;
 mod input;
 mod render;
+
+/// `Term::report_private_mode` (alacritty_terminal's DECRQM handler, in
+/// upstream `term/mod.rs`) always answers a query for private mode 2026
+/// (synchronized output, `CSI ?2026h`/`CSI ?2026l` a.k.a. BSU/ESU) with
+/// "reset" — `NamedPrivateMode::SyncUpdate => ModeState::Reset`,
+/// unconditionally — regardless of whether a synchronized-update window is
+/// actually open. That's an upstream quirk in `Term` itself, not something
+/// fixable from here. Apps that open a window and then verify it took
+/// effect read the always-reset reply as "not supported" and give up on
+/// synchronized output.
+///
+/// `vte::ansi::Processor` (the parser `TerminalCore::parser` wraps) *does*
+/// track the live window correctly — it buffers everything between BSU and
+/// ESU opaquely and only clears its internal sync timeout once ESU (or a
+/// 2s failsafe) closes the window, which is exactly the live state we want
+/// (see `Processor::sync_timeout`/`Timeout::pending_timeout`, used in
+/// `TerminalCore::write_vt`). So patch just this one reply on the way out:
+/// while a window is open, report "set" instead of the hardcoded "reset".
+/// Nothing else about DECRQM handling is touched — only an exact match of
+/// the mode-2026 reset reply is ever rewritten.
+const SYNC_UPDATE_DECRQM_RESET: &[u8] = b"\x1b[?2026;2$y";
+const SYNC_UPDATE_DECRQM_SET: &[u8] = b"\x1b[?2026;1$y";
+
+fn rewrite_sync_update_decrqm(pty_writes: &mut [Vec<u8>]) {
+    for write in pty_writes {
+        if write.as_slice() == SYNC_UPDATE_DECRQM_RESET {
+            *write = SYNC_UPDATE_DECRQM_SET.to_vec();
+        }
+    }
+}
 
 pub(crate) struct TerminalCore {
     term: Term<EventSink>,
@@ -49,8 +79,21 @@ impl TerminalCore {
     }
 
     pub(crate) fn write_vt(&mut self, bytes: &[u8]) -> TerminalEvents {
+        // Captured *before* `advance` runs (which can itself close the
+        // window if `bytes` ends a synchronized-update sequence): a DECRQM
+        // reply queued while the window was open is only actually flushed
+        // by `Processor` once ESU (or its failsafe timeout) closes it,
+        // which can happen inside this very call. Classifying that flushed
+        // reply against the *pre-call* state means it's judged by what was
+        // true when the query was made, not by the state its own
+        // terminating ESU leaves behind. See `rewrite_sync_update_decrqm`.
+        let sync_output_was_active = self.parser.sync_timeout().pending_timeout();
         self.parser.advance(&mut self.term, bytes);
         let mut events = self.events.drain();
+
+        if sync_output_was_active {
+            rewrite_sync_update_decrqm(&mut events.pty_writes);
+        }
 
         // `Event::ColorRequest`/`Event::TextAreaSizeRequest` hand back a
         // formatter instead of a ready `PtyWrite` because alacritty_terminal

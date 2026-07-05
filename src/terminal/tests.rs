@@ -292,6 +292,42 @@ fn kitty_keyboard_query_reports_pushed_flags() {
 }
 
 #[test]
+fn decrqm_2026_reports_set_while_a_synchronized_update_window_is_open() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+
+    // Before any synchronized-update window: alacritty_terminal's own
+    // (correct, in this case) reset reply passes through untouched.
+    let events = core.write_vt(b"\x1b[?2026$p");
+    assert_eq!(events.pty_writes, vec![b"\x1b[?2026;2$y".to_vec()]);
+
+    // Open the window (BSU) and query again in a *separate* `write_vt`
+    // call — mirroring separate PTY reads, as a real round-trip
+    // verification would naturally be (the app must see the BSU take
+    // effect before deciding to query). alacritty_terminal buffers
+    // everything after BSU opaquely and only releases it once ESU (or its
+    // failsafe timeout) closes the window, so this query's reply doesn't
+    // surface yet.
+    let events = core.write_vt(b"\x1b[?2026h");
+    assert!(events.pty_writes.is_empty());
+    let events = core.write_vt(b"\x1b[?2026$p");
+    assert!(
+        events.pty_writes.is_empty(),
+        "the query is buffered until the window closes, not answered inline"
+    );
+
+    // Closing the window (ESU) flushes the buffered query. Upstream
+    // hardcodes "reset" for this reply regardless of live state (see
+    // `rewrite_sync_update_decrqm` in `core.rs`); patched, it must report
+    // "set" since the window was open when the query was made.
+    let events = core.write_vt(b"\x1b[?2026l");
+    assert_eq!(events.pty_writes, vec![b"\x1b[?2026;1$y".to_vec()]);
+
+    // After ESU, a fresh query goes back to reporting reset.
+    let events = core.write_vt(b"\x1b[?2026$p");
+    assert_eq!(events.pty_writes, vec![b"\x1b[?2026;2$y".to_vec()]);
+}
+
+#[test]
 fn xtwinops_18t_reports_size_in_characters() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     let events = core.write_vt(b"\x1b[18t");

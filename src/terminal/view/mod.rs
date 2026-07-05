@@ -15,12 +15,16 @@ use floem::{
     View, ViewId,
 };
 use floem_renderer::Renderer;
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::time::Instant;
 
 mod input;
 mod layout;
 mod metrics;
 mod preedit;
 mod render;
+mod resize;
 
 use input::{
     cell_from_point, scroll_lines_from_wheel, terminal_mouse_button, terminal_mouse_modifiers,
@@ -29,6 +33,7 @@ use layout::{build_line_layouts, update_line_layouts, CellLayout};
 use metrics::TerminalMetrics;
 use preedit::{build_preedit_layout, PreeditLayout};
 use render::{draw_block_element, expanded_rect};
+use resize::ResizeDebounce;
 
 const PADDING_X: f64 = 12.0;
 const PADDING_Y: f64 = 12.0;
@@ -77,6 +82,7 @@ struct TerminalTextView {
     metrics: TerminalMetrics,
     terminal_tx: Option<Sender<TerminalCommand>>,
     last_size: Option<TerminalSize>,
+    resize_debounce: Rc<RefCell<ResizeDebounce>>,
     selecting: bool,
     reporting_button: Option<TerminalMouseButton>,
     window_origin: Box<dyn Fn() -> Point>,
@@ -98,6 +104,7 @@ impl TerminalTextView {
     ) -> Self {
         let lines = build_line_layouts(&state.frame);
         let preedit = build_preedit_layout(state.preedit.as_deref());
+        let resize_debounce = ResizeDebounce::new(terminal_tx.clone());
         Self {
             id,
             frame: state.frame,
@@ -106,6 +113,7 @@ impl TerminalTextView {
             metrics: TerminalMetrics::default(),
             terminal_tx,
             last_size: None,
+            resize_debounce,
             selecting: false,
             reporting_button: None,
             window_origin,
@@ -342,9 +350,10 @@ impl TerminalTextView {
         }
         self.last_size = Some(size);
 
-        if let Some(tx) = &self.terminal_tx {
-            let _ = tx.send(TerminalCommand::Resize(size));
-        }
+        // Forwarding itself is debounced (see `resize::ResizeDebounce`): a
+        // live drag calls this on every repaint, and only the leading edge
+        // plus the final settled size should ever reach the pty writer.
+        ResizeDebounce::request(&self.resize_debounce, size, Instant::now());
     }
 
     fn send_selection_command(&self, command: TerminalCommand) {
@@ -384,6 +393,7 @@ mod tests {
     use crate::terminal::TerminalSelectionPoint;
     use crate::terminal::TerminalSpan;
     use floem::text::FamilyOwned;
+    use std::time::Duration;
 
     fn test_line(text: &str) -> TerminalLine {
         TerminalLine {
@@ -468,14 +478,119 @@ mod tests {
             "unchanged dimensions must not re-emit Resize"
         );
 
-        // A genuine size change must still go through.
+        // A genuine size change must still go through — eventually. It
+        // lands inside the debounce window opened by the first send above
+        // (see `resize_terminal_debounces_a_burst_forwarding_only_the_leading_size`
+        // for that behavior in isolation), so it's deferred rather than
+        // sent immediately; flushing (as the trailing `exec_after` timer
+        // would) delivers it.
         view.resize_terminal(100, 30);
+        assert!(
+            rx.try_recv().is_err(),
+            "a size change inside the debounce window must not be forwarded immediately"
+        );
+        resize::ResizeDebounce::flush(&view.resize_debounce, Instant::now());
         match rx.try_recv() {
             Ok(TerminalCommand::Resize(size)) => {
                 assert_eq!(size.cols, 100);
                 assert_eq!(size.rows, 30);
             }
             other => panic!("expected a Resize command for the changed size, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resize_terminal_debounces_a_burst_forwarding_only_the_leading_size() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut view = TerminalTextView::new(
+            ViewId::new(),
+            TerminalViewState {
+                frame: TerminalFrame::from_text(String::new()),
+                preedit: None,
+            },
+            Some(tx),
+            Box::new(|| Point::ZERO),
+            Box::new(|_, _| {}),
+        );
+        view.metrics = TerminalMetrics {
+            cell_width: 9.0,
+            line_height: 18.0,
+        };
+
+        // Mirrors a live window/pane drag: `resize_terminal` is called on
+        // every repaint with a smoothly changing, always-distinct size
+        // (the trace that motivated this test stepped cols 157 -> 136 ->
+        // ... -> 101 at ~35ms cadence). All of these calls land well
+        // inside a single 100ms debounce window in wall-clock terms, so
+        // only the first (the leading edge, sent immediately per
+        // "first-ever size still immediate") should reach the pty writer.
+        let sizes: Vec<u16> = (101..=157).rev().collect();
+        for &cols in &sizes {
+            view.resize_terminal(cols as usize, 40);
+        }
+
+        match rx.try_recv() {
+            Ok(TerminalCommand::Resize(size)) => assert_eq!(size.cols, sizes[0]),
+            other => panic!("expected the leading size to be forwarded immediately, got {other:?}"),
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "sizes requested inside the debounce window must not be forwarded individually"
+        );
+
+        // The trailing flush is normally driven by a `floem::action::exec_after`
+        // timer armed when the first size was deferred; invoke it directly
+        // here since a unit test has no running Floem event loop to fire
+        // that timer. It must deliver the *last* requested size, not one of
+        // the intermediate ones the burst stepped through.
+        resize::ResizeDebounce::flush(&view.resize_debounce, Instant::now());
+        match rx.try_recv() {
+            Ok(TerminalCommand::Resize(size)) => {
+                assert_eq!(size.cols, *sizes.last().unwrap());
+            }
+            other => panic!("expected the final settled size to be flushed, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn resize_terminal_forwards_immediately_once_the_debounce_window_elapses() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut view = TerminalTextView::new(
+            ViewId::new(),
+            TerminalViewState {
+                frame: TerminalFrame::from_text(String::new()),
+                preedit: None,
+            },
+            Some(tx),
+            Box::new(|| Point::ZERO),
+            Box::new(|_, _| {}),
+        );
+        view.metrics = TerminalMetrics {
+            cell_width: 9.0,
+            line_height: 18.0,
+        };
+
+        view.resize_terminal(80, 24);
+        assert!(matches!(rx.try_recv(), Ok(TerminalCommand::Resize(_))));
+
+        // A resize requested after the debounce window has elapsed is a
+        // new leading edge in its own right and must go out immediately,
+        // without waiting for a trailing flush.
+        let size = TerminalSize {
+            cols: 90,
+            rows: 24,
+            pixel_width: pixel_dimension(90, view.metrics.cell_width),
+            pixel_height: pixel_dimension(24, view.metrics.line_height),
+        };
+        resize::ResizeDebounce::request(
+            &view.resize_debounce,
+            size,
+            Instant::now() + Duration::from_millis(150),
+        );
+        match rx.try_recv() {
+            Ok(TerminalCommand::Resize(size)) => assert_eq!(size.cols, 90),
+            other => panic!("expected an immediate Resize once the window elapsed, got {other:?}"),
         }
     }
 
