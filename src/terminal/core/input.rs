@@ -41,6 +41,24 @@ use crate::terminal::types::{
 /// Enter/Tab/Backspace, modified or not — gets `CSI u` once that flag is
 /// set ("Note that all keys are reported as escape codes, including Enter,
 /// Tab, Backspace etc.").
+///
+/// One deliberate, documented deviation from that spec text: the
+/// unmodified-only reading. The spec's own exception text has no modifier
+/// carve-out — literally, Shift+Enter should stay `\r` under disambiguate
+/// alone, same as bare Enter — and its stated rationale is narrow: keep
+/// `reset<Enter>` typeable after a crashed program leaves the mode on.
+/// That rationale only needs the *bare* key preserved. We instead promote
+/// Enter/Tab/Backspace to `CSI u` under disambiguate alone whenever a
+/// modifier is held, verified against a real client rather than the text
+/// alone: capturing `claude` (Claude Code 2.1.201)'s own startup negotiation
+/// shows it pushes only `CSI>1u` (disambiguate, nothing else), and replaying
+/// both `\x1b[13;2u` (Kitty CSI u) and the older `\x1b[27;2;13~` (xterm
+/// `modifyOtherKeys`) back into a live session through Horizon's own
+/// `TerminalCore` renders a correctly-inserted second input line for either
+/// — not the "wedges the parser" failure the strict, unconditional
+/// legacy-bytes reading was chosen to avoid. Bare Enter/Tab/Backspace still
+/// fall through to legacy bytes here, so the crash-recovery case is
+/// unaffected.
 pub(super) fn kitty_override(
     key: KeyCode,
     mods: Modifiers,
@@ -59,20 +77,34 @@ pub(super) fn kitty_override(
     };
 
     let report_all_keys = flags.contains(KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES);
+    let disambiguate = flags.contains(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES);
     let promote = match key {
-        // Esc is promoted by the disambiguate flag alone; Enter/Tab/
-        // Backspace are the spec's named exceptions and only start being
-        // reported as `CSI u` once *every* key is (report-all-keys).
-        KeyCode::Escape => {
-            report_all_keys || flags.contains(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES)
-        }
-        _ => report_all_keys,
+        // Esc has no legacy-mode exception in the spec: disambiguate alone
+        // promotes it, modified or not.
+        KeyCode::Escape => report_all_keys || disambiguate,
+        // Enter/Tab/Backspace: promoted once *any* modifier is held (see
+        // the deviation note above); the bare key stays legacy until
+        // report-all-keys, preserving `reset<Enter>` recovery.
+        _ => report_all_keys || (disambiguate && !mods.is_empty()),
     };
     if !promote {
         return None;
     }
 
-    let mod_value = 1u32 + u32::from(mods.encode_xterm());
+    // `Modifiers::encode_xterm()` (termwiz, via `wezterm-input-types`) only
+    // ever encodes shift(1)/alt(2)/ctrl(4) — it silently drops `SUPER` even
+    // though `app::keymap::termwiz_modifiers` does carry it through from
+    // the OS's Cmd/Win key. The Kitty spec reserves bit `0b1000` (8) for
+    // super in this same field, so add it back for the keys we encode
+    // ourselves; `Modifiers` has no distinct hyper/true-meta/caps_lock/
+    // num_lock bits at all (`ALT` doubles as "meta" in this crate), so
+    // those spec bits (16/32/64/128) are unreachable here — see the
+    // compliance report for that structural limitation.
+    let mut mod_bits = u32::from(mods.encode_xterm());
+    if mods.contains(Modifiers::SUPER) {
+        mod_bits |= 0b1000;
+    }
+    let mod_value = 1u32 + mod_bits;
     let mut sequence = format!("\x1b[{codepoint}");
     if mod_value != 1 {
         sequence.push_str(&format!(";{mod_value}"));

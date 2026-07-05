@@ -396,6 +396,16 @@ fn test_mouse(kind: TerminalMouseKind) -> TerminalMouseReport {
 /// Kitty-aware reader expects `u` is a plausible way to wedge a client's own
 /// parser into swallowing everything that follows. See `kitty_override` in
 /// `terminal::core::input` for the fix.
+///
+/// Also covers the follow-up regression that first fix introduced: it made
+/// Shift+Enter fall all the way back to bare `\r` under disambiguate-only
+/// mode (the literal spec text's "same bytes as legacy mode" exception has
+/// no modifier carve-out), which is exactly what Claude Code negotiates
+/// (`CSI>1u`, confirmed by capturing its real startup handshake) — so
+/// Shift+Enter *submitted* instead of inserting a newline. `kitty_override`
+/// now promotes Enter/Tab/Backspace to `CSI u` under disambiguate alone once
+/// any modifier is held (bare presses still stay legacy); see its doc
+/// comment for the empirical justification against a real client.
 #[test]
 fn kitty_csi_u_truth_table() {
     fn push_flags(core: &mut TerminalCore, flags: u32) {
@@ -440,19 +450,24 @@ fn kitty_csi_u_truth_table() {
         expect(&core, *key, *mods, expected);
     }
 
-    // flags = 0b1 (disambiguate only) and 0b11 (+ report event types):
-    // spec's named exception keeps Enter/Tab/Backspace exactly as legacy
-    // mode, regardless of modifier; Esc alone is promoted to `CSI 27u`.
-    // Critically: no `CSI 27;mods;codepoint~` (the bug) anywhere.
+    // flags = 0b1 (disambiguate only) and 0b11 (+ report event types): the
+    // *bare* Enter/Tab/Backspace stay legacy bytes (crash-recovery case:
+    // `reset<Enter>` must still work); any modifier promotes them to
+    // `CSI u` (the documented, empirically-verified deviation from the
+    // spec's unconditional exception text — see `kitty_override`). Esc is
+    // promoted unconditionally by disambiguate alone, per spec. Critically:
+    // no `CSI 27;mods;codepoint~` (the original bug) anywhere.
     for flags in [0b1u32, 0b11] {
         let mut core = TerminalCore::new(TerminalSize::new(20, 4));
         push_flags(&mut core, flags);
         for (name, key, mods) in cases {
             let expected: &[u8] = match *name {
-                "Enter" | "Shift+Enter" | "Ctrl+Enter" => b"\r",
-                "Alt+Enter" => b"\x1b\r",
+                "Enter" => b"\r",
+                "Shift+Enter" => b"\x1b[13;2u",
+                "Ctrl+Enter" => b"\x1b[13;5u",
+                "Alt+Enter" => b"\x1b[13;3u",
                 "Tab" => b"\t",
-                "Shift+Tab" => b"\x1b[Z",
+                "Shift+Tab" => b"\x1b[9;2u",
                 "Backspace" => b"\x7f",
                 "Esc" => b"\x1b[27u",
                 other => panic!("unhandled case {other}"),
@@ -481,6 +496,174 @@ fn kitty_csi_u_truth_table() {
             expect(&core, *key, *mods, expected);
         }
     }
+}
+
+/// `Modifiers::encode_xterm()` (termwiz) drops the Super/Cmd/Win bit even
+/// though `app::keymap::termwiz_modifiers` does carry it through — see the
+/// comment in `kitty_override`. This is the regression test for the local
+/// fix that adds it back for the four keys we encode ourselves.
+#[test]
+fn kitty_override_reports_super_modifier() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt(b"\x1b[>1u");
+    assert_eq!(
+        core.key_input(KeyCode::Enter, Modifiers::SUPER, true),
+        b"\x1b[13;9u".to_vec()
+    );
+
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt(b"\x1b[>31u");
+    assert_eq!(
+        core.key_input(KeyCode::Enter, Modifiers::SUPER | Modifiers::SHIFT, true),
+        b"\x1b[13;10u".to_vec()
+    );
+}
+
+/// Compliance coverage for the keys `kitty_override` deliberately leaves
+/// alone: arrows, Home/End, PageUp/PageDown and Delete already reuse the
+/// xterm-compatible `CSI 1;mods<letter>` / `CSI n;mods~` forms the Kitty
+/// spec itself specifies for these ("Functional key definitions": `HOME` =
+/// `1 H or 7 ~`, `END` = `1 F or 8 ~`, arrows = `1 A/B/C/D`, `PAGE_UP`/
+/// `PAGE_DOWN` = `5 ~`/`6 ~`, `DELETE` = `3 ~`), unconditionally — unlike
+/// Enter/Tab/Backspace these were never ambiguous in legacy mode, so the
+/// spec doesn't move them to a different form under any of disambiguate,
+/// report-event-types or report-all-keys. termwiz's built-in encoder
+/// already gets this right without any Horizon-side override, across every
+/// flag combination.
+#[test]
+fn navigation_keys_are_flag_invariant_and_spec_compliant() {
+    let nav_cases: &[(&str, KeyCode, Modifiers, &[u8])] = &[
+        ("Up", KeyCode::UpArrow, Modifiers::NONE, b"\x1b[A"),
+        ("Shift+Up", KeyCode::UpArrow, Modifiers::SHIFT, b"\x1b[1;2A"),
+        ("Home", KeyCode::Home, Modifiers::NONE, b"\x1b[H"),
+        ("Ctrl+Home", KeyCode::Home, Modifiers::CTRL, b"\x1b[1;5H"),
+        ("End", KeyCode::End, Modifiers::NONE, b"\x1b[F"),
+        ("PageUp", KeyCode::PageUp, Modifiers::NONE, b"\x1b[5~"),
+        ("PageDown", KeyCode::PageDown, Modifiers::NONE, b"\x1b[6~"),
+        ("Alt+Delete", KeyCode::Delete, Modifiers::ALT, b"\x1b[3;3~"),
+    ];
+
+    for flags in [0u32, 0b1, 0b1111, 0b11111] {
+        let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+        if flags != 0 {
+            core.write_vt(format!("\x1b[>{flags}u").as_bytes());
+        }
+        for (name, key, mods, want) in nav_cases {
+            assert_eq!(
+                core.key_input(*key, *mods, true),
+                want.to_vec(),
+                "flags={flags:#b} case={name}"
+            );
+        }
+    }
+}
+
+/// UNIMPLEMENTED, structural: the Kitty spec's "report event types" flag
+/// (`0b10`) requires the terminal to report key-release events (`CSI
+/// ...;mods:3u`), and Horizon does route `is_down` through
+/// `TerminalCore::key_input`/`encode_key` down to `KeyCode::encode` — but
+/// termwiz 0.23.3's `KeyCode::encode` hardcodes `if !is_down { return
+/// Ok(String::new()) }` before it ever looks at `modes.encoding`, for every
+/// key without exception. There is no way to produce a release event
+/// through termwiz's encoder as vendored; it would need patching or
+/// replacing (a much larger change than a local override, since every key
+/// class would need its own release-event encoding, including the
+/// dedicated `event-type` sub-field of the general `CSI u` form). Compounding
+/// this: `workspace::input::handle_terminal_key` (owned by another agent,
+/// out of scope here) hardcodes `is_down: true` on every `TerminalCommand::
+/// Key` it sends, so even if termwiz were fixed, no key-up event is ever
+/// constructed from the real UI today. Effort estimate: medium (a few days)
+/// — fork or vendor termwiz's `KeyCode::encode` release-event path, or
+/// reimplement the whole `CSI u` general form locally instead of leaning on
+/// termwiz's legacy-oriented encoder; plus the app-layer wiring change.
+#[test]
+#[ignore = "structural: termwiz's KeyCode::encode never emits release events regardless of Kitty flags; see report"]
+fn release_events_are_unimplemented_regardless_of_flags() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt(b"\x1b[>3u"); // disambiguate + report-event-types
+    assert_eq!(
+        core.key_input(KeyCode::Char('a'), Modifiers::NONE, false),
+        b"\x1b[97;1:3u".to_vec(),
+        "spec's release-event form for plain 'a'; termwiz always returns empty for is_down=false"
+    );
+}
+
+/// UNIMPLEMENTED, structural: F25 and above have no representation at all
+/// in termwiz's `KeyCode::Function(n)` encoder — its internal table only
+/// covers `n <= 24` (reusing legacy rxvt-style `CSI n~` numbers, which for
+/// F1-F12 happen to match the alternate numeric forms Kitty's own spec
+/// documents, e.g. `F1` = `1 P or 11 ~`); anything higher hits a `bail!`
+/// that `TerminalCore::encode_key`'s `.unwrap_or_default()` silently turns
+/// into `""`. Kitty's Functional key definitions table has no legacy/
+/// numeric form for F13 and up at all, only Private-Use-Area `CSI u` codes
+/// (`F13` = `57376 u`, ..., `F35` = `57398 u`), so termwiz's `F13..=F24`
+/// output (its own legacy numbers, e.g. `\x1b[25~` for F13) is WRONG rather
+/// than merely unimplemented, and `F25..=F35` is UNIMPLEMENTED (empty).
+/// Moot in today's build regardless: `app::keymap` never maps any function
+/// key to a `TermKeyCode` at all (`terminal_key_from_key`/
+/// `terminal_input_from_key` have no `NamedKey::F1..F24` arm), so F-keys
+/// never reach `TerminalCore::key_input` from the real UI — BYPASSED at the
+/// app layer, on top of being WRONG/UNIMPLEMENTED here. Effort estimate:
+/// small for a `kitty_override`-style PUA table covering F13-F35 (same
+/// shape as Enter/Tab/Backspace/Escape) but it only matters once the
+/// app-layer gap (out of scope: `src/app/keymap.rs`) is also closed.
+#[test]
+#[ignore = "structural: termwiz has no F25+ encoding at all (and F13-F24 use the wrong numbers), and app::keymap never routes function keys to core; see report"]
+fn very_high_function_keys_are_unimplemented() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt(b"\x1b[>1u");
+    assert_eq!(
+        core.key_input(KeyCode::Function(25), Modifiers::NONE, true),
+        b"\x1b[57388u".to_vec()
+    );
+}
+
+/// UNIMPLEMENTED, structural: standalone modifier-key presses (bare Shift,
+/// Ctrl, Alt, Super...) get dedicated `CSI u` codes under the disambiguate
+/// flag per the spec's Functional key definitions table (`LEFT_SHIFT` =
+/// `57441 u`, etc.). termwiz's `KeyCode::encode` puts every modifier
+/// `KeyCode` variant (`Shift`, `Control`, `Alt`, `Super`, `LeftShift`, ...)
+/// in its final catch-all "don't expand to anything" arm unconditionally,
+/// ignoring `modes.encoding` entirely. Also moot today: `app::keymap` never
+/// constructs a modifier `TermKeyCode` from a bare modifier keypress in the
+/// first place. Effort estimate: medium — needs both a termwiz-side (or
+/// locally-overridden) PUA code table for every modifier key/side, and new
+/// app-layer wiring to recognize bare modifier `KeyEvent`s at all.
+#[test]
+#[ignore = "structural: termwiz never encodes standalone modifier keypresses, and app::keymap never constructs them; see report"]
+fn standalone_modifier_keypresses_are_unimplemented() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt(b"\x1b[>1u");
+    assert_eq!(
+        core.key_input(KeyCode::LeftShift, Modifiers::SHIFT, true),
+        b"\x1b[57441u".to_vec()
+    );
+}
+
+/// WRONG, structural: under the disambiguate flag, keypad keys are supposed
+/// to switch from "reported as their equivalent non-keypad key" (legacy
+/// behavior, e.g. `KP_0` sends the same bytes as `Insert`) to their own
+/// dedicated Private-Use-Area `CSI u` codes ("All keypad keys are reported
+/// as their equivalent non-keypad keys. To distinguish these, use the
+/// disambiguate flag" — spec's Legacy functional keys section; `KP_0` =
+/// `57399 u` in the Functional key definitions table). termwiz's
+/// `KeyCode::Numpad0` encoder never consults `modes.encoding` at all — it
+/// always emits the legacy `\x1b[2~` form (coincidentally reasonable
+/// *without* disambiguate, since `2~` is also `Insert`'s code, but wrong
+/// once disambiguate is active). Moot today regardless: `app::keymap` has
+/// no path from any keypad `KeyEvent` to a `TermKeyCode::NumpadN` at all.
+/// Effort estimate: small-medium — a `kitty_override`-style PUA table for
+/// the keypad keys, gated on the disambiguate flag; the app-layer wiring
+/// gap is a separate, larger effort (floem/winit keypad key detection).
+#[test]
+#[ignore = "structural: termwiz's keypad encoding ignores the Kitty disambiguate flag entirely, and app::keymap has no keypad wiring; see report"]
+fn keypad_keys_ignore_disambiguate_flag() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt(b"\x1b[>1u"); // disambiguate
+    assert_eq!(
+        core.key_input(KeyCode::Numpad0, Modifiers::NONE, true),
+        b"\x1b[57399u".to_vec()
+    );
 }
 
 /// Documents a known, pre-existing compliance gap that is NOT part of the
