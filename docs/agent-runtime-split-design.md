@@ -842,11 +842,40 @@ noticeably before `session_list`/`session_new` answered.
   through floem's signal plumbing against a real spawned `horizon-agentd` —
   matching the precedent already accepted above for this same function's
   spawn/reconnect orchestration.
-- **Pre-existing flake, unrelated to this addendum.** `killed_agentd_
-  respawns_and_replays_transcript_with_open_turn_cancelled` and `drained_
-  agentd_respawns_and_preserves_a_completed_session` intermittently fail
-  under heavy parallel `cargo test` load (confirmed present on unmodified
-  `main` too, via a stashed before/after comparison) — a race between the
-  JSONL writer's background flush and a `SIGKILL`/respawn happening fast
-  enough to race it, not anything this addendum touches. Worth a follow-up
-  if it proves disruptive.
+- **Pre-existing flake, unrelated to this addendum — since deflaked.**
+  `killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled`
+  and `drained_agentd_respawns_and_preserves_a_completed_session`
+  intermittently failed under parallel `cargo test` load. Root cause:
+  `Appender::append_provider_events` only *enqueues* onto the JSONL
+  writer's background thread (`persistence::event_log::writer`'s
+  flush-per-append happens on that thread, not the caller); forwarding the
+  same event to a connected client happens right after that enqueue, on
+  the same session thread — so a test client can observe an event over the
+  wire well before it's actually durable. The durability contract is
+  "records that reached disk survive", not "records accepted into the
+  channel survive". Reproduced under parallel load: the kill test could
+  lose an entire in-flight burst (not just the tail record) when the
+  writer thread was starved long enough, and on respawn the resumed
+  session showed a duplicated startup burst instead of the expected
+  tool-call/approval transcript. Fixed two ways, matching which side
+  actually owned the broken promise:
+  - **Kill test (test-side fix):** a hard `kill -9` racing the writer is
+    the *expected*, documented tradeoff — nothing can make an unflushed
+    channel entry survive `SIGKILL`. `killed_agentd_respawns_and_replays_
+    transcript_with_open_turn_cancelled` now polls the on-disk log (via
+    `persistence::event_log::read`) until the last event it depends on
+    (`ApprovalRequested`) is actually durable *before* killing — the
+    writer drains its one channel strictly in order, so confirming that
+    event is on disk also confirms everything earlier in the session is.
+  - **Drain test (product-side fix):** a graceful `Control::Drain` has no
+    such excuse — `horizon-agentd`'s drain handling (both call sites in
+    `main.rs`) called `std::process::exit(0)` without ever flushing the
+    event log's `WriterHandle`, so a drain issued right after a client
+    observed a session's latest event over the wire could still race the
+    writer and lose it. Fixed in `main.rs`/`session.rs`: `Control::Drain`
+    now calls the new `Connection::writer`/`flush_event_log_before_exit`
+    to block on `WriterHandle::flush()` before exiting, so a clean drain
+    (unlike a crash) now genuinely never loses an accepted write. 20
+    consecutive full `cargo test -p horizon-agentd --test e2e` runs, plus
+    dozens of runs of just these two tests under deliberate parallel load,
+    came back green after both fixes.

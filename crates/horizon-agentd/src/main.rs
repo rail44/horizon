@@ -371,6 +371,7 @@ async fn handle_connection(stream: UnixStream, state: Arc<AgentdState>) -> anyho
             }
             Control::Drain => {
                 let _ = writer.flush().await;
+                flush_event_log_before_exit(state.writer());
                 eprintln!("horizon-agentd: drained, exiting");
                 std::process::exit(0);
             }
@@ -500,6 +501,7 @@ async fn run_session_hosting_loop(
                 connection.handle_host_tool_response(response);
             }
             EnvelopeBody::Control(Control::Drain) => {
+                flush_event_log_before_exit(connection.writer());
                 eprintln!("horizon-agentd: drained, exiting");
                 std::process::exit(0);
             }
@@ -510,6 +512,29 @@ async fn run_session_hosting_loop(
             other => {
                 eprintln!("horizon-agentd: unexpected message during session hosting: {other:?}");
             }
+        }
+    }
+}
+
+/// Blocks until every event-log record enqueued so far has actually been
+/// written and flushed to disk (see [`WriterHandle::flush`]'s doc comment),
+/// then returns -- called right before `std::process::exit(0)` on a
+/// `Control::Drain`. An `Appender::append_provider_events` call only
+/// enqueues onto the writer's own background thread (see `WriterHandle::
+/// open`'s "Ordering guarantee"); forwarding the resulting event to a
+/// connected client happens after that same enqueue, not after it becomes
+/// durable. Without this, a client observing a session's latest event over
+/// the wire and immediately draining could still race the writer's thread
+/// and lose it, or lose everything not yet drained -- indistinguishable
+/// from the `kill -9` case this binary has no signal handler for, except a
+/// graceful drain has every opportunity to just wait instead. A blocking
+/// call is safe here despite running on an async task: this is the last
+/// thing that happens before the process exits, so there is nothing else
+/// for the runtime to make progress on.
+fn flush_event_log_before_exit(writer: Option<WriterHandle>) {
+    if let Some(writer) = writer {
+        if let Err(error) = writer.flush() {
+            eprintln!("horizon-agentd: failed to flush event log before draining: {error}");
         }
     }
 }

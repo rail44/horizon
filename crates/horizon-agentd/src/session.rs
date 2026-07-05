@@ -453,6 +453,21 @@ impl Connection {
             .collect()
     }
 
+    /// Delegates to [`AgentdState::writer`] -- `main`'s `Control::Drain`
+    /// handling uses this to flush the event log's writer channel to disk
+    /// before the process exits. An `append` returning only means a record
+    /// was *enqueued*; the writer's background thread is what actually
+    /// writes and flushes it (see `WriterHandle::open`'s "Ordering
+    /// guarantee" doc comment), and forwarding an event to this connection
+    /// over the wire happens after that same enqueue, not after it's
+    /// durable. Without this, a client that drains right after observing a
+    /// session's latest event over the wire could still race the writer and
+    /// lose it -- unlike a `kill -9`, a graceful drain has no excuse to ever
+    /// do that.
+    pub(crate) fn writer(&self) -> Option<WriterHandle> {
+        self.state.writer()
+    }
+
     /// Handles `Control::SessionLoad`: asks `session_id`'s own thread (if
     /// live) to hand back everything its `LiveState::events()` has
     /// accumulated -- already-committed history plus anything folded in

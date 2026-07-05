@@ -36,9 +36,12 @@ any work — run it yourself and make sure all three are clean:
 
 ```sh
 cargo fmt
-cargo clippy --all-targets -- -D warnings
-cargo test
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
+
+`--workspace` is load-bearing: bare `cargo clippy`/`cargo test` from the
+repo root silently skip the `horizon-agentd`/`horizon-agent` crates.
 
 The same gate runs as a pre-commit hook (`hooks/pre-commit`). One-time setup
 per clone:

@@ -1120,6 +1120,49 @@ async fn collect_replayed_events(
     }
 }
 
+/// Polls `path`'s on-disk event log until a record for `session_id`
+/// matching `predicate` appears, or panics after a generous timeout.
+///
+/// The event log's durability contract (see `persistence::event_log::
+/// writer`'s flush-per-append doc comment) is "records that reached disk
+/// survive a hard kill" -- it does **not** promise a record merely accepted
+/// onto the writer's channel is already durable. `Appender::
+/// append_provider_events` just enqueues onto the writer's own background
+/// thread and returns; forwarding the resulting event to a connected client
+/// (what every `collect_events_until` caller observes) happens right after
+/// that same enqueue, on the same session thread, so a client can see an
+/// event well before it has actually reached disk. Killing right after
+/// observing an event over the wire, without waiting for this, races that
+/// disk write and can spuriously lose it -- or, since the writer drains its
+/// single channel strictly in FIFO order (see `WriterHandle::open`'s
+/// "Ordering guarantee"), lose everything from that point in the session
+/// backward that also hadn't been drained yet. Confirming a later event is
+/// durable also confirms every earlier one in the same session already is,
+/// which is why callers only need to wait for the *last* event they depend
+/// on before killing.
+async fn wait_for_persisted_event(
+    path: &std::path::Path,
+    session_id: SessionId,
+    mut predicate: impl FnMut(&Event) -> bool,
+) {
+    for _ in 0..200 {
+        if let Ok(report) = horizon_agent::persistence::event_log::read(path) {
+            if report
+                .records
+                .iter()
+                .any(|record| record.session_id == session_id && predicate(&record.event))
+            {
+                return;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!(
+        "gave up waiting for the expected event to reach disk at {}",
+        path.display()
+    );
+}
+
 /// Step 4's headline scenario: `kill -9` a live `horizon-agentd` mid-session
 /// (while a turn is genuinely still open -- parked in `WaitingForApproval`
 /// with no timer to close it on its own), respawn a fresh process pointed at
@@ -1152,6 +1195,16 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
     // Parks the session in `WaitingForApproval` indefinitely -- a genuinely
     // open turn, not a race against a timer -- once this arrives.
     collect_events_until(&mut reader, session_id, |event| {
+        matches!(event, Event::ApprovalRequested(_))
+    })
+    .await;
+
+    // Observing the approval request over the wire is not the same as it
+    // being durable yet (see `wait_for_persisted_event`'s doc comment) --
+    // wait for it to actually reach disk before the hard kill below, so
+    // this test exercises the event log's documented durability contract
+    // instead of racing the writer's background thread.
+    wait_for_persisted_event(&event_log_path, session_id, |event| {
         matches!(event, Event::ApprovalRequested(_))
     })
     .await;
