@@ -1,5 +1,7 @@
 use floem::peniko::Color;
 
+use crate::ui::theme;
+
 use super::transcript::TranscriptTone;
 
 pub(super) fn block_label_size(tone: TranscriptTone) -> f32 {
@@ -22,23 +24,23 @@ pub(super) fn block_max_width(tone: TranscriptTone) -> f32 {
 
 pub(super) fn block_text_color(tone: TranscriptTone) -> Color {
     match tone {
-        TranscriptTone::Status => Color::from_rgb8(166, 174, 188),
-        TranscriptTone::Thinking => Color::from_rgb8(172, 178, 190),
-        TranscriptTone::Tool | TranscriptTone::Approval => Color::from_rgb8(214, 221, 232),
-        TranscriptTone::Error => Color::from_rgb8(255, 174, 178),
-        _ => Color::from_rgb8(235, 238, 244),
+        TranscriptTone::Status => theme::text_muted(),
+        TranscriptTone::Thinking => theme::text_muted(),
+        TranscriptTone::Tool | TranscriptTone::Approval => theme::text_primary(),
+        TranscriptTone::Error => theme::danger(),
+        _ => theme::text_primary(),
     }
 }
 
 pub(super) fn block_colors(tone: TranscriptTone) -> (Color, Color) {
     match tone {
-        TranscriptTone::User => (Color::from_rgb8(30, 43, 63), Color::from_rgb8(65, 94, 133)),
-        TranscriptTone::Assistant => (Color::from_rgb8(29, 33, 40), Color::from_rgb8(48, 56, 68)),
-        TranscriptTone::Thinking => (Color::from_rgb8(23, 26, 31), Color::from_rgb8(43, 48, 57)),
-        TranscriptTone::Status => (Color::from_rgb8(25, 30, 37), Color::from_rgb8(47, 56, 68)),
-        TranscriptTone::Tool => (Color::from_rgb8(23, 32, 34), Color::from_rgb8(42, 66, 66)),
-        TranscriptTone::Approval => (Color::from_rgb8(38, 34, 26), Color::from_rgb8(78, 66, 44)),
-        TranscriptTone::Error => (Color::from_rgb8(42, 28, 32), Color::from_rgb8(88, 52, 58)),
-        TranscriptTone::Lifecycle => (Color::from_rgb8(28, 32, 39), Color::from_rgb8(42, 48, 58)),
+        TranscriptTone::User => (theme::surface_raised(), theme::border_default()),
+        TranscriptTone::Assistant => (theme::surface_raised(), theme::border_default()),
+        TranscriptTone::Thinking => (theme::surface_panel(), theme::border_subtle()),
+        TranscriptTone::Status => (theme::surface_chrome(), theme::border_default()),
+        TranscriptTone::Tool => (theme::surface_raised(), theme::border_default()),
+        TranscriptTone::Approval => (theme::surface_raised(), theme::accent()),
+        TranscriptTone::Error => (theme::surface_raised(), theme::danger()),
+        TranscriptTone::Lifecycle => (theme::surface_raised(), theme::border_subtle()),
     }
 }

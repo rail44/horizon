@@ -1,7 +1,8 @@
 use crate::agent::frame::AgentFrame;
 use crate::ui::fonts::font_family;
+use crate::ui::theme;
 use floem::event::{Event, EventListener, EventPropagation};
-use floem::peniko::{kurbo::Point, Color};
+use floem::peniko::kurbo::Point;
 use floem::prelude::*;
 
 mod labels;
@@ -56,7 +57,7 @@ pub(crate) fn agent_frame_view(
                 .flex_basis(0.0)
                 .flex_grow(1.0)
                 .min_height(0.0)
-                .background(Color::from_rgb8(24, 27, 32))
+                .background(theme::surface_panel())
         })
         .on_event(EventListener::PointerWheel, move |event| {
             if let Event::PointerWheel(pointer) = event {
@@ -204,9 +205,9 @@ fn markdown_line_view(line: MarkdownLine, tone: TranscriptTone) -> impl IntoView
                 .font_size(12)
                 .padding_horiz(8)
                 .padding_vert(3)
-                .background(Color::from_rgb8(20, 23, 28))
+                .background(theme::surface_base())
                 .border(1.0)
-                .border_color(Color::from_rgb8(43, 49, 60)),
+                .border_color(theme::border_subtle()),
             MarkdownLineKind::Blank => s.font_size(6).height(6),
             MarkdownLineKind::Paragraph => s.font_size(12),
         };
