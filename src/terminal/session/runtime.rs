@@ -112,6 +112,23 @@ fn notify_snapshot(
     }
 }
 
+/// Re-arm (or disarm) the synchronized-update failsafe timer against the
+/// core's current window state. Called after every core mutation that can
+/// open, extend, or close a sync window — i.e. every `write_vt` and every
+/// `flush_sync_update` — so `sync_flush_rx` always reflects live state:
+/// `Some(deadline)` schedules a wakeup at that instant (mirroring
+/// alacritty's own event loop, which polls with this same deadline as its
+/// timeout — see `TerminalCore::sync_flush_deadline`'s doc comment);
+/// `None` (no window open) parks it on a channel that never fires, so an
+/// idle terminal causes no extra wakeups, matching `notify_snapshot`'s own
+/// coalescing-timer discipline.
+fn rearm_sync_flush(core: &TerminalCore, sync_flush_rx: &mut Receiver<Instant>) {
+    *sync_flush_rx = match core.sync_flush_deadline() {
+        Some(deadline) => crossbeam_channel::at(deadline),
+        None => crossbeam_channel::never(),
+    };
+}
+
 /// Flush the latest dirty state once the coalescing timer fires.
 fn flush_snapshot(
     core: &TerminalCore,
@@ -153,6 +170,13 @@ pub(super) fn run_terminal_core(
     let mut dirty = false;
     let mut flush_armed = false;
     let mut flush_rx: Receiver<Instant> = crossbeam_channel::never();
+
+    // Failsafe for a synchronized-update window (BSU/ESU, private mode 2026)
+    // left open by a PTY chunk that never delivers its closing ESU — see
+    // `TerminalCore::sync_flush_deadline`'s doc comment. Starts disarmed;
+    // `rearm_sync_flush` only schedules a wakeup while a window is actually
+    // open.
+    let mut sync_flush_rx: Receiver<Instant> = crossbeam_channel::never();
 
     loop {
         crossbeam_channel::select! {
@@ -232,10 +256,25 @@ pub(super) fn run_terminal_core(
                 if events.title.is_some() {
                     let _ = update_tx.send(TerminalUpdate::Title(events.title));
                 }
+                rearm_sync_flush(&core, &mut sync_flush_rx);
                 notify_snapshot(&core, &update_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
             }
             recv(flush_rx) -> _ => {
                 flush_snapshot(&core, &update_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
+            }
+            recv(sync_flush_rx) -> _ => {
+                let events = core.flush_sync_update();
+                for bytes in events.pty_writes {
+                    let _ = command_tx.send(TerminalCommand::Input(bytes));
+                }
+                if events.bell_count > 0 {
+                    let _ = update_tx.send(TerminalUpdate::Bell);
+                }
+                if events.title.is_some() {
+                    let _ = update_tx.send(TerminalUpdate::Title(events.title));
+                }
+                rearm_sync_flush(&core, &mut sync_flush_rx);
+                notify_snapshot(&core, &update_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
             }
         }
     }
@@ -395,6 +434,62 @@ mod tests {
         assert_eq!(calls.len(), 2, "expected one resize per distinct size");
         assert_eq!(calls[0].rows, 24);
         assert_eq!(calls[1].rows, 30);
+    }
+
+    /// End-to-end regression test for the synchronized-update failsafe
+    /// (`rearm_sync_flush`/`TerminalCore::flush_sync_update`): a PTY chunk
+    /// that opens a BSU window and never sends the closing ESU must still
+    /// eventually flush, driven purely by the wall-clock timer armed
+    /// against `TerminalCore::sync_flush_deadline` — with no further PTY
+    /// data at all. Exercises `run_terminal_core` directly (no real PTY
+    /// needed; `pty_tx` stands in for the reader thread) so the timer
+    /// actually has to fire, unlike the core-level tests in
+    /// `terminal::tests` which call `flush_sync_update` explicitly.
+    #[test]
+    fn sync_update_failsafe_flushes_a_stuck_window_after_the_deadline() {
+        let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
+        let (command_tx, _command_rx) = crossbeam_channel::unbounded();
+        let (update_tx, update_rx) = crossbeam_channel::unbounded();
+        let receivers = CoreReceivers {
+            resize_rx: crossbeam_channel::never(),
+            scroll_rx: crossbeam_channel::never(),
+            mouse_rx: crossbeam_channel::never(),
+            paste_rx: crossbeam_channel::never(),
+            key_rx: crossbeam_channel::never(),
+            selection_rx: crossbeam_channel::never(),
+        };
+
+        std::thread::spawn(move || {
+            run_terminal_core(
+                TerminalSize::new(40, 40),
+                pty_rx,
+                receivers,
+                command_tx,
+                update_tx,
+            );
+        });
+
+        pty_tx.send(b"STALE".to_vec()).unwrap();
+        // Open a synchronized-update window with an erase queued inside it,
+        // then go silent — no ESU, no further PTY data, ever.
+        pty_tx.send(b"\x1b[?2026h\x1b[H\x1b[K".to_vec()).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut healed = false;
+        while Instant::now() < deadline {
+            match update_rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(TerminalUpdate::Snapshot(frame)) if !frame.text.contains("STALE") => {
+                    healed = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        assert!(
+            healed,
+            "failsafe timer should flush the stuck sync window without any further PTY data"
+        );
     }
 
     /// Regression guard for the IME/composed-text carve-out described in

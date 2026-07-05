@@ -398,6 +398,144 @@ fn osc4_query_reports_overridden_palette_color_over_theme_default() {
     );
 }
 
+/// A real Claude Code redraw frame captured with `HORIZON_PTY_TRACE` while
+/// reproducing the "Backspace deletes but the screen doesn't update" bug:
+/// `\x1b[?2026h\x1b[?25l\x1b[H\r\x1b[6C\x1b[25B\x1b[K\x1b[33;1H\x1b[26;7H\x1b[?25h\x1b[?2026l`
+/// — hide cursor, home, move to row 26 col 7 (1-indexed), erase to end of
+/// line (`\x1b[K`, the actual backspace delta), reposition, show cursor,
+/// close the synchronized-update window (BSU/ESU, private mode 2026). Split
+/// at byte 8 (`bsu_len` below) for the split-chunk/no-ESU cases: that is
+/// exactly the end of the opening `\x1b[?2026h`.
+const REAL_BACKSPACE_FRAME: &[u8] =
+    b"\x1b[?2026h\x1b[?25l\x1b[H\r\x1b[6C\x1b[25B\x1b[K\x1b[33;1H\x1b[26;7H\x1b[?25h\x1b[?2026l";
+
+/// Position the cursor at the same row/col the frame's own `\x1b[K` erases
+/// from (1-indexed row 26, col 7) and plant a marker there, so a test can
+/// assert on whether that marker survived.
+fn seed_erase_target(core: &mut TerminalCore) {
+    core.write_vt(b"\x1b[26;7HSTALE");
+    assert!(core.snapshot_text().contains("STALE"));
+}
+
+fn sized_core() -> TerminalCore {
+    // Tall/wide enough for the frame's `\x1b[33;1H`/`\x1b[26;7H` absolute
+    // positioning.
+    TerminalCore::new(TerminalSize::new(40, 40))
+}
+
+/// Suspect 1, case (a): a full synchronized-update frame delivered as a
+/// single PTY read (`write_vt` call) applies immediately — no timer
+/// involved, since `vte::ansi::Processor` sees BSU and ESU in the same
+/// `advance`.
+#[test]
+fn sync_update_single_chunk_flushes_immediately() {
+    let mut core = sized_core();
+    seed_erase_target(&mut core);
+
+    core.write_vt(REAL_BACKSPACE_FRAME);
+    assert!(!core.snapshot_text().contains("STALE"));
+}
+
+/// Suspect 1, case (b): the same frame split across two `write_vt` calls
+/// right after the opening BSU (mirroring a read-boundary split) stays
+/// buffered until the second chunk's ESU arrives — `vte::ansi::Processor`
+/// already tracks the open window across separate `advance` calls via its
+/// own `sync_state.buffer`, scanning each newly appended chunk (plus a
+/// small overlap) for the closing escape. Confirms cross-chunk buffering
+/// itself was never the bug; only a *lost* ESU has no pump (case (c)).
+#[test]
+fn sync_update_split_across_chunks_flushes_only_after_second_chunk() {
+    let mut core = sized_core();
+    seed_erase_target(&mut core);
+
+    let bsu_len = 8; // len(b"\x1b[?2026h")
+    core.write_vt(&REAL_BACKSPACE_FRAME[..bsu_len]);
+    assert!(
+        core.snapshot_text().contains("STALE"),
+        "content must stay buffered until ESU closes the window"
+    );
+
+    core.write_vt(&REAL_BACKSPACE_FRAME[bsu_len..]);
+    assert!(!core.snapshot_text().contains("STALE"));
+}
+
+/// Suspect 1, case (c) — the actual bug: with the closing ESU truly lost
+/// (never arrives in any later `write_vt` call either), the window stays
+/// open and the erase never reaches the grid. `vte::ansi::Processor` has a
+/// 150ms failsafe deadline (`sync_flush_deadline`) but never checks it
+/// itself — nothing inside `advance` compares it to real time, since
+/// `advance` only ever runs when new bytes show up (see the doc comment on
+/// `SYNC_UPDATE_DECRQM_RESET` in `core.rs`). Without a caller pumping it,
+/// this is a permanent freeze, not just a delay. `TerminalCore::
+/// flush_sync_update` is that pump's mechanism (armed by
+/// `terminal::session::runtime`'s `sync_flush_rx` against
+/// `sync_flush_deadline`, exercised end-to-end in
+/// `session::runtime::tests::sync_update_failsafe_flushes_a_stuck_window_after_the_deadline`).
+#[test]
+fn sync_update_with_no_esu_never_self_heals_but_flush_sync_update_forces_it() {
+    let mut core = sized_core();
+    seed_erase_target(&mut core);
+
+    let bsu_len = 8;
+    let esu_len = 8; // len(b"\x1b[?2026l")
+    let without_esu = &REAL_BACKSPACE_FRAME[..REAL_BACKSPACE_FRAME.len() - esu_len];
+    assert_eq!(&without_esu[..bsu_len], b"\x1b[?2026h");
+
+    core.write_vt(without_esu);
+    assert!(
+        core.sync_flush_deadline().is_some(),
+        "window should be open"
+    );
+    assert!(
+        core.snapshot_text().contains("STALE"),
+        "no ESU ever arrived: nothing should flush on its own"
+    );
+
+    // The runtime-level failsafe timer's actual mechanism: force-close the
+    // window once its deadline has passed with no more PTY data.
+    core.flush_sync_update();
+    assert!(!core.snapshot_text().contains("STALE"));
+    assert_eq!(
+        core.sync_flush_deadline(),
+        None,
+        "window should now be closed"
+    );
+}
+
+/// Suspect 1's stated "rolling freeze" theory — that once one ESU is lost,
+/// *every subsequent* sync-wrapped frame also stays stuck, compounding
+/// forever — turns out not to hold against the real `vte::ansi::Processor`
+/// behavior: a stuck window's search for BSU/ESU resumes on the *next*
+/// chunk's own bytes, so a later frame's own closing ESU flushes the
+/// **entire** accumulated buffer at once (the old stuck delta and the new
+/// frame's delta together), fully closing the window again. Documented here
+/// as a regression guard on that specific (non-)compounding behavior, not
+/// because it excuses skipping the case (c) fix above: this self-healing
+/// only helps if the child ever emits another sync-wrapped frame at all,
+/// which does not hold on a truly idle PTY (case (c)).
+#[test]
+fn sync_update_next_full_frame_esu_flushes_the_stuck_window_too() {
+    let mut core = sized_core();
+    seed_erase_target(&mut core);
+
+    let esu_len = 8;
+    core.write_vt(&REAL_BACKSPACE_FRAME[..REAL_BACKSPACE_FRAME.len() - esu_len]);
+    assert!(core.snapshot_text().contains("STALE"));
+
+    // A later, fully self-contained BSU..content..ESU frame arrives (e.g.
+    // the next keystroke's echoed redraw).
+    core.write_vt(b"\x1b[?2026h\x1b[1;1Hworld\x1b[?2026l");
+    let snapshot = core.snapshot_text();
+    assert!(
+        !snapshot.contains("STALE"),
+        "stuck frame's erase should apply too: {snapshot:?}"
+    );
+    assert!(
+        snapshot.contains("world"),
+        "new frame's content should apply too: {snapshot:?}"
+    );
+}
+
 fn test_scroll(lines: i32) -> TerminalScroll {
     TerminalScroll {
         lines,

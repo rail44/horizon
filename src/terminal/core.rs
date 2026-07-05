@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use alacritty_terminal::event::WindowSize;
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::index::{Column, Line, Point as TermPoint, Side};
@@ -33,13 +35,20 @@ mod render;
 ///
 /// `vte::ansi::Processor` (the parser `TerminalCore::parser` wraps) *does*
 /// track the live window correctly — it buffers everything between BSU and
-/// ESU opaquely and only clears its internal sync timeout once ESU (or a
-/// 2s failsafe) closes the window, which is exactly the live state we want
-/// (see `Processor::sync_timeout`/`Timeout::pending_timeout`, used in
-/// `TerminalCore::write_vt`). So patch just this one reply on the way out:
-/// while a window is open, report "set" instead of the hardcoded "reset".
-/// Nothing else about DECRQM handling is touched — only an exact match of
-/// the mode-2026 reset reply is ever rewritten.
+/// ESU opaquely and only clears its internal sync timeout once ESU (or its
+/// 150ms failsafe, `vte::ansi`'s `SYNC_UPDATE_TIMEOUT`) closes the window,
+/// which is exactly the live state we want (see `Processor::sync_timeout`/
+/// `Timeout::pending_timeout`, used in `TerminalCore::write_vt`). So patch
+/// just this one reply on the way out: while a window is open, report "set"
+/// instead of the hardcoded "reset". Nothing else about DECRQM handling is
+/// touched — only an exact match of the mode-2026 reset reply is ever
+/// rewritten.
+///
+/// Note the failsafe is *not* self-pumping: `Processor` only ever checks the
+/// deadline against real time from inside `advance`, so it only fires on the
+/// next byte that happens to arrive — see `sync_flush_deadline`/
+/// `flush_sync_update` and their caller in `terminal::session::runtime` for
+/// the timer that actually pumps it when no more PTY data shows up.
 const SYNC_UPDATE_DECRQM_RESET: &[u8] = b"\x1b[?2026;2$y";
 const SYNC_UPDATE_DECRQM_SET: &[u8] = b"\x1b[?2026;1$y";
 
@@ -88,6 +97,39 @@ impl TerminalCore {
         // terminating ESU leaves behind. See `rewrite_sync_update_decrqm`.
         let sync_output_was_active = self.parser.sync_timeout().pending_timeout();
         self.parser.advance(&mut self.term, bytes);
+        self.finish_advance(sync_output_was_active)
+    }
+
+    /// The real-time deadline `vte::ansi::Processor` would use to abort a
+    /// synchronized-update window on its own — if it were ever asked. It
+    /// isn't, automatically: `Processor::advance` only compares this against
+    /// `Instant::now()` from *inside* a call fed new bytes (see the doc
+    /// comment above `SYNC_UPDATE_DECRQM_RESET`), so an idle PTY with no more
+    /// data leaves a window open forever. `None` while no window is open.
+    pub(crate) fn sync_flush_deadline(&self) -> Option<Instant> {
+        self.parser.sync_timeout().sync_timeout()
+    }
+
+    /// Force-close an open synchronized-update window without new PTY bytes
+    /// — the explicit pump `terminal::session::runtime` calls once
+    /// `sync_flush_deadline` has passed with nothing else arriving,
+    /// mirroring alacritty's own event loop (`EventLoop::spawn`, which polls
+    /// with that same deadline as its timeout and calls
+    /// `Processor::stop_sync` when it elapses). A no-op, PTY-write-wise, if
+    /// no window is open.
+    pub(crate) fn flush_sync_update(&mut self) -> TerminalEvents {
+        let sync_output_was_active = self.parser.sync_timeout().pending_timeout();
+        self.parser.stop_sync(&mut self.term);
+        self.finish_advance(sync_output_was_active)
+    }
+
+    /// Shared tail of `write_vt`/`flush_sync_update`: drain events queued by
+    /// whichever parser call just ran, rewrite a stale DECRQM reply against
+    /// the window state from *before* that call, and resolve any deferred
+    /// color/window-size query formatters. `sync_output_was_active` is the
+    /// pre-call snapshot the caller took for exactly the reason documented
+    /// on `write_vt`'s own capture.
+    fn finish_advance(&mut self, sync_output_was_active: bool) -> TerminalEvents {
         let mut events = self.events.drain();
 
         if sync_output_was_active {
