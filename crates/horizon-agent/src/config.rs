@@ -58,6 +58,7 @@ pub struct AgentFileAgentConfig {
     pub pane_status_tick_secs: Option<u64>,
     pub event_log_path: Option<String>,
     pub state_db_path: Option<String>,
+    pub history_token_budget: Option<usize>,
 }
 
 /// Mirrors `RawProviderConfig`'s fields one-to-one — see [`AgentFileConfig`].
@@ -240,6 +241,19 @@ pub const DEFAULT_STREAM_FLUSH_CHARS: usize = 320;
 /// struct, and this is the one place `[agent]`'s built-in defaults are
 /// named (see the module doc).
 pub const DEFAULT_PANE_STATUS_TICK_SECS: u64 = 1;
+/// Token budget for the conversation history sent to the provider on each
+/// turn (`providers::rig::completion`'s `history_token_window_policy`,
+/// applying `rig_memory::TokenWindowMemory`). 60,000 is conservative rather
+/// than tight against any particular model's real context window: the
+/// counter behind it (`rig_memory::HeuristicTokenCounter`'s OpenAI preset)
+/// approximates tokens from UTF-8 byte lengths and can over- or
+/// under-count by up to ~30% on real content, and the budget only bounds
+/// history -- it leaves headroom on top for the system prompt, the new
+/// turn's prompt, and the tool responses a turn is still free to request
+/// after this history is sent. Applies regardless of provider, but was
+/// chosen with Horizon's current provider in mind: an OpenAI-compatible
+/// endpoint fronting Kimi.
+pub const DEFAULT_HISTORY_TOKEN_BUDGET: usize = 60_000;
 
 pub const FS_GREP_MAX_BYTES_PRODUCTION_DEFAULT: u64 = 64 * 1024 * 1024;
 pub const FS_TRAVERSAL_MAX_FILES_PRODUCTION_DEFAULT: usize = 20_000;
@@ -325,6 +339,17 @@ pub struct RigAgentConfig {
     /// Character count that forces an early flush ahead of the interval
     /// above. Was `providers::rig::stream`'s `STREAM_FLUSH_CHARS`.
     pub stream_flush_chars: usize,
+    /// Token budget applied to the conversation history sent to the
+    /// provider on each turn -- see [`DEFAULT_HISTORY_TOKEN_BUDGET`] for
+    /// why 60,000 was chosen. Always active (no "0/unset disables
+    /// windowing" escape hatch), matching this struct's other tuning
+    /// knobs (`iteration_cap`, `doom_loop_window`, ...): the config file
+    /// can move the number, but the guard itself is never optional. This
+    /// only shapes the *view* sent to the provider
+    /// (`providers::rig::completion::windowed_history_for_request`) --
+    /// `rig_history` itself, and the DuckDB-persisted event log it's
+    /// rebuilt from, are never truncated.
+    pub history_token_budget: usize,
 }
 
 impl Default for RigAgentConfig {
@@ -339,6 +364,7 @@ impl Default for RigAgentConfig {
             doom_loop_window: DEFAULT_DOOM_LOOP_WINDOW,
             stream_flush_interval_ms: DEFAULT_STREAM_FLUSH_INTERVAL_MS,
             stream_flush_chars: DEFAULT_STREAM_FLUSH_CHARS,
+            history_token_budget: DEFAULT_HISTORY_TOKEN_BUDGET,
         }
     }
 }
@@ -370,6 +396,10 @@ impl RigAgentConfig {
                 .agent
                 .stream_flush_chars
                 .unwrap_or(DEFAULT_STREAM_FLUSH_CHARS),
+            history_token_budget: file
+                .agent
+                .history_token_budget
+                .unwrap_or(DEFAULT_HISTORY_TOKEN_BUDGET),
         }
     }
 }
@@ -723,6 +753,22 @@ mod tests {
             DEFAULT_STREAM_FLUSH_INTERVAL_MS
         );
         assert_eq!(config.stream_flush_chars, DEFAULT_STREAM_FLUSH_CHARS);
+        assert_eq!(config.history_token_budget, DEFAULT_HISTORY_TOKEN_BUDGET);
+    }
+
+    #[test]
+    fn rig_agent_config_reads_history_token_budget_from_file() {
+        let file = AgentFileConfig {
+            agent: AgentFileAgentConfig {
+                history_token_budget: Some(12_345),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let config = RigAgentConfig::from_env_and_file(&file);
+
+        assert_eq!(config.history_token_budget, 12_345);
     }
 
     #[test]

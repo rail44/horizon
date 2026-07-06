@@ -84,6 +84,10 @@ pub(crate) struct RawAgentConfig {
     pub(crate) fs_glob_result_limit: Option<usize>,
     pub(crate) iteration_cap: Option<u32>,
     pub(crate) doom_loop_window: Option<usize>,
+    /// Token budget for the conversation history sent to the provider on
+    /// each turn. See `agent::config::RigAgentConfig::history_token_budget`
+    /// for the built-in default and why it's applied unconditionally.
+    pub(crate) history_token_budget: Option<usize>,
     /// How often, in milliseconds, streamed assistant-text/reasoning deltas
     /// and tool-call-argument progress are coalesced into an emitted event.
     /// See `providers::rig::stream`'s `StreamDeltaBuffer`/

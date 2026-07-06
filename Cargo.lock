@@ -2375,12 +2375,14 @@ dependencies = [
  "libc",
  "regex",
  "rig-core",
+ "rig-memory",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "toml 0.8.23",
+ "tracing",
  "uuid",
  "walkdir",
 ]
@@ -4640,6 +4642,16 @@ dependencies = [
  "quote",
  "serde_json",
  "syn 2.0.118",
+]
+
+[[package]]
+name = "rig-memory"
+version = "0.39.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "718603378cd5e89a8f587260ddfe1f06d27ae18943d926edc420ac4f52a3436e"
+dependencies = [
+ "rig-core",
+ "tracing",
 ]
 
 [[package]]

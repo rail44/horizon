@@ -12,6 +12,7 @@ use rig_core::{
     streaming::{StreamedAssistantContent, ToolCallDeltaContent},
     OneOrMany,
 };
+use rig_memory::{HeuristicTokenCounter, MemoryPolicy, TokenWindowMemory};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -143,6 +144,8 @@ async fn rig_openai_turn_streaming(
         })
         .into(),
     );
+    let policy = history_token_window_policy(config);
+    let history = windowed_history_for_request(history, &policy);
     let mut stream = model
         .completion_request(prompt)
         .messages(history)
@@ -295,6 +298,48 @@ async fn rig_openai_turn_streaming(
             failed: false,
         },
     ))
+}
+
+/// Builds the token-window memory policy applied to the outgoing history
+/// just before it is sent to the provider (see
+/// [`windowed_history_for_request`]). Uses `rig-memory`'s OpenAI
+/// [`HeuristicTokenCounter`] preset -- a provider-agnostic, byte-length
+/// heuristic, not the real tokenizer of whatever model `config.model`
+/// names -- which is why `config.history_token_budget`'s built-in default
+/// (`config::DEFAULT_HISTORY_TOKEN_BUDGET`) leaves headroom against that
+/// approximation rather than tracking a specific context window exactly.
+pub(super) fn history_token_window_policy(config: &RigAgentConfig) -> TokenWindowMemory {
+    TokenWindowMemory::new(config.history_token_budget, HeuristicTokenCounter::openai())
+}
+
+/// Applies `policy` to `history` -- the *view* of the conversation sent to
+/// the provider for this turn. This never touches `rig_history` itself
+/// (the session loop's source of truth, appended to and persisted via the
+/// DuckDB projection unchanged by the caller in `complete_rig_turn`): only
+/// the clone handed to this function is ever windowed.
+///
+/// `TokenWindowMemory::apply` cannot currently fail (its `MemoryPolicy`
+/// impl only ever returns `Ok`), but [`MemoryPolicy::apply`] is fallible by
+/// contract, so a future policy change (or a different policy swapped in
+/// here) could start returning `Err`. On `Err` the original, unwindowed
+/// history is used instead and the failure is logged via `tracing` --
+/// never silently dropping context (an empty history) or failing the
+/// turn outright over a policy bug.
+pub(super) fn windowed_history_for_request(
+    history: Vec<Message>,
+    policy: &dyn MemoryPolicy,
+) -> Vec<Message> {
+    let fallback = history.clone();
+    match policy.apply(history) {
+        Ok(windowed) => windowed,
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "history token-window policy failed; sending unwindowed history"
+            );
+            fallback
+        }
+    }
 }
 
 /// Builds the OpenAI Completions client for a turn.

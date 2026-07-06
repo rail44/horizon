@@ -1,6 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
-use super::completion::{partial_assistant_message, TurnCompletion, MULTI_TOOL_TEST_BATCH_SIZE};
+use super::completion::{
+    history_token_window_policy, partial_assistant_message, windowed_history_for_request,
+    TurnCompletion, MULTI_TOOL_TEST_BATCH_SIZE,
+};
 use super::mapping::{
     horizon_events_from_rig_message, horizon_provider_events_from_rig_message,
     horizon_tool_definition_from_rig, rig_messages_from_horizon_events,
@@ -34,6 +37,7 @@ use rig_core::{
     },
     OneOrMany,
 };
+use rig_memory::{HeuristicTokenCounter, MemoryError, MemoryPolicy, TokenWindowMemory};
 
 fn recv(rx: &crossbeam_channel::Receiver<ProviderEvent>) -> ProviderEvent {
     rx.recv_timeout(std::time::Duration::from_secs(1))
@@ -1176,5 +1180,99 @@ fn rig_session_iteration_cap_counts_one_tool_turn_per_batch() {
     assert_eq!(
         recv(&rx).event,
         Event::StateChanged(SessionState::WaitingForUser)
+    );
+}
+
+// --- history token-window memory policy -------------------------------
+//
+// `windowed_history_for_request`/`history_token_window_policy` shape only
+// the *view* of `rig_history` sent to the provider for a turn -- they never
+// touch `rig_history` itself (covered by the rest of this file, which never
+// exercises them: every other test here either bypasses the OpenAI path
+// entirely via the deterministic fallback, or asserts on `rig_history`
+// post-turn, never on what was actually sent).
+
+#[test]
+fn windowed_history_for_request_passes_through_when_within_budget() {
+    let history = vec![RigMessage::user("hi"), RigMessage::assistant("hello")];
+    let policy = TokenWindowMemory::new(10_000, HeuristicTokenCounter::openai());
+
+    let windowed = windowed_history_for_request(history.clone(), &policy);
+
+    assert_eq!(windowed, history);
+}
+
+#[test]
+fn windowed_history_for_request_keeps_the_newest_messages_when_over_budget() {
+    let history = vec![
+        RigMessage::user("a".repeat(400)),
+        RigMessage::assistant("b".repeat(400)),
+        RigMessage::user("c".repeat(400)),
+        RigMessage::assistant("d".repeat(400)),
+    ];
+    // Each ~400-byte message costs roughly 400/4 + 4 = 104 heuristic tokens
+    // (`HeuristicTokenCounter::openai`'s 4 bytes/token + 4-token overhead),
+    // so a 250-token budget fits the newest two messages (~208) but not all
+    // four (~416).
+    let policy = TokenWindowMemory::new(250, HeuristicTokenCounter::openai());
+
+    let windowed = windowed_history_for_request(history.clone(), &policy);
+
+    assert!(
+        windowed.len() < history.len(),
+        "older messages must be dropped once the budget is exceeded"
+    );
+    assert_eq!(
+        windowed.last(),
+        history.last(),
+        "the newest message must always survive windowing"
+    );
+    assert_eq!(
+        windowed.as_slice(),
+        &history[history.len() - windowed.len()..],
+        "the surviving messages must be the newest, contiguous suffix of history"
+    );
+}
+
+#[test]
+fn windowed_history_for_request_falls_back_to_the_original_history_on_policy_error() {
+    struct FailingPolicy;
+
+    impl MemoryPolicy for FailingPolicy {
+        fn apply(&self, _messages: Vec<RigMessage>) -> Result<Vec<RigMessage>, MemoryError> {
+            Err(MemoryError::Policy("boom".to_string()))
+        }
+    }
+
+    let history = vec![RigMessage::user("hi"), RigMessage::assistant("hello")];
+
+    let windowed = windowed_history_for_request(history.clone(), &FailingPolicy);
+
+    assert_eq!(
+        windowed, history,
+        "a failing policy must fall back to the unwindowed history rather than \
+         dropping context or panicking"
+    );
+}
+
+#[test]
+fn history_token_window_policy_uses_the_configured_budget() {
+    let config = RigAgentConfig {
+        history_token_budget: 250,
+        ..Default::default()
+    };
+    let history = vec![
+        RigMessage::user("a".repeat(400)),
+        RigMessage::assistant("b".repeat(400)),
+        RigMessage::user("c".repeat(400)),
+        RigMessage::assistant("d".repeat(400)),
+    ];
+
+    let policy = history_token_window_policy(&config);
+    let windowed = windowed_history_for_request(history.clone(), &policy);
+
+    assert!(
+        windowed.len() < history.len(),
+        "the configured budget, not some other default, must drive the window"
     );
 }

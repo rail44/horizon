@@ -78,6 +78,17 @@ iteration_cap = 25
 # doom-loop guard.
 doom_loop_window = 3
 
+# Token budget for the conversation history sent to the provider on each
+# turn: once the accumulated history would exceed this many (heuristically
+# counted) tokens, the oldest messages are dropped from the outgoing
+# request while the full history stays intact in the DuckDB projection --
+# this only shapes the view sent to the provider, never what's persisted.
+# 60000 is conservative on purpose: token counts come from a
+# provider-agnostic byte-length heuristic, not the provider's real
+# tokenizer, and can be off by up to ~30% on real content, so the budget
+# leaves headroom for that plus the system prompt and tool responses.
+history_token_budget = 60000
+
 # How often, in milliseconds, streamed assistant-text/reasoning deltas and
 # tool-call-argument progress are coalesced into an emitted event.
 stream_flush_interval_ms = 100

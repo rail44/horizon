@@ -108,6 +108,10 @@ mod tests {
             Some(config::DEFAULT_DOOM_LOOP_WINDOW)
         );
         assert_eq!(
+            parsed.agent.history_token_budget,
+            Some(config::DEFAULT_HISTORY_TOKEN_BUDGET)
+        );
+        assert_eq!(
             parsed.agent.fs_grep_result_limit,
             Some(config::DEFAULT_FS_GREP_RESULT_LIMIT)
         );
