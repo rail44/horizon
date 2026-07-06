@@ -16,11 +16,16 @@
 //! `agent::host_tools::workspace_snapshot` -- the exact function Horizon's
 //! former in-process `WorkspaceHostTools` used to call.
 //!
-//! Step 4 additions: [`AgentdConnection::session_list`]/[`reconnect_all_sessions`]
+//! Step 4 additions: [`AgentdConnection::session_list`]/[`attach_sessions`]
 //! implement "on connect: `hello` -> `session_list` -> `session_load` for
 //! every session" (startup, and the tail of a `Reload Agent Runtime`), and
 //! [`reload_agent_runtime`] is the command's whole drain/respawn/reconnect
-//! sequence.
+//! sequence. [`connect_agentd_at_startup_async`] is startup's own
+//! non-blocking counterpart (backlog item 14(c)): the same connect/
+//! `session_list` sequence, run on a background thread from the start
+//! (rather than a blocking call followed by a background-only reload) so a
+//! slow, busy, or absent `horizon-agentd` never delays the window's first
+//! frame.
 
 use std::collections::HashMap;
 use std::os::unix::net::UnixStream as StdUnixStream;
@@ -166,7 +171,7 @@ impl AgentdConnection {
     /// connection) rather than creating a new one: sends `session_load`
     /// instead of `session_new`, so agentd replays the session's committed
     /// events onto the handle this returns instead of starting it fresh.
-    /// The one production call site is [`reconnect_all_sessions`].
+    /// The one production call site is [`attach_sessions`].
     pub(crate) fn attach_session(&self, session_id: AgentSessionId) -> contract::SessionHandle {
         let handle = self.register_session_routing(session_id);
         let _ = self
@@ -296,9 +301,9 @@ pub(crate) fn wire_host_tool_responder(
 /// summary agentd sends over `skipped_lines` into `agent_state_status`, the
 /// same free-floating status the status bar (`app::status_bar`) already
 /// renders -- no new UI surface needed. Called once per connection
-/// (`agent::agentd_client::connect_agentd_at_startup` and
-/// [`reload_agent_runtime`]'s reconnect), mirroring
-/// [`wire_host_tool_responder`]'s channel-to-signal bridge shape.
+/// ([`connect_agentd_at_startup_async`] and [`reload_agent_runtime`]'s
+/// reconnect), mirroring [`wire_host_tool_responder`]'s channel-to-signal
+/// bridge shape.
 pub(crate) fn wire_skipped_lines_status(
     skipped_lines: Receiver<String>,
     agent_state_status: RwSignal<Option<String>>,
@@ -474,35 +479,19 @@ fn mark_connection_lost(
 // --- step 4: reconnect and the `Reload Agent Runtime` command ---------------
 
 /// `docs/agent-runtime-split-design.md` step 4's "on connect: `hello` ->
-/// `session_list` -> `session_load` for every session". The one production
-/// call site is `app::state::AppState::new` (right after a successful
-/// `agentd_client::connect_agentd_at_startup`) -- a fresh Horizon process
-/// has no panes yet, so every session `session_list` reports surfaces as a
-/// newly-registered detached session ("survival made visible"). Blocks the
-/// calling thread on `AgentdConnection::session_list`'s round trip,
-/// acceptable at startup for the same reason `AgentdConnection::connect`
-/// itself is (see that method's doc comment); [`reload_agent_runtime`] does
-/// the equivalent work off the UI thread instead, since it can run at any
-/// point during a session.
-pub(crate) fn reconnect_all_sessions(
-    connection: &AgentdConnection,
-    workspace: RwSignal<Workspace>,
-    frames: RwSignal<Frames>,
-    sessions: RwSignal<Registry>,
-) {
-    attach_sessions(
-        connection,
-        connection.session_list(),
-        workspace,
-        frames,
-        sessions,
-    );
-}
-
-/// The per-summary half of [`reconnect_all_sessions`], factored out so
-/// [`reload_agent_runtime`] can fetch `session_list` on its own background
-/// thread (a blocking round trip) and run only this -- which touches floem
-/// signals and so must run on the UI thread -- once it has the answer.
+/// `session_list` -> `session_load` for every session" -- the per-summary
+/// half of that sequence, run once a connection and its `session_list`
+/// reply are already in hand. Both production callers
+/// ([`connect_agentd_at_startup_async`]'s and [`reload_agent_runtime`]'s
+/// outcome effects) fetch `session_list` on their own background thread
+/// first (a blocking round trip -- see [`connect_and_discover_sessions`])
+/// and run only this -- which touches floem signals and so must run on the
+/// UI thread -- once they have the answer. A fresh Horizon process has no
+/// panes yet, so at startup every session `session_list` reports surfaces
+/// as a newly-registered detached session ("survival made visible"); a
+/// session id that already has a pane (from a prior connection this
+/// process made, or -- once workspace layout persistence exists -- a
+/// restored one) is reattached/refreshed seamlessly instead.
 pub(crate) fn attach_sessions(
     connection: &AgentdConnection,
     summaries: Vec<SessionSummary>,
@@ -641,6 +630,121 @@ enum ReloadOutcome {
     Failed(String),
 }
 
+/// Spawn-or-connect plus session discovery, staged through `progress_tx` the
+/// same way for every caller: [`reload_agent_runtime`] (after its own drain
+/// step) and [`connect_agentd_at_startup_async`] (which has no prior
+/// connection to drain, so this is its entire background-thread body).
+/// Factored out because both need exactly "connect (spawning agentd if
+/// nothing answers yet), then ask what it already hosts" with the same
+/// `ReloadStage::Spawning`/`Replaying` staged status text -- duplicating it
+/// would risk the two call sites' wording drifting apart.
+fn connect_and_discover_sessions(
+    socket_path: &Path,
+    progress_tx: &Sender<String>,
+) -> ReloadOutcome {
+    let started = Instant::now();
+    let _ = progress_tx.send(reload_stage_status(ReloadStage::Spawning));
+    match AgentdConnection::connect(socket_path) {
+        Ok((connection, host_tool_requests, skipped_lines)) => {
+            let summaries = connection.session_list();
+            let _ = progress_tx.send(reload_stage_status(ReloadStage::Replaying(summaries.len())));
+            ReloadOutcome::Connected {
+                connection,
+                host_tool_requests,
+                skipped_lines,
+                summaries,
+                elapsed: started.elapsed(),
+            }
+        }
+        Err(error) => ReloadOutcome::Failed(error),
+    }
+}
+
+/// Non-blocking startup connect -- `docs/tasks/backlog.md` item 14(c)'s
+/// product-level fix. The one production call site is `app::state::
+/// AppState::new`, which used to block the calling thread (and so the whole
+/// window's first frame, per `app_view`'s `.window(|_| app_view(), ..)`
+/// closure) on `AgentdConnection::connect`'s handshake and a
+/// `session_list` round trip -- fine when `horizon-agentd` answers
+/// immediately, but `horizon-agentd` accepts only one connection at a time
+/// by construction (see its own module doc), so a second Horizon instance
+/// racing an already-connected one (headless verification alongside the
+/// owner's desktop session, the exact scenario backlog item 14 records) sat
+/// with its connection queued in the kernel's accept backlog -- successfully
+/// "connected" at the socket level, but the handshake's `hello` reply never
+/// arrives until the busy `horizon-agentd` gets back around to its accept
+/// loop -- and never got a chance to map a window at all in the meantime.
+///
+/// This moves the exact same connect/handshake/`session_list` sequence
+/// `app::state::AppState::new` used to run inline onto its own background
+/// thread (mirroring [`reload_agent_runtime`]'s own shape), and
+/// reuses its `ReloadStage`/`ReloadOutcome` vocabulary and the
+/// `agent_state_status` signal the status bar already renders for progress
+/// -- deliberately no new UI surface (the agent-pane UI is mid-redesign
+/// elsewhere; see the task this landed under). `agentd_connection` starts
+/// (and, until this resolves, stays) `None`, so any agent pane a caller
+/// spawns before this finishes takes the pre-existing "agent runtime
+/// unavailable" fallback (`app::runtime::agent::surface_agent_runtime_
+/// unavailable`) exactly as it already does for a genuinely failed connect
+/// -- there is no separate "still connecting" pane state to invent. Once
+/// this resolves, [`attach_sessions`] reattaches/refreshes every session
+/// `horizon-agentd` reports, by id, so a pane that already existed for one
+/// of those ids (attached before this connect finished, from a previous
+/// Horizon run's persisted workspace) is transparently brought current
+/// instead of staying stuck on the fallback frame.
+pub(crate) fn connect_agentd_at_startup_async(
+    workspace: RwSignal<Workspace>,
+    frames: RwSignal<Frames>,
+    sessions: RwSignal<Registry>,
+    agentd_connection: RwSignal<Option<AgentdConnection>>,
+    agent_state_status: RwSignal<Option<String>>,
+) {
+    let (progress_tx, progress_rx) = unbounded::<String>();
+    let (outcome_tx, outcome_rx) = unbounded::<ReloadOutcome>();
+    thread::spawn(move || {
+        let socket_path = horizon_agent::socket::default_socket_path();
+        let outcome = connect_and_discover_sessions(&socket_path, &progress_tx);
+        let _ = outcome_tx.send(outcome);
+    });
+
+    let progress_signal = create_signal_from_channel(progress_rx);
+    create_effect(move |_| {
+        if let Some(message) = progress_signal.get() {
+            agent_state_status.set(Some(message));
+        }
+    });
+
+    let outcome_signal = create_signal_from_channel(outcome_rx);
+    create_effect(move |_| {
+        if let Some(outcome) = outcome_signal.get() {
+            match outcome {
+                ReloadOutcome::Connected {
+                    connection,
+                    host_tool_requests,
+                    skipped_lines,
+                    summaries,
+                    elapsed,
+                } => {
+                    eprintln!("horizon: connected to horizon-agentd");
+                    wire_host_tool_responder(connection.clone(), host_tool_requests, workspace);
+                    wire_skipped_lines_status(skipped_lines, agent_state_status);
+                    attach_sessions(&connection, summaries, workspace, frames, sessions);
+                    agentd_connection.set(Some(connection));
+                    agent_state_status
+                        .set(Some(reload_stage_status(ReloadStage::Reconnected(elapsed))));
+                }
+                ReloadOutcome::Failed(error) => {
+                    eprintln!("horizon: could not connect to horizon-agentd ({error})");
+                    agent_state_status.set(Some(format!(
+                        "Agent runtime unavailable ({error}) -- use \"Reload Agent Runtime\" to \
+                         retry"
+                    )));
+                }
+            }
+        }
+    });
+}
+
 /// The whole `Reload Agent Runtime` command (`app::commands::CommandId::
 /// ReloadAgentRuntime`, dispatched from `app::command_actions`): drain the
 /// current connection (if any), wait for it to actually exit
@@ -661,8 +765,9 @@ enum ReloadOutcome {
 /// The blocking work (`wait_for_drain`, `AgentdConnection::connect`,
 /// `session_list`'s round trip) all runs on a background thread; only the
 /// `create_effect` callbacks that receive progress/results touch floem
-/// signals, so this never stalls the UI thread the way blocking at Horizon
-/// startup is allowed to.
+/// signals, so this never stalls the UI thread -- matching
+/// [`connect_agentd_at_startup_async`]'s own shape, which this function's
+/// background-thread body now shares via [`connect_and_discover_sessions`].
 pub(crate) fn reload_agent_runtime(
     current: Option<AgentdConnection>,
     workspace: RwSignal<Workspace>,
@@ -680,7 +785,6 @@ pub(crate) fn reload_agent_runtime(
     let (progress_tx, progress_rx) = unbounded::<String>();
     let (outcome_tx, outcome_rx) = unbounded::<ReloadOutcome>();
     thread::spawn(move || {
-        let started = Instant::now();
         let socket_path = horizon_agent::socket::default_socket_path();
 
         if let Err(error) = wait_for_drain(&socket_path) {
@@ -688,22 +792,7 @@ pub(crate) fn reload_agent_runtime(
             return;
         }
 
-        let _ = progress_tx.send(reload_stage_status(ReloadStage::Spawning));
-        let outcome = match AgentdConnection::connect(&socket_path) {
-            Ok((connection, host_tool_requests, skipped_lines)) => {
-                let summaries = connection.session_list();
-                let _ =
-                    progress_tx.send(reload_stage_status(ReloadStage::Replaying(summaries.len())));
-                ReloadOutcome::Connected {
-                    connection,
-                    host_tool_requests,
-                    skipped_lines,
-                    summaries,
-                    elapsed: started.elapsed(),
-                }
-            }
-            Err(error) => ReloadOutcome::Failed(error),
-        };
+        let outcome = connect_and_discover_sessions(&socket_path, &progress_tx);
         let _ = outcome_tx.send(outcome);
     });
 

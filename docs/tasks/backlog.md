@@ -110,3 +110,31 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     startup agentd connect non-blocking so the UI maps even when agentd
     is busy or absent — agent panes can degrade gracefully instead of
     the whole window stalling.
+    *(b) and (c) resolved (2026-07-06):* `horizon_agent::socket::
+    default_socket_path` now resolves `$HORIZON_AGENTD_SOCKET` first
+    (falling through to the existing `$XDG_RUNTIME_DIR`/`/tmp` rule when
+    unset or empty) — shared code, so `horizon-agentd`'s own `--socket`-
+    absent fallback and every Horizon-side client call honor it
+    identically with no extra wiring on either side. `app::state::
+    AppState::new` no longer blocks on the startup connect at all: the
+    connect/handshake/`session_list` sequence
+    (`agent::agentd_runtime::connect_agentd_at_startup_async`) now runs
+    entirely on a background thread from the start (the same shape
+    `reload_agent_runtime` already used for `Reload Agent Runtime`,
+    factored into a shared `connect_and_discover_sessions` helper), with
+    progress/outcome applied back through a `create_effect` callback.
+    `agentd_connection` starts `None`; the window maps unconditionally,
+    and any agent pane spawned before the connect resolves takes the
+    pre-existing "Agent runtime unavailable" fallback frame/status —
+    reused as-is, no new UI. Verified headlessly both ways: (1) a real
+    `horizon-agentd` on a scratch socket with a dummy client holding its
+    one connection slot open — Horizon's window still mapped and a
+    terminal pane still worked, with `agent runtime: spawning…` visibly
+    stuck in the status bar the whole time (via
+    `scripts/check-terminal-visual.sh`); (2) the `horizon-agentd` binary
+    entirely absent — window still mapped, terminal pane #1 unaffected,
+    and a freshly opened agent pane showed the ordinary "Agent runtime
+    unavailable -- use \"Reload Agent Runtime\" to reconnect." error
+    frame. Full gate green (`cargo fmt`, `cargo clippy --workspace
+    --all-targets -- -D warnings`, `cargo nextest run --workspace`: 672
+    passed including all 19 `horizon-agentd` e2e tests).

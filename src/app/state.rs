@@ -48,41 +48,31 @@ impl AppState {
         let sessions = RwSignal::new(Registry::default());
         let agent_state_status = RwSignal::new(None::<String>);
 
-        // Step 4's "on connect: hello -> session_list -> session_load for
-        // every session" -- a fresh Horizon process has no panes yet, so
-        // every session agentd already hosts (resumed from its own log,
-        // possibly from a previous Horizon run entirely) surfaces as a
-        // detached session. A failed connect leaves `agentd_connection`
-        // `None` and latches an actionable status instead of silently
-        // limping along -- there is no in-process fallback left to fall
-        // back to.
-        let agentd_connection = match crate::agent::agentd_client::connect_agentd_at_startup(
+        // Non-blocking startup connect (`docs/tasks/backlog.md` item 14(c)):
+        // `agentd_connection` starts `None` and the window must map
+        // regardless of how long -- or whether -- this ever resolves, so
+        // the connect/handshake/`session_list` sequence (step 4's "on
+        // connect: hello -> session_list -> session_load for every
+        // session") runs entirely on a background thread; a
+        // `create_effect` callback applies the outcome once it arrives.
+        // See `agent::agentd_runtime::connect_agentd_at_startup_async`'s
+        // own doc for why this used to block here (a busy `horizon-agentd`
+        // -- it serves one connection at a time -- could stall this call
+        // indefinitely, along with the window's first frame).
+        let agentd_connection: RwSignal<Option<AgentdConnection>> = RwSignal::new(None);
+        crate::agent::agentd_runtime::connect_agentd_at_startup_async(
             workspace,
+            frames,
+            sessions,
+            agentd_connection,
             agent_state_status,
-        ) {
-            Ok(connection) => {
-                crate::agent::agentd_runtime::reconnect_all_sessions(
-                    &connection,
-                    workspace,
-                    frames,
-                    sessions,
-                );
-                Some(connection)
-            }
-            Err(error) => {
-                eprintln!("horizon: could not connect to horizon-agentd ({error})");
-                agent_state_status.set(Some(format!(
-                    "Agent runtime unavailable ({error}) -- use \"Reload Agent Runtime\" to retry"
-                )));
-                None
-            }
-        };
+        );
 
         let state = Self {
             workspace,
             frames,
             sessions,
-            agentd_connection: RwSignal::new(agentd_connection),
+            agentd_connection,
             ime_composing: RwSignal::new(false),
             ime_preedit: RwSignal::new(None::<String>),
             ime_cursor_area: RwSignal::new((Point::new(12.0, 64.0), Size::new(8.0, 18.0))),

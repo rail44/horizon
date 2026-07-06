@@ -23,16 +23,12 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use floem::prelude::RwSignal;
 use horizon_agent::wire::{self, Control, Envelope, EnvelopeBody, Hello, CONTRACT_VERSION};
 #[cfg(test)]
 use tokio::io::AsyncRead;
 use tokio::io::{AsyncBufRead, AsyncWrite, BufReader};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::UnixStream;
-
-use crate::agent::agentd_runtime::AgentdConnection;
-use crate::workspace::Workspace;
 
 /// Total retry-connect budget: `RETRY_ATTEMPTS * RETRY_DELAY` = 2s. Verified
 /// still generous after `horizon-agentd`'s bind-first startup fix (it binds
@@ -49,33 +45,6 @@ const RETRY_DELAY: Duration = Duration::from_millis(50);
 /// The binary name `horizon-agentd` is spawned as/looked up as -- see
 /// [`resolve_agentd_binary`].
 const AGENTD_BINARY_NAME: &str = "horizon-agentd";
-
-/// Connects to `horizon-agentd` (spawning it if nothing is listening yet),
-/// wiring up the host-tool responder (`agentd_runtime::
-/// wire_host_tool_responder`) against `workspace` and the skipped-lines
-/// status bridge (`agentd_runtime::wire_skipped_lines_status`) against
-/// `agent_state_status` on success. Called both at Horizon startup
-/// (`app::state::AppState::new`) and by the `Reload Agent Runtime` command's
-/// reconnect phase (`agentd_runtime::reload_agent_runtime`) -- every agent
-/// session routes through the resulting connection, so a failure here means
-/// agent panes are unavailable until a retry (typically another `Reload
-/// Agent Runtime`) succeeds; there is no in-process fallback to fall back to
-/// (see the module doc).
-pub(crate) fn connect_agentd_at_startup(
-    workspace: RwSignal<Workspace>,
-    agent_state_status: RwSignal<Option<String>>,
-) -> Result<AgentdConnection, String> {
-    let socket_path = horizon_agent::socket::default_socket_path();
-    let (connection, host_tool_requests, skipped_lines) = AgentdConnection::connect(&socket_path)?;
-    eprintln!("horizon: connected to horizon-agentd");
-    crate::agent::agentd_runtime::wire_host_tool_responder(
-        connection.clone(),
-        host_tool_requests,
-        workspace,
-    );
-    crate::agent::agentd_runtime::wire_skipped_lines_status(skipped_lines, agent_state_status);
-    Ok(connection)
-}
 
 /// Connects to `horizon-agentd` at `socket_path` (spawning it if nothing is
 /// listening yet), completes the hello handshake, and hands back the split

@@ -18,7 +18,7 @@ back into the real environment (e.g. to reproduce a bug that only
 shows up against real session history).
 
 **Two isolation caveats when opting out with `HORIZON_REAL_RUNTIME=1`
-(2026-07-06):** (1) If the owner's desktop Horizon is running, headless
+(2026-07-06):** (1) (Historical — resolved by the non-blocking startup connect, backlog 14.) If the owner's desktop Horizon is running, headless
 boots can stall before the window ever maps — the shared agentd accepts
 one connection at a time and startup blocks on it (backlog item 14);
 the default hermetic mode above already sidesteps this by giving each
