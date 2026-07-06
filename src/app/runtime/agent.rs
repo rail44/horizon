@@ -33,7 +33,11 @@ pub(super) fn spawn_agent_session(
     };
 
     let provider_id = agent::ProviderRegistry::default().default_provider_id();
-    let handle = connection.start_session(session_id.into(), provider_id);
+    // Role-less for every spawn path today -- the GUI has no role-picking
+    // command yet (see `docs/plans/agent-foundation/03-roles-and-config-agent.md`;
+    // a future "New Configuration Agent" command is the intended caller of
+    // a `Some(..)` role here).
+    let handle = connection.start_session(session_id.into(), provider_id, None);
     fold_agent_session_events(session_id, handle, frames, sessions);
 }
 

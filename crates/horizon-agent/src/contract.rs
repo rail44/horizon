@@ -6,6 +6,7 @@ use crossbeam_channel::{Receiver, Sender};
 use uuid::Uuid;
 
 use crate::config::AgentConfig;
+use crate::roles::RoleId;
 
 /// This crate's own session identifier: a UUID newtype that serializes as a
 /// bare UUID string (serde's transparent treatment of one-field tuple
@@ -51,6 +52,11 @@ pub struct ToolCallId(pub String);
 pub struct StartSession {
     pub session_id: SessionId,
     pub provider_id: ProviderId,
+    /// `None` for a role-less session (unchanged behavior). `Some` must
+    /// already have been validated by the caller (`ProviderRegistry::
+    /// start_session`) -- see `roles`'s module doc on never silently
+    /// degrading an unresolvable role id to role-less.
+    pub role_id: Option<RoleId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -77,6 +83,7 @@ pub enum Command {
 pub struct Initialization {
     pub session_id: SessionId,
     pub provider_id: ProviderId,
+    pub role_id: Option<RoleId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -360,15 +367,32 @@ impl ProviderRegistry {
         ProviderId("builtin.agent.rig".to_string())
     }
 
+    /// Starts a session, forwarding `role_id` to whichever provider is
+    /// registered under `provider_id`. Validates `role_id` *before*
+    /// dispatching to the provider -- an unresolvable role id returns
+    /// `None` here exactly like an unknown `provider_id` does, so a caller
+    /// that already treats `None` as "fail loudly, don't start a role-less
+    /// session instead" (see `roles`'s module doc; `horizon-agentd`'s
+    /// `session::run_session` is the one production caller) gets that
+    /// behavior for both failure modes without extra plumbing. This is the
+    /// single choke point every session start goes through, so a role is
+    /// validated the same way regardless of which provider ends up running
+    /// it -- including the mock provider, which otherwise accepts and
+    /// ignores `role_id` entirely (see `providers::mock`).
     pub fn start_session(
         &self,
         provider_id: &ProviderId,
         session_id: SessionId,
+        role_id: Option<RoleId>,
     ) -> Option<SessionHandle> {
+        if let Some(role_id) = &role_id {
+            crate::roles::resolve(role_id)?;
+        }
         self.providers.get(provider_id).map(|provider| {
             provider.start_session(StartSession {
                 session_id,
                 provider_id: provider_id.clone(),
+                role_id,
             })
         })
     }

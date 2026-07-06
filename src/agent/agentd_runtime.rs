@@ -144,10 +144,16 @@ impl AgentdConnection {
     /// back a [`contract::SessionHandle`] via [`Self::register_session_routing`].
     /// Indistinguishable, from the caller's side, from `providers::
     /// ProviderRegistry::start_session`'s former in-process handle.
+    /// `role_id` is `None` for every production call site today (the GUI
+    /// has no role-picking command yet -- see
+    /// `docs/plans/agent-foundation/03-roles-and-config-agent.md`); it's a
+    /// parameter now so a future "New Configuration Agent" command has
+    /// somewhere to plug in without another signature change.
     pub(crate) fn start_session(
         &self,
         session_id: AgentSessionId,
         provider_id: ProviderId,
+        role_id: Option<horizon_agent::roles::RoleId>,
     ) -> contract::SessionHandle {
         let handle = self.register_session_routing(session_id);
         let _ = self
@@ -155,7 +161,7 @@ impl AgentdConnection {
             .send(Envelope::control(Control::SessionNew(SessionNew {
                 session_id,
                 provider_id,
-                config_overrides: None,
+                role_id,
             })));
         handle
     }

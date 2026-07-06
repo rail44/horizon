@@ -18,6 +18,7 @@ use stream::{StreamDeltaBuffer, StreamDeltaKind, ToolCallProgressBuffer};
 use crate::{
     config::RigAgentConfig,
     contract::{Provider as AgentProvider, ProviderId, SessionHandle, StartSession},
+    roles::RoleDefinition,
 };
 
 pub(crate) struct Provider {
@@ -39,13 +40,40 @@ impl AgentProvider for Provider {
         ProviderId("builtin.agent.rig".to_string())
     }
 
+    /// Resolves `request.role_id` (defensively -- an unresolvable role here
+    /// silently has no effect on this session's config/prompt, but
+    /// production sessions never reach this with one:
+    /// `contract::ProviderRegistry::start_session` already refused to start
+    /// them -- see that method's doc comment) and derives a per-session
+    /// [`RigAgentConfig`] from it before spawning, per
+    /// `docs/plans/agent-foundation/03-roles-and-config-agent.md`.
     fn start_session(&self, request: StartSession) -> SessionHandle {
-        spawn_rig_session(
-            request,
-            self.config.clone(),
-            self.memory_duckdb_path.clone(),
-        )
+        let role = request.role_id.as_ref().and_then(crate::roles::resolve);
+        let config = role_adjusted_config(&self.config, role);
+        spawn_rig_session(request, config, role, self.memory_duckdb_path.clone())
     }
+}
+
+/// Applies a role's `allowed_tool_ids`/`model` overrides on top of the
+/// provider's own (process-wide) [`RigAgentConfig`], producing the config
+/// this one session actually runs with. `role: None` (the role-less case)
+/// returns `base` cloned unchanged -- byte-identical behavior to before
+/// roles existed.
+fn role_adjusted_config(
+    base: &RigAgentConfig,
+    role: Option<&'static RoleDefinition>,
+) -> RigAgentConfig {
+    let mut config = base.clone();
+    let Some(role) = role else {
+        return config;
+    };
+    if let Some(allowed) = role.allowed_tool_ids {
+        config.allowed_tool_ids = Some(allowed.iter().map(|id| id.to_string()).collect());
+    }
+    if let Some(model) = role.model {
+        config.model = model.to_string();
+    }
+    config
 }
 
 pub(super) fn rig_initialization_message(

@@ -16,6 +16,7 @@ use crate::{
         SessionState, StartSession, ToolCallId, ToolCallResult, TurnEndReason,
     },
     prompt::SessionEnvironment,
+    roles::RoleDefinition,
     tools::cancelled_tool_call_result,
 };
 
@@ -28,6 +29,7 @@ use super::{
 pub(super) fn spawn_rig_session(
     request: StartSession,
     config: RigAgentConfig,
+    role: Option<&'static RoleDefinition>,
     memory_duckdb_path: Option<PathBuf>,
 ) -> SessionHandle {
     let (commands_tx, commands_rx) = unbounded();
@@ -41,14 +43,7 @@ pub(super) fn spawn_rig_session(
         // turn's system prompt — cwd/OS/git-repo status don't change over a
         // session's lifetime.
         let environment = SessionEnvironment::current();
-        // Same "gather once, reuse for every turn" treatment: the
-        // repository instruction files under `environment.cwd` don't change
-        // over a session's lifetime either (config is applied at startup
-        // only — see `AGENTS.md`'s "Configuration" section).
-        let extra_sections = crate::instructions::extra_sections(
-            &environment.cwd,
-            config.repository_instructions_cap_chars,
-        );
+        let extra_sections = session_extra_sections(&environment, &config, role);
 
         let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -85,6 +80,41 @@ pub(super) fn spawn_rig_session(
     });
 
     SessionHandle::new(commands_tx, events_rx)
+}
+
+/// Builds the `extra_sections` a session's system prompt is composed from
+/// (`prompt::system_prompt`), in order: the role's own prompt section (if
+/// any), then the skills listing for that role's `skill_ids`, then
+/// repository `AGENTS.md`/`CLAUDE.md` instructions -- but only when
+/// `role.include_repository_instructions` allows it (`roles::CONFIG_ROLE`
+/// sets this `false`; see its own doc comment for why). `role: None`
+/// reproduces the pre-role behavior byte-for-byte: no role/skills section,
+/// repository instructions unconditionally included -- the same
+/// `instructions::extra_sections` call this function replaces at its one
+/// call site.
+pub(super) fn session_extra_sections(
+    environment: &SessionEnvironment,
+    config: &RigAgentConfig,
+    role: Option<&'static RoleDefinition>,
+) -> Vec<String> {
+    let mut sections = Vec::new();
+    let include_repository_instructions = match role {
+        Some(role) => {
+            sections.push(role.prompt_section.to_string());
+            if let Some(skills_section) = crate::skills::skills_prompt_section(role.skill_ids) {
+                sections.push(skills_section);
+            }
+            role.include_repository_instructions
+        }
+        None => true,
+    };
+    if include_repository_instructions {
+        sections.extend(crate::instructions::extra_sections(
+            &environment.cwd,
+            config.repository_instructions_cap_chars,
+        ));
+    }
+    sections
 }
 
 /// Forwards commands from the crossbeam channel (the provider's public,

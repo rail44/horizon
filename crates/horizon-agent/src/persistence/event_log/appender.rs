@@ -4,6 +4,7 @@ use anyhow::Result;
 use uuid::Uuid;
 
 use crate::contract::{event_kind, ProviderEvent, ProviderId, SessionId};
+use crate::roles::RoleId;
 
 use super::{Record, TurnTracker, WriterHandle, AGENT_EVENT_LOG_SCHEMA, AGENT_EVENT_LOG_VERSION};
 
@@ -11,6 +12,7 @@ pub struct Appender {
     writer: WriterHandle,
     session_id: SessionId,
     provider_id: Option<ProviderId>,
+    role_id: Option<RoleId>,
     turn_tracker: TurnTracker,
 }
 
@@ -19,11 +21,13 @@ impl Appender {
         writer: WriterHandle,
         session_id: SessionId,
         provider_id: Option<ProviderId>,
+        role_id: Option<RoleId>,
     ) -> Self {
         Self {
             writer,
             session_id,
             provider_id,
+            role_id,
             turn_tracker: TurnTracker::new(),
         }
     }
@@ -39,6 +43,7 @@ impl Appender {
                 session_id: self.session_id,
                 turn_id,
                 provider_id: self.provider_id.clone(),
+                role_id: self.role_id.clone(),
                 event_kind: event_kind(&event.event).to_string(),
                 event: event.event,
                 provider_payload: event.provider_payload,
