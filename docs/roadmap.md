@@ -83,13 +83,12 @@ wave items where possible; design docs on first use.
   co-located as an independent crate — no horizon dependencies
   (extractable later), SSE streaming required (horizon-agent assumes
   it).
-- **Outcome-label projection**: project the free deterministic signals
-  (turn end reasons, approval outcomes, tool success, `role_id`) into
-  the now-live DuckDB projection and put them in recall's scope — see
-  `docs/agent-feedback-design.md`. Unblocked: the recall tool shipped.
 - **Skill distillation (approval-gated)**: agent-drafted skill updates
   from labeled trajectories, owner-approved before landing — see
-  `docs/agent-feedback-design.md`. After the label projection.
+  `docs/agent-feedback-design.md`. Unblocked: the label projection
+  shipped 2026-07-07 (all four turn end reasons, order-derived
+  approval outcomes, is_error, role_id — with a recall turn_outcome
+  filter).
 
 ## Later (deliberately unshaped)
 
