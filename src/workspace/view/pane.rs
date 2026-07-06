@@ -392,6 +392,14 @@ pub(super) fn pane_view(
     .on_event(EventListener::PointerDown, move |_| {
         focus_request.update(|request| *request += 1);
         workspace.update(|ws| {
+            // A click always "dives" into the pane clicked while workspace
+            // mode is active -- the design's mouse convention
+            // (`docs/workspace-mode-design.md`): commit relative to the
+            // click target, exiting the mode, rather than leaving the mode
+            // active with only focus moved. A no-op when the mode isn't
+            // active, in which case the ordinary `activate_visible_pane`
+            // call right below is this click's entire effect, unchanged.
+            ws.commit_workspace_mode_to(index);
             ws.activate_visible_pane(index);
         });
         if workspace.with(|ws| ws.active_visible_pane_accepts_text_input(index)) {
@@ -425,7 +433,7 @@ pub(super) fn pane_view(
                 return EventPropagation::Stop;
             }
 
-            // Workspace mode's entry chord (default Super+Esc,
+            // Workspace mode's entry chord (default `ctrl+'`,
             // `docs/workspace-mode-design.md`) always wins, regardless of
             // pane kind or any pane-internal focus (e.g. the approval
             // banner below, which would otherwise swallow a held-modifier

@@ -170,7 +170,10 @@ pub(crate) fn is_terminal_paste_key(event: &KeyEvent) -> bool {
 
 /// Whether `event` matches the chord that opens the command palette — the
 /// `[keybindings]` entry for the reserved `"open-palette"` pseudo-command
-/// (see [`Keymap::from_entries`]), falling back to `ctrl+p` when unset.
+/// (see [`Keymap::from_entries`]). Unbound by default: the palette's global
+/// chord retired once workspace mode shipped `:` as its one-key resident
+/// (`docs/tasks/backlog.md` item 1, resolved) — set an explicit entry here
+/// to restore a global shortcut.
 pub(crate) fn is_palette_open_key(event: &KeyEvent) -> bool {
     Keymap::global().is_palette_open(event)
 }
@@ -178,7 +181,7 @@ pub(crate) fn is_palette_open_key(event: &KeyEvent) -> bool {
 /// Whether `event` matches the chord that enters workspace mode
 /// (`docs/workspace-mode-design.md`) — the `[keybindings]` entry for the
 /// reserved `"workspace-mode"` pseudo-command (see
-/// [`Keymap::from_entries`]), falling back to `super+esc` when unset. An
+/// [`Keymap::from_entries`]), falling back to `ctrl+'` when unset. An
 /// agent pane's message box also accepts a bare `Esc` as a second entry
 /// path regardless of this chord — see
 /// `workspace::agent_escape_requests_workspace_mode`.
@@ -304,10 +307,14 @@ fn default_bindings() -> &'static [(&'static str, CommandId)] {
 /// operation the palette itself can list or run), so it's resolved
 /// separately from `command_id_from_str`/`Keymap::bindings` below. See
 /// [`Keymap::from_entries`].
+///
+/// Unlike [`WORKSPACE_MODE_PSEUDO_COMMAND`], this one has no built-in
+/// default chord any more (`docs/tasks/backlog.md` item 1, resolved):
+/// opening the palette is a workspace-mode resident now (`:` inside the
+/// mode, see `workspace::mode_input`), not a global shortcut. The
+/// mechanism itself is kept — an explicit entry here still works — only
+/// the shipped default is gone.
 const OPEN_PALETTE_PSEUDO_COMMAND: &str = "open-palette";
-/// Built-in default chord for [`OPEN_PALETTE_PSEUDO_COMMAND`] — unchanged
-/// from the hardcoded `Ctrl+P` this replaces.
-const DEFAULT_PALETTE_CHORD: &str = "ctrl+p";
 
 /// The reserved `[keybindings]` value that overrides the workspace-mode
 /// entry chord — mirrors [`OPEN_PALETTE_PSEUDO_COMMAND`] exactly (not a
@@ -315,10 +322,14 @@ const DEFAULT_PALETTE_CHORD: &str = "ctrl+p";
 /// [`Keymap::from_entries`].
 const WORKSPACE_MODE_PSEUDO_COMMAND: &str = "workspace-mode";
 /// Built-in default chord for [`WORKSPACE_MODE_PSEUDO_COMMAND`] —
-/// `docs/workspace-mode-design.md`'s tentative pick: TUIs historically
-/// never bind Super at all, so it is (almost) never claimed by an in-pane
-/// app.
-const DEFAULT_WORKSPACE_MODE_CHORD: &str = "super+esc";
+/// `docs/workspace-mode-design.md`'s shipped pick. `super+esc` was tried
+/// first, but on the owner's real GNOME session the shell intercepts it
+/// before it ever reaches a client window (Horizon's own handling path
+/// proved healthy headless, so the loss is GNOME's, not Horizon's).
+/// `ctrl+'` replaces it: apostrophe has no legacy terminal encoding, so
+/// essentially no in-pane TUI can already claim it, and it sits under a
+/// comfortable finger for the owner's (Dvorak) layout.
+const DEFAULT_WORKSPACE_MODE_CHORD: &str = "ctrl+'";
 
 fn command_id_from_str(id: &str) -> Option<CommandId> {
     match id {
@@ -510,11 +521,18 @@ fn parse_chord(spec: &str) -> Result<Chord, String> {
 /// defaults with the config file's `[keybindings]` table layered on top.
 /// The command-palette open chord is tracked separately (`palette_chord`)
 /// rather than through `bindings`, since it isn't a `CommandId` — see
-/// [`Keymap::from_entries`].
+/// [`Keymap::from_entries`]. `palette_chord` is `None` unless a config
+/// entry sets one (see [`OPEN_PALETTE_PSEUDO_COMMAND`]'s doc comment).
 pub(crate) struct Keymap {
     bindings: Vec<(Chord, CommandId)>,
-    palette_chord: Chord,
+    palette_chord: Option<Chord>,
     workspace_mode_chord: Chord,
+    /// The chord spec string that produced `workspace_mode_chord` (the
+    /// built-in default, or whatever a config entry set) — kept alongside
+    /// the parsed `Chord` purely for display, so the status bar can render
+    /// the actual configured chord (`app::status_bar`) instead of a
+    /// hardcoded string that would drift the moment someone rebinds it.
+    workspace_mode_chord_label: String,
 }
 
 impl Keymap {
@@ -536,10 +554,10 @@ impl Keymap {
                 )
             })
             .collect();
-        let mut palette_chord =
-            parse_chord(DEFAULT_PALETTE_CHORD).expect("built-in default key chord must parse");
+        let mut palette_chord: Option<Chord> = None;
         let mut workspace_mode_chord = parse_chord(DEFAULT_WORKSPACE_MODE_CHORD)
             .expect("built-in default key chord must parse");
+        let mut workspace_mode_chord_label = DEFAULT_WORKSPACE_MODE_CHORD.to_string();
 
         for (chord_spec, command_spec) in entries {
             let chord = match parse_chord(chord_spec) {
@@ -553,11 +571,12 @@ impl Keymap {
                 }
             };
             if command_spec == OPEN_PALETTE_PSEUDO_COMMAND {
-                palette_chord = chord;
+                palette_chord = Some(chord);
                 continue;
             }
             if command_spec == WORKSPACE_MODE_PSEUDO_COMMAND {
                 workspace_mode_chord = chord;
+                workspace_mode_chord_label = chord_spec.clone();
                 continue;
             }
             let Some(command_id) = command_id_from_str(command_spec) else {
@@ -578,6 +597,7 @@ impl Keymap {
             bindings,
             palette_chord,
             workspace_mode_chord,
+            workspace_mode_chord_label,
         }
     }
 
@@ -589,16 +609,27 @@ impl Keymap {
             .map(|(_, command_id)| *command_id)
     }
 
-    /// Whether `event` matches the command-palette open chord.
+    /// Whether `event` matches the command-palette open chord. Always
+    /// `false` unless a config entry set one — see
+    /// [`OPEN_PALETTE_PSEUDO_COMMAND`]'s doc comment.
     pub(crate) fn is_palette_open(&self, event: &KeyEvent) -> bool {
         self.palette_chord
-            .matches(event.modifiers, &event.key.logical_key)
+            .is_some_and(|chord| chord.matches(event.modifiers, &event.key.logical_key))
     }
 
     /// Whether `event` matches the workspace-mode entry chord.
     pub(crate) fn is_workspace_mode_enter(&self, event: &KeyEvent) -> bool {
         self.workspace_mode_chord
             .matches(event.modifiers, &event.key.logical_key)
+    }
+
+    /// The chord spec string (e.g. `"ctrl+'"`) for the workspace-mode entry
+    /// chord currently in effect -- the built-in default, or whatever a
+    /// `[keybindings]` entry overrode it to. Purely for display -- see
+    /// `app::status_bar`, which builds its "how to enter workspace mode"
+    /// hint from this instead of a hardcoded string.
+    pub(crate) fn workspace_mode_chord_label(&self) -> &str {
+        &self.workspace_mode_chord_label
     }
 }
 
@@ -908,19 +939,25 @@ mod tests {
     // --- palette-open pseudo-command ------------------------------------
 
     #[test]
-    fn palette_chord_defaults_to_ctrl_p_when_config_is_empty() {
+    fn palette_chord_is_unbound_when_config_is_empty() {
+        // No built-in default any more (`docs/tasks/backlog.md` item 1,
+        // resolved): opening the palette is a workspace-mode resident
+        // (`:`), not a global shortcut.
         let keymap = Keymap::from_entries(&HashMap::new());
-        assert_eq!(keymap.palette_chord, parse_chord("ctrl+p").unwrap());
+        assert_eq!(keymap.palette_chord, None);
     }
 
     #[test]
-    fn open_palette_entry_overrides_the_default_palette_chord() {
+    fn open_palette_entry_sets_the_palette_chord() {
         let mut entries = HashMap::new();
         entries.insert("ctrl+shift+p".to_string(), "open-palette".to_string());
 
         let keymap = Keymap::from_entries(&entries);
 
-        assert_eq!(keymap.palette_chord, parse_chord("ctrl+shift+p").unwrap());
+        assert_eq!(
+            keymap.palette_chord,
+            Some(parse_chord("ctrl+shift+p").unwrap())
+        );
         // Not a real command id, so it never lands in `bindings`.
         assert_eq!(keymap.bindings.len(), default_bindings().len());
     }
@@ -928,12 +965,10 @@ mod tests {
     // --- workspace-mode-entry pseudo-command ----------------------------
 
     #[test]
-    fn workspace_mode_chord_defaults_to_super_esc_when_config_is_empty() {
+    fn workspace_mode_chord_defaults_to_ctrl_quote_when_config_is_empty() {
         let keymap = Keymap::from_entries(&HashMap::new());
-        assert_eq!(
-            keymap.workspace_mode_chord,
-            parse_chord("super+esc").unwrap()
-        );
+        assert_eq!(keymap.workspace_mode_chord, parse_chord("ctrl+'").unwrap());
+        assert_eq!(keymap.workspace_mode_chord_label(), "ctrl+'");
     }
 
     #[test]
@@ -947,7 +982,27 @@ mod tests {
             keymap.workspace_mode_chord,
             parse_chord("ctrl+space").unwrap()
         );
+        assert_eq!(keymap.workspace_mode_chord_label(), "ctrl+space");
         // Not a real command id, so it never lands in `bindings`.
         assert_eq!(keymap.bindings.len(), default_bindings().len());
+    }
+
+    #[test]
+    fn parses_a_chord_with_an_apostrophe_key() {
+        // The shipped workspace-mode default (`DEFAULT_WORKSPACE_MODE_CHORD`)
+        // -- apostrophe is an ordinary single-character key, not a named one,
+        // but exercised explicitly here since it's now load-bearing.
+        let chord = parse_chord("ctrl+'").expect("valid chord");
+        assert_eq!(
+            chord,
+            Chord {
+                ctrl: true,
+                shift: false,
+                alt: false,
+                meta: false,
+                key: ChordKey::Char('\''),
+            }
+        );
+        assert!(chord.matches(Modifiers::CONTROL, &Key::Character("'".into())));
     }
 }

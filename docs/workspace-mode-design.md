@@ -1,9 +1,11 @@
 # Workspace Mode and the Cursor
 
-Status: design fully settled 2026-07-06 (two rounds); implementation
-has not started. The only remaining item is an empirical check, listed
-at the bottom. This document records the design conversation between
-the owner and the planning session.
+Status: design settled and implemented 2026-07-06 (v1 core: mode,
+cursor, `:`-palette, visualization; phase B: `ctrl+'` default, global
+palette chord retired, click-dives). The former pending check
+(Super+Esc) is resolved — see "Pending verification". This document
+records the design conversation between the owner and the planning
+session.
 
 ## Problem
 
@@ -69,18 +71,25 @@ nested-prefix analogy does not apply here). The mouse remains a
 non-keyboard escape hatch from any state, so the one stolen chord is a
 convenience for keyboard flow, not a lifeline.
 
-### The escape chord: Super+Esc, tentative, configurable
+### The escape chord: `ctrl+'`, shipped, configurable
 
-The only irreducible theft is leaving passthrough by keyboard. Chosen
-pocket: **Super+Esc** (tentative). Rationale: TUIs historically could
-not receive Super at all, so almost nothing in-pane binds it; the
-competition for Super is the window manager, not terminal apps.
-Pending: an empirical check that the owner's GNOME session lets
-Super+Esc through. The chord is configured via the existing
-`[keybindings]` reserved-name mechanism (same pattern as
-`"open-palette"`), so a WM collision or nested-instance preference is a
-config edit, not a redesign. Machinery note: floem's `meta()` modifier
-already maps to SUPER app-side.
+The only irreducible theft is leaving passthrough by keyboard. First
+choice was **Super+Esc**: TUIs historically could not receive Super at
+all, so almost nothing in-pane binds it, and the competition for Super is
+the window manager rather than terminal apps. That rationale held up to
+reasoning but not to the owner's actual machine: on the owner's real
+GNOME session, gnome-shell intercepts Super+Esc before it ever reaches
+Horizon's window at all -- confirmed empirically, while Horizon's own
+key-handling path was separately shown to be healthy headless (no WM in
+the loop). Super+Esc was dropped for the shipped default as a result.
+
+The shipped default is now **`ctrl+'`**: apostrophe has no legacy
+terminal encoding, so (almost) no in-pane TUI can plausibly already have
+a claim on it, and it sits under a comfortable finger for the owner's
+Dvorak layout. As with the rejected Super+Esc, the chord is configured
+via the existing `[keybindings]` reserved-name mechanism (same pattern as
+`"open-palette"`), so a future collision or a different owner's layout
+preference is a config edit, not a redesign.
 
 ### Per-kind asymmetry
 
@@ -128,9 +137,13 @@ already maps to SUPER app-side.
 
 ## Pending verification
 
-- Super+Esc pass-through on the owner's GNOME session — checked on
-  first run once implemented; a collision is a config edit (the escape
-  key rides the `[keybindings]` mechanism), not a redesign.
+Resolved 2026-07-06: Super+Esc was checked on the owner's real GNOME
+session and found to be intercepted by gnome-shell before reaching
+Horizon's window (Horizon's own key-handling path was independently
+verified healthy headless), so the shipped default was changed to
+`ctrl+'` -- see "The escape chord" above. Nothing outstanding here; a
+future collision remains a config edit via `[keybindings]`, not a
+redesign.
 
 ## Non-goals for v1
 

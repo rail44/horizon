@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::app::keymap::Keymap;
 use crate::ui::theme;
 use crate::workspace::Workspace;
 use floem::prelude::*;
@@ -35,9 +36,7 @@ pub(super) fn status_bar(
 
 /// Workspace mode's status-bar chip (`docs/workspace-mode-design.md`'s
 /// third visualization signal, alongside pane dimming and the cursor
-/// frame). Purely additive next to the existing status text above -- that
-/// text's own wording is next-stage's job (retiring the Ctrl+Shift+P
-/// mention once workspace mode replaces it) and stays untouched here.
+/// frame). Purely additive next to the existing status text below.
 fn workspace_mode_chip(workspace: RwSignal<Workspace>) -> impl IntoView {
     label(|| "WORKSPACE MODE".to_string()).style(move |s| {
         if !workspace.with(|ws| ws.is_workspace_mode_active()) {
@@ -54,17 +53,33 @@ fn workspace_mode_chip(workspace: RwSignal<Workspace>) -> impl IntoView {
 
 fn status_bar_text(workspace: &Workspace, agent_state_status: Option<&str>) -> String {
     let base = format!(
-        "{} tab(s), {} pane(s), {} detached session(s), active: {}, active pane: {} | Ctrl+Shift+P: control surface",
+        "{} tab(s), {} pane(s), {} detached session(s), active: {}, active pane: {} | {}",
         workspace.tab_count(),
         workspace.visible_panes().len(),
         workspace.detached_session_count(),
         workspace.active_title(),
-        workspace.active_visible_index() + 1
+        workspace.active_visible_index() + 1,
+        workspace_mode_hint(),
     );
     match agent_state_status {
         Some(status) if !status.is_empty() => format!("{base} | {status}"),
         _ => base,
     }
+}
+
+/// Renders the "how to enter workspace mode" status-bar hint from the
+/// chord actually in effect (`Keymap::workspace_mode_chord_label`) rather
+/// than a hardcoded string -- so a `[keybindings]` rebind of the
+/// `"workspace-mode"` pseudo-command (`docs/workspace-mode-design.md`)
+/// keeps this text truthful without a code change. Replaces the retired
+/// `"Ctrl+Shift+P: control surface"` hint (`docs/tasks/backlog.md` item 1,
+/// resolved) -- the palette itself now lives behind this same chord, via
+/// `:` inside the mode.
+fn workspace_mode_hint() -> String {
+    format!(
+        "{}: workspace",
+        Keymap::global().workspace_mode_chord_label()
+    )
 }
 
 #[cfg(test)]
@@ -76,7 +91,10 @@ mod tests {
         let workspace = Workspace::mvp();
         let status = status_bar_text(&workspace, Some("Agent state: /tmp/horizon.duckdb"));
 
-        assert!(status.contains("Ctrl+Shift+P: control surface"));
+        // `Keymap::global()` resolves to built-in defaults under `#[cfg(test)]`
+        // (see `config::load`'s doc comment), so the workspace-mode chord is
+        // always `ctrl+'` here regardless of the developer's real config.
+        assert!(status.contains("ctrl+': workspace"));
         assert!(status.contains("Agent state: /tmp/horizon.duckdb"));
     }
 }

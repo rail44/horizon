@@ -10,9 +10,10 @@
 //!
 //! Not to be confused with `control_surface::ControlMode::Workspace` -- an
 //! unrelated, pre-existing name for the command palette's "workspace
-//! overview" tab (toggled by `Tab` inside the Ctrl+Shift+P surface). That
-//! type and this module's workspace mode are two different concepts that
-//! happen to share the English word "workspace".
+//! overview" tab (toggled by `Tab` inside the palette, itself reached via
+//! `:` from this module's mode). That type and this module's workspace
+//! mode are two different concepts that happen to share the English word
+//! "workspace".
 
 use super::types::Workspace;
 
@@ -113,6 +114,25 @@ impl Workspace {
     /// -- there is nothing else to restore.
     pub(crate) fn cancel_workspace_mode(&mut self) {
         self.workspace_mode_cursor = None;
+    }
+
+    /// A pane click while workspace mode is active: the design's click
+    /// convention (`docs/workspace-mode-design.md`'s mouse/keyboard split)
+    /// is that a click always "dives" into the pane clicked, regardless of
+    /// where the cursor currently sits -- equivalent to moving the cursor
+    /// to `index` and then calling [`commit_workspace_mode`], done in one
+    /// step so there's no observable intermediate cursor position. A no-op
+    /// when the mode isn't active: the caller's own ordinary
+    /// `activate_visible_pane` call already handles a plain click-to-focus
+    /// in that case.
+    ///
+    /// [`commit_workspace_mode`]: Self::commit_workspace_mode
+    pub(crate) fn commit_workspace_mode_to(&mut self, index: usize) {
+        if self.workspace_mode_cursor.is_none() {
+            return;
+        }
+        self.workspace_mode_cursor = Some(index);
+        self.commit_workspace_mode();
     }
 
     /// Unconditionally leaves workspace mode, regardless of whether it was
@@ -252,6 +272,41 @@ mod tests {
 
         assert!(!workspace.is_workspace_mode_active());
         assert_eq!(workspace.active_visible_index(), 1);
+    }
+
+    #[test]
+    fn a_pane_click_dives_into_the_clicked_pane_and_exits_the_mode() {
+        // The design's click convention: a click always dives into the
+        // pane clicked, not wherever the cursor currently sits -- so
+        // clicking pane 0 here must win even though the cursor moved to
+        // pane 1 (see `workspace::view::pane`'s `PointerDown` handler,
+        // which calls this ahead of its own `activate_visible_pane`).
+        let mut workspace = Workspace::mvp();
+        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        workspace.activate_visible_pane(0);
+        workspace.enter_workspace_mode();
+        workspace.move_cursor(Direction::Right);
+        assert_eq!(workspace.cursor_visible_index(), 1);
+
+        workspace.commit_workspace_mode_to(0);
+
+        assert!(!workspace.is_workspace_mode_active());
+        assert_eq!(workspace.active_visible_index(), 0);
+    }
+
+    #[test]
+    fn commit_workspace_mode_to_is_a_no_op_outside_the_mode() {
+        // The caller's own `activate_visible_pane` call already handles an
+        // ordinary click-to-focus when the mode isn't active -- this must
+        // leave focus untouched rather than double-applying it.
+        let mut workspace = Workspace::mvp();
+        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        workspace.activate_visible_pane(0);
+
+        workspace.commit_workspace_mode_to(1);
+
+        assert!(!workspace.is_workspace_mode_active());
+        assert_eq!(workspace.active_visible_index(), 0);
     }
 
     #[test]

@@ -102,8 +102,15 @@ DISPLAY="$client_display" xdotool windowmove "$window_id" 0 0
 DISPLAY="$client_display" xdotool windowsize "$window_id" 1100 720
 DISPLAY="$client_display" xdotool windowfocus "$window_id" 2>/dev/null || true
 
+# Enters workspace mode (`docs/workspace-mode-design.md`'s `ctrl+'`
+# default) and opens the palette with `:` -- the mode-based replacement
+# for the retired global `ctrl+shift+p` chord (`docs/tasks/backlog.md`
+# item 1, resolved). xdotool's X11 keysym name for the apostrophe key is
+# "apostrophe"; "colon" is a named keysym independent of physical layout.
 if [[ "${HORIZON_TEST_SPLIT:-0}" == "1" ]]; then
-  DISPLAY="$client_display" xdotool key ctrl+shift+p
+  DISPLAY="$client_display" xdotool key ctrl+apostrophe
+  sleep "$input_settle"
+  DISPLAY="$client_display" xdotool key colon
   sleep 0.2
   DISPLAY="$client_display" xdotool key s p l i t Return
   sleep 0.2

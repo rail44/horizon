@@ -186,10 +186,12 @@ window_height = 720.0
 # deny-tool-call, cancel-agent-turn. The reserved pseudo-command
 # `open-palette` is also accepted here — it isn't a real `CommandId` (opening
 # the palette isn't an operation the palette itself can list or run), and
-# overrides the chord that opens the command palette (`ctrl+p` by default).
+# overrides the chord that opens the command palette. Unbound by default:
+# the palette is a workspace-mode resident (`:` inside the mode, see below)
+# rather than a global shortcut, so this only matters if you want one back.
 #
 # Likewise, the reserved pseudo-command `workspace-mode` overrides the
-# chord that enters workspace mode (`super+esc` by default -- see
+# chord that enters workspace mode (`ctrl+'` by default -- see
 # `docs/workspace-mode-design.md`). An agent pane's message box also
 # accepts a bare `Esc` as a second entry path regardless of this setting,
 # since (unlike a terminal) it has no protocol-level claim on that key.
@@ -199,8 +201,8 @@ window_height = 720.0
 # ---------------------------------------------------------------------------
 [keybindings]
 # "ctrl+shift+t" = "new-terminal"
-# "ctrl+p" = "open-palette"
-# "super+esc" = "workspace-mode"
+# "ctrl+shift+p" = "open-palette"
+# "ctrl+'" = "workspace-mode"
 
 # ---------------------------------------------------------------------------
 # [theme] — the app's one color scheme: named role overrides for the chrome

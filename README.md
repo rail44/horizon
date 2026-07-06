@@ -30,7 +30,8 @@ Horizon spawns on demand. Run `cargo build --workspace` at least once (and
 again after touching `crates/horizon-agent`/`crates/horizon-agentd`) or agent
 panes will fail to find a runtime to spawn.
 
-After `cargo run`, use `Ctrl+Shift+P` to open the control surface. Commands mode
+After `cargo run`, press `ctrl+'` to enter workspace mode, then `:` to open
+the control surface (see `docs/workspace-mode-design.md`). Commands mode
 supports these manual smoke checks:
 
 - `new terminal`: opens another terminal tab.

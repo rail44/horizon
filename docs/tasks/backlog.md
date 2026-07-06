@@ -2,12 +2,16 @@
 
 Discovered during dogfooding; promote to a numbered mission when picked up.
 
-1. **Palette-open key mismatch** — code default is `ctrl+p`; the status
-   bar, AGENTS.md, and the verification scripts all claim `Ctrl+Shift+P`;
-   `ctrl+p` also collides with shell history. Blocked on the owner's
-   choice of default (`ctrl+shift+p` vs `ctrl+;`). Fix must align code,
-   status-bar text, scripts, and docs together (this also un-breaks the
-   `new-terminal-focus` / `split-pane` headless smoke scenarios).
+1. *(resolved 2026-07-06)* **Palette-open key mismatch** — resolved by
+   retiring the global chord outright rather than picking a winner between
+   the mismatched candidates: workspace mode shipped with `:` as the
+   palette's one-key resident (`docs/workspace-mode-design.md`), so
+   `open-palette`'s built-in default binding is gone (the `[keybindings]`
+   mechanism for an explicit override is unchanged). Status-bar text now
+   renders the actual configured workspace-mode chord instead of a
+   hardcoded hint, and the headless smoke scripts move to the mode-based
+   flow (`ctrl+'` then `:`) in the same change, un-breaking the
+   `new-terminal-focus` / `split-pane` scenarios.
 2. **Insert and F1-F24 send nothing** — `app::keymap` has no wiring for
    them at all (not even legacy bytes). F13+ also needs the kitty PUA
    table (see `KITTY_COMPLIANCE`).
@@ -55,3 +59,21 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     `HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB` and point agentd
     at a scratch socket per run. Flagged 2026-07-06 during the startup
     focus diagnosis.
+14. **headless GUI scripts hung/failed under shared-machine load,
+    2026-07-06** — every `check-terminal-visual.sh` scenario (including
+    ones that don't touch workspace mode at all, and reproduced against
+    unmodified `origin/main`) failed with `X_GetImage`/`BadMatch` from
+    `xwd`; the Horizon window was created (visible to `xdotool search`)
+    but never reached `IsViewable` (`xwininfo`'s Map State) even after
+    60s+, with the process idle in `futex_do_wait` and no `horizon-agentd`
+    child ever spawned, even pointed at a fully isolated scratch
+    `HORIZON_SOCKET`/`HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB`.
+    Observed on the owner's real desktop under heavy concurrent load
+    (several other agent worktrees running their own Horizon/agentd
+    instances and cargo builds at the same time) — likely a scheduling/
+    contention effect on the software (`LIBGL_ALWAYS_SOFTWARE=1`)
+    rendering path rather than anything in the app itself, but not root
+    caused. Distinct from and more severe than item 13 (that one is about
+    state pollution and replay cost on an otherwise-working connect; this
+    one is the window never appearing at all). Revisit if it recurs
+    outside a loaded shared machine.

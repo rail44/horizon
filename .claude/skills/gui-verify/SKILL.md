@@ -52,7 +52,7 @@ Artifacts:
 
 Driving input (all optional env vars): `HORIZON_TEST_TEXT` (typed into the
 terminal), `HORIZON_TEST_ENTER=1` (press Return), `HORIZON_TEST_SPLIT=1`
-(split via the Ctrl+Shift+P command surface), `HORIZON_TEST_XDOTOOL="<args>"`
+(split via workspace mode: `ctrl+'` then `:`), `HORIZON_TEST_XDOTOOL="<args>"`
 (raw xdotool command chain). Assertions: `HORIZON_EXPECT_DUMP_CONTAINS`,
 `HORIZON_EXPECT_STATUS_CONTAINS`, `HORIZON_EXPECT_CLIPBOARD_CONTAINS`
 (fixed-string grep against the respective dump; mismatch exits 1).

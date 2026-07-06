@@ -34,13 +34,17 @@ run_case basic-shell \
   HORIZON_TEST_ENTER=1 \
   HORIZON_EXPECT_DUMP_CONTAINS="horizon-smoke-basic"
 
+# Both scenarios below enter workspace mode (`ctrl+'`, the shipped default
+# from `docs/workspace-mode-design.md`) and open the palette with `:` --
+# the mode-based replacement for the retired global `ctrl+shift+p` chord
+# (`docs/tasks/backlog.md` item 1, resolved).
 run_case new-terminal-focus \
-  HORIZON_TEST_XDOTOOL="key ctrl+shift+p sleep 0.2 key n e w space t e r m i n a l Return sleep 0.8 type --clearmodifiers horizon-focus-ok" \
+  HORIZON_TEST_XDOTOOL="key ctrl+apostrophe sleep 0.7 key colon sleep 0.2 key n e w space t e r m i n a l Return sleep 0.8 type --clearmodifiers horizon-focus-ok" \
   HORIZON_EXPECT_DUMP_CONTAINS="horizon-focus-ok" \
   HORIZON_EXPECT_STATUS_CONTAINS="2 tab(s)"
 
 run_case split-pane \
-  HORIZON_TEST_XDOTOOL="key ctrl+shift+p sleep 0.2 key s p l i t Return sleep 0.8" \
+  HORIZON_TEST_XDOTOOL="key ctrl+apostrophe sleep 0.7 key colon sleep 0.2 key s p l i t Return sleep 0.8" \
   HORIZON_EXPECT_STATUS_CONTAINS="2 pane(s)"
 
 if command -v python3 >/dev/null 2>&1; then

@@ -72,7 +72,8 @@ scenario suite on top of it. Authoritative details — env vars, artifact
 paths, system deps, and caveats — live in the `gui-verify` skill
 (`.claude/skills/gui-verify/SKILL.md`); read it before using either script.
 
-Manual smoke after `cargo run`: `Ctrl+Shift+P` opens the control surface;
+Manual smoke after `cargo run`: press `ctrl+'` to enter workspace mode
+(`docs/workspace-mode-design.md`), then `:` to open the control surface;
 `Tab` toggles between Commands and Workspace modes. See README.md for the
 manual command checklist (`new terminal`, `split`, `detached`, ...).
 
@@ -97,8 +98,9 @@ contents:
 - `app/` — composition root: the command model (`commands.rs` defines
   `CommandId`, `command_actions.rs` executes), keymap, session spawning,
   app-level state and view.
-- `control_surface/` — the Ctrl+Shift+P surface: command palette and
-  workspace overview.
+- `control_surface/` — the command palette and workspace overview,
+  opened with `:` from workspace mode (see
+  `docs/workspace-mode-design.md`).
 - `control_plane/` — the CLI control-plane listener: per-instance Unix
   socket, one thread per connection, bridged onto the UI thread so
   commands still execute through the command model. The contract lives
