@@ -91,6 +91,7 @@ fn run_ctl_with_ask(
     let code = horizon_ctl::run(
         &args,
         Some(socket_path.display().to_string()),
+        None,
         &mut stdout,
         &mut stderr,
         stdin_is_tty,
@@ -199,7 +200,10 @@ fn new_agent_with_prompt_reaches_the_server_and_reports_ok() {
         .clone()
         .expect("server saw a request");
     assert_eq!(received.0, "new-agent");
-    assert_eq!(received.1, serde_json::json!({ "prompt": "fix the bug" }));
+    assert_eq!(
+        received.1,
+        serde_json::json!({ "activate": false, "prompt": "fix the bug" })
+    );
 
     let _ = std::fs::remove_file(&socket_path);
 }
@@ -386,17 +390,37 @@ fn destructive_subcommand_on_a_tty_asks_and_honors_the_answer() {
 }
 
 #[test]
-fn missing_socket_is_a_clear_connection_error_not_a_panic() {
-    let args: Vec<String> = vec!["sessions".to_string()];
+fn a_socket_with_no_listener_is_a_clear_connection_error_not_a_panic() {
+    // Deliberately an explicit `--socket` to a path nothing is bound to,
+    // rather than leaving both `--socket` and `HORIZON_SOCKET` unset: since
+    // the Second revision's fixed default path is real and per-user (see
+    // `cli::resolve_socket_path`), leaving both unset in a test would race
+    // whatever real Horizon instance happens to be running on this machine
+    // instead of deterministically exercising the "nothing is listening"
+    // path this test means to cover.
+    let socket_path = temp_socket_path("no-listener");
+    let args: Vec<String> = vec![
+        "--socket".to_string(),
+        socket_path.display().to_string(),
+        "sessions".to_string(),
+    ];
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
-    let code = horizon_ctl::run(&args, None, &mut stdout, &mut stderr, false, &mut |_| false);
+    let code = horizon_ctl::run(
+        &args,
+        None,
+        None,
+        &mut stdout,
+        &mut stderr,
+        false,
+        &mut |_| false,
+    );
     assert_eq!(code, 1);
     assert!(
         String::from_utf8(stderr)
             .unwrap()
-            .contains("HORIZON_SOCKET"),
-        "expected the discovery hint in the error message"
+            .contains("failed to connect"),
+        "expected a clear connection-failure message"
     );
 }
 
@@ -408,6 +432,7 @@ fn usage_error_exits_with_code_two() {
     let code = horizon_ctl::run(
         &args,
         Some("/tmp/should-not-be-used.sock".to_string()),
+        None,
         &mut stdout,
         &mut stderr,
         false,

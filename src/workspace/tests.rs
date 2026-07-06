@@ -151,7 +151,7 @@ fn session_identity_survives_detach_and_reattach() {
     );
 
     workspace
-        .attach_existing_session_to_split(session_id)
+        .attach_existing_session_to_split_activated(session_id, true)
         .expect("reattached pane");
 
     assert_eq!(
@@ -184,7 +184,7 @@ fn attach_existing_session_to_split_reuses_session_kind() {
     workspace.close_tab_index(1);
 
     let pane_id = workspace
-        .attach_existing_session_to_split(session_id)
+        .attach_existing_session_to_split_activated(session_id, true)
         .expect("attached pane");
 
     assert_eq!(workspace.visible_pane_id(1), Some(pane_id));

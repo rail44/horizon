@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use termwiz::input::{KeyCode, Modifiers};
 
 use super::*;
+use crate::session::SessionId;
 
 #[test]
 fn terminal_intro_mentions_backends() {
@@ -40,8 +41,8 @@ fn key_up_events_do_not_emit_legacy_input() {
 
 #[test]
 fn terminal_session_runs_shell_command() {
-    let session =
-        TerminalSession::spawn(TerminalSize::new(80, 12)).expect("terminal session should spawn");
+    let session = TerminalSession::spawn(TerminalSize::new(80, 12), SessionId::new())
+        .expect("terminal session should spawn");
     let tx = session.sender();
     let rx = session.updates();
 
@@ -222,7 +223,7 @@ fn selection_to_string_uses_alacritty_selection() {
 
 #[test]
 fn terminal_command_sanitizes_emulator_environment() {
-    let cmd = terminal_command("/bin/sh", &[], "xterm-kitty");
+    let cmd = terminal_command("/bin/sh", &[], "xterm-kitty", SessionId::new());
 
     assert_eq!(
         cmd.get_env("TERM").and_then(|v| v.to_str()),
@@ -248,11 +249,22 @@ fn terminal_command_sanitizes_emulator_environment() {
 
 #[test]
 fn terminal_command_injects_the_control_socket_env_var() {
-    let cmd = terminal_command("/bin/sh", &[], "xterm-kitty");
+    let cmd = terminal_command("/bin/sh", &[], "xterm-kitty", SessionId::new());
 
     assert_eq!(
         cmd.get_env("HORIZON_SOCKET"),
         Some(crate::control_plane::default_socket_path().as_os_str())
+    );
+}
+
+#[test]
+fn terminal_command_injects_this_panes_own_session_id() {
+    let session_id = SessionId::new();
+    let cmd = terminal_command("/bin/sh", &[], "xterm-kitty", session_id);
+
+    assert_eq!(
+        cmd.get_env("HORIZON_SESSION_ID").and_then(|v| v.to_str()),
+        Some(session_id.as_uuid().to_string().as_str())
     );
 }
 

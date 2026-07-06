@@ -101,12 +101,13 @@ contents:
 - `control_surface/` — the command palette and workspace overview,
   opened with `:` from workspace mode (see
   `docs/workspace-mode-design.md`).
-- `control_plane/` — the CLI control-plane listener: per-instance Unix
-  socket, one thread per connection, bridged onto the UI thread so
+- `control_plane/` — the CLI control-plane listener: a fixed well-known
+  Unix socket, one thread per connection, bridged onto the UI thread so
   commands still execute through the command model. The contract lives
-  in `crates/horizon-control`, the client binary in `crates/horizon-ctl`
-  (`horizon-ctl`); panes and agentd get the socket path via
-  `HORIZON_SOCKET`. See `docs/cli-control-plane-design.md`.
+  in `crates/horizon-control`; the client is `horizon <subcommand>`
+  itself (client code in the lib-only `crates/horizon-ctl`). Panes get
+  `HORIZON_SOCKET`/`HORIZON_SESSION_ID` in their environment. See
+  `docs/cli-control-plane-design.md`.
 - `ui/` — cross-domain UI primitives only. Domain-specific views live next
   to their domains.
 - `plugins/` — WASM plugin groundwork; the future path for hot-reloadable

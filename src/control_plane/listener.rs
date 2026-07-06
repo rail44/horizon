@@ -68,11 +68,13 @@ fn accept_loop(listener: UnixListener, executor: &Arc<dyn ControlExecutor>) {
 /// Binds `path`, handling the stale-socket case exactly like `horizon-
 /// agentd`'s own `bind_listener` (`crates/horizon-agentd/src/main.rs`): if a
 /// socket file already exists there but nothing answers a connection attempt
-/// (a previous Horizon process that didn't shut down cleanly -- this path
-/// embeds this process's own pid, so in practice this only fires on a pid
-/// wraparound colliding with a leftover file), remove it and rebind; if
-/// something *is* accepting, refuse to steal the path out from under a live
-/// instance.
+/// (a previous Horizon process that didn't shut down cleanly), remove it and
+/// rebind; if something *is* accepting -- a second Horizon instance racing
+/// this one, per the fixed well-known path's single-instance norm
+/// (`docs/cli-control-plane-design.md`'s Second revision) -- refuse to steal
+/// the path out from under it. `spawn`'s caller treats that refusal as a
+/// non-fatal bind failure: this instance simply starts without a control
+/// listener and logs a warning, it never bails Horizon's own startup.
 pub(super) fn bind(path: &Path) -> io::Result<UnixListener> {
     if path.exists() {
         match UnixStream::connect(path) {

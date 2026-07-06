@@ -1,13 +1,17 @@
 //! `horizon-ctl`: the CLI client for Horizon's Unix-socket control plane --
 //! see `docs/cli-control-plane-design.md` and the frozen contract crate,
-//! `crates/horizon-control`.
+//! `crates/horizon-control`. As of the design doc's Second revision
+//! ("Single binary, subcommand client"), this crate has no binary of its
+//! own -- the root `horizon` binary's `src/main.rs` is the thin argv/env/
+//! stdio wrapper that calls [`run`] when it sees a subcommand, dispatching
+//! to the GUI (`app_view`) otherwise.
 //!
-//! Split into a library (this crate) plus a thin `src/main.rs` so
-//! `tests/integration.rs` can drive [`run`] directly against a stub
-//! control-plane server (a real `std::os::unix::net::UnixListener`, not the
-//! real Horizon) without spawning a subprocess, and so every other piece of
-//! logic ([`cli`], [`commands`], [`client`], [`confirm`], [`output`]) is
-//! independently unit-testable, colocated with its own module.
+//! Kept as a library so `tests/integration.rs` can drive [`run`] directly
+//! against a stub control-plane server (a real
+//! `std::os::unix::net::UnixListener`, not the real Horizon) without
+//! spawning a subprocess, and so every other piece of logic ([`cli`],
+//! [`commands`], [`client`], [`confirm`], [`output`]) is independently
+//! unit-testable, colocated with its own module.
 
 pub mod cli;
 pub mod client;
@@ -34,12 +38,14 @@ use std::os::unix::net::UnixStream;
 /// interactive-confirmation answer without a real tty; `stdin_is_tty` is
 /// injected for the same reason (`std::io::IsTerminal` on a piped test
 /// stdin is always `false`, so a test proving the *interactive* path needs
-/// to say so explicitly). `env_socket` is the one real `std::env::var`
-/// read, done by the caller so this function stays a pure mapping from its
-/// arguments to an exit code plus writes to `stdout`/`stderr`.
+/// to say so explicitly). `env_socket`/`env_session_id` are the two real
+/// `std::env::var` reads (`HORIZON_SOCKET`/`HORIZON_SESSION_ID`), done by
+/// the caller so this function stays a pure mapping from its arguments to
+/// an exit code plus writes to `stdout`/`stderr`.
 pub fn run(
     args: &[String],
     env_socket: Option<String>,
+    env_session_id: Option<String>,
     stdout: &mut impl Write,
     stderr: &mut impl Write,
     stdin_is_tty: bool,
@@ -53,13 +59,15 @@ pub fn run(
         }
     };
 
-    let socket_path = match cli::resolve_socket_path(parsed.global.socket.clone(), env_socket) {
-        Ok(path) => path,
+    let resolved_split = match cli::resolved_split_for(&parsed.subcommand, env_session_id) {
+        Ok(resolved) => resolved,
         Err(message) => {
             let _ = writeln!(stderr, "error: {message}");
             return 1;
         }
     };
+
+    let socket_path = cli::resolve_socket_path(parsed.global.socket.clone(), env_socket);
 
     let stream = match UnixStream::connect(&socket_path) {
         Ok(stream) => stream,
@@ -103,7 +111,7 @@ pub fn run(
         }
     }
 
-    let request = commands::to_request(&parsed.subcommand);
+    let request = commands::to_request(&parsed.subcommand, resolved_split.as_deref());
     match conn.send_request(request) {
         Ok(body) => {
             output::render(&body, parsed.global.json, stdout);

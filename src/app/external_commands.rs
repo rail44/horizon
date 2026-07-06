@@ -47,18 +47,19 @@ use horizon_control::contract::{EnvelopeBody, ErrorMessage, Invoke, Query, Sessi
 use crate::agent::contract::ToolCallId;
 use crate::control_surface::command_state;
 use crate::session::{Frames, SessionId};
-use crate::workspace::Workspace;
+use crate::workspace::{PaneKind, Workspace};
 
 use super::command_actions::{execute_command, CommandActionState, CommandInvocation};
 use super::commands::{core_commands, CommandId};
 
 /// One row of the external-name <-> `CommandId` table, for the plain
-/// (unparameterized) commands that map 1:1 -- `new-agent`'s optional
-/// `prompt`, and every `session_id`/`call_id`-carrying command, are handled
-/// directly in [`invocation_from_external`] instead, since they don't have a
-/// single backing `CommandId`.
+/// (unparameterized, non-placement-aware) commands that map 1:1 --
+/// `new-terminal`/`new-agent` (placement- and activation-aware, see
+/// [`CommandInvocation::CreateSession`]), `attach`, and every
+/// `session_id`/`call_id`-carrying command are handled directly in
+/// [`invocation_from_external`] instead, since none of them have a single
+/// context-free backing `CommandId`.
 const SIMPLE_EXTERNAL_COMMANDS: &[(&str, CommandId)] = &[
-    ("new-terminal", CommandId::NewTerminal),
     (
         "terminate-all-detached",
         CommandId::TerminateAllDetachedSessions,
@@ -83,7 +84,12 @@ pub(crate) fn invocation_from_external(
     }
 
     match command {
-        "new-agent" => new_agent_invocation(args),
+        "new-terminal" => create_session_invocation(PaneKind::Terminal, args, false),
+        "new-agent" => create_session_invocation(PaneKind::Agent, args, true),
+        "attach" => Ok(CommandInvocation::AttachSession {
+            session_id: session_id_arg(args, "session_id")?,
+            activate: activate_arg(args)?,
+        }),
         "terminate-session" => Ok(CommandInvocation::TerminateSession {
             session_id: session_id_arg(args, "session_id")?,
         }),
@@ -103,14 +109,36 @@ pub(crate) fn invocation_from_external(
     }
 }
 
-fn new_agent_invocation(args: &Value) -> Result<CommandInvocation, String> {
-    match args.get("prompt") {
-        None | Some(Value::Null) => Ok(CommandInvocation::Simple(CommandId::NewAgent)),
-        Some(Value::String(prompt)) => Ok(CommandInvocation::NewAgentWithPrompt {
-            prompt: prompt.clone(),
-        }),
-        Some(_) => Err("`prompt` must be a string".to_string()),
-    }
+/// Builds `CommandInvocation::CreateSession` for `new-terminal`/`new-agent`
+/// (`docs/cli-control-plane-design.md`'s "Placement vocabulary" decision):
+/// `split` (a session id string) places the new pane next to that session's
+/// pane instead of opening a new tab; `activate` defaults to `false` when
+/// absent (the control plane never steals focus unless asked); `prompt` is
+/// only accepted for `new-agent` (`allow_prompt`) -- the composite
+/// create-with-prompt decision doesn't apply to `new-terminal`, which has no
+/// analogous "first message" to send.
+fn create_session_invocation(
+    kind: PaneKind,
+    args: &Value,
+    allow_prompt: bool,
+) -> Result<CommandInvocation, String> {
+    let split_target = optional_session_id_arg(args, "split")?;
+    let activate = activate_arg(args)?;
+    let prompt = if allow_prompt {
+        match args.get("prompt") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(prompt)) => Some(prompt.clone()),
+            Some(_) => return Err("`prompt` must be a string".to_string()),
+        }
+    } else {
+        None
+    };
+    Ok(CommandInvocation::CreateSession {
+        kind,
+        split_target,
+        activate,
+        prompt,
+    })
 }
 
 fn session_id_arg(args: &Value, key: &str) -> Result<SessionId, String> {
@@ -118,6 +146,34 @@ fn session_id_arg(args: &Value, key: &str) -> Result<SessionId, String> {
     raw.parse::<Uuid>()
         .map(SessionId::from_uuid)
         .map_err(|_| format!("`{key}` must be a valid session id"))
+}
+
+/// Same as [`session_id_arg`] but `key`'s absence (or an explicit `null`) is
+/// `Ok(None)` rather than an error -- for `CreateSession::split_target`,
+/// which is genuinely optional (omitted means "open a new tab").
+fn optional_session_id_arg(args: &Value, key: &str) -> Result<Option<SessionId>, String> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(raw)) => raw
+            .parse::<Uuid>()
+            .map(SessionId::from_uuid)
+            .map(Some)
+            .map_err(|_| format!("`{key}` must be a valid session id")),
+        Some(_) => Err(format!("`{key}` must be a string")),
+    }
+}
+
+/// `CreateSession::activate`/`AttachSession::activate`'s wire
+/// representation: an absent or `null` `activate` defaults to `false` --
+/// `docs/cli-control-plane-design.md`'s "activate rides on creating/
+/// attaching operations" decision (the control plane never dives unless
+/// asked).
+fn activate_arg(args: &Value) -> Result<bool, String> {
+    match args.get("activate") {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(activate)) => Ok(*activate),
+        Some(_) => Err("`activate` must be a boolean".to_string()),
+    }
 }
 
 fn call_id_arg(args: &Value, key: &str) -> Result<ToolCallId, String> {
@@ -206,17 +262,58 @@ pub(crate) fn state_query(
 /// through -- the one production call site is `control_plane::bridge`'s
 /// effect. A conversion failure (bad command name, missing or malformed
 /// argument) answers `EnvelopeBody::Error` without ever calling
-/// `execute_command`; a successful dispatch always answers `Ok` -- whether
-/// the underlying operation actually changed anything is not surfaced here,
-/// matching `execute_command`'s own return type (`()`) for every existing
-/// caller.
+/// `execute_command`; so does a [`CommandInvocation::CreateSession`] whose
+/// `split_target` doesn't resolve to any pane right now (see
+/// [`reject_unresolvable_split_target`]) -- the one case where "did the
+/// operation actually do anything" needs to reach the wire as an explicit
+/// error rather than a blanket `Ok`, since `execute_command`'s own return
+/// type (`()`) gives every other caller no way to observe that afterward.
+/// Every other successful dispatch always answers `Ok` regardless of
+/// whether the underlying operation changed anything.
 pub(crate) fn dispatch_invoke(invoke: &Invoke, command_state: &CommandActionState) -> EnvelopeBody {
     match invocation_from_external(&invoke.command, &invoke.args) {
-        Ok(invocation) => {
-            execute_command(invocation, command_state.clone());
-            EnvelopeBody::Ok
-        }
+        Ok(invocation) => match reject_unresolvable_split_target(&invocation, command_state) {
+            Ok(()) => {
+                execute_command(invocation, command_state.clone());
+                EnvelopeBody::Ok
+            }
+            Err(message) => error_body(message),
+        },
         Err(message) => error_body(message),
+    }
+}
+
+/// `CommandInvocation::CreateSession`'s `split_target`, if set, must
+/// currently be hosted by some pane -- checked here, before `execute_command`
+/// runs, per the design doc's "Placement vocabulary" decision ("サーバ側:
+/// セッション ID → ペイン解決...対象セッションがどのペインにも無い場合はエラ
+/// ーを返す"). `Workspace::split_session_with_new_session` performs the same
+/// check again when it actually runs (returning `None` rather than
+/// panicking), so a target that detaches between this check and
+/// `execute_command`'s call is still handled safely -- this function's job
+/// is only to turn the common case into a wire-level error instead of a
+/// silent no-op.
+fn reject_unresolvable_split_target(
+    invocation: &CommandInvocation,
+    command_state: &CommandActionState,
+) -> Result<(), String> {
+    let CommandInvocation::CreateSession {
+        split_target: Some(session_id),
+        ..
+    } = invocation
+    else {
+        return Ok(());
+    };
+    let hosted = command_state
+        .workspace()
+        .with_untracked(|workspace| workspace.session_is_referenced(*session_id));
+    if hosted {
+        Ok(())
+    } else {
+        Err(format!(
+            "no pane currently hosts session `{}` to split next to",
+            session_id.as_uuid()
+        ))
     }
 }
 
@@ -260,31 +357,49 @@ mod tests {
     // --- invocation_from_external: one case per external command --------
 
     #[test]
-    fn new_terminal_maps_to_the_simple_command() {
+    fn new_terminal_with_no_args_opens_a_new_tab_unactivated() {
         assert_eq!(
             invocation_from_external("new-terminal", &serde_json::json!({})),
-            Ok(CommandInvocation::Simple(CommandId::NewTerminal))
+            Ok(CommandInvocation::CreateSession {
+                kind: PaneKind::Terminal,
+                split_target: None,
+                activate: false,
+                prompt: None,
+            })
         );
     }
 
     #[test]
-    fn new_agent_without_a_prompt_maps_to_the_simple_command() {
+    fn new_agent_without_a_prompt_opens_a_new_tab_unactivated() {
         assert_eq!(
             invocation_from_external("new-agent", &serde_json::json!({})),
-            Ok(CommandInvocation::Simple(CommandId::NewAgent))
+            Ok(CommandInvocation::CreateSession {
+                kind: PaneKind::Agent,
+                split_target: None,
+                activate: false,
+                prompt: None,
+            })
         );
         assert_eq!(
             invocation_from_external("new-agent", &serde_json::json!({ "prompt": null })),
-            Ok(CommandInvocation::Simple(CommandId::NewAgent))
+            Ok(CommandInvocation::CreateSession {
+                kind: PaneKind::Agent,
+                split_target: None,
+                activate: false,
+                prompt: None,
+            })
         );
     }
 
     #[test]
-    fn new_agent_with_a_string_prompt_maps_to_the_composite_command() {
+    fn new_agent_with_a_string_prompt_carries_it_on_create_session() {
         assert_eq!(
             invocation_from_external("new-agent", &serde_json::json!({ "prompt": "fix the bug" })),
-            Ok(CommandInvocation::NewAgentWithPrompt {
-                prompt: "fix the bug".to_string()
+            Ok(CommandInvocation::CreateSession {
+                kind: PaneKind::Agent,
+                split_target: None,
+                activate: false,
+                prompt: Some("fix the bug".to_string()),
             })
         );
     }
@@ -294,6 +409,101 @@ mod tests {
         assert!(
             invocation_from_external("new-agent", &serde_json::json!({ "prompt": 5 })).is_err()
         );
+    }
+
+    #[test]
+    fn new_terminal_and_new_agent_accept_an_explicit_split_target() {
+        let session_id = SessionId::new();
+        assert_eq!(
+            invocation_from_external(
+                "new-terminal",
+                &serde_json::json!({ "split": session_id.as_uuid().to_string() }),
+            ),
+            Ok(CommandInvocation::CreateSession {
+                kind: PaneKind::Terminal,
+                split_target: Some(session_id),
+                activate: false,
+                prompt: None,
+            })
+        );
+        assert_eq!(
+            invocation_from_external(
+                "new-agent",
+                &serde_json::json!({ "split": session_id.as_uuid().to_string() }),
+            ),
+            Ok(CommandInvocation::CreateSession {
+                kind: PaneKind::Agent,
+                split_target: Some(session_id),
+                activate: false,
+                prompt: None,
+            })
+        );
+    }
+
+    #[test]
+    fn split_must_be_a_valid_session_id_when_given() {
+        assert!(invocation_from_external(
+            "new-terminal",
+            &serde_json::json!({ "split": "not-a-uuid" }),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn activate_true_opts_into_diving_and_defaults_false() {
+        let session_id = SessionId::new();
+        assert_eq!(
+            invocation_from_external("new-terminal", &serde_json::json!({ "activate": true }),),
+            Ok(CommandInvocation::CreateSession {
+                kind: PaneKind::Terminal,
+                split_target: None,
+                activate: true,
+                prompt: None,
+            })
+        );
+        assert_eq!(
+            invocation_from_external(
+                "attach",
+                &serde_json::json!({ "session_id": session_id.as_uuid().to_string() }),
+            ),
+            Ok(CommandInvocation::AttachSession {
+                session_id,
+                activate: false,
+            })
+        );
+    }
+
+    #[test]
+    fn activate_must_be_a_boolean_when_given() {
+        assert!(invocation_from_external(
+            "new-terminal",
+            &serde_json::json!({ "activate": "yes" }),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn attach_requires_a_valid_session_id_and_defaults_activate_false() {
+        let session_id = SessionId::new();
+        assert_eq!(
+            invocation_from_external(
+                "attach",
+                &serde_json::json!({
+                    "session_id": session_id.as_uuid().to_string(),
+                    "activate": true,
+                }),
+            ),
+            Ok(CommandInvocation::AttachSession {
+                session_id,
+                activate: true,
+            })
+        );
+        assert!(invocation_from_external("attach", &serde_json::json!({})).is_err());
+        assert!(invocation_from_external(
+            "attach",
+            &serde_json::json!({ "session_id": "not-a-uuid" }),
+        )
+        .is_err());
     }
 
     #[test]
@@ -541,5 +751,144 @@ mod tests {
         );
 
         assert!(matches!(body, EnvelopeBody::Error(_)));
+    }
+
+    // --- CreateSession's activate/split wiring through dispatch_invoke -----
+
+    #[test]
+    fn dispatch_invoke_new_terminal_without_active_does_not_switch_the_active_session() {
+        let state = test_state();
+        let original_active_session = state
+            .workspace()
+            .with_untracked(|ws| ws.active_session_id());
+
+        let body = dispatch_invoke(
+            &Invoke {
+                command: "new-terminal".to_string(),
+                args: serde_json::json!({}),
+            },
+            &state,
+        );
+
+        assert!(matches!(body, EnvelopeBody::Ok));
+        assert_eq!(state.workspace().with_untracked(|ws| ws.tab_count()), 2);
+        assert_eq!(
+            state
+                .workspace()
+                .with_untracked(|ws| ws.active_session_id()),
+            original_active_session,
+            "activate defaults to false: the owner's active session must not change"
+        );
+    }
+
+    #[test]
+    fn dispatch_invoke_new_terminal_with_active_true_switches_to_the_new_session() {
+        let state = test_state();
+        let original_active_session = state
+            .workspace()
+            .with_untracked(|ws| ws.active_session_id());
+
+        let body = dispatch_invoke(
+            &Invoke {
+                command: "new-terminal".to_string(),
+                args: serde_json::json!({ "activate": true }),
+            },
+            &state,
+        );
+
+        assert!(matches!(body, EnvelopeBody::Ok));
+        assert_ne!(
+            state
+                .workspace()
+                .with_untracked(|ws| ws.active_session_id()),
+            original_active_session,
+            "activate: true must switch to the new session"
+        );
+    }
+
+    #[test]
+    fn dispatch_invoke_rejects_a_split_target_with_no_hosting_pane() {
+        let state = test_state();
+        let unresolvable = SessionId::new();
+
+        let body = dispatch_invoke(
+            &Invoke {
+                command: "new-terminal".to_string(),
+                args: serde_json::json!({ "split": unresolvable.as_uuid().to_string() }),
+            },
+            &state,
+        );
+
+        assert!(matches!(body, EnvelopeBody::Error(_)));
+        assert_eq!(
+            state.workspace().with_untracked(|ws| ws.tab_count()),
+            1,
+            "a rejected split target must not create anything"
+        );
+    }
+
+    #[test]
+    fn dispatch_invoke_accepts_a_split_target_hosted_by_a_pane() {
+        let state = test_state();
+        let target_session = state
+            .workspace()
+            .with_untracked(|ws| ws.active_session_id())
+            .expect("mvp() starts with an active session");
+
+        let body = dispatch_invoke(
+            &Invoke {
+                command: "new-terminal".to_string(),
+                args: serde_json::json!({ "split": target_session.as_uuid().to_string() }),
+            },
+            &state,
+        );
+
+        assert!(matches!(body, EnvelopeBody::Ok));
+        assert_eq!(
+            state.workspace().with_untracked(|ws| ws.tab_count()),
+            1,
+            "a resolvable split target must split in place, not open a new tab"
+        );
+        assert_eq!(
+            state
+                .workspace()
+                .with_untracked(|ws| ws.visible_panes().len()),
+            2
+        );
+    }
+
+    #[test]
+    fn dispatch_invoke_attach_reattaches_a_detached_session_without_activating_by_default() {
+        let state = test_state();
+        let detached_session = state
+            .workspace()
+            .with_untracked(|ws| ws.active_session_id())
+            .expect("mvp() starts with an active session");
+        state.workspace().update(|ws| {
+            ws.split_active(PaneKind::Terminal, Some(SessionId::new()));
+            ws.close_visible_pane(0);
+        });
+        assert_eq!(
+            state
+                .workspace()
+                .with_untracked(|ws| ws.detached_session_count()),
+            1
+        );
+
+        let body = dispatch_invoke(
+            &Invoke {
+                command: "attach".to_string(),
+                args: serde_json::json!({ "session_id": detached_session.as_uuid().to_string() }),
+            },
+            &state,
+        );
+
+        assert!(matches!(body, EnvelopeBody::Ok));
+        assert_eq!(
+            state
+                .workspace()
+                .with_untracked(|ws| ws.detached_session_count()),
+            0
+        );
     }
 }

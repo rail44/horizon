@@ -2,6 +2,8 @@ use std::env;
 
 use portable_pty::CommandBuilder;
 
+use crate::session::SessionId;
+
 const TERMINAL_ENV_REMOVE: &[&str] = &[
     "TERM_PROGRAM",
     "TERM_PROGRAM_VERSION",
@@ -39,14 +41,19 @@ const TERMINAL_ENV_REMOVE: &[&str] = &[
     "XDG_ACTIVATION_TOKEN",
 ];
 
-pub(crate) fn terminal_command(shell: &str, args: &[String], term: &str) -> CommandBuilder {
+pub(crate) fn terminal_command(
+    shell: &str,
+    args: &[String],
+    term: &str,
+    session_id: SessionId,
+) -> CommandBuilder {
     let mut cmd = CommandBuilder::new(shell);
     cmd.args(args);
-    configure_terminal_environment(&mut cmd, term);
+    configure_terminal_environment(&mut cmd, term, session_id);
     cmd
 }
 
-fn configure_terminal_environment(cmd: &mut CommandBuilder, term: &str) {
+fn configure_terminal_environment(cmd: &mut CommandBuilder, term: &str, session_id: SessionId) {
     for key in TERMINAL_ENV_REMOVE {
         cmd.env_remove(key);
     }
@@ -63,4 +70,9 @@ fn configure_terminal_environment(cmd: &mut CommandBuilder, term: &str) {
         "HORIZON_SOCKET",
         crate::control_plane::default_socket_path(),
     );
+    // The Second revision's "Placement vocabulary" decision: this pane's own
+    // stable external reference, so a CLI invoked from this shell can
+    // resolve `--split`'s bare "here" form without the caller ever having to
+    // name a session id itself.
+    cmd.env("HORIZON_SESSION_ID", session_id.as_uuid().to_string());
 }

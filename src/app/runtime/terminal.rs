@@ -15,7 +15,7 @@ pub(super) fn spawn_terminal_session(
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
 ) {
-    match TerminalSession::spawn(TerminalSize::default()) {
+    match TerminalSession::spawn(TerminalSize::default(), session_id) {
         Ok(session) => {
             sessions.update(|registry| {
                 registry.insert_terminal(session_id, session.sender());

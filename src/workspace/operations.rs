@@ -42,16 +42,62 @@ impl Workspace {
     }
 
     pub(crate) fn open_tab_with_new_session(&mut self, kind: PaneKind) -> SessionId {
+        self.open_tab_with_new_session_activated(kind, true)
+    }
+
+    /// Same as [`Self::open_tab_with_new_session`], but `activate` controls
+    /// whether the new tab becomes the workspace's active one -- the control
+    /// plane's `activate=false` default (`docs/cli-control-plane-design.md`'s
+    /// "activate rides on creating/attaching operations" decision): the tab
+    /// and its pane are always created and pushed either way, so the session
+    /// exists and is queryable/attachable immediately; `activate: false`
+    /// only means [`Self::active_tab`] is restored to whatever it was before
+    /// this call, leaving the caller's own focus-follow
+    /// (`workspace::request_active_pane_focus`) with nothing to move. See
+    /// `app::command_actions::create_session`, the one caller that varies
+    /// `activate` at runtime (human surfaces keep calling
+    /// [`Self::open_tab_with_new_session`], which always dives).
+    pub(crate) fn open_tab_with_new_session_activated(
+        &mut self,
+        kind: PaneKind,
+        activate: bool,
+    ) -> SessionId {
+        let previous_active_tab = self.active_tab;
         let session_id = SessionId::new();
         self.open_tab(kind, Some(session_id));
+        if !activate {
+            self.active_tab = previous_active_tab;
+        }
         session_id
     }
 
     pub(crate) fn split_active(&mut self, kind: PaneKind, session_id: Option<SessionId>) -> PaneId {
+        self.split_tab(self.active_tab, kind, session_id, true)
+    }
+
+    /// Splits `tab_id` (any tab, not necessarily the active one) with a new
+    /// `kind` pane, honoring `activate` for whether that tab becomes active
+    /// and its new pane takes tab-local focus -- the shared worker behind
+    /// [`Self::split_active`] (`tab_id == self.active_tab`, `activate:
+    /// true`, a no-op change in that case) and
+    /// [`Self::split_session_with_new_session`] (an explicit, possibly
+    /// non-active, target tab). A `tab_id` that no longer exists is silently
+    /// a no-op for the layout mutation (defensive; every call site resolves
+    /// `tab_id` from a live tab immediately beforehand, so this never
+    /// actually happens today) but still returns the new pane's id and
+    /// registers its session, matching `split_active`'s prior behavior of
+    /// never failing outright.
+    fn split_tab(
+        &mut self,
+        tab_id: TabId,
+        kind: PaneKind,
+        session_id: Option<SessionId>,
+        activate: bool,
+    ) -> PaneId {
         self.ensure_session(kind, session_id);
         let pane = Pane::new(kind, session_id);
         let pane_id = pane.id;
-        if let Some(tab) = self.active_tab_mut() {
+        if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) {
             let old_root = tab.root.clone();
             tab.root = LayoutNode::Split {
                 axis: SplitAxis::Horizontal,
@@ -59,9 +105,14 @@ impl Workspace {
                 first: Box::new(old_root),
                 second: Box::new(LayoutNode::Pane(pane_id)),
             };
-            tab.active = pane_id;
+            if activate {
+                tab.active = pane_id;
+            }
         }
         self.panes.push(pane);
+        if activate {
+            self.active_tab = tab_id;
+        }
         pane_id
     }
 
@@ -72,12 +123,56 @@ impl Workspace {
         Some((kind, session_id))
     }
 
-    pub(crate) fn attach_existing_session_to_split(
+    /// Splits the tab that currently hosts `target_session_id`'s pane (any
+    /// tab, not just the active one) with a brand-new `kind` session,
+    /// honoring `activate` exactly like [`Self::split_tab`] -- the control
+    /// plane's `--split <session-id>` placement
+    /// (`docs/cli-control-plane-design.md`'s "Placement vocabulary"
+    /// decision). Returns `None`, spawning nothing, when
+    /// `target_session_id` isn't referenced by any pane (the CLI's "target
+    /// session not found" error case -- callers are expected to have
+    /// already surfaced that as an error before reaching here, see
+    /// `app::external_commands::dispatch_invoke`'s pre-check; this is
+    /// defense in depth, not the primary error path).
+    pub(crate) fn split_session_with_new_session(
+        &mut self,
+        target_session_id: SessionId,
+        kind: PaneKind,
+        activate: bool,
+    ) -> Option<SessionId> {
+        let target_pane_id = self
+            .panes
+            .iter()
+            .find(|pane| pane.session_id == Some(target_session_id))
+            .map(|pane| pane.id)?;
+        let tab_id = self
+            .tabs
+            .iter()
+            .find(|tab| tab.root.pane_ids().contains(&target_pane_id))
+            .map(|tab| tab.id)?;
+        let session_id = SessionId::new();
+        self.split_tab(tab_id, kind, Some(session_id), activate);
+        Some(session_id)
+    }
+
+    /// Attaches a detached `session_id` as a split in the active tab,
+    /// honoring `activate` for whether that tab becomes active and its new
+    /// pane takes tab-local focus -- see [`Self::split_tab`]'s doc comment
+    /// for what `activate: false` leaves untouched (human surfaces always
+    /// pass `true`, per `docs/workspace-mode-design.md`'s Amended
+    /// second-round decision 1; the control plane's `attach` external
+    /// command defaults `false`). Reattaching always targets the currently
+    /// active tab (unlike [`Self::split_session_with_new_session`]'s
+    /// explicit-target lookup): there is no other tab to place a *detached*
+    /// session's pane next to. `None` if `session_id` isn't a session this
+    /// workspace knows about at all.
+    pub(crate) fn attach_existing_session_to_split_activated(
         &mut self,
         session_id: SessionId,
+        activate: bool,
     ) -> Option<PaneId> {
         let kind = self.session_pane_kind(session_id)?;
-        Some(self.split_active(kind, Some(session_id)))
+        Some(self.split_tab(self.active_tab, kind, Some(session_id), activate))
     }
 
     pub(crate) fn activate_tab_index(&mut self, index: usize) -> bool {

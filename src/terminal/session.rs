@@ -11,6 +11,7 @@ pub(crate) use self::environment::terminal_command;
 use self::runtime::{read_pty, run_terminal_core, run_writer, CoreReceivers, CoreSenders};
 use super::core::TerminalCore;
 use super::types::TerminalSize;
+use crate::session::SessionId;
 
 mod contract;
 mod environment;
@@ -35,7 +36,10 @@ pub(crate) struct TerminalSession {
 }
 
 impl TerminalSession {
-    pub(crate) fn spawn(size: TerminalSize) -> Result<Self, TerminalSessionError> {
+    pub(crate) fn spawn(
+        size: TerminalSize,
+        session_id: SessionId,
+    ) -> Result<Self, TerminalSessionError> {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtySize {
             rows: size.rows,
@@ -50,6 +54,7 @@ impl TerminalSession {
             &shell,
             &terminal_config.shell_args,
             &terminal_config.term,
+            session_id,
         );
         pair.slave
             .spawn_command(cmd)

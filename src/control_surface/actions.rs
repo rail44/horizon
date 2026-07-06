@@ -67,7 +67,13 @@ pub(crate) fn execute_overview_selection(state: OverviewActionState) {
             execute_command(CommandInvocation::ActivateTab { index }, command);
         }
         OverviewItem::DetachedSession { session_id, .. } => {
-            execute_command(CommandInvocation::AttachSession { session_id }, command);
+            execute_command(
+                CommandInvocation::AttachSession {
+                    session_id,
+                    activate: true,
+                },
+                command,
+            );
         }
         OverviewItem::Pane {
             tab_index,
@@ -134,7 +140,13 @@ pub(crate) fn execute_palette_selection(state: PaletteActionState) {
             execute_command(CommandInvocation::Simple(entry.spec.id), command)
         }
         PaletteItem::DetachedSession { session_id, .. } => {
-            execute_command(CommandInvocation::AttachSession { session_id }, command);
+            execute_command(
+                CommandInvocation::AttachSession {
+                    session_id,
+                    activate: true,
+                },
+                command,
+            );
         }
         PaletteItem::Tab { index, .. } => {
             execute_command(CommandInvocation::ActivateTab { index }, command);

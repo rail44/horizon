@@ -69,15 +69,30 @@ impl CommandActionState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CommandInvocation {
     Simple(CommandId),
-    /// `new-agent --prompt "..."`'s composite create-with-prompt
-    /// (`docs/cli-control-plane-design.md`'s "Composite create-with-prompt"
-    /// decision): opens a new agent tab exactly like
-    /// `Simple(CommandId::NewAgent)`, then sends `prompt` as the session's
-    /// first `Command::UserMessage` -- see [`execute_command`]'s handling of
-    /// this variant and [`send_initial_user_message`] for why there is no
-    /// readiness wait between the two steps.
-    NewAgentWithPrompt {
-        prompt: String,
+    /// Creates a new `kind` session for a control-plane `new-terminal`/
+    /// `new-agent` invocation (`docs/cli-control-plane-design.md`'s
+    /// "Placement vocabulary" and "activate rides on creating/attaching
+    /// operations" decisions). Unlike `Simple(CommandId::NewTerminal |
+    /// NewAgent)` -- the human palette/keybinding path, which always opens a
+    /// new tab and always dives -- this variant is placement- and
+    /// activation-aware: `split_target`, when set, places the new pane as a
+    /// split next to the pane currently hosting that session (in whichever
+    /// tab that is, not necessarily the active one) instead of opening a new
+    /// tab; `activate` controls whether focus/the active tab and pane follow
+    /// the new session at all (the control plane defaults this to `false`,
+    /// the CLI's `--active` opts in -- see `app::external_commands::
+    /// invocation_from_external`). `prompt`, if set, is the composite
+    /// create-with-prompt decision's payload: sent as the new session's
+    /// first `Command::UserMessage` once spawned (see [`execute_command`]'s
+    /// handling of this variant and [`send_initial_user_message`] for why
+    /// there is no readiness wait between the two steps) -- this subsumes
+    /// the older, narrower `NewAgentWithPrompt` variant, which had no room
+    /// for `split_target`/`activate`.
+    CreateSession {
+        kind: PaneKind,
+        split_target: Option<SessionId>,
+        activate: bool,
+        prompt: Option<String>,
     },
     ApproveToolCall {
         session_id: SessionId,
@@ -112,9 +127,15 @@ pub(crate) enum CommandInvocation {
         pane_index: usize,
     },
     /// Attach a detached session to a new split in the active tab (palette
-    /// or overview detached-session row).
+    /// or overview detached-session row, or the control plane's `attach`
+    /// external command). `activate` is always `true` from human surfaces
+    /// (attaching dives, per `docs/workspace-mode-design.md`'s Amended
+    /// second-round decision 1: "`AttachSession` joins this bucket"); the
+    /// control plane defaults it to `false`, with `--active` opting in --
+    /// same rationale as `CreateSession::activate`.
     AttachSession {
         session_id: SessionId,
+        activate: bool,
     },
     /// Terminate a session by id, whether or not it's the active session or
     /// attached to any pane — reuses the same registry/frame cleanup as
@@ -145,10 +166,18 @@ pub(crate) enum CommandInvocation {
 pub(crate) fn execute_command(invocation: CommandInvocation, state: CommandActionState) {
     match invocation {
         CommandInvocation::Simple(command_id) => execute_simple_command(command_id, state),
-        CommandInvocation::NewAgentWithPrompt { prompt } => {
+        CommandInvocation::CreateSession {
+            kind,
+            split_target,
+            activate,
+            prompt,
+        } => {
             let sessions = state.sessions();
-            let session_id = open_tab(state, PaneKind::Agent);
-            send_initial_user_message(sessions, session_id, prompt);
+            if let Some(session_id) = create_session(state, kind, split_target, activate) {
+                if let Some(prompt) = prompt {
+                    send_initial_user_message(sessions, session_id, prompt);
+                }
+            }
         }
         CommandInvocation::ApproveToolCall {
             session_id,
@@ -192,12 +221,17 @@ pub(crate) fn execute_command(invocation: CommandInvocation, state: CommandActio
             });
             request_active_pane_focus(workspace, state.pane_focus_requests);
         }
-        CommandInvocation::AttachSession { session_id } => {
+        CommandInvocation::AttachSession {
+            session_id,
+            activate,
+        } => {
             let workspace = state.workspace();
             workspace.update(|ws| {
-                ws.attach_existing_session_to_split(session_id);
+                ws.attach_existing_session_to_split_activated(session_id, activate);
             });
-            request_active_pane_focus(workspace, state.pane_focus_requests);
+            if activate {
+                request_active_pane_focus(workspace, state.pane_focus_requests);
+            }
         }
         CommandInvocation::TerminateSession { session_id } => {
             terminate_session_by_id(
@@ -315,11 +349,14 @@ fn reload_agent_runtime(state: CommandActionState) {
     );
 }
 
-/// Opens a new tab with a freshly spawned `kind` session and returns its id.
-/// The return value matters to exactly one caller,
-/// `CommandInvocation::NewAgentWithPrompt` -- see [`send_initial_user_message`]
-/// for why it's safe to use immediately, with no readiness wait, the instant
-/// this returns.
+/// Opens a new tab with a freshly spawned `kind` session and returns its id
+/// -- the human palette/keybinding path (`Simple(CommandId::NewTerminal |
+/// NewAgent)`), which always dives and never needs placement/activation
+/// control. The control plane's equivalent is `create_session`, whose
+/// returned id *does* matter to its one caller,
+/// `CommandInvocation::CreateSession`'s `prompt` handling -- see
+/// [`send_initial_user_message`] for why it's safe to use immediately, with
+/// no readiness wait, the instant `create_session` returns.
 fn open_tab(state: CommandActionState, kind: PaneKind) -> SessionId {
     let workspace = state.workspace();
     let mut session_id = None;
@@ -339,16 +376,56 @@ fn open_tab(state: CommandActionState, kind: PaneKind) -> SessionId {
     session_id
 }
 
+/// `CommandInvocation::CreateSession`'s worker -- see that variant's doc
+/// comment. Mirrors `open_tab`/`split_active_pane`'s shape (spawn the
+/// session, request focus) but is placement- and activation-aware: `None`
+/// `split_target` opens a new tab (like `open_tab`); `Some` places the new
+/// pane as a split next to that session's pane in whichever tab currently
+/// hosts it (any tab, not just the active one). `activate: false` skips both
+/// the workspace-mode exit and the focus-follow request, so a control-
+/// plane-driven creation never disturbs the owner's focus or an in-progress
+/// workspace-mode session -- see `Workspace::exit_workspace_mode`'s doc
+/// comment for why that call is otherwise tied to "creating operations
+/// dive". Returns `None` (spawning nothing) only when `split_target` fails
+/// to resolve to any pane -- already rejected earlier by
+/// `external_commands::dispatch_invoke`'s pre-check, so this is defense in
+/// depth, not the primary error path.
+fn create_session(
+    state: CommandActionState,
+    kind: PaneKind,
+    split_target: Option<SessionId>,
+    activate: bool,
+) -> Option<SessionId> {
+    let workspace = state.workspace();
+    let mut session_id = None;
+    workspace.update(|ws| {
+        session_id = match split_target {
+            Some(target) => ws.split_session_with_new_session(target, kind, activate),
+            None => Some(ws.open_tab_with_new_session_activated(kind, activate)),
+        };
+        if activate {
+            ws.exit_workspace_mode();
+        }
+    });
+    let session_id = session_id?;
+    spawn_session(kind, session_id, &state.runtime);
+    if activate {
+        request_active_pane_focus(workspace, state.pane_focus_requests);
+    }
+    Some(session_id)
+}
+
 /// Sends `text` as `session_id`'s first `Command::UserMessage` --
-/// `CommandInvocation::NewAgentWithPrompt`'s tail half, once `open_tab` has
+/// `CommandInvocation::CreateSession`'s tail half, once `create_session` has
 /// already spawned the session.
 ///
-/// Safe to call immediately, with no readiness wait: `open_tab` runs
+/// Safe to call immediately, with no readiness wait: `create_session` runs
 /// `spawn_session` synchronously, and for an agent session that path
 /// (`app::runtime::agent::spawn_agent_session` ->
 /// `agent::agentd_runtime::fold_agent_session_events`) registers the
 /// session's sender into `Registry` *before* returning -- there is no window
-/// where `NewAgentWithPrompt` could observe a session id with no sender yet.
+/// where `CreateSession`'s prompt-sending tail could observe a session id
+/// with no sender yet.
 /// This is a different race than the one agentd's own `session_new`
 /// readiness gate guards against (`crates/horizon-agentd/src/main.rs`'s
 /// `run_session_hosting_loop` comment on `Control::SessionNew`) -- that one
@@ -854,7 +931,10 @@ mod tests {
         );
 
         execute_command(
-            CommandInvocation::AttachSession { session_id },
+            CommandInvocation::AttachSession {
+                session_id,
+                activate: true,
+            },
             state.clone(),
         );
 
@@ -964,7 +1044,7 @@ mod tests {
         );
     }
 
-    // --- CommandInvocation::NewAgentWithPrompt ------------------------------
+    // --- CommandInvocation::CreateSession -----------------------------------
 
     #[test]
     fn send_initial_user_message_sends_the_prompt_to_the_sessions_channel() {
@@ -993,7 +1073,7 @@ mod tests {
     }
 
     #[test]
-    fn new_agent_with_prompt_invocation_opens_a_tab_and_registers_the_session() {
+    fn create_session_with_prompt_dives_when_activated() {
         let workspace = Workspace::mvp();
         let runtime = SessionRuntimeState::new(
             RwSignal::new(workspace),
@@ -1012,8 +1092,11 @@ mod tests {
         let before_tab_count = workspace.with_untracked(|ws| ws.tab_count());
 
         execute_command(
-            CommandInvocation::NewAgentWithPrompt {
-                prompt: "hello agent".to_string(),
+            CommandInvocation::CreateSession {
+                kind: PaneKind::Agent,
+                split_target: None,
+                activate: true,
+                prompt: Some("hello agent".to_string()),
             },
             state.clone(),
         );
@@ -1024,11 +1107,169 @@ mod tests {
         );
         let new_session_id = workspace
             .with_untracked(|ws| ws.active_session_id())
-            .expect("the new agent tab should be active after NewAgentWithPrompt");
+            .expect("the new agent tab should be active when activate is true");
         assert!(state
             .sessions()
             .with_untracked(|registry| registry.agent_sender(new_session_id))
             .is_some());
+    }
+
+    #[test]
+    fn create_session_without_activate_creates_the_tab_but_does_not_switch_to_it() {
+        let state = test_command_action_state(Workspace::mvp());
+        let workspace = state.workspace();
+        let before_active_tab = workspace.with_untracked(|ws| ws.active_tab_index());
+        let before_tab_count = workspace.with_untracked(|ws| ws.tab_count());
+        let before_focus_requests: Vec<u64> = state
+            .pane_focus_requests
+            .iter()
+            .map(|request| request.with_untracked(|count| *count))
+            .collect();
+
+        execute_command(
+            CommandInvocation::CreateSession {
+                kind: PaneKind::Terminal,
+                split_target: None,
+                activate: false,
+                prompt: None,
+            },
+            state.clone(),
+        );
+
+        assert_eq!(
+            workspace.with_untracked(|ws| ws.tab_count()),
+            before_tab_count + 1,
+            "a new tab is still created even when not activated"
+        );
+        assert_eq!(
+            workspace.with_untracked(|ws| ws.active_tab_index()),
+            before_active_tab,
+            "activate: false must not switch the active tab"
+        );
+        let after_focus_requests: Vec<u64> = state
+            .pane_focus_requests
+            .iter()
+            .map(|request| request.with_untracked(|count| *count))
+            .collect();
+        assert_eq!(
+            before_focus_requests, after_focus_requests,
+            "activate: false must not request pane focus"
+        );
+    }
+
+    #[test]
+    fn create_session_with_split_target_places_the_pane_in_the_targets_tab_without_activating() {
+        let mut workspace = Workspace::mvp();
+        let target_session = SessionId::new();
+        // tab 0: [initial session, target_session], target_session's pane
+        // left active by `split_active` -- this fixture call always dives,
+        // matching every other direct `split_active` call in this test
+        // module.
+        workspace.split_active(PaneKind::Terminal, Some(target_session));
+        // tab 1, opened and switched to -- tab 0 (and target_session) is no
+        // longer the active tab.
+        workspace.open_tab(PaneKind::Terminal, Some(SessionId::new()));
+        let state = test_command_action_state(workspace);
+        let workspace = state.workspace();
+        assert_eq!(workspace.with_untracked(|ws| ws.active_tab_index()), 1);
+
+        execute_command(
+            CommandInvocation::CreateSession {
+                kind: PaneKind::Terminal,
+                split_target: Some(target_session),
+                activate: false,
+                prompt: None,
+            },
+            state.clone(),
+        );
+
+        assert_eq!(
+            workspace.with_untracked(|ws| ws.tab_count()),
+            2,
+            "splitting next to a session must not open a new tab"
+        );
+        assert_eq!(
+            workspace.with_untracked(|ws| ws.active_tab_index()),
+            1,
+            "activate: false must not switch to the split target's tab"
+        );
+        let panes_in_target_tab = workspace.with_untracked(|ws| {
+            ws.pane_summaries()
+                .into_iter()
+                .filter(|pane| pane.tab_index == 0)
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(panes_in_target_tab.len(), 3);
+        assert!(
+            panes_in_target_tab.iter().all(|pane| !pane.tab_active),
+            "tab 0 must not report itself as the active tab"
+        );
+        assert!(
+            panes_in_target_tab[1].active,
+            "the pane hosting the split target must remain that tab's own active pane"
+        );
+        assert!(
+            !panes_in_target_tab[2].active,
+            "the newly created pane must not become active when activate is false"
+        );
+    }
+
+    #[test]
+    fn create_session_with_split_target_and_activate_switches_to_the_targets_tab_and_pane() {
+        let mut workspace = Workspace::mvp();
+        let target_session = SessionId::new();
+        workspace.split_active(PaneKind::Terminal, Some(target_session));
+        workspace.open_tab(PaneKind::Terminal, Some(SessionId::new()));
+        let state = test_command_action_state(workspace);
+        let workspace = state.workspace();
+        assert_eq!(workspace.with_untracked(|ws| ws.active_tab_index()), 1);
+
+        execute_command(
+            CommandInvocation::CreateSession {
+                kind: PaneKind::Terminal,
+                split_target: Some(target_session),
+                activate: true,
+                prompt: None,
+            },
+            state.clone(),
+        );
+
+        assert_eq!(
+            workspace.with_untracked(|ws| ws.active_tab_index()),
+            0,
+            "activate: true must switch to the split target's tab"
+        );
+        let new_active_session = workspace
+            .with_untracked(|ws| ws.active_session_id())
+            .expect("the new pane should be active");
+        assert_ne!(new_active_session, target_session);
+    }
+
+    #[test]
+    fn create_session_with_an_unresolvable_split_target_spawns_nothing() {
+        let state = test_command_action_state(Workspace::mvp());
+        let workspace = state.workspace();
+        let before_tab_count = workspace.with_untracked(|ws| ws.tab_count());
+        let before_session_count = workspace.with_untracked(|ws| ws.session_count());
+
+        execute_command(
+            CommandInvocation::CreateSession {
+                kind: PaneKind::Terminal,
+                split_target: Some(SessionId::new()),
+                activate: false,
+                prompt: None,
+            },
+            state.clone(),
+        );
+
+        assert_eq!(
+            workspace.with_untracked(|ws| ws.tab_count()),
+            before_tab_count
+        );
+        assert_eq!(
+            workspace.with_untracked(|ws| ws.session_count()),
+            before_session_count
+        );
     }
 
     // --- workspace-mode invocations ---------------------------------------

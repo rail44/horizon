@@ -2352,6 +2352,7 @@ dependencies = [
  "floem_renderer",
  "horizon-agent",
  "horizon-control",
+ "horizon-ctl",
  "libc",
  "portable-pty",
  "serde",
@@ -2416,6 +2417,7 @@ name = "horizon-ctl"
 version = "0.1.0"
 dependencies = [
  "horizon-control",
+ "libc",
  "serde_json",
 ]
 
