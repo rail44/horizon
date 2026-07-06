@@ -1826,9 +1826,11 @@ async fn duckdb_rebuild_delay_does_not_block_hello_or_session_list() {
 /// skip the DuckDB rebuild entirely once the freshness check finds the
 /// existing projection's high-water mark already matches the log's tail --
 /// observed directly via the "already current, skipping rebuild" stderr
-/// marker `main::rebuild_duckdb_projection` logs, polled for while the
-/// process is still alive (there's no over-the-wire signal for this: task
-/// 1's whole point is that nothing waits on it).
+/// marker `event_log::writer::rebuild_and_open_duckdb_projection` logs
+/// (folded there from `main.rs` as part of the recall work -- see
+/// `docs/agent-runtime-split-design.md`'s trailing addendum), polled for
+/// while the process is still alive (there's no over-the-wire signal for
+/// this: task 1's whole point is that nothing waits on it).
 ///
 /// The fixture's session must already be terminated: a *live* resumed
 /// session's own thread replays its startup burst (`Created`/init-message/

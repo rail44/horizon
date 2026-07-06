@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use duckdb::params;
+use duckdb::{params, params_from_iter, types::Value as DuckValue};
 #[cfg(test)]
 use serde_json::Value;
 
@@ -10,12 +10,23 @@ use crate::contract::{MessageRole, ToolCallId};
 #[cfg(test)]
 use crate::frame::{agent_frame_from_events, AgentFrame};
 
-use super::{session_id_text, AgentStoredEvent, AgentStoredSession, Store};
+use super::{
+    session_id_text, AgentStoredEvent, AgentStoredSession, RecallEntry, RecallEntryKind,
+    RecallSearchReport, Store,
+};
 #[cfg(test)]
 use super::{
     AgentStoredApproval, AgentStoredMessage, AgentStoredSessionSnapshot, AgentStoredToolCall,
     AgentStoredToolResult,
 };
+
+/// How many characters of `text`/`input_json`/`output_json` `search_history`
+/// and `read_history_window` pull out of the database per row, via SQL
+/// `substr` -- *before* Rust ever sees the row. This is what stops a single
+/// huge tool result from ballooning a recall response regardless of the
+/// caller's own `limit`; `tools::recall` trims further (a ~200-char search
+/// snippet, a ~16k-char total cap for `recall.read`) on top of this.
+const RECALL_TEXT_BOUND_CHARS: usize = 4_000;
 
 impl Store {
     /// Not test-only: `app/runtime/agent.rs`'s DuckDB-replay regression
@@ -213,6 +224,183 @@ impl Store {
             .context("query agent tool results")
     }
 
+    /// Case-insensitive substring search over this store's durable,
+    /// *committed* history: message text (`agent_messages` where `NOT
+    /// is_delta` -- streaming reasoning/assistant-text deltas are never
+    /// searched, only what actually got committed), tool-call `input_json`,
+    /// and tool-result `output_json`. `scope` restricts the search to one
+    /// session; `None` searches every persisted session.
+    ///
+    /// `query` is escaped for `%`/`_`/the escape character itself (see
+    /// [`escape_like_pattern`]) before being wrapped in a `%...%` `ILIKE`
+    /// pattern, so a literal `%` or `_` in a user's search term matches
+    /// itself literally rather than acting as a wildcard. Each hit's `text`
+    /// is bounded to [`RECALL_TEXT_BOUND_CHARS`] *at the SQL layer* (`substr`)
+    /// before it ever reaches Rust, so a single huge tool result can't
+    /// balloon a response regardless of `limit`.
+    ///
+    /// Rows are newest-first (`event_at` then `sequence`, both descending).
+    /// [`RecallSearchReport::total`] counts every match, not just the
+    /// `limit`-bounded rows actually returned -- computed via `COUNT(*)
+    /// OVER ()` over the unlimited match set, before the `LIMIT` clause
+    /// trims it.
+    pub fn search_history(
+        &self,
+        scope: Option<SessionId>,
+        query: &str,
+        limit: usize,
+    ) -> Result<RecallSearchReport> {
+        let pattern = format!("%{}%", escape_like_pattern(query));
+        let scope_session_id = scope.map(session_id_text).transpose()?;
+        // Each UNION ALL branch needs its own alias-qualified scope clause
+        // (`m.session_id`/`c.session_id`/`r.session_id`) -- `agent_events`
+        // (joined into every branch for `event_at`) has its own
+        // `session_id` column too, so an unqualified `session_id = ?` is
+        // ambiguous once that join is in play.
+        let scope_clause_for = |alias: &str| -> String {
+            if scope_session_id.is_some() {
+                format!("AND {alias}.session_id = ?")
+            } else {
+                String::new()
+            }
+        };
+
+        let sql = format!(
+            "WITH matches AS (
+                SELECT m.session_id AS session_id, m.sequence AS sequence,
+                       'message' AS kind, m.role AS role_or_tool,
+                       substr(m.text, 1, {bound}) AS text,
+                       e.event_at::TEXT AS at_ts
+                FROM agent_messages m
+                JOIN agent_events e ON e.event_id = m.event_id
+                WHERE NOT m.is_delta AND m.text ILIKE ? ESCAPE '\\' {scope_m}
+                UNION ALL
+                SELECT c.session_id, c.sequence, 'tool_call', c.tool_id,
+                       substr(c.input_json, 1, {bound}), e.event_at::TEXT
+                FROM agent_tool_calls c
+                JOIN agent_events e ON e.event_id = c.event_id
+                WHERE c.input_json ILIKE ? ESCAPE '\\' {scope_c}
+                UNION ALL
+                SELECT r.session_id, r.sequence, 'tool_result',
+                       COALESCE(tc.tool_id, r.call_id),
+                       substr(r.output_json, 1, {bound}), e.event_at::TEXT
+                FROM agent_tool_results r
+                JOIN agent_events e ON e.event_id = r.event_id
+                LEFT JOIN agent_tool_calls tc
+                    ON tc.call_id = r.call_id AND tc.session_id = r.session_id
+                WHERE r.output_json ILIKE ? ESCAPE '\\' {scope_r}
+            )
+            SELECT session_id, sequence, kind, role_or_tool, text, at_ts,
+                   COUNT(*) OVER () AS total
+            FROM matches
+            ORDER BY at_ts DESC, sequence DESC
+            LIMIT ?",
+            bound = RECALL_TEXT_BOUND_CHARS,
+            scope_m = scope_clause_for("m"),
+            scope_c = scope_clause_for("c"),
+            scope_r = scope_clause_for("r"),
+        );
+
+        let mut bind_values: Vec<DuckValue> = Vec::new();
+        for _ in 0..3 {
+            bind_values.push(DuckValue::Text(pattern.clone()));
+            if let Some(scope_session_id) = &scope_session_id {
+                bind_values.push(DuckValue::Text(scope_session_id.clone()));
+            }
+        }
+        bind_values.push(DuckValue::BigInt(limit as i64));
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut total = 0usize;
+        let rows = stmt.query_map(params_from_iter(bind_values), |row| {
+            total = row.get::<_, i64>(6)? as usize;
+            Ok(RecallEntry {
+                session_id: parse_session_id_column(0, &row.get::<_, String>(0)?)?,
+                sequence: row.get(1)?,
+                kind: parse_recall_kind(&row.get::<_, String>(2)?)?,
+                role_or_tool: row.get(3)?,
+                text: row.get(4)?,
+                at: row.get(5)?,
+            })
+        })?;
+
+        let hits = rows
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .context("query recall search history")?;
+        Ok(RecallSearchReport { hits, total })
+    }
+
+    /// Committed messages, tool calls, and tool results for one session,
+    /// from `from_sequence` onward (inclusive), ordered ascending by
+    /// sequence and limited to `limit` rows -- the "read the full context
+    /// around a hit" counterpart to [`Self::search_history`]. Each entry's
+    /// text is bounded the same way (see [`RECALL_TEXT_BOUND_CHARS`]).
+    pub fn read_history_window(
+        &self,
+        session_id: SessionId,
+        from_sequence: i64,
+        limit: usize,
+    ) -> Result<Vec<RecallEntry>> {
+        let session_id_text = session_id_text(session_id)?;
+        let sql = format!(
+            "WITH history_window AS (
+                SELECT m.session_id AS session_id, m.sequence AS sequence,
+                       'message' AS kind, m.role AS role_or_tool,
+                       substr(m.text, 1, {bound}) AS text,
+                       e.event_at::TEXT AS at_ts
+                FROM agent_messages m
+                JOIN agent_events e ON e.event_id = m.event_id
+                WHERE NOT m.is_delta AND m.session_id = ? AND m.sequence >= ?
+                UNION ALL
+                SELECT c.session_id, c.sequence, 'tool_call', c.tool_id,
+                       substr(c.input_json, 1, {bound}), e.event_at::TEXT
+                FROM agent_tool_calls c
+                JOIN agent_events e ON e.event_id = c.event_id
+                WHERE c.session_id = ? AND c.sequence >= ?
+                UNION ALL
+                SELECT r.session_id, r.sequence, 'tool_result',
+                       COALESCE(tc.tool_id, r.call_id),
+                       substr(r.output_json, 1, {bound}), e.event_at::TEXT
+                FROM agent_tool_results r
+                JOIN agent_events e ON e.event_id = r.event_id
+                LEFT JOIN agent_tool_calls tc
+                    ON tc.call_id = r.call_id AND tc.session_id = r.session_id
+                WHERE r.session_id = ? AND r.sequence >= ?
+            )
+            SELECT sequence, kind, role_or_tool, text, at_ts
+            FROM history_window
+            ORDER BY sequence ASC
+            LIMIT ?",
+            bound = RECALL_TEXT_BOUND_CHARS,
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(
+            params![
+                &session_id_text,
+                from_sequence,
+                &session_id_text,
+                from_sequence,
+                &session_id_text,
+                from_sequence,
+                limit as i64,
+            ],
+            |row| {
+                Ok(RecallEntry {
+                    session_id,
+                    sequence: row.get(0)?,
+                    kind: parse_recall_kind(&row.get::<_, String>(1)?)?,
+                    role_or_tool: row.get(2)?,
+                    text: row.get(3)?,
+                    at: row.get(4)?,
+                })
+            },
+        )?;
+
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .context("query recall history window")
+    }
+
     #[cfg(test)]
     pub fn approvals_for_session(&self, session_id: SessionId) -> Result<Vec<AgentStoredApproval>> {
         let session_id_text = session_id_text(session_id)?;
@@ -253,9 +441,290 @@ fn parse_session_id_column(column: usize, value: &str) -> duckdb::Result<Session
     })
 }
 
+/// Escapes `%`, `_`, and the escape character itself (`\`) in `text` for
+/// safe embedding in an `ILIKE ... ESCAPE '\'` pattern -- turns those into
+/// literal characters to match instead of wildcards. Used by
+/// [`Store::search_history`] so a user's raw substring query (which may
+/// itself contain `%`/`_`) is matched literally, never interpreted as a
+/// wildcard.
+fn escape_like_pattern(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if matches!(ch, '\\' | '%' | '_') {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
+}
+
+fn parse_recall_kind(value: &str) -> duckdb::Result<RecallEntryKind> {
+    match value {
+        "message" => Ok(RecallEntryKind::Message),
+        "tool_call" => Ok(RecallEntryKind::ToolCall),
+        "tool_result" => Ok(RecallEntryKind::ToolResult),
+        other => Err(duckdb::Error::InvalidColumnType(
+            2,
+            other.to_string(),
+            duckdb::types::Type::Text,
+        )),
+    }
+}
+
 #[cfg(test)]
 fn parse_json_column(column: usize, json: &str) -> duckdb::Result<Value> {
     serde_json::from_str(json).map_err(|err| {
         duckdb::Error::FromSqlConversionFailure(column, duckdb::types::Type::Text, Box::new(err))
     })
+}
+
+#[cfg(test)]
+mod recall_tests {
+    use super::*;
+    use crate::contract::{
+        ApprovalRequest, Event, Message, MessageDelta, MessageRole, ToolCallId, ToolCallRequest,
+        ToolCallResult,
+    };
+
+    fn committed(role: MessageRole, text: &str) -> Event {
+        Event::MessageCommitted(Message {
+            role,
+            text: text.to_string(),
+        })
+    }
+
+    #[test]
+    fn search_finds_matches_in_each_source_and_excludes_deltas() {
+        let store = Store::open_in_memory().expect("store");
+        let session_id = SessionId::new();
+        let call_id = ToolCallId("call-fox".to_string());
+
+        store
+            .append_events(
+                session_id,
+                None,
+                [
+                    committed(MessageRole::User, "the quick brown fox"),
+                    Event::ReasoningDelta(MessageDelta {
+                        role: MessageRole::Assistant,
+                        text: "thinking about a fox".to_string(),
+                    }),
+                    Event::ToolCallRequested(ToolCallRequest {
+                        call_id: call_id.clone(),
+                        tool_id: "fs.grep".to_string(),
+                        input: serde_json::json!({ "pattern": "fox" }),
+                    }),
+                    Event::ToolCallFinished(ToolCallResult {
+                        call_id,
+                        output: serde_json::json!({ "matches": ["a red fox"] }),
+                    }),
+                ],
+            )
+            .expect("append events");
+
+        let report = store
+            .search_history(Some(session_id), "fox", 20)
+            .expect("search");
+
+        assert_eq!(report.total, 3, "the delta must not be counted as a match");
+        let kinds: Vec<RecallEntryKind> = report.hits.iter().map(|hit| hit.kind).collect();
+        assert!(kinds.contains(&RecallEntryKind::Message));
+        assert!(kinds.contains(&RecallEntryKind::ToolCall));
+        assert!(kinds.contains(&RecallEntryKind::ToolResult));
+        assert!(
+            report
+                .hits
+                .iter()
+                .all(|hit| hit.text.to_lowercase().contains("fox")),
+            "every hit's bounded text must actually contain the query"
+        );
+    }
+
+    #[test]
+    fn search_is_case_insensitive() {
+        let store = Store::open_in_memory().expect("store");
+        let session_id = SessionId::new();
+        store
+            .append_events(
+                session_id,
+                None,
+                [committed(MessageRole::User, "Hello World")],
+            )
+            .expect("append events");
+
+        let report = store
+            .search_history(Some(session_id), "WORLD", 20)
+            .expect("search");
+        assert_eq!(report.total, 1);
+
+        let report = store
+            .search_history(Some(session_id), "hello", 20)
+            .expect("search");
+        assert_eq!(report.total, 1);
+    }
+
+    /// Without escaping, `_` is a LIKE wildcard matching any single
+    /// character -- a literal `_` in the search query must only match rows
+    /// that actually contain that character, not every row.
+    #[test]
+    fn search_escapes_underscore_wildcard() {
+        let store = Store::open_in_memory().expect("store");
+        let session_id = SessionId::new();
+        store
+            .append_events(
+                session_id,
+                None,
+                [
+                    committed(MessageRole::User, "contains_underscore"),
+                    committed(MessageRole::User, "nounderscorehere"),
+                ],
+            )
+            .expect("append events");
+
+        let report = store
+            .search_history(Some(session_id), "_", 20)
+            .expect("search");
+        assert_eq!(
+            report.total, 1,
+            "a literal `_` must only match the row that actually contains one"
+        );
+        assert!(report.hits[0].text.contains("contains_underscore"));
+    }
+
+    /// Same idea for `%`, LIKE's zero-or-more wildcard.
+    #[test]
+    fn search_escapes_percent_wildcard() {
+        let store = Store::open_in_memory().expect("store");
+        let session_id = SessionId::new();
+        store
+            .append_events(
+                session_id,
+                None,
+                [
+                    committed(MessageRole::User, "fifty% done"),
+                    committed(MessageRole::User, "no percent sign here"),
+                ],
+            )
+            .expect("append events");
+
+        let report = store
+            .search_history(Some(session_id), "%", 20)
+            .expect("search");
+        assert_eq!(report.total, 1);
+        assert!(report.hits[0].text.contains("fifty%"));
+    }
+
+    #[test]
+    fn search_scope_restricts_to_one_session() {
+        let store = Store::open_in_memory().expect("store");
+        let session_a = SessionId::new();
+        let session_b = SessionId::new();
+        store
+            .append_events(session_a, None, [committed(MessageRole::User, "widget a")])
+            .expect("append a");
+        store
+            .append_events(session_b, None, [committed(MessageRole::User, "widget b")])
+            .expect("append b");
+
+        let scoped = store
+            .search_history(Some(session_a), "widget", 20)
+            .expect("scoped search");
+        assert_eq!(scoped.total, 1);
+        assert_eq!(scoped.hits[0].session_id, session_a);
+
+        let unscoped = store
+            .search_history(None, "widget", 20)
+            .expect("unscoped search");
+        assert_eq!(unscoped.total, 2);
+    }
+
+    #[test]
+    fn search_reports_total_separately_from_the_limited_hits() {
+        let store = Store::open_in_memory().expect("store");
+        let session_id = SessionId::new();
+        let events: Vec<Event> = (0..5)
+            .map(|index| committed(MessageRole::User, &format!("widget number {index}")))
+            .collect();
+        store
+            .append_events(session_id, None, events)
+            .expect("append events");
+
+        let report = store
+            .search_history(Some(session_id), "widget", 2)
+            .expect("search");
+        assert_eq!(report.hits.len(), 2, "rows are capped at `limit`");
+        assert_eq!(
+            report.total, 5,
+            "total counts every match, not just `limit`"
+        );
+    }
+
+    #[test]
+    fn search_bounds_text_at_the_sql_layer() {
+        let store = Store::open_in_memory().expect("store");
+        let session_id = SessionId::new();
+        let huge_text = format!("needle {}", "x".repeat(RECALL_TEXT_BOUND_CHARS * 2));
+        store
+            .append_events(session_id, None, [committed(MessageRole::User, &huge_text)])
+            .expect("append events");
+
+        let report = store
+            .search_history(Some(session_id), "needle", 20)
+            .expect("search");
+        assert_eq!(report.total, 1);
+        assert_eq!(
+            report.hits[0].text.chars().count(),
+            RECALL_TEXT_BOUND_CHARS,
+            "the SQL layer must bound the returned text regardless of the original length"
+        );
+    }
+
+    #[test]
+    fn read_history_window_is_ordered_ascending_and_respects_from_sequence_and_limit() {
+        let store = Store::open_in_memory().expect("store");
+        let session_id = SessionId::new();
+        let call_id = ToolCallId("call-1".to_string());
+        store
+            .append_events(
+                session_id,
+                None,
+                [
+                    committed(MessageRole::User, "message 0"),
+                    committed(MessageRole::Assistant, "message 1"),
+                    Event::ToolCallRequested(ToolCallRequest {
+                        call_id: call_id.clone(),
+                        tool_id: "fs.read".to_string(),
+                        input: serde_json::json!({}),
+                    }),
+                    Event::ApprovalRequested(ApprovalRequest {
+                        call_id: call_id.clone(),
+                        reason: "needs approval".to_string(),
+                    }),
+                    Event::ToolCallFinished(ToolCallResult {
+                        call_id,
+                        output: serde_json::json!({ "ok": true }),
+                    }),
+                ],
+            )
+            .expect("append events");
+
+        // Sequences: 0=message, 1=message, 2=tool_call, 3=approval (no
+        // projection, so absent from the window), 4=tool_result.
+        let window = store
+            .read_history_window(session_id, 1, 10)
+            .expect("read window");
+        let sequences: Vec<i64> = window.iter().map(|entry| entry.sequence).collect();
+        assert_eq!(
+            sequences,
+            vec![1, 2, 4],
+            "must start at from_sequence, ascend, and skip the un-projected approval"
+        );
+
+        let limited = store
+            .read_history_window(session_id, 0, 2)
+            .expect("read window with limit");
+        assert_eq!(limited.len(), 2);
+        assert_eq!(limited[0].sequence, 0);
+        assert_eq!(limited[1].sequence, 1);
+    }
 }

@@ -202,13 +202,29 @@ attribution the query above gives you): `ls -la "$(dirname "$LOG")"/horizon-bash
 
 ## DuckDB projection
 
+**The DB file is held read-write by `horizon-agentd` for its entire
+lifetime now (as of the recall work) — every `duckdb -readonly` recipe
+below fails with a lock error while agentd is running.** Previously the
+projection was only rebuilt (and the file briefly locked) at startup, then
+closed; now the event-log writer thread opens the store once at startup and
+*keeps it open*, live-appending every subsequent event so the projection
+stays current without a restart (see `docs/agent-duckdb-state-design.md`'s
+"Runtime Boundary" addendum). While agentd is running, **the JSONL recipes
+earlier in this doc are the first resort**, not a fallback — they're the
+only thing guaranteed to work against a live process. The SQL recipes below
+still work in two cases: after stopping agentd (`horizon reload-agent-runtime`
+drains the old process and starts a fresh one, which re-grabs the file on
+its own startup — so the window where the file is free is brief; a plain
+kill/stop leaves it free until the next start), or against a copied
+`*.duckdb` file (DuckDB may also keep a sibling `*.duckdb.wal` — copy both
+together, or checkpoint first if you have a live connection available).
+
 Requires the separate `duckdb` CLI (`command -v duckdb`) — it is not bundled
-with Horizon and must be installed independently. The projection runs by
-default now (no more "unset = disabled"): `horizon-agentd` rebuilds it at
+with Horizon and must be installed independently. The projection lives at
 `$XDG_DATA_HOME/horizon/agent-state.duckdb` (falling back to
-`~/.local/share/horizon/agent-state.duckdb`) every time it starts, unless
-`HORIZON_AGENT_STATE_DB` or the config file's `[agent].state_db_path`
-relocates it (`AgentPersistenceConfig`/`resolve_state_db_path` in
+`~/.local/share/horizon/agent-state.duckdb`), unless `HORIZON_AGENT_STATE_DB`
+or the config file's `[agent].state_db_path` relocates it
+(`AgentPersistenceConfig`/`resolve_state_db_path` in
 `crates/horizon-agent/src/config.rs`). There is nothing to inspect only if
 `horizon-agentd` has never started, or the file was deleted since.
 
@@ -262,14 +278,12 @@ duckdb -readonly "$DB" -c "
   ORDER BY latency_ms DESC;"
 ```
 
-The file only reflects the JSONL as of the last app start either way; a
-session still running right now may not be in it yet — for that, or for any
-gap analysis spanning more than one rebuild's worth of history, fall back to
-the JSONL recipes above.
-
-The rebuild's `Store`/`Connection` is closed again immediately after startup
-finishes, so it's safe to open the file while Horizon is running. Open
-read-only anyway, out of habit:
+A session still being actively appended to right now reflects everything up
+to its last processed event (the projection is live, not just a snapshot
+from the last app start) — but the file itself is unreachable from another
+process while agentd holds it open (see this section's lead paragraph). Run
+these against a stopped agentd, or a copied file (+ its `.wal` sibling if
+present):
 
 ```sh
 DB=$XDG_DATA_HOME/horizon/agent-state.duckdb   # default; or wherever HORIZON_AGENT_STATE_DB points

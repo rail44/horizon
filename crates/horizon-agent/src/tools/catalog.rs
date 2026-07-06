@@ -252,6 +252,73 @@ pub fn definitions() -> Vec<Definition> {
             permission: ToolPermission::RequireApproval,
         },
         Definition {
+            id: "recall.search".to_string(),
+            title: "Search Persisted History".to_string(),
+            description: "Search committed conversation text and tool calls/results across \
+                persisted history (including turns no longer in your context window). \
+                Case-insensitive substring match. Streaming deltas/reasoning are not included, \
+                only what was actually committed. Default scope is this session; pass \
+                scope: \"all\" to search every persisted session. Use recall.read to pull full \
+                context around a hit."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["query"],
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Substring to search for, case-insensitive.",
+                    },
+                    "scope": {
+                        "type": "string",
+                        "enum": ["session", "all"],
+                        "description": "\"session\" (default) searches only this session's \
+                            history; \"all\" searches every persisted session.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "description": "Maximum number of hits to return. Defaults to 20.",
+                    },
+                }
+            }),
+            permission: ToolPermission::AutoAllowRead,
+        },
+        Definition {
+            id: "recall.read".to_string(),
+            title: "Read Persisted History Window".to_string(),
+            description: "Read an ordered window of committed messages, tool calls, and tool \
+                results for a session starting at a given sequence number -- use after \
+                recall.search to pull full context around a hit. Defaults to this session if \
+                session_id is omitted. Output is capped in total size; call again with a later \
+                from_sequence to continue."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["from_sequence"],
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session id to read from. Defaults to this session.",
+                    },
+                    "from_sequence": {
+                        "type": "integer",
+                        "description": "Sequence number to start reading from (inclusive).",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "description": "Maximum number of entries to return. Defaults to 20.",
+                    },
+                }
+            }),
+            permission: ToolPermission::AutoAllowRead,
+        },
+        Definition {
             id: "skill.read".to_string(),
             title: "Read Skill".to_string(),
             description: "Read one of this session's available skills by id (see the skills \

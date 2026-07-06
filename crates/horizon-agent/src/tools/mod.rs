@@ -5,6 +5,7 @@ mod config;
 mod execution;
 mod fs;
 mod processing;
+mod recall;
 mod state;
 
 pub use approval::{resolve_approval, ApprovalDecision, ApprovalOutcome};
@@ -14,7 +15,9 @@ pub use execution::{
     cancelled_tool_call_result, execute_agent_tool, tool_result_message, Execution, HostTools,
 };
 pub use processing::process_agent_provider_event;
-pub use state::{register_session_runtime, unregister_session_runtime, ToolSessionState};
+pub use state::{
+    register_session_runtime, unregister_session_runtime, RecallContext, ToolSessionState,
+};
 
 /// Executes a Horizon-approved (`RequireApproval`) tool once the user has
 /// approved it -- `tools::approval`'s single entry point for the tools this

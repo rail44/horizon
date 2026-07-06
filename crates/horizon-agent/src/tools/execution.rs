@@ -7,6 +7,7 @@ use crate::contract::{
 use crate::tools::config;
 use crate::tools::fs;
 use crate::tools::permission_for_tool;
+use crate::tools::recall;
 use crate::tools::state::ToolSessionState;
 
 /// Seam for tools this crate doesn't implement itself because they need
@@ -61,7 +62,8 @@ fn execute_auto_tool(
     let output = host
         .execute_auto(&request.tool_id, &request.input)
         .or_else(|| fs::execute_auto(tool_state, &request.tool_id, &request.input))
-        .or_else(|| config::execute_auto(tool_state, &request.tool_id, &request.input));
+        .or_else(|| config::execute_auto(tool_state, &request.tool_id, &request.input))
+        .or_else(|| recall::execute_auto(tool_state, &request.tool_id, &request.input));
     let output = match output {
         Some(output) => output,
         None => {
