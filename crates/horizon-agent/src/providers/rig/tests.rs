@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use super::completion::{
-    history_token_window_policy, partial_assistant_message, windowed_history_for_request,
-    TurnCompletion, MULTI_TOOL_TEST_BATCH_SIZE,
+    history_token_window_policy, partial_assistant_message, rig_tool_definitions,
+    windowed_history_for_request, TurnCompletion, MULTI_TOOL_TEST_BATCH_SIZE,
 };
 use super::mapping::{
     horizon_events_from_rig_message, horizon_provider_events_from_rig_message,
@@ -1275,4 +1275,50 @@ fn history_token_window_policy_uses_the_configured_budget() {
         windowed.len() < history.len(),
         "the configured budget, not some other default, must drive the window"
     );
+}
+
+// --- rig_tool_definitions' allowed_tool_ids extension point ----------------
+//
+// `docs/research/agent-prompting.md` Part 2.5: a back-compatible allowlist
+// for which tools get advertised to the provider, with `None` reproducing
+// today's "every tool in the catalog" behavior exactly.
+
+#[test]
+fn rig_tool_definitions_with_no_allow_list_returns_every_catalog_tool() {
+    let all = crate::tools::definitions();
+
+    let definitions = rig_tool_definitions(None);
+
+    assert_eq!(definitions.len(), all.len());
+    for definition in &all {
+        assert!(
+            definitions.iter().any(|d| d.name == definition.id),
+            "expected `{}` to be present with no allow list",
+            definition.id
+        );
+    }
+}
+
+#[test]
+fn rig_tool_definitions_with_an_allow_list_is_restricted_to_it() {
+    let allowed = vec!["fs.read".to_string(), "fs.glob".to_string()];
+
+    let definitions = rig_tool_definitions(Some(&allowed));
+
+    assert_eq!(definitions.len(), 2);
+    let names: HashSet<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(
+        names,
+        HashSet::from(["fs.read", "fs.glob"]),
+        "only the allow-listed tool ids should be advertised"
+    );
+}
+
+#[test]
+fn rig_tool_definitions_with_an_empty_allow_list_returns_no_tools() {
+    let allowed: Vec<String> = Vec::new();
+
+    let definitions = rig_tool_definitions(Some(&allowed));
+
+    assert!(definitions.is_empty());
 }

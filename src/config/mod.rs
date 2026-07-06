@@ -108,6 +108,12 @@ pub(crate) struct RawAgentConfig {
     /// set, wins over this. Unset (here and via env) means no persisted
     /// memory.
     pub(crate) state_db_path: Option<String>,
+    /// Character cap on the "Repository instructions" system-prompt section
+    /// built from `AGENTS.md`/`CLAUDE.md` files found while walking from
+    /// the session's working directory up to the repository root. See
+    /// `agent::config::RigAgentConfig::repository_instructions_cap_chars`
+    /// for the built-in default and its rationale.
+    pub(crate) repository_instructions_cap_chars: Option<usize>,
 }
 
 /// `[provider]`: model selection, base URL, and request parameters for the

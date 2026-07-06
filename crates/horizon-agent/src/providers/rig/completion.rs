@@ -67,9 +67,11 @@ pub(super) struct TurnCompletion {
     pub(super) failed: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn complete_rig_turn(
     config: &RigAgentConfig,
     environment: &SessionEnvironment,
+    extra_sections: &[String],
     rig_history: &mut Vec<Message>,
     prompt: Message,
     events_tx: &Sender<ProviderEvent>,
@@ -80,6 +82,7 @@ pub(super) async fn complete_rig_turn(
         match rig_openai_turn_streaming(
             config,
             environment,
+            extra_sections,
             prompt.clone(),
             rig_history.clone(),
             events_tx.clone(),
@@ -128,6 +131,7 @@ pub(super) async fn complete_rig_turn(
 async fn rig_openai_turn_streaming(
     config: &RigAgentConfig,
     environment: &SessionEnvironment,
+    extra_sections: &[String],
     prompt: Message,
     history: Vec<Message>,
     events_tx: Sender<ProviderEvent>,
@@ -149,8 +153,8 @@ async fn rig_openai_turn_streaming(
     let mut stream = model
         .completion_request(prompt)
         .messages(history)
-        .tools(rig_tool_definitions())
-        .preamble(system_prompt(environment))
+        .tools(rig_tool_definitions(config.allowed_tool_ids.as_deref()))
+        .preamble(system_prompt(environment, extra_sections))
         .temperature_opt(config.temperature)
         .max_tokens_opt(config.max_tokens)
         .stream()
@@ -459,9 +463,18 @@ fn multi_tool_call_message(count: usize) -> Message {
     }
 }
 
-fn rig_tool_definitions() -> Vec<ToolDefinition> {
+/// Converts the catalog's tool definitions to rig's `ToolDefinition` shape,
+/// optionally restricted to `allowed_tool_ids` (`RigAgentConfig::
+/// allowed_tool_ids` — see that field's doc comment). `None` is the current,
+/// unrestricted behavior: every tool in `tools::definitions()` is advertised
+/// to the provider, unchanged from before this parameter existed.
+pub(super) fn rig_tool_definitions(allowed_tool_ids: Option<&[String]>) -> Vec<ToolDefinition> {
     definitions()
         .into_iter()
+        .filter(|definition| match allowed_tool_ids {
+            Some(allowed) => allowed.iter().any(|id| id == &definition.id),
+            None => true,
+        })
         .map(rig_tool_definition_from_horizon)
         .collect()
 }

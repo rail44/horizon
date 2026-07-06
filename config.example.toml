@@ -89,6 +89,14 @@ doom_loop_window = 3
 # leaves headroom for that plus the system prompt and tool responses.
 history_token_budget = 60000
 
+# Character cap on the "Repository instructions" section appended to the
+# system prompt from AGENTS.md/CLAUDE.md files found while walking from the
+# session's working directory up to the repository root (AGENTS.md wins at
+# each directory level; CLAUDE.md is a fallback for a level with only that).
+# 24000 is roughly 4x this repository's own AGENTS.md, generous for a normal
+# repo while still leaving most of history_token_budget's headroom free.
+repository_instructions_cap_chars = 24000
+
 # How often, in milliseconds, streamed assistant-text/reasoning deltas and
 # tool-call-argument progress are coalesced into an emitted event.
 stream_flush_interval_ms = 100

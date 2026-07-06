@@ -41,6 +41,14 @@ pub(super) fn spawn_rig_session(
         // turn's system prompt — cwd/OS/git-repo status don't change over a
         // session's lifetime.
         let environment = SessionEnvironment::current();
+        // Same "gather once, reuse for every turn" treatment: the
+        // repository instruction files under `environment.cwd` don't change
+        // over a session's lifetime either (config is applied at startup
+        // only — see `AGENTS.md`'s "Configuration" section).
+        let extra_sections = crate::instructions::extra_sections(
+            &environment.cwd,
+            config.repository_instructions_cap_chars,
+        );
 
         let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -71,6 +79,7 @@ pub(super) fn spawn_rig_session(
             events_tx,
             config,
             environment,
+            extra_sections,
             rig_history,
         ));
     });
@@ -102,6 +111,7 @@ async fn run_session_loop(
     events_tx: Sender<ProviderEvent>,
     config: RigAgentConfig,
     environment: SessionEnvironment,
+    extra_sections: Vec<String>,
     mut rig_history: Vec<Message>,
 ) {
     let mut commands = bridge_commands(commands_rx);
@@ -145,6 +155,7 @@ async fn run_session_loop(
                     &mut inbox,
                     &config,
                     &environment,
+                    &extra_sections,
                     &mut rig_history,
                     Message::user(text.clone()),
                     &events_tx,
@@ -233,6 +244,7 @@ async fn run_session_loop(
                     &mut inbox,
                     &config,
                     &environment,
+                    &extra_sections,
                     &mut rig_history,
                     rig_tool_result_message(&result),
                     &events_tx,
@@ -287,6 +299,7 @@ async fn run_cancellable_turn(
     inbox: &mut VecDeque<Command>,
     config: &RigAgentConfig,
     environment: &SessionEnvironment,
+    extra_sections: &[String],
     rig_history: &mut Vec<Message>,
     prompt: Message,
     events_tx: &Sender<ProviderEvent>,
@@ -296,6 +309,7 @@ async fn run_cancellable_turn(
     let turn = complete_rig_turn(
         config,
         environment,
+        extra_sections,
         rig_history,
         prompt,
         events_tx,

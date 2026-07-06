@@ -741,7 +741,7 @@ fn system_prompt_reports_environment_facts() {
         git_repo: true,
     };
 
-    let prompt = system_prompt(&environment);
+    let prompt = system_prompt(&environment, &[]);
 
     assert!(prompt.contains("/home/user/project"));
     assert!(prompt.contains("linux"));
@@ -756,7 +756,7 @@ fn system_prompt_reports_non_git_directory() {
         git_repo: false,
     };
 
-    let prompt = system_prompt(&environment);
+    let prompt = system_prompt(&environment, &[]);
 
     assert!(prompt.contains("Git repository: no"));
 }
@@ -772,7 +772,7 @@ fn system_prompt_stays_within_line_budget() {
         git_repo: true,
     };
 
-    let line_count = system_prompt(&environment).lines().count();
+    let line_count = system_prompt(&environment, &[]).lines().count();
 
     assert!(
         line_count <= LINE_BUDGET,
@@ -782,11 +782,14 @@ fn system_prompt_stays_within_line_budget() {
 
 #[test]
 fn system_prompt_carries_tool_policy_and_retry_nudge() {
-    let prompt = system_prompt(&SessionEnvironment {
-        cwd: std::path::PathBuf::from("/repo"),
-        os: "linux",
-        git_repo: true,
-    });
+    let prompt = system_prompt(
+        &SessionEnvironment {
+            cwd: std::path::PathBuf::from("/repo"),
+            os: "linux",
+            git_repo: true,
+        },
+        &[],
+    );
 
     let lower = prompt.to_ascii_lowercase();
     assert!(lower.contains("absolute path"));
@@ -795,13 +798,51 @@ fn system_prompt_carries_tool_policy_and_retry_nudge() {
 
 #[test]
 fn system_prompt_carries_destructive_action_caution() {
-    let prompt = system_prompt(&SessionEnvironment {
+    let prompt = system_prompt(
+        &SessionEnvironment {
+            cwd: std::path::PathBuf::from("/repo"),
+            os: "linux",
+            git_repo: true,
+        },
+        &[],
+    );
+
+    assert!(prompt.to_ascii_lowercase().contains("destructive"));
+}
+
+#[test]
+fn system_prompt_with_no_extra_sections_matches_the_base_prompt_exactly() {
+    let environment = SessionEnvironment {
         cwd: std::path::PathBuf::from("/repo"),
         os: "linux",
         git_repo: true,
-    });
+    };
 
-    assert!(prompt.to_ascii_lowercase().contains("destructive"));
+    // An empty slice must reproduce today's prompt byte-for-byte -- the
+    // back-compatibility guarantee of the `extra_sections` injection point
+    // (`docs/research/agent-prompting.md` Part 2.5).
+    assert_eq!(
+        system_prompt(&environment, &[]),
+        system_prompt(&environment, &Vec::new())
+    );
+    assert!(!system_prompt(&environment, &[]).contains("Repository instructions"));
+}
+
+#[test]
+fn system_prompt_appends_extra_sections_after_the_base_prompt() {
+    let environment = SessionEnvironment {
+        cwd: std::path::PathBuf::from("/repo"),
+        os: "linux",
+        git_repo: true,
+    };
+    let base = system_prompt(&environment, &[]);
+    let extra_sections = vec!["Repository instructions (AGENTS.md):\n\nRun the tests.".to_string()];
+
+    let prompt = system_prompt(&environment, &extra_sections);
+
+    assert!(prompt.starts_with(&base));
+    assert!(prompt.ends_with("Run the tests."));
+    assert!(prompt.len() > base.len());
 }
 
 #[test]

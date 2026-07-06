@@ -59,6 +59,7 @@ pub struct AgentFileAgentConfig {
     pub event_log_path: Option<String>,
     pub state_db_path: Option<String>,
     pub history_token_budget: Option<usize>,
+    pub repository_instructions_cap_chars: Option<usize>,
 }
 
 /// Mirrors `RawProviderConfig`'s fields one-to-one — see [`AgentFileConfig`].
@@ -254,6 +255,20 @@ pub const DEFAULT_PANE_STATUS_TICK_SECS: u64 = 1;
 /// chosen with Horizon's current provider in mind: an OpenAI-compatible
 /// endpoint fronting Kimi.
 pub const DEFAULT_HISTORY_TOKEN_BUDGET: usize = 60_000;
+/// Character cap on the composed "Repository instructions" system-prompt
+/// section built by `instructions::extra_sections` from `AGENTS.md`/
+/// `CLAUDE.md` files found while walking from the session's working
+/// directory up to the repository root. 24,000 characters is roughly
+/// 4x the size of this repository's own `AGENTS.md` (~6KB at the time this
+/// default was chosen), generous enough for a normal single-file repo
+/// instruction set while still bounding a worst case (a deep monorepo with
+/// an instruction file at every level) well clear of
+/// [`DEFAULT_HISTORY_TOKEN_BUDGET`]'s headroom -- at a roughly 4-characters-
+/// per-token rule of thumb this is ~6,000 tokens, a fraction of the 60,000
+/// token history budget, leaving the rest for conversation history and the
+/// turn's own prompt. Same "config tuning knob" treatment as
+/// [`DEFAULT_BASH_OUTPUT_CAP_CHARS`]: file-only, no dedicated env var.
+pub const DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS: usize = 24_000;
 
 pub const FS_GREP_MAX_BYTES_PRODUCTION_DEFAULT: u64 = 64 * 1024 * 1024;
 pub const FS_TRAVERSAL_MAX_FILES_PRODUCTION_DEFAULT: usize = 20_000;
@@ -350,6 +365,22 @@ pub struct RigAgentConfig {
     /// `rig_history` itself, and the DuckDB-persisted event log it's
     /// rebuilt from, are never truncated.
     pub history_token_budget: usize,
+    /// Character cap applied to the composed "Repository instructions"
+    /// system-prompt section -- see
+    /// [`DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS`] for why 24,000 was
+    /// chosen. Read by `providers::rig::session::spawn_rig_session` when it
+    /// builds that section via `instructions::extra_sections`.
+    pub repository_instructions_cap_chars: usize,
+    /// Restricts which tool ids `providers::rig::completion::
+    /// rig_tool_definitions` advertises to the provider. `None` (the only
+    /// value ever produced by [`Self::from_env_and_file`] today) means "no
+    /// restriction, every tool in `tools::definitions()`" -- current
+    /// behavior, unchanged. This is a back-compatible extension point
+    /// (`docs/research/agent-prompting.md` Part 2.5) with no consumer yet:
+    /// a future per-role or per-skill tool allowlist can construct a
+    /// `RigAgentConfig` with `Some(..)` directly, in Rust, without any wire
+    /// or contract change.
+    pub allowed_tool_ids: Option<Vec<String>>,
 }
 
 impl Default for RigAgentConfig {
@@ -365,6 +396,8 @@ impl Default for RigAgentConfig {
             stream_flush_interval_ms: DEFAULT_STREAM_FLUSH_INTERVAL_MS,
             stream_flush_chars: DEFAULT_STREAM_FLUSH_CHARS,
             history_token_budget: DEFAULT_HISTORY_TOKEN_BUDGET,
+            repository_instructions_cap_chars: DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS,
+            allowed_tool_ids: None,
         }
     }
 }
@@ -400,6 +433,11 @@ impl RigAgentConfig {
                 .agent
                 .history_token_budget
                 .unwrap_or(DEFAULT_HISTORY_TOKEN_BUDGET),
+            repository_instructions_cap_chars: file
+                .agent
+                .repository_instructions_cap_chars
+                .unwrap_or(DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS),
+            allowed_tool_ids: None,
         }
     }
 }
@@ -754,6 +792,11 @@ mod tests {
         );
         assert_eq!(config.stream_flush_chars, DEFAULT_STREAM_FLUSH_CHARS);
         assert_eq!(config.history_token_budget, DEFAULT_HISTORY_TOKEN_BUDGET);
+        assert_eq!(
+            config.repository_instructions_cap_chars,
+            DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS
+        );
+        assert_eq!(config.allowed_tool_ids, None);
     }
 
     #[test]
@@ -769,6 +812,21 @@ mod tests {
         let config = RigAgentConfig::from_env_and_file(&file);
 
         assert_eq!(config.history_token_budget, 12_345);
+    }
+
+    #[test]
+    fn rig_agent_config_reads_repository_instructions_cap_chars_from_file() {
+        let file = AgentFileConfig {
+            agent: AgentFileAgentConfig {
+                repository_instructions_cap_chars: Some(1_000),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let config = RigAgentConfig::from_env_and_file(&file);
+
+        assert_eq!(config.repository_instructions_cap_chars, 1_000);
     }
 
     #[test]

@@ -112,6 +112,10 @@ mod tests {
             Some(config::DEFAULT_HISTORY_TOKEN_BUDGET)
         );
         assert_eq!(
+            parsed.agent.repository_instructions_cap_chars,
+            Some(config::DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS)
+        );
+        assert_eq!(
             parsed.agent.fs_grep_result_limit,
             Some(config::DEFAULT_FS_GREP_RESULT_LIMIT)
         );

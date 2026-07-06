@@ -6,6 +6,14 @@
 //! workflow prescriptions — over-prescription measurably harms newer
 //! models, and the environment block is the only part that varies per
 //! session.
+//!
+//! [`system_prompt`]'s `extra_sections` parameter is a back-compatible
+//! injection point (`docs/research/agent-prompting.md` Part 2.5): an empty
+//! slice reproduces the thin prompt above byte-for-byte, while each
+//! passed-in section is appended verbatim, in order. `instructions::
+//! extra_sections` is its first consumer (repository instruction files,
+//! see that module); a future role/skill mechanism can reuse the same seam
+//! without another signature change.
 
 use std::path::{Path, PathBuf};
 
@@ -43,9 +51,12 @@ fn is_git_repository(cwd: &Path) -> bool {
 }
 
 /// Builds the system prompt (rig calls this the completion request's
-/// "preamble") from session environment facts.
-pub fn system_prompt(environment: &SessionEnvironment) -> String {
-    format!(
+/// "preamble") from session environment facts, followed by any
+/// `extra_sections` appended verbatim (each separated by a blank line) — see
+/// the module doc. Passing an empty slice reproduces the base prompt
+/// unchanged, so every existing call site keeps its exact current behavior.
+pub fn system_prompt(environment: &SessionEnvironment, extra_sections: &[String]) -> String {
+    let mut prompt = format!(
         "You are the Horizon agent, a coding assistant embedded in the Horizon desktop shell.\n\
          Answer directly; use tools only when they add information you don't already have.\n\
          \n\
@@ -67,5 +78,10 @@ pub fn system_prompt(environment: &SessionEnvironment) -> String {
         cwd = environment.cwd.display(),
         os = environment.os,
         git_repo = if environment.git_repo { "yes" } else { "no" },
-    )
+    );
+    for section in extra_sections {
+        prompt.push_str("\n\n");
+        prompt.push_str(section);
+    }
+    prompt
 }
