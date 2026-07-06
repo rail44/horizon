@@ -51,6 +51,7 @@ use horizon_agent::contract::{
 use horizon_agent::frame::{agent_frame_from_events, AgentFrame, AgentFrameItem};
 use horizon_agent::live::LiveState;
 use horizon_agent::persistence::event_log::{Appender, Record, WriterHandle};
+use horizon_agent::persistence::projection::duckdb::{DuckdbStoreHandle, SharedDuckdbStore};
 use horizon_agent::roles::RoleId;
 use horizon_agent::tools::{
     cancelled_tool_call_result, process_agent_provider_event, register_session_runtime,
@@ -114,6 +115,14 @@ pub(crate) struct AgentdState {
     /// connection restoring the step-3 trim recorded in
     /// `docs/agent-runtime-split-design.md`.
     skipped_lines_summary: Mutex<Option<String>>,
+    /// Shared, multi-reader-blocking handle onto the live DuckDB projection
+    /// (see [`SharedDuckdbStore`]'s doc comment) -- the *same* instance
+    /// `main` also hands to the rig provider, so both consumers observe the
+    /// event-log writer thread's one rebuild-or-open decision. `run_session`
+    /// blocks on [`Self::wait_for_duckdb_store`] (never `main`'s accept loop
+    /// or the readiness gate above) to populate a spawned session's
+    /// `RecallContext`.
+    duckdb_cell: SharedDuckdbStore,
 }
 
 impl AgentdState {
@@ -121,6 +130,7 @@ impl AgentdState {
         providers: ProviderRegistry,
         agent_config: AgentConfig,
         writer: Option<WriterHandle>,
+        duckdb_cell: SharedDuckdbStore,
     ) -> Self {
         Self {
             providers,
@@ -132,6 +142,7 @@ impl AgentdState {
             resume_ready: AtomicBool::new(false),
             resume_notify: Notify::new(),
             skipped_lines_summary: Mutex::new(None),
+            duckdb_cell,
         }
     }
 
@@ -141,6 +152,17 @@ impl AgentdState {
 
     pub(crate) fn set_writer(&self, writer: Option<WriterHandle>) {
         *self.writer.lock().unwrap() = writer;
+    }
+
+    /// Blocks the calling (dedicated session, per the module doc) OS
+    /// thread until the event-log writer thread's own DuckDB rebuild-or-
+    /// open decision has landed, then returns the shared handle (`None` if
+    /// no DuckDB path was configured, or the rebuild/open failed). Never
+    /// called from `main`'s accept loop or from anything gated on
+    /// [`Self::wait_until_resume_ready`] -- this is a wholly separate wait,
+    /// scoped to one session's own construction.
+    pub(crate) fn wait_for_duckdb_store(&self) -> Option<DuckdbStoreHandle> {
+        self.duckdb_cell.wait()
     }
 
     /// Called once from [`crate::spawn_resume_task`], alongside
@@ -639,9 +661,14 @@ fn run_session(
         return;
     };
 
+    // Blocks this session's own dedicated thread (never `main`'s accept
+    // loop, and never the readiness gate `session_list`/`session_new`
+    // block on) until the event-log writer thread's own DuckDB
+    // rebuild-or-open decision has landed -- see `AgentdState::
+    // wait_for_duckdb_store`'s doc comment.
     let recall = RecallContext {
         session_id: Some(session_id),
-        duckdb_path: state.agent_config.persistence.duckdb_path.clone(),
+        store: state.wait_for_duckdb_store(),
     };
     let tool_state = ToolSessionState::for_current_dir(state.agent_config.tools, recall);
     let live_state = match state.writer() {

@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use super::*;
 use crate::config::AgentToolsConfig;
 use crate::contract::{Event, Message, MessageRole};
@@ -6,7 +8,8 @@ use crate::tools::state::RecallContext;
 
 /// Builds a fresh file-backed DuckDB projection at a throwaway path, seeded
 /// with `sessions` (each a `SessionId` and its committed messages), and a
-/// `ToolSessionState` whose recall context points at that file with
+/// `ToolSessionState` whose recall context shares that same store (never a
+/// fresh `Store::open` -- see this module's doc comment) with
 /// `own_session_id` as "this session". Returns the tool state and the
 /// path, so a test can clean the file up afterward.
 fn tool_state_with_seeded_store(
@@ -17,27 +20,25 @@ fn tool_state_with_seeded_store(
         "horizon-agent-recall-tool-{}.duckdb",
         uuid::Uuid::new_v4()
     ));
-    {
-        let store = Store::open(&path).expect("open duckdb store");
-        for (session_id, texts) in sessions {
-            let events = texts
-                .into_iter()
-                .map(|text| {
-                    Event::MessageCommitted(Message {
-                        role: MessageRole::User,
-                        text: text.to_string(),
-                    })
+    let store = Store::open(&path).expect("open duckdb store");
+    for (session_id, texts) in sessions {
+        let events = texts
+            .into_iter()
+            .map(|text| {
+                Event::MessageCommitted(Message {
+                    role: MessageRole::User,
+                    text: text.to_string(),
                 })
-                .collect::<Vec<_>>();
-            store
-                .append_events(session_id, None, events)
-                .expect("seed session");
-        }
+            })
+            .collect::<Vec<_>>();
+        store
+            .append_events(session_id, None, events)
+            .expect("seed session");
     }
 
     let recall = RecallContext {
         session_id: Some(own_session_id),
-        duckdb_path: Some(path.clone()),
+        store: Some(Arc::new(Mutex::new(store))),
     };
     let tool_state = ToolSessionState::for_current_dir(AgentToolsConfig::default(), recall);
     (tool_state, path)
@@ -126,25 +127,23 @@ fn search_session_scope_without_a_session_id_errors_instead_of_falling_back_to_a
         "horizon-agent-recall-tool-noscope-{}.duckdb",
         uuid::Uuid::new_v4()
     ));
-    {
-        let store = Store::open(&path).expect("open duckdb store");
-        store
-            .append_events(
-                SessionId::new(),
-                None,
-                [Event::MessageCommitted(Message {
-                    role: MessageRole::User,
-                    text: "widget".to_string(),
-                })],
-            )
-            .expect("seed session");
-    }
+    let store = Store::open(&path).expect("open duckdb store");
+    store
+        .append_events(
+            SessionId::new(),
+            None,
+            [Event::MessageCommitted(Message {
+                role: MessageRole::User,
+                text: "widget".to_string(),
+            })],
+        )
+        .expect("seed session");
 
     // No session id in context (shouldn't happen in production, but must
     // fail loudly rather than silently searching everything).
     let recall = RecallContext {
         session_id: None,
-        duckdb_path: Some(path.clone()),
+        store: Some(Arc::new(Mutex::new(store))),
     };
     let tool_state = ToolSessionState::for_current_dir(AgentToolsConfig::default(), recall);
 

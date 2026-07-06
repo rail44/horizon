@@ -10,15 +10,21 @@ use std::{
 use crate::config::{AgentToolsConfig, BashToolConfig};
 use crate::contract::SessionId;
 use crate::live::LiveState;
+use crate::persistence::projection::duckdb::DuckdbStoreHandle;
 use crate::tools::bash::BashCompletion;
 
 /// Where this session's persisted history lives, for the recall tools
 /// (`tools::recall`) to search/read it: the session's own id (the tools'
-/// default search/read scope) and the DuckDB projection's file path
-/// (`tools::recall` opens it fresh per call -- see that module's doc
-/// comment for why a same-process transient open alongside the event log
-/// writer's long-lived one is safe). `None` fields mean recall degrades to
-/// a clear error instead of a silent no-op or a silent "search everything".
+/// default search/read scope) and the *shared* live DuckDB projection
+/// handle (`persistence::projection::duckdb::SharedDuckdbStore::wait`'s
+/// result -- see that type's doc comment). `tools::recall` locks this same
+/// `Arc` per query; it must never open its own fresh `Store::open` of the
+/// same path -- a second independent DuckDB instance against one file is
+/// unsound (not just redundant) with `duckdb-rs`'s lack of a cross-instance
+/// cache and DuckDB's relaxed durability, confirmed in production as a
+/// fresh open reading zero rows for a session with real history. `None`
+/// fields mean recall degrades to a clear error instead of a silent no-op
+/// or a silent "search everything".
 ///
 /// Only `horizon-agentd`'s real session construction site
 /// (`session::run_session`) populates both fields. Every other
@@ -27,10 +33,10 @@ use crate::tools::bash::BashCompletion;
 /// dummy-tool-state test helper in `src/agent/host_tools.rs` -- uses
 /// `RecallContext::default()` and keeps behaving exactly as it did before
 /// recall existed.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct RecallContext {
     pub session_id: Option<SessionId>,
-    pub duckdb_path: Option<PathBuf>,
+    pub store: Option<DuckdbStoreHandle>,
 }
 
 /// Per-session file-tool state: the workspace root every absolute path is
@@ -147,7 +153,7 @@ impl ToolSessionState {
     }
 
     /// This session's recall context (see [`RecallContext`]) -- cheap to
-    /// clone (an `Option<SessionId>` and an `Option<PathBuf>`).
+    /// clone (an `Option<SessionId>` and an `Option<Arc<Mutex<_>>>`).
     pub fn recall_context(&self) -> RecallContext {
         self.inner.recall.clone()
     }

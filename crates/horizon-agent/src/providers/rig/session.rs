@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    path::PathBuf,
     thread,
 };
 
@@ -15,6 +14,7 @@ use crate::{
         Command, Error, Event, Message as AgentMessage, MessageRole, ProviderEvent, SessionHandle,
         SessionState, StartSession, ToolCallId, ToolCallResult, TurnEndReason,
     },
+    persistence::projection::duckdb::SharedDuckdbStore,
     prompt::SessionEnvironment,
     roles::RoleDefinition,
     tools::cancelled_tool_call_result,
@@ -30,7 +30,7 @@ pub(super) fn spawn_rig_session(
     request: StartSession,
     config: RigAgentConfig,
     role: Option<&'static RoleDefinition>,
-    memory_duckdb_path: Option<PathBuf>,
+    duckdb_cell: SharedDuckdbStore,
 ) -> SessionHandle {
     let (commands_tx, commands_rx) = unbounded();
     let (events_tx, events_rx) = unbounded::<ProviderEvent>();
@@ -38,7 +38,16 @@ pub(super) fn spawn_rig_session(
     let session_id = request.session_id;
 
     thread::spawn(move || {
-        let rig_history = load_rig_history(memory_duckdb_path.as_deref(), session_id);
+        // Blocks this dedicated thread (never the caller of `start_session`,
+        // and never agentd's async accept loop) until the event-log
+        // writer's own rebuild-or-open decision has landed -- see
+        // `SharedDuckdbStore`'s doc comment for why this must be a genuine
+        // wait, not "read whatever's there right now": reading too early
+        // here (or through a fresh `Store::open`) is exactly the
+        // resumed-session bug this fixed -- a session's own real history
+        // silently not showing up.
+        let duckdb_store = duckdb_cell.wait();
+        let rig_history = load_rig_history(duckdb_store.as_ref(), session_id);
         // Gathered once, right as the session starts, and reused for every
         // turn's system prompt — cwd/OS/git-repo status don't change over a
         // session's lifetime.

@@ -271,8 +271,17 @@ fn rebuilds_rig_memory_messages_from_horizon_transcript_events() {
     assert!(matches!(&messages[3], RigMessage::Assistant { .. }));
 }
 
+/// `load_rig_history` reads through the *shared* `Arc<Mutex<Store>>` handle
+/// -- never a fresh `Store::open` of the same path (see that function's and
+/// `SharedDuckdbStore`'s doc comments for why a second independent open is
+/// unsound with DuckDB's relaxed durability). This appends through the same
+/// `Arc` `load_rig_history` reads through, exactly mirroring how
+/// `event_log::writer`'s background thread and a resumed session's rig
+/// thread now share one instance in production.
 #[test]
 fn loads_initial_rig_history_from_duckdb_projection() {
+    use std::sync::{Arc, Mutex};
+
     let path = std::env::temp_dir().join(format!(
         "horizon-rig-memory-{}.duckdb",
         uuid::Uuid::new_v4()
@@ -293,20 +302,20 @@ fn loads_initial_rig_history_from_duckdb_projection() {
         }),
     ];
 
-    {
-        let store = crate::persistence::projection::duckdb::Store::open(&path).expect("open store");
-        store
-            .append_events(
-                session_id,
-                Some(ProviderId("builtin.agent.rig".to_string())),
-                events.clone(),
-            )
-            .expect("append events");
-    }
+    let store = crate::persistence::projection::duckdb::Store::open(&path).expect("open store");
+    store
+        .append_events(
+            session_id,
+            Some(ProviderId("builtin.agent.rig".to_string())),
+            events.clone(),
+        )
+        .expect("append events");
+    let shared_store = Arc::new(Mutex::new(store));
 
-    let history = load_rig_history(Some(&path), session_id);
+    let history = load_rig_history(Some(&shared_store), session_id);
     assert_eq!(history, rig_messages_from_horizon_events(&events));
 
+    drop(shared_store);
     let _ = std::fs::remove_file(path);
 }
 
@@ -632,7 +641,10 @@ fn start_fallback_rig_session_with_config(
     crossbeam_channel::Sender<Command>,
     crossbeam_channel::Receiver<ProviderEvent>,
 ) {
-    let provider = Provider::new(config, None);
+    let provider = Provider::new(
+        config,
+        crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
+    );
     let handle = provider.start_session(StartSession {
         session_id: SessionId::new(),
         provider_id: AgentProvider::provider_id(&provider),
@@ -1335,7 +1347,7 @@ fn config_role_start_session_advertises_only_its_three_allowed_tools() {
             openai_enabled: false,
             ..Default::default()
         },
-        None,
+        crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
     );
 
     let handle = AgentProvider::start_session(
