@@ -247,6 +247,16 @@ fn terminal_command_sanitizes_emulator_environment() {
 }
 
 #[test]
+fn terminal_command_injects_the_control_socket_env_var() {
+    let cmd = terminal_command("/bin/sh", &[], "xterm-kitty");
+
+    assert_eq!(
+        cmd.get_env("HORIZON_SOCKET"),
+        Some(crate::control_plane::default_socket_path().as_os_str())
+    );
+}
+
+#[test]
 fn da1_query_reports_primary_device_attributes() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     let events = core.write_vt(b"\x1b[c");

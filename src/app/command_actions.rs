@@ -69,6 +69,16 @@ impl CommandActionState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CommandInvocation {
     Simple(CommandId),
+    /// `new-agent --prompt "..."`'s composite create-with-prompt
+    /// (`docs/cli-control-plane-design.md`'s "Composite create-with-prompt"
+    /// decision): opens a new agent tab exactly like
+    /// `Simple(CommandId::NewAgent)`, then sends `prompt` as the session's
+    /// first `Command::UserMessage` -- see [`execute_command`]'s handling of
+    /// this variant and [`send_initial_user_message`] for why there is no
+    /// readiness wait between the two steps.
+    NewAgentWithPrompt {
+        prompt: String,
+    },
     ApproveToolCall {
         session_id: SessionId,
         call_id: ToolCallId,
@@ -117,6 +127,11 @@ pub(crate) enum CommandInvocation {
 pub(crate) fn execute_command(invocation: CommandInvocation, state: CommandActionState) {
     match invocation {
         CommandInvocation::Simple(command_id) => execute_simple_command(command_id, state),
+        CommandInvocation::NewAgentWithPrompt { prompt } => {
+            let sessions = state.sessions();
+            let session_id = open_tab(state, PaneKind::Agent);
+            send_initial_user_message(sessions, session_id, prompt);
+        }
         CommandInvocation::ApproveToolCall {
             session_id,
             call_id,
@@ -186,7 +201,9 @@ fn execute_simple_command(command_id: CommandId, state: CommandActionState) {
     }
 
     match command_id {
-        CommandId::NewTerminal => open_tab(state, PaneKind::Terminal),
+        CommandId::NewTerminal => {
+            open_tab(state, PaneKind::Terminal);
+        }
         CommandId::NewAgent => {
             open_tab(state, PaneKind::Agent);
         }
@@ -266,7 +283,12 @@ fn reload_agent_runtime(state: CommandActionState) {
     );
 }
 
-fn open_tab(state: CommandActionState, kind: PaneKind) {
+/// Opens a new tab with a freshly spawned `kind` session and returns its id.
+/// The return value matters to exactly one caller,
+/// `CommandInvocation::NewAgentWithPrompt` -- see [`send_initial_user_message`]
+/// for why it's safe to use immediately, with no readiness wait, the instant
+/// this returns.
+fn open_tab(state: CommandActionState, kind: PaneKind) -> SessionId {
     let workspace = state.workspace();
     let mut session_id = None;
     workspace.update(|ws| {
@@ -275,6 +297,33 @@ fn open_tab(state: CommandActionState, kind: PaneKind) {
     let session_id = session_id.expect("new session");
     spawn_session(kind, session_id, &state.runtime);
     request_active_pane_focus(workspace, state.pane_focus_requests);
+    session_id
+}
+
+/// Sends `text` as `session_id`'s first `Command::UserMessage` --
+/// `CommandInvocation::NewAgentWithPrompt`'s tail half, once `open_tab` has
+/// already spawned the session.
+///
+/// Safe to call immediately, with no readiness wait: `open_tab` runs
+/// `spawn_session` synchronously, and for an agent session that path
+/// (`app::runtime::agent::spawn_agent_session` ->
+/// `agent::agentd_runtime::fold_agent_session_events`) registers the
+/// session's sender into `Registry` *before* returning -- there is no window
+/// where `NewAgentWithPrompt` could observe a session id with no sender yet.
+/// This is a different race than the one agentd's own `session_new`
+/// readiness gate guards against (`crates/horizon-agentd/src/main.rs`'s
+/// `run_session_hosting_loop` comment on `Control::SessionNew`) -- that one
+/// is about agentd's *own* persistence-writer startup, in a different
+/// process, and is already handled entirely on agentd's side. A missing
+/// sender here can therefore only mean agentd itself was unavailable when
+/// the session was spawned, which `spawn_agent_session`'s "agent runtime
+/// unavailable" error frame already covers -- so this is a silent no-op in
+/// that case, exactly like `cancel_agent_turn`/`resolve_and_send_approval`
+/// already are for the same "no sender" condition.
+fn send_initial_user_message(sessions: RwSignal<Registry>, session_id: SessionId, text: String) {
+    if let Some(tx) = sessions.with_untracked(|registry| registry.agent_sender(session_id)) {
+        let _ = tx.send(Command::UserMessage { text });
+    }
 }
 
 fn split_active_pane(state: CommandActionState) {
@@ -872,5 +921,72 @@ mod tests {
                 .with_untracked(|ws| ws.active_terminal_session_id()),
             Some(active_session)
         );
+    }
+
+    // --- CommandInvocation::NewAgentWithPrompt ------------------------------
+
+    #[test]
+    fn send_initial_user_message_sends_the_prompt_to_the_sessions_channel() {
+        let session_id = SessionId::new();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let (_events_tx, events_rx) = crossbeam_channel::unbounded();
+        let mut sessions = Registry::default();
+        sessions.insert_agent(session_id, SessionHandle::new(tx, events_rx));
+        let sessions = RwSignal::new(sessions);
+
+        send_initial_user_message(sessions, session_id, "hello agent".to_string());
+
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Command::UserMessage { text }) if text == "hello agent"
+        ));
+    }
+
+    #[test]
+    fn send_initial_user_message_is_a_silent_no_op_with_no_registered_sender() {
+        let session_id = SessionId::new();
+        let sessions = RwSignal::new(Registry::default());
+
+        // Must not panic when no session is registered under this id.
+        send_initial_user_message(sessions, session_id, "hello agent".to_string());
+    }
+
+    #[test]
+    fn new_agent_with_prompt_invocation_opens_a_tab_and_registers_the_session() {
+        let workspace = Workspace::mvp();
+        let runtime = SessionRuntimeState::new(
+            RwSignal::new(workspace),
+            RwSignal::new(Frames::default()),
+            RwSignal::new(Registry::default()),
+            RwSignal::new(None),
+            None,
+            None,
+            RwSignal::new(Some(AgentdConnection::for_test())),
+        );
+        let state = CommandActionState {
+            runtime,
+            pane_focus_requests: std::array::from_fn(|_| RwSignal::new(0_u64)),
+        };
+        let workspace = state.workspace();
+        let before_tab_count = workspace.with_untracked(|ws| ws.tab_count());
+
+        execute_command(
+            CommandInvocation::NewAgentWithPrompt {
+                prompt: "hello agent".to_string(),
+            },
+            state.clone(),
+        );
+
+        assert_eq!(
+            workspace.with_untracked(|ws| ws.tab_count()),
+            before_tab_count + 1
+        );
+        let new_session_id = workspace
+            .with_untracked(|ws| ws.active_session_id())
+            .expect("the new agent tab should be active after NewAgentWithPrompt");
+        assert!(state
+            .sessions()
+            .with_untracked(|registry| registry.agent_sender(new_session_id))
+            .is_some());
     }
 }

@@ -2351,6 +2351,8 @@ dependencies = [
  "floem",
  "floem_renderer",
  "horizon-agent",
+ "horizon-control",
+ "libc",
  "portable-pty",
  "serde",
  "serde_json",

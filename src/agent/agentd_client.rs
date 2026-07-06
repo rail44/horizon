@@ -102,9 +102,7 @@ async fn connect_or_spawn(socket_path: &Path) -> Result<UnixStream, String> {
 
 fn spawn_agentd(socket_path: &Path) -> Result<(), String> {
     let binary = resolve_agentd_binary();
-    std::process::Command::new(&binary)
-        .arg("--socket")
-        .arg(socket_path)
+    agentd_command(&binary, socket_path)
         .spawn()
         .map(|_child| ())
         .map_err(|err| {
@@ -114,6 +112,22 @@ fn spawn_agentd(socket_path: &Path) -> Result<(), String> {
                 binary.display()
             )
         })
+}
+
+/// Builds the `horizon-agentd --socket <path>` command [`spawn_agentd`]
+/// spawns, injecting `HORIZON_SOCKET` into its environment so agentd's own
+/// `bash` tool (and anything else a session might shell out to) defaults to
+/// targeting *this* Horizon instance's control socket --
+/// `docs/cli-control-plane-design.md`'s "Discovery" decision. Split out from
+/// `spawn_agentd` so the env injection is directly assertable without
+/// actually spawning a process (see this module's tests).
+fn agentd_command(binary: &Path, socket_path: &Path) -> std::process::Command {
+    let mut command = std::process::Command::new(binary);
+    command.arg("--socket").arg(socket_path).env(
+        "HORIZON_SOCKET",
+        crate::control_plane::default_socket_path(),
+    );
+    command
 }
 
 /// Where to look for the `horizon-agentd` binary: first, right next to
@@ -218,6 +232,24 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agentd_command_injects_the_control_socket_env_var() {
+        let command = agentd_command(
+            Path::new("/usr/bin/horizon-agentd"),
+            Path::new("/tmp/x.sock"),
+        );
+
+        let value = command
+            .get_envs()
+            .find(|(key, _)| *key == std::ffi::OsStr::new("HORIZON_SOCKET"))
+            .and_then(|(_, value)| value);
+
+        assert_eq!(
+            value,
+            Some(crate::control_plane::default_socket_path().as_os_str())
+        );
+    }
 
     async fn fake_agentd_reply(server_side: tokio::io::DuplexStream, reply: Envelope) {
         let (read_half, mut write_half) = tokio::io::split(server_side);

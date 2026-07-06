@@ -78,7 +78,7 @@ impl AppState {
             }
         };
 
-        Self {
+        let state = Self {
             workspace,
             frames,
             sessions,
@@ -98,7 +98,25 @@ impl AppState {
             terminal_dump: std::env::var_os("HORIZON_TERMINAL_DUMP").map(PathBuf::from),
             clipboard_dump: std::env::var_os("HORIZON_CLIPBOARD_DUMP").map(PathBuf::from),
             status_dump: std::env::var_os("HORIZON_STATUS_DUMP").map(PathBuf::from),
-        }
+        };
+        state.start_control_plane();
+        state
+    }
+
+    /// Starts Horizon's CLI control-plane listener
+    /// (`docs/cli-control-plane-design.md`) against this state's command-
+    /// action surface -- the exact same `CommandActionState` the palette and
+    /// keybindings already dispatch through, so an external client's
+    /// `Invoke` runs through the identical `execute_command` path ("the
+    /// command model is the core; surfaces are replaceable"). Called once,
+    /// at the tail of `new()` -- deliberately before `app_view`'s
+    /// `spawn_initial_sessions()` runs, so the listener (and the
+    /// `HORIZON_SOCKET` value every terminal/agentd spawn injects) is
+    /// already up before the first child process that might read it exists.
+    /// Not run by [`Self::for_test`]: unit tests never need a real bound
+    /// socket.
+    fn start_control_plane(&self) {
+        crate::control_plane::start(super::context::command_action_state(self));
     }
 
     pub(super) fn spawn_initial_sessions(&self) {

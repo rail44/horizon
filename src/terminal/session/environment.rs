@@ -54,4 +54,13 @@ fn configure_terminal_environment(cmd: &mut CommandBuilder, term: &str) {
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TERM_PROGRAM", "horizon");
     cmd.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
+    // `docs/cli-control-plane-design.md`'s "Discovery" decision: every pane
+    // is born pointed at the control socket of the Horizon instance it's
+    // running inside, so a CLI invoked from a shell in this terminal
+    // defaults to targeting *this* instance rather than requiring an
+    // explicit `--socket`/env override.
+    cmd.env(
+        "HORIZON_SOCKET",
+        crate::control_plane::default_socket_path(),
+    );
 }
