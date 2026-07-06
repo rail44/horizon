@@ -155,7 +155,8 @@ mod tests {
 
     #[test]
     fn config_role_does_not_ingest_repository_instructions() {
-        assert!(!CONFIG_ROLE.include_repository_instructions);
+        let role = resolve(&RoleId("config".to_string())).expect("config role must resolve");
+        assert!(!role.include_repository_instructions);
     }
 
     #[test]
