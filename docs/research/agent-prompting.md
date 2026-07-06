@@ -390,3 +390,16 @@ Part 1 の Kimi 固有要件(reasoning_content 保持等)は Moonshot 公式 API
 のドキュメントに基づくもので、synthetic.new の互換層で同じ制約が現れる
 かは同社ドキュメント(models ページ)に記載がなく未確定。resume 経路の
 リスクは実測検証待ちに格下げ。
+
+**実測結果(2026-07-06)**: `api.synthetic.new/openai/v1/chat/completions`
+に `hf:moonshotai/Kimi-K2.7-Code` を直接叩いて検証。レスポンスには
+`reasoning_content` フィールドが確かに載る(`tool_calls` の `id` も
+vLLM 系エンジンに特徴的な `functions.<name>:<idx>` 形式)。しかし、直前
+ターンの assistant tool-call メッセージから `reasoning_content` を完全
+に落とした履歴(Horizon の `rig_messages_from_horizon_events` と同じ
+形)で追撃のツール呼び出しターンを送っても、単発でも2ラウンド連続で
+も HTTP 200 で正常に会話が継続し、エラーは一切再現しなかった(reasoning
+を残した対照リクエストとの応答は実質同等)。Moonshot 公式ドキュメントの
+「reasoning_content を落とすとエラー」という制約は、少なくとも
+synthetic.new の互換層では効いていない。**判定: 再現せず。コード変更は
+行わない。**
