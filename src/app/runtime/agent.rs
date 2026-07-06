@@ -22,10 +22,12 @@ use crate::session::{Frames, Registry, SessionId};
 /// error frame instead of silently doing nothing.
 pub(super) fn spawn_agent_session(
     session_id: SessionId,
+    role_id: Option<horizon_agent::roles::RoleId>,
     frames: RwSignal<Frames>,
     sessions: RwSignal<Registry>,
     agent_state_status: RwSignal<Option<String>>,
     agentd_connection: RwSignal<Option<AgentdConnection>>,
+    config_reload_requests: RwSignal<u64>,
 ) {
     let Some(connection) = agentd_connection.get_untracked() else {
         surface_agent_runtime_unavailable(session_id, frames, agent_state_status);
@@ -33,12 +35,11 @@ pub(super) fn spawn_agent_session(
     };
 
     let provider_id = agent::ProviderRegistry::default().default_provider_id();
-    // Role-less for every spawn path today -- the GUI has no role-picking
-    // command yet (see `docs/plans/agent-foundation/03-roles-and-config-agent.md`;
-    // a future "New Configuration Agent" command is the intended caller of
-    // a `Some(..)` role here).
-    let handle = connection.start_session(session_id.into(), provider_id, None);
-    fold_agent_session_events(session_id, handle, frames, sessions);
+    // `role_id` is `Some(..)` only for the `New Configuration Agent`
+    // command today (`app::command_actions`); every other spawn path stays
+    // role-less -- see `horizon_agent::roles` for what a role changes.
+    let handle = connection.start_session(session_id.into(), provider_id, role_id);
+    fold_agent_session_events(session_id, handle, frames, sessions, config_reload_requests);
 }
 
 /// The pane-facing side of "agentd is unreachable": an explanatory error
@@ -81,10 +82,12 @@ mod tests {
 
         spawn_agent_session(
             session_id,
+            None,
             frames,
             sessions,
             agent_state_status,
             agentd_connection,
+            RwSignal::new(0_u64),
         );
 
         let frame = frames.with_untracked(|frames| frames.agent_frame(session_id));
@@ -115,10 +118,12 @@ mod tests {
 
         spawn_agent_session(
             session_id,
+            None,
             frames,
             sessions,
             agent_state_status,
             agentd_connection,
+            RwSignal::new(0_u64),
         );
 
         assert!(

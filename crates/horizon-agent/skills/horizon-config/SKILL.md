@@ -113,10 +113,11 @@ Modifiers: `ctrl`/`control`, `shift`, `alt`/`option`, `meta`/`cmd`/
 `backspace`, `delete`, `up`/`arrowup`, `down`, `left`, `right`, `home`,
 `end`, `pageup`, `pagedown`. Case-insensitive throughout.
 
-**Command ids**: `new-terminal`, `new-agent`, `split-active-pane`,
-`focus-next-pane`, `close-active-pane`, `close-active-tab`,
-`terminate-active-session`, `approve-tool-call`, `deny-tool-call`,
-`cancel-agent-turn`. Two reserved pseudo-command ids are also accepted
+**Command ids**: `new-terminal`, `new-agent`, `new-config-agent`,
+`split-active-pane`, `focus-next-pane`, `close-active-pane`,
+`close-active-tab`, `terminate-active-session`, `approve-tool-call`,
+`deny-tool-call`, `cancel-agent-turn`, `reload-agent-runtime`,
+`reload-config`. Two reserved pseudo-command ids are also accepted
 here even though they are not real commands: `open-palette` (overrides the
 chord that opens the command palette) and `workspace-mode` (overrides the
 chord that enters workspace mode, `ctrl+'` by default).

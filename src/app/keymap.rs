@@ -335,6 +335,7 @@ fn command_id_from_str(id: &str) -> Option<CommandId> {
     match id {
         "new-terminal" => Some(CommandId::NewTerminal),
         "new-agent" => Some(CommandId::NewAgent),
+        "new-config-agent" => Some(CommandId::NewConfigAgent),
         "split-active-pane" => Some(CommandId::SplitActivePane),
         "focus-next-pane" => Some(CommandId::FocusNextPane),
         "close-active-pane" => Some(CommandId::CloseActivePane),
@@ -930,6 +931,14 @@ mod tests {
                 .find(|(bound, _)| *bound == chord)
                 .map(|(_, id)| *id),
             Some(CommandId::TerminateActiveSession)
+        );
+    }
+
+    #[test]
+    fn new_config_agent_keybinding_entry_resolves_to_the_new_config_agent_command() {
+        assert_eq!(
+            command_id_from_str("new-config-agent"),
+            Some(CommandId::NewConfigAgent)
         );
     }
 

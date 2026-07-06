@@ -2,6 +2,7 @@
 pub(crate) enum CommandId {
     NewTerminal,
     NewAgent,
+    NewConfigAgent,
     SplitActivePane,
     FocusNextPane,
     CloseActivePane,
@@ -67,6 +68,13 @@ pub(crate) fn core_commands() -> Vec<CommandSpec> {
             title: "New Agent",
             category: CommandCategory::Agent,
             description: "Open a new agent tab.",
+            destructive: false,
+        },
+        CommandSpec {
+            id: CommandId::NewConfigAgent,
+            title: "New Configuration Agent",
+            category: CommandCategory::Agent,
+            description: "Open an agent tab for changing Horizon's theme and keybindings.",
             destructive: false,
         },
         CommandSpec {
@@ -153,6 +161,7 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
     match command_id {
         CommandId::NewTerminal
         | CommandId::NewAgent
+        | CommandId::NewConfigAgent
         | CommandId::SplitActivePane
         | CommandId::FocusNextPane
         | CommandId::ReloadAgentRuntime
@@ -213,13 +222,15 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 13);
+        assert_eq!(commands.len(), 14);
         assert_eq!(commands[0].id, CommandId::NewTerminal);
         assert_eq!(commands[0].title, "New Terminal");
-        assert_eq!(commands[6].id, CommandId::TerminateActiveSession);
-        assert_eq!(commands[6].title, "Terminate Active Session");
-        assert_eq!(commands[7].id, CommandId::TerminateAllDetachedSessions);
-        assert_eq!(commands[7].title, "Terminate All Detached Sessions");
+        assert_eq!(commands[2].id, CommandId::NewConfigAgent);
+        assert_eq!(commands[2].title, "New Configuration Agent");
+        assert_eq!(commands[7].id, CommandId::TerminateActiveSession);
+        assert_eq!(commands[7].title, "Terminate Active Session");
+        assert_eq!(commands[8].id, CommandId::TerminateAllDetachedSessions);
+        assert_eq!(commands[8].title, "Terminate All Detached Sessions");
     }
 
     #[test]

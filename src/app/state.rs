@@ -39,6 +39,11 @@ pub(super) struct AppState {
     pub(super) terminal_dump: Option<PathBuf>,
     pub(super) clipboard_dump: Option<PathBuf>,
     pub(super) status_dump: Option<PathBuf>,
+    /// Bumped when a session's successful `config.write` is observed
+    /// (`agent::agentd_runtime::fold_agent_session_events`); `app::view`
+    /// answers a bump by executing the `Reload Config` command. Same
+    /// request-counter shape as `pane_focus_requests`.
+    pub(super) config_reload_requests: RwSignal<u64>,
 }
 
 impl AppState {
@@ -47,6 +52,7 @@ impl AppState {
         let frames = RwSignal::new(Frames::default());
         let sessions = RwSignal::new(Registry::default());
         let agent_state_status = RwSignal::new(None::<String>);
+        let config_reload_requests = RwSignal::new(0_u64);
 
         // Step 4's "on connect: hello -> session_list -> session_load for
         // every session" -- a fresh Horizon process has no panes yet, so
@@ -66,6 +72,7 @@ impl AppState {
                     workspace,
                     frames,
                     sessions,
+                    config_reload_requests,
                 );
                 Some(connection)
             }
@@ -98,6 +105,7 @@ impl AppState {
             terminal_dump: std::env::var_os("HORIZON_TERMINAL_DUMP").map(PathBuf::from),
             clipboard_dump: std::env::var_os("HORIZON_CLIPBOARD_DUMP").map(PathBuf::from),
             status_dump: std::env::var_os("HORIZON_STATUS_DUMP").map(PathBuf::from),
+            config_reload_requests,
         };
         state.start_control_plane();
         state
@@ -123,7 +131,7 @@ impl AppState {
         let runtime = self.session_runtime_state();
         for session in self.workspace.with(|ws| ws.session_summaries()) {
             if session.attached {
-                spawn_session(session.kind.into(), session.id, &runtime);
+                spawn_session(session.kind.into(), None, session.id, &runtime);
             }
         }
     }
@@ -137,6 +145,7 @@ impl AppState {
             self.terminal_dump.clone(),
             self.clipboard_dump.clone(),
             self.agentd_connection,
+            self.config_reload_requests,
         )
     }
 
@@ -167,6 +176,7 @@ impl AppState {
             terminal_dump: None,
             clipboard_dump: None,
             status_dump: None,
+            config_reload_requests: RwSignal::new(0_u64),
         }
     }
 }

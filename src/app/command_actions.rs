@@ -90,6 +90,11 @@ pub(crate) enum CommandInvocation {
     /// for `split_target`/`activate`.
     CreateSession {
         kind: PaneKind,
+        /// Role tag for an agent session (`horizon_agent::roles`) -- the
+        /// control plane's `new-config-agent` sets this; `new-terminal`/
+        /// `new-agent` leave it `None`. Meaningless (and always `None`) for
+        /// a terminal `kind`.
+        role_id: Option<horizon_agent::roles::RoleId>,
         split_target: Option<SessionId>,
         activate: bool,
         prompt: Option<String>,
@@ -168,12 +173,13 @@ pub(crate) fn execute_command(invocation: CommandInvocation, state: CommandActio
         CommandInvocation::Simple(command_id) => execute_simple_command(command_id, state),
         CommandInvocation::CreateSession {
             kind,
+            role_id,
             split_target,
             activate,
             prompt,
         } => {
             let sessions = state.sessions();
-            if let Some(session_id) = create_session(state, kind, split_target, activate) {
+            if let Some(session_id) = create_session(state, kind, role_id, split_target, activate) {
                 if let Some(prompt) = prompt {
                     send_initial_user_message(sessions, session_id, prompt);
                 }
@@ -268,10 +274,13 @@ fn execute_simple_command(command_id: CommandId, state: CommandActionState) {
 
     match command_id {
         CommandId::NewTerminal => {
-            open_tab(state, PaneKind::Terminal);
+            open_tab(state, PaneKind::Terminal, None);
         }
         CommandId::NewAgent => {
-            open_tab(state, PaneKind::Agent);
+            open_tab(state, PaneKind::Agent, None);
+        }
+        CommandId::NewConfigAgent => {
+            open_tab(state, PaneKind::Agent, Some(config_agent_role_id()));
         }
         CommandId::SplitActivePane => {
             split_active_pane(state);
@@ -347,7 +356,16 @@ fn reload_agent_runtime(state: CommandActionState) {
         state.sessions(),
         state.agentd_connection(),
         state.agent_state_status(),
+        state.runtime.config_reload_requests(),
     );
+}
+
+/// The one place the GUI names the `config` role
+/// (`horizon_agent::roles::CONFIG_ROLE`) -- `New Configuration Agent`'s
+/// palette arm and the control plane's `new-config-agent` both spawn
+/// through it, so the role id literal isn't scattered.
+pub(crate) fn config_agent_role_id() -> horizon_agent::roles::RoleId {
+    horizon_agent::roles::RoleId(horizon_agent::roles::CONFIG_ROLE.id.to_string())
 }
 
 /// `Reload Config` (`CommandId::ReloadConfig`): re-reads Horizon's single
@@ -396,7 +414,11 @@ fn reload_config(state: CommandActionState) {
 /// `CommandInvocation::CreateSession`'s `prompt` handling -- see
 /// [`send_initial_user_message`] for why it's safe to use immediately, with
 /// no readiness wait, the instant `create_session` returns.
-fn open_tab(state: CommandActionState, kind: PaneKind) -> SessionId {
+fn open_tab(
+    state: CommandActionState,
+    kind: PaneKind,
+    role_id: Option<horizon_agent::roles::RoleId>,
+) -> SessionId {
     let workspace = state.workspace();
     let mut session_id = None;
     workspace.update(|ws| {
@@ -410,7 +432,7 @@ fn open_tab(state: CommandActionState, kind: PaneKind) -> SessionId {
         ws.exit_workspace_mode();
     });
     let session_id = session_id.expect("new session");
-    spawn_session(kind, session_id, &state.runtime);
+    spawn_session(kind, role_id, session_id, &state.runtime);
     request_active_pane_focus(workspace, state.pane_focus_requests);
     session_id
 }
@@ -432,6 +454,7 @@ fn open_tab(state: CommandActionState, kind: PaneKind) -> SessionId {
 fn create_session(
     state: CommandActionState,
     kind: PaneKind,
+    role_id: Option<horizon_agent::roles::RoleId>,
     split_target: Option<SessionId>,
     activate: bool,
 ) -> Option<SessionId> {
@@ -447,7 +470,7 @@ fn create_session(
         }
     });
     let session_id = session_id?;
-    spawn_session(kind, session_id, &state.runtime);
+    spawn_session(kind, role_id, session_id, &state.runtime);
     if activate {
         request_active_pane_focus(workspace, state.pane_focus_requests);
     }
@@ -493,7 +516,7 @@ fn split_active_pane(state: CommandActionState) {
     let Some((kind, session_id)) = split else {
         return;
     };
-    spawn_session(kind, session_id, &state.runtime);
+    spawn_session(kind, None, session_id, &state.runtime);
     request_active_pane_focus(workspace, state.pane_focus_requests);
 }
 
@@ -734,6 +757,7 @@ mod tests {
             None,
             None,
             RwSignal::new(None),
+            RwSignal::new(0_u64),
         );
         let state = CommandActionState {
             runtime,
@@ -755,6 +779,7 @@ mod tests {
             None,
             None,
             RwSignal::new(None),
+            RwSignal::new(0_u64),
         );
         CommandActionState {
             runtime,
@@ -817,6 +842,7 @@ mod tests {
             None,
             None,
             RwSignal::new(None),
+            RwSignal::new(0_u64),
         );
         let state = CommandActionState {
             runtime,
@@ -1122,6 +1148,7 @@ mod tests {
             None,
             None,
             RwSignal::new(Some(AgentdConnection::for_test())),
+            RwSignal::new(0_u64),
         );
         let state = CommandActionState {
             runtime,
@@ -1133,6 +1160,7 @@ mod tests {
         execute_command(
             CommandInvocation::CreateSession {
                 kind: PaneKind::Agent,
+                role_id: None,
                 split_target: None,
                 activate: true,
                 prompt: Some("hello agent".to_string()),
@@ -1168,6 +1196,7 @@ mod tests {
         execute_command(
             CommandInvocation::CreateSession {
                 kind: PaneKind::Terminal,
+                role_id: None,
                 split_target: None,
                 activate: false,
                 prompt: None,
@@ -1215,6 +1244,7 @@ mod tests {
         execute_command(
             CommandInvocation::CreateSession {
                 kind: PaneKind::Terminal,
+                role_id: None,
                 split_target: Some(target_session),
                 activate: false,
                 prompt: None,
@@ -1266,6 +1296,7 @@ mod tests {
         execute_command(
             CommandInvocation::CreateSession {
                 kind: PaneKind::Terminal,
+                role_id: None,
                 split_target: Some(target_session),
                 activate: true,
                 prompt: None,
@@ -1294,6 +1325,7 @@ mod tests {
         execute_command(
             CommandInvocation::CreateSession {
                 kind: PaneKind::Terminal,
+                role_id: None,
                 split_target: Some(SessionId::new()),
                 activate: false,
                 prompt: None,

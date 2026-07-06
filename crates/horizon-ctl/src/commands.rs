@@ -25,6 +25,7 @@ pub fn external_name(subcommand: &Subcommand) -> &'static str {
     match subcommand {
         Subcommand::NewTerminal { .. } => "new-terminal",
         Subcommand::NewAgent { .. } => "new-agent",
+        Subcommand::NewConfigAgent { .. } => "new-config-agent",
         Subcommand::Attach { .. } => "attach",
         Subcommand::TerminateSession { .. } => "terminate-session",
         Subcommand::TerminateAllDetached => "terminate-all-detached",
@@ -70,6 +71,12 @@ pub fn to_request(subcommand: &Subcommand, resolved_split: Option<&str>) -> Requ
             prompt, activate, ..
         } => invoke(
             "new-agent",
+            create_session_args(resolved_split, *activate, prompt.as_deref()),
+        ),
+        Subcommand::NewConfigAgent {
+            prompt, activate, ..
+        } => invoke(
+            "new-config-agent",
             create_session_args(resolved_split, *activate, prompt.as_deref()),
         ),
         Subcommand::Attach {
