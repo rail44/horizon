@@ -2,6 +2,7 @@ use floem::event::EventListener;
 use floem::prelude::*;
 
 use crate::control_surface::view::{command_palette, workspace_overview};
+use crate::workspace::request_active_pane_focus;
 use crate::workspace::view::{tab_strip, workspace_view};
 
 use super::context::{
@@ -16,7 +17,24 @@ pub fn app_view() -> impl IntoView {
     state.spawn_initial_sessions();
 
     let input = AppInput::new(&state);
+    let workspace = state.workspace;
+    let pane_focus_requests = state.pane_focus_requests;
     let content = app_content(state);
+
+    // Every pane_view's own `request_focus` (floem's `request_focus`
+    // decorator, `workspace::view::pane`) fires unconditionally the instant
+    // it's created -- regardless of the tracked signal's value -- so
+    // building all `MAX_VISIBLE_PANES` panes above always ends the mount
+    // with the *last-created* pane (typically hidden/nonexistent this
+    // early -- see `pane_view`'s `!exists()` guard) holding keyboard focus,
+    // not the actually-active one. Left alone, no click ever lands because
+    // nothing owns focus in the first place. Bumping the active pane's own
+    // request here -- after every pane's initial effect has already run --
+    // re-triggers just that one pane's `request_focus` effect (each pane
+    // only tracks its own slot in `pane_focus_requests`) and wins the race
+    // last, so the workspace starts with real keyboard focus on the pane
+    // the user actually sees as active.
+    request_active_pane_focus(workspace, pane_focus_requests);
 
     let focus_input = input.clone();
     let ime_enabled_input = input.clone();
