@@ -149,8 +149,9 @@ this section extends it to every session working in this repository.
 Feature-grained plans live in `docs/plans/<domain>/` — the directory
 is the domain (see `docs/roadmap.md`); one plan file is handed to one
 domain session, which starts by reading it. Each plan carries a
-`Status:` line (ready → in-session → review → merged) maintained by
-the project session. Concrete design decisions
+`Status:` line (ready → review → merged); the project session flips it
+only on events it observes first-hand — a review request arriving, a
+merge landing. Live session state is deliberately not tracked in git. Concrete design decisions
 belong to the domain session (with the owner); the project session
 does not relitigate them at merge — its review covers the gate,
 cross-domain integration, and coherence with the architecture docs,

@@ -1,6 +1,6 @@
 # Plan 03 — 役割機構と設定エージェント
 
-Status: in-session
+Status: ready
 
 ## 背景
 
