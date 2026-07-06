@@ -211,6 +211,32 @@ fn paste_wraps_text_when_bracketed_paste_is_enabled() {
 }
 
 #[test]
+fn focus_input_is_none_without_mode_1004() {
+    let core = TerminalCore::new(TerminalSize::new(20, 3));
+
+    assert_eq!(core.focus_input(true), None);
+    assert_eq!(core.focus_input(false), None);
+}
+
+#[test]
+fn focus_input_reports_csi_i_and_o_once_mode_1004_is_enabled() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 3));
+    core.write_vt(b"\x1b[?1004h");
+
+    assert_eq!(core.focus_input(true), Some(b"\x1b[I".to_vec()));
+    assert_eq!(core.focus_input(false), Some(b"\x1b[O".to_vec()));
+}
+
+#[test]
+fn focus_input_stops_once_mode_1004_is_disabled_again() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 3));
+    core.write_vt(b"\x1b[?1004h");
+    core.write_vt(b"\x1b[?1004l");
+
+    assert_eq!(core.focus_input(true), None);
+}
+
+#[test]
 fn selection_to_string_uses_alacritty_selection() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 3));
     core.write_vt(b"hello world");
@@ -417,6 +443,60 @@ fn osc4_query_reports_overridden_palette_color_over_theme_default() {
     assert_eq!(
         events.pty_writes,
         vec![b"\x1b]4;1;rgb:1111/2222/3333\x07".to_vec()]
+    );
+}
+
+#[test]
+fn osc52_clipboard_write_reaches_terminal_events() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    // base64("hello") == "aGVsbG8="
+    let events = core.write_vt(b"\x1b]52;c;aGVsbG8=\x07");
+
+    assert_eq!(events.clipboard_writes, vec!["hello".to_string()]);
+}
+
+#[test]
+fn osc52_clipboard_write_accepts_the_selection_target_too() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    // Horizon has no separate primary-selection buffer, so the `s`
+    // (selection) target lands in the same `clipboard_writes` bucket as
+    // `c` (clipboard) -- see `TerminalEvents::clipboard_writes`'s doc
+    // comment.
+    let events = core.write_vt(b"\x1b]52;s;aGVsbG8=\x07");
+
+    assert_eq!(events.clipboard_writes, vec!["hello".to_string()]);
+}
+
+#[test]
+fn osc52_clipboard_read_query_is_refused() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    // A bare `?` payload asks to read the clipboard back. `Osc52::OnlyCopy`
+    // (see `TerminalCore::new`) means alacritty_terminal's own parser
+    // refuses to even emit an event for this -- nothing is queued, and
+    // nothing is written back to the PTY either (no error reply exists for
+    // a refused OSC 52 load).
+    let events = core.write_vt(b"\x1b]52;c;?\x07");
+
+    assert!(events.clipboard_writes.is_empty());
+    assert!(events.pty_writes.is_empty());
+}
+
+#[test]
+fn osc52_clipboard_write_over_the_cap_is_dropped() {
+    use base64::Engine;
+
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    let oversized = "a".repeat(300_000);
+    let payload = base64::engine::general_purpose::STANDARD.encode(&oversized);
+    let mut sequence = b"\x1b]52;c;".to_vec();
+    sequence.extend_from_slice(payload.as_bytes());
+    sequence.push(0x07);
+
+    let events = core.write_vt(&sequence);
+
+    assert!(
+        events.clipboard_writes.is_empty(),
+        "a payload past OSC52_CLIPBOARD_WRITE_CAP must be dropped, not forwarded"
     );
 }
 

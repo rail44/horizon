@@ -27,9 +27,20 @@ impl AppInput {
     }
 
     pub(super) fn handle_window_focus(&self) -> EventPropagation {
+        self.state.window_focused.set(true);
         set_ime_allowed(active_text_input_pane(self.state.workspace));
         let (position, size) = self.state.ime_cursor_area.get_untracked();
         set_ime_cursor_area(position, size);
+        EventPropagation::Continue
+    }
+
+    /// Counterpart to [`Self::handle_window_focus`] -- floem's
+    /// `WindowLostFocus` (`docs/tasks/backlog.md` item 5). Only updates
+    /// `window_focused`; unlike gaining focus, losing it doesn't need to
+    /// touch IME state (a composition in progress survives an alt-tab and
+    /// resumes when the window is focused again).
+    pub(super) fn handle_window_lost_focus(&self) -> EventPropagation {
+        self.state.window_focused.set(false);
         EventPropagation::Continue
     }
 

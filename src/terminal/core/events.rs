@@ -15,11 +15,36 @@ type ColorFormatter = Arc<dyn Fn(Rgb) -> String + Send + Sync>;
 /// `ColorFormatter`.
 type WindowSizeFormatter = Arc<dyn Fn(WindowSize) -> String + Send + Sync>;
 
+/// Maximum accepted size (decoded UTF-8 byte length) of one OSC 52
+/// clipboard-write payload (`Event::ClipboardStore`). A misbehaving or
+/// malicious terminal app could otherwise flood the system clipboard with
+/// an arbitrarily large string on every write; a few hundred KB
+/// comfortably covers any legitimate copy (a path, a URL, a chunk of log
+/// output) while bounding the worst case. There's no OSC 52 "too large"
+/// error reply defined by the spec, so an oversized request is just
+/// dropped silently -- the same way a real terminal ignores a clipboard
+/// request it doesn't like.
+const OSC52_CLIPBOARD_WRITE_CAP: usize = 256 * 1024;
+
 #[derive(Clone, Default)]
 pub(crate) struct TerminalEvents {
     pub(crate) pty_writes: Vec<Vec<u8>>,
     pub(crate) title: Option<String>,
     pub(crate) bell_count: usize,
+    /// OSC 52 clipboard-write payloads (`Event::ClipboardStore`) accepted
+    /// this call, already capped at `OSC52_CLIPBOARD_WRITE_CAP` -- see
+    /// `EventSink::send_event`. Both OSC 52 targets alacritty_terminal
+    /// parses (`c` clipboard, `p`/`s` selection) land here uniformly:
+    /// Horizon exposes a single system clipboard (via floem's `Clipboard`),
+    /// not a separate primary-selection buffer, so there is nothing to
+    /// distinguish between them. OSC 52 *read* (`Event::ClipboardLoad`)
+    /// never reaches here at all -- `TerminalCore::new` configures
+    /// `alacritty_terminal` with `Osc52::OnlyCopy`, so the parser itself
+    /// refuses to ever emit a load event. Rejecting clipboard read access
+    /// from a terminal app is a deliberate security decision (an app could
+    /// otherwise read whatever's on the system clipboard from under the
+    /// user), not something this module has to separately filter.
+    pub(crate) clipboard_writes: Vec<String>,
     /// Pending color queries, resolved against `Term::colors()` and
     /// Horizon's theme by `TerminalCore::write_vt` once the parser call
     /// that produced them returns (the callback needs the terminal's
@@ -39,6 +64,7 @@ impl fmt::Debug for TerminalEvents {
             .field("pty_writes", &self.pty_writes)
             .field("title", &self.title)
             .field("bell_count", &self.bell_count)
+            .field("clipboard_writes", &self.clipboard_writes)
             .field("color_requests", &self.color_requests.len())
             .field("window_size_requests", &self.window_size_requests.len())
             .finish()
@@ -66,6 +92,9 @@ impl EventListener for EventSink {
             Event::Bell => events.bell_count += 1,
             Event::ColorRequest(index, format) => events.color_requests.push((index, format)),
             Event::TextAreaSizeRequest(format) => events.window_size_requests.push(format),
+            Event::ClipboardStore(_, text) if text.len() <= OSC52_CLIPBOARD_WRITE_CAP => {
+                events.clipboard_writes.push(text);
+            }
             _ => {}
         }
     }

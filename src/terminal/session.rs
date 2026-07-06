@@ -79,6 +79,7 @@ impl TerminalSession {
         let (paste_tx, paste_rx) = crossbeam_channel::unbounded();
         let (key_tx, key_rx) = crossbeam_channel::unbounded();
         let (selection_tx, selection_rx) = crossbeam_channel::unbounded();
+        let (focus_tx, focus_rx) = crossbeam_channel::unbounded();
         let master = pair.master;
         let response_tx = command_tx.clone();
         let read_update_tx = update_tx.clone();
@@ -99,6 +100,7 @@ impl TerminalSession {
                 paste_rx,
                 key_rx,
                 selection_rx,
+                focus_rx,
             };
             run_terminal_core(size, pty_rx, receivers, response_tx, update_tx);
         });
@@ -110,6 +112,7 @@ impl TerminalSession {
                 paste_tx,
                 key_tx,
                 selection_tx,
+                focus_tx,
             };
             run_writer(master, &mut *writer, command_rx, senders, &trace_short_id);
         });

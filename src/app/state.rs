@@ -7,7 +7,7 @@ use crate::agent::agentd_runtime::AgentdConnection;
 use crate::session::{Frames, Registry, SessionId};
 use crate::workspace::{AgentDrafts, PaneFocusRequests, Workspace, MAX_VISIBLE_PANES};
 
-use super::runtime::{spawn_session, SessionRuntimeState};
+use super::runtime::{spawn_session, wire_focus_reporting, SessionRuntimeState};
 
 #[derive(Clone)]
 pub(super) struct AppState {
@@ -22,6 +22,15 @@ pub(super) struct AppState {
     pub(super) palette_selection: RwSignal<usize>,
     pub(super) palette_focus_request: RwSignal<u64>,
     pub(super) pane_focus_requests: PaneFocusRequests,
+    /// Whether Horizon's own window currently holds OS-level focus --
+    /// updated from floem's `WindowGotFocus`/`WindowLostFocus`
+    /// (`app::input::AppInput::handle_window_focus`/
+    /// `handle_window_lost_focus`) and composed with the active visible
+    /// pane by `app::runtime::wire_focus_reporting` to decide when the
+    /// active terminal session gets a `CSI I`/`CSI O` focus report
+    /// (`docs/tasks/backlog.md` item 5). Starts `true`: a freshly launched
+    /// window is focused by default on every desktop this targets.
+    pub(super) window_focused: RwSignal<bool>,
     pub(super) agent_drafts: AgentDrafts,
     /// The session manager modal's own signals (`docs/plans/application-ui/
     /// 01-session-manager.md`) -- mirrors `palette_open`/`palette_selection`/
@@ -81,6 +90,9 @@ impl AppState {
             config_reload_requests,
         );
 
+        let window_focused = RwSignal::new(true);
+        wire_focus_reporting(workspace, sessions, window_focused);
+
         let state = Self {
             workspace,
             frames,
@@ -94,6 +106,7 @@ impl AppState {
             palette_selection: RwSignal::new(0_usize),
             palette_focus_request: RwSignal::new(0_u64),
             pane_focus_requests: [(); MAX_VISIBLE_PANES].map(|_| RwSignal::new(0_u64)),
+            window_focused,
             agent_drafts: [(); MAX_VISIBLE_PANES].map(|_| RwSignal::new(String::new())),
             session_manager_open: RwSignal::new(false),
             session_manager_selection: RwSignal::new(0_usize),
@@ -167,6 +180,7 @@ impl AppState {
             palette_selection: RwSignal::new(0_usize),
             palette_focus_request: RwSignal::new(0_u64),
             pane_focus_requests: [(); MAX_VISIBLE_PANES].map(|_| RwSignal::new(0_u64)),
+            window_focused: RwSignal::new(true),
             agent_drafts: [(); MAX_VISIBLE_PANES].map(|_| RwSignal::new(String::new())),
             session_manager_open: RwSignal::new(false),
             session_manager_selection: RwSignal::new(0_usize),

@@ -4,7 +4,7 @@ use alacritty_terminal::event::WindowSize;
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::index::{Column, Line, Point as TermPoint, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
-use alacritty_terminal::term::{Config as TermConfig, Term, TermMode};
+use alacritty_terminal::term::{Config as TermConfig, Osc52, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Processor, Timeout};
 use termwiz::escape::csi::KittyKeyboardFlags;
 use termwiz::input::{KeyCode, KeyCodeEncodeModes, KeyboardEncoding, Modifiers};
@@ -74,6 +74,18 @@ impl TerminalCore {
         let config = TermConfig {
             kitty_keyboard: true,
             scrolling_history: terminal_config.scrollback_lines,
+            // OSC 52 clipboard write only, no read: a terminal app can copy
+            // to the system clipboard (`Event::ClipboardStore`, see
+            // `core::events::TerminalEvents::clipboard_writes`) but can
+            // never query it back (`Event::ClipboardLoad`) -- letting an
+            // app read whatever's on the clipboard is the well-known OSC 52
+            // security hazard (a compromised/malicious program could
+            // exfiltrate clipboard contents unrelated to itself), so reads
+            // are refused outright rather than gated some other way. This
+            // is also `Osc52`'s own documented default; set explicitly here
+            // so the security decision is visible at the call site instead
+            // of resting on an upstream default that could silently change.
+            osc52: Osc52::OnlyCopy,
             ..TermConfig::default()
         };
         let term = Term::new(config, &size, events.clone());
@@ -212,6 +224,28 @@ impl TerminalCore {
         } else {
             text.as_bytes().to_vec()
         }
+    }
+
+    /// Focus-report bytes for a pane focus transition (`CSI I`/`CSI O`,
+    /// private mode 1004) -- `None` unless the app currently attached to
+    /// this PTY has actually asked for focus events
+    /// (`TermMode::FOCUS_IN_OUT`), the same mode-gated shape as
+    /// `paste_input`'s bracketed-paste check. Stateless: every call is
+    /// judged purely against the terminal's current mode, with no
+    /// deduplication against the last reported state -- an app that
+    /// negotiates mode 1004 must already tolerate a duplicate focus-in/out
+    /// report (nothing in the spec promises otherwise), so the caller
+    /// (`terminal::session::runtime`) is free to call this on every real
+    /// focus transition without this method tracking any history itself.
+    pub(crate) fn focus_input(&self, focused: bool) -> Option<Vec<u8>> {
+        if !self.term.mode().contains(TermMode::FOCUS_IN_OUT) {
+            return None;
+        }
+        Some(if focused {
+            b"\x1b[I".to_vec()
+        } else {
+            b"\x1b[O".to_vec()
+        })
     }
 
     #[cfg(test)]

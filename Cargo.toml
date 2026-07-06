@@ -33,5 +33,12 @@ unicode-width = "0.2"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 wasmtime = "46.0.1"
 
+[dev-dependencies]
+# Only used to build OSC 52 clipboard-write test fixtures
+# (`terminal::tests`/`terminal::session::runtime::tests`) -- already in the
+# dependency graph transitively via alacritty_terminal, so this adds no new
+# crate to the build.
+base64 = "0.22"
+
 [lints.clippy]
 all = { level = "warn", priority = -1 }

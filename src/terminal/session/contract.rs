@@ -20,6 +20,12 @@ pub(crate) enum TerminalCommand {
     SelectionStart(TerminalSelectionPoint),
     SelectionUpdate(TerminalSelectionPoint),
     CopySelection,
+    /// A pane focus transition (`true` = gained focus, `false` = lost it),
+    /// forwarded to `TerminalCore::focus_input` so it can be reported to
+    /// the attached app as `CSI I`/`CSI O` if it negotiated mode 1004. The
+    /// source is `app::runtime::wire_focus_reporting`, which composes
+    /// Horizon's own window focus with which visible pane is active.
+    Focus(bool),
     Shutdown,
 }
 

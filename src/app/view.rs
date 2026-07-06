@@ -38,6 +38,7 @@ pub fn app_view() -> impl IntoView {
     request_active_pane_focus(workspace, pane_focus_requests);
 
     let focus_input = input.clone();
+    let lost_focus_input = input.clone();
     let ime_enabled_input = input.clone();
     let ime_disabled_input = input.clone();
     let ime_preedit_input = input.clone();
@@ -47,6 +48,9 @@ pub fn app_view() -> impl IntoView {
     content
         .on_event(EventListener::WindowGotFocus, move |_| {
             focus_input.handle_window_focus()
+        })
+        .on_event(EventListener::WindowLostFocus, move |_| {
+            lost_focus_input.handle_window_lost_focus()
         })
         .on_event(EventListener::ImeEnabled, move |_| {
             ime_enabled_input.handle_ime_enabled()

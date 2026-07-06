@@ -55,6 +55,7 @@ pub(super) struct CoreReceivers {
     pub(super) paste_rx: Receiver<String>,
     pub(super) key_rx: Receiver<(KeyCode, Modifiers, KeyEventKind)>,
     pub(super) selection_rx: Receiver<SelectionCommand>,
+    pub(super) focus_rx: Receiver<bool>,
 }
 
 pub(super) struct CoreSenders {
@@ -64,6 +65,7 @@ pub(super) struct CoreSenders {
     pub(super) paste_tx: Sender<String>,
     pub(super) key_tx: Sender<(KeyCode, Modifiers, KeyEventKind)>,
     pub(super) selection_tx: Sender<SelectionCommand>,
+    pub(super) focus_tx: Sender<bool>,
 }
 
 /// How long the session runtime waits before flushing a burst of core
@@ -161,6 +163,7 @@ pub(super) fn run_terminal_core(
         paste_rx,
         key_rx,
         selection_rx,
+        focus_rx,
     } = receivers;
     let mut core = TerminalCore::new(size);
 
@@ -242,6 +245,14 @@ pub(super) fn run_terminal_core(
                     }
                 }
             }
+            recv(focus_rx) -> focused => {
+                let Ok(focused) = focused else {
+                    return;
+                };
+                if let Some(bytes) = core.focus_input(focused) {
+                    let _ = command_tx.send(TerminalCommand::Input(bytes));
+                }
+            }
             recv(pty_rx) -> bytes => {
                 let Ok(bytes) = bytes else {
                     return;
@@ -255,6 +266,9 @@ pub(super) fn run_terminal_core(
                 }
                 if events.title.is_some() {
                     let _ = update_tx.send(TerminalUpdate::Title(events.title));
+                }
+                for text in events.clipboard_writes {
+                    let _ = update_tx.send(TerminalUpdate::Clipboard(text));
                 }
                 rearm_sync_flush(&core, &mut sync_flush_rx);
                 notify_snapshot(&core, &update_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
@@ -272,6 +286,9 @@ pub(super) fn run_terminal_core(
                 }
                 if events.title.is_some() {
                     let _ = update_tx.send(TerminalUpdate::Title(events.title));
+                }
+                for text in events.clipboard_writes {
+                    let _ = update_tx.send(TerminalUpdate::Clipboard(text));
                 }
                 rearm_sync_flush(&core, &mut sync_flush_rx);
                 notify_snapshot(&core, &update_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
@@ -295,6 +312,7 @@ pub(super) fn run_writer(
         paste_tx,
         key_tx,
         selection_tx,
+        focus_tx,
     } = senders;
     // Belt-and-braces alongside the view-layer dedup in `terminal::view`:
     // skip the `TIOCSWINSZ` syscall when the requested size matches the one
@@ -349,6 +367,9 @@ pub(super) fn run_writer(
             }
             TerminalCommand::CopySelection => {
                 let _ = selection_tx.send(SelectionCommand::Copy);
+            }
+            TerminalCommand::Focus(focused) => {
+                let _ = focus_tx.send(focused);
             }
             TerminalCommand::Shutdown => return,
         }
@@ -408,6 +429,7 @@ mod tests {
             paste_tx: crossbeam_channel::unbounded().0,
             key_tx: crossbeam_channel::unbounded().0,
             selection_tx: crossbeam_channel::unbounded().0,
+            focus_tx: crossbeam_channel::unbounded().0,
         }
     }
 
@@ -457,6 +479,7 @@ mod tests {
             paste_rx: crossbeam_channel::never(),
             key_rx: crossbeam_channel::never(),
             selection_rx: crossbeam_channel::never(),
+            focus_rx: crossbeam_channel::never(),
         };
 
         std::thread::spawn(move || {
@@ -490,6 +513,120 @@ mod tests {
             healed,
             "failsafe timer should flush the stuck sync window without any further PTY data"
         );
+    }
+
+    /// End-to-end regression coverage for OSC 52 clipboard-write plumbing
+    /// (`docs/tasks/backlog.md` item 4): a PTY chunk carrying an OSC 52
+    /// write sequence must come out the other side of `run_terminal_core`
+    /// as a `TerminalUpdate::Clipboard`, exercised through the real
+    /// `pty_rx` -> `TerminalCore::write_vt` -> `update_tx` path rather than
+    /// calling `write_vt` directly (see `terminal::tests` for the core-level
+    /// event-firing/cap tests this complements). Deliberately stops at the
+    /// channel boundary: writing to the real system clipboard only happens
+    /// in `app::runtime::terminal`, outside this module entirely.
+    #[test]
+    fn run_terminal_core_forwards_osc52_clipboard_writes_as_updates() {
+        let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
+        let (command_tx, _command_rx) = crossbeam_channel::unbounded();
+        let (update_tx, update_rx) = crossbeam_channel::unbounded();
+        let receivers = CoreReceivers {
+            resize_rx: crossbeam_channel::never(),
+            scroll_rx: crossbeam_channel::never(),
+            mouse_rx: crossbeam_channel::never(),
+            paste_rx: crossbeam_channel::never(),
+            key_rx: crossbeam_channel::never(),
+            selection_rx: crossbeam_channel::never(),
+            focus_rx: crossbeam_channel::never(),
+        };
+
+        std::thread::spawn(move || {
+            run_terminal_core(
+                TerminalSize::new(40, 40),
+                pty_rx,
+                receivers,
+                command_tx,
+                update_tx,
+            );
+        });
+
+        // base64("hello") == "aGVsbG8="
+        pty_tx.send(b"\x1b]52;c;aGVsbG8=\x07".to_vec()).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut clipboard_text = None;
+        while Instant::now() < deadline {
+            if let Ok(TerminalUpdate::Clipboard(text)) =
+                update_rx.recv_timeout(Duration::from_millis(50))
+            {
+                clipboard_text = Some(text);
+                break;
+            }
+        }
+
+        assert_eq!(clipboard_text.as_deref(), Some("hello"));
+    }
+
+    /// End-to-end regression coverage for focus-report plumbing
+    /// (`docs/tasks/backlog.md` item 5): a `focus_rx` transition must stay
+    /// silent until the attached app has negotiated mode 1004 (`CSI ?1004h`,
+    /// sent here as ordinary PTY input, exactly as a real shell/TUI would),
+    /// and only then turn into a `CSI I`/`CSI O` `TerminalCommand::Input`
+    /// for the writer thread to send on to the PTY.
+    #[test]
+    fn run_terminal_core_reports_focus_only_once_mode_1004_is_enabled() {
+        let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
+        let (command_tx, command_rx) = crossbeam_channel::unbounded();
+        let (update_tx, update_rx) = crossbeam_channel::unbounded();
+        let (focus_tx, focus_rx) = crossbeam_channel::unbounded();
+        let receivers = CoreReceivers {
+            resize_rx: crossbeam_channel::never(),
+            scroll_rx: crossbeam_channel::never(),
+            mouse_rx: crossbeam_channel::never(),
+            paste_rx: crossbeam_channel::never(),
+            key_rx: crossbeam_channel::never(),
+            selection_rx: crossbeam_channel::never(),
+            focus_rx,
+        };
+
+        std::thread::spawn(move || {
+            run_terminal_core(
+                TerminalSize::new(20, 10),
+                pty_rx,
+                receivers,
+                command_tx,
+                update_tx,
+            );
+        });
+
+        // No app has asked for focus reporting yet -- a focus transition
+        // must not produce any PTY input at all.
+        focus_tx.send(true).unwrap();
+        assert!(
+            command_rx.recv_timeout(Duration::from_millis(200)).is_err(),
+            "focus_input must stay silent until mode 1004 is negotiated"
+        );
+
+        // Negotiate mode 1004, then synchronize on the snapshot that always
+        // follows a PTY-driven mutation (`notify_snapshot`'s backdated
+        // `last_sent` guarantees the very first one sends immediately) --
+        // proof the mode-1004 write has already been applied before the
+        // focus transition below is sent, with no arbitrary sleep needed.
+        pty_tx.send(b"\x1b[?1004h".to_vec()).unwrap();
+        update_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("a snapshot should follow the mode-1004 write");
+
+        focus_tx.send(true).unwrap();
+        let focus_in = command_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("focus-in should be reported once mode 1004 is enabled");
+        assert!(matches!(focus_in, TerminalCommand::Input(bytes) if bytes == b"\x1b[I"));
+
+        focus_tx.send(false).unwrap();
+        let focus_out = command_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("focus-out should be reported once mode 1004 is enabled");
+        assert!(matches!(focus_out, TerminalCommand::Input(bytes) if bytes == b"\x1b[O"));
     }
 
     /// Regression guard for the IME/composed-text carve-out described in
