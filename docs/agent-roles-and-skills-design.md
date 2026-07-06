@@ -250,3 +250,120 @@ never accumulate domain text — and a future user-facing agent-definition
 flow (roadmap "Later") becomes "pick skills, pick an envelope" rather
 than authoring prompts. The fork stays open until a second role tests
 the line; this is one data point, not a verdict.
+
+## v2: a repository skill layer, default skills, and the first generic consumer
+
+Written 2026-07-07 (owner decisions made in-session; implementation follows
+this section). Where v1 left skills embedded-only and gated behind a role,
+v2 does two things: adds a second, on-disk skill source that can be edited
+without rebuilding the binary, and gives skills to role-less sessions too —
+so `skill.read` finally has a generic-session consumer, not just the config
+role.
+
+### The repository skill layer: `.horizon/skills/<id>/SKILL.md`
+
+Mirroring `instructions`' `AGENTS.md`/`CLAUDE.md` walk exactly:
+`skills::SkillRegistry::discover(cwd)` walks from the session's cwd up to
+its git root (or just `cwd`, outside a repository — same rule as
+`instructions::ancestor_dirs_from_git_root`, now shared by both), and reads
+every `.horizon/skills/<id>/SKILL.md` found along the way. Same frontmatter
+format as an embedded skill (`name:`/`description:` + Markdown body); a
+directory whose `SKILL.md` doesn't parse warns on stderr and is skipped,
+never crashing the session (the config-file-style discipline
+`instructions::read_to_string_or_warn` already established).
+
+**Override order: repository wins.** A repository skill sharing an embedded
+skill's id replaces it outright for that session (not just its body — its
+description too), and a repository skill discovered nearer the session's
+cwd replaces one discovered at a more distant ancestor with the same id
+(the same "nested refines root" composition order `instructions` uses).
+This is a deliberate, accepted trust trade, not an oversight: a
+`.horizon/skills/` directory is exactly the prompt-injection surface
+`docs/trust-boundaries.md`'s tier reasoning warns about — the same surface
+`roles::CONFIG_ROLE`'s doc comment already flags for `AGENTS.md`/
+`CLAUDE.md` ingestion — and sharper here, since it can silently shadow an
+embedded skill's instructions (including `horizon-config`'s, for any
+session that happens to run in a repo carrying one). Accepted anyway,
+because Horizon is presently a personal, single-owner project: this is a
+deliberate hypothesis-testing setup, letting a skill be iterated on by
+editing a file instead of rebuilding and restarting the binary, exactly
+the same trade the repository-instructions ingestion already makes. Should
+Horizon ever gain other users or a threat model with an untrusted
+repository, this override direction is exactly what would need
+revisiting (see `docs/trust-boundaries.md`).
+
+**Discovery is cheap, reads are fresh.** Only frontmatter is consulted at
+session start (there's no cheaper way to reach just the frontmatter with
+this crate's hand-rolled parser, but the body is discarded immediately
+after parsing) — a repository skill's `Skill` value stores a path, not a
+cached body. `skill.read` re-reads and re-parses that path from disk on
+every call, so an edit followed by a fresh `skill.read` in the same
+session sees the new content without a session restart — the "edit,
+observe" loop this layer exists for. A repository skill's body is capped
+at `skills::SKILL_BODY_CAP_CHARS` (a plain constant, not a config knob —
+mirroring `repository_instructions_cap_chars`'s discipline without needing
+its own file-configurable knob, since there's no per-deployment reason to
+tune this crate-internal limit).
+
+### Per-session composition, not a global static
+
+`skills::SkillRegistry` moved from v1's process-lifetime `OnceLock` (a
+fixed, compile-time-known set) to a per-session value: embedded builtins
+composed with whatever `.horizon/skills/` this session's cwd resolves to,
+sorted by id for deterministic listing/lookup order. Built at two
+independent production sites, both from the same process cwd (a cheap,
+session-start-once listing, the same duplication style `instructions`'
+cwd-derived state already has between call sites):
+
+- `providers::rig::session::session_extra_sections` builds one for the
+  prompt section (below).
+- `horizon-agentd`'s `session::run_session` builds a second one for
+  `skill.read`'s dispatch, installed onto `tools::ToolSessionState` via a
+  new builder method (`ToolSessionState::with_skills`) rather than a
+  `for_current_dir` parameter — mirroring how `RecallContext` was threaded
+  in, except set post-construction so that constructor's signature (and
+  every non-production caller: this crate's own tests, `tools::recall`'s
+  tests, Horizon's UI-side dummy-tool-state test helper) stays unchanged.
+
+### Default skills for generic sessions
+
+v1's `skills_prompt_section` only ever ran for a role naming `skill_ids`;
+a role-less session got no skills section at all, "no consumer" being the
+byte-identical backward-compatible case. v2 gives every role-less session
+a skills section too, listing *every* skill this session's registry
+knows about (embedded + repository) — `SkillRegistry::
+prompt_section_for_all`. A role-bearing session's curated `skill_ids`
+listing is unchanged in shape (`SkillRegistry::prompt_section_for_ids`),
+except it now resolves against this same per-session composed registry
+instead of a fixed embedded set — so a repository skill can override an
+embedded one even under a role's narrower envelope, consistent with the
+override order above. The role's allowlist itself (`allowed_tool_ids`)
+is untouched by any of this: a config-role session still cannot reach
+`bash`/`fs.*` regardless of what a repository defines under
+`.horizon/skills/`.
+
+The byte-identical-prompt guarantee from v1 (an empty skill set adds no
+section at all) still holds structurally, but this build never actually
+exercises it in production — it always embeds at least `horizon-config`
+and `horizon-cli` — so it's exercised directly against a hand-built empty
+`SkillRegistry` in `skills`' own tests rather than through
+`SkillRegistry::discover`.
+
+### `horizon-cli`: the first generic-session skill
+
+`crates/horizon-agent/skills/horizon-cli/SKILL.md` is the first skill a
+role-less session can discover on its own initiative (v1's
+`horizon-config` was role-gated). It teaches an agent to operate the
+Horizon workspace it's running inside via the `horizon` CLI: orientation
+(`sessions`/`state`), pane creation (`new-terminal`/`new-agent`/
+`new-config-agent`, `--split`'s "here" vs. explicit vs. omitted placement,
+`--active`'s focus-stealing caution), attach/terminate/approve/deny/
+cancel-turn, and the `--yes`/destructive-command convention for running
+non-interactively from `bash`. Its description frontmatter names the
+trigger explicitly ("operate Horizon itself: open panes/terminals, attach
+sessions, run commands in the workspace this agent lives in") so the
+model can match it against a task without ever reading the body first.
+Content is sourced from `crates/horizon-ctl/src/cli.rs` (the real parser),
+`docs/cli-control-plane-design.md`, and `AGENTS.md`'s own command list —
+not re-derived from memory, so it can't drift from the actual subcommand
+surface at the point it was written.

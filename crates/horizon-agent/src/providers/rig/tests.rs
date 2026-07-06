@@ -1415,20 +1415,59 @@ fn test_environment(cwd: std::path::PathBuf) -> crate::prompt::SessionEnvironmen
 }
 
 #[test]
-fn session_extra_sections_is_repository_instructions_only_for_a_role_less_session() {
+fn session_extra_sections_lists_every_skill_then_repository_instructions_for_a_role_less_session() {
     let cwd = git_repo_with_agents_md("role-less");
     let environment = test_environment(cwd.clone());
     let config = RigAgentConfig::default();
 
     let sections = session_extra_sections(&environment, &config, None);
-    let expected = crate::instructions::extra_sections(
+    let expected_instructions = crate::instructions::extra_sections(
         &environment.cwd,
         config.repository_instructions_cap_chars,
     );
 
     assert_eq!(
-        sections, expected,
-        "a role-less session's extra_sections must match instructions::extra_sections exactly"
+        sections.len(),
+        2,
+        "expected exactly a skills section and a repository-instructions section, got: \
+         {sections:?}"
+    );
+    assert!(
+        sections[0].contains("horizon-config")
+            && sections[0].contains("horizon-cli")
+            && sections[0].contains("skill.read"),
+        "a role-less session must list every available skill, got: {:?}",
+        sections[0]
+    );
+    assert_eq!(
+        sections[1..],
+        expected_instructions[..],
+        "a role-less session's repository instructions must match \
+         instructions::extra_sections exactly"
+    );
+
+    let _ = std::fs::remove_dir_all(&cwd);
+}
+
+#[test]
+fn session_extra_sections_lists_a_repository_skill_discovered_from_cwd_for_a_role_less_session() {
+    let cwd = git_repo_with_agents_md("role-less-repo-skill");
+    let skill_dir = cwd.join(".horizon").join("skills").join("my-skill");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: my-skill\ndescription: A repository skill.\n---\nBody.\n",
+    )
+    .unwrap();
+    let environment = test_environment(cwd.clone());
+    let config = RigAgentConfig::default();
+
+    let sections = session_extra_sections(&environment, &config, None);
+
+    assert!(
+        sections[0].contains("my-skill") && sections[0].contains("A repository skill."),
+        "expected the repository skill in the skills section, got: {:?}",
+        sections[0]
     );
 
     let _ = std::fs::remove_dir_all(&cwd);

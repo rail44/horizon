@@ -53,6 +53,7 @@ use horizon_agent::live::LiveState;
 use horizon_agent::persistence::event_log::{Appender, Record, WriterHandle};
 use horizon_agent::persistence::projection::duckdb::{DuckdbStoreHandle, SharedDuckdbStore};
 use horizon_agent::roles::RoleId;
+use horizon_agent::skills::SkillRegistry;
 use horizon_agent::tools::{
     cancelled_tool_call_result, process_agent_provider_event, register_session_runtime,
     resolve_approval, should_fold_completion, unregister_session_runtime, ApprovalDecision,
@@ -670,7 +671,16 @@ fn run_session(
         session_id: Some(session_id),
         store: state.wait_for_duckdb_store(),
     };
-    let tool_state = ToolSessionState::for_current_dir(state.agent_config.tools, recall);
+    // Discovered from this process's own cwd, same as `providers::rig::
+    // session::session_extra_sections` independently does for the prompt's
+    // skills section -- both are cheap, session-start-once listings of the
+    // same on-disk state, so there's no shared value worth threading
+    // between these two otherwise-unconnected session-start sites (this
+    // thread's `ToolSessionState`/tool execution vs. the rig provider's own
+    // dedicated thread and its system prompt).
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
+    let tool_state = ToolSessionState::for_current_dir(state.agent_config.tools, recall)
+        .with_skills(SkillRegistry::discover(&cwd));
     let live_state = match state.writer() {
         Some(writer) => LiveState::with_event_log_and_history(
             session_id,

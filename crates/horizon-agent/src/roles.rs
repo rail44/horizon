@@ -59,8 +59,12 @@ pub struct RoleDefinition {
     /// this role. See [`CONFIG_ROLE`]'s doc comment for why the `config`
     /// role sets this to `false`.
     pub include_repository_instructions: bool,
-    /// Skill ids (`skills::get`) advertised to a session with this role --
-    /// see `skills::skills_prompt_section`.
+    /// Skill ids (`skills::SkillRegistry::get`) advertised to a session with
+    /// this role -- see `skills::SkillRegistry::prompt_section_for_ids`.
+    /// Resolved against the session's own composed registry (embedded +
+    /// any repository skills discovered from its cwd -- see the `skills`
+    /// module doc's v2 update), so a repository skill can override an
+    /// embedded one even for a role.
     pub skill_ids: &'static [&'static str],
 }
 

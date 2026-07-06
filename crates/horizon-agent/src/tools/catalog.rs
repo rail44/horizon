@@ -208,13 +208,16 @@ pub fn definitions() -> Vec<Definition> {
             }),
             permission: ToolPermission::RequireApproval,
         },
-        // config.read/config.write/skill.read (`tools::config`) are the
-        // config role's only allowed tools (`roles::CONFIG_ROLE`).
-        // Cataloging them globally here adds no new *capability* -- `bash`
-        // can already read/write this same file with no dedicated tool at
-        // all (`docs/agent-tools-design.md`) -- the restriction they exist
-        // for happens at the role's `allowed_tool_ids`, not here. See
+        // config.read/config.write (`tools::config`) are the config role's
+        // only allowed tools (`roles::CONFIG_ROLE`). Cataloging them
+        // globally here adds no new *capability* -- `bash` can already
+        // read/write this same file with no dedicated tool at all
+        // (`docs/agent-tools-design.md`) -- the restriction they exist for
+        // happens at the role's `allowed_tool_ids`, not here. See
         // `tools::config`'s own doc comment for the full trust reasoning.
+        // `skill.read` (grouped with them below since `tools::config` also
+        // executes it) is different: every session can call it, role-less
+        // or not -- see `skills`' module doc.
         Definition {
             id: "config.read".to_string(),
             title: "Read Horizon Config".to_string(),
