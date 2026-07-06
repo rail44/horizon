@@ -98,6 +98,14 @@ already maps to SUPER app-side.
    pane (you made it to use it). Palette commands that create nothing
    (reload, terminate-detached, ...) return to the state from before
    the palette opened.
+   *Amended 2026-07-06 (second revision):* diving is a property of the
+   **origin**, not the command. Creating/attaching operations invoked
+   from human surfaces (mode, palette) dive — and `AttachSession`
+   joins this bucket. The same operations arriving over the control
+   plane carry an explicit `activate` argument and default to **not**
+   stealing focus (an agent opening views behind the owner's work must
+   not grab the keyboard); the CLI exposes `--active` as the opt-in.
+   See `docs/cli-control-plane-design.md`.
 2. **Visualization uses all three signals**: pane dimming while in
    workspace mode (the accident-killer), a cursor frame visually
    distinct from the focus border, and a status-bar mode chip.

@@ -102,6 +102,37 @@ explicit acknowledgment flag by convention. Server-side policy
 (allowlists, per-capability grants) can be layered later through
 handshake capabilities if remote/ACP scenarios ever demand it.
 
+## Second revision (2026-07-06, owner-approved)
+
+Four amendments settled after v1 shipped and was exercised end-to-end:
+
+1. **Single binary, subcommand client.** Running multiple Horizons is
+   an anti-pattern in this design's philosophy, so a second binary name
+   earns nothing: `horizon` with no arguments launches the GUI as
+   today; `horizon <subcommand> ...` runs the control-plane client and
+   exits (tmux's model). The separate `horizon-ctl` binary is retired;
+   its client code survives as a library the root binary dispatches to.
+2. **Fixed well-known socket path.** The single-instance norm justifies
+   `$XDG_RUNTIME_DIR/horizon/control.sock` (agentd's discipline,
+   including stale-socket handling) instead of the per-pid path — so
+   the client works from anywhere, not just inside panes.
+   `HORIZON_SOCKET` remains the override and is still injected into
+   panes/agentd, which is what keeps a nested dev instance addressable
+   (it shadows the variable for its own panes). A second instance
+   finding a responsive owner does not steal the socket: it starts
+   without a control listener and logs a warning.
+3. **`activate` rides on creating/attaching operations.** Origin
+   decides the default: human surfaces dive (see the workspace-mode
+   design), control-plane calls default to `activate=false` so
+   scripted/agent-driven view creation never steals the owner's focus.
+   The CLI flag is `--active`.
+4. **Placement vocabulary.** `attach <session-id>` joins the external
+   names; `new-terminal`/`new-agent` gain `--split` placement. "Here"
+   is resolved client-side from `HORIZON_SESSION_ID` (newly injected
+   into pane environments — the pane's session id is the stable
+   external pane reference) and sent as an explicit target, keeping
+   the explicit-targets rule intact.
+
 ## Deferred
 
 - **Subscription streams** — v2, additive (see above).
