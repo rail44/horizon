@@ -150,7 +150,7 @@ pub(crate) fn agent_frame_view(
             .flex_basis(0.0)
             .flex_grow(1.0)
             .min_height(0.0)
-            .background(theme::surface_panel())
+            .background(theme::terminal_background())
     })
 }
 

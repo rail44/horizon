@@ -584,16 +584,20 @@ pub(super) fn pane_view(
         } else {
             (1.0, theme::surface_selected())
         };
-        // Terminal panes take the terminal's own background so the
-        // sub-row-height remainder at the pane bottom (pane height is
-        // rarely an exact multiple of the line height) blends in instead
-        // of showing as a differently-colored band.
-        let background =
-            if workspace.with(|ws| ws.visible_pane_kind(index) == Some(PaneKind::Terminal)) {
-                theme::terminal_background()
-            } else {
-                theme::surface_panel()
-            };
+        // Session panes (terminal and agent) share the terminal's own
+        // background: for terminals it blends the sub-row-height
+        // remainder at the pane bottom, and for agents it keeps the two
+        // session kinds on one canvas color (owner request, 2026-07-07).
+        let background = if workspace.with(|ws| {
+            matches!(
+                ws.visible_pane_kind(index),
+                Some(PaneKind::Terminal) | Some(PaneKind::Agent)
+            )
+        }) {
+            theme::terminal_background()
+        } else {
+            theme::surface_panel()
+        };
         s.height_full()
             .min_width(0.0)
             .flex_basis(0.0)
