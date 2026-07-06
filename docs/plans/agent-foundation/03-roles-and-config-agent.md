@@ -1,6 +1,5 @@
 # Plan 03 — 役割機構と設定エージェント
 
-Domain: エージェント基盤
 Status: ready
 
 ## 背景

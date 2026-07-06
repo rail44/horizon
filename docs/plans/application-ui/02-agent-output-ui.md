@@ -1,6 +1,5 @@
 # Plan 02 — エージェント出力 UI の抜本改善
 
-Domain: アプリケーション/UI
 Status: ready
 
 ## 背景

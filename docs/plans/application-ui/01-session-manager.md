@@ -1,6 +1,5 @@
 # Plan 01 — セッション管理モーダル
 
-Domain: アプリケーション/UI
 Status: ready
 
 ## 背景

@@ -146,8 +146,11 @@ back through the review queue below. Subagent workers already follow
 the same shape (worktree branch handoff, `.claude/agents/worker.md`);
 this section extends it to every session working in this repository.
 
-Feature-grained plans live in `docs/plans/` (see `docs/roadmap.md`); a
-domain session starts by reading its plan. Concrete design decisions
+Feature-grained plans live in `docs/plans/<domain>/` — the directory
+is the domain (see `docs/roadmap.md`); one plan file is handed to one
+domain session, which starts by reading it. Each plan carries a
+`Status:` line (ready → in-session → review → merged) maintained by
+the project session. Concrete design decisions
 belong to the domain session (with the owner); the project session
 does not relitigate them at merge — its review covers the gate,
 cross-domain integration, and coherence with the architecture docs,
