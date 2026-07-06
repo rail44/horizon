@@ -115,6 +115,11 @@ contents:
 
 ## Conventions
 
+- **Code and comments are English.** Do not quote task instructions
+  (often written in Japanese) verbatim into code comments — restate the
+  intent in English. Japanese as *test data* (IME, multibyte-boundary
+  cases) is fine and deliberate; docs under `docs/research/` and
+  `docs/plans/` are Japanese by choice.
 - **Keep module internals crate-local.** Default to `pub(crate)` (or private)
   and re-export a narrow surface from each `mod.rs`. See the long run of
   "Keep ... crate-local" commits for the pattern.
