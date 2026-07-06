@@ -23,9 +23,11 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
    view/app layer).
 5. **Focus events (CSI I/O)** — never sent on pane focus change; needs a
    pane-focus signal wired into the terminal session.
-6. **agentd e2e flakiness under load** — `drained_agentd_respawns...` and
-   `killed_agentd_respawns...` fail nondeterministically under
-   `cargo test --workspace -j4` on a loaded machine; pass standalone.
+6. *(resolved 2026-07-06)* **agentd e2e flakiness under load** —
+   verified gone: 5 consecutive `cargo nextest run -p horizon-agentd`
+   runs all green, including the two historical flakes individually.
+   Attributed to nextest's per-test process isolation plus the drain
+   event-log flush fix.
 7. **Theme roles lost two distinctions** — the user message bubble's blue
    tint and the approval banner's amber background have no matching theme
    role (both fell back to neutral surfaces); candidates for a
