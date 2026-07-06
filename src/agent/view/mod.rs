@@ -1,12 +1,16 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use crate::agent::frame::AgentFrame;
 use crate::ui::fonts::font_family;
 use crate::ui::theme;
-use floem::event::{Event, EventListener, EventPropagation};
 use floem::peniko::kurbo::Point;
 use floem::prelude::*;
 use floem::reactive::{create_effect, create_memo};
 
 mod diff;
+mod follow_scroll;
 mod labels;
 mod markdown;
 mod style;
@@ -14,20 +18,53 @@ mod tool_header;
 mod tool_view;
 mod transcript;
 
+use follow_scroll::{classify_scroll, next_follow_state, FollowState};
 use labels::{block_label, shows_label};
 use markdown::{markdown_lines, MarkdownLine, MarkdownLineKind};
 use style::{block_colors, block_max_width, block_text_color};
 use transcript::{
-    compute_transcript_window, current_block_text, is_thinking_streaming, show_turn_end_rule,
-    starts_new_turn, BlockKind, TranscriptBlock, TranscriptTone, TranscriptWindow,
+    compute_transcript_window, current_block_text, is_thinking_streaming, latest_user_block_id,
+    show_turn_end_rule, starts_new_turn, BlockKind, TranscriptBlock, TranscriptTone,
+    TranscriptWindow,
 };
+
+/// How much taller the transcript's measured content height must get,
+/// since the previous `on_scroll` call, to count as "the content grew"
+/// (`follow_scroll::ScrollCause::ContentGrew`) rather than layout-rounding
+/// noise on an unchanged document.
+const CONTENT_GROWTH_EPSILON: f64 = 0.5;
 
 pub(crate) fn agent_frame_view(
     frame: impl Fn() -> AgentFrame + Copy + 'static,
     visible: impl Fn() -> bool + Copy + 'static,
 ) -> impl IntoView {
-    let follow_latest = RwSignal::new(true);
+    let follow = RwSignal::new(FollowState::Following);
     let viewport = RwSignal::new(None::<floem::peniko::kurbo::Rect>);
+    // `on_scroll`'s "did the content grow" input -- see `follow_scroll`'s
+    // `ScrollCause` doc comment for why this, not a "was this our own
+    // jump?" flag, is what guards against misreading a streaming height
+    // change as the user scrolling away.
+    let last_content_height = RwSignal::new(0.0_f64);
+    // The last rendered block's id at the moment `follow` most recently
+    // went `Detached` -- what the return pill's "new output arrived while
+    // you were looking away" label (part b of this slice) compares the
+    // live last-block id against.
+    let detached_since_block = RwSignal::new(None::<usize>);
+    // Every currently-mounted block's own top-level `ViewId`, registered by
+    // `transcript_block_view` as each block is first built. The "jump to
+    // latest user message" pill resolves a block *id* via
+    // `latest_user_block_id`, then looks it up here to get something
+    // `.scroll_to_view` can actually target. A plain `RefCell`, not a
+    // signal: nothing needs to react to this map changing, only to read it
+    // at click time. Stale entries for blocks the 200-block window has
+    // since trimmed are harmless (see this slice's report on window-trim
+    // scroll position).
+    let block_view_ids: Rc<RefCell<HashMap<usize, floem::ViewId>>> =
+        Rc::new(RefCell::new(HashMap::new()));
+    // Where the "jump to latest user message" pill wants the viewport,
+    // consumed by `.scroll_to_view` below.
+    let jump_to_view = RwSignal::new(None::<floem::ViewId>);
+
     // Recomputed only when `transcript_revision` actually changes (see
     // `compute_transcript_window`), so a reactive re-run caused by some
     // *other* pane's agent frame updating the shared `Frames` signal is a
@@ -35,6 +72,7 @@ pub(crate) fn agent_frame_view(
     let window = create_memo(move |previous: Option<&TranscriptWindow>| {
         compute_transcript_window(&frame(), previous)
     });
+    let block_ids_for_blocks = block_view_ids.clone();
     let content = v_stack((
         label(move || omitted_summary(window.with(|window| window.omitted))).style(move |s| {
             if window.with(|window| window.omitted) == 0 {
@@ -46,7 +84,7 @@ pub(crate) fn agent_frame_view(
         dyn_stack(
             move || window.with(|window| window.blocks.clone()),
             move |block| (block.id, block.tone),
-            move |block| transcript_block_view(block, frame),
+            move |block| transcript_block_view(block, frame, block_ids_for_blocks.clone()),
         )
         // Dense within a turn (decision 6): whitespace belongs at turn
         // boundaries only, which `turn_boundary_rule` supplies per-block via
@@ -57,15 +95,27 @@ pub(crate) fn agent_frame_view(
     .style(|s| s.width_full().flex_col().gap(4).padding(8));
     let content_id = content.id();
 
-    scroll(content)
+    let transcript_scroll = scroll(content)
         .on_scroll(move |rect| {
             viewport.set(Some(rect));
-            if viewport_is_at_bottom(rect, content_height(content_id)) {
-                follow_latest.set(true);
+
+            let height = content_height(content_id);
+            let content_grew =
+                height > last_content_height.get_untracked() + CONTENT_GROWTH_EPSILON;
+            last_content_height.set(height);
+
+            let at_bottom = viewport_is_at_bottom(rect, height);
+            let cause = classify_scroll(at_bottom, content_grew);
+            let previous = follow.get_untracked();
+            let next = next_follow_state(previous, cause);
+            if previous == FollowState::Following && next == FollowState::Detached {
+                detached_since_block
+                    .set(window.with(|window| window.blocks.last().map(|block| block.id)));
             }
+            follow.set(next);
         })
         .scroll_to(move || {
-            if !visible() || !follow_latest.get() {
+            if !visible() || follow.get() != FollowState::Following {
                 return None;
             }
 
@@ -76,32 +126,113 @@ pub(crate) fn agent_frame_view(
             let _ = window.with(|window| window.revision);
             Some(Point::new(0.0, 1_000_000_000.0))
         })
+        .scroll_to_view(move || jump_to_view.get())
         .scroll_style(|s| s.shrink_to_fit().overflow_clip(true))
-        .style(move |s| {
-            if !visible() {
-                return s.hide();
-            }
+        .style(|s| s.size_full());
 
-            s.width_full()
-                .flex_basis(0.0)
-                .flex_grow(1.0)
-                .min_height(0.0)
-                .background(theme::surface_panel())
+    stack((
+        transcript_scroll,
+        follow_scroll_pills(
+            frame,
+            window,
+            follow,
+            detached_since_block,
+            block_view_ids,
+            jump_to_view,
+        ),
+    ))
+    .style(move |s| {
+        if !visible() {
+            return s.hide();
+        }
+
+        s.width_full()
+            .flex_basis(0.0)
+            .flex_grow(1.0)
+            .min_height(0.0)
+            .background(theme::surface_panel())
+    })
+}
+
+/// The follow-scroll return pills (`docs/agent-output-ui-design.md`
+/// decision 7: "a return pill, and a jump to the latest user message"),
+/// overlaid on the transcript's bottom-right corner and shown only while
+/// `follow` is `Detached`. Scrolling -- including where these buttons send
+/// it -- is continuous/positional input and pure display state, not an
+/// app-level operation (`docs/ux-principles.md`'s "Not commands" list), so
+/// these stay plain click handlers rather than `CommandId`s.
+fn follow_scroll_pills(
+    frame: impl Fn() -> AgentFrame + Copy + 'static,
+    window: floem::reactive::Memo<TranscriptWindow>,
+    follow: RwSignal<FollowState>,
+    detached_since_block: RwSignal<Option<usize>>,
+    block_view_ids: Rc<RefCell<HashMap<usize, floem::ViewId>>>,
+    jump_to_view: RwSignal<Option<floem::ViewId>>,
+) -> impl IntoView {
+    let has_unread = move || {
+        detached_since_block.get().is_some_and(|since| {
+            window.with(|window| window.blocks.last().map(|block| block.id)) != Some(since)
         })
-        .on_event(EventListener::PointerWheel, move |event| {
-            if let Event::PointerWheel(pointer) = event {
-                if pointer.delta.y < 0.0 {
-                    follow_latest.set(false);
-                } else if pointer.delta.y > 0.0
-                    && viewport
-                        .get_untracked()
-                        .is_some_and(|rect| viewport_is_at_bottom(rect, content_height(content_id)))
-                {
-                    follow_latest.set(true);
-                }
+    };
+
+    let return_pill = pill_button(
+        move || {
+            if has_unread() {
+                "\u{2193} New output".to_string()
+            } else {
+                "\u{2193} Latest".to_string()
             }
-            EventPropagation::Continue
-        })
+        },
+        move || {
+            detached_since_block.set(None);
+            follow.set(FollowState::Following);
+        },
+    );
+
+    let jump_to_user_pill = pill_button(
+        || "Your last message".to_string(),
+        move || {
+            let Some(block_id) = latest_user_block_id(&frame()) else {
+                return;
+            };
+            let Some(view_id) = block_view_ids.borrow().get(&block_id).copied() else {
+                return;
+            };
+
+            jump_to_view.set(Some(view_id));
+            // A deliberate look-back at earlier context, not a resumed
+            // follow (decision 7) -- forced regardless of where the target
+            // happens to land, rather than relying on the next `on_scroll`
+            // call to infer it.
+            detached_since_block
+                .set(window.with(|window| window.blocks.last().map(|block| block.id)));
+            follow.set(FollowState::Detached);
+        },
+    );
+
+    h_stack((return_pill, jump_to_user_pill)).style(move |s| {
+        let s = s.absolute().inset_bottom(16.0).inset_right(16.0).gap(8);
+        if follow.get() == FollowState::Following {
+            s.hide()
+        } else {
+            s
+        }
+    })
+}
+
+fn pill_button(
+    text: impl Fn() -> String + 'static,
+    on_click: impl Fn() + 'static,
+) -> impl IntoView {
+    label(text).on_click_stop(move |_| on_click()).style(|s| {
+        s.padding_horiz(10)
+            .padding_vert(6)
+            .font_size(11)
+            .color(theme::text_primary())
+            .background(theme::surface_raised())
+            .border(1.0)
+            .border_color(theme::accent())
+    })
 }
 
 fn omitted_summary(omitted: usize) -> String {
@@ -124,6 +255,7 @@ fn viewport_is_at_bottom(viewport: floem::peniko::kurbo::Rect, content_height: f
 fn transcript_block_view(
     block: TranscriptBlock,
     frame: impl Fn() -> AgentFrame + Copy + 'static,
+    block_view_ids: Rc<RefCell<HashMap<usize, floem::ViewId>>>,
 ) -> impl IntoView {
     let tone = block.tone;
     let block_id = block.id;
@@ -144,7 +276,7 @@ fn transcript_block_view(
         });
     }
 
-    v_stack((
+    let view = v_stack((
         turn_boundary_rule_view(tone),
         h_stack((
             label(String::new).style(move |s| {
@@ -186,7 +318,15 @@ fn transcript_block_view(
         ))
         .style(move |s| s.width_full().items_start().gap(12)),
     ))
-    .style(|s| s.width_full().flex_col())
+    .style(|s| s.width_full().flex_col());
+
+    // Registered once per block (see `dyn_stack`'s `(block.id, block.tone)`
+    // key in `agent_frame_view`: an unchanged key means this constructor
+    // never runs again for the same block) -- what the "jump to latest
+    // user message" pill resolves a block id through to reach an actual
+    // `.scroll_to_view` target.
+    block_view_ids.borrow_mut().insert(block_id, view.id());
+    view
 }
 
 /// The subtle rule that opens a new turn (decision 6) -- rendered above

@@ -68,6 +68,26 @@ decoration is reserved for modals and badges).
 - All colors go through theme roles (no hardcoded colors).
 - Operations stay on the command model; approval commands unchanged.
 
+## Known limitation: window-trim scroll drift (slice 3)
+
+While `follow` is `Detached` and a very long session (> 200 blocks past
+the last one visible) trims the oldest block from the window, the
+surviving blocks shift up by the trimmed block's height, but the
+scroll view's pixel offset does not compensate -- the same offset now
+shows different content. `floem::views::Scroll` exposes an item-based
+jump (`scroll_to_view(ViewId)`, used by slice 3's "jump to latest user
+message" pill and its own `latest_user_block_id` resolution), so an
+anchor-and-reassert fix is possible in principle: track the topmost
+visible block while detached, and re-`scroll_to_view` it whenever a
+trim (`TranscriptWindow.omitted` increasing) is observed. Deferred for
+now -- it needs (a) a topmost-visible-block resolver walking every
+mounted block's layout rect, and (b) a trim-only trigger distinct from
+the ordinary revision bump that already drives the sticky-bottom snap,
+which is more machinery than this slice's scope. Only affects sessions
+long enough to exceed the 200-block window while the user is reading
+older content; not a regression from slices 1/2, which already
+established the same trailing-window trade-off.
+
 ## Slices
 
 1. Tool-block merge + one-line summaries + per-tool renderers (edit

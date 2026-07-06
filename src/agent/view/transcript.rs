@@ -520,6 +520,25 @@ pub(super) fn show_turn_end_rule(frame: &AgentFrame, last_tone: Option<Transcrip
     !frame.is_turn_in_flight() && last_tone.is_some_and(|tone| tone != TranscriptTone::User)
 }
 
+/// The block id of the most recent user message in `frame`, if any --
+/// what the "jump to latest user message" return pill (`docs/
+/// agent-output-ui-design.md` decision 7) resolves its target from. A
+/// message item's block id is always its own index in `frame.items` (see
+/// [`message_block`]), so this can scan `frame.items` directly rather than
+/// building the full windowed block list just to find one id.
+pub(super) fn latest_user_block_id(frame: &AgentFrame) -> Option<usize> {
+    frame.items.iter().enumerate().rev().find_map(|(id, item)| {
+        matches!(
+            item,
+            AgentFrameItem::Message(Message {
+                role: MessageRole::User,
+                ..
+            })
+        )
+        .then_some(id)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -905,6 +924,58 @@ mod tests {
             items: Vec::new(),
         };
         assert!(!show_turn_end_rule(&frame, None));
+    }
+
+    // --- latest user message resolution (follow-scroll return pill, slice 3)
+
+    #[test]
+    fn latest_user_block_id_finds_the_last_user_message() {
+        let frame = AgentFrame {
+            state: None,
+            items: vec![
+                AgentFrameItem::Message(Message {
+                    role: MessageRole::User,
+                    text: "first".to_string(),
+                }),
+                AgentFrameItem::Message(Message {
+                    role: MessageRole::Assistant,
+                    text: "reply".to_string(),
+                }),
+                AgentFrameItem::Message(Message {
+                    role: MessageRole::User,
+                    text: "second".to_string(),
+                }),
+                AgentFrameItem::Message(Message {
+                    role: MessageRole::Assistant,
+                    text: "reply 2".to_string(),
+                }),
+            ],
+        };
+
+        assert_eq!(latest_user_block_id(&frame), Some(2));
+    }
+
+    #[test]
+    fn latest_user_block_id_is_none_without_a_user_message() {
+        let frame = AgentFrame {
+            state: None,
+            items: vec![AgentFrameItem::Message(Message {
+                role: MessageRole::Assistant,
+                text: "hi".to_string(),
+            })],
+        };
+
+        assert_eq!(latest_user_block_id(&frame), None);
+    }
+
+    #[test]
+    fn latest_user_block_id_is_none_for_an_empty_frame() {
+        let frame = AgentFrame {
+            state: None,
+            items: Vec::new(),
+        };
+
+        assert_eq!(latest_user_block_id(&frame), None);
     }
 
     #[test]
