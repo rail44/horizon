@@ -9,6 +9,7 @@ use crate::contract::SessionId;
 use crate::contract::{MessageRole, ToolCallId};
 #[cfg(test)]
 use crate::frame::{agent_frame_from_events, AgentFrame};
+use crate::roles::RoleId;
 
 use super::{
     session_id_text, AgentStoredEvent, AgentStoredSession, RecallEntry, RecallEntryKind,
@@ -17,7 +18,7 @@ use super::{
 #[cfg(test)]
 use super::{
     AgentStoredApproval, AgentStoredMessage, AgentStoredSessionSnapshot, AgentStoredToolCall,
-    AgentStoredToolResult,
+    AgentStoredToolResult, AgentStoredTurn,
 };
 
 /// How many characters of `text`/`input_json`/`output_json` `search_history`
@@ -36,7 +37,7 @@ impl Store {
     /// [`parse_session_id_column`] stay real API rather than test scaffolding.
     pub fn sessions(&self) -> Result<Vec<AgentStoredSession>> {
         let mut stmt = self.conn.prepare(
-            "SELECT session_id, provider_id, last_sequence, updated_at::TEXT
+            "SELECT session_id, provider_id, role_id, last_sequence, updated_at::TEXT
              FROM agent_sessions
              ORDER BY updated_at DESC, session_id",
         )?;
@@ -44,8 +45,9 @@ impl Store {
             Ok(AgentStoredSession {
                 session_id: parse_session_id_column(0, &row.get::<_, String>(0)?)?,
                 provider_id: row.get::<_, Option<String>>(1)?.map(ProviderId),
-                last_sequence: row.get(2)?,
-                updated_at: row.get(3)?,
+                role_id: row.get::<_, Option<String>>(2)?.map(RoleId),
+                last_sequence: row.get(3)?,
+                updated_at: row.get(4)?,
             })
         })?;
 
@@ -95,6 +97,7 @@ impl Store {
                 event_kind,
                 horizon_event_json,
                 provider_id,
+                role_id,
                 provider_payload_json
              FROM agent_events
              WHERE session_id = ?
@@ -102,7 +105,7 @@ impl Store {
         )?;
         let rows = stmt.query_map(params![&session_id_text], |row| {
             let event_json: String = row.get(4)?;
-            let provider_payload_json: Option<String> = row.get(6)?;
+            let provider_payload_json: Option<String> = row.get(7)?;
             Ok(AgentStoredEvent {
                 event_id: row.get(0)?,
                 session_id,
@@ -117,11 +120,12 @@ impl Store {
                     )
                 })?,
                 provider_id: row.get::<_, Option<String>>(5)?.map(ProviderId),
+                role_id: row.get::<_, Option<String>>(6)?.map(RoleId),
                 provider_payload: provider_payload_json
                     .map(|json| {
                         serde_json::from_str(&json).map_err(|err| {
                             duckdb::Error::FromSqlConversionFailure(
-                                6,
+                                7,
                                 duckdb::types::Type::Text,
                                 Box::new(err),
                             )
@@ -204,7 +208,7 @@ impl Store {
     ) -> Result<Vec<AgentStoredToolResult>> {
         let session_id_text = session_id_text(session_id)?;
         let mut stmt = self.conn.prepare(
-            "SELECT event_id, sequence, call_id, output_json
+            "SELECT event_id, sequence, call_id, output_json, is_error
              FROM agent_tool_results
              WHERE session_id = ?
              ORDER BY sequence",
@@ -217,6 +221,7 @@ impl Store {
                 sequence: row.get(1)?,
                 call_id: ToolCallId(row.get(2)?),
                 output: parse_json_column(3, &output_json)?,
+                is_error: row.get(4)?,
             })
         })?;
 
@@ -229,7 +234,14 @@ impl Store {
     /// is_delta` -- streaming reasoning/assistant-text deltas are never
     /// searched, only what actually got committed), tool-call `input_json`,
     /// and tool-result `output_json`. `scope` restricts the search to one
-    /// session; `None` searches every persisted session.
+    /// session; `None` searches every persisted session. `turn_outcome`, if
+    /// `Some`, restricts hits to events whose enclosing turn ended with
+    /// that `agent_turns.end_reason` (`"completed"`/`"cancelled"`/
+    /// `"failed"`/`"halted"`) -- see `docs/agent-feedback-design.md`'s
+    /// decision 1 and decision 3 (recall scope includes labels). Callers
+    /// validate the value before it reaches here (`tools::recall`); this
+    /// method does not reject an unrecognized string itself, it just
+    /// matches nothing.
     ///
     /// `query` is escaped for `%`/`_`/the escape character itself (see
     /// [`escape_like_pattern`]) before being wrapped in a `%...%` `ILIKE`
@@ -249,6 +261,7 @@ impl Store {
         scope: Option<SessionId>,
         query: &str,
         limit: usize,
+        turn_outcome: Option<&str>,
     ) -> Result<RecallSearchReport> {
         let pattern = format!("%{}%", escape_like_pattern(query));
         let scope_session_id = scope.map(session_id_text).transpose()?;
@@ -264,35 +277,47 @@ impl Store {
                 String::new()
             }
         };
+        let turn_outcome_clause = if turn_outcome.is_some() {
+            "WHERE t.end_reason = ?"
+        } else {
+            ""
+        };
 
         let sql = format!(
             "WITH matches AS (
                 SELECT m.session_id AS session_id, m.sequence AS sequence,
                        'message' AS kind, m.role AS role_or_tool,
                        substr(m.text, 1, {bound}) AS text,
-                       e.event_at::TEXT AS at_ts
+                       e.event_at::TEXT AS at_ts, e.turn_id AS turn_id,
+                       CAST(NULL AS BOOLEAN) AS is_error
                 FROM agent_messages m
                 JOIN agent_events e ON e.event_id = m.event_id
                 WHERE NOT m.is_delta AND m.text ILIKE ? ESCAPE '\\' {scope_m}
                 UNION ALL
                 SELECT c.session_id, c.sequence, 'tool_call', c.tool_id,
-                       substr(c.input_json, 1, {bound}), e.event_at::TEXT
+                       substr(c.input_json, 1, {bound}), e.event_at::TEXT, e.turn_id,
+                       CAST(NULL AS BOOLEAN)
                 FROM agent_tool_calls c
                 JOIN agent_events e ON e.event_id = c.event_id
                 WHERE c.input_json ILIKE ? ESCAPE '\\' {scope_c}
                 UNION ALL
                 SELECT r.session_id, r.sequence, 'tool_result',
                        COALESCE(tc.tool_id, r.call_id),
-                       substr(r.output_json, 1, {bound}), e.event_at::TEXT
+                       substr(r.output_json, 1, {bound}), e.event_at::TEXT, e.turn_id,
+                       r.is_error
                 FROM agent_tool_results r
                 JOIN agent_events e ON e.event_id = r.event_id
                 LEFT JOIN agent_tool_calls tc
                     ON tc.call_id = r.call_id AND tc.session_id = r.session_id
                 WHERE r.output_json ILIKE ? ESCAPE '\\' {scope_r}
             )
-            SELECT session_id, sequence, kind, role_or_tool, text, at_ts,
+            SELECT matches.session_id, matches.sequence, matches.kind, matches.role_or_tool,
+                   matches.text, matches.at_ts, matches.is_error, t.end_reason,
                    COUNT(*) OVER () AS total
             FROM matches
+            LEFT JOIN agent_turns t
+                ON t.session_id = matches.session_id AND t.turn_id = matches.turn_id
+            {turn_outcome_clause}
             ORDER BY at_ts DESC, sequence DESC
             LIMIT ?",
             bound = RECALL_TEXT_BOUND_CHARS,
@@ -308,12 +333,15 @@ impl Store {
                 bind_values.push(DuckValue::Text(scope_session_id.clone()));
             }
         }
+        if let Some(turn_outcome) = turn_outcome {
+            bind_values.push(DuckValue::Text(turn_outcome.to_string()));
+        }
         bind_values.push(DuckValue::BigInt(limit as i64));
 
         let mut stmt = self.conn.prepare(&sql)?;
         let mut total = 0usize;
         let rows = stmt.query_map(params_from_iter(bind_values), |row| {
-            total = row.get::<_, i64>(6)? as usize;
+            total = row.get::<_, i64>(8)? as usize;
             Ok(RecallEntry {
                 session_id: parse_session_id_column(0, &row.get::<_, String>(0)?)?,
                 sequence: row.get(1)?,
@@ -321,6 +349,8 @@ impl Store {
                 role_or_tool: row.get(3)?,
                 text: row.get(4)?,
                 at: row.get(5)?,
+                is_error: row.get(6)?,
+                turn_outcome: row.get(7)?,
             })
         })?;
 
@@ -347,27 +377,30 @@ impl Store {
                 SELECT m.session_id AS session_id, m.sequence AS sequence,
                        'message' AS kind, m.role AS role_or_tool,
                        substr(m.text, 1, {bound}) AS text,
-                       e.event_at::TEXT AS at_ts
+                       e.event_at::TEXT AS at_ts,
+                       CAST(NULL AS BOOLEAN) AS is_error
                 FROM agent_messages m
                 JOIN agent_events e ON e.event_id = m.event_id
                 WHERE NOT m.is_delta AND m.session_id = ? AND m.sequence >= ?
                 UNION ALL
                 SELECT c.session_id, c.sequence, 'tool_call', c.tool_id,
-                       substr(c.input_json, 1, {bound}), e.event_at::TEXT
+                       substr(c.input_json, 1, {bound}), e.event_at::TEXT,
+                       CAST(NULL AS BOOLEAN)
                 FROM agent_tool_calls c
                 JOIN agent_events e ON e.event_id = c.event_id
                 WHERE c.session_id = ? AND c.sequence >= ?
                 UNION ALL
                 SELECT r.session_id, r.sequence, 'tool_result',
                        COALESCE(tc.tool_id, r.call_id),
-                       substr(r.output_json, 1, {bound}), e.event_at::TEXT
+                       substr(r.output_json, 1, {bound}), e.event_at::TEXT,
+                       r.is_error
                 FROM agent_tool_results r
                 JOIN agent_events e ON e.event_id = r.event_id
                 LEFT JOIN agent_tool_calls tc
                     ON tc.call_id = r.call_id AND tc.session_id = r.session_id
                 WHERE r.session_id = ? AND r.sequence >= ?
             )
-            SELECT sequence, kind, role_or_tool, text, at_ts
+            SELECT sequence, kind, role_or_tool, text, at_ts, is_error
             FROM history_window
             ORDER BY sequence ASC
             LIMIT ?",
@@ -393,6 +426,8 @@ impl Store {
                     role_or_tool: row.get(2)?,
                     text: row.get(3)?,
                     at: row.get(4)?,
+                    is_error: row.get(5)?,
+                    turn_outcome: None,
                 })
             },
         )?;
@@ -405,7 +440,7 @@ impl Store {
     pub fn approvals_for_session(&self, session_id: SessionId) -> Result<Vec<AgentStoredApproval>> {
         let session_id_text = session_id_text(session_id)?;
         let mut stmt = self.conn.prepare(
-            "SELECT event_id, sequence, call_id, reason
+            "SELECT event_id, sequence, call_id, reason, outcome
              FROM agent_approvals
              WHERE session_id = ?
              ORDER BY sequence",
@@ -417,11 +452,34 @@ impl Store {
                 sequence: row.get(1)?,
                 call_id: ToolCallId(row.get(2)?),
                 reason: row.get(3)?,
+                outcome: row.get(4)?,
             })
         })?;
 
         rows.collect::<Result<Vec<_>, _>>()
             .context("query agent approvals")
+    }
+
+    #[cfg(test)]
+    pub fn turns_for_session(&self, session_id: SessionId) -> Result<Vec<AgentStoredTurn>> {
+        let session_id_text = session_id_text(session_id)?;
+        let mut stmt = self.conn.prepare(
+            "SELECT turn_id, end_reason, ended_event_id
+             FROM agent_turns
+             WHERE session_id = ?
+             ORDER BY turn_id",
+        )?;
+        let rows = stmt.query_map(params![&session_id_text], |row| {
+            Ok(AgentStoredTurn {
+                session_id,
+                turn_id: row.get(0)?,
+                end_reason: row.get(1)?,
+                ended_event_id: row.get(2)?,
+            })
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .context("query agent turns")
     }
 }
 
@@ -523,7 +581,7 @@ mod recall_tests {
             .expect("append events");
 
         let report = store
-            .search_history(Some(session_id), "fox", 20)
+            .search_history(Some(session_id), "fox", 20, None)
             .expect("search");
 
         assert_eq!(report.total, 3, "the delta must not be counted as a match");
@@ -553,12 +611,12 @@ mod recall_tests {
             .expect("append events");
 
         let report = store
-            .search_history(Some(session_id), "WORLD", 20)
+            .search_history(Some(session_id), "WORLD", 20, None)
             .expect("search");
         assert_eq!(report.total, 1);
 
         let report = store
-            .search_history(Some(session_id), "hello", 20)
+            .search_history(Some(session_id), "hello", 20, None)
             .expect("search");
         assert_eq!(report.total, 1);
     }
@@ -582,7 +640,7 @@ mod recall_tests {
             .expect("append events");
 
         let report = store
-            .search_history(Some(session_id), "_", 20)
+            .search_history(Some(session_id), "_", 20, None)
             .expect("search");
         assert_eq!(
             report.total, 1,
@@ -608,7 +666,7 @@ mod recall_tests {
             .expect("append events");
 
         let report = store
-            .search_history(Some(session_id), "%", 20)
+            .search_history(Some(session_id), "%", 20, None)
             .expect("search");
         assert_eq!(report.total, 1);
         assert!(report.hits[0].text.contains("fifty%"));
@@ -627,13 +685,13 @@ mod recall_tests {
             .expect("append b");
 
         let scoped = store
-            .search_history(Some(session_a), "widget", 20)
+            .search_history(Some(session_a), "widget", 20, None)
             .expect("scoped search");
         assert_eq!(scoped.total, 1);
         assert_eq!(scoped.hits[0].session_id, session_a);
 
         let unscoped = store
-            .search_history(None, "widget", 20)
+            .search_history(None, "widget", 20, None)
             .expect("unscoped search");
         assert_eq!(unscoped.total, 2);
     }
@@ -650,7 +708,7 @@ mod recall_tests {
             .expect("append events");
 
         let report = store
-            .search_history(Some(session_id), "widget", 2)
+            .search_history(Some(session_id), "widget", 2, None)
             .expect("search");
         assert_eq!(report.hits.len(), 2, "rows are capped at `limit`");
         assert_eq!(
@@ -669,7 +727,7 @@ mod recall_tests {
             .expect("append events");
 
         let report = store
-            .search_history(Some(session_id), "needle", 20)
+            .search_history(Some(session_id), "needle", 20, None)
             .expect("search");
         assert_eq!(report.total, 1);
         assert_eq!(

@@ -259,7 +259,11 @@ pub fn definitions() -> Vec<Definition> {
                 Case-insensitive substring match. Streaming deltas/reasoning are not included, \
                 only what was actually committed. Default scope is this session; pass \
                 scope: \"all\" to search every persisted session. Use recall.read to pull full \
-                context around a hit."
+                context around a hit. Hits carry outcome labels: a tool_result hit has \
+                is_error, and every hit has turn_outcome (how the turn it belongs to ended, if \
+                it has). Use turn_outcome to find how past work ended -- e.g. search with \
+                turn_outcome: \"halted\" for doom-looped turns, or \"failed\" for turns that \
+                errored out."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
@@ -281,6 +285,13 @@ pub fn definitions() -> Vec<Definition> {
                         "minimum": 1,
                         "maximum": 100,
                         "description": "Maximum number of hits to return. Defaults to 20.",
+                    },
+                    "turn_outcome": {
+                        "type": "string",
+                        "enum": ["completed", "cancelled", "failed", "halted"],
+                        "description": "Restrict hits to events whose turn ended this way. \
+                            \"halted\" surfaces doom-looped turns; \"failed\" surfaces turns \
+                            that errored out.",
                     },
                 }
             }),

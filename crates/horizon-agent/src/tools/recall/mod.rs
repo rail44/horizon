@@ -63,6 +63,12 @@ pub(crate) fn execute_auto(
     }
 }
 
+/// Valid `turn_outcome` filter values -- mirrors `agent_turns.end_reason`'s
+/// four `TurnEndReason` variants (`contract::TurnEndReason`; see
+/// `docs/agent-feedback-design.md`'s implementation-shape addendum for why
+/// there are four, not three).
+const VALID_TURN_OUTCOMES: &[&str] = &["completed", "cancelled", "failed", "halted"];
+
 fn search(tool_state: &ToolSessionState, input: &Value) -> Value {
     let Some(query) = input.get("query").and_then(Value::as_str) else {
         return error_output("recall.search requires a `query` string argument");
@@ -75,6 +81,16 @@ fn search(tool_state: &ToolSessionState, input: &Value) -> Value {
         input.get("limit").and_then(Value::as_u64),
         DEFAULT_SEARCH_LIMIT,
     );
+    let turn_outcome = match input.get("turn_outcome").and_then(Value::as_str) {
+        Some(value) if VALID_TURN_OUTCOMES.contains(&value) => Some(value),
+        Some(other) => {
+            return error_output(format!(
+                "recall.search: unknown turn_outcome `{other}` (expected one of {})",
+                VALID_TURN_OUTCOMES.join(", ")
+            ))
+        }
+        None => None,
+    };
 
     let recall = tool_state.recall_context();
     let Some(store) = recall.store.as_ref() else {
@@ -105,7 +121,7 @@ fn search(tool_state: &ToolSessionState, input: &Value) -> Value {
         let store = store
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        store.search_history(scope, query, limit)
+        store.search_history(scope, query, limit, turn_outcome)
     };
     let report = match report {
         Ok(report) => report,
@@ -134,6 +150,8 @@ fn hit_json(entry: RecallEntry, query: &str, own_session_id: Option<SessionId>) 
         "role_or_tool": entry.role_or_tool,
         "snippet": snippet_around_match(&entry.text, query),
         "at": entry.at,
+        "is_error": entry.is_error,
+        "turn_outcome": entry.turn_outcome,
     })
 }
 
@@ -203,6 +221,7 @@ fn read(tool_state: &ToolSessionState, input: &Value) -> Value {
             "role_or_tool": entry.role_or_tool,
             "text": text,
             "at": entry.at,
+            "is_error": entry.is_error,
         }));
         if truncated {
             break;

@@ -196,6 +196,7 @@ fn duckdb_store_preserves_rig_provider_payload_for_tool_call() {
             session_id,
             turn_id: Some("turn-1".to_string()),
             provider_id: Some(ProviderId("builtin.agent.rig".to_string())),
+            role_id: None,
             event,
             provider_payload: Some(provider_payload.clone()),
         })

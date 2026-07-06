@@ -237,13 +237,42 @@ or the config file's `[agent].state_db_path` relocates it
 Schema (`crates/horizon-agent/src/persistence/projection/duckdb/schema.rs`):
 
 ```
-agent_sessions(session_id PK, provider_id, last_sequence, updated_at)
+agent_sessions(session_id PK, provider_id, role_id, last_sequence, updated_at)
 agent_events(event_id PK, session_id, turn_id, sequence, event_kind,
-             horizon_event_json, provider_id, provider_payload_json, event_at)
+             horizon_event_json, provider_id, role_id, provider_payload_json, event_at)
 agent_messages(event_id PK, session_id, sequence, role, text, is_delta)
 agent_tool_calls(event_id PK, session_id, sequence, call_id, tool_id, input_json)
-agent_tool_results(event_id PK, session_id, sequence, call_id, output_json)
-agent_approvals(event_id PK, session_id, sequence, call_id, reason)
+agent_tool_results(event_id PK, session_id, sequence, call_id, output_json, is_error)
+agent_approvals(event_id PK, session_id, sequence, call_id, reason, outcome)
+agent_turns(session_id, turn_id PK(session_id, turn_id), end_reason, ended_event_id)
+```
+
+`role_id`/`is_error`/`outcome`/`agent_turns` are outcome labels (see
+`docs/agent-feedback-design.md`'s decision 1 and its implementation-shape
+addendum), not analytics: deterministic signals Horizon already emits,
+projected for later recall rather than re-derived on read.
+
+- `agent_tool_results.is_error` is copied from the tool's own output JSON
+  (`output_json`'s `"is_error"` key) at projection time.
+- `agent_approvals.outcome` is `NULL` while pending, then `'approved'` or
+  `'denied'` -- derived from event *order*, not any string match: a
+  `ToolCallStarted` for the call means a human approved it; a
+  `ToolCallFinished` arriving while `outcome` is still `NULL` means it was
+  denied (a deny short-circuits without ever emitting `ToolCallStarted`).
+- `agent_turns.end_reason` is one of `'completed'`/`'cancelled'`/
+  `'failed'`/`'halted'` (`Event::TurnEnded`'s `TurnEndReason` -- note this
+  enum has **four** variants, not the three the design doc's original prose
+  lists). `ended_event_id` is the `agent_events` row for the `TurnEnded`
+  event itself; join through it for `event_at` rather than a duplicated
+  timestamp.
+
+Halted turns per session (a quick doom-loop census):
+
+```sh
+duckdb -readonly "$DB" -c "
+  SELECT session_id, COUNT(*) AS halted_turns
+  FROM agent_turns WHERE end_reason = 'halted'
+  GROUP BY session_id ORDER BY halted_turns DESC;"
 ```
 
 `provider_request_sent`/`provider_request_first_token`/`provider_request_finished`
@@ -317,10 +346,14 @@ A pre-existing local `.duckdb` file may carry extra legacy tables/columns
 from an older Horizon version (confirmed on a real dev machine: an
 `agent_conversation_messages` table not in the current schema at all) —
 schema application is `CREATE TABLE IF NOT EXISTS`, additive only, and by
-itself never migrates or drops stale tables. `agent_events` is the one
-exception: `Store::open` explicitly detects a pre-`event_at` `agent_events`
-table and drops it before recreating (`migrate_legacy_agent_events_schema`
-in `mod.rs`) — safe only because the rebuild that always follows
-repopulates it. Every other table is still additive-only, untouched by that
-migration. Treat `schema.rs` as authoritative for what's current;
+itself never migrates or drops stale tables. `Store::open`'s
+`migrate_legacy_agent_events_schema` (`mod.rs`) is the one exception: it
+explicitly checks a fixed list of known outdated shapes (pre-`event_at`
+`agent_events`; missing `role_id` on `agent_events`/`agent_sessions`;
+missing `is_error` on `agent_tool_results`; missing `outcome` on
+`agent_approvals`; a missing `agent_turns` table) and drops the affected
+table before recreating — safe only because the rebuild that always
+follows repopulates it from JSONL. Any table/column not on that list is
+still additive-only, untouched by that migration. Treat `schema.rs` as
+authoritative for what's current;
 `.tables`/`DESCRIBE` may show more than that.

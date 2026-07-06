@@ -2,8 +2,10 @@ use std::sync::{Arc, Mutex};
 
 use super::*;
 use crate::config::AgentToolsConfig;
-use crate::contract::{Event, Message, MessageRole};
-use crate::persistence::projection::duckdb::Store;
+use crate::contract::{
+    Event, Message, MessageRole, ToolCallId, ToolCallRequest, ToolCallResult, TurnEndReason,
+};
+use crate::persistence::projection::duckdb::{AppendEvent, Store};
 use crate::tools::state::RecallContext;
 
 /// Builds a fresh file-backed DuckDB projection at a throwaway path, seeded
@@ -233,6 +235,236 @@ fn snippet_around_match_has_no_ellipses_when_the_match_is_near_the_edges() {
     let snippet = snippet_around_match(text, "needle");
     assert!(!snippet.starts_with("..."));
     assert_eq!(snippet, text);
+}
+
+/// Appends a message, then a `TurnEnded(reason)`, both under `turn_id` --
+/// unlike `tool_state_with_seeded_store`'s helper (which uses
+/// `Store::append_events` and always leaves `turn_id: None`), this goes
+/// through `Store::append_event` directly so the seeded events actually
+/// belong to a turn `agent_turns` can join against.
+fn seed_turn(
+    store: &Store,
+    session_id: SessionId,
+    turn_id: &str,
+    message_text: &str,
+    reason: TurnEndReason,
+) {
+    store
+        .append_event(AppendEvent {
+            session_id,
+            turn_id: Some(turn_id.to_string()),
+            provider_id: None,
+            role_id: None,
+            event: Event::MessageCommitted(Message {
+                role: MessageRole::User,
+                text: message_text.to_string(),
+            }),
+            provider_payload: None,
+        })
+        .expect("append seeded message");
+    store
+        .append_event(AppendEvent {
+            session_id,
+            turn_id: Some(turn_id.to_string()),
+            provider_id: None,
+            role_id: None,
+            event: Event::TurnEnded(reason),
+            provider_payload: None,
+        })
+        .expect("append turn ended");
+}
+
+#[test]
+fn search_filters_by_turn_outcome() {
+    let session_id = SessionId::new();
+    let path = std::env::temp_dir().join(format!(
+        "horizon-agent-recall-turn-outcome-{}.duckdb",
+        uuid::Uuid::new_v4()
+    ));
+    let store = Store::open(&path).expect("open duckdb store");
+    seed_turn(
+        &store,
+        session_id,
+        "turn-completed",
+        "widget alpha",
+        TurnEndReason::Completed,
+    );
+    seed_turn(
+        &store,
+        session_id,
+        "turn-halted",
+        "widget beta",
+        TurnEndReason::Halted,
+    );
+
+    let recall = RecallContext {
+        session_id: Some(session_id),
+        store: Some(Arc::new(Mutex::new(store))),
+    };
+    let tool_state = ToolSessionState::for_current_dir(AgentToolsConfig::default(), recall);
+
+    let output = execute_auto(
+        &tool_state,
+        "recall.search",
+        &json!({ "query": "widget", "turn_outcome": "halted" }),
+    )
+    .expect("recall.search handled");
+
+    assert_eq!(output["total"], 1, "only the halted turn's hit must match");
+    let hits = output["hits"].as_array().expect("hits array");
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0]["snippet"].as_str().unwrap().contains("widget beta"));
+    assert_eq!(hits[0]["turn_outcome"], "halted");
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn search_hits_carry_is_error_and_turn_outcome_labels() {
+    let session_id = SessionId::new();
+    let path = std::env::temp_dir().join(format!(
+        "horizon-agent-recall-labels-{}.duckdb",
+        uuid::Uuid::new_v4()
+    ));
+    let store = Store::open(&path).expect("open duckdb store");
+    let call_id = ToolCallId("call-1".to_string());
+
+    store
+        .append_event(AppendEvent {
+            session_id,
+            turn_id: Some("turn-1".to_string()),
+            provider_id: None,
+            role_id: None,
+            event: Event::ToolCallRequested(ToolCallRequest {
+                call_id: call_id.clone(),
+                tool_id: "fs.read".to_string(),
+                input: serde_json::json!({ "path": "widget.txt" }),
+            }),
+            provider_payload: None,
+        })
+        .expect("append tool call");
+    store
+        .append_event(AppendEvent {
+            session_id,
+            turn_id: Some("turn-1".to_string()),
+            provider_id: None,
+            role_id: None,
+            event: Event::ToolCallFinished(ToolCallResult {
+                call_id,
+                output: serde_json::json!({ "is_error": true, "message": "widget not found" }),
+            }),
+            provider_payload: None,
+        })
+        .expect("append tool result");
+    store
+        .append_event(AppendEvent {
+            session_id,
+            turn_id: Some("turn-1".to_string()),
+            provider_id: None,
+            role_id: None,
+            event: Event::TurnEnded(TurnEndReason::Failed),
+            provider_payload: None,
+        })
+        .expect("append turn ended");
+
+    let recall = RecallContext {
+        session_id: Some(session_id),
+        store: Some(Arc::new(Mutex::new(store))),
+    };
+    let tool_state = ToolSessionState::for_current_dir(AgentToolsConfig::default(), recall);
+
+    let output = execute_auto(&tool_state, "recall.search", &json!({ "query": "widget" }))
+        .expect("recall.search handled");
+    let hits = output["hits"].as_array().expect("hits array");
+
+    let tool_result_hit = hits
+        .iter()
+        .find(|hit| hit["kind"] == "tool_result")
+        .expect("tool_result hit present");
+    assert_eq!(tool_result_hit["is_error"], true);
+    assert_eq!(tool_result_hit["turn_outcome"], "failed");
+
+    let tool_call_hit = hits
+        .iter()
+        .find(|hit| hit["kind"] == "tool_call")
+        .expect("tool_call hit present");
+    assert_eq!(
+        tool_call_hit["is_error"],
+        Value::Null,
+        "a tool_call hit has no is_error label"
+    );
+    assert_eq!(tool_call_hit["turn_outcome"], "failed");
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn search_rejects_an_unknown_turn_outcome_value() {
+    let session_id = SessionId::new();
+    let (tool_state, path) =
+        tool_state_with_seeded_store(session_id, vec![(session_id, vec!["widget"])]);
+
+    let output = execute_auto(
+        &tool_state,
+        "recall.search",
+        &json!({ "query": "widget", "turn_outcome": "bogus" }),
+    )
+    .expect("recall.search handled");
+    assert_eq!(output["is_error"], true);
+    assert!(output["message"].as_str().unwrap().contains("turn_outcome"));
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn read_entries_carry_is_error_on_tool_results() {
+    let session_id = SessionId::new();
+    let path = std::env::temp_dir().join(format!(
+        "horizon-agent-recall-read-is-error-{}.duckdb",
+        uuid::Uuid::new_v4()
+    ));
+    let store = Store::open(&path).expect("open duckdb store");
+    let call_id = ToolCallId("call-1".to_string());
+    store
+        .append_events(
+            session_id,
+            None,
+            [
+                Event::ToolCallRequested(ToolCallRequest {
+                    call_id: call_id.clone(),
+                    tool_id: "fs.read".to_string(),
+                    input: serde_json::json!({}),
+                }),
+                Event::ToolCallFinished(ToolCallResult {
+                    call_id,
+                    output: serde_json::json!({ "is_error": true, "message": "nope" }),
+                }),
+            ],
+        )
+        .expect("seed session");
+
+    let recall = RecallContext {
+        session_id: Some(session_id),
+        store: Some(Arc::new(Mutex::new(store))),
+    };
+    let tool_state = ToolSessionState::for_current_dir(AgentToolsConfig::default(), recall);
+
+    let output = execute_auto(&tool_state, "recall.read", &json!({ "from_sequence": 0 }))
+        .expect("recall.read handled");
+    let entries = output["entries"].as_array().expect("entries array");
+    let tool_result_entry = entries
+        .iter()
+        .find(|entry| entry["kind"] == "tool_result")
+        .expect("tool_result entry present");
+    assert_eq!(tool_result_entry["is_error"], true);
+
+    let tool_call_entry = entries
+        .iter()
+        .find(|entry| entry["kind"] == "tool_call")
+        .expect("tool_call entry present");
+    assert_eq!(tool_call_entry["is_error"], Value::Null);
+
+    let _ = std::fs::remove_file(path);
 }
 
 #[test]

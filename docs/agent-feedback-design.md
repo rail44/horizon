@@ -75,3 +75,46 @@ Two roadmap items, in order (agent-foundation domain):
    recall tool lands (same crate).
 2. **Skill distillation (approval-gated)**: the drafting flow on top
    of the labels. Starts after item 1.
+
+## Implementation shape (2026-07-07)
+
+Item 1 landed. Concrete schema (all in
+`crates/horizon-agent/src/persistence/projection/duckdb/schema.rs`):
+
+- `agent_events.role_id TEXT` and `agent_sessions.role_id TEXT` -- the
+  `role_id` projection gap from decision 1, carried the same way as
+  `provider_id` (event-level: the role active when the event was
+  recorded; session-level: last-seen, `COALESCE`d on conflict so it
+  never clears back to `NULL`).
+- `agent_tool_results.is_error BOOLEAN NOT NULL` -- derived at
+  projection time from the output JSON's own `is_error` key (the
+  convention every tool's error output already follows), not
+  re-derived on read.
+- `agent_approvals.outcome TEXT` -- `NULL` while pending, then
+  `'approved'`/`'denied'`. Derived from event *order*, not any string
+  match: a `ToolCallStarted` for a call means a human approved it; a
+  `ToolCallFinished` arriving while `outcome` is still `NULL` means it
+  was denied (a deny short-circuits without ever emitting
+  `ToolCallStarted` -- `tools::approval::synchronous_result(ran=false)`).
+- New `agent_turns(session_id, turn_id, end_reason, ended_event_id)`
+  table, one row per turn -- label bookkeeping, not analytics, so no
+  derived durations. `end_reason` is one of `'completed'`/
+  `'cancelled'`/`'failed'`/`'halted'`, from `Event::TurnEnded`'s
+  `TurnEndReason`. Note for future readers: `TurnEndReason` has **four**
+  variants (`Completed`/`Cancelled`/`Failed`/`Halted`) -- the prose
+  above this addendum (decision 1, written before the enum was pinned
+  down) says three ("Completed / Cancelled / Halted"); the enum in
+  `contract.rs` is authoritative, and the schema/projection follow it.
+
+Schema evolution followed the existing `agent_events`/`event_at`
+precedent (`Store::migrate_legacy_agent_events_schema`): a `.duckdb`
+file missing any of the columns/table above is detected on open, the
+affected table is dropped, and the startup rebuild from JSONL
+repopulates it -- no in-place `ALTER TABLE` migration.
+
+Recall (decision 3): `recall.search` hits carry `is_error` (tool-result
+hits only) and `turn_outcome` (the end reason of the enclosing turn,
+joined via `agent_events.turn_id`; `null` if the event has no turn or
+the turn hasn't ended). `recall.search` also gained an optional
+`turn_outcome` input filter, validated against the four end-reason
+strings. `recall.read` entries carry `is_error` on tool results only.

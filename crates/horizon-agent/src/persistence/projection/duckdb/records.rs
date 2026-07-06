@@ -6,6 +6,7 @@ use crate::contract::{Event, ProviderId};
 use crate::contract::{MessageRole, ToolCallId};
 #[cfg(test)]
 use crate::frame::AgentFrame;
+use crate::roles::RoleId;
 
 // Not `cfg(test)`, unlike its sibling record types below: `Store::sessions`
 // (see `query.rs`) isn't test-only — a downstream crate's tests (`horizon`'s
@@ -15,6 +16,9 @@ use crate::frame::AgentFrame;
 pub struct AgentStoredSession {
     pub session_id: SessionId,
     pub provider_id: Option<ProviderId>,
+    /// Last-seen role for the session -- see `agent_sessions.role_id`'s
+    /// doc comment in `schema.rs`.
+    pub role_id: Option<RoleId>,
     pub last_sequence: i64,
     pub updated_at: String,
 }
@@ -35,6 +39,7 @@ pub struct AppendEvent {
     pub session_id: SessionId,
     pub turn_id: Option<String>,
     pub provider_id: Option<ProviderId>,
+    pub role_id: Option<RoleId>,
     pub event: Event,
     pub provider_payload: Option<Value>,
 }
@@ -48,6 +53,9 @@ pub struct AgentStoredEvent {
     pub event_kind: String,
     pub event: Event,
     pub provider_id: Option<ProviderId>,
+    /// The role active when this event was recorded -- see
+    /// `agent_events.role_id`'s doc comment in `schema.rs`.
+    pub role_id: Option<RoleId>,
     pub provider_payload: Option<Value>,
 }
 
@@ -81,6 +89,21 @@ pub struct AgentStoredToolResult {
     pub sequence: i64,
     pub call_id: ToolCallId,
     pub output: Value,
+    /// Derived from `output`'s own `is_error` key at projection time -- see
+    /// `agent_tool_results.is_error`'s doc comment in `schema.rs`.
+    pub is_error: bool,
+}
+
+/// One row of `agent_turns` -- see that table's doc comment in `schema.rs`.
+/// Test-only, like this file's other `AgentStored*` siblings: no caller
+/// outside this crate's own tests needs turn rows as structured data yet.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg(test)]
+pub struct AgentStoredTurn {
+    pub session_id: SessionId,
+    pub turn_id: String,
+    pub end_reason: String,
+    pub ended_event_id: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -91,6 +114,9 @@ pub struct AgentStoredApproval {
     pub sequence: i64,
     pub call_id: ToolCallId,
     pub reason: String,
+    /// `None` while pending; `Some("approved"/"denied")` once resolved --
+    /// see `agent_approvals.outcome`'s doc comment in `schema.rs`.
+    pub outcome: Option<String>,
 }
 
 /// One row surfaced by the recall tools (`tools::recall`) via
@@ -117,6 +143,16 @@ pub struct RecallEntry {
     /// The event's real wall-clock time (`agent_events.event_at`, see its
     /// own doc comment in `schema.rs`), as DuckDB's own `TEXT` rendering.
     pub at: String,
+    /// Only meaningful for a `ToolResult` entry -- `agent_tool_results.is_error`
+    /// (see decision 1 in `docs/agent-feedback-design.md`). `None` for a
+    /// `Message`/`ToolCall` entry, which has no such column.
+    pub is_error: Option<bool>,
+    /// The end reason of the turn this event belongs to (`agent_turns.end_reason`,
+    /// joined via `agent_events.turn_id`) -- `None` for an event outside any
+    /// turn, or whose turn hasn't ended yet. Only populated by
+    /// [`super::Store::search_history`]; [`super::Store::read_history_window`]
+    /// leaves this `None` on every row (see that method's doc comment).
+    pub turn_outcome: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

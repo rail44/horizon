@@ -34,6 +34,7 @@ impl Store {
         let sequence = i64::try_from(record.sequence).context("agent event sequence overflow")?;
         let event_json = serde_json::to_string(&record.event).context("serialize agent event")?;
         let provider_id_text = record.provider_id.as_ref().map(|id| id.0.clone());
+        let role_id_text = record.role_id.as_ref().map(|id| id.0.clone());
         let provider_payload_json = record
             .provider_payload
             .as_ref()
@@ -52,9 +53,10 @@ impl Store {
                 event_kind,
                 horizon_event_json,
                 provider_id,
+                role_id,
                 provider_payload_json,
                 event_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, epoch_ms(?))",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, epoch_ms(?))",
             params![
                 &record.event_id,
                 &session_id_text,
@@ -63,15 +65,22 @@ impl Store {
                 &record.event_kind,
                 &event_json,
                 provider_id_text.as_deref(),
+                role_id_text.as_deref(),
                 provider_payload_json.as_deref(),
                 event_at_unix_ms,
             ],
         )?;
 
-        self.upsert_session(&session_id_text, provider_id_text.as_deref(), sequence)?;
+        self.upsert_session(
+            &session_id_text,
+            provider_id_text.as_deref(),
+            role_id_text.as_deref(),
+            sequence,
+        )?;
         self.project_event(EventRecordRef {
             event_id: &record.event_id,
             session_id: &session_id_text,
+            turn_id: record.turn_id.as_deref(),
             sequence,
             event: &record.event,
         })?;
@@ -91,6 +100,7 @@ impl Store {
         let event_kind = event_kind(&record.event).to_string();
         let event_json = serde_json::to_string(&record.event).context("serialize agent event")?;
         let provider_id_text = record.provider_id.as_ref().map(|id| id.0.clone());
+        let role_id_text = record.role_id.as_ref().map(|id| id.0.clone());
         let provider_payload_json = record
             .provider_payload
             .as_ref()
@@ -107,9 +117,10 @@ impl Store {
                 event_kind,
                 horizon_event_json,
                 provider_id,
+                role_id,
                 provider_payload_json,
                 event_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, now())",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, now())",
             params![
                 &event_id,
                 &session_id_text,
@@ -118,14 +129,21 @@ impl Store {
                 &event_kind,
                 &event_json,
                 provider_id_text.as_deref(),
+                role_id_text.as_deref(),
                 provider_payload_json.as_deref(),
             ],
         )?;
 
-        self.upsert_session(&session_id_text, provider_id_text.as_deref(), sequence)?;
+        self.upsert_session(
+            &session_id_text,
+            provider_id_text.as_deref(),
+            role_id_text.as_deref(),
+            sequence,
+        )?;
         self.project_event(EventRecordRef {
             event_id: &event_id,
             session_id: &session_id_text,
+            turn_id: record.turn_id.as_deref(),
             sequence,
             event: &record.event,
         })?;
@@ -138,6 +156,7 @@ impl Store {
             event_kind,
             event: record.event,
             provider_id: record.provider_id,
+            role_id: record.role_id,
             provider_payload: record.provider_payload,
         })
     }
@@ -156,6 +175,7 @@ impl Store {
                     session_id,
                     turn_id: None,
                     provider_id: provider_id.clone(),
+                    role_id: None,
                     event,
                     provider_payload: None,
                 })
@@ -181,16 +201,18 @@ impl Store {
         &self,
         session_id: &str,
         provider_id: Option<&str>,
+        role_id: Option<&str>,
         last_sequence: i64,
     ) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO agent_sessions (session_id, provider_id, last_sequence, updated_at)
-             VALUES (?, ?, ?, now())
+            "INSERT INTO agent_sessions (session_id, provider_id, role_id, last_sequence, updated_at)
+             VALUES (?, ?, ?, ?, now())
              ON CONFLICT (session_id) DO UPDATE SET
                 provider_id = COALESCE(excluded.provider_id, agent_sessions.provider_id),
+                role_id = COALESCE(excluded.role_id, agent_sessions.role_id),
                 last_sequence = excluded.last_sequence,
                 updated_at = now()",
-            params![session_id, provider_id, last_sequence],
+            params![session_id, provider_id, role_id, last_sequence],
         )?;
         Ok(())
     }
