@@ -803,16 +803,18 @@ fn kitty_override_reports_super_modifier() {
 }
 
 /// Compliance coverage for the keys `kitty_override` deliberately leaves
-/// alone: arrows, Home/End, PageUp/PageDown and Delete already reuse the
-/// xterm-compatible `CSI 1;mods<letter>` / `CSI n;mods~` forms the Kitty
-/// spec itself specifies for these ("Functional key definitions": `HOME` =
-/// `1 H or 7 ~`, `END` = `1 F or 8 ~`, arrows = `1 A/B/C/D`, `PAGE_UP`/
-/// `PAGE_DOWN` = `5 ~`/`6 ~`, `DELETE` = `3 ~`), unconditionally — unlike
-/// Enter/Tab/Backspace these were never ambiguous in legacy mode, so the
-/// spec doesn't move them to a different form under any of disambiguate,
-/// report-event-types or report-all-keys. termwiz's built-in encoder
-/// already gets this right without any Horizon-side override, across every
-/// flag combination.
+/// alone: arrows, Home/End, PageUp/PageDown, Insert and Delete already
+/// reuse the xterm-compatible `CSI 1;mods<letter>` / `CSI n;mods~` forms
+/// the Kitty spec itself specifies for these ("Functional key definitions":
+/// `HOME` = `1 H or 7 ~`, `END` = `1 F or 8 ~`, arrows = `1 A/B/C/D`,
+/// `PAGE_UP`/`PAGE_DOWN` = `5 ~`/`6 ~`, `INSERT` = `2 ~`, `DELETE` = `3 ~`),
+/// unconditionally — unlike Enter/Tab/Backspace these were never ambiguous
+/// in legacy mode, so the spec doesn't move them to a different form under
+/// any of disambiguate, report-event-types or report-all-keys. termwiz's
+/// built-in encoder already gets this right without any Horizon-side
+/// override, across every flag combination. This test is Press-only —
+/// `csi_u_navigation_key_event_type_truth_table` (`terminal::tests`) covers
+/// Repeat/Release, which *do* change once `REPORT_EVENT_TYPES` is active.
 #[test]
 fn navigation_keys_are_flag_invariant_and_spec_compliant() {
     let nav_cases: &[(&str, KeyCode, Modifiers, &[u8])] = &[
@@ -823,6 +825,7 @@ fn navigation_keys_are_flag_invariant_and_spec_compliant() {
         ("End", KeyCode::End, Modifiers::NONE, b"\x1b[F"),
         ("PageUp", KeyCode::PageUp, Modifiers::NONE, b"\x1b[5~"),
         ("PageDown", KeyCode::PageDown, Modifiers::NONE, b"\x1b[6~"),
+        ("Insert", KeyCode::Insert, Modifiers::NONE, b"\x1b[2~"),
         ("Alt+Delete", KeyCode::Delete, Modifiers::ALT, b"\x1b[3;3~"),
     ];
 
@@ -951,16 +954,19 @@ fn csi_u_event_type_truth_table() {
         core.key_input(KeyCode::Enter, Modifiers::NONE, KeyEventKind::Release),
         Vec::<u8>::new()
     );
-    // Navigation keys never go through `kitty_override` at all, at any
-    // flags (see `KITTY_COMPLIANCE`'s "Functional key definitions:
-    // navigation keys" row) — repeat matches press, release is empty.
+    // Navigation keys never go through `kitty_override`, but
+    // `navigation_key_event_override` still decorates their own legacy
+    // `CSI` form with the modifiers:event-type sub-field once
+    // REPORT_EVENT_TYPES is active — see `KITTY_COMPLIANCE`'s "Report event
+    // types" navigation row (`csi_u_navigation_key_event_type_truth_table`
+    // below has broader coverage of this).
     assert_eq!(
         core.key_input(KeyCode::UpArrow, Modifiers::NONE, KeyEventKind::Repeat),
-        b"\x1b[A".to_vec()
+        b"\x1b[1;1:2A".to_vec()
     );
     assert_eq!(
         core.key_input(KeyCode::UpArrow, Modifiers::NONE, KeyEventKind::Release),
-        Vec::<u8>::new()
+        b"\x1b[1;1:3A".to_vec()
     );
 
     // Report-event-types + report-all-keys (no disambiguate): text keys
@@ -1000,27 +1006,205 @@ fn csi_u_event_type_truth_table() {
     );
 }
 
+/// Broader coverage for `navigation_key_event_override`: the "Report event
+/// types" modifier sub-field applied to navigation keys' own legacy `CSI`
+/// forms (letter-terminated arrows/Home/End, `~`-terminated
+/// PageUp/PageDown/Insert/Delete), across several representative keys,
+/// modifiers, and flag states. See `KITTY_COMPLIANCE`'s "Report event
+/// types" navigation row for the primary-source verification (kitty's own
+/// `key_encoding.c` and alacritty's `keyboard.rs`) backing this being
+/// `Compliant` rather than a deviation from the spec text.
+#[test]
+fn csi_u_navigation_key_event_type_truth_table() {
+    // No Kitty flags at all: repeat matches press, release is empty --
+    // exactly as before, unaffected by this feature.
+    let core = TerminalCore::new(TerminalSize::new(20, 4));
+    assert_eq!(
+        core.key_input(KeyCode::Home, Modifiers::NONE, KeyEventKind::Repeat),
+        b"\x1b[H".to_vec()
+    );
+    assert_eq!(
+        core.key_input(KeyCode::Home, Modifiers::NONE, KeyEventKind::Release),
+        Vec::<u8>::new()
+    );
+
+    // REPORT_EVENT_TYPES alone (flags = 0b10): every navigation key gains a
+    // repeat/release representation it never had before, decorating its
+    // existing legacy CSI form rather than replacing it with a genuine
+    // `CSI u` -- letter-terminated (arrows/Home/End) and `~`-terminated
+    // (PageUp/PageDown/Insert/Delete) forms both covered.
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt(b"\x1b[>2u");
+    // A small named struct rather than a tuple -- a `(&str, KeyCode,
+    // Modifiers, &[u8], &[u8])` tuple trips clippy's `type_complexity`.
+    struct NavEventCase {
+        name: &'static str,
+        key: KeyCode,
+        mods: Modifiers,
+        repeat: &'static [u8],
+        release: &'static [u8],
+    }
+    let cases = [
+        NavEventCase {
+            name: "Up",
+            key: KeyCode::UpArrow,
+            mods: Modifiers::NONE,
+            repeat: b"\x1b[1;1:2A",
+            release: b"\x1b[1;1:3A",
+        },
+        NavEventCase {
+            name: "Shift+Up",
+            key: KeyCode::UpArrow,
+            mods: Modifiers::SHIFT,
+            repeat: b"\x1b[1;2:2A",
+            release: b"\x1b[1;2:3A",
+        },
+        NavEventCase {
+            name: "Home",
+            key: KeyCode::Home,
+            mods: Modifiers::NONE,
+            repeat: b"\x1b[1;1:2H",
+            release: b"\x1b[1;1:3H",
+        },
+        NavEventCase {
+            name: "End",
+            key: KeyCode::End,
+            mods: Modifiers::NONE,
+            repeat: b"\x1b[1;1:2F",
+            release: b"\x1b[1;1:3F",
+        },
+        NavEventCase {
+            name: "PageUp",
+            key: KeyCode::PageUp,
+            mods: Modifiers::NONE,
+            repeat: b"\x1b[5;1:2~",
+            release: b"\x1b[5;1:3~",
+        },
+        NavEventCase {
+            name: "PageDown",
+            key: KeyCode::PageDown,
+            mods: Modifiers::NONE,
+            repeat: b"\x1b[6;1:2~",
+            release: b"\x1b[6;1:3~",
+        },
+        NavEventCase {
+            name: "Insert",
+            key: KeyCode::Insert,
+            mods: Modifiers::NONE,
+            repeat: b"\x1b[2;1:2~",
+            release: b"\x1b[2;1:3~",
+        },
+        NavEventCase {
+            name: "Ctrl+Delete",
+            key: KeyCode::Delete,
+            mods: Modifiers::CTRL,
+            repeat: b"\x1b[3;5:2~",
+            release: b"\x1b[3;5:3~",
+        },
+    ];
+    for case in cases {
+        assert_eq!(
+            core.key_input(case.key, case.mods, KeyEventKind::Repeat),
+            case.repeat.to_vec(),
+            "repeat {}",
+            case.name
+        );
+        assert_eq!(
+            core.key_input(case.key, case.mods, KeyEventKind::Release),
+            case.release.to_vec(),
+            "release {}",
+            case.name
+        );
+    }
+
+    // Press stays byte-for-byte identical regardless of this feature --
+    // covered more broadly by
+    // `navigation_keys_are_flag_invariant_and_spec_compliant`, spot-checked
+    // here alongside the same flags/case set.
+    assert_eq!(
+        core.key_input(KeyCode::UpArrow, Modifiers::NONE, KeyEventKind::Press),
+        b"\x1b[A".to_vec()
+    );
+}
+
+/// Regression test for `docs/tasks/backlog.md` item 2's PUA-table half:
+/// F13-F24 have no legacy encoding at all in the Kitty spec's own
+/// "Functional key definitions" table (only dedicated Private-Use-Area
+/// `CSI u` codepoints, `57376`-`57387` for F13-F24) — so once any Kitty
+/// flag is negotiated, `kitty_override` now reports those instead of
+/// termwiz's rxvt-derived legacy numbers (which are simply wrong in that
+/// context). With no Kitty flags negotiated at all, those legacy numbers
+/// remain exactly as before — a deliberate, documented deviation from
+/// kitty's own reference (which always emits PUA codes for F13+, even at
+/// zero flags) that the spec text itself explicitly permits; see
+/// `kitty_override`'s doc comment and `KITTY_COMPLIANCE`'s "Functional key
+/// definitions: F13-F24" row.
+#[test]
+fn high_function_keys_use_legacy_numbers_without_kitty_flags_and_pua_codes_with_them() {
+    // No Kitty flags at all: termwiz's existing (xterm/rxvt-compatible)
+    // numbers, unchanged.
+    let core = TerminalCore::new(TerminalSize::new(20, 4));
+    let legacy_cases: &[(u8, &[u8])] = &[(13, b"\x1b[25~"), (14, b"\x1b[26~"), (24, b"\x1b[45~")];
+    for (n, want) in legacy_cases {
+        assert_eq!(
+            core.key_input(KeyCode::Function(*n), Modifiers::NONE, KeyEventKind::Press),
+            want.to_vec(),
+            "F{n} with no Kitty flags"
+        );
+    }
+
+    // Any Kitty flag active: genuine PUA `CSI u` codes instead, decorated
+    // with modifiers/event-type exactly like Enter/Tab/Backspace/Escape.
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt(b"\x1b[>1u"); // disambiguate only
+    assert_eq!(
+        core.key_input(KeyCode::Function(13), Modifiers::NONE, KeyEventKind::Press),
+        b"\x1b[57376u".to_vec()
+    );
+    assert_eq!(
+        core.key_input(KeyCode::Function(24), Modifiers::SHIFT, KeyEventKind::Press),
+        b"\x1b[57387;2u".to_vec()
+    );
+
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt(b"\x1b[>3u"); // disambiguate + report-event-types
+    assert_eq!(
+        core.key_input(KeyCode::Function(13), Modifiers::NONE, KeyEventKind::Repeat),
+        b"\x1b[57376;1:2u".to_vec()
+    );
+    assert_eq!(
+        core.key_input(
+            KeyCode::Function(13),
+            Modifiers::NONE,
+            KeyEventKind::Release
+        ),
+        b"\x1b[57376;1:3u".to_vec()
+    );
+}
+
 /// UNIMPLEMENTED, structural: F25 and above have no representation at all
 /// in termwiz's `KeyCode::Function(n)` encoder — its internal table only
 /// covers `n <= 24` (reusing legacy rxvt-style `CSI n~` numbers, which for
 /// F1-F12 happen to match the alternate numeric forms Kitty's own spec
 /// documents, e.g. `F1` = `1 P or 11 ~`); anything higher hits a `bail!`
 /// that `TerminalCore::encode_key`'s `.unwrap_or_default()` silently turns
-/// into `""`. Kitty's Functional key definitions table has no legacy/
-/// numeric form for F13 and up at all, only Private-Use-Area `CSI u` codes
-/// (`F13` = `57376 u`, ..., `F35` = `57398 u`), so termwiz's `F13..=F24`
-/// output (its own legacy numbers, e.g. `\x1b[25~` for F13) is WRONG rather
-/// than merely unimplemented, and `F25..=F35` is UNIMPLEMENTED (empty).
-/// Moot in today's build regardless: `app::keymap` never maps any function
-/// key to a `TermKeyCode` at all (`terminal_key_from_key`/
-/// `terminal_input_from_key` have no `NamedKey::F1..F24` arm), so F-keys
-/// never reach `TerminalCore::key_input` from the real UI — BYPASSED at the
-/// app layer, on top of being WRONG/UNIMPLEMENTED here. Effort estimate:
-/// small for a `kitty_override`-style PUA table covering F13-F35 (same
-/// shape as Enter/Tab/Backspace/Escape) but it only matters once the
-/// app-layer gap (out of scope: `src/app/keymap.rs`) is also closed.
+/// into `""`. `docs/tasks/backlog.md` item 2, resolved for F13-F24: those
+/// now report their genuine Private-Use-Area `CSI u` codes
+/// (`kitty_override`, `F13` = `57376 u`, ..., `F24` = `57387 u`) once any
+/// Kitty flag is negotiated — see
+/// `high_function_keys_use_legacy_numbers_without_kitty_flags_and_pua_codes_with_them`
+/// — and are reachable from the real UI too (`app::keymap::
+/// terminal_key_from_input` now maps `NamedKey::F1..F24`). F25 and up
+/// remain both UNIMPLEMENTED here (no PUA table entry — `kitty_override`'s
+/// `Function` arm is bounded to `13..=24`, matching termwiz's own
+/// `KeyCode::Function` doc: "F1-F24 are possible") and BYPASSED at the app
+/// layer (`app::keymap` has no `NamedKey::F25..F35` arm, matching this
+/// bug's own explicit scope) — see `KITTY_COMPLIANCE`'s "Functional key
+/// definitions: F25-F35" row. Effort estimate for closing this remaining
+/// gap: small — extend `kitty_override`'s `Function` range to `13..=35`
+/// and add the matching `app::keymap` arms.
 #[test]
-#[ignore = "structural: termwiz has no F25+ encoding at all (and F13-F24 use the wrong numbers), and app::keymap never routes function keys to core; see report"]
+#[ignore = "structural: termwiz/kitty_override have no F25+ encoding at all, and app::keymap never routes F25+ to core; see report"]
 fn very_high_function_keys_are_unimplemented() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     core.write_vt(b"\x1b[>1u");

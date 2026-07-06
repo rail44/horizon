@@ -28,6 +28,11 @@ const TEST_REGISTRY: &[(&str, bool)] = &[
         false,
     ),
     ("csi_u_event_type_truth_table", false),
+    ("csi_u_navigation_key_event_type_truth_table", false),
+    (
+        "high_function_keys_use_legacy_numbers_without_kitty_flags_and_pua_codes_with_them",
+        false,
+    ),
     ("very_high_function_keys_are_unimplemented", true),
     ("standalone_modifier_keypresses_are_unimplemented", true),
     ("keypad_keys_ignore_disambiguate_flag", true),

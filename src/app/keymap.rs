@@ -109,6 +109,16 @@ fn terminal_key_from_character(text: &str, modifiers: Modifiers) -> Option<TermK
     Some(TermKeyCode::Char(base))
 }
 
+/// `docs/tasks/backlog.md` item 2, resolved: `Insert` and `F1`-`F24` used to
+/// have no arm here at all, so they never reached `TerminalCommand::Key` —
+/// not even termwiz's own legacy bytes. Routing them through `TermKeyCode`
+/// like every other named key means they now go through the terminal's live
+/// Kitty state exactly like arrows/Home/End/etc. already did — see
+/// `terminal::protocol::kitty_keyboard`'s `encode_function_key` (legacy
+/// xterm-compatible numbers) and its `kitty_override` (F13-F24's dedicated
+/// Kitty PUA codes once any progressive-enhancement flag is negotiated;
+/// F25-F35 remain unwired here — termwiz's own `KeyCode::Function` doc
+/// notes only "F1-F24 are possible" — see `KITTY_COMPLIANCE`).
 pub(crate) fn terminal_key_from_input(key: &Key) -> Option<TermKeyCode> {
     match key {
         Key::Named(NamedKey::Enter) => Some(TermKeyCode::Enter),
@@ -124,6 +134,31 @@ pub(crate) fn terminal_key_from_input(key: &Key) -> Option<TermKeyCode> {
         Key::Named(NamedKey::PageUp) => Some(TermKeyCode::PageUp),
         Key::Named(NamedKey::PageDown) => Some(TermKeyCode::PageDown),
         Key::Named(NamedKey::Delete) => Some(TermKeyCode::Delete),
+        Key::Named(NamedKey::Insert) => Some(TermKeyCode::Insert),
+        Key::Named(NamedKey::F1) => Some(TermKeyCode::Function(1)),
+        Key::Named(NamedKey::F2) => Some(TermKeyCode::Function(2)),
+        Key::Named(NamedKey::F3) => Some(TermKeyCode::Function(3)),
+        Key::Named(NamedKey::F4) => Some(TermKeyCode::Function(4)),
+        Key::Named(NamedKey::F5) => Some(TermKeyCode::Function(5)),
+        Key::Named(NamedKey::F6) => Some(TermKeyCode::Function(6)),
+        Key::Named(NamedKey::F7) => Some(TermKeyCode::Function(7)),
+        Key::Named(NamedKey::F8) => Some(TermKeyCode::Function(8)),
+        Key::Named(NamedKey::F9) => Some(TermKeyCode::Function(9)),
+        Key::Named(NamedKey::F10) => Some(TermKeyCode::Function(10)),
+        Key::Named(NamedKey::F11) => Some(TermKeyCode::Function(11)),
+        Key::Named(NamedKey::F12) => Some(TermKeyCode::Function(12)),
+        Key::Named(NamedKey::F13) => Some(TermKeyCode::Function(13)),
+        Key::Named(NamedKey::F14) => Some(TermKeyCode::Function(14)),
+        Key::Named(NamedKey::F15) => Some(TermKeyCode::Function(15)),
+        Key::Named(NamedKey::F16) => Some(TermKeyCode::Function(16)),
+        Key::Named(NamedKey::F17) => Some(TermKeyCode::Function(17)),
+        Key::Named(NamedKey::F18) => Some(TermKeyCode::Function(18)),
+        Key::Named(NamedKey::F19) => Some(TermKeyCode::Function(19)),
+        Key::Named(NamedKey::F20) => Some(TermKeyCode::Function(20)),
+        Key::Named(NamedKey::F21) => Some(TermKeyCode::Function(21)),
+        Key::Named(NamedKey::F22) => Some(TermKeyCode::Function(22)),
+        Key::Named(NamedKey::F23) => Some(TermKeyCode::Function(23)),
+        Key::Named(NamedKey::F24) => Some(TermKeyCode::Function(24)),
         _ => None,
     }
 }
@@ -756,6 +791,62 @@ mod tests {
             terminal_key_from_input(&Key::Named(NamedKey::ArrowUp)),
             Some(TermKeyCode::UpArrow)
         );
+    }
+
+    // --- Insert / F1-F24 wiring (`docs/tasks/backlog.md` item 2) ----------
+
+    #[test]
+    fn insert_key_routes_through_termwiz_key_path() {
+        assert_eq!(
+            terminal_key_from_input(&Key::Named(NamedKey::Insert)),
+            Some(TermKeyCode::Insert)
+        );
+    }
+
+    #[test]
+    fn function_keys_f1_to_f24_route_through_termwiz_key_path() {
+        let named = [
+            NamedKey::F1,
+            NamedKey::F2,
+            NamedKey::F3,
+            NamedKey::F4,
+            NamedKey::F5,
+            NamedKey::F6,
+            NamedKey::F7,
+            NamedKey::F8,
+            NamedKey::F9,
+            NamedKey::F10,
+            NamedKey::F11,
+            NamedKey::F12,
+            NamedKey::F13,
+            NamedKey::F14,
+            NamedKey::F15,
+            NamedKey::F16,
+            NamedKey::F17,
+            NamedKey::F18,
+            NamedKey::F19,
+            NamedKey::F20,
+            NamedKey::F21,
+            NamedKey::F22,
+            NamedKey::F23,
+            NamedKey::F24,
+        ];
+        for (index, key) in named.into_iter().enumerate() {
+            let expected_n = (index + 1) as u8;
+            assert_eq!(
+                terminal_key_from_input(&Key::Named(key)),
+                Some(TermKeyCode::Function(expected_n)),
+                "F{expected_n}"
+            );
+        }
+    }
+
+    #[test]
+    fn function_keys_beyond_f24_are_not_wired() {
+        // `docs/tasks/backlog.md` item 2's own scope: termwiz's own
+        // `KeyCode::Function` doc notes only "F1-F24 are possible" — see
+        // `KITTY_COMPLIANCE`'s "Functional key definitions: F25-F35" row.
+        assert_eq!(terminal_key_from_input(&Key::Named(NamedKey::F25)), None);
     }
 
     // --- text-key routing (`terminal_key_from_character`) ----------------

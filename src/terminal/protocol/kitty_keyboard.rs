@@ -71,15 +71,15 @@ pub(crate) fn flags_from_mode(mode: TermMode) -> KittyKeyboardFlags {
 ///
 /// `event` is only ever `Release` here when `REPORT_EVENT_TYPES` is active
 /// (`TerminalCore::encode_key` filters out every other release before this
-/// function is even called — see its doc comment). A release still only
-/// produces bytes for the handful of keys `kitty_override` promotes to
-/// genuine `CSI u` at these flags (Enter/Tab/Backspace/Escape): every other
-/// key here — arrows, Home/End, PageUp/PageDown, Delete, ... — stays on its
-/// flag-invariant legacy `CSI` form (see `KITTY_COMPLIANCE`'s "Functional
-/// key definitions: navigation keys" row), which this module doesn't extend
-/// with an event-type subfield, so a release for one of those has no
-/// representation to fall back to and must produce nothing — re-emitting
-/// the press bytes would read as a second press to any Kitty-aware client.
+/// function is even called — see its doc comment). A release produces bytes
+/// for the keys `kitty_override` promotes to genuine `CSI u` at these flags
+/// (Enter/Tab/Backspace/Escape/F13-F24) and for the navigation keys
+/// `navigation_key_event_override` decorates in place (arrows, Home/End,
+/// PageUp/PageDown, Insert, Delete — see `KITTY_COMPLIANCE`'s "Report event
+/// types" navigation row); every other key here — keypad, standalone
+/// modifiers, F25+, ... — has no representation to fall back to and must
+/// produce nothing, since re-emitting the press bytes would read as a
+/// second press to any Kitty-aware client.
 pub(crate) fn encode(
     key: KeyCode,
     mods: Modifiers,
@@ -89,6 +89,10 @@ pub(crate) fn encode(
     newline_mode: bool,
 ) -> Vec<u8> {
     if let Some(bytes) = kitty_override(key, mods, flags, event) {
+        return bytes;
+    }
+
+    if let Some(bytes) = navigation_key_event_override(key, mods, flags, event) {
         return bytes;
     }
 
@@ -153,6 +157,28 @@ pub(crate) fn encode(
 /// from ever having an orphan release with no representation at all, which
 /// re-deriving the spec's carve-out as its own separate condition here
 /// would have produced.
+///
+/// F13-F24 are a second, unrelated class this function also promotes,
+/// unconditionally once any Kitty flag is negotiated: unlike F1-F12 (whose
+/// SS3/`CSI`-letter and `CSI n~` legacy numbers the Kitty spec's own
+/// "Functional key definitions" table documents as legal alternate forms —
+/// see `encode_function_key`), the spec has no legacy encoding for F13 and
+/// up at all, only dedicated Private-Use-Area `CSI u` codepoints
+/// (`57376`-`57398` for F13-F35; termwiz's own `KeyCode::Function` doc caps
+/// out at F24, matching this module's own scope — see `KITTY_COMPLIANCE`'s
+/// "Functional key definitions: F13-F24"/"F25-F35" rows). kitty's own
+/// reference (`key_encoding.c`) always emits these PUA codes for F13+, even
+/// with zero progressive-enhancement flags negotiated — the spec explicitly
+/// permits terminals to choose otherwise for keys with no legacy form
+/// ("terminals may instead choose to ignore such keys in legacy mode
+/// instead, or have an option to control this behavior"), and this module
+/// takes that option: with `flags.is_empty()` (the earlier check above),
+/// F13-F24 still fall through to `legacy_bytes`' existing xterm/rxvt-style
+/// numbers, preserving compatibility for old programs that never negotiate
+/// Kitty at all. Once any flag is negotiated, though, promotion is
+/// unconditional (no report-all-keys/disambiguate distinction the way
+/// Enter/Tab/Backspace/Escape have) since there's no legacy form worth
+/// preserving here in the first place.
 fn kitty_override(
     key: KeyCode,
     mods: Modifiers,
@@ -168,6 +194,9 @@ fn kitty_override(
         KeyCode::Tab => 9,
         KeyCode::Backspace => 127,
         KeyCode::Escape => 27,
+        // F13-F24's dedicated Private-Use-Area codepoints (57376-57387) —
+        // see this function's doc comment.
+        KeyCode::Function(n) if (13..=24).contains(&n) => 57376 + u32::from(n - 13),
         _ => return None,
     };
 
@@ -177,6 +206,10 @@ fn kitty_override(
         // Esc has no legacy-mode exception in the spec: disambiguate alone
         // promotes it, modified or not.
         KeyCode::Escape => report_all_keys || disambiguate,
+        // F13-F24 have no legacy form to preserve at all, so any negotiated
+        // flag promotes them unconditionally — see this function's doc
+        // comment.
+        KeyCode::Function(n) if (13..=24).contains(&n) => true,
         // Enter/Tab/Backspace: promoted once *any* modifier is held (see
         // the deviation note above); the bare key stays legacy until
         // report-all-keys, preserving `reset<Enter>` recovery.
@@ -231,6 +264,83 @@ fn event_type_subfield(event: KeyEventKind, flags: KittyKeyboardFlags) -> Option
         KeyEventKind::Repeat => Some(2),
         KeyEventKind::Release => Some(3),
     }
+}
+
+/// Adds the Kitty "Report event types" modifier sub-field
+/// (`event_type_subfield`) to the navigation keys' own Kitty-flag-invariant
+/// legacy `CSI` forms (`legacy_bytes`'s Home/End/arrows and
+/// PageUp/PageDown/Insert/Delete arms) — the one thing those forms were
+/// missing relative to the genuine `CSI u` forms `kitty_override`/
+/// `csi_u_text_key` already decorate.
+///
+/// This is `Compliant`, not a deviation, despite a narrower reading of the
+/// spec text that takes the "central escape code" section's literal `CSI
+/// ... u` framing to mean the event-type sub-field is `CSI u`-only: the
+/// spec's own "Event types" section defines it generically as "a sub-field
+/// of the modifiers field", and its "Legacy functional keys" section says
+/// explicitly that these forms "encoded as described in the modifiers
+/// section, above" — the same section event types are a part of. Verified
+/// against both reference implementations the spec names as implementing
+/// this protocol: kitty's own `key_encoding.c` (`serialize()` appends the
+/// `mods:action` sub-field to every functional key uniformly, regardless of
+/// whether the trailing byte is `u`, `~`, or a legacy CSI letter — there is
+/// no special-casing for `CSI u` there at all) and alacritty's
+/// `build_sequence` (same: `kitty_event_type` decorates the payload before
+/// the terminator is even chosen). See `KITTY_COMPLIANCE`'s "Report event
+/// types" navigation row.
+///
+/// `None` for every other key, or when there's nothing to add (a plain
+/// press, or `REPORT_EVENT_TYPES` not negotiated) — `encode`'s existing
+/// fallback (`legacy_bytes`, or "no representation" for an unpromoted
+/// release) is already correct in both cases.
+fn navigation_key_event_override(
+    key: KeyCode,
+    mods: Modifiers,
+    flags: KittyKeyboardFlags,
+    event: KeyEventKind,
+) -> Option<Vec<u8>> {
+    let event_type = event_type_subfield(event, flags)?;
+    let (intro, terminator) = navigation_key_form(key)?;
+
+    // Once an event-type sub-field is present the modifiers field can't be
+    // omitted either — spec: "If no modifiers are present, the modifiers
+    // field must have the value 1 and the event type sub-field the type of
+    // event" — which also means the `SS3` alternate form `legacy_bytes`
+    // uses for an unmodified press in application-cursor-keys mode can't
+    // carry a Repeat/Release at all (it has no field to hold either
+    // sub-field in), so this always uses the `CSI` form instead — matching
+    // kitty's own reference, whose `cursor_key_mode` `SS3` special case is
+    // itself gated on "legacy mode", unconditionally false once
+    // `REPORT_EVENT_TYPES` is negotiated.
+    let mut mod_bits = u32::from(mods.encode_xterm());
+    if mods.contains(Modifiers::SUPER) {
+        mod_bits |= 0b1000;
+    }
+    let mod_value = 1u32 + mod_bits;
+    Some(format!("{intro};{mod_value}:{event_type}{terminator}").into_bytes())
+}
+
+/// The `CSI` intro/terminator pair `legacy_bytes` uses for the navigation
+/// keys `KITTY_COMPLIANCE`'s "Report event types" navigation row covers:
+/// the letter-terminated arrows/Home/End (always the `CSI 1;...<letter>`
+/// form here, the `1` never omitted once decorating — see
+/// `navigation_key_event_override`), and the `~`-terminated
+/// PageUp/PageDown/Insert/Delete. `None` for every other key (F1-F35,
+/// keypad, standalone modifiers, ... — outside that row's scope).
+fn navigation_key_form(key: KeyCode) -> Option<(&'static str, char)> {
+    Some(match key {
+        KeyCode::UpArrow | KeyCode::ApplicationUpArrow => ("\x1b[1", 'A'),
+        KeyCode::DownArrow | KeyCode::ApplicationDownArrow => ("\x1b[1", 'B'),
+        KeyCode::RightArrow | KeyCode::ApplicationRightArrow => ("\x1b[1", 'C'),
+        KeyCode::LeftArrow | KeyCode::ApplicationLeftArrow => ("\x1b[1", 'D'),
+        KeyCode::Home | KeyCode::KeyPadHome => ("\x1b[1", 'H'),
+        KeyCode::End | KeyCode::KeyPadEnd => ("\x1b[1", 'F'),
+        KeyCode::Insert => ("\x1b[2", '~'),
+        KeyCode::Delete => ("\x1b[3", '~'),
+        KeyCode::PageUp | KeyCode::KeyPadPageUp => ("\x1b[5", '~'),
+        KeyCode::PageDown | KeyCode::KeyPadPageDown => ("\x1b[6", '~'),
+        _ => return None,
+    })
 }
 
 /// Every key `kitty_override` doesn't (or, for
@@ -614,10 +724,13 @@ fn csi_u_text_key(
 /// readability. Ported from termwiz's own table: F1-F4 use SS3 when
 /// unmodified and CSI when modified, F5-F24 reuse legacy rxvt-style `CSI
 /// n~` numbers (which the Kitty spec's own "Functional key definitions"
-/// table also documents as F1-F12's alternate numeric forms — see
-/// `KITTY_COMPLIANCE`'s "F13-F35" row for where this stops being spec-legal:
-/// termwiz's F13-F24 numbers there are legacy rxvt numbers, not Kitty's PUA
-/// codes, and F25+ has no representation at all).
+/// table also documents as F1-F12's alternate numeric forms). This
+/// function is only ever reached with `flags.is_empty()` (see `encode`) or
+/// for `n` outside `kitty_override`'s `13..=24` PUA range — see
+/// `KITTY_COMPLIANCE`'s "Functional key definitions: F13-F24"/"F25-F35"
+/// rows: F13-F24's numbers here are legacy rxvt numbers, not Kitty's PUA
+/// codes, which is why `kitty_override` takes over for them once any Kitty
+/// flag is active; F25+ has no representation at all, in either place.
 fn encode_function_key(n: u8, mods: Modifiers) -> String {
     if mods.is_empty() && n < 5 {
         return match n {
@@ -812,7 +925,7 @@ pub(crate) const KITTY_COMPLIANCE: &[FeatureEntry] = &[
     },
     FeatureEntry {
         feature: "Functional key definitions: navigation keys",
-        key_class: "arrows, Home, End, PageUp, PageDown, Delete",
+        key_class: "arrows, Home, End, PageUp, PageDown, Insert, Delete",
         verdict: Verdict::Compliant,
         tests: &["navigation_keys_are_flag_invariant_and_spec_compliant"],
     },
@@ -835,27 +948,40 @@ pub(crate) const KITTY_COMPLIANCE: &[FeatureEntry] = &[
         feature: "Report event types",
         key_class: "navigation/legacy functional forms (arrows, Home, End, PageUp, PageDown, \
                     Insert, Delete)",
-        verdict: Verdict::Unimplemented(
-            "the wider Kitty grammar extends the modifier:event-type sub-field to the legacy \
-             `CSI 1;mods<letter>` / `CSI n;mods~` forms these keys use too, not just the general \
-             `CSI u` form — but this module only decorates the CSI u sequences \
-             kitty_override/csi_u_text_key already produce, matching this feature's explicit \
-             scope. Effort: small-medium — thread the same event_type_subfield through \
-             legacy_bytes' nav-key arm, gated on flags being non-empty (that arm currently \
-             ignores flags entirely, by design — see \"Functional key definitions: navigation \
-             keys\"), plus deciding whether that changes those keys' 'flag-invariant' status",
-        ),
-        tests: &[],
+        verdict: Verdict::Compliant,
+        tests: &[
+            "csi_u_navigation_key_event_type_truth_table",
+            "csi_u_event_type_truth_table",
+        ],
     },
     FeatureEntry {
-        feature: "Functional key definitions: F13-F35",
-        key_class: "function keys (high)",
+        feature: "Functional key definitions: F13-F24",
+        key_class: "function keys (high, app-wired)",
+        verdict: Verdict::Deviation(
+            "reports the dedicated Private-Use-Area CSI u codepoints (57376-57387) once any \
+             Kitty flag is negotiated (kitty_override), but — unlike kitty's own reference \
+             implementation, which always emits these regardless of flags, even with zero \
+             enhancements negotiated — keeps termwiz's legacy rxvt-style numbers when no Kitty \
+             flag is active at all, preserving compatibility for old programs that never \
+             negotiate the protocol. The spec's own text explicitly permits this choice: \
+             \"terminals may instead choose to ignore such keys in legacy mode instead, or have \
+             an option to control this behavior.\" `docs/tasks/backlog.md` item 2, resolved: \
+             app::keymap now maps NamedKey::F1..F24 to a TermKeyCode, so this path is reachable \
+             from the real UI too.",
+        ),
+        tests: &["high_function_keys_use_legacy_numbers_without_kitty_flags_and_pua_codes_with_them"],
+    },
+    FeatureEntry {
+        feature: "Functional key definitions: F25-F35",
+        key_class: "function keys (very high)",
         verdict: Verdict::Unimplemented(
-            "no PUA table exists for F13 and up: F13-F24 here reuse termwiz's legacy rxvt \
-             numbers (spec-WRONG, not just missing), F25-F35 produce nothing at all. Also \
-             BYPASSED at the app layer: app::keymap never maps any function key to a \
-             TermKeyCode, so this path isn't reachable from the real UI regardless. Effort: \
-             small for the PUA table itself, once the app-layer gap is separately closed",
+            "no PUA table entry for these in kitty_override (bounded to 13..=24, matching \
+             termwiz's own KeyCode::Function doc: \"F1-F24 are possible\"), so they still \
+             produce nothing. Also BYPASSED at the app layer: app::keymap has no \
+             NamedKey::F25..F35 arm, matching this bug's own explicit scope \
+             (`docs/tasks/backlog.md` item 2 title: \"Insert and F1-F24\"). Effort: small — \
+             extend kitty_override's Function range to 13..=35 and add the matching app::keymap \
+             arms",
         ),
         tests: &["very_high_function_keys_are_unimplemented"],
     },
