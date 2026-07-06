@@ -11,6 +11,7 @@ use crate::config::{AgentToolsConfig, BashToolConfig};
 use crate::contract::SessionId;
 use crate::live::LiveState;
 use crate::persistence::projection::duckdb::DuckdbStoreHandle;
+use crate::skills::SkillRegistry;
 use crate::tools::bash::BashCompletion;
 
 /// Where this session's persisted history lives, for the recall tools
@@ -72,6 +73,20 @@ struct Inner {
     tools: AgentToolsConfig,
     /// See [`RecallContext`].
     recall: RecallContext,
+    /// This session's composed skill registry (`skills::SkillRegistry`) --
+    /// embedded builtins plus any `.horizon/skills/` discovered from the
+    /// session's cwd, per `skills`' module doc (v2). Empty
+    /// ([`SkillRegistry::default`]) at every construction site except the
+    /// one production call site (`horizon-agentd`'s `session::run_session`),
+    /// which installs the real per-session registry via
+    /// [`ToolSessionState::with_skills`] right after construction --
+    /// mirroring how [`RecallContext`] is threaded in, except this seat is
+    /// set post-construction (via a builder method) rather than as a
+    /// `for_current_dir` parameter, so that constructor's signature -- and
+    /// every non-production caller of it (this crate's own tests, `tools::
+    /// recall`'s tests, Horizon's UI-side dummy-tool-state test helper) --
+    /// stays unchanged.
+    skills: SkillRegistry,
 }
 
 impl ToolSessionState {
@@ -112,8 +127,25 @@ impl ToolSessionState {
                 bash_cwd: Arc::new(Mutex::new(bash_cwd)),
                 tools,
                 recall,
+                skills: SkillRegistry::default(),
             }),
         }
+    }
+
+    /// Installs this session's real skill registry after construction --
+    /// the one production call site (`horizon-agentd`'s
+    /// `session::run_session`) uses this to attach the per-session
+    /// [`SkillRegistry::discover`] result once it's built, without adding a
+    /// parameter to [`Self::for_current_dir`] (see [`Inner::skills`]'s doc
+    /// comment for why). Safe to call only right after construction, before
+    /// this `ToolSessionState` has been cloned anywhere else -- `Rc::
+    /// get_mut` silently does nothing if that invariant is violated (no
+    /// other production caller does).
+    pub fn with_skills(mut self, skills: SkillRegistry) -> Self {
+        if let Some(inner) = Rc::get_mut(&mut self.inner) {
+            inner.skills = skills;
+        }
+        self
     }
 
     /// v1 workspace root: the process's current directory at session start,
@@ -156,6 +188,12 @@ impl ToolSessionState {
     /// clone (an `Option<SessionId>` and an `Option<Arc<Mutex<_>>>`).
     pub fn recall_context(&self) -> RecallContext {
         self.inner.recall.clone()
+    }
+
+    /// This session's composed skill registry (see [`Inner::skills`]) --
+    /// what `tools::config`'s `skill.read` dispatch reads from.
+    pub fn skill_registry(&self) -> &SkillRegistry {
+        &self.inner.skills
     }
 
     pub fn record_mtime(&self, path: PathBuf, mtime: SystemTime) {
