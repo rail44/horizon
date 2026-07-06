@@ -1,5 +1,11 @@
 [workspace]
-members = [".", "crates/horizon-agent", "crates/horizon-agentd", "crates/horizon-control"]
+members = [
+    ".",
+    "crates/horizon-agent",
+    "crates/horizon-agentd",
+    "crates/horizon-control",
+    "crates/horizon-ctl",
+]
 
 [package]
 name = "horizon"

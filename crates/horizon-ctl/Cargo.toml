@@ -1,0 +1,18 @@
+[package]
+name = "horizon-ctl"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+horizon-control = { path = "../horizon-control" }
+# Not a "new" dependency in spirit: `horizon-control::contract::{Invoke,
+# Query}::args`/`what` are typed as `serde_json::Value`, and Rust's extern
+# prelude only makes a *direct* dependency's items nameable -- so building
+# an `Invoke`/`Query` payload at all requires this crate directly, even
+# though it never appears in horizon-ctl's own public surface. Already a
+# workspace dependency (`horizon-control`, `horizon-agent`, `horizon` all
+# use it), so this pulls in nothing new to the dependency graph.
+serde_json = "1.0"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

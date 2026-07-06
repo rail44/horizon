@@ -2410,6 +2410,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-ctl"
+version = "0.1.0"
+dependencies = [
+ "horizon-control",
+ "serde_json",
+]
+
+[[package]]
 name = "http"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
