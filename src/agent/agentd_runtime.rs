@@ -548,19 +548,38 @@ pub(crate) fn fold_agent_session_events(
     sessions: RwSignal<Registry>,
     config_reload_requests: RwSignal<u64>,
 ) {
-    let events = create_signal_from_channel(handle.events());
+    let event_stream = handle.events();
     sessions.update(|registry| {
         registry.insert_agent(session_id, handle);
     });
 
-    let runtime_state = LiveState::with_disabled_persistence();
-    let config_write_calls = Rc::new(RefCell::new(HashSet::new()));
-    create_effect(move |_| {
-        if let Some(event) = events.get() {
-            observe_config_write(&event, &config_write_calls, config_reload_requests);
-            let frame = runtime_state.extend_provider_events(std::iter::once(event));
-            frames.update(|frames| frames.update_agent_frame(session_id, frame));
-        }
+    // The fold's channel signal and effect are created under a detached
+    // root `Scope`, NOT whatever scope happens to be current. This function
+    // is reachable from inside other effects -- most concretely the CLI
+    // control-plane bridge (`control_plane::bridge`), whose request-pump
+    // `create_effect` runs `execute_command` for `new-agent`/
+    // `new-config-agent`. Reactive nodes created inside a running effect
+    // are owned by that effect's scope and are disposed the next time it
+    // re-runs -- so a CLI-spawned session's fold used to go silently dead
+    // on the *next* CLI request (observed in the plan-03 E2E as "the pane
+    // froze at 'waiting for approval' the moment the `approve` command
+    // arrived, though agentd kept streaming events"). A detached scope pins
+    // the fold to the session's lifetime instead of the spawning effect's;
+    // when the session ends, the channel closes and the effect simply never
+    // fires again -- the same quiescence every startup-attached fold
+    // already relies on.
+    let scope = floem::reactive::Scope::new();
+    floem::reactive::with_scope(scope, move || {
+        let events = create_signal_from_channel(event_stream);
+        let runtime_state = LiveState::with_disabled_persistence();
+        let config_write_calls = Rc::new(RefCell::new(HashSet::new()));
+        create_effect(move |_| {
+            if let Some(event) = events.get() {
+                observe_config_write(&event, &config_write_calls, config_reload_requests);
+                let frame = runtime_state.extend_provider_events(std::iter::once(event));
+                frames.update(|frames| frames.update_agent_frame(session_id, frame));
+            }
+        });
     });
 }
 

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use floem::peniko::Color;
-use floem::reactive::{RwSignal, SignalUpdate, SignalWith};
+use floem::reactive::{RwSignal, Scope, SignalUpdate, SignalWith};
 
 use crate::config::RawThemeConfig;
 use crate::terminal::config::TerminalColors;
@@ -166,15 +166,15 @@ const THEME_NAMES: &[&str] = &[
     "terminal_cursor",
 ];
 
-/// All of Horizon's `Reload Config`-able theme state, bundled behind one
-/// signal ([`state_signal`]) so a reload swaps chrome overrides, the ANSI
-/// palette, and the terminal's derived color scheme atomically — a reader
-/// can never observe chrome already reloaded but the terminal still on the
-/// old palette, or vice versa. `terminal` is precomputed once here, at swap
-/// time, rather than resolved from `chrome`/`ansi` on every
-/// `terminal::config::resolved_colors()` call: that accessor is read once
-/// per rendered cell (`terminal::core::render::resolve_color`), so its cost
-/// must stay a plain field read.
+/// All of Horizon's `Reload Config`-able theme state. Chrome overrides and
+/// the ANSI palette swap atomically behind the one reactive signal
+/// ([`THEME_STATE`]); the terminal's derived scheme is precomputed here at
+/// swap time — rather than resolved from `chrome`/`ansi` on every
+/// `terminal::config::resolved_colors()` call, which is read once per
+/// rendered cell — and then published to the cross-thread
+/// [`TERMINAL_COLORS`] store, since cell rendering happens off the UI
+/// thread where the reactive signal doesn't reach (see that static's doc
+/// comment).
 #[derive(Clone)]
 struct ThemeState {
     chrome: HashMap<&'static str, Color>,
@@ -281,7 +281,21 @@ thread_local! {
     /// the override maps) and keeps `.with()` reads cheap (a pointer deref,
     /// not a clone) — see this module's doc comment on `ThemeState` for why
     /// chrome/ansi/terminal are bundled into one signal rather than three.
-    static THEME_STATE: RwSignal<Arc<ThemeState>> = RwSignal::new(initial_state());
+    ///
+    /// Created under a detached root `Scope` — NOT the scope that happens
+    /// to be current at first access. This thread-local initializes lazily,
+    /// and in the running app that first access is inside a view's style
+    /// effect; a bare `RwSignal::new` would make that effect's scope the
+    /// signal's owner, so the first theme swap — which re-runs exactly that
+    /// effect — would dispose the signal mid-propagation and every other
+    /// style closure would then read a dangling signal id (observed as a
+    /// `called Option::unwrap() on a None value` panic in
+    /// `floem_reactive`'s read path on the first real `Reload Config`;
+    /// unit tests never catch this because nothing there reads the signal
+    /// from inside an effect). `Scope::new()` has no parent, so nothing
+    /// ever disposes it — the right lifetime for process-wide theme state.
+    static THEME_STATE: RwSignal<Arc<ThemeState>> =
+        Scope::new().create_rw_signal(initial_state());
 }
 
 /// Reads the config file's `[theme]` table once, at first access from
@@ -293,10 +307,32 @@ fn initial_state() -> Arc<ThemeState> {
     Arc::new(ThemeState::build(&crate::config::load().theme))
 }
 
+/// The terminal scheme's cross-thread home. The reactive `THEME_STATE`
+/// above is thread-local twice over (the `thread_local!` itself, and
+/// floem's reactive runtime behind `RwSignal`), which is correct for the
+/// chrome/ansi accessors — those are only ever read from UI style
+/// closures — but WRONG for the terminal's colors: the per-cell RGB
+/// resolution (`terminal::core::render`) runs on terminal session threads,
+/// which would each lazily initialize their own startup-config copy and
+/// never observe a UI-thread [`apply_reload`]. Observed in the plan-03 E2E
+/// as "chrome recolors live, the terminal grid keeps the startup theme
+/// forever". A process-wide `RwLock` fixes that: one copy, written by
+/// `apply_reload` on the UI thread, read (uncontended, a `Copy` struct)
+/// from any thread that paints cells.
+static TERMINAL_COLORS: std::sync::OnceLock<std::sync::RwLock<TerminalColors>> =
+    std::sync::OnceLock::new();
+
+fn terminal_colors_store() -> &'static std::sync::RwLock<TerminalColors> {
+    TERMINAL_COLORS.get_or_init(|| {
+        std::sync::RwLock::new(ThemeState::build(&crate::config::load().theme).terminal)
+    })
+}
+
 /// Swaps in a freshly parsed `[theme]` table (`Reload Config`'s theme half
-/// — see `app::command_actions::reload_config`). Chrome, the ansi palette,
-/// and the terminal's derived colors all update together, since they share
-/// one [`ThemeState`] — see that struct's doc comment for why.
+/// — see `app::command_actions::reload_config`): chrome and the ansi
+/// palette atomically through the reactive [`ThemeState`], then the
+/// terminal's derived colors into the cross-thread [`TERMINAL_COLORS`]
+/// store — see those items' doc comments for why the split exists.
 ///
 /// Two signal writes, not one: phase 1 installs the new chrome/ansi
 /// override maps immediately (with a placeholder `terminal` field, never
@@ -346,6 +382,13 @@ pub(crate) fn apply_reload(theme: &RawThemeConfig) {
     THEME_STATE.with(|signal| {
         signal.update(|state| Arc::make_mut(state).terminal = terminal);
     });
+    // The cross-thread copy the render paths actually read — see
+    // [`TERMINAL_COLORS`]. Written last, after the reactive state is fully
+    // consistent; terminal readers are repaint-driven (per frame), not
+    // reactive, so there is no ordering hazard with the signal writes above.
+    *terminal_colors_store()
+        .write()
+        .expect("terminal color store poisoned") = terminal;
 }
 
 fn resolve(name: &'static str, default: Color) -> Color {
@@ -368,12 +411,16 @@ pub(super) fn resolve_ansi(name: &'static str, default: Color) -> Color {
     THEME_STATE.with(|signal| signal.with(|state| resolve_pure(&state.ansi, name, default)))
 }
 
-/// The terminal's live derived color scheme — a plain field read out of the
-/// current `ThemeState` (cheap: `TerminalColors` is a `Copy` struct of
-/// `[u8; 3]` triples), for `terminal::config::resolved_colors` to expose to
-/// the per-cell render path.
+/// The terminal's live derived color scheme — a plain locked read of a
+/// `Copy` struct of `[u8; 3]` triples, for `terminal::config::
+/// resolved_colors` to expose to the per-cell render path. Reads
+/// [`TERMINAL_COLORS`], not `THEME_STATE`: cell rendering runs on terminal
+/// session threads, where the thread-local reactive state would be a
+/// stale, never-reloaded copy — see [`TERMINAL_COLORS`]'s doc comment.
 pub(crate) fn terminal_colors() -> TerminalColors {
-    THEME_STATE.with(|signal| signal.with(|state| state.terminal))
+    *terminal_colors_store()
+        .read()
+        .expect("terminal color store poisoned")
 }
 
 /// A map lookup with a fallback default — the pure core both the
