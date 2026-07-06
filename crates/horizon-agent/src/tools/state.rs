@@ -10,7 +10,34 @@ use std::{
 use crate::config::{AgentToolsConfig, BashToolConfig};
 use crate::contract::SessionId;
 use crate::live::LiveState;
+use crate::persistence::projection::duckdb::DuckdbStoreHandle;
 use crate::tools::bash::BashCompletion;
+
+/// Where this session's persisted history lives, for the recall tools
+/// (`tools::recall`) to search/read it: the session's own id (the tools'
+/// default search/read scope) and the *shared* live DuckDB projection
+/// handle (`persistence::projection::duckdb::SharedDuckdbStore::wait`'s
+/// result -- see that type's doc comment). `tools::recall` locks this same
+/// `Arc` per query; it must never open its own fresh `Store::open` of the
+/// same path -- a second independent DuckDB instance against one file is
+/// unsound (not just redundant) with `duckdb-rs`'s lack of a cross-instance
+/// cache and DuckDB's relaxed durability, confirmed in production as a
+/// fresh open reading zero rows for a session with real history. `None`
+/// fields mean recall degrades to a clear error instead of a silent no-op
+/// or a silent "search everything".
+///
+/// Only `horizon-agentd`'s real session construction site
+/// (`session::run_session`) populates both fields. Every other
+/// `ToolSessionState` construction site -- this crate's own tests
+/// (`ToolSessionState::new`/`without_root`), and Horizon's UI-side
+/// dummy-tool-state test helper in `src/agent/host_tools.rs` -- uses
+/// `RecallContext::default()` and keeps behaving exactly as it did before
+/// recall existed.
+#[derive(Clone, Default)]
+pub struct RecallContext {
+    pub session_id: Option<SessionId>,
+    pub store: Option<DuckdbStoreHandle>,
+}
 
 /// Per-session file-tool state: the workspace root every absolute path is
 /// confined to, the mtimes recorded by `fs.read`/`fs.write`/`fs.edit` for
@@ -43,22 +70,32 @@ struct Inner {
     /// `AGENTS.md`). `Copy`, so cheap to store by value here and to clone
     /// out via `tools_config`/`bash_config`.
     tools: AgentToolsConfig,
+    /// See [`RecallContext`].
+    recall: RecallContext,
 }
 
 impl ToolSessionState {
     #[cfg(test)]
     pub fn new(workspace_root: PathBuf) -> Self {
-        Self::with_root(Some(workspace_root), AgentToolsConfig::default())
+        Self::with_root(
+            Some(workspace_root),
+            AgentToolsConfig::default(),
+            RecallContext::default(),
+        )
     }
 
     /// A session with no usable workspace root: every file-tool path
     /// resolution returns an `is_error` result.
     #[cfg(test)]
     pub fn without_root() -> Self {
-        Self::with_root(None, AgentToolsConfig::default())
+        Self::with_root(None, AgentToolsConfig::default(), RecallContext::default())
     }
 
-    fn with_root(workspace_root: Option<PathBuf>, tools: AgentToolsConfig) -> Self {
+    fn with_root(
+        workspace_root: Option<PathBuf>,
+        tools: AgentToolsConfig,
+        recall: RecallContext,
+    ) -> Self {
         // Bash's initial tracked cwd is "the workspace root"
         // (`docs/agent-tools-design.md`); if no root could be established,
         // fall back to the raw (non-canonicalized) current directory, and
@@ -74,6 +111,7 @@ impl ToolSessionState {
                 recorded_mtimes: RefCell::new(HashMap::new()),
                 bash_cwd: Arc::new(Mutex::new(bash_cwd)),
                 tools,
+                recall,
             }),
         }
     }
@@ -83,17 +121,18 @@ impl ToolSessionState {
     /// canonicalized, the session gets no root at all and every file-tool
     /// path is rejected with an actionable error — never a panic, and
     /// never a fallback root that fails open. `tools` is the resolved
-    /// `[agent]` tool tuning, passed in by the caller
-    /// (`app/runtime/agent.rs::spawn_agent_session`, the one production call
+    /// `[agent]` tool tuning, and `recall` is this session's recall context
+    /// (see [`RecallContext`]) -- both passed in by the caller
+    /// (`horizon-agentd`'s `session::run_session`, the one production call
     /// site) rather than resolved here — this crate can't read Horizon's
-    /// config file itself (see `config`'s module doc), and Horizon has
-    /// already resolved a full `AgentConfig` by the time it spawns a
-    /// session.
-    pub fn for_current_dir(tools: AgentToolsConfig) -> Self {
+    /// config file itself (see `config`'s module doc), and the caller has
+    /// already resolved a full `AgentConfig` (and knows its own session id)
+    /// by the time it spawns a session.
+    pub fn for_current_dir(tools: AgentToolsConfig, recall: RecallContext) -> Self {
         let root = std::env::current_dir()
             .and_then(|dir| dir.canonicalize())
             .ok();
-        Self::with_root(root, tools)
+        Self::with_root(root, tools, recall)
     }
 
     pub fn workspace_root(&self) -> Option<&Path> {
@@ -111,6 +150,12 @@ impl ToolSessionState {
     /// `tools::approval::resolve_bash`.
     pub fn bash_config(&self) -> BashToolConfig {
         self.inner.tools.bash
+    }
+
+    /// This session's recall context (see [`RecallContext`]) -- cheap to
+    /// clone (an `Option<SessionId>` and an `Option<Arc<Mutex<_>>>`).
+    pub fn recall_context(&self) -> RecallContext {
+        self.inner.recall.clone()
     }
 
     pub fn record_mtime(&self, path: PathBuf, mtime: SystemTime) {

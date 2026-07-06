@@ -142,6 +142,54 @@ code.
 Runtime persistence writes normalized Horizon events to the JSONL event log.
 DuckDB is rebuilt from JSONL and is not the primary append path.
 
+> **Addendum (2026-07-07, recall work).** The statement above ("DuckDB is
+> rebuilt from JSONL and is not the primary append path") still describes
+> JSONL's role as the source of truth, but the projection is no longer
+> *only* rebuilt at startup: `horizon-agentd`'s event-log writer thread
+> (`persistence::event_log::writer`) now opens the DuckDB store once, right
+> after its startup rebuild (or skip, if already current -- the same
+> freshness check as before), and *keeps* that `Store` open for the rest of
+> the process's life, projecting every subsequent event live, right after
+> its own JSONL line is durably written. JSONL is still authoritative and
+> the startup rebuild is still the reconciliation point (a live-projection
+> append failure only warns and moves on -- see `run_writer`'s doc comment);
+> what changed is that a session's history is now queryable in DuckDB
+> within the same run it happened in, not only after the next restart. This
+> is also what powers the `recall.search`/`recall.read` agent tools (see
+> `tools::recall`).
+>
+> **A same-path second `Store::open` is unsound, not just redundant.** An
+> early version of this work assumed same-process opens of one path were
+> safe to multiply (some libduckdb bindings cache connections by resolved
+> path). Measured against the actual `duckdb-rs` binding this crate uses:
+> there is no such cache -- every `Connection::open` call opens a wholly
+> independent database instance against the file, regardless of what else
+> in the process already has it open. Combined with DuckDB's relaxed
+> durability (a connection's own committed writes can sit in *that
+> connection's* in-memory WAL for a while before landing in the on-disk
+> file), a second instance opened elsewhere in the same process read a
+> stale, in one observed case *zero-row*, view of a session with
+> substantial real history. The fix: exactly one `Store`, wrapped in
+> `Arc<Mutex<_>>` and shared (`persistence::projection::duckdb::
+> SharedDuckdbStore`) with every in-process consumer that needs a live
+> view -- the recall tools (via `tools::ToolSessionState`/`RecallContext`)
+> and the rig provider's history replay (`providers::rig::history::
+> load_rig_history`) both lock the *same* `Arc` the writer thread appends
+> through, never open the file again themselves.
+>
+> **External processes (a `duckdb -readonly` CLI invocation, a copied
+> file) are a different, still-usable case, with a different caveat.**
+> Unlike a second in-process `Store::open`, a same-machine external process
+> opening the file is not blocked by agentd's own open (POSIX file locks
+> are per-process, and DuckDB's own locking followed suit in practice) --
+> but it is reading DuckDB's own on-disk, last-checkpointed state, which
+> can lag behind whatever the live writer connection has committed
+> in-memory. Treat an external read while agentd is running as a
+> *diagnostic* snapshot that may be stale, not as an authoritative live
+> view -- see the `agent-inspect` skill's updated DuckDB section for the
+> practical implications (prefer the JSONL log while agentd is live, or
+> stop agentd first for a guaranteed-current read).
+
 The projection runs by default now, at `$XDG_DATA_HOME/horizon/agent-state.duckdb`
 (falling back to `~/.local/share/horizon/agent-state.duckdb`) -- there is no
 "unset = disabled" state any more. `HORIZON_AGENT_STATE_DB` (or the config

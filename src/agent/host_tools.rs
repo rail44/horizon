@@ -87,6 +87,7 @@ mod tests {
     fn dummy_tool_state() -> crate::agent::tools::ToolSessionState {
         crate::agent::tools::ToolSessionState::for_current_dir(
             crate::agent::config::AgentToolsConfig::default(),
+            crate::agent::tools::RecallContext::default(),
         )
     }
 

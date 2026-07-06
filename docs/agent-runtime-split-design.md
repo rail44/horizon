@@ -879,3 +879,25 @@ noticeably before `session_list`/`session_new` answered.
     consecutive full `cargo test -p horizon-agentd --test e2e` runs, plus
     dozens of runs of just these two tests under deliberate parallel load,
     came back green after both fixes.
+
+### Addendum (2026-07-07, recall work): the DuckDB rebuild moved again
+
+`main::spawn_duckdb_rebuild_task`/`main::rebuild_duckdb_projection`, named
+throughout the "Step 4 addendum" above, no longer exist in `main.rs` --
+folded into `persistence::event_log::writer`
+(`rebuild_and_open_duckdb_projection`/`duckdb_projection_is_current`) as
+part of making the DuckDB projection live, not just rebuilt at startup (see
+`docs/agent-duckdb-state-design.md`'s "Runtime Boundary" addendum). The
+behavior the addendum above describes is unchanged: the rebuild (or skip,
+via the same freshness check) still runs after `WriterInit::Ready` is sent,
+still doesn't block `hello`/`session_list`/`session_new`, and the same
+stderr lines and `HORIZON_AGENTD_TEST_DUCKDB_REBUILD_DELAY_MS` test hook
+still exist (now read by the writer module instead of `main.rs`). What's
+new: the writer thread now *keeps* the `Store` it opened, instead of
+dropping it right after the rebuild, so every event appended for the rest
+of the process's life is projected live too -- this is also the basis for
+the `recall.search`/`recall.read` agent tools (`tools::recall`). One
+casualty: a rebuild failure is no longer folded into `AgentdState`'s
+skipped-lines-style status (the writer module has no handle to
+`AgentdState`), so that specific client-visible surfacing regressed to
+stderr-only; still reported, just not over the wire.

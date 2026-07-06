@@ -1,11 +1,15 @@
 use std::{
     io::{BufWriter, Write},
-    path::Path,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
     thread,
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
 use crossbeam_channel::{unbounded, Receiver, Sender};
+
+use crate::persistence::projection::duckdb::{DuckdbStoreHandle, Store};
 
 use super::{read, ReadReport, Record};
 
@@ -118,8 +122,39 @@ impl WriterHandle {
     /// each of the two call sites. Every other caller (Horizon's own tests,
     /// and any future direct caller) keeps getting the line via
     /// [`Self::open`]/[`Self::open_with_reader`].
-    pub fn open_silently(path: impl AsRef<Path>) -> (Self, Receiver<WriterInit>) {
-        Self::open_inner(path, |path| read(path), false)
+    ///
+    /// `duckdb_path`, when `Some`, is also this call's seam onto the live
+    /// DuckDB projection (`docs/agent-duckdb-state-design.md`'s "Runtime
+    /// Boundary" addendum): once the startup read finishes and
+    /// [`WriterInit::Ready`] has been sent, the background thread opens
+    /// (and, if needed, rebuilds) the projection at that path and *keeps*
+    /// the `Store` open (behind an `Arc<Mutex<_>>` -- see
+    /// [`rebuild_and_open_duckdb_projection`]'s doc comment for why a
+    /// second independent open of the same path is unsound, not just
+    /// redundant) for the rest of the process's life, projecting every
+    /// subsequent [`Self::append`] right after its JSONL line is durably
+    /// written -- see [`run_writer`]. The decision (`Some(store)`, or
+    /// `None` if there's nothing to share) is delivered exactly once on the
+    /// returned second [`Receiver`]; a caller that needs to hand the same
+    /// live store to more than one consumer (recall tools, the rig
+    /// provider's history replay) should drain it into a shared,
+    /// multi-reader cell (`persistence::projection::duckdb::
+    /// SharedDuckdbStore`) rather than relying on this channel's
+    /// single-delivery semantics directly. This is `horizon-agentd`'s only
+    /// real caller of `duckdb_path`; every other caller of this module
+    /// (Horizon's own tests, [`Self::open`]/[`Self::open_with_reader`])
+    /// passes `None` and gets the exact pre-recall behavior (JSONL only,
+    /// DuckDB never touched here) plus an immediately-`None` second
+    /// receiver.
+    pub fn open_silently(
+        path: impl AsRef<Path>,
+        duckdb_path: Option<PathBuf>,
+    ) -> (
+        Self,
+        Receiver<WriterInit>,
+        Receiver<Option<DuckdbStoreHandle>>,
+    ) {
+        Self::open_inner(path, |path| read(path), false, duckdb_path)
     }
 
     /// Same mechanism as [`Self::open`], but lets a caller substitute the
@@ -133,33 +168,60 @@ impl WriterHandle {
         path: impl AsRef<Path>,
         reader: impl FnOnce(&Path) -> Result<ReadReport> + Send + 'static,
     ) -> (Self, Receiver<WriterInit>) {
-        Self::open_inner(path, reader, true)
+        let (handle, init_rx, _duckdb_rx) = Self::open_inner(path, reader, true, None);
+        (handle, init_rx)
     }
 
     fn open_inner(
         path: impl AsRef<Path>,
         reader: impl FnOnce(&Path) -> Result<ReadReport> + Send + 'static,
         log_skipped_summary: bool,
-    ) -> (Self, Receiver<WriterInit>) {
+        duckdb_path: Option<PathBuf>,
+    ) -> (
+        Self,
+        Receiver<WriterInit>,
+        Receiver<Option<DuckdbStoreHandle>>,
+    ) {
         let path = path.as_ref().to_path_buf();
         let (tx, rx) = unbounded();
         let (init_tx, init_rx) = unbounded();
+        let (duckdb_tx, duckdb_rx) = unbounded();
 
         thread::spawn(move || match start_up(&path, reader, log_skipped_summary) {
             Ok((file, report, next_sequence)) => {
+                // Seed the rebuild from this read's records *before* handing
+                // `report` to `WriterInit::Ready` below (which moves it) --
+                // readiness (this send) must not wait on the rebuild, so it
+                // fires first; the rebuild itself runs right after, still on
+                // this same background thread, before `run_writer` starts
+                // draining the channel (see this fn's doc comment and
+                // `run_writer`'s doc comment for why appends sent in that
+                // window queue harmlessly rather than racing anything).
+                let duckdb_seed_records = duckdb_path.is_some().then(|| report.records.clone());
                 let _ = init_tx.send(WriterInit::Ready(report));
-                run_writer(file, &path, rx, next_sequence);
+                let duckdb_store = match (duckdb_path.as_deref(), duckdb_seed_records) {
+                    (Some(duckdb_path), Some(records)) => {
+                        rebuild_and_open_duckdb_projection(duckdb_path, &records)
+                    }
+                    _ => None,
+                };
+                let _ = duckdb_tx.send(duckdb_store.clone());
+                run_writer(file, &path, rx, next_sequence, duckdb_store);
             }
             Err(error) => {
                 let _ = init_tx.send(WriterInit::Failed(error));
                 // No writer loop: dropping `rx` here (it's only captured by
                 // this closure) makes every `append`/`flush` sent from now
                 // on fail fast with a disconnected-channel error instead of
-                // queuing forever with nothing to drain it.
+                // queuing forever with nothing to drain it. `duckdb_tx` is
+                // dropped too without ever sending -- callers of the
+                // returned `duckdb_rx` observe a disconnected channel
+                // (`recv()` returns `Err`), which they treat the same as an
+                // explicit `None` (nothing to share).
             }
         });
 
-        (Self { tx }, init_rx)
+        (Self { tx }, init_rx, duckdb_rx)
     }
 
     pub fn append(&self, record: Record) -> Result<()> {
@@ -255,18 +317,157 @@ fn start_up(
     Ok((file, report, next_sequence))
 }
 
+/// Opens (creating parent directories as needed) and fully rebuilds the
+/// DuckDB projection at `duckdb_path` from `records` -- this is where
+/// `horizon-agentd`'s old `main::rebuild_duckdb_projection` (a separate,
+/// short-lived `Store::open` spawned only after readiness) now lives,
+/// folded into the event-log writer's own startup so the `Store` returned
+/// here can be *kept* by [`run_writer`] afterward instead of being dropped
+/// right after the rebuild -- that's what makes every subsequent append
+/// project live instead of only at the next restart (see
+/// `docs/agent-duckdb-state-design.md`'s "Runtime Boundary" addendum).
+///
+/// Preserves the prior freshness-skip behavior: unless [`Store::
+/// migrated_legacy_schema`] just ran (which invalidates the projection's
+/// own high-water mark, per that method's doc comment), a rebuild is
+/// skipped when [`Store::max_last_sequence`] already matches the log's own
+/// tail sequence. The exact same "rebuilt (N record(s))"/"already current,
+/// skipping rebuild" stderr lines the old code printed are preserved too,
+/// so operators (and `horizon-agentd`'s own e2e tests, which poll for these
+/// strings) see the same signals.
+///
+/// Failure (creating the parent directory, opening the store, or the
+/// rebuild itself) is reported to stderr and returns `None`: a rebuildable,
+/// non-authoritative derived view failing here must never take down the
+/// JSONL writer thread it shares a process with -- JSONL stays the source
+/// of truth regardless, and the next restart's rebuild reconciles.
+///
+/// Returns the store wrapped in `Arc<Mutex<_>>`, not a bare `Store`: a
+/// second, independent `Store::open` against the same path from elsewhere
+/// in this process (a recall tool's lookup, the rig provider's history
+/// replay, an external `duckdb` CLI invocation) does *not* share this
+/// instance's state the way "same path, same process" might suggest --
+/// `duckdb-rs`'s `Connection::open` has no instance cache and opens a
+/// wholly separate database instance every time, and DuckDB's relaxed
+/// durability means this instance's own committed appends can sit in *its*
+/// in-memory WAL well before (or without ever, until a checkpoint) landing
+/// in the on-disk file a second instance would read -- confirmed in
+/// practice as a second same-path open seeing zero rows for a session with
+/// substantial real history. The only sound way to give more than one part
+/// of the process a live view is to hand out clones of this *one* `Arc`
+/// (see `persistence::projection::duckdb::SharedDuckdbStore`, and this
+/// function's caller in [`WriterHandle::open_inner`]) rather than letting
+/// anyone open the file again.
+fn rebuild_and_open_duckdb_projection(
+    duckdb_path: &Path,
+    records: &[Record],
+) -> Option<DuckdbStoreHandle> {
+    if let Some(delay) = test_duckdb_rebuild_delay() {
+        thread::sleep(delay);
+    }
+
+    if let Some(parent) = duckdb_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            if let Err(error) = std::fs::create_dir_all(parent) {
+                eprintln!(
+                    "horizon-agentd: failed to create DuckDB projection directory {} ({error}); \
+                     live projection disabled for this run",
+                    parent.display()
+                );
+                return None;
+            }
+        }
+    }
+
+    let store = match Store::open(duckdb_path) {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!(
+                "horizon-agentd: DuckDB projection unavailable ({error}); live projection \
+                 disabled for this run"
+            );
+            return None;
+        }
+    };
+
+    if !store.migrated_legacy_schema() {
+        match duckdb_projection_is_current(&store, records) {
+            Ok(true) => {
+                eprintln!("horizon-agentd: DuckDB projection already current, skipping rebuild");
+                return Some(Arc::new(Mutex::new(store)));
+            }
+            Ok(false) => {}
+            Err(error) => eprintln!(
+                "horizon-agentd: DuckDB projection freshness check failed ({error}), rebuilding"
+            ),
+        }
+    }
+
+    let record_count = records.len();
+    if let Err(error) = store.replace_from_event_log_records(records.iter().cloned()) {
+        eprintln!(
+            "horizon-agentd: DuckDB projection rebuild failed ({error}); live projection \
+             disabled for this run"
+        );
+        return None;
+    }
+    eprintln!("horizon-agentd: DuckDB projection rebuilt ({record_count} record(s))");
+    Some(Arc::new(Mutex::new(store)))
+}
+
+/// Whether `store`'s existing high-water mark already matches `records`'
+/// own final sequence -- mirrors the check `horizon-agentd`'s old
+/// `main::duckdb_projection_is_current` used to make before the rebuild
+/// moved here. `records` is already sorted ascending by `event_log::read`,
+/// so its last element carries the log's overall maximum sequence.
+fn duckdb_projection_is_current(store: &Store, records: &[Record]) -> Result<bool> {
+    let log_final_sequence = records.last().map(|record| record.sequence as i64);
+    Ok(store.max_last_sequence()? == log_final_sequence)
+}
+
+/// Test-only hook, mirroring `horizon-agentd::main`'s own resume-delay hook
+/// (`TEST_RESUME_DELAY_MS_VAR`): when set, artificially delays this thread's
+/// DuckDB rebuild (which runs *after* [`WriterInit::Ready`] has already been
+/// sent -- see [`WriterHandle::open_inner`]) so a test can prove the
+/// rebuild never sits on the readiness path `session_list`/`session_new`
+/// block on. Never set outside `horizon-agentd`'s own e2e tests.
+const TEST_DUCKDB_REBUILD_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_DUCKDB_REBUILD_DELAY_MS";
+
+fn test_duckdb_rebuild_delay() -> Option<Duration> {
+    std::env::var(TEST_DUCKDB_REBUILD_DELAY_MS_VAR)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+}
+
 /// Drains `rx` for the lifetime of the writer, assigning each `Append`
 /// command the next sequence number in `next_sequence` (seeded by
 /// [`start_up`] from the startup read) — see the "Ordering guarantee"
 /// section on [`WriterHandle::open`] for why this single-threaded loop is
 /// the only place that assignment ever happens.
+///
+/// `duckdb_store`, when `Some` (only for a `horizon-agentd` writer opened
+/// via [`WriterHandle::open_silently`] with a DuckDB path -- see
+/// [`WriterHandle::open_inner`]), is locked and projected into right after
+/// each record's own JSONL line is durably written, keeping the projection
+/// live. The lock is only ever briefly held (one row's worth of inserts);
+/// write volume is low enough (roughly 1-2 events/s) that contention with
+/// another locker of the *same* `Arc` (a recall tool's query, the rig
+/// provider's history replay -- see `persistence::projection::duckdb::
+/// SharedDuckdbStore`) is a non-issue. A projection failure only ever warns
+/// once (a simple "warned already" latch, not per-event) to avoid log spam
+/// -- the JSONL write it followed already succeeded regardless, and the
+/// next restart's rebuild reconciles any projection rows this run couldn't
+/// keep live.
 fn run_writer(
     file: std::fs::File,
     path: &Path,
     rx: Receiver<AgentEventLogWriterCommand>,
     mut next_sequence: u64,
+    duckdb_store: Option<DuckdbStoreHandle>,
 ) {
     let mut writer = BufWriter::new(file);
+    let mut warned_duckdb_append_failure = false;
 
     while let Ok(command) = rx.recv() {
         match command {
@@ -293,6 +494,22 @@ fn run_writer(
                     // loss can still lose an unsynced page-cache write; that
                     // tier of durability is out of scope here.
                     let _ = writer.flush();
+
+                    if let Some(store) = &duckdb_store {
+                        let store = store
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        if let Err(error) = store.append_record(&record) {
+                            if !warned_duckdb_append_failure {
+                                eprintln!(
+                                    "horizon-agentd: DuckDB projection append failed ({error}); \
+                                     further append failures in this run won't be logged \
+                                     individually -- the next restart's rebuild reconciles"
+                                );
+                                warned_duckdb_append_failure = true;
+                            }
+                        }
+                    }
                 }
             }
             AgentEventLogWriterCommand::Flush(reply) => {

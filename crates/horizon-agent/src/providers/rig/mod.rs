@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 mod completion;
 mod history;
 mod mapping;
@@ -18,19 +16,26 @@ use stream::{StreamDeltaBuffer, StreamDeltaKind, ToolCallProgressBuffer};
 use crate::{
     config::RigAgentConfig,
     contract::{Provider as AgentProvider, ProviderId, SessionHandle, StartSession},
+    persistence::projection::duckdb::SharedDuckdbStore,
     roles::RoleDefinition,
 };
 
 pub(crate) struct Provider {
     config: RigAgentConfig,
-    memory_duckdb_path: Option<PathBuf>,
+    /// Shared, multi-reader-blocking handle onto the live DuckDB projection
+    /// -- see [`SharedDuckdbStore`]'s doc comment. Cloned into every
+    /// session's own dedicated rig thread (`start_session`/
+    /// `spawn_rig_session`), which blocks on it (never this method, and
+    /// never agentd's async accept loop) until the event-log writer's own
+    /// rebuild-or-open decision is known.
+    duckdb_cell: SharedDuckdbStore,
 }
 
 impl Provider {
-    pub(crate) fn new(config: RigAgentConfig, memory_duckdb_path: Option<PathBuf>) -> Self {
+    pub(crate) fn new(config: RigAgentConfig, duckdb_cell: SharedDuckdbStore) -> Self {
         Self {
             config,
-            memory_duckdb_path,
+            duckdb_cell,
         }
     }
 }
@@ -50,7 +55,7 @@ impl AgentProvider for Provider {
     fn start_session(&self, request: StartSession) -> SessionHandle {
         let role = request.role_id.as_ref().and_then(crate::roles::resolve);
         let config = role_adjusted_config(&self.config, role);
-        spawn_rig_session(request, config, role, self.memory_duckdb_path.clone())
+        spawn_rig_session(request, config, role, self.duckdb_cell.clone())
     }
 }
 
