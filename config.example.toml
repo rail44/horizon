@@ -228,8 +228,11 @@ window_height = 720.0
 # surface_chrome, surface_selected, border_default, border_subtle,
 # cursor_accent (workspace mode's cursor-frame border, distinct from
 # accent's focus border -- see `docs/workspace-mode-design.md`),
-# terminal_foreground (defaults to text_primary), terminal_background
-# (defaults to surface_base), terminal_cursor (defaults to accent).
+# diff_added_surface, diff_added_text, diff_removed_surface,
+# diff_removed_text (the agent transcript's fs.edit diff rendering --
+# see `docs/agent-output-ui-design.md`), terminal_foreground (defaults to
+# text_primary), terminal_background (defaults to surface_base),
+# terminal_cursor (defaults to accent).
 #
 # An unrecognized name or an unparsable hex value is warned about on stderr
 # and skipped, leaving that color at its built-in default.

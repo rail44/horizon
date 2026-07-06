@@ -32,6 +32,10 @@ const SURFACE_SELECTED_DEFAULT: Color = Color::from_rgb8(54, 59, 70);
 const BORDER_DEFAULT_DEFAULT: Color = Color::from_rgb8(54, 59, 70);
 const BORDER_SUBTLE_DEFAULT: Color = Color::from_rgb8(42, 46, 55);
 const CURSOR_ACCENT_DEFAULT: Color = Color::from_rgb8(229, 192, 123);
+const DIFF_ADDED_SURFACE_DEFAULT: Color = Color::from_rgb8(30, 46, 34);
+const DIFF_ADDED_TEXT_DEFAULT: Color = Color::from_rgb8(140, 209, 156);
+const DIFF_REMOVED_SURFACE_DEFAULT: Color = Color::from_rgb8(48, 30, 32);
+const DIFF_REMOVED_TEXT_DEFAULT: Color = Color::from_rgb8(224, 130, 138);
 
 pub(crate) fn text_primary() -> Color {
     resolve("text_primary", TEXT_PRIMARY_DEFAULT)
@@ -95,6 +99,31 @@ pub(crate) fn border_subtle() -> Color {
 /// introducing a new one.
 pub(crate) fn cursor_accent() -> Color {
     resolve("cursor_accent", CURSOR_ACCENT_DEFAULT)
+}
+
+// --- diff roles ------------------------------------------------------------
+//
+// Line-level diff rendering (`agent::view`'s fs.edit body, see
+// `docs/agent-output-ui-design.md` decision 4): a line's background carries
+// the added/removed distinction, and the sign column (+/-) gets its own,
+// slightly brighter color so it stays legible against the surface tint.
+// Unchanged/context lines use the ordinary chrome roles above, not a
+// dedicated role of their own.
+
+pub(crate) fn diff_added_surface() -> Color {
+    resolve("diff_added_surface", DIFF_ADDED_SURFACE_DEFAULT)
+}
+
+pub(crate) fn diff_added_text() -> Color {
+    resolve("diff_added_text", DIFF_ADDED_TEXT_DEFAULT)
+}
+
+pub(crate) fn diff_removed_surface() -> Color {
+    resolve("diff_removed_surface", DIFF_REMOVED_SURFACE_DEFAULT)
+}
+
+pub(crate) fn diff_removed_text() -> Color {
+    resolve("diff_removed_text", DIFF_REMOVED_TEXT_DEFAULT)
 }
 
 // --- terminal roles ------------------------------------------------------
@@ -161,6 +190,10 @@ const THEME_NAMES: &[&str] = &[
     "border_default",
     "border_subtle",
     "cursor_accent",
+    "diff_added_surface",
+    "diff_added_text",
+    "diff_removed_surface",
+    "diff_removed_text",
     "terminal_foreground",
     "terminal_background",
     "terminal_cursor",
