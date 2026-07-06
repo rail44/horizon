@@ -62,9 +62,14 @@ wave items where possible; design docs on first use.
 - **Agent output UI** (application-ui) — stage 1 survey merged
   (`docs/research/agent-ui.md`); stage 2 redesign in the domain
   session with the owner.
-- **Roles + configuration agent** (agent-foundation) — in the domain
-  session. Named prerequisite: runtime config reload. Carries the
-  owner's open question (defined role vs skill-specialized coder).
+- **Roles + configuration agent** — shipped 2026-07-06 (`c369eb9`):
+  runtime config reload (theme/keybindings live), minimal roles (wire
+  v2, persisted `role_id`), embedded skills with `skill.read`, config
+  tools, and the end-to-end configuration agent. The owner's open
+  question got its evidence — see
+  `docs/agent-roles-and-skills-design.md`: the role stayed a
+  capability envelope (enforcement, identity); the skill carried the
+  knowledge.
 
 ## Next (unclaimed — pick freely)
 
@@ -76,13 +81,15 @@ wave items where possible; design docs on first use.
   (extractable later), SSE streaming required (horizon-agent assumes
   it).
 - **Recall tool**: search over the DuckDB history (Letta survey:
-  retrieval over summarization); same crate as the roles work — start
-  after it lands.
+  retrieval over summarization); unblocked now that the roles work has
+  landed.
 
 ## Later (deliberately unshaped)
 
-- Skill mechanism: waits for the roles work's evidence on the owner's
-  open question (defined role vs skill-specialized coder).
+- Skill mechanism (beyond the embedded minimum that shipped with the
+  roles work): the evidence is in
+  (`docs/agent-roles-and-skills-design.md`) — a consultation with the
+  owner shapes the next step.
 - Inter-agent messaging: designed together with the session daemon —
   a project-level consultation comes first.
 - First-party viewers (image / markdown / git diff / color picker):

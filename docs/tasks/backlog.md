@@ -138,3 +138,8 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     frame. Full gate green (`cargo fmt`, `cargo clippy --workspace
     --all-targets -- -D warnings`, `cargo nextest run --workspace`: 672
     passed including all 19 `horizon-agentd` e2e tests).
+15. **reload_agent_runtime's responder/status effects when invoked over
+    the CLI** — a latent reactive-lifetime hazard sibling to the three
+    fixed in the plan-03 E2E (detached-scope creation): documented in
+    docs/agent-roles-and-skills-design.md but deliberately not fixed
+    there. Flagged 2026-07-06 by the agent-foundation session.
