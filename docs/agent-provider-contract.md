@@ -3,6 +3,11 @@
 This document defines the Horizon-owned contract for agent-capable session
 providers. It is a design contract, not yet a Rust API commitment.
 
+> **Superseded in part.** The "Tool Boundary" section's deferred tool
+> families (process execution, file writes) are no longer deferred — they
+> shipped as the `bash`/`write`/`edit` tools with approval gates. See
+> `docs/agent-tools-design.md` for the current tool set and permissions.
+
 ## Decision Summary
 
 Agent capability is provided by a `SessionProvider`, not by a special global AI

@@ -85,7 +85,11 @@ contents:
 - `workspace/` — the core domain: tabs, panes, layout tree, session
   attachments, operations/queries, pane input routing, and workspace views.
 - `terminal/` — PTY-backed terminal sessions (emulation core, session
-  runtime, rendering/input/IME views).
+  runtime, rendering/input/IME views). The kitty-keyboard-protocol
+  conformance matrix (`KITTY_COMPLIANCE`,
+  `src/terminal/protocol/kitty_keyboard.rs`) is resident, code-adjacent
+  documentation; print it with `cargo test -p horizon print_compliance_matrix
+  -- --nocapture`.
 - `agent/` — Horizon's seam onto AI agent sessions: the client/reconnect
   logic for `horizon-agentd` (`agentd_client.rs`, `agentd_runtime.rs`) and
   agent views. The provider contract, providers, tools, and persistence
@@ -150,6 +154,10 @@ branch, never commit to or push `main` directly, and hand your branch
 back through the review queue below. Subagent workers already follow
 the same shape (worktree branch handoff, `.claude/agents/worker.md`);
 this section extends it to every session working in this repository.
+Before editing anything, confirm `git rev-parse --show-toplevel` points at
+your own worktree, not the shared main checkout — a domain session has
+edited the main checkout directly by mistake before, and that is exactly
+the collision this whole flow exists to prevent.
 
 Feature-grained plans live in `docs/plans/<domain>/` — the directory
 is the domain (see `docs/roadmap.md`); one plan file is handed to one

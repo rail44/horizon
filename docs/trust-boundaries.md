@@ -6,6 +6,13 @@ asset; price-model ownership) plus a stack/runtime/principles audit of the
 codebase. This file records where code runs and why, and the stances taken
 on the major dependencies. Update it when a decision here is revisited.
 
+> **Superseded in part.** Tier 2's "in-process today, process boundary
+> decided as the next architecture milestone" and its "future enforcement:
+> split the mechanism into its own crate" have both landed: the agent
+> mechanism runs in the separate `horizon-agentd` process, and the crate
+> split (`crates/horizon-agent`) is done — see
+> `docs/agent-runtime-split-design.md`.
+
 ## Three tiers, chosen by trust — not by one technology
 
 **1. Untrusted code (agent-authored and third-party plugins) → wasm.**

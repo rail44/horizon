@@ -3,6 +3,12 @@
 This document records the initial product and architecture decisions for the
 Horizon Agent pane. It builds on `docs/ux-principles.md`.
 
+> **Superseded in part.** "Execution Boundary"'s stdio-JSON-RPC bridge was
+> replaced by the Unix-socket/JSONL-envelope `horizon-agentd` runtime — see
+> `docs/agent-runtime-split-design.md`. The tool boundary's "deferred"
+> operations (process execution, file writes) have since shipped with
+> approval gates — see `docs/agent-tools-design.md` for the actual tool set.
+
 ## Decision Summary
 
 The Agent pane is a pane-attached view of an agent session. It is not a global

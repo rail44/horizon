@@ -79,6 +79,47 @@ Not commands:
 Persistent UI should not become a complete command surface. It should show
 workspace state and expose only a small set of contextual affordances.
 
+### Surfaces Over The Command Model
+
+The command palette, workspace mode, and the `horizon` CLI control plane are
+three different surfaces over the same command model — "the command model is
+the core; surfaces are replaceable" (`docs/cli-control-plane-design.md`).
+None of them owns command semantics; each only contributes its own way of
+naming a command and resolving its target (typed query text, `hjkl`
+navigation to a cursor, or an explicit `session_id` over the wire). A future
+surface — a different palette, a scripting API, an agent driving Horizon
+directly — is expected to be another binding, not a rewrite.
+
+## Focus And Cursor
+
+Operating on the workspace requires two different "selected pane" concepts,
+kept deliberately distinct (the owner's own articulation, adopted verbatim as
+the design's spine — see `docs/workspace-mode-design.md` for the full
+rationale):
+
+- **Focus**: where keyboard input flows. A focused terminal pane receives
+  everything, kitty-faithfully; a focused agent pane receives composer text.
+- **Cursor**: the pane, tab, or session that Horizon commands act on. Command
+  targets (see "What Becomes A Command" above) resolve to the cursor.
+  Normally cursor and focus coincide, but they can diverge — a command can
+  act on a pane "over there" without moving where the user is typing. In
+  workspace mode, navigation keys move the cursor; `Enter` commits it (focus
+  follows the cursor), `Esc` cancels (the cursor snaps back, focus never
+  moved).
+
+### Activation Is An Origin Property
+
+Whether creating or attaching a session also moves focus onto it is decided
+by where the operation came from, not by which command it is — activation is
+an explicit, freely-specifiable argument on any command, not something
+implied by the command itself (the owner's point). Human surfaces (workspace
+mode, the palette) dive by default: making something is reason enough to look
+at it. The same operations arriving over the CLI control plane default to
+**not** stealing focus — a supervising or delegated agent creating a view
+must not grab the keyboard out from under the owner's own work — with
+explicit opt-in (the CLI's `--active`) available. See the "Second revision"
+section of `docs/cli-control-plane-design.md` for the full decision.
+
 ## Close, Detach, And Terminate
 
 Close and terminate are different concepts.

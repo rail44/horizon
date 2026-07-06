@@ -2,6 +2,14 @@
 
 Date: 2026-06-30
 
+> **Superseded.** This note's recommendations (JSONL as the primary durable
+> log, DuckDB as a rebuildable projection, a non-blocking log writer,
+> turn-level persistence granularity) were adopted — see
+> `docs/agent-duckdb-state-design.md`'s "Runtime Boundary" section for the
+> shipped shape. The runtime they describe has since moved out of the
+> Horizon process entirely: `horizon-agentd` now owns the event log and the
+> DuckDB projection — see `docs/agent-runtime-split-design.md`.
+
 This note records the stabilization pass after the first Agent pane, Rig, and
 DuckDB implementation passes. It separates measured facts from design
 implications so the next implementation step does not continue from guesswork.

@@ -1,11 +1,15 @@
 # Horizon
 
-Horizon is a Floem desktop shell for tabbed and split-pane applications.
+Horizon is a Floem-based desktop shell for tabbed and split-pane
+applications: a keyboard-first command workspace where terminals, AI agent
+sessions, and (future) WASM plugin views run as sessions attached to panes.
 
 ## MVP Shape
 
-- Floem owns the native window, command surface, tab actions, and split-pane
-  layout.
+- Floem owns the native window, tab actions, and split-pane layout. Every
+  operation runs through one command model, surfaced today by workspace mode's
+  `:` palette (`docs/workspace-mode-design.md`) and by the `horizon` CLI
+  control plane (`docs/cli-control-plane-design.md`).
 - Built-in sessions provide the first two MVP surfaces:
   - Terminal: PTY-backed terminal core using `portable-pty`,
     `alacritty_terminal`, and `termwiz`.
@@ -28,7 +32,10 @@ cargo run
 in `horizon-agentd` (`crates/horizon-agentd`), a separate workspace member
 Horizon spawns on demand. Run `cargo build --workspace` at least once (and
 again after touching `crates/horizon-agent`/`crates/horizon-agentd`) or agent
-panes will fail to find a runtime to spawn.
+panes will fail to find a runtime to spawn. `just dev` builds the whole
+workspace and launches the freshly built binary directly (bypassing `cargo
+run`'s environment leakage into Horizon and agentd); pass CLI subcommand
+arguments after it, e.g. `just dev sessions`.
 
 After `cargo run`, press `ctrl+'` to enter workspace mode, then `:` to open
 the control surface (see `docs/workspace-mode-design.md`). Commands mode
@@ -51,6 +58,19 @@ Use `Tab` while the control surface is open to switch between Commands and
 Workspace. The Workspace mode lists open tabs, panes inside split tabs, and
 detached sessions; Enter switches to the selected tab or pane, or attaches the
 selected detached session as a split.
+
+The same command model is also reachable from outside the GUI: `horizon
+<subcommand>` (no arguments launches the GUI itself) is a thin client over a
+Unix-socket control plane, useful for scripting or driving Horizon from an
+agent. Panes get `HORIZON_SOCKET`/`HORIZON_SESSION_ID` in their environment,
+so a subcommand run from inside a pane targets the enclosing instance and
+`--split` (bare) resolves to "here" by default. Subcommands: `new-terminal`,
+`new-agent [--prompt <text>]`, `attach <session-id>`,
+`terminate-session <session-id>`, `terminate-all-detached`,
+`approve`/`deny <session-id> <call-id>`, `cancel-turn <session-id>`,
+`reload-agent-runtime`, `sessions`, `state` (each takes `--split`/`--active`
+where placement/focus applies). See `docs/cli-control-plane-design.md` for
+the full contract.
 
 For automated visual inspection of the terminal pane:
 
@@ -77,7 +97,6 @@ default, with each scenario containing `terminal.txt`, `status.txt`,
 
 ## Next Integration Points
 
-1. Persist workspace state so tabs and splits survive restart.
-2. Render split layouts recursively instead of through fixed pane slots.
-3. Define the guest WASM ABI as WIT or a small exported JSON command function.
-4. Wire plugin views into the session model for hot-reloadable pane development.
+`docs/roadmap.md` is the source of truth for the current phase plan; this
+section does not duplicate it. Wave 1 in flight: a session-manager modal, a
+redesigned agent transcript UI, and a minimal agent-roles mechanism.
