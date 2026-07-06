@@ -6,6 +6,7 @@ use crate::control_surface::{
 };
 use crate::ui::list_row::{list_row, ListRow, ListRowStyle};
 use crate::ui::selectable_list::selectable_list;
+use crate::ui::spacing;
 use crate::ui::theme;
 use crate::workspace::Workspace;
 use floem::event::{Event, EventListener, EventPropagation};
@@ -17,7 +18,7 @@ const SESSION_MANAGER_ROW_HEIGHT: f64 = 52.0;
 const SESSION_MANAGER_ROW_STYLE: ListRowStyle = ListRowStyle {
     badge_width: 86.0,
     row_height: SESSION_MANAGER_ROW_HEIGHT,
-    padding_horiz: 14.0,
+    padding_horiz: spacing::SPACING_LG,
 };
 
 /// The session manager modal (`docs/plans/application-ui/01-session-
@@ -83,8 +84,8 @@ pub(crate) fn session_manager_modal(state: CommandActionState) -> impl IntoView 
             ))
             .style(|s| {
                 s.width_full()
-                    .padding_horiz(14)
-                    .padding_vert(12)
+                    .padding_horiz(spacing::SPACING_LG)
+                    .padding_vert(spacing::SPACING_MD)
                     .gap(4)
                     .background(theme::surface_raised())
             }),
@@ -100,7 +101,7 @@ pub(crate) fn session_manager_modal(state: CommandActionState) -> impl IntoView 
                 s.width_full()
                     .height(28)
                     .items_center()
-                    .padding_horiz(14)
+                    .padding_horiz(spacing::SPACING_LG)
                     .font_size(11)
                     .color(theme::text_muted())
                     .background(theme::surface_chrome())

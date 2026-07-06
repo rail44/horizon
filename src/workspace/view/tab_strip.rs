@@ -1,4 +1,5 @@
 use crate::app::command_actions::{execute_command, CommandActionState, CommandInvocation};
+use crate::ui::spacing;
 use crate::ui::theme;
 use floem::prelude::*;
 
@@ -18,7 +19,7 @@ pub(crate) fn tab_strip(command_state: CommandActionState) -> impl IntoView {
             .height(35)
             .items_center()
             .gap(6)
-            .padding_horiz(10)
+            .padding_horiz(spacing::SPACING_SM)
             .background(theme::surface_base())
     })
 }
@@ -84,7 +85,7 @@ fn tab_chip(command_state: CommandActionState, index: usize) -> impl IntoView {
             .min_width(0.0)
             .items_center()
             .gap(7)
-            .padding_left(10)
+            .padding_left(spacing::SPACING_SM)
             .padding_right(3)
             .background(background)
             .border(1.0)

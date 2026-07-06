@@ -1,6 +1,7 @@
 use crate::control_surface::{palette_items, ControlInputState, PALETTE_VISIBLE_ROWS};
 use crate::ui::list_row::{list_row, ListRowStyle};
 use crate::ui::selectable_list::selectable_list;
+use crate::ui::spacing;
 use crate::ui::theme;
 use floem::event::{Event, EventListener, EventPropagation};
 use floem::prelude::*;
@@ -14,7 +15,7 @@ const PALETTE_ROW_HEIGHT: f64 = 48.0;
 const PALETTE_ROW_STYLE: ListRowStyle = ListRowStyle {
     badge_width: 72.0,
     row_height: PALETTE_ROW_HEIGHT,
-    padding_horiz: 12.0,
+    padding_horiz: spacing::SPACING_MD,
 };
 
 #[derive(Clone)]
@@ -83,7 +84,7 @@ pub(crate) fn command_palette(state: CommandPaletteState) -> impl IntoView {
                 s.width_full()
                     .height(38)
                     .items_center()
-                    .padding_horiz(12)
+                    .padding_horiz(spacing::SPACING_MD)
                     .font_size(14)
                     .color(theme::text_primary())
                     .background(theme::surface_raised())

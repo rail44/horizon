@@ -3,6 +3,7 @@ use std::time::Duration;
 use crate::agent::contract::{SessionState, ToolCallId, ToolCallRequest};
 use crate::ui::fonts::font_family;
 use crate::ui::hint_chip::key_hint;
+use crate::ui::spacing;
 use crate::ui::theme;
 use floem::prelude::*;
 use floem::{
@@ -49,9 +50,9 @@ pub(super) fn agent_composer(
             .height(34)
             .min_height(34)
             .items_center()
-            .padding_horiz(10)
-            .margin_horiz(8)
-            .margin_bottom(7)
+            .padding_horiz(spacing::SPACING_SM)
+            .margin_horiz(spacing::SPACING_XS)
+            .margin_bottom(spacing::SPACING_XS)
             .font_family(font_family().to_string())
             .font_size(12)
             .line_height(1.2)
@@ -312,7 +313,7 @@ pub(super) fn agent_approval_banner(
             .min_height(30)
             .items_center()
             .justify_end()
-            .padding_horiz(8)
+            .padding_horiz(spacing::SPACING_XS)
             .gap(10)
     })
 }
@@ -388,7 +389,7 @@ fn agent_approval_button(
             }
 
             s.height(26)
-                .padding_horiz(10)
+                .padding_horiz(spacing::SPACING_SM)
                 .items_center()
                 .justify_center()
                 .background(background)

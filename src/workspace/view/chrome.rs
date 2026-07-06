@@ -1,3 +1,4 @@
+use crate::ui::spacing;
 use crate::ui::theme;
 use floem::prelude::*;
 
@@ -75,7 +76,7 @@ pub(super) fn chrome_cancel_button(
 
             s.height(20)
                 .margin_left(10)
-                .padding_horiz(8)
+                .padding_horiz(spacing::SPACING_XS)
                 .items_center()
                 .justify_center()
                 .font_size(11)
@@ -128,8 +129,8 @@ pub(super) fn pane_header(
             .height(35)
             .items_center()
             .gap(10)
-            .padding_left(11)
-            .padding_right(6)
+            .padding_left(spacing::SPACING_MD)
+            .padding_right(spacing::SPACING_XXS)
             .background(background)
     })
 }
