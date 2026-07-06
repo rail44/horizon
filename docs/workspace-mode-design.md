@@ -1,8 +1,9 @@
 # Workspace Mode and the Cursor
 
-Status: core decisions settled 2026-07-06; open questions listed at the
-bottom. This document records the design conversation between the owner
-and the planning session; implementation has not started.
+Status: design fully settled 2026-07-06 (two rounds); implementation
+has not started. The only remaining item is an empirical check, listed
+at the bottom. This document records the design conversation between
+the owner and the planning session.
 
 ## Problem
 
@@ -90,20 +91,38 @@ already maps to SUPER app-side.
   approval banner's key capture (`AgentPaneFocus`) already works as a
   small-scale precedent of mode-as-focus.
 
-## Open questions (agenda for the next session)
+## Second-round decisions (settled 2026-07-06)
 
-1. Dive or stay: after a split, and after executing a palette command,
-   does focus follow into the pane or stay in workspace mode?
-2. Visualization: which combination of pane dimming, cursor frame, and
-   a status-bar mode chip. Must be loud enough to pay for persistence.
-3. In-mode key principle: vim-spatial (`hjkl`, counts?) vs mnemonic;
-   then the initial keyset (movement, split, tab nav, palette, close).
-4. Migration of existing chords: retire `ctrl+shift+p`/`ctrl+p` into
-   the mode (this absorbs backlog item 1 — code/docs/status-bar/smoke
-   scripts move together).
-5. Full-passthrough pane lock (hand even the escape chord to the app;
-   mouse-only exit): deferred, not in v1.
-6. Super+Esc pass-through confirmation on the owner's desktop.
+1. **Creating operations dive; everything else restores.** After a
+   split or a new terminal/agent session, focus follows into the new
+   pane (you made it to use it). Palette commands that create nothing
+   (reload, terminate-detached, ...) return to the state from before
+   the palette opened.
+2. **Visualization uses all three signals**: pane dimming while in
+   workspace mode (the accident-killer), a cursor frame visually
+   distinct from the focus border, and a status-bar mode chip.
+3. **`:` opens the palette** — workspace mode's `:` is vim's
+   normal-to-cmdline transition, making the palette the command-line
+   analogue outright. The v1 keyset is deliberately minimal: `hjkl`
+   movement, `Enter` (commit focus to cursor), `Esc` (cancel), `:`
+   (palette). Everything else goes through the palette until
+   dogfooding proves a key promotion. Structural principle (owner):
+   keep the in-mode key handling shaped for future vim vocabulary —
+   interpret key sequences rather than a flat one-key-one-action
+   table, so counts/motions can arrive without a rewrite.
+4. **Global modifier shortcuts retire when the mode ships.** No
+   dual-running period: `ctrl+shift+p`/`ctrl+p` go away, and code,
+   status-bar text, smoke scripts, and docs move in the same change
+   (absorbing backlog item 1).
+5. **No full-passthrough pane lock in v1** (the per-pane "hand even
+   the escape key to the app, exit by mouse only" valve). Add it when
+   a real need appears.
+
+## Pending verification
+
+- Super+Esc pass-through on the owner's GNOME session — checked on
+  first run once implemented; a collision is a config edit (the escape
+  key rides the `[keybindings]` mechanism), not a redesign.
 
 ## Non-goals for v1
 
