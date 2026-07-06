@@ -136,6 +136,18 @@ contents:
   `agent-duckdb-state-design.md`). Add or update a doc when making a
   non-obvious architectural decision.
 
+## Branch and Integration Flow
+
+Development is organized as one **project session** (long-horizon
+milestones, application-wide decisions, integration) plus per-domain
+work sessions. If you are a domain or task session: implement on a
+branch, never commit to or push `main` directly, and hand your branch
+name + commit ref back when done — the project session reviews in an
+isolated worktree, runs the integration gate, merges, and pushes.
+Subagent workers already follow the same shape (worktree branch
+handoff, `.claude/agents/worker.md`); this section extends it to every
+session working in this repository.
+
 ## Open Work
 
 Check `docs/roadmap.md` for current phases and their status, and the README
