@@ -161,27 +161,30 @@ your own worktree, not the shared main checkout — a domain session has
 edited the main checkout directly by mistake before, and that is exactly
 the collision this whole flow exists to prevent.
 
-Feature-grained plans live in `docs/plans/<domain>/` — the directory
-is the domain (see `docs/roadmap.md`); one plan file is handed to one
-domain session, which starts by reading it. Each plan carries a
-`Status:` line (ready → review → merged); the project session flips it
-only on events it observes first-hand — a review request arriving, a
-merge landing. Live session state is deliberately not tracked in git. Concrete design decisions
-belong to the domain session (with the owner); the project session
-does not relitigate them at merge — its review covers the gate,
-cross-domain integration, and coherence with the architecture docs,
-and returns non-blocking concerns as notes.
+Direction comes from `docs/roadmap.md`: a domain session picks an
+item there and makes the concrete design decisions with the owner
+in-session — there is no separate plans layer; **the review request is
+the scope record**. The project session does not relitigate in-session
+decisions at merge — its review covers the gate, cross-domain
+integration, and coherence with the roadmap and architecture docs,
+returning non-blocking concerns as notes — and reflects merges back
+into the roadmap. Live session state is deliberately not tracked in
+git.
 
 **Review queue** (`.claude/review-queue/`, untracked): when a branch
 is ready, write `<slug>.request.md` containing the branch name, commit
-ref, the plan it implements, a short summary, and the tail of your
-gate run. Don't wait synchronously — the project session is notified,
-reviews in an isolated worktree, merges and pushes on green, and
-writes `<slug>.result` (`merged <hash>` / `rejected: <reason>` +
-notes) next to your request.
+ref, the roadmap item it implements, the key design decisions made
+in-session, a short summary, and the tail of your gate run. An
+optional `## Observations` section (same two categories as worker
+reports: out-of-scope findings, friction) is triaged at review time by
+the project session into the backlog or the roadmap; mid-work findings
+can also ride your branch as edits to `docs/tasks/backlog.md`. Don't
+wait synchronously — the project session is notified, reviews in an
+isolated worktree, merges and pushes on green, and writes
+`<slug>.result` (`merged <hash>` / `rejected: <reason>` + notes) next
+to your request.
 
 ## Open Work
 
-Check `docs/roadmap.md` for current phases and their status, and the README
-"Next Integration Points" section for nearer-term items. Phase status is not
-duplicated here.
+Check `docs/roadmap.md` — it is the single direction document (in
+flight / next / later). Status is not duplicated here.

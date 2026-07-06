@@ -9,10 +9,13 @@ the foundations below.
 ## How work flows
 
 One **project session** owns this roadmap, long-horizon decisions, and
-integration (see AGENTS.md "Branch and Integration Flow"). Each wave-1
-item has a feature-grained plan under `docs/plans/`; the owner opens a
-**domain session** per plan and makes concrete design decisions there.
-Implementation comes back as branches through the review queue.
+integration (see AGENTS.md "Branch and Integration Flow"). **Domain
+sessions take items directly from this roadmap**, make concrete design
+decisions with the owner in-session, and hand branches back through
+the review queue citing the item they implement. There is no separate
+plans layer (retired 2026-07-06 — the two in-flight plan files under
+`docs/plans/` are those sessions' working documents and retire with
+them).
 
 ## Current position (orientation only — the repo is the truth)
 
@@ -52,36 +55,37 @@ wave items where possible; design docs on first use.
    the standing agreement. The CLI control plane is the seam it grows
    from.
 
-## Wave 1 (plans in `docs/plans/`)
+## In flight
 
-- **01 — Session manager modal**: dedicated command (+ optional
-  keybinding) opening a session-management modal; retire the palette's
-  Commands/Workspace Tab toggle.
-- **02 — Agent output UI**: survey existing agent UIs, then redesign
-  Horizon's transcript with the owner in the domain session.
-- **03 — Roles + configuration agent**: minimal role mechanism and the
-  onboarding/config agent (color scheme, keybindings) as its first
-  consumer. Named prerequisite: runtime config reload (config is
-  startup-only today).
+- **Session manager modal** — shipped 2026-07-06 (`20603dd`): palette
+  is Commands-only, sessions managed via the Manage Sessions command.
+- **Agent output UI** (application-ui) — stage 1 survey merged
+  (`docs/research/agent-ui.md`); stage 2 redesign in the domain
+  session with the owner.
+- **Roles + configuration agent** (agent-foundation) — in the domain
+  session. Named prerequisite: runtime config reload. Carries the
+  owner's open question (defined role vs skill-specialized coder).
 
-## Planned beyond wave 1 (plans exist)
+## Next (unclaimed — pick freely)
 
-- **04 — Recursive layout** (`docs/plans/application-ui/`): vertical
-  splits, 3+ panes; prerequisite for the viewers.
-- **05 — Model-routing API** (`docs/plans/provider-infra/`):
-  OpenAI-compatible router over synthetic.new, co-located as an
-  independent crate (no horizon dependencies — extractable later).
-- **06 — Recall tool** (`docs/plans/agent-foundation/`): search over
-  the DuckDB history (Letta survey: retrieval over summarization);
-  starts after plan 03 (same crate).
+- **Recursive layout**: vertical splits, 3+ panes (workspace-mode
+  `j/k` currently no-ops for lack of a vertical axis); prerequisite
+  for the viewers.
+- **Model-routing OpenAI-compatible API**: router over synthetic.new,
+  co-located as an independent crate — no horizon dependencies
+  (extractable later), SSE streaming required (horizon-agent assumes
+  it).
+- **Recall tool**: search over the DuckDB history (Letta survey:
+  retrieval over summarization); same crate as the roles work — start
+  after it lands.
 
-## Later (deliberately unplanned)
+## Later (deliberately unshaped)
 
-- Skill mechanism: waits for plan 03's evidence on the owner's open
-  question (defined role vs skill-specialized coder).
+- Skill mechanism: waits for the roles work's evidence on the owner's
+  open question (defined role vs skill-specialized coder).
 - Inter-agent messaging: designed together with the session daemon —
   a project-level consultation comes first.
 - First-party viewers (image / markdown / git diff / color picker):
-  wait for the view foundation (plan 04).
+  wait for recursive layout.
 - User-facing agent definition: composing an agent from tools and
   skills as a first-class flow.
