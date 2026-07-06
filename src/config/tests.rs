@@ -135,6 +135,77 @@ fn load_from_path_parses_a_well_formed_file() {
     let _ = std::fs::remove_file(&path);
 }
 
+// --- reload_from_path: Reload Config's fresh re-parse -------------------
+//
+// Unlike `load_from_path` above (folds every non-success case into
+// `RawConfig::default()`), `reload_from_path` must let the caller tell a
+// missing file (a legitimate "reset to defaults" reload outcome) apart from
+// a read/parse error (which must leave the currently applied config
+// untouched -- see the function's doc comment).
+
+#[test]
+fn reload_from_path_returns_ok_defaults_when_file_is_missing() {
+    let missing = std::env::temp_dir().join(format!(
+        "horizon-config-test-reload-missing-{}.toml",
+        uuid::Uuid::new_v4()
+    ));
+    assert_eq!(reload_from_path(Some(&missing)), Ok(RawConfig::default()));
+}
+
+#[test]
+fn reload_from_path_returns_ok_defaults_without_a_path_at_all() {
+    assert_eq!(reload_from_path(None), Ok(RawConfig::default()));
+}
+
+#[test]
+fn reload_from_path_errs_on_unparsable_toml_instead_of_falling_back_to_defaults() {
+    let path = std::env::temp_dir().join(format!(
+        "horizon-config-test-reload-invalid-{}.toml",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::write(&path, "this is not [ valid toml").unwrap();
+
+    let reloaded = reload_from_path(Some(&path));
+
+    assert!(
+        reloaded.is_err(),
+        "a reload must not silently reset a working theme/keymap to defaults over a typo"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn reload_from_path_parses_a_well_formed_file() {
+    let path = std::env::temp_dir().join(format!(
+        "horizon-config-test-reload-valid-{}.toml",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::write(
+        &path,
+        r##"
+            [theme]
+            accent = "#ff00ff"
+
+            [keybindings]
+            "ctrl+shift+z" = "new-agent"
+        "##,
+    )
+    .unwrap();
+
+    let reloaded = reload_from_path(Some(&path)).expect("well-formed file must parse");
+
+    assert_eq!(
+        reloaded.theme.colors.get("accent").map(String::as_str),
+        Some("#ff00ff")
+    );
+    assert_eq!(
+        reloaded.keybindings.get("ctrl+shift+z").map(String::as_str),
+        Some("new-agent")
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
 #[test]
 fn a_file_with_only_some_knobs_set_leaves_the_rest_none() {
     let path = std::env::temp_dir().join(format!(

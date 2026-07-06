@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::contract::{Event, ProviderId, SessionId};
+use crate::roles::RoleId;
 
 mod appender;
 mod turn;
@@ -25,6 +26,13 @@ pub struct Record {
     pub session_id: SessionId,
     pub turn_id: Option<String>,
     pub provider_id: Option<ProviderId>,
+    /// Mirrors `provider_id` exactly: `None` for a role-less session, and
+    /// `#[serde(default)]` so a log record written before this field
+    /// existed (schema/version unchanged -- this is additive, unlike the
+    /// wire's breaking `SessionNew` change) still parses, reading back as
+    /// `None` -- a resumed pre-existing session simply resumes role-less.
+    #[serde(default)]
+    pub role_id: Option<RoleId>,
     pub event_kind: String,
     pub event: Event,
     pub provider_payload: Option<serde_json::Value>,
@@ -127,6 +135,7 @@ mod tests {
             writer.clone(),
             session_id,
             Some(ProviderId("test.provider".to_string())),
+            None,
         );
 
         appender
@@ -173,6 +182,7 @@ mod tests {
             writer.clone(),
             session_id,
             Some(ProviderId("builtin.agent.rig".to_string())),
+            None,
         );
 
         appender
@@ -239,6 +249,7 @@ mod tests {
             session_id,
             turn_id: None,
             provider_id: None,
+            role_id: None,
             event_kind: "state_changed".to_string(),
             event: Event::StateChanged(SessionState::Running),
             provider_payload: None,
@@ -255,6 +266,38 @@ mod tests {
         assert_eq!(report.records, vec![record]);
         assert_eq!(report.corrupt_line_count, 1);
         assert!(report.ignored_partial_line);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// A record written before `role_id` existed has no such key in its
+    /// JSON at all -- `#[serde(default)]` must still parse it (as `None`),
+    /// not treat it as corrupt. Regression guard for resuming a log written
+    /// by a pre-role build of `horizon-agentd`.
+    #[test]
+    fn reads_a_pre_role_record_with_no_role_id_key() {
+        let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
+        let session_id = SessionId::new();
+        let line = serde_json::json!({
+            "schema": AGENT_EVENT_LOG_SCHEMA,
+            "version": AGENT_EVENT_LOG_VERSION,
+            "event_id": "event-pre-role",
+            "sequence": 0,
+            "session_id": session_id,
+            "turn_id": null,
+            "provider_id": null,
+            "event_kind": "state_changed",
+            "event": Event::StateChanged(SessionState::Running),
+            "provider_payload": null,
+            "created_at_unix_ms": 1,
+        })
+        .to_string();
+        std::fs::write(&path, format!("{line}\n")).expect("write pre-role fixture");
+
+        let report = read(&path).expect("read");
+        assert_eq!(report.records.len(), 1);
+        assert_eq!(report.records[0].role_id, None);
+        assert_eq!(report.corrupt_line_count, 0);
 
         let _ = std::fs::remove_file(path);
     }
@@ -277,6 +320,7 @@ mod tests {
             session_id,
             turn_id: None,
             provider_id: None,
+            role_id: None,
             event_kind: "state_changed".to_string(),
             event: Event::StateChanged(SessionState::Running),
             provider_payload: None,
@@ -324,7 +368,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
         let session_id = SessionId::new();
         let (writer, _init_rx) = WriterHandle::open(&path);
-        let mut appender = Appender::new(writer.clone(), session_id, None);
+        let mut appender = Appender::new(writer.clone(), session_id, None, None);
 
         appender
             .append_provider_events(vec![ProviderEvent::from(Event::MessageCommitted(
@@ -382,6 +426,7 @@ mod tests {
                         writer,
                         session_id,
                         Some(ProviderId("test.provider".to_string())),
+                        None,
                     );
                     for index in 0..events_per_session {
                         appender

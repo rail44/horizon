@@ -20,8 +20,13 @@
 //!   to defaults with a warning on stderr — the same "warn and skip, never
 //!   fail startup" policy `app::keymap` and `ui::theme` apply per-entry to
 //!   an unrecognized keybinding or theme color.
-//! - **Applied at startup only.** Nothing here watches the file for
-//!   changes; restart Horizon to pick up edits.
+//! - **Applied at startup only, except `[theme]`/`[keybindings]`.** Nothing
+//!   here watches the file for changes; restart Horizon to pick up edits to
+//!   `[agent]`/`[provider]`/`[terminal]`/`[ui]`. The `Reload Config` command
+//!   (`app::command_actions::reload_config`, [`reload`]) re-reads the file
+//!   and applies `[theme]` (`ui::theme::apply_reload`) and `[keybindings]`
+//!   (`app::keymap::Keymap::reload`) live — see that command's doc comment
+//!   for why those two sections and not the rest.
 //! - **Secrets stay out.** Nothing under `[provider]` accepts an API key —
 //!   `OPENAI_API_KEY` (and any future provider secret) is environment-only.
 
@@ -264,29 +269,108 @@ fn non_empty(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.is_empty())
 }
 
-fn load_from_path(path: Option<&Path>) -> RawConfig {
+/// The outcome of trying to read and parse the config file at some path,
+/// before either [`load_from_path`] (startup: every non-success case folds
+/// into `RawConfig::default()` plus a stderr warning) or [`reload_from_path`]
+/// (`Reload Config`: a parse/read error must NOT reset to defaults, since
+/// that would blow away a working theme/keymap over a typo -- see that
+/// function's doc comment) decides what to do with it. Factored out so the
+/// two callers can't drift on what counts as "missing" vs. "malformed".
+enum ConfigRead {
+    /// No file at all -- the common case, not a warning; equivalent to
+    /// `RawConfig::default()`.
+    Missing,
+    /// Boxed: `RawConfig` is a few hundred bytes (every section's fields,
+    /// several `HashMap`s) while the other variants are a plain `String` --
+    /// boxing keeps this enum from ballooning to the size of its largest
+    /// variant (`clippy::large_enum_variant`).
+    Parsed(Box<RawConfig>),
+    /// The file exists but could not be read (permissions, a symlink loop,
+    /// ...).
+    ReadError(String),
+    /// The file exists and was read, but isn't valid TOML (or doesn't match
+    /// `RawConfig`'s shape).
+    ParseError(String),
+}
+
+fn read_config(path: Option<&Path>) -> ConfigRead {
     let Some(path) = path else {
-        return RawConfig::default();
+        return ConfigRead::Missing;
     };
     let contents = match std::fs::read_to_string(path) {
         Ok(contents) => contents,
         // No file written yet is the common case, not a warning.
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return RawConfig::default(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return ConfigRead::Missing,
         Err(error) => {
-            eprintln!(
-                "horizon config: could not read {}: {error} -- using built-in defaults",
-                path.display()
-            );
-            return RawConfig::default();
+            return ConfigRead::ReadError(format!("could not read {}: {error}", path.display()))
         }
     };
-    parse(&contents).unwrap_or_else(|error| {
-        eprintln!(
-            "horizon config: could not parse {}: {error} -- using built-in defaults",
-            path.display()
-        );
-        RawConfig::default()
-    })
+    match parse(&contents) {
+        Ok(config) => ConfigRead::Parsed(Box::new(config)),
+        Err(error) => {
+            ConfigRead::ParseError(format!("could not parse {}: {error}", path.display()))
+        }
+    }
+}
+
+fn load_from_path(path: Option<&Path>) -> RawConfig {
+    match read_config(path) {
+        ConfigRead::Missing => RawConfig::default(),
+        ConfigRead::Parsed(config) => *config,
+        ConfigRead::ReadError(message) | ConfigRead::ParseError(message) => {
+            eprintln!("horizon config: {message} -- using built-in defaults");
+            RawConfig::default()
+        }
+    }
+}
+
+/// Re-reads and parses the config file fresh from disk, bypassing [`load`]'s
+/// startup-only cache -- `Reload Config`'s entry point
+/// (`app::command_actions::reload_config`). Unlike [`load_from_path`] (used
+/// only at startup, where nothing has been "applied" yet, so falling back to
+/// defaults on any error is always safe), a reload distinguishes a missing
+/// file (`Ok(RawConfig::default())` -- rewriting the process's whole
+/// theme/keymap state back to defaults because the file got deleted is a
+/// legitimate reload outcome, not a failure) from a read or parse error
+/// (`Err`, so the caller can leave the currently applied theme/keymap
+/// untouched instead of resetting them over a typo). Not gated by
+/// `#[cfg(test)]` itself (unlike [`resolve_config_path`]): it takes the path
+/// as a plain argument rather than reading the environment, so it's exactly
+/// as safe to compile and call from a test as `load_from_path` is -- see
+/// this module's tests.
+pub(crate) fn reload_from_path(path: Option<&Path>) -> Result<RawConfig, String> {
+    match read_config(path) {
+        ConfigRead::Missing => Ok(RawConfig::default()),
+        ConfigRead::Parsed(config) => Ok(*config),
+        ConfigRead::ReadError(message) | ConfigRead::ParseError(message) => Err(message),
+    }
+}
+
+/// `Reload Config`'s path resolution + fresh parse: re-resolves the config
+/// path (in case `HORIZON_CONFIG`/`XDG_CONFIG_HOME`/`HOME` changed since
+/// startup -- not the common case, but no more expensive to re-check than to
+/// assume) and re-reads the file, entirely bypassing [`load`]'s cache. See
+/// [`reload_from_path`] for the missing-file/error distinction.
+///
+/// Under `#[cfg(test)]` this resolves to built-in defaults unconditionally,
+/// mirroring [`load`]'s own test-mode behavior for the same reason: a test
+/// process must never observe the developer's real
+/// `~/.config/horizon/config.toml`. `app::command_actions::reload_config`
+/// (this function's one caller) is therefore not unit-tested directly --
+/// like `reload_agent_runtime`, which spawns a real process, there is
+/// nothing left to exercise here once `reload_from_path` (this module's
+/// tests) and the theme/keymap apply functions it feeds
+/// (`ui::theme::apply_reload`'s and `app::keymap::Keymap::reload`'s own
+/// tests) are each covered on their own.
+pub(crate) fn reload() -> Result<RawConfig, String> {
+    #[cfg(test)]
+    {
+        Ok(RawConfig::default())
+    }
+    #[cfg(not(test))]
+    {
+        reload_from_path(resolve_config_path().as_deref())
+    }
 }
 
 fn parse(contents: &str) -> Result<RawConfig, toml::de::Error> {

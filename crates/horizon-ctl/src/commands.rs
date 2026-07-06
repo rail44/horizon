@@ -25,6 +25,7 @@ pub fn external_name(subcommand: &Subcommand) -> &'static str {
     match subcommand {
         Subcommand::NewTerminal { .. } => "new-terminal",
         Subcommand::NewAgent { .. } => "new-agent",
+        Subcommand::NewConfigAgent { .. } => "new-config-agent",
         Subcommand::Attach { .. } => "attach",
         Subcommand::TerminateSession { .. } => "terminate-session",
         Subcommand::TerminateAllDetached => "terminate-all-detached",
@@ -32,6 +33,7 @@ pub fn external_name(subcommand: &Subcommand) -> &'static str {
         Subcommand::Deny { .. } => "deny",
         Subcommand::CancelTurn { .. } => "cancel-turn",
         Subcommand::ReloadAgentRuntime => "reload-agent-runtime",
+        Subcommand::ReloadConfig => "reload-config",
         Subcommand::Sessions => "sessions",
         Subcommand::State => "state",
     }
@@ -71,6 +73,12 @@ pub fn to_request(subcommand: &Subcommand, resolved_split: Option<&str>) -> Requ
             "new-agent",
             create_session_args(resolved_split, *activate, prompt.as_deref()),
         ),
+        Subcommand::NewConfigAgent {
+            prompt, activate, ..
+        } => invoke(
+            "new-config-agent",
+            create_session_args(resolved_split, *activate, prompt.as_deref()),
+        ),
         Subcommand::Attach {
             session_id,
             activate,
@@ -102,6 +110,7 @@ pub fn to_request(subcommand: &Subcommand, resolved_split: Option<&str>) -> Requ
             serde_json::json!({ "session_id": session_id }),
         ),
         Subcommand::ReloadAgentRuntime => invoke("reload-agent-runtime", serde_json::json!({})),
+        Subcommand::ReloadConfig => invoke("reload-config", serde_json::json!({})),
         Subcommand::Sessions => Request::Query(Query {
             what: "sessions".to_string(),
         }),
@@ -315,6 +324,21 @@ mod tests {
             panic!("expected an Invoke request");
         };
         assert_eq!(deny.command, "deny");
+    }
+
+    #[test]
+    fn reload_agent_runtime_and_reload_config_are_bare_invokes() {
+        assert_eq!(
+            external_name(&Subcommand::ReloadAgentRuntime),
+            "reload-agent-runtime"
+        );
+        assert_eq!(external_name(&Subcommand::ReloadConfig), "reload-config");
+
+        let Request::Invoke(invoke) = to_request(&Subcommand::ReloadConfig, None) else {
+            panic!("expected an Invoke request");
+        };
+        assert_eq!(invoke.command, "reload-config");
+        assert_eq!(invoke.args, serde_json::json!({}));
     }
 
     #[test]

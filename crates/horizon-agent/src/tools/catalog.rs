@@ -208,6 +208,68 @@ pub fn definitions() -> Vec<Definition> {
             }),
             permission: ToolPermission::RequireApproval,
         },
+        // config.read/config.write/skill.read (`tools::config`) are the
+        // config role's only allowed tools (`roles::CONFIG_ROLE`).
+        // Cataloging them globally here adds no new *capability* -- `bash`
+        // can already read/write this same file with no dedicated tool at
+        // all (`docs/agent-tools-design.md`) -- the restriction they exist
+        // for happens at the role's `allowed_tool_ids`, not here. See
+        // `tools::config`'s own doc comment for the full trust reasoning.
+        Definition {
+            id: "config.read".to_string(),
+            title: "Read Horizon Config".to_string(),
+            description: "Read Horizon's config file: the resolved path and its current \
+                contents, or an explicit \"does not exist yet\" result (with the path still \
+                reported) if nothing has been written there yet. Takes no arguments."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            }),
+            permission: ToolPermission::AutoAllowRead,
+        },
+        Definition {
+            id: "config.write".to_string(),
+            title: "Write Horizon Config".to_string(),
+            description: "Replace Horizon's config file with the given complete content \
+                (validated as well-formed TOML before writing). Preserve every entry the user \
+                didn't ask to change -- this replaces the whole file, not just one section. \
+                Overwriting an existing file requires it to have been read in this session \
+                (via config.read) with no changes on disk since."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["content"],
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "Full TOML file contents to write, replacing any existing content.",
+                    },
+                }
+            }),
+            permission: ToolPermission::RequireApproval,
+        },
+        Definition {
+            id: "skill.read".to_string(),
+            title: "Read Skill".to_string(),
+            description: "Read one of this session's available skills by id (see the skills \
+                listed in the system prompt) and return its full instructions."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id"],
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Skill id, as listed in the system prompt's skills section.",
+                    },
+                }
+            }),
+            permission: ToolPermission::AutoAllowRead,
+        },
     ]
 }
 

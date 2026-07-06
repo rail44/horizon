@@ -10,8 +10,6 @@
 //! those built-in defaults; see `config.example.toml` at the repo root for
 //! the full list.
 
-use std::sync::OnceLock;
-
 use crate::config::RawConfig;
 use crate::ui::theme;
 
@@ -95,6 +93,16 @@ pub(crate) fn resolve_shell(env_value: Option<String>, file_value: Option<String
 /// and `terminal::view` work in. Not a separate `[terminal.colors]` config
 /// section: every field here projects from `ui::theme`'s roles, so `[theme]`
 /// is the only place these are configured.
+///
+/// `Clone`/`Copy`: [`resolved_colors`] hands back an owned value (backed by
+/// `ui::theme`'s reload-able signal, not a `&'static` reference any more —
+/// see that function's doc comment), and every field is a plain `[u8; 3]`,
+/// so copying the whole struct is as cheap as copying three more bytes
+/// would be. `Default` (all-black): `ui::theme::apply_reload` briefly
+/// installs this as a placeholder mid-reload, before the real derived
+/// scheme is computed and patched in a moment later — see that function's
+/// doc comment.
+#[derive(Clone, Copy, Default)]
 pub(crate) struct TerminalColors {
     pub(crate) foreground: [u8; 3],
     pub(crate) background: [u8; 3],
@@ -117,34 +125,19 @@ pub(crate) struct TerminalColors {
     pub(crate) bright_white: [u8; 3],
 }
 
-/// The process-wide resolved terminal color scheme, built once (theme
-/// resolution is a `HashMap` lookup per role, and this is read for every
-/// cell of every rendered frame — `terminal::core::render::resolve_color`)
-/// and cached for the rest of the run, matching `ui::theme`'s own
-/// override-caching pattern.
-pub(crate) fn resolved_colors() -> &'static TerminalColors {
-    static COLORS: OnceLock<TerminalColors> = OnceLock::new();
-    COLORS.get_or_init(|| TerminalColors {
-        foreground: theme::to_rgb8(theme::terminal_foreground()),
-        background: theme::to_rgb8(theme::terminal_background()),
-        cursor: theme::to_rgb8(theme::terminal_cursor()),
-        black: theme::to_rgb8(theme::ansi::black()),
-        red: theme::to_rgb8(theme::ansi::red()),
-        green: theme::to_rgb8(theme::ansi::green()),
-        yellow: theme::to_rgb8(theme::ansi::yellow()),
-        blue: theme::to_rgb8(theme::ansi::blue()),
-        magenta: theme::to_rgb8(theme::ansi::magenta()),
-        cyan: theme::to_rgb8(theme::ansi::cyan()),
-        white: theme::to_rgb8(theme::ansi::white()),
-        bright_black: theme::to_rgb8(theme::ansi::bright_black()),
-        bright_red: theme::to_rgb8(theme::ansi::bright_red()),
-        bright_green: theme::to_rgb8(theme::ansi::bright_green()),
-        bright_yellow: theme::to_rgb8(theme::ansi::bright_yellow()),
-        bright_blue: theme::to_rgb8(theme::ansi::bright_blue()),
-        bright_magenta: theme::to_rgb8(theme::ansi::bright_magenta()),
-        bright_cyan: theme::to_rgb8(theme::ansi::bright_cyan()),
-        bright_white: theme::to_rgb8(theme::ansi::bright_white()),
-    })
+/// The terminal's live resolved color scheme. Delegates entirely to
+/// `ui::theme::terminal_colors`, which reads the same reload-able
+/// `ThemeState` signal `Reload Config` swaps (`ui::theme::apply_reload`) —
+/// so a reload's new `[theme]`/`[theme.ansi]` values reach the terminal
+/// with no separate cache of its own to go stale here. There used to be a
+/// startup-only `OnceLock<TerminalColors>` cache in this function directly;
+/// it moved to `ui::theme` (see `ThemeState`'s doc comment) precisely so it
+/// could be invalidated on reload instead of living for the whole process.
+/// Cheap to call per rendered cell (`terminal::core::render::resolve_color`)
+/// either way: `TerminalColors` is a small `Copy` struct, so this is a
+/// signal read plus a struct copy, not a `HashMap` lookup.
+pub(crate) fn resolved_colors() -> TerminalColors {
+    theme::terminal_colors()
 }
 
 #[cfg(test)]

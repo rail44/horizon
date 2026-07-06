@@ -13,10 +13,12 @@ use super::mapping::{
 };
 use super::session::{
     append_cancelled_tool_results_to_history, apply_turn_outcome, fold_batched_tool_result,
-    halt_turn_loop, tool_result_fingerprint, BatchStep, GuardHalt, TurnLoopGuard,
+    halt_turn_loop, session_extra_sections, tool_result_fingerprint, BatchStep, GuardHalt,
+    TurnLoopGuard,
 };
 use super::*;
 use crate::config::RigAgentConfig;
+use crate::roles::{resolve, RoleId};
 
 /// Mirrors the built-in defaults in `agent::config` (`DEFAULT_ITERATION_CAP`/
 /// `DEFAULT_DOOM_LOOP_WINDOW`) for these guard-logic unit tests, which
@@ -634,6 +636,7 @@ fn start_fallback_rig_session_with_config(
     let handle = provider.start_session(StartSession {
         session_id: SessionId::new(),
         provider_id: AgentProvider::provider_id(&provider),
+        role_id: None,
     });
     let tx = handle.sender();
     let rx = handle.events();
@@ -1321,4 +1324,135 @@ fn rig_tool_definitions_with_an_empty_allow_list_returns_no_tools() {
     let definitions = rig_tool_definitions(Some(&allowed));
 
     assert!(definitions.is_empty());
+}
+
+// --- role_adjusted_config: a role narrows the process-wide RigAgentConfig -
+
+#[test]
+fn config_role_start_session_advertises_only_its_three_allowed_tools() {
+    let provider = Provider::new(
+        RigAgentConfig {
+            openai_enabled: false,
+            ..Default::default()
+        },
+        None,
+    );
+
+    let handle = AgentProvider::start_session(
+        &provider,
+        StartSession {
+            session_id: SessionId::new(),
+            provider_id: AgentProvider::provider_id(&provider),
+            role_id: Some(RoleId("config".to_string())),
+        },
+    );
+
+    // Drain session-startup events (Created, init message, WaitingForUser) --
+    // this session never receives a completion request, so proving the
+    // role took effect has to happen through `rig_tool_definitions` /
+    // `role_adjusted_config` directly (below); this call just proves
+    // `start_session` accepts a role without erroring.
+    let rx = handle.events();
+    for _ in 0..3 {
+        recv(&rx);
+    }
+}
+
+#[test]
+fn role_adjusted_config_restricts_allowed_tool_ids_to_the_roles_list() {
+    let base = RigAgentConfig::default();
+    let role = resolve(&RoleId("config".to_string())).expect("config role must resolve");
+
+    let config = role_adjusted_config(&base, Some(role));
+
+    let allowed = config
+        .allowed_tool_ids
+        .expect("config role must set an allow list");
+    assert_eq!(allowed, vec!["skill.read", "config.read", "config.write"]);
+    let definitions = rig_tool_definitions(Some(&allowed));
+    assert_eq!(definitions.len(), 3);
+}
+
+#[test]
+fn role_adjusted_config_is_unchanged_for_a_role_less_session() {
+    let base = RigAgentConfig::default();
+
+    let config = role_adjusted_config(&base, None);
+
+    assert_eq!(config, base);
+}
+
+// --- session_extra_sections: role/skills/repository-instructions ordering -
+
+fn git_repo_with_agents_md(label: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "horizon-agent-rig-session-extra-sections-{label}-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(dir.join(".git")).unwrap();
+    std::fs::write(dir.join("AGENTS.md"), "REPO_MARKER").unwrap();
+    dir
+}
+
+fn test_environment(cwd: std::path::PathBuf) -> crate::prompt::SessionEnvironment {
+    crate::prompt::SessionEnvironment {
+        cwd,
+        os: "linux",
+        git_repo: true,
+    }
+}
+
+#[test]
+fn session_extra_sections_is_repository_instructions_only_for_a_role_less_session() {
+    let cwd = git_repo_with_agents_md("role-less");
+    let environment = test_environment(cwd.clone());
+    let config = RigAgentConfig::default();
+
+    let sections = session_extra_sections(&environment, &config, None);
+    let expected = crate::instructions::extra_sections(
+        &environment.cwd,
+        config.repository_instructions_cap_chars,
+    );
+
+    assert_eq!(
+        sections, expected,
+        "a role-less session's extra_sections must match instructions::extra_sections exactly"
+    );
+
+    let _ = std::fs::remove_dir_all(&cwd);
+}
+
+#[test]
+fn session_extra_sections_orders_role_then_skills_and_excludes_repository_instructions_for_config_role(
+) {
+    let cwd = git_repo_with_agents_md("config-role");
+    let environment = test_environment(cwd.clone());
+    let config = RigAgentConfig::default();
+    let role = resolve(&RoleId("config".to_string())).expect("config role must resolve");
+
+    let sections = session_extra_sections(&environment, &config, Some(role));
+
+    assert_eq!(
+        sections.len(),
+        2,
+        "expected exactly a role section and a skills section, got: {sections:?}"
+    );
+    assert!(
+        sections[0].contains("configuration assistant"),
+        "the role section must come first, got: {:?}",
+        sections[0]
+    );
+    assert!(
+        sections[1].contains("horizon-config") && sections[1].contains("skill.read"),
+        "the skills section must come second, got: {:?}",
+        sections[1]
+    );
+    assert!(
+        !sections
+            .iter()
+            .any(|section| section.contains("REPO_MARKER")),
+        "the config role must not ingest repository instructions, got: {sections:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&cwd);
 }

@@ -3,6 +3,7 @@ use std::{cell::RefCell, rc::Rc};
 use crate::contract::SessionId;
 use crate::contract::{Event, ProviderEvent, ProviderId};
 use crate::persistence::event_log;
+use crate::roles::RoleId;
 
 use super::frame::{
     agent_frame_from_events, apply_agent_event_to_frame, apply_tool_call_progress_to_frame,
@@ -108,9 +109,10 @@ impl LiveState {
     pub fn with_event_log(
         session_id: SessionId,
         provider_id: Option<ProviderId>,
+        role_id: Option<RoleId>,
         writer: event_log::WriterHandle,
     ) -> Self {
-        Self::with_event_log_and_history(session_id, provider_id, writer, Vec::new())
+        Self::with_event_log_and_history(session_id, provider_id, role_id, writer, Vec::new())
     }
 
     /// Same as [`Self::with_event_log`], seeded with `history` (already-
@@ -124,13 +126,14 @@ impl LiveState {
     pub fn with_event_log_and_history(
         session_id: SessionId,
         provider_id: Option<ProviderId>,
+        role_id: Option<RoleId>,
         writer: event_log::WriterHandle,
         history: Vec<Event>,
     ) -> Self {
         Self {
             inner: Rc::new(RefCell::new(State::from_history(history))),
             persistence: Some(Rc::new(Persistence::EventLog(RefCell::new(
-                event_log::Appender::new(writer, session_id, provider_id),
+                event_log::Appender::new(writer, session_id, provider_id, role_id),
             )))),
         }
     }

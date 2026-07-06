@@ -65,6 +65,7 @@ const SIMPLE_EXTERNAL_COMMANDS: &[(&str, CommandId)] = &[
         CommandId::TerminateAllDetachedSessions,
     ),
     ("reload-agent-runtime", CommandId::ReloadAgentRuntime),
+    ("reload-config", CommandId::ReloadConfig),
 ];
 
 /// Converts one external `{command, args}` pair (an `Invoke` request's
@@ -84,8 +85,14 @@ pub(crate) fn invocation_from_external(
     }
 
     match command {
-        "new-terminal" => create_session_invocation(PaneKind::Terminal, args, false),
-        "new-agent" => create_session_invocation(PaneKind::Agent, args, true),
+        "new-terminal" => create_session_invocation(PaneKind::Terminal, None, args, false),
+        "new-agent" => create_session_invocation(PaneKind::Agent, None, args, true),
+        "new-config-agent" => create_session_invocation(
+            PaneKind::Agent,
+            Some(crate::app::command_actions::config_agent_role_id()),
+            args,
+            true,
+        ),
         "attach" => Ok(CommandInvocation::AttachSession {
             session_id: session_id_arg(args, "session_id")?,
             activate: activate_arg(args)?,
@@ -109,16 +116,21 @@ pub(crate) fn invocation_from_external(
     }
 }
 
-/// Builds `CommandInvocation::CreateSession` for `new-terminal`/`new-agent`
-/// (`docs/cli-control-plane-design.md`'s "Placement vocabulary" decision):
-/// `split` (a session id string) places the new pane next to that session's
-/// pane instead of opening a new tab; `activate` defaults to `false` when
-/// absent (the control plane never steals focus unless asked); `prompt` is
-/// only accepted for `new-agent` (`allow_prompt`) -- the composite
-/// create-with-prompt decision doesn't apply to `new-terminal`, which has no
-/// analogous "first message" to send.
+/// Builds `CommandInvocation::CreateSession` for `new-terminal`/`new-agent`/
+/// `new-config-agent` (`docs/cli-control-plane-design.md`'s "Placement
+/// vocabulary" decision): `split` (a session id string) places the new pane
+/// next to that session's pane instead of opening a new tab; `activate`
+/// defaults to `false` when absent (the control plane never steals focus
+/// unless asked); `prompt` is only accepted for the agent commands
+/// (`allow_prompt`) -- the composite create-with-prompt decision doesn't
+/// apply to `new-terminal`, which has no analogous "first message" to send.
+/// `role_id` is fixed by the command name, never client-supplied: the
+/// external vocabulary names each role-tagged flavor (`new-config-agent`)
+/// rather than exposing a free-form role argument -- see
+/// `docs/agent-roles-and-skills-design.md`.
 fn create_session_invocation(
     kind: PaneKind,
+    role_id: Option<horizon_agent::roles::RoleId>,
     args: &Value,
     allow_prompt: bool,
 ) -> Result<CommandInvocation, String> {
@@ -135,6 +147,7 @@ fn create_session_invocation(
     };
     Ok(CommandInvocation::CreateSession {
         kind,
+        role_id,
         split_target,
         activate,
         prompt,
@@ -363,6 +376,7 @@ mod tests {
             invocation_from_external("new-terminal", &serde_json::json!({})),
             Ok(CommandInvocation::CreateSession {
                 kind: PaneKind::Terminal,
+                role_id: None,
                 split_target: None,
                 activate: false,
                 prompt: None,
@@ -376,6 +390,7 @@ mod tests {
             invocation_from_external("new-agent", &serde_json::json!({})),
             Ok(CommandInvocation::CreateSession {
                 kind: PaneKind::Agent,
+                role_id: None,
                 split_target: None,
                 activate: false,
                 prompt: None,
@@ -385,6 +400,7 @@ mod tests {
             invocation_from_external("new-agent", &serde_json::json!({ "prompt": null })),
             Ok(CommandInvocation::CreateSession {
                 kind: PaneKind::Agent,
+                role_id: None,
                 split_target: None,
                 activate: false,
                 prompt: None,
@@ -398,6 +414,7 @@ mod tests {
             invocation_from_external("new-agent", &serde_json::json!({ "prompt": "fix the bug" })),
             Ok(CommandInvocation::CreateSession {
                 kind: PaneKind::Agent,
+                role_id: None,
                 split_target: None,
                 activate: false,
                 prompt: Some("fix the bug".to_string()),
@@ -422,6 +439,7 @@ mod tests {
             ),
             Ok(CommandInvocation::CreateSession {
                 kind: PaneKind::Terminal,
+                role_id: None,
                 split_target: Some(session_id),
                 activate: false,
                 prompt: None,
@@ -434,6 +452,7 @@ mod tests {
             ),
             Ok(CommandInvocation::CreateSession {
                 kind: PaneKind::Agent,
+                role_id: None,
                 split_target: Some(session_id),
                 activate: false,
                 prompt: None,
@@ -457,6 +476,7 @@ mod tests {
             invocation_from_external("new-terminal", &serde_json::json!({ "activate": true }),),
             Ok(CommandInvocation::CreateSession {
                 kind: PaneKind::Terminal,
+                role_id: None,
                 split_target: None,
                 activate: true,
                 prompt: None,
@@ -600,6 +620,45 @@ mod tests {
     }
 
     #[test]
+    fn reload_config_maps_to_the_simple_command() {
+        assert_eq!(
+            invocation_from_external("reload-config", &serde_json::json!({})),
+            Ok(CommandInvocation::Simple(CommandId::ReloadConfig))
+        );
+    }
+
+    #[test]
+    fn new_config_agent_maps_to_a_config_role_create_session() {
+        assert_eq!(
+            invocation_from_external("new-config-agent", &serde_json::json!({})),
+            Ok(CommandInvocation::CreateSession {
+                kind: PaneKind::Agent,
+                role_id: Some(crate::app::command_actions::config_agent_role_id()),
+                split_target: None,
+                activate: false,
+                prompt: None,
+            })
+        );
+    }
+
+    #[test]
+    fn new_config_agent_accepts_a_prompt_like_new_agent() {
+        let invocation = invocation_from_external(
+            "new-config-agent",
+            &serde_json::json!({ "prompt": "make it dark" }),
+        )
+        .unwrap();
+        assert!(matches!(
+            invocation,
+            CommandInvocation::CreateSession {
+                prompt: Some(ref prompt),
+                role_id: Some(_),
+                ..
+            } if prompt == "make it dark"
+        ));
+    }
+
+    #[test]
     fn an_unknown_command_name_is_an_error() {
         assert!(invocation_from_external("not-a-real-command", &serde_json::json!({})).is_err());
     }
@@ -623,6 +682,7 @@ mod tests {
             "deny",
             "cancel-turn",
             "reload-agent-runtime",
+            "reload-config",
         ] {
             assert!(
                 !names.contains(&non_destructive.to_string()),
@@ -665,6 +725,7 @@ mod tests {
             None,
             None,
             RwSignal::new(Some(AgentdConnection::for_test())),
+            RwSignal::new(0_u64),
         );
         CommandActionState {
             runtime,

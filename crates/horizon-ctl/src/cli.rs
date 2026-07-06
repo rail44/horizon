@@ -54,6 +54,16 @@ pub enum Subcommand {
         split: Option<SplitFlag>,
         activate: bool,
     },
+    /// `new-agent`'s role-tagged flavor: spawns the configuration agent
+    /// (the `config` role -- theme/keybinding editing). A separate
+    /// subcommand rather than a `--role` flag on `new-agent`: the external
+    /// vocabulary names each role-tagged flavor so the set of roles stays
+    /// the server's to define, never a free-form client-supplied string.
+    NewConfigAgent {
+        prompt: Option<String>,
+        split: Option<SplitFlag>,
+        activate: bool,
+    },
     Attach {
         session_id: String,
         activate: bool,
@@ -74,6 +84,7 @@ pub enum Subcommand {
         session_id: String,
     },
     ReloadAgentRuntime,
+    ReloadConfig,
     Sessions,
     State,
 }
@@ -100,6 +111,7 @@ Running `horizon` with no subcommand launches the GUI application.\n\
 Subcommands:\n  \
   new-terminal [--split [<session-id>]] [--active]\n  \
   new-agent [--prompt <text>] [--split [<session-id>]] [--active]\n  \
+  new-config-agent [--prompt <text>] [--split [<session-id>]] [--active]\n  \
   attach <session-id> [--active]\n  \
   terminate-session <session-id>\n  \
   terminate-all-detached\n  \
@@ -107,6 +119,7 @@ Subcommands:\n  \
   deny <session-id> <call-id>\n  \
   cancel-turn <session-id>\n  \
   reload-agent-runtime\n  \
+  reload-config\n  \
   sessions\n  \
   state";
 
@@ -193,6 +206,14 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
                 activate: std::mem::take(&mut active),
             }
         }
+        "new-config-agent" => {
+            reject_extra(&mut positionals, "new-config-agent")?;
+            Subcommand::NewConfigAgent {
+                prompt: prompt.take(),
+                split: split.take(),
+                activate: std::mem::take(&mut active),
+            }
+        }
         "attach" => {
             let session_id = next_required(&mut positionals, "attach", "session-id")?;
             reject_extra(&mut positionals, "attach")?;
@@ -237,6 +258,10 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             reject_extra(&mut positionals, "reload-agent-runtime")?;
             Subcommand::ReloadAgentRuntime
         }
+        "reload-config" => {
+            reject_extra(&mut positionals, "reload-config")?;
+            Subcommand::ReloadConfig
+        }
         "sessions" => {
             reject_extra(&mut positionals, "sessions")?;
             Subcommand::Sessions
@@ -250,17 +275,18 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
 
     if prompt.is_some() {
         return Err(UsageError(
-            "--prompt is only valid with new-agent".to_string(),
+            "--prompt is only valid with new-agent/new-config-agent".to_string(),
         ));
     }
     if split.is_some() {
         return Err(UsageError(
-            "--split is only valid with new-terminal/new-agent".to_string(),
+            "--split is only valid with new-terminal/new-agent/new-config-agent".to_string(),
         ));
     }
     if active {
         return Err(UsageError(
-            "--active is only valid with new-terminal/new-agent/attach".to_string(),
+            "--active is only valid with new-terminal/new-agent/new-config-agent/attach"
+                .to_string(),
         ));
     }
 
@@ -342,9 +368,9 @@ pub fn resolved_split_for(
     env_session_id: Option<String>,
 ) -> Result<Option<String>, String> {
     match subcommand {
-        Subcommand::NewTerminal { split, .. } | Subcommand::NewAgent { split, .. } => {
-            resolve_split(split.clone(), env_session_id)
-        }
+        Subcommand::NewTerminal { split, .. }
+        | Subcommand::NewAgent { split, .. }
+        | Subcommand::NewConfigAgent { split, .. } => resolve_split(split.clone(), env_session_id),
         _ => Ok(None),
     }
 }
@@ -440,6 +466,27 @@ mod tests {
                 prompt: Some("fix the bug".to_string()),
                 split: None,
                 activate: false,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_new_config_agent_with_prompt_split_and_active() {
+        let parsed = parse(&args(&[
+            "new-config-agent",
+            "--prompt",
+            "make it dark",
+            "--split",
+            "s-1",
+            "--active",
+        ]))
+        .unwrap();
+        assert_eq!(
+            parsed.subcommand,
+            Subcommand::NewConfigAgent {
+                prompt: Some("make it dark".to_string()),
+                split: Some(SplitFlag::Explicit("s-1".to_string())),
+                activate: true,
             }
         );
     }
@@ -582,6 +629,10 @@ mod tests {
         assert_eq!(
             parse(&args(&["reload-agent-runtime"])).unwrap().subcommand,
             Subcommand::ReloadAgentRuntime
+        );
+        assert_eq!(
+            parse(&args(&["reload-config"])).unwrap().subcommand,
+            Subcommand::ReloadConfig
         );
     }
 

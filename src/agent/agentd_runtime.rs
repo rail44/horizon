@@ -27,9 +27,11 @@
 //! slow, busy, or absent `horizon-agentd` never delays the window's first
 //! frame.
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -149,10 +151,14 @@ impl AgentdConnection {
     /// back a [`contract::SessionHandle`] via [`Self::register_session_routing`].
     /// Indistinguishable, from the caller's side, from `providers::
     /// ProviderRegistry::start_session`'s former in-process handle.
+    /// `role_id` tags the session with a role (`horizon_agent::roles`) --
+    /// `Some(..)` from the `New Configuration Agent` command, `None` from
+    /// every other spawn path.
     pub(crate) fn start_session(
         &self,
         session_id: AgentSessionId,
         provider_id: ProviderId,
+        role_id: Option<horizon_agent::roles::RoleId>,
     ) -> contract::SessionHandle {
         let handle = self.register_session_routing(session_id);
         let _ = self
@@ -160,7 +166,7 @@ impl AgentdConnection {
             .send(Envelope::control(Control::SessionNew(SessionNew {
                 session_id,
                 provider_id,
-                config_overrides: None,
+                role_id,
             })));
         handle
     }
@@ -498,6 +504,7 @@ pub(crate) fn attach_sessions(
     workspace: RwSignal<Workspace>,
     frames: RwSignal<Frames>,
     sessions: RwSignal<Registry>,
+    config_reload_requests: RwSignal<u64>,
 ) {
     for summary in summaries {
         let session_id: SessionId = summary.session_id.into();
@@ -508,7 +515,7 @@ pub(crate) fn attach_sessions(
         workspace.update(|ws| ws.register_detached_session(PaneKind::Agent, session_id));
 
         let handle = connection.attach_session(summary.session_id);
-        fold_agent_session_events(session_id, handle, frames, sessions);
+        fold_agent_session_events(session_id, handle, frames, sessions, config_reload_requests);
     }
 }
 
@@ -526,19 +533,86 @@ pub(crate) fn fold_agent_session_events(
     handle: contract::SessionHandle,
     frames: RwSignal<Frames>,
     sessions: RwSignal<Registry>,
+    config_reload_requests: RwSignal<u64>,
 ) {
-    let events = create_signal_from_channel(handle.events());
+    let event_stream = handle.events();
     sessions.update(|registry| {
         registry.insert_agent(session_id, handle);
     });
 
-    let runtime_state = LiveState::with_disabled_persistence();
-    create_effect(move |_| {
-        if let Some(event) = events.get() {
-            let frame = runtime_state.extend_provider_events(std::iter::once(event));
-            frames.update(|frames| frames.update_agent_frame(session_id, frame));
-        }
+    // The fold's channel signal and effect are created under a detached
+    // root `Scope`, NOT whatever scope happens to be current. This function
+    // is reachable from inside other effects -- most concretely the CLI
+    // control-plane bridge (`control_plane::bridge`), whose request-pump
+    // `create_effect` runs `execute_command` for `new-agent`/
+    // `new-config-agent`. Reactive nodes created inside a running effect
+    // are owned by that effect's scope and are disposed the next time it
+    // re-runs -- so a CLI-spawned session's fold used to go silently dead
+    // on the *next* CLI request (observed in the plan-03 E2E as "the pane
+    // froze at 'waiting for approval' the moment the `approve` command
+    // arrived, though agentd kept streaming events"). A detached scope pins
+    // the fold to the session's lifetime instead of the spawning effect's;
+    // when the session ends, the channel closes and the effect simply never
+    // fires again -- the same quiescence every startup-attached fold
+    // already relies on.
+    let scope = floem::reactive::Scope::new();
+    floem::reactive::with_scope(scope, move || {
+        let events = create_signal_from_channel(event_stream);
+        let runtime_state = LiveState::with_disabled_persistence();
+        let config_write_calls = Rc::new(RefCell::new(HashSet::new()));
+        create_effect(move |_| {
+            if let Some(event) = events.get() {
+                observe_config_write(&event, &config_write_calls, config_reload_requests);
+                let frame = runtime_state.extend_provider_events(std::iter::once(event));
+                frames.update(|frames| frames.update_agent_frame(session_id, frame));
+            }
+        });
     });
+}
+
+/// The tool whose successful completion means Horizon's own config file
+/// just changed on disk -- see `horizon_agent::tools::config`.
+const CONFIG_WRITE_TOOL_ID: &str = "config.write";
+
+/// The auto-reload half of the configuration agent's loop (`docs/
+/// agent-roles-and-skills-design.md`, "Runtime config reload"): watches one
+/// session's event stream for a successful `config.write` and bumps
+/// `config_reload_requests`, which `app::view` answers by executing the same
+/// `Reload Config` command a user could run by hand -- the observation is
+/// merely a trigger; the operation itself stays in the command model.
+/// `calls` remembers which in-flight call ids belong to `config.write`
+/// (`ToolCallFinished` only carries the call id, not the tool id).
+///
+/// Replayed history triggers this too: a `session_load` for a session whose
+/// past includes a successful `config.write` re-fires a reload. That is
+/// deliberate rather than filtered out -- a reload re-reads whatever is on
+/// disk right now, so re-applying it is idempotent, and distinguishing
+/// replay from live delivery here would breach "the fold must not know
+/// which transport delivered the events" (this module's doc).
+fn observe_config_write(
+    event: &ProviderEvent,
+    calls: &RefCell<HashSet<contract::ToolCallId>>,
+    config_reload_requests: RwSignal<u64>,
+) {
+    match &event.event {
+        Event::ToolCallRequested(request) if request.tool_id == CONFIG_WRITE_TOOL_ID => {
+            calls.borrow_mut().insert(request.call_id.clone());
+        }
+        Event::ToolCallFinished(result) => {
+            if calls.borrow_mut().take(&result.call_id).is_none() {
+                return;
+            }
+            let is_error = result
+                .output
+                .get("is_error")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            if !is_error {
+                config_reload_requests.update(|count| *count += 1);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// How long [`wait_for_drain`] polls for the old `horizon-agentd` to
@@ -698,6 +772,7 @@ pub(crate) fn connect_agentd_at_startup_async(
     sessions: RwSignal<Registry>,
     agentd_connection: RwSignal<Option<AgentdConnection>>,
     agent_state_status: RwSignal<Option<String>>,
+    config_reload_requests: RwSignal<u64>,
 ) {
     let (progress_tx, progress_rx) = unbounded::<String>();
     let (outcome_tx, outcome_rx) = unbounded::<ReloadOutcome>();
@@ -728,7 +803,14 @@ pub(crate) fn connect_agentd_at_startup_async(
                     eprintln!("horizon: connected to horizon-agentd");
                     wire_host_tool_responder(connection.clone(), host_tool_requests, workspace);
                     wire_skipped_lines_status(skipped_lines, agent_state_status);
-                    attach_sessions(&connection, summaries, workspace, frames, sessions);
+                    attach_sessions(
+                        &connection,
+                        summaries,
+                        workspace,
+                        frames,
+                        sessions,
+                        config_reload_requests,
+                    );
                     agentd_connection.set(Some(connection));
                     agent_state_status
                         .set(Some(reload_stage_status(ReloadStage::Reconnected(elapsed))));
@@ -775,6 +857,7 @@ pub(crate) fn reload_agent_runtime(
     sessions: RwSignal<Registry>,
     agentd_connection: RwSignal<Option<AgentdConnection>>,
     agent_state_status: RwSignal<Option<String>>,
+    config_reload_requests: RwSignal<u64>,
 ) {
     if let Some(connection) = &current {
         connection.drain();
@@ -816,7 +899,14 @@ pub(crate) fn reload_agent_runtime(
                 } => {
                     wire_host_tool_responder(connection.clone(), host_tool_requests, workspace);
                     wire_skipped_lines_status(skipped_lines, agent_state_status);
-                    attach_sessions(&connection, summaries, workspace, frames, sessions);
+                    attach_sessions(
+                        &connection,
+                        summaries,
+                        workspace,
+                        frames,
+                        sessions,
+                        config_reload_requests,
+                    );
                     agentd_connection.set(Some(connection));
                     agent_state_status
                         .set(Some(reload_stage_status(ReloadStage::Reconnected(elapsed))));
@@ -847,6 +937,75 @@ fn reload_failure_status(error: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::contract::{ToolCallId, ToolCallRequest, ToolCallResult};
+
+    fn requested(call_id: &str, tool_id: &str) -> ProviderEvent {
+        ProviderEvent::new(Event::ToolCallRequested(ToolCallRequest {
+            call_id: ToolCallId(call_id.to_string()),
+            tool_id: tool_id.to_string(),
+            input: serde_json::json!({}),
+        }))
+    }
+
+    fn finished(call_id: &str, output: serde_json::Value) -> ProviderEvent {
+        ProviderEvent::new(Event::ToolCallFinished(ToolCallResult {
+            call_id: ToolCallId(call_id.to_string()),
+            output,
+        }))
+    }
+
+    fn observe_all(events: &[ProviderEvent]) -> u64 {
+        let calls = RefCell::new(HashSet::new());
+        let requests = RwSignal::new(0_u64);
+        for event in events {
+            observe_config_write(event, &calls, requests);
+        }
+        requests.get_untracked()
+    }
+
+    #[test]
+    fn a_successful_config_write_bumps_the_reload_request_counter() {
+        let bumps = observe_all(&[
+            requested("c-1", CONFIG_WRITE_TOOL_ID),
+            finished(
+                "c-1",
+                serde_json::json!({ "path": "/x", "bytes_written": 3 }),
+            ),
+        ]);
+        assert_eq!(bumps, 1);
+    }
+
+    #[test]
+    fn a_failed_config_write_does_not_bump() {
+        let bumps = observe_all(&[
+            requested("c-1", CONFIG_WRITE_TOOL_ID),
+            finished(
+                "c-1",
+                serde_json::json!({ "is_error": true, "message": "bad toml" }),
+            ),
+        ]);
+        assert_eq!(bumps, 0);
+    }
+
+    #[test]
+    fn other_tools_and_unmatched_finishes_do_not_bump() {
+        let bumps = observe_all(&[
+            requested("c-1", "fs.write"),
+            finished("c-1", serde_json::json!({ "ok": true })),
+            finished("c-2", serde_json::json!({ "ok": true })),
+        ]);
+        assert_eq!(bumps, 0);
+    }
+
+    #[test]
+    fn one_config_write_bumps_only_once_even_with_duplicate_finishes() {
+        let bumps = observe_all(&[
+            requested("c-1", CONFIG_WRITE_TOOL_ID),
+            finished("c-1", serde_json::json!({})),
+            finished("c-1", serde_json::json!({})),
+        ]);
+        assert_eq!(bumps, 1);
+    }
 
     #[test]
     fn reload_failure_status_calls_out_a_version_mismatch_as_reload_required() {

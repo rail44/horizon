@@ -4,7 +4,6 @@ use crate::contract::SessionId;
 use crate::contract::{Command, Event, SessionState, ToolCallId, ToolCallRequest, ToolCallResult};
 use crate::frame::AgentFrame;
 use crate::tools::bash;
-use crate::tools::fs;
 use crate::tools::state::{session_runtime, SessionRuntime};
 
 /// The user's decision on a pending `ApprovalRequested` tool call.
@@ -72,8 +71,11 @@ pub enum ApprovalOutcome {
 /// Tool ids Horizon executes itself once approved, rather than notifying
 /// the provider via `ApproveToolCall`/`DenyToolCall` and waiting for it to
 /// report a result. See `docs/agent-tools-design.md`, "Approval Wiring".
+/// `config.write` (`tools::config`) joins the fs tools here since it's the
+/// same "runs to completion synchronously" shape -- see
+/// [`resolve_synchronous_tool`].
 fn is_horizon_executed_tool(tool_id: &str) -> bool {
-    matches!(tool_id, "fs.write" | "fs.edit" | "bash")
+    matches!(tool_id, "fs.write" | "fs.edit" | "bash" | "config.write")
 }
 
 /// Resolves a user's approve/deny decision for the tool call pending in
@@ -120,21 +122,25 @@ fn try_execute(
     Some(if request.tool_id == "bash" {
         resolve_bash(session_id, &runtime, request, decision)
     } else {
-        resolve_fs_tool(&runtime, request, decision)
+        resolve_synchronous_tool(&runtime, request, decision)
     })
 }
 
-/// `fs.write`/`fs.edit`: both run to completion synchronously, so their
-/// approve/deny always resolves to `Executed`.
-fn resolve_fs_tool(
+/// `fs.write`/`fs.edit`/`config.write`: all run to completion synchronously,
+/// so their approve/deny always resolves to `Executed`. Dispatches through
+/// `tools::execute_approved`, which picks the owning module by tool id.
+fn resolve_synchronous_tool(
     runtime: &SessionRuntime,
     request: &ToolCallRequest,
     decision: &ApprovalDecision,
 ) -> ApprovalOutcome {
     match decision {
         ApprovalDecision::Approve => {
-            let output =
-                fs::execute_approved(&runtime.tool_state, &request.tool_id, &request.input);
+            let output = crate::tools::execute_approved(
+                &runtime.tool_state,
+                &request.tool_id,
+                &request.input,
+            );
             synchronous_result(runtime, &request.call_id, output, true)
         }
         ApprovalDecision::Deny { .. } => {

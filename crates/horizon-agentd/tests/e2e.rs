@@ -16,6 +16,7 @@ use horizon_agent::contract::{
 };
 use horizon_agent::frame::agent_frame_from_events;
 use horizon_agent::persistence::event_log::{Appender, WriterHandle, WriterInit};
+use horizon_agent::roles::RoleId;
 use horizon_agent::wire::{
     self, Control, Envelope, EnvelopeBody, Hello, HostToolRequest, HostToolResponse, SessionLoad,
     SessionNew, SessionSummary, CONTRACT_VERSION,
@@ -493,7 +494,8 @@ fn write_session_fixture(path: &std::path::Path, sessions: Vec<(SessionId, Vec<E
         }
     }
     for (session_id, events) in sessions {
-        let mut appender = Appender::new(writer.clone(), session_id, Some(mock_provider_id()));
+        let mut appender =
+            Appender::new(writer.clone(), session_id, Some(mock_provider_id()), None);
         appender
             .append_provider_events(events.into_iter().map(ProviderEvent::from).collect())
             .expect("append fixture events");
@@ -507,7 +509,30 @@ async fn send_session_new(writer: &mut OwnedWriteHalf, session_id: SessionId) {
         &Envelope::control(Control::SessionNew(SessionNew {
             session_id,
             provider_id: mock_provider_id(),
-            config_overrides: None,
+            role_id: None,
+        })),
+    )
+    .await
+    .unwrap();
+}
+
+/// Same as [`send_session_new`], with a role attached -- the mock provider
+/// accepts and ignores it (`providers::mock`), so this only exercises
+/// role_id's *persistence* (`Appender`/`Record`) and resume path, not any
+/// role-specific prompt/tool behavior (that's the rig provider's job, and
+/// mock is used here precisely to avoid a real completion-provider
+/// dependency in an e2e test).
+async fn send_session_new_with_role(
+    writer: &mut OwnedWriteHalf,
+    session_id: SessionId,
+    role_id: RoleId,
+) {
+    wire::write_envelope(
+        writer,
+        &Envelope::control(Control::SessionNew(SessionNew {
+            session_id,
+            provider_id: mock_provider_id(),
+            role_id: Some(role_id),
         })),
     )
     .await
@@ -622,6 +647,7 @@ async fn session_list_reflects_live_sessions_after_session_new() {
                 vec![SessionSummary {
                     session_id,
                     provider_id: mock_provider_id(),
+                    role_id: None,
                 }]
             );
             return;
@@ -1226,6 +1252,7 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
         EnvelopeBody::Control(Control::SessionListResult(vec![SessionSummary {
             session_id,
             provider_id: mock_provider_id(),
+            role_id: None,
         }])),
         "the resumed session must be listed as live again"
     );
@@ -1288,6 +1315,53 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
         Event::MessageCommitted(message)
             if message.role == MessageRole::User && message.text == "hello again"
     )));
+}
+
+/// A crash-and-respawn must restore a session's role, not just its
+/// provider (`docs/plans/agent-foundation/03-roles-and-config-agent.md`):
+/// `session::resume_persisted_sessions` extracts `role_id` from the log the
+/// same way it already extracted `provider_id`, and the resumed thread's
+/// `SessionEntry` must reflect it in `session_list`.
+#[tokio::test]
+async fn resume_restores_the_sessions_role_after_a_crash_and_respawn() {
+    let agentd = AgentdProcess::spawn();
+    let socket_path = agentd.socket_path.clone();
+    let event_log_path = agentd.event_log_path.clone();
+    let (mut reader, mut writer) = connect_and_handshake(&socket_path).await;
+
+    let session_id = SessionId::new();
+    send_session_new_with_role(&mut writer, session_id, RoleId("config".to_string())).await;
+
+    // Wait for the session's init message to actually reach disk before the
+    // hard kill below, so this proves resume reads the role back from the
+    // log rather than racing the writer's background thread.
+    collect_events_until(&mut reader, session_id, |event| {
+        matches!(event, Event::MessageCommitted(_))
+    })
+    .await;
+    wait_for_persisted_event(&event_log_path, session_id, |event| {
+        matches!(event, Event::MessageCommitted(_))
+    })
+    .await;
+
+    agentd.kill_and_wait();
+
+    let respawned = AgentdProcess::spawn_at(socket_path, event_log_path);
+    let (mut reader, mut writer) = connect_and_handshake(&respawned.socket_path).await;
+
+    wire::write_envelope(&mut writer, &Envelope::control(Control::SessionList))
+        .await
+        .unwrap();
+    let reply = wire::read_envelope(&mut reader).await.unwrap().unwrap();
+    assert_eq!(
+        reply.body,
+        EnvelopeBody::Control(Control::SessionListResult(vec![SessionSummary {
+            session_id,
+            provider_id: mock_provider_id(),
+            role_id: Some(RoleId("config".to_string())),
+        }])),
+        "resume must restore the session's role, not just its provider"
+    );
 }
 
 /// `session_load` bootstrap (no crash involved this time): a client that
@@ -1408,6 +1482,7 @@ async fn drained_agentd_respawns_and_preserves_a_completed_session() {
         EnvelopeBody::Control(Control::SessionListResult(vec![SessionSummary {
             session_id,
             provider_id: mock_provider_id(),
+            role_id: None,
         }])),
         "a gracefully drained session must resume too, not just a crashed one"
     );
@@ -1506,6 +1581,7 @@ async fn resume_skips_sessions_whose_log_already_ended_in_a_terminal_state() {
         EnvelopeBody::Control(Control::SessionListResult(vec![SessionSummary {
             session_id: live_session,
             provider_id: mock_provider_id(),
+            role_id: None,
         }])),
         "only the live session should have been resumed, got {reply:?}"
     );
@@ -1572,6 +1648,7 @@ async fn hello_answers_immediately_while_session_list_waits_for_a_slow_resume() 
         EnvelopeBody::Control(Control::SessionListResult(vec![SessionSummary {
             session_id: live_session,
             provider_id: mock_provider_id(),
+            role_id: None,
         }])),
     );
 }
@@ -1740,6 +1817,7 @@ async fn duckdb_rebuild_delay_does_not_block_hello_or_session_list() {
         EnvelopeBody::Control(Control::SessionListResult(vec![SessionSummary {
             session_id: live_session,
             provider_id: mock_provider_id(),
+            role_id: None,
         }])),
     );
 }

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock, RwLock};
 
 use floem::keyboard::{Key, KeyEvent, Modifiers, NamedKey};
 use termwiz::input::{KeyCode as TermKeyCode, Modifiers as TermModifiers};
@@ -335,6 +335,7 @@ fn command_id_from_str(id: &str) -> Option<CommandId> {
     match id {
         "new-terminal" => Some(CommandId::NewTerminal),
         "new-agent" => Some(CommandId::NewAgent),
+        "new-config-agent" => Some(CommandId::NewConfigAgent),
         "split-active-pane" => Some(CommandId::SplitActivePane),
         "focus-next-pane" => Some(CommandId::FocusNextPane),
         "close-active-pane" => Some(CommandId::CloseActivePane),
@@ -345,6 +346,7 @@ fn command_id_from_str(id: &str) -> Option<CommandId> {
         "cancel-agent-turn" => Some(CommandId::CancelAgentTurn),
         "reload-agent-runtime" => Some(CommandId::ReloadAgentRuntime),
         "manage-sessions" => Some(CommandId::OpenSessionManager),
+        "reload-config" => Some(CommandId::ReloadConfig),
         _ => None,
     }
 }
@@ -537,12 +539,39 @@ pub(crate) struct Keymap {
 }
 
 impl Keymap {
-    /// The process-wide keymap, built once from Horizon's config file
-    /// (applied at startup only — see `AGENTS.md`) and cached for the rest
-    /// of the run.
-    pub(crate) fn global() -> &'static Keymap {
-        static KEYMAP: OnceLock<Keymap> = OnceLock::new();
-        KEYMAP.get_or_init(|| Keymap::from_entries(&crate::config::load().keybindings))
+    /// The process-wide keymap slot, built once from Horizon's config file
+    /// and swappable thereafter by [`Keymap::reload`] (`Reload Config`'s
+    /// keymap half — see `app::command_actions::reload_config`).
+    /// `RwLock<Arc<Keymap>>`, not a reactive signal like `ui::theme`'s
+    /// `ThemeState`: the keymap is read fresh on every keystroke
+    /// (`app::input::handle_key`), never inside a floem `.style(|s| ...)`
+    /// closure, so there is nothing that needs to react to a swap — a plain
+    /// lock that always returns the current `Arc` is enough.
+    fn slot() -> &'static RwLock<Arc<Keymap>> {
+        static KEYMAP: OnceLock<RwLock<Arc<Keymap>>> = OnceLock::new();
+        KEYMAP.get_or_init(|| {
+            RwLock::new(Arc::new(Keymap::from_entries(
+                &crate::config::load().keybindings,
+            )))
+        })
+    }
+
+    /// The process-wide keymap, current as of the last [`Keymap::reload`]
+    /// (or the startup-parsed one, if reload was never called). Returns an
+    /// owned `Arc` (cheap: a refcount bump) rather than a borrowed
+    /// reference, since the lock backing it can't hand out a `'static`
+    /// reference once it's swappable.
+    pub(crate) fn global() -> Arc<Keymap> {
+        Self::slot().read().expect("keymap lock poisoned").clone()
+    }
+
+    /// Swaps in a freshly parsed `[keybindings]` table — `Reload Config`'s
+    /// keymap half. Every existing reader (a keystroke that already called
+    /// `global()` before this runs) keeps working against its own `Arc`
+    /// snapshot; the next keystroke's `global()` call sees the new keymap.
+    pub(crate) fn reload(entries: &HashMap<String, String>) {
+        let mut keymap = Self::slot().write().expect("keymap lock poisoned");
+        *keymap = Arc::new(Keymap::from_entries(entries));
     }
 
     fn from_entries(entries: &HashMap<String, String>) -> Self {
@@ -907,6 +936,14 @@ mod tests {
     }
 
     #[test]
+    fn new_config_agent_keybinding_entry_resolves_to_the_new_config_agent_command() {
+        assert_eq!(
+            command_id_from_str("new-config-agent"),
+            Some(CommandId::NewConfigAgent)
+        );
+    }
+
+    #[test]
     fn invalid_chord_is_skipped_without_dropping_other_entries() {
         let mut entries = HashMap::new();
         entries.insert("not a chord".to_string(), "new-agent".to_string());
@@ -935,6 +972,51 @@ mod tests {
     fn default_bindings_are_present_when_config_is_empty() {
         let keymap = Keymap::from_entries(&HashMap::new());
         assert_eq!(keymap.bindings.len(), default_bindings().len());
+    }
+
+    #[test]
+    fn reload_config_keybinding_entry_resolves_to_the_reload_config_command() {
+        let mut entries = HashMap::new();
+        entries.insert("ctrl+shift+r".to_string(), "reload-config".to_string());
+
+        let keymap = Keymap::from_entries(&entries);
+        let chord = parse_chord("ctrl+shift+r").unwrap();
+
+        assert_eq!(
+            keymap
+                .bindings
+                .iter()
+                .find(|(bound, _)| *bound == chord)
+                .map(|(_, id)| *id),
+            Some(CommandId::ReloadConfig)
+        );
+    }
+
+    // --- Reload Config: swapping the process-wide keymap -----------------
+
+    #[test]
+    fn reload_swaps_the_global_keymap() {
+        let mut entries = HashMap::new();
+        entries.insert(
+            "ctrl+shift+q".to_string(),
+            "terminate-active-session".to_string(),
+        );
+
+        Keymap::reload(&entries);
+        let chord = parse_chord("ctrl+shift+q").unwrap();
+        let resolved = Keymap::global()
+            .bindings
+            .iter()
+            .find(|(bound, _)| *bound == chord)
+            .map(|(_, id)| *id);
+
+        // Restore before asserting, so a failed assertion still leaves
+        // `Keymap::global` -- a process-wide global, like `config::load`
+        // and `ui::theme`'s state -- as the defaults-only keymap every
+        // other test in this process expects.
+        Keymap::reload(&HashMap::new());
+
+        assert_eq!(resolved, Some(CommandId::TerminateActiveSession));
     }
 
     // --- palette-open pseudo-command ------------------------------------

@@ -539,6 +539,7 @@ mod tests {
                 session_id,
                 turn_id: Some("turn-1".to_string()),
                 provider_id: Some(ProviderId("builtin.agent.rig".to_string())),
+                role_id: None,
                 event_kind: event_kind(&Event::MessageCommitted(Message {
                     role: MessageRole::User,
                     text: "snapshot".to_string(),
@@ -559,6 +560,7 @@ mod tests {
                 session_id,
                 turn_id: Some("turn-1".to_string()),
                 provider_id: Some(ProviderId("builtin.agent.rig".to_string())),
+                role_id: None,
                 event_kind: event_kind(&Event::ToolCallRequested(ToolCallRequest {
                     call_id: call_id.clone(),
                     tool_id: "workspace.snapshot".to_string(),
@@ -581,6 +583,7 @@ mod tests {
                 session_id,
                 turn_id: Some("turn-1".to_string()),
                 provider_id: Some(ProviderId("builtin.agent.rig".to_string())),
+                role_id: None,
                 event_kind: event_kind(&Event::ToolCallFinished(ToolCallResult {
                     call_id: call_id.clone(),
                     output: serde_json::json!({ "ok": true }),
@@ -672,6 +675,7 @@ mod tests {
                     session_id,
                     turn_id: None,
                     provider_id: None,
+                    role_id: None,
                     event_kind: "state_changed".to_string(),
                     event: Event::StateChanged(SessionState::Running),
                     provider_payload: None,
@@ -792,6 +796,7 @@ mod tests {
                 session_id,
                 turn_id: None,
                 provider_id: None,
+                role_id: None,
                 event_kind: "state_changed".to_string(),
                 event: Event::StateChanged(SessionState::Running),
                 provider_payload: None,

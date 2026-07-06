@@ -5,6 +5,8 @@ use crate::control_surface::view::{command_palette, session_manager_modal};
 use crate::workspace::request_active_pane_focus;
 use crate::workspace::view::{tab_strip, workspace_view};
 
+use super::command_actions::{execute_command, CommandInvocation};
+use super::commands::CommandId;
 use super::context::{command_action_state, command_palette_state, workspace_view_state};
 use super::input::AppInput;
 use super::state::AppState;
@@ -17,6 +19,7 @@ pub fn app_view() -> impl IntoView {
     let input = AppInput::new(&state);
     let workspace = state.workspace;
     let pane_focus_requests = state.pane_focus_requests;
+    wire_config_reload_requests(&state);
     let content = app_content(state);
 
     // Every pane_view's own `request_focus` (floem's `request_focus`
@@ -65,6 +68,32 @@ pub fn app_view() -> impl IntoView {
             s.size_full()
                 .background(floem::peniko::Color::from_rgb8(22, 24, 29))
         })
+}
+
+/// Answers a `config_reload_requests` bump (a session's successful
+/// `config.write`, observed by `agent::agentd_runtime::
+/// fold_agent_session_events`) by executing the `Reload Config` command --
+/// the same `execute_command` path the palette/keybinding/CLI use, so the
+/// automatic reload is just another binding to the command, not a second
+/// reload implementation (AGENTS.md, "Operations go through the command
+/// model"). The previous-value comparison skips the effect's initial run
+/// (counter still at its startup value), so merely mounting the app never
+/// reloads anything.
+fn wire_config_reload_requests(state: &AppState) {
+    let requests = state.config_reload_requests;
+    let action_state = command_action_state(state);
+    floem::reactive::create_effect(move |previous: Option<u64>| {
+        let count = requests.get();
+        if let Some(previous) = previous {
+            if count > previous {
+                execute_command(
+                    CommandInvocation::Simple(CommandId::ReloadConfig),
+                    action_state.clone(),
+                );
+            }
+        }
+        count
+    });
 }
 
 fn app_content(state: AppState) -> impl IntoView {
