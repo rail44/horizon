@@ -83,6 +83,13 @@ wave items where possible; design docs on first use.
 - **Recall tool**: search over the DuckDB history (Letta survey:
   retrieval over summarization); unblocked now that the roles work has
   landed.
+- **Outcome-label projection**: project the free deterministic signals
+  (turn end reasons, approval outcomes, tool success, `role_id`) into
+  the DuckDB projection and put them in recall's scope — see
+  `docs/agent-feedback-design.md`. After the recall tool (same crate).
+- **Skill distillation (approval-gated)**: agent-drafted skill updates
+  from labeled trajectories, owner-approved before landing — see
+  `docs/agent-feedback-design.md`. After the label projection.
 
 ## Later (deliberately unshaped)
 
@@ -96,3 +103,7 @@ wave items where possible; design docs on first use.
   wait for recursive layout.
 - User-facing agent definition: composing an agent from tools and
   skills as a first-class flow.
+- Explicit user-feedback surface (per-turn ratings etc.): deliberately
+  deferred — a project-session consultation informed by the pre-LLM
+  implicit-feedback literature decides this
+  (`docs/agent-feedback-design.md` decision 5).
