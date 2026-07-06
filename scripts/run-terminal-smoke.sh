@@ -6,6 +6,15 @@ check_script="$root_dir/scripts/check-terminal-visual.sh"
 artifact_root="${HORIZON_SMOKE_ARTIFACT_ROOT:-/tmp/horizon-terminal-smoke-$(date +%Y%m%d-%H%M%S)-$$}"
 base_display="${HORIZON_SMOKE_DISPLAY_BASE:-99}"
 
+# No hermetic-mode wiring needed here: each scenario below gets its own
+# HORIZON_ARTIFACT_DIR (see run_case), and check-terminal-visual.sh derives
+# its scratch XDG_RUNTIME_DIR/event-log/state-db from that per-scenario dir
+# by default (docs/tasks/backlog.md item 13), so every scenario already
+# gets an isolated agentd. Export HORIZON_REAL_RUNTIME=1 before invoking
+# this script to opt every scenario back into the real environment; `env`
+# below only overrides HORIZON_ARTIFACT_DIR/HORIZON_TEST_DISPLAY, so an
+# already-exported HORIZON_REAL_RUNTIME passes through untouched.
+
 mkdir -p "$artifact_root"
 
 run_case() {

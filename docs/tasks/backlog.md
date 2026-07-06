@@ -51,19 +51,35 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     resolve stale shared libraries from build dirs. agentd should
     sanitize these when spawning tool processes; launching the built
     binary directly instead of `cargo run` also sidesteps it.
-13. **headless GUI verification writes into the real agentd state** —
-    `check-terminal-visual.sh`/`run-terminal-smoke.sh` runs connect to
-    the owner's real `horizon-agentd` socket and persist throwaway test
-    sessions into the real event log / DuckDB (observed at ~4k lines,
-    plus replay cost on every reconnect). The scripts should isolate
-    `HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB` and point agentd
-    at a scratch socket per run. Flagged 2026-07-06 during the startup
-    focus diagnosis. *Working recipe (2026-07-06):* overriding
-    `XDG_RUNTIME_DIR` to a scratch dir isolates both the control socket
-    and agentd (a fresh daemon spawns there) in one move — verified in a
-    live CLI E2E. The missing piece for a per-knob fix is an agentd
-    socket override (`HORIZON_AGENTD_SOCKET`, already anticipated as a
-    code comment).
+13. *(resolved 2026-07-06)* **headless GUI verification writes into the
+    real agentd state** — `check-terminal-visual.sh`/`run-terminal-smoke.sh`
+    runs connected to the owner's real `horizon-agentd` socket and
+    persisted throwaway test sessions into the real event log / DuckDB
+    (observed at ~4k lines, plus replay cost on every reconnect). Fixed
+    by making `check-terminal-visual.sh` hermetic by default: each run
+    computes a scratch `XDG_RUNTIME_DIR` under its own artifact dir (the
+    working recipe already noted below — `XDG_RUNTIME_DIR` isolates both
+    the control socket and agentd, since a fresh agentd binds under it
+    and `horizon_agent::socket::default_socket_path` is
+    `$XDG_RUNTIME_DIR/horizon/agentd.sock`) and points
+    `HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB` at scratch files
+    alongside it, so a run never touches `~/.local/share/horizon` or the
+    owner's real agentd connection slot. `run-terminal-smoke.sh` needed
+    no changes: each scenario already gets its own `HORIZON_ARTIFACT_DIR`,
+    so hermetic mode composes automatically per scenario. Since Horizon
+    exiting doesn't kill agentd (sessions survive by design), the
+    script's cleanup trap now also finds and kills *this run's* scratch
+    agentd — identified by grepping for the run-unique scratch socket
+    path in agentd's own `--socket <path>` argv, never a bare
+    process-name kill — so hermetic runs don't leak an agentd per
+    invocation. `HORIZON_REAL_RUNTIME=1` opts back into the real
+    environment when needed. *Prior working recipe (2026-07-06):*
+    overriding `XDG_RUNTIME_DIR` to a scratch dir isolates both the
+    control socket and agentd (a fresh daemon spawns there) in one move —
+    verified in a live CLI E2E. The missing piece for a per-knob fix is
+    an agentd socket override (`HORIZON_AGENTD_SOCKET`, already
+    anticipated as a code comment) — still not implemented; not needed
+    since the `XDG_RUNTIME_DIR` recipe covers this fix.
 14. **headless GUI scripts hung/failed under shared-machine load,
     2026-07-06** — every `check-terminal-visual.sh` scenario (including
     ones that don't touch workspace mode at all, and reproduced against

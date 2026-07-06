@@ -24,11 +24,38 @@ metadata="$artifact_dir/metadata.txt"
 
 xvfb_pid=""
 app_pid=""
+# Set below only in hermetic mode (the default); left empty in
+# HORIZON_REAL_RUNTIME=1 mode so `cleanup`'s scratch-agentd search is a
+# guaranteed no-op instead of matching the owner's real agentd.
+scratch_runtime_dir=""
 
 cleanup() {
   if [[ -n "$app_pid" ]] && kill -0 "$app_pid" 2>/dev/null; then
     kill "$app_pid" 2>/dev/null || true
     wait "$app_pid" 2>/dev/null || true
+  fi
+
+  # Hermetic runs (the default, see below) give Horizon its own scratch
+  # XDG_RUNTIME_DIR, which makes agentd bind a scratch socket at
+  # "$scratch_runtime_dir/horizon/agentd.sock" (horizon_agent::socket::
+  # default_socket_path) instead of the owner's real one. Horizon exiting
+  # does NOT kill agentd -- sessions are designed to survive pane/app
+  # restarts -- so without this, every hermetic run would leak one
+  # horizon-agentd process. We find *only this run's* agentd by grepping
+  # for that scratch socket path in the process command line: agentd is
+  # always spawned as `horizon-agentd --socket <that exact path>` (see
+  # src/agent/agentd_client.rs's agentd_command), so the path is a literal
+  # argv entry, not just an inherited env var. That path lives under this
+  # run's artifact_dir (itself timestamp+pid-qualified), so it cannot
+  # collide with any other run's agentd, past or concurrent -- this is a
+  # match on a run-unique identifier, not an indiscriminate name/pattern
+  # kill of "any horizon-agentd".
+  if [[ -n "$scratch_runtime_dir" ]]; then
+    scratch_agentd_pids="$(pgrep -f -- "${scratch_runtime_dir}/horizon/agentd.sock" 2>/dev/null || true)"
+    if [[ -n "$scratch_agentd_pids" ]]; then
+      # shellcheck disable=SC2086 # word-splitting a pid list is intentional
+      kill $scratch_agentd_pids 2>/dev/null || true
+    fi
   fi
 
   if [[ -n "$xvfb_pid" ]] && kill -0 "$xvfb_pid" 2>/dev/null; then
@@ -42,6 +69,35 @@ trap cleanup EXIT
 echo "artifact_dir=$artifact_dir" > "$metadata"
 echo "server_display=$server_display" >> "$metadata"
 echo "client_display=$client_display" >> "$metadata"
+
+# Hermetic by default (docs/tasks/backlog.md item 13): isolate Horizon's
+# agentd (event log, DuckDB state projection, and the agentd control
+# socket itself) into scratch paths under this run's artifact_dir so a
+# verification run never reads from or writes into the owner's real
+# ~/.local/share/horizon state or steals the owner's real agentd
+# connection slot (agentd accepts one connection at a time). Set
+# HORIZON_REAL_RUNTIME=1 to opt back into the real environment (e.g. to
+# reproduce a bug that only shows up against real session history).
+real_runtime="${HORIZON_REAL_RUNTIME:-0}"
+runtime_env_args=()
+if [[ "$real_runtime" != "1" ]]; then
+  scratch_runtime_dir="$artifact_dir/xdg-runtime"
+  mkdir -p "$scratch_runtime_dir"
+  chmod 700 "$scratch_runtime_dir"
+  scratch_event_log="$artifact_dir/scratch-agent-events.jsonl"
+  scratch_state_db="$artifact_dir/scratch-agent-state.duckdb"
+  runtime_env_args=(
+    "XDG_RUNTIME_DIR=$scratch_runtime_dir"
+    "HORIZON_AGENT_EVENT_LOG=$scratch_event_log"
+    "HORIZON_AGENT_STATE_DB=$scratch_state_db"
+  )
+  echo "runtime_mode=hermetic" >> "$metadata"
+  echo "scratch_xdg_runtime_dir=$scratch_runtime_dir" >> "$metadata"
+  echo "scratch_agent_event_log=$scratch_event_log" >> "$metadata"
+  echo "scratch_agent_state_db=$scratch_state_db" >> "$metadata"
+else
+  echo "runtime_mode=real (HORIZON_REAL_RUNTIME=1)" >> "$metadata"
+fi
 
 Xvfb "$server_display" -screen 0 1280x800x24 -listen tcp -nolisten unix >"$xvfb_log" 2>&1 &
 xvfb_pid="$!"
@@ -65,6 +121,7 @@ env -u WAYLAND_DISPLAY \
   HORIZON_STATUS_DUMP="$status_dump" \
   WGPU_BACKEND="${WGPU_BACKEND:-gl}" \
   LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}" \
+  "${runtime_env_args[@]}" \
   cargo run --quiet >"$app_log" 2>&1 &
 app_pid="$!"
 
