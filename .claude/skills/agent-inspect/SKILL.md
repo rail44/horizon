@@ -202,22 +202,28 @@ attribution the query above gives you): `ls -la "$(dirname "$LOG")"/horizon-bash
 
 ## DuckDB projection
 
-**The DB file is held read-write by `horizon-agentd` for its entire
-lifetime now (as of the recall work) — every `duckdb -readonly` recipe
-below fails with a lock error while agentd is running.** Previously the
-projection was only rebuilt (and the file briefly locked) at startup, then
-closed; now the event-log writer thread opens the store once at startup and
-*keeps it open*, live-appending every subsequent event so the projection
-stays current without a restart (see `docs/agent-duckdb-state-design.md`'s
-"Runtime Boundary" addendum). While agentd is running, **the JSONL recipes
-earlier in this doc are the first resort**, not a fallback — they're the
-only thing guaranteed to work against a live process. The SQL recipes below
-still work in two cases: after stopping agentd (`horizon reload-agent-runtime`
-drains the old process and starts a fresh one, which re-grabs the file on
-its own startup — so the window where the file is free is brief; a plain
-kill/stop leaves it free until the next start), or against a copied
-`*.duckdb` file (DuckDB may also keep a sibling `*.duckdb.wal` — copy both
-together, or checkpoint first if you have a live connection available).
+**The projection is live now (as of the recall work), and the recipes below
+"work" while `horizon-agentd` is running — but may silently lag.**
+Previously the projection was only rebuilt at startup, then the store was
+closed; now the event-log writer thread opens the store once at startup
+and *keeps it open* for the rest of the process's life, live-appending
+every subsequent event so the projection stays current without a restart
+(see `docs/agent-duckdb-state-design.md`'s "Runtime Boundary" addendum). An
+external `duckdb -readonly` invocation against the same file is **not
+blocked** by that open (POSIX file locks are per-process, and DuckDB's own
+locking follows suit here) — but it reads DuckDB's own on-disk,
+last-checkpointed state, which can trail behind what the live writer
+connection has actually committed in memory. Treat a `duckdb -readonly`
+read taken while agentd is running as a **diagnostic snapshot that may be
+stale**, not as an authoritative live view. For anything time-sensitive (a
+session's most recent few events, "did this just happen"), **prefer the
+JSONL recipes earlier in this doc** — they read the same file the writer
+itself appends to, with no separate database engine's checkpoint timing in
+the way. For a guaranteed-current DuckDB read, stop agentd first (a plain
+kill/stop, or `horizon reload-agent-runtime`, whose drain-then-respawn
+window is brief but real), or query a copied `*.duckdb` file (DuckDB may
+also keep a sibling `*.duckdb.wal` — copy both together, or checkpoint
+first if you have a live connection available).
 
 Requires the separate `duckdb` CLI (`command -v duckdb`) — it is not bundled
 with Horizon and must be installed independently. The projection lives at
@@ -278,12 +284,13 @@ duckdb -readonly "$DB" -c "
   ORDER BY latency_ms DESC;"
 ```
 
-A session still being actively appended to right now reflects everything up
-to its last processed event (the projection is live, not just a snapshot
-from the last app start) — but the file itself is unreachable from another
-process while agentd holds it open (see this section's lead paragraph). Run
-these against a stopped agentd, or a copied file (+ its `.wal` sibling if
-present):
+A session still being actively appended to right now is *usually* reflected
+here (the projection is live, not just a snapshot from the last app start)
+— but see this section's lead paragraph: a `duckdb -readonly` read like the
+ones below can lag the writer's actual in-memory state until a checkpoint,
+so treat "nothing new since X" as inconclusive, not as proof nothing
+happened. For a guaranteed-current read, run these against a stopped
+agentd, or a copied file (+ its `.wal` sibling if present):
 
 ```sh
 DB=$XDG_DATA_HOME/horizon/agent-state.duckdb   # default; or wherever HORIZON_AGENT_STATE_DB points

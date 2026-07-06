@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use duckdb::Connection;
@@ -11,6 +12,7 @@ mod projection;
 mod query;
 mod records;
 mod schema;
+mod shared_store;
 
 use schema::INITIALIZE_SCHEMA_SQL;
 
@@ -22,6 +24,15 @@ pub use records::{
     AgentStoredToolResult, AppendEvent,
 };
 pub use records::{AgentStoredSession, RecallEntry, RecallEntryKind, RecallSearchReport};
+pub use shared_store::SharedDuckdbStore;
+
+/// A live `Store`, shared (behind a lock) by every in-process consumer that
+/// needs it -- see [`SharedDuckdbStore`]'s doc comment for why a second,
+/// independent `Store::open` of the same path is unsound rather than
+/// merely redundant. A plain type alias, not a newtype: every caller already
+/// needs the full `Arc<Mutex<_>>` API (`lock()`, `clone()`), so wrapping it
+/// would only add ceremony.
+pub type DuckdbStoreHandle = Arc<Mutex<Store>>;
 
 pub struct Store {
     conn: Connection,
@@ -821,14 +832,21 @@ mod tests {
     /// not just the rebuild-at-startup path the tests above cover: drives
     /// real appends through `event_log::WriterHandle::open_silently(path,
     /// Some(duckdb_path))` -- the exact seam `horizon-agentd`'s
-    /// `open_persistence` uses -- then opens a *fresh*, independent
-    /// `Store::open` in this same process (proving same-process concurrent
-    /// opens don't contend, per this feature's measured premises) and
-    /// checks the rows are already there, with each record's own
-    /// `event_at`, not a rebuild discovering them at the next restart and
-    /// not a `now()` stamp from the writer thread's own append time.
+    /// `open_persistence` uses -- then queries through the *shared*
+    /// `Arc<Mutex<Store>>` handle the writer thread itself hands back (via
+    /// the second `open_silently` receiver), not a fresh independent
+    /// `Store::open` of the same path. That distinction is load-bearing: a
+    /// second `Store::open` against the same file is a wholly separate
+    /// DuckDB instance (`duckdb-rs` has no cross-instance cache), and with
+    /// DuckDB's relaxed durability a second instance can read the file
+    /// before the writer instance's own commits ever reach it -- confirmed
+    /// in production as a fresh open seeing zero rows for a session with
+    /// real history. This test proves the fix: querying the *same* `Arc`
+    /// the writer appended through sees every row, with each record's own
+    /// `event_at` (not a `now()` stamp from the writer thread's append
+    /// time).
     #[test]
-    fn live_projection_reflects_writer_thread_appends_with_correct_event_at() {
+    fn live_projection_reflects_writer_thread_appends_through_the_shared_handle() {
         use crate::persistence::event_log::{
             Record, WriterHandle, WriterInit, AGENT_EVENT_LOG_SCHEMA, AGENT_EVENT_LOG_VERSION,
         };
@@ -843,7 +861,7 @@ mod tests {
         ));
         let session_id = SessionId::new();
 
-        let (writer, init_rx) =
+        let (writer, init_rx, duckdb_rx) =
             WriterHandle::open_silently(&event_log_path, Some(duckdb_path.clone()));
         match init_rx.recv().expect("writer init outcome") {
             WriterInit::Ready(_) => {}
@@ -873,9 +891,17 @@ mod tests {
             .expect("append 1");
         writer.flush().expect("flush");
 
-        let reopened = Store::open(&duckdb_path).expect("reopen duckdb store");
+        // The shared handle the writer thread itself appends through --
+        // never a fresh `Store::open` (see this test's doc comment).
+        let shared_store = duckdb_rx
+            .recv()
+            .expect("duckdb store decision delivered")
+            .expect("duckdb store available");
+        let guard = shared_store
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let session_id_text = session_id_text(session_id).expect("session id text");
-        let mut stmt = reopened
+        let mut stmt = guard
             .conn
             .prepare(
                 "SELECT sequence, epoch_ms(event_at) FROM agent_events

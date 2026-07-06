@@ -342,19 +342,37 @@ pub struct ProviderRegistry {
 }
 
 impl ProviderRegistry {
+    /// Test-only convenience: no real event-log writer exists behind this
+    /// registry, so the rig provider gets an already-resolved-to-`None`
+    /// [`crate::persistence::projection::duckdb::SharedDuckdbStore`]
+    /// (`SharedDuckdbStore::unavailable`) -- reads through it return
+    /// immediately with no history, and never block, exactly like the
+    /// pre-recall behavior of a provider constructed with no DuckDB path.
     #[cfg(test)]
     pub fn builtin() -> Self {
-        Self::builtin_with_config(AgentConfig::from_env_and_file(
-            &crate::config::AgentFileConfig::default(),
-        ))
+        Self::builtin_with_config(
+            AgentConfig::from_env_and_file(&crate::config::AgentFileConfig::default()),
+            crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
+        )
     }
 
-    pub fn builtin_with_config(config: AgentConfig) -> Self {
+    /// `duckdb_cell` is shared with (a clone of) whatever else in the
+    /// process needs the same live DuckDB projection handle once it exists
+    /// (`horizon-agentd`'s `AgentdState`, for the recall tools) -- see
+    /// `persistence::projection::duckdb::SharedDuckdbStore`'s doc comment.
+    /// It's threaded in here (rather than resolved internally) because this
+    /// registry -- and the rig provider it constructs -- is built at
+    /// process startup, before the event log's writer thread (and
+    /// therefore any real DuckDB store) exists yet.
+    pub fn builtin_with_config(
+        config: AgentConfig,
+        duckdb_cell: crate::persistence::projection::duckdb::SharedDuckdbStore,
+    ) -> Self {
         let mut registry = Self::default();
         registry.insert(Arc::new(crate::providers::mock::MockProvider::new()));
         registry.insert(Arc::new(crate::providers::rig::Provider::new(
             config.rig,
-            config.persistence.duckdb_path,
+            duckdb_cell,
         )));
         registry
     }

@@ -7,20 +7,28 @@
 //! session's) own already-persisted history -- no different in trust terms
 //! from `fs.read`.
 //!
-//! Each call opens its own short-lived `Store` (see [`Store::open`]) rather
-//! than sharing the event-log writer's long-lived one: measured on this
-//! machine, same-process `Store::open` calls against one path succeed and
-//! share the underlying libduckdb instance cache, so a per-call open here
-//! never contends with the writer thread's own long-lived handle (see
-//! `docs/agent-duckdb-state-design.md`'s "Runtime Boundary" addendum). Only
-//! *cross-process* access (e.g. `duckdb -readonly` from a shell while
-//! `horizon-agentd` is running) is blocked -- see the `agent-inspect`
-//! skill's updated DuckDB section.
+//! Both tools query through the *shared* `Arc<Mutex<Store>>` handle in
+//! `ToolSessionState::recall_context`'s `RecallContext::store` (locking
+//! briefly per query), never a fresh `Store::open` of the same path. That
+//! distinction is load-bearing, not a style preference: `duckdb-rs`'s
+//! `Connection::open` has no cross-instance cache (an earlier version of
+//! this module claimed same-process opens "share the underlying libduckdb
+//! instance cache" -- that was a misread; no such cache exists), so two
+//! opens of the same path are two independent, uncoordinated database
+//! instances. Combined with DuckDB's relaxed durability -- a writer
+//! instance's committed appends can sit in *that instance's own* in-memory
+//! WAL well before landing in the on-disk file -- a second instance opened
+//! here would read however-stale the file happens to be, confirmed in
+//! practice as a fresh open seeing zero rows for a session with real
+//! history. See `persistence::projection::duckdb::SharedDuckdbStore`'s doc
+//! comment for the full story, and the `agent-inspect` skill's DuckDB
+//! section for what that means for *external* (e.g. `duckdb -readonly` CLI)
+//! access while `horizon-agentd` is running.
 
 use serde_json::{json, Value};
 
 use crate::contract::SessionId;
-use crate::persistence::projection::duckdb::{RecallEntry, Store};
+use crate::persistence::projection::duckdb::RecallEntry;
 use crate::tools::state::ToolSessionState;
 
 const DEFAULT_SEARCH_LIMIT: usize = 20;
@@ -69,7 +77,7 @@ fn search(tool_state: &ToolSessionState, input: &Value) -> Value {
     );
 
     let recall = tool_state.recall_context();
-    let Some(duckdb_path) = recall.duckdb_path.as_deref() else {
+    let Some(store) = recall.store.as_ref() else {
         return error_output(
             "recall is unavailable: no persisted history database is configured for this session",
         );
@@ -93,11 +101,13 @@ fn search(tool_state: &ToolSessionState, input: &Value) -> Value {
         }
     };
 
-    let store = match Store::open(duckdb_path) {
-        Ok(store) => store,
-        Err(error) => return error_output(format!("recall is unavailable: {error}")),
+    let report = {
+        let store = store
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        store.search_history(scope, query, limit)
     };
-    let report = match store.search_history(scope, query, limit) {
+    let report = match report {
         Ok(report) => report,
         Err(error) => return error_output(format!("recall.search failed: {error}")),
     };
@@ -129,7 +139,7 @@ fn hit_json(entry: RecallEntry, query: &str, own_session_id: Option<SessionId>) 
 
 fn read(tool_state: &ToolSessionState, input: &Value) -> Value {
     let recall = tool_state.recall_context();
-    let Some(duckdb_path) = recall.duckdb_path.as_deref() else {
+    let Some(store) = recall.store.as_ref() else {
         return error_output(
             "recall is unavailable: no persisted history database is configured for this session",
         );
@@ -159,11 +169,13 @@ fn read(tool_state: &ToolSessionState, input: &Value) -> Value {
         DEFAULT_READ_LIMIT,
     );
 
-    let store = match Store::open(duckdb_path) {
-        Ok(store) => store,
-        Err(error) => return error_output(format!("recall is unavailable: {error}")),
+    let entries = {
+        let store = store
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        store.read_history_window(session_id, from_sequence, limit)
     };
-    let entries = match store.read_history_window(session_id, from_sequence, limit) {
+    let entries = match entries {
         Ok(entries) => entries,
         Err(error) => return error_output(format!("recall.read failed: {error}")),
     };

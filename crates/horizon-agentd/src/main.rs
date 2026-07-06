@@ -65,6 +65,7 @@ use std::time::Duration;
 use horizon_agent::config::{self, AgentConfig};
 use horizon_agent::contract::ProviderRegistry;
 use horizon_agent::persistence::event_log::{Record, WriterHandle, WriterInit};
+use horizon_agent::persistence::projection::duckdb::{DuckdbStoreHandle, SharedDuckdbStore};
 use horizon_agent::socket::default_socket_path;
 use horizon_agent::wire::{self, Control, Envelope, EnvelopeBody, Hello, CONTRACT_VERSION};
 use session::{AgentdState, Connection};
@@ -104,10 +105,23 @@ async fn main() -> anyhow::Result<()> {
     // the socket path, and it happens before the event log is even opened.
     let listener = bind_listener(&socket_path).await?;
 
-    let providers = ProviderRegistry::builtin_with_config(agent_config.clone());
-    let state = Arc::new(AgentdState::new(providers, agent_config.clone(), None));
+    // Shared, multi-reader-blocking handle onto the live DuckDB projection
+    // -- see `SharedDuckdbStore`'s doc comment. Created empty here (before
+    // the event log's writer thread, and therefore any real DuckDB store,
+    // exists) and handed to both the provider registry (the rig provider's
+    // history replay) and `AgentdState` (the recall tools' context);
+    // populated later, once, by `spawn_resume_task`'s propagator.
+    let duckdb_cell = SharedDuckdbStore::new();
+    let providers =
+        ProviderRegistry::builtin_with_config(agent_config.clone(), duckdb_cell.clone());
+    let state = Arc::new(AgentdState::new(
+        providers,
+        agent_config.clone(),
+        None,
+        duckdb_cell.clone(),
+    ));
 
-    spawn_resume_task(state.clone(), agent_config);
+    spawn_resume_task(state.clone(), agent_config, duckdb_cell);
 
     run(listener, &socket_path, state).await
 }
@@ -123,12 +137,24 @@ async fn main() -> anyhow::Result<()> {
 /// module doc's "DuckDB rebuild is off the readiness path too" for where it
 /// actually happens now ([`open_persistence`]'s `WriterHandle::
 /// open_silently` call).
-fn spawn_resume_task(state: Arc<AgentdState>, agent_config: AgentConfig) {
+///
+/// `duckdb_cell` is populated by a *separate*, fire-and-forget
+/// `spawn_blocking` task spawned right after `open_persistence` returns --
+/// deliberately not awaited by (or ordered against) `resume_persisted_
+/// sessions`/`mark_resume_ready` below, so populating it can never
+/// reintroduce DuckDB onto the readiness path this function's own doc
+/// comment describes avoiding.
+fn spawn_resume_task(
+    state: Arc<AgentdState>,
+    agent_config: AgentConfig,
+    duckdb_cell: SharedDuckdbStore,
+) {
     tokio::task::spawn_blocking(move || {
         if let Some(delay) = test_resume_delay() {
             std::thread::sleep(delay);
         }
-        let (writer, records, skipped_lines_summary) = open_persistence(&agent_config);
+        let (writer, records, skipped_lines_summary, duckdb_ready_rx) =
+            open_persistence(&agent_config);
         state.set_writer(writer);
         state.set_skipped_lines_summary(skipped_lines_summary);
         // Step 4: "agentd restart = read own log, rebuild rig_history, mark
@@ -136,6 +162,18 @@ fn spawn_resume_task(state: Arc<AgentdState>, agent_config: AgentConfig) {
         // again".
         session::resume_persisted_sessions(&state, records);
         state.mark_resume_ready();
+
+        // Propagates the writer thread's own rebuild-or-open decision into
+        // the shared cell whenever it lands -- `duckdb_ready_rx.recv()`
+        // blocks this dedicated propagator task, never the resume/readiness
+        // path above (already completed by the time this line runs). A
+        // disconnected channel (the writer's startup itself failed, so it
+        // never reached the DuckDB step at all) is treated the same as an
+        // explicit "no store".
+        tokio::task::spawn_blocking(move || {
+            let store = duckdb_ready_rx.recv().ok().flatten();
+            duckdb_cell.set(store);
+        });
     });
 }
 
@@ -168,10 +206,22 @@ fn test_resume_delay() -> Option<Duration> {
 /// production use of the live DuckDB projection (see the module doc): the
 /// event log's own writer thread rebuilds (or skips, if already current)
 /// and then keeps that `Store` open for the rest of this process's life.
+///
+/// The fourth return value is `open_silently`'s own second receiver: the
+/// writer thread's DuckDB rebuild-or-open decision, delivered exactly once,
+/// whenever it lands (see [`spawn_resume_task`]'s propagator, which is the
+/// only consumer). A disconnected channel (writer startup itself failed)
+/// is indistinguishable from -- and handled the same as -- an explicit
+/// `None`.
 fn open_persistence(
     agent_config: &AgentConfig,
-) -> (Option<WriterHandle>, Vec<Record>, Option<String>) {
-    let (writer, init_rx) = WriterHandle::open_silently(
+) -> (
+    Option<WriterHandle>,
+    Vec<Record>,
+    Option<String>,
+    crossbeam_channel::Receiver<Option<DuckdbStoreHandle>>,
+) {
+    let (writer, init_rx, duckdb_rx) = WriterHandle::open_silently(
         &agent_config.persistence.event_log_path,
         agent_config.persistence.duckdb_path.clone(),
     );
@@ -184,20 +234,20 @@ fn open_persistence(
                     agent_config.persistence.event_log_path.display()
                 );
             }
-            (Some(writer), report.records, skipped_summary)
+            (Some(writer), report.records, skipped_summary, duckdb_rx)
         }
         Ok(WriterInit::Failed(error)) => {
             eprintln!(
                 "horizon-agentd: event log unavailable ({error}); persistence disabled for this run"
             );
-            (None, Vec::new(), None)
+            (None, Vec::new(), None, duckdb_rx)
         }
         Err(_) => {
             eprintln!(
                 "horizon-agentd: event log writer thread exited before reporting startup status; \
                  persistence disabled for this run"
             );
-            (None, Vec::new(), None)
+            (None, Vec::new(), None, duckdb_rx)
         }
     }
 }
