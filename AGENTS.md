@@ -142,11 +142,24 @@ Development is organized as one **project session** (long-horizon
 milestones, application-wide decisions, integration) plus per-domain
 work sessions. If you are a domain or task session: implement on a
 branch, never commit to or push `main` directly, and hand your branch
-name + commit ref back when done — the project session reviews in an
-isolated worktree, runs the integration gate, merges, and pushes.
-Subagent workers already follow the same shape (worktree branch
-handoff, `.claude/agents/worker.md`); this section extends it to every
-session working in this repository.
+back through the review queue below. Subagent workers already follow
+the same shape (worktree branch handoff, `.claude/agents/worker.md`);
+this section extends it to every session working in this repository.
+
+Feature-grained plans live in `docs/plans/` (see `docs/roadmap.md`); a
+domain session starts by reading its plan. Concrete design decisions
+belong to the domain session (with the owner); the project session
+does not relitigate them at merge — its review covers the gate,
+cross-domain integration, and coherence with the architecture docs,
+and returns non-blocking concerns as notes.
+
+**Review queue** (`.claude/review-queue/`, untracked): when a branch
+is ready, write `<slug>.request.md` containing the branch name, commit
+ref, the plan it implements, a short summary, and the tail of your
+gate run. Don't wait synchronously — the project session is notified,
+reviews in an isolated worktree, merges and pushes on green, and
+writes `<slug>.result` (`merged <hash>` / `rejected: <reason>` +
+notes) next to your request.
 
 ## Open Work
 
