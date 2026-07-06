@@ -247,6 +247,7 @@ mod tests {
             tool_id: Some(tool_id.to_string()),
             input: Some(input),
             status,
+            approval: None,
         }
     }
 
@@ -387,6 +388,7 @@ mod tests {
             tool_id: Some("bash".to_string()),
             input: None,
             status: ToolStatus::Preparing { bytes: 12 },
+            approval: None,
         };
 
         assert_eq!(header_line(&block), "○ Preparing bash… (12B)");

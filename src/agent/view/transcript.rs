@@ -28,16 +28,30 @@ pub(super) enum BlockKind {
 }
 
 /// One tool call's merged state, keyed by `call_id` -- see
-/// [`transcript_blocks`] for how the three lifecycle items fold into this.
-/// `call_id`/`tool_id`/`input` are `None` only for a still-in-flight
-/// `ToolCallPreparing` progress tick, before the real request (which always
-/// carries all three) arrives.
+/// [`transcript_blocks`] for how the lifecycle items (including, since
+/// slice 4, `ApprovalRequested`) fold into this. `call_id`/`tool_id`/`input`
+/// are `None` only for a still-in-flight `ToolCallPreparing` progress tick,
+/// before the real request (which always carries all three) arrives.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct ToolBlock {
     pub(super) call_id: Option<ToolCallId>,
     pub(super) tool_id: Option<String>,
     pub(super) input: Option<Value>,
     pub(super) status: ToolStatus,
+    /// Set once this call's `ApprovalRequested` item is seen -- inlined
+    /// approval (`docs/agent-output-ui-design.md` decision 8) instead of the
+    /// pre-slice-4 standalone `TranscriptTone::Approval` block. Stays
+    /// `Some` even after the call resolves (the reason is harmless history
+    /// at that point); [`Self::needs_confirmation`] is what call sites
+    /// actually gate rendering on.
+    pub(super) approval: Option<ApprovalState>,
+}
+
+/// The substance of a pending tool-call approval, carried on the
+/// [`ToolBlock`] it belongs to.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct ApprovalState {
+    pub(super) reason: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -71,6 +85,17 @@ impl ToolBlock {
             _ => false,
         }
     }
+
+    /// Whether this block still needs an approve/deny decision -- an
+    /// `ApprovalRequested` was seen for it, and it hasn't reached a terminal
+    /// `Finished` status yet (approve/deny/cancel all resolve through a
+    /// `ToolCallFinished`, see `agent::tools::approval`). Drives the forced
+    /// expand, the approval-tinted header/border, and whether the inline
+    /// control row renders at all (`docs/agent-output-ui-design.md`
+    /// decision 8).
+    pub(super) fn needs_confirmation(&self) -> bool {
+        self.approval.is_some() && !matches!(self.status, ToolStatus::Finished { .. })
+    }
 }
 
 /// Whether a tool result `Value` is Horizon's `is_error` shape
@@ -93,24 +118,25 @@ pub(super) enum TranscriptTone {
     Thinking,
     Status,
     Tool,
-    Approval,
     Error,
     Lifecycle,
 }
 
 /// Builds the transcript's blocks from `frame.items`, merging every tool
-/// call's `ToolCallRequested`/`ToolCallStarted`/`ToolCallFinished` items
-/// into the one [`ToolBlock`] first created for that `call_id` (at the
-/// `ToolCallRequested` -- or, if it's still in flight, `ToolCallPreparing`
-/// -- item's own index, which becomes the merged block's stable `id`).
-/// `ApprovalRequested`/`Error`/`Exited`/messages/thinking are unaffected,
-/// one block per item as before slice 1.
+/// call's `ToolCallRequested`/`ToolCallStarted`/`ToolCallFinished`/
+/// `ApprovalRequested` items into the one [`ToolBlock`] first created for
+/// that `call_id` (at the `ToolCallRequested` -- or, if it's still in
+/// flight, `ToolCallPreparing` -- item's own index, which becomes the
+/// merged block's stable `id`). `ApprovalRequested` folding in (slice 4)
+/// replaces the pre-slice-4 standalone `TranscriptTone::Approval` block --
+/// see [`ToolBlock::approval`]. `Error`/`Exited`/messages/thinking are
+/// unaffected, one block per item as before slice 1.
 pub(super) fn transcript_blocks(frame: &AgentFrame) -> Vec<TranscriptBlock> {
     let mut blocks: Vec<TranscriptBlock> = Vec::new();
     // Maps a call id to its block's position in `blocks` (not its position
-    // in `frame.items`), so `ToolCallStarted`/`ToolCallFinished` -- which
-    // never produce a block of their own -- can mutate the existing one in
-    // place instead of appending a new one.
+    // in `frame.items`), so `ToolCallStarted`/`ToolCallFinished`/
+    // `ApprovalRequested` -- which never produce a block of their own --
+    // can mutate the existing one in place instead of appending a new one.
     let mut tool_positions: HashMap<ToolCallId, usize> = HashMap::new();
 
     for (id, item) in frame.items.iter().enumerate() {
@@ -145,8 +171,39 @@ pub(super) fn transcript_blocks(frame: &AgentFrame) -> Vec<TranscriptBlock> {
                             status: ToolStatus::Finished {
                                 output: result.output.clone(),
                             },
+                            approval: None,
                         }),
                     });
+                }
+                continue;
+            }
+            AgentFrameItem::ApprovalRequested(request) => {
+                if let Some(&position) = tool_positions.get(&request.call_id) {
+                    if let BlockKind::Tool(tool) = &mut blocks[position].kind {
+                        tool.approval = Some(ApprovalState {
+                            reason: request.reason.clone(),
+                        });
+                    }
+                } else {
+                    // Defensive: policy always emits `ApprovalRequested`
+                    // right after the `ToolCallRequested` for the same call
+                    // (`policy::horizon_events_for_provider_event`), so this
+                    // shouldn't happen in practice -- same posture as the
+                    // `ToolCallFinished` fallback above.
+                    blocks.push(TranscriptBlock {
+                        id,
+                        tone: TranscriptTone::Tool,
+                        kind: BlockKind::Tool(ToolBlock {
+                            call_id: Some(request.call_id.clone()),
+                            tool_id: None,
+                            input: None,
+                            status: ToolStatus::Requested,
+                            approval: Some(ApprovalState {
+                                reason: request.reason.clone(),
+                            }),
+                        }),
+                    });
+                    tool_positions.insert(request.call_id.clone(), blocks.len() - 1);
                 }
                 continue;
             }
@@ -210,10 +267,10 @@ pub(super) fn current_block_text(
 /// (the `ToolCallRequested`/`ToolCallPreparing` item's own index) --
 /// `tool_view`'s reactive header/body closures call this so a block whose
 /// `dyn_stack` key never changes (see [`transcript_blocks`]'s doc comment)
-/// still picks up later `ToolCallStarted`/`ToolCallFinished` items. Scans
-/// forward from `id` only as far as the terminal `ToolCallFinished` (or the
-/// end of the frame if the call is still in flight), not the whole item
-/// log.
+/// still picks up later `ToolCallStarted`/`ToolCallFinished`/
+/// `ApprovalRequested` items. Scans forward from `id` only as far as the
+/// terminal `ToolCallFinished` (or the end of the frame if the call is
+/// still in flight), not the whole item log.
 pub(super) fn current_tool_block(frame: &AgentFrame, id: usize) -> Option<ToolBlock> {
     let (call_id, tool_id, input, mut status) = match frame.items.get(id)? {
         AgentFrameItem::ToolCallRequested(request) => (
@@ -233,9 +290,15 @@ pub(super) fn current_tool_block(frame: &AgentFrame, id: usize) -> Option<ToolBl
         _ => return None,
     };
 
+    let mut approval = None;
     if let Some(call_id) = &call_id {
         for item in &frame.items[id + 1..] {
             match item {
+                AgentFrameItem::ApprovalRequested(request) if &request.call_id == call_id => {
+                    approval = Some(ApprovalState {
+                        reason: request.reason.clone(),
+                    });
+                }
                 AgentFrameItem::ToolCallStarted(started_id) if started_id == call_id => {
                     status = ToolStatus::Started;
                 }
@@ -255,6 +318,7 @@ pub(super) fn current_tool_block(frame: &AgentFrame, id: usize) -> Option<ToolBl
         tool_id,
         input,
         status,
+        approval,
     })
 }
 
@@ -372,6 +436,7 @@ fn transcript_block(id: usize, item: &AgentFrameItem) -> Option<TranscriptBlock>
                 tool_id: Some(request.tool_id.clone()),
                 input: Some(request.input.clone()),
                 status: ToolStatus::Requested,
+                approval: None,
             }),
         }),
         AgentFrameItem::ToolCallPreparing(progress) => Some(TranscriptBlock {
@@ -384,15 +449,8 @@ fn transcript_block(id: usize, item: &AgentFrameItem) -> Option<TranscriptBlock>
                 status: ToolStatus::Preparing {
                     bytes: progress.bytes,
                 },
+                approval: None,
             }),
-        }),
-        AgentFrameItem::ApprovalRequested(request) => Some(TranscriptBlock {
-            id,
-            tone: TranscriptTone::Approval,
-            kind: BlockKind::Text {
-                label: Some("approval"),
-                text: request.reason.clone(),
-            },
         }),
         AgentFrameItem::Error(error) => Some(TranscriptBlock {
             id,
@@ -412,7 +470,9 @@ fn transcript_block(id: usize, item: &AgentFrameItem) -> Option<TranscriptBlock>
         }),
         // Merged into an already-emitted `ToolBlock` by `transcript_blocks`
         // above rather than producing a block of their own.
-        AgentFrameItem::ToolCallStarted(_) | AgentFrameItem::ToolCallFinished(_) => None,
+        AgentFrameItem::ToolCallStarted(_)
+        | AgentFrameItem::ToolCallFinished(_)
+        | AgentFrameItem::ApprovalRequested(_) => None,
     }
 }
 
@@ -454,10 +514,16 @@ fn status_block(
             "Running tool..."
         }
         SessionState::WaitingForApproval => {
-            if matches!(
-                last_block.map(|block| block.tone),
-                Some(TranscriptTone::Approval)
-            ) {
+            // Suppressed once the pending call's own tool block already
+            // carries the inline approval row (`ToolBlock::approval`,
+            // slice 4) -- this ephemeral status text is a fallback only for
+            // the (defensive, shouldn't-happen) gap before that block
+            // exists.
+            let already_shown = matches!(
+                last_block.map(|block| &block.kind),
+                Some(BlockKind::Tool(tool)) if tool.needs_confirmation()
+            );
+            if already_shown {
                 return None;
             }
             "Approval required"
@@ -978,8 +1044,10 @@ mod tests {
         assert_eq!(latest_user_block_id(&frame), None);
     }
 
+    // --- inline approval fold (slice 4) ------------------------------------
+
     #[test]
-    fn approval_and_status_blocks_are_unaffected_by_the_tool_merge() {
+    fn an_approval_request_folds_into_the_same_call_ids_tool_block() {
         let call_id = ToolCallId("call-1".to_string());
         let frame = AgentFrame {
             state: Some(SessionState::WaitingForApproval),
@@ -994,8 +1062,84 @@ mod tests {
 
         let blocks = transcript_blocks(&frame);
 
-        assert_eq!(blocks.len(), 2);
-        assert_eq!(blocks[1].tone, TranscriptTone::Approval);
-        assert_eq!(text_of(&blocks[1]), "writes outside the workspace");
+        assert_eq!(
+            blocks.len(),
+            1,
+            "approval must merge into the tool block, not stand alone"
+        );
+        let tool = tool_of(&blocks[0]);
+        assert_eq!(
+            tool.approval
+                .as_ref()
+                .map(|approval| approval.reason.as_str()),
+            Some("writes outside the workspace")
+        );
+        assert!(tool.needs_confirmation());
+    }
+
+    #[test]
+    fn needs_confirmation_clears_once_the_call_finishes() {
+        let call_id = ToolCallId("call-1".to_string());
+        let frame = AgentFrame {
+            state: None,
+            items: vec![
+                AgentFrameItem::ToolCallRequested(request("call-1")),
+                AgentFrameItem::ApprovalRequested(ApprovalRequest {
+                    call_id: call_id.clone(),
+                    reason: "writes outside the workspace".to_string(),
+                }),
+                AgentFrameItem::ToolCallFinished(ToolCallResult {
+                    call_id,
+                    output: serde_json::json!({ "content": "" }),
+                }),
+            ],
+        };
+
+        let blocks = transcript_blocks(&frame);
+
+        assert_eq!(blocks.len(), 1);
+        assert!(
+            !tool_of(&blocks[0]).needs_confirmation(),
+            "a finished call no longer needs a decision, even though it was once asked for one"
+        );
+    }
+
+    #[test]
+    fn current_tool_block_picks_up_the_approval_reason() {
+        let call_id = ToolCallId("call-1".to_string());
+        let frame = AgentFrame {
+            state: Some(SessionState::WaitingForApproval),
+            items: vec![
+                AgentFrameItem::ToolCallRequested(request("call-1")),
+                AgentFrameItem::ApprovalRequested(ApprovalRequest {
+                    call_id,
+                    reason: "writes outside the workspace".to_string(),
+                }),
+            ],
+        };
+
+        let tool = current_tool_block(&frame, 0).expect("block at id 0");
+        assert!(tool.needs_confirmation());
+    }
+
+    #[test]
+    fn approval_required_status_is_suppressed_once_the_tool_block_shows_it() {
+        let call_id = ToolCallId("call-1".to_string());
+        let frame = AgentFrame {
+            state: Some(SessionState::WaitingForApproval),
+            items: vec![
+                AgentFrameItem::ToolCallRequested(request("call-1")),
+                AgentFrameItem::ApprovalRequested(ApprovalRequest {
+                    call_id,
+                    reason: "writes outside the workspace".to_string(),
+                }),
+            ],
+        };
+
+        let blocks = transcript_blocks(&frame);
+
+        // Only the merged tool block -- no separate ephemeral "Approval
+        // required" status block once the tool block itself carries it.
+        assert_eq!(blocks.len(), 1);
     }
 }

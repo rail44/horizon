@@ -28,7 +28,7 @@ pub(super) fn block_text_color(tone: TranscriptTone) -> Color {
     match tone {
         TranscriptTone::Status => theme::text_muted(),
         TranscriptTone::Thinking => theme::text_muted(),
-        TranscriptTone::Tool | TranscriptTone::Approval => theme::text_primary(),
+        TranscriptTone::Tool => theme::text_primary(),
         TranscriptTone::Error => theme::danger(),
         _ => theme::text_primary(),
     }
@@ -41,9 +41,22 @@ pub(super) fn block_colors(tone: TranscriptTone) -> (Color, Color) {
         TranscriptTone::Thinking => (theme::surface_panel(), theme::border_subtle()),
         TranscriptTone::Status => (theme::surface_chrome(), theme::border_default()),
         TranscriptTone::Tool => (theme::surface_raised(), theme::border_default()),
-        TranscriptTone::Approval => (theme::approval_surface(), theme::approval_border()),
         TranscriptTone::Error => (theme::surface_raised(), theme::danger()),
         TranscriptTone::Lifecycle => (theme::surface_raised(), theme::border_subtle()),
+    }
+}
+
+/// A `Tool` block's background/border, swapped to the approval theme roles
+/// while it still needs a decision (`ToolBlock::needs_confirmation`,
+/// `docs/agent-output-ui-design.md` decision 8: "ヘッダ/枠を approval ロールで
+/// 強調") -- otherwise the plain `Tool` tone colors. Shared by the header
+/// (`tool_view::tool_header_view`) and the block wrapper (`mod.rs`'s
+/// `transcript_block_view`) so both switch in lockstep.
+pub(super) fn tool_block_colors(confirming: bool) -> (Color, Color) {
+    if confirming {
+        (theme::approval_surface(), theme::approval_border())
+    } else {
+        block_colors(TranscriptTone::Tool)
     }
 }
 

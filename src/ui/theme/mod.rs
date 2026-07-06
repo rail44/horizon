@@ -60,10 +60,9 @@ pub(crate) fn accent() -> Color {
 }
 
 /// The app's one destructive/danger accent — the same red used for the
-/// agent pane's "Deny" approval action (`workspace/view/agent_controls.rs`).
-/// Reused here for destructive command styling (`ui/list_row.rs`) so both
-/// "reject this" and "this ends something" read as the same kind of
-/// warning.
+/// agent pane's "Deny" approval action (`agent/view/approval.rs`). Reused
+/// here for destructive command styling (`ui/list_row.rs`) so both "reject
+/// this" and "this ends something" read as the same kind of warning.
 pub(crate) fn danger() -> Color {
     resolve("danger", DANGER_DEFAULT)
 }
@@ -154,28 +153,30 @@ pub(crate) fn user_message_border() -> Color {
     resolve("user_message_border", USER_MESSAGE_BORDER_DEFAULT)
 }
 
-/// The `Approval`-tone transcript block's background (`agent::view::style::
-/// block_colors`) -- restores the amber tint backlog item 7 flagged as
-/// lost.
+/// A `Tool` transcript block's background while it still needs an
+/// approve/deny decision (`agent::view::style::tool_block_colors`, `docs/
+/// agent-output-ui-design.md` decision 8) -- restores the amber tint
+/// backlog item 7 flagged as lost. Pre-slice-4, this was the now-removed
+/// standalone `Approval`-tone block's background.
 pub(crate) fn approval_surface() -> Color {
     resolve("approval_surface", APPROVAL_SURFACE_DEFAULT)
 }
 
-/// The `Approval`-tone transcript block's border -- paired with
+/// A `Tool` block's border while awaiting approval -- paired with
 /// [`approval_surface`].
 pub(crate) fn approval_border() -> Color {
     resolve("approval_border", APPROVAL_BORDER_DEFAULT)
 }
 
-/// The approval banner's Approve button background
-/// (`workspace::view::agent_controls::agent_approval_banner`) -- its border
-/// stays plain [`accent`], this only roles the fill.
+/// The inline approval control row's Approve button background
+/// (`agent::view::approval::approval_control_row`) -- its border stays
+/// plain [`accent`], this only roles the fill.
 pub(crate) fn approval_confirm_surface() -> Color {
     resolve("approval_confirm_surface", APPROVAL_CONFIRM_SURFACE_DEFAULT)
 }
 
-/// The approval banner's Deny button background -- its border stays plain
-/// [`danger`], this only roles the fill.
+/// The inline approval control row's Deny button background -- its border
+/// stays plain [`danger`], this only roles the fill.
 pub(crate) fn approval_deny_surface() -> Color {
     resolve("approval_deny_surface", APPROVAL_DENY_SURFACE_DEFAULT)
 }

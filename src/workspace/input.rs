@@ -205,26 +205,29 @@ pub(super) fn composing_guard_swallows(
     matches!(key, Key::Character(_))
 }
 
-/// A banner-focused agent pane's response to one keystroke -- see
-/// `workspace::view::agent_controls::AgentPaneFocus` and `pane_view`'s
-/// `KeyDown` handler, which calls `handle_agent_banner_key` before falling
-/// through to `handle_active_pane_key` whenever the pane's approval banner
-/// currently holds pane-internal focus.
+/// An approval-focused agent pane's response to one keystroke -- see
+/// `agent::view::AgentPaneFocus` and `pane_view`'s `KeyDown` handler, which
+/// calls `handle_agent_approval_key` before falling through to
+/// `handle_active_pane_key` whenever the pane's inline approval control row
+/// (`docs/agent-output-ui-design.md` decision 8) currently holds
+/// pane-internal focus. Named for the pre-slice-4 approval banner this
+/// key routing was originally built for; the routing itself is unchanged by
+/// the banner's move inline.
 ///
 /// Mirrors the crush-inspired (charmbracelet's TUI) design: `y` approves,
 /// `n` denies, `Esc` backs out to the message box without answering, and any
 /// other printable character is delivered to the message box instead of
-/// being swallowed -- the banner must never be a modal trap for ordinary
-/// typing. Everything else (Enter, Backspace, arrows, a held modifier
-/// chord, ...) is swallowed outright: while the banner holds focus, keys
-/// must not leak to the terminal/message box except through that one
+/// being swallowed -- the approval row must never be a modal trap for
+/// ordinary typing. Everything else (Enter, Backspace, arrows, a held
+/// modifier chord, ...) is swallowed outright: while the row holds focus,
+/// keys must not leak to the terminal/message box except through that one
 /// soft-redirect path.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum BannerKeyAction {
+pub(crate) enum ApprovalKeyAction {
     Approve,
     Deny,
-    /// Leave the banner without answering: pane-internal focus moves back
-    /// to the message box, the pending call is left untouched.
+    /// Leave the approval row without answering: pane-internal focus moves
+    /// back to the message box, the pending call is left untouched.
     ReleaseFocus,
     /// Deliver `.0` to the message box as if it had been typed there, and
     /// move focus there too.
@@ -233,37 +236,37 @@ pub(crate) enum BannerKeyAction {
     Swallow,
 }
 
-fn banner_key_action(key: &Key, modifiers: Modifiers) -> BannerKeyAction {
+fn approval_key_action(key: &Key, modifiers: Modifiers) -> ApprovalKeyAction {
     if modifiers.control() || modifiers.alt() || modifiers.meta() {
-        return BannerKeyAction::Swallow;
+        return ApprovalKeyAction::Swallow;
     }
 
     match key {
-        Key::Named(NamedKey::Escape) => BannerKeyAction::ReleaseFocus,
-        Key::Named(NamedKey::Space) => BannerKeyAction::Redirect(" ".to_string()),
+        Key::Named(NamedKey::Escape) => ApprovalKeyAction::ReleaseFocus,
+        Key::Named(NamedKey::Space) => ApprovalKeyAction::Redirect(" ".to_string()),
         Key::Character(text) => match text.as_str() {
-            "y" | "Y" => BannerKeyAction::Approve,
-            "n" | "N" => BannerKeyAction::Deny,
-            _ => BannerKeyAction::Redirect(text.to_string()),
+            "y" | "Y" => ApprovalKeyAction::Approve,
+            "n" | "N" => ApprovalKeyAction::Deny,
+            _ => ApprovalKeyAction::Redirect(text.to_string()),
         },
-        _ => BannerKeyAction::Swallow,
+        _ => ApprovalKeyAction::Swallow,
     }
 }
 
-/// `Event::KeyDown` entry point for a banner-focused agent pane. Applies the
-/// same IME composing guard as the message box/terminal
+/// `Event::KeyDown` entry point for an approval-focused agent pane. Applies
+/// the same IME composing guard as the message box/terminal
 /// (`composing_guard_swallows`) before considering the key at all, so a
 /// composing IME's own keystrokes never reach `y`/`n`/`Esc` handling
 /// half-composed.
-pub(crate) fn handle_agent_banner_key(
+pub(crate) fn handle_agent_approval_key(
     key_event: &KeyEvent,
     ime_composing: RwSignal<bool>,
     ime_preedit: RwSignal<Option<String>>,
-) -> BannerKeyAction {
+) -> ApprovalKeyAction {
     if composing_guard_swallows(&key_event.key.logical_key, ime_composing, ime_preedit) {
-        return BannerKeyAction::Swallow;
+        return ApprovalKeyAction::Swallow;
     }
-    banner_key_action(&key_event.key.logical_key, key_event.modifiers)
+    approval_key_action(&key_event.key.logical_key, key_event.modifiers)
 }
 
 pub(crate) fn handle_active_pane_key(
@@ -432,80 +435,80 @@ mod tests {
         ));
     }
 
-    // --- approval banner key routing (`banner_key_action`) ----------------
+    // --- approval key routing (`approval_key_action`) ---------------------
 
     #[test]
-    fn banner_key_y_approves_case_insensitively() {
+    fn approval_key_y_approves_case_insensitively() {
         assert_eq!(
-            banner_key_action(&Key::Character("y".into()), Modifiers::default()),
-            BannerKeyAction::Approve
+            approval_key_action(&Key::Character("y".into()), Modifiers::default()),
+            ApprovalKeyAction::Approve
         );
         assert_eq!(
-            banner_key_action(&Key::Character("Y".into()), Modifiers::SHIFT),
-            BannerKeyAction::Approve
+            approval_key_action(&Key::Character("Y".into()), Modifiers::SHIFT),
+            ApprovalKeyAction::Approve
         );
     }
 
     #[test]
-    fn banner_key_n_denies_case_insensitively() {
+    fn approval_key_n_denies_case_insensitively() {
         assert_eq!(
-            banner_key_action(&Key::Character("n".into()), Modifiers::default()),
-            BannerKeyAction::Deny
+            approval_key_action(&Key::Character("n".into()), Modifiers::default()),
+            ApprovalKeyAction::Deny
         );
         assert_eq!(
-            banner_key_action(&Key::Character("N".into()), Modifiers::SHIFT),
-            BannerKeyAction::Deny
-        );
-    }
-
-    #[test]
-    fn banner_key_escape_releases_focus_without_answering() {
-        assert_eq!(
-            banner_key_action(&Key::Named(NamedKey::Escape), Modifiers::default()),
-            BannerKeyAction::ReleaseFocus
+            approval_key_action(&Key::Character("N".into()), Modifiers::SHIFT),
+            ApprovalKeyAction::Deny
         );
     }
 
     #[test]
-    fn banner_key_other_printable_chars_redirect_to_the_message_box() {
+    fn approval_key_escape_releases_focus_without_answering() {
         assert_eq!(
-            banner_key_action(&Key::Character("h".into()), Modifiers::default()),
-            BannerKeyAction::Redirect("h".to_string())
-        );
-        assert_eq!(
-            banner_key_action(&Key::Named(NamedKey::Space), Modifiers::default()),
-            BannerKeyAction::Redirect(" ".to_string())
+            approval_key_action(&Key::Named(NamedKey::Escape), Modifiers::default()),
+            ApprovalKeyAction::ReleaseFocus
         );
     }
 
     #[test]
-    fn banner_key_swallows_keys_bound_to_nothing() {
+    fn approval_key_other_printable_chars_redirect_to_the_message_box() {
         assert_eq!(
-            banner_key_action(&Key::Named(NamedKey::Enter), Modifiers::default()),
-            BannerKeyAction::Swallow
+            approval_key_action(&Key::Character("h".into()), Modifiers::default()),
+            ApprovalKeyAction::Redirect("h".to_string())
         );
         assert_eq!(
-            banner_key_action(&Key::Named(NamedKey::Backspace), Modifiers::default()),
-            BannerKeyAction::Swallow
-        );
-        assert_eq!(
-            banner_key_action(&Key::Named(NamedKey::ArrowLeft), Modifiers::default()),
-            BannerKeyAction::Swallow
+            approval_key_action(&Key::Named(NamedKey::Space), Modifiers::default()),
+            ApprovalKeyAction::Redirect(" ".to_string())
         );
     }
 
     #[test]
-    fn banner_key_swallows_modifier_held_chords_instead_of_redirecting() {
+    fn approval_key_swallows_keys_bound_to_nothing() {
+        assert_eq!(
+            approval_key_action(&Key::Named(NamedKey::Enter), Modifiers::default()),
+            ApprovalKeyAction::Swallow
+        );
+        assert_eq!(
+            approval_key_action(&Key::Named(NamedKey::Backspace), Modifiers::default()),
+            ApprovalKeyAction::Swallow
+        );
+        assert_eq!(
+            approval_key_action(&Key::Named(NamedKey::ArrowLeft), Modifiers::default()),
+            ApprovalKeyAction::Swallow
+        );
+    }
+
+    #[test]
+    fn approval_key_swallows_modifier_held_chords_instead_of_redirecting() {
         // A held Ctrl/Alt/Meta chord isn't ordinary typing -- and per the
-        // banner's "must not leak to the terminal/message box" rule it still
+        // row's "must not leak to the terminal/message box" rule it still
         // must not fall through, so it's swallowed rather than redirected.
         assert_eq!(
-            banner_key_action(&Key::Character("y".into()), Modifiers::CONTROL),
-            BannerKeyAction::Swallow
+            approval_key_action(&Key::Character("y".into()), Modifiers::CONTROL),
+            ApprovalKeyAction::Swallow
         );
         assert_eq!(
-            banner_key_action(&Key::Character("h".into()), Modifiers::ALT),
-            BannerKeyAction::Swallow
+            approval_key_action(&Key::Character("h".into()), Modifiers::ALT),
+            ApprovalKeyAction::Swallow
         );
     }
 }

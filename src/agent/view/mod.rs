@@ -9,6 +9,7 @@ use floem::peniko::kurbo::Point;
 use floem::prelude::*;
 use floem::reactive::{create_effect, create_memo};
 
+mod approval;
 mod diff;
 mod follow_scroll;
 mod labels;
@@ -18,14 +19,18 @@ mod tool_header;
 mod tool_view;
 mod transcript;
 
+pub(crate) use approval::{
+    awaiting_call, gate_pending_approval, next_agent_pane_focus, next_answered_call,
+    AgentPaneFocus, ApprovalController,
+};
 use follow_scroll::{classify_scroll, next_follow_state, FollowState};
 use labels::{block_label, shows_label};
 use markdown::{markdown_lines, MarkdownLine, MarkdownLineKind};
 use style::{block_colors, block_max_width, block_text_color};
 use transcript::{
-    compute_transcript_window, current_block_text, is_thinking_streaming, latest_user_block_id,
-    show_turn_end_rule, starts_new_turn, BlockKind, TranscriptBlock, TranscriptTone,
-    TranscriptWindow,
+    compute_transcript_window, current_block_text, current_tool_block, is_thinking_streaming,
+    latest_user_block_id, show_turn_end_rule, starts_new_turn, BlockKind, TranscriptBlock,
+    TranscriptTone, TranscriptWindow,
 };
 
 /// How much taller the transcript's measured content height must get,
@@ -37,6 +42,7 @@ const CONTENT_GROWTH_EPSILON: f64 = 0.5;
 pub(crate) fn agent_frame_view(
     frame: impl Fn() -> AgentFrame + Copy + 'static,
     visible: impl Fn() -> bool + Copy + 'static,
+    approval: ApprovalController,
 ) -> impl IntoView {
     let follow = RwSignal::new(FollowState::Following);
     let viewport = RwSignal::new(None::<floem::peniko::kurbo::Rect>);
@@ -72,6 +78,43 @@ pub(crate) fn agent_frame_view(
     let window = create_memo(move |previous: Option<&TranscriptWindow>| {
         compute_transcript_window(&frame(), previous)
     });
+
+    // Forced scroll-in (`docs/agent-output-ui-design.md` decision 8): the
+    // instant a new tool call becomes the oldest pending approval, jump the
+    // viewport to its block regardless of `follow`'s current state --
+    // mirrors the "jump to latest user message" pill's own `.scroll_to_view`
+    // use just below, but fired automatically rather than by a click.
+    // Deliberately doesn't touch `follow`/`detached_since_block` itself: the
+    // next `on_scroll` this jump triggers classifies the resulting position
+    // through the ordinary slice-3 state machine, same as any other scroll.
+    let approval_for_scroll = approval.clone();
+    let block_view_ids_for_scroll = block_view_ids.clone();
+    create_effect(
+        move |previous: Option<Option<crate::agent::contract::ToolCallId>>| {
+            let pending = approval_for_scroll.pending_call_id();
+            if let Some(previous) = previous {
+                if previous != pending {
+                    if let Some(call_id) = &pending {
+                        let target_block = window.with(|window| {
+                            window.blocks.iter().find_map(|block| match &block.kind {
+                                BlockKind::Tool(tool) if tool.call_id.as_ref() == Some(call_id) => {
+                                    Some(block.id)
+                                }
+                                _ => None,
+                            })
+                        });
+                        if let Some(view_id) = target_block.and_then(|block_id| {
+                            block_view_ids_for_scroll.borrow().get(&block_id).copied()
+                        }) {
+                            jump_to_view.set(Some(view_id));
+                        }
+                    }
+                }
+            }
+            pending
+        },
+    );
+
     let block_ids_for_blocks = block_view_ids.clone();
     let content = v_stack((
         label(move || omitted_summary(window.with(|window| window.omitted))).style(move |s| {
@@ -84,7 +127,9 @@ pub(crate) fn agent_frame_view(
         dyn_stack(
             move || window.with(|window| window.blocks.clone()),
             move |block| (block.id, block.tone),
-            move |block| transcript_block_view(block, frame, block_ids_for_blocks.clone()),
+            move |block| {
+                transcript_block_view(block, frame, block_ids_for_blocks.clone(), approval.clone())
+            },
         )
         // Dense within a turn (decision 6): whitespace belongs at turn
         // boundaries only, which `turn_boundary_rule` supplies per-block via
@@ -256,11 +301,18 @@ fn transcript_block_view(
     block: TranscriptBlock,
     frame: impl Fn() -> AgentFrame + Copy + 'static,
     block_view_ids: Rc<RefCell<HashMap<usize, floem::ViewId>>>,
+    approval: ApprovalController,
 ) -> impl IntoView {
     let tone = block.tone;
     let block_id = block.id;
     let expanded = RwSignal::new(!style::is_collapsible(tone));
     let kind = block.kind;
+    // Captured before `kind` moves into `transcript_body_view` below --
+    // whether this is a `Tool` block never changes over its lifetime (see
+    // `transcript::transcript_blocks`'s doc comment), so a plain `bool` is
+    // enough; only the block's *approval* state needs a live re-check
+    // (`style::tool_block_colors`' `confirming` argument below).
+    let is_tool = matches!(kind, BlockKind::Tool(_));
 
     // Thinking's auto-expand-while-streaming (decision 5): `manual_override`
     // is `None` until the user first clicks the header, after which it wins
@@ -295,18 +347,27 @@ fn transcript_block_view(
                     manual_override,
                     frame,
                 ),
-                transcript_body_view(block_id, tone, kind, expanded, frame),
+                transcript_body_view(block_id, tone, kind, expanded, frame, approval),
             ))
             .style(move |s| {
                 let s = s.flex_col().min_width(0.0).max_width(block_max_width(tone));
                 // Assistant prose stays chromeless (research heuristic: user
                 // boxed, assistant bare text) -- every other tone keeps its
                 // surface/border (`docs/agent-output-ui-design.md` decision
-                // 6).
+                // 6). A `Tool` block awaiting approval swaps in the approval
+                // theme roles instead (decision 8), live-checked on every
+                // `frame` change so the tint clears the instant it resolves.
                 let s = if tone == TranscriptTone::Assistant {
                     s
                 } else {
-                    let (background, border) = block_colors(tone);
+                    let confirming = is_tool
+                        && current_tool_block(&frame(), block_id)
+                            .is_some_and(|tool| tool.needs_confirmation());
+                    let (background, border) = if confirming {
+                        style::tool_block_colors(true)
+                    } else {
+                        block_colors(tone)
+                    };
                     s.background(background).border(1.0).border_color(border)
                 };
 
@@ -416,10 +477,11 @@ fn transcript_body_view(
     kind: BlockKind,
     expanded: RwSignal<bool>,
     frame: impl Fn() -> AgentFrame + Copy + 'static,
+    approval: ApprovalController,
 ) -> impl IntoView {
     match kind {
         BlockKind::Tool(tool) => {
-            tool_view::tool_body_view(block_id, tool, expanded, frame).into_any()
+            tool_view::tool_body_view(block_id, tool, expanded, frame, approval).into_any()
         }
         BlockKind::Text {
             label: text_label, ..

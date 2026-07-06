@@ -10,8 +10,8 @@ pub(crate) mod view;
 
 pub(crate) use input::{
     active_agent, active_agent_draft, active_terminal_sender, active_text_input_pane,
-    handle_active_pane_key, handle_active_pane_key_release, handle_agent_banner_key,
-    request_active_pane_focus, trace_ime, visible_terminal_sender, AgentDrafts, BannerKeyAction,
+    handle_active_pane_key, handle_active_pane_key_release, handle_agent_approval_key,
+    request_active_pane_focus, trace_ime, visible_terminal_sender, AgentDrafts, ApprovalKeyAction,
     PaneFocusRequests, MAX_VISIBLE_PANES,
 };
 pub(crate) use mode::Direction;

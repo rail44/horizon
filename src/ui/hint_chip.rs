@@ -7,12 +7,12 @@ use crate::ui::theme;
 /// beside its bound action in muted text (e.g. `approve`).
 ///
 /// This is the crush-inspired (charmbracelet's TUI) principle Horizon's
-/// tool-approval banner follows: every interaction request should visibly
-/// explain which key does what, rather than relying on the user to already
-/// know. Domain-neutral and reusable outside the approval banner
-/// (`workspace::view::agent_controls::agent_approval_banner`, its first
-/// caller) -- any future interactive prompt (delegation-era) that wants to
-/// spell out its own keybindings inline can reuse this.
+/// tool-approval control row follows: every interaction request should
+/// visibly explain which key does what, rather than relying on the user to
+/// already know. Domain-neutral and reusable outside the approval row
+/// (`agent::view::approval::approval_control_row`, its first caller) -- any
+/// future interactive prompt (delegation-era) that wants to spell out its
+/// own keybindings inline can reuse this.
 pub(crate) fn key_hint(key: &'static str, action: &'static str) -> impl IntoView {
     h_stack((
         label(move || format!("[{key}]")).style(|s| {

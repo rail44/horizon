@@ -11,8 +11,8 @@ use crate::terminal::TerminalFrame;
 use crate::ui::theme;
 use crate::workspace::{
     agent_escape_requests_workspace_mode, handle_active_pane_key, handle_active_pane_key_release,
-    handle_agent_banner_key, handle_workspace_mode_key, visible_terminal_sender, AgentDrafts,
-    BannerKeyAction, ModeAction, PaneKind, Workspace,
+    handle_agent_approval_key, handle_workspace_mode_key, visible_terminal_sender, AgentDrafts,
+    ApprovalKeyAction, ModeAction, PaneKind, Workspace,
 };
 use floem::prelude::*;
 use floem::reactive::create_effect;
@@ -22,19 +22,20 @@ use floem::{
     peniko::kurbo::{Point, Size},
 };
 
-use super::agent_controls::{
-    agent_approval_banner, agent_composer, agent_pane_status_label, awaiting_call,
-    describe_pending_call, gate_pending_approval, next_agent_pane_focus, next_answered_call,
-    AgentPaneFocus,
-};
+use super::agent_controls::{agent_composer, agent_pane_status_label};
 use super::chrome::{pane_header, workspace_mode_scrim};
 use super::terminal_output::terminal_output;
 use crate::agent::view as agent_view;
+use crate::agent::view::{
+    awaiting_call, gate_pending_approval, next_agent_pane_focus, next_answered_call,
+    AgentPaneFocus, ApprovalController,
+};
 
 /// Approves `call_id` on the agent session currently occupying visible pane
-/// `index`, if any -- shared by the approval banner's `y`/click paths (see
-/// `pane_view`'s `KeyDown` handler and its `agent_approval_banner` call) so
-/// both dispatch through the exact same `CommandInvocation`.
+/// `index`, if any -- shared by the inline approval control row's `y`/click
+/// path (`agent::view::approval::approval_control_row`, wired through the
+/// `ApprovalController` this pane builds below) and `pane_view`'s `KeyDown`
+/// handler, so both dispatch through the exact same `CommandInvocation`.
 fn approve_pending(
     workspace: RwSignal<Workspace>,
     command_state: CommandActionState,
@@ -74,15 +75,17 @@ fn deny_pending(
 }
 
 /// Optimistically answers `call_id` locally (the fix for the 2026-07
-/// repeated-approval OOM incident -- see `agent_controls::agent_approval_
-/// banner`'s doc comment) before actually dispatching the decision: marks
-/// it answered so the banner can't be re-triggered for the same call
-/// regardless of round-trip latency, releases pane-internal keyboard focus
-/// back to the message box, then runs `dispatch`. Shared by the banner's
-/// button clicks and the `y`/`n` key handler below so both go through the
-/// exact same sequencing. Callers must gate on `awaiting_call` themselves
-/// before calling this -- it doesn't re-check, it just performs the "lock
-/// it in" side effects unconditionally.
+/// repeated-approval OOM incident -- see `agent::view::approval::
+/// ApprovalController`'s doc comment) before actually dispatching the
+/// decision: marks it answered so the approval row can't be re-triggered
+/// for the same call regardless of round-trip latency, releases
+/// pane-internal keyboard focus back to the message box, then runs
+/// `dispatch`. Shared by the approval row's button clicks (wrapped into the
+/// `ApprovalController` passed to `agent_view::agent_frame_view` below) and
+/// the `y`/`n` key handler further down so both go through the exact same
+/// sequencing. Callers must gate on `awaiting_call` themselves before
+/// calling this -- it doesn't re-check, it just performs the "lock it in"
+/// side effects unconditionally.
 fn answer_pending(
     answered_call: RwSignal<Option<ToolCallId>>,
     agent_pane_focus: RwSignal<AgentPaneFocus>,
@@ -200,33 +203,20 @@ pub(super) fn pane_view(
             })
             .saturating_sub(1)
     };
-    // What's being approved (`docs/agent-tools-design.md`'s "Show what is
-    // being approved"): the pending call's own request, rendered by
-    // `describe_pending_call` (the command line for `bash`, the target path
-    // for `fs.write`/`fs.edit`) -- shown next to the banner's key hints.
-    let pending_summary = move || {
-        let session_id = workspace.with(|ws| ws.visible_agent_session_id(index))?;
-        let call_id = pending_approval()?;
-        frames.with(|frames| {
-            frames
-                .agent_frame(session_id)
-                .tool_call_request(&call_id)
-                .map(describe_pending_call)
-        })
-    };
     // Which of the pane's two key-focus targets is live right now -- the
-    // message-box composer, or the approval banner (see `AgentPaneFocus`).
-    // Driven entirely by `pending_approval` transitions (`next_agent_pane_
-    // focus`): the banner grabs focus the instant a new call becomes the
-    // oldest pending one and releases it the instant none remain, however
-    // the resolution happened (`y`/`n`, a button click, or the palette all
-    // converge on the same `pending_approval` signal). `Esc` sets this
-    // directly (see the `KeyDown` handler below) without going through the
-    // pending-approval signal at all, so it survives an unrelated refresh.
+    // message-box composer, or the inline approval control row (see
+    // `AgentPaneFocus`). Driven entirely by `pending_approval` transitions
+    // (`next_agent_pane_focus`): the approval row grabs focus the instant a
+    // new call becomes the oldest pending one and releases it the instant
+    // none remain, however the resolution happened (`y`/`n`, a button
+    // click, or the palette all converge on the same `pending_approval`
+    // signal). `Esc` sets this directly (see the `KeyDown` handler below)
+    // without going through the pending-approval signal at all, so it
+    // survives an unrelated refresh.
     let agent_pane_focus = RwSignal::new(AgentPaneFocus::default());
     // The pane's locally-recorded "this call was already answered" marker
-    // (the optimistic banner-state fix -- see `agent_controls::
-    // agent_approval_banner`'s doc comment): set the instant a keypress or
+    // (the optimistic-state fix -- see `agent::view::approval::
+    // ApprovalController`'s doc comment): set the instant a keypress or
     // click answers a call (`answer_pending`), cleared here the instant the
     // resolution round-trips back (`next_answered_call`, driven by the same
     // `pending_approval` transitions the focus effect above reacts to, so
@@ -293,6 +283,32 @@ pub(super) fn pane_view(
 
     let cancel_visible = move || is_agent() && turn_in_flight();
 
+    // Bundles this pane's approval plumbing for the inline control row
+    // rendered inside the tool block that requested it (`docs/agent-output-
+    // ui-design.md` decision 8) -- replaces the pre-slice-4
+    // `agent_approval_banner` call below `agent_view::agent_frame_view`.
+    let approval_controller = ApprovalController::new(
+        pending_approval,
+        pending_approval_extra,
+        move || answered_call.get(),
+        {
+            let command_state = command_state.clone();
+            move |call_id| {
+                answer_pending(answered_call, agent_pane_focus, call_id, |call_id| {
+                    approve_pending(workspace, command_state.clone(), index, call_id)
+                });
+            }
+        },
+        {
+            let command_state = command_state.clone();
+            move |call_id| {
+                answer_pending(answered_call, agent_pane_focus, call_id, |call_id| {
+                    deny_pending(workspace, command_state.clone(), index, call_id)
+                });
+            }
+        },
+    );
+
     v_stack((
         pane_header(
             title,
@@ -338,30 +354,7 @@ pub(super) fn pane_view(
             ime_cursor_area,
             is_terminal,
         ),
-        agent_view::agent_frame_view(agent_frame, is_agent),
-        agent_approval_banner(
-            is_agent,
-            pending_approval,
-            move || answered_call.get(),
-            pending_summary,
-            pending_approval_extra,
-            {
-                let command_state = command_state.clone();
-                move |call_id| {
-                    answer_pending(answered_call, agent_pane_focus, call_id, |call_id| {
-                        approve_pending(workspace, command_state.clone(), index, call_id)
-                    });
-                }
-            },
-            {
-                let command_state = command_state.clone();
-                move |call_id| {
-                    answer_pending(answered_call, agent_pane_focus, call_id, |call_id| {
-                        deny_pending(workspace, command_state.clone(), index, call_id)
-                    });
-                }
-            },
-        ),
+        agent_view::agent_frame_view(agent_frame, is_agent, approval_controller),
         agent_composer(
             is_agent,
             active,
@@ -433,12 +426,13 @@ pub(super) fn pane_view(
 
             // Workspace mode's entry chord (default `ctrl+'`,
             // `docs/workspace-mode-design.md`) always wins, regardless of
-            // pane kind or any pane-internal focus (e.g. the approval
-            // banner below, which would otherwise swallow a held-modifier
-            // chord as `BannerKeyAction::Swallow`) -- it's the one
-            // irreducible escape hatch back to the mode and must never be
-            // capturable by anything in-pane. Re-pressing it while already
-            // in the mode is a no-op (`Workspace::enter_workspace_mode`).
+            // pane kind or any pane-internal focus (e.g. the inline approval
+            // control row below, which would otherwise swallow a
+            // held-modifier chord as `ApprovalKeyAction::Swallow`) -- it's
+            // the one irreducible escape hatch back to the mode and must
+            // never be capturable by anything in-pane. Re-pressing it while
+            // already in the mode is a no-op
+            // (`Workspace::enter_workspace_mode`).
             if is_workspace_mode_enter_key(key_event) {
                 if !workspace.with_untracked(|ws| ws.is_workspace_mode_active()) {
                     execute_command(CommandInvocation::EnterWorkspaceMode, command_state.clone());
@@ -449,7 +443,7 @@ pub(super) fn pane_view(
             // While workspace mode is active, every key belongs to it --
             // recognized ones (`hjkl`/Enter/Esc/`:`) dispatch below,
             // everything else is silently swallowed rather than reaching
-            // the banner/terminal/agent-draft handling further down.
+            // the approval-row/terminal/agent-draft handling further down.
             if workspace.with_untracked(|ws| ws.is_workspace_mode_active()) {
                 if let Some(action) =
                     handle_workspace_mode_key(key_event, ime_composing, ime_preedit)
@@ -479,16 +473,16 @@ pub(super) fn pane_view(
             }
         }
 
-        // While the approval banner holds pane-internal focus, it answers
-        // for every key here (even ones bound to nothing -- see
-        // `BannerKeyAction::Swallow`) except the one soft-redirect path, so
-        // this must run before `handle_active_pane_key` ever sees the key
-        // (targeting discipline: only this pane's own session/call_id are
-        // ever touched, via `approve_pending`/`deny_pending` above).
+        // While the inline approval control row holds pane-internal focus,
+        // it answers for every key here (even ones bound to nothing -- see
+        // `ApprovalKeyAction::Swallow`) except the one soft-redirect path,
+        // so this must run before `handle_active_pane_key` ever sees the
+        // key (targeting discipline: only this pane's own session/call_id
+        // are ever touched, via `approve_pending`/`deny_pending` above).
         if let Event::KeyDown(key_event) = event {
-            if is_agent() && agent_pane_focus.get_untracked() == AgentPaneFocus::Banner {
-                match handle_agent_banner_key(key_event, ime_composing, ime_preedit) {
-                    BannerKeyAction::Approve => {
+            if is_agent() && agent_pane_focus.get_untracked() == AgentPaneFocus::Approval {
+                match handle_agent_approval_key(key_event, ime_composing, ime_preedit) {
+                    ApprovalKeyAction::Approve => {
                         if let Some(call_id) =
                             awaiting_call(pending_approval(), answered_call.get_untracked())
                         {
@@ -497,7 +491,7 @@ pub(super) fn pane_view(
                             });
                         }
                     }
-                    BannerKeyAction::Deny => {
+                    ApprovalKeyAction::Deny => {
                         if let Some(call_id) =
                             awaiting_call(pending_approval(), answered_call.get_untracked())
                         {
@@ -506,14 +500,14 @@ pub(super) fn pane_view(
                             });
                         }
                     }
-                    BannerKeyAction::ReleaseFocus => {
+                    ApprovalKeyAction::ReleaseFocus => {
                         agent_pane_focus.set(AgentPaneFocus::MessageBox);
                     }
-                    BannerKeyAction::Redirect(text) => {
+                    ApprovalKeyAction::Redirect(text) => {
                         agent_pane_focus.set(AgentPaneFocus::MessageBox);
                         agent_draft.update(|draft| draft.push_str(&text));
                     }
-                    BannerKeyAction::Swallow => {}
+                    ApprovalKeyAction::Swallow => {}
                 }
                 return EventPropagation::Stop;
             }
@@ -521,9 +515,9 @@ pub(super) fn pane_view(
 
         // An agent pane's message box (unlike a terminal) has no
         // protocol-level claim on a bare `Esc`, so it doubles as a second
-        // workspace-mode entry path -- but only once the banner above has
-        // had first refusal, so the banner's own `Esc`-releases-focus
-        // behavior isn't shadowed while it holds pane-internal focus. See
+        // workspace-mode entry path -- but only once the approval row above
+        // has had first refusal, so its own `Esc`-releases-focus behavior
+        // isn't shadowed while it holds pane-internal focus. See
         // `docs/workspace-mode-design.md`'s per-kind asymmetry.
         if let Event::KeyDown(key_event) = event {
             if is_agent()

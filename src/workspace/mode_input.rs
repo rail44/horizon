@@ -9,8 +9,8 @@
 //! reachable yet -- it exists as the seam a later `"2j"`-style count would
 //! use, once a real key buffer sits above this function.
 //!
-//! Layering mirrors the pre-existing approval-banner precedent
-//! (`banner_key_action`/`handle_agent_banner_key` in `workspace::input`):
+//! Layering mirrors the pre-existing approval-key-routing precedent
+//! (`approval_key_action`/`handle_agent_approval_key` in `workspace::input`):
 //! this module only classifies -- it never calls `execute_command` itself.
 //! The pane view (`workspace::view::pane`) and the app-level key fallback
 //! (`app::input::AppInput::handle_key_down`) each match on the returned

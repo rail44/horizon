@@ -22,6 +22,7 @@ use crate::agent::frame::AgentFrame;
 use crate::ui::fonts::font_family;
 use crate::ui::theme;
 
+use super::approval::{self, ApprovalController};
 use super::diff::{self, DiffLineKind};
 use super::style;
 use super::tool_header;
@@ -33,6 +34,13 @@ use super::transcript::{current_tool_block, is_error_output, ToolBlock, ToolStat
 /// hidden is always surfaced as a number, never silently dropped (`docs/
 /// research/agent-ui.md`'s "隠した量は必ず数値で可視化する").
 const BODY_LINE_CAP: usize = 40;
+
+/// Caps the preview's height while the block still needs a decision
+/// (`docs/agent-output-ui-design.md` decision 8: "プレビューは高さ制限
+/// (スクロール可能領域)し、承認コントロール行は常に見える") -- a long diff or
+/// command output scrolls inside this instead of pushing the approve/deny
+/// row off screen.
+const BODY_PREVIEW_MAX_HEIGHT_WHILE_CONFIRMING: f64 = 320.0;
 
 pub(super) fn tool_header_view(
     block_id: usize,
@@ -52,8 +60,21 @@ pub(super) fn tool_header_view(
     })
     .style(move |s| {
         let tool = current_tool_block(&frame(), block_id).unwrap_or_else(|| color_initial.clone());
-        style::header_row_style(s, super::transcript::TranscriptTone::Tool, expanded.get())
-            .color(style::tool_status_color(&tool.status))
+        let confirming = tool.needs_confirmation();
+        // Forced open (`docs/agent-output-ui-design.md` decision 8:
+        // "is_open |= needs_confirmation") while a decision is pending --
+        // the underlying `expanded` signal keeps whatever the user last set
+        // it to, so a manual collapse click still registers and the block
+        // returns to that choice once the call resolves.
+        let is_open = expanded.get() || confirming;
+        let s = style::header_row_style(s, super::transcript::TranscriptTone::Tool, is_open)
+            .color(style::tool_status_color(&tool.status));
+        if confirming {
+            let (background, border) = style::tool_block_colors(true);
+            s.background(background).border_color(border)
+        } else {
+            s
+        }
     })
 }
 
@@ -62,24 +83,46 @@ pub(super) fn tool_body_view(
     initial: ToolBlock,
     expanded: RwSignal<bool>,
     frame: impl Fn() -> AgentFrame + Copy + 'static,
+    approval_controller: ApprovalController,
 ) -> impl IntoView {
-    dyn_stack(
-        move || {
-            if !expanded.get() {
-                return Vec::new();
-            }
-            let tool = current_tool_block(&frame(), block_id).unwrap_or_else(|| initial.clone());
-            tool_body_lines(&tool)
-        },
-        move |line| (line.index, line.kind, line.text.clone()),
-        tool_body_line_view,
+    let lines_initial = initial.clone();
+    let visible_initial = initial;
+
+    let preview = scroll(
+        dyn_stack(
+            move || {
+                let tool =
+                    current_tool_block(&frame(), block_id).unwrap_or_else(|| lines_initial.clone());
+                if !(expanded.get() || tool.needs_confirmation()) {
+                    return Vec::new();
+                }
+                tool_body_lines(&tool)
+            },
+            move |line| (line.index, line.kind, line.text.clone()),
+            tool_body_line_view,
+        )
+        .style(|s| s.width_full().flex_col().padding_horiz(14).padding_vert(10)),
     )
     .style(move |s| {
-        if !expanded.get() {
+        let tool =
+            current_tool_block(&frame(), block_id).unwrap_or_else(|| visible_initial.clone());
+        let confirming = tool.needs_confirmation();
+        if !(expanded.get() || confirming) {
             return s.hide();
         }
-        s.width_full().flex_col().padding_horiz(14).padding_vert(10)
-    })
+        let s = s.width_full();
+        if confirming {
+            s.max_height(BODY_PREVIEW_MAX_HEIGHT_WHILE_CONFIRMING)
+        } else {
+            s
+        }
+    });
+
+    v_stack((
+        preview,
+        approval::approval_control_row(block_id, frame, approval_controller),
+    ))
+    .style(|s| s.width_full().flex_col())
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
