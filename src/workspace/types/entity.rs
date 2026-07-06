@@ -10,6 +10,17 @@ pub(crate) struct Workspace {
     pub(in crate::workspace) active_tab: TabId,
     pub(in crate::workspace) next_terminal_display_number: usize,
     pub(in crate::workspace) next_agent_display_number: usize,
+    /// Workspace mode's cursor (`docs/workspace-mode-design.md`): `None`
+    /// outside the mode, where the cursor is simply defined to be wherever
+    /// focus is (see `Workspace::cursor_visible_index`) so the two can
+    /// never drift apart by construction. `Some(visible_index)` while the
+    /// mode is active -- a visible-pane index within the active tab, the
+    /// same targeting convention `close_visible_pane`/`activate_visible_
+    /// pane` already use (see `app::command_actions::CommandInvocation`'s
+    /// doc comment for why visible indices, not stable `PaneId`s, are this
+    /// codebase's convention at this layer). See `workspace::mode` for the
+    /// state transitions.
+    pub(in crate::workspace) workspace_mode_cursor: Option<usize>,
 }
 
 #[derive(Clone, Debug)]

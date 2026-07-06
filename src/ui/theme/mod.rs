@@ -58,6 +58,17 @@ pub(crate) fn border_subtle() -> Color {
     resolve("border_subtle", Color::from_rgb8(42, 46, 55))
 }
 
+/// Workspace mode's cursor-frame border color
+/// (`workspace::view::pane`/`docs/workspace-mode-design.md`) — deliberately
+/// distinct from `accent()` (the focus border) so the two remain
+/// simultaneously legible when the cursor has moved away from focus.
+/// Defaults to the same amber already used for `ui::theme::ansi::yellow`,
+/// reusing a hue already present in the app's palette rather than
+/// introducing a new one.
+pub(crate) fn cursor_accent() -> Color {
+    resolve("cursor_accent", Color::from_rgb8(229, 192, 123))
+}
+
 // --- terminal roles ------------------------------------------------------
 //
 // The terminal is not a separate palette: its default foreground,
@@ -121,6 +132,7 @@ const THEME_NAMES: &[&str] = &[
     "surface_selected",
     "border_default",
     "border_subtle",
+    "cursor_accent",
     "terminal_foreground",
     "terminal_background",
     "terminal_cursor",
@@ -246,6 +258,26 @@ mod tests {
         assert_eq!(
             overrides.get("accent"),
             Some(&Color::from_rgb8(255, 0, 255))
+        );
+    }
+
+    #[test]
+    fn build_overrides_accepts_cursor_accent_override_name() {
+        let mut entries = HashMap::new();
+        entries.insert("cursor_accent".to_string(), "#ff00ff".to_string());
+
+        let overrides = build_overrides(&entries);
+
+        assert_eq!(overrides.len(), 1);
+        assert!(overrides.contains_key("cursor_accent"));
+    }
+
+    #[test]
+    fn cursor_accent_defaults_to_a_color_distinct_from_the_focus_accent() {
+        assert_ne!(
+            cursor_accent(),
+            accent(),
+            "the cursor frame must be visually distinct from the focus border"
         );
     }
 

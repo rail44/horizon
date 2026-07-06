@@ -175,6 +175,17 @@ pub(crate) fn is_palette_open_key(event: &KeyEvent) -> bool {
     Keymap::global().is_palette_open(event)
 }
 
+/// Whether `event` matches the chord that enters workspace mode
+/// (`docs/workspace-mode-design.md`) — the `[keybindings]` entry for the
+/// reserved `"workspace-mode"` pseudo-command (see
+/// [`Keymap::from_entries`]), falling back to `super+esc` when unset. An
+/// agent pane's message box also accepts a bare `Esc` as a second entry
+/// path regardless of this chord — see
+/// `workspace::agent_escape_requests_workspace_mode`.
+pub(crate) fn is_workspace_mode_enter_key(event: &KeyEvent) -> bool {
+    Keymap::global().is_workspace_mode_enter(event)
+}
+
 pub(crate) fn palette_accepts_text_input(modifiers: Modifiers) -> bool {
     !modifiers.control() && !modifiers.alt() && !modifiers.meta()
 }
@@ -297,6 +308,17 @@ const OPEN_PALETTE_PSEUDO_COMMAND: &str = "open-palette";
 /// Built-in default chord for [`OPEN_PALETTE_PSEUDO_COMMAND`] — unchanged
 /// from the hardcoded `Ctrl+P` this replaces.
 const DEFAULT_PALETTE_CHORD: &str = "ctrl+p";
+
+/// The reserved `[keybindings]` value that overrides the workspace-mode
+/// entry chord — mirrors [`OPEN_PALETTE_PSEUDO_COMMAND`] exactly (not a
+/// real `CommandId`, resolved separately from `command_id_from_str`). See
+/// [`Keymap::from_entries`].
+const WORKSPACE_MODE_PSEUDO_COMMAND: &str = "workspace-mode";
+/// Built-in default chord for [`WORKSPACE_MODE_PSEUDO_COMMAND`] —
+/// `docs/workspace-mode-design.md`'s tentative pick: TUIs historically
+/// never bind Super at all, so it is (almost) never claimed by an in-pane
+/// app.
+const DEFAULT_WORKSPACE_MODE_CHORD: &str = "super+esc";
 
 fn command_id_from_str(id: &str) -> Option<CommandId> {
     match id {
@@ -492,6 +514,7 @@ fn parse_chord(spec: &str) -> Result<Chord, String> {
 pub(crate) struct Keymap {
     bindings: Vec<(Chord, CommandId)>,
     palette_chord: Chord,
+    workspace_mode_chord: Chord,
 }
 
 impl Keymap {
@@ -515,6 +538,8 @@ impl Keymap {
             .collect();
         let mut palette_chord =
             parse_chord(DEFAULT_PALETTE_CHORD).expect("built-in default key chord must parse");
+        let mut workspace_mode_chord = parse_chord(DEFAULT_WORKSPACE_MODE_CHORD)
+            .expect("built-in default key chord must parse");
 
         for (chord_spec, command_spec) in entries {
             let chord = match parse_chord(chord_spec) {
@@ -529,6 +554,10 @@ impl Keymap {
             };
             if command_spec == OPEN_PALETTE_PSEUDO_COMMAND {
                 palette_chord = chord;
+                continue;
+            }
+            if command_spec == WORKSPACE_MODE_PSEUDO_COMMAND {
+                workspace_mode_chord = chord;
                 continue;
             }
             let Some(command_id) = command_id_from_str(command_spec) else {
@@ -548,6 +577,7 @@ impl Keymap {
         Keymap {
             bindings,
             palette_chord,
+            workspace_mode_chord,
         }
     }
 
@@ -562,6 +592,12 @@ impl Keymap {
     /// Whether `event` matches the command-palette open chord.
     pub(crate) fn is_palette_open(&self, event: &KeyEvent) -> bool {
         self.palette_chord
+            .matches(event.modifiers, &event.key.logical_key)
+    }
+
+    /// Whether `event` matches the workspace-mode entry chord.
+    pub(crate) fn is_workspace_mode_enter(&self, event: &KeyEvent) -> bool {
+        self.workspace_mode_chord
             .matches(event.modifiers, &event.key.logical_key)
     }
 }
@@ -885,6 +921,32 @@ mod tests {
         let keymap = Keymap::from_entries(&entries);
 
         assert_eq!(keymap.palette_chord, parse_chord("ctrl+shift+p").unwrap());
+        // Not a real command id, so it never lands in `bindings`.
+        assert_eq!(keymap.bindings.len(), default_bindings().len());
+    }
+
+    // --- workspace-mode-entry pseudo-command ----------------------------
+
+    #[test]
+    fn workspace_mode_chord_defaults_to_super_esc_when_config_is_empty() {
+        let keymap = Keymap::from_entries(&HashMap::new());
+        assert_eq!(
+            keymap.workspace_mode_chord,
+            parse_chord("super+esc").unwrap()
+        );
+    }
+
+    #[test]
+    fn workspace_mode_entry_overrides_the_default_chord() {
+        let mut entries = HashMap::new();
+        entries.insert("ctrl+space".to_string(), "workspace-mode".to_string());
+
+        let keymap = Keymap::from_entries(&entries);
+
+        assert_eq!(
+            keymap.workspace_mode_chord,
+            parse_chord("ctrl+space").unwrap()
+        );
         // Not a real command id, so it never lands in `bindings`.
         assert_eq!(keymap.bindings.len(), default_bindings().len());
     }

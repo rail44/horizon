@@ -190,7 +190,7 @@ fn handle_agent_key(
 /// guard fails open right here by clearing the flag and letting the key
 /// through, instead of swallowing every Character key forever with no way
 /// back short of a pane focus change.
-fn composing_guard_swallows(
+pub(super) fn composing_guard_swallows(
     key: &Key,
     ime_composing: RwSignal<bool>,
     ime_preedit: RwSignal<Option<String>>,

@@ -3,15 +3,16 @@ use crate::agent::frame::AgentFrame;
 use crate::app::command_actions::{
     execute_command, CommandActionState, CommandInvocation, DEFAULT_DENY_REASON,
 };
-use crate::app::keymap::is_palette_open_key;
+use crate::app::keymap::{is_palette_open_key, is_workspace_mode_enter_key};
 use crate::control_surface::{
     handle_control_key, open_palette, ControlInputState, ControlMode, OpenPaletteState,
 };
 use crate::terminal::TerminalFrame;
 use crate::ui::theme;
 use crate::workspace::{
-    handle_active_pane_key, handle_active_pane_key_release, handle_agent_banner_key,
-    visible_terminal_sender, AgentDrafts, BannerKeyAction, PaneKind, Workspace,
+    agent_escape_requests_workspace_mode, handle_active_pane_key, handle_active_pane_key_release,
+    handle_agent_banner_key, handle_workspace_mode_key, visible_terminal_sender, AgentDrafts,
+    BannerKeyAction, ModeAction, PaneKind, Workspace,
 };
 use floem::prelude::*;
 use floem::reactive::create_effect;
@@ -26,7 +27,7 @@ use super::agent_controls::{
     describe_pending_call, gate_pending_approval, next_agent_pane_focus, next_answered_call,
     AgentPaneFocus,
 };
-use super::chrome::pane_header;
+use super::chrome::{pane_header, workspace_mode_scrim};
 use super::terminal_output::terminal_output;
 use crate::agent::view as agent_view;
 
@@ -155,6 +156,10 @@ pub(super) fn pane_view(
     let active = move || workspace.with(|ws| ws.active_visible_index() == index);
     let exists = move || workspace.with(|ws| ws.visible_pane_kind(index).is_some());
     let closeable = move || workspace.with(|ws| ws.visible_panes().len() > 1);
+    let workspace_mode_active = move || workspace.with(|ws| ws.is_workspace_mode_active());
+    let is_cursor = move || {
+        workspace.with(|ws| ws.is_workspace_mode_active() && ws.cursor_visible_index() == index)
+    };
     let is_agent =
         move || workspace.with(|ws| ws.visible_pane_kind(index) == Some(PaneKind::Agent));
     let is_terminal =
@@ -371,6 +376,7 @@ pub(super) fn pane_view(
             },
             ime_cursor_area,
         ),
+        workspace_mode_scrim(workspace_mode_active),
     ))
     .style(|s| {
         s.flex()
@@ -418,6 +424,54 @@ pub(super) fn pane_view(
                 open_palette(open_palette_state);
                 return EventPropagation::Stop;
             }
+
+            // Workspace mode's entry chord (default Super+Esc,
+            // `docs/workspace-mode-design.md`) always wins, regardless of
+            // pane kind or any pane-internal focus (e.g. the approval
+            // banner below, which would otherwise swallow a held-modifier
+            // chord as `BannerKeyAction::Swallow`) -- it's the one
+            // irreducible escape hatch back to the mode and must never be
+            // capturable by anything in-pane. Re-pressing it while already
+            // in the mode is a no-op (`Workspace::enter_workspace_mode`).
+            if is_workspace_mode_enter_key(key_event) {
+                if !workspace.with_untracked(|ws| ws.is_workspace_mode_active()) {
+                    execute_command(CommandInvocation::EnterWorkspaceMode, command_state.clone());
+                }
+                return EventPropagation::Stop;
+            }
+
+            // While workspace mode is active, every key belongs to it --
+            // recognized ones (`hjkl`/Enter/Esc/`:`) dispatch below,
+            // everything else is silently swallowed rather than reaching
+            // the banner/terminal/agent-draft handling further down.
+            if workspace.with_untracked(|ws| ws.is_workspace_mode_active()) {
+                if let Some(action) =
+                    handle_workspace_mode_key(key_event, ime_composing, ime_preedit)
+                {
+                    match action {
+                        ModeAction::Move(direction) => execute_command(
+                            CommandInvocation::MoveWorkspaceCursor { direction },
+                            command_state.clone(),
+                        ),
+                        ModeAction::Commit => execute_command(
+                            CommandInvocation::CommitWorkspaceMode,
+                            command_state.clone(),
+                        ),
+                        ModeAction::Cancel => execute_command(
+                            CommandInvocation::CancelWorkspaceMode,
+                            command_state.clone(),
+                        ),
+                        ModeAction::OpenPalette => {
+                            ime_composing.set(false);
+                            ime_preedit.set(None);
+                            set_ime_allowed(false);
+                            control_mode.set(ControlMode::Commands);
+                            open_palette(open_palette_state);
+                        }
+                    }
+                }
+                return EventPropagation::Stop;
+            }
         }
 
         // While the approval banner holds pane-internal focus, it answers
@@ -460,6 +514,21 @@ pub(super) fn pane_view(
             }
         }
 
+        // An agent pane's message box (unlike a terminal) has no
+        // protocol-level claim on a bare `Esc`, so it doubles as a second
+        // workspace-mode entry path -- but only once the banner above has
+        // had first refusal, so the banner's own `Esc`-releases-focus
+        // behavior isn't shadowed while it holds pane-internal focus. See
+        // `docs/workspace-mode-design.md`'s per-kind asymmetry.
+        if let Event::KeyDown(key_event) = event {
+            if is_agent()
+                && agent_escape_requests_workspace_mode(key_event, ime_composing.get_untracked())
+            {
+                execute_command(CommandInvocation::EnterWorkspaceMode, command_state.clone());
+                return EventPropagation::Stop;
+            }
+        }
+
         if let Event::KeyDown(key_event) = event {
             if handle_active_pane_key(
                 key_event,
@@ -498,17 +567,29 @@ pub(super) fn pane_view(
             return s.hide();
         }
 
-        let border = if active() {
-            theme::accent()
+        // Workspace mode's cursor frame (`docs/workspace-mode-design.md`):
+        // visually distinct from the focus border below in both color
+        // (`theme::cursor_accent()`, a role dedicated to this) and
+        // thickness, so the two remain simultaneously legible when the
+        // cursor has moved away from focus.
+        let (border_width, border) = if is_cursor() {
+            (WORKSPACE_MODE_CURSOR_BORDER_WIDTH, theme::cursor_accent())
+        } else if active() {
+            (1.0, theme::accent())
         } else {
-            theme::surface_selected()
+            (1.0, theme::surface_selected())
         };
         s.height_full()
             .min_width(0.0)
             .flex_basis(0.0)
             .flex_grow(1.0)
             .background(theme::surface_panel())
-            .border(1.0)
+            .border(border_width)
             .border_color(border)
     })
 }
+
+/// The cursor frame's border width -- thicker than the ordinary focus/
+/// unselected border (`1.0`, above) so the cursor pane is unmistakable at a
+/// glance even before reading its color.
+const WORKSPACE_MODE_CURSOR_BORDER_WIDTH: f64 = 2.0;

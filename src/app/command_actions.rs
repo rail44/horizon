@@ -9,7 +9,7 @@ use crate::app::commands::{command_enabled, CommandId};
 use crate::control_surface::command_state;
 use crate::session::{Frames, Registry, SessionId};
 use crate::workspace::{
-    request_active_pane_focus, PaneFocusRequests, PaneKind, SessionKind, Workspace,
+    request_active_pane_focus, Direction, PaneFocusRequests, PaneKind, SessionKind, Workspace,
 };
 
 use super::runtime::{spawn_session, SessionRuntimeState};
@@ -122,6 +122,24 @@ pub(crate) enum CommandInvocation {
     TerminateSession {
         session_id: SessionId,
     },
+    /// Enters workspace mode (`docs/workspace-mode-design.md`) — the
+    /// terminal/agent-pane entry chord (`app::keymap::
+    /// is_workspace_mode_enter_key`) and an agent pane's bare-`Esc`
+    /// fallback (`workspace::agent_escape_requests_workspace_mode`) both
+    /// dispatch here. No catalog `CommandId`/palette row: entering the mode
+    /// isn't something worth listing as a searchable operation, matching
+    /// the precedent the other targeted variants above already set.
+    EnterWorkspaceMode,
+    /// Moves the workspace-mode cursor one step — the interpreted result of
+    /// an `hjkl` key while the mode is active (see `workspace::mode_input`).
+    MoveWorkspaceCursor {
+        direction: Direction,
+    },
+    /// `Enter` while in workspace mode: focus follows the cursor, then the
+    /// mode ends.
+    CommitWorkspaceMode,
+    /// `Esc` while in workspace mode: cancels back to the untouched focus.
+    CancelWorkspaceMode,
 }
 
 pub(crate) fn execute_command(invocation: CommandInvocation, state: CommandActionState) {
@@ -188,6 +206,20 @@ pub(crate) fn execute_command(invocation: CommandInvocation, state: CommandActio
                 state.sessions(),
                 session_id,
             );
+        }
+        CommandInvocation::EnterWorkspaceMode => {
+            state.workspace().update(Workspace::enter_workspace_mode);
+        }
+        CommandInvocation::MoveWorkspaceCursor { direction } => {
+            state.workspace().update(|ws| ws.move_cursor(direction));
+        }
+        CommandInvocation::CommitWorkspaceMode => {
+            let workspace = state.workspace();
+            workspace.update(Workspace::commit_workspace_mode);
+            request_active_pane_focus(workspace, state.pane_focus_requests);
+        }
+        CommandInvocation::CancelWorkspaceMode => {
+            state.workspace().update(Workspace::cancel_workspace_mode);
         }
     }
 }
@@ -293,6 +325,13 @@ fn open_tab(state: CommandActionState, kind: PaneKind) -> SessionId {
     let mut session_id = None;
     workspace.update(|ws| {
         session_id = Some(ws.open_tab_with_new_session(kind));
+        // `docs/workspace-mode-design.md`'s "creating operations dive": run
+        // from inside workspace mode (via the `:` palette), a new tab's
+        // focus-follow below already lands focus in it, so the mode's job
+        // is done. A safe no-op otherwise -- see `Workspace::
+        // exit_workspace_mode`'s doc comment for why this never needs an
+        // `is_workspace_mode_active` guard at the call site.
+        ws.exit_workspace_mode();
     });
     let session_id = session_id.expect("new session");
     spawn_session(kind, session_id, &state.runtime);
@@ -331,6 +370,8 @@ fn split_active_pane(state: CommandActionState) {
     let mut split = None;
     workspace.update(|ws| {
         split = ws.split_active_with_new_session();
+        // See `open_tab`'s matching comment above.
+        ws.exit_workspace_mode();
     });
 
     let Some((kind, session_id)) = split else {
@@ -989,4 +1030,117 @@ mod tests {
             .with_untracked(|registry| registry.agent_sender(new_session_id))
             .is_some());
     }
+
+    // --- workspace-mode invocations ---------------------------------------
+
+    #[test]
+    fn enter_workspace_mode_invocation_activates_the_mode() {
+        let state = test_command_action_state(Workspace::mvp());
+
+        execute_command(CommandInvocation::EnterWorkspaceMode, state.clone());
+
+        assert!(state
+            .workspace()
+            .with_untracked(|ws| ws.is_workspace_mode_active()));
+    }
+
+    #[test]
+    fn move_workspace_cursor_invocation_moves_the_cursor_without_moving_focus() {
+        let mut workspace = Workspace::mvp();
+        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        // `split_active` itself focuses the new (second) pane -- reset to
+        // the first so this test starts from a known focus position.
+        workspace.activate_visible_pane(0);
+        let state = test_command_action_state(workspace);
+        execute_command(CommandInvocation::EnterWorkspaceMode, state.clone());
+
+        execute_command(
+            CommandInvocation::MoveWorkspaceCursor {
+                direction: Direction::Right,
+            },
+            state.clone(),
+        );
+
+        assert_eq!(
+            state
+                .workspace()
+                .with_untracked(|ws| ws.cursor_visible_index()),
+            1
+        );
+        assert_eq!(
+            state
+                .workspace()
+                .with_untracked(|ws| ws.active_visible_index()),
+            0,
+            "focus must not follow the cursor until a commit"
+        );
+    }
+
+    #[test]
+    fn commit_workspace_mode_invocation_moves_focus_to_the_cursor_and_refocuses_the_pane() {
+        let mut workspace = Workspace::mvp();
+        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        workspace.activate_visible_pane(0);
+        let state = test_command_action_state(workspace);
+        execute_command(CommandInvocation::EnterWorkspaceMode, state.clone());
+        execute_command(
+            CommandInvocation::MoveWorkspaceCursor {
+                direction: Direction::Right,
+            },
+            state.clone(),
+        );
+        let focus_request_before = state.pane_focus_requests[1].with_untracked(|count| *count);
+
+        execute_command(CommandInvocation::CommitWorkspaceMode, state.clone());
+
+        assert!(!state
+            .workspace()
+            .with_untracked(|ws| ws.is_workspace_mode_active()));
+        assert_eq!(
+            state
+                .workspace()
+                .with_untracked(|ws| ws.active_visible_index()),
+            1
+        );
+        assert!(
+            state.pane_focus_requests[1].with_untracked(|count| *count) > focus_request_before,
+            "commit must request real focus for the pane the cursor landed on"
+        );
+    }
+
+    #[test]
+    fn cancel_workspace_mode_invocation_leaves_focus_untouched() {
+        let mut workspace = Workspace::mvp();
+        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        workspace.activate_visible_pane(0);
+        let state = test_command_action_state(workspace);
+        execute_command(CommandInvocation::EnterWorkspaceMode, state.clone());
+        execute_command(
+            CommandInvocation::MoveWorkspaceCursor {
+                direction: Direction::Right,
+            },
+            state.clone(),
+        );
+
+        execute_command(CommandInvocation::CancelWorkspaceMode, state.clone());
+
+        assert!(!state
+            .workspace()
+            .with_untracked(|ws| ws.is_workspace_mode_active()));
+        assert_eq!(
+            state
+                .workspace()
+                .with_untracked(|ws| ws.active_visible_index()),
+            0
+        );
+    }
+
+    // `open_tab`/`split_active_pane`'s "creating operations dive" call to
+    // `Workspace::exit_workspace_mode` (see their doc comments) isn't
+    // exercised here through `execute_command(Simple(NewTerminal | NewAgent
+    // | SplitActivePane))`: that path spawns a real PTY/shell process via
+    // `runtime::spawn_session`, which is too heavy (and environment-
+    // dependent) for a unit test. `Workspace::exit_workspace_mode`'s own
+    // no-op-when-inactive/clears-when-active behavior is covered directly
+    // in `workspace::mode`'s tests instead.
 }

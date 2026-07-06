@@ -1,6 +1,37 @@
 use crate::ui::theme;
 use floem::prelude::*;
 
+/// Alpha applied to `theme::surface_base()` for workspace mode's dimming
+/// overlay (`workspace_mode_scrim` below) -- a numeric opacity factor, not a
+/// color, so it doesn't run afoul of "no hardcoded colors": the color
+/// itself always comes from the theme (and is therefore
+/// `[theme]`-overridable), only how translucent it's drawn is fixed here.
+const WORKSPACE_MODE_DIM_ALPHA: f32 = 0.55;
+
+/// Workspace mode's "pane dimming" signal
+/// (`docs/workspace-mode-design.md`'s accident-killer): a translucent scrim
+/// drawn over the pane's entire header+content while the mode is active, so
+/// a stray keystroke reads as "nothing here types normally right now" at a
+/// glance. Distinct from the cursor pane's own bright frame (drawn by the
+/// pane's border instead, see `pane::pane_view`'s `WORKSPACE_MODE_CURSOR_
+/// BORDER_WIDTH`) -- dimming applies uniformly to every pane, cursor pane
+/// included. Hidden entirely outside the mode: no visual change at all, per
+/// the design's "モード外では一切の視覚変化なし".
+pub(super) fn workspace_mode_scrim(active: impl Fn() -> bool + 'static + Copy) -> impl IntoView {
+    empty().style(move |s| {
+        if !active() {
+            return s.hide();
+        }
+
+        s.absolute()
+            .inset_left(0.0)
+            .inset_right(0.0)
+            .inset_top(0.0)
+            .inset_bottom(0.0)
+            .background(theme::surface_base().with_alpha(WORKSPACE_MODE_DIM_ALPHA))
+    })
+}
+
 pub(super) fn chrome_close_button(
     visible: impl Fn() -> bool + 'static + Copy,
     on_close: impl Fn() + 'static,

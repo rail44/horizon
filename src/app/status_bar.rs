@@ -9,24 +9,46 @@ pub(super) fn status_bar(
     agent_state_status: RwSignal<Option<String>>,
     status_dump: Option<PathBuf>,
 ) -> impl IntoView {
-    label(move || {
-        let agent_state_status = agent_state_status.get();
-        workspace.with(|ws| {
-            let status = status_bar_text(ws, agent_state_status.as_deref());
-            if let Some(path) = &status_dump {
-                let _ = std::fs::write(path, &status);
-            }
-            status
+    h_stack((
+        workspace_mode_chip(workspace),
+        label(move || {
+            let agent_state_status = agent_state_status.get();
+            workspace.with(|ws| {
+                let status = status_bar_text(ws, agent_state_status.as_deref());
+                if let Some(path) = &status_dump {
+                    let _ = std::fs::write(path, &status);
+                }
+                status
+            })
         })
-    })
+        .style(|s| s.min_width(0.0).font_size(12).color(theme::text_muted())),
+    ))
     .style(|s| {
         s.width_full()
             .height(26)
             .padding_horiz(10)
             .items_center()
-            .font_size(12)
-            .color(theme::text_muted())
+            .gap(8)
             .background(theme::surface_raised())
+    })
+}
+
+/// Workspace mode's status-bar chip (`docs/workspace-mode-design.md`'s
+/// third visualization signal, alongside pane dimming and the cursor
+/// frame). Purely additive next to the existing status text above -- that
+/// text's own wording is next-stage's job (retiring the Ctrl+Shift+P
+/// mention once workspace mode replaces it) and stays untouched here.
+fn workspace_mode_chip(workspace: RwSignal<Workspace>) -> impl IntoView {
+    label(|| "WORKSPACE MODE".to_string()).style(move |s| {
+        if !workspace.with(|ws| ws.is_workspace_mode_active()) {
+            return s.hide();
+        }
+
+        s.font_size(11)
+            .padding_horiz(6)
+            .padding_vert(2)
+            .color(theme::surface_base())
+            .background(theme::cursor_accent())
     })
 }
 

@@ -3,11 +3,12 @@ use floem::event::{Event, EventPropagation};
 use floem::prelude::*;
 
 use crate::app::command_actions::{execute_command, CommandActionState, CommandInvocation};
-use crate::app::keymap::{is_palette_open_key, Keymap};
+use crate::app::keymap::{is_palette_open_key, is_workspace_mode_enter_key, Keymap};
 use crate::control_surface::{handle_control_key, open_palette, ControlMode};
 use crate::terminal::TerminalCommand;
 use crate::workspace::{
-    active_agent, active_agent_draft, active_terminal_sender, active_text_input_pane, trace_ime,
+    active_agent, active_agent_draft, active_terminal_sender, active_text_input_pane,
+    agent_escape_requests_workspace_mode, handle_workspace_mode_key, trace_ime, ModeAction,
 };
 
 use super::context::{control_input_state, open_palette_state};
@@ -135,6 +136,56 @@ impl AppInput {
                 return EventPropagation::Stop;
             }
 
+            // Workspace mode (`docs/workspace-mode-design.md`) -- this
+            // mirrors the same check `workspace::view::pane`'s own
+            // `KeyDown` handler runs (and, like the `is_palette_open_key`
+            // duplication right above, exists here too as a fallback for
+            // whenever no pane currently holds real keyboard focus, e.g.
+            // right after a non-refocusing palette command closes the
+            // palette -- see `docs/workspace-mode-design.md`'s "everything
+            // else restores").
+            if is_workspace_mode_enter_key(key_event) {
+                if !self
+                    .state
+                    .workspace
+                    .with_untracked(|ws| ws.is_workspace_mode_active())
+                {
+                    execute_command(
+                        CommandInvocation::EnterWorkspaceMode,
+                        self.command_action_state(),
+                    );
+                }
+                return EventPropagation::Stop;
+            }
+
+            if self
+                .state
+                .workspace
+                .with_untracked(|ws| ws.is_workspace_mode_active())
+            {
+                if let Some(action) = handle_workspace_mode_key(
+                    key_event,
+                    self.state.ime_composing,
+                    self.state.ime_preedit,
+                ) {
+                    self.dispatch_workspace_mode_action(action);
+                }
+                return EventPropagation::Stop;
+            }
+
+            if active_agent(self.state.workspace)
+                && agent_escape_requests_workspace_mode(
+                    key_event,
+                    self.state.ime_composing.get_untracked(),
+                )
+            {
+                execute_command(
+                    CommandInvocation::EnterWorkspaceMode,
+                    self.command_action_state(),
+                );
+                return EventPropagation::Stop;
+            }
+
             // Config-driven command keybindings (`[keybindings]`, see
             // `app::keymap::Keymap`) — checked last, as a fallback under
             // whatever the palette itself didn't already claim. Note this
@@ -160,6 +211,34 @@ impl AppInput {
         CommandActionState {
             runtime: self.state.session_runtime_state(),
             pane_focus_requests: self.state.pane_focus_requests,
+        }
+    }
+
+    /// Dispatches one workspace-mode key action through the command model
+    /// -- shared by this file's fallback `KeyDown` handling above and
+    /// `workspace::view::pane`'s own per-pane handler, which matches on the
+    /// same `ModeAction` the same way.
+    fn dispatch_workspace_mode_action(&self, action: ModeAction) {
+        match action {
+            ModeAction::Move(direction) => execute_command(
+                CommandInvocation::MoveWorkspaceCursor { direction },
+                self.command_action_state(),
+            ),
+            ModeAction::Commit => execute_command(
+                CommandInvocation::CommitWorkspaceMode,
+                self.command_action_state(),
+            ),
+            ModeAction::Cancel => execute_command(
+                CommandInvocation::CancelWorkspaceMode,
+                self.command_action_state(),
+            ),
+            ModeAction::OpenPalette => {
+                self.state.ime_composing.set(false);
+                self.state.ime_preedit.set(None);
+                set_ime_allowed(false);
+                self.state.control_mode.set(ControlMode::Commands);
+                open_palette(open_palette_state(&self.state));
+            }
         }
     }
 }
