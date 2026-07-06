@@ -33,14 +33,11 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
    pin; candidate for an upstream report (5/5 reproducible bisection).
 10. **Test knob for sync-update pump** — the 150ms failsafe constant is
     vte's; if TUIs ever need tuning here it should join `[terminal]`.
-11. **bash tool truncation hides the head of long outputs** — reported by
-    the agent that executed mission 001: `cargo test --workspace` output
-    was truncated from the front, so the first suite's results were
-    unverifiable in-context and it had to rerun `-p horizon` separately.
-    The full output *is* spilled to `horizon-bash-<uuid>.log` and
-    referenced by the tool result's `output_file`, but the agent never
-    reached for it. Candidates: keep head+tail instead of tail-only,
-    and/or make the truncation notice point at the spill file loudly.
+11. *(resolved 2026-07-06)* **bash tool truncation hides the head of long
+    outputs** — ground truth turned out to be a 50/50 head+tail split whose
+    head budget was eaten by compile spew, plus a spill path hidden in a
+    JSON field. Fixed by skewing the split to tail 2/3 and inlining the
+    spill path into the truncation notice.
 12. **agentd leaks its `cargo run` environment into tool processes** —
     when Horizon is launched via `cargo run`, agentd (and thus every
     bash tool call an agent makes) inherits `CARGO_*`, `RUSTUP_*`, and

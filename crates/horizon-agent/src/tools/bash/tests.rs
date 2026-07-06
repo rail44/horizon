@@ -143,10 +143,17 @@ fn truncation_preserves_head_and_tail_and_spills_full_output() {
     let shown = output["output"].as_str().expect("shown output");
     assert!(shown.starts_with("aaaa"));
     assert!(shown.ends_with("aaaa"));
-    assert!(shown.contains("truncated"));
+    assert!(shown.contains("chars omitted"));
     assert!(shown.len() < 40_000);
 
     let spill_path = output["output_file"].as_str().expect("spill file path");
+    // The truncation notice must inline the spill path itself -- not just
+    // leave it in the separate `output_file` field -- so the model can act
+    // on it without having to notice a second place to look (backlog #11).
+    assert!(
+        shown.contains(spill_path),
+        "notice should inline the spill path: {shown}"
+    );
     let spilled = std::fs::read_to_string(spill_path).expect("spilled file should be readable");
     assert_eq!(spilled.len(), 40_000);
     assert!(spilled.chars().all(|c| c == 'a'));

@@ -310,8 +310,12 @@ fn success_output(
     let mut shown_source = String::from_utf8_lossy(&raw_stdout).into_owned();
     apply_cwd_report(&raw_stderr, cwd_handle, &mut shown_source);
 
-    let Capped { shown, truncated } = output::cap(&shown_source, config.output_cap_chars);
     let output_file = output::spill(&shown_source);
+    let Capped { shown, truncated } = output::cap(
+        &shown_source,
+        config.output_cap_chars,
+        output_file.as_deref(),
+    );
 
     json!({
         "exit_code": status.code(),
@@ -393,8 +397,9 @@ fn error_output(message: &str, partial_output: Option<Vec<u8>>, config: &BashToo
         None => json!({ "is_error": true, "message": message }),
         Some(raw) => {
             let source = String::from_utf8_lossy(&raw).into_owned();
-            let Capped { shown, truncated } = output::cap(&source, config.output_cap_chars);
             let output_file = output::spill(&source);
+            let Capped { shown, truncated } =
+                output::cap(&source, config.output_cap_chars, output_file.as_deref());
             json!({
                 "is_error": true,
                 "message": message,
