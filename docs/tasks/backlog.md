@@ -47,3 +47,11 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     resolve stale shared libraries from build dirs. agentd should
     sanitize these when spawning tool processes; launching the built
     binary directly instead of `cargo run` also sidesteps it.
+13. **headless GUI verification writes into the real agentd state** —
+    `check-terminal-visual.sh`/`run-terminal-smoke.sh` runs connect to
+    the owner's real `horizon-agentd` socket and persist throwaway test
+    sessions into the real event log / DuckDB (observed at ~4k lines,
+    plus replay cost on every reconnect). The scripts should isolate
+    `HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB` and point agentd
+    at a scratch socket per run. Flagged 2026-07-06 during the startup
+    focus diagnosis.
