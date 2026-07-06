@@ -64,16 +64,24 @@ wave items where possible; design docs on first use.
   consumer. Named prerequisite: runtime config reload (config is
   startup-only today).
 
-## Later
+## Planned beyond wave 1 (plans exist)
 
-- Model-routing OpenAI-compatible API: co-located in this workspace as
-  an independent crate (no horizon dependencies — extractable to its
-  own repository later); synthetic.new chosen as the upstream for
-  multi-model composition.
-- First-party viewers (image / markdown / git diff / color picker) on
-  the view foundation.
+- **04 — Recursive layout** (`docs/plans/application-ui/`): vertical
+  splits, 3+ panes; prerequisite for the viewers.
+- **05 — Model-routing API** (`docs/plans/provider-infra/`):
+  OpenAI-compatible router over synthetic.new, co-located as an
+  independent crate (no horizon dependencies — extractable later).
+- **06 — Recall tool** (`docs/plans/agent-foundation/`): search over
+  the DuckDB history (Letta survey: retrieval over summarization);
+  starts after plan 03 (same crate).
+
+## Later (deliberately unplanned)
+
+- Skill mechanism: waits for plan 03's evidence on the owner's open
+  question (defined role vs skill-specialized coder).
+- Inter-agent messaging: designed together with the session daemon —
+  a project-level consultation comes first.
+- First-party viewers (image / markdown / git diff / color picker):
+  wait for the view foundation (plan 04).
 - User-facing agent definition: composing an agent from tools and
   skills as a first-class flow.
-- Delegation (Phase-1) and team coordination on Horizon itself;
-  recall/search tooling over the DuckDB knowledge base (Letta survey:
-  retrieval over summarization).
