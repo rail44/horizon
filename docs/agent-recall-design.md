@@ -16,17 +16,32 @@ is long-lived across UI restarts. A recall tool over the startup-frozen
 projection would miss both the current session's evicted turns and every
 session created since agentd started — the primary use cases.
 
-## Premises (measured 2026-07-06, DuckDB 1.5 / duckdb-rs "1" bundled)
+## Premises (measured 2026-07-06/07, DuckDB 1.5 / duckdb-rs "1" bundled)
 
 - **Write volume is a non-issue**: live agent traffic peaks at ~1-2 events/s
   (streaming deltas included; ~35% of events are deltas).
-- **Cross-process locking is all-or-nothing**: one process holding the file
-  read-write blocks every other open, *including read-only*; N read-only
-  opens coexist; a held read-only open conversely blocks a read-write open.
-- **Same-process opens share the instance**: two `Store::open`s of the same
-  path inside one process both succeed (libduckdb's database-instance
-  cache), so an in-process long-lived writer and per-query readers never
-  contend on the file lock.
+- **Same-process opens are NOT shared — and that's the load-bearing fact.**
+  A first measurement ("two `Store::open`s of one path both succeed, so
+  they must share libduckdb's instance cache") was misread: duckdb-rs
+  calls `duckdb_open_ext` directly and uses no instance cache; the double
+  open only "succeeds" because POSIX file locks are per-process. The
+  result is two *independent* database instances unsafely sharing one
+  file. Combined with DuckDB's relaxed durability (committed appends sit
+  in the instance's in-memory WAL until a checkpoint threshold — nothing
+  on disk), a second instance reads the stale on-disk state: observed
+  live as the writer's own connection counting 18 events while a fresh
+  same-path open in the same process counted 0. **Every same-process
+  consumer must therefore go through the one shared `Store` instance**
+  (`Arc<Mutex<..>>`); per-call opens are forbidden, including the
+  session-resume history replay.
+- **External read-only access is diagnostic at best.** Measured both ways
+  across holder kinds: a `duckdb` CLI holding the file read-write blocks
+  other processes outright, while a crate-held instance let an external
+  `duckdb -readonly` open succeed — but that reader sees only the last
+  checkpointed state, silently missing everything in the live writer's
+  memory. Either way the safe assumption is the same: external reads may
+  fail or silently lag; only the JSONL (or a stopped agentd) is
+  authoritative from outside.
 
 ## Decision A: agentd holds the projection live
 
@@ -43,17 +58,20 @@ background thread, so the projection append rides the same thread with the
 same materialized `Record` — one owner thread, no shared-connection
 locking, and DuckDB rows always match their JSONL lines.
 
-**Accepted consequence — external readers change.** While agentd runs, the
-`.duckdb` file cannot be opened by another process at all (measured above).
-`agent-inspect`'s direct `duckdb -readonly` recipes therefore only work
-when agentd is stopped; the skill is updated to say so and to lead with the
-JSONL (which external tooling can always read). This was weighed against
-the alternative (transient open + watermark refresh per recall query, which
-preserves external access but leaves the file cold between calls) and
-decided deliberately: the projection is becoming a live read model — the
-direction the knowledge-base ambitions on the roadmap point — and the
-inspection path should move to the log or to an agentd-served query surface
-when the need returns.
+**Accepted consequence — external readers change.** While agentd runs,
+external access to the `.duckdb` file is no longer authoritative: an
+external open may be refused outright or may succeed and silently show
+only the last checkpointed state (see the premises above — both were
+observed). `agent-inspect`'s direct `duckdb -readonly` recipes therefore
+only give authoritative answers when agentd is stopped; the skill is
+updated to say so and to lead with the JSONL (which external tooling can
+always read). This was weighed against the alternative (transient open +
+watermark refresh per recall query, which preserves external access but
+leaves the file cold between calls) and decided deliberately: the
+projection is becoming a live read model — the direction the
+knowledge-base ambitions on the roadmap point — and the inspection path
+should move to the log or to an agentd-served query surface when the need
+returns.
 
 ## The recall tools
 
@@ -77,10 +95,12 @@ remain non-goals per `docs/agent-duckdb-state-design.md`):
   pull the full context around a hit instead of relying on snippets.
 
 Sessions gain the context this needs: `ToolSessionState` now carries the
-session's own id and the projection path (threaded at agentd session
-spawn), which is also the seat any future history-aware tool would use.
-Reads open their own `Store` per call — measured safe alongside the live
-writer in the same process — and drop it immediately.
+session's own id and a handle to the process's one shared `Store`
+(threaded at agentd session spawn), which is also the seat any future
+history-aware tool would use. All reads — the recall tools and the
+session-resume history replay alike — go through that shared instance;
+per-call `Store::open`s are forbidden (see the premises: an independent
+instance silently reads a stale file).
 
 Streaming deltas are deliberately not searchable: committed rows carry the
 same final text without the near-duplicate noise. Reasoning text is only
