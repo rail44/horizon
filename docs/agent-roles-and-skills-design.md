@@ -95,7 +95,14 @@ role deliberately has no filesystem access.
 
 ## The configuration agent
 
-The `config` role is the first role and the first skill consumer:
+The `config` role is the first role and the first skill consumer. It is
+launched as a named command — `New Configuration Agent` in the palette,
+`new-config-agent` over the control plane / CLI (mirroring `new-agent`'s
+`--prompt`/`--split`/`--active`). The external vocabulary names each
+role-tagged flavor rather than exposing a free-form `--role` argument:
+the set of roles stays the binary's to define, never a client-supplied
+string, and an unknown role id can therefore only arise from version
+skew, where it fails the session start loudly.
 
 - prompt section: Horizon configuration assistant framing — read the
   skill and the current config before proposing changes; write the
@@ -153,10 +160,12 @@ to become visible. The reload is **partial by design**:
 Mechanics: theme values were cached in `OnceLock`s and read inside floem
 style closures with no reactive dependency, so a swap alone would never
 re-style. The fix is inside the theme module: accessors now read a
-reactive signal holding the resolved theme state (chrome overrides, ANSI
-palette, precomputed terminal colors), so every existing call site tracks
-it for free and a swap re-runs styling app-wide. Keybindings just swap the
-global keymap — it is re-read on every keystroke. A reload that fails to
+reactive signal holding the resolved chrome/ANSI state, so every existing
+call site tracks it for free and a swap re-runs styling app-wide; the
+terminal's derived colors live in a separate cross-thread store, since
+cell rendering happens off the UI thread (see "What the E2E shook out"
+below). Keybindings just swap the global keymap — it is re-read on every
+keystroke. A reload that fails to
 parse keeps the currently applied values and reports the error; it does
 not reset a working theme to defaults over a typo (deliberately different
 from the startup fallback, where there is nothing applied yet to keep).
@@ -180,8 +189,64 @@ color" step and receiving the chosen value back into the conversation;
 nothing in the role/tool surface blocks that, and nothing anticipates it
 beyond this paragraph.
 
+## What the E2E shook out (implementation notes)
+
+The completion criterion — a live conversational theme change visibly
+recoloring the running app — failed three times before it passed, each
+time on a reactive-lifetime property no unit test exercises (nothing in
+tests reads signals from inside effects or across threads):
+
+1. A lazily created global signal belongs to whatever scope is current at
+   first access — in the running app, some view's style effect — and dies
+   when that effect re-runs. Process-lifetime reactive state must be
+   created on a detached root `Scope` (`ui::theme`'s `THEME_STATE`).
+2. Thread-local reactive state cannot feed consumers on other threads:
+   terminal cell colors are resolved on session threads, which saw their
+   own never-reloaded copy. Cross-thread values live in a plain lock
+   (`ui::theme`'s `TERMINAL_COLORS`), reactive values stay UI-side.
+3. Effects created while another effect is running are its children and
+   die on its next run. The CLI control-plane bridge's request pump is an
+   effect, so anything `execute_command` builds that must outlive the
+   command — a session's event fold — needs its own detached scope
+   (`agent::agentd_runtime::fold_agent_session_events`). The same latent
+   hazard exists for `reload_agent_runtime`'s responder/status effects
+   when invoked over the CLI; left as-is here (pre-existing shape, one
+   command deep) and worth a sweep of its own.
+
 ## Evidence: role vs. skill, from this implementation
 
-(To be completed after integration — what the role definition actually
-carried vs. what the skill carried, and what that suggests for the
-domain-agent fork.)
+What each side actually carried, once the configuration agent worked end
+to end (live provider, 2026-07-06):
+
+- **The role stayed a capability envelope, not a persona.** The final
+  `RoleDefinition` is a dozen lines of data: one framing paragraph, three
+  tool ids, `model: None`, two booleans, one skill id. Every attempt to
+  put *knowledge* in it (schema, valid names, editing rules) read better
+  in the skill, and the live sessions confirmed the agent treats the
+  skill as the authority — each run began with `skill.read` +
+  `config.read` before proposing anything, preserved unrelated config
+  entries, and correctly told the user which sections apply live versus
+  at restart, all of which it can only have learned from the skill body.
+- **What the role did could not have been a skill.** The tool allowlist
+  is enforcement, not knowledge — a skill can teach restraint but not
+  impose it. The repository-instructions opt-out is a trust decision
+  applied before the model reads anything. The persisted `role_id` is
+  identity — it survives an agentd restart and reconstructs the narrowed
+  session. All three are harness properties; none are prompt content.
+- **Unused seats stayed unused.** `model: None` (the seat exists because
+  the plan's mapping names it and model routing is a stated future
+  consumer, but nothing about *this* role wanted a different model), and
+  the prompt section never grew procedure.
+
+**Reading for the owner's fork** (defined role vs. skill-specialized
+generic coder): this implementation behaves like *both at once*, split
+along an enforcement/knowledge line — a generic loop, specialized by a
+skill (knowledge), inside a role-shaped capability envelope (tools,
+trust, identity). Everything conversational about the "domain agent" came
+from the skill; everything the skill could not do was exactly the
+envelope. If that line holds for the next role, "role" in Horizon should
+stay a small envelope (allowlist + trust flags + model + skills) and
+never accumulate domain text — and a future user-facing agent-definition
+flow (roadmap "Later") becomes "pick skills, pick an envelope" rather
+than authoring prompts. The fork stays open until a second role tests
+the line; this is one data point, not a verdict.
