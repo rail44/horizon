@@ -584,11 +584,21 @@ pub(super) fn pane_view(
         } else {
             (1.0, theme::surface_selected())
         };
+        // Terminal panes take the terminal's own background so the
+        // sub-row-height remainder at the pane bottom (pane height is
+        // rarely an exact multiple of the line height) blends in instead
+        // of showing as a differently-colored band.
+        let background =
+            if workspace.with(|ws| ws.visible_pane_kind(index) == Some(PaneKind::Terminal)) {
+                theme::terminal_background()
+            } else {
+                theme::surface_panel()
+            };
         s.height_full()
             .min_width(0.0)
             .flex_basis(0.0)
             .flex_grow(1.0)
-            .background(theme::surface_panel())
+            .background(background)
             .border(border_width)
             .border_color(border)
     })
