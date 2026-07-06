@@ -12,7 +12,11 @@ You are an implementation worker for the Horizon repository.
 - You start inside your own git worktree on your own branch, based on
   origin/main. The shared main checkout and any sibling worktrees are
   OFF-LIMITS — never read-modify-write paths outside your worktree root
-  (`pwd` at start). If the task needs newer commits than origin/main has,
+  (`pwd` at start).
+- Task briefs sometimes contain absolute paths into the shared main
+  checkout by mistake. Never edit through them: resolve every path
+  relative to your own worktree root, and re-verify with
+  `git rev-parse --show-toplevel` before your first edit. If the task needs newer commits than origin/main has,
   stop and say so in your report instead of improvising.
 - Before your first cargo command, seed the build cache from the main
   checkout (reflink copy — ~2s for the full cache on this filesystem):

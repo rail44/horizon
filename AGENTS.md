@@ -186,7 +186,12 @@ can also ride your branch as edits to `docs/tasks/backlog.md`. Don't
 wait synchronously — the project session is notified, reviews in an
 isolated worktree, merges and pushes on green, and writes
 `<slug>.result` (`merged <hash>` / `rejected: <reason>` + notes) next
-to your request.
+to your request. After writing a request, don't go idle blind: arm a
+background watcher on your own `<slug>.result` (e.g. an `until
+[ -e ... ]; do sleep 15; done` background task) so the verdict wakes
+you — the owner should never need to prod a session back to life.
+The pre-commit hook refuses commits on `main` unless
+`HORIZON_INTEGRATION=1` is set; only the project session sets it.
 
 ## Open Work
 

@@ -2,6 +2,17 @@
 # Local quality gate — same checks AGENTS.md requires before finishing work.
 set -e
 
+# Integration guard: only the project session (which sets
+# HORIZON_INTEGRATION=1) commits on main. Domain/task sessions and
+# workers commit on their own branches and hand them to the review
+# queue (AGENTS.md "Branch and Integration Flow").
+branch=$(git rev-parse --abbrev-ref HEAD)
+if [ "$branch" = "main" ] && [ "${HORIZON_INTEGRATION:-0}" != "1" ]; then
+  echo "pre-commit: refusing to commit on main without HORIZON_INTEGRATION=1" >&2
+  echo "pre-commit: work on a branch and hand it to the review queue instead" >&2
+  exit 1
+fi
+
 echo "pre-commit: cargo fmt --check"
 cargo fmt --all -- --check
 
