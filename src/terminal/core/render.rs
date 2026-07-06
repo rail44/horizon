@@ -165,8 +165,12 @@ fn resolve_color(color: AnsiColor, colors: &Colors) -> Option<[u8; 3]> {
 /// (`scheme`, `terminal::config::resolved_colors`). `DimWhite` is the one
 /// exception: alacritty gives "dim white" its own distinct shade (unlike
 /// the other colors, whose `Dim*` variant just reuses the `Bright*` value),
-/// and there is no theme slot for it, so it stays hardcoded.
-fn named_rgb(color: NamedColor, scheme: &TerminalColors) -> Rgb {
+/// and there is no theme slot for it, so it stays hardcoded. Takes `scheme`
+/// by value: `TerminalColors` is a small `Copy` struct (see its doc
+/// comment), so there is no reference to thread through here any more now
+/// that `resolved_colors()` hands back an owned value rather than a
+/// `&'static` one.
+fn named_rgb(color: NamedColor, scheme: TerminalColors) -> Rgb {
     let [r, g, b] = match color {
         NamedColor::Black => scheme.black,
         NamedColor::Red => scheme.red,
@@ -194,7 +198,7 @@ fn named_rgb(color: NamedColor, scheme: &TerminalColors) -> Rgb {
     Rgb { r, g, b }
 }
 
-fn indexed_rgb(index: u8, scheme: &TerminalColors) -> Rgb {
+fn indexed_rgb(index: u8, scheme: TerminalColors) -> Rgb {
     if index < 16 {
         return named_rgb(
             match index {

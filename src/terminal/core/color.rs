@@ -28,7 +28,7 @@ pub(super) fn resolve_query_color(index: usize, overrides: &Colors) -> Rgb {
     default_rgb(index, resolved_colors())
 }
 
-fn default_rgb(index: usize, scheme: &TerminalColors) -> Rgb {
+fn default_rgb(index: usize, scheme: TerminalColors) -> Rgb {
     if index < 16 {
         return named_rgb(base_ansi_color(index), scheme);
     }
@@ -83,7 +83,7 @@ fn base_ansi_color(index: usize) -> NamedColor {
     }
 }
 
-fn named_rgb(color: NamedColor, scheme: &TerminalColors) -> Rgb {
+fn named_rgb(color: NamedColor, scheme: TerminalColors) -> Rgb {
     let [r, g, b] = match color {
         NamedColor::Black => scheme.black,
         NamedColor::Red => scheme.red,

@@ -12,7 +12,6 @@
 //! colors exactly.
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
 
 use floem::peniko::Color;
 
@@ -20,22 +19,26 @@ use crate::config::RawThemeAnsiConfig;
 
 use super::parse_hex_color;
 
-const BLACK: Color = Color::from_rgb8(35, 38, 46);
-const RED: Color = Color::from_rgb8(224, 108, 117);
-const GREEN: Color = Color::from_rgb8(152, 195, 121);
-const YELLOW: Color = Color::from_rgb8(229, 192, 123);
-const BLUE: Color = Color::from_rgb8(97, 175, 239);
-const MAGENTA: Color = Color::from_rgb8(198, 120, 221);
-const CYAN: Color = Color::from_rgb8(86, 182, 194);
-const WHITE: Color = Color::from_rgb8(222, 226, 234);
-const BRIGHT_BLACK: Color = Color::from_rgb8(95, 99, 112);
-const BRIGHT_RED: Color = Color::from_rgb8(255, 123, 127);
-const BRIGHT_GREEN: Color = Color::from_rgb8(181, 214, 140);
-const BRIGHT_YELLOW: Color = Color::from_rgb8(245, 211, 139);
-const BRIGHT_BLUE: Color = Color::from_rgb8(120, 194, 255);
-const BRIGHT_MAGENTA: Color = Color::from_rgb8(218, 140, 255);
-const BRIGHT_CYAN: Color = Color::from_rgb8(103, 205, 216);
-const BRIGHT_WHITE: Color = Color::from_rgb8(255, 255, 255);
+/// `pub(super)`: the parent module's [`super::compute_terminal_colors`]
+/// needs the same defaults these accessors fall back to, so a `Reload
+/// Config` swap's precomputed terminal colors never drift from what the
+/// accessors below would resolve to.
+pub(super) const BLACK: Color = Color::from_rgb8(35, 38, 46);
+pub(super) const RED: Color = Color::from_rgb8(224, 108, 117);
+pub(super) const GREEN: Color = Color::from_rgb8(152, 195, 121);
+pub(super) const YELLOW: Color = Color::from_rgb8(229, 192, 123);
+pub(super) const BLUE: Color = Color::from_rgb8(97, 175, 239);
+pub(super) const MAGENTA: Color = Color::from_rgb8(198, 120, 221);
+pub(super) const CYAN: Color = Color::from_rgb8(86, 182, 194);
+pub(super) const WHITE: Color = Color::from_rgb8(222, 226, 234);
+pub(super) const BRIGHT_BLACK: Color = Color::from_rgb8(95, 99, 112);
+pub(super) const BRIGHT_RED: Color = Color::from_rgb8(255, 123, 127);
+pub(super) const BRIGHT_GREEN: Color = Color::from_rgb8(181, 214, 140);
+pub(super) const BRIGHT_YELLOW: Color = Color::from_rgb8(245, 211, 139);
+pub(super) const BRIGHT_BLUE: Color = Color::from_rgb8(120, 194, 255);
+pub(super) const BRIGHT_MAGENTA: Color = Color::from_rgb8(218, 140, 255);
+pub(super) const BRIGHT_CYAN: Color = Color::from_rgb8(103, 205, 216);
+pub(super) const BRIGHT_WHITE: Color = Color::from_rgb8(255, 255, 255);
 
 pub(crate) fn black() -> Color {
     resolve("black", BLACK)
@@ -102,22 +105,18 @@ pub(crate) fn bright_white() -> Color {
 }
 
 fn resolve(name: &'static str, default: Color) -> Color {
-    overrides().get(name).copied().unwrap_or(default)
-}
-
-/// The process-wide `[theme.ansi]` overrides, built once from Horizon's
-/// config file (applied at startup only — see `AGENTS.md`) and cached for
-/// the rest of the run, matching the parent module's `overrides()`.
-fn overrides() -> &'static HashMap<&'static str, Color> {
-    static OVERRIDES: OnceLock<HashMap<&'static str, Color>> = OnceLock::new();
-    OVERRIDES.get_or_init(|| build_overrides(&crate::config::load().theme.ansi))
+    super::resolve_ansi(name, default)
 }
 
 /// Unlike the parent module's flat `[theme]` map, `[theme.ansi]` has one
 /// fixed field per slot (parsed directly by serde), so there's no
 /// "unrecognized name" case to warn about here — only an unparsable hex
 /// value, same policy as everywhere else in `crate::config`.
-fn build_overrides(config: &RawThemeAnsiConfig) -> HashMap<&'static str, Color> {
+///
+/// `pub(super)`: [`super::ThemeState::build`] calls this directly to
+/// (re)build the ansi override map on every `Reload Config` swap — see this
+/// module's doc comment.
+pub(super) fn build_overrides(config: &RawThemeAnsiConfig) -> HashMap<&'static str, Color> {
     let entries: [(&'static str, &Option<String>); 16] = [
         ("black", &config.black),
         ("red", &config.red),
