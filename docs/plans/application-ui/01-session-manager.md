@@ -1,6 +1,6 @@
 # Plan 01 — セッション管理モーダル
 
-Status: ready
+Status: in-session
 
 ## 背景
 

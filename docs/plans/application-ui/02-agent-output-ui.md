@@ -1,6 +1,6 @@
 # Plan 02 — エージェント出力 UI の抜本改善
 
-Status: ready
+Status: in-session
 
 ## 背景
 
