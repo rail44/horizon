@@ -114,7 +114,9 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
    captured evidence lives in the session transcripts (PTY traces under
    /tmp/horizon-pty-*.jsonl as of 2026-07-05).
 9. **floem startup input gap (~0.5s)** — accepted regression of the git
-   pin; candidate for an upstream report (5/5 reproducible bisection).
+   pin, compensated by `HORIZON_INPUT_SETTLE` in the verification
+   scripts. Whether to report it upstream is the owner's own call and
+   act, not something this repo's sessions do.
 10. **Test knob for sync-update pump** — the 150ms failsafe constant is
     vte's; if TUIs ever need tuning here it should join `[terminal]`.
 11. *(resolved 2026-07-06)* **bash tool truncation hides the head of long
