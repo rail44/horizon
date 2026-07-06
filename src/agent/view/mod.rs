@@ -54,7 +54,7 @@ pub(crate) fn agent_frame_view(
         .style(|s| s.width_full().flex_col().gap(4)),
         turn_end_rule_view(window, frame),
     ))
-    .style(|s| s.width_full().flex_col().gap(4).padding(16));
+    .style(|s| s.width_full().flex_col().gap(4).padding(8));
     let content_id = content.id();
 
     scroll(content)
