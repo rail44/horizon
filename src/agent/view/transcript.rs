@@ -1,12 +1,89 @@
-use crate::agent::contract::{Message, MessageRole, SessionState};
+use std::collections::HashMap;
+
+use serde_json::Value;
+
+use crate::agent::contract::{Message, MessageRole, SessionState, ToolCallId};
 use crate::agent::frame::{AgentFrame, AgentFrameItem};
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) struct TranscriptBlock {
     pub(super) id: usize,
-    pub(super) label: Option<&'static str>,
-    pub(super) text: String,
     pub(super) tone: TranscriptTone,
+    pub(super) kind: BlockKind,
+}
+
+/// A block's content. `Text` covers every item that was already one block
+/// per item pre-slice-1 (messages, thinking, status, approval, error,
+/// exit); `Tool` is the one-block-per-call-id merge (`docs/
+/// agent-output-ui-design.md` decision 1) of what used to be up to three
+/// separate blocks (`ToolCallRequested`/`ToolCallStarted`/
+/// `ToolCallFinished`).
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum BlockKind {
+    Text {
+        label: Option<&'static str>,
+        text: String,
+    },
+    Tool(ToolBlock),
+}
+
+/// One tool call's merged state, keyed by `call_id` -- see
+/// [`transcript_blocks`] for how the three lifecycle items fold into this.
+/// `call_id`/`tool_id`/`input` are `None` only for a still-in-flight
+/// `ToolCallPreparing` progress tick, before the real request (which always
+/// carries all three) arrives.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct ToolBlock {
+    pub(super) call_id: Option<ToolCallId>,
+    pub(super) tool_id: Option<String>,
+    pub(super) input: Option<Value>,
+    pub(super) status: ToolStatus,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum ToolStatus {
+    Preparing { bytes: usize },
+    Requested,
+    Started,
+    Finished { output: Value },
+}
+
+impl ToolBlock {
+    /// The `old_string`/`new_string` pair an `fs.edit` request carries, if
+    /// present -- what `diff::line_diff` reconstructs this block's line
+    /// diff from (`docs/agent-output-ui-design.md` decision 3: "joining the
+    /// finished result to its originating request's `old_string`/
+    /// `new_string`"). `None` for any other tool, or if the input is
+    /// somehow missing one of the two fields.
+    pub(super) fn edit_strings(&self) -> Option<(&str, &str)> {
+        let input = self.input.as_ref()?;
+        let old = input.get("old_string")?.as_str()?;
+        let new = input.get("new_string")?.as_str()?;
+        Some((old, new))
+    }
+
+    /// Whether this call finished with Horizon's `is_error` result shape.
+    /// `false` for any call still in flight -- only a `Finished` status can
+    /// be an error.
+    pub(super) fn is_error(&self) -> bool {
+        match &self.status {
+            ToolStatus::Finished { output } => is_error_output(output),
+            _ => false,
+        }
+    }
+}
+
+/// Whether a tool result `Value` is Horizon's `is_error` shape
+/// (`{"is_error": true, ...}` -- see `tools/fs/mod.rs::error_output` and the
+/// `bash` tool's own error paths). Shared by the header/body renderers
+/// (`tool_header`, `tool_view`) and the status-color lookup (`style::
+/// tool_status_color`), so "what counts as a failed tool call" has exactly
+/// one definition.
+pub(super) fn is_error_output(output: &Value) -> bool {
+    output
+        .get("is_error")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -21,19 +98,86 @@ pub(super) enum TranscriptTone {
     Lifecycle,
 }
 
+/// Builds the transcript's blocks from `frame.items`, merging every tool
+/// call's `ToolCallRequested`/`ToolCallStarted`/`ToolCallFinished` items
+/// into the one [`ToolBlock`] first created for that `call_id` (at the
+/// `ToolCallRequested` -- or, if it's still in flight, `ToolCallPreparing`
+/// -- item's own index, which becomes the merged block's stable `id`).
+/// `ApprovalRequested`/`Error`/`Exited`/messages/thinking are unaffected,
+/// one block per item as before slice 1.
 pub(super) fn transcript_blocks(frame: &AgentFrame) -> Vec<TranscriptBlock> {
-    let mut blocks = frame
-        .items
-        .iter()
-        .enumerate()
-        .filter_map(|(id, item)| transcript_block(id, item))
-        .collect::<Vec<_>>();
+    let mut blocks: Vec<TranscriptBlock> = Vec::new();
+    // Maps a call id to its block's position in `blocks` (not its position
+    // in `frame.items`), so `ToolCallStarted`/`ToolCallFinished` -- which
+    // never produce a block of their own -- can mutate the existing one in
+    // place instead of appending a new one.
+    let mut tool_positions: HashMap<ToolCallId, usize> = HashMap::new();
+
+    for (id, item) in frame.items.iter().enumerate() {
+        match item {
+            AgentFrameItem::ToolCallStarted(call_id) => {
+                if let Some(&position) = tool_positions.get(call_id) {
+                    if let BlockKind::Tool(tool) = &mut blocks[position].kind {
+                        tool.status = ToolStatus::Started;
+                    }
+                }
+                continue;
+            }
+            AgentFrameItem::ToolCallFinished(result) => {
+                if let Some(&position) = tool_positions.get(&result.call_id) {
+                    if let BlockKind::Tool(tool) = &mut blocks[position].kind {
+                        tool.status = ToolStatus::Finished {
+                            output: result.output.clone(),
+                        };
+                    }
+                } else {
+                    // Defensive: a finished call whose request isn't in
+                    // this frame (shouldn't happen -- requests and results
+                    // are folded onto the same frame) still needs *some*
+                    // representation rather than silently vanishing.
+                    blocks.push(TranscriptBlock {
+                        id,
+                        tone: TranscriptTone::Tool,
+                        kind: BlockKind::Tool(ToolBlock {
+                            call_id: Some(result.call_id.clone()),
+                            tool_id: None,
+                            input: None,
+                            status: ToolStatus::Finished {
+                                output: result.output.clone(),
+                            },
+                        }),
+                    });
+                }
+                continue;
+            }
+            _ => {}
+        }
+
+        let Some(block) = transcript_block(id, item) else {
+            continue;
+        };
+        if let BlockKind::Tool(ToolBlock {
+            call_id: Some(call_id),
+            ..
+        }) = &block.kind
+        {
+            tool_positions.insert(call_id.clone(), blocks.len());
+        }
+        blocks.push(block);
+    }
+
     if let Some(status) = status_block(frame.state, blocks.len(), blocks.last()) {
         blocks.push(status);
     }
     blocks
 }
 
+/// The live text of a `Text`-kind block at `id`/`tone`/`label`, re-derived
+/// directly from `frame` -- used by `markdown_block_view`'s reactive
+/// closure so a streaming block's displayed text keeps growing even though
+/// `dyn_stack` never rebuilds its view for an unchanged key (see that
+/// view's call site). Not used for `Tool`-kind blocks: see
+/// [`current_tool_block`] instead.
 pub(super) fn current_block_text(
     frame: &AgentFrame,
     id: usize,
@@ -45,19 +189,73 @@ pub(super) fn current_block_text(
         .get(id)
         .and_then(|item| transcript_block(id, item))
         .or_else(|| {
-            let blocks = frame
-                .items
-                .iter()
-                .enumerate()
-                .filter_map(|(id, item)| transcript_block(id, item))
-                .collect::<Vec<_>>();
-            status_block(frame.state, blocks.len(), blocks.last())
+            transcript_blocks(frame)
+                .into_iter()
+                .find(|block| block.id == id)
         });
 
     block
-        .filter(|block| block.id == id && block.tone == tone && block.label == label)
-        .map(|block| block.text)
+        .filter(|block| block.tone == tone)
+        .and_then(|block| match block.kind {
+            BlockKind::Text {
+                label: block_label,
+                text,
+            } if block_label == label => Some(text),
+            _ => None,
+        })
         .unwrap_or_default()
+}
+
+/// The live merged state of the tool call whose block started at `id`
+/// (the `ToolCallRequested`/`ToolCallPreparing` item's own index) --
+/// `tool_view`'s reactive header/body closures call this so a block whose
+/// `dyn_stack` key never changes (see [`transcript_blocks`]'s doc comment)
+/// still picks up later `ToolCallStarted`/`ToolCallFinished` items. Scans
+/// forward from `id` only as far as the terminal `ToolCallFinished` (or the
+/// end of the frame if the call is still in flight), not the whole item
+/// log.
+pub(super) fn current_tool_block(frame: &AgentFrame, id: usize) -> Option<ToolBlock> {
+    let (call_id, tool_id, input, mut status) = match frame.items.get(id)? {
+        AgentFrameItem::ToolCallRequested(request) => (
+            Some(request.call_id.clone()),
+            Some(request.tool_id.clone()),
+            Some(request.input.clone()),
+            ToolStatus::Requested,
+        ),
+        AgentFrameItem::ToolCallPreparing(progress) => (
+            None,
+            progress.tool_id.clone(),
+            None,
+            ToolStatus::Preparing {
+                bytes: progress.bytes,
+            },
+        ),
+        _ => return None,
+    };
+
+    if let Some(call_id) = &call_id {
+        for item in &frame.items[id + 1..] {
+            match item {
+                AgentFrameItem::ToolCallStarted(started_id) if started_id == call_id => {
+                    status = ToolStatus::Started;
+                }
+                AgentFrameItem::ToolCallFinished(result) if &result.call_id == call_id => {
+                    status = ToolStatus::Finished {
+                        output: result.output.clone(),
+                    };
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Some(ToolBlock {
+        call_id,
+        tool_id,
+        input,
+        status,
+    })
 }
 
 /// Caps how many transcript blocks `agent_frame_view`'s dyn_stack actually
@@ -117,6 +315,14 @@ fn window_blocks(mut blocks: Vec<TranscriptBlock>, window: usize) -> (usize, Vec
     (omitted, blocks.split_off(omitted))
 }
 
+/// A cheap proxy for "has `frame` changed since last computed", checked
+/// purely against `frame.items`/`frame.state` -- independent of how
+/// [`transcript_blocks`] groups those items into blocks, so merging tool
+/// lifecycle items into one block (slice 1) doesn't require touching this:
+/// every state transition this must detect (a new `ToolCallStarted`/
+/// `ToolCallFinished` item, `ToolCallPreparing`'s growing byte count) is
+/// already either a new item (bumping `frame.items.len()`) or a changed
+/// field length summed below.
 pub(super) fn transcript_revision(frame: &AgentFrame) -> usize {
     let state = usize::from(frame.state.is_some());
     frame
@@ -144,58 +350,69 @@ fn transcript_block(id: usize, item: &AgentFrameItem) -> Option<TranscriptBlock>
         AgentFrameItem::Message(message) => Some(message_block(id, message)),
         AgentFrameItem::ReasoningDelta(delta) => Some(TranscriptBlock {
             id,
-            label: Some("thinking"),
-            text: delta.text.clone(),
             tone: TranscriptTone::Thinking,
+            kind: BlockKind::Text {
+                label: Some("thinking"),
+                text: delta.text.clone(),
+            },
         }),
         AgentFrameItem::AssistantTextDelta(delta) => Some(TranscriptBlock {
             id,
-            label: None,
-            text: delta.text.clone(),
             tone: TranscriptTone::Assistant,
+            kind: BlockKind::Text {
+                label: None,
+                text: delta.text.clone(),
+            },
         }),
         AgentFrameItem::ToolCallRequested(request) => Some(TranscriptBlock {
             id,
-            label: Some("tool request"),
-            text: format!("{} {}", request.tool_id, request.input),
             tone: TranscriptTone::Tool,
-        }),
-        AgentFrameItem::ToolCallStarted(call_id) => Some(TranscriptBlock {
-            id,
-            label: Some("tool running"),
-            text: call_id.0.clone(),
-            tone: TranscriptTone::Tool,
-        }),
-        AgentFrameItem::ToolCallFinished(result) => Some(TranscriptBlock {
-            id,
-            label: Some("tool result"),
-            text: tool_result_summary(result.call_id.0.as_str(), &result.output),
-            tone: TranscriptTone::Tool,
+            kind: BlockKind::Tool(ToolBlock {
+                call_id: Some(request.call_id.clone()),
+                tool_id: Some(request.tool_id.clone()),
+                input: Some(request.input.clone()),
+                status: ToolStatus::Requested,
+            }),
         }),
         AgentFrameItem::ToolCallPreparing(progress) => Some(TranscriptBlock {
             id,
-            label: Some("preparing"),
-            text: tool_call_preparing_summary(progress),
             tone: TranscriptTone::Tool,
+            kind: BlockKind::Tool(ToolBlock {
+                call_id: None,
+                tool_id: progress.tool_id.clone(),
+                input: None,
+                status: ToolStatus::Preparing {
+                    bytes: progress.bytes,
+                },
+            }),
         }),
         AgentFrameItem::ApprovalRequested(request) => Some(TranscriptBlock {
             id,
-            label: Some("approval"),
-            text: request.reason.clone(),
             tone: TranscriptTone::Approval,
+            kind: BlockKind::Text {
+                label: Some("approval"),
+                text: request.reason.clone(),
+            },
         }),
         AgentFrameItem::Error(error) => Some(TranscriptBlock {
             id,
-            label: Some("error"),
-            text: error.message.clone(),
             tone: TranscriptTone::Error,
+            kind: BlockKind::Text {
+                label: Some("error"),
+                text: error.message.clone(),
+            },
         }),
         AgentFrameItem::Exited(exit) => Some(TranscriptBlock {
             id,
-            label: Some("exited"),
-            text: exit.reason.clone(),
             tone: TranscriptTone::Lifecycle,
+            kind: BlockKind::Text {
+                label: Some("exited"),
+                text: exit.reason.clone(),
+            },
         }),
+        // Merged into an already-emitted `ToolBlock` by `transcript_blocks`
+        // above rather than producing a block of their own.
+        AgentFrameItem::ToolCallStarted(_) | AgentFrameItem::ToolCallFinished(_) => None,
     }
 }
 
@@ -207,9 +424,11 @@ fn message_block(id: usize, message: &Message) -> TranscriptBlock {
 
     TranscriptBlock {
         id,
-        label: None,
-        text: message.text.clone(),
         tone,
+        kind: BlockKind::Text {
+            label: None,
+            text: message.text.clone(),
+        },
     }
 }
 
@@ -253,9 +472,11 @@ fn status_block(
 
     Some(TranscriptBlock {
         id,
-        label: Some("status"),
-        text: text.to_string(),
         tone: TranscriptTone::Status,
+        kind: BlockKind::Text {
+            label: Some("status"),
+            text: text.to_string(),
+        },
     })
 }
 
@@ -266,51 +487,12 @@ fn should_show_initial_reply_status(last_block: Option<&TranscriptBlock>) -> boo
     )
 }
 
-/// Renders the ephemeral "arguments are still streaming in" feedback for a
-/// [`crate::agent::contract::ToolCallProgress`] tick — see
-/// `ToolCallProgressBuffer` in the rig provider for where these come from.
-fn tool_call_preparing_summary(progress: &crate::agent::contract::ToolCallProgress) -> String {
-    match &progress.tool_id {
-        Some(tool_id) => format!(
-            "preparing `{tool_id}`… ({} byte{} so far)",
-            progress.bytes,
-            if progress.bytes == 1 { "" } else { "s" }
-        ),
-        None => format!(
-            "preparing a tool call… ({} byte{} so far)",
-            progress.bytes,
-            if progress.bytes == 1 { "" } else { "s" }
-        ),
-    }
-}
-
-fn tool_result_summary(call_id: &str, output: &serde_json::Value) -> String {
-    match output {
-        serde_json::Value::Object(map) => {
-            let mut keys = map.keys().take(4).cloned().collect::<Vec<_>>();
-            keys.sort();
-            format!(
-                "{call_id} completed ({} field{}){}",
-                map.len(),
-                if map.len() == 1 { "" } else { "s" },
-                if keys.is_empty() {
-                    String::new()
-                } else {
-                    format!(": {}", keys.join(", "))
-                }
-            )
-        }
-        serde_json::Value::Array(values) => {
-            format!("{call_id} completed ({} item array)", values.len())
-        }
-        _ => format!("{call_id} {output}"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::contract::{Message, MessageRole};
+    use crate::agent::contract::{
+        ApprovalRequest, Message, MessageRole, ToolCallId, ToolCallRequest, ToolCallResult,
+    };
 
     fn message_frame(count: usize) -> AgentFrame {
         AgentFrame {
@@ -326,6 +508,20 @@ mod tests {
         }
     }
 
+    fn text_of(block: &TranscriptBlock) -> &str {
+        match &block.kind {
+            BlockKind::Text { text, .. } => text,
+            BlockKind::Tool(_) => panic!("expected a text block, got a tool block"),
+        }
+    }
+
+    fn tool_of(block: &TranscriptBlock) -> &ToolBlock {
+        match &block.kind {
+            BlockKind::Tool(tool) => tool,
+            BlockKind::Text { .. } => panic!("expected a tool block, got a text block"),
+        }
+    }
+
     #[test]
     fn window_blocks_keeps_everything_under_the_window() {
         let frame = message_frame(TRANSCRIPT_WINDOW - 1);
@@ -333,7 +529,7 @@ mod tests {
 
         assert_eq!(omitted, 0);
         assert_eq!(blocks.len(), TRANSCRIPT_WINDOW - 1);
-        assert_eq!(blocks[0].text, "message 0");
+        assert_eq!(text_of(&blocks[0]), "message 0");
     }
 
     #[test]
@@ -343,7 +539,7 @@ mod tests {
 
         assert_eq!(omitted, 0);
         assert_eq!(blocks.len(), TRANSCRIPT_WINDOW);
-        assert_eq!(blocks[0].text, "message 0");
+        assert_eq!(text_of(&blocks[0]), "message 0");
     }
 
     #[test]
@@ -355,9 +551,9 @@ mod tests {
         assert_eq!(blocks.len(), TRANSCRIPT_WINDOW);
         // The single omitted block is the oldest one ("message 0"); the
         // trailing window keeps the most recent blocks, in order.
-        assert_eq!(blocks[0].text, "message 1");
+        assert_eq!(text_of(&blocks[0]), "message 1");
         assert_eq!(
-            blocks.last().unwrap().text,
+            text_of(blocks.last().unwrap()),
             format!("message {TRANSCRIPT_WINDOW}")
         );
     }
@@ -370,7 +566,7 @@ mod tests {
 
         assert_eq!(omitted, extra);
         assert_eq!(blocks.len(), TRANSCRIPT_WINDOW);
-        assert_eq!(blocks[0].text, format!("message {extra}"));
+        assert_eq!(text_of(&blocks[0]), format!("message {extra}"));
     }
 
     #[test]
@@ -420,5 +616,180 @@ mod tests {
         assert_eq!(result.revision, transcript_revision(&frame));
         assert_eq!(result.omitted, 0);
         assert_eq!(result.blocks.len(), 3);
+    }
+
+    // --- tool call merge (slice 1) ----------------------------------------
+
+    fn request(call_id: &str) -> ToolCallRequest {
+        ToolCallRequest {
+            call_id: ToolCallId(call_id.to_string()),
+            tool_id: "fs.read".to_string(),
+            input: serde_json::json!({ "path": "src/lib.rs" }),
+        }
+    }
+
+    #[test]
+    fn a_lone_request_produces_one_pending_tool_block() {
+        let frame = AgentFrame {
+            state: None,
+            items: vec![AgentFrameItem::ToolCallRequested(request("call-1"))],
+        };
+
+        let blocks = transcript_blocks(&frame);
+
+        assert_eq!(blocks.len(), 1);
+        let tool = tool_of(&blocks[0]);
+        assert_eq!(tool.status, ToolStatus::Requested);
+        assert_eq!(tool.call_id, Some(ToolCallId("call-1".to_string())));
+    }
+
+    #[test]
+    fn request_started_and_finished_merge_into_a_single_block() {
+        let call_id = ToolCallId("call-1".to_string());
+        let frame = AgentFrame {
+            state: None,
+            items: vec![
+                AgentFrameItem::ToolCallRequested(request("call-1")),
+                AgentFrameItem::ToolCallStarted(call_id.clone()),
+                AgentFrameItem::ToolCallFinished(ToolCallResult {
+                    call_id: call_id.clone(),
+                    output: serde_json::json!({ "content": "fn main() {}\n" }),
+                }),
+            ],
+        };
+
+        let blocks = transcript_blocks(&frame);
+
+        assert_eq!(
+            blocks.len(),
+            1,
+            "the three lifecycle items must collapse into one block"
+        );
+        let tool = tool_of(&blocks[0]);
+        assert_eq!(tool.call_id, Some(call_id));
+        assert!(matches!(tool.status, ToolStatus::Finished { .. }));
+    }
+
+    #[test]
+    fn the_merged_block_transitions_through_every_status_in_place() {
+        let call_id = ToolCallId("call-1".to_string());
+
+        let after_request = AgentFrame {
+            state: None,
+            items: vec![AgentFrameItem::ToolCallRequested(request("call-1"))],
+        };
+        let blocks = transcript_blocks(&after_request);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(tool_of(&blocks[0]).status, ToolStatus::Requested);
+        let block_id = blocks[0].id;
+
+        let mut after_started = after_request.clone();
+        after_started
+            .items
+            .push(AgentFrameItem::ToolCallStarted(call_id.clone()));
+        let blocks = transcript_blocks(&after_started);
+        assert_eq!(blocks.len(), 1, "started must not add a second block");
+        assert_eq!(blocks[0].id, block_id, "the block's id must stay stable");
+        assert_eq!(tool_of(&blocks[0]).status, ToolStatus::Started);
+
+        let mut after_finished = after_started.clone();
+        after_finished
+            .items
+            .push(AgentFrameItem::ToolCallFinished(ToolCallResult {
+                call_id: call_id.clone(),
+                output: serde_json::json!({ "content": "" }),
+            }));
+        let blocks = transcript_blocks(&after_finished);
+        assert_eq!(blocks.len(), 1, "finished must not add a second block");
+        assert_eq!(blocks[0].id, block_id, "the block's id must stay stable");
+        assert!(matches!(
+            tool_of(&blocks[0]).status,
+            ToolStatus::Finished { .. }
+        ));
+    }
+
+    #[test]
+    fn an_error_result_is_reflected_on_the_merged_block() {
+        let call_id = ToolCallId("call-1".to_string());
+        let frame = AgentFrame {
+            state: None,
+            items: vec![
+                AgentFrameItem::ToolCallRequested(request("call-1")),
+                AgentFrameItem::ToolCallFinished(ToolCallResult {
+                    call_id,
+                    output: serde_json::json!({ "is_error": true, "message": "boom" }),
+                }),
+            ],
+        };
+
+        let blocks = transcript_blocks(&frame);
+
+        assert_eq!(blocks.len(), 1);
+        assert!(tool_of(&blocks[0]).is_error());
+    }
+
+    #[test]
+    fn independent_calls_produce_independent_blocks() {
+        let frame = AgentFrame {
+            state: None,
+            items: vec![
+                AgentFrameItem::ToolCallRequested(request("call-1")),
+                AgentFrameItem::ToolCallRequested(request("call-2")),
+                AgentFrameItem::ToolCallFinished(ToolCallResult {
+                    call_id: ToolCallId("call-1".to_string()),
+                    output: serde_json::json!({}),
+                }),
+            ],
+        };
+
+        let blocks = transcript_blocks(&frame);
+
+        assert_eq!(blocks.len(), 2);
+        assert!(matches!(
+            tool_of(&blocks[0]).status,
+            ToolStatus::Finished { .. }
+        ));
+        assert_eq!(tool_of(&blocks[1]).status, ToolStatus::Requested);
+    }
+
+    #[test]
+    fn current_tool_block_reflects_the_latest_status() {
+        let call_id = ToolCallId("call-1".to_string());
+        let frame = AgentFrame {
+            state: None,
+            items: vec![
+                AgentFrameItem::ToolCallRequested(request("call-1")),
+                AgentFrameItem::ToolCallStarted(call_id.clone()),
+                AgentFrameItem::ToolCallFinished(ToolCallResult {
+                    call_id,
+                    output: serde_json::json!({ "content": "" }),
+                }),
+            ],
+        };
+
+        let tool = current_tool_block(&frame, 0).expect("block at id 0");
+
+        assert!(matches!(tool.status, ToolStatus::Finished { .. }));
+    }
+
+    #[test]
+    fn approval_and_status_blocks_are_unaffected_by_the_tool_merge() {
+        let call_id = ToolCallId("call-1".to_string());
+        let frame = AgentFrame {
+            state: Some(SessionState::WaitingForApproval),
+            items: vec![
+                AgentFrameItem::ToolCallRequested(request("call-1")),
+                AgentFrameItem::ApprovalRequested(ApprovalRequest {
+                    call_id,
+                    reason: "writes outside the workspace".to_string(),
+                }),
+            ],
+        };
+
+        let blocks = transcript_blocks(&frame);
+
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[1].tone, TranscriptTone::Approval);
+        assert_eq!(text_of(&blocks[1]), "writes outside the workspace");
     }
 }

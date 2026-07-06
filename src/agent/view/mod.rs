@@ -6,16 +6,19 @@ use floem::peniko::kurbo::Point;
 use floem::prelude::*;
 use floem::reactive::create_memo;
 
+mod diff;
 mod labels;
 mod markdown;
 mod style;
+mod tool_header;
+mod tool_view;
 mod transcript;
 
 use labels::{block_label, shows_label};
 use markdown::{markdown_lines, MarkdownLine, MarkdownLineKind};
-use style::{block_colors, block_label_size, block_max_width, block_text_color};
+use style::{block_colors, block_max_width, block_text_color};
 use transcript::{
-    compute_transcript_window, current_block_text, TranscriptBlock, TranscriptTone,
+    compute_transcript_window, current_block_text, BlockKind, TranscriptBlock, TranscriptTone,
     TranscriptWindow,
 };
 
@@ -42,7 +45,7 @@ pub(crate) fn agent_frame_view(
         }),
         dyn_stack(
             move || window.with(|window| window.blocks.clone()),
-            move |block| (block.id, block.tone, block.label),
+            move |block| (block.id, block.tone),
             move |block| transcript_block_view(block, frame),
         )
         .style(|s| s.width_full().flex_col().gap(8)),
@@ -119,8 +122,9 @@ fn transcript_block_view(
     frame: impl Fn() -> AgentFrame + Copy + 'static,
 ) -> impl IntoView {
     let tone = block.tone;
-    let expanded = RwSignal::new(tone != TranscriptTone::Thinking);
-    let block_for_label = block.clone();
+    let block_id = block.id;
+    let expanded = RwSignal::new(!style::is_collapsible(tone));
+    let kind = block.kind;
 
     h_stack((
         label(String::new).style(move |s| {
@@ -131,39 +135,8 @@ fn transcript_block_view(
             }
         }),
         v_stack((
-            label(move || block_label(&block_for_label))
-                .on_click_stop(move |_| {
-                    if tone == TranscriptTone::Thinking {
-                        expanded.update(|expanded| *expanded = !*expanded);
-                    }
-                })
-                .style(move |s| {
-                    if !shows_label(tone) {
-                        return s.hide();
-                    }
-
-                    let (background, border) = block_colors(tone);
-                    let s = s
-                        .width_full()
-                        .min_height(28)
-                        .items_center()
-                        .padding_horiz(10)
-                        .padding_vert(5)
-                        .font_family(font_family().to_string())
-                        .font_size(block_label_size(tone))
-                        .line_height(1.35)
-                        .color(block_text_color(tone))
-                        .background(background)
-                        .border(1.0)
-                        .border_color(border);
-
-                    if expanded.get() && tone == TranscriptTone::Thinking {
-                        s.border_bottom(0.0)
-                    } else {
-                        s
-                    }
-                }),
-            markdown_block_view(block.clone(), expanded, frame),
+            transcript_header_view(block_id, tone, kind.clone(), expanded, frame),
+            transcript_body_view(block_id, tone, kind, expanded, frame),
         ))
         .style(move |s| {
             let (background, border) = block_colors(tone);
@@ -184,21 +157,71 @@ fn transcript_block_view(
     .style(move |s| s.width_full().items_start().gap(12))
 }
 
-fn markdown_block_view(
-    block: TranscriptBlock,
+/// The block's one-line header. `Tool`-kind blocks route to
+/// `tool_view::tool_header_view`, whose text/color re-derive live from
+/// `frame` on every status transition; every other kind keeps the
+/// pre-slice-1 static label (computed once -- these blocks' headers never
+/// change over their lifetime, only their body text streams in).
+fn transcript_header_view(
+    block_id: usize,
+    tone: TranscriptTone,
+    kind: BlockKind,
     expanded: RwSignal<bool>,
     frame: impl Fn() -> AgentFrame + Copy + 'static,
 ) -> impl IntoView {
-    let tone = block.tone;
-    let block_id = block.id;
-    let block_label = block.label;
+    match kind {
+        BlockKind::Tool(tool) => {
+            tool_view::tool_header_view(block_id, tool, expanded, frame).into_any()
+        }
+        BlockKind::Text { .. } => {
+            let text = block_label(tone, &kind);
+            label(move || text.clone())
+                .on_click_stop(move |_| {
+                    if tone == TranscriptTone::Thinking {
+                        expanded.update(|expanded| *expanded = !*expanded);
+                    }
+                })
+                .style(move |s| {
+                    if !shows_label(tone) {
+                        return s.hide();
+                    }
+                    style::header_row_style(s, tone, expanded.get()).color(block_text_color(tone))
+                })
+                .into_any()
+        }
+    }
+}
 
+fn transcript_body_view(
+    block_id: usize,
+    tone: TranscriptTone,
+    kind: BlockKind,
+    expanded: RwSignal<bool>,
+    frame: impl Fn() -> AgentFrame + Copy + 'static,
+) -> impl IntoView {
+    match kind {
+        BlockKind::Tool(tool) => {
+            tool_view::tool_body_view(block_id, tool, expanded, frame).into_any()
+        }
+        BlockKind::Text {
+            label: text_label, ..
+        } => markdown_block_view(block_id, tone, text_label, expanded, frame).into_any(),
+    }
+}
+
+fn markdown_block_view(
+    block_id: usize,
+    tone: TranscriptTone,
+    body_label: Option<&'static str>,
+    expanded: RwSignal<bool>,
+    frame: impl Fn() -> AgentFrame + Copy + 'static,
+) -> impl IntoView {
     dyn_stack(
         move || {
             if tone == TranscriptTone::Thinking && !expanded.get() {
                 Vec::new()
             } else {
-                let text = current_block_text(&frame(), block_id, tone, block_label);
+                let text = current_block_text(&frame(), block_id, tone, body_label);
                 markdown_lines(&text)
             }
         },
@@ -252,6 +275,13 @@ mod tests {
     use crate::agent::frame::AgentFrameItem;
     use transcript::transcript_blocks;
 
+    fn text_of(block: &TranscriptBlock) -> &str {
+        match &block.kind {
+            BlockKind::Text { text, .. } => text,
+            BlockKind::Tool(_) => panic!("expected a text block, got a tool block"),
+        }
+    }
+
     #[test]
     fn transcript_blocks_keep_full_assistant_text() {
         let text = "long assistant response ".repeat(80);
@@ -266,7 +296,7 @@ mod tests {
         let blocks = transcript_blocks(&frame);
 
         assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].text, text);
+        assert_eq!(text_of(&blocks[0]), text);
         assert_eq!(blocks[0].tone, TranscriptTone::Assistant);
     }
 
@@ -281,7 +311,7 @@ mod tests {
 
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].tone, TranscriptTone::Status);
-        assert_eq!(blocks[0].text, "Agent is replying...");
+        assert_eq!(text_of(&blocks[0]), "Agent is replying...");
     }
 
     #[test]

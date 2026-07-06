@@ -16,12 +16,12 @@ use schema::INITIALIZE_SCHEMA_SQL;
 
 use records::AgentStoredEvent;
 
-pub use records::AgentStoredSession;
 #[cfg(test)]
 pub use records::{
     AgentStoredApproval, AgentStoredMessage, AgentStoredSessionSnapshot, AgentStoredToolCall,
     AgentStoredToolResult, AppendEvent,
 };
+pub use records::{AgentStoredSession, RecallEntry, RecallEntryKind, RecallSearchReport};
 
 pub struct Store {
     conn: Connection,
@@ -815,6 +815,90 @@ mod tests {
         assert_eq!(event_at_ms, 1_700_000_000_000);
 
         let _ = std::fs::remove_file(path);
+    }
+
+    /// End-to-end for the *live* projection (task 1 of the recall work),
+    /// not just the rebuild-at-startup path the tests above cover: drives
+    /// real appends through `event_log::WriterHandle::open_silently(path,
+    /// Some(duckdb_path))` -- the exact seam `horizon-agentd`'s
+    /// `open_persistence` uses -- then opens a *fresh*, independent
+    /// `Store::open` in this same process (proving same-process concurrent
+    /// opens don't contend, per this feature's measured premises) and
+    /// checks the rows are already there, with each record's own
+    /// `event_at`, not a rebuild discovering them at the next restart and
+    /// not a `now()` stamp from the writer thread's own append time.
+    #[test]
+    fn live_projection_reflects_writer_thread_appends_with_correct_event_at() {
+        use crate::persistence::event_log::{
+            Record, WriterHandle, WriterInit, AGENT_EVENT_LOG_SCHEMA, AGENT_EVENT_LOG_VERSION,
+        };
+
+        let event_log_path = std::env::temp_dir().join(format!(
+            "horizon-agent-live-duckdb-events-{}.jsonl",
+            Uuid::new_v4()
+        ));
+        let duckdb_path = std::env::temp_dir().join(format!(
+            "horizon-agent-live-duckdb-state-{}.duckdb",
+            Uuid::new_v4()
+        ));
+        let session_id = SessionId::new();
+
+        let (writer, init_rx) =
+            WriterHandle::open_silently(&event_log_path, Some(duckdb_path.clone()));
+        match init_rx.recv().expect("writer init outcome") {
+            WriterInit::Ready(_) => {}
+            WriterInit::Failed(error) => panic!("unexpected startup failure: {error}"),
+        }
+
+        let record_at = |created_at_unix_ms: u64| Record {
+            schema: AGENT_EVENT_LOG_SCHEMA.to_string(),
+            version: AGENT_EVENT_LOG_VERSION,
+            event_id: Uuid::new_v4().to_string(),
+            sequence: 0, // placeholder -- the writer thread assigns the real one
+            session_id,
+            turn_id: None,
+            provider_id: None,
+            role_id: None,
+            event_kind: "state_changed".to_string(),
+            event: Event::StateChanged(SessionState::Running),
+            provider_payload: None,
+            created_at_unix_ms,
+        };
+
+        writer
+            .append(record_at(1_700_000_000_000))
+            .expect("append 0");
+        writer
+            .append(record_at(1_700_000_050_000))
+            .expect("append 1");
+        writer.flush().expect("flush");
+
+        let reopened = Store::open(&duckdb_path).expect("reopen duckdb store");
+        let session_id_text = session_id_text(session_id).expect("session id text");
+        let mut stmt = reopened
+            .conn
+            .prepare(
+                "SELECT sequence, epoch_ms(event_at) FROM agent_events
+                 WHERE session_id = ? ORDER BY sequence",
+            )
+            .expect("prepare");
+        let rows = stmt
+            .query_map(params![&session_id_text], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+            })
+            .expect("query_map")
+            .map(|row| row.expect("row"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            rows,
+            vec![(0, 1_700_000_000_000), (1, 1_700_000_050_000)],
+            "the writer thread's live per-append projection must assign real sequences and \
+             carry each record's own event_at, not a rebuild-time now() stamp"
+        );
+
+        let _ = std::fs::remove_file(&event_log_path);
+        let _ = std::fs::remove_file(&duckdb_path);
     }
 
     #[test]

@@ -55,7 +55,7 @@ use horizon_agent::roles::RoleId;
 use horizon_agent::tools::{
     cancelled_tool_call_result, process_agent_provider_event, register_session_runtime,
     resolve_approval, should_fold_completion, unregister_session_runtime, ApprovalDecision,
-    ApprovalOutcome, BashCompletion, HostTools, ToolSessionState,
+    ApprovalOutcome, BashCompletion, HostTools, RecallContext, ToolSessionState,
 };
 use horizon_agent::wire::{
     Control, Envelope, EnvelopeBody, HostToolRequest, HostToolResponse, SessionNew, SessionSummary,
@@ -639,7 +639,11 @@ fn run_session(
         return;
     };
 
-    let tool_state = ToolSessionState::for_current_dir(state.agent_config.tools);
+    let recall = RecallContext {
+        session_id: Some(session_id),
+        duckdb_path: state.agent_config.persistence.duckdb_path.clone(),
+    };
+    let tool_state = ToolSessionState::for_current_dir(state.agent_config.tools, recall);
     let live_state = match state.writer() {
         Some(writer) => LiveState::with_event_log_and_history(
             session_id,

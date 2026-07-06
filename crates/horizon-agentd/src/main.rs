@@ -39,13 +39,22 @@
 //! mark_resume_ready`] -- meaning every readiness-gated request waited on a
 //! full synchronous rebuild of a derived, non-authoritative read model that
 //! no session actually needs (sessions resume from the JSONL log directly).
-//! [`spawn_resume_task`] now marks readiness right after resuming sessions
-//! and only *then* kicks off [`spawn_duckdb_rebuild_task`] as its own
-//! separate background task -- readiness genuinely no longer waits on
-//! DuckDB at all. That task also skips the rebuild entirely when the
-//! projection is already current (see its doc comment) -- the common case
-//! on a clean restart against an unchanged log, which used to mean a full
-//! synchronous rebuild every single time.
+//!
+//! As of the recall work, the rebuild (and the projection itself) moved
+//! again: it's no longer a separate task this binary spawns at all.
+//! [`open_persistence`] now passes `agent_config.persistence.duckdb_path`
+//! straight into [`WriterHandle::open_silently`], and the event log's own
+//! background writer thread (`horizon_agent::persistence::event_log::
+//! writer`) does the rebuild-or-skip itself, right after it sends
+//! `WriterInit::Ready` (which is what [`open_persistence`]'s blocking
+//! `init_rx.recv()` -- and therefore [`AgentdState::mark_resume_ready`] --
+//! actually waits on) and before it starts draining/durably writing further
+//! appends. Readiness still doesn't wait on DuckDB at all, and the same
+//! skip-when-current freshness check still applies (see that module's
+//! `rebuild_and_open_duckdb_projection` doc comment) -- but the writer
+//! thread now *keeps* the opened `Store` afterward instead of dropping it,
+//! projecting every later append live instead of only at the next restart
+//! (`docs/agent-duckdb-state-design.md`'s "Runtime Boundary" addendum).
 
 mod session;
 
@@ -56,7 +65,6 @@ use std::time::Duration;
 use horizon_agent::config::{self, AgentConfig};
 use horizon_agent::contract::ProviderRegistry;
 use horizon_agent::persistence::event_log::{Record, WriterHandle, WriterInit};
-use horizon_agent::persistence::projection::duckdb::Store;
 use horizon_agent::socket::default_socket_path;
 use horizon_agent::wire::{self, Control, Envelope, EnvelopeBody, Hello, CONTRACT_VERSION};
 use session::{AgentdState, Connection};
@@ -78,14 +86,6 @@ const BINARY_ID: &str = env!("CARGO_PKG_VERSION");
 /// `session_load` don't) instead of relying on incidental timing. Never set
 /// in production.
 const TEST_RESUME_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_RESUME_DELAY_MS";
-
-/// Test-only hook (`crates/horizon-agentd/tests/e2e.rs`): when set to a
-/// number of milliseconds, [`spawn_duckdb_rebuild_task`] sleeps that long
-/// before touching the DuckDB file -- the DuckDB analogue of
-/// [`TEST_RESUME_DELAY_MS_VAR`], letting a test prove `hello`/`session_list`
-/// stay reachable while a slow rebuild is still running in its own
-/// background task. Never set in production.
-const TEST_DUCKDB_REBUILD_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_DUCKDB_REBUILD_DELAY_MS";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -115,13 +115,14 @@ async fn main() -> anyhow::Result<()> {
 /// Opens this process's own event log writer, resumes every session found
 /// in it, and marks `state` ready -- all on a background task that races
 /// the accept loop `main` starts right after this returns, per the
-/// module's bind-first fix. Once readiness is marked, the DuckDB rebuild
-/// ([`spawn_duckdb_rebuild_task`]) is kicked off as its *own* background
-/// task -- see the module doc's "DuckDB rebuild is off the readiness path
-/// too" -- so nothing gated on [`AgentdState::wait_until_resume_ready`]
-/// waits on it. Decision 3 in the design doc ("the child owns the event log
-/// and DuckDB projection") still holds: this uses this binary's own config
-/// load, never Horizon's.
+/// module's bind-first fix. Decision 3 in the design doc ("the child owns
+/// the event log and DuckDB projection") still holds: this uses this
+/// binary's own config load, never Horizon's.
+///
+/// The DuckDB rebuild is no longer spawned from here at all -- see the
+/// module doc's "DuckDB rebuild is off the readiness path too" for where it
+/// actually happens now ([`open_persistence`]'s `WriterHandle::
+/// open_silently` call).
 fn spawn_resume_task(state: Arc<AgentdState>, agent_config: AgentConfig) {
     tokio::task::spawn_blocking(move || {
         if let Some(delay) = test_resume_delay() {
@@ -130,32 +131,16 @@ fn spawn_resume_task(state: Arc<AgentdState>, agent_config: AgentConfig) {
         let (writer, records, skipped_lines_summary) = open_persistence(&agent_config);
         state.set_writer(writer);
         state.set_skipped_lines_summary(skipped_lines_summary);
-        // The DuckDB rebuild also needs these records (see
-        // `spawn_duckdb_rebuild_task`), but `resume_persisted_sessions`
-        // below takes ownership of `records` -- clone once here rather than
-        // reordering the resume-critical path around it.
-        let records_for_duckdb_rebuild = records.clone();
         // Step 4: "agentd restart = read own log, rebuild rig_history, mark
         // turns that died mid-flight as cancelled ... sessions are live
         // again".
         session::resume_persisted_sessions(&state, records);
         state.mark_resume_ready();
-
-        if let Some(duckdb_path) = agent_config.persistence.duckdb_path {
-            spawn_duckdb_rebuild_task(state, duckdb_path, records_for_duckdb_rebuild);
-        }
     });
 }
 
 fn test_resume_delay() -> Option<Duration> {
     std::env::var(TEST_RESUME_DELAY_MS_VAR)
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(Duration::from_millis)
-}
-
-fn test_duckdb_rebuild_delay() -> Option<Duration> {
-    std::env::var(TEST_DUCKDB_REBUILD_DELAY_MS_VAR)
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .map(Duration::from_millis)
@@ -168,8 +153,7 @@ fn test_duckdb_rebuild_delay() -> Option<Duration> {
 /// accept loop waits on (see the module doc). Also hands back the startup
 /// read's records (empty if persistence is disabled or there's nothing yet)
 /// so the caller can resume every session they belong to
-/// ([`session::resume_persisted_sessions`]) and rebuild the DuckDB
-/// projection ([`spawn_duckdb_rebuild_task`]), and the human-readable
+/// ([`session::resume_persisted_sessions`]), and the human-readable
 /// skipped-lines summary (if any corrupt/torn lines were found) so
 /// [`spawn_resume_task`] can stash it on [`AgentdState`] for `main::
 /// run_session_hosting_loop` to forward to a connecting client -- restoring
@@ -180,10 +164,17 @@ fn test_duckdb_rebuild_delay() -> Option<Duration> {
 /// open`]: this function already prints its own `horizon-agentd`-prefixed
 /// skipped-lines summary just below, so the shared writer module's own
 /// generic summary line would otherwise double up in agentd's stderr.
+/// `open_silently`'s `duckdb_path` argument is this binary's only real
+/// production use of the live DuckDB projection (see the module doc): the
+/// event log's own writer thread rebuilds (or skips, if already current)
+/// and then keeps that `Store` open for the rest of this process's life.
 fn open_persistence(
     agent_config: &AgentConfig,
 ) -> (Option<WriterHandle>, Vec<Record>, Option<String>) {
-    let (writer, init_rx) = WriterHandle::open_silently(&agent_config.persistence.event_log_path);
+    let (writer, init_rx) = WriterHandle::open_silently(
+        &agent_config.persistence.event_log_path,
+        agent_config.persistence.duckdb_path.clone(),
+    );
     match init_rx.recv() {
         Ok(WriterInit::Ready(report)) => {
             let skipped_summary = report.skipped_summary();
@@ -209,81 +200,6 @@ fn open_persistence(
             (None, Vec::new(), None)
         }
     }
-}
-
-/// Rebuilds the DuckDB projection on its own background task, spawned only
-/// after [`AgentdState::mark_resume_ready`] has already fired -- see the
-/// module doc's "DuckDB rebuild is off the readiness path too". A failure
-/// is non-fatal (the projection is a rebuildable, non-authoritative derived
-/// view -- see `docs/agent-duckdb-state-design.md`): reported to stderr as
-/// before, and folded into `state`'s skipped-lines-style status too (best
-/// effort -- appended to whatever summary is already there, so a real
-/// corrupt-log diagnostic isn't silently dropped) so a client that connects
-/// *after* this finishes still learns about it, restoring the same
-/// visibility guardrail the step-3 skipped-lines feature established for
-/// event-log corruption.
-fn spawn_duckdb_rebuild_task(state: Arc<AgentdState>, duckdb_path: PathBuf, records: Vec<Record>) {
-    tokio::task::spawn_blocking(move || {
-        if let Some(delay) = test_duckdb_rebuild_delay() {
-            std::thread::sleep(delay);
-        }
-        if let Err(error) = rebuild_duckdb_projection(&duckdb_path, records) {
-            let message = format!("DuckDB projection rebuild failed: {error}");
-            eprintln!("horizon-agentd: {message}");
-            let combined = match state.skipped_lines_summary() {
-                Some(existing) => format!("{existing}; {message}"),
-                None => message,
-            };
-            state.set_skipped_lines_summary(Some(combined));
-        }
-    });
-}
-
-/// Rebuilds the DuckDB projection from `records` at `path`, unless it's
-/// already current. Opens the store (which may migrate a legacy pre-
-/// `event_at` schema -- see [`Store::migrated_legacy_schema`]) and, only
-/// when no migration was needed, compares its existing high-water mark
-/// ([`Store::max_last_sequence`]) against the log's own final record's
-/// sequence: [`Record::sequence`] is a single counter global to the whole
-/// log, not per-session (see `event_log::writer`'s "Ordering guarantee"),
-/// and `records` is already sorted ascending by `event_log::read`, so its
-/// last element carries the log's overall maximum. Equal means every
-/// session's `agent_sessions.last_sequence` already reflects everything on
-/// disk -- a full rebuild would just reinsert the exact same rows, so it's
-/// skipped, with a one-line log instead. A mismatch (stale projection), a
-/// migration having just run (its own doc comment explains why that case
-/// can't trust the freshness check -- the migration just dropped
-/// `agent_events` without touching `agent_sessions`), or the freshness
-/// check itself erroring all fall through to the same full rebuild this
-/// function used to do unconditionally.
-fn rebuild_duckdb_projection(path: &Path, records: Vec<Record>) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
-    let store = Store::open(path)?;
-    if !store.migrated_legacy_schema() {
-        match duckdb_projection_is_current(&store, &records) {
-            Ok(true) => {
-                eprintln!("horizon-agentd: DuckDB projection already current, skipping rebuild");
-                return Ok(());
-            }
-            Ok(false) => {}
-            Err(error) => eprintln!(
-                "horizon-agentd: DuckDB projection freshness check failed ({error}), rebuilding"
-            ),
-        }
-    }
-    let record_count = records.len();
-    store.replace_from_event_log_records(records)?;
-    eprintln!("horizon-agentd: DuckDB projection rebuilt ({record_count} record(s))");
-    Ok(())
-}
-
-fn duckdb_projection_is_current(store: &Store, records: &[Record]) -> anyhow::Result<bool> {
-    let log_final_sequence = records.last().map(|record| record.sequence as i64);
-    Ok(store.max_last_sequence()? == log_final_sequence)
 }
 
 async fn run(

@@ -142,6 +142,26 @@ code.
 Runtime persistence writes normalized Horizon events to the JSONL event log.
 DuckDB is rebuilt from JSONL and is not the primary append path.
 
+> **Addendum (2026-07-07, recall work).** The statement above ("DuckDB is
+> rebuilt from JSONL and is not the primary append path") still describes
+> JSONL's role as the source of truth, but the projection is no longer
+> *only* rebuilt at startup: `horizon-agentd`'s event-log writer thread
+> (`persistence::event_log::writer`) now opens the DuckDB store once, right
+> after its startup rebuild (or skip, if already current -- the same
+> freshness check as before), and *keeps* that `Store` open for the rest of
+> the process's life, projecting every subsequent event live, right after
+> its own JSONL line is durably written. JSONL is still authoritative and
+> the startup rebuild is still the reconciliation point (a live-projection
+> append failure only warns and moves on -- see `run_writer`'s doc comment);
+> what changed is that a session's history is now queryable in DuckDB
+> within the same run it happened in, not only after the next restart. This
+> is also what powers the `recall.search`/`recall.read` agent tools (see
+> `tools::recall`). One consequence: because the store is now held
+> read-write for `horizon-agentd`'s entire lifetime, an external process can
+> no longer open the file at all while agentd is running (see the
+> `agent-inspect` skill's updated DuckDB section) -- previously the file was
+> only briefly locked during a rebuild.
+
 The projection runs by default now, at `$XDG_DATA_HOME/horizon/agent-state.duckdb`
 (falling back to `~/.local/share/horizon/agent-state.duckdb`) -- there is no
 "unset = disabled" state any more. `HORIZON_AGENT_STATE_DB` (or the config
