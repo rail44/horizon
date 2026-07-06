@@ -4,7 +4,7 @@ use crate::ui::theme;
 use floem::event::{Event, EventListener, EventPropagation};
 use floem::peniko::kurbo::Point;
 use floem::prelude::*;
-use floem::reactive::create_memo;
+use floem::reactive::{create_effect, create_memo};
 
 mod diff;
 mod labels;
@@ -18,8 +18,8 @@ use labels::{block_label, shows_label};
 use markdown::{markdown_lines, MarkdownLine, MarkdownLineKind};
 use style::{block_colors, block_max_width, block_text_color};
 use transcript::{
-    compute_transcript_window, current_block_text, BlockKind, TranscriptBlock, TranscriptTone,
-    TranscriptWindow,
+    compute_transcript_window, current_block_text, is_thinking_streaming, show_turn_end_rule,
+    starts_new_turn, BlockKind, TranscriptBlock, TranscriptTone, TranscriptWindow,
 };
 
 pub(crate) fn agent_frame_view(
@@ -48,9 +48,13 @@ pub(crate) fn agent_frame_view(
             move |block| (block.id, block.tone),
             move |block| transcript_block_view(block, frame),
         )
-        .style(|s| s.width_full().flex_col().gap(8)),
+        // Dense within a turn (decision 6): whitespace belongs at turn
+        // boundaries only, which `turn_boundary_rule` supplies per-block via
+        // its own margin, not this shared gap.
+        .style(|s| s.width_full().flex_col().gap(4)),
+        turn_end_rule_view(window, frame),
     ))
-    .style(|s| s.width_full().flex_col().gap(8).padding(16));
+    .style(|s| s.width_full().flex_col().gap(4).padding(16));
     let content_id = content.id();
 
     scroll(content)
@@ -126,35 +130,104 @@ fn transcript_block_view(
     let expanded = RwSignal::new(!style::is_collapsible(tone));
     let kind = block.kind;
 
-    h_stack((
-        label(String::new).style(move |s| {
-            if tone == TranscriptTone::User {
-                s.flex_basis(0.0).flex_grow(1.0).min_width(40.0)
-            } else {
-                s.hide()
-            }
-        }),
-        v_stack((
-            transcript_header_view(block_id, tone, kind.clone(), expanded, frame),
-            transcript_body_view(block_id, tone, kind, expanded, frame),
-        ))
-        .style(move |s| {
-            let (background, border) = block_colors(tone);
-            let s = s
-                .flex_col()
-                .min_width(0.0)
-                .max_width(block_max_width(tone))
-                .background(background)
-                .border(1.0)
-                .border_color(border);
+    // Thinking's auto-expand-while-streaming (decision 5): `manual_override`
+    // is `None` until the user first clicks the header, after which it wins
+    // forever for this block. The effect composes it with the live
+    // `is_thinking_streaming` read on every `frame` change and writes the
+    // result into `expanded` -- the one signal the header/body below
+    // already read, so no other call site needs to change.
+    let manual_override = RwSignal::new(None::<bool>);
+    if tone == TranscriptTone::Thinking {
+        create_effect(move |_| {
+            let auto = is_thinking_streaming(&frame(), block_id);
+            expanded.set(manual_override.get().unwrap_or(auto));
+        });
+    }
 
-            match tone {
-                TranscriptTone::User => s,
-                _ => s.flex_basis(0.0).flex_grow(1.0),
-            }
-        }),
+    v_stack((
+        turn_boundary_rule_view(tone),
+        h_stack((
+            label(String::new).style(move |s| {
+                if tone == TranscriptTone::User {
+                    s.flex_basis(0.0).flex_grow(1.0).min_width(40.0)
+                } else {
+                    s.hide()
+                }
+            }),
+            v_stack((
+                transcript_header_view(
+                    block_id,
+                    tone,
+                    kind.clone(),
+                    expanded,
+                    manual_override,
+                    frame,
+                ),
+                transcript_body_view(block_id, tone, kind, expanded, frame),
+            ))
+            .style(move |s| {
+                let s = s.flex_col().min_width(0.0).max_width(block_max_width(tone));
+                // Assistant prose stays chromeless (research heuristic: user
+                // boxed, assistant bare text) -- every other tone keeps its
+                // surface/border (`docs/agent-output-ui-design.md` decision
+                // 6).
+                let s = if tone == TranscriptTone::Assistant {
+                    s
+                } else {
+                    let (background, border) = block_colors(tone);
+                    s.background(background).border(1.0).border_color(border)
+                };
+
+                match tone {
+                    TranscriptTone::User => s,
+                    _ => s.flex_basis(0.0).flex_grow(1.0),
+                }
+            }),
+        ))
+        .style(move |s| s.width_full().items_start().gap(12)),
     ))
-    .style(move |s| s.width_full().items_start().gap(12))
+    .style(|s| s.width_full().flex_col())
+}
+
+/// The subtle rule that opens a new turn (decision 6) -- rendered above
+/// every user-message block, whose `tone` never changes over the block's
+/// lifetime, so this can be a plain, non-reactive style rather than a live
+/// re-derivation.
+fn turn_boundary_rule_view(tone: TranscriptTone) -> impl IntoView {
+    label(String::new).style(move |s| {
+        if !starts_new_turn(tone) {
+            return s.hide();
+        }
+
+        s.width_full()
+            .height(1.0)
+            .margin_top(14)
+            .margin_bottom(6)
+            .background(theme::border_subtle())
+    })
+}
+
+/// The trailing rule marking a completed turn's end (decision 6), rendered
+/// once after the whole transcript rather than per-block: unlike
+/// `turn_boundary_rule_view`'s `tone`, whether the turn just ended is a
+/// live property of `frame`'s current state, so this reads `frame`/`window`
+/// reactively in its own `.style` closure -- the same pattern
+/// `omitted_summary`'s label above already uses.
+fn turn_end_rule_view(
+    window: floem::reactive::Memo<TranscriptWindow>,
+    frame: impl Fn() -> AgentFrame + Copy + 'static,
+) -> impl IntoView {
+    label(String::new).style(move |s| {
+        let last_tone = window.with(|window| window.blocks.last().map(|block| block.tone));
+        if !show_turn_end_rule(&frame(), last_tone) {
+            return s.hide();
+        }
+
+        s.width_full()
+            .height(1.0)
+            .margin_top(14)
+            .background(theme::border_subtle())
+    })
 }
 
 /// The block's one-line header. `Tool`-kind blocks route to
@@ -167,6 +240,7 @@ fn transcript_header_view(
     tone: TranscriptTone,
     kind: BlockKind,
     expanded: RwSignal<bool>,
+    manual_override: RwSignal<Option<bool>>,
     frame: impl Fn() -> AgentFrame + Copy + 'static,
 ) -> impl IntoView {
     match kind {
@@ -178,7 +252,11 @@ fn transcript_header_view(
             label(move || text.clone())
                 .on_click_stop(move |_| {
                     if tone == TranscriptTone::Thinking {
-                        expanded.update(|expanded| *expanded = !*expanded);
+                        // A manual click always wins from here on (decision
+                        // 5) -- toggled relative to what's currently shown,
+                        // not the raw auto-derived value, so a click always
+                        // does what it visually looks like it should do.
+                        manual_override.set(Some(!expanded.get_untracked()));
                     }
                 })
                 .style(move |s| {

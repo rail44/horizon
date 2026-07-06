@@ -36,6 +36,12 @@ const DIFF_ADDED_SURFACE_DEFAULT: Color = Color::from_rgb8(30, 46, 34);
 const DIFF_ADDED_TEXT_DEFAULT: Color = Color::from_rgb8(140, 209, 156);
 const DIFF_REMOVED_SURFACE_DEFAULT: Color = Color::from_rgb8(48, 30, 32);
 const DIFF_REMOVED_TEXT_DEFAULT: Color = Color::from_rgb8(224, 130, 138);
+const USER_MESSAGE_SURFACE_DEFAULT: Color = Color::from_rgb8(30, 43, 63);
+const USER_MESSAGE_BORDER_DEFAULT: Color = Color::from_rgb8(65, 94, 133);
+const APPROVAL_SURFACE_DEFAULT: Color = Color::from_rgb8(38, 34, 26);
+const APPROVAL_BORDER_DEFAULT: Color = Color::from_rgb8(78, 66, 44);
+const APPROVAL_CONFIRM_SURFACE_DEFAULT: Color = Color::from_rgb8(48, 84, 75);
+const APPROVAL_DENY_SURFACE_DEFAULT: Color = Color::from_rgb8(80, 50, 54);
 
 pub(crate) fn text_primary() -> Color {
     resolve("text_primary", TEXT_PRIMARY_DEFAULT)
@@ -126,6 +132,54 @@ pub(crate) fn diff_removed_text() -> Color {
     resolve("diff_removed_text", DIFF_REMOVED_TEXT_DEFAULT)
 }
 
+// --- agent transcript roles -------------------------------------------
+//
+// The two distinctions backlog item 7 flagged as lost when the transcript
+// moved onto shared chrome roles (`Source agent transcript colors from the
+// theme`): the user message bubble's blue tint, and the tool-approval
+// surfaces' amber tint. Restored here as their own roles (not reused from
+// `accent`/`danger`, which are hue-specific to other UI already) so a
+// `[theme]` override can retint them independently of the rest of chrome.
+
+/// The user message bubble's background (`agent::view::style::block_colors`)
+/// -- restores the blue tint backlog item 7 flagged as lost when the
+/// transcript moved onto shared chrome roles.
+pub(crate) fn user_message_surface() -> Color {
+    resolve("user_message_surface", USER_MESSAGE_SURFACE_DEFAULT)
+}
+
+/// The user message bubble's border -- paired with
+/// [`user_message_surface`].
+pub(crate) fn user_message_border() -> Color {
+    resolve("user_message_border", USER_MESSAGE_BORDER_DEFAULT)
+}
+
+/// The `Approval`-tone transcript block's background (`agent::view::style::
+/// block_colors`) -- restores the amber tint backlog item 7 flagged as
+/// lost.
+pub(crate) fn approval_surface() -> Color {
+    resolve("approval_surface", APPROVAL_SURFACE_DEFAULT)
+}
+
+/// The `Approval`-tone transcript block's border -- paired with
+/// [`approval_surface`].
+pub(crate) fn approval_border() -> Color {
+    resolve("approval_border", APPROVAL_BORDER_DEFAULT)
+}
+
+/// The approval banner's Approve button background
+/// (`workspace::view::agent_controls::agent_approval_banner`) -- its border
+/// stays plain [`accent`], this only roles the fill.
+pub(crate) fn approval_confirm_surface() -> Color {
+    resolve("approval_confirm_surface", APPROVAL_CONFIRM_SURFACE_DEFAULT)
+}
+
+/// The approval banner's Deny button background -- its border stays plain
+/// [`danger`], this only roles the fill.
+pub(crate) fn approval_deny_surface() -> Color {
+    resolve("approval_deny_surface", APPROVAL_DENY_SURFACE_DEFAULT)
+}
+
 // --- terminal roles ------------------------------------------------------
 //
 // The terminal is not a separate palette: its default foreground,
@@ -194,6 +248,12 @@ const THEME_NAMES: &[&str] = &[
     "diff_added_text",
     "diff_removed_surface",
     "diff_removed_text",
+    "user_message_surface",
+    "user_message_border",
+    "approval_surface",
+    "approval_border",
+    "approval_confirm_surface",
+    "approval_deny_surface",
     "terminal_foreground",
     "terminal_background",
     "terminal_cursor",
@@ -589,6 +649,22 @@ mod tests {
             accent(),
             "the cursor frame must be visually distinct from the focus border"
         );
+    }
+
+    #[test]
+    fn build_overrides_accepts_agent_transcript_role_override_names() {
+        let mut entries = HashMap::new();
+        entries.insert("user_message_surface".to_string(), "#ff00ff".to_string());
+        entries.insert(
+            "approval_confirm_surface".to_string(),
+            "#00ff00".to_string(),
+        );
+
+        let overrides = build_overrides(&entries);
+
+        assert_eq!(overrides.len(), 2);
+        assert!(overrides.contains_key("user_message_surface"));
+        assert!(overrides.contains_key("approval_confirm_surface"));
     }
 
     #[test]

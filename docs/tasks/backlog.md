@@ -106,10 +106,22 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
    runs all green, including the two historical flakes individually.
    Attributed to nextest's per-test process isolation plus the drain
    event-log flush fix.
-7. **Theme roles lost two distinctions** — the user message bubble's blue
-   tint and the approval banner's amber background have no matching theme
-   role (both fell back to neutral surfaces); candidates for a
-   `surface_accent_soft`-class role.
+7. *(resolved 2026-07-07)* **Theme roles lost two distinctions** — restored
+   as dedicated roles rather than a shared `surface_accent_soft`-class one
+   (each tint belongs to a specific, distinct piece of UI, not a general
+   soft-accent surface): `user_message_surface`/`user_message_border`
+   (the blue bubble, `agent::view::style::block_colors`'s `User` arm) and
+   `approval_surface`/`approval_border` (the amber pending-approval
+   transcript block, that match's `Approval` arm) — both back to their
+   exact pre-regression colors (`Source agent transcript colors from the
+   theme`'s diff). The approval banner's Approve/Deny button fills
+   (`workspace::view::agent_controls`, previously hardcoded
+   `Color::from_rgb8`) got their own `approval_confirm_surface`/
+   `approval_deny_surface` roles alongside, and the message composer's
+   remaining hardcoded colors were swept onto their already-existing
+   matching roles (`accent`, `border_default`, `text_subtle`,
+   `text_primary`, `surface_base`) in the same pass — no hardcoded colors
+   remain in `agent::view`/`workspace::view::agent_controls`.
 8. **ghostty multi-attach corruption** — deliberately deprioritized;
    captured evidence lives in the session transcripts (PTY traces under
    /tmp/horizon-pty-*.jsonl as of 2026-07-05).

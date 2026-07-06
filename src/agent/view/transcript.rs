@@ -487,6 +487,39 @@ fn should_show_initial_reply_status(last_block: Option<&TranscriptBlock>) -> boo
     )
 }
 
+/// Whether the `ReasoningDelta` item at `id` is still actively streaming --
+/// it's the last item in the frame (nothing has superseded it yet: an
+/// `AssistantTextDelta`, a tool call, or a committed message all end a
+/// thought) and the turn is still in flight. Drives `Thinking`'s
+/// auto-expand-while-streaming behavior (`docs/agent-output-ui-design.md`
+/// decision 5) -- `agent_frame_view`'s per-block effect composes this with
+/// the block's manual override (a manual toggle always wins once set).
+pub(super) fn is_thinking_streaming(frame: &AgentFrame, id: usize) -> bool {
+    frame.is_turn_in_flight()
+        && id + 1 == frame.items.len()
+        && matches!(frame.items.get(id), Some(AgentFrameItem::ReasoningDelta(_)))
+}
+
+/// Whether a block of `tone` opens a fresh turn -- currently just "is this
+/// a user message" (`docs/agent-output-ui-design.md` decision 6). A block's
+/// tone never changes over its lifetime, so this is safe to read once at
+/// view-construction time rather than re-derived live from `frame` the way
+/// `is_thinking_streaming`/tool status must be.
+pub(super) fn starts_new_turn(tone: TranscriptTone) -> bool {
+    tone == TranscriptTone::User
+}
+
+/// Whether a trailing turn-end rule should render after the last rendered
+/// block: the turn has finished (not in flight) and that last block is
+/// actual turn content, not a bare user message still awaiting a reply (in
+/// which case there's no turn to mark the end of yet). `last_tone` is the
+/// window's last block's tone, if any. No model/duration footer text here
+/// -- `AgentFrame` carries neither (see this slice's report); a rule is all
+/// that's implemented.
+pub(super) fn show_turn_end_rule(frame: &AgentFrame, last_tone: Option<TranscriptTone>) -> bool {
+    !frame.is_turn_in_flight() && last_tone.is_some_and(|tone| tone != TranscriptTone::User)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -770,6 +803,108 @@ mod tests {
         let tool = current_tool_block(&frame, 0).expect("block at id 0");
 
         assert!(matches!(tool.status, ToolStatus::Finished { .. }));
+    }
+
+    // --- thinking auto-expand (`is_thinking_streaming`, slice 2) ----------
+
+    fn reasoning_frame(state: Option<SessionState>, trailing: Vec<AgentFrameItem>) -> AgentFrame {
+        let mut items = vec![AgentFrameItem::ReasoningDelta(
+            crate::agent::contract::MessageDelta {
+                role: MessageRole::Assistant,
+                text: "thinking...".to_string(),
+            },
+        )];
+        items.extend(trailing);
+        AgentFrame { state, items }
+    }
+
+    #[test]
+    fn thinking_streams_while_it_is_the_last_item_and_the_turn_is_in_flight() {
+        let frame = reasoning_frame(Some(SessionState::Running), Vec::new());
+        assert!(is_thinking_streaming(&frame, 0));
+    }
+
+    #[test]
+    fn thinking_stops_streaming_once_a_later_item_supersedes_it() {
+        let frame = reasoning_frame(
+            Some(SessionState::Running),
+            vec![AgentFrameItem::AssistantTextDelta(
+                crate::agent::contract::MessageDelta {
+                    role: MessageRole::Assistant,
+                    text: "answer".to_string(),
+                },
+            )],
+        );
+        assert!(!is_thinking_streaming(&frame, 0));
+    }
+
+    #[test]
+    fn thinking_stops_streaming_once_the_turn_is_no_longer_in_flight() {
+        let frame = reasoning_frame(Some(SessionState::Completed), Vec::new());
+        assert!(!is_thinking_streaming(&frame, 0));
+    }
+
+    #[test]
+    fn thinking_is_not_streaming_for_a_non_reasoning_item() {
+        let frame = AgentFrame {
+            state: Some(SessionState::Running),
+            items: vec![AgentFrameItem::Message(Message {
+                role: MessageRole::Assistant,
+                text: "hi".to_string(),
+            })],
+        };
+        assert!(!is_thinking_streaming(&frame, 0));
+    }
+
+    // --- turn boundaries (`starts_new_turn`/`show_turn_end_rule`, slice 2) -
+
+    #[test]
+    fn a_user_block_starts_a_new_turn() {
+        assert!(starts_new_turn(TranscriptTone::User));
+    }
+
+    #[test]
+    fn non_user_blocks_do_not_start_a_new_turn() {
+        assert!(!starts_new_turn(TranscriptTone::Assistant));
+        assert!(!starts_new_turn(TranscriptTone::Tool));
+        assert!(!starts_new_turn(TranscriptTone::Thinking));
+    }
+
+    #[test]
+    fn turn_end_rule_shows_once_a_completed_turns_last_block_is_not_a_user_message() {
+        let frame = AgentFrame {
+            state: Some(SessionState::Completed),
+            items: Vec::new(),
+        };
+        assert!(show_turn_end_rule(&frame, Some(TranscriptTone::Assistant)));
+        assert!(show_turn_end_rule(&frame, Some(TranscriptTone::Tool)));
+    }
+
+    #[test]
+    fn turn_end_rule_hides_while_the_turn_is_still_in_flight() {
+        let frame = AgentFrame {
+            state: Some(SessionState::Running),
+            items: Vec::new(),
+        };
+        assert!(!show_turn_end_rule(&frame, Some(TranscriptTone::Assistant)));
+    }
+
+    #[test]
+    fn turn_end_rule_hides_when_the_last_block_is_the_awaiting_user_message() {
+        let frame = AgentFrame {
+            state: Some(SessionState::WaitingForUser),
+            items: Vec::new(),
+        };
+        assert!(!show_turn_end_rule(&frame, Some(TranscriptTone::User)));
+    }
+
+    #[test]
+    fn turn_end_rule_hides_when_there_are_no_blocks_yet() {
+        let frame = AgentFrame {
+            state: Some(SessionState::WaitingForUser),
+            items: Vec::new(),
+        };
+        assert!(!show_turn_end_rule(&frame, None));
     }
 
     #[test]

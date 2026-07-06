@@ -230,9 +230,13 @@ window_height = 720.0
 # accent's focus border -- see `docs/workspace-mode-design.md`),
 # diff_added_surface, diff_added_text, diff_removed_surface,
 # diff_removed_text (the agent transcript's fs.edit diff rendering --
-# see `docs/agent-output-ui-design.md`), terminal_foreground (defaults to
-# text_primary), terminal_background (defaults to surface_base),
-# terminal_cursor (defaults to accent).
+# see `docs/agent-output-ui-design.md`), user_message_surface,
+# user_message_border (the user message bubble), approval_surface,
+# approval_border (the pending-approval transcript block),
+# approval_confirm_surface, approval_deny_surface (the approval banner's
+# Approve/Deny button fills -- their borders stay accent/danger),
+# terminal_foreground (defaults to text_primary), terminal_background
+# (defaults to surface_base), terminal_cursor (defaults to accent).
 #
 # An unrecognized name or an unparsable hex value is warned about on stderr
 # and skipped, leaving that color at its built-in default.

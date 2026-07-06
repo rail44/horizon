@@ -36,12 +36,12 @@ pub(super) fn block_text_color(tone: TranscriptTone) -> Color {
 
 pub(super) fn block_colors(tone: TranscriptTone) -> (Color, Color) {
     match tone {
-        TranscriptTone::User => (theme::surface_raised(), theme::border_default()),
+        TranscriptTone::User => (theme::user_message_surface(), theme::user_message_border()),
         TranscriptTone::Assistant => (theme::surface_raised(), theme::border_default()),
         TranscriptTone::Thinking => (theme::surface_panel(), theme::border_subtle()),
         TranscriptTone::Status => (theme::surface_chrome(), theme::border_default()),
         TranscriptTone::Tool => (theme::surface_raised(), theme::border_default()),
-        TranscriptTone::Approval => (theme::surface_raised(), theme::accent()),
+        TranscriptTone::Approval => (theme::approval_surface(), theme::approval_border()),
         TranscriptTone::Error => (theme::surface_raised(), theme::danger()),
         TranscriptTone::Lifecycle => (theme::surface_raised(), theme::border_subtle()),
     }

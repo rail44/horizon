@@ -35,14 +35,14 @@ pub(super) fn agent_composer(
         }
 
         let border = if active() {
-            floem::peniko::Color::from_rgb8(132, 220, 198)
+            theme::accent()
         } else {
-            floem::peniko::Color::from_rgb8(57, 64, 76)
+            theme::border_default()
         };
         let color = if draft.with(|text| text.is_empty()) && preedit().is_none() {
-            floem::peniko::Color::from_rgb8(115, 122, 136)
+            theme::text_subtle()
         } else {
-            floem::peniko::Color::from_rgb8(233, 236, 242)
+            theme::text_primary()
         };
 
         s.width_full()
@@ -56,7 +56,7 @@ pub(super) fn agent_composer(
             .font_size(12)
             .line_height(1.2)
             .color(color)
-            .background(floem::peniko::Color::from_rgb8(21, 24, 30))
+            .background(theme::surface_base())
             .border(1.0)
             .border_color(border)
     })
@@ -264,7 +264,7 @@ pub(super) fn agent_approval_banner(
             pending_approval,
             answered,
             on_approve,
-            floem::peniko::Color::from_rgb8(48, 84, 75),
+            theme::approval_confirm_surface(),
             theme::accent(),
         ),
         agent_approval_button(
@@ -274,7 +274,7 @@ pub(super) fn agent_approval_banner(
             pending_approval,
             answered,
             on_deny,
-            floem::peniko::Color::from_rgb8(80, 50, 54),
+            theme::approval_deny_surface(),
             theme::danger(),
         ),
         key_hint("esc", "back to draft").style(move |s| {
