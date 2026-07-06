@@ -74,6 +74,7 @@ pub enum Subcommand {
         session_id: String,
     },
     ReloadAgentRuntime,
+    ReloadConfig,
     Sessions,
     State,
 }
@@ -107,6 +108,7 @@ Subcommands:\n  \
   deny <session-id> <call-id>\n  \
   cancel-turn <session-id>\n  \
   reload-agent-runtime\n  \
+  reload-config\n  \
   sessions\n  \
   state";
 
@@ -236,6 +238,10 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
         "reload-agent-runtime" => {
             reject_extra(&mut positionals, "reload-agent-runtime")?;
             Subcommand::ReloadAgentRuntime
+        }
+        "reload-config" => {
+            reject_extra(&mut positionals, "reload-config")?;
+            Subcommand::ReloadConfig
         }
         "sessions" => {
             reject_extra(&mut positionals, "sessions")?;
@@ -582,6 +588,10 @@ mod tests {
         assert_eq!(
             parse(&args(&["reload-agent-runtime"])).unwrap().subcommand,
             Subcommand::ReloadAgentRuntime
+        );
+        assert_eq!(
+            parse(&args(&["reload-config"])).unwrap().subcommand,
+            Subcommand::ReloadConfig
         );
     }
 

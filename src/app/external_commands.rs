@@ -65,6 +65,7 @@ const SIMPLE_EXTERNAL_COMMANDS: &[(&str, CommandId)] = &[
         CommandId::TerminateAllDetachedSessions,
     ),
     ("reload-agent-runtime", CommandId::ReloadAgentRuntime),
+    ("reload-config", CommandId::ReloadConfig),
 ];
 
 /// Converts one external `{command, args}` pair (an `Invoke` request's
@@ -599,6 +600,14 @@ mod tests {
     }
 
     #[test]
+    fn reload_config_maps_to_the_simple_command() {
+        assert_eq!(
+            invocation_from_external("reload-config", &serde_json::json!({})),
+            Ok(CommandInvocation::Simple(CommandId::ReloadConfig))
+        );
+    }
+
+    #[test]
     fn an_unknown_command_name_is_an_error() {
         assert!(invocation_from_external("not-a-real-command", &serde_json::json!({})).is_err());
     }
@@ -622,6 +631,7 @@ mod tests {
             "deny",
             "cancel-turn",
             "reload-agent-runtime",
+            "reload-config",
         ] {
             assert!(
                 !names.contains(&non_destructive.to_string()),

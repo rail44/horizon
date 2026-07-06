@@ -327,6 +327,7 @@ fn execute_simple_command(command_id: CommandId, state: CommandActionState) {
             }
         }
         CommandId::ReloadAgentRuntime => reload_agent_runtime(state),
+        CommandId::ReloadConfig => reload_config(state),
     }
 }
 
@@ -347,6 +348,44 @@ fn reload_agent_runtime(state: CommandActionState) {
         state.agentd_connection(),
         state.agent_state_status(),
     );
+}
+
+/// `Reload Config` (`CommandId::ReloadConfig`): re-reads Horizon's single
+/// config file fresh from disk (`crate::config::reload`, bypassing
+/// `config::load`'s startup-only cache) and applies its `[theme]` (chrome
+/// roles, `[theme.ansi]`, and the terminal colors both derive) and
+/// `[keybindings]` live -- see `docs/plans/agent-foundation/
+/// 03-roles-and-config-agent.md`'s "前提機能: config の実行時リロード".
+///
+/// Every other config section (`[agent]`/`[provider]`/`[terminal]`/`[ui]`)
+/// is deliberately NOT reapplied here: those are read once, at session-spawn
+/// or app-startup time, into small owned structs with no swappable process
+/// state behind them (`agent::config`, `terminal::config::TerminalConfig`,
+/// `ui::fonts`, ...) -- making *those* live too is future work, out of scope
+/// for this command, so the surfaced status says so explicitly rather than
+/// implying a full reload happened.
+///
+/// A parse or read failure leaves the currently applied theme/keymap
+/// untouched -- never resets to defaults over a typo -- and surfaces the
+/// error instead; see `config::reload_from_path`'s doc comment for why a
+/// missing file is a different (successful) case from a malformed one.
+fn reload_config(state: CommandActionState) {
+    match crate::config::reload() {
+        Ok(config) => {
+            crate::ui::theme::apply_reload(&config.theme);
+            crate::app::keymap::Keymap::reload(&config.keybindings);
+            state.agent_state_status().set(Some(
+                "Config reloaded -- theme & keybindings applied (other sections apply at \
+                 restart / to new sessions)"
+                    .to_string(),
+            ));
+        }
+        Err(error) => {
+            state.agent_state_status().set(Some(format!(
+                "Config reload failed: {error} -- keeping current theme/keybindings"
+            )));
+        }
+    }
 }
 
 /// Opens a new tab with a freshly spawned `kind` session and returns its id

@@ -12,6 +12,7 @@ pub(crate) enum CommandId {
     DenyToolCall,
     CancelAgentTurn,
     ReloadAgentRuntime,
+    ReloadConfig,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -138,6 +139,13 @@ pub(crate) fn core_commands() -> Vec<CommandSpec> {
             description: "Restart horizon-agentd and reconnect every agent session.",
             destructive: false,
         },
+        CommandSpec {
+            id: CommandId::ReloadConfig,
+            title: "Reload Config",
+            category: CommandCategory::Workspace,
+            description: "Re-read the config file and apply theme and keybindings live.",
+            destructive: false,
+        },
     ]
 }
 
@@ -147,7 +155,8 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
         | CommandId::NewAgent
         | CommandId::SplitActivePane
         | CommandId::FocusNextPane
-        | CommandId::ReloadAgentRuntime => true,
+        | CommandId::ReloadAgentRuntime
+        | CommandId::ReloadConfig => true,
         CommandId::CloseActivePane => state.visible_pane_count > 1,
         CommandId::CloseActiveTab => state.tab_count > 1,
         CommandId::TerminateActiveSession => state.has_active_session,
@@ -204,7 +213,7 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 12);
+        assert_eq!(commands.len(), 13);
         assert_eq!(commands[0].id, CommandId::NewTerminal);
         assert_eq!(commands[0].title, "New Terminal");
         assert_eq!(commands[6].id, CommandId::TerminateActiveSession);

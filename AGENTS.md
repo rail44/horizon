@@ -60,8 +60,12 @@ Horizon reads one optional TOML file: `$XDG_CONFIG_HOME/horizon/config.toml`
 `HORIZON_CONFIG`. Precedence is env var > config file > built-in default;
 existing env vars keep winning. Secrets (`OPENAI_API_KEY`) are
 environment-only and never read from the file. Config is applied at startup
-only — restart Horizon after editing it. See `config.example.toml` at the
-repo root for every knob, and `src/config/` for the loader.
+only, with one exception: `Reload Config` (palette / `reload-config`
+keybinding id / CLI `horizon reload-config`) re-reads the file and applies
+`[theme]` (chrome, `[theme.ansi]`, and the derived terminal colors) and
+`[keybindings]` live; every other section still needs a restart. See
+`config.example.toml` at the repo root for every knob, and `src/config/` for
+the loader.
 
 ## GUI Verification
 

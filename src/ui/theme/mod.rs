@@ -1,24 +1,52 @@
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::Arc;
 
 use floem::peniko::Color;
+use floem::reactive::{RwSignal, SignalUpdate, SignalWith};
+
+use crate::config::RawThemeConfig;
+use crate::terminal::config::TerminalColors;
 
 pub(crate) mod ansi;
 
+// --- built-in chrome-role defaults ---------------------------------------
+//
+// Named constants (rather than inline literals in each accessor below)
+// exist for exactly one reason: [`ThemeState::build`] needs the same
+// defaults `resolve` falls back to, computed once per `Reload Config` swap
+// rather than read reactively per call -- see that function's doc comment.
+// Keeping one named constant per role, read from both places, is what keeps
+// the accessor and the reload-time terminal-color computation from ever
+// drifting apart. Mirrors `ansi`'s existing `BLACK`/`RED`/... constants.
+
+const TEXT_PRIMARY_DEFAULT: Color = Color::from_rgb8(233, 236, 242);
+const TEXT_MUTED_DEFAULT: Color = Color::from_rgb8(178, 185, 198);
+const TEXT_SUBTLE_DEFAULT: Color = Color::from_rgb8(115, 122, 136);
+const ACCENT_DEFAULT: Color = Color::from_rgb8(132, 220, 198);
+const DANGER_DEFAULT: Color = Color::from_rgb8(246, 137, 146);
+const SURFACE_BASE_DEFAULT: Color = Color::from_rgb8(22, 24, 29);
+const SURFACE_PANEL_DEFAULT: Color = Color::from_rgb8(24, 27, 32);
+const SURFACE_RAISED_DEFAULT: Color = Color::from_rgb8(31, 34, 41);
+const SURFACE_CHROME_DEFAULT: Color = Color::from_rgb8(25, 28, 34);
+const SURFACE_SELECTED_DEFAULT: Color = Color::from_rgb8(54, 59, 70);
+const BORDER_DEFAULT_DEFAULT: Color = Color::from_rgb8(54, 59, 70);
+const BORDER_SUBTLE_DEFAULT: Color = Color::from_rgb8(42, 46, 55);
+const CURSOR_ACCENT_DEFAULT: Color = Color::from_rgb8(229, 192, 123);
+
 pub(crate) fn text_primary() -> Color {
-    resolve("text_primary", Color::from_rgb8(233, 236, 242))
+    resolve("text_primary", TEXT_PRIMARY_DEFAULT)
 }
 
 pub(crate) fn text_muted() -> Color {
-    resolve("text_muted", Color::from_rgb8(178, 185, 198))
+    resolve("text_muted", TEXT_MUTED_DEFAULT)
 }
 
 pub(crate) fn text_subtle() -> Color {
-    resolve("text_subtle", Color::from_rgb8(115, 122, 136))
+    resolve("text_subtle", TEXT_SUBTLE_DEFAULT)
 }
 
 pub(crate) fn accent() -> Color {
-    resolve("accent", Color::from_rgb8(132, 220, 198))
+    resolve("accent", ACCENT_DEFAULT)
 }
 
 /// The app's one destructive/danger accent — the same red used for the
@@ -27,35 +55,35 @@ pub(crate) fn accent() -> Color {
 /// "reject this" and "this ends something" read as the same kind of
 /// warning.
 pub(crate) fn danger() -> Color {
-    resolve("danger", Color::from_rgb8(246, 137, 146))
+    resolve("danger", DANGER_DEFAULT)
 }
 
 pub(crate) fn surface_base() -> Color {
-    resolve("surface_base", Color::from_rgb8(22, 24, 29))
+    resolve("surface_base", SURFACE_BASE_DEFAULT)
 }
 
 pub(crate) fn surface_panel() -> Color {
-    resolve("surface_panel", Color::from_rgb8(24, 27, 32))
+    resolve("surface_panel", SURFACE_PANEL_DEFAULT)
 }
 
 pub(crate) fn surface_raised() -> Color {
-    resolve("surface_raised", Color::from_rgb8(31, 34, 41))
+    resolve("surface_raised", SURFACE_RAISED_DEFAULT)
 }
 
 pub(crate) fn surface_chrome() -> Color {
-    resolve("surface_chrome", Color::from_rgb8(25, 28, 34))
+    resolve("surface_chrome", SURFACE_CHROME_DEFAULT)
 }
 
 pub(crate) fn surface_selected() -> Color {
-    resolve("surface_selected", Color::from_rgb8(54, 59, 70))
+    resolve("surface_selected", SURFACE_SELECTED_DEFAULT)
 }
 
 pub(crate) fn border_default() -> Color {
-    resolve("border_default", Color::from_rgb8(54, 59, 70))
+    resolve("border_default", BORDER_DEFAULT_DEFAULT)
 }
 
 pub(crate) fn border_subtle() -> Color {
-    resolve("border_subtle", Color::from_rgb8(42, 46, 55))
+    resolve("border_subtle", BORDER_SUBTLE_DEFAULT)
 }
 
 /// Workspace mode's cursor-frame border color
@@ -66,7 +94,7 @@ pub(crate) fn border_subtle() -> Color {
 /// reusing a hue already present in the app's palette rather than
 /// introducing a new one.
 pub(crate) fn cursor_accent() -> Color {
-    resolve("cursor_accent", Color::from_rgb8(229, 192, 123))
+    resolve("cursor_accent", CURSOR_ACCENT_DEFAULT)
 }
 
 // --- terminal roles ------------------------------------------------------
@@ -138,8 +166,190 @@ const THEME_NAMES: &[&str] = &[
     "terminal_cursor",
 ];
 
+/// All of Horizon's `Reload Config`-able theme state, bundled behind one
+/// signal ([`state_signal`]) so a reload swaps chrome overrides, the ANSI
+/// palette, and the terminal's derived color scheme atomically — a reader
+/// can never observe chrome already reloaded but the terminal still on the
+/// old palette, or vice versa. `terminal` is precomputed once here, at swap
+/// time, rather than resolved from `chrome`/`ansi` on every
+/// `terminal::config::resolved_colors()` call: that accessor is read once
+/// per rendered cell (`terminal::core::render::resolve_color`), so its cost
+/// must stay a plain field read.
+#[derive(Clone)]
+struct ThemeState {
+    chrome: HashMap<&'static str, Color>,
+    ansi: HashMap<&'static str, Color>,
+    terminal: TerminalColors,
+}
+
+impl ThemeState {
+    fn build(theme: &RawThemeConfig) -> Self {
+        let chrome = build_overrides(&theme.colors);
+        let ansi_overrides = ansi::build_overrides(&theme.ansi);
+        let terminal = compute_terminal_colors(&chrome, &ansi_overrides);
+        ThemeState {
+            chrome,
+            ansi: ansi_overrides,
+            terminal,
+        }
+    }
+}
+
+/// Pure computation of the terminal's derived 19-color scheme from a chrome
+/// override map and an ansi override map — the reload-safe replacement for
+/// what used to be a startup-only `OnceLock<TerminalColors>` in
+/// `terminal::config`. Kept here, not there: every default color it falls
+/// back to (the chrome roles' `*_DEFAULT` constants above, `ansi`'s
+/// `BLACK`/`RED`/...) already lives in this module and `ansi`, so computing
+/// the derived scheme here is the only way to do it without duplicating
+/// those defaults a second time.
+fn compute_terminal_colors(
+    chrome: &HashMap<&'static str, Color>,
+    ansi_overrides: &HashMap<&'static str, Color>,
+) -> TerminalColors {
+    let text_primary = resolve_pure(chrome, "text_primary", TEXT_PRIMARY_DEFAULT);
+    let surface_base = resolve_pure(chrome, "surface_base", SURFACE_BASE_DEFAULT);
+    let accent = resolve_pure(chrome, "accent", ACCENT_DEFAULT);
+
+    TerminalColors {
+        foreground: to_rgb8(resolve_pure(chrome, "terminal_foreground", text_primary)),
+        background: to_rgb8(resolve_pure(chrome, "terminal_background", surface_base)),
+        cursor: to_rgb8(resolve_pure(chrome, "terminal_cursor", accent)),
+        black: to_rgb8(resolve_pure(ansi_overrides, "black", ansi::BLACK)),
+        red: to_rgb8(resolve_pure(ansi_overrides, "red", ansi::RED)),
+        green: to_rgb8(resolve_pure(ansi_overrides, "green", ansi::GREEN)),
+        yellow: to_rgb8(resolve_pure(ansi_overrides, "yellow", ansi::YELLOW)),
+        blue: to_rgb8(resolve_pure(ansi_overrides, "blue", ansi::BLUE)),
+        magenta: to_rgb8(resolve_pure(ansi_overrides, "magenta", ansi::MAGENTA)),
+        cyan: to_rgb8(resolve_pure(ansi_overrides, "cyan", ansi::CYAN)),
+        white: to_rgb8(resolve_pure(ansi_overrides, "white", ansi::WHITE)),
+        bright_black: to_rgb8(resolve_pure(
+            ansi_overrides,
+            "bright_black",
+            ansi::BRIGHT_BLACK,
+        )),
+        bright_red: to_rgb8(resolve_pure(ansi_overrides, "bright_red", ansi::BRIGHT_RED)),
+        bright_green: to_rgb8(resolve_pure(
+            ansi_overrides,
+            "bright_green",
+            ansi::BRIGHT_GREEN,
+        )),
+        bright_yellow: to_rgb8(resolve_pure(
+            ansi_overrides,
+            "bright_yellow",
+            ansi::BRIGHT_YELLOW,
+        )),
+        bright_blue: to_rgb8(resolve_pure(
+            ansi_overrides,
+            "bright_blue",
+            ansi::BRIGHT_BLUE,
+        )),
+        bright_magenta: to_rgb8(resolve_pure(
+            ansi_overrides,
+            "bright_magenta",
+            ansi::BRIGHT_MAGENTA,
+        )),
+        bright_cyan: to_rgb8(resolve_pure(
+            ansi_overrides,
+            "bright_cyan",
+            ansi::BRIGHT_CYAN,
+        )),
+        bright_white: to_rgb8(resolve_pure(
+            ansi_overrides,
+            "bright_white",
+            ansi::BRIGHT_WHITE,
+        )),
+    }
+}
+
+thread_local! {
+    /// The process-wide (per-thread, in practice: floem's own reactive
+    /// runtime is thread-local too — `RwSignal` is deliberately `!Sync`/
+    /// `!Send`, see `floem_reactive::signal::NotThreadSafe` — and Horizon
+    /// only ever touches this from its single UI thread; each test that
+    /// reaches this module gets its own independent copy on its own
+    /// thread, which is exactly the isolation `crate::config::load`'s
+    /// startup-only cache and `app::keymap::Keymap`'s lock already rely on
+    /// nextest's one-process-per-test model for), reload-able theme state.
+    ///
+    /// `RwSignal` (rather than a plain thread-local `ThemeState`, this
+    /// module's pre-reload shape) is what makes every accessor below
+    /// reactive: floem re-runs any `.style(|s| ...)` closure that read this
+    /// signal the moment [`apply_reload`] swaps it, so existing call sites
+    /// (`tab_strip.rs`, `workspace::view::chrome`, ...) pick up a reload
+    /// with no changes of their own. `Arc` keeps a swap O(1) (no cloning
+    /// the override maps) and keeps `.with()` reads cheap (a pointer deref,
+    /// not a clone) — see this module's doc comment on `ThemeState` for why
+    /// chrome/ansi/terminal are bundled into one signal rather than three.
+    static THEME_STATE: RwSignal<Arc<ThemeState>> = RwSignal::new(initial_state());
+}
+
+/// Reads the config file's `[theme]` table once, at first access from
+/// whichever code path (production startup or a test) touches this module
+/// first on its thread — mirrors the pre-reload behavior where
+/// `overrides()`'s `OnceLock::get_or_init` read `crate::config::load()`
+/// lazily rather than eagerly at process start.
+fn initial_state() -> Arc<ThemeState> {
+    Arc::new(ThemeState::build(&crate::config::load().theme))
+}
+
+/// Swaps in a freshly parsed `[theme]` table (`Reload Config`'s theme half
+/// — see `app::command_actions::reload_config`). Chrome, the ansi palette,
+/// and the terminal's derived colors all update together, since they share
+/// one [`ThemeState`] — see that struct's doc comment for why.
+///
+/// Two signal writes, not one: phase 1 installs the new chrome/ansi
+/// override maps immediately (with a placeholder `terminal` field, never
+/// observed by any reader — nothing else runs between phase 1 and phase 2,
+/// both synchronous on the one UI thread); phase 2 then derives the
+/// terminal's scheme by calling the *ordinary* per-role/per-ansi-color
+/// accessors below (`terminal_foreground`, `ansi::black`, ...), which all
+/// read this same thread-local signal and therefore now resolve against the
+/// config this reload just installed. This reuses the exact resolution
+/// path every other reader of the theme already goes through, rather than
+/// a second hand-rolled one — [`ThemeState::build`]'s
+/// `compute_terminal_colors` exists only to bootstrap the very first
+/// `ThemeState`, before this signal exists for phase 2's accessors to read
+/// "live" from at all.
+pub(crate) fn apply_reload(theme: &RawThemeConfig) {
+    let chrome = build_overrides(&theme.colors);
+    let ansi_overrides = ansi::build_overrides(&theme.ansi);
+    THEME_STATE.with(|signal| {
+        signal.set(Arc::new(ThemeState {
+            chrome,
+            ansi: ansi_overrides,
+            terminal: TerminalColors::default(),
+        }));
+    });
+
+    let terminal = TerminalColors {
+        foreground: to_rgb8(terminal_foreground()),
+        background: to_rgb8(terminal_background()),
+        cursor: to_rgb8(terminal_cursor()),
+        black: to_rgb8(ansi::black()),
+        red: to_rgb8(ansi::red()),
+        green: to_rgb8(ansi::green()),
+        yellow: to_rgb8(ansi::yellow()),
+        blue: to_rgb8(ansi::blue()),
+        magenta: to_rgb8(ansi::magenta()),
+        cyan: to_rgb8(ansi::cyan()),
+        white: to_rgb8(ansi::white()),
+        bright_black: to_rgb8(ansi::bright_black()),
+        bright_red: to_rgb8(ansi::bright_red()),
+        bright_green: to_rgb8(ansi::bright_green()),
+        bright_yellow: to_rgb8(ansi::bright_yellow()),
+        bright_blue: to_rgb8(ansi::bright_blue()),
+        bright_magenta: to_rgb8(ansi::bright_magenta()),
+        bright_cyan: to_rgb8(ansi::bright_cyan()),
+        bright_white: to_rgb8(ansi::bright_white()),
+    };
+    THEME_STATE.with(|signal| {
+        signal.update(|state| Arc::make_mut(state).terminal = terminal);
+    });
+}
+
 fn resolve(name: &'static str, default: Color) -> Color {
-    overrides().get(name).copied().unwrap_or(default)
+    THEME_STATE.with(|signal| signal.with(|state| resolve_pure(&state.chrome, name, default)))
 }
 
 /// Like [`resolve`], but the fallback is another role's resolved color
@@ -147,15 +357,35 @@ fn resolve(name: &'static str, default: Color) -> Color {
 /// `terminal_foreground`/`terminal_background`/`terminal_cursor` derive
 /// from `text_primary`/`surface_base`/`accent` by default.
 fn resolve_or(name: &'static str, fallback: fn() -> Color) -> Color {
-    overrides().get(name).copied().unwrap_or_else(fallback)
+    let direct = THEME_STATE.with(|signal| signal.with(|state| state.chrome.get(name).copied()));
+    direct.unwrap_or_else(fallback)
 }
 
-/// The process-wide theme overrides, built once from Horizon's config file
-/// (applied at startup only — see `AGENTS.md`) and cached for the rest of
-/// the run.
-fn overrides() -> &'static HashMap<&'static str, Color> {
-    static OVERRIDES: OnceLock<HashMap<&'static str, Color>> = OnceLock::new();
-    OVERRIDES.get_or_init(|| build_overrides(&crate::config::load().theme.colors))
+/// Reads `[theme.ansi]`'s live override for `name`, if any — `ansi`'s own
+/// `resolve` calls back into this rather than keeping its own signal, so
+/// chrome and ansi always swap together through the one `ThemeState` above.
+pub(super) fn resolve_ansi(name: &'static str, default: Color) -> Color {
+    THEME_STATE.with(|signal| signal.with(|state| resolve_pure(&state.ansi, name, default)))
+}
+
+/// The terminal's live derived color scheme — a plain field read out of the
+/// current `ThemeState` (cheap: `TerminalColors` is a `Copy` struct of
+/// `[u8; 3]` triples), for `terminal::config::resolved_colors` to expose to
+/// the per-cell render path.
+pub(crate) fn terminal_colors() -> TerminalColors {
+    THEME_STATE.with(|signal| signal.with(|state| state.terminal))
+}
+
+/// A map lookup with a fallback default — the pure core both the
+/// signal-backed [`resolve`]/[`resolve_ansi`] and reload-time
+/// [`compute_terminal_colors`] share, so "how an override map resolves a
+/// name" is defined exactly once.
+fn resolve_pure(
+    overrides: &HashMap<&'static str, Color>,
+    name: &'static str,
+    default: Color,
+) -> Color {
+    overrides.get(name).copied().unwrap_or(default)
 }
 
 fn build_overrides(entries: &HashMap<String, String>) -> HashMap<&'static str, Color> {
@@ -348,5 +578,54 @@ mod tests {
     #[test]
     fn terminal_cursor_falls_back_to_accent() {
         assert_eq!(terminal_cursor(), accent());
+    }
+
+    // --- Reload Config: theme swap ---------------------------------------
+
+    #[test]
+    fn apply_reload_updates_a_chrome_role() {
+        let before = accent();
+
+        let mut theme = RawThemeConfig::default();
+        theme
+            .colors
+            .insert("accent".to_string(), "#123456".to_string());
+        apply_reload(&theme);
+
+        assert_eq!(accent(), Color::from_rgb8(0x12, 0x34, 0x56));
+        assert_ne!(accent(), before);
+
+        // Restore, so other tests in this process see the built-in default
+        // again (theme state is a process-wide global, like `config::load`
+        // and `Keymap::global`).
+        apply_reload(&RawThemeConfig::default());
+    }
+
+    #[test]
+    fn apply_reload_updates_the_ansi_palette_and_terminal_colors_together() {
+        let mut theme = RawThemeConfig::default();
+        theme.ansi.red = Some("#abcdef".to_string());
+        apply_reload(&theme);
+
+        assert_eq!(ansi::red(), Color::from_rgb8(0xab, 0xcd, 0xef));
+        assert_eq!(terminal_colors().red, [0xab, 0xcd, 0xef]);
+
+        apply_reload(&RawThemeConfig::default());
+    }
+
+    #[test]
+    fn apply_reload_recomputes_derived_terminal_roles() {
+        let mut theme = RawThemeConfig::default();
+        theme
+            .colors
+            .insert("surface_base".to_string(), "#0a0b0c".to_string());
+        apply_reload(&theme);
+
+        // `terminal_background` has no override of its own here, so it
+        // still derives from `surface_base` -- proving the derived roles
+        // recompute from the *new* chrome map, not a stale one.
+        assert_eq!(terminal_colors().background, [0x0a, 0x0b, 0x0c]);
+
+        apply_reload(&RawThemeConfig::default());
     }
 }

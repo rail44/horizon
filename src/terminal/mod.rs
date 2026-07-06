@@ -1,4 +1,9 @@
-mod config;
+// `pub(crate)`, not private: `ui::theme` builds `TerminalColors` directly
+// (`ui::theme::compute_terminal_colors`, the `Reload Config`-safe home for
+// what used to be a startup-only cache here — see `terminal::config::
+// resolved_colors`'s doc comment), so it needs `terminal::config::
+// TerminalColors` visible from outside this module tree.
+pub(crate) mod config;
 mod core;
 mod protocol;
 mod session;
