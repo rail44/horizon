@@ -104,7 +104,12 @@ pub fn load_file_config() -> AgentFileConfig {
     load_file_config_from_path(resolve_config_file_path().as_deref())
 }
 
-fn resolve_config_file_path() -> Option<PathBuf> {
+/// `pub(crate)` (not just `fn`) so `tools::config` can target exactly the
+/// file `horizon-agentd` itself resolves and reads -- see that module's own
+/// doc comment on why `config.write` deliberately reaches outside the
+/// per-session `workspace_root` confinement to edit this one host-owned
+/// path.
+pub(crate) fn resolve_config_file_path() -> Option<PathBuf> {
     resolve_config_file_path_from(
         std::env::var(CONFIG_PATH_VAR).ok(),
         std::env::var(XDG_CONFIG_HOME_VAR).ok(),
@@ -373,13 +378,15 @@ pub struct RigAgentConfig {
     pub repository_instructions_cap_chars: usize,
     /// Restricts which tool ids `providers::rig::completion::
     /// rig_tool_definitions` advertises to the provider. `None` (the only
-    /// value ever produced by [`Self::from_env_and_file`] today) means "no
-    /// restriction, every tool in `tools::definitions()`" -- current
-    /// behavior, unchanged. This is a back-compatible extension point
-    /// (`docs/research/agent-prompting.md` Part 2.5) with no consumer yet:
-    /// a future per-role or per-skill tool allowlist can construct a
-    /// `RigAgentConfig` with `Some(..)` directly, in Rust, without any wire
-    /// or contract change.
+    /// value [`Self::from_env_and_file`] itself ever produces -- this field
+    /// is process-wide config, not per-session) means "no restriction,
+    /// every tool in `tools::definitions()`" -- current behavior,
+    /// unchanged. This back-compatible extension point
+    /// (`docs/research/agent-prompting.md` Part 2.5) now has its first
+    /// consumer: `providers::rig::Provider::start_session` derives a
+    /// per-session `RigAgentConfig` with `Some(..)` here when the session
+    /// has a role that restricts tools (`roles::RoleDefinition::
+    /// allowed_tool_ids`).
     pub allowed_tool_ids: Option<Vec<String>>,
 }
 

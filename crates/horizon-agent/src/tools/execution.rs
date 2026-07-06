@@ -4,6 +4,7 @@ use crate::contract::{
     Error, Event, Message, MessageRole, SessionState, ToolCallId, ToolCallRequest, ToolCallResult,
     ToolPermission,
 };
+use crate::tools::config;
 use crate::tools::fs;
 use crate::tools::permission_for_tool;
 use crate::tools::state::ToolSessionState;
@@ -57,19 +58,20 @@ fn execute_auto_tool(
     tool_state: &ToolSessionState,
     request: &ToolCallRequest,
 ) -> Vec<Event> {
-    let output = match host.execute_auto(&request.tool_id, &request.input) {
+    let output = host
+        .execute_auto(&request.tool_id, &request.input)
+        .or_else(|| fs::execute_auto(tool_state, &request.tool_id, &request.input))
+        .or_else(|| config::execute_auto(tool_state, &request.tool_id, &request.input));
+    let output = match output {
         Some(output) => output,
-        None => match fs::execute_auto(tool_state, &request.tool_id, &request.input) {
-            Some(output) => output,
-            None => {
-                return vec![Event::Error(Error {
-                    message: format!(
-                        "Tool `{}` cannot be executed automatically.",
-                        request.tool_id
-                    ),
-                })]
-            }
-        },
+        None => {
+            return vec![Event::Error(Error {
+                message: format!(
+                    "Tool `{}` cannot be executed automatically.",
+                    request.tool_id
+                ),
+            })]
+        }
     };
 
     vec![

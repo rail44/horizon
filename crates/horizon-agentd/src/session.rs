@@ -51,6 +51,7 @@ use horizon_agent::contract::{
 use horizon_agent::frame::{agent_frame_from_events, AgentFrame, AgentFrameItem};
 use horizon_agent::live::LiveState;
 use horizon_agent::persistence::event_log::{Appender, Record, WriterHandle};
+use horizon_agent::roles::RoleId;
 use horizon_agent::tools::{
     cancelled_tool_call_result, process_agent_provider_event, register_session_runtime,
     resolve_approval, should_fold_completion, unregister_session_runtime, ApprovalDecision,
@@ -181,6 +182,9 @@ impl AgentdState {
 
 struct SessionEntry {
     provider_id: ProviderId,
+    /// Mirrors `provider_id` -- surfaced in `session_list` summaries
+    /// ([`Connection::session_list`]) the same way.
+    role_id: Option<RoleId>,
     inbound: Sender<Command>,
     /// Answers a `session_load` for this session: the session's own thread
     /// receives a one-shot reply channel here and sends back everything its
@@ -198,6 +202,7 @@ fn spawn_session_thread(
     state: Arc<AgentdState>,
     session_id: SessionId,
     provider_id: ProviderId,
+    role_id: Option<RoleId>,
     history: Vec<Event>,
 ) {
     let (inbound_tx, inbound_rx) = unbounded::<Command>();
@@ -206,6 +211,7 @@ fn spawn_session_thread(
         session_id,
         SessionEntry {
             provider_id: provider_id.clone(),
+            role_id: role_id.clone(),
             inbound: inbound_tx,
             replay: replay_tx,
         },
@@ -216,6 +222,7 @@ fn spawn_session_thread(
         run_session(
             session_id,
             provider_id,
+            role_id,
             &thread_state,
             inbound_rx,
             replay_rx,
@@ -264,6 +271,14 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
             .rev()
             .find_map(|record| record.provider_id.clone())
             .unwrap_or_else(|| state.providers.default_provider_id());
+        // Mirrors `provider_id` just above: every record `Appender` writes
+        // for a session carries the same `role_id` (see
+        // `event_log::Appender::new`), so the last one found scanning from
+        // the tail is the session's role for its whole lifetime.
+        let role_id = session_records
+            .iter()
+            .rev()
+            .find_map(|record| record.role_id.clone());
         let mut events: Vec<Event> = session_records
             .into_iter()
             .map(|record| record.event)
@@ -289,7 +304,12 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
             closing.push(Event::TurnEnded(TurnEndReason::Cancelled));
             closing.push(Event::StateChanged(SessionState::WaitingForUser));
 
-            let mut appender = Appender::new(writer.clone(), session_id, Some(provider_id.clone()));
+            let mut appender = Appender::new(
+                writer.clone(),
+                session_id,
+                Some(provider_id.clone()),
+                role_id.clone(),
+            );
             match appender
                 .append_provider_events(closing.iter().cloned().map(ProviderEvent::from).collect())
             {
@@ -305,7 +325,7 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
             "horizon-agentd: resumed session {session_id:?} ({} event(s))",
             events.len()
         );
-        spawn_session_thread(state.clone(), session_id, provider_id, events);
+        spawn_session_thread(state.clone(), session_id, provider_id, role_id, events);
     }
 }
 
@@ -386,6 +406,7 @@ impl Connection {
             self.state.clone(),
             new.session_id,
             new.provider_id,
+            new.role_id,
             Vec::new(),
         );
     }
@@ -449,6 +470,7 @@ impl Connection {
             .map(|(session_id, entry)| SessionSummary {
                 session_id: *session_id,
                 provider_id: entry.provider_id.clone(),
+                role_id: entry.role_id.clone(),
             })
             .collect()
     }
@@ -587,20 +609,32 @@ impl HostTools for AgentdHostTools {
 fn run_session(
     session_id: SessionId,
     provider_id: ProviderId,
+    role_id: Option<RoleId>,
     state: &Arc<AgentdState>,
     inbound_rx: Receiver<Command>,
     replay_rx: Receiver<Sender<Vec<Event>>>,
     history: Vec<Event>,
 ) {
-    let Some(handle) = state.providers.start_session(&provider_id, session_id) else {
+    let Some(handle) = state
+        .providers
+        .start_session(&provider_id, session_id, role_id.clone())
+    else {
+        // `ProviderRegistry::start_session` returns `None` for either an
+        // unknown `provider_id` or an unresolvable `role_id` (see its own
+        // doc comment on why role validation is centralized there) -- this
+        // is `roles`'s "never silently degrade to role-less" requirement's
+        // one production enforcement point, so the message distinguishes
+        // which one actually failed rather than defaulting to a generic
+        // "unknown provider" that would be misleading for a bad role.
+        let message = match &role_id {
+            Some(role_id) if horizon_agent::roles::resolve(role_id).is_none() => {
+                format!("Unknown role `{}`.", role_id.0)
+            }
+            _ => format!("Unknown provider `{}`.", provider_id.0),
+        };
         send_envelope(
             &state.outgoing,
-            Envelope::event(
-                session_id,
-                Event::Error(AgentError {
-                    message: format!("Unknown provider `{}`.", provider_id.0),
-                }),
-            ),
+            Envelope::event(session_id, Event::Error(AgentError { message })),
         );
         return;
     };
@@ -610,6 +644,7 @@ fn run_session(
         Some(writer) => LiveState::with_event_log_and_history(
             session_id,
             Some(provider_id.clone()),
+            role_id.clone(),
             writer,
             history,
         ),
@@ -632,6 +667,7 @@ fn run_session(
     let _ = commands_tx.send(Command::Initialize(Initialization {
         session_id,
         provider_id: provider_id.clone(),
+        role_id,
     }));
 
     let provider_events = handle.events();

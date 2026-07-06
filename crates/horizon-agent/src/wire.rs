@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::contract::{Command, Event, ProviderId, RequestId, SessionId, ToolCallProgress};
+use crate::roles::RoleId;
 
 /// The contract/wire version this build speaks. Carried both by every
 /// envelope's `v` field (checked structurally by [`read_envelope`] -- an
@@ -30,7 +31,15 @@ use crate::contract::{Command, Event, ProviderId, RequestId, SessionId, ToolCall
 /// separate: a future transport without an envelope at all (ACP's JSON-RPC
 /// over stdio, guardrail 2) has no `v` field to check, so `Hello` carries
 /// its own copy that survives independently of this envelope format.
-pub const CONTRACT_VERSION: u32 = 1;
+///
+/// Bumped 1 -> 2 (`docs/plans/agent-foundation/03-roles-and-config-agent.md`):
+/// [`SessionNew`]'s placeholder `config_overrides` field is replaced outright
+/// by a real, typed `role_id` -- the "later step" its own former doc comment
+/// said would define real override fields. Not additive (the field is
+/// renamed and reshaped, not just added), so old and new peers must not
+/// silently talk past each other -- the version bump makes that a rejected
+/// handshake ([`Control::HandshakeRejected`]) instead.
+pub const CONTRACT_VERSION: u32 = 2;
 
 /// One JSONL message: `{"v":1,"session_id":..,"kind":"command"|"event"|
 /// "control","payload":..}`. `session_id` is `None` for connection-global
@@ -159,18 +168,22 @@ pub struct Hello {
 pub struct SessionSummary {
     pub session_id: SessionId,
     pub provider_id: ProviderId,
+    /// So a (re)connecting client can label a resumed/live session by its
+    /// role without a separate round trip -- mirrors `provider_id` above.
+    pub role_id: Option<RoleId>,
 }
 
 /// Per `docs/agent-runtime-split-design.md` guardrail 5, `session_new` is
-/// distinct from `session_load` and carries per-session config overrides.
-/// `config_overrides` is a placeholder shape (arbitrary JSON) until a later
-/// step defines the actual override fields -- not yet produced or consumed
-/// anywhere in step 2.
+/// distinct from `session_load` and carries per-session overrides.
+/// `role_id` replaces this field's former placeholder shape
+/// (`config_overrides: Option<serde_json::Value>`) -- see
+/// [`CONTRACT_VERSION`]'s doc comment for why that was a breaking, not
+/// additive, change.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SessionNew {
     pub session_id: SessionId,
     pub provider_id: ProviderId,
-    pub config_overrides: Option<serde_json::Value>,
+    pub role_id: Option<RoleId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -315,11 +328,12 @@ mod tests {
             Control::SessionListResult(vec![SessionSummary {
                 session_id: SessionId::new(),
                 provider_id: ProviderId("builtin.agent.rig".to_string()),
+                role_id: Some(RoleId("config".to_string())),
             }]),
             Control::SessionNew(SessionNew {
                 session_id: SessionId::new(),
                 provider_id: ProviderId("builtin.agent.rig".to_string()),
-                config_overrides: None,
+                role_id: Some(RoleId("config".to_string())),
             }),
             Control::SessionLoad(SessionLoad {
                 session_id: SessionId::new(),
@@ -344,6 +358,15 @@ mod tests {
             }),
             Control::SkippedLines("skipped 1 corrupt line".to_string()),
         ]
+    }
+
+    /// Documents the bump this module's own doc comment on
+    /// [`CONTRACT_VERSION`] explains -- `SessionNew.role_id` replacing the
+    /// dead `config_overrides` placeholder is a breaking wire change, not
+    /// an additive one.
+    #[test]
+    fn contract_version_was_bumped_for_the_role_id_field() {
+        assert_eq!(CONTRACT_VERSION, 2);
     }
 
     #[tokio::test]
@@ -402,7 +425,12 @@ mod tests {
         let mut server_reader = BufReader::new(server);
 
         client
-            .write_all(b"{\"v\":1,\"kind\":\"bogus\",\"session_id\":null,\"payload\":{}}\n")
+            .write_all(
+                format!(
+                    "{{\"v\":{CONTRACT_VERSION},\"kind\":\"bogus\",\"session_id\":null,\"payload\":{{}}}}\n"
+                )
+                .as_bytes(),
+            )
             .await
             .unwrap();
         drop(client);
@@ -447,7 +475,11 @@ mod tests {
 
         client
             .write_all(
-                b"{\"v\":1,\"kind\":\"control\",\"session_id\":null,\"payload\":\"ping\",\"future_field\":42}\n",
+                format!(
+                    "{{\"v\":{CONTRACT_VERSION},\"kind\":\"control\",\"session_id\":null,\
+                     \"payload\":\"ping\",\"future_field\":42}}\n"
+                )
+                .as_bytes(),
             )
             .await
             .unwrap();

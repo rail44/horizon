@@ -15,6 +15,7 @@ fn mock_agent_emits_initial_session_events() {
         agent::StartSession {
             session_id: SessionId::new(),
             provider_id: agent::Provider::provider_id(&provider),
+            role_id: None,
         },
     );
 
@@ -185,6 +186,7 @@ fn with_event_log_and_history_seeds_the_frame_and_events_up_front() {
     let store = crate::live::LiveState::with_event_log_and_history(
         session_id,
         None,
+        None,
         writer.clone(),
         history.clone(),
     );
@@ -219,6 +221,7 @@ fn runtime_state_store_enqueues_events_to_jsonl_log() {
     let store = crate::live::LiveState::with_event_log(
         session_id,
         Some(provider_id.clone()),
+        None,
         writer.clone(),
     );
 
@@ -261,7 +264,7 @@ fn runtime_state_store_folds_tool_call_progress_but_excludes_it_from_the_jsonl_l
     ));
     let session_id = SessionId::new();
     let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
-    let store = crate::live::LiveState::with_event_log(session_id, None, writer.clone());
+    let store = crate::live::LiveState::with_event_log(session_id, None, None, writer.clone());
 
     let frame = store.extend_provider_events([
         agent::ProviderEvent::tool_call_progress(agent::ToolCallProgress {
@@ -465,6 +468,7 @@ fn mock_agent_accepts_tool_call_result_command() {
         agent::StartSession {
             session_id: SessionId::new(),
             provider_id: agent::Provider::provider_id(&provider),
+            role_id: None,
         },
     );
     let tx = handle.sender();
@@ -498,6 +502,7 @@ fn mock_agent_cancel_mid_turn_keeps_partial_and_marks_cancelled() {
         agent::StartSession {
             session_id: SessionId::new(),
             provider_id: agent::Provider::provider_id(&provider),
+            role_id: None,
         },
     );
     let tx = handle.sender();
@@ -592,6 +597,7 @@ fn mock_agent_slow_turn_emits_provider_request_lifecycle_in_order() {
         agent::StartSession {
             session_id: SessionId::new(),
             provider_id: agent::Provider::provider_id(&provider),
+            role_id: None,
         },
     );
     let tx = handle.sender();
@@ -643,6 +649,7 @@ fn mock_agent_cancel_marks_pending_approval_cancelled_and_recovers() {
         agent::StartSession {
             session_id: SessionId::new(),
             provider_id: agent::Provider::provider_id(&provider),
+            role_id: None,
         },
     );
     let tx = handle.sender();
@@ -858,7 +865,7 @@ fn provider_registry_starts_builtin_provider() {
     let registry = agent::ProviderRegistry::builtin();
     let provider_id = registry.default_provider_id();
     let handle = registry
-        .start_session(&provider_id, SessionId::new())
+        .start_session(&provider_id, SessionId::new(), None)
         .expect("builtin provider");
 
     let first = handle.events().recv().expect("first event");
