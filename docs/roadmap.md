@@ -13,9 +13,8 @@ integration (see AGENTS.md "Branch and Integration Flow"). **Domain
 sessions take items directly from this roadmap**, make concrete design
 decisions with the owner in-session, and hand branches back through
 the review queue citing the item they implement. There is no separate
-plans layer (retired 2026-07-06 — the two in-flight plan files under
-`docs/plans/` are those sessions' working documents and retire with
-them).
+plans layer (retired 2026-07-06; the transitional plan files are gone
+— see git history).
 
 ## Current position (orientation only — the repo is the truth)
 
