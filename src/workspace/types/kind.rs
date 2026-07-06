@@ -28,15 +28,6 @@ impl From<SessionKind> for PaneKind {
     }
 }
 
-impl PaneKind {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Terminal => "terminal",
-            Self::Agent => "agent",
-        }
-    }
-}
-
 impl SessionKind {
     pub(crate) fn label(self) -> &'static str {
         match self {

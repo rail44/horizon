@@ -1,6 +1,6 @@
 use floem::peniko::Color;
 
-use crate::control_surface::{OverviewItem, PaletteItem};
+use crate::control_surface::PaletteItem;
 use crate::ui::list_row::ListRow;
 use crate::ui::theme;
 
@@ -12,19 +12,6 @@ pub(super) fn palette_item_row(item: &PaletteItem) -> ListRow {
         description: palette_description(item),
         enabled: item.enabled(),
         destructive: palette_is_destructive(item),
-    }
-}
-
-pub(super) fn overview_item_row(item: &OverviewItem) -> ListRow {
-    ListRow {
-        badge: overview_kind_label(item).to_string(),
-        badge_color: overview_kind_color(item),
-        title: overview_title(item),
-        description: overview_description(item),
-        enabled: true,
-        // The overview lists tabs/sessions/panes, never commands directly —
-        // nothing here is a destructive action in its own right.
-        destructive: false,
     }
 }
 
@@ -123,73 +110,6 @@ fn palette_description(item: &PaletteItem) -> String {
     }
 }
 
-fn overview_kind_label(item: &OverviewItem) -> &'static str {
-    match item {
-        OverviewItem::Tab { .. } => "TAB",
-        OverviewItem::DetachedSession { .. } => "DETACHED",
-        OverviewItem::Pane { .. } => "PANE",
-    }
-}
-
-fn overview_kind_color(item: &OverviewItem) -> Color {
-    match item {
-        OverviewItem::Tab { .. } => Color::from_rgb8(224, 184, 104),
-        OverviewItem::DetachedSession { .. } => Color::from_rgb8(126, 170, 255),
-        OverviewItem::Pane { .. } => Color::from_rgb8(132, 220, 198),
-    }
-}
-
-fn overview_title(item: &OverviewItem) -> String {
-    match item {
-        OverviewItem::Tab { index, title, .. } => format!("Tab {}: {title}", index + 1),
-        OverviewItem::DetachedSession { title, .. } => format!("Attach {title}"),
-        OverviewItem::Pane {
-            tab_index,
-            pane_index,
-            title,
-            ..
-        } => format!("Tab {} / Pane {}: {title}", tab_index + 1, pane_index + 1),
-    }
-}
-
-fn overview_description(item: &OverviewItem) -> String {
-    match item {
-        OverviewItem::Tab {
-            pane_count, active, ..
-        } => {
-            if *active {
-                format!("Current tab · {pane_count} pane(s)")
-            } else {
-                format!("Switch to tab · {pane_count} pane(s)")
-            }
-        }
-        OverviewItem::DetachedSession {
-            kind,
-            display_number,
-            ..
-        } => format!(
-            "Detached {} session #{} · Enter attaches as split",
-            kind.label(),
-            display_number
-        ),
-        OverviewItem::Pane {
-            kind,
-            active,
-            tab_active,
-            ..
-        } => {
-            let state = if *tab_active && *active {
-                "Active pane"
-            } else if *tab_active {
-                "Visible pane"
-            } else {
-                "Pane in inactive tab"
-            };
-            format!("{state} · {} pane", kind.label())
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,17 +167,5 @@ mod tests {
         };
 
         assert!(palette_item_row(&terminate).destructive);
-    }
-
-    #[test]
-    fn overview_rows_are_never_destructive() {
-        let tab = OverviewItem::Tab {
-            index: 0,
-            title: "Terminal #1".to_string(),
-            pane_count: 1,
-            active: true,
-        };
-
-        assert!(!overview_item_row(&tab).destructive);
     }
 }

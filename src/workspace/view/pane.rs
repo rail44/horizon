@@ -5,7 +5,7 @@ use crate::app::command_actions::{
 };
 use crate::app::keymap::{is_palette_open_key, is_workspace_mode_enter_key};
 use crate::control_surface::{
-    handle_control_key, open_palette, ControlInputState, ControlMode, OpenPaletteState,
+    handle_control_key, open_palette, ControlInputState, OpenPaletteState,
 };
 use crate::terminal::TerminalFrame;
 use crate::ui::theme;
@@ -131,7 +131,6 @@ pub(super) fn pane_view(
     let ime_cursor_area = state.ime_cursor_area;
     let palette_open = control_input.palette_open;
     let agent_drafts = state.agent_drafts;
-    let control_mode = control_input.control_mode;
 
     let terminal_frame = move || {
         let Some(session_id) = workspace.with(|ws| ws.visible_terminal_session_id(index)) else {
@@ -428,7 +427,6 @@ pub(super) fn pane_view(
                 ime_composing.set(false);
                 ime_preedit.set(None);
                 set_ime_allowed(false);
-                control_mode.set(ControlMode::Commands);
                 open_palette(open_palette_state);
                 return EventPropagation::Stop;
             }
@@ -473,7 +471,6 @@ pub(super) fn pane_view(
                             ime_composing.set(false);
                             ime_preedit.set(None);
                             set_ime_allowed(false);
-                            control_mode.set(ControlMode::Commands);
                             open_palette(open_palette_state);
                         }
                     }

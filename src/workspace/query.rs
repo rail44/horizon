@@ -41,6 +41,13 @@ impl Workspace {
             .and_then(|pane| pane.session_id)
     }
 
+    /// Test-only now: the workspace overview's header text
+    /// (`ws.session_count()` alongside `detached_session_count()`) was its
+    /// last production caller and is gone
+    /// (`docs/plans/application-ui/01-session-manager.md` -- session
+    /// management moved to its own modal, which derives the same count from
+    /// `control_surface::session_manager_items` instead).
+    #[cfg(test)]
     pub(crate) fn session_count(&self) -> usize {
         self.sessions.len()
     }
@@ -57,6 +64,29 @@ impl Workspace {
             .into_iter()
             .filter(|session| !session.attached)
             .collect()
+    }
+
+    /// The `(tab_index, pane_index)` of the visible pane currently hosting
+    /// `session_id`, if any -- lets the session manager modal
+    /// (`control_surface::view::session_manager`) resolve an *attached*
+    /// row straight to `CommandInvocation::ActivatePane` without a
+    /// separate lookup table. `None` for a detached session (no pane
+    /// references it).
+    pub(crate) fn pane_location_for_session(
+        &self,
+        session_id: SessionId,
+    ) -> Option<(usize, usize)> {
+        self.tabs.iter().enumerate().find_map(|(tab_index, tab)| {
+            tab.root
+                .pane_ids()
+                .into_iter()
+                .position(|pane_id| {
+                    self.panes
+                        .iter()
+                        .any(|pane| pane.id == pane_id && pane.session_id == Some(session_id))
+                })
+                .map(|pane_index| (tab_index, pane_index))
+        })
     }
 
     pub(crate) fn session_summaries(&self) -> Vec<SessionSummary> {

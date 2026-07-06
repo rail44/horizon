@@ -6,7 +6,7 @@ use crate::agent::tools::{
     resolve_approval, unregister_session_runtime, ApprovalDecision, ApprovalOutcome,
 };
 use crate::app::commands::{command_enabled, CommandId};
-use crate::control_surface::command_state;
+use crate::control_surface::{command_state, open_session_manager, SessionManagerHandle};
 use crate::session::{Frames, Registry, SessionId};
 use crate::workspace::{
     request_active_pane_focus, Direction, PaneFocusRequests, PaneKind, SessionKind, Workspace,
@@ -23,6 +23,12 @@ pub(crate) const DEFAULT_DENY_REASON: &str = "Denied by user";
 pub(crate) struct CommandActionState {
     pub(crate) runtime: SessionRuntimeState,
     pub(crate) pane_focus_requests: PaneFocusRequests,
+    /// The session manager modal's own signals -- carried here (rather than
+    /// threaded to call sites the way `OpenPaletteState` is) so
+    /// `CommandId::OpenSessionManager` opens the modal identically whether
+    /// it's invoked from the palette or a `[keybindings]` chord; see
+    /// `control_surface::SessionManagerHandle`'s doc comment.
+    pub(crate) session_manager: SessionManagerHandle,
 }
 
 impl CommandActionState {
@@ -327,6 +333,7 @@ fn execute_simple_command(command_id: CommandId, state: CommandActionState) {
             }
         }
         CommandId::ReloadAgentRuntime => reload_agent_runtime(state),
+        CommandId::OpenSessionManager => open_session_manager(state.session_manager),
     }
 }
 
@@ -699,6 +706,7 @@ mod tests {
         let state = CommandActionState {
             runtime,
             pane_focus_requests: std::array::from_fn(|_| RwSignal::new(0_u64)),
+            session_manager: SessionManagerHandle::for_test(),
         };
 
         (state, session_id, call_id, rx)
@@ -720,6 +728,7 @@ mod tests {
         CommandActionState {
             runtime,
             pane_focus_requests: std::array::from_fn(|_| RwSignal::new(0_u64)),
+            session_manager: SessionManagerHandle::for_test(),
         }
     }
 
@@ -782,6 +791,7 @@ mod tests {
         let state = CommandActionState {
             runtime,
             pane_focus_requests: std::array::from_fn(|_| RwSignal::new(0_u64)),
+            session_manager: SessionManagerHandle::for_test(),
         };
 
         (
@@ -1087,6 +1097,7 @@ mod tests {
         let state = CommandActionState {
             runtime,
             pane_focus_requests: std::array::from_fn(|_| RwSignal::new(0_u64)),
+            session_manager: SessionManagerHandle::for_test(),
         };
         let workspace = state.workspace();
         let before_tab_count = workspace.with_untracked(|ws| ws.tab_count());

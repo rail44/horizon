@@ -4,14 +4,14 @@ use floem::prelude::*;
 
 use crate::app::command_actions::{execute_command, CommandActionState, CommandInvocation};
 use crate::app::keymap::{is_palette_open_key, is_workspace_mode_enter_key, Keymap};
-use crate::control_surface::{handle_control_key, open_palette, ControlMode};
+use crate::control_surface::{handle_control_key, open_palette};
 use crate::terminal::TerminalCommand;
 use crate::workspace::{
     active_agent, active_agent_draft, active_terminal_sender, active_text_input_pane,
     agent_escape_requests_workspace_mode, handle_workspace_mode_key, trace_ime, ModeAction,
 };
 
-use super::context::{control_input_state, open_palette_state};
+use super::context::{control_input_state, open_palette_state, session_manager_handle};
 use super::state::AppState;
 
 #[derive(Clone)]
@@ -131,7 +131,6 @@ impl AppInput {
                 self.state.ime_composing.set(false);
                 self.state.ime_preedit.set(None);
                 set_ime_allowed(false);
-                self.state.control_mode.set(ControlMode::Commands);
                 open_palette(open_palette_state(&self.state));
                 return EventPropagation::Stop;
             }
@@ -211,6 +210,7 @@ impl AppInput {
         CommandActionState {
             runtime: self.state.session_runtime_state(),
             pane_focus_requests: self.state.pane_focus_requests,
+            session_manager: session_manager_handle(&self.state),
         }
     }
 
@@ -236,7 +236,6 @@ impl AppInput {
                 self.state.ime_composing.set(false);
                 self.state.ime_preedit.set(None);
                 set_ime_allowed(false);
-                self.state.control_mode.set(ControlMode::Commands);
                 open_palette(open_palette_state(&self.state));
             }
         }

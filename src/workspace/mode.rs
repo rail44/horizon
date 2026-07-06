@@ -8,12 +8,13 @@
 //! so there is nothing to keep synchronized on every focus-changing
 //! operation elsewhere in the codebase.
 //!
-//! Not to be confused with `control_surface::ControlMode::Workspace` -- an
-//! unrelated, pre-existing name for the command palette's "workspace
-//! overview" tab (toggled by `Tab` inside the palette, itself reached via
-//! `:` from this module's mode). That type and this module's workspace
-//! mode are two different concepts that happen to share the English word
-//! "workspace".
+//! Formerly disambiguated here against `control_surface::ControlMode::
+//! Workspace`, a same-named-but-unrelated concept (the palette's
+//! Tab-switching "workspace overview" panel); that panel and its `ControlMode`
+//! type are gone (`docs/plans/application-ui/01-session-manager.md` --
+//! session management moved to its own modal,
+//! `control_surface::view::session_manager`), so the disambiguation no
+//! longer applies.
 
 use super::types::Workspace;
 

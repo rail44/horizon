@@ -191,7 +191,8 @@ window_height = 720.0
 # Command ids (see `src/app/commands.rs`'s `CommandId`): new-terminal,
 # new-agent, split-active-pane, focus-next-pane, close-active-pane,
 # close-active-tab, terminate-active-session, approve-tool-call,
-# deny-tool-call, cancel-agent-turn. The reserved pseudo-command
+# deny-tool-call, cancel-agent-turn, manage-sessions (opens the session
+# manager modal). The reserved pseudo-command
 # `open-palette` is also accepted here — it isn't a real `CommandId` (opening
 # the palette isn't an operation the palette itself can list or run), and
 # overrides the chord that opens the command palette. Unbound by default:

@@ -1,15 +1,9 @@
 use crate::app::commands::CommandEntry;
 use crate::session::SessionId;
-use crate::workspace::{PaneKind, PaneSummary, SessionKind};
+use crate::workspace::SessionKind;
 
 pub(crate) const PALETTE_VISIBLE_ROWS: usize = 6;
-pub(crate) const OVERVIEW_VISIBLE_ROWS: usize = 8;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ControlMode {
-    Commands,
-    Workspace,
-}
+pub(crate) const SESSION_MANAGER_VISIBLE_ROWS: usize = 8;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum PaletteItem {
@@ -52,30 +46,6 @@ pub(crate) enum PaletteItem {
     },
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum OverviewItem {
-    Tab {
-        index: usize,
-        title: String,
-        pane_count: usize,
-        active: bool,
-    },
-    DetachedSession {
-        session_id: SessionId,
-        title: String,
-        kind: SessionKind,
-        display_number: usize,
-    },
-    Pane {
-        tab_index: usize,
-        pane_index: usize,
-        title: String,
-        kind: PaneKind,
-        active: bool,
-        tab_active: bool,
-    },
-}
-
 impl PaletteItem {
     pub(crate) fn enabled(&self) -> bool {
         match self {
@@ -88,15 +58,16 @@ impl PaletteItem {
     }
 }
 
-impl From<PaneSummary> for OverviewItem {
-    fn from(pane: PaneSummary) -> Self {
-        Self::Pane {
-            tab_index: pane.tab_index,
-            pane_index: pane.pane_index,
-            title: pane.title,
-            kind: pane.kind,
-            active: pane.active,
-            tab_active: pane.tab_active,
-        }
-    }
+/// One row of the session manager modal
+/// (`control_surface::view::session_manager`) -- every session the
+/// workspace knows about (attached or detached), detached-first then
+/// ordered by `display_number` within each group (see
+/// `items::session_manager_items`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SessionManagerRow {
+    pub(crate) session_id: SessionId,
+    pub(crate) kind: SessionKind,
+    pub(crate) display_number: usize,
+    pub(crate) title: String,
+    pub(crate) attached: bool,
 }

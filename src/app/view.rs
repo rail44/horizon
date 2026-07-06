@@ -1,13 +1,11 @@
 use floem::event::EventListener;
 use floem::prelude::*;
 
-use crate::control_surface::view::{command_palette, workspace_overview};
+use crate::control_surface::view::{command_palette, session_manager_modal};
 use crate::workspace::request_active_pane_focus;
 use crate::workspace::view::{tab_strip, workspace_view};
 
-use super::context::{
-    command_action_state, command_palette_state, workspace_overview_state, workspace_view_state,
-};
+use super::context::{command_action_state, command_palette_state, workspace_view_state};
 use super::input::AppInput;
 use super::state::AppState;
 use super::status_bar::status_bar;
@@ -82,6 +80,6 @@ fn app_content(state: AppState) -> impl IntoView {
         ))
         .style(|s| s.size_full().flex().flex_col()),
         command_palette(command_palette_state(&state)),
-        workspace_overview(workspace_overview_state(&state)),
+        session_manager_modal(command_action_state(&state)),
     ))
 }

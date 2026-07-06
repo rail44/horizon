@@ -344,6 +344,7 @@ fn command_id_from_str(id: &str) -> Option<CommandId> {
         "deny-tool-call" => Some(CommandId::DenyToolCall),
         "cancel-agent-turn" => Some(CommandId::CancelAgentTurn),
         "reload-agent-runtime" => Some(CommandId::ReloadAgentRuntime),
+        "manage-sessions" => Some(CommandId::OpenSessionManager),
         _ => None,
     }
 }

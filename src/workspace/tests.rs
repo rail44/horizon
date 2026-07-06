@@ -46,6 +46,28 @@ fn split_active_with_new_session_uses_active_pane_kind() {
 }
 
 #[test]
+fn pane_location_for_session_resolves_the_hosting_pane() {
+    let mut workspace = Workspace::mvp();
+    let session_id = SessionId::new();
+    workspace.split_active(PaneKind::Terminal, Some(session_id));
+
+    assert_eq!(
+        workspace.pane_location_for_session(session_id),
+        Some((0, 1))
+    );
+}
+
+#[test]
+fn pane_location_for_session_is_none_once_detached() {
+    let mut workspace = Workspace::mvp();
+    let session_id = SessionId::new();
+    workspace.split_active(PaneKind::Terminal, Some(session_id));
+    workspace.close_visible_pane(1);
+
+    assert_eq!(workspace.pane_location_for_session(session_id), None);
+}
+
+#[test]
 fn detach_reports_session_and_removes_reference() {
     let mut workspace = Workspace::mvp();
     let session_id = SessionId::new();

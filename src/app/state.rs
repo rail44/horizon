@@ -4,8 +4,7 @@ use floem::peniko::kurbo::{Point, Size};
 use floem::prelude::*;
 
 use crate::agent::agentd_runtime::AgentdConnection;
-use crate::control_surface::ControlMode;
-use crate::session::{Frames, Registry};
+use crate::session::{Frames, Registry, SessionId};
 use crate::workspace::{AgentDrafts, PaneFocusRequests, Workspace, MAX_VISIBLE_PANES};
 
 use super::runtime::{spawn_session, SessionRuntimeState};
@@ -24,8 +23,15 @@ pub(super) struct AppState {
     pub(super) palette_focus_request: RwSignal<u64>,
     pub(super) pane_focus_requests: PaneFocusRequests,
     pub(super) agent_drafts: AgentDrafts,
-    pub(super) control_mode: RwSignal<ControlMode>,
-    pub(super) overview_selection: RwSignal<usize>,
+    /// The session manager modal's own signals (`docs/plans/application-ui/
+    /// 01-session-manager.md`) -- mirrors `palette_open`/`palette_selection`/
+    /// `palette_focus_request` above, bundled into a
+    /// `control_surface::SessionManagerHandle` for `CommandActionState` (see
+    /// `app::context::session_manager_handle`).
+    pub(super) session_manager_open: RwSignal<bool>,
+    pub(super) session_manager_selection: RwSignal<usize>,
+    pub(super) session_manager_pending_terminate: RwSignal<Option<SessionId>>,
+    pub(super) session_manager_focus_request: RwSignal<u64>,
     pub(super) agent_state_status: RwSignal<Option<String>>,
     /// `Some` once Horizon has a live connection to `horizon-agentd` -- the
     /// *only* place agent sessions run (step 4 retired the in-process
@@ -82,8 +88,10 @@ impl AppState {
             palette_focus_request: RwSignal::new(0_u64),
             pane_focus_requests: [(); MAX_VISIBLE_PANES].map(|_| RwSignal::new(0_u64)),
             agent_drafts: [(); MAX_VISIBLE_PANES].map(|_| RwSignal::new(String::new())),
-            control_mode: RwSignal::new(ControlMode::Commands),
-            overview_selection: RwSignal::new(0_usize),
+            session_manager_open: RwSignal::new(false),
+            session_manager_selection: RwSignal::new(0_usize),
+            session_manager_pending_terminate: RwSignal::new(None),
+            session_manager_focus_request: RwSignal::new(0_u64),
             agent_state_status,
             terminal_dump: std::env::var_os("HORIZON_TERMINAL_DUMP").map(PathBuf::from),
             clipboard_dump: std::env::var_os("HORIZON_CLIPBOARD_DUMP").map(PathBuf::from),
@@ -151,8 +159,10 @@ impl AppState {
             palette_focus_request: RwSignal::new(0_u64),
             pane_focus_requests: [(); MAX_VISIBLE_PANES].map(|_| RwSignal::new(0_u64)),
             agent_drafts: [(); MAX_VISIBLE_PANES].map(|_| RwSignal::new(String::new())),
-            control_mode: RwSignal::new(ControlMode::Commands),
-            overview_selection: RwSignal::new(0_usize),
+            session_manager_open: RwSignal::new(false),
+            session_manager_selection: RwSignal::new(0_usize),
+            session_manager_pending_terminate: RwSignal::new(None),
+            session_manager_focus_request: RwSignal::new(0_u64),
             agent_state_status: RwSignal::new(None::<String>),
             terminal_dump: None,
             clipboard_dump: None,

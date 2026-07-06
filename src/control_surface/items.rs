@@ -1,7 +1,7 @@
 use crate::app::command_actions::{find_agent_turn_in_flight, find_pending_agent_approval};
 use crate::app::commands::{command_entries, filter_command_entries, CommandId, CommandState};
 use crate::control_surface::query::{normalize_palette_query, palette_matches};
-use crate::control_surface::{OverviewItem, PaletteItem};
+use crate::control_surface::{PaletteItem, SessionManagerRow};
 use crate::session::Frames;
 use crate::workspace::Workspace;
 
@@ -16,45 +16,26 @@ pub(crate) fn command_state(workspace: &Workspace, frames: &Frames) -> CommandSt
     }
 }
 
-pub(crate) fn overview_items(workspace: &Workspace) -> Vec<OverviewItem> {
-    let tabs = workspace.tab_summaries();
-    let panes = workspace.pane_summaries();
-    let mut items = Vec::new();
-
-    for tab in tabs {
-        let tab_index = tab.index;
-        let pane_count = tab.pane_count;
-        items.push(OverviewItem::Tab {
-            index: tab.index,
-            title: tab.title,
-            pane_count: tab.pane_count,
-            active: tab.active,
-        });
-
-        if pane_count > 1 {
-            items.extend(
-                panes
-                    .iter()
-                    .filter(|pane| pane.tab_index == tab_index)
-                    .cloned()
-                    .map(OverviewItem::from),
-            );
-        }
-    }
-
-    items.extend(
-        workspace
-            .detached_session_summaries()
-            .into_iter()
-            .map(|session| OverviewItem::DetachedSession {
-                session_id: session.id,
-                title: session.title,
-                kind: session.kind,
-                display_number: session.display_number,
-            }),
-    );
-
-    items
+/// Every session the workspace knows about, for the session manager modal
+/// (`control_surface::view::session_manager`) -- detached sessions first
+/// (the ones worth hunting for), then attached ones, each group ordered by
+/// `display_number`. `sort_by_key`'s stability keeps ties (e.g. a terminal
+/// and an agent sharing the same `display_number`) in their original
+/// `Workspace::session_summaries` order rather than reshuffling them.
+pub(crate) fn session_manager_items(workspace: &Workspace) -> Vec<SessionManagerRow> {
+    let mut rows: Vec<SessionManagerRow> = workspace
+        .session_summaries()
+        .into_iter()
+        .map(|session| SessionManagerRow {
+            session_id: session.id,
+            kind: session.kind,
+            display_number: session.display_number,
+            title: session.title,
+            attached: session.attached,
+        })
+        .collect();
+    rows.sort_by_key(|row| (row.attached, row.display_number));
+    rows
 }
 
 pub(crate) fn palette_items(
@@ -296,71 +277,37 @@ mod tests {
     }
 
     #[test]
-    fn overview_items_include_tabs_and_sessions() {
+    fn session_manager_items_list_detached_sessions_before_attached_ones() {
         let mut workspace = Workspace::mvp();
-        let session_id = SessionId::new();
-        workspace.split_active(PaneKind::Terminal, Some(session_id));
+        let detached = SessionId::new();
+        workspace.split_active(PaneKind::Terminal, Some(detached));
         workspace.close_visible_pane(1);
 
-        let items = overview_items(&workspace);
+        let items = session_manager_items(&workspace);
 
-        assert!(matches!(
-            items[0],
-            OverviewItem::Tab {
-                index: 0,
-                active: true,
-                ..
-            }
-        ));
-        assert!(!items.iter().any(
-            |item| matches!(item, OverviewItem::Pane { title, .. } if title == "Terminal #1")
-        ));
-        assert!(items.iter().any(|item| matches!(
-            item,
-            OverviewItem::DetachedSession {
-                session_id: id,
-                title,
-                ..
-            } if *id == session_id && title == "Terminal #2"
-        )));
+        assert_eq!(items.len(), 2);
+        assert!(!items[0].attached);
+        assert_eq!(items[0].session_id, detached);
+        assert!(items[1].attached);
     }
 
     #[test]
-    fn overview_items_include_split_panes_under_their_tab() {
+    fn session_manager_items_sort_each_group_by_display_number() {
         let mut workspace = Workspace::mvp();
-        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        let second = SessionId::new();
+        workspace.split_active(PaneKind::Terminal, Some(second));
+        workspace.close_visible_pane(1);
+        let third = SessionId::new();
+        workspace.split_active(PaneKind::Terminal, Some(third));
+        workspace.close_visible_pane(1);
 
-        let items = overview_items(&workspace);
+        let items = session_manager_items(&workspace);
 
-        assert!(matches!(
-            &items[0],
-            OverviewItem::Tab {
-                title,
-                active: true,
-                ..
-            } if title == "Terminal #2"
-        ));
-        assert!(matches!(
-            &items[1],
-            OverviewItem::Pane {
-                tab_index: 0,
-                pane_index: 0,
-                title,
-                kind: PaneKind::Terminal,
-                active: false,
-                tab_active: true,
-            } if title == "Terminal #1"
-        ));
-        assert!(matches!(
-            &items[2],
-            OverviewItem::Pane {
-                tab_index: 0,
-                pane_index: 1,
-                title,
-                kind: PaneKind::Terminal,
-                active: true,
-                tab_active: true,
-            } if title == "Terminal #2"
-        ));
+        let detached_numbers: Vec<usize> = items
+            .iter()
+            .filter(|row| !row.attached)
+            .map(|row| row.display_number)
+            .collect();
+        assert_eq!(detached_numbers, vec![2, 3]);
     }
 }

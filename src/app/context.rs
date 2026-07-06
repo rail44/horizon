@@ -1,6 +1,6 @@
 use crate::app::command_actions::CommandActionState;
-use crate::control_surface::view::{CommandPaletteState, WorkspaceOverviewState};
-use crate::control_surface::{ControlInputState, OpenPaletteState};
+use crate::control_surface::view::CommandPaletteState;
+use crate::control_surface::{ControlInputState, OpenPaletteState, SessionManagerHandle};
 use crate::workspace::view::WorkspaceViewState;
 
 use super::state::AppState;
@@ -23,13 +23,6 @@ pub(super) fn command_palette_state(state: &AppState) -> CommandPaletteState {
     }
 }
 
-pub(super) fn workspace_overview_state(state: &AppState) -> WorkspaceOverviewState {
-    WorkspaceOverviewState {
-        workspace_control: control_input_state(state).workspace_control_state(),
-        palette_focus_request: state.palette_focus_request,
-    }
-}
-
 pub(super) fn open_palette_state(state: &AppState) -> OpenPaletteState {
     OpenPaletteState {
         palette_open: state.palette_open,
@@ -45,8 +38,6 @@ pub(super) fn control_input_state(state: &AppState) -> ControlInputState {
         palette_open: state.palette_open,
         palette_query: state.palette_query,
         palette_selection: state.palette_selection,
-        control_mode: state.control_mode,
-        overview_selection: state.overview_selection,
     }
 }
 
@@ -54,5 +45,19 @@ pub(super) fn command_action_state(state: &AppState) -> CommandActionState {
     CommandActionState {
         runtime: state.session_runtime_state(),
         pane_focus_requests: state.pane_focus_requests,
+        session_manager: session_manager_handle(state),
+    }
+}
+
+/// The session manager modal's signals, bundled for `CommandActionState`
+/// (see `control_surface::SessionManagerHandle`'s doc comment) -- also
+/// reused directly by `app::input::AppInput`'s own `CommandActionState`
+/// constructor.
+pub(super) fn session_manager_handle(state: &AppState) -> SessionManagerHandle {
+    SessionManagerHandle {
+        open: state.session_manager_open,
+        selection: state.session_manager_selection,
+        pending_terminate: state.session_manager_pending_terminate,
+        focus_request: state.session_manager_focus_request,
     }
 }

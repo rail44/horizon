@@ -1,7 +1,7 @@
 use crate::app::command_actions::{execute_command, CommandActionState, CommandInvocation};
 use crate::app::commands::{clamp_palette_selection, CommandId};
-use crate::control_surface::{overview_items, palette_items, OverviewItem, PaletteItem};
-use crate::session::Frames;
+use crate::control_surface::{palette_items, PaletteItem};
+use crate::session::{Frames, SessionId};
 use crate::workspace::Workspace;
 use floem::prelude::*;
 
@@ -11,13 +11,6 @@ pub(crate) struct PaletteActionState {
     pub(crate) palette_open: RwSignal<bool>,
     pub(crate) palette_query: RwSignal<String>,
     pub(crate) palette_selection: RwSignal<usize>,
-}
-
-#[derive(Clone)]
-pub(crate) struct OverviewActionState {
-    pub(crate) command: CommandActionState,
-    pub(crate) palette_open: RwSignal<bool>,
-    pub(crate) overview_selection: RwSignal<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -40,72 +33,48 @@ pub(crate) fn close_palette(palette_open: RwSignal<bool>, palette_query: RwSigna
     palette_query.set(String::new());
 }
 
-pub(crate) fn close_control_surface(palette_open: RwSignal<bool>) {
-    palette_open.set(false);
+/// The session manager modal's own signals (`control_surface::view::
+/// session_manager`): whether it's open, the selected row, the row (if any)
+/// currently awaiting a second `x` press to confirm termination, and a
+/// focus-request counter mirroring `OpenPaletteState::palette_focus_request`
+/// (a plain `open.set(true)` wouldn't retrigger `request_focus` on a no-op
+/// re-open, since the signal's value wouldn't actually change).
+///
+/// Bundled as its own handle (rather than living on `CommandActionState`
+/// directly) so it's just one field to add there -- `CommandActionState`
+/// carries it precisely so `CommandId::OpenSessionManager` can open the
+/// modal identically whether it's invoked from the palette or from a
+/// `[keybindings]` chord (see `app::command_actions::execute_simple_command`).
+#[derive(Clone, Copy)]
+pub(crate) struct SessionManagerHandle {
+    pub(crate) open: RwSignal<bool>,
+    pub(crate) selection: RwSignal<usize>,
+    pub(crate) pending_terminate: RwSignal<Option<SessionId>>,
+    pub(crate) focus_request: RwSignal<u64>,
 }
 
-pub(crate) fn execute_overview_selection(state: OverviewActionState) {
-    let command = state.command;
-    let workspace = command.workspace();
-    let overview_selection = state.overview_selection;
-
-    let selection = overview_selection.get_untracked();
-    let item = workspace.with_untracked(|ws| {
-        let items = overview_items(ws);
-        items
-            .get(clamp_palette_selection(selection, items.len()))
-            .cloned()
-    });
-
-    let Some(item) = item else {
-        return;
-    };
-
-    close_control_surface(state.palette_open);
-    match item {
-        OverviewItem::Tab { index, .. } => {
-            execute_command(CommandInvocation::ActivateTab { index }, command);
-        }
-        OverviewItem::DetachedSession { session_id, .. } => {
-            execute_command(
-                CommandInvocation::AttachSession {
-                    session_id,
-                    activate: true,
-                },
-                command,
-            );
-        }
-        OverviewItem::Pane {
-            tab_index,
-            pane_index,
-            ..
-        } => {
-            execute_command(
-                CommandInvocation::ActivatePane {
-                    tab_index,
-                    pane_index,
-                },
-                command,
-            );
+impl SessionManagerHandle {
+    #[cfg(test)]
+    pub(crate) fn for_test() -> Self {
+        Self {
+            open: RwSignal::new(false),
+            selection: RwSignal::new(0),
+            pending_terminate: RwSignal::new(None),
+            focus_request: RwSignal::new(0),
         }
     }
 }
 
-pub(crate) fn move_overview_selection(
-    workspace: RwSignal<Workspace>,
-    overview_selection: RwSignal<usize>,
-    delta: isize,
-) {
-    let item_count = workspace.with_untracked(|ws| overview_items(ws).len());
-    if item_count == 0 {
-        overview_selection.set(0);
-        return;
-    }
+pub(crate) fn open_session_manager(handle: SessionManagerHandle) {
+    handle.selection.set(0);
+    handle.pending_terminate.set(None);
+    handle.open.set(true);
+    handle.focus_request.update(|request| *request += 1);
+}
 
-    overview_selection.update(|selection| {
-        let next = (*selection as isize + delta).clamp(0, item_count.saturating_sub(1) as isize);
-        *selection = next as usize;
-    });
+pub(crate) fn close_session_manager(handle: SessionManagerHandle) {
+    handle.open.set(false);
+    handle.pending_terminate.set(None);
 }
 
 pub(crate) fn execute_palette_selection(state: PaletteActionState) {

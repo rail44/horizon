@@ -1,4 +1,4 @@
-use crate::control_surface::{palette_items, ControlInputState, ControlMode, PALETTE_VISIBLE_ROWS};
+use crate::control_surface::{palette_items, ControlInputState, PALETTE_VISIBLE_ROWS};
 use crate::ui::list_row::{list_row, ListRowStyle};
 use crate::ui::selectable_list::selectable_list;
 use crate::ui::theme;
@@ -6,7 +6,6 @@ use floem::event::{Event, EventListener, EventPropagation};
 use floem::prelude::*;
 use floem::reactive::create_memo;
 
-use super::chrome::control_mode_tabs;
 use super::row::palette_item_row;
 use crate::control_surface::actions::{execute_palette_selection, PaletteActionState};
 use crate::control_surface::handle_control_key;
@@ -44,7 +43,6 @@ pub(crate) fn command_palette(state: CommandPaletteState) -> impl IntoView {
     let palette_query = control_input.palette_query;
     let palette_selection = control_input.palette_selection;
     let palette_focus_request = state.palette_focus_request;
-    let control_mode = control_input.control_mode;
 
     let items = create_memo(move |_| {
         let query = palette_query.get();
@@ -73,7 +71,6 @@ pub(crate) fn command_palette(state: CommandPaletteState) -> impl IntoView {
 
     container(
         v_stack((
-            control_mode_tabs(control_mode),
             label(move || {
                 let query = palette_query.get();
                 if query.is_empty() {
@@ -109,7 +106,7 @@ pub(crate) fn command_palette(state: CommandPaletteState) -> impl IntoView {
         EventPropagation::Stop
     })
     .style(move |s| {
-        if !palette_open.get() || control_mode.get() != ControlMode::Commands {
+        if !palette_open.get() {
             return s.hide();
         }
 

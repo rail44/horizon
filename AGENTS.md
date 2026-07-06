@@ -73,9 +73,11 @@ paths, system deps, and caveats — live in the `gui-verify` skill
 (`.claude/skills/gui-verify/SKILL.md`); read it before using either script.
 
 Manual smoke after `cargo run`: press `ctrl+'` to enter workspace mode
-(`docs/workspace-mode-design.md`), then `:` to open the control surface;
-`Tab` toggles between Commands and Workspace modes. See README.md for the
-manual command checklist (`new terminal`, `split`, `detached`, ...).
+(`docs/workspace-mode-design.md`), then `:` to open the control surface —
+a Commands-only palette; session management (attach/terminate detached
+sessions) is a separate modal opened via its "Manage Sessions" command. See
+README.md for the manual command checklist (`new terminal`, `split`,
+`detached`, `manage sessions`, ...).
 
 ## Module Map (`src/`)
 
@@ -102,9 +104,9 @@ contents:
 - `app/` — composition root: the command model (`commands.rs` defines
   `CommandId`, `command_actions.rs` executes), keymap, session spawning,
   app-level state and view.
-- `control_surface/` — the command palette and workspace overview,
-  opened with `:` from workspace mode (see
-  `docs/workspace-mode-design.md`).
+- `control_surface/` — the command palette (opened with `:` from workspace
+  mode, see `docs/workspace-mode-design.md`) and the session manager modal
+  (attach/terminate any session, opened via its "Manage Sessions" command).
 - `control_plane/` — the CLI control-plane listener: a fixed well-known
   Unix socket, one thread per connection, bridged onto the UI thread so
   commands still execute through the command model. The contract lives

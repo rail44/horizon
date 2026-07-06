@@ -38,7 +38,8 @@ run`'s environment leakage into Horizon and agentd); pass CLI subcommand
 arguments after it, e.g. `just dev sessions`.
 
 After `cargo run`, press `ctrl+'` to enter workspace mode, then `:` to open
-the control surface (see `docs/workspace-mode-design.md`). Commands mode
+the control surface (see `docs/workspace-mode-design.md`) — a Commands-only
+palette now that session management has its own modal (see below). It
 supports these manual smoke checks:
 
 - `new terminal`: opens another terminal tab.
@@ -50,14 +51,16 @@ supports these manual smoke checks:
   selected session back into the active tab as a split.
 - `tab 1`, `tab 2`, ...: switches to the matching tab.
 - `terminate active session`: terminates the active session.
+- `manage sessions`: opens the session manager modal (see below).
 - `reload agent runtime`: restarts `horizon-agentd` and reconnects every
   agent session — use after rebuilding the agent crates, or to recover from
   a lost connection.
 
-Use `Tab` while the control surface is open to switch between Commands and
-Workspace. The Workspace mode lists open tabs, panes inside split tabs, and
-detached sessions; Enter switches to the selected tab or pane, or attaches the
-selected detached session as a split.
+Running the `manage sessions` command opens a separate modal listing every
+session the workspace knows about, detached ones first: `j`/`k`/arrows move
+the selection, `Enter` attaches a detached session as a split (or jumps to an
+attached session's pane), `x` twice terminates the selected session, and
+`Esc` closes the modal (or cancels a pending termination first).
 
 The same command model is also reachable from outside the GUI: `horizon
 <subcommand>` (no arguments launches the GUI itself) is a thin client over a
