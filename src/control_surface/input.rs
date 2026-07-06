@@ -44,6 +44,20 @@ pub(crate) fn handle_control_key(key_event: &KeyEvent, state: ControlInputState)
             execute_palette_selection(state.palette_action_state());
             true
         }
+        // Tab walks the list like ArrowDown (Shift+Tab like ArrowUp) --
+        // picker convention; Tab lost its old Commands/Workspace toggle
+        // role when the overview retired, freeing it for this.
+        Key::Named(NamedKey::Tab) => {
+            let step = if key_event.modifiers.shift() { -1 } else { 1 };
+            move_palette_selection(
+                workspace,
+                frames,
+                state.palette_query,
+                state.palette_selection,
+                step,
+            );
+            true
+        }
         Key::Named(NamedKey::ArrowUp) => {
             move_palette_selection(
                 workspace,
