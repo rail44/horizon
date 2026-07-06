@@ -61,6 +61,10 @@ wave items where possible; design docs on first use.
 - **Agent output UI** (application-ui) — stage 1 survey merged
   (`docs/research/agent-ui.md`); stage 2 redesign in the domain
   session with the owner.
+- **Recall tool** — shipped 2026-07-07: live DuckDB projection (writer
+  thread, one shared Store handle), `recall.search`/`recall.read`
+  (auto-allowed, injection-safe, own-session default with `scope:
+  "all"`) — see `docs/agent-recall-design.md`.
 - **Roles + configuration agent** — shipped 2026-07-06 (`c369eb9`):
   runtime config reload (theme/keybindings live), minimal roles (wire
   v2, persisted `role_id`), embedded skills with `skill.read`, config
@@ -79,13 +83,10 @@ wave items where possible; design docs on first use.
   co-located as an independent crate — no horizon dependencies
   (extractable later), SSE streaming required (horizon-agent assumes
   it).
-- **Recall tool**: search over the DuckDB history (Letta survey:
-  retrieval over summarization); unblocked now that the roles work has
-  landed.
 - **Outcome-label projection**: project the free deterministic signals
   (turn end reasons, approval outcomes, tool success, `role_id`) into
-  the DuckDB projection and put them in recall's scope — see
-  `docs/agent-feedback-design.md`. After the recall tool (same crate).
+  the now-live DuckDB projection and put them in recall's scope — see
+  `docs/agent-feedback-design.md`. Unblocked: the recall tool shipped.
 - **Skill distillation (approval-gated)**: agent-drafted skill updates
   from labeled trajectories, owner-approved before landing — see
   `docs/agent-feedback-design.md`. After the label projection.
