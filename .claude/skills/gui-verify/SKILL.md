@@ -5,6 +5,15 @@ description: Use when verifying Horizon GUI changes end-to-end - launching the a
 
 # Verifying the Horizon GUI
 
+**Two isolation caveats (2026-07-06):** (1) If the owner's desktop
+Horizon is running, headless boots can stall before the window ever
+maps — the shared agentd accepts one connection at a time and startup
+blocks on it (backlog item 14). Run with a scratch `XDG_RUNTIME_DIR`
+to get a private control socket *and* a private agentd in one move.
+(2) The scripts already `env -u WAYLAND_DISPLAY`; any *manual* launch
+outside them must do the same, or winit picks the Wayland backend and
+ignores your Xvfb `DISPLAY` entirely.
+
 Horizon is a Floem desktop app. Two scripts launch it headless on an isolated
 Xvfb display, drive it with xdotool, and capture text dumps plus a screenshot.
 

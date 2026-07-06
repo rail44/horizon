@@ -58,7 +58,12 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     plus replay cost on every reconnect). The scripts should isolate
     `HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB` and point agentd
     at a scratch socket per run. Flagged 2026-07-06 during the startup
-    focus diagnosis.
+    focus diagnosis. *Working recipe (2026-07-06):* overriding
+    `XDG_RUNTIME_DIR` to a scratch dir isolates both the control socket
+    and agentd (a fresh daemon spawns there) in one move — verified in a
+    live CLI E2E. The missing piece for a per-knob fix is an agentd
+    socket override (`HORIZON_AGENTD_SOCKET`, already anticipated as a
+    code comment).
 14. **headless GUI scripts hung/failed under shared-machine load,
     2026-07-06** — every `check-terminal-visual.sh` scenario (including
     ones that don't touch workspace mode at all, and reproduced against
@@ -77,3 +82,15 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     state pollution and replay cost on an otherwise-working connect; this
     one is the window never appearing at all). Revisit if it recurs
     outside a loaded shared machine.
+    *Root cause identified (2026-07-06, later the same day):* the shared
+    agentd accepts ONE connection at a time, and Horizon's startup
+    connects to it synchronously before the first frame — while the
+    owner's desktop instance holds that connection, any headless boot
+    stalls pre-map with no agentd child spawned (exactly the recorded
+    signature; `HORIZON_SOCKET`/event-log isolation can't help because
+    the agentd socket path has no env override). Fix directions:
+    (a) scratch `XDG_RUNTIME_DIR` per run (works today, see item 13),
+    (b) add `HORIZON_AGENTD_SOCKET`, (c) product-level: make the
+    startup agentd connect non-blocking so the UI maps even when agentd
+    is busy or absent — agent panes can degrade gracefully instead of
+    the whole window stalling.
