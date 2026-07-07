@@ -91,7 +91,7 @@ wave items where possible; design docs on first use.
 
 - **Recursive layout**: vertical splits, 3+ panes (workspace-mode
   `j/k` currently no-ops for lack of a vertical axis); prerequisite
-  for the viewers.
+  for the viewers. — slice 1 (N-ary tiling tree, shallow-nesting invariant, headless) shipped 2026-07-07; see docs/recursive-layout-design.md.
 - **Model-routing OpenAI-compatible API**: router over synthetic.new,
   co-located as an independent crate — no horizon dependencies
   (extractable later), SSE streaming required (horizon-agent assumes
