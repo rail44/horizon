@@ -13,12 +13,18 @@
 //! first split: the root goes from `Pane` to `Split` in place, see
 //! `LayoutNode::split_pane`'s wrap case), still re-renders correctly.
 //! That transition is gated by `create_memo` (equality-checked, so it only
-//! fires when the position's own leaf/split shape actually flips) feeding a
-//! `dyn_container`. Below it, `dyn_stack` keys each child by its
-//! `RenderChild::anchor` (`workspace::layout::split_render_plan`), so an
-//! ordinary add/remove/reorder (any other split or close) only touches the
-//! views actually affected -- every other pane's local UI state (approval
-//! focus, the cancel-turn latch, ...) survives undisturbed.
+//! fires when the position's shape -- `PositionShape`, which includes the
+//! leaf's own `PaneId` -- actually changes) feeding a `dyn_container`. This
+//! also covers a leaf-to-different-leaf transition at a position that has
+//! no parent `dyn_stack` of its own (the tree's root: switching tabs, or
+//! opening a new tab, replaces the whole root in place, from one `Pane` to
+//! another) -- if the memo only tracked leaf-vs-split, two single-pane tabs
+//! would look identical to it and the stale pane would stay rendered.
+//! Below it, `dyn_stack` keys each child by its `RenderChild::anchor`
+//! (`workspace::layout::split_render_plan`), so an ordinary add/remove/
+//! reorder (any other split or close) only touches the views actually
+//! affected -- every other pane's local UI state (approval focus, the
+//! cancel-turn latch, ...) survives undisturbed.
 
 use std::rc::Rc;
 
@@ -44,6 +50,25 @@ pub(super) fn layout_tree_view(pane_state: PaneViewState) -> impl IntoView {
     layout_position_view(pane_state, workspace, resolver)
 }
 
+/// A position's shape, as tracked by the `create_memo` in
+/// `layout_position_view`: `Leaf` carries the pane's own id so that a
+/// leaf-to-different-leaf transition (e.g. switching tabs) counts as a
+/// shape change and re-fires the `dyn_container`, not just leaf-vs-split.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PositionShape {
+    Leaf(PaneId),
+    Split,
+    Gone,
+}
+
+fn position_shape(node: Option<&LayoutNode>) -> PositionShape {
+    match node {
+        Some(LayoutNode::Pane(id)) => PositionShape::Leaf(*id),
+        Some(LayoutNode::Split { .. }) => PositionShape::Split,
+        None => PositionShape::Gone,
+    }
+}
+
 /// One position in the tree: renders as a plain pane when the live node
 /// there is a `Pane`, or as a nested split container when it's a `Split`.
 fn layout_position_view(
@@ -51,28 +76,22 @@ fn layout_position_view(
     workspace: RwSignal<Workspace>,
     resolver: NodeResolver,
 ) -> impl IntoView {
-    let is_split = {
+    let shape = {
         let resolver = resolver.clone();
-        create_memo(move |_| matches!(resolver(), Some(LayoutNode::Split { .. })))
+        create_memo(move |_| position_shape(resolver().as_ref()))
     };
     dyn_container(
-        move || is_split.get(),
-        move |is_split| {
-            if is_split {
+        move || shape.get(),
+        move |shape| match shape {
+            PositionShape::Split => {
                 split_view(pane_state.clone(), workspace, resolver.clone()).into_any()
-            } else {
-                match resolver() {
-                    Some(LayoutNode::Pane(pane_id)) => {
-                        pane::pane_view(pane_state.clone(), pane_id).into_any()
-                    }
-                    // The position vanished between the memo tick that
-                    // chose this branch and now (its pane just closed) --
-                    // the parent `dyn_stack` drops this view on its own
-                    // next diff pass; render nothing in the meantime
-                    // rather than panic.
-                    _ => empty().into_any(),
-                }
             }
+            PositionShape::Leaf(pane_id) => pane::pane_view(pane_state.clone(), pane_id).into_any(),
+            // The position vanished between the memo tick that chose this
+            // branch and now (its pane just closed) -- the parent
+            // `dyn_stack` drops this view on its own next diff pass;
+            // render nothing in the meantime rather than panic.
+            PositionShape::Gone => empty().into_any(),
         },
     )
 }
@@ -150,4 +169,48 @@ fn child_node_resolver(parent: NodeResolver, anchor: PaneId) -> NodeResolver {
             .map(|child| child.node),
         LayoutNode::Pane(_) => None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{position_shape, PositionShape};
+    use crate::workspace::types::{LayoutChild, LayoutNode, SplitAxis};
+    use crate::workspace::PaneId;
+
+    #[test]
+    fn position_shape_of_none_is_gone() {
+        assert_eq!(position_shape(None), PositionShape::Gone);
+    }
+
+    #[test]
+    fn position_shape_of_pane_is_leaf_with_its_id() {
+        let id = PaneId::new();
+        assert_eq!(
+            position_shape(Some(&LayoutNode::Pane(id))),
+            PositionShape::Leaf(id)
+        );
+    }
+
+    #[test]
+    fn position_shape_of_split_is_split() {
+        let split = LayoutNode::Split {
+            axis: SplitAxis::Horizontal,
+            children: vec![LayoutChild {
+                node: LayoutNode::Pane(PaneId::new()),
+                weight: 1.0,
+            }],
+        };
+        assert_eq!(position_shape(Some(&split)), PositionShape::Split);
+    }
+
+    #[test]
+    fn position_shape_distinguishes_two_different_leaves() {
+        // This is the case the old `is_split: bool` memo missed: two
+        // single-pane positions both look like a leaf, but with different
+        // ids -- e.g. switching tabs, or opening a new tab, when both the
+        // old and new active tab are unsplit.
+        let a = position_shape(Some(&LayoutNode::Pane(PaneId::new())));
+        let b = position_shape(Some(&LayoutNode::Pane(PaneId::new())));
+        assert_ne!(a, b);
+    }
 }
