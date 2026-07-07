@@ -167,6 +167,23 @@ impl ToolSessionState {
         Self::with_root(root, tools, recall)
     }
 
+    /// A session confined to an explicit directory rather than this
+    /// process's own current directory -- the per-session
+    /// `wire::SessionNew::workspace_root`, when a caller supplies one,
+    /// instead of the `for_current_dir` fallback. Canonicalized the same
+    /// way `for_current_dir` canonicalizes the process cwd: if
+    /// canonicalization fails, the session gets no root at all (see
+    /// [`Inner::workspace_root`]'s doc comment), never a fallback that
+    /// fails open.
+    pub fn for_root(
+        workspace_root: PathBuf,
+        tools: AgentToolsConfig,
+        recall: RecallContext,
+    ) -> Self {
+        let root = workspace_root.canonicalize().ok();
+        Self::with_root(root, tools, recall)
+    }
+
     pub fn workspace_root(&self) -> Option<&Path> {
         self.inner.workspace_root.as_deref()
     }

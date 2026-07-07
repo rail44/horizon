@@ -167,6 +167,10 @@ impl AgentdConnection {
                 session_id,
                 provider_id,
                 role_id,
+                // No per-session directory to supply yet (e.g. an inherited
+                // terminal cwd) -- `None` keeps agentd's existing
+                // process-cwd fallback (`ToolSessionState::for_current_dir`).
+                workspace_root: None,
             })));
         handle
     }

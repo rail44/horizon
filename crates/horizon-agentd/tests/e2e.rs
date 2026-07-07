@@ -510,6 +510,7 @@ async fn send_session_new(writer: &mut OwnedWriteHalf, session_id: SessionId) {
             session_id,
             provider_id: mock_provider_id(),
             role_id: None,
+            workspace_root: None,
         })),
     )
     .await
@@ -533,6 +534,7 @@ async fn send_session_new_with_role(
             session_id,
             provider_id: mock_provider_id(),
             role_id: Some(role_id),
+            workspace_root: None,
         })),
     )
     .await

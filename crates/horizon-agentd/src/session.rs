@@ -36,6 +36,7 @@
 //! silently dropping events when it's `None` (no client to see them).
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -43,7 +44,7 @@ use std::time::Duration;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
-use horizon_agent::config::AgentConfig;
+use horizon_agent::config::{AgentConfig, AgentToolsConfig};
 use horizon_agent::contract::{
     self, Command, Error as AgentError, Event, Initialization, ProviderEvent, ProviderId,
     ProviderRegistry, SessionId, SessionState, ToolCallId, TurnEndReason,
@@ -220,12 +221,17 @@ struct SessionEntry {
 /// both a fresh `Control::SessionNew` ([`Connection::handle_session_new`])
 /// and a session resumed from the persisted log at startup
 /// ([`resume_persisted_sessions`]); `history` is empty for the former,
-/// already-committed events for the latter.
+/// already-committed events for the latter. `workspace_root` is `Some` only
+/// from a fresh `SessionNew` that carried one — resumed sessions don't
+/// persist it (out of scope here), so they always pass `None` and fall back
+/// to `run_session`'s process-cwd default, same as before this field
+/// existed.
 fn spawn_session_thread(
     state: Arc<AgentdState>,
     session_id: SessionId,
     provider_id: ProviderId,
     role_id: Option<RoleId>,
+    workspace_root: Option<PathBuf>,
     history: Vec<Event>,
 ) {
     let (inbound_tx, inbound_rx) = unbounded::<Command>();
@@ -246,6 +252,7 @@ fn spawn_session_thread(
             session_id,
             provider_id,
             role_id,
+            workspace_root,
             &thread_state,
             inbound_rx,
             replay_rx,
@@ -348,7 +355,14 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
             "horizon-agentd: resumed session {session_id:?} ({} event(s))",
             events.len()
         );
-        spawn_session_thread(state.clone(), session_id, provider_id, role_id, events);
+        spawn_session_thread(
+            state.clone(),
+            session_id,
+            provider_id,
+            role_id,
+            None,
+            events,
+        );
     }
 }
 
@@ -430,6 +444,7 @@ impl Connection {
             new.session_id,
             new.provider_id,
             new.role_id,
+            new.workspace_root,
             Vec::new(),
         );
     }
@@ -619,6 +634,26 @@ impl HostTools for AgentdHostTools {
     }
 }
 
+/// Builds a session's file-tool confinement root (`tools::state::
+/// ToolSessionState::workspace_root`): an explicit `workspace_root` --
+/// carried by a fresh `wire::SessionNew`, when the caller supplied one --
+/// takes precedence over `ToolSessionState::for_current_dir`'s default of
+/// this process's own cwd (the only behavior before this field existed, and
+/// still the only behavior for a resumed session, which never has one --
+/// see [`spawn_session_thread`]'s doc comment). Pulled out of
+/// [`run_session`] as its own function purely so this Some/None dispatch is
+/// unit-testable without spinning up a whole session thread.
+fn tool_session_state_for(
+    workspace_root: Option<PathBuf>,
+    tools: AgentToolsConfig,
+    recall: RecallContext,
+) -> ToolSessionState {
+    match workspace_root {
+        Some(root) => ToolSessionState::for_root(root, tools, recall),
+        None => ToolSessionState::for_current_dir(tools, recall),
+    }
+}
+
 /// The session's whole lifetime, from `Initialize` through to the
 /// provider's channel closing. Runs entirely synchronously on its own
 /// dedicated thread -- see the module doc for why. Faithfully mirrors
@@ -629,10 +664,12 @@ impl HostTools for AgentdHostTools {
 /// request as it arrives, forwarding the resulting (non-ephemeral) events to
 /// Horizon over the wire exactly as `LiveState::extend_provider_events`
 /// folded them in-process.
+#[allow(clippy::too_many_arguments)]
 fn run_session(
     session_id: SessionId,
     provider_id: ProviderId,
     role_id: Option<RoleId>,
+    workspace_root: Option<PathBuf>,
     state: &Arc<AgentdState>,
     inbound_rx: Receiver<Command>,
     replay_rx: Receiver<Sender<Vec<Event>>>,
@@ -679,7 +716,10 @@ fn run_session(
     // thread's `ToolSessionState`/tool execution vs. the rig provider's own
     // dedicated thread and its system prompt).
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
-    let tool_state = ToolSessionState::for_current_dir(state.agent_config.tools, recall)
+    // Skill discovery above always uses the process cwd regardless of
+    // `workspace_root` -- see the comment just above `cwd`'s definition on
+    // why that's an intentionally separate, unthreaded value.
+    let tool_state = tool_session_state_for(workspace_root, state.agent_config.tools, recall)
         .with_skills(SkillRegistry::discover(&cwd));
     let live_state = match state.writer() {
         Some(writer) => LiveState::with_event_log_and_history(
@@ -982,5 +1022,34 @@ mod tests {
         ];
         let frame = agent_frame_from_events(&events);
         assert!(!session_is_dead(&frame));
+    }
+
+    /// A `SessionNew.workspace_root` of `Some(dir)` must confine the
+    /// session's file tools to `dir`, not this process's cwd.
+    #[test]
+    fn tool_session_state_for_uses_the_given_directory_when_some() {
+        let dir = std::env::temp_dir()
+            .canonicalize()
+            .expect("canonicalize temp dir");
+        let state = tool_session_state_for(
+            Some(dir.clone()),
+            AgentToolsConfig::default(),
+            RecallContext::default(),
+        );
+        assert_eq!(state.workspace_root(), Some(dir.as_path()));
+    }
+
+    /// `None` (today's only value Horizon actually sends -- see
+    /// `wire::SessionNew::workspace_root`'s doc comment) must keep behaving
+    /// exactly as before this field existed: confined to this process's own
+    /// cwd.
+    #[test]
+    fn tool_session_state_for_falls_back_to_the_process_cwd_when_none() {
+        let expected_root = std::env::current_dir()
+            .and_then(|dir| dir.canonicalize())
+            .expect("canonicalize process cwd");
+        let state =
+            tool_session_state_for(None, AgentToolsConfig::default(), RecallContext::default());
+        assert_eq!(state.workspace_root(), Some(expected_root.as_path()));
     }
 }

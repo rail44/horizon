@@ -15,6 +15,8 @@
 //! `tokio::io::BufReader::new(unix_stream_read_half)` for the read side)
 //! and pass it in here.
 
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -184,6 +186,21 @@ pub struct SessionNew {
     pub session_id: SessionId,
     pub provider_id: ProviderId,
     pub role_id: Option<RoleId>,
+    /// The directory `horizon-agentd`'s file tools should confine this
+    /// session to (`tools::state::ToolSessionState::workspace_root`).
+    /// `None` keeps today's behavior -- the session falls back to
+    /// `horizon-agentd`'s own process cwd (`session::run_session`'s
+    /// `ToolSessionState::for_current_dir` call). Unlike `role_id` above,
+    /// this is a brand-new field, not a reshape of an existing one, so it's
+    /// purely additive: `#[serde(default)]` lets a peer's `SessionNew`
+    /// written before this field existed still parse (as `None`), mirroring
+    /// `persistence::event_log::Record::role_id`'s own additive-field
+    /// precedent rather than [`CONTRACT_VERSION`]'s breaking-change one.
+    /// Not yet populated by any sender -- Horizon's `agentd_runtime::
+    /// start_session` passes `None` until a future change threads a real
+    /// per-session directory (e.g. an inherited terminal cwd) through.
+    #[serde(default)]
+    pub workspace_root: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -334,6 +351,7 @@ mod tests {
                 session_id: SessionId::new(),
                 provider_id: ProviderId("builtin.agent.rig".to_string()),
                 role_id: Some(RoleId("config".to_string())),
+                workspace_root: Some(PathBuf::from("/tmp/some-workspace")),
             }),
             Control::SessionLoad(SessionLoad {
                 session_id: SessionId::new(),
@@ -367,6 +385,58 @@ mod tests {
     #[test]
     fn contract_version_was_bumped_for_the_role_id_field() {
         assert_eq!(CONTRACT_VERSION, 2);
+    }
+
+    /// Unlike `role_id` above, `SessionNew.workspace_root` is a brand-new,
+    /// `#[serde(default)]` field, not a reshape of an existing one -- see
+    /// its own doc comment. Additive changes don't need a version bump, so
+    /// this pins `CONTRACT_VERSION` unchanged as a regression guard against
+    /// bumping it out of habit the next time a `SessionNew` field is added.
+    #[test]
+    fn contract_version_was_not_bumped_for_the_additive_workspace_root_field() {
+        assert_eq!(CONTRACT_VERSION, 2);
+    }
+
+    /// A `session_new` control message written by a peer built before
+    /// `workspace_root` existed has no such key in its JSON payload at all
+    /// -- `#[serde(default)]` must still parse it (as `None`), not reject
+    /// the envelope. Mirrors `persistence::event_log::Record`'s
+    /// `reads_a_pre_role_record_with_no_role_id_key` regression guard.
+    #[tokio::test]
+    async fn session_new_without_a_workspace_root_key_deserializes_to_none() {
+        let (mut client, server) = tokio::io::duplex(1024);
+        let mut server_reader = BufReader::new(server);
+
+        let session_id = SessionId::new();
+        let line = serde_json::json!({
+            "v": CONTRACT_VERSION,
+            "session_id": null,
+            "kind": "control",
+            "payload": {
+                "session_new": {
+                    "session_id": session_id,
+                    "provider_id": "builtin.agent.rig",
+                    "role_id": null,
+                }
+            }
+        })
+        .to_string();
+        client
+            .write_all(format!("{line}\n").as_bytes())
+            .await
+            .unwrap();
+        drop(client);
+
+        let envelope = read_envelope(&mut server_reader)
+            .await
+            .unwrap()
+            .expect("envelope should parse despite the missing workspace_root key");
+        match envelope.body {
+            EnvelopeBody::Control(Control::SessionNew(new)) => {
+                assert_eq!(new.workspace_root, None);
+            }
+            other => panic!("expected Control::SessionNew, got {other:?}"),
+        }
     }
 
     #[tokio::test]
