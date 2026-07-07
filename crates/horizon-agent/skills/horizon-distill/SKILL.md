@@ -80,7 +80,10 @@ Distill a lesson only if it clears all four bars:
   git-versioned -- the owner can review the draft as a diff, and revert it
   the same way as any other file. `fs.write` requires approval; **that
   approval is the distillation gate** -- nothing lands without the owner
-  seeing and accepting the exact content first.
+  seeing and accepting the exact content first. Because the approval
+  prompt itself is the owner's yes/no, don't *also* ask for permission in
+  the conversation before calling `fs.write` -- asking twice only stalls
+  the pass. Show your evidence, then make the call.
 - One skill, one topic. Don't fold multiple unrelated lessons into a
   single SKILL.md.
 - Same frontmatter format as every other skill: `name:` and a
