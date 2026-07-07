@@ -93,29 +93,42 @@ pub(super) fn spawn_rig_session(
 
 /// Builds the `extra_sections` a session's system prompt is composed from
 /// (`prompt::system_prompt`), in order: the role's own prompt section (if
-/// any), then the skills listing for that role's `skill_ids`, then
-/// repository `AGENTS.md`/`CLAUDE.md` instructions -- but only when
-/// `role.include_repository_instructions` allows it (`roles::CONFIG_ROLE`
-/// sets this `false`; see its own doc comment for why). `role: None`
-/// reproduces the pre-role behavior byte-for-byte: no role/skills section,
-/// repository instructions unconditionally included -- the same
-/// `instructions::extra_sections` call this function replaces at its one
-/// call site.
+/// any), then a skills listing, then repository `AGENTS.md`/`CLAUDE.md`
+/// instructions -- but only when `role.include_repository_instructions`
+/// allows it (`roles::CONFIG_ROLE` sets this `false`; see its own doc
+/// comment for why).
+///
+/// The skills listing (`skills::SkillRegistry`, composed here from this
+/// session's own cwd -- see `skills`' module doc for the v2 repository
+/// layer) covers *every* skill for a role-less session
+/// (`SkillRegistry::prompt_section_for_all`) and just that role's
+/// `skill_ids` for a role-bearing one (`SkillRegistry::
+/// prompt_section_for_ids`) -- so `role: None` no longer reproduces the
+/// pre-v2 prompt byte-for-byte whenever this build has any skill to
+/// disclose (it always does -- see `skills`' embedded builtins); it stays
+/// byte-identical only in the hypothetical case of an empty registry,
+/// exercised directly in `skills`' own tests.
 pub(super) fn session_extra_sections(
     environment: &SessionEnvironment,
     config: &RigAgentConfig,
     role: Option<&'static RoleDefinition>,
 ) -> Vec<String> {
+    let skills = crate::skills::SkillRegistry::discover(&environment.cwd);
     let mut sections = Vec::new();
     let include_repository_instructions = match role {
         Some(role) => {
             sections.push(role.prompt_section.to_string());
-            if let Some(skills_section) = crate::skills::skills_prompt_section(role.skill_ids) {
+            if let Some(skills_section) = skills.prompt_section_for_ids(role.skill_ids) {
                 sections.push(skills_section);
             }
             role.include_repository_instructions
         }
-        None => true,
+        None => {
+            if let Some(skills_section) = skills.prompt_section_for_all() {
+                sections.push(skills_section);
+            }
+            true
+        }
     };
     if include_repository_instructions {
         sections.extend(crate::instructions::extra_sections(

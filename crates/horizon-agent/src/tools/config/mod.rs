@@ -1,6 +1,9 @@
-//! `config.read`/`config.write`/`skill.read` -- the config role's only
-//! allowed tools (`roles::CONFIG_ROLE`). Grouped in one module because they
-//! share the same trust story, not because they share code with `tools::fs`:
+//! `config.read`/`config.write`/`skill.read`. The first two are the config
+//! role's only allowed tools (`roles::CONFIG_ROLE`); `skill.read` is
+//! available to every session, role-bearing or not (see `skills`' module
+//! doc). Grouped in one module because `config.read`/`config.write` share a
+//! trust story, and `skill.read` shares this module's dispatch shape --
+//! not because any of the three share code with `tools::fs`:
 //!
 //! **Why `config.write` bypasses `workspace_root` confinement.**
 //! `tools::fs::safety::resolve_path` confines every filesystem tool to the
@@ -45,7 +48,10 @@ pub(crate) fn execute_auto(
 ) -> Option<Value> {
     match tool_id {
         "config.read" => Some(read_at(tool_state, resolve_config_file_path().as_deref())),
-        "skill.read" => Some(crate::skills::execute_read(input)),
+        "skill.read" => Some(crate::skills::execute_read(
+            tool_state.skill_registry(),
+            input,
+        )),
         _ => None,
     }
 }

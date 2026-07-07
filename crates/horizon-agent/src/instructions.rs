@@ -30,7 +30,7 @@ const SECTION_LABEL: &str = "Repository instructions (AGENTS.md):";
 
 /// Builds the `extra_sections` entries (see `prompt::system_prompt`) that
 /// surface repository instruction files to the model: zero entries if none
-/// were found anywhere in the walk described by [`instruction_search_dirs`],
+/// were found anywhere in the walk described by [`ancestor_dirs_from_git_root`],
 /// one labelled section otherwise. `cwd` is the session's working directory
 /// (`prompt::SessionEnvironment::cwd`); `cap_chars` bounds the section's
 /// total size (`config::RigAgentConfig::repository_instructions_cap_chars`)
@@ -44,7 +44,7 @@ pub fn extra_sections(cwd: &Path, cap_chars: usize) -> Vec<String> {
 }
 
 fn repository_instructions_section(cwd: &Path, cap_chars: usize) -> Option<String> {
-    let files: Vec<(PathBuf, String)> = instruction_search_dirs(cwd)
+    let files: Vec<(PathBuf, String)> = ancestor_dirs_from_git_root(cwd)
         .into_iter()
         .filter_map(|dir| read_instruction_file(&dir))
         .collect();
@@ -75,16 +75,20 @@ fn repository_instructions_section(cwd: &Path, cap_chars: usize) -> Option<Strin
     Some(section)
 }
 
-/// Directories to check for an instruction file, in composition order
-/// (broad to specific: the repository root first, `cwd` last) — so a
-/// deeper directory's instructions read as refining the root's, matching
-/// the reading order a human would use. Inside a git repository this is
-/// every ancestor of `cwd`, from the repository root (the nearest ancestor
-/// holding a `.git` entry) down to `cwd` itself; outside one it's just
-/// `cwd` — walking indefinitely toward the filesystem root with no
-/// repository boundary to stop at would pull in unrelated ancestor
-/// directories (e.g. a stray `~/AGENTS.md`).
-fn instruction_search_dirs(cwd: &Path) -> Vec<PathBuf> {
+/// Directories to check for repository-scoped, per-directory content, in
+/// composition/discovery order (broad to specific: the repository root
+/// first, `cwd` last) — so a deeper directory's content reads as refining
+/// the root's, matching the reading order a human would use. Inside a git
+/// repository this is every ancestor of `cwd`, from the repository root
+/// (the nearest ancestor holding a `.git` entry) down to `cwd` itself;
+/// outside one it's just `cwd` — walking indefinitely toward the filesystem
+/// root with no repository boundary to stop at would pull in unrelated
+/// ancestor directories (e.g. a stray `~/AGENTS.md`).
+///
+/// Shared with `skills`' repository-skill discovery (`.horizon/skills/`) --
+/// both want the exact same "walk from cwd up to the git root" discipline,
+/// just applied to a different filename/directory convention at each level.
+pub(crate) fn ancestor_dirs_from_git_root(cwd: &Path) -> Vec<PathBuf> {
     match git_root(cwd) {
         Some(root) => {
             let mut dirs: Vec<PathBuf> = Vec::new();
@@ -106,7 +110,7 @@ fn instruction_search_dirs(cwd: &Path) -> Vec<PathBuf> {
 /// `cwd` isn't inside a git repository at all. A near-duplicate of
 /// `prompt::is_git_repository`'s walk (which only needs a yes/no answer);
 /// this one needs the actual matching directory to bound
-/// [`instruction_search_dirs`]'s walk.
+/// [`ancestor_dirs_from_git_root`]'s walk.
 fn git_root(cwd: &Path) -> Option<PathBuf> {
     cwd.ancestors()
         .find(|dir| dir.join(".git").exists())
@@ -149,8 +153,9 @@ fn read_to_string_or_warn(path: &Path) -> Option<String> {
 
 /// Truncates `body` to at most `cap_chars` *characters* (not bytes, so a
 /// cap can never split a multi-byte UTF-8 sequence), returning whether it
-/// truncated anything.
-fn cap_to_chars(body: String, cap_chars: usize) -> (String, bool) {
+/// truncated anything. `pub(crate)` so `skills` can apply the same
+/// truncation discipline to a skill's body (`skill.read`'s size cap).
+pub(crate) fn cap_to_chars(body: String, cap_chars: usize) -> (String, bool) {
     if body.chars().count() <= cap_chars {
         (body, false)
     } else {

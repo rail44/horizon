@@ -128,6 +128,17 @@ identity, an environment block (cwd, OS, git repo or not), a few lines of
 tool policy, the retry nudge, and an explicit caution list for destructive
 actions. No step-by-step workflows.
 
+**Addendum (2026-07-07).** The prompting survey
+(`docs/research/agent-prompting.md` Part 1.4) found short communication
+and verification norms near-universal even among deliberately thin
+prompts, and Horizon had none; the prompt now carries them (be concise;
+report outcomes faithfully; verify before declaring done) plus one line
+naming session persistence, which the recall tool made true. Owner
+constraint recorded at the same time: norms must stay model-agnostic --
+Horizon expects to switch providers, so provider-specific prompt lore
+(e.g. Kimi-tuned phrasing, or removing the tool-policy lines on Kimi's
+official advice) is out of scope regardless of its evidence.
+
 ## Config
 
 Provider/model selection, base URL, and the bash/fs tool tuning and

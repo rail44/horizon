@@ -21,7 +21,7 @@ pub(crate) mod policy;
 pub mod prompt;
 pub(crate) mod providers;
 pub mod roles;
-pub(crate) mod skills;
+pub mod skills;
 pub mod socket;
 pub mod tools;
 pub mod wire;
