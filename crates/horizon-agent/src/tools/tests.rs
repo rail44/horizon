@@ -575,6 +575,110 @@ fn fs_grep_skips_default_ignored_directories() {
     );
 }
 
+/// Sets `root` up as a (minimally) git-managed directory — a `.git` entry
+/// is all `ignore::WalkBuilder` needs to treat it as a repository and
+/// consult `.gitignore` — with a `.gitignore` that excludes `secret.log`
+/// plus one file that isn't ignored.
+fn populate_git_repo_with_gitignore(root: &Path) {
+    fs::create_dir_all(root.join(".git")).unwrap();
+    fs::write(root.join(".gitignore"), "secret.log\n").unwrap();
+    fs::write(root.join("keep.txt"), "content").unwrap();
+    fs::write(root.join("secret.log"), "content").unwrap();
+}
+
+#[test]
+fn fs_glob_respects_gitignore_in_a_git_repository() {
+    let root = temp_workspace("glob-gitignore");
+    populate_git_repo_with_gitignore(&root);
+    let tool_state = ToolSessionState::new(root.clone());
+
+    let output = fs_tools::execute_auto(
+        &tool_state,
+        "fs.glob",
+        &json!({ "base_path": root.display().to_string(), "pattern": "*" }),
+    )
+    .expect("fs.glob is auto-executed");
+
+    assert!(!is_error(&output));
+    let matches: Vec<&str> = output["matches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap())
+        .collect();
+    assert!(matches.iter().any(|path| path.ends_with("keep.txt")));
+    assert!(!matches.iter().any(|path| path.ends_with("secret.log")));
+}
+
+#[test]
+fn fs_grep_respects_gitignore_in_a_git_repository() {
+    let root = temp_workspace("grep-gitignore");
+    populate_git_repo_with_gitignore(&root);
+    let tool_state = ToolSessionState::new(root.clone());
+
+    let output = fs_tools::execute_auto(
+        &tool_state,
+        "fs.grep",
+        &json!({ "base_path": root.display().to_string(), "pattern": "content" }),
+    )
+    .expect("fs.grep is auto-executed");
+
+    assert!(!is_error(&output));
+    assert_eq!(output["total_matches"], 1);
+    assert_eq!(
+        output["matches"][0]["path"].as_str().unwrap(),
+        root.join("keep.txt").display().to_string()
+    );
+}
+
+/// Locks in `walk`'s `require_git` choice (the `ignore` crate's default):
+/// a `.gitignore` file only takes effect inside an actual git repository,
+/// not in an arbitrary directory that merely happens to contain one. A
+/// future change relaxing this would silently start hiding matches for
+/// non-git workspace roots.
+#[test]
+fn fs_glob_ignores_gitignore_file_outside_a_git_repository() {
+    let root = temp_workspace("glob-gitignore-no-git");
+    fs::write(root.join(".gitignore"), "secret.log\n").unwrap();
+    fs::write(root.join("secret.log"), "content").unwrap();
+    let tool_state = ToolSessionState::new(root.clone());
+
+    let output = fs_tools::execute_auto(
+        &tool_state,
+        "fs.glob",
+        &json!({ "base_path": root.display().to_string(), "pattern": "*.log" }),
+    )
+    .expect("fs.glob is auto-executed");
+
+    assert!(!is_error(&output));
+    assert_eq!(output["total_matches"], 1);
+}
+
+/// Locks in the decision to keep walking plain dotfiles/dotdirs (anything
+/// other than `SKIPPED_DIR_NAMES`): `ignore::WalkBuilder` skips all hidden
+/// entries by default, but this migration is scoped to adding `.gitignore`
+/// support, not to newly hiding e.g. lint/CI config files from a search.
+#[test]
+fn fs_glob_still_walks_plain_dotfiles() {
+    let root = temp_workspace("glob-dotfiles");
+    fs::write(root.join(".eslintrc.json"), "{}").unwrap();
+    let tool_state = ToolSessionState::new(root.clone());
+
+    let output = fs_tools::execute_auto(
+        &tool_state,
+        "fs.glob",
+        &json!({ "base_path": root.display().to_string(), "pattern": "*" }),
+    )
+    .expect("fs.glob is auto-executed");
+
+    assert!(!is_error(&output));
+    assert!(output["matches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|value| value.as_str().unwrap().ends_with(".eslintrc.json")));
+}
+
 // The file-count and (grep-only) byte-count traversal caps below are
 // shrunk under `cfg(test)` (see `agent::config`'s `default_fs_traversal_max_files`/
 // `default_fs_grep_max_bytes`, which back `ToolSessionState::new`'s

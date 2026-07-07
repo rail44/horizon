@@ -39,7 +39,10 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
     let mut visited = 0usize;
     let mut scan_truncated = false;
     for entry in traverse::walk(&base) {
-        if !entry.file_type().is_file() {
+        if !entry
+            .file_type()
+            .is_some_and(|file_type| file_type.is_file())
+        {
             continue;
         }
         if visited >= traversal_max_files {

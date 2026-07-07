@@ -2377,6 +2377,7 @@ dependencies = [
  "duckdb",
  "futures-util",
  "globset",
+ "ignore",
  "libc",
  "regex",
  "rig-core",
@@ -2389,7 +2390,6 @@ dependencies = [
  "toml 0.8.23",
  "tracing",
  "uuid",
- "walkdir",
 ]
 
 [[package]]
@@ -2662,6 +2662,22 @@ name = "if_chain"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd62e6b5e86ea8eeeb8db1de02880a6abc01a397b2ebb64b5d74ac255318f5cb"
+
+[[package]]
+name = "ignore"
+version = "0.4.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe112b004901c62c2faa11f4f75e9864e0cc5af8da71c9115d184a3aa888749f"
+dependencies = [
+ "crossbeam-deque",
+ "globset",
+ "log",
+ "memchr",
+ "regex-automata",
+ "same-file",
+ "walkdir",
+ "winapi-util",
+]
 
 [[package]]
 name = "im"

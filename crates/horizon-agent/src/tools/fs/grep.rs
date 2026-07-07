@@ -54,7 +54,10 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
     let mut bytes_read = 0u64;
     let mut scan_truncated = false;
     for entry in traverse::walk(&base) {
-        if !entry.file_type().is_file() {
+        if !entry
+            .file_type()
+            .is_some_and(|file_type| file_type.is_file())
+        {
             continue;
         }
         if visited >= fs_config.traversal_max_files || bytes_read >= fs_config.grep_max_bytes {
