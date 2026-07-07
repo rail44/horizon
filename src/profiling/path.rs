@@ -3,14 +3,14 @@ use std::path::PathBuf;
 /// Env var override for the UI-profile JSONL log path -- takes precedence
 /// over the built-in default (see [`log_path`]). There is no config-file
 /// entry for this (unlike the agent event log's `[agent].event_log_path`):
-/// this is spike-quality, opt-in-only instrumentation, not a persistent
+/// this is opt-in-only diagnostic instrumentation, not a persistent
 /// user-facing setting.
 const LOG_PATH_VAR: &str = "HORIZON_UI_PROFILE_LOG";
 
 /// Resolves the UI-profile JSONL log path: `HORIZON_UI_PROFILE_LOG` wins
 /// verbatim (no `~` expansion, unlike the agent event log's env override --
-/// not worth the extra code for a spike), else the built-in default from
-/// [`default_log_path_from`].
+/// not worth the extra code for a diagnostic-only path), else the built-in
+/// default from [`default_log_path_from`].
 pub(crate) fn log_path() -> PathBuf {
     match std::env::var(LOG_PATH_VAR).ok().filter(|v| !v.is_empty()) {
         Some(value) => PathBuf::from(value),

@@ -89,8 +89,7 @@ pub enum Subcommand {
     State,
     /// Prints the tail of Horizon's opt-in (`HORIZON_UI_PROFILE`)
     /// UI-thread event-timing log -- see `horizon::profiling`'s module
-    /// doc. A SPIKE-quality query proving an agent can read UI-thread
-    /// performance from outside the app.
+    /// doc. Lets an agent read UI-thread performance from outside the app.
     Profile,
 }
 

@@ -37,11 +37,11 @@ impl ProfileRecord {
 /// Tolerant read of the last `limit` valid records in `path` -- mirrors
 /// `crates/horizon-agent`'s event-log reader's "skip corrupt/torn lines
 /// instead of failing the whole read" policy (`crates/horizon-agent/src/
-/// persistence/event_log/mod.rs::read`), simplified for a spike: no
-/// sequence numbers to sort by (the writer is a single background thread
-/// appending in order, so file order is already chronological), and only
-/// the tail is kept so a long-running profiling session's read cost stays
-/// bounded instead of growing with the whole file.
+/// persistence/event_log/mod.rs::read`), simplified: no sequence numbers to
+/// sort by (the writer is a single background thread appending in order, so
+/// file order is already chronological), and only the tail is kept so a
+/// long-running profiling session's read cost stays bounded instead of
+/// growing with the whole file.
 pub(crate) fn read_recent(path: &Path, limit: usize) -> std::io::Result<Vec<ProfileRecord>> {
     if !path.exists() {
         return Ok(Vec::new());

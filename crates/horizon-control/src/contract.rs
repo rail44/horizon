@@ -192,12 +192,12 @@ pub struct State {
 
 /// Reply to `Query { what: "profile" }` -- the tail of Horizon's opt-in
 /// (`HORIZON_UI_PROFILE`) UI-thread event-timing JSONL log (see
-/// `horizon::profiling`'s module doc for what "frame" means here: observed
-/// window-event handling latency, not floem's internal paint pass, which
-/// Horizon has no public hook to time). A SPIKE-quality substrate proving
-/// an agent can read UI-thread performance from outside the app, the same
-/// "durable file + control-plane command" shape the agent event log's own
-/// external readability already established.
+/// `horizon::profiling`'s module doc for what a captured entry means here:
+/// an explicitly-wrapped code path's duration, not floem's internal paint
+/// pass, which Horizon has no public hook to time). Lets an agent read
+/// UI-thread performance from outside the app, the same "durable file +
+/// control-plane command" shape the agent event log's own external
+/// readability already established.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProfileSnapshot {
     /// Whether the app has capture enabled right now -- `frames` is always

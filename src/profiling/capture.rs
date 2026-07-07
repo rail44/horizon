@@ -8,7 +8,7 @@ use super::record::ProfileRecord;
 
 /// Opt-in switch for UI-thread profiling capture -- any non-empty value
 /// enables it, unset or empty disables it (same truthy convention as the
-/// rest of Horizon's env-gated flags). Default off, per the spike's
+/// rest of Horizon's env-gated flags). Default off, per this module's
 /// "no overhead on a normal run" constraint.
 const ENABLE_VAR: &str = "HORIZON_UI_PROFILE";
 

@@ -264,7 +264,9 @@ fn changes_bar_view(
     // file change is always a plain push, never coalesced, so it's
     // guaranteed to bump this count whenever `session_changes`'s output
     // could have changed.
-    let items_revision = create_memo(move |_| frame().items.len());
+    let items_revision = create_memo(move |_| {
+        crate::profiling::timed("transcript.items_revision", || frame().items.len())
+    });
     // Derived straight from `frame.items` (see `changes::session_changes`'s
     // doc comment), so -- like `latest_user_block_id` -- this is immune to
     // the transcript window's 200-block trailing trim: a change made far
@@ -280,7 +282,9 @@ fn changes_bar_view(
     // below only runs when the structural revision above actually changed.
     let changes = create_memo(move |_| {
         items_revision.get();
-        untrack(move || changes::session_changes(&frame()))
+        crate::profiling::timed("transcript.session_changes", || {
+            untrack(move || changes::session_changes(&frame()))
+        })
     });
 
     let header = h_stack((
@@ -456,7 +460,9 @@ fn follow_scroll_pills(
     let jump_to_user_pill = pill_button(
         || "Your last message".to_string(),
         move || {
-            let Some(block_id) = latest_user_block_id(&frame()) else {
+            let Some(block_id) = crate::profiling::timed("transcript.latest_user_block_id", || {
+                latest_user_block_id(&frame())
+            }) else {
                 return;
             };
             let Some(view_id) = block_view_ids.borrow().get(&block_id).copied() else {
@@ -542,7 +548,9 @@ fn transcript_block_view(
     let manual_override = RwSignal::new(None::<bool>);
     if tone == TranscriptTone::Thinking {
         create_effect(move |_| {
-            let auto = is_thinking_streaming(&frame(), block_id);
+            let auto = crate::profiling::timed("transcript.is_thinking_streaming", || {
+                is_thinking_streaming(&frame(), block_id)
+            });
             expanded.set(manual_override.get().unwrap_or(auto));
         });
     }
@@ -580,8 +588,10 @@ fn transcript_block_view(
                     s
                 } else {
                     let confirming = is_tool
-                        && current_tool_block(&frame(), block_id)
-                            .is_some_and(|tool| tool.needs_confirmation());
+                        && crate::profiling::timed("transcript.current_tool_block", || {
+                            current_tool_block(&frame(), block_id)
+                        })
+                        .is_some_and(|tool| tool.needs_confirmation());
                     let (background, border) = if confirming {
                         style::tool_block_colors(true)
                     } else {

@@ -343,13 +343,13 @@ fn reject_unresolvable_split_target(
 /// in `CommandActionState` -- the log is already the durable source of
 /// truth (same "external read is safe, doesn't touch the live app" shape
 /// the agent event log's own external readability already established),
-/// and a fixed tail length keeps this simple for a SPIKE. Doesn't need
-/// `command_state` at all, unlike [`sessions_query`]/[`state_query`]: the
-/// profile log is process-global, not workspace state.
+/// and a fixed tail length keeps this simple. Doesn't need `command_state`
+/// at all, unlike [`sessions_query`]/[`state_query`]: the profile log is
+/// process-global, not workspace state.
 fn profile_query() -> ProfileSnapshot {
     /// How many of the most recent captured events `horizon profile`
-    /// shows -- arbitrary, spike-quality choice; the raw JSONL file (whose
-    /// path is echoed back in the reply) has the rest.
+    /// shows -- arbitrary choice; the raw JSONL file (whose path is echoed
+    /// back in the reply) has the rest.
     const TAIL_LEN: usize = 100;
 
     let path = crate::profiling::log_path();

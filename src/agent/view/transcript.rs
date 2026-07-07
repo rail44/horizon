@@ -352,19 +352,21 @@ pub(super) fn compute_transcript_window(
     frame: &AgentFrame,
     previous: Option<&TranscriptWindow>,
 ) -> TranscriptWindow {
-    let revision = transcript_revision(frame);
-    if let Some(previous) = previous {
-        if previous.revision == revision {
-            return previous.clone();
+    crate::profiling::timed("transcript.window", || {
+        let revision = transcript_revision(frame);
+        if let Some(previous) = previous {
+            if previous.revision == revision {
+                return previous.clone();
+            }
         }
-    }
 
-    let (omitted, blocks) = window_blocks(transcript_blocks(frame), TRANSCRIPT_WINDOW);
-    TranscriptWindow {
-        revision,
-        omitted,
-        blocks,
-    }
+        let (omitted, blocks) = window_blocks(transcript_blocks(frame), TRANSCRIPT_WINDOW);
+        TranscriptWindow {
+            revision,
+            omitted,
+            blocks,
+        }
+    })
 }
 
 /// Splits `blocks` into (how many leading blocks fall outside `window`, the
@@ -734,6 +736,76 @@ mod tests {
         assert_eq!(result.revision, transcript_revision(&frame));
         assert_eq!(result.omitted, 0);
         assert_eq!(result.blocks.len(), 3);
+    }
+
+    /// This is `agent_ui_performance` leg 3's actual production capture
+    /// point (`docs/agent-ui-performance-design.md`): `compute_transcript_window`
+    /// is exactly what `agent_frame_view`'s `window` memo calls, and during a
+    /// real streaming turn that memo re-runs once per `AssistantTextDelta` --
+    /// the class of reactive over-tracking this leg exists to make visible.
+    /// Simulates that per-token growth directly against the frame (no UI,
+    /// no provider), then reads the resulting `"transcript.window"` JSONL
+    /// entries back through the exact [`crate::profiling::read_recent`] the
+    /// `horizon profile` control-plane query uses -- proving both that the
+    /// hot closure is captured under its own trigger name, and that a
+    /// high-frequency burst (one entry per simulated token, close together
+    /// in time) is the shape an agent would actually see for an
+    /// over-tracking regression.
+    #[test]
+    fn compute_transcript_window_capture_shows_a_per_token_firing_burst() {
+        let path = std::env::temp_dir().join(format!(
+            "horizon-ui-profile-transcript-window-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::env::set_var("HORIZON_UI_PROFILE", "1");
+        std::env::set_var("HORIZON_UI_PROFILE_LOG", &path);
+        assert!(
+            crate::profiling::is_enabled(),
+            "HORIZON_UI_PROFILE must be honored in this test process"
+        );
+
+        const TOKENS: usize = 40;
+        let mut frame = AgentFrame {
+            state: Some(SessionState::Running),
+            items: Vec::new(),
+        };
+        let mut previous: Option<TranscriptWindow> = None;
+        for i in 0..TOKENS {
+            frame.items.push(AgentFrameItem::AssistantTextDelta(
+                crate::agent::contract::MessageDelta {
+                    role: MessageRole::Assistant,
+                    text: format!("token{i} "),
+                },
+            ));
+            previous = Some(compute_transcript_window(&frame, previous.as_ref()));
+        }
+        crate::profiling::flush_for_test();
+
+        let records =
+            crate::profiling::read_recent(&path, TOKENS + 10).expect("read the profiling log back");
+        assert_eq!(
+            records.len(),
+            TOKENS,
+            "one compute_transcript_window call per simulated token must \
+             produce one captured entry"
+        );
+        assert!(
+            records
+                .iter()
+                .all(|record| record.trigger == "transcript.window"),
+            "every entry must be tagged with this capture point's trigger name"
+        );
+        let span_ms = records.last().unwrap().created_at_unix_ms
+            - records.first().unwrap().created_at_unix_ms;
+        assert!(
+            span_ms < 1_000,
+            "the whole burst of {TOKENS} fires should land within about a \
+             second, the same high-frequency-in-a-short-window shape an \
+             agent reading `horizon profile` would flag as over-tracking \
+             (actual span: {span_ms}ms)"
+        );
+
+        let _ = std::fs::remove_file(&path);
     }
 
     // --- tool call merge (slice 1) ----------------------------------------

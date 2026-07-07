@@ -23,9 +23,9 @@ fn disabled_by_default_runs_the_closure_without_recording() {
     assert!(ran.get(), "timed must still run the closure when disabled");
 }
 
-/// End-to-end proof of the whole substrate this spike exists to
-/// demonstrate: enabling capture via the env var, timing a couple of
-/// events, and reading them back through the same tolerant JSONL reader
+/// End-to-end proof of the whole substrate this module exists to
+/// provide: enabling capture via the env var, timing a couple of events,
+/// and reading them back through the same tolerant JSONL reader
 /// `app::external_commands`'s `"profile"` query uses.
 #[test]
 fn enabled_capture_round_trips_through_the_jsonl_log() {
