@@ -58,9 +58,12 @@ wave items where possible; design docs on first use.
 
 - **Session manager modal** — shipped 2026-07-06 (`20603dd`): palette
   is Commands-only, sessions managed via the Manage Sessions command.
-- **Agent output UI** (application-ui) — stage 1 survey merged
-  (`docs/research/agent-ui.md`); stage 2 redesign in the domain
-  session with the owner.
+- **Agent output UI** (application-ui) — implementation complete
+  2026-07-07: stage 2 shipped as slices 1-5 per
+  `docs/agent-output-ui-design.md` (tool blocks, density/turn
+  boundaries, follow-scroll, inline approval, Changes overview).
+  Owner visual pass pending; remaining improvements wait on the two
+  small contract extensions (Todo tool below, backlog 16).
 - **Recall tool** — shipped 2026-07-07: live DuckDB projection (writer
   thread, one shared Store handle), `recall.search`/`recall.read`
   (auto-allowed, injection-safe, own-session default with `scope:
@@ -97,10 +100,11 @@ wave items where possible; design docs on first use.
 
 ## Later (deliberately unshaped)
 
-- Skill mechanism (beyond the embedded minimum that shipped with the
-  roles work): the evidence is in
-  (`docs/agent-roles-and-skills-design.md`) — a consultation with the
-  owner shapes the next step.
+- Skill mechanism — shipped 2026-07-07 as skill mechanism v2
+  (repository skill layer `.horizon/skills/`, default skill
+  advertising, `horizon-cli` built-in; owner-consulted in the
+  agent-foundation session, recorded in
+  `docs/agent-roles-and-skills-design.md`).
 - Inter-agent messaging: designed together with the session daemon —
   a project-level consultation comes first.
 - First-party viewers (image / markdown / git diff / color picker):
