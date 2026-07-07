@@ -1,3 +1,7 @@
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
+
 use crate::agent::contract::Command;
 use crate::app::keymap::{
     agent_draft_action, is_terminal_copy_key, is_terminal_paste_key, pop_last_grapheme_approx,
@@ -6,16 +10,71 @@ use crate::app::keymap::{
 };
 use crate::session::Registry;
 use crate::terminal::{KeyEventKind, TerminalCommand};
-use crate::workspace::{PaneKind, Workspace};
+use crate::workspace::{PaneId, PaneKind, Workspace};
 use floem::action::set_ime_allowed;
 use floem::keyboard::{Key, KeyEvent, Modifiers, NamedKey};
 use floem::prelude::*;
 use floem::Clipboard;
 
-pub(crate) const MAX_VISIBLE_PANES: usize = 4;
+/// A dynamically-sized, `PaneId`-keyed table of per-pane UI signals --
+/// replaces the old fixed `[RwSignal<T>; MAX_VISIBLE_PANES]` arrays
+/// (`docs/recursive-layout-design.md`'s slice 2 de-caps the pane count).
+/// Entries are created lazily the first time a pane's view actually needs
+/// one (`register`, called from `workspace::view::pane`'s
+/// `pane_view`) and pruned once the pane no longer exists anywhere in the
+/// workspace (`retain`, driven reactively by `workspace::view::
+/// workspace_view`'s cleanup effect) -- so a pane that's never rendered
+/// (e.g. one only ever touched through the CLI control plane) never
+/// allocates an entry, and a closed pane's entry doesn't outlive it.
+#[derive(Clone)]
+pub(crate) struct PaneKeyedSignals<T: 'static> {
+    inner: Rc<RefCell<HashMap<PaneId, RwSignal<T>>>>,
+}
 
-pub(crate) type AgentDrafts = [RwSignal<String>; MAX_VISIBLE_PANES];
-pub(crate) type PaneFocusRequests = [RwSignal<u64>; MAX_VISIBLE_PANES];
+impl<T: Default + 'static> PaneKeyedSignals<T> {
+    pub(crate) fn new() -> Self {
+        Self {
+            inner: Rc::new(RefCell::new(HashMap::new())),
+        }
+    }
+
+    /// Registers a fresh signal (seeded with `T::default()`) for `pane_id`,
+    /// replacing any existing entry -- called once per `pane_view`
+    /// construction, never from inside a reactive closure that might re-run
+    /// for an already-live view. This *must* overwrite rather than reuse an
+    /// existing entry: `workspace::view::layout_tree`'s leaf/split
+    /// `dyn_container` (e.g. a tab's very first split, which wraps its
+    /// sole existing pane) disposes and rebuilds that pane's own
+    /// `pane_view` in place, which disposes every signal created while
+    /// that view was mounted -- reusing the stale entry here would hand
+    /// back a signal from a disposed reactive scope, panicking on the next
+    /// read. Minting a new one instead keeps this always valid, at the
+    /// cost of losing that one pane's draft/focus-request state across
+    /// exactly that transition (acceptable -- see the design's slice 2
+    /// report).
+    pub(crate) fn register(&self, pane_id: PaneId) -> RwSignal<T> {
+        let signal = RwSignal::new(T::default());
+        self.inner.borrow_mut().insert(pane_id, signal);
+        signal
+    }
+
+    /// The signal for `pane_id`, if one has already been created -- for
+    /// call sites (focus-follow, the active agent draft) that must act on
+    /// an already-rendered pane and never conjure a signal into existence
+    /// for one that isn't.
+    pub(crate) fn get(&self, pane_id: PaneId) -> Option<RwSignal<T>> {
+        self.inner.borrow().get(&pane_id).copied()
+    }
+
+    /// Drops every entry whose pane isn't in `live` -- the counterpart to
+    /// `register`'s lazy allocation.
+    pub(crate) fn retain(&self, live: &HashSet<PaneId>) {
+        self.inner.borrow_mut().retain(|id, _| live.contains(id));
+    }
+}
+
+pub(crate) type AgentDrafts = PaneKeyedSignals<String>;
+pub(crate) type PaneFocusRequests = PaneKeyedSignals<u64>;
 
 pub(crate) fn active_agent(workspace: RwSignal<Workspace>) -> bool {
     workspace.with(|ws| ws.active_pane_is(PaneKind::Agent))
@@ -25,13 +84,18 @@ pub(crate) fn active_text_input_pane(workspace: RwSignal<Workspace>) -> bool {
     workspace.with(|ws| ws.active_pane_accepts_text_input())
 }
 
+fn active_pane_id(workspace: RwSignal<Workspace>) -> Option<PaneId> {
+    workspace.with_untracked(|ws| ws.active_tab().map(|tab| tab.active))
+}
+
 pub(crate) fn request_active_pane_focus(
     workspace: RwSignal<Workspace>,
     pane_focus_requests: PaneFocusRequests,
 ) {
-    let index = workspace.with_untracked(|ws| ws.active_visible_index());
-    if let Some(focus_request) = pane_focus_requests.get(index) {
-        focus_request.update(|request| *request += 1);
+    if let Some(pane_id) = active_pane_id(workspace) {
+        if let Some(focus_request) = pane_focus_requests.get(pane_id) {
+            focus_request.update(|request| *request += 1);
+        }
     }
     set_ime_allowed(active_text_input_pane(workspace));
 }
@@ -44,8 +108,7 @@ pub(crate) fn active_agent_draft(
         return None;
     }
 
-    let index = workspace.with_untracked(|ws| ws.active_visible_index());
-    agent_drafts.get(index).copied()
+    agent_drafts.get(active_pane_id(workspace)?)
 }
 
 pub(crate) fn active_terminal_sender(
@@ -56,21 +119,21 @@ pub(crate) fn active_terminal_sender(
     sessions.with_untracked(|registry| registry.terminal_sender(session_id))
 }
 
-pub(crate) fn visible_terminal_sender(
+pub(crate) fn pane_terminal_sender(
     workspace: RwSignal<Workspace>,
     sessions: RwSignal<Registry>,
-    index: usize,
+    pane_id: PaneId,
 ) -> Option<crossbeam_channel::Sender<TerminalCommand>> {
-    let session_id = workspace.with_untracked(|ws| ws.visible_terminal_session_id(index))?;
+    let session_id = workspace.with_untracked(|ws| ws.terminal_session_id(pane_id))?;
     sessions.with_untracked(|registry| registry.terminal_sender(session_id))
 }
 
-pub(crate) fn visible_agent_sender(
+pub(crate) fn pane_agent_sender(
     workspace: RwSignal<Workspace>,
     sessions: RwSignal<Registry>,
-    index: usize,
+    pane_id: PaneId,
 ) -> Option<crossbeam_channel::Sender<Command>> {
-    let session_id = workspace.with_untracked(|ws| ws.visible_agent_session_id(index))?;
+    let session_id = workspace.with_untracked(|ws| ws.agent_session_id(pane_id))?;
     sessions.with_untracked(|registry| registry.agent_sender(session_id))
 }
 
@@ -273,7 +336,7 @@ pub(crate) fn handle_active_pane_key(
     key_event: &KeyEvent,
     workspace: RwSignal<Workspace>,
     sessions: RwSignal<Registry>,
-    index: usize,
+    pane_id: PaneId,
     ime_composing: RwSignal<bool>,
     ime_preedit: RwSignal<Option<String>>,
     agent_draft: RwSignal<String>,
@@ -282,18 +345,18 @@ pub(crate) fn handle_active_pane_key(
         return true;
     }
 
-    if workspace.with(|ws| ws.active_visible_pane_is(index, PaneKind::Agent)) {
+    if workspace.with(|ws| ws.is_active_pane_of_kind(pane_id, PaneKind::Agent)) {
         return handle_agent_key(
             key_event,
             agent_draft,
-            visible_agent_sender(workspace, sessions, index),
+            pane_agent_sender(workspace, sessions, pane_id),
         );
     }
 
-    if workspace.with(|ws| ws.active_visible_pane_is(index, PaneKind::Terminal)) {
+    if workspace.with(|ws| ws.is_active_pane_of_kind(pane_id, PaneKind::Terminal)) {
         return handle_terminal_key(
             key_event,
-            visible_terminal_sender(workspace, sessions, index),
+            pane_terminal_sender(workspace, sessions, pane_id),
             terminal_key_event_kind(key_event),
         );
     }
@@ -315,7 +378,7 @@ pub(crate) fn handle_active_pane_key_release(
     key_event: &KeyEvent,
     workspace: RwSignal<Workspace>,
     sessions: RwSignal<Registry>,
-    index: usize,
+    pane_id: PaneId,
     ime_composing: RwSignal<bool>,
     ime_preedit: RwSignal<Option<String>>,
     palette_open: RwSignal<bool>,
@@ -342,13 +405,13 @@ pub(crate) fn handle_active_pane_key_release(
         return true;
     }
 
-    if !workspace.with(|ws| ws.active_visible_pane_is(index, PaneKind::Terminal)) {
+    if !workspace.with(|ws| ws.is_active_pane_of_kind(pane_id, PaneKind::Terminal)) {
         return false;
     }
 
     handle_terminal_key_release(
         key_event,
-        visible_terminal_sender(workspace, sessions, index),
+        pane_terminal_sender(workspace, sessions, pane_id),
     )
 }
 

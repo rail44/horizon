@@ -12,7 +12,7 @@ pub(super) fn workspace_view_state(state: &AppState) -> WorkspaceViewState {
         ime_composing: state.ime_composing,
         ime_preedit: state.ime_preedit,
         ime_cursor_area: state.ime_cursor_area,
-        agent_drafts: state.agent_drafts,
+        agent_drafts: state.agent_drafts.clone(),
     }
 }
 
@@ -45,7 +45,7 @@ pub(super) fn control_input_state(state: &AppState) -> ControlInputState {
 pub(super) fn command_action_state(state: &AppState) -> CommandActionState {
     CommandActionState {
         runtime: state.session_runtime_state(),
-        pane_focus_requests: state.pane_focus_requests,
+        pane_focus_requests: state.pane_focus_requests.clone(),
         session_manager: session_manager_handle(state),
         palette: open_palette_state(state),
     }

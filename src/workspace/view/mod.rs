@@ -1,11 +1,12 @@
 use crate::control_surface::{ControlInputState, OpenPaletteState};
-use crate::ui::theme;
 use crate::workspace::AgentDrafts;
 use floem::peniko::kurbo::{Point, Size};
 use floem::prelude::*;
+use floem::reactive::create_effect;
 
 mod agent_controls;
 mod chrome;
+mod layout_tree;
 mod pane;
 mod tab_strip;
 mod terminal_output;
@@ -31,29 +32,35 @@ impl WorkspaceViewState {
             ime_composing: self.ime_composing,
             ime_preedit: self.ime_preedit,
             ime_cursor_area: self.ime_cursor_area,
-            agent_drafts: self.agent_drafts,
+            agent_drafts: self.agent_drafts.clone(),
         }
     }
 }
 
 pub(crate) fn workspace_view(state: WorkspaceViewState) -> impl IntoView {
-    let pane_focus_requests = state.control_input.command.pane_focus_requests;
+    let workspace = state.control_input.command.workspace();
+    let pane_focus_requests = state.control_input.command.pane_focus_requests.clone();
+    let agent_drafts = state.agent_drafts.clone();
+    // Prunes both `PaneId`-keyed per-pane UI maps (`workspace::input::
+    // PaneKeyedSignals`) against every pane that still exists anywhere in
+    // the workspace -- not just the active tab's visible ones, so a
+    // background tab's drafts survive a tab switch. Runs once at mount and
+    // again on every workspace mutation, which covers every pane-removal
+    // path (the pane header's close button, `CloseActivePane`/`CloseTab`,
+    // terminate, the CLI control plane) uniformly, without needing to
+    // thread cleanup through each one individually.
+    create_effect(move |_| {
+        let live = workspace.with(|ws| ws.all_pane_ids());
+        pane_focus_requests.retain(&live);
+        agent_drafts.retain(&live);
+    });
+
     let pane_state = state.pane_view_state();
-    h_stack((
-        pane::pane_view(pane_state.clone(), 0, pane_focus_requests[0]),
-        pane::pane_view(pane_state.clone(), 1, pane_focus_requests[1]),
-        pane::pane_view(pane_state.clone(), 2, pane_focus_requests[2]),
-        pane::pane_view(pane_state, 3, pane_focus_requests[3]),
-    ))
-    .style(|s| {
+    layout_tree::layout_tree_view(pane_state).style(|s| {
         s.flex()
-            .flex_row()
             .width_full()
             .min_height(0.0)
             .flex_basis(0.0)
             .flex_grow(1.0)
-            .gap(1)
-            .padding(1)
-            .background(theme::border_subtle())
     })
 }

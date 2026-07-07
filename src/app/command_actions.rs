@@ -12,7 +12,8 @@ use crate::control_surface::{
 };
 use crate::session::{Frames, Registry, SessionId};
 use crate::workspace::{
-    request_active_pane_focus, Direction, PaneFocusRequests, PaneKind, SessionKind, Workspace,
+    request_active_pane_focus, Direction, PaneFocusRequests, PaneId, PaneKind, SessionKind,
+    Workspace,
 };
 
 use super::runtime::{spawn_session, SessionRuntimeState};
@@ -82,7 +83,7 @@ impl CommandActionState {
         );
         Self {
             runtime,
-            pane_focus_requests: std::array::from_fn(|_| RwSignal::new(0_u64)),
+            pane_focus_requests: PaneFocusRequests::new(),
             session_manager: SessionManagerHandle::for_test(),
             palette: OpenPaletteState::for_test(),
         }
@@ -99,15 +100,18 @@ impl CommandActionState {
 /// entirely — this is what lets, e.g., an approval or a terminate on a
 /// *detached* session (no pane showing it) resolve at all.
 ///
-/// `ClosePane`/`CloseTab`/`ActivateTab`/`ActivatePane` target a visible
-/// index rather than a stable id: the workspace model only tracks
-/// `PaneId`/`TabId` internally (see `workspace::types::id`), and every
-/// `Workspace` method backing these operations already takes a visible
-/// index (`close_visible_pane`, `close_tab_index`, `activate_tab_index`,
-/// `activate_pane_index`), so there is no stable id available to prefer at
-/// the call sites this enum serves today. `AttachSession` and
-/// `TerminateSession` target a `SessionId` instead, since that's stable
-/// across attach/detach and is what the workspace already keys sessions by.
+/// `CloseTab`/`ActivateTab`/`ActivatePane` target a visible index rather
+/// than a stable id: the `Workspace` methods backing them
+/// (`close_tab_index`, `activate_tab_index`, `activate_pane_index`) already
+/// take one, and workspace mode's own cursor is itself a flat visible
+/// index (`docs/recursive-layout-design.md`'s slice 3 is what would move
+/// that to real geometry), so there's no stable id to prefer at those call
+/// sites yet. `ClosePane` targets a `PaneId` instead: `workspace::view::
+/// pane`'s recursive renderer (slice 2 of the same doc) builds each pane's
+/// view directly off its `PaneId`, so its close button already has one to
+/// hand. `AttachSession`/`TerminateSession` target a `SessionId`, since
+/// that's stable across attach/detach and is what the workspace already
+/// keys sessions by.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CommandInvocation {
     Simple(CommandId),
@@ -157,10 +161,15 @@ pub(crate) enum CommandInvocation {
     CancelAgentTurn {
         session_id: SessionId,
     },
-    /// Close a specific visible pane (pane header's × button), whether or
-    /// not it's the active pane.
+    /// Close a specific pane (pane header's × button), whether or not it's
+    /// the active pane. Targets a stable `PaneId` (unlike `CloseTab`/
+    /// `ActivateTab`/`ActivatePane` below, which still target a visible
+    /// index) -- `workspace::view::pane`'s recursive renderer builds each
+    /// pane's view directly off its `PaneId`
+    /// (`docs/recursive-layout-design.md`'s slice 2), so that's what its
+    /// close button already has to hand.
     ClosePane {
-        index: usize,
+        pane_id: PaneId,
     },
     /// Close a specific tab (tab chip's × button), whether or not it's the
     /// active tab.
@@ -246,9 +255,9 @@ pub(crate) fn execute_command(invocation: CommandInvocation, state: CommandActio
             ApprovalDecision::Deny { reason },
         ),
         CommandInvocation::CancelAgentTurn { session_id } => cancel_agent_turn(state, session_id),
-        CommandInvocation::ClosePane { index } => {
+        CommandInvocation::ClosePane { pane_id } => {
             state.workspace().update(|ws| {
-                ws.close_visible_pane(index);
+                ws.close_pane(pane_id);
             });
         }
         CommandInvocation::CloseTab { index } => {
@@ -261,7 +270,7 @@ pub(crate) fn execute_command(invocation: CommandInvocation, state: CommandActio
             workspace.update(|ws| {
                 ws.activate_tab_index(index);
             });
-            request_active_pane_focus(workspace, state.pane_focus_requests);
+            request_active_pane_focus(workspace, state.pane_focus_requests.clone());
         }
         CommandInvocation::ActivatePane {
             tab_index,
@@ -271,7 +280,7 @@ pub(crate) fn execute_command(invocation: CommandInvocation, state: CommandActio
             workspace.update(|ws| {
                 ws.activate_pane_index(tab_index, pane_index);
             });
-            request_active_pane_focus(workspace, state.pane_focus_requests);
+            request_active_pane_focus(workspace, state.pane_focus_requests.clone());
         }
         CommandInvocation::AttachSession {
             session_id,
@@ -282,7 +291,7 @@ pub(crate) fn execute_command(invocation: CommandInvocation, state: CommandActio
                 ws.attach_existing_session_to_split_activated(session_id, activate);
             });
             if activate {
-                request_active_pane_focus(workspace, state.pane_focus_requests);
+                request_active_pane_focus(workspace, state.pane_focus_requests.clone());
             }
         }
         CommandInvocation::TerminateSession { session_id } => {
@@ -302,7 +311,7 @@ pub(crate) fn execute_command(invocation: CommandInvocation, state: CommandActio
         CommandInvocation::CommitWorkspaceMode => {
             let workspace = state.workspace();
             workspace.update(Workspace::commit_workspace_mode);
-            request_active_pane_focus(workspace, state.pane_focus_requests);
+            request_active_pane_focus(workspace, state.pane_focus_requests.clone());
         }
         CommandInvocation::CancelWorkspaceMode => {
             state.workspace().update(Workspace::cancel_workspace_mode);
@@ -327,7 +336,7 @@ fn execute_simple_command(command_id: CommandId, state: CommandActionState) {
         }
         CommandId::FocusNextPane => {
             workspace.update(Workspace::focus_next);
-            request_active_pane_focus(workspace, state.pane_focus_requests);
+            request_active_pane_focus(workspace, state.pane_focus_requests.clone());
         }
         CommandId::CloseActivePane => {
             workspace.update(|ws| {
@@ -482,7 +491,7 @@ fn create_session(
     let session_id = session_id?;
     spawn_session(kind, role_id, session_id, &state.runtime);
     if activate {
-        request_active_pane_focus(workspace, state.pane_focus_requests);
+        request_active_pane_focus(workspace, state.pane_focus_requests.clone());
     }
     Some(session_id)
 }
@@ -755,7 +764,7 @@ mod tests {
         );
         let state = CommandActionState {
             runtime,
-            pane_focus_requests: std::array::from_fn(|_| RwSignal::new(0_u64)),
+            pane_focus_requests: PaneFocusRequests::new(),
             session_manager: SessionManagerHandle::for_test(),
             palette: OpenPaletteState::for_test(),
         };
@@ -832,7 +841,7 @@ mod tests {
         );
         let state = CommandActionState {
             runtime,
-            pane_focus_requests: std::array::from_fn(|_| RwSignal::new(0_u64)),
+            pane_focus_requests: PaneFocusRequests::new(),
             session_manager: SessionManagerHandle::for_test(),
             palette: OpenPaletteState::for_test(),
         };
@@ -890,10 +899,10 @@ mod tests {
     fn close_pane_invocation_closes_the_targeted_pane() {
         let mut workspace = Workspace::mvp();
         let second_session = SessionId::new();
-        workspace.split_active(PaneKind::Terminal, Some(second_session));
+        let pane_id = workspace.split_active(PaneKind::Terminal, Some(second_session));
         let state = test_command_action_state(workspace);
 
-        execute_command(CommandInvocation::ClosePane { index: 1 }, state.clone());
+        execute_command(CommandInvocation::ClosePane { pane_id }, state.clone());
 
         assert_eq!(
             state
@@ -1140,7 +1149,7 @@ mod tests {
         );
         let state = CommandActionState {
             runtime,
-            pane_focus_requests: std::array::from_fn(|_| RwSignal::new(0_u64)),
+            pane_focus_requests: PaneFocusRequests::new(),
             session_manager: SessionManagerHandle::for_test(),
             palette: OpenPaletteState::for_test(),
         };
@@ -1177,11 +1186,16 @@ mod tests {
         let workspace = state.workspace();
         let before_active_tab = workspace.with_untracked(|ws| ws.active_tab_index());
         let before_tab_count = workspace.with_untracked(|ws| ws.tab_count());
-        let before_focus_requests: Vec<u64> = state
-            .pane_focus_requests
-            .iter()
-            .map(|request| request.with_untracked(|count| *count))
-            .collect();
+        // `pane_focus_requests` entries are created lazily, normally by
+        // `pane_view` mounting -- pre-register the active pane's own entry
+        // here (standing in for a real mount) so the "must not bump" check
+        // below actually observes something rather than comparing two
+        // empty maps.
+        let active_pane_id = workspace
+            .with_untracked(|ws| ws.visible_pane_id(ws.active_visible_index()))
+            .expect("mvp() has an active pane");
+        let focus_request = state.pane_focus_requests.register(active_pane_id);
+        let before_focus_request = focus_request.with_untracked(|count| *count);
 
         execute_command(
             CommandInvocation::CreateSession {
@@ -1204,13 +1218,9 @@ mod tests {
             before_active_tab,
             "activate: false must not switch the active tab"
         );
-        let after_focus_requests: Vec<u64> = state
-            .pane_focus_requests
-            .iter()
-            .map(|request| request.with_untracked(|count| *count))
-            .collect();
         assert_eq!(
-            before_focus_requests, after_focus_requests,
+            focus_request.with_untracked(|count| *count),
+            before_focus_request,
             "activate: false must not request pane focus"
         );
     }
@@ -1428,7 +1438,14 @@ mod tests {
         let mut workspace = Workspace::mvp();
         workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
         workspace.activate_visible_pane(0);
+        let second_pane_id = workspace
+            .visible_pane_id(1)
+            .expect("split_active left a second visible pane");
         let state = test_command_action_state(workspace);
+        // Pre-register the second pane's focus-request entry -- normally
+        // created lazily by `pane_view` mounting -- so the "commit bumps
+        // it" check below observes a real signal rather than `None`.
+        let focus_request = state.pane_focus_requests.register(second_pane_id);
         execute_command(CommandInvocation::EnterWorkspaceMode, state.clone());
         execute_command(
             CommandInvocation::MoveWorkspaceCursor {
@@ -1436,7 +1453,7 @@ mod tests {
             },
             state.clone(),
         );
-        let focus_request_before = state.pane_focus_requests[1].with_untracked(|count| *count);
+        let focus_request_before = focus_request.with_untracked(|count| *count);
 
         execute_command(CommandInvocation::CommitWorkspaceMode, state.clone());
 
@@ -1450,7 +1467,7 @@ mod tests {
             1
         );
         assert!(
-            state.pane_focus_requests[1].with_untracked(|count| *count) > focus_request_before,
+            focus_request.with_untracked(|count| *count) > focus_request_before,
             "commit must request real focus for the pane the cursor landed on"
         );
     }

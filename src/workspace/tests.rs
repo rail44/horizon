@@ -23,6 +23,85 @@ fn split_creates_new_attachment_for_session() {
 }
 
 #[test]
+fn pane_id_accessors_resolve_kind_session_and_title_for_a_specific_pane() {
+    let mut workspace = Workspace::mvp();
+    let session_id = SessionId::new();
+    let pane_id = workspace.split_active(PaneKind::Agent, Some(session_id));
+
+    assert_eq!(workspace.pane_kind(pane_id), Some(PaneKind::Agent));
+    assert_eq!(workspace.agent_session_id(pane_id), Some(session_id));
+    assert_eq!(workspace.terminal_session_id(pane_id), None);
+    assert!(workspace.pane_title_for(pane_id).is_some());
+    // The other (unrelated) pane must not be confused with this one.
+    let first_pane_id = workspace.visible_pane_id(0).expect("first pane");
+    assert_ne!(workspace.agent_session_id(first_pane_id), Some(session_id));
+}
+
+#[test]
+fn is_active_pane_reflects_the_tabs_own_active_pane_by_id() {
+    let mut workspace = Workspace::mvp();
+    let first_pane_id = workspace.visible_pane_id(0).expect("first pane");
+    let second_pane_id = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+
+    // split_active dives into the new pane.
+    assert!(workspace.is_active_pane(second_pane_id));
+    assert!(!workspace.is_active_pane(first_pane_id));
+
+    workspace.activate_visible_pane(0);
+
+    assert!(workspace.is_active_pane(first_pane_id));
+    assert!(!workspace.is_active_pane(second_pane_id));
+}
+
+#[test]
+fn visible_index_of_resolves_a_pane_id_to_its_visible_position() {
+    let mut workspace = Workspace::mvp();
+    let first_pane_id = workspace.visible_pane_id(0).expect("first pane");
+    let second_pane_id = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+
+    assert_eq!(workspace.visible_index_of(first_pane_id), Some(0));
+    assert_eq!(workspace.visible_index_of(second_pane_id), Some(1));
+}
+
+#[test]
+fn visible_index_of_is_none_for_a_pane_id_not_in_the_active_tab() {
+    let workspace = Workspace::mvp();
+    let unknown = super::types::PaneId::new();
+
+    assert_eq!(workspace.visible_index_of(unknown), None);
+}
+
+#[test]
+fn cursor_pane_id_follows_the_workspace_mode_cursor() {
+    let mut workspace = Workspace::mvp();
+    let first_pane_id = workspace.visible_pane_id(0).expect("first pane");
+    let second_pane_id = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+    workspace.activate_visible_pane(0);
+    workspace.enter_workspace_mode();
+
+    assert_eq!(workspace.cursor_pane_id(), Some(first_pane_id));
+
+    workspace.move_cursor(Direction::Right);
+
+    assert_eq!(workspace.cursor_pane_id(), Some(second_pane_id));
+}
+
+#[test]
+fn all_pane_ids_includes_panes_in_every_tab_not_just_the_active_one() {
+    let mut workspace = Workspace::mvp();
+    let first_pane_id = workspace.visible_pane_id(0).expect("first pane");
+    let second_pane_id = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+    let third_pane_id = workspace.open_tab(PaneKind::Agent, Some(SessionId::new()));
+
+    let all = workspace.all_pane_ids();
+
+    assert!(all.contains(&first_pane_id));
+    assert!(all.contains(&second_pane_id));
+    assert!(all.contains(&third_pane_id));
+    assert_eq!(all.len(), 3);
+}
+
+#[test]
 fn split_active_with_new_session_uses_active_pane_kind() {
     let mut workspace = Workspace::mvp();
 

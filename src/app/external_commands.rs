@@ -365,7 +365,7 @@ mod tests {
     use crate::app::runtime::SessionRuntimeState;
     use crate::control_surface::{OpenPaletteState, SessionManagerHandle};
     use crate::session::Registry;
-    use crate::workspace::Workspace;
+    use crate::workspace::{PaneFocusRequests, Workspace};
     use floem::prelude::RwSignal;
 
     // --- invocation_from_external: one case per external command --------
@@ -729,7 +729,7 @@ mod tests {
         );
         CommandActionState {
             runtime,
-            pane_focus_requests: std::array::from_fn(|_| RwSignal::new(0_u64)),
+            pane_focus_requests: PaneFocusRequests::new(),
             session_manager: SessionManagerHandle::for_test(),
             palette: OpenPaletteState::for_test(),
         }

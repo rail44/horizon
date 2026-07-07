@@ -115,7 +115,7 @@ impl AppInput {
 
             if active_agent(self.state.workspace) {
                 if let Some(draft) =
-                    active_agent_draft(self.state.workspace, self.state.agent_drafts)
+                    active_agent_draft(self.state.workspace, self.state.agent_drafts.clone())
                 {
                     draft.update(|draft| draft.push_str(text));
                     return EventPropagation::Stop;
@@ -220,7 +220,7 @@ impl AppInput {
     fn command_action_state(&self) -> CommandActionState {
         CommandActionState {
             runtime: self.state.session_runtime_state(),
-            pane_focus_requests: self.state.pane_focus_requests,
+            pane_focus_requests: self.state.pane_focus_requests.clone(),
             session_manager: session_manager_handle(&self.state),
             palette: open_palette_state(&self.state),
         }

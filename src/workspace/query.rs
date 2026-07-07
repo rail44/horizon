@@ -9,6 +9,85 @@ impl Workspace {
         self.visible_pane_ids().get(index).copied()
     }
 
+    /// The visible-index counterpart's `PaneId`-keyed equivalent
+    /// (`docs/recursive-layout-design.md`'s slice 2): `workspace::view`'s
+    /// recursive renderer builds each pane's view directly off its
+    /// `PaneId`, so it needs these rather than the index-based accessors
+    /// above (which stay as they are for every other caller -- the
+    /// control plane, palette, and workspace-mode's own flat cursor index
+    /// are all untouched by this slice).
+    pub(crate) fn pane_kind(&self, pane_id: PaneId) -> Option<PaneKind> {
+        self.panes
+            .iter()
+            .find(|pane| pane.id == pane_id)
+            .map(|pane| pane.kind)
+    }
+
+    pub(crate) fn terminal_session_id(&self, pane_id: PaneId) -> Option<SessionId> {
+        self.panes
+            .iter()
+            .find(|pane| pane.id == pane_id && pane.kind == PaneKind::Terminal)
+            .and_then(|pane| pane.session_id)
+    }
+
+    pub(crate) fn agent_session_id(&self, pane_id: PaneId) -> Option<SessionId> {
+        self.panes
+            .iter()
+            .find(|pane| pane.id == pane_id && pane.kind == PaneKind::Agent)
+            .and_then(|pane| pane.session_id)
+    }
+
+    pub(crate) fn pane_title_for(&self, pane_id: PaneId) -> Option<String> {
+        self.panes
+            .iter()
+            .find(|pane| pane.id == pane_id)
+            .map(|pane| self.pane_title(pane))
+    }
+
+    pub(crate) fn is_active_pane(&self, pane_id: PaneId) -> bool {
+        self.active_tab().map(|tab| tab.active) == Some(pane_id)
+    }
+
+    pub(crate) fn is_active_pane_of_kind(&self, pane_id: PaneId, kind: PaneKind) -> bool {
+        self.is_active_pane(pane_id) && self.pane_kind(pane_id) == Some(kind)
+    }
+
+    pub(crate) fn active_pane_accepts_text_input_for(&self, pane_id: PaneId) -> bool {
+        self.is_active_pane(pane_id)
+            && matches!(
+                self.pane_kind(pane_id),
+                Some(PaneKind::Terminal | PaneKind::Agent)
+            )
+    }
+
+    /// The `PaneId` the workspace-mode cursor currently sits on -- the flat
+    /// index model itself is unchanged (`Workspace::cursor_visible_index`);
+    /// this just resolves that index to the stable id the recursive
+    /// renderer needs to compare against.
+    pub(crate) fn cursor_pane_id(&self) -> Option<PaneId> {
+        self.visible_pane_ids()
+            .get(self.cursor_visible_index())
+            .copied()
+    }
+
+    /// `pane_id`'s position in `visible_pane_ids()`, if it's currently
+    /// visible in the active tab -- lets a `PaneId`-driven call site (a
+    /// pane's own click handler) reach the index-targeting operations
+    /// (`activate_visible_pane`, `commit_workspace_mode_to`) that workspace
+    /// mode's flat cursor model still uses.
+    pub(crate) fn visible_index_of(&self, pane_id: PaneId) -> Option<usize> {
+        self.visible_pane_ids().iter().position(|id| *id == pane_id)
+    }
+
+    /// Every pane that exists anywhere in the workspace, across every tab
+    /// -- not just the active tab's visible ones. Used to prune per-pane UI
+    /// state keyed by `PaneId` (`workspace::input::PaneKeyedSignals`) once
+    /// a pane is gone for good, regardless of which close/terminate path
+    /// removed it.
+    pub(crate) fn all_pane_ids(&self) -> std::collections::HashSet<PaneId> {
+        self.panes.iter().map(|pane| pane.id).collect()
+    }
+
     pub(crate) fn active_terminal_session_id(&self) -> Option<SessionId> {
         let active = self.active_tab()?.active;
         self.panes
@@ -33,6 +112,11 @@ impl Workspace {
             .and_then(|pane| pane.session_id)
     }
 
+    /// Test-only now: `workspace::view::pane`'s recursive renderer
+    /// (`docs/recursive-layout-design.md`'s slice 2) resolves an agent
+    /// pane's session by `PaneId` (`agent_session_id`) rather than a
+    /// visible index, which was this method's last production caller.
+    #[cfg(test)]
     pub(crate) fn visible_agent_session_id(&self, index: usize) -> Option<SessionId> {
         let pane_id = self.visible_pane_id(index)?;
         self.panes
@@ -160,23 +244,11 @@ impl Workspace {
         self.visible_pane_kind(self.active_visible_index()) == Some(kind)
     }
 
-    pub(crate) fn active_visible_pane_is(&self, index: usize, kind: PaneKind) -> bool {
-        self.active_visible_index() == index && self.visible_pane_kind(index) == Some(kind)
-    }
-
     pub(crate) fn active_pane_accepts_text_input(&self) -> bool {
         matches!(
             self.visible_pane_kind(self.active_visible_index()),
             Some(PaneKind::Terminal | PaneKind::Agent)
         )
-    }
-
-    pub(crate) fn active_visible_pane_accepts_text_input(&self, index: usize) -> bool {
-        self.active_visible_index() == index
-            && matches!(
-                self.visible_pane_kind(index),
-                Some(PaneKind::Terminal | PaneKind::Agent)
-            )
     }
 
     pub(crate) fn active_visible_index(&self) -> usize {
@@ -203,6 +275,11 @@ impl Workspace {
             .unwrap_or_else(|| "none".to_string())
     }
 
+    /// Test-only now: `workspace::view::pane`'s recursive renderer
+    /// (`docs/recursive-layout-design.md`'s slice 2) titles a pane by
+    /// `PaneId` (`pane_title_for`) rather than a visible index, which was
+    /// this method's last production caller.
+    #[cfg(test)]
     pub(crate) fn visible_pane_title(&self, index: usize) -> Option<String> {
         self.visible_panes()
             .get(index)

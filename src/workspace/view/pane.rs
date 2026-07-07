@@ -11,8 +11,8 @@ use crate::terminal::TerminalFrame;
 use crate::ui::theme;
 use crate::workspace::{
     agent_escape_requests_workspace_mode, handle_active_pane_key, handle_active_pane_key_release,
-    handle_agent_approval_key, handle_workspace_mode_key, visible_terminal_sender, AgentDrafts,
-    ApprovalKeyAction, ModeAction, PaneKind, Workspace,
+    handle_agent_approval_key, handle_workspace_mode_key, pane_terminal_sender, AgentDrafts,
+    ApprovalKeyAction, ModeAction, PaneId, PaneKind, Workspace,
 };
 use floem::prelude::*;
 use floem::reactive::create_effect;
@@ -31,18 +31,18 @@ use crate::agent::view::{
     AgentPaneFocus, ApprovalController,
 };
 
-/// Approves `call_id` on the agent session currently occupying visible pane
-/// `index`, if any -- shared by the inline approval control row's `y`/click
-/// path (`agent::view::approval::approval_control_row`, wired through the
+/// Approves `call_id` on the agent session occupying pane `pane_id`, if
+/// any -- shared by the inline approval control row's `y`/click path
+/// (`agent::view::approval::approval_control_row`, wired through the
 /// `ApprovalController` this pane builds below) and `pane_view`'s `KeyDown`
 /// handler, so both dispatch through the exact same `CommandInvocation`.
 fn approve_pending(
     workspace: RwSignal<Workspace>,
     command_state: CommandActionState,
-    index: usize,
+    pane_id: PaneId,
     call_id: ToolCallId,
 ) {
-    let Some(session_id) = workspace.with_untracked(|ws| ws.visible_agent_session_id(index)) else {
+    let Some(session_id) = workspace.with_untracked(|ws| ws.agent_session_id(pane_id)) else {
         return;
     };
     execute_command(
@@ -58,10 +58,10 @@ fn approve_pending(
 fn deny_pending(
     workspace: RwSignal<Workspace>,
     command_state: CommandActionState,
-    index: usize,
+    pane_id: PaneId,
     call_id: ToolCallId,
 ) {
-    let Some(session_id) = workspace.with_untracked(|ws| ws.visible_agent_session_id(index)) else {
+    let Some(session_id) = workspace.with_untracked(|ws| ws.agent_session_id(pane_id)) else {
         return;
     };
     execute_command(
@@ -117,11 +117,7 @@ impl PaneViewState {
     }
 }
 
-pub(super) fn pane_view(
-    state: PaneViewState,
-    index: usize,
-    focus_request: RwSignal<u64>,
-) -> impl IntoView {
+pub(super) fn pane_view(state: PaneViewState, pane_id: PaneId) -> impl IntoView {
     let control_input = state.control_input_state();
     let open_palette_state = state.open_palette_state();
     let command_state = control_input.command.clone();
@@ -134,15 +130,20 @@ pub(super) fn pane_view(
     let ime_cursor_area = state.ime_cursor_area;
     let palette_open = control_input.palette_open;
     let agent_drafts = state.agent_drafts;
+    // Registered the moment this pane's view is built (rather than pulled
+    // from a fixed pre-allocated slot, per-pane) -- `workspace::view::
+    // workspace_view`'s cleanup effect prunes it once `pane_id` no longer
+    // exists anywhere in the workspace.
+    let focus_request = control_input.command.pane_focus_requests.register(pane_id);
 
     let terminal_frame = move || {
-        let Some(session_id) = workspace.with(|ws| ws.visible_terminal_session_id(index)) else {
+        let Some(session_id) = workspace.with(|ws| ws.terminal_session_id(pane_id)) else {
             return TerminalFrame::from_text("No split yet".to_string());
         };
         frames.with(|frames| frames.terminal_frame(session_id))
     };
     let agent_frame = move || {
-        let Some(session_id) = workspace.with(|ws| ws.visible_agent_session_id(index)) else {
+        let Some(session_id) = workspace.with(|ws| ws.agent_session_id(pane_id)) else {
             return AgentFrame::empty();
         };
         frames.with(|frames| frames.agent_frame(session_id))
@@ -150,29 +151,27 @@ pub(super) fn pane_view(
 
     let title = move || {
         workspace.with(|ws| {
-            ws.visible_pane_title(index)
+            ws.pane_title_for(pane_id)
                 .unwrap_or_else(|| "Empty".to_string())
         })
     };
 
-    let active = move || workspace.with(|ws| ws.active_visible_index() == index);
-    let exists = move || workspace.with(|ws| ws.visible_pane_kind(index).is_some());
+    let active = move || workspace.with(|ws| ws.is_active_pane(pane_id));
     let closeable = move || workspace.with(|ws| ws.visible_panes().len() > 1);
     let workspace_mode_active = move || workspace.with(|ws| ws.is_workspace_mode_active());
     let is_cursor = move || {
-        workspace.with(|ws| ws.is_workspace_mode_active() && ws.cursor_visible_index() == index)
+        workspace.with(|ws| ws.is_workspace_mode_active() && ws.cursor_pane_id() == Some(pane_id))
     };
-    let is_agent =
-        move || workspace.with(|ws| ws.visible_pane_kind(index) == Some(PaneKind::Agent));
+    let is_agent = move || workspace.with(|ws| ws.pane_kind(pane_id) == Some(PaneKind::Agent));
     let is_terminal =
-        move || workspace.with(|ws| ws.visible_pane_kind(index) == Some(PaneKind::Terminal));
+        move || workspace.with(|ws| ws.pane_kind(pane_id) == Some(PaneKind::Terminal));
     // Set the instant the cancel action fires, cleared when the session
     // state next changes; while set, approve/deny are dead (see
     // `gate_pending_approval`) so an approval click can't race an
     // in-flight cancellation into executing the tool anyway.
     let cancel_requested = RwSignal::new(false);
     let agent_session_state = move || {
-        let session_id = workspace.with(|ws| ws.visible_agent_session_id(index))?;
+        let session_id = workspace.with(|ws| ws.agent_session_id(pane_id))?;
         frames.with(|frames| frames.agent_frame(session_id).state)
     };
     create_effect(move |previous: Option<Option<SessionState>>| {
@@ -185,13 +184,13 @@ pub(super) fn pane_view(
         state
     });
     let pending_approval = move || {
-        let session_id = workspace.with(|ws| ws.visible_agent_session_id(index))?;
+        let session_id = workspace.with(|ws| ws.agent_session_id(pane_id))?;
         let pending =
             frames.with(|frames| frames.agent_frame(session_id).pending_approval_call_id());
         gate_pending_approval(cancel_requested.get(), pending)
     };
     let pending_approval_extra = move || {
-        let Some(session_id) = workspace.with(|ws| ws.visible_agent_session_id(index)) else {
+        let Some(session_id) = workspace.with(|ws| ws.agent_session_id(pane_id)) else {
             return 0;
         };
         frames
@@ -235,7 +234,7 @@ pub(super) fn pane_view(
         pending
     });
     let turn_in_flight = move || {
-        let Some(session_id) = workspace.with(|ws| ws.visible_agent_session_id(index)) else {
+        let Some(session_id) = workspace.with(|ws| ws.agent_session_id(pane_id)) else {
             return false;
         };
         frames.with(|frames| frames.agent_frame(session_id).is_turn_in_flight())
@@ -273,13 +272,13 @@ pub(super) fn pane_view(
             return None;
         }
         let state = agent_session_state()?;
-        let session_id = workspace.with(|ws| ws.visible_agent_session_id(index))?;
+        let session_id = workspace.with(|ws| ws.agent_session_id(pane_id))?;
         let entered_at = frames.with(|frames| frames.agent_state_entered_at(session_id))?;
         let elapsed =
             turn_in_flight().then(|| now_tick.get().saturating_duration_since(entered_at));
         Some(agent_pane_status_label(state, elapsed))
     };
-    let agent_draft = agent_drafts[index];
+    let agent_draft = agent_drafts.register(pane_id);
 
     let cancel_visible = move || is_agent() && turn_in_flight();
 
@@ -295,7 +294,7 @@ pub(super) fn pane_view(
             let command_state = command_state.clone();
             move |call_id| {
                 answer_pending(answered_call, agent_pane_focus, call_id, |call_id| {
-                    approve_pending(workspace, command_state.clone(), index, call_id)
+                    approve_pending(workspace, command_state.clone(), pane_id, call_id)
                 });
             }
         },
@@ -303,7 +302,7 @@ pub(super) fn pane_view(
             let command_state = command_state.clone();
             move |call_id| {
                 answer_pending(answered_call, agent_pane_focus, call_id, |call_id| {
-                    deny_pending(workspace, command_state.clone(), index, call_id)
+                    deny_pending(workspace, command_state.clone(), pane_id, call_id)
                 });
             }
         },
@@ -321,7 +320,7 @@ pub(super) fn pane_view(
                 move || {
                     cancel_requested.set(true);
                     let Some(session_id) =
-                        workspace.with_untracked(|ws| ws.visible_agent_session_id(index))
+                        workspace.with_untracked(|ws| ws.agent_session_id(pane_id))
                     else {
                         return;
                     };
@@ -335,7 +334,7 @@ pub(super) fn pane_view(
                 let command_state = command_state.clone();
                 move || {
                     execute_command(
-                        CommandInvocation::ClosePane { index },
+                        CommandInvocation::ClosePane { pane_id },
                         command_state.clone(),
                     );
                 }
@@ -350,7 +349,7 @@ pub(super) fn pane_view(
                     None
                 }
             },
-            visible_terminal_sender(workspace, sessions, index),
+            pane_terminal_sender(workspace, sessions, pane_id),
             ime_cursor_area,
             is_terminal,
         ),
@@ -391,16 +390,23 @@ pub(super) fn pane_view(
             // active with only focus moved. A no-op when the mode isn't
             // active, in which case the ordinary `activate_visible_pane`
             // call right below is this click's entire effect, unchanged.
+            // Both operations still target workspace mode's flat cursor
+            // index (unchanged by this slice -- see `docs/recursive-
+            // layout-design.md`'s slice 3), so `pane_id` is resolved to its
+            // current visible index first.
+            let Some(index) = ws.visible_index_of(pane_id) else {
+                return;
+            };
             ws.commit_workspace_mode_to(index);
             ws.activate_visible_pane(index);
         });
-        if workspace.with(|ws| ws.active_visible_pane_accepts_text_input(index)) {
+        if workspace.with(|ws| ws.active_pane_accepts_text_input_for(pane_id)) {
             set_ime_allowed(true);
         }
         EventPropagation::Stop
     })
     .on_event(EventListener::FocusGained, move |_| {
-        set_ime_allowed(workspace.with(|ws| ws.active_visible_pane_accepts_text_input(index)));
+        set_ime_allowed(workspace.with(|ws| ws.active_pane_accepts_text_input_for(pane_id)));
         EventPropagation::Continue
     })
     .on_event(EventListener::FocusLost, move |_| {
@@ -487,7 +493,7 @@ pub(super) fn pane_view(
                             awaiting_call(pending_approval(), answered_call.get_untracked())
                         {
                             answer_pending(answered_call, agent_pane_focus, call_id, |call_id| {
-                                approve_pending(workspace, command_state.clone(), index, call_id);
+                                approve_pending(workspace, command_state.clone(), pane_id, call_id);
                             });
                         }
                     }
@@ -496,7 +502,7 @@ pub(super) fn pane_view(
                             awaiting_call(pending_approval(), answered_call.get_untracked())
                         {
                             answer_pending(answered_call, agent_pane_focus, call_id, |call_id| {
-                                deny_pending(workspace, command_state.clone(), index, call_id);
+                                deny_pending(workspace, command_state.clone(), pane_id, call_id);
                             });
                         }
                     }
@@ -533,7 +539,7 @@ pub(super) fn pane_view(
                 key_event,
                 workspace,
                 sessions,
-                index,
+                pane_id,
                 ime_composing,
                 ime_preedit,
                 agent_draft,
@@ -550,7 +556,7 @@ pub(super) fn pane_view(
                 key_event,
                 workspace,
                 sessions,
-                index,
+                pane_id,
                 ime_composing,
                 ime_preedit,
                 palette_open,
@@ -562,10 +568,6 @@ pub(super) fn pane_view(
         EventPropagation::Continue
     })
     .style(move |s| {
-        if !exists() {
-            return s.hide();
-        }
-
         // Workspace mode's cursor frame (`docs/workspace-mode-design.md`):
         // visually distinct from the focus border below in both color
         // (`theme::cursor_accent()`, a role dedicated to this) and
@@ -584,7 +586,7 @@ pub(super) fn pane_view(
         // session kinds on one canvas color (owner request, 2026-07-07).
         let background = if workspace.with(|ws| {
             matches!(
-                ws.visible_pane_kind(index),
+                ws.pane_kind(pane_id),
                 Some(PaneKind::Terminal) | Some(PaneKind::Agent)
             )
         }) {

@@ -1,5 +1,43 @@
 use super::types::{LayoutChild, LayoutNode, PaneId, SplitAxis};
 
+/// One child in a `Split`'s rendering plan (see [`split_render_plan`]):
+/// `anchor` is the stable identity `workspace::view`'s recursive renderer
+/// keys that child's own nested view by across re-renders -- the child's
+/// own pane id for a leaf, or its subtree's leftmost pane id otherwise (see
+/// `LayoutNode::first_pane`). Two sibling subtrees can never share an
+/// anchor: every `PaneId` in a tree is unique, so a subtree's leftmost leaf
+/// uniquely identifies it among its siblings.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct RenderChild {
+    pub(super) anchor: PaneId,
+    pub(super) weight: f32,
+}
+
+/// The immediate rendering plan for one `Split` level -- its axis and, per
+/// child, the identity/weight pair the view needs to key and size that
+/// child's slot. `None` for a bare leaf (nothing to stack). Kept as a pure,
+/// floem-independent function of the tree (`docs/recursive-layout-
+/// design.md`'s slice 2) so the shape fed to `workspace::view`'s recursive
+/// renderer is unit-testable without mounting floem.
+pub(super) fn split_render_plan(node: &LayoutNode) -> Option<(SplitAxis, Vec<RenderChild>)> {
+    match node {
+        LayoutNode::Pane(_) => None,
+        LayoutNode::Split { axis, children } => Some((
+            *axis,
+            children
+                .iter()
+                .map(|child| RenderChild {
+                    anchor: child
+                        .node
+                        .first_pane()
+                        .expect("a canonical Split's child always contains at least one pane"),
+                    weight: child.weight,
+                })
+                .collect(),
+        )),
+    }
+}
+
 impl LayoutNode {
     pub(super) fn pane_ids(&self) -> Vec<PaneId> {
         match self {
@@ -478,6 +516,66 @@ mod tests {
         };
 
         assert!(!root.is_canonical());
+    }
+
+    #[test]
+    fn split_render_plan_is_none_for_a_bare_leaf() {
+        let a = PaneId::new();
+        let root = LayoutNode::Pane(a);
+
+        assert_eq!(split_render_plan(&root), None);
+    }
+
+    #[test]
+    fn split_render_plan_reports_axis_and_leaf_anchors_with_weights() {
+        let a = PaneId::new();
+        let b = PaneId::new();
+        let mut root = LayoutNode::Pane(a);
+        root.split_pane(a, b, SplitAxis::Horizontal);
+        if let LayoutNode::Split { children, .. } = &mut root {
+            children[0].weight = 3.0;
+        }
+
+        let (axis, plan) = split_render_plan(&root).expect("root is a Split");
+
+        assert_eq!(axis, SplitAxis::Horizontal);
+        assert_eq!(
+            plan,
+            vec![
+                RenderChild {
+                    anchor: a,
+                    weight: 3.0
+                },
+                RenderChild {
+                    anchor: b,
+                    weight: 1.0
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn split_render_plan_anchors_a_nested_subtree_by_its_leftmost_leaf() {
+        let a = PaneId::new();
+        let b = PaneId::new();
+        let c = PaneId::new();
+        let mut root = LayoutNode::Pane(a);
+        root.split_pane(a, b, SplitAxis::Horizontal);
+        root.split_pane(b, c, SplitAxis::Horizontal);
+        // Wrap `b` in a Vertical split with a new pane `d` -- `b`'s slot in
+        // the top-level row becomes a subtree, anchored by its own leftmost
+        // leaf (still `b`, since it's the wrapped pair's first child).
+        let d = PaneId::new();
+        root.split_pane(b, d, SplitAxis::Vertical);
+
+        let (axis, plan) = split_render_plan(&root).expect("root is a Split");
+
+        assert_eq!(axis, SplitAxis::Horizontal);
+        assert_eq!(
+            plan.iter().map(|child| child.anchor).collect::<Vec<_>>(),
+            vec![a, b, c],
+            "the nested subtree's anchor is its own leftmost leaf (b), not d"
+        );
     }
 
     #[test]

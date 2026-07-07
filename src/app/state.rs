@@ -6,7 +6,7 @@ use floem::prelude::*;
 use crate::agent::agentd_runtime::AgentdConnection;
 use crate::control_surface::PaletteStage;
 use crate::session::{Frames, Registry, SessionId};
-use crate::workspace::{AgentDrafts, PaneFocusRequests, Workspace, MAX_VISIBLE_PANES};
+use crate::workspace::{AgentDrafts, PaneFocusRequests, Workspace};
 
 use super::runtime::{spawn_session, wire_focus_reporting, SessionRuntimeState};
 
@@ -112,9 +112,9 @@ impl AppState {
             palette_selection: RwSignal::new(0_usize),
             palette_stage: RwSignal::new(PaletteStage::Commands),
             palette_focus_request: RwSignal::new(0_u64),
-            pane_focus_requests: [(); MAX_VISIBLE_PANES].map(|_| RwSignal::new(0_u64)),
+            pane_focus_requests: PaneFocusRequests::new(),
             window_focused,
-            agent_drafts: [(); MAX_VISIBLE_PANES].map(|_| RwSignal::new(String::new())),
+            agent_drafts: AgentDrafts::new(),
             session_manager_open: RwSignal::new(false),
             session_manager_selection: RwSignal::new(0_usize),
             session_manager_pending_terminate: RwSignal::new(None),
@@ -187,9 +187,9 @@ impl AppState {
             palette_selection: RwSignal::new(0_usize),
             palette_stage: RwSignal::new(PaletteStage::Commands),
             palette_focus_request: RwSignal::new(0_u64),
-            pane_focus_requests: [(); MAX_VISIBLE_PANES].map(|_| RwSignal::new(0_u64)),
+            pane_focus_requests: PaneFocusRequests::new(),
             window_focused: RwSignal::new(true),
-            agent_drafts: [(); MAX_VISIBLE_PANES].map(|_| RwSignal::new(String::new())),
+            agent_drafts: AgentDrafts::new(),
             session_manager_open: RwSignal::new(false),
             session_manager_selection: RwSignal::new(0_usize),
             session_manager_pending_terminate: RwSignal::new(None),
