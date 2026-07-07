@@ -21,3 +21,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 echo "pre-commit: cargo nextest run --workspace"
 cargo nextest run --workspace
+
+echo "pre-commit: ast-grep scan (over-tracking lint, docs/agent-ui-performance-design.md leg 2)"
+if ! command -v ast-grep >/dev/null 2>&1; then
+  echo "pre-commit: ast-grep is not installed — this gate step is enforced, not optional" >&2
+  echo "pre-commit: install ast-grep: npm install -g @ast-grep/cli (or: cargo install ast-grep --locked)" >&2
+  exit 1
+fi
+ast-grep scan --error -r .config/ast-grep/overtracking.yml src crates

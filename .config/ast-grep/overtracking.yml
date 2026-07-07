@@ -1,0 +1,43 @@
+# Gate rule for the "over-tracking" reactive anti-pattern — leg 2 of the
+# three-leg defense in docs/agent-ui-performance-design.md. Wired into
+# hooks/pre-commit via `ast-grep scan --error -r <this file>`.
+#
+# Limitation (by design, not a bug): this rule only catches the *direct*
+# shape, where the frame() read and the .items walk are both syntactically
+# inside the create_memo/create_effect closure. If the walk is hidden behind
+# a helper function one call away, ast-grep (syntax-only, intraprocedural)
+# will not see it — confirmed in the spike this rule was promoted from
+# (worktree-agent-a00cc2ee8092ee474 @ 56f8af1,
+# spikes/lint-overtracking/overtracking_lint/ui/bad_indirect.rs, a
+# documented false negative). That gap is exactly why leg 1 (the API
+# boundary making the raw frame signal unreachable from hot view closures)
+# is the primary defense; this rule is a backstop, not a substitute.
+id: overtracking-frame-items
+language: rust
+message: >-
+  Reactive closure reads the raw frame signal and walks `.items` without an
+  `untrack` gate. Gate the walk behind a coarse revision memo and wrap it in
+  `untrack(...)` (see `items_revision` in src/agent/view/mod.rs).
+severity: warning
+rule:
+  any:
+    - pattern: create_memo($ARG)
+    - pattern: create_effect($ARG)
+  all:
+    - has:
+        stopBy: end
+        pattern: frame()
+        not:
+          inside:
+            stopBy: end
+            pattern: untrack($$$UNTRACKED)
+    - has:
+        stopBy: end
+        any:
+          - pattern: $RECV.items.iter()
+          - pattern: $RECV.items.iter_mut()
+          - pattern: $RECV.items.into_iter()
+        not:
+          inside:
+            stopBy: end
+            pattern: untrack($$$UNTRACKED2)

@@ -32,12 +32,13 @@ or use `Reload Agent Runtime` from the command palette to retry after
 rebuilding.
 
 There is no CI. The local quality gate below is mandatory before finishing
-any work — run it yourself and make sure all three are clean:
+any work — run it yourself and make sure all four are clean:
 
 ```sh
 cargo fmt
 cargo clippy --workspace --all-targets -- -D warnings
 cargo nextest run --workspace
+ast-grep scan --error -r .config/ast-grep/overtracking.yml src crates
 ```
 
 `--workspace` is load-bearing: bare `cargo clippy`/`cargo nextest run`
@@ -46,11 +47,20 @@ crates. nextest runs each test in its own process (no cross-test env
 leakage) but does not run doctests; the workspace currently has none —
 add `cargo test --doc` here if that changes.
 
-The same gate runs as a pre-commit hook (`hooks/pre-commit`). One-time setup
+The `ast-grep` step is the leg-2 static-analysis backstop against the
+"over-tracking" reactive anti-pattern (raw `frame()` read + `.items` walk in
+a `create_memo`/`create_effect` closure, no `untrack`) — see
+`docs/agent-ui-performance-design.md`. It only catches the direct form (the
+rule file documents the intraprocedural limitation); it is a backstop, not
+the primary defense.
+
+The same gate runs as a pre-commit hook (`hooks/pre-commit`), which hard-fails
+if `ast-grep` isn't on `PATH` rather than skipping the check. One-time setup
 per clone:
 
 ```sh
 git config core.hooksPath hooks
+npm install -g @ast-grep/cli   # or: cargo install ast-grep --locked
 ```
 
 ## Configuration
