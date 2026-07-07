@@ -52,7 +52,12 @@ wave items where possible; design docs on first use.
    sessions (the coordination substrate for project → domain → task
    teams), designed together with the tmux-style session daemon per
    the standing agreement. The CLI control plane is the seam it grows
-   from.
+   from. **Session daemon design settled 2026-07-07**
+   (`docs/session-daemon-design.md`): expand agentd → `sessiond`
+   hosting both kinds, whole terminal brain moved (no PTY-only stage),
+   sister contracts, row-diff push. Migration starts headless with the
+   `horizon-terminal-core` crate extraction; awaiting a domain session
+   to pick it up.
 
 ## In flight
 
