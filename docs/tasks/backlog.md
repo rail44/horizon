@@ -243,3 +243,7 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     frame. Needs a small contract-level addition (agent-foundation);
     the UI receiving end is trivial. Proposed by application-ui
     slice 2 (2026-07-07).
+17. **color-grid smoke fails on xdotool quoting/spacing** — pre-existing
+    environment quirk, unrelated to the placement-first change (fails
+    identically standalone); distinct from the backlog-14 Xvfb family.
+    Reported by application-ui (2026-07-07).
