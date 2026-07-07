@@ -30,7 +30,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::os::unix::net::UnixStream as StdUnixStream;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -167,10 +167,13 @@ impl AgentdConnection {
                 session_id,
                 provider_id,
                 role_id,
-                // No per-session directory to supply yet (e.g. an inherited
-                // terminal cwd) -- `None` keeps agentd's existing
-                // process-cwd fallback (`ToolSessionState::for_current_dir`).
-                workspace_root: None,
+                // Anchor the session to Horizon's own process cwd, not
+                // agentd's -- agentd is one shared, long-lived daemon per
+                // user (fixed global socket), so its own cwd is wherever it
+                // happened to be spawned from, unrelated to whichever
+                // project this Horizon window is running against. See
+                // `session_new_workspace_root`'s doc comment.
+                workspace_root: session_new_workspace_root(std::env::current_dir()),
             })));
         handle
     }
@@ -276,6 +279,20 @@ impl AgentdConnection {
         };
         let _ = self.outgoing.send(envelope);
     }
+}
+
+/// Turns `std::env::current_dir()`'s result into the value
+/// [`AgentdConnection::start_session`] sends as `SessionNew.workspace_root`.
+/// Takes the `Result` rather than calling `current_dir()` itself so the
+/// `Err` branch (which can't be forced portably without mutating the whole
+/// process's cwd -- global, shared, mutable state no test should touch) is
+/// still exercisable directly. `Ok(dir)` becomes `Some(dir)`: the common
+/// case, and the one that fixes cross-project use of a shared `agentd`.
+/// `Err` becomes `None`, leaving agentd's own `ToolSessionState::
+/// for_current_dir` fallback in place (`SessionNew::workspace_root`'s doc
+/// comment) -- the same behavior `start_session` always used to produce.
+fn session_new_workspace_root(current_dir: std::io::Result<PathBuf>) -> Option<PathBuf> {
+    current_dir.ok()
 }
 
 /// Wires up the Horizon side of the host-tool channel, once, for the
@@ -1144,5 +1161,63 @@ mod tests {
             reload_stage_status(ReloadStage::Replaying(1)),
             "agent runtime: replaying 1 session…"
         );
+    }
+
+    /// A readable process cwd must become this session's `workspace_root`
+    /// -- the fix itself: a new session anchors to Horizon's own cwd, not
+    /// whichever directory the shared `agentd` process happened to start
+    /// from.
+    #[test]
+    fn session_new_workspace_root_returns_some_for_a_readable_cwd() {
+        let dir = PathBuf::from("/tmp/some-horizon-cwd");
+        assert_eq!(session_new_workspace_root(Ok(dir.clone())), Some(dir));
+    }
+
+    /// An unreadable process cwd must fall back to `None`, preserving
+    /// agentd's own `ToolSessionState::for_current_dir` fallback
+    /// (`SessionNew::workspace_root`'s doc comment) -- the same behavior
+    /// `start_session` always produced before this change. Exercised
+    /// against a plain `io::Error` rather than an actually-broken
+    /// `std::env::current_dir()`, since forcing that call to fail would
+    /// mean deleting the test process's own cwd out from under it --
+    /// global, shared, mutable state no test should touch.
+    #[test]
+    fn session_new_workspace_root_returns_none_for_an_unreadable_cwd() {
+        let err = std::io::Error::other("no such directory");
+        assert_eq!(session_new_workspace_root(Err(err)), None);
+    }
+
+    /// `start_session` must send the process cwd as `SessionNew.
+    /// workspace_root` on the wire, not `None` -- the actual dispatch this
+    /// change makes, proven end to end against a real (receiver-backed)
+    /// outgoing channel rather than [`AgentdConnection::for_test`], which
+    /// discards its receiver.
+    #[test]
+    fn start_session_sends_the_process_cwd_as_workspace_root() {
+        let (outgoing, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let connection = AgentdConnection {
+            outgoing,
+            session_events: Arc::new(Mutex::new(HashMap::new())),
+            pending_session_list: Arc::new(Mutex::new(None)),
+        };
+
+        let _handle = connection.start_session(
+            AgentSessionId::new(),
+            ProviderId("builtin.agent.rig".to_string()),
+            None,
+        );
+
+        let envelope = receiver
+            .try_recv()
+            .expect("start_session should send a session_new envelope");
+        match envelope.body {
+            EnvelopeBody::Control(Control::SessionNew(new)) => {
+                assert_eq!(
+                    new.workspace_root,
+                    Some(std::env::current_dir().expect("test process should have a cwd"))
+                );
+            }
+            other => panic!("expected Control::SessionNew, got {other:?}"),
+        }
     }
 }

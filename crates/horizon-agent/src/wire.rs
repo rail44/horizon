@@ -196,9 +196,12 @@ pub struct SessionNew {
     /// written before this field existed still parse (as `None`), mirroring
     /// `persistence::event_log::Record::role_id`'s own additive-field
     /// precedent rather than [`CONTRACT_VERSION`]'s breaking-change one.
-    /// Not yet populated by any sender -- Horizon's `agentd_runtime::
-    /// start_session` passes `None` until a future change threads a real
-    /// per-session directory (e.g. an inherited terminal cwd) through.
+    /// Populated by Horizon's `agentd_runtime::start_session` with the
+    /// Horizon process's own cwd (falling back to `None` only if that cwd
+    /// can't be read) -- so a session's workspace root tracks whichever
+    /// Horizon window spawned it, not `horizon-agentd`'s own cwd (one
+    /// shared, long-lived daemon per user, started from whatever directory
+    /// happened to be current the first time it was launched).
     #[serde(default)]
     pub workspace_root: Option<PathBuf>,
 }
