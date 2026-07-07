@@ -64,6 +64,11 @@ wave items where possible; design docs on first use.
   boundaries, follow-scroll, inline approval, Changes overview).
   Owner visual pass pending; remaining improvements wait on the two
   small contract extensions (Todo tool below, backlog 16).
+- **Skill distillation** — shipped 2026-07-07: the horizon-distill
+  embedded skill guides a generic session from labeled history
+  (recall listing mode) to owner-approved drafts in
+  `.horizon/skills/`; the feedback design's second return path — see
+  `docs/agent-feedback-design.md`'s addendum.
 - **Recall tool** — shipped 2026-07-07: live DuckDB projection (writer
   thread, one shared Store handle), `recall.search`/`recall.read`
   (auto-allowed, injection-safe, own-session default with `scope:
@@ -105,12 +110,6 @@ wave items where possible; design docs on first use.
   same way as the Changes aggregation — proposed by application-ui
   slice 5; pairs with backlog 16 (turn metadata) as the two small
   contract extensions unblocking the UI's remaining improvements.
-- **Skill distillation (approval-gated)**: agent-drafted skill updates
-  from labeled trajectories, owner-approved before landing — see
-  `docs/agent-feedback-design.md`. Unblocked: the label projection
-  shipped 2026-07-07 (all four turn end reasons, order-derived
-  approval outcomes, is_error, role_id — with a recall turn_outcome
-  filter).
 
 ## Later (deliberately unshaped)
 
