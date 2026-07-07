@@ -142,7 +142,10 @@ fn write_stat(input: &Value) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::contract::{ToolCallRequest, ToolCallResult};
+    use crate::agent::contract::{
+        Event, MessageDelta, MessageRole, ToolCallRequest, ToolCallResult,
+    };
+    use crate::agent::frame::apply_agent_event_to_frame;
 
     fn edit_request(call_id: &str, path: &str, old: &str, new: &str) -> AgentFrameItem {
         AgentFrameItem::ToolCallRequested(ToolCallRequest {
@@ -345,5 +348,127 @@ mod tests {
                 removed: 0,
             }
         );
+    }
+
+    /// Pins the invariant `changes_bar_view`'s `items_revision` memo relies
+    /// on (`src/agent/view/mod.rs`): once a streaming assistant turn has
+    /// started, each further text delta coalesces into that same item in
+    /// place (`apply_agent_event_to_frame`) rather than pushing a new one,
+    /// so it must change neither `frame.items.len()` nor what
+    /// `session_changes` reports. This is what lets that memo skip
+    /// re-walking the item log on every streamed token after the first --
+    /// the Changes-bar performance regression this change fixes. (The
+    /// *first* delta of a turn is a real, if harmless, exception: it starts
+    /// a new item because `ToolCallFinished` is a turn boundary
+    /// (`is_turn_boundary_item`), so it does grow the count by one -- fine,
+    /// since that's a single extra recompute per turn, not per token.)
+    #[test]
+    fn streaming_text_deltas_leave_item_count_and_changes_untouched() {
+        let mut frame = AgentFrame::empty();
+
+        apply_agent_event_to_frame(
+            &mut frame,
+            &Event::ToolCallRequested(ToolCallRequest {
+                call_id: ToolCallId("call-1".to_string()),
+                tool_id: "fs.edit".to_string(),
+                input: serde_json::json!({
+                    "path": "src/lib.rs",
+                    "old_string": "a\n",
+                    "new_string": "a\nb\n",
+                }),
+            }),
+        );
+        apply_agent_event_to_frame(
+            &mut frame,
+            &Event::ToolCallFinished(ToolCallResult {
+                call_id: ToolCallId("call-1".to_string()),
+                output: serde_json::json!({ "replaced": true }),
+            }),
+        );
+
+        let before_changes = session_changes(&frame);
+
+        // The first delta of the new turn starts a fresh item (see the doc
+        // comment above) -- exercise that once, then pin the steady state
+        // every later delta of the same turn must hold to.
+        apply_agent_event_to_frame(
+            &mut frame,
+            &Event::AssistantTextDelta(MessageDelta {
+                role: MessageRole::Assistant,
+                text: "It ".to_string(),
+            }),
+        );
+        let steady_state_len = frame.items.len();
+        assert_eq!(
+            session_changes(&frame),
+            before_changes,
+            "a text delta must never affect the Changes aggregation"
+        );
+
+        for chunk in ["looks ", "good."] {
+            apply_agent_event_to_frame(
+                &mut frame,
+                &Event::AssistantTextDelta(MessageDelta {
+                    role: MessageRole::Assistant,
+                    text: chunk.to_string(),
+                }),
+            );
+
+            assert_eq!(
+                frame.items.len(),
+                steady_state_len,
+                "a delta continuing an in-progress turn must coalesce into \
+                 the existing item, not push a new one"
+            );
+            assert_eq!(
+                session_changes(&frame),
+                before_changes,
+                "streamed text must not change the Changes aggregation"
+            );
+        }
+    }
+
+    /// The other half of the `items_revision` invariant: a `ToolCallFinished`
+    /// -- the only event that can add a new [`FileChange`] or grow an
+    /// existing one -- is always a plain push in
+    /// `apply_agent_event_to_frame`, never coalesced in place. So a change
+    /// in `frame.items.len()` is a reliable (if not perfectly tight) signal
+    /// that `session_changes`'s output may have changed.
+    #[test]
+    fn a_tool_call_finishing_always_grows_item_count() {
+        let mut frame = AgentFrame::empty();
+        apply_agent_event_to_frame(
+            &mut frame,
+            &Event::ToolCallRequested(ToolCallRequest {
+                call_id: ToolCallId("call-1".to_string()),
+                tool_id: "fs.edit".to_string(),
+                input: serde_json::json!({
+                    "path": "src/lib.rs",
+                    "old_string": "a\n",
+                    "new_string": "a\nb\n",
+                }),
+            }),
+        );
+
+        let before_len = frame.items.len();
+        assert!(
+            session_changes(&frame).is_empty(),
+            "a requested-but-not-finished edit must not count yet"
+        );
+
+        apply_agent_event_to_frame(
+            &mut frame,
+            &Event::ToolCallFinished(ToolCallResult {
+                call_id: ToolCallId("call-1".to_string()),
+                output: serde_json::json!({ "replaced": true }),
+            }),
+        );
+
+        assert!(
+            frame.items.len() > before_len,
+            "ToolCallFinished must grow item count so the structural-revision \
+             proxy notices the Changes aggregation needs to be re-derived"
+        );
+        assert_eq!(session_changes(&frame).len(), 1);
     }
 }

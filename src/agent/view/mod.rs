@@ -7,7 +7,7 @@ use crate::ui::fonts::font_family;
 use crate::ui::theme;
 use floem::peniko::kurbo::Point;
 use floem::prelude::*;
-use floem::reactive::{create_effect, create_memo};
+use floem::reactive::{create_effect, create_memo, untrack};
 
 mod approval;
 mod changes;
@@ -252,11 +252,36 @@ fn changes_bar_view(
     jump_to_view: RwSignal<Option<floem::ViewId>>,
 ) -> impl IntoView {
     let expanded = RwSignal::new(false);
+    // A cheap structural-revision proxy for `frame.items`: just the Vec's
+    // length, versus `session_changes`'s full item-log walk below.
+    // `apply_agent_event_to_frame` (`crates/horizon-agent/src/frame.rs`)
+    // never removes items, and text deltas / `MessageCommitted` coalesce
+    // into an existing item in place (`text.push_str`, or an in-place
+    // replace), so pure token streaming leaves `items.len()` unchanged.
+    // `ToolCallRequested` can likewise supersede a pending
+    // `ToolCallPreparing` item in place -- but the matching
+    // `ToolCallFinished` that actually makes `session_changes` see a new
+    // file change is always a plain push, never coalesced, so it's
+    // guaranteed to bump this count whenever `session_changes`'s output
+    // could have changed.
+    let items_revision = create_memo(move |_| frame().items.len());
     // Derived straight from `frame.items` (see `changes::session_changes`'s
     // doc comment), so -- like `latest_user_block_id` -- this is immune to
     // the transcript window's 200-block trailing trim: a change made far
     // enough back to have scrolled out of the rendered window still counts.
-    let changes = create_memo(move |_| changes::session_changes(&frame()));
+    //
+    // Tracks `items_revision`'s *value* rather than `frame()` directly, and
+    // reads `frame()` itself `untrack`ed so this closure isn't *also*
+    // subscribed to the raw frame signal -- otherwise this memo would still
+    // re-walk the whole item log on every streamed text delta (the
+    // per-token cost that made the Changes bar a performance regression),
+    // even though its own recomputation is skipped whenever the value
+    // doesn't change. Chaining through `items_revision` means the O(N) walk
+    // below only runs when the structural revision above actually changed.
+    let changes = create_memo(move |_| {
+        items_revision.get();
+        untrack(move || changes::session_changes(&frame()))
+    });
 
     let header = h_stack((
         label(move || {
