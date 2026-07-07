@@ -39,7 +39,7 @@ Three independent axes, decided separately:
    the nearest pane in that direction by rectangle geometry (bspwm
    style), NOT by tree traversal (i3's tree-structural resolution is the
    source of its well-known "focus direction is confusing" wart). This
-   axis is independent of topology. [slice 3]
+   axis is independent of topology. [slice 4]
 
 ## The shallow-nesting invariant (the core of this slice)
 
@@ -81,18 +81,22 @@ expressiveness grounds.)
    invariant), `split_tab` splits at the focused pane honoring an axis
    param — callers still pass Horizontal, so no view/CLI/command change
    and no visible behavior change yet. Fully unit-tested. [this slice]
-2. **Recursive rendering + de-cap + vertical entry.** Replace the fixed
-   4-slot render with a recursive nested `h_stack`/`v_stack` mirroring
-   the tree, weighted by each child's weight; make the per-pane fixed
-   `[_; 4]` arrays (drafts, focus requests) `PaneId`-keyed and dynamic;
-   remove `MAX_VISIBLE_PANES`. Expose the vertical axis in the UI:
-   retire `Split Pane…` for two placement verbs `Split Right…`
-   (horizontal) / `Split Down…` (vertical), each opening the same
-   kind/role chooser; thread an axis onto `CommandInvocation::
-   CreateSession`. Vertical creation and correct rendering land
-   together so there is never a "vertical renders as horizontal"
-   intermediate.
-3. **2-D geometric navigation.** `move_cursor` resolves `hjkl` to the
+2. **Recursive rendering + de-cap.** Replace the fixed 4-slot render with a
+   recursive nested `h_stack`/`v_stack` mirroring the tree, weighted by
+   each child's weight; make the per-pane fixed `[_; 4]` arrays (drafts,
+   focus requests) `PaneId`-keyed and dynamic; remove `MAX_VISIBLE_PANES`.
+   The vertical axis is not yet reachable from any UI surface at this
+   point -- every split site still passes `Horizontal` -- but the
+   renderer is already axis-generic, so slice 3's new vertical splits
+   render correctly with no further rendering change.
+3. **Vertical entry.** Expose the vertical axis in the UI: retire
+   `Split Pane…` for two placement verbs `Split Right…` (horizontal) /
+   `Split Down…` (vertical), each opening the same kind/role chooser;
+   thread an axis onto `CommandInvocation::CreateSession` down to
+   `Workspace::split_session_with_new_session`. Vertical creation and
+   correct rendering land together (rendering already shipped in slice 2)
+   so there is never a "vertical renders as horizontal" intermediate.
+4. **2-D geometric navigation.** `move_cursor` resolves `hjkl` to the
    nearest pane in that direction using rectangles from a pure domain
    function (tree + viewport → per-pane rects); `j`/`k` stop being
    no-ops.

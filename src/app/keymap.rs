@@ -330,7 +330,7 @@ fn control_input(c: char) -> Option<Vec<u8>> {
 fn default_bindings() -> &'static [(&'static str, CommandId)] {
     &[
         ("ctrl+shift+t", CommandId::NewTab),
-        ("ctrl+shift+d", CommandId::SplitPane),
+        ("ctrl+shift+d", CommandId::SplitRight),
         ("ctrl+shift+w", CommandId::CloseActivePane),
         ("ctrl+shift+x", CommandId::CloseActiveTab),
     ]
@@ -367,7 +367,8 @@ const DEFAULT_WORKSPACE_MODE_CHORD: &str = "ctrl+'";
 
 fn command_id_from_str(id: &str) -> Option<CommandId> {
     match id {
-        "split-pane" => Some(CommandId::SplitPane),
+        "split-right" => Some(CommandId::SplitRight),
+        "split-down" => Some(CommandId::SplitDown),
         "new-tab" => Some(CommandId::NewTab),
         "focus-next-pane" => Some(CommandId::FocusNextPane),
         "close-active-pane" => Some(CommandId::CloseActivePane),
@@ -987,7 +988,7 @@ mod tests {
     #[test]
     fn config_entry_overrides_a_default_bound_to_the_same_chord() {
         let mut entries = HashMap::new();
-        entries.insert("ctrl+shift+t".to_string(), "split-pane".to_string());
+        entries.insert("ctrl+shift+t".to_string(), "split-right".to_string());
 
         let keymap = Keymap::from_entries(&entries);
         let chord = parse_chord("ctrl+shift+t").unwrap();
@@ -998,7 +999,7 @@ mod tests {
                 .iter()
                 .find(|(bound, _)| *bound == chord)
                 .map(|(_, id)| *id),
-            Some(CommandId::SplitPane)
+            Some(CommandId::SplitRight)
         );
     }
 
@@ -1024,10 +1025,14 @@ mod tests {
     }
 
     #[test]
-    fn split_pane_and_new_tab_keybinding_entries_resolve_to_their_commands() {
+    fn split_right_split_down_and_new_tab_keybinding_entries_resolve_to_their_commands() {
         assert_eq!(
-            command_id_from_str("split-pane"),
-            Some(CommandId::SplitPane)
+            command_id_from_str("split-right"),
+            Some(CommandId::SplitRight)
+        );
+        assert_eq!(
+            command_id_from_str("split-down"),
+            Some(CommandId::SplitDown)
         );
         assert_eq!(command_id_from_str("new-tab"), Some(CommandId::NewTab));
     }

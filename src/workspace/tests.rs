@@ -557,7 +557,12 @@ fn split_session_with_new_session_targets_the_sessions_own_pane() {
     workspace.activate_visible_pane(0);
 
     let third_session = workspace
-        .split_session_with_new_session(first_session, PaneKind::Terminal, true)
+        .split_session_with_new_session(
+            first_session,
+            PaneKind::Terminal,
+            SplitAxis::Horizontal,
+            true,
+        )
         .expect("split next to the first session's pane");
 
     let root = &workspace.tabs[workspace.active_tab_index()].root;
@@ -575,4 +580,26 @@ fn split_session_with_new_session_targets_the_sessions_own_pane() {
         workspace.visible_terminal_session_id(2),
         Some(second_session)
     );
+}
+
+#[test]
+fn split_session_with_new_session_honors_the_vertical_axis() {
+    // `docs/recursive-layout-design.md`'s slice 3: the axis threaded through
+    // `split_session_with_new_session` must actually reach the tree, not
+    // just get accepted and dropped.
+    let mut workspace = Workspace::mvp();
+    let session = workspace.active_terminal_session_id().expect("session");
+
+    workspace
+        .split_session_with_new_session(session, PaneKind::Terminal, SplitAxis::Vertical, true)
+        .expect("split next to the session's pane");
+
+    let root = &workspace.tabs[workspace.active_tab_index()].root;
+    match root {
+        LayoutNode::Split { axis, children } => {
+            assert_eq!(*axis, SplitAxis::Vertical);
+            assert_eq!(children.len(), 2);
+        }
+        LayoutNode::Pane(_) => panic!("expected a vertical split of 2 panes"),
+    }
 }

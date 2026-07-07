@@ -18,7 +18,7 @@ pub(crate) use mode::Direction;
 pub(crate) use mode_input::{
     agent_escape_requests_workspace_mode, handle_workspace_mode_key, ModeAction,
 };
-pub(crate) use types::{PaneId, PaneKind, SessionKind, Workspace};
+pub(crate) use types::{PaneId, PaneKind, SessionKind, SplitAxis, Workspace};
 
 #[cfg(test)]
 use types::{PaneSummary, SessionSummary, TabSummary};

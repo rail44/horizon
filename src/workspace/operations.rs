@@ -162,7 +162,9 @@ impl Workspace {
     /// honoring `activate` exactly like [`Self::split_tab`] -- the control
     /// plane's `--split <session-id>` placement
     /// (`docs/cli-control-plane-design.md`'s "Placement vocabulary"
-    /// decision). Splits at `target_session_id`'s own pane (not the tab's
+    /// decision) and the palette's `Split Right…`/`Split Down…` verbs
+    /// (`docs/recursive-layout-design.md`'s slice 3), which pick `axis`.
+    /// Splits at `target_session_id`'s own pane (not the tab's
     /// focus, which may be a different pane), so the new pane lands next to
     /// the requested session regardless of what else is focused in that
     /// tab. Returns `None`, spawning nothing, when `target_session_id` isn't
@@ -175,6 +177,7 @@ impl Workspace {
         &mut self,
         target_session_id: SessionId,
         kind: PaneKind,
+        axis: SplitAxis,
         activate: bool,
     ) -> Option<SessionId> {
         let target_pane_id = self
@@ -194,7 +197,7 @@ impl Workspace {
             kind,
             Some(session_id),
             activate,
-            SplitAxis::Horizontal,
+            axis,
         );
         Some(session_id)
     }

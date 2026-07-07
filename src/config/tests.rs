@@ -187,7 +187,7 @@ fn reload_from_path_parses_a_well_formed_file() {
             accent = "#ff00ff"
 
             [keybindings]
-            "ctrl+shift+z" = "split-pane"
+            "ctrl+shift+z" = "split-right"
         "##,
     )
     .unwrap();
@@ -200,7 +200,7 @@ fn reload_from_path_parses_a_well_formed_file() {
     );
     assert_eq!(
         reloaded.keybindings.get("ctrl+shift+z").map(String::as_str),
-        Some("split-pane")
+        Some("split-right")
     );
 
     let _ = std::fs::remove_file(&path);

@@ -29,11 +29,5 @@ pub(crate) struct LayoutChild {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SplitAxis {
     Horizontal,
-    // Not constructed by any production caller yet -- every split site
-    // still passes `Horizontal` (docs/recursive-layout-design.md's slice
-    // 2 exposes a vertical placement verb in the UI). The layout tree and
-    // its operations are already vertical-capable and exercised by
-    // `layout::tests`.
-    #[allow(dead_code)]
     Vertical,
 }

@@ -1,28 +1,31 @@
 use crate::app::commands::CommandEntry;
 use crate::session::SessionId;
-use crate::workspace::{PaneKind, SessionKind};
+use crate::workspace::{PaneKind, SessionKind, SplitAxis};
 
 pub(crate) const PALETTE_VISIBLE_ROWS: usize = 6;
 pub(crate) const SESSION_MANAGER_VISIBLE_ROWS: usize = 8;
 
 /// Where a session created from the palette's second-stage view chooser
 /// lands (`docs/roadmap.md`'s "Placement-first session creation") --
-/// `CommandId::SplitPane`/`CommandId::NewTab` each open the chooser tagged
-/// with the placement it will use once a view is picked, so the same
-/// `CommandInvocation::CreateSession` dispatch (`control_surface::actions::
-/// execute_palette_selection`) works for both: `SplitPane` resolves
-/// `split_target` from the active pane's session at commit time, `NewTab`
-/// always passes `None`.
+/// `CommandId::SplitRight`/`CommandId::SplitDown`/`CommandId::NewTab` each
+/// open the chooser tagged with the placement it will use once a view is
+/// picked, so the same `CommandInvocation::CreateSession` dispatch
+/// (`control_surface::actions::execute_palette_selection`) works for all
+/// three: `Split(axis)` resolves `split_target` from the active pane's
+/// session at commit time, bundled with the axis the chooser was opened
+/// with (`docs/recursive-layout-design.md`'s slice 3); `NewTab` always
+/// passes `None`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Placement {
-    SplitPane,
+    Split(SplitAxis),
     NewTab,
 }
 
 impl Placement {
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::SplitPane => "Split Pane",
+            Self::Split(SplitAxis::Horizontal) => "Split Right",
+            Self::Split(SplitAxis::Vertical) => "Split Down",
             Self::NewTab => "New Tab",
         }
     }
@@ -30,8 +33,9 @@ impl Placement {
 
 /// Which set of rows the palette currently lists. `Commands` is the normal,
 /// searchable catalog (`items::palette_items`); `ViewChooser` is the second
-/// stage `CommandId::SplitPane`/`CommandId::NewTab` open into -- a
-/// registry-driven list of kinds and roles a new session can be created as
+/// stage `CommandId::SplitRight`/`CommandId::SplitDown`/`CommandId::NewTab`
+/// open into -- a registry-driven list of kinds and roles a new session can
+/// be created as
 /// (`items::view_chooser_rows`). Carried as its own signal on
 /// `control_surface::OpenPaletteState`/`CommandActionState::palette` so
 /// opening/advancing/retreating the palette can be driven identically from

@@ -104,9 +104,12 @@ Runs check-terminal-visual.sh once per scenario, each on its own display
 1. `basic-shell` — types `printf horizon-smoke-basic`, expects it in the dump.
 2. `new-terminal-focus` — opens a second terminal tab via the command surface,
    expects typed text in the dump and `2 tab(s)` in status.txt.
-3. `split-pane` — splits via the command surface, expects `2 pane(s)` in status.
-4. `color-grid` — ANSI background colors via python3 (skipped if no python3).
-5. `nvim-screen` — launches nvim with a 5s capture delay, expects `NVIM`
+3. `split-right` — splits horizontally via the command surface, expects
+   `2 pane(s)` in status.
+4. `split-down` — splits vertically via the command surface, expects
+   `2 pane(s)` in status.
+5. `color-grid` — ANSI background colors via python3 (skipped if no python3).
+6. `nvim-screen` — launches nvim with a 5s capture delay, expects `NVIM`
    (skipped if no nvim).
 
 Artifacts land under `/tmp/horizon-terminal-smoke-<timestamp>-<pid>/<scenario>/`

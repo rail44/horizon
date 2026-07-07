@@ -14,10 +14,11 @@ pub(crate) struct PaletteActionState {
     pub(crate) palette_selection: RwSignal<usize>,
 }
 
-/// The palette's full open/reset state -- bundled so `CommandId::SplitPane`/
-/// `CommandId::NewTab` (`app::command_actions::execute_simple_command`) can
-/// open the second-stage view chooser identically whether invoked from a
-/// palette row or a `[keybindings]` chord, the same way `SessionManagerHandle`
+/// The palette's full open/reset state -- bundled so `CommandId::SplitRight`/
+/// `CommandId::SplitDown`/`CommandId::NewTab`
+/// (`app::command_actions::execute_simple_command`) can open the
+/// second-stage view chooser identically whether invoked from a palette row
+/// or a `[keybindings]` chord, the same way `SessionManagerHandle`
 /// lets `CommandId::OpenSessionManager` open that modal from either surface.
 /// Carried on `CommandActionState` (`command_actions::CommandActionState::
 /// palette`) for that reason, and reused as-is by the normal palette-open
@@ -62,8 +63,9 @@ pub(crate) fn open_palette(state: OpenPaletteState) {
 }
 
 /// Opens the palette straight into the second-stage view chooser, tagged
-/// with `placement` -- `CommandId::SplitPane`/`CommandId::NewTab`'s shared
-/// implementation (`app::command_actions::execute_simple_command`), reached
+/// with `placement` -- `CommandId::SplitRight`/`CommandId::SplitDown`/
+/// `CommandId::NewTab`'s shared implementation
+/// (`app::command_actions::execute_simple_command`), reached
 /// identically from a palette row (`execute_palette_selection` dispatching
 /// `CommandInvocation::Simple` like any other catalog command) or a
 /// `[keybindings]` chord (`app::input::AppInput`'s fallback, which also
@@ -187,15 +189,17 @@ pub(crate) fn execute_palette_selection(state: PaletteActionState) {
         }
         PaletteRow::Chooser(chooser_row) => {
             // Only reachable while `stage` is `ViewChooser`, whose
-            // `placement` decides `split_target`: `SplitPane` targets the
+            // `placement` decides `split_target`: `Split(axis)` targets the
             // session behind the active pane at commit time (mirroring
-            // `SplitActivePane`'s retired active-pane resolution), `NewTab`
-            // never splits.
+            // `SplitActivePane`'s retired active-pane resolution), bundled
+            // with the axis to split on; `NewTab` never splits.
             let PaletteStage::ViewChooser { placement } = stage else {
                 return;
             };
             let split_target = match placement {
-                Placement::SplitPane => workspace.with_untracked(|ws| ws.active_session_id()),
+                Placement::Split(axis) => workspace
+                    .with_untracked(|ws| ws.active_session_id())
+                    .map(|session_id| (session_id, axis)),
                 Placement::NewTab => None,
             };
             close_palette(state.palette_open, palette_query, stage_signal);
@@ -274,7 +278,7 @@ pub(crate) fn move_palette_selection(
 mod tests {
     use super::*;
     use crate::app::command_actions::CommandActionState;
-    use crate::workspace::PaneKind;
+    use crate::workspace::{PaneKind, SplitAxis};
 
     fn test_state(workspace: Workspace) -> PaletteActionState {
         let command = CommandActionState::for_test(workspace);
@@ -307,12 +311,12 @@ mod tests {
     fn open_view_chooser_opens_directly_into_the_chooser_stage() {
         let state = OpenPaletteState::for_test();
 
-        open_view_chooser(state, Placement::SplitPane);
+        open_view_chooser(state, Placement::Split(SplitAxis::Horizontal));
 
         assert_eq!(
             state.palette_stage.get_untracked(),
             PaletteStage::ViewChooser {
-                placement: Placement::SplitPane
+                placement: Placement::Split(SplitAxis::Horizontal)
             }
         );
         assert!(state.palette_open.get_untracked());
@@ -334,21 +338,21 @@ mod tests {
     }
 
     #[test]
-    fn execute_palette_selection_on_split_pane_row_opens_the_chooser_without_creating_a_session() {
+    fn execute_palette_selection_on_split_right_row_opens_the_chooser_without_creating_a_session() {
         let state = test_state(Workspace::mvp());
         let before_session_count = state
             .command
             .workspace()
             .with_untracked(|ws| ws.session_count());
 
-        // Selection 0 in the default Commands stage is `Split Pane…` (see
+        // Selection 0 in the default Commands stage is `Split Right…` (see
         // `commands::core_commands`'s order).
         execute_palette_selection(state.clone());
 
         assert_eq!(
             state.command.palette.palette_stage.get_untracked(),
             PaletteStage::ViewChooser {
-                placement: Placement::SplitPane
+                placement: Placement::Split(SplitAxis::Horizontal)
             }
         );
         assert!(state.command.palette.palette_open.get_untracked());
@@ -410,7 +414,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_palette_selection_on_split_pane_placement_splits_next_to_the_active_session() {
+    fn execute_palette_selection_on_split_right_placement_splits_next_to_the_active_session() {
         let workspace = Workspace::mvp();
         let state = test_state(workspace);
         state
@@ -418,7 +422,50 @@ mod tests {
             .palette
             .palette_stage
             .set(PaletteStage::ViewChooser {
-                placement: Placement::SplitPane,
+                placement: Placement::Split(SplitAxis::Horizontal),
+            });
+        state.command.palette.palette_open.set(true);
+        state.palette_selection.set(0);
+        let before_tab_count = state
+            .command
+            .workspace()
+            .with_untracked(|ws| ws.tab_count());
+
+        execute_palette_selection(state.clone());
+
+        assert_eq!(
+            state
+                .command
+                .workspace()
+                .with_untracked(|ws| ws.tab_count()),
+            before_tab_count,
+            "splitting next to a session must not open a new tab"
+        );
+        assert_eq!(
+            state
+                .command
+                .workspace()
+                .with_untracked(|ws| ws.visible_panes().len()),
+            2
+        );
+    }
+
+    #[test]
+    fn execute_palette_selection_on_split_down_placement_splits_next_to_the_active_session() {
+        // The axis actually reaching the tree (Vertical vs Horizontal) is
+        // covered at the workspace level
+        // (`workspace::tests::split_session_with_new_session_honors_the_vertical_axis`);
+        // this only checks that the `SplitDown` placement still resolves to
+        // a split (not a new tab) and passes its axis through without
+        // panicking.
+        let workspace = Workspace::mvp();
+        let state = test_state(workspace);
+        state
+            .command
+            .palette
+            .palette_stage
+            .set(PaletteStage::ViewChooser {
+                placement: Placement::Split(SplitAxis::Vertical),
             });
         state.command.palette.palette_open.set(true);
         state.palette_selection.set(0);

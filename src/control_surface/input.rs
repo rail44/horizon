@@ -161,6 +161,7 @@ fn handle_escape(
 mod tests {
     use super::*;
     use crate::control_surface::Placement;
+    use crate::workspace::SplitAxis;
 
     #[test]
     fn escape_pops_the_view_chooser_back_to_commands_without_closing() {
@@ -168,7 +169,7 @@ mod tests {
         let query = RwSignal::new("term".to_string());
         let selection = RwSignal::new(2);
         let stage = RwSignal::new(PaletteStage::ViewChooser {
-            placement: Placement::SplitPane,
+            placement: Placement::Split(SplitAxis::Horizontal),
         });
 
         handle_escape(open, query, selection, stage);

@@ -410,12 +410,12 @@ mod tests {
         let workspace = Workspace::mvp();
         let frames = Frames::default();
 
-        let rows = palette_rows(&workspace, &frames, PaletteStage::Commands, "split pane");
+        let rows = palette_rows(&workspace, &frames, PaletteStage::Commands, "split right");
 
         assert_eq!(rows.len(), 1);
         assert!(matches!(
             &rows[0],
-            PaletteRow::Catalog(PaletteItem::Command(entry)) if entry.spec.id == CommandId::SplitPane
+            PaletteRow::Catalog(PaletteItem::Command(entry)) if entry.spec.id == CommandId::SplitRight
         ));
     }
 

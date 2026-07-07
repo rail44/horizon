@@ -47,7 +47,7 @@ use horizon_control::contract::{EnvelopeBody, ErrorMessage, Invoke, Query, Sessi
 use crate::agent::contract::ToolCallId;
 use crate::control_surface::command_state;
 use crate::session::{Frames, SessionId};
-use crate::workspace::{PaneKind, Workspace};
+use crate::workspace::{PaneKind, SplitAxis, Workspace};
 
 use super::command_actions::{execute_command, CommandActionState, CommandInvocation};
 use super::commands::{core_commands, CommandId};
@@ -119,22 +119,26 @@ pub(crate) fn invocation_from_external(
 /// Builds `CommandInvocation::CreateSession` for `new-terminal`/`new-agent`/
 /// `new-config-agent` (`docs/cli-control-plane-design.md`'s "Placement
 /// vocabulary" decision): `split` (a session id string) places the new pane
-/// next to that session's pane instead of opening a new tab; `activate`
-/// defaults to `false` when absent (the control plane never steals focus
-/// unless asked); `prompt` is only accepted for the agent commands
-/// (`allow_prompt`) -- the composite create-with-prompt decision doesn't
-/// apply to `new-terminal`, which has no analogous "first message" to send.
-/// `role_id` is fixed by the command name, never client-supplied: the
-/// external vocabulary names each role-tagged flavor (`new-config-agent`)
-/// rather than exposing a free-form role argument -- see
-/// `docs/agent-roles-and-skills-design.md`.
+/// next to that session's pane instead of opening a new tab, always on the
+/// horizontal axis -- the external vocabulary has no vertical-split
+/// argument yet (`docs/recursive-layout-design.md`'s slice 3 exposes
+/// `Split Down…` only through the palette; a `--vertical` CLI flag is
+/// deferred); `activate` defaults to `false` when absent (the control plane
+/// never steals focus unless asked); `prompt` is only accepted for the
+/// agent commands (`allow_prompt`) -- the composite create-with-prompt
+/// decision doesn't apply to `new-terminal`, which has no analogous "first
+/// message" to send. `role_id` is fixed by the command name, never
+/// client-supplied: the external vocabulary names each role-tagged flavor
+/// (`new-config-agent`) rather than exposing a free-form role argument --
+/// see `docs/agent-roles-and-skills-design.md`.
 fn create_session_invocation(
     kind: PaneKind,
     role_id: Option<horizon_agent::roles::RoleId>,
     args: &Value,
     allow_prompt: bool,
 ) -> Result<CommandInvocation, String> {
-    let split_target = optional_session_id_arg(args, "split")?;
+    let split_target =
+        optional_session_id_arg(args, "split")?.map(|id| (id, SplitAxis::Horizontal));
     let activate = activate_arg(args)?;
     let prompt = if allow_prompt {
         match args.get("prompt") {
@@ -311,7 +315,7 @@ fn reject_unresolvable_split_target(
     command_state: &CommandActionState,
 ) -> Result<(), String> {
     let CommandInvocation::CreateSession {
-        split_target: Some(session_id),
+        split_target: Some((session_id, _axis)),
         ..
     } = invocation
     else {
@@ -440,7 +444,7 @@ mod tests {
             Ok(CommandInvocation::CreateSession {
                 kind: PaneKind::Terminal,
                 role_id: None,
-                split_target: Some(session_id),
+                split_target: Some((session_id, SplitAxis::Horizontal)),
                 activate: false,
                 prompt: None,
             })
@@ -453,7 +457,7 @@ mod tests {
             Ok(CommandInvocation::CreateSession {
                 kind: PaneKind::Agent,
                 role_id: None,
-                split_target: Some(session_id),
+                split_target: Some((session_id, SplitAxis::Horizontal)),
                 activate: false,
                 prompt: None,
             })

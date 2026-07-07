@@ -22,9 +22,10 @@ pub(super) struct AppState {
     pub(super) palette_query: RwSignal<String>,
     pub(super) palette_selection: RwSignal<usize>,
     /// Which palette stage is showing -- the normal Commands catalog, or
-    /// the second-stage view chooser `CommandId::SplitPane`/`CommandId::
-    /// NewTab` open (`docs/roadmap.md`'s "Placement-first session
-    /// creation"). See `control_surface::{open_palette, open_view_chooser}`.
+    /// the second-stage view chooser `CommandId::SplitRight`/`CommandId::
+    /// SplitDown`/`CommandId::NewTab` open (`docs/roadmap.md`'s
+    /// "Placement-first session creation"). See
+    /// `control_surface::{open_palette, open_view_chooser}`.
     pub(super) palette_stage: RwSignal<PaletteStage>,
     pub(super) palette_focus_request: RwSignal<u64>,
     pub(super) pane_focus_requests: PaneFocusRequests,

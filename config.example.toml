@@ -188,9 +188,10 @@ window_height = 720.0
 # `escape`, `tab`, `space`, `backspace`, `delete`, `up`/`arrowup`, `down`,
 # `left`, `right`, `home`, `end`, `pageup`, `pagedown`). Case-insensitive.
 #
-# Command ids (see `src/app/commands.rs`'s `CommandId`): split-pane (opens
-# the palette's view chooser to split the active pane), new-tab (opens the
-# chooser to open a new tab), focus-next-pane, close-active-pane,
+# Command ids (see `src/app/commands.rs`'s `CommandId`): split-right (opens
+# the palette's view chooser to split the active pane horizontally),
+# split-down (same chooser, but vertically), new-tab (opens the chooser to
+# open a new tab), focus-next-pane, close-active-pane,
 # close-active-tab, terminate-active-session, approve-tool-call,
 # deny-tool-call, cancel-agent-turn, reload-agent-runtime, reload-config,
 # manage-sessions (opens the session manager modal). The reserved pseudo-command

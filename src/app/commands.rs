@@ -1,6 +1,7 @@
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum CommandId {
-    SplitPane,
+    SplitRight,
+    SplitDown,
     NewTab,
     FocusNextPane,
     CloseActivePane,
@@ -55,10 +56,17 @@ pub(crate) struct CommandEntry {
 pub(crate) fn core_commands() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
-            id: CommandId::SplitPane,
-            title: "Split Pane…",
+            id: CommandId::SplitRight,
+            title: "Split Right…",
             category: CommandCategory::Workspace,
-            description: "Open the view chooser to split the active pane.",
+            description: "Open the view chooser to split the active pane horizontally.",
+            destructive: false,
+        },
+        CommandSpec {
+            id: CommandId::SplitDown,
+            title: "Split Down…",
+            category: CommandCategory::Workspace,
+            description: "Open the view chooser to split the active pane vertically.",
             destructive: false,
         },
         CommandSpec {
@@ -150,7 +158,8 @@ pub(crate) fn core_commands() -> Vec<CommandSpec> {
 
 pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
     match command_id {
-        CommandId::SplitPane
+        CommandId::SplitRight
+        | CommandId::SplitDown
         | CommandId::NewTab
         | CommandId::FocusNextPane
         | CommandId::ReloadAgentRuntime
@@ -212,19 +221,21 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 13);
-        assert_eq!(commands[0].id, CommandId::SplitPane);
-        assert_eq!(commands[0].title, "Split Pane…");
-        assert_eq!(commands[1].id, CommandId::NewTab);
-        assert_eq!(commands[1].title, "New Tab…");
-        assert_eq!(commands[5].id, CommandId::TerminateActiveSession);
-        assert_eq!(commands[5].title, "Terminate Active Session");
-        assert_eq!(commands[6].id, CommandId::TerminateAllDetachedSessions);
-        assert_eq!(commands[6].title, "Terminate All Detached Sessions");
-        assert_eq!(commands[11].id, CommandId::OpenSessionManager);
-        assert_eq!(commands[11].title, "Manage Sessions");
-        assert_eq!(commands[12].id, CommandId::ReloadConfig);
-        assert_eq!(commands[12].title, "Reload Config");
+        assert_eq!(commands.len(), 14);
+        assert_eq!(commands[0].id, CommandId::SplitRight);
+        assert_eq!(commands[0].title, "Split Right…");
+        assert_eq!(commands[1].id, CommandId::SplitDown);
+        assert_eq!(commands[1].title, "Split Down…");
+        assert_eq!(commands[2].id, CommandId::NewTab);
+        assert_eq!(commands[2].title, "New Tab…");
+        assert_eq!(commands[6].id, CommandId::TerminateActiveSession);
+        assert_eq!(commands[6].title, "Terminate Active Session");
+        assert_eq!(commands[7].id, CommandId::TerminateAllDetachedSessions);
+        assert_eq!(commands[7].title, "Terminate All Detached Sessions");
+        assert_eq!(commands[12].id, CommandId::OpenSessionManager);
+        assert_eq!(commands[12].title, "Manage Sessions");
+        assert_eq!(commands[13].id, CommandId::ReloadConfig);
+        assert_eq!(commands[13].title, "Reload Config");
     }
 
     #[test]
@@ -451,9 +462,9 @@ mod tests {
             has_turn_in_flight: false,
         });
 
-        let split = filter_command_entries(entries.clone(), "split pane");
+        let split = filter_command_entries(entries.clone(), "split right");
         assert_eq!(split.len(), 1);
-        assert_eq!(split[0].spec.id, CommandId::SplitPane);
+        assert_eq!(split[0].spec.id, CommandId::SplitRight);
 
         let new_tab = filter_command_entries(entries, "new tab");
         assert_eq!(new_tab.len(), 1);

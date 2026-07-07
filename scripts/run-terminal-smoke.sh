@@ -43,21 +43,29 @@ run_case basic-shell \
   HORIZON_TEST_ENTER=1 \
   HORIZON_EXPECT_DUMP_CONTAINS="horizon-smoke-basic"
 
-# Both scenarios below enter workspace mode (`ctrl+'`, the shipped default
+# These scenarios enter workspace mode (`ctrl+'`, the shipped default
 # from `docs/workspace-mode-design.md`) and open the palette with `:` --
 # the mode-based replacement for the retired global `ctrl+shift+p` chord
 # (`docs/tasks/backlog.md` item 1, resolved). Placement-first session
-# creation (`docs/roadmap.md`) means both now go through a two-step flow:
-# the typed command (`new tab` / `split`) opens the palette's view chooser,
-# and a second `Return` picks its first row (`Terminal`, always listed
-# first -- see `control_surface::items::view_chooser_rows`).
+# creation (`docs/roadmap.md`) means all three now go through a two-step
+# flow: the typed command (`new tab` / `split right` / `split down`) opens
+# the palette's view chooser, and a second `Return` picks its first row
+# (`Terminal`, always listed first -- see
+# `control_surface::items::view_chooser_rows`). `split right`/`split down`
+# must each type past "split " to disambiguate between the two verbs
+# (`docs/recursive-layout-design.md`'s slice 3) -- typing just "split"
+# would match both rows.
 run_case new-terminal-focus \
   HORIZON_TEST_XDOTOOL="key ctrl+apostrophe sleep 0.7 key colon sleep 0.2 key n e w space t a b Return sleep 0.3 key Return sleep 0.8 type --clearmodifiers horizon-focus-ok" \
   HORIZON_EXPECT_DUMP_CONTAINS="horizon-focus-ok" \
   HORIZON_EXPECT_STATUS_CONTAINS="2 tab(s)"
 
-run_case split-pane \
-  HORIZON_TEST_XDOTOOL="key ctrl+apostrophe sleep 0.7 key colon sleep 0.2 key s p l i t Return sleep 0.3 key Return sleep 0.8" \
+run_case split-right \
+  HORIZON_TEST_XDOTOOL="key ctrl+apostrophe sleep 0.7 key colon sleep 0.2 key s p l i t space r i g h t Return sleep 0.3 key Return sleep 0.8" \
+  HORIZON_EXPECT_STATUS_CONTAINS="2 pane(s)"
+
+run_case split-down \
+  HORIZON_TEST_XDOTOOL="key ctrl+apostrophe sleep 0.7 key colon sleep 0.2 key s p l i t space d o w n Return sleep 0.3 key Return sleep 0.8" \
   HORIZON_EXPECT_STATUS_CONTAINS="2 pane(s)"
 
 if command -v python3 >/dev/null 2>&1; then

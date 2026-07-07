@@ -113,8 +113,9 @@ Modifiers: `ctrl`/`control`, `shift`, `alt`/`option`, `meta`/`cmd`/
 `backspace`, `delete`, `up`/`arrowup`, `down`, `left`, `right`, `home`,
 `end`, `pageup`, `pagedown`. Case-insensitive throughout.
 
-**Command ids**: `split-pane` (opens the palette's view chooser to split
-the active pane), `new-tab` (opens the chooser to open a new tab),
+**Command ids**: `split-right` (opens the palette's view chooser to split
+the active pane horizontally), `split-down` (same chooser, but vertically),
+`new-tab` (opens the chooser to open a new tab),
 `focus-next-pane`, `close-active-pane`, `close-active-tab`,
 `terminate-active-session`, `approve-tool-call`, `deny-tool-call`,
 `cancel-agent-turn`, `reload-agent-runtime`, `reload-config`. Two reserved

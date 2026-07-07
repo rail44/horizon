@@ -45,8 +45,9 @@ supports these manual smoke checks:
 - `new tab`: opens the view chooser (`Enter` on `Terminal` opens another
   terminal tab; `Enter` on `Agent` or a role like `Configuration Agent`
   opens an agent tab).
-- `split pane`: opens the same view chooser, but the chosen view splits the
-  active pane instead of opening a new tab.
+- `split right`: opens the same view chooser, but the chosen view splits the
+  active pane horizontally instead of opening a new tab.
+- `split down`: same as `split right`, but splits vertically.
 - `close active pane`: closes the active pane and leaves its session detached
   when another pane remains.
 - `detached`: shows detached sessions such as `Terminal #2` and attaches the
@@ -94,9 +95,9 @@ To run the current terminal compatibility smoke suite:
 scripts/run-terminal-smoke.sh
 ```
 
-The suite runs shell input, new-terminal focus, split-pane status, ANSI color,
-and nvim screen scenarios. The nvim scenario is skipped when `nvim` is not
-installed. Artifacts are grouped under `/tmp/horizon-terminal-smoke-*` by
+The suite runs shell input, new-terminal focus, split-right/split-down pane
+status, ANSI color, and nvim screen scenarios. The nvim scenario is skipped
+when `nvim` is not installed. Artifacts are grouped under `/tmp/horizon-terminal-smoke-*` by
 default, with each scenario containing `terminal.txt`, `status.txt`,
 `screenshot.png`, and logs.
 

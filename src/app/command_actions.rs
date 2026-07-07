@@ -13,7 +13,7 @@ use crate::control_surface::{
 use crate::session::{Frames, Registry, SessionId};
 use crate::workspace::{
     request_active_pane_focus, Direction, PaneFocusRequests, PaneId, PaneKind, SessionKind,
-    Workspace,
+    SplitAxis, Workspace,
 };
 
 use super::runtime::{spawn_session, SessionRuntimeState};
@@ -34,10 +34,10 @@ pub(crate) struct CommandActionState {
     /// `control_surface::SessionManagerHandle`'s doc comment.
     pub(crate) session_manager: SessionManagerHandle,
     /// The command palette's own signals -- carried here (mirroring
-    /// `session_manager` above) so `CommandId::SplitPane`/`CommandId::NewTab`
-    /// can open the second-stage view chooser (`docs/roadmap.md`'s
-    /// "Placement-first session creation") identically whether invoked from
-    /// a palette row or a `[keybindings]` chord -- see
+    /// `session_manager` above) so `CommandId::SplitRight`/`CommandId::
+    /// SplitDown`/`CommandId::NewTab` can open the second-stage view chooser
+    /// (`docs/roadmap.md`'s "Placement-first session creation") identically
+    /// whether invoked from a palette row or a `[keybindings]` chord -- see
     /// `control_surface::open_view_chooser`.
     pub(crate) palette: OpenPaletteState,
 }
@@ -121,18 +121,22 @@ pub(crate) enum CommandInvocation {
     /// invocation (`docs/cli-control-plane-design.md`'s "Placement
     /// vocabulary" and "activate rides on creating/attaching operations"
     /// decisions), and the human palette/keybinding path via `CommandId::
-    /// SplitPane`/`CommandId::NewTab`'s second-stage view chooser
-    /// (`control_surface::actions::execute_palette_selection`'s
+    /// SplitRight`/`CommandId::SplitDown`/`CommandId::NewTab`'s second-stage
+    /// view chooser (`control_surface::actions::execute_palette_selection`'s
     /// `PaletteRow::Chooser` branch), which always sets `activate: true`
-    /// (a human creation always dives). `split_target`, when set, places
-    /// the new pane as a split next to the pane currently hosting that
-    /// session (in whichever tab that is, not necessarily the active one)
-    /// instead of opening a new tab; `activate` controls whether focus/the
-    /// active tab and pane follow the new session at all (the control
-    /// plane defaults this to `false`, the CLI's `--active` opts in -- see
-    /// `app::external_commands::invocation_from_external`). `prompt`, if
-    /// set, is the composite create-with-prompt decision's payload: sent as
-    /// the new session's first `Command::UserMessage` once spawned (see
+    /// (a human creation always dives). `split_target`, when set, bundles
+    /// the target session with the axis to split on
+    /// (`docs/recursive-layout-design.md`'s slice 3 -- `SplitRight`/
+    /// `SplitDown` resolve to `Horizontal`/`Vertical`, the control plane
+    /// always resolves to `Horizontal` since it has no vertical vocabulary
+    /// yet) and places the new pane as a split next to the pane currently
+    /// hosting that session (in whichever tab that is, not necessarily the
+    /// active one) instead of opening a new tab; `activate` controls whether
+    /// focus/the active tab and pane follow the new session at all (the
+    /// control plane defaults this to `false`, the CLI's `--active` opts in
+    /// -- see `app::external_commands::invocation_from_external`). `prompt`,
+    /// if set, is the composite create-with-prompt decision's payload: sent
+    /// as the new session's first `Command::UserMessage` once spawned (see
     /// [`execute_command`]'s handling of this variant and
     /// [`send_initial_user_message`] for why
     /// there is no readiness wait between the two steps) -- this subsumes
@@ -145,7 +149,7 @@ pub(crate) enum CommandInvocation {
         /// `new-agent` leave it `None`. Meaningless (and always `None`) for
         /// a terminal `kind`.
         role_id: Option<horizon_agent::roles::RoleId>,
-        split_target: Option<SessionId>,
+        split_target: Option<(SessionId, SplitAxis)>,
         activate: bool,
         prompt: Option<String>,
     },
@@ -328,8 +332,11 @@ fn execute_simple_command(command_id: CommandId, state: CommandActionState) {
     }
 
     match command_id {
-        CommandId::SplitPane => {
-            open_view_chooser(state.palette, Placement::SplitPane);
+        CommandId::SplitRight => {
+            open_view_chooser(state.palette, Placement::Split(SplitAxis::Horizontal));
+        }
+        CommandId::SplitDown => {
+            open_view_chooser(state.palette, Placement::Split(SplitAxis::Vertical));
         }
         CommandId::NewTab => {
             open_view_chooser(state.palette, Placement::NewTab);
@@ -458,11 +465,11 @@ fn reload_config(state: CommandActionState) {
 
 /// `CommandInvocation::CreateSession`'s worker -- see that variant's doc
 /// comment. Spawns the session and requests focus, placement- and
-/// activation-aware: `None` `split_target` opens a new tab; `Some` places
-/// the new pane as a split next to that session's pane in whichever tab
-/// currently hosts it (any tab, not just the active one). `activate: false`
-/// skips both the workspace-mode exit and the focus-follow request, so a
-/// control-
+/// activation-aware: `None` `split_target` opens a new tab; `Some((target,
+/// axis))` places the new pane as a split, on `axis`, next to that session's
+/// pane in whichever tab currently hosts it (any tab, not just the active
+/// one). `activate: false` skips both the workspace-mode exit and the
+/// focus-follow request, so a control-
 /// plane-driven creation never disturbs the owner's focus or an in-progress
 /// workspace-mode session -- see `Workspace::exit_workspace_mode`'s doc
 /// comment for why that call is otherwise tied to "creating operations
@@ -474,14 +481,14 @@ fn create_session(
     state: CommandActionState,
     kind: PaneKind,
     role_id: Option<horizon_agent::roles::RoleId>,
-    split_target: Option<SessionId>,
+    split_target: Option<(SessionId, SplitAxis)>,
     activate: bool,
 ) -> Option<SessionId> {
     let workspace = state.workspace();
     let mut session_id = None;
     workspace.update(|ws| {
         session_id = match split_target {
-            Some(target) => ws.split_session_with_new_session(target, kind, activate),
+            Some((target, axis)) => ws.split_session_with_new_session(target, kind, axis, activate),
             None => Some(ws.open_tab_with_new_session_activated(kind, activate)),
         };
         if activate {
@@ -1245,7 +1252,7 @@ mod tests {
             CommandInvocation::CreateSession {
                 kind: PaneKind::Terminal,
                 role_id: None,
-                split_target: Some(target_session),
+                split_target: Some((target_session, SplitAxis::Horizontal)),
                 activate: false,
                 prompt: None,
             },
@@ -1297,7 +1304,7 @@ mod tests {
             CommandInvocation::CreateSession {
                 kind: PaneKind::Terminal,
                 role_id: None,
-                split_target: Some(target_session),
+                split_target: Some((target_session, SplitAxis::Horizontal)),
                 activate: true,
                 prompt: None,
             },
@@ -1326,7 +1333,7 @@ mod tests {
             CommandInvocation::CreateSession {
                 kind: PaneKind::Terminal,
                 role_id: None,
-                split_target: Some(SessionId::new()),
+                split_target: Some((SessionId::new(), SplitAxis::Horizontal)),
                 activate: false,
                 prompt: None,
             },
@@ -1343,9 +1350,10 @@ mod tests {
         );
     }
 
-    // --- CommandId::SplitPane / CommandId::NewTab: open the view chooser ---
+    // --- CommandId::SplitRight / CommandId::SplitDown / CommandId::NewTab:
+    // open the view chooser ------------------------------------------------
     //
-    // `docs/roadmap.md`'s "Placement-first session creation": these two
+    // `docs/roadmap.md`'s "Placement-first session creation": these three
     // catalog commands never create a session directly -- they open the
     // palette's second-stage view chooser (`control_surface::
     // open_view_chooser`), tagged with which placement a chosen view will
@@ -1355,11 +1363,11 @@ mod tests {
     // first.
 
     #[test]
-    fn simple_split_pane_opens_the_view_chooser_directly() {
+    fn simple_split_right_opens_the_view_chooser_directly() {
         let state = test_command_action_state(Workspace::mvp());
 
         execute_command(
-            CommandInvocation::Simple(CommandId::SplitPane),
+            CommandInvocation::Simple(CommandId::SplitRight),
             state.clone(),
         );
 
@@ -1367,7 +1375,26 @@ mod tests {
         assert_eq!(
             state.palette.palette_stage.get_untracked(),
             crate::control_surface::PaletteStage::ViewChooser {
-                placement: crate::control_surface::Placement::SplitPane
+                placement: crate::control_surface::Placement::Split(SplitAxis::Horizontal)
+            }
+        );
+        assert_eq!(state.palette.palette_query.get_untracked(), "");
+    }
+
+    #[test]
+    fn simple_split_down_opens_the_view_chooser_directly() {
+        let state = test_command_action_state(Workspace::mvp());
+
+        execute_command(
+            CommandInvocation::Simple(CommandId::SplitDown),
+            state.clone(),
+        );
+
+        assert!(state.palette.palette_open.get_untracked());
+        assert_eq!(
+            state.palette.palette_stage.get_untracked(),
+            crate::control_surface::PaletteStage::ViewChooser {
+                placement: crate::control_surface::Placement::Split(SplitAxis::Vertical)
             }
         );
         assert_eq!(state.palette.palette_query.get_untracked(), "");
