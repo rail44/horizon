@@ -10,6 +10,7 @@ use floem::prelude::*;
 use floem::reactive::{create_effect, create_memo};
 
 mod approval;
+mod changes;
 mod diff;
 mod follow_scroll;
 mod labels;
@@ -175,7 +176,13 @@ pub(crate) fn agent_frame_view(
         .scroll_style(|s| s.shrink_to_fit().overflow_clip(true))
         .style(|s| s.size_full());
 
-    stack((
+    // Cloned before `follow_scroll_pills`/`changes_bar_view` each consume
+    // their own copy of the same registry -- both resolve a block id to a
+    // `ViewId` through it (the "jump to latest user message" pill and a
+    // Changes row's own jump, respectively).
+    let block_view_ids_for_changes = block_view_ids.clone();
+
+    let transcript_area = stack((
         transcript_scroll,
         follow_scroll_pills(
             frame,
@@ -183,6 +190,29 @@ pub(crate) fn agent_frame_view(
             follow,
             detached_since_block,
             block_view_ids,
+            jump_to_view,
+        ),
+    ))
+    .style(|s| {
+        s.width_full()
+            .flex_basis(0.0)
+            .flex_grow(1.0)
+            .min_height(0.0)
+    });
+
+    v_stack((
+        transcript_area,
+        // The Changes overview bar (`docs/agent-output-ui-design.md`
+        // decision 9) -- a sibling below the scrollable transcript, above
+        // the composer, so it never scrolls out of view itself and never
+        // steals space from the transcript except its own (collapsed by
+        // default) height.
+        changes_bar_view(
+            frame,
+            window,
+            follow,
+            detached_since_block,
+            block_view_ids_for_changes,
             jump_to_view,
         ),
     ))
@@ -197,6 +227,170 @@ pub(crate) fn agent_frame_view(
             .min_height(0.0)
             .background(theme::terminal_background())
     })
+}
+
+/// How tall the Changes bar's expanded file list can grow before it starts
+/// scrolling internally -- keeps a session with many touched files from
+/// pushing the composer off screen (`docs/agent-output-ui-design.md`
+/// decision 9's "展開リストは高さ上限+スクロール").
+const CHANGES_LIST_MAX_HEIGHT: f64 = 200.0;
+
+/// The Changes overview bar: collapsed by default, showing only when the
+/// session has at least one successful `fs.edit`/`fs.write` call
+/// (`changes::session_changes`). Collapsed reads `Changes · N files · +A
+/// −B` (Zed's Edits-bar convention, `docs/research/agent-ui.md`'s Part
+/// 4-5/5-2); expanded lists one row per file, each clickable to jump the
+/// transcript to that file's most recent edit -- a display jump, not a
+/// `CommandId` (`docs/ux-principles.md`'s "Not commands" list; same
+/// reasoning as the follow-scroll pills' own jump just above).
+fn changes_bar_view(
+    frame: impl Fn() -> AgentFrame + Copy + 'static,
+    window: floem::reactive::Memo<TranscriptWindow>,
+    follow: RwSignal<FollowState>,
+    detached_since_block: RwSignal<Option<usize>>,
+    block_view_ids: Rc<RefCell<HashMap<usize, floem::ViewId>>>,
+    jump_to_view: RwSignal<Option<floem::ViewId>>,
+) -> impl IntoView {
+    let expanded = RwSignal::new(false);
+    // Derived straight from `frame.items` (see `changes::session_changes`'s
+    // doc comment), so -- like `latest_user_block_id` -- this is immune to
+    // the transcript window's 200-block trailing trim: a change made far
+    // enough back to have scrolled out of the rendered window still counts.
+    let changes = create_memo(move |_| changes::session_changes(&frame()));
+
+    let header = h_stack((
+        label(move || {
+            if expanded.get() {
+                "\u{25be}"
+            } else {
+                "\u{25b8}"
+            }
+            .to_string()
+        })
+        .style(|s| s.width(12).font_size(10).color(theme::text_muted())),
+        label(move || {
+            changes.with(|changes| changes_summary_text(changes::changes_total(changes)))
+        })
+        .style(|s| {
+            s.flex_basis(0.0)
+                .flex_grow(1.0)
+                .min_width(0.0)
+                .font_size(11)
+                .color(theme::text_muted())
+        }),
+    ))
+    .on_click_stop(move |_| expanded.update(|value| *value = !*value))
+    .style(|s| {
+        s.width_full()
+            .items_center()
+            .gap(6)
+            .padding_horiz(10)
+            .padding_vert(6)
+            .border_top(1.0)
+            .border_color(theme::border_subtle())
+            .background(theme::surface_chrome())
+    });
+
+    let file_list = scroll(
+        dyn_stack(
+            move || changes.get(),
+            |change| change.path.clone(),
+            move |change| {
+                changes_file_row_view(
+                    change,
+                    window,
+                    follow,
+                    detached_since_block,
+                    block_view_ids.clone(),
+                    jump_to_view,
+                )
+            },
+        )
+        .style(|s| s.width_full().flex_col()),
+    )
+    .style(move |s| {
+        let s = s.width_full().max_height(CHANGES_LIST_MAX_HEIGHT);
+        if expanded.get() {
+            s
+        } else {
+            s.hide()
+        }
+    });
+
+    v_stack((header, file_list)).style(move |s| {
+        if changes.with(|changes| changes.is_empty()) {
+            s.hide()
+        } else {
+            s.width_full().flex_col()
+        }
+    })
+}
+
+/// One file row in the expanded Changes list: path, that file's own
+/// `+added −removed`, and how many edit/write calls touched it.
+fn changes_file_row_view(
+    change: changes::FileChange,
+    window: floem::reactive::Memo<TranscriptWindow>,
+    follow: RwSignal<FollowState>,
+    detached_since_block: RwSignal<Option<usize>>,
+    block_view_ids: Rc<RefCell<HashMap<usize, floem::ViewId>>>,
+    jump_to_view: RwSignal<Option<floem::ViewId>>,
+) -> impl IntoView {
+    let block_id = change.last_block_id;
+    let path = change.path.clone();
+    let added = change.added;
+    let removed = change.removed;
+    let edits = change.edits;
+
+    h_stack((
+        label(move || path.clone()).style(move |s| {
+            s.flex_basis(0.0)
+                .flex_grow(1.0)
+                .min_width(0.0)
+                .font_family(font_family().to_string())
+                .font_size(12)
+                .color(theme::text_primary())
+        }),
+        label(move || format!("+{added}"))
+            .style(|s| s.font_size(11).color(theme::diff_added_text())),
+        label(move || format!("\u{2212}{removed}"))
+            .style(|s| s.font_size(11).color(theme::diff_removed_text())),
+        label(move || format!("{edits} edit{}", if edits == 1 { "" } else { "s" }))
+            .style(|s| s.font_size(11).color(theme::text_muted())),
+    ))
+    .on_click_stop(move |_| {
+        let Some(view_id) = block_view_ids.borrow().get(&block_id).copied() else {
+            return;
+        };
+        jump_to_view.set(Some(view_id));
+        // A deliberate look-back at an earlier tool call -- same posture as
+        // the "jump to latest user message" pill above (decision 7): forced
+        // regardless of where the jump lands, so the return pill reliably
+        // reappears even if this file's last edit happens to be near the
+        // current bottom.
+        detached_since_block.set(window.with(|window| window.blocks.last().map(|block| block.id)));
+        follow.set(FollowState::Detached);
+    })
+    .style(|s| {
+        s.width_full()
+            .items_center()
+            .gap(10)
+            .padding_horiz(10)
+            .padding_vert(4)
+    })
+}
+
+/// The Changes bar's collapsed-state summary text -- Zed's Edits-bar
+/// convention (`docs/research/agent-ui.md`'s Part 4-5/Part 5-2: "Zed の
+/// Edits バーは `N files +add/-del`").
+fn changes_summary_text(total: changes::ChangesTotal) -> String {
+    format!(
+        "Changes \u{b7} {} file{} \u{b7} +{} \u{2212}{}",
+        total.files,
+        if total.files == 1 { "" } else { "s" },
+        total.added,
+        total.removed,
+    )
 }
 
 /// The follow-scroll return pills (`docs/agent-output-ui-design.md`
