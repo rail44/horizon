@@ -399,6 +399,71 @@ fn search_hits_carry_is_error_and_turn_outcome_labels() {
 }
 
 #[test]
+fn search_without_query_but_with_turn_outcome_lists_matches() {
+    let session_id = SessionId::new();
+    let path = std::env::temp_dir().join(format!(
+        "horizon-agent-recall-listing-mode-{}.duckdb",
+        uuid::Uuid::new_v4()
+    ));
+    let store = Store::open(&path).expect("open duckdb store");
+    seed_turn(
+        &store,
+        session_id,
+        "turn-completed",
+        "widget alpha",
+        TurnEndReason::Completed,
+    );
+    seed_turn(
+        &store,
+        session_id,
+        "turn-halted",
+        "widget beta",
+        TurnEndReason::Halted,
+    );
+
+    let recall = RecallContext {
+        session_id: Some(session_id),
+        store: Some(Arc::new(Mutex::new(store))),
+    };
+    let tool_state = ToolSessionState::for_current_dir(AgentToolsConfig::default(), recall);
+
+    let output = execute_auto(
+        &tool_state,
+        "recall.search",
+        &json!({ "turn_outcome": "halted" }),
+    )
+    .expect("recall.search handled");
+
+    assert_eq!(
+        output["total"], 1,
+        "listing mode must find only the halted turn's hit with no query"
+    );
+    let hits = output["hits"].as_array().expect("hits array");
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0]["snippet"].as_str().unwrap().contains("widget beta"));
+    assert_eq!(hits[0]["turn_outcome"], "halted");
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn search_without_query_and_without_turn_outcome_errors_clearly() {
+    let session_id = SessionId::new();
+    let (tool_state, path) =
+        tool_state_with_seeded_store(session_id, vec![(session_id, vec!["widget"])]);
+
+    let output =
+        execute_auto(&tool_state, "recall.search", &json!({})).expect("recall.search handled");
+    assert_eq!(output["is_error"], true);
+    assert!(output["message"]
+        .as_str()
+        .unwrap()
+        .contains("query` or a `turn_outcome`"));
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn search_rejects_an_unknown_turn_outcome_value() {
     let session_id = SessionId::new();
     let (tool_state, path) =

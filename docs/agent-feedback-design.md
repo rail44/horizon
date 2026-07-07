@@ -118,3 +118,48 @@ joined via `agent_events.turn_id`; `null` if the event has no turn or
 the turn hasn't ended). `recall.search` also gained an optional
 `turn_outcome` input filter, validated against the four end-reason
 strings. `recall.read` entries carry `is_error` on tool results only.
+
+## Implementation shape: skill distillation (2026-07-07)
+
+Item 2 (decision 4) landed as a **skill-guided generic session**, not a new
+role or a new write tool -- the outcome the role-vs.-skill fork evidence in
+`docs/agent-roles-and-skills-design.md` pointed at: distillation needs no
+enforcement (no narrowed tool allowlist, no trust flag, no persisted
+identity), so it carries no envelope, only knowledge. The knowledge lives
+entirely in a new embedded skill, `horizon-distill`
+(`crates/horizon-agent/skills/horizon-distill/SKILL.md`), that any
+generic session can `skill.read` on the owner's request; every tool it
+uses (`recall.search`/`recall.read`, `fs.read`, `fs.write`) already
+existed.
+
+**The one mechanism gap it needed**: mining recipes like "list how recent
+work ended" have no substring to search for -- they want to cluster hits by
+`turn_outcome` alone. `recall.search`'s `query` input is now optional when
+`turn_outcome` is given (*listing mode*): the SQL layer
+(`Store::search_history`, `query.rs`) drops the `ILIKE` predicate from
+every branch entirely rather than matching an empty pattern, so a listing
+query costs no more than the scope/turn-outcome filters already applied.
+Omitting both `query` and `turn_outcome` is still the same clear error as
+before. A hit found this way has no match to center a snippet on, so its
+snippet is the bounded head of the text instead (same character cap, no
+match window to build around).
+
+**The approval gate**: distillation drafts land at
+`.horizon/skills/<id>/SKILL.md` via `fs.write` -- the same path the v2
+repository-skill layer already reads from
+(`docs/agent-roles-and-skills-design.md`'s "v2" section), which is inside
+the session's workspace root and therefore git-versioned. `fs.write`
+already requires approval; that approval *is* decision 4's gate verbatim,
+not a new mechanism layered on top. Landing the draft as a normal file
+write also means the owner can review it the same way as any other change
+(`git diff`) and revert it the same way, rather than through a
+distillation-specific undo path.
+
+The skill itself teaches the judgment decision 4 flagged as the harder
+half: which lessons clear the bar (recurring across 2+ incidents,
+generalizable but concrete, model-agnostic, not already covered by an
+existing skill), how to read full context before concluding anything
+(`recall.read`, never a bare snippet), and restraint -- an empty pass
+("nothing recurring enough to distill") is a fine outcome, naming
+`docs/research/letta.md` §14's "generic and lossy" failure mode as exactly
+what forcing a lesson out of insufficient evidence would produce.

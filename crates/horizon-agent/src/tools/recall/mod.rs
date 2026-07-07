@@ -70,9 +70,7 @@ pub(crate) fn execute_auto(
 const VALID_TURN_OUTCOMES: &[&str] = &["completed", "cancelled", "failed", "halted"];
 
 fn search(tool_state: &ToolSessionState, input: &Value) -> Value {
-    let Some(query) = input.get("query").and_then(Value::as_str) else {
-        return error_output("recall.search requires a `query` string argument");
-    };
+    let query = input.get("query").and_then(Value::as_str);
     let scope_arg = input
         .get("scope")
         .and_then(Value::as_str)
@@ -91,6 +89,14 @@ fn search(tool_state: &ToolSessionState, input: &Value) -> Value {
         }
         None => None,
     };
+    // Listing mode: `query` may be omitted only when `turn_outcome` narrows
+    // the result set instead -- e.g. "list how recent work ended" mining
+    // recipes have no substring to search for. Omitting both would mean
+    // "return this store's entire matched history", which is never useful
+    // and is rejected the same way v1's always-required `query` was.
+    if query.is_none() && turn_outcome.is_none() {
+        return error_output("recall.search requires a `query` or a `turn_outcome` filter");
+    }
 
     let recall = tool_state.recall_context();
     let Some(store) = recall.store.as_ref() else {
@@ -141,14 +147,21 @@ fn search(tool_state: &ToolSessionState, input: &Value) -> Value {
     })
 }
 
-fn hit_json(entry: RecallEntry, query: &str, own_session_id: Option<SessionId>) -> Value {
+fn hit_json(entry: RecallEntry, query: Option<&str>, own_session_id: Option<SessionId>) -> Value {
+    let snippet = match query {
+        Some(query) => snippet_around_match(&entry.text, query),
+        // Listing mode: there's no match to center a snippet on, so just
+        // return the bounded head of the text (same radius as the
+        // match-centered case, reusing the same cap).
+        None => snippet_head(&entry.text),
+    };
     json!({
         "session_id": session_id_json(entry.session_id),
         "own_session": Some(entry.session_id) == own_session_id,
         "sequence": entry.sequence,
         "kind": entry.kind.as_str(),
         "role_or_tool": entry.role_or_tool,
-        "snippet": snippet_around_match(&entry.text, query),
+        "snippet": snippet,
         "at": entry.at,
         "is_error": entry.is_error,
         "turn_outcome": entry.turn_outcome,
@@ -296,6 +309,22 @@ fn snippet_around_match(text: &str, query: &str) -> String {
     if end < chars.len() {
         snippet.push_str("...");
     }
+    snippet
+}
+
+/// The listing-mode counterpart to [`snippet_around_match`]: there is no
+/// query to center on, so this just bounds `text` to the same
+/// [`SNIPPET_RADIUS_CHARS`] * 2 cap from the start, with a trailing
+/// ellipsis if anything was cut. Works in char counts, same UTF-8-safety
+/// rationale as `snippet_around_match`.
+fn snippet_head(text: &str) -> String {
+    let cap = SNIPPET_RADIUS_CHARS * 2;
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= cap {
+        return text.to_string();
+    }
+    let mut snippet: String = chars[..cap].iter().collect();
+    snippet.push_str("...");
     snippet
 }
 

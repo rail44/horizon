@@ -243,13 +243,20 @@ impl Store {
     /// method does not reject an unrecognized string itself, it just
     /// matches nothing.
     ///
-    /// `query` is escaped for `%`/`_`/the escape character itself (see
-    /// [`escape_like_pattern`]) before being wrapped in a `%...%` `ILIKE`
-    /// pattern, so a literal `%` or `_` in a user's search term matches
-    /// itself literally rather than acting as a wildcard. Each hit's `text`
-    /// is bounded to [`RECALL_TEXT_BOUND_CHARS`] *at the SQL layer* (`substr`)
-    /// before it ever reaches Rust, so a single huge tool result can't
-    /// balloon a response regardless of `limit`.
+    /// `query`, if `Some`, is escaped for `%`/`_`/the escape character
+    /// itself (see [`escape_like_pattern`]) before being wrapped in a
+    /// `%...%` `ILIKE` pattern, so a literal `%` or `_` in a user's search
+    /// term matches itself literally rather than acting as a wildcard. If
+    /// `None`, the `ILIKE` predicate is skipped entirely on every branch --
+    /// this is "listing mode": every row matching `scope`/`turn_outcome`
+    /// alone, newest-first, for mining recipes like "list how recent work
+    /// ended" that have no substring to center on. Callers are expected to
+    /// pair `query: None` with a `turn_outcome` filter (`tools::recall`
+    /// enforces this); listing mode with neither would return this store's
+    /// entire matched history unfiltered. Each hit's `text` is bounded to
+    /// [`RECALL_TEXT_BOUND_CHARS`] *at the SQL layer* (`substr`) before it
+    /// ever reaches Rust, so a single huge tool result can't balloon a
+    /// response regardless of `limit`.
     ///
     /// Rows are newest-first (`event_at` then `sequence`, both descending).
     /// [`RecallSearchReport::total`] counts every match, not just the
@@ -259,11 +266,11 @@ impl Store {
     pub fn search_history(
         &self,
         scope: Option<SessionId>,
-        query: &str,
+        query: Option<&str>,
         limit: usize,
         turn_outcome: Option<&str>,
     ) -> Result<RecallSearchReport> {
-        let pattern = format!("%{}%", escape_like_pattern(query));
+        let pattern = query.map(|query| format!("%{}%", escape_like_pattern(query)));
         let scope_session_id = scope.map(session_id_text).transpose()?;
         // Each UNION ALL branch needs its own alias-qualified scope clause
         // (`m.session_id`/`c.session_id`/`r.session_id`) -- `agent_events`
@@ -275,6 +282,18 @@ impl Store {
                 format!("AND {alias}.session_id = ?")
             } else {
                 String::new()
+            }
+        };
+        // In listing mode (`pattern` is `None`, i.e. `query` was omitted --
+        // see the doc comment above), every branch's `ILIKE` predicate
+        // collapses to `TRUE`, leaving only the (optional) scope/delta
+        // filters -- no placeholder is emitted, and none is bound for it
+        // below.
+        let text_predicate_for = |alias: &str, column: &str| -> String {
+            if pattern.is_some() {
+                format!("{alias}.{column} ILIKE ? ESCAPE '\\'")
+            } else {
+                "TRUE".to_string()
             }
         };
         let turn_outcome_clause = if turn_outcome.is_some() {
@@ -292,14 +311,14 @@ impl Store {
                        CAST(NULL AS BOOLEAN) AS is_error
                 FROM agent_messages m
                 JOIN agent_events e ON e.event_id = m.event_id
-                WHERE NOT m.is_delta AND m.text ILIKE ? ESCAPE '\\' {scope_m}
+                WHERE NOT m.is_delta AND {predicate_m} {scope_m}
                 UNION ALL
                 SELECT c.session_id, c.sequence, 'tool_call', c.tool_id,
                        substr(c.input_json, 1, {bound}), e.event_at::TEXT, e.turn_id,
                        CAST(NULL AS BOOLEAN)
                 FROM agent_tool_calls c
                 JOIN agent_events e ON e.event_id = c.event_id
-                WHERE c.input_json ILIKE ? ESCAPE '\\' {scope_c}
+                WHERE {predicate_c} {scope_c}
                 UNION ALL
                 SELECT r.session_id, r.sequence, 'tool_result',
                        COALESCE(tc.tool_id, r.call_id),
@@ -309,7 +328,7 @@ impl Store {
                 JOIN agent_events e ON e.event_id = r.event_id
                 LEFT JOIN agent_tool_calls tc
                     ON tc.call_id = r.call_id AND tc.session_id = r.session_id
-                WHERE r.output_json ILIKE ? ESCAPE '\\' {scope_r}
+                WHERE {predicate_r} {scope_r}
             )
             SELECT matches.session_id, matches.sequence, matches.kind, matches.role_or_tool,
                    matches.text, matches.at_ts, matches.is_error, t.end_reason,
@@ -321,6 +340,9 @@ impl Store {
             ORDER BY at_ts DESC, sequence DESC
             LIMIT ?",
             bound = RECALL_TEXT_BOUND_CHARS,
+            predicate_m = text_predicate_for("m", "text"),
+            predicate_c = text_predicate_for("c", "input_json"),
+            predicate_r = text_predicate_for("r", "output_json"),
             scope_m = scope_clause_for("m"),
             scope_c = scope_clause_for("c"),
             scope_r = scope_clause_for("r"),
@@ -328,7 +350,9 @@ impl Store {
 
         let mut bind_values: Vec<DuckValue> = Vec::new();
         for _ in 0..3 {
-            bind_values.push(DuckValue::Text(pattern.clone()));
+            if let Some(pattern) = &pattern {
+                bind_values.push(DuckValue::Text(pattern.clone()));
+            }
             if let Some(scope_session_id) = &scope_session_id {
                 bind_values.push(DuckValue::Text(scope_session_id.clone()));
             }
@@ -541,8 +565,9 @@ mod recall_tests {
     use super::*;
     use crate::contract::{
         ApprovalRequest, Event, Message, MessageDelta, MessageRole, ToolCallId, ToolCallRequest,
-        ToolCallResult,
+        ToolCallResult, TurnEndReason,
     };
+    use crate::persistence::projection::duckdb::AppendEvent;
 
     fn committed(role: MessageRole, text: &str) -> Event {
         Event::MessageCommitted(Message {
@@ -581,7 +606,7 @@ mod recall_tests {
             .expect("append events");
 
         let report = store
-            .search_history(Some(session_id), "fox", 20, None)
+            .search_history(Some(session_id), Some("fox"), 20, None)
             .expect("search");
 
         assert_eq!(report.total, 3, "the delta must not be counted as a match");
@@ -611,12 +636,12 @@ mod recall_tests {
             .expect("append events");
 
         let report = store
-            .search_history(Some(session_id), "WORLD", 20, None)
+            .search_history(Some(session_id), Some("WORLD"), 20, None)
             .expect("search");
         assert_eq!(report.total, 1);
 
         let report = store
-            .search_history(Some(session_id), "hello", 20, None)
+            .search_history(Some(session_id), Some("hello"), 20, None)
             .expect("search");
         assert_eq!(report.total, 1);
     }
@@ -640,7 +665,7 @@ mod recall_tests {
             .expect("append events");
 
         let report = store
-            .search_history(Some(session_id), "_", 20, None)
+            .search_history(Some(session_id), Some("_"), 20, None)
             .expect("search");
         assert_eq!(
             report.total, 1,
@@ -666,7 +691,7 @@ mod recall_tests {
             .expect("append events");
 
         let report = store
-            .search_history(Some(session_id), "%", 20, None)
+            .search_history(Some(session_id), Some("%"), 20, None)
             .expect("search");
         assert_eq!(report.total, 1);
         assert!(report.hits[0].text.contains("fifty%"));
@@ -685,13 +710,13 @@ mod recall_tests {
             .expect("append b");
 
         let scoped = store
-            .search_history(Some(session_a), "widget", 20, None)
+            .search_history(Some(session_a), Some("widget"), 20, None)
             .expect("scoped search");
         assert_eq!(scoped.total, 1);
         assert_eq!(scoped.hits[0].session_id, session_a);
 
         let unscoped = store
-            .search_history(None, "widget", 20, None)
+            .search_history(None, Some("widget"), 20, None)
             .expect("unscoped search");
         assert_eq!(unscoped.total, 2);
     }
@@ -708,7 +733,7 @@ mod recall_tests {
             .expect("append events");
 
         let report = store
-            .search_history(Some(session_id), "widget", 2, None)
+            .search_history(Some(session_id), Some("widget"), 2, None)
             .expect("search");
         assert_eq!(report.hits.len(), 2, "rows are capped at `limit`");
         assert_eq!(
@@ -727,7 +752,7 @@ mod recall_tests {
             .expect("append events");
 
         let report = store
-            .search_history(Some(session_id), "needle", 20, None)
+            .search_history(Some(session_id), Some("needle"), 20, None)
             .expect("search");
         assert_eq!(report.total, 1);
         assert_eq!(
@@ -735,6 +760,64 @@ mod recall_tests {
             RECALL_TEXT_BOUND_CHARS,
             "the SQL layer must bound the returned text regardless of the original length"
         );
+    }
+
+    #[test]
+    fn search_without_a_query_lists_matches_by_turn_outcome_alone() {
+        let store = Store::open_in_memory().expect("store");
+        let session_id = SessionId::new();
+
+        store
+            .append_event(AppendEvent {
+                session_id,
+                turn_id: Some("turn-completed".to_string()),
+                provider_id: None,
+                role_id: None,
+                event: committed(MessageRole::User, "alpha"),
+                provider_payload: None,
+            })
+            .expect("append completed message");
+        store
+            .append_event(AppendEvent {
+                session_id,
+                turn_id: Some("turn-completed".to_string()),
+                provider_id: None,
+                role_id: None,
+                event: Event::TurnEnded(TurnEndReason::Completed),
+                provider_payload: None,
+            })
+            .expect("append completed turn end");
+        store
+            .append_event(AppendEvent {
+                session_id,
+                turn_id: Some("turn-halted".to_string()),
+                provider_id: None,
+                role_id: None,
+                event: committed(MessageRole::User, "beta"),
+                provider_payload: None,
+            })
+            .expect("append halted message");
+        store
+            .append_event(AppendEvent {
+                session_id,
+                turn_id: Some("turn-halted".to_string()),
+                provider_id: None,
+                role_id: None,
+                event: Event::TurnEnded(TurnEndReason::Halted),
+                provider_payload: None,
+            })
+            .expect("append halted turn end");
+
+        let report = store
+            .search_history(None, None, 20, Some("halted"))
+            .expect("listing-mode search");
+        assert_eq!(
+            report.total, 1,
+            "listing mode with a turn_outcome filter must return only that turn's rows, \
+             with no query to narrow by"
+        );
+        assert_eq!(report.hits[0].text, "beta");
+        assert_eq!(report.hits[0].turn_outcome.as_deref(), Some("halted"));
     }
 
     #[test]

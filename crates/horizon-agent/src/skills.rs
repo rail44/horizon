@@ -103,6 +103,7 @@ impl Skill {
 /// Horizon was launched or whether any repository skills exist at all.
 const HORIZON_CONFIG_SKILL_SOURCE: &str = include_str!("../skills/horizon-config/SKILL.md");
 const HORIZON_CLI_SKILL_SOURCE: &str = include_str!("../skills/horizon-cli/SKILL.md");
+const HORIZON_DISTILL_SKILL_SOURCE: &str = include_str!("../skills/horizon-distill/SKILL.md");
 
 /// Every skill this build embeds, parsed once and cached for the process's
 /// lifetime -- the input [`SkillRegistry::discover`] starts every session's
@@ -110,18 +111,22 @@ const HORIZON_CLI_SKILL_SOURCE: &str = include_str!("../skills/horizon-cli/SKILL
 fn embedded_skills() -> &'static [Skill] {
     static SKILLS: std::sync::OnceLock<Vec<Skill>> = std::sync::OnceLock::new();
     SKILLS.get_or_init(|| {
-        [HORIZON_CONFIG_SKILL_SOURCE, HORIZON_CLI_SKILL_SOURCE]
-            .into_iter()
-            .map(|source| {
-                let parsed = parse_skill_md(source)
-                    .expect("crates/horizon-agent/skills/*/SKILL.md must parse");
-                Skill {
-                    name: parsed.name,
-                    description: parsed.description,
-                    source: SkillBody::Embedded(parsed.body),
-                }
-            })
-            .collect()
+        [
+            HORIZON_CONFIG_SKILL_SOURCE,
+            HORIZON_CLI_SKILL_SOURCE,
+            HORIZON_DISTILL_SKILL_SOURCE,
+        ]
+        .into_iter()
+        .map(|source| {
+            let parsed =
+                parse_skill_md(source).expect("crates/horizon-agent/skills/*/SKILL.md must parse");
+            Skill {
+                name: parsed.name,
+                description: parsed.description,
+                source: SkillBody::Embedded(parsed.body),
+            }
+        })
+        .collect()
     })
 }
 
@@ -405,6 +410,12 @@ mod tests {
             .expect("horizon-cli must be registered");
         assert!(!cli_skill.description.is_empty());
         assert!(cli_skill.body().contains("horizon"));
+
+        let distill_skill = registry
+            .get("horizon-distill")
+            .expect("horizon-distill must be registered");
+        assert!(!distill_skill.description.is_empty());
+        assert!(distill_skill.body().contains("recall.search"));
     }
 
     #[test]
