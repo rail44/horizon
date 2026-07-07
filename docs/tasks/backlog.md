@@ -247,3 +247,20 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     environment quirk, unrelated to the placement-first change (fails
     identically standalone); distinct from the backlog-14 Xvfb family.
     Reported by application-ui (2026-07-07).
+18. **Web search tool** — give the agent outward web search (the "search
+    tool" the owner originally meant, 2026-07-07). Needs its own
+    consultation: provider choice (crush shells out to DuckDuckGo Lite
+    HTML scraping = free but brittle; opencode uses Exa/Parallel over
+    MCP endpoints = API key required; or a plain search API), the
+    trust-boundary/network-access approval design, and whether it sits
+    behind a crush-`agentic_fetch`-style throwaway subagent (one outer
+    approval, inner search/fetch chain) — a shape close to Horizon's
+    delegation + skill mechanism. See docs/research on crush/opencode
+    tools (in the session transcript, not yet a doc).
+19. **Public-code / symbol search** — crush exposes `sourcegraph`
+    (public GitHub via Sourcegraph GraphQL, no API key) and
+    `lsp_references` (LSP-backed symbol references); opencode has an
+    experimental `lsp` tool (default off). Separate discussion from web
+    search — LSP integration is a larger commitment (language-server
+    lifecycle) and overlaps with future viewer/plugin work. Recorded
+    2026-07-07.
