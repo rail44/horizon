@@ -120,6 +120,15 @@ wave items where possible; design docs on first use.
   same way as the Changes aggregation — proposed by application-ui
   slice 5; pairs with backlog 16 (turn metadata) as the two small
   contract extensions unblocking the UI's remaining improvements.
+- **Agent UI performance defenses** (`docs/agent-ui-performance-design.md`)
+  — three legs against reactive over-tracking (the `session_changes`
+  regression class). Legs 2 (ast-grep gate) and 3 (agent-readable
+  `horizon profile` measurement, capture aimed at hot reactive
+  closures) launched as worker tasks from the project session
+  2026-07-08. Leg 1 (the raw-`frame`-unreachable API boundary — the
+  only airtight defense, since static analysis misses the indirect
+  form) is **design-pending**: the primary defense, wants a concrete
+  design pass over the transcript reactivity before implementation.
 
 ## Later (deliberately unshaped)
 
