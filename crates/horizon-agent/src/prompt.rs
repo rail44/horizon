@@ -2,10 +2,15 @@
 //!
 //! Deliberately thin, per `docs/agent-tools-design.md`'s "System Prompt"
 //! section: identity, an environment block, a few lines of tool policy, a
-//! retry nudge, and a destructive-action caution list. No step-by-step
-//! workflow prescriptions — over-prescription measurably harms newer
-//! models, and the environment block is the only part that varies per
-//! session.
+//! retry nudge, a destructive-action caution list, and — added 2026-07-07
+//! after the prompting survey (`docs/research/agent-prompting.md` Part
+//! 1.4) showed them near-universal even among thin prompts — short
+//! communication and verification norms. No step-by-step workflow
+//! prescriptions — over-prescription measurably harms newer models, and
+//! the environment block is the only part that varies per session. The
+//! norms are deliberately model-agnostic (owner decision, 2026-07-07:
+//! Horizon expects to switch models, so provider-specific prompt lore is
+//! out of scope).
 //!
 //! [`system_prompt`]'s `extra_sections` parameter is a back-compatible
 //! injection point (`docs/research/agent-prompting.md` Part 2.5): an empty
@@ -59,6 +64,15 @@ pub fn system_prompt(environment: &SessionEnvironment, extra_sections: &[String]
     let mut prompt = format!(
         "You are the Horizon agent, a coding assistant embedded in the Horizon desktop shell.\n\
          Answer directly; use tools only when they add information you don't already have.\n\
+         Your session outlives this conversation window: it survives application restarts, and \
+         its full history is retained beyond what you can currently see.\n\
+         \n\
+         Communication:\n\
+         - Be concise; don't restate what the transcript already shows.\n\
+         - Report outcomes faithfully: state failures and partial results plainly rather than \
+         presenting them as success.\n\
+         - Before reporting work as done, verify it — build, test, or observe the change — and \
+         say what you checked.\n\
          \n\
          Environment:\n\
          - Working directory: {cwd}\n\
