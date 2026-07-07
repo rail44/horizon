@@ -307,7 +307,7 @@ fn control_input(c: char) -> Option<Vec<u8>> {
 //
 // `[keybindings]` in Horizon's config file (`crate::config`) maps a key
 // chord string (e.g. `"ctrl+shift+t"`) to a `CommandId` string (e.g.
-// `"new-terminal"`) for the *simple* commands — the ones `app::
+// `"new-tab"`) for the *simple* commands — the ones `app::
 // command_actions::CommandInvocation::Simple` can run without an
 // explicit target. Entries layer on top of `default_bindings` below,
 // overriding a default bound to the same chord or adding a new one.
@@ -329,9 +329,8 @@ fn control_input(c: char) -> Option<Vec<u8>> {
 /// add a `[keybindings]` entry for them if wanted.
 fn default_bindings() -> &'static [(&'static str, CommandId)] {
     &[
-        ("ctrl+shift+t", CommandId::NewTerminal),
-        ("ctrl+shift+a", CommandId::NewAgent),
-        ("ctrl+shift+d", CommandId::SplitActivePane),
+        ("ctrl+shift+t", CommandId::NewTab),
+        ("ctrl+shift+d", CommandId::SplitPane),
         ("ctrl+shift+w", CommandId::CloseActivePane),
         ("ctrl+shift+x", CommandId::CloseActiveTab),
     ]
@@ -368,10 +367,8 @@ const DEFAULT_WORKSPACE_MODE_CHORD: &str = "ctrl+'";
 
 fn command_id_from_str(id: &str) -> Option<CommandId> {
     match id {
-        "new-terminal" => Some(CommandId::NewTerminal),
-        "new-agent" => Some(CommandId::NewAgent),
-        "new-config-agent" => Some(CommandId::NewConfigAgent),
-        "split-active-pane" => Some(CommandId::SplitActivePane),
+        "split-pane" => Some(CommandId::SplitPane),
+        "new-tab" => Some(CommandId::NewTab),
         "focus-next-pane" => Some(CommandId::FocusNextPane),
         "close-active-pane" => Some(CommandId::CloseActivePane),
         "close-active-tab" => Some(CommandId::CloseActiveTab),
@@ -990,7 +987,7 @@ mod tests {
     #[test]
     fn config_entry_overrides_a_default_bound_to_the_same_chord() {
         let mut entries = HashMap::new();
-        entries.insert("ctrl+shift+t".to_string(), "new-agent".to_string());
+        entries.insert("ctrl+shift+t".to_string(), "split-pane".to_string());
 
         let keymap = Keymap::from_entries(&entries);
         let chord = parse_chord("ctrl+shift+t").unwrap();
@@ -1001,7 +998,7 @@ mod tests {
                 .iter()
                 .find(|(bound, _)| *bound == chord)
                 .map(|(_, id)| *id),
-            Some(CommandId::NewAgent)
+            Some(CommandId::SplitPane)
         );
     }
 
@@ -1027,17 +1024,18 @@ mod tests {
     }
 
     #[test]
-    fn new_config_agent_keybinding_entry_resolves_to_the_new_config_agent_command() {
+    fn split_pane_and_new_tab_keybinding_entries_resolve_to_their_commands() {
         assert_eq!(
-            command_id_from_str("new-config-agent"),
-            Some(CommandId::NewConfigAgent)
+            command_id_from_str("split-pane"),
+            Some(CommandId::SplitPane)
         );
+        assert_eq!(command_id_from_str("new-tab"), Some(CommandId::NewTab));
     }
 
     #[test]
     fn invalid_chord_is_skipped_without_dropping_other_entries() {
         let mut entries = HashMap::new();
-        entries.insert("not a chord".to_string(), "new-agent".to_string());
+        entries.insert("not a chord".to_string(), "new-tab".to_string());
         entries.insert(
             "ctrl+shift+q".to_string(),
             "terminate-active-session".to_string(),
@@ -1045,7 +1043,7 @@ mod tests {
 
         let keymap = Keymap::from_entries(&entries);
 
-        assert!(command_id_from_str("new-agent").is_some());
+        assert!(command_id_from_str("new-tab").is_some());
         assert_eq!(keymap.bindings.len(), default_bindings().len() + 1);
     }
 

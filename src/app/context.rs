@@ -28,6 +28,7 @@ pub(super) fn open_palette_state(state: &AppState) -> OpenPaletteState {
         palette_open: state.palette_open,
         palette_query: state.palette_query,
         palette_selection: state.palette_selection,
+        palette_stage: state.palette_stage,
         palette_focus_request: state.palette_focus_request,
     }
 }
@@ -46,6 +47,7 @@ pub(super) fn command_action_state(state: &AppState) -> CommandActionState {
         runtime: state.session_runtime_state(),
         pane_focus_requests: state.pane_focus_requests,
         session_manager: session_manager_handle(state),
+        palette: open_palette_state(state),
     }
 }
 

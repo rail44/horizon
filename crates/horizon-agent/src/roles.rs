@@ -41,6 +41,12 @@ pub struct RoleId(pub String);
 pub struct RoleDefinition {
     /// Matches [`RoleId`]'s inner string exactly -- see [`resolve`].
     pub id: &'static str,
+    /// Human-readable name shown in Horizon's second-stage view chooser
+    /// (`docs/roadmap.md`'s "Placement-first session creation": the
+    /// palette's registry-driven list of kinds + roles a new session can be
+    /// created as) -- the only place a role is user-facing outside its own
+    /// system prompt.
+    pub title: &'static str,
     /// Appended as its own `extra_sections` entry (`prompt::system_prompt`),
     /// right after the base prompt and before the skills listing -- see
     /// `providers::rig::session::spawn_rig_session`'s ordering.
@@ -89,6 +95,7 @@ pub struct RoleDefinition {
 /// `docs/trust-boundaries.md`'s tier reasoning.
 pub const CONFIG_ROLE: RoleDefinition = RoleDefinition {
     id: "config",
+    title: "Configuration Agent",
     prompt_section: CONFIG_ROLE_PROMPT_SECTION,
     allowed_tool_ids: Some(&["skill.read", "config.read", "config.write"]),
     model: None,
@@ -122,6 +129,15 @@ static ROLES: &[&RoleDefinition] = &[&CONFIG_ROLE];
 /// silently treated as "no role" by a session-starting caller.
 pub fn resolve(role_id: &RoleId) -> Option<&'static RoleDefinition> {
     ROLES.iter().copied().find(|role| role.id == role_id.0)
+}
+
+/// Every role this build knows about, for a registry-driven listing (e.g.
+/// Horizon's palette view chooser, `docs/roadmap.md`'s "Placement-first
+/// session creation") -- callers that need a stable order (a UI list) sort
+/// this themselves (by `id`, for determinism) rather than relying on
+/// declaration order here.
+pub fn all() -> &'static [&'static RoleDefinition] {
+    ROLES
 }
 
 #[cfg(test)]
@@ -166,5 +182,13 @@ mod tests {
     #[test]
     fn config_role_uses_the_provider_default_model() {
         assert_eq!(CONFIG_ROLE.model, None);
+    }
+
+    #[test]
+    fn all_lists_the_config_role_with_its_display_title() {
+        let roles = all();
+        assert_eq!(roles.len(), 1);
+        assert_eq!(roles[0].id, "config");
+        assert_eq!(roles[0].title, "Configuration Agent");
     }
 }

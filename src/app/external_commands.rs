@@ -363,7 +363,7 @@ mod tests {
     use super::*;
     use crate::agent::agentd_runtime::AgentdConnection;
     use crate::app::runtime::SessionRuntimeState;
-    use crate::control_surface::SessionManagerHandle;
+    use crate::control_surface::{OpenPaletteState, SessionManagerHandle};
     use crate::session::Registry;
     use crate::workspace::Workspace;
     use floem::prelude::RwSignal;
@@ -731,6 +731,7 @@ mod tests {
             runtime,
             pane_focus_requests: std::array::from_fn(|_| RwSignal::new(0_u64)),
             session_manager: SessionManagerHandle::for_test(),
+            palette: OpenPaletteState::for_test(),
         }
     }
 

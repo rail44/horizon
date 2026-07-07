@@ -1,4 +1,5 @@
-use crate::control_surface::{palette_items, ControlInputState, PALETTE_VISIBLE_ROWS};
+use crate::control_surface::items::palette_rows;
+use crate::control_surface::{ControlInputState, PALETTE_VISIBLE_ROWS};
 use crate::ui::list_row::{list_row, ListRowStyle};
 use crate::ui::selectable_list::selectable_list;
 use crate::ui::spacing;
@@ -7,9 +8,10 @@ use floem::event::{Event, EventListener, EventPropagation};
 use floem::prelude::*;
 use floem::reactive::create_memo;
 
-use super::row::palette_item_row;
+use super::row::palette_row_view;
 use crate::control_surface::actions::{execute_palette_selection, PaletteActionState};
 use crate::control_surface::handle_control_key;
+use crate::control_surface::PaletteStage;
 
 const PALETTE_ROW_HEIGHT: f64 = 48.0;
 const PALETTE_ROW_STYLE: ListRowStyle = ListRowStyle {
@@ -43,18 +45,20 @@ pub(crate) fn command_palette(state: CommandPaletteState) -> impl IntoView {
     let palette_open = control_input.palette_open;
     let palette_query = control_input.palette_query;
     let palette_selection = control_input.palette_selection;
+    let palette_stage = control_input.command.palette.palette_stage;
     let palette_focus_request = state.palette_focus_request;
 
     let items = create_memo(move |_| {
         let query = palette_query.get();
-        workspace.with(|ws| frames.with(|fr| palette_items(ws, fr, &query)))
+        let stage = palette_stage.get();
+        workspace.with(|ws| frames.with(|fr| palette_rows(ws, fr, stage, &query)))
     });
 
     let list = selectable_list(
         move || items.with(|items| items.len()),
         move || palette_selection.get(),
         move |index| {
-            let row = move || items.with(|items| items.get(index).map(palette_item_row));
+            let row = move || items.with(|items| items.get(index).map(palette_row_view));
             let palette_action = palette_action.clone();
 
             list_row(
@@ -74,10 +78,21 @@ pub(crate) fn command_palette(state: CommandPaletteState) -> impl IntoView {
         v_stack((
             label(move || {
                 let query = palette_query.get();
-                if query.is_empty() {
-                    "> Search commands, sessions, tabs".to_string()
-                } else {
-                    format!("> {query}")
+                match palette_stage.get() {
+                    PaletteStage::Commands => {
+                        if query.is_empty() {
+                            "> Search commands, sessions, tabs".to_string()
+                        } else {
+                            format!("> {query}")
+                        }
+                    }
+                    PaletteStage::ViewChooser { placement } => {
+                        if query.is_empty() {
+                            format!("> {}: choose a view", placement.label())
+                        } else {
+                            format!("> {query}")
+                        }
+                    }
                 }
             })
             .style(|s| {

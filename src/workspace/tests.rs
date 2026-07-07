@@ -219,7 +219,7 @@ fn attach_existing_session_to_split_reuses_session_kind() {
 fn open_tab_with_new_session_attaches_requested_kind() {
     let mut workspace = Workspace::mvp();
 
-    let session_id = workspace.open_tab_with_new_session(PaneKind::Agent);
+    let session_id = workspace.open_tab_with_new_session_activated(PaneKind::Agent, true);
 
     assert_eq!(workspace.visible_agent_session_id(0), Some(session_id));
     assert_eq!(workspace.visible_panes()[0].kind, PaneKind::Agent);

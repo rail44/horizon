@@ -41,22 +41,18 @@ impl Workspace {
         pane_id
     }
 
-    pub(crate) fn open_tab_with_new_session(&mut self, kind: PaneKind) -> SessionId {
-        self.open_tab_with_new_session_activated(kind, true)
-    }
-
-    /// Same as [`Self::open_tab_with_new_session`], but `activate` controls
-    /// whether the new tab becomes the workspace's active one -- the control
-    /// plane's `activate=false` default (`docs/cli-control-plane-design.md`'s
-    /// "activate rides on creating/attaching operations" decision): the tab
-    /// and its pane are always created and pushed either way, so the session
-    /// exists and is queryable/attachable immediately; `activate: false`
-    /// only means [`Self::active_tab`] is restored to whatever it was before
-    /// this call, leaving the caller's own focus-follow
-    /// (`workspace::request_active_pane_focus`) with nothing to move. See
-    /// `app::command_actions::create_session`, the one caller that varies
-    /// `activate` at runtime (human surfaces keep calling
-    /// [`Self::open_tab_with_new_session`], which always dives).
+    /// `activate` controls whether the new tab becomes the workspace's
+    /// active one -- the control plane's `activate=false` default
+    /// (`docs/cli-control-plane-design.md`'s "activate rides on creating/
+    /// attaching operations" decision): the tab and its pane are always
+    /// created and pushed either way, so the session exists and is
+    /// queryable/attachable immediately; `activate: false` only means
+    /// [`Self::active_tab`] is restored to whatever it was before this
+    /// call, leaving the caller's own focus-follow (`workspace::
+    /// request_active_pane_focus`) with nothing to move. See
+    /// `app::command_actions::create_session`, the one caller (`activate:
+    /// true` for a human surface's dive, `false` for the control plane's
+    /// default).
     pub(crate) fn open_tab_with_new_session_activated(
         &mut self,
         kind: PaneKind,
@@ -71,6 +67,13 @@ impl Workspace {
         session_id
     }
 
+    /// Test-only now: its last production caller was
+    /// `split_active_with_new_session` (also `#[cfg(test)]` now -- see its
+    /// doc comment), retired by `docs/roadmap.md`'s "Placement-first session
+    /// creation". Kept as a test fixture helper: it's the common
+    /// "split the active tab with an explicit session id" shape most tests
+    /// across `workspace`/`app`/`control_surface` build their fixtures with.
+    #[cfg(test)]
     pub(crate) fn split_active(&mut self, kind: PaneKind, session_id: Option<SessionId>) -> PaneId {
         self.split_tab(self.active_tab, kind, session_id, true)
     }
@@ -116,6 +119,17 @@ impl Workspace {
         pane_id
     }
 
+    /// Test-only now: its last production caller was `app::command_actions
+    /// ::split_active_pane`, retired by `docs/roadmap.md`'s "Placement-first
+    /// session creation" -- `CommandInvocation::CreateSession`'s
+    /// `split_session_with_new_session` (an explicit target session, not
+    /// "whatever kind the active pane happens to be") covers the same
+    /// ground for every remaining caller. Kept as a small workspace-level
+    /// test fixture helper (`workspace::tests`, `app::runtime::mod`'s focus-
+    /// reporting test) since re-deriving "split with a new session of the
+    /// active pane's own kind" at each call site would be more code than
+    /// this one method.
+    #[cfg(test)]
     pub(crate) fn split_active_with_new_session(&mut self) -> Option<(PaneKind, SessionId)> {
         let kind = self.visible_pane_kind(self.active_visible_index())?;
         let session_id = SessionId::new();

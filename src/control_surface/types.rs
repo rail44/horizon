@@ -1,9 +1,48 @@
 use crate::app::commands::CommandEntry;
 use crate::session::SessionId;
-use crate::workspace::SessionKind;
+use crate::workspace::{PaneKind, SessionKind};
 
 pub(crate) const PALETTE_VISIBLE_ROWS: usize = 6;
 pub(crate) const SESSION_MANAGER_VISIBLE_ROWS: usize = 8;
+
+/// Where a session created from the palette's second-stage view chooser
+/// lands (`docs/roadmap.md`'s "Placement-first session creation") --
+/// `CommandId::SplitPane`/`CommandId::NewTab` each open the chooser tagged
+/// with the placement it will use once a view is picked, so the same
+/// `CommandInvocation::CreateSession` dispatch (`control_surface::actions::
+/// execute_palette_selection`) works for both: `SplitPane` resolves
+/// `split_target` from the active pane's session at commit time, `NewTab`
+/// always passes `None`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Placement {
+    SplitPane,
+    NewTab,
+}
+
+impl Placement {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::SplitPane => "Split Pane",
+            Self::NewTab => "New Tab",
+        }
+    }
+}
+
+/// Which set of rows the palette currently lists. `Commands` is the normal,
+/// searchable catalog (`items::palette_items`); `ViewChooser` is the second
+/// stage `CommandId::SplitPane`/`CommandId::NewTab` open into -- a
+/// registry-driven list of kinds and roles a new session can be created as
+/// (`items::view_chooser_rows`). Carried as its own signal on
+/// `control_surface::OpenPaletteState`/`CommandActionState::palette` so
+/// opening/advancing/retreating the palette can be driven identically from
+/// a palette row, a `[keybindings]` chord, or the control-plane's shared
+/// command model -- see `control_surface::actions::{open_palette,
+/// open_view_chooser}`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PaletteStage {
+    Commands,
+    ViewChooser { placement: Placement },
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum PaletteItem {
@@ -70,4 +109,31 @@ pub(crate) struct SessionManagerRow {
     pub(crate) display_number: usize,
     pub(crate) title: String,
     pub(crate) attached: bool,
+}
+
+/// One row of the palette's second-stage view chooser (`items::
+/// view_chooser_rows`) -- a `kind`/`role_id` pair the chooser's `Enter`
+/// (`actions::execute_palette_selection`) feeds straight into
+/// `CommandInvocation::CreateSession`. `role_id: None` is the plain
+/// `Terminal`/`Agent` row; `Some(id)` is one row per `horizon_agent::
+/// roles::all()` entry (always `kind: PaneKind::Agent` today -- a role is
+/// only ever agent-flavored).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ViewChooserRow {
+    pub(crate) kind: PaneKind,
+    pub(crate) role_id: Option<horizon_agent::roles::RoleId>,
+    pub(crate) title: String,
+}
+
+/// One selectable palette row, regardless of which stage produced it --
+/// what `view::palette` renders and what `actions::execute_palette_selection`
+/// dispatches on. See `items::palette_rows`, the single stage-branching
+/// point every other palette-navigation function (`actions::
+/// move_palette_selection`/`clamp_current_palette_selection`) also goes
+/// through, so "how many rows are there right now" is never computed two
+/// different ways.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum PaletteRow {
+    Catalog(PaletteItem),
+    Chooser(ViewChooserRow),
 }

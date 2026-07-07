@@ -6,7 +6,10 @@ use crate::agent::tools::{
     resolve_approval, unregister_session_runtime, ApprovalDecision, ApprovalOutcome,
 };
 use crate::app::commands::{command_enabled, CommandId};
-use crate::control_surface::{command_state, open_session_manager, SessionManagerHandle};
+use crate::control_surface::{
+    command_state, open_session_manager, open_view_chooser, OpenPaletteState, Placement,
+    SessionManagerHandle,
+};
 use crate::session::{Frames, Registry, SessionId};
 use crate::workspace::{
     request_active_pane_focus, Direction, PaneFocusRequests, PaneKind, SessionKind, Workspace,
@@ -29,6 +32,13 @@ pub(crate) struct CommandActionState {
     /// it's invoked from the palette or a `[keybindings]` chord; see
     /// `control_surface::SessionManagerHandle`'s doc comment.
     pub(crate) session_manager: SessionManagerHandle,
+    /// The command palette's own signals -- carried here (mirroring
+    /// `session_manager` above) so `CommandId::SplitPane`/`CommandId::NewTab`
+    /// can open the second-stage view chooser (`docs/roadmap.md`'s
+    /// "Placement-first session creation") identically whether invoked from
+    /// a palette row or a `[keybindings]` chord -- see
+    /// `control_surface::open_view_chooser`.
+    pub(crate) palette: OpenPaletteState,
 }
 
 impl CommandActionState {
@@ -50,6 +60,32 @@ impl CommandActionState {
 
     pub(crate) fn agentd_connection(&self) -> RwSignal<Option<AgentdConnection>> {
         self.runtime.agentd_connection()
+    }
+
+    /// A minimal `CommandActionState` wrapping `workspace`, with empty
+    /// frames/sessions and no live `horizon-agentd` connection -- exposed
+    /// crate-wide (unlike this module's own private `test_command_action_
+    /// state`) so other modules' tests (e.g. `control_surface::actions`'s
+    /// `execute_palette_selection` coverage) can build one without reaching
+    /// into `app::runtime`, which is private outside `app`.
+    #[cfg(test)]
+    pub(crate) fn for_test(workspace: Workspace) -> Self {
+        let runtime = SessionRuntimeState::new(
+            RwSignal::new(workspace),
+            RwSignal::new(Frames::default()),
+            RwSignal::new(Registry::default()),
+            RwSignal::new(None),
+            None,
+            None,
+            RwSignal::new(None),
+            RwSignal::new(0_u64),
+        );
+        Self {
+            runtime,
+            pane_focus_requests: std::array::from_fn(|_| RwSignal::new(0_u64)),
+            session_manager: SessionManagerHandle::for_test(),
+            palette: OpenPaletteState::for_test(),
+        }
     }
 }
 
@@ -75,22 +111,26 @@ impl CommandActionState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CommandInvocation {
     Simple(CommandId),
-    /// Creates a new `kind` session for a control-plane `new-terminal`/
-    /// `new-agent` invocation (`docs/cli-control-plane-design.md`'s
-    /// "Placement vocabulary" and "activate rides on creating/attaching
-    /// operations" decisions). Unlike `Simple(CommandId::NewTerminal |
-    /// NewAgent)` -- the human palette/keybinding path, which always opens a
-    /// new tab and always dives -- this variant is placement- and
-    /// activation-aware: `split_target`, when set, places the new pane as a
-    /// split next to the pane currently hosting that session (in whichever
-    /// tab that is, not necessarily the active one) instead of opening a new
-    /// tab; `activate` controls whether focus/the active tab and pane follow
-    /// the new session at all (the control plane defaults this to `false`,
-    /// the CLI's `--active` opts in -- see `app::external_commands::
-    /// invocation_from_external`). `prompt`, if set, is the composite
-    /// create-with-prompt decision's payload: sent as the new session's
-    /// first `Command::UserMessage` once spawned (see [`execute_command`]'s
-    /// handling of this variant and [`send_initial_user_message`] for why
+    /// Creates a new `kind` session -- the one operation every session-
+    /// creating surface converges on (`docs/roadmap.md`'s "Placement-first
+    /// session creation"): a control-plane `new-terminal`/`new-agent`
+    /// invocation (`docs/cli-control-plane-design.md`'s "Placement
+    /// vocabulary" and "activate rides on creating/attaching operations"
+    /// decisions), and the human palette/keybinding path via `CommandId::
+    /// SplitPane`/`CommandId::NewTab`'s second-stage view chooser
+    /// (`control_surface::actions::execute_palette_selection`'s
+    /// `PaletteRow::Chooser` branch), which always sets `activate: true`
+    /// (a human creation always dives). `split_target`, when set, places
+    /// the new pane as a split next to the pane currently hosting that
+    /// session (in whichever tab that is, not necessarily the active one)
+    /// instead of opening a new tab; `activate` controls whether focus/the
+    /// active tab and pane follow the new session at all (the control
+    /// plane defaults this to `false`, the CLI's `--active` opts in -- see
+    /// `app::external_commands::invocation_from_external`). `prompt`, if
+    /// set, is the composite create-with-prompt decision's payload: sent as
+    /// the new session's first `Command::UserMessage` once spawned (see
+    /// [`execute_command`]'s handling of this variant and
+    /// [`send_initial_user_message`] for why
     /// there is no readiness wait between the two steps) -- this subsumes
     /// the older, narrower `NewAgentWithPrompt` variant, which had no room
     /// for `split_target`/`activate`.
@@ -279,17 +319,11 @@ fn execute_simple_command(command_id: CommandId, state: CommandActionState) {
     }
 
     match command_id {
-        CommandId::NewTerminal => {
-            open_tab(state, PaneKind::Terminal, None);
+        CommandId::SplitPane => {
+            open_view_chooser(state.palette, Placement::SplitPane);
         }
-        CommandId::NewAgent => {
-            open_tab(state, PaneKind::Agent, None);
-        }
-        CommandId::NewConfigAgent => {
-            open_tab(state, PaneKind::Agent, Some(config_agent_role_id()));
-        }
-        CommandId::SplitActivePane => {
-            split_active_pane(state);
+        CommandId::NewTab => {
+            open_view_chooser(state.palette, Placement::NewTab);
         }
         CommandId::FocusNextPane => {
             workspace.update(Workspace::focus_next);
@@ -413,44 +447,13 @@ fn reload_config(state: CommandActionState) {
     }
 }
 
-/// Opens a new tab with a freshly spawned `kind` session and returns its id
-/// -- the human palette/keybinding path (`Simple(CommandId::NewTerminal |
-/// NewAgent)`), which always dives and never needs placement/activation
-/// control. The control plane's equivalent is `create_session`, whose
-/// returned id *does* matter to its one caller,
-/// `CommandInvocation::CreateSession`'s `prompt` handling -- see
-/// [`send_initial_user_message`] for why it's safe to use immediately, with
-/// no readiness wait, the instant `create_session` returns.
-fn open_tab(
-    state: CommandActionState,
-    kind: PaneKind,
-    role_id: Option<horizon_agent::roles::RoleId>,
-) -> SessionId {
-    let workspace = state.workspace();
-    let mut session_id = None;
-    workspace.update(|ws| {
-        session_id = Some(ws.open_tab_with_new_session(kind));
-        // `docs/workspace-mode-design.md`'s "creating operations dive": run
-        // from inside workspace mode (via the `:` palette), a new tab's
-        // focus-follow below already lands focus in it, so the mode's job
-        // is done. A safe no-op otherwise -- see `Workspace::
-        // exit_workspace_mode`'s doc comment for why this never needs an
-        // `is_workspace_mode_active` guard at the call site.
-        ws.exit_workspace_mode();
-    });
-    let session_id = session_id.expect("new session");
-    spawn_session(kind, role_id, session_id, &state.runtime);
-    request_active_pane_focus(workspace, state.pane_focus_requests);
-    session_id
-}
-
 /// `CommandInvocation::CreateSession`'s worker -- see that variant's doc
-/// comment. Mirrors `open_tab`/`split_active_pane`'s shape (spawn the
-/// session, request focus) but is placement- and activation-aware: `None`
-/// `split_target` opens a new tab (like `open_tab`); `Some` places the new
-/// pane as a split next to that session's pane in whichever tab currently
-/// hosts it (any tab, not just the active one). `activate: false` skips both
-/// the workspace-mode exit and the focus-follow request, so a control-
+/// comment. Spawns the session and requests focus, placement- and
+/// activation-aware: `None` `split_target` opens a new tab; `Some` places
+/// the new pane as a split next to that session's pane in whichever tab
+/// currently hosts it (any tab, not just the active one). `activate: false`
+/// skips both the workspace-mode exit and the focus-follow request, so a
+/// control-
 /// plane-driven creation never disturbs the owner's focus or an in-progress
 /// workspace-mode session -- see `Workspace::exit_workspace_mode`'s doc
 /// comment for why that call is otherwise tied to "creating operations
@@ -509,22 +512,6 @@ fn send_initial_user_message(sessions: RwSignal<Registry>, session_id: SessionId
     if let Some(tx) = sessions.with_untracked(|registry| registry.agent_sender(session_id)) {
         let _ = tx.send(Command::UserMessage { text });
     }
-}
-
-fn split_active_pane(state: CommandActionState) {
-    let workspace = state.workspace();
-    let mut split = None;
-    workspace.update(|ws| {
-        split = ws.split_active_with_new_session();
-        // See `open_tab`'s matching comment above.
-        ws.exit_workspace_mode();
-    });
-
-    let Some((kind, session_id)) = split else {
-        return;
-    };
-    spawn_session(kind, None, session_id, &state.runtime);
-    request_active_pane_focus(workspace, state.pane_focus_requests);
 }
 
 fn terminate_active_session(
@@ -770,6 +757,7 @@ mod tests {
             runtime,
             pane_focus_requests: std::array::from_fn(|_| RwSignal::new(0_u64)),
             session_manager: SessionManagerHandle::for_test(),
+            palette: OpenPaletteState::for_test(),
         };
 
         (state, session_id, call_id, rx)
@@ -778,22 +766,11 @@ mod tests {
     /// A minimal `CommandActionState` wrapping the given workspace, with
     /// empty frames/sessions — for tests of the targeted-index/session
     /// invocations below that don't need a running session behind them.
+    /// Thin wrapper over `CommandActionState::for_test` (kept as its own
+    /// name in this file since every call site here predates that crate-
+    /// wide helper).
     fn test_command_action_state(workspace: Workspace) -> CommandActionState {
-        let runtime = SessionRuntimeState::new(
-            RwSignal::new(workspace),
-            RwSignal::new(Frames::default()),
-            RwSignal::new(Registry::default()),
-            RwSignal::new(None),
-            None,
-            None,
-            RwSignal::new(None),
-            RwSignal::new(0_u64),
-        );
-        CommandActionState {
-            runtime,
-            pane_focus_requests: std::array::from_fn(|_| RwSignal::new(0_u64)),
-            session_manager: SessionManagerHandle::for_test(),
-        }
+        CommandActionState::for_test(workspace)
     }
 
     /// One attached terminal session plus two detached sessions (a terminal
@@ -857,6 +834,7 @@ mod tests {
             runtime,
             pane_focus_requests: std::array::from_fn(|_| RwSignal::new(0_u64)),
             session_manager: SessionManagerHandle::for_test(),
+            palette: OpenPaletteState::for_test(),
         };
 
         (
@@ -1164,6 +1142,7 @@ mod tests {
             runtime,
             pane_focus_requests: std::array::from_fn(|_| RwSignal::new(0_u64)),
             session_manager: SessionManagerHandle::for_test(),
+            palette: OpenPaletteState::for_test(),
         };
         let workspace = state.workspace();
         let before_tab_count = workspace.with_untracked(|ws| ws.tab_count());
@@ -1354,6 +1333,51 @@ mod tests {
         );
     }
 
+    // --- CommandId::SplitPane / CommandId::NewTab: open the view chooser ---
+    //
+    // `docs/roadmap.md`'s "Placement-first session creation": these two
+    // catalog commands never create a session directly -- they open the
+    // palette's second-stage view chooser (`control_surface::
+    // open_view_chooser`), tagged with which placement a chosen view will
+    // use. Dispatched via `Simple`, exactly like a `[keybindings]` chord
+    // would (`app::input::AppInput`'s fallback), so this also proves the
+    // bound-key path opens the chooser directly -- no palette row needed
+    // first.
+
+    #[test]
+    fn simple_split_pane_opens_the_view_chooser_directly() {
+        let state = test_command_action_state(Workspace::mvp());
+
+        execute_command(
+            CommandInvocation::Simple(CommandId::SplitPane),
+            state.clone(),
+        );
+
+        assert!(state.palette.palette_open.get_untracked());
+        assert_eq!(
+            state.palette.palette_stage.get_untracked(),
+            crate::control_surface::PaletteStage::ViewChooser {
+                placement: crate::control_surface::Placement::SplitPane
+            }
+        );
+        assert_eq!(state.palette.palette_query.get_untracked(), "");
+    }
+
+    #[test]
+    fn simple_new_tab_opens_the_view_chooser_directly() {
+        let state = test_command_action_state(Workspace::mvp());
+
+        execute_command(CommandInvocation::Simple(CommandId::NewTab), state.clone());
+
+        assert!(state.palette.palette_open.get_untracked());
+        assert_eq!(
+            state.palette.palette_stage.get_untracked(),
+            crate::control_surface::PaletteStage::ViewChooser {
+                placement: crate::control_surface::Placement::NewTab
+            }
+        );
+    }
+
     // --- workspace-mode invocations ---------------------------------------
 
     #[test]
@@ -1458,12 +1482,12 @@ mod tests {
         );
     }
 
-    // `open_tab`/`split_active_pane`'s "creating operations dive" call to
-    // `Workspace::exit_workspace_mode` (see their doc comments) isn't
-    // exercised here through `execute_command(Simple(NewTerminal | NewAgent
-    // | SplitActivePane))`: that path spawns a real PTY/shell process via
-    // `runtime::spawn_session`, which is too heavy (and environment-
-    // dependent) for a unit test. `Workspace::exit_workspace_mode`'s own
-    // no-op-when-inactive/clears-when-active behavior is covered directly
-    // in `workspace::mode`'s tests instead.
+    // `create_session`'s "creating operations dive" call to
+    // `Workspace::exit_workspace_mode` (see its doc comment) isn't exercised
+    // here through `execute_command(CreateSession { activate: true, .. })`
+    // with a real agent/terminal kind: that path spawns a real PTY/shell
+    // process via `runtime::spawn_session`, which is too heavy (and
+    // environment-dependent) for a unit test. `Workspace::
+    // exit_workspace_mode`'s own no-op-when-inactive/clears-when-active
+    // behavior is covered directly in `workspace::mode`'s tests instead.
 }

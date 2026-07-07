@@ -1,10 +1,56 @@
 use floem::peniko::Color;
 
-use crate::control_surface::PaletteItem;
+use crate::control_surface::{PaletteItem, PaletteRow, ViewChooserRow};
 use crate::ui::list_row::ListRow;
 use crate::ui::theme;
+use crate::workspace::PaneKind;
 
-pub(super) fn palette_item_row(item: &PaletteItem) -> ListRow {
+/// Dispatches a `PaletteRow` (whichever stage produced it) to its
+/// `ListRow` rendering -- the palette view's one row-conversion entry point
+/// (`view::palette::command_palette`).
+pub(super) fn palette_row_view(row: &PaletteRow) -> ListRow {
+    match row {
+        PaletteRow::Catalog(item) => palette_item_row(item),
+        PaletteRow::Chooser(row) => chooser_row_view(row),
+    }
+}
+
+fn chooser_row_view(row: &ViewChooserRow) -> ListRow {
+    ListRow {
+        badge: chooser_kind_label(row).to_string(),
+        badge_color: chooser_kind_color(row),
+        title: row.title.clone(),
+        description: chooser_description(row),
+        enabled: true,
+        destructive: false,
+    }
+}
+
+fn chooser_kind_label(row: &ViewChooserRow) -> &'static str {
+    match row.kind {
+        PaneKind::Terminal => "TERMINAL",
+        PaneKind::Agent => "AGENT",
+    }
+}
+
+fn chooser_kind_color(row: &ViewChooserRow) -> Color {
+    match row.kind {
+        PaneKind::Terminal => Color::from_rgb8(126, 170, 255),
+        PaneKind::Agent => Color::from_rgb8(132, 220, 198),
+    }
+}
+
+fn chooser_description(row: &ViewChooserRow) -> String {
+    match &row.role_id {
+        Some(_) => format!("Open a new agent session as {}.", row.title),
+        None => match row.kind {
+            PaneKind::Terminal => "Open a new terminal session.".to_string(),
+            PaneKind::Agent => "Open a new agent session.".to_string(),
+        },
+    }
+}
+
+fn palette_item_row(item: &PaletteItem) -> ListRow {
     ListRow {
         badge: palette_kind_label(item).to_string(),
         badge_color: palette_kind_color(item),
@@ -167,5 +213,46 @@ mod tests {
         };
 
         assert!(palette_item_row(&terminate).destructive);
+    }
+
+    #[test]
+    fn chooser_row_for_a_kind_with_no_role_is_never_destructive_and_always_enabled() {
+        let terminal = ViewChooserRow {
+            kind: PaneKind::Terminal,
+            role_id: None,
+            title: "Terminal".to_string(),
+        };
+
+        let row = chooser_row_view(&terminal);
+        assert!(!row.destructive);
+        assert!(row.enabled);
+        assert_eq!(row.badge, "TERMINAL");
+        assert_eq!(row.title, "Terminal");
+    }
+
+    #[test]
+    fn chooser_row_for_a_role_mentions_the_role_title_in_its_description() {
+        let config_role = ViewChooserRow {
+            kind: PaneKind::Agent,
+            role_id: Some(horizon_agent::roles::RoleId("config".to_string())),
+            title: "Configuration Agent".to_string(),
+        };
+
+        let row = chooser_row_view(&config_role);
+        assert_eq!(row.badge, "AGENT");
+        assert!(row.description.contains("Configuration Agent"));
+    }
+
+    #[test]
+    fn palette_row_view_dispatches_to_the_right_conversion() {
+        let command_row = PaletteRow::Catalog(command_item(false));
+        let chooser_row = PaletteRow::Chooser(ViewChooserRow {
+            kind: PaneKind::Terminal,
+            role_id: None,
+            title: "Terminal".to_string(),
+        });
+
+        assert_eq!(palette_row_view(&command_row).badge, "COMMAND");
+        assert_eq!(palette_row_view(&chooser_row).badge, "TERMINAL");
     }
 }
