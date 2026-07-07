@@ -411,140 +411,177 @@ pub(super) fn pane_view(state: PaneViewState, pane_id: PaneId) -> impl IntoView 
         set_ime_allowed(false);
         EventPropagation::Continue
     })
+    // Wrapped in `profiling::timed`, unlike `app::view::app_view`'s own
+    // root-level `KeyDown` chain: ordinary typing is handled (and
+    // `EventPropagation::Stop`ped) right here, at the focused pane, and
+    // never bubbles up to that outer chain at all -- confirmed against a
+    // live headless run, where typing into a terminal produced zero root-
+    // level `KeyDown` captures. This is the actual high-frequency hot path
+    // for a terminal-and-agent shell, so it's the more representative of
+    // the two `crate::profiling` capture points for typical use.
     .on_event(EventListener::KeyDown, move |event| {
-        if let Event::KeyDown(key_event) = event {
-            if palette_open.get_untracked() && handle_control_key(key_event, control_input.clone())
-            {
-                return EventPropagation::Stop;
-            }
-
-            if is_palette_open_key(key_event) {
-                ime_composing.set(false);
-                ime_preedit.set(None);
-                set_ime_allowed(false);
-                open_palette(open_palette_state);
-                return EventPropagation::Stop;
-            }
-
-            // Workspace mode's entry chord (default `ctrl+'`,
-            // `docs/workspace-mode-design.md`) always wins, regardless of
-            // pane kind or any pane-internal focus (e.g. the inline approval
-            // control row below, which would otherwise swallow a
-            // held-modifier chord as `ApprovalKeyAction::Swallow`) -- it's
-            // the one irreducible escape hatch back to the mode and must
-            // never be capturable by anything in-pane. Re-pressing it while
-            // already in the mode is a no-op
-            // (`Workspace::enter_workspace_mode`).
-            if is_workspace_mode_enter_key(key_event) {
-                if !workspace.with_untracked(|ws| ws.is_workspace_mode_active()) {
-                    execute_command(CommandInvocation::EnterWorkspaceMode, command_state.clone());
-                }
-                return EventPropagation::Stop;
-            }
-
-            // While workspace mode is active, every key belongs to it --
-            // recognized ones (`hjkl`/Enter/Esc/`:`) dispatch below,
-            // everything else is silently swallowed rather than reaching
-            // the approval-row/terminal/agent-draft handling further down.
-            if workspace.with_untracked(|ws| ws.is_workspace_mode_active()) {
-                if let Some(action) =
-                    handle_workspace_mode_key(key_event, ime_composing, ime_preedit)
+        crate::profiling::timed("PaneKeyDown", || {
+            if let Event::KeyDown(key_event) = event {
+                if palette_open.get_untracked()
+                    && handle_control_key(key_event, control_input.clone())
                 {
-                    match action {
-                        ModeAction::Move(direction) => execute_command(
-                            CommandInvocation::MoveWorkspaceCursor { direction },
-                            command_state.clone(),
-                        ),
-                        ModeAction::Commit => execute_command(
-                            CommandInvocation::CommitWorkspaceMode,
-                            command_state.clone(),
-                        ),
-                        ModeAction::Cancel => execute_command(
-                            CommandInvocation::CancelWorkspaceMode,
-                            command_state.clone(),
-                        ),
-                        ModeAction::OpenPalette => {
-                            ime_composing.set(false);
-                            ime_preedit.set(None);
-                            set_ime_allowed(false);
-                            open_palette(open_palette_state);
-                        }
-                    }
+                    return EventPropagation::Stop;
                 }
-                return EventPropagation::Stop;
-            }
-        }
 
-        // While the inline approval control row holds pane-internal focus,
-        // it answers for every key here (even ones bound to nothing -- see
-        // `ApprovalKeyAction::Swallow`) except the one soft-redirect path,
-        // so this must run before `handle_active_pane_key` ever sees the
-        // key (targeting discipline: only this pane's own session/call_id
-        // are ever touched, via `approve_pending`/`deny_pending` above).
-        if let Event::KeyDown(key_event) = event {
-            if is_agent() && agent_pane_focus.get_untracked() == AgentPaneFocus::Approval {
-                match handle_agent_approval_key(key_event, ime_composing, ime_preedit) {
-                    ApprovalKeyAction::Approve => {
-                        if let Some(call_id) =
-                            awaiting_call(pending_approval(), answered_call.get_untracked())
-                        {
-                            answer_pending(answered_call, agent_pane_focus, call_id, |call_id| {
-                                approve_pending(workspace, command_state.clone(), pane_id, call_id);
-                            });
-                        }
-                    }
-                    ApprovalKeyAction::Deny => {
-                        if let Some(call_id) =
-                            awaiting_call(pending_approval(), answered_call.get_untracked())
-                        {
-                            answer_pending(answered_call, agent_pane_focus, call_id, |call_id| {
-                                deny_pending(workspace, command_state.clone(), pane_id, call_id);
-                            });
-                        }
-                    }
-                    ApprovalKeyAction::ReleaseFocus => {
-                        agent_pane_focus.set(AgentPaneFocus::MessageBox);
-                    }
-                    ApprovalKeyAction::Redirect(text) => {
-                        agent_pane_focus.set(AgentPaneFocus::MessageBox);
-                        agent_draft.update(|draft| draft.push_str(&text));
-                    }
-                    ApprovalKeyAction::Swallow => {}
+                if is_palette_open_key(key_event) {
+                    ime_composing.set(false);
+                    ime_preedit.set(None);
+                    set_ime_allowed(false);
+                    open_palette(open_palette_state);
+                    return EventPropagation::Stop;
                 }
-                return EventPropagation::Stop;
-            }
-        }
 
-        // An agent pane's message box (unlike a terminal) has no
-        // protocol-level claim on a bare `Esc`, so it doubles as a second
-        // workspace-mode entry path -- but only once the approval row above
-        // has had first refusal, so its own `Esc`-releases-focus behavior
-        // isn't shadowed while it holds pane-internal focus. See
-        // `docs/workspace-mode-design.md`'s per-kind asymmetry.
-        if let Event::KeyDown(key_event) = event {
-            if is_agent()
-                && agent_escape_requests_workspace_mode(key_event, ime_composing.get_untracked())
-            {
-                execute_command(CommandInvocation::EnterWorkspaceMode, command_state.clone());
-                return EventPropagation::Stop;
-            }
-        }
+                // Workspace mode's entry chord (default `ctrl+'`,
+                // `docs/workspace-mode-design.md`) always wins, regardless of
+                // pane kind or any pane-internal focus (e.g. the inline approval
+                // control row below, which would otherwise swallow a
+                // held-modifier chord as `ApprovalKeyAction::Swallow`) -- it's
+                // the one irreducible escape hatch back to the mode and must
+                // never be capturable by anything in-pane. Re-pressing it while
+                // already in the mode is a no-op
+                // (`Workspace::enter_workspace_mode`).
+                if is_workspace_mode_enter_key(key_event) {
+                    if !workspace.with_untracked(|ws| ws.is_workspace_mode_active()) {
+                        execute_command(
+                            CommandInvocation::EnterWorkspaceMode,
+                            command_state.clone(),
+                        );
+                    }
+                    return EventPropagation::Stop;
+                }
 
-        if let Event::KeyDown(key_event) = event {
-            if handle_active_pane_key(
-                key_event,
-                workspace,
-                sessions,
-                pane_id,
-                ime_composing,
-                ime_preedit,
-                agent_draft,
-            ) {
-                return EventPropagation::Stop;
+                // While workspace mode is active, every key belongs to it --
+                // recognized ones (`hjkl`/Enter/Esc/`:`) dispatch below,
+                // everything else is silently swallowed rather than reaching
+                // the approval-row/terminal/agent-draft handling further down.
+                if workspace.with_untracked(|ws| ws.is_workspace_mode_active()) {
+                    if let Some(action) =
+                        handle_workspace_mode_key(key_event, ime_composing, ime_preedit)
+                    {
+                        match action {
+                            ModeAction::Move(direction) => execute_command(
+                                CommandInvocation::MoveWorkspaceCursor { direction },
+                                command_state.clone(),
+                            ),
+                            ModeAction::Commit => execute_command(
+                                CommandInvocation::CommitWorkspaceMode,
+                                command_state.clone(),
+                            ),
+                            ModeAction::Cancel => execute_command(
+                                CommandInvocation::CancelWorkspaceMode,
+                                command_state.clone(),
+                            ),
+                            ModeAction::OpenPalette => {
+                                ime_composing.set(false);
+                                ime_preedit.set(None);
+                                set_ime_allowed(false);
+                                open_palette(open_palette_state);
+                            }
+                        }
+                    }
+                    return EventPropagation::Stop;
+                }
             }
-        }
 
-        EventPropagation::Continue
+            // While the inline approval control row holds pane-internal focus,
+            // it answers for every key here (even ones bound to nothing -- see
+            // `ApprovalKeyAction::Swallow`) except the one soft-redirect path,
+            // so this must run before `handle_active_pane_key` ever sees the
+            // key (targeting discipline: only this pane's own session/call_id
+            // are ever touched, via `approve_pending`/`deny_pending` above).
+            if let Event::KeyDown(key_event) = event {
+                if is_agent() && agent_pane_focus.get_untracked() == AgentPaneFocus::Approval {
+                    match handle_agent_approval_key(key_event, ime_composing, ime_preedit) {
+                        ApprovalKeyAction::Approve => {
+                            if let Some(call_id) =
+                                awaiting_call(pending_approval(), answered_call.get_untracked())
+                            {
+                                answer_pending(
+                                    answered_call,
+                                    agent_pane_focus,
+                                    call_id,
+                                    |call_id| {
+                                        approve_pending(
+                                            workspace,
+                                            command_state.clone(),
+                                            pane_id,
+                                            call_id,
+                                        );
+                                    },
+                                );
+                            }
+                        }
+                        ApprovalKeyAction::Deny => {
+                            if let Some(call_id) =
+                                awaiting_call(pending_approval(), answered_call.get_untracked())
+                            {
+                                answer_pending(
+                                    answered_call,
+                                    agent_pane_focus,
+                                    call_id,
+                                    |call_id| {
+                                        deny_pending(
+                                            workspace,
+                                            command_state.clone(),
+                                            pane_id,
+                                            call_id,
+                                        );
+                                    },
+                                );
+                            }
+                        }
+                        ApprovalKeyAction::ReleaseFocus => {
+                            agent_pane_focus.set(AgentPaneFocus::MessageBox);
+                        }
+                        ApprovalKeyAction::Redirect(text) => {
+                            agent_pane_focus.set(AgentPaneFocus::MessageBox);
+                            agent_draft.update(|draft| draft.push_str(&text));
+                        }
+                        ApprovalKeyAction::Swallow => {}
+                    }
+                    return EventPropagation::Stop;
+                }
+            }
+
+            // An agent pane's message box (unlike a terminal) has no
+            // protocol-level claim on a bare `Esc`, so it doubles as a second
+            // workspace-mode entry path -- but only once the approval row above
+            // has had first refusal, so its own `Esc`-releases-focus behavior
+            // isn't shadowed while it holds pane-internal focus. See
+            // `docs/workspace-mode-design.md`'s per-kind asymmetry.
+            if let Event::KeyDown(key_event) = event {
+                if is_agent()
+                    && agent_escape_requests_workspace_mode(
+                        key_event,
+                        ime_composing.get_untracked(),
+                    )
+                {
+                    execute_command(CommandInvocation::EnterWorkspaceMode, command_state.clone());
+                    return EventPropagation::Stop;
+                }
+            }
+
+            if let Event::KeyDown(key_event) = event {
+                if handle_active_pane_key(
+                    key_event,
+                    workspace,
+                    sessions,
+                    pane_id,
+                    ime_composing,
+                    ime_preedit,
+                    agent_draft,
+                ) {
+                    return EventPropagation::Stop;
+                }
+            }
+
+            EventPropagation::Continue
+        })
     })
     .on_event(EventListener::KeyUp, move |event| {
         if let Event::KeyUp(key_event) = event {

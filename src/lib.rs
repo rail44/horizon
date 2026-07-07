@@ -4,6 +4,7 @@ pub(crate) mod config;
 pub(crate) mod control_plane;
 pub(crate) mod control_surface;
 pub(crate) mod plugins;
+pub(crate) mod profiling;
 pub(crate) mod session;
 pub(crate) mod terminal;
 pub(crate) mod ui;

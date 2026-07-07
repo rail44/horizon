@@ -15,8 +15,8 @@ use std::io::{BufRead, Write};
 use serde::Deserialize;
 
 use crate::contract::{
-    Envelope, EnvelopeBody, ErrorMessage, Hello, HelloAck, Invoke, Query, Rejected, Sessions,
-    State, CONTROL_VERSION,
+    Envelope, EnvelopeBody, ErrorMessage, Hello, HelloAck, Invoke, ProfileSnapshot, Query,
+    Rejected, Sessions, State, CONTROL_VERSION,
 };
 
 /// Explicit, non-panicking failure modes for [`read_envelope`]. Unlike
@@ -98,6 +98,7 @@ fn parse_line(line: &str) -> Result<Envelope, WireError> {
         "error" => EnvelopeBody::Error(serde_json::from_value::<ErrorMessage>(raw.payload)?),
         "sessions" => EnvelopeBody::Sessions(serde_json::from_value::<Sessions>(raw.payload)?),
         "state" => EnvelopeBody::State(serde_json::from_value::<State>(raw.payload)?),
+        "profile" => EnvelopeBody::Profile(serde_json::from_value::<ProfileSnapshot>(raw.payload)?),
         other => EnvelopeBody::Unknown {
             kind: other.to_string(),
             payload: raw.payload,
@@ -114,7 +115,7 @@ fn parse_line(line: &str) -> Result<Envelope, WireError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::SessionEntry;
+    use crate::contract::{ProfileFrameEntry, SessionEntry};
     use std::io::BufReader;
 
     fn sample_bodies() -> Vec<EnvelopeBody> {
@@ -161,6 +162,15 @@ mod tests {
                     "terminate-active-session".to_string(),
                     "terminate-all-detached-sessions".to_string(),
                 ],
+            }),
+            EnvelopeBody::Profile(ProfileSnapshot {
+                enabled: true,
+                log_path: "/tmp/ui-profile.jsonl".to_string(),
+                frames: vec![ProfileFrameEntry {
+                    trigger: "KeyDown".to_string(),
+                    duration_us: 1234,
+                    created_at_unix_ms: 1_700_000_000_000,
+                }],
             }),
         ]
     }

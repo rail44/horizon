@@ -45,27 +45,36 @@ pub fn app_view() -> impl IntoView {
     let key_input = input.clone();
 
     content
+        // Each handler below is wrapped in `profiling::timed`, Horizon's
+        // opt-in (`HORIZON_UI_PROFILE`) UI-thread event-timing capture --
+        // see `crate::profiling`'s module doc for what "frame" means here
+        // (event-handling latency, not floem's internal paint pass, which
+        // this global `on_event` chain can't observe). A no-op wrapper
+        // (one cached bool check) when capture is disabled, which it is by
+        // default.
         .on_event(EventListener::WindowGotFocus, move |_| {
-            focus_input.handle_window_focus()
+            crate::profiling::timed("WindowGotFocus", || focus_input.handle_window_focus())
         })
         .on_event(EventListener::WindowLostFocus, move |_| {
-            lost_focus_input.handle_window_lost_focus()
+            crate::profiling::timed("WindowLostFocus", || {
+                lost_focus_input.handle_window_lost_focus()
+            })
         })
         .on_event(EventListener::ImeEnabled, move |_| {
-            ime_enabled_input.handle_ime_enabled()
+            crate::profiling::timed("ImeEnabled", || ime_enabled_input.handle_ime_enabled())
         })
         .on_event(EventListener::ImeDisabled, move |_| {
-            ime_disabled_input.handle_ime_disabled()
+            crate::profiling::timed("ImeDisabled", || ime_disabled_input.handle_ime_disabled())
         })
         .on_event(EventListener::ImePreedit, move |event| {
-            ime_preedit_input.handle_ime_preedit(event)
+            crate::profiling::timed("ImePreedit", || ime_preedit_input.handle_ime_preedit(event))
         })
         .on_event(EventListener::ImeCommit, move |event| {
-            ime_commit_input.handle_ime_commit(event)
+            crate::profiling::timed("ImeCommit", || ime_commit_input.handle_ime_commit(event))
         })
         .keyboard_navigable()
         .on_event(EventListener::KeyDown, move |event| {
-            key_input.handle_key_down(event)
+            crate::profiling::timed("KeyDown", || key_input.handle_key_down(event))
         })
         .style(move |s| {
             s.size_full()

@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 use horizon_control::contract::{
-    Envelope, EnvelopeBody, ErrorMessage, HelloAck, Rejected, SessionEntry, Sessions, State,
-    CONTROL_VERSION,
+    Envelope, EnvelopeBody, ErrorMessage, HelloAck, ProfileFrameEntry, ProfileSnapshot, Rejected,
+    SessionEntry, Sessions, State, CONTROL_VERSION,
 };
 use horizon_control::wire;
 
@@ -148,6 +148,32 @@ fn state_query_supports_json_output() {
     assert_eq!(code, 0, "stderr: {stderr}");
     assert!(stdout.contains("\"kind\": \"state\""));
     assert!(stdout.contains("\"tab_count\": 2"));
+
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+#[test]
+fn profile_query_round_trips_and_renders_frame_lines() {
+    let socket_path = temp_socket_path("profile");
+    stub_server(
+        socket_path.clone(),
+        our_hello_ack(),
+        vec![EnvelopeBody::Profile(ProfileSnapshot {
+            enabled: true,
+            log_path: "/tmp/ui-profile.jsonl".to_string(),
+            frames: vec![ProfileFrameEntry {
+                trigger: "KeyDown".to_string(),
+                duration_us: 2500,
+                created_at_unix_ms: 1_700_000_000_000,
+            }],
+        })],
+    );
+
+    let (code, stdout, stderr) = run_ctl(&["profile"], &socket_path, false);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(stdout.contains("KeyDown"));
+    assert!(stdout.contains("2.500 ms"));
+    assert!(stdout.contains("/tmp/ui-profile.jsonl"));
 
     let _ = std::fs::remove_file(&socket_path);
 }

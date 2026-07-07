@@ -36,6 +36,7 @@ pub fn external_name(subcommand: &Subcommand) -> &'static str {
         Subcommand::ReloadConfig => "reload-config",
         Subcommand::Sessions => "sessions",
         Subcommand::State => "state",
+        Subcommand::Profile => "profile",
     }
 }
 
@@ -116,6 +117,9 @@ pub fn to_request(subcommand: &Subcommand, resolved_split: Option<&str>) -> Requ
         }),
         Subcommand::State => Request::Query(Query {
             what: "state".to_string(),
+        }),
+        Subcommand::Profile => Request::Query(Query {
+            what: "profile".to_string(),
         }),
     }
 }
@@ -350,6 +354,16 @@ mod tests {
         assert!(matches!(
             to_request(&Subcommand::State, None),
             Request::Query(q) if q.what == "state"
+        ));
+    }
+
+    #[test]
+    fn profile_is_a_non_destructive_query() {
+        assert_eq!(external_name(&Subcommand::Profile), "profile");
+        assert!(!is_destructive(&Subcommand::Profile));
+        assert!(matches!(
+            to_request(&Subcommand::Profile, None),
+            Request::Query(q) if q.what == "profile"
         ));
     }
 }

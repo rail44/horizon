@@ -6,7 +6,7 @@
 
 use std::io::Write;
 
-use horizon_control::contract::{EnvelopeBody, Sessions, State};
+use horizon_control::contract::{EnvelopeBody, ProfileSnapshot, Sessions, State};
 
 pub fn render(body: &EnvelopeBody, json: bool, out: &mut impl Write) {
     if json {
@@ -19,6 +19,7 @@ pub fn render(body: &EnvelopeBody, json: bool, out: &mut impl Write) {
         }
         EnvelopeBody::Sessions(sessions) => render_sessions(sessions, out),
         EnvelopeBody::State(state) => render_state(state, out),
+        EnvelopeBody::Profile(snapshot) => render_profile(snapshot, out),
         EnvelopeBody::Unknown { kind, payload } => {
             let _ = writeln!(out, "(unrecognized server response: kind={kind})");
             let _ = writeln!(out, "{payload}");
@@ -83,10 +84,41 @@ fn render_state(state: &State, out: &mut impl Write) {
     let _ = writeln!(out, "destructive_commands: {destructive}");
 }
 
+/// Renders `Query { what: "profile" }`'s reply as structured text -- one
+/// line per captured event (timestamp, duration, trigger), oldest first,
+/// matching `render_sessions`' one-line-per-entry shape. Distinguishes
+/// "capture is off" from "capture is on but nothing recorded yet" since
+/// both would otherwise print as an empty list, and the difference matters
+/// for a caller deciding whether to set `HORIZON_UI_PROFILE=1` and restart.
+fn render_profile(snapshot: &ProfileSnapshot, out: &mut impl Write) {
+    if !snapshot.enabled {
+        let _ = writeln!(
+            out,
+            "UI profiling is not enabled for the running instance -- set HORIZON_UI_PROFILE=1 \
+             (any non-empty value) before launching Horizon to capture frame timings"
+        );
+        let _ = writeln!(out, "log path: {}", snapshot.log_path);
+        return;
+    }
+    if snapshot.frames.is_empty() {
+        let _ = writeln!(out, "(no frames captured yet)");
+    }
+    for frame in &snapshot.frames {
+        let _ = writeln!(
+            out,
+            "{}  {:>10.3} ms  {}",
+            frame.created_at_unix_ms,
+            frame.duration_us as f64 / 1000.0,
+            frame.trigger
+        );
+    }
+    let _ = writeln!(out, "log path: {}", snapshot.log_path);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use horizon_control::contract::SessionEntry;
+    use horizon_control::contract::{ProfileFrameEntry, SessionEntry};
 
     fn rendered(body: &EnvelopeBody, json: bool) -> String {
         let mut buf = Vec::new();
@@ -149,6 +181,46 @@ mod tests {
             destructive_commands: vec![],
         });
         assert!(rendered(&body, false).contains("destructive_commands: (none)"));
+    }
+
+    #[test]
+    fn disabled_profile_explains_how_to_enable_it() {
+        let body = EnvelopeBody::Profile(ProfileSnapshot {
+            enabled: false,
+            log_path: "/tmp/ui-profile.jsonl".to_string(),
+            frames: vec![],
+        });
+        let text = rendered(&body, false);
+        assert!(text.contains("HORIZON_UI_PROFILE=1"));
+        assert!(text.contains("/tmp/ui-profile.jsonl"));
+    }
+
+    #[test]
+    fn enabled_profile_with_no_frames_says_so() {
+        let body = EnvelopeBody::Profile(ProfileSnapshot {
+            enabled: true,
+            log_path: "/tmp/ui-profile.jsonl".to_string(),
+            frames: vec![],
+        });
+        assert!(rendered(&body, false).contains("(no frames captured yet)"));
+    }
+
+    #[test]
+    fn profile_frames_render_one_line_each() {
+        let body = EnvelopeBody::Profile(ProfileSnapshot {
+            enabled: true,
+            log_path: "/tmp/ui-profile.jsonl".to_string(),
+            frames: vec![ProfileFrameEntry {
+                trigger: "KeyDown".to_string(),
+                duration_us: 1500,
+                created_at_unix_ms: 1_700_000_000_000,
+            }],
+        });
+        let text = rendered(&body, false);
+        assert!(text.contains("1700000000000"));
+        assert!(text.contains("1.500 ms"));
+        assert!(text.contains("KeyDown"));
+        assert!(text.contains("log path: /tmp/ui-profile.jsonl"));
     }
 
     #[test]

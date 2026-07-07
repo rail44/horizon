@@ -42,7 +42,9 @@ use floem::prelude::*;
 use serde_json::Value;
 use uuid::Uuid;
 
-use horizon_control::contract::{EnvelopeBody, ErrorMessage, Invoke, Query, Sessions};
+use horizon_control::contract::{
+    EnvelopeBody, ErrorMessage, Invoke, ProfileFrameEntry, ProfileSnapshot, Query, Sessions,
+};
 
 use crate::agent::contract::ToolCallId;
 use crate::control_surface::command_state;
@@ -334,10 +336,44 @@ fn reject_unresolvable_split_target(
     }
 }
 
+/// `Query { what: "profile" }`'s reply: the tail of Horizon's opt-in
+/// (`HORIZON_UI_PROFILE`) UI-thread event-timing JSONL log
+/// (`crate::profiling`), reshaped into the contract's plain DTO. Reads the
+/// file fresh on every query rather than keeping an in-memory ring buffer
+/// in `CommandActionState` -- the log is already the durable source of
+/// truth (same "external read is safe, doesn't touch the live app" shape
+/// the agent event log's own external readability already established),
+/// and a fixed tail length keeps this simple for a SPIKE. Doesn't need
+/// `command_state` at all, unlike [`sessions_query`]/[`state_query`]: the
+/// profile log is process-global, not workspace state.
+fn profile_query() -> ProfileSnapshot {
+    /// How many of the most recent captured events `horizon profile`
+    /// shows -- arbitrary, spike-quality choice; the raw JSONL file (whose
+    /// path is echoed back in the reply) has the rest.
+    const TAIL_LEN: usize = 100;
+
+    let path = crate::profiling::log_path();
+    let frames = crate::profiling::read_recent(&path, TAIL_LEN)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|record| ProfileFrameEntry {
+            trigger: record.trigger,
+            duration_us: record.duration_us,
+            created_at_unix_ms: record.created_at_unix_ms,
+        })
+        .collect();
+    ProfileSnapshot {
+        enabled: crate::profiling::is_enabled(),
+        log_path: path.display().to_string(),
+        frames,
+    }
+}
+
 /// Runs one `Query` request against `command_state`'s live `Workspace`/
-/// `Frames` -- see [`sessions_query`]/[`state_query`]. `what` is an open
-/// string in the contract (new query names can be added without a version
-/// bump); an unrecognized one answers `EnvelopeBody::Error` here.
+/// `Frames` -- see [`sessions_query`]/[`state_query`]/[`profile_query`].
+/// `what` is an open string in the contract (new query names can be added
+/// without a version bump); an unrecognized one answers `EnvelopeBody::Error`
+/// here.
 pub(crate) fn dispatch_query(query: &Query, command_state: &CommandActionState) -> EnvelopeBody {
     match query.what.as_str() {
         "sessions" => {
@@ -352,6 +388,7 @@ pub(crate) fn dispatch_query(query: &Query, command_state: &CommandActionState) 
             });
             EnvelopeBody::State(state)
         }
+        "profile" => EnvelopeBody::Profile(profile_query()),
         other => error_body(format!("unknown query `{other}`")),
     }
 }
@@ -804,6 +841,38 @@ mod tests {
                 .destructive_commands
                 .contains(&"terminate-session".to_string())),
             other => panic!("expected State, got {other:?}"),
+        }
+    }
+
+    /// `AGENTS.md`: every `cargo nextest` test runs in its own process, so
+    /// setting `HORIZON_UI_PROFILE_LOG` here (and leaving `HORIZON_UI_PROFILE`
+    /// unset) can't leak into or be affected by any other test.
+    #[test]
+    fn dispatch_query_profile_reports_disabled_state_by_default() {
+        let path = std::env::temp_dir().join(format!(
+            "horizon-ui-profile-dispatch-test-{}",
+            Uuid::new_v4()
+        ));
+        std::env::set_var("HORIZON_UI_PROFILE_LOG", &path);
+        let state = test_state();
+
+        let body = dispatch_query(
+            &Query {
+                what: "profile".to_string(),
+            },
+            &state,
+        );
+
+        match body {
+            EnvelopeBody::Profile(snapshot) => {
+                assert!(
+                    !snapshot.enabled,
+                    "HORIZON_UI_PROFILE is unset in this test process"
+                );
+                assert!(snapshot.frames.is_empty());
+                assert_eq!(snapshot.log_path, path.display().to_string());
+            }
+            other => panic!("expected Profile, got {other:?}"),
         }
     }
 
