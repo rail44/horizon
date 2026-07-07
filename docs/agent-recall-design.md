@@ -82,9 +82,16 @@ remain non-goals per `docs/agent-duckdb-state-design.md`):
 - **`recall.search`** — case-insensitive substring search over committed
   message text (`agent_messages`, `NOT is_delta`), tool-call arguments
   (`agent_tool_calls.input_json`), and tool results
-  (`agent_tool_results.output_json`). Input: `query`, optional
-  `scope: "session" | "all"` (default `"session"` — the calling session),
-  optional `limit` (default 20). Output rows carry session id, sequence,
+  (`agent_tool_results.output_json`). Input: `query` (optional if
+  `turn_outcome` is given -- see below), optional `scope: "session" | "all"`
+  (default `"session"` — the calling session), optional `limit` (default
+  20), optional `turn_outcome` filter. Omitting `query` while giving
+  `turn_outcome` is *listing mode* (`docs/agent-feedback-design.md`'s
+  2026-07-07 skill-distillation addendum): every hit matching
+  `scope`/`turn_outcome` alone, newest-first, for mining recipes like
+  "list how recent work ended" that have no substring to search for.
+  Omitting both `query` and `turn_outcome` is still a clear error. Output
+  rows carry session id, sequence,
   kind, role/tool id, a bounded snippet around the first match, and the
   event's wall-clock time; the total match count is always reported
   (`fs.grep`'s cap-and-report discipline). Matching is a parameterized SQL
