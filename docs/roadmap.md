@@ -83,6 +83,11 @@ wave items where possible; design docs on first use.
   co-located as an independent crate — no horizon dependencies
   (extractable later), SSE streaming required (horizon-agent assumes
   it).
+- **Todo tool + overview panel hookup**: a plan/todo tool in the agent
+  contract (agent-foundation) feeding the transcript's overview bar the
+  same way as the Changes aggregation — proposed by application-ui
+  slice 5; pairs with backlog 16 (turn metadata) as the two small
+  contract extensions unblocking the UI's remaining improvements.
 - **Skill distillation (approval-gated)**: agent-drafted skill updates
   from labeled trajectories, owner-approved before landing — see
   `docs/agent-feedback-design.md`. Unblocked: the label projection
