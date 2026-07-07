@@ -86,6 +86,20 @@ wave items where possible; design docs on first use.
   co-located as an independent crate — no horizon dependencies
   (extractable later), SSE streaming required (horizon-agent assumes
   it).
+- **Placement-first session creation** (application-ui): replace the
+  palette's creation vocabulary with two placement verbs (`Split
+  Pane…` / `New Tab…`) plus a second-stage view chooser
+  (registry-driven: kinds + roles; future user-defined agents and
+  WASM views appear in the list, not as new commands). Execution is
+  one parameterized operation on the same `CreateSession` vocabulary
+  the CLI uses. `split-pane` / `new-tab` become `[keybindings]`
+  targets; a bound key opens the chooser directly. Retired: `Split
+  Active Pane` and the direct `New Terminal` / `New Agent` / `New
+  Config Agent` commands (their future shape is user-defined
+  commands). Out of scope, deferred to a later consultation:
+  workspace-mode bare-key bindings (the mode_input vim vocabulary)
+  and chooserless one-shot bindings (`split-pane:agent`-style).
+  Designed with the owner 2026-07-07 (project session).
 - **Todo tool + overview panel hookup**: a plan/todo tool in the agent
   contract (agent-foundation) feeding the transcript's overview bar the
   same way as the Changes aggregation — proposed by application-ui
