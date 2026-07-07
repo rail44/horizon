@@ -57,7 +57,15 @@ wave items where possible; design docs on first use.
    hosting both kinds, whole terminal brain moved (no PTY-only stage),
    sister contracts, row-diff push. Migration starts headless with the
    `horizon-terminal-core` crate extraction; awaiting a domain session
-   to pick it up.
+   to pick it up. **Session relationship model designed 2026-07-07**
+   (`docs/session-relationship-design.md`): lineage is a first-class
+   layout-orthogonal derivation tree — the same tree worktree
+   isolation, delegation, and messaging all use. Foundation landed
+   (per-session `workspace_root`, `9110c7c`); remaining is terminal-cwd
+   sourcing (shell-independent process-info crate + pid capture), the
+   lineage tree, origin-defaulted isolation/worktree creation, and
+   control surfacing (open-directory command + session-manager lineage
+   view).
 
 ## In flight
 
