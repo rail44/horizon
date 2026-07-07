@@ -12,15 +12,15 @@ pub(crate) struct Workspace {
     pub(in crate::workspace) next_agent_display_number: usize,
     /// Workspace mode's cursor (`docs/workspace-mode-design.md`): `None`
     /// outside the mode, where the cursor is simply defined to be wherever
-    /// focus is (see `Workspace::cursor_visible_index`) so the two can
-    /// never drift apart by construction. `Some(visible_index)` while the
-    /// mode is active -- a visible-pane index within the active tab, the
-    /// same targeting convention `close_visible_pane`/`activate_visible_
-    /// pane` already use (see `app::command_actions::CommandInvocation`'s
-    /// doc comment for why visible indices, not stable `PaneId`s, are this
-    /// codebase's convention at this layer). See `workspace::mode` for the
-    /// state transitions.
-    pub(in crate::workspace) workspace_mode_cursor: Option<usize>,
+    /// focus is (see `Workspace::cursor_pane_id`) so the two can never
+    /// drift apart by construction. `Some(pane_id)` while the mode is
+    /// active -- a stable `PaneId` rather than a visible-pane index, so it
+    /// survives across a directional move without needing to be re-derived
+    /// from the tree's shape (`docs/recursive-layout-design.md`'s slice 4:
+    /// `hjkl` resolves geometrically via `workspace::nav`, which only
+    /// speaks in `PaneId`s). See `workspace::mode` for the state
+    /// transitions.
+    pub(in crate::workspace) workspace_mode_cursor: Option<PaneId>,
 }
 
 #[derive(Clone, Debug)]

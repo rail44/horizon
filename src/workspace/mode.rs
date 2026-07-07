@@ -3,9 +3,9 @@
 //! persistent modal state (entered by a single reserved chord) in which
 //! `hjkl` moves a **cursor** -- Horizon's operation target -- independently
 //! of **focus** (where keyboard input actually flows). Outside the mode the
-//! two are the same pane by construction (`Workspace::cursor_visible_index`
-//! falls back to `active_visible_index`, never a separately-tracked value),
-//! so there is nothing to keep synchronized on every focus-changing
+//! two are the same pane by construction (`Workspace::cursor_pane_id`
+//! falls back to the tab's own `active` pane, never a separately-tracked
+//! value), so there is nothing to keep synchronized on every focus-changing
 //! operation elsewhere in the codebase.
 //!
 //! Formerly disambiguated here against `control_surface::ControlMode::
@@ -16,16 +16,13 @@
 //! `control_surface::view::session_manager`), so the disambiguation no
 //! longer applies.
 
-use super::types::Workspace;
+use super::nav::{nearest_in_direction, pane_rects};
+use super::types::{PaneId, Workspace};
 
-/// A cursor movement request. `Up`/`Down` are accepted today (the v1 key
-/// interpreter's `hjkl` vocabulary needs all four -- see
-/// `workspace::mode_input`) but are currently always a no-op: every split
-/// today is still requested as `SplitAxis::Horizontal` (see
-/// `docs/recursive-layout-design.md`'s slice plan -- the tree itself is
-/// N-ary and vertical-capable, but no caller passes `Vertical` yet), so
-/// there is no "pane above/below" to move to. Wiring `Up`/`Down` up to real
-/// geometric navigation is slice 3 of that plan, not a v1 gap.
+/// A cursor movement request, resolved geometrically (bspwm style) rather
+/// than by tree structure (`docs/recursive-layout-design.md`'s Focus
+/// navigation decision) -- see `workspace::nav::nearest_in_direction`, the
+/// pure function [`Workspace::move_cursor`] delegates to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Direction {
     Left,
@@ -40,30 +37,6 @@ impl Workspace {
         self.workspace_mode_cursor.is_some()
     }
 
-    /// The visible-pane index (within the active tab) that Horizon
-    /// operations should act on right now: the free-floating cursor while
-    /// workspace mode is active, or simply `active_visible_index()`
-    /// (focus) otherwise -- see this module's doc comment for why that
-    /// equivalence needs no explicit synchronization. Clamped defensively
-    /// against a pane count that shrank out from under a stale cursor
-    /// (e.g. a non-creating palette command run from inside the mode
-    /// closing panes elsewhere -- see `docs/workspace-mode-design.md`'s
-    /// "everything else restores" rule, which leaves the cursor untouched
-    /// by such a command).
-    pub(crate) fn cursor_visible_index(&self) -> usize {
-        match self.workspace_mode_cursor {
-            Some(index) => {
-                let visible_len = self.visible_pane_ids().len();
-                if visible_len == 0 {
-                    0
-                } else {
-                    index.min(visible_len - 1)
-                }
-            }
-            None => self.active_visible_index(),
-        }
-    }
-
     /// Enters workspace mode, seeding the cursor at the currently focused
     /// pane. A no-op if already active -- re-pressing the entry chord (or
     /// otherwise re-requesting entry) while already in the mode must not
@@ -74,40 +47,42 @@ impl Workspace {
         if self.workspace_mode_cursor.is_some() {
             return;
         }
-        self.workspace_mode_cursor = Some(self.active_visible_index());
+        self.workspace_mode_cursor = self.active_tab().map(|tab| tab.active);
     }
 
-    /// Moves the cursor one step in `direction`. A no-op when the mode
-    /// isn't active, and (today) a no-op for `Up`/`Down` -- see
-    /// [`Direction`]. Never wraps: hitting either edge of the pane row
-    /// simply stops there, matching vim's non-wrapping window navigation
-    /// (`ctrl-w h`/`ctrl-w l` at an edge do nothing) rather than the
-    /// existing `focus_next`'s wrap-around cycling, which is a different,
-    /// older command this deliberately doesn't reuse.
+    /// Moves the cursor one step in `direction`, resolved geometrically
+    /// (`workspace::nav::nearest_in_direction`) against the active tab's
+    /// pane rectangles: the nearest pane whose rectangle lies in
+    /// `direction` from the cursor's, by relative position and overlap --
+    /// not a flat left/right index walk, so `Up`/`Down` reach panes across
+    /// a vertical split exactly like `Left`/`Right` do across a horizontal
+    /// one (`docs/recursive-layout-design.md`'s slice 4). A no-op when the
+    /// mode isn't active, or when nothing qualifies in `direction` (the
+    /// cursor is already at that edge) -- hitting an edge simply stops
+    /// there, matching vim's non-wrapping window navigation (`ctrl-w h`/
+    /// `ctrl-w l` at an edge do nothing) rather than the existing
+    /// `focus_next`'s wrap-around cycling, which is a different, older
+    /// command this deliberately doesn't reuse.
     pub(crate) fn move_cursor(&mut self, direction: Direction) {
         let Some(current) = self.workspace_mode_cursor else {
             return;
         };
-        let visible_len = self.visible_pane_ids().len();
-        if visible_len == 0 {
+        let Some(tab) = self.active_tab() else {
             return;
-        }
-        let current = current.min(visible_len - 1);
-        let next = match direction {
-            Direction::Left => current.saturating_sub(1),
-            Direction::Right => (current + 1).min(visible_len - 1),
-            Direction::Up | Direction::Down => current,
         };
-        self.workspace_mode_cursor = Some(next);
+        let rects = pane_rects(&tab.root);
+        if let Some(next) = nearest_in_direction(&rects, current, direction) {
+            self.workspace_mode_cursor = Some(next);
+        }
     }
 
     /// `Enter`: focus follows the cursor, then the mode ends. A no-op when
     /// the mode isn't active.
     pub(crate) fn commit_workspace_mode(&mut self) {
-        let Some(index) = self.workspace_mode_cursor else {
+        let Some(pane_id) = self.workspace_mode_cursor else {
             return;
         };
-        self.activate_visible_pane(index);
+        self.activate_pane(pane_id);
         self.workspace_mode_cursor = None;
     }
 
@@ -122,18 +97,18 @@ impl Workspace {
     /// convention (`docs/workspace-mode-design.md`'s mouse/keyboard split)
     /// is that a click always "dives" into the pane clicked, regardless of
     /// where the cursor currently sits -- equivalent to moving the cursor
-    /// to `index` and then calling [`commit_workspace_mode`], done in one
+    /// to `pane_id` and then calling [`commit_workspace_mode`], done in one
     /// step so there's no observable intermediate cursor position. A no-op
     /// when the mode isn't active: the caller's own ordinary
-    /// `activate_visible_pane` call already handles a plain click-to-focus
-    /// in that case.
+    /// `activate_pane` call already handles a plain click-to-focus in that
+    /// case.
     ///
     /// [`commit_workspace_mode`]: Self::commit_workspace_mode
-    pub(crate) fn commit_workspace_mode_to(&mut self, index: usize) {
+    pub(crate) fn commit_workspace_mode_to(&mut self, pane_id: PaneId) {
         if self.workspace_mode_cursor.is_none() {
             return;
         }
-        self.workspace_mode_cursor = Some(index);
+        self.workspace_mode_cursor = Some(pane_id);
         self.commit_workspace_mode();
     }
 
@@ -160,48 +135,43 @@ impl Workspace {
 mod tests {
     use super::*;
     use crate::session::SessionId;
-    use crate::workspace::types::PaneKind;
+    use crate::workspace::types::{PaneKind, SplitAxis};
 
     #[test]
     fn cursor_follows_focus_outside_the_mode() {
         let mut workspace = Workspace::mvp();
-        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
-        workspace.activate_visible_pane(1);
+        let second = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
 
         assert!(!workspace.is_workspace_mode_active());
-        assert_eq!(workspace.cursor_visible_index(), 1);
-        assert_eq!(
-            workspace.cursor_visible_index(),
-            workspace.active_visible_index()
-        );
+        assert_eq!(workspace.cursor_pane_id(), Some(second));
+        assert!(workspace.is_active_pane(second));
     }
 
     #[test]
     fn entering_seeds_the_cursor_at_the_focused_pane() {
         let mut workspace = Workspace::mvp();
-        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
-        workspace.activate_visible_pane(1);
+        let second = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
 
         workspace.enter_workspace_mode();
 
         assert!(workspace.is_workspace_mode_active());
-        assert_eq!(workspace.cursor_visible_index(), 1);
+        assert_eq!(workspace.cursor_pane_id(), Some(second));
     }
 
     #[test]
     fn re_entering_while_active_does_not_reset_the_cursor() {
         let mut workspace = Workspace::mvp();
-        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        let second = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
         workspace.activate_visible_pane(0);
         workspace.enter_workspace_mode();
         workspace.move_cursor(Direction::Right);
-        assert_eq!(workspace.cursor_visible_index(), 1);
+        assert_eq!(workspace.cursor_pane_id(), Some(second));
 
         workspace.enter_workspace_mode();
 
         assert_eq!(
-            workspace.cursor_visible_index(),
-            1,
+            workspace.cursor_pane_id(),
+            Some(second),
             "re-entering while already active must be a no-op"
         );
     }
@@ -209,7 +179,8 @@ mod tests {
     #[test]
     fn moving_the_cursor_leaves_focus_untouched() {
         let mut workspace = Workspace::mvp();
-        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        let first = workspace.visible_pane_id(0).expect("first pane");
+        let second = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
         // `split_active` itself focuses the new (second) pane -- reset to
         // the first so this test starts from a known focus position.
         workspace.activate_visible_pane(0);
@@ -217,55 +188,67 @@ mod tests {
 
         workspace.move_cursor(Direction::Right);
 
-        assert_eq!(workspace.cursor_visible_index(), 1);
-        assert_eq!(
-            workspace.active_visible_index(),
-            0,
+        assert_eq!(workspace.cursor_pane_id(), Some(second));
+        assert!(
+            workspace.is_active_pane(first),
             "focus must not move while the mode is active"
         );
     }
 
     #[test]
-    fn cursor_does_not_wrap_past_either_edge() {
+    fn cursor_does_not_move_past_either_edge_of_a_horizontal_split() {
         let mut workspace = Workspace::mvp();
-        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        let first = workspace.visible_pane_id(0).expect("first pane");
+        let second = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
         workspace.activate_visible_pane(0);
         workspace.enter_workspace_mode();
 
         workspace.move_cursor(Direction::Left);
         assert_eq!(
-            workspace.cursor_visible_index(),
-            0,
+            workspace.cursor_pane_id(),
+            Some(first),
             "already at the left edge"
         );
 
         workspace.move_cursor(Direction::Right);
         workspace.move_cursor(Direction::Right);
         assert_eq!(
-            workspace.cursor_visible_index(),
-            1,
+            workspace.cursor_pane_id(),
+            Some(second),
             "already at the right edge"
         );
     }
 
     #[test]
-    fn vertical_moves_are_a_no_op_with_only_horizontal_splits() {
+    fn vertical_moves_navigate_a_vertical_split() {
         let mut workspace = Workspace::mvp();
-        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        let top = workspace.visible_pane_id(0).expect("first pane");
+        let target_session = workspace
+            .active_terminal_session_id()
+            .expect("mvp() starts with a terminal session");
+        workspace.split_session_with_new_session(
+            target_session,
+            PaneKind::Terminal,
+            SplitAxis::Vertical,
+            true,
+        );
+        let bottom = workspace
+            .visible_pane_id(1)
+            .expect("the vertical split created a second pane");
         workspace.activate_visible_pane(0);
         workspace.enter_workspace_mode();
 
         workspace.move_cursor(Direction::Down);
-        assert_eq!(workspace.cursor_visible_index(), 0);
+        assert_eq!(workspace.cursor_pane_id(), Some(bottom));
 
         workspace.move_cursor(Direction::Up);
-        assert_eq!(workspace.cursor_visible_index(), 0);
+        assert_eq!(workspace.cursor_pane_id(), Some(top));
     }
 
     #[test]
     fn commit_moves_focus_to_the_cursor_and_exits() {
         let mut workspace = Workspace::mvp();
-        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        let second = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
         workspace.activate_visible_pane(0);
         workspace.enter_workspace_mode();
         workspace.move_cursor(Direction::Right);
@@ -273,47 +256,51 @@ mod tests {
         workspace.commit_workspace_mode();
 
         assert!(!workspace.is_workspace_mode_active());
-        assert_eq!(workspace.active_visible_index(), 1);
+        assert!(workspace.is_active_pane(second));
     }
 
     #[test]
     fn a_pane_click_dives_into_the_clicked_pane_and_exits_the_mode() {
         // The design's click convention: a click always dives into the
         // pane clicked, not wherever the cursor currently sits -- so
-        // clicking pane 0 here must win even though the cursor moved to
-        // pane 1 (see `workspace::view::pane`'s `PointerDown` handler,
-        // which calls this ahead of its own `activate_visible_pane`).
+        // clicking the first pane here must win even though the cursor
+        // moved to the second (see `workspace::view::pane`'s
+        // `PointerDown` handler, which calls this ahead of its own
+        // `activate_pane`).
         let mut workspace = Workspace::mvp();
-        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        let first = workspace.visible_pane_id(0).expect("first pane");
+        let second = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
         workspace.activate_visible_pane(0);
         workspace.enter_workspace_mode();
         workspace.move_cursor(Direction::Right);
-        assert_eq!(workspace.cursor_visible_index(), 1);
+        assert_eq!(workspace.cursor_pane_id(), Some(second));
 
-        workspace.commit_workspace_mode_to(0);
+        workspace.commit_workspace_mode_to(first);
 
         assert!(!workspace.is_workspace_mode_active());
-        assert_eq!(workspace.active_visible_index(), 0);
+        assert!(workspace.is_active_pane(first));
     }
 
     #[test]
     fn commit_workspace_mode_to_is_a_no_op_outside_the_mode() {
-        // The caller's own `activate_visible_pane` call already handles an
+        // The caller's own `activate_pane` call already handles an
         // ordinary click-to-focus when the mode isn't active -- this must
         // leave focus untouched rather than double-applying it.
         let mut workspace = Workspace::mvp();
-        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        let first = workspace.visible_pane_id(0).expect("first pane");
+        let second = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
         workspace.activate_visible_pane(0);
 
-        workspace.commit_workspace_mode_to(1);
+        workspace.commit_workspace_mode_to(second);
 
         assert!(!workspace.is_workspace_mode_active());
-        assert_eq!(workspace.active_visible_index(), 0);
+        assert!(workspace.is_active_pane(first));
     }
 
     #[test]
     fn cancel_snaps_the_cursor_back_to_the_untouched_focus() {
         let mut workspace = Workspace::mvp();
+        let first = workspace.visible_pane_id(0).expect("first pane");
         workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
         workspace.activate_visible_pane(0);
         workspace.enter_workspace_mode();
@@ -322,13 +309,14 @@ mod tests {
         workspace.cancel_workspace_mode();
 
         assert!(!workspace.is_workspace_mode_active());
-        assert_eq!(workspace.active_visible_index(), 0);
-        assert_eq!(workspace.cursor_visible_index(), 0);
+        assert!(workspace.is_active_pane(first));
+        assert_eq!(workspace.cursor_pane_id(), Some(first));
     }
 
     #[test]
     fn move_and_commit_are_no_ops_outside_the_mode() {
         let mut workspace = Workspace::mvp();
+        let first = workspace.visible_pane_id(0).expect("first pane");
         workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
         workspace.activate_visible_pane(0);
 
@@ -336,7 +324,7 @@ mod tests {
         workspace.commit_workspace_mode();
 
         assert!(!workspace.is_workspace_mode_active());
-        assert_eq!(workspace.active_visible_index(), 0);
+        assert!(workspace.is_active_pane(first));
     }
 
     #[test]

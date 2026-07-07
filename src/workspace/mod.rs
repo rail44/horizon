@@ -2,6 +2,7 @@ mod input;
 mod layout;
 mod mode;
 mod mode_input;
+mod nav;
 mod operations;
 mod query;
 mod session;

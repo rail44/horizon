@@ -91,12 +91,18 @@ wave items where possible; design docs on first use.
   `docs/agent-roles-and-skills-design.md`: the role stayed a
   capability envelope (enforcement, identity); the skill carried the
   knowledge.
+- **Recursive layout** — implementation complete 2026-07-07, shipped in
+  four slices per `docs/recursive-layout-design.md`: slice 1 (N-ary
+  tiling tree, shallow-nesting invariant, headless), slice 2 (recursive
+  render, `MAX_VISIBLE_PANES` removed, weight sizing), slice 3
+  (vertical entry: `Split Right…`/`Split Down…` placement verbs, axis
+  threaded onto `CommandInvocation::CreateSession`), slice 4 (2-D
+  geometric navigation: `hjkl` resolves to the nearest pane in that
+  direction by rectangle geometry, `workspace::nav`, rather than tree
+  structure — `j`/`k` are no longer no-ops).
 
 ## Next (unclaimed — pick freely)
 
-- **Recursive layout**: vertical splits, 3+ panes (workspace-mode
-  `j/k` currently no-ops for lack of a vertical axis); prerequisite
-  for the viewers. — slice 1 (N-ary tiling tree, shallow-nesting invariant, headless) shipped 2026-07-07; see docs/recursive-layout-design.md. Slice 2 (recursive render, MAX_VISIBLE_PANES removed, weight sizing) shipped 2026-07-07. Slice 3 (vertical entry: `Split Right…`/`Split Down…` placement verbs, axis threaded onto `CommandInvocation::CreateSession`) shipped 2026-07-07; remaining: slice 4 (geometric nav).
 - **Model-routing OpenAI-compatible API**: router over synthetic.new,
   co-located as an independent crate — no horizon dependencies
   (extractable later), SSE streaming required (horizon-agent assumes

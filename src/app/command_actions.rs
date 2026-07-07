@@ -1435,6 +1435,9 @@ mod tests {
         // `split_active` itself focuses the new (second) pane -- reset to
         // the first so this test starts from a known focus position.
         workspace.activate_visible_pane(0);
+        let second_pane_id = workspace
+            .visible_pane_id(1)
+            .expect("split_active left a second visible pane");
         let state = test_command_action_state(workspace);
         execute_command(CommandInvocation::EnterWorkspaceMode, state.clone());
 
@@ -1446,10 +1449,8 @@ mod tests {
         );
 
         assert_eq!(
-            state
-                .workspace()
-                .with_untracked(|ws| ws.cursor_visible_index()),
-            1
+            state.workspace().with_untracked(|ws| ws.cursor_pane_id()),
+            Some(second_pane_id)
         );
         assert_eq!(
             state

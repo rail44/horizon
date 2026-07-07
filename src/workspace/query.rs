@@ -60,21 +60,30 @@ impl Workspace {
             )
     }
 
-    /// The `PaneId` the workspace-mode cursor currently sits on -- the flat
-    /// index model itself is unchanged (`Workspace::cursor_visible_index`);
-    /// this just resolves that index to the stable id the recursive
-    /// renderer needs to compare against.
+    /// The `PaneId` the workspace-mode cursor currently sits on: the free-
+    /// floating cursor while the mode is active, or simply the focused
+    /// pane otherwise -- mirroring `Workspace::is_workspace_mode_active`'s
+    /// "cursor equals focus outside the mode" invariant (`docs/workspace-
+    /// mode-design.md`). Falls back to the focused pane if the cursor's own
+    /// `PaneId` stopped being visible out from under it (e.g. a
+    /// non-creating palette command closed it while the mode was active) --
+    /// defensive, since nothing in `workspace::mode` itself removes the
+    /// cursor's pane.
     pub(crate) fn cursor_pane_id(&self) -> Option<PaneId> {
-        self.visible_pane_ids()
-            .get(self.cursor_visible_index())
-            .copied()
+        let focus = self.active_tab().map(|tab| tab.active);
+        match self.workspace_mode_cursor {
+            Some(pane_id) if self.visible_pane_ids().contains(&pane_id) => Some(pane_id),
+            _ => focus,
+        }
     }
 
-    /// `pane_id`'s position in `visible_pane_ids()`, if it's currently
-    /// visible in the active tab -- lets a `PaneId`-driven call site (a
-    /// pane's own click handler) reach the index-targeting operations
-    /// (`activate_visible_pane`, `commit_workspace_mode_to`) that workspace
-    /// mode's flat cursor model still uses.
+    /// Test-only now: `workspace::mode`'s cursor is `PaneId`-keyed directly
+    /// (`docs/recursive-layout-design.md`'s slice 4), so no production call
+    /// site needs to resolve a `PaneId` back to a visible index anymore --
+    /// `workspace::view::pane`'s click handler (its last production caller)
+    /// now targets `commit_workspace_mode_to`/`activate_pane` by `PaneId`
+    /// directly. Kept as a small test fixture helper.
+    #[cfg(test)]
     pub(crate) fn visible_index_of(&self, pane_id: PaneId) -> Option<usize> {
         self.visible_pane_ids().iter().position(|id| *id == pane_id)
     }

@@ -288,10 +288,34 @@ impl Workspace {
         session_ids
     }
 
+    /// Test-only now: `workspace::mode`'s commit path (its last production
+    /// caller) is `PaneId`-keyed since `docs/recursive-layout-design.md`'s
+    /// slice 4 and uses [`Self::activate_pane`] instead. Kept as a test
+    /// fixture helper -- "activate pane N by its visible index" is a common
+    /// setup shape across `workspace`/`app`/`control_surface` tests
+    /// unrelated to workspace mode.
+    #[cfg(test)]
     pub(crate) fn activate_visible_pane(&mut self, index: usize) -> bool {
         let Some(pane_id) = self.visible_pane_id(index) else {
             return false;
         };
+        let Some(tab) = self.active_tab_mut() else {
+            return false;
+        };
+        tab.active = pane_id;
+        true
+    }
+
+    /// The `PaneId`-targeting counterpart of [`Self::activate_visible_
+    /// pane`] -- `workspace::mode`'s cursor is `PaneId`-keyed
+    /// (`docs/recursive-layout-design.md`'s slice 4), so committing it
+    /// needs to activate by id directly rather than re-deriving a visible
+    /// index first. `false`, a no-op, if `pane_id` isn't currently visible
+    /// in the active tab.
+    pub(crate) fn activate_pane(&mut self, pane_id: PaneId) -> bool {
+        if !self.visible_pane_ids().contains(&pane_id) {
+            return false;
+        }
         let Some(tab) = self.active_tab_mut() else {
             return false;
         };

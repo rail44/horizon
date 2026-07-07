@@ -388,17 +388,13 @@ pub(super) fn pane_view(state: PaneViewState, pane_id: PaneId) -> impl IntoView 
             // (`docs/workspace-mode-design.md`): commit relative to the
             // click target, exiting the mode, rather than leaving the mode
             // active with only focus moved. A no-op when the mode isn't
-            // active, in which case the ordinary `activate_visible_pane`
-            // call right below is this click's entire effect, unchanged.
-            // Both operations still target workspace mode's flat cursor
-            // index (unchanged by this slice -- see `docs/recursive-
-            // layout-design.md`'s slice 3), so `pane_id` is resolved to its
-            // current visible index first.
-            let Some(index) = ws.visible_index_of(pane_id) else {
-                return;
-            };
-            ws.commit_workspace_mode_to(index);
-            ws.activate_visible_pane(index);
+            // active, in which case the ordinary `activate_pane` call right
+            // below is this click's entire effect, unchanged. Both target
+            // `pane_id` directly -- workspace mode's cursor is `PaneId`-
+            // keyed (`docs/recursive-layout-design.md`'s slice 4), so there
+            // is no index to resolve first.
+            ws.commit_workspace_mode_to(pane_id);
+            ws.activate_pane(pane_id);
         });
         if workspace.with(|ws| ws.active_pane_accepts_text_input_for(pane_id)) {
             set_ime_allowed(true);
