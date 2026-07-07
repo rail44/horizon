@@ -1,9 +1,7 @@
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum CommandId {
-    NewTerminal,
-    NewAgent,
-    NewConfigAgent,
-    SplitActivePane,
+    SplitPane,
+    NewTab,
     FocusNextPane,
     CloseActivePane,
     CloseActiveTab,
@@ -20,7 +18,6 @@ pub(crate) enum CommandId {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CommandCategory {
     Workspace,
-    Terminal,
     Agent,
 }
 
@@ -58,31 +55,17 @@ pub(crate) struct CommandEntry {
 pub(crate) fn core_commands() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
-            id: CommandId::NewTerminal,
-            title: "New Terminal",
-            category: CommandCategory::Terminal,
-            description: "Open a new terminal tab.",
-            destructive: false,
-        },
-        CommandSpec {
-            id: CommandId::NewAgent,
-            title: "New Agent",
-            category: CommandCategory::Agent,
-            description: "Open a new agent tab.",
-            destructive: false,
-        },
-        CommandSpec {
-            id: CommandId::NewConfigAgent,
-            title: "New Configuration Agent",
-            category: CommandCategory::Agent,
-            description: "Open an agent tab for changing Horizon's theme and keybindings.",
-            destructive: false,
-        },
-        CommandSpec {
-            id: CommandId::SplitActivePane,
-            title: "Split Active Pane",
+            id: CommandId::SplitPane,
+            title: "Split Pane…",
             category: CommandCategory::Workspace,
-            description: "Split the active pane in the current tab.",
+            description: "Open the view chooser to split the active pane.",
+            destructive: false,
+        },
+        CommandSpec {
+            id: CommandId::NewTab,
+            title: "New Tab…",
+            category: CommandCategory::Workspace,
+            description: "Open the view chooser to open a new tab.",
             destructive: false,
         },
         CommandSpec {
@@ -167,10 +150,8 @@ pub(crate) fn core_commands() -> Vec<CommandSpec> {
 
 pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
     match command_id {
-        CommandId::NewTerminal
-        | CommandId::NewAgent
-        | CommandId::NewConfigAgent
-        | CommandId::SplitActivePane
+        CommandId::SplitPane
+        | CommandId::NewTab
         | CommandId::FocusNextPane
         | CommandId::ReloadAgentRuntime
         | CommandId::OpenSessionManager
@@ -231,19 +212,19 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 15);
-        assert_eq!(commands[0].id, CommandId::NewTerminal);
-        assert_eq!(commands[0].title, "New Terminal");
-        assert_eq!(commands[2].id, CommandId::NewConfigAgent);
-        assert_eq!(commands[2].title, "New Configuration Agent");
-        assert_eq!(commands[7].id, CommandId::TerminateActiveSession);
-        assert_eq!(commands[7].title, "Terminate Active Session");
-        assert_eq!(commands[8].id, CommandId::TerminateAllDetachedSessions);
-        assert_eq!(commands[8].title, "Terminate All Detached Sessions");
-        assert_eq!(commands[13].id, CommandId::OpenSessionManager);
-        assert_eq!(commands[13].title, "Manage Sessions");
-        assert_eq!(commands[14].id, CommandId::ReloadConfig);
-        assert_eq!(commands[14].title, "Reload Config");
+        assert_eq!(commands.len(), 13);
+        assert_eq!(commands[0].id, CommandId::SplitPane);
+        assert_eq!(commands[0].title, "Split Pane…");
+        assert_eq!(commands[1].id, CommandId::NewTab);
+        assert_eq!(commands[1].title, "New Tab…");
+        assert_eq!(commands[5].id, CommandId::TerminateActiveSession);
+        assert_eq!(commands[5].title, "Terminate Active Session");
+        assert_eq!(commands[6].id, CommandId::TerminateAllDetachedSessions);
+        assert_eq!(commands[6].title, "Terminate All Detached Sessions");
+        assert_eq!(commands[11].id, CommandId::OpenSessionManager);
+        assert_eq!(commands[11].title, "Manage Sessions");
+        assert_eq!(commands[12].id, CommandId::ReloadConfig);
+        assert_eq!(commands[12].title, "Reload Config");
     }
 
     #[test]
@@ -470,13 +451,13 @@ mod tests {
             has_turn_in_flight: false,
         });
 
-        let terminal = filter_command_entries(entries.clone(), "terminal");
-        assert_eq!(terminal.len(), 1);
-        assert_eq!(terminal[0].spec.id, CommandId::NewTerminal);
+        let split = filter_command_entries(entries.clone(), "split pane");
+        assert_eq!(split.len(), 1);
+        assert_eq!(split[0].spec.id, CommandId::SplitPane);
 
-        let current = filter_command_entries(entries, "current tab");
-        assert_eq!(current.len(), 1);
-        assert_eq!(current[0].spec.id, CommandId::SplitActivePane);
+        let new_tab = filter_command_entries(entries, "new tab");
+        assert_eq!(new_tab.len(), 1);
+        assert_eq!(new_tab[0].spec.id, CommandId::NewTab);
     }
 
     #[test]

@@ -107,7 +107,7 @@ fn load_from_path_parses_a_well_formed_file() {
             base_url = "https://example.invalid/v1"
 
             [keybindings]
-            "ctrl+shift+t" = "new-terminal"
+            "ctrl+shift+t" = "new-tab"
 
             [theme]
             accent = "#ff00ff"
@@ -125,7 +125,7 @@ fn load_from_path_parses_a_well_formed_file() {
     );
     assert_eq!(
         loaded.keybindings.get("ctrl+shift+t").map(String::as_str),
-        Some("new-terminal")
+        Some("new-tab")
     );
     assert_eq!(
         loaded.theme.colors.get("accent").map(String::as_str),
@@ -187,7 +187,7 @@ fn reload_from_path_parses_a_well_formed_file() {
             accent = "#ff00ff"
 
             [keybindings]
-            "ctrl+shift+z" = "new-agent"
+            "ctrl+shift+z" = "split-pane"
         "##,
     )
     .unwrap();
@@ -200,7 +200,7 @@ fn reload_from_path_parses_a_well_formed_file() {
     );
     assert_eq!(
         reloaded.keybindings.get("ctrl+shift+z").map(String::as_str),
-        Some("new-agent")
+        Some("split-pane")
     );
 
     let _ = std::fs::remove_file(&path);

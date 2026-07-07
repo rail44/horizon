@@ -1,9 +1,11 @@
 use crate::app::command_actions::{find_agent_turn_in_flight, find_pending_agent_approval};
 use crate::app::commands::{command_entries, filter_command_entries, CommandId, CommandState};
 use crate::control_surface::query::{normalize_palette_query, palette_matches};
-use crate::control_surface::{PaletteItem, SessionManagerRow};
+use crate::control_surface::{
+    PaletteItem, PaletteRow, PaletteStage, SessionManagerRow, ViewChooserRow,
+};
 use crate::session::Frames;
-use crate::workspace::Workspace;
+use crate::workspace::{PaneKind, Workspace};
 
 pub(crate) fn command_state(workspace: &Workspace, frames: &Frames) -> CommandState {
     CommandState {
@@ -152,11 +154,73 @@ pub(crate) fn palette_items(
     items
 }
 
+/// The palette's second-stage view chooser rows (`PaletteStage::
+/// ViewChooser`) -- registry-driven, per `docs/roadmap.md`'s "Placement-
+/// first session creation": `Terminal`/`Agent` (no role) first, then one
+/// row per `horizon_agent::roles::all()` entry, sorted by role id for a
+/// deterministic list (future user-defined agents and WASM views are meant
+/// to extend this list, not add new palette commands). Unlike
+/// `palette_items`, this needs no `Workspace`/`Frames` snapshot -- every row
+/// is a fixed `(kind, role_id)` pair, not derived from live session state.
+pub(crate) fn view_chooser_rows(query: &str) -> Vec<ViewChooserRow> {
+    let query = normalize_palette_query(query);
+
+    let mut roles: Vec<&horizon_agent::roles::RoleDefinition> =
+        horizon_agent::roles::all().to_vec();
+    roles.sort_by_key(|role| role.id);
+
+    let mut rows = vec![
+        ViewChooserRow {
+            kind: PaneKind::Terminal,
+            role_id: None,
+            title: "Terminal".to_string(),
+        },
+        ViewChooserRow {
+            kind: PaneKind::Agent,
+            role_id: None,
+            title: "Agent".to_string(),
+        },
+    ];
+    rows.extend(roles.into_iter().map(|role| ViewChooserRow {
+        kind: PaneKind::Agent,
+        role_id: Some(horizon_agent::roles::RoleId(role.id.to_string())),
+        title: role.title.to_string(),
+    }));
+
+    rows.into_iter()
+        .filter(|row| query.is_empty() || normalize_palette_query(&row.title).contains(&query))
+        .collect()
+}
+
+/// The single stage-branching point for "what rows does the palette show
+/// right now" -- `view::palette`'s rendering and every navigation function
+/// in `actions` (`move_palette_selection`, `clamp_current_palette_selection`
+/// via `update_palette_query`, `execute_palette_selection`) all go through
+/// this rather than re-deciding `Commands` vs `ViewChooser` themselves, so
+/// the row count and the row list can never disagree.
+pub(crate) fn palette_rows(
+    workspace: &Workspace,
+    frames: &Frames,
+    stage: PaletteStage,
+    query: &str,
+) -> Vec<PaletteRow> {
+    match stage {
+        PaletteStage::Commands => palette_items(workspace, frames, query)
+            .into_iter()
+            .map(PaletteRow::Catalog)
+            .collect(),
+        PaletteStage::ViewChooser { .. } => view_chooser_rows(query)
+            .into_iter()
+            .map(PaletteRow::Chooser)
+            .collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::session::SessionId;
-    use crate::workspace::{PaneKind, SessionKind};
+    use crate::workspace::SessionKind;
 
     #[test]
     fn command_state_reflects_workspace_counts() {
@@ -309,5 +373,67 @@ mod tests {
             .map(|row| row.display_number)
             .collect();
         assert_eq!(detached_numbers, vec![2, 3]);
+    }
+
+    #[test]
+    fn view_chooser_rows_lists_kinds_before_roles() {
+        let rows = view_chooser_rows("");
+
+        // Terminal, then Agent (no role), then every registered role --
+        // today just `config`, but the order (kinds first, roles sorted by
+        // id) must hold regardless of how many roles exist.
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].kind, PaneKind::Terminal);
+        assert_eq!(rows[0].role_id, None);
+        assert_eq!(rows[0].title, "Terminal");
+        assert_eq!(rows[1].kind, PaneKind::Agent);
+        assert_eq!(rows[1].role_id, None);
+        assert_eq!(rows[1].title, "Agent");
+        assert_eq!(rows[2].kind, PaneKind::Agent);
+        assert_eq!(
+            rows[2].role_id,
+            Some(horizon_agent::roles::RoleId("config".to_string()))
+        );
+        assert_eq!(rows[2].title, "Configuration Agent");
+    }
+
+    #[test]
+    fn view_chooser_rows_filters_by_title() {
+        let rows = view_chooser_rows("config");
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "Configuration Agent");
+    }
+
+    #[test]
+    fn palette_rows_commands_stage_wraps_palette_items() {
+        let workspace = Workspace::mvp();
+        let frames = Frames::default();
+
+        let rows = palette_rows(&workspace, &frames, PaletteStage::Commands, "split pane");
+
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(
+            &rows[0],
+            PaletteRow::Catalog(PaletteItem::Command(entry)) if entry.spec.id == CommandId::SplitPane
+        ));
+    }
+
+    #[test]
+    fn palette_rows_view_chooser_stage_wraps_chooser_rows() {
+        let workspace = Workspace::mvp();
+        let frames = Frames::default();
+
+        let rows = palette_rows(
+            &workspace,
+            &frames,
+            PaletteStage::ViewChooser {
+                placement: crate::control_surface::Placement::NewTab,
+            },
+            "",
+        );
+
+        assert_eq!(rows.len(), 3);
+        assert!(matches!(&rows[0], PaletteRow::Chooser(row) if row.kind == PaneKind::Terminal));
     }
 }

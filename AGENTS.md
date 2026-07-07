@@ -80,7 +80,7 @@ Manual smoke after `cargo run`: press `ctrl+'` to enter workspace mode
 (`docs/workspace-mode-design.md`), then `:` to open the control surface —
 a Commands-only palette; session management (attach/terminate detached
 sessions) is a separate modal opened via its "Manage Sessions" command. See
-README.md for the manual command checklist (`new terminal`, `split`,
+README.md for the manual command checklist (`new tab`, `split pane`,
 `detached`, `manage sessions`, ...).
 
 ## Module Map (`src/`)

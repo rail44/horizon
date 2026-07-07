@@ -4,6 +4,7 @@ use floem::peniko::kurbo::{Point, Size};
 use floem::prelude::*;
 
 use crate::agent::agentd_runtime::AgentdConnection;
+use crate::control_surface::PaletteStage;
 use crate::session::{Frames, Registry, SessionId};
 use crate::workspace::{AgentDrafts, PaneFocusRequests, Workspace, MAX_VISIBLE_PANES};
 
@@ -20,6 +21,11 @@ pub(super) struct AppState {
     pub(super) palette_open: RwSignal<bool>,
     pub(super) palette_query: RwSignal<String>,
     pub(super) palette_selection: RwSignal<usize>,
+    /// Which palette stage is showing -- the normal Commands catalog, or
+    /// the second-stage view chooser `CommandId::SplitPane`/`CommandId::
+    /// NewTab` open (`docs/roadmap.md`'s "Placement-first session
+    /// creation"). See `control_surface::{open_palette, open_view_chooser}`.
+    pub(super) palette_stage: RwSignal<PaletteStage>,
     pub(super) palette_focus_request: RwSignal<u64>,
     pub(super) pane_focus_requests: PaneFocusRequests,
     /// Whether Horizon's own window currently holds OS-level focus --
@@ -104,6 +110,7 @@ impl AppState {
             palette_open: RwSignal::new(false),
             palette_query: RwSignal::new(String::new()),
             palette_selection: RwSignal::new(0_usize),
+            palette_stage: RwSignal::new(PaletteStage::Commands),
             palette_focus_request: RwSignal::new(0_u64),
             pane_focus_requests: [(); MAX_VISIBLE_PANES].map(|_| RwSignal::new(0_u64)),
             window_focused,
@@ -178,6 +185,7 @@ impl AppState {
             palette_open: RwSignal::new(false),
             palette_query: RwSignal::new(String::new()),
             palette_selection: RwSignal::new(0_usize),
+            palette_stage: RwSignal::new(PaletteStage::Commands),
             palette_focus_request: RwSignal::new(0_u64),
             pane_focus_requests: [(); MAX_VISIBLE_PANES].map(|_| RwSignal::new(0_u64)),
             window_focused: RwSignal::new(true),

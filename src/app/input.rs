@@ -222,6 +222,7 @@ impl AppInput {
             runtime: self.state.session_runtime_state(),
             pane_focus_requests: self.state.pane_focus_requests,
             session_manager: session_manager_handle(&self.state),
+            palette: open_palette_state(&self.state),
         }
     }
 

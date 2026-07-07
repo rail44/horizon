@@ -42,9 +42,11 @@ the control surface (see `docs/workspace-mode-design.md`) — a Commands-only
 palette now that session management has its own modal (see below). It
 supports these manual smoke checks:
 
-- `new terminal`: opens another terminal tab.
-- `new agent`: opens an agent tab.
-- `split`: splits the active pane.
+- `new tab`: opens the view chooser (`Enter` on `Terminal` opens another
+  terminal tab; `Enter` on `Agent` or a role like `Configuration Agent`
+  opens an agent tab).
+- `split pane`: opens the same view chooser, but the chosen view splits the
+  active pane instead of opening a new tab.
 - `close active pane`: closes the active pane and leaves its session detached
   when another pane remains.
 - `detached`: shows detached sessions such as `Terminal #2` and attaches the

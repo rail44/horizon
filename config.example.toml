@@ -188,12 +188,12 @@ window_height = 720.0
 # `escape`, `tab`, `space`, `backspace`, `delete`, `up`/`arrowup`, `down`,
 # `left`, `right`, `home`, `end`, `pageup`, `pagedown`). Case-insensitive.
 #
-# Command ids (see `src/app/commands.rs`'s `CommandId`): new-terminal,
-# new-agent, new-config-agent, split-active-pane, focus-next-pane,
-# close-active-pane, close-active-tab, terminate-active-session,
-# approve-tool-call, deny-tool-call, cancel-agent-turn,
-# reload-agent-runtime, reload-config, manage-sessions (opens the
-# session manager modal). The reserved pseudo-command
+# Command ids (see `src/app/commands.rs`'s `CommandId`): split-pane (opens
+# the palette's view chooser to split the active pane), new-tab (opens the
+# chooser to open a new tab), focus-next-pane, close-active-pane,
+# close-active-tab, terminate-active-session, approve-tool-call,
+# deny-tool-call, cancel-agent-turn, reload-agent-runtime, reload-config,
+# manage-sessions (opens the session manager modal). The reserved pseudo-command
 # `open-palette` is also accepted here — it isn't a real `CommandId` (opening
 # the palette isn't an operation the palette itself can list or run), and
 # overrides the chord that opens the command palette. Unbound by default:
@@ -210,7 +210,7 @@ window_height = 720.0
 # stderr and skipped — never a startup failure.
 # ---------------------------------------------------------------------------
 [keybindings]
-# "ctrl+shift+t" = "new-terminal"
+# "ctrl+shift+t" = "new-tab"
 # "ctrl+shift+p" = "open-palette"
 # "ctrl+'" = "workspace-mode"
 
