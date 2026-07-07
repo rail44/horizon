@@ -75,39 +75,59 @@ impl Workspace {
     /// across `workspace`/`app`/`control_surface` build their fixtures with.
     #[cfg(test)]
     pub(crate) fn split_active(&mut self, kind: PaneKind, session_id: Option<SessionId>) -> PaneId {
-        self.split_tab(self.active_tab, kind, session_id, true)
+        self.split_tab(
+            self.active_tab,
+            kind,
+            session_id,
+            true,
+            SplitAxis::Horizontal,
+        )
     }
 
     /// Splits `tab_id` (any tab, not necessarily the active one) with a new
-    /// `kind` pane, honoring `activate` for whether that tab becomes active
-    /// and its new pane takes tab-local focus -- the shared worker behind
-    /// [`Self::split_active`] (`tab_id == self.active_tab`, `activate:
-    /// true`, a no-op change in that case) and
-    /// [`Self::split_session_with_new_session`] (an explicit, possibly
-    /// non-active, target tab). A `tab_id` that no longer exists is silently
-    /// a no-op for the layout mutation (defensive; every call site resolves
-    /// `tab_id` from a live tab immediately beforehand, so this never
-    /// actually happens today) but still returns the new pane's id and
-    /// registers its session, matching `split_active`'s prior behavior of
-    /// never failing outright.
+    /// `kind` pane at that tab's currently-focused pane, honoring `activate`
+    /// for whether that tab becomes active and its new pane takes tab-local
+    /// focus -- the shared worker behind [`Self::split_active`] (`tab_id ==
+    /// self.active_tab`, `activate: true`, a no-op change in that case) and
+    /// [`Self::attach_existing_session_to_split_activated`]. A `tab_id`
+    /// that no longer exists is silently a no-op for the layout mutation
+    /// (defensive; every call site resolves `tab_id` from a live tab
+    /// immediately beforehand, so this never actually happens today) but
+    /// still returns the new pane's id and registers its session, matching
+    /// `split_active`'s prior behavior of never failing outright.
     fn split_tab(
         &mut self,
         tab_id: TabId,
         kind: PaneKind,
         session_id: Option<SessionId>,
         activate: bool,
+        axis: SplitAxis,
+    ) -> PaneId {
+        self.split_pane_in_tab(tab_id, None, kind, session_id, activate, axis)
+    }
+
+    /// Splits `tab_id` with a new `kind` pane at `target_pane_id` (the
+    /// tab's currently-focused pane when `None`), honoring `activate` and
+    /// `axis` per [`Self::split_tab`]'s doc comment. Shared by
+    /// [`Self::split_tab`] (target: the tab's own focus) and
+    /// [`Self::split_session_with_new_session`] (an explicit target pane,
+    /// which may not be the tab's currently-focused one).
+    fn split_pane_in_tab(
+        &mut self,
+        tab_id: TabId,
+        target_pane_id: Option<PaneId>,
+        kind: PaneKind,
+        session_id: Option<SessionId>,
+        activate: bool,
+        axis: SplitAxis,
     ) -> PaneId {
         self.ensure_session(kind, session_id);
         let pane = Pane::new(kind, session_id);
         let pane_id = pane.id;
         if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) {
-            let old_root = tab.root.clone();
-            tab.root = LayoutNode::Split {
-                axis: SplitAxis::Horizontal,
-                ratio: 0.5,
-                first: Box::new(old_root),
-                second: Box::new(LayoutNode::Pane(pane_id)),
-            };
+            let target = target_pane_id.unwrap_or(tab.active);
+            tab.root.split_pane(target, pane_id, axis);
+            tab.root.flatten();
             if activate {
                 tab.active = pane_id;
             }
@@ -142,12 +162,15 @@ impl Workspace {
     /// honoring `activate` exactly like [`Self::split_tab`] -- the control
     /// plane's `--split <session-id>` placement
     /// (`docs/cli-control-plane-design.md`'s "Placement vocabulary"
-    /// decision). Returns `None`, spawning nothing, when
-    /// `target_session_id` isn't referenced by any pane (the CLI's "target
-    /// session not found" error case -- callers are expected to have
-    /// already surfaced that as an error before reaching here, see
-    /// `app::external_commands::dispatch_invoke`'s pre-check; this is
-    /// defense in depth, not the primary error path).
+    /// decision). Splits at `target_session_id`'s own pane (not the tab's
+    /// focus, which may be a different pane), so the new pane lands next to
+    /// the requested session regardless of what else is focused in that
+    /// tab. Returns `None`, spawning nothing, when `target_session_id` isn't
+    /// referenced by any pane (the CLI's "target session not found" error
+    /// case -- callers are expected to have already surfaced that as an
+    /// error before reaching here, see `app::external_commands::
+    /// dispatch_invoke`'s pre-check; this is defense in depth, not the
+    /// primary error path).
     pub(crate) fn split_session_with_new_session(
         &mut self,
         target_session_id: SessionId,
@@ -165,7 +188,14 @@ impl Workspace {
             .find(|tab| tab.root.pane_ids().contains(&target_pane_id))
             .map(|tab| tab.id)?;
         let session_id = SessionId::new();
-        self.split_tab(tab_id, kind, Some(session_id), activate);
+        self.split_pane_in_tab(
+            tab_id,
+            Some(target_pane_id),
+            kind,
+            Some(session_id),
+            activate,
+            SplitAxis::Horizontal,
+        );
         Some(session_id)
     }
 
@@ -186,7 +216,13 @@ impl Workspace {
         activate: bool,
     ) -> Option<PaneId> {
         let kind = self.session_pane_kind(session_id)?;
-        Some(self.split_tab(self.active_tab, kind, Some(session_id), activate))
+        Some(self.split_tab(
+            self.active_tab,
+            kind,
+            Some(session_id),
+            activate,
+            SplitAxis::Horizontal,
+        ))
     }
 
     pub(crate) fn activate_tab_index(&mut self, index: usize) -> bool {
@@ -270,7 +306,8 @@ impl Workspace {
         self.panes.retain(|pane| pane.id != pane_id);
         let mut empty_tabs = Vec::new();
         for tab in &mut self.tabs {
-            if let Some(root) = tab.root.without_pane(pane_id) {
+            if let Some(mut root) = tab.root.without_pane(pane_id) {
+                root.flatten();
                 tab.root = root;
             } else {
                 empty_tabs.push(tab.id);

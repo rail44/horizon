@@ -20,11 +20,12 @@ use super::types::Workspace;
 
 /// A cursor movement request. `Up`/`Down` are accepted today (the v1 key
 /// interpreter's `hjkl` vocabulary needs all four -- see
-/// `workspace::mode_input`) but are currently always a no-op: every layout
-/// today is a single left-to-right row of panes (`workspace::types::tree`'s
-/// `SplitAxis` has only a `Horizontal` variant so far), so there is no
-/// "pane above/below" to move to yet. Wiring them up is forward work for
-/// whenever a vertical split exists, not a v1 gap.
+/// `workspace::mode_input`) but are currently always a no-op: every split
+/// today is still requested as `SplitAxis::Horizontal` (see
+/// `docs/recursive-layout-design.md`'s slice plan -- the tree itself is
+/// N-ary and vertical-capable, but no caller passes `Vertical` yet), so
+/// there is no "pane above/below" to move to. Wiring `Up`/`Down` up to real
+/// geometric navigation is slice 3 of that plan, not a v1 gap.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Direction {
     Left,

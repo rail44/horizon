@@ -1,3 +1,4 @@
+use super::types::LayoutNode;
 use super::*;
 use crate::session::SessionId;
 
@@ -439,4 +440,60 @@ fn terminate_unknown_session_is_noop() {
     assert!(!workspace.terminate_session(SessionId::new()));
     assert_eq!(workspace.session_count(), 1);
     assert_eq!(workspace.visible_panes().len(), 1);
+}
+
+#[test]
+fn repeated_splits_of_the_focused_pane_stay_in_one_row() {
+    // `split_active` always splits the focused pane, and each split leaves
+    // its new pane focused, so three consecutive splits chain onto the same
+    // (last-created) pane -- this should absorb into a single flat row
+    // rather than nest (docs/recursive-layout-design.md's shallow-nesting
+    // invariant).
+    let mut workspace = Workspace::mvp();
+    workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+    workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+    workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+
+    assert_eq!(workspace.visible_panes().len(), 4);
+    let root = &workspace.tabs[workspace.active_tab_index()].root;
+    assert!(root.is_canonical());
+    match root {
+        LayoutNode::Split { children, .. } => assert_eq!(children.len(), 4),
+        LayoutNode::Pane(_) => panic!("expected a single flat row of 4 panes"),
+    }
+}
+
+#[test]
+fn split_session_with_new_session_targets_the_sessions_own_pane() {
+    // The new pane must land next to `target_session_id`'s own pane, not
+    // whichever pane happens to be focused in that tab: here the tab's
+    // focus is refocused onto the *first* pane before splitting on it, so
+    // the new pane must be inserted right after it (index 1), leaving the
+    // second session's pane pushed to the end (index 2) rather than the
+    // new pane simply being appended.
+    let mut workspace = Workspace::mvp();
+    let first_session = workspace.active_terminal_session_id().expect("session");
+    let second_session = SessionId::new();
+    workspace.split_active(PaneKind::Terminal, Some(second_session));
+    workspace.activate_visible_pane(0);
+
+    let third_session = workspace
+        .split_session_with_new_session(first_session, PaneKind::Terminal, true)
+        .expect("split next to the first session's pane");
+
+    let root = &workspace.tabs[workspace.active_tab_index()].root;
+    assert!(root.is_canonical());
+    assert_eq!(root.pane_ids().len(), 3);
+    assert_eq!(
+        workspace.visible_terminal_session_id(0),
+        Some(first_session)
+    );
+    assert_eq!(
+        workspace.visible_terminal_session_id(1),
+        Some(third_session)
+    );
+    assert_eq!(
+        workspace.visible_terminal_session_id(2),
+        Some(second_session)
+    );
 }
