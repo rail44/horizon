@@ -81,9 +81,17 @@ Artifacts:
 Driving input (all optional env vars): `HORIZON_TEST_TEXT` (typed into the
 terminal), `HORIZON_TEST_ENTER=1` (press Return), `HORIZON_TEST_SPLIT=1`
 (split via workspace mode: `ctrl+'` then `:`), `HORIZON_TEST_XDOTOOL="<args>"`
-(raw xdotool command chain). Assertions: `HORIZON_EXPECT_DUMP_CONTAINS`,
-`HORIZON_EXPECT_STATUS_CONTAINS`, `HORIZON_EXPECT_CLIPBOARD_CONTAINS`
-(fixed-string grep against the respective dump; mismatch exits 1).
+(raw xdotool command chain -- note `xdotool type` swallows every remaining
+word in the chain as literal text rather than stopping at the next
+recognized verb, so it can only ever be the last command; type multi-word
+sequences via per-letter `key` chains instead, as the existing scenarios
+already do for palette queries). Assertions: `HORIZON_EXPECT_DUMP_CONTAINS`,
+`HORIZON_EXPECT_DUMP_NOT_CONTAINS`, `HORIZON_EXPECT_STATUS_CONTAINS`,
+`HORIZON_EXPECT_CLIPBOARD_CONTAINS` (fixed-string grep against the
+respective dump, negated for the `NOT_CONTAINS` one; mismatch exits 1).
+`DUMP_NOT_CONTAINS` exists for regressions only observable as unwanted
+content leaking/lingering in the dump rather than expected content being
+absent -- see the tab-switch/new-tab scenarios below.
 
 Example:
 
@@ -108,8 +116,24 @@ Runs check-terminal-visual.sh once per scenario, each on its own display
    `2 pane(s)` in status.
 4. `split-down` — splits vertically via the command surface, expects
    `2 pane(s)` in status.
-5. `color-grid` — ANSI background colors via python3 (skipped if no python3).
-6. `nvim-screen` — launches nvim with a 5s capture delay, expects `NVIM`
+5. `new-tab-no-stale-render` / `tab-switch-among-new-tabs` — regression
+   guards for the stale-render/input-misrouting bug fixed in `5fb0b97`
+   (`PositionShape` in `src/workspace/view/layout_tree.rs`): switching
+   between single-pane tabs left the *previous* tab's widget mounted (both
+   rendered and holding keyboard focus). Status/model-dump asserts can't
+   catch this (the workspace model itself stays correct throughout) --
+   these plant a marker in one tab, switch to another (`new-tab-no-stale-
+   render` via `New Tab`'s creation-dive focus, `tab-switch-among-new-tabs`
+   via the palette's `ActivateTab` "tab N" row instead, switching between
+   two already-created tabs so the round trip can't trivially land back on
+   the one pane whose widget was never disturbed), types a second marker,
+   and asserts it shows up while an earlier, different tab's marker does
+   not (`HORIZON_EXPECT_DUMP_NOT_CONTAINS`) -- on the bug the keystrokes
+   for the new/target tab are silently dropped (their pane's own
+   `request_focus` binding never existed to receive them), leaving a
+   *stale* marker as the last thing written to the shared dump instead.
+6. `color-grid` — ANSI background colors via python3 (skipped if no python3).
+7. `nvim-screen` — launches nvim with a 5s capture delay, expects `NVIM`
    (skipped if no nvim).
 
 Artifacts land under `/tmp/horizon-terminal-smoke-<timestamp>-<pid>/<scenario>/`

@@ -219,6 +219,19 @@ if [[ -n "${HORIZON_EXPECT_DUMP_CONTAINS:-}" ]]; then
   fi
 fi
 
+# The negative counterpart: some regressions (e.g. stale-render input
+# misrouting) are only observable as unwanted content leaking into the
+# dump, not as expected content being absent -- see the
+# tab-switch/new-tab smoke scenarios in run-terminal-smoke.sh, which rely
+# on this to catch input landing in the wrong (stale) terminal.
+if [[ -n "${HORIZON_EXPECT_DUMP_NOT_CONTAINS:-}" ]]; then
+  if grep -F -- "${HORIZON_EXPECT_DUMP_NOT_CONTAINS}" "$dump" >/dev/null; then
+    echo "Terminal dump unexpectedly contains: ${HORIZON_EXPECT_DUMP_NOT_CONTAINS}" >&2
+    echo "Dump path: $dump" >&2
+    exit 1
+  fi
+fi
+
 if [[ -n "${HORIZON_EXPECT_CLIPBOARD_CONTAINS:-}" ]]; then
   if [[ ! -s "$clipboard_dump" ]]; then
     echo "Clipboard dump is empty or missing: $clipboard_dump" >&2
