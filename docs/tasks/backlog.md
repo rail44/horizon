@@ -264,3 +264,14 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     search — LSP integration is a larger commitment (language-server
     lifecycle) and overlaps with future viewer/plugin work. Recorded
     2026-07-07.
+20. **Live PTY hand-off across a sessiond binary update** — keeping a
+    terminal session's PTY master fd and child processes alive while
+    the session daemon's binary is replaced (execve re-exec or
+    systemd-style socket-activation fd passing). Deliberately split out
+    of the session-daemon migration (consultation 2026-07-07, agenda
+    item 5): UI-crash survival — the actual motive — is already met by
+    sessiond being a separate process, so this is an independent,
+    heavier capability (a reliability requirement agentd's drain has
+    never proven). First migration form accepts "sessiond reload
+    terminates terminal sessions; agent sessions restore from the log."
+    See docs/research/session-daemon.md §2.E.
