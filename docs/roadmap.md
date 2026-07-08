@@ -29,7 +29,7 @@ truncation. Research corpus under `docs/research/`.
 
 ## Shared foundations
 
-Four pieces that multiple desired features sit on. Grow them inside
+Five pieces that multiple desired features sit on. Grow them inside
 wave items where possible; design docs on first use.
 
 1. **Agent roles** — named agent definitions (prompt sections, allowed
@@ -56,8 +56,13 @@ wave items where possible; design docs on first use.
    (`docs/session-daemon-design.md`): expand agentd → `sessiond`
    hosting both kinds, whole terminal brain moved (no PTY-only stage),
    sister contracts, row-diff push. Migration starts headless with the
-   `horizon-terminal-core` crate extraction; awaiting a domain session
-   to pick it up. **Session relationship model designed 2026-07-07**
+   `horizon-terminal-core` crate extraction. **In flight 2026-07-08**
+   (owner-driven session): the extraction's one cross-crate dependency
+   is theme-color resolution, and how that cut is made pre-decides the
+   daemon frame representation — daemon-resolves-RGB (aligns with the
+   row-diff `TerminalLine` `PartialEq`) vs UI-resolves-index (zero
+   round-trip live re-color, but changes the frame type). **Session
+   relationship model designed 2026-07-07**
    (`docs/session-relationship-design.md`): lineage is a first-class
    layout-orthogonal derivation tree — the same tree worktree
    isolation, delegation, and messaging all use. Foundation landed
@@ -66,6 +71,23 @@ wave items where possible; design docs on first use.
    lineage tree, origin-defaulted isolation/worktree creation, and
    control surfacing (open-directory command + session-manager lineage
    view).
+5. **Reactive store** — a general keyed/field-granular reactive
+   container for floem, which has no store (its reactivity tracks whole
+   signals only; confirmed from the pinned source). The UI-wide
+   generalization of the agent-UI-performance leg-1 fix: the 2026-07-08
+   audit found the over-tracking root is `session::Frames` — one coarse
+   `RwSignal` with deep-cloning accessors, no per-session/per-field
+   signals — leaking into the command palette, the per-pane
+   header/status/approval closures, and the terminal pane. **Decided
+   2026-07-08** to build the fuller per-field form (reactive_stores-style
+   macro-derived path subscription) rather than a keyed-map-only stopgap,
+   because roadmap features (multi-session live-status, coordination /
+   lineage views, the todo overview) need per-field subscription anyway.
+   **In flight 2026-07-08** (owner-driven session): open substrate fork —
+   real-signal decomposition vs single-value + path-table — and how far
+   to open `AgentFrame`/`Frames` into typed fields. First consumer:
+   `Frames`. Existence proof: leg-1's hand-rolled per-block signals.
+   Design doc `docs/reactive-store-design.md` (pending).
 
 ## In flight
 
