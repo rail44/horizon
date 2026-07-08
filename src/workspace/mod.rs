@@ -12,8 +12,8 @@ pub(crate) mod view;
 pub(crate) use input::{
     active_agent, active_agent_draft, active_terminal_sender, active_text_input_pane,
     handle_active_pane_key, handle_active_pane_key_release, handle_agent_approval_key,
-    pane_terminal_sender, request_active_pane_focus, trace_ime, AgentDrafts, ApprovalKeyAction,
-    PaneFocusRequests,
+    insert_agent_draft_text, pane_terminal_sender, request_active_pane_focus, trace_ime,
+    AgentDraft, AgentDrafts, ApprovalKeyAction, PaneFocusRequests,
 };
 pub(crate) use mode::Direction;
 pub(crate) use mode_input::{

@@ -8,7 +8,8 @@ use crate::control_surface::{handle_control_key, open_palette};
 use crate::terminal::TerminalCommand;
 use crate::workspace::{
     active_agent, active_agent_draft, active_terminal_sender, active_text_input_pane,
-    agent_escape_requests_workspace_mode, handle_workspace_mode_key, trace_ime, ModeAction,
+    agent_escape_requests_workspace_mode, handle_workspace_mode_key, insert_agent_draft_text,
+    trace_ime, ModeAction,
 };
 
 use super::context::{control_input_state, open_palette_state, session_manager_handle};
@@ -117,7 +118,7 @@ impl AppInput {
                 if let Some(draft) =
                     active_agent_draft(self.state.workspace, self.state.agent_drafts.clone())
                 {
-                    draft.update(|draft| draft.push_str(text));
+                    insert_agent_draft_text(draft, text);
                     return EventPropagation::Stop;
                 }
             }

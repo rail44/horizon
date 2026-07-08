@@ -4,9 +4,9 @@ use std::rc::Rc;
 
 use crate::agent::contract::Command;
 use crate::app::keymap::{
-    agent_draft_action, is_terminal_copy_key, is_terminal_paste_key, pop_last_grapheme_approx,
-    terminal_input_from_key, terminal_key_event_kind, terminal_key_from_key, termwiz_modifiers,
-    AgentDraftAction,
+    agent_draft_action, is_terminal_copy_key, is_terminal_paste_key, next_grapheme_boundary_approx,
+    prev_grapheme_boundary_approx, terminal_input_from_key, terminal_key_event_kind,
+    terminal_key_from_key, termwiz_modifiers, AgentDraftAction,
 };
 use crate::session::Registry;
 use crate::terminal::{KeyEventKind, TerminalCommand};
@@ -73,7 +73,21 @@ impl<T: Default + 'static> PaneKeyedSignals<T> {
     }
 }
 
-pub(crate) type AgentDrafts = PaneKeyedSignals<String>;
+/// A composer's in-progress message plus its cursor position -- `cursor` is
+/// a byte offset into `text`, always kept on a UTF-8 char boundary by every
+/// mutation path (`apply_agent_draft_action`, `insert_agent_draft_text`).
+/// Backs `agent_controls::agent_composer`'s cursor rendering and the
+/// arrow-key/insert/backspace editing below; before this, drafts were plain
+/// `String`s with an implicit cursor that was always at the end (append-only
+/// typing, pop-from-the-end Backspace), which is what made the cursor
+/// neither visible nor movable.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct AgentDraft {
+    pub(crate) text: String,
+    pub(crate) cursor: usize,
+}
+
+pub(crate) type AgentDrafts = PaneKeyedSignals<AgentDraft>;
 pub(crate) type PaneFocusRequests = PaneKeyedSignals<u64>;
 
 pub(crate) fn active_agent(workspace: RwSignal<Workspace>) -> bool {
@@ -103,12 +117,26 @@ pub(crate) fn request_active_pane_focus(
 pub(crate) fn active_agent_draft(
     workspace: RwSignal<Workspace>,
     agent_drafts: AgentDrafts,
-) -> Option<RwSignal<String>> {
+) -> Option<RwSignal<AgentDraft>> {
     if !active_agent(workspace) {
         return None;
     }
 
     agent_drafts.get(active_pane_id(workspace)?)
+}
+
+/// Inserts `text` at the current cursor and advances the cursor past it --
+/// shared by ordinary character insertion/paste (`handle_agent_key` below),
+/// IME commit (`app::input::AppInput::handle_ime_commit`), and the approval
+/// row's soft-redirect path (`workspace::view::pane`'s
+/// `ApprovalKeyAction::Redirect`), so every write path keeps the cursor
+/// in sync with the text it just inserted instead of always appending at
+/// the tail regardless of where the cursor actually is.
+pub(crate) fn insert_agent_draft_text(draft: RwSignal<AgentDraft>, text: &str) {
+    draft.update(|draft| {
+        draft.text.insert_str(draft.cursor, text);
+        draft.cursor += text.len();
+    });
 }
 
 pub(crate) fn active_terminal_sender(
@@ -204,40 +232,56 @@ fn handle_terminal_key_release(
 
 fn handle_agent_key(
     key_event: &KeyEvent,
-    draft: RwSignal<String>,
+    draft: RwSignal<AgentDraft>,
     agent_tx: Option<crossbeam_channel::Sender<Command>>,
 ) -> bool {
     if is_terminal_paste_key(key_event) {
         if let Ok(text) = Clipboard::get_contents() {
-            draft.update(|draft| draft.push_str(&text));
+            insert_agent_draft_text(draft, &text);
             return true;
         }
     }
 
-    match agent_draft_action(&key_event.key.logical_key, key_event.modifiers) {
-        Some(AgentDraftAction::Insert(text)) => {
-            draft.update(|draft| draft.push_str(&text));
-            true
-        }
-        Some(AgentDraftAction::Backspace) => {
-            draft.update(|draft| {
-                pop_last_grapheme_approx(draft);
-            });
-            true
-        }
-        Some(AgentDraftAction::Submit) => {
-            let text = draft.with_untracked(|draft| draft.trim().to_string());
+    let Some(action) = agent_draft_action(&key_event.key.logical_key, key_event.modifiers) else {
+        return false;
+    };
+    apply_agent_draft_action(action, draft, agent_tx);
+    true
+}
+
+/// Applies one editing action to `draft` -- pulled out of `handle_agent_key`
+/// so it's directly testable without constructing a floem `KeyEvent` (which
+/// wraps a private winit type -- see `app::keymap::Chord::matches`'s doc
+/// comment for why the rest of this file's tests stick to raw `Key`/
+/// `Modifiers` instead).
+fn apply_agent_draft_action(
+    action: AgentDraftAction,
+    draft: RwSignal<AgentDraft>,
+    agent_tx: Option<crossbeam_channel::Sender<Command>>,
+) {
+    match action {
+        AgentDraftAction::Insert(text) => insert_agent_draft_text(draft, &text),
+        AgentDraftAction::Backspace => draft.update(|draft| {
+            let boundary = prev_grapheme_boundary_approx(&draft.text, draft.cursor);
+            draft.text.replace_range(boundary..draft.cursor, "");
+            draft.cursor = boundary;
+        }),
+        AgentDraftAction::MoveLeft => draft.update(|draft| {
+            draft.cursor = prev_grapheme_boundary_approx(&draft.text, draft.cursor);
+        }),
+        AgentDraftAction::MoveRight => draft.update(|draft| {
+            draft.cursor = next_grapheme_boundary_approx(&draft.text, draft.cursor);
+        }),
+        AgentDraftAction::Submit => {
+            let text = draft.with_untracked(|draft| draft.text.trim().to_string());
             if text.is_empty() {
-                return true;
+                return;
             }
             if let Some(tx) = agent_tx {
-                let command = Command::UserMessage { text };
-                let _ = tx.send(command);
-                draft.set(String::new());
+                let _ = tx.send(Command::UserMessage { text });
+                draft.set(AgentDraft::default());
             }
-            true
         }
-        None => false,
     }
 }
 
@@ -339,7 +383,7 @@ pub(crate) fn handle_active_pane_key(
     pane_id: PaneId,
     ime_composing: RwSignal<bool>,
     ime_preedit: RwSignal<Option<String>>,
-    agent_draft: RwSignal<String>,
+    agent_draft: RwSignal<AgentDraft>,
 ) -> bool {
     if composing_guard_swallows(&key_event.key.logical_key, ime_composing, ime_preedit) {
         return true;
@@ -573,5 +617,128 @@ mod tests {
             approval_key_action(&Key::Character("h".into()), Modifiers::ALT),
             ApprovalKeyAction::Swallow
         );
+    }
+
+    // --- agent draft editing (`apply_agent_draft_action`) -----------------
+    //
+    // Exercises the action-application core directly rather than through
+    // `handle_agent_key`'s full `&KeyEvent`, which can't be constructed in a
+    // test (see `apply_agent_draft_action`'s doc comment).
+
+    fn apply_all(draft: RwSignal<AgentDraft>, actions: impl IntoIterator<Item = AgentDraftAction>) {
+        for action in actions {
+            apply_agent_draft_action(action, draft, None);
+        }
+    }
+
+    #[test]
+    fn cursor_left_then_insert_lands_mid_string_not_at_the_tail() {
+        // The regression this whole fix is for: typing "abc", moving the
+        // cursor left twice, then typing "X" must insert *before* "bc"
+        // ("aXbc"), not append at the end ("abcX") the way the old
+        // always-push_str editing did.
+        let draft = RwSignal::new(AgentDraft::default());
+        apply_all(
+            draft,
+            [
+                AgentDraftAction::Insert("a".to_string()),
+                AgentDraftAction::Insert("b".to_string()),
+                AgentDraftAction::Insert("c".to_string()),
+                AgentDraftAction::MoveLeft,
+                AgentDraftAction::MoveLeft,
+                AgentDraftAction::Insert("X".to_string()),
+            ],
+        );
+
+        draft.with_untracked(|draft| {
+            assert_eq!(draft.text, "aXbc");
+            assert_eq!(draft.cursor, 2);
+        });
+    }
+
+    #[test]
+    fn backspace_removes_the_grapheme_before_the_cursor_not_the_tail() {
+        let draft = RwSignal::new(AgentDraft::default());
+        apply_all(
+            draft,
+            [
+                AgentDraftAction::Insert("abc".to_string()),
+                AgentDraftAction::MoveLeft,
+                AgentDraftAction::Backspace,
+            ],
+        );
+
+        draft.with_untracked(|draft| {
+            assert_eq!(draft.text, "ac");
+            assert_eq!(draft.cursor, 1);
+        });
+    }
+
+    #[test]
+    fn move_right_past_the_end_of_text_is_a_no_op() {
+        let draft = RwSignal::new(AgentDraft::default());
+        apply_all(
+            draft,
+            [
+                AgentDraftAction::Insert("ab".to_string()),
+                AgentDraftAction::MoveRight,
+                AgentDraftAction::MoveRight,
+            ],
+        );
+
+        draft.with_untracked(|draft| {
+            assert_eq!(draft.text, "ab");
+            assert_eq!(draft.cursor, 2);
+        });
+    }
+
+    #[test]
+    fn cursor_editing_handles_multibyte_japanese_text() {
+        // Test data as multibyte/IME-relevant Japanese, per this repo's own
+        // convention for exercising char-boundary correctness.
+        let draft = RwSignal::new(AgentDraft::default());
+        apply_all(
+            draft,
+            [
+                AgentDraftAction::Insert("こんにちは".to_string()),
+                AgentDraftAction::MoveLeft,
+                AgentDraftAction::MoveLeft,
+                AgentDraftAction::Insert("!".to_string()),
+            ],
+        );
+
+        draft.with_untracked(|draft| {
+            assert_eq!(draft.text, "こんに!ちは");
+        });
+    }
+
+    #[test]
+    fn submit_sends_trimmed_text_and_resets_cursor() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let draft = RwSignal::new(AgentDraft::default());
+        apply_agent_draft_action(AgentDraftAction::Insert("  hi  ".to_string()), draft, None);
+        apply_agent_draft_action(AgentDraftAction::Submit, draft, Some(tx));
+
+        draft.with_untracked(|draft| {
+            assert_eq!(draft.text, "");
+            assert_eq!(draft.cursor, 0);
+        });
+        assert_eq!(
+            rx.try_recv(),
+            Ok(Command::UserMessage {
+                text: "hi".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn submit_of_blank_text_does_not_send_or_clear() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let draft = RwSignal::new(AgentDraft::default());
+        apply_agent_draft_action(AgentDraftAction::Insert("   ".to_string()), draft, None);
+        apply_agent_draft_action(AgentDraftAction::Submit, draft, Some(tx));
+
+        draft.with_untracked(|draft| assert_eq!(draft.text, "   "));
+        assert!(rx.try_recv().is_err());
     }
 }

@@ -11,8 +11,8 @@ use crate::terminal::TerminalFrame;
 use crate::ui::theme;
 use crate::workspace::{
     agent_escape_requests_workspace_mode, handle_active_pane_key, handle_active_pane_key_release,
-    handle_agent_approval_key, handle_workspace_mode_key, pane_terminal_sender, AgentDrafts,
-    ApprovalKeyAction, ModeAction, PaneId, PaneKind, Workspace,
+    handle_agent_approval_key, handle_workspace_mode_key, insert_agent_draft_text,
+    pane_terminal_sender, AgentDrafts, ApprovalKeyAction, ModeAction, PaneId, PaneKind, Workspace,
 };
 use floem::prelude::*;
 use floem::reactive::create_effect;
@@ -540,7 +540,7 @@ pub(super) fn pane_view(state: PaneViewState, pane_id: PaneId) -> impl IntoView 
                         }
                         ApprovalKeyAction::Redirect(text) => {
                             agent_pane_focus.set(AgentPaneFocus::MessageBox);
-                            agent_draft.update(|draft| draft.push_str(&text));
+                            insert_agent_draft_text(agent_draft, &text);
                         }
                         ApprovalKeyAction::Swallow => {}
                     }

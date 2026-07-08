@@ -11,13 +11,43 @@ use crate::terminal::KeyEventKind;
 pub(crate) enum AgentDraftAction {
     Insert(String),
     Backspace,
+    MoveLeft,
+    MoveRight,
     Submit,
 }
 
-pub(crate) fn pop_last_grapheme_approx(text: &mut String) {
-    while let Some(ch) = text.pop() {
-        if !is_combining_mark(ch) {
-            break;
+/// Byte offset of the grapheme boundary immediately before `at` in `text`
+/// (which must itself land on a char boundary) -- the cursor-movement/
+/// backspace primitive behind `AgentDraftAction::Backspace`/`MoveLeft`.
+/// Steps back over trailing combining marks so a precomposed accent's mark
+/// doesn't get stranded from its base character, same approximation the
+/// codebase already accepted (this replaces the old always-pop-from-the-end
+/// `pop_last_grapheme_approx`, generalized to an arbitrary cursor position);
+/// it doesn't implement full UAX #29 grapheme clustering.
+pub(crate) fn prev_grapheme_boundary_approx(text: &str, at: usize) -> usize {
+    let mut idx = at;
+    loop {
+        let Some(ch) = text[..idx].chars().next_back() else {
+            return 0;
+        };
+        idx -= ch.len_utf8();
+        if idx == 0 || !is_combining_mark(ch) {
+            return idx;
+        }
+    }
+}
+
+/// Byte offset of the grapheme boundary immediately after `at` in `text` --
+/// the counterpart behind `AgentDraftAction::MoveRight`.
+pub(crate) fn next_grapheme_boundary_approx(text: &str, at: usize) -> usize {
+    let mut idx = at;
+    loop {
+        let Some(ch) = text[idx..].chars().next() else {
+            return text.len();
+        };
+        idx += ch.len_utf8();
+        if !text[idx..].chars().next().is_some_and(is_combining_mark) {
+            return idx;
         }
     }
 }
@@ -26,6 +56,12 @@ pub(crate) fn agent_draft_action(key: &Key, modifiers: Modifiers) -> Option<Agen
     match key {
         Key::Named(NamedKey::Enter) => Some(AgentDraftAction::Submit),
         Key::Named(NamedKey::Backspace) => Some(AgentDraftAction::Backspace),
+        Key::Named(NamedKey::ArrowLeft) if agent_accepts_text_input(modifiers) => {
+            Some(AgentDraftAction::MoveLeft)
+        }
+        Key::Named(NamedKey::ArrowRight) if agent_accepts_text_input(modifiers) => {
+            Some(AgentDraftAction::MoveRight)
+        }
         Key::Named(NamedKey::Space) if agent_accepts_text_input(modifiers) => {
             Some(AgentDraftAction::Insert(" ".to_string()))
         }
@@ -747,6 +783,75 @@ mod tests {
             agent_draft_action(&Key::Character("p".into()), Modifiers::CONTROL),
             None
         );
+    }
+
+    #[test]
+    fn agent_draft_accepts_arrow_keys_as_cursor_movement() {
+        assert_eq!(
+            agent_draft_action(&Key::Named(NamedKey::ArrowLeft), Modifiers::default()),
+            Some(AgentDraftAction::MoveLeft)
+        );
+        assert_eq!(
+            agent_draft_action(&Key::Named(NamedKey::ArrowRight), Modifiers::default()),
+            Some(AgentDraftAction::MoveRight)
+        );
+    }
+
+    #[test]
+    fn agent_draft_arrow_keys_stay_out_of_the_way_of_held_modifier_chords() {
+        assert_eq!(
+            agent_draft_action(&Key::Named(NamedKey::ArrowLeft), Modifiers::CONTROL),
+            None
+        );
+        assert_eq!(
+            agent_draft_action(&Key::Named(NamedKey::ArrowRight), Modifiers::ALT),
+            None
+        );
+    }
+
+    // --- grapheme boundary approximation (`prev`/`next_grapheme_boundary_
+    // approx`) ------------------------------------------------------------
+
+    #[test]
+    fn prev_boundary_steps_back_one_ascii_char() {
+        assert_eq!(prev_grapheme_boundary_approx("abc", 3), 2);
+    }
+
+    #[test]
+    fn prev_boundary_at_start_of_empty_text_is_a_no_op() {
+        assert_eq!(prev_grapheme_boundary_approx("", 0), 0);
+    }
+
+    #[test]
+    fn prev_boundary_steps_back_a_full_multibyte_char() {
+        // "日" is a single grapheme spanning 3 UTF-8 bytes -- the boundary
+        // must jump over the whole character, not land mid-codepoint.
+        assert_eq!(prev_grapheme_boundary_approx("あ日", "あ日".len()), 3);
+    }
+
+    #[test]
+    fn prev_boundary_takes_a_trailing_combining_mark_with_its_base_char() {
+        // U+0301 COMBINING ACUTE ACCENT after a plain "e" -- one visual
+        // grapheme, two chars. Backspacing at the end must remove both in
+        // one step rather than stranding the mark.
+        let text = "e\u{0301}";
+        assert_eq!(prev_grapheme_boundary_approx(text, text.len()), 0);
+    }
+
+    #[test]
+    fn next_boundary_steps_forward_one_ascii_char() {
+        assert_eq!(next_grapheme_boundary_approx("abc", 0), 1);
+    }
+
+    #[test]
+    fn next_boundary_at_end_of_text_is_a_no_op() {
+        assert_eq!(next_grapheme_boundary_approx("abc", 3), 3);
+    }
+
+    #[test]
+    fn next_boundary_takes_a_trailing_combining_mark_with_its_base_char() {
+        let text = "e\u{0301}bc";
+        assert_eq!(next_grapheme_boundary_approx(text, 0), "e\u{0301}".len());
     }
 
     #[test]
