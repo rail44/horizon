@@ -71,23 +71,25 @@ wave items where possible; design docs on first use.
    lineage tree, origin-defaulted isolation/worktree creation, and
    control surfacing (open-directory command + session-manager lineage
    view).
-5. **Reactive store** — a general keyed/field-granular reactive
-   container for floem, which has no store (its reactivity tracks whole
-   signals only; confirmed from the pinned source). The UI-wide
-   generalization of the agent-UI-performance leg-1 fix: the 2026-07-08
-   audit found the over-tracking root is `session::Frames` — one coarse
-   `RwSignal` with deep-cloning accessors, no per-session/per-field
-   signals — leaking into the command palette, the per-pane
-   header/status/approval closures, and the terminal pane. **Decided
-   2026-07-08** to build the fuller per-field form (reactive_stores-style
-   macro-derived path subscription) rather than a keyed-map-only stopgap,
-   because roadmap features (multi-session live-status, coordination /
-   lineage views, the todo overview) need per-field subscription anyway.
-   **In flight 2026-07-08** (owner-driven session): open substrate fork —
-   real-signal decomposition vs single-value + path-table — and how far
-   to open `AgentFrame`/`Frames` into typed fields. First consumer:
-   `Frames`. Existence proof: leg-1's hand-rolled per-block signals.
-   Design doc `docs/reactive-store-design.md` (pending).
+5. **Fine-grained reactive state** — floem's `floem_reactive` tracks whole
+   signals only (no store; verified from the pinned source), which is the
+   root of the agent-UI over-tracking class: `session::Frames` is one
+   coarse `RwSignal` over all sessions with deep-cloning accessors, leaking
+   into the command palette, per-pane header/status/approval closures, and
+   the terminal pane. **Settled 2026-07-08** (`docs/reactive-store-design.md`),
+   after a four-way probe (floem's in-progress `floem_store` PR #1010;
+   crate survey; reactive_graph reuse; how Lapce does it): **stay on
+   floem_reactive; apply Lapce's manual-sharding discipline to `Frames`
+   now** (per-field `RwSignal`s in a per-session child `Scope`, held as
+   `Rc` handles in `RwSignal<im::HashMap<SessionId, FrameHandle>>`, with
+   `frame(id)`/`frame_untracked(id)` accessors and narrowing memos), behind
+   a **store-swappable accessor boundary** (expose `impl SignalWith`/
+   `SignalUpdate`, never raw `RwSignal` fields). The **store abstraction is
+   deferred**, opt-in per struct, adopted only when the manual boilerplate
+   hurts — via upstream `floem_store` or a lean port of reactive_stores'
+   path→Trigger design. leg-1 / `PaneKeyedSignals` are early instances of
+   the pattern. Not the earlier "build a general store now" — Lapce scaling
+   on discipline alone justifies deferring.
 
 ## In flight
 
