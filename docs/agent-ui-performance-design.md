@@ -30,15 +30,62 @@ cut here is over-tracking.
 
 No single mechanism is sufficient, so three legs that overlap:
 
-1. **Structural / API boundary — primary, design-pending.** Make the
-   raw `frame` signal unreachable from hot view closures; expose only
-   coarse-keyed derived accessors so "read everything + walk it per
-   fire" cannot be written by default. This is the only *airtight* leg:
-   the spike below proved static analysis misses the indirect form (the
-   walk hidden one call away), so a lint alone gives false comfort. Not
-   yet concretely designed — it wants a design pass over the transcript
-   reactivity (how accessors compose with the existing window/revision
-   memoization) before implementation.
+1. **Structural / API boundary — primary, implemented (2026-07-08).**
+   Per-block content signals make the raw `frame` signal unreachable from
+   hot per-block view closures: `agent_frame_view`
+   (`src/agent/view/mod.rs`) creates one `RwSignal<String>` (text blocks)
+   or `RwSignal<ToolBlock>` (tool blocks) per block, lazily on first mount
+   (`get_or_create_text_signal`/`get_or_create_tool_signal`), and keeps
+   every already-mounted block's signal live via a single bridge effect —
+   the only per-token reader of the raw `frame` signal left in the
+   transcript. The bridge calls `diff_block_content`
+   (`src/agent/view/transcript.rs`), an O(1) scan on every fire: the
+   growth path only touches `previous_items_len..items.len()` (newly
+   pushed items), and the no-growth path (a streamed token coalescing into
+   an existing item in place) queries `in_place_mutable_item_indices`
+   (`crates/horizon-agent/src/frame.rs`, co-located with the reducer
+   `apply_agent_event_to_frame`) for the small, bounded set of indices a
+   fold could have just mutated — never a linear rescan of `frame.items`.
+   A second, coarser effect trims both signal maps (and the bridge's own
+   `call_id -> block id` registry) once a block scrolls out of the
+   200-block transcript window, so the maps stay bounded over a long
+   session rather than growing forever. `tool_view.rs`'s header/body and
+   `markdown_block_view`'s text now read only their own block's signal;
+   `approval.rs`'s inline approve/deny control row was migrated the same
+   way, so no per-block view closure in the transcript reads `frame`
+   directly any more — the bridge is the sole exception, by design.
+
+   `in_place_mutable_item_indices` is the single source of truth for "what
+   could a next in-place fold touch without growing `items.len()`": it
+   must stay in lockstep with the reducer's in-place-mutation arms
+   (documented on the function itself), and it is what makes the O(1) scan
+   correct rather than a "just check the literal last item" heuristic.
+   That heuristic looked sufficient at first but silently shows a stale
+   block on interleaved-thinking providers (reasoning, then text, then
+   reasoning again within one turn): the reducer's own coalescing scan
+   (`last_current_turn_item_index`) is scoped to "the last matching item
+   in the current turn segment", which can be an *earlier* index than the
+   literal last item — e.g. a second `ReasoningDelta` coalescing into an
+   earlier reasoning block after an `AssistantTextDelta` was appended
+   after it. `in_place_mutable_item_indices` also has to unconditionally
+   include the literal last item alongside its segment-scoped
+   reach-backs, because a `ToolCallRequested` superseding a
+   `ToolCallPreparing` changes that slot's item *variant* — and
+   `ToolCallRequested` is itself a turn-boundary item, so any type-scoped
+   backward scan over the *post-mutation* frame self-excludes that slot.
+   Unit tests on both sides (`crates/horizon-agent/src/tests.rs`,
+   `src/agent/view/transcript.rs`'s `tests` module) pin the interleaved
+   case directly.
+
+   Empirical result (the owner's own UI-thread profiling): in the
+   post-`current_tool_block`-fix state (the coarse `items_revision`/
+   `turn_in_flight` memo gating already in place, `7ae6990`), a
+   moderately-sized transcript re-derived ~68 tool blocks and ~28 thinking
+   blocks per newly streamed item — ~96 block closures at ~155µs each,
+   ~15ms of UI-thread work per streamed item, because every block's
+   `dyn_stack` closure still read the raw `frame` signal directly. Leg 1
+   collapses that into one O(1) bridge pass per token that only ever
+   touches the blocks whose content actually changed.
 
 2. **Static-analysis backstop — ast-grep in the gate.** Spike
    (`worktree-agent-a00cc2ee8092ee474` @ `56f8af1`, under
@@ -74,9 +121,11 @@ No single mechanism is sufficient, so three legs that overlap:
 
 - Legs 2 and 3 are launched as worker tasks from the project session
   (2026-07-08; domain sessions are paused while larger changes land).
-- Leg 1 (the API boundary) stays a design-pending roadmap item — the
-  primary defense, but it wants a concrete design pass first, not a
-  rushed refactor.
+- Leg 1 (the API boundary) is implemented (2026-07-08): per-block content
+  signals plus the single bridge effect, hardened with the co-located
+  `in_place_mutable_item_indices` source of truth described above and the
+  `approval.rs` migration that removed the last raw-`frame()` reads from
+  per-block view closures.
 
 ## Research basis (primary sources)
 

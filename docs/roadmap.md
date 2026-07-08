@@ -127,8 +127,12 @@ wave items where possible; design docs on first use.
   closures) launched as worker tasks from the project session
   2026-07-08. Leg 1 (the raw-`frame`-unreachable API boundary — the
   only airtight defense, since static analysis misses the indirect
-  form) is **design-pending**: the primary defense, wants a concrete
-  design pass over the transcript reactivity before implementation.
+  form) is **implemented** (2026-07-08): per-block content signals plus
+  a single bridge effect, hardened with a co-located
+  `in_place_mutable_item_indices` source of truth in
+  `crates/horizon-agent/src/frame.rs` for the reducer's in-place
+  coalescing targets, and the `approval.rs` inline approve/deny row
+  migrated off raw `frame()` reads.
 
 ## Later (deliberately unshaped)
 

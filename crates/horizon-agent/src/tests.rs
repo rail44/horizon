@@ -146,6 +146,60 @@ fn agent_frame_coalesces_interleaved_stream_deltas_within_turn() {
 }
 
 #[test]
+fn in_place_mutable_item_indices_finds_an_earlier_reasoning_delta_across_an_interleaved_text_delta()
+{
+    // Interleaved-thinking case: reasoning, then text, both within the same
+    // turn -- a further `ReasoningDelta` must coalesce back into item 0 (the
+    // earlier `ReasoningDelta`), not item 1 (the literal last item).
+    let mut frame = AgentFrame::empty();
+    apply_agent_event_to_frame(
+        &mut frame,
+        &agent::Event::ReasoningDelta(agent::MessageDelta {
+            role: agent::MessageRole::Assistant,
+            text: "think ".to_string(),
+        }),
+    );
+    apply_agent_event_to_frame(
+        &mut frame,
+        &agent::Event::AssistantTextDelta(agent::MessageDelta {
+            role: agent::MessageRole::Assistant,
+            text: "answer ".to_string(),
+        }),
+    );
+    assert_eq!(frame.items.len(), 2);
+
+    apply_agent_event_to_frame(
+        &mut frame,
+        &agent::Event::ReasoningDelta(agent::MessageDelta {
+            role: agent::MessageRole::Assistant,
+            text: "more".to_string(),
+        }),
+    );
+    assert_eq!(
+        frame.items.len(),
+        2,
+        "the ReasoningDelta coalesces in place, no growth"
+    );
+    assert_eq!(
+        frame.items[0],
+        AgentFrameItem::ReasoningDelta(agent::MessageDelta {
+            role: agent::MessageRole::Assistant,
+            text: "think more".to_string(),
+        })
+    );
+
+    let indices = in_place_mutable_item_indices(&frame);
+    assert!(
+        indices.contains(&0),
+        "must include the ReasoningDelta at index 0: {indices:?}"
+    );
+    assert!(
+        indices.contains(&1),
+        "must still include the AssistantTextDelta at index 1: {indices:?}"
+    );
+}
+
+#[test]
 fn runtime_state_store_accumulates_events_into_frame() {
     let store = crate::live::LiveState::new();
     let frame = store.extend_events([

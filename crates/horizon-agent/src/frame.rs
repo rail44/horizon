@@ -359,6 +359,65 @@ pub fn apply_tool_call_progress_to_frame(frame: &mut AgentFrame, progress: ToolC
         .push(AgentFrameItem::ToolCallPreparing(progress));
 }
 
+/// The complete set of item indices a *next* in-place fold
+/// (no push, `frame.items.len()` unchanged) could target -- the single
+/// source of truth `diff_block_content`
+/// (`src/agent/view/transcript.rs`) uses to know which blocks might have
+/// changed on a frame update that didn't append a new item, instead of
+/// assuming the literal last item.
+///
+/// Must stay in lockstep with [`apply_agent_event_to_frame`]'s in-place
+/// arms, and [`apply_tool_call_progress_to_frame`]:
+/// - `Event::ReasoningDelta` coalesces into the last `ReasoningDelta`.
+/// - `Event::AssistantTextDelta` coalesces into the last
+///   `AssistantTextDelta`.
+/// - `Event::MessageCommitted` replaces the last `AssistantTextDelta`
+///   (role match) or otherwise the last `Message` (role match).
+/// - `Event::ToolCallRequested` supersedes the last `ToolCallPreparing`.
+/// - `apply_tool_call_progress_to_frame`'s progress ticks update the last
+///   matching `ToolCallPreparing` in place.
+///
+/// The first four of those are scoped to the current turn segment (from the
+/// last [`is_turn_boundary_item`] to the end of `frame.items`) via
+/// [`last_current_turn_item_index`] -- the same reverse scan the reducer
+/// itself uses, reused rather than duplicated. That segment scoping is why
+/// this can reach further back than the literal last item: within one turn,
+/// a `ReasoningDelta` and an `AssistantTextDelta` can each hold their own
+/// coalescing target at different indices (interleaved-thinking providers
+/// alternate reasoning and text within a turn).
+///
+/// The literal last item is *also* always included, unconditionally: a
+/// `ToolCallRequested` superseding a `ToolCallPreparing` changes that slot's
+/// item *variant*, and `ToolCallRequested` is itself a turn boundary
+/// (`is_turn_boundary_item`) -- so once superseded, a segment-scoped search
+/// for `ToolCallPreparing` on the post-mutation frame always excludes that
+/// very slot (it now starts, rather than sits inside, the next segment). No
+/// type-scoped backward scan over the post-mutation frame can recover that
+/// index; only "the literal last item" reliably can, since supersession
+/// only ever happens at the current turn's most recent slot.
+///
+/// Adding a new in-place-mutation arm to the reducer means adding its
+/// target kind here too.
+pub fn in_place_mutable_item_indices(frame: &AgentFrame) -> Vec<usize> {
+    let mut indices = Vec::new();
+    let mut push_index = |index: Option<usize>| {
+        if let Some(index) = index {
+            if !indices.contains(&index) {
+                indices.push(index);
+            }
+        }
+    };
+    push_index(frame.items.len().checked_sub(1));
+    let mut push_target = |predicate: fn(&AgentFrameItem) -> bool| {
+        push_index(last_current_turn_item_index(frame, predicate));
+    };
+    push_target(|item| matches!(item, AgentFrameItem::ReasoningDelta(_)));
+    push_target(|item| matches!(item, AgentFrameItem::AssistantTextDelta(_)));
+    push_target(|item| matches!(item, AgentFrameItem::Message(_)));
+    push_target(|item| matches!(item, AgentFrameItem::ToolCallPreparing(_)));
+    indices
+}
+
 fn last_current_turn_item_mut(
     frame: &mut AgentFrame,
     predicate: impl Fn(&AgentFrameItem) -> bool,

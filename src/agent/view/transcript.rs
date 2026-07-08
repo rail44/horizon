@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use crate::agent::contract::{Message, MessageRole, SessionState, ToolCallId};
-use crate::agent::frame::{AgentFrame, AgentFrameItem};
+use crate::agent::frame::{in_place_mutable_item_indices, AgentFrame, AgentFrameItem};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct TranscriptBlock {
@@ -227,40 +227,6 @@ pub(super) fn transcript_blocks(frame: &AgentFrame) -> Vec<TranscriptBlock> {
         blocks.push(status);
     }
     blocks
-}
-
-/// The live text of a `Text`-kind block at `id`/`tone`/`label`, re-derived
-/// directly from `frame` -- used by `markdown_block_view`'s reactive
-/// closure so a streaming block's displayed text keeps growing even though
-/// `dyn_stack` never rebuilds its view for an unchanged key (see that
-/// view's call site). Not used for `Tool`-kind blocks: see
-/// [`current_tool_block`] instead.
-pub(super) fn current_block_text(
-    frame: &AgentFrame,
-    id: usize,
-    tone: TranscriptTone,
-    label: Option<&'static str>,
-) -> String {
-    let block = frame
-        .items
-        .get(id)
-        .and_then(|item| transcript_block(id, item))
-        .or_else(|| {
-            transcript_blocks(frame)
-                .into_iter()
-                .find(|block| block.id == id)
-        });
-
-    block
-        .filter(|block| block.tone == tone)
-        .and_then(|block| match block.kind {
-            BlockKind::Text {
-                label: block_label,
-                text,
-            } if block_label == label => Some(text),
-            _ => None,
-        })
-        .unwrap_or_default()
 }
 
 /// The live merged state of the tool call whose block started at `id`
@@ -555,6 +521,139 @@ fn should_show_initial_reply_status(last_block: Option<&TranscriptBlock>) -> boo
     )
 }
 
+/// Content changes [`diff_block_content`] detected for the transcript's two
+/// hot streaming block kinds (streaming text blocks, tool blocks fed by
+/// [`current_tool_block`]) since a previous `frame.items.len()` -- what
+/// `agent_frame_view`'s single content-signal
+/// bridge effect applies to its per-block `RwSignal`s, instead of leaving
+/// each block's own view to re-derive its content by reading the whole
+/// `frame` directly (`docs/agent-ui-performance-design.md` leg 1's spike).
+/// A `(block_id, value)` pair with no live signal (a block `dyn_stack`
+/// hasn't built a view for yet, or one the transcript window already
+/// trimmed) is simply not applied by the bridge -- see that effect's doc
+/// comment.
+#[derive(Debug, Default, PartialEq)]
+pub(super) struct BlockContentDiff {
+    pub(super) text: Vec<(usize, String)>,
+    pub(super) tool: Vec<(usize, ToolBlock)>,
+}
+
+/// Scans `frame` for content changes affecting the transcript's two hot
+/// streaming block kinds since `previous_items_len` (a plain
+/// `frame.items.len()` snapshot the caller keeps across fires), folding any
+/// newly discovered `call_id -> tool block id` mapping into
+/// `call_id_to_block` (a bridge-owned registry, built incrementally here --
+/// separate from, and cheaper than, `transcript_blocks`' own
+/// `tool_positions`, which rebuilds from scratch every call).
+///
+/// Cheap: touches only the newly appended items
+/// (`previous_items_len..frame.items.len()`), or -- if nothing was appended
+/// -- whatever [`in_place_mutable_item_indices`] reports (a handful of
+/// indices at most, never a full scan). `ToolCallStarted`/`ToolCallFinished`/
+/// `ApprovalRequested` are always a plain push (never an in-place target),
+/// so they only ever show up via the growth path, where `call_id_to_block`
+/// resolves them back to the tool block they belong to.
+///
+/// Never walks the full item log itself -- `current_tool_block`, which
+/// matched items call into, only scans forward from its own `id` to that
+/// call's terminal `ToolCallFinished` (see its own doc comment), not the
+/// whole frame.
+///
+/// In-place targets (the "nothing appended" branch) come from
+/// [`in_place_mutable_item_indices`], co-located with the reducer
+/// (`apply_agent_event_to_frame` in `crates/horizon-agent/src/frame.rs`) as
+/// the single source of truth for what an in-place fold can target --
+/// rather than this function assuming the literal last item, which misses
+/// interleaved-thinking providers (reasoning, then text, then reasoning
+/// again within one turn).
+pub(super) fn diff_block_content(
+    frame: &AgentFrame,
+    previous_items_len: usize,
+    call_id_to_block: &mut HashMap<ToolCallId, usize>,
+) -> BlockContentDiff {
+    let mut diff = BlockContentDiff::default();
+    let current_len = frame.items.len();
+
+    if current_len > previous_items_len {
+        for id in previous_items_len..current_len {
+            apply_item_content_change(frame, id, call_id_to_block, &mut diff);
+        }
+    } else {
+        for id in in_place_mutable_item_indices(frame) {
+            apply_item_content_change(frame, id, call_id_to_block, &mut diff);
+        }
+    }
+
+    diff
+}
+
+fn apply_item_content_change(
+    frame: &AgentFrame,
+    id: usize,
+    call_id_to_block: &mut HashMap<ToolCallId, usize>,
+    diff: &mut BlockContentDiff,
+) {
+    match &frame.items[id] {
+        AgentFrameItem::ToolCallRequested(request) => {
+            call_id_to_block.insert(request.call_id.clone(), id);
+            push_tool_content(frame, id, diff);
+        }
+        AgentFrameItem::ToolCallPreparing(_) => push_tool_content(frame, id, diff),
+        AgentFrameItem::ToolCallStarted(call_id) => {
+            resolve_and_push_tool_content(frame, call_id, id, call_id_to_block, diff);
+        }
+        AgentFrameItem::ToolCallFinished(result) => {
+            resolve_and_push_tool_content(frame, &result.call_id, id, call_id_to_block, diff);
+        }
+        AgentFrameItem::ApprovalRequested(request) => {
+            resolve_and_push_tool_content(frame, &request.call_id, id, call_id_to_block, diff);
+        }
+        AgentFrameItem::Message(_)
+        | AgentFrameItem::ReasoningDelta(_)
+        | AgentFrameItem::AssistantTextDelta(_)
+        | AgentFrameItem::Error(_)
+        | AgentFrameItem::Exited(_) => push_text_content(frame, id, diff),
+    }
+}
+
+/// Resolves `call_id` back to the tool block it belongs to via
+/// `call_id_to_block`, falling back to `item_id` (this lifecycle item's own
+/// index) if unknown -- mirroring `transcript_blocks`' own defensive
+/// handling of an orphaned `ToolCallFinished`/`ApprovalRequested` with no
+/// matching request in the frame (see that function's doc comment; "shouldn't
+/// happen in practice"). Unlike `transcript_blocks`, this doesn't try to
+/// synthesize a `ToolBlock` for the orphan case: `current_tool_block`
+/// requires a `ToolCallRequested`/`ToolCallPreparing` item *at* the id it's
+/// given, which an orphaned lifecycle item's own id never is, so
+/// `push_tool_content` below naturally finds nothing and pushes no update --
+/// acceptable since this fallback path is defensive-only.
+fn resolve_and_push_tool_content(
+    frame: &AgentFrame,
+    call_id: &ToolCallId,
+    item_id: usize,
+    call_id_to_block: &mut HashMap<ToolCallId, usize>,
+    diff: &mut BlockContentDiff,
+) {
+    let block_id = *call_id_to_block.entry(call_id.clone()).or_insert(item_id);
+    push_tool_content(frame, block_id, diff);
+}
+
+fn push_tool_content(frame: &AgentFrame, block_id: usize, diff: &mut BlockContentDiff) {
+    if let Some(tool) = current_tool_block(frame, block_id) {
+        diff.tool.push((block_id, tool));
+    }
+}
+
+fn push_text_content(frame: &AgentFrame, id: usize, diff: &mut BlockContentDiff) {
+    if let Some(TranscriptBlock {
+        kind: BlockKind::Text { text, .. },
+        ..
+    }) = transcript_block(id, &frame.items[id])
+    {
+        diff.text.push((id, text));
+    }
+}
+
 /// Whether the `ReasoningDelta` item at `id` is still actively streaming --
 /// it's the last item in the frame (nothing has superseded it yet: an
 /// `AssistantTextDelta`, a tool call, or a committed message all end a
@@ -611,7 +710,8 @@ pub(super) fn latest_user_block_id(frame: &AgentFrame) -> Option<usize> {
 mod tests {
     use super::*;
     use crate::agent::contract::{
-        ApprovalRequest, Message, MessageRole, ToolCallId, ToolCallRequest, ToolCallResult,
+        ApprovalRequest, Message, MessageDelta, MessageRole, ToolCallId, ToolCallProgress,
+        ToolCallRequest, ToolCallResult,
     };
 
     fn message_frame(count: usize) -> AgentFrame {
@@ -1213,5 +1313,183 @@ mod tests {
         // Only the merged tool block -- no separate ephemeral "Approval
         // required" status block once the tool block itself carries it.
         assert_eq!(blocks.len(), 1);
+    }
+
+    // --- content-signal bridge diff (agent-ui-performance leg 1 spike) ----
+
+    fn diff_frame(items: Vec<AgentFrameItem>) -> AgentFrame {
+        AgentFrame { state: None, items }
+    }
+
+    #[test]
+    fn diff_block_content_is_empty_for_an_empty_frame() {
+        let frame = diff_frame(Vec::new());
+        let mut call_id_to_block = HashMap::new();
+
+        let diff = diff_block_content(&frame, 0, &mut call_id_to_block);
+
+        assert_eq!(diff, BlockContentDiff::default());
+    }
+
+    #[test]
+    fn diff_block_content_reports_a_newly_pushed_text_block() {
+        let frame = diff_frame(vec![AgentFrameItem::Message(Message {
+            role: MessageRole::Assistant,
+            text: "hello".to_string(),
+        })]);
+        let mut call_id_to_block = HashMap::new();
+
+        let diff = diff_block_content(&frame, 0, &mut call_id_to_block);
+
+        assert_eq!(diff.text, vec![(0, "hello".to_string())]);
+        assert!(diff.tool.is_empty());
+    }
+
+    #[test]
+    fn diff_block_content_targets_the_same_id_on_a_coalesced_text_delta() {
+        let mut frame = diff_frame(vec![AgentFrameItem::AssistantTextDelta(MessageDelta {
+            role: MessageRole::Assistant,
+            text: "he".to_string(),
+        })]);
+        let mut call_id_to_block = HashMap::new();
+        let diff = diff_block_content(&frame, 0, &mut call_id_to_block);
+        assert_eq!(diff.text, vec![(0, "he".to_string())]);
+
+        // A streamed token growing the same item in place -- `items.len()`
+        // stays 1, so the "no growth" path must re-check id 0 rather than
+        // skip it.
+        if let AgentFrameItem::AssistantTextDelta(delta) = &mut frame.items[0] {
+            delta.text.push_str("llo");
+        }
+        let diff = diff_block_content(&frame, frame.items.len(), &mut call_id_to_block);
+
+        assert_eq!(diff.text, vec![(0, "hello".to_string())]);
+    }
+
+    #[test]
+    fn diff_block_content_updates_an_earlier_reasoning_delta_across_an_interleaved_text_delta() {
+        // Interleaved-thinking case (reasoning, then text, within one
+        // turn): a further `ReasoningDelta` coalesces into item 0 (the
+        // earlier `ReasoningDelta`), not item 1 (the literal last item) --
+        // `in_place_mutable_item_indices` is what makes `diff_block_content`
+        // catch this instead of only refreshing the last item.
+        let mut frame = diff_frame(vec![
+            AgentFrameItem::ReasoningDelta(MessageDelta {
+                role: MessageRole::Assistant,
+                text: "think".to_string(),
+            }),
+            AgentFrameItem::AssistantTextDelta(MessageDelta {
+                role: MessageRole::Assistant,
+                text: "answer".to_string(),
+            }),
+        ]);
+        let mut call_id_to_block = HashMap::new();
+        diff_block_content(&frame, 0, &mut call_id_to_block);
+
+        // Coalesce a further `ReasoningDelta` into item 0 in place --
+        // mirrors what `apply_agent_event_to_frame`'s `ReasoningDelta` arm
+        // does via `last_current_turn_item_index`, without pulling in the
+        // whole reducer.
+        if let AgentFrameItem::ReasoningDelta(delta) = &mut frame.items[0] {
+            delta.text.push_str(" more");
+        }
+        let diff = diff_block_content(&frame, frame.items.len(), &mut call_id_to_block);
+
+        assert!(
+            diff.text.contains(&(0, "think more".to_string())),
+            "the ReasoningDelta block at index 0 must be refreshed, not \
+             just the literal last item: {diff:?}"
+        );
+    }
+
+    #[test]
+    fn diff_block_content_reports_a_newly_requested_tool_block_and_registers_its_call_id() {
+        let frame = diff_frame(vec![AgentFrameItem::ToolCallRequested(request("call-1"))]);
+        let mut call_id_to_block = HashMap::new();
+
+        let diff = diff_block_content(&frame, 0, &mut call_id_to_block);
+
+        assert_eq!(diff.tool.len(), 1);
+        assert_eq!(diff.tool[0].0, 0);
+        assert_eq!(diff.tool[0].1.status, ToolStatus::Requested);
+        assert_eq!(
+            call_id_to_block.get(&ToolCallId("call-1".to_string())),
+            Some(&0)
+        );
+    }
+
+    #[test]
+    fn diff_block_content_resolves_a_later_lifecycle_item_back_to_the_original_block() {
+        let call_id = ToolCallId("call-1".to_string());
+        let mut frame = diff_frame(vec![AgentFrameItem::ToolCallRequested(request("call-1"))]);
+        let mut call_id_to_block = HashMap::new();
+        diff_block_content(&frame, 0, &mut call_id_to_block);
+
+        // `ToolCallStarted` is always a plain push (`apply_agent_event_to_
+        // frame`), landing at a *new* item index -- but it must still
+        // update the *original* tool block (id 0), not create/target a
+        // second one.
+        frame
+            .items
+            .push(AgentFrameItem::ToolCallStarted(call_id.clone()));
+        let diff = diff_block_content(&frame, 1, &mut call_id_to_block);
+
+        assert_eq!(diff.tool.len(), 1);
+        assert_eq!(
+            diff.tool[0].0, 0,
+            "must resolve back to the requesting block's id"
+        );
+        assert_eq!(diff.tool[0].1.status, ToolStatus::Started);
+    }
+
+    #[test]
+    fn diff_block_content_follows_a_preparing_block_superseded_by_its_real_request() {
+        let mut frame = diff_frame(vec![AgentFrameItem::ToolCallPreparing(ToolCallProgress {
+            key: "call-1".to_string(),
+            tool_id: Some("bash".to_string()),
+            bytes: 8,
+        })]);
+        let mut call_id_to_block = HashMap::new();
+        let diff = diff_block_content(&frame, 0, &mut call_id_to_block);
+        assert!(matches!(
+            diff.tool[0].1.status,
+            ToolStatus::Preparing { .. }
+        ));
+
+        // Superseded in place (`apply_agent_event_to_frame`'s
+        // `ToolCallRequested` arm) -- same index, `items.len()` unchanged.
+        frame.items[0] = AgentFrameItem::ToolCallRequested(request("call-1"));
+        let diff = diff_block_content(&frame, frame.items.len(), &mut call_id_to_block);
+
+        assert_eq!(diff.tool, vec![(0, current_tool_block(&frame, 0).unwrap())]);
+        assert_eq!(
+            call_id_to_block.get(&ToolCallId("call-1".to_string())),
+            Some(&0),
+            "the real call id must be registered once the request supersedes \
+             the preparing tick"
+        );
+    }
+
+    #[test]
+    fn diff_block_content_falls_back_to_the_orphans_own_id_when_no_request_is_known() {
+        // Defensive-only path (`resolve_and_push_tool_content`'s doc
+        // comment) -- shouldn't happen in practice, but must not panic.
+        let frame = diff_frame(vec![AgentFrameItem::ToolCallFinished(ToolCallResult {
+            call_id: ToolCallId("orphan".to_string()),
+            output: serde_json::json!({}),
+        })]);
+        let mut call_id_to_block = HashMap::new();
+
+        let diff = diff_block_content(&frame, 0, &mut call_id_to_block);
+
+        assert!(
+            diff.tool.is_empty(),
+            "no ToolCallRequested/Preparing sits at the orphan's own id, so \
+             current_tool_block can't reconstruct a block there"
+        );
+        assert_eq!(
+            call_id_to_block.get(&ToolCallId("orphan".to_string())),
+            Some(&0)
+        );
     }
 }

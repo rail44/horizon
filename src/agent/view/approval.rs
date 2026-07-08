@@ -9,13 +9,12 @@ use std::rc::Rc;
 use floem::prelude::*;
 
 use crate::agent::contract::ToolCallId;
-use crate::agent::frame::AgentFrame;
 use crate::ui::fonts::font_family;
 use crate::ui::hint_chip::key_hint;
 use crate::ui::spacing;
 use crate::ui::theme;
 
-use super::transcript::current_tool_block;
+use super::transcript::ToolBlock;
 
 /// Which of an agent pane's two pane-internal focus targets currently owns
 /// the keyboard: the message-box composer, or the inline approval control
@@ -194,49 +193,45 @@ impl ApprovalController {
     }
 }
 
-fn block_call_id(frame: &AgentFrame, block_id: usize) -> Option<ToolCallId> {
-    current_tool_block(frame, block_id).and_then(|tool| tool.call_id)
+fn block_call_id(tool: RwSignal<ToolBlock>) -> Option<ToolCallId> {
+    tool.with(|tool| tool.call_id.clone())
 }
 
-fn block_needs_confirmation(frame: &AgentFrame, block_id: usize) -> bool {
-    current_tool_block(frame, block_id)
-        .map(|tool| tool.needs_confirmation())
-        .unwrap_or(false)
+fn block_needs_confirmation(tool: RwSignal<ToolBlock>) -> bool {
+    tool.with(ToolBlock::needs_confirmation)
 }
 
-fn block_approval_reason(frame: &AgentFrame, block_id: usize) -> String {
-    current_tool_block(frame, block_id)
-        .and_then(|tool| tool.approval)
+fn block_approval_reason(tool: RwSignal<ToolBlock>) -> String {
+    tool.with(|tool| tool.approval.clone())
         .map(|approval| approval.reason)
         .unwrap_or_default()
 }
 
-/// Whether `block_id`'s call is the oldest pending one -- the only one the
+/// Whether this block's call is the oldest pending one -- the only one the
 /// row's y/n buttons/`+N more` hint ever apply to, regardless of whether
 /// it's already been answered locally (see [`is_actionable`] for that
 /// narrower check).
-fn is_head(frame: &AgentFrame, block_id: usize, controller: &ApprovalController) -> bool {
-    let call_id = block_call_id(frame, block_id);
+fn is_head(tool: RwSignal<ToolBlock>, controller: &ApprovalController) -> bool {
+    let call_id = block_call_id(tool);
     call_id.is_some() && call_id == controller.pending_call_id()
 }
 
-/// Whether `block_id`'s call is the one the y/n buttons/`esc` hint actually
+/// Whether this block's call is the one the y/n buttons/`esc` hint actually
 /// act on right now -- the head, and not already answered locally.
-fn is_actionable(frame: &AgentFrame, block_id: usize, controller: &ApprovalController) -> bool {
-    let call_id = block_call_id(frame, block_id);
+fn is_actionable(tool: RwSignal<ToolBlock>, controller: &ApprovalController) -> bool {
+    let call_id = block_call_id(tool);
     call_id.is_some()
         && call_id == awaiting_call(controller.pending_call_id(), controller.answered())
 }
 
-/// Whether `block_id`'s call is the head, already answered locally, and
+/// Whether this block's call is the head, already answered locally, and
 /// just waiting for the resolution round-trip (the "answered -- running…"
 /// state).
 fn is_awaiting_this_blocks_resolution(
-    frame: &AgentFrame,
-    block_id: usize,
+    tool: RwSignal<ToolBlock>,
     controller: &ApprovalController,
 ) -> bool {
-    is_head(frame, block_id, controller)
+    is_head(tool, controller)
         && is_awaiting_resolution(controller.pending_call_id(), controller.answered())
 }
 
@@ -249,13 +244,12 @@ fn is_awaiting_this_blocks_resolution(
 /// or a "queued" notice for a call that isn't the oldest yet. Hidden
 /// entirely once the call resolves.
 pub(crate) fn approval_control_row(
-    block_id: usize,
-    frame: impl Fn() -> AgentFrame + Copy + 'static,
+    tool: RwSignal<ToolBlock>,
     controller: ApprovalController,
 ) -> impl IntoView {
-    let row_visible = move || block_needs_confirmation(&frame(), block_id);
+    let row_visible = move || block_needs_confirmation(tool);
 
-    let reason_label = label(move || block_approval_reason(&frame(), block_id)).style(move |s| {
+    let reason_label = label(move || block_approval_reason(tool)).style(move |s| {
         if !row_visible() {
             return s.hide();
         }
@@ -272,8 +266,7 @@ pub(crate) fn approval_control_row(
     let approve_button = approval_button(
         "y",
         "approve",
-        frame,
-        block_id,
+        tool,
         approve_gate,
         move |call_id| (approve_click.on_approve)(call_id),
         theme::approval_confirm_surface(),
@@ -285,8 +278,7 @@ pub(crate) fn approval_control_row(
     let deny_button = approval_button(
         "n",
         "deny",
-        frame,
-        block_id,
+        tool,
         deny_gate,
         move |call_id| (deny_click.on_deny)(call_id),
         theme::approval_deny_surface(),
@@ -295,7 +287,7 @@ pub(crate) fn approval_control_row(
 
     let esc_controller = controller.clone();
     let esc_hint = key_hint("esc", "back to draft").style(move |s| {
-        if !row_visible() || !is_actionable(&frame(), block_id, &esc_controller) {
+        if !row_visible() || !is_actionable(tool, &esc_controller) {
             return s.hide();
         }
         s
@@ -303,9 +295,7 @@ pub(crate) fn approval_control_row(
 
     let waiting_controller = controller.clone();
     let waiting_label = label(|| "answered — running…".to_string()).style(move |s| {
-        if !row_visible()
-            || !is_awaiting_this_blocks_resolution(&frame(), block_id, &waiting_controller)
-        {
+        if !row_visible() || !is_awaiting_this_blocks_resolution(tool, &waiting_controller) {
             return s.hide();
         }
         s.font_family(font_family().to_string())
@@ -318,7 +308,7 @@ pub(crate) fn approval_control_row(
     let extra_label = label(move || format!("+{} more", extra_text_controller.extra_pending()))
         .style(move |s| {
             if !row_visible()
-                || !is_head(&frame(), block_id, &extra_style_controller)
+                || !is_head(tool, &extra_style_controller)
                 || extra_style_controller.extra_pending() == 0
             {
                 return s.hide();
@@ -330,7 +320,7 @@ pub(crate) fn approval_control_row(
 
     let queued_controller = controller.clone();
     let queued_label = label(|| "queued behind an earlier approval".to_string()).style(move |s| {
-        if !row_visible() || is_head(&frame(), block_id, &queued_controller) {
+        if !row_visible() || is_head(tool, &queued_controller) {
             return s.hide();
         }
         s.font_family(font_family().to_string())
@@ -360,12 +350,10 @@ pub(crate) fn approval_control_row(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn approval_button(
     key_label: &'static str,
     action_label: &'static str,
-    frame: impl Fn() -> AgentFrame + Copy + 'static,
-    block_id: usize,
+    tool: RwSignal<ToolBlock>,
     controller: ApprovalController,
     on_click: impl Fn(ToolCallId) + 'static,
     background: floem::peniko::Color,
@@ -374,14 +362,14 @@ fn approval_button(
     let click_controller = controller.clone();
     key_hint(key_label, action_label)
         .on_click_stop(move |_| {
-            if is_actionable(&frame(), block_id, &click_controller) {
-                if let Some(call_id) = block_call_id(&frame(), block_id) {
+            if is_actionable(tool, &click_controller) {
+                if let Some(call_id) = block_call_id(tool) {
                     on_click(call_id);
                 }
             }
         })
         .style(move |s| {
-            if !is_actionable(&frame(), block_id, &controller) {
+            if !is_actionable(tool, &controller) {
                 return s.hide();
             }
             s.height(26)

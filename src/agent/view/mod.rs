@@ -1,7 +1,8 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::agent::contract::ToolCallId;
 use crate::agent::frame::AgentFrame;
 use crate::ui::fonts::font_family;
 use crate::ui::theme;
@@ -29,9 +30,9 @@ use labels::{block_label, shows_label};
 use markdown::{markdown_lines, MarkdownLine, MarkdownLineKind};
 use style::{block_colors, block_max_width, block_text_color};
 use transcript::{
-    compute_transcript_window, current_block_text, current_tool_block, is_thinking_streaming,
-    latest_user_block_id, show_turn_end_rule, starts_new_turn, BlockKind, TranscriptBlock,
-    TranscriptTone, TranscriptWindow,
+    compute_transcript_window, diff_block_content, is_thinking_streaming, latest_user_block_id,
+    show_turn_end_rule, starts_new_turn, BlockKind, ToolBlock, TranscriptBlock, TranscriptTone,
+    TranscriptWindow,
 };
 
 /// How much taller the transcript's measured content height must get,
@@ -99,6 +100,116 @@ pub(crate) fn agent_frame_view(
         crate::profiling::timed("transcript.turn_in_flight", || frame().is_turn_in_flight())
     });
 
+    // --- Leg 1 spike: per-block content signals -------------------------
+    //
+    // `docs/agent-ui-performance-design.md` leg 1's spike: rather than every
+    // mounted block's own view re-deriving its live content by reading the
+    // whole `frame` directly (the diagnosed hot path for streaming text and
+    // tool blocks -- every block re-running on every streamed token,
+    // session-wide, because `dyn_stack` never rebuilds a view for an
+    // unchanged `(id, tone)` key), each block gets its own content signal,
+    // created once by `transcript_block_view` when the block is first built
+    // (`get_or_create_text_signal`/`get_or_create_tool_signal`) and kept
+    // live only by the one bridge effect below -- the sole place, for these
+    // two block kinds, that still reads the raw `frame` signal directly.
+    let text_content: Rc<RefCell<HashMap<usize, RwSignal<String>>>> =
+        Rc::new(RefCell::new(HashMap::new()));
+    let tool_content: Rc<RefCell<HashMap<usize, RwSignal<ToolBlock>>>> =
+        Rc::new(RefCell::new(HashMap::new()));
+    // The bridge's own `call_id -> tool block id` registry (built up
+    // incrementally by `diff_block_content`, see its doc comment) -- shared
+    // with the trim effect below purely so a call whose block has scrolled
+    // out of the window doesn't linger here forever either.
+    let call_id_to_block: Rc<RefCell<HashMap<ToolCallId, usize>>> =
+        Rc::new(RefCell::new(HashMap::new()));
+
+    {
+        let text_content = text_content.clone();
+        let tool_content = tool_content.clone();
+        let call_id_to_block = call_id_to_block.clone();
+        // Bridge-internal bookkeeping, not shared with any view beyond the
+        // trim effect above: previous fire's `frame.items.len()`, what
+        // `diff_block_content` diffs against. A plain `Cell`, not a signal
+        // -- nothing needs to react to it changing, only this effect needs
+        // to read it, and only from inside itself.
+        let previous_items_len = Cell::new(0usize);
+        create_effect(move |_| {
+            let frame_snapshot = frame();
+            crate::profiling::timed("transcript.block_signal_bridge", || {
+                let diff = diff_block_content(
+                    &frame_snapshot,
+                    previous_items_len.get(),
+                    &mut call_id_to_block.borrow_mut(),
+                );
+                previous_items_len.set(frame_snapshot.items.len());
+
+                // Only applied to signals that already exist: a block whose
+                // view `dyn_stack` hasn't built yet seeds itself fresh from
+                // `window`'s own snapshot when it *is* built (see
+                // `transcript_block_view`), so there's nothing for this
+                // bridge to create -- only already-mounted blocks need a
+                // live update. `set_if_changed` (not a plain `.set`) skips
+                // the write when the derived value didn't actually change,
+                // so a frame update unrelated to this specific block (e.g.
+                // another block's token, or a `state`-only change) doesn't
+                // wake this block's view.
+                let text_content = text_content.borrow();
+                for (id, text) in diff.text {
+                    if let Some(signal) = text_content.get(&id) {
+                        set_if_changed(*signal, text);
+                    }
+                }
+                drop(text_content);
+
+                let tool_content = tool_content.borrow();
+                for (id, tool) in diff.tool {
+                    if let Some(signal) = tool_content.get(&id) {
+                        set_if_changed(*signal, tool);
+                    }
+                }
+            });
+        });
+    }
+
+    // Trims per-block content signals (and the bridge's own
+    // `call_id_to_block`) for blocks the transcript window
+    // (`transcript::TRANSCRIPT_WINDOW`) has already dropped -- otherwise
+    // these maps would grow without bound over a long session, exactly the
+    // class of bug this whole initiative exists to avoid. Gated on
+    // `omitted`'s *value* (the same `create_memo`-PartialEq-gates-
+    // notification trick `items_revision`/`turn_in_flight` use above)
+    // rather than firing on every token the way `window` itself does
+    // (`compute_transcript_window`'s revision incorporates growing text
+    // length, by design, so `.scroll_to`'s autoscroll tracks smoothly --
+    // out of scope for this spike, see the design doc): trimming only needs
+    // to run when a block actually falls out of the trailing window, not
+    // every time an already-visible block's text grows.
+    let omitted = create_memo(move |_| window.with(|window| window.omitted));
+    {
+        let text_content = text_content.clone();
+        let tool_content = tool_content.clone();
+        let call_id_to_block = call_id_to_block.clone();
+        create_effect(move |_| {
+            omitted.get();
+            untrack(|| {
+                let Some(oldest_visible_id) =
+                    window.with(|window| window.blocks.first().map(|block| block.id))
+                else {
+                    return;
+                };
+                text_content
+                    .borrow_mut()
+                    .retain(|id, _| *id >= oldest_visible_id);
+                tool_content
+                    .borrow_mut()
+                    .retain(|id, _| *id >= oldest_visible_id);
+                call_id_to_block
+                    .borrow_mut()
+                    .retain(|_, block_id| *block_id >= oldest_visible_id);
+            });
+        });
+    }
+
     // Forced scroll-in (`docs/agent-output-ui-design.md` decision 8): the
     // instant a new tool call becomes the oldest pending approval, jump the
     // viewport to its block regardless of `follow`'s current state --
@@ -154,6 +265,8 @@ pub(crate) fn agent_frame_view(
                     items_revision,
                     turn_in_flight,
                     block_ids_for_blocks.clone(),
+                    text_content.clone(),
+                    tool_content.clone(),
                     approval.clone(),
                 )
             },
@@ -548,24 +661,82 @@ fn viewport_is_at_bottom(viewport: floem::peniko::kurbo::Rect, content_height: f
     content_height <= 0.0 || viewport.y1 >= content_height - 2.0
 }
 
+/// Returns `block_id`'s text content signal, creating it (seeded with
+/// `initial`) the first time this block is built. Leg 1 spike support --
+/// see `agent_frame_view`'s content-signal doc comment.
+fn get_or_create_text_signal(
+    text_content: &Rc<RefCell<HashMap<usize, RwSignal<String>>>>,
+    block_id: usize,
+    initial: &str,
+) -> RwSignal<String> {
+    *text_content
+        .borrow_mut()
+        .entry(block_id)
+        .or_insert_with(|| RwSignal::new(initial.to_string()))
+}
+
+/// Returns `block_id`'s tool content signal, creating it (seeded with
+/// `initial`) the first time this block is built. Leg 1 spike support --
+/// see `agent_frame_view`'s content-signal doc comment.
+fn get_or_create_tool_signal(
+    tool_content: &Rc<RefCell<HashMap<usize, RwSignal<ToolBlock>>>>,
+    block_id: usize,
+    initial: &ToolBlock,
+) -> RwSignal<ToolBlock> {
+    *tool_content
+        .borrow_mut()
+        .entry(block_id)
+        .or_insert_with(|| RwSignal::new(initial.clone()))
+}
+
+/// Writes `value` into `signal` only if it actually differs from the
+/// current value -- so `agent_frame_view`'s bridge effect never wakes a
+/// block's view over a frame change that didn't touch that block's own
+/// content (e.g. another block's token, or a `state`-only change with no
+/// item mutation at all).
+fn set_if_changed<T: PartialEq + 'static>(signal: RwSignal<T>, value: T) {
+    let changed = signal.with_untracked(|current| *current != value);
+    if changed {
+        signal.set(value);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn transcript_block_view(
     block: TranscriptBlock,
     frame: impl Fn() -> AgentFrame + Copy + 'static,
     items_revision: floem::reactive::Memo<usize>,
     turn_in_flight: floem::reactive::Memo<bool>,
     block_view_ids: Rc<RefCell<HashMap<usize, floem::ViewId>>>,
+    text_content: Rc<RefCell<HashMap<usize, RwSignal<String>>>>,
+    tool_content: Rc<RefCell<HashMap<usize, RwSignal<ToolBlock>>>>,
     approval: ApprovalController,
 ) -> impl IntoView {
     let tone = block.tone;
     let block_id = block.id;
     let expanded = RwSignal::new(!style::is_collapsible(tone));
     let kind = block.kind;
-    // Captured before `kind` moves into `transcript_body_view` below --
-    // whether this is a `Tool` block never changes over its lifetime (see
-    // `transcript::transcript_blocks`'s doc comment), so a plain `bool` is
-    // enough; only the block's *approval* state needs a live re-check
-    // (`style::tool_block_colors`' `confirming` argument below).
-    let is_tool = matches!(kind, BlockKind::Tool(_));
+
+    // Leg 1 spike (docs/agent-ui-performance-design.md): this block's own
+    // content signal, seeded from `kind` -- the freshly-derived snapshot
+    // `dyn_stack` just built this view from (`window`'s memo re-derives the
+    // whole block list every token; see that memo's doc comment for why
+    // that's out of scope here), so no extra `frame` read is needed just to
+    // seed it. Exactly one of the two is ever `Some`: a block is either
+    // `Text` or `Tool` for its whole lifetime (`transcript::transcript_blocks`'s
+    // doc comment). Every later update to whichever signal exists comes
+    // from `agent_frame_view`'s single bridge effect, not from re-reading
+    // `frame` here.
+    let tool_signal = match &kind {
+        BlockKind::Tool(tool) => Some(get_or_create_tool_signal(&tool_content, block_id, tool)),
+        BlockKind::Text { .. } => None,
+    };
+    let text_signal = match &kind {
+        BlockKind::Text { text, .. } => {
+            Some(get_or_create_text_signal(&text_content, block_id, text))
+        }
+        BlockKind::Tool(_) => None,
+    };
 
     // Thinking's auto-expand-while-streaming (decision 5): `manual_override`
     // is `None` until the user first clicks the header, after which it wins
@@ -609,15 +780,8 @@ fn transcript_block_view(
                 }
             }),
             v_stack((
-                transcript_header_view(
-                    block_id,
-                    tone,
-                    kind.clone(),
-                    expanded,
-                    manual_override,
-                    frame,
-                ),
-                transcript_body_view(block_id, tone, kind, expanded, frame, approval),
+                transcript_header_view(tone, kind, expanded, manual_override, tool_signal),
+                transcript_body_view(tone, expanded, text_signal, tool_signal, approval),
             ))
             .style(move |s| {
                 let s = s.flex_col().min_width(0.0).max_width(block_max_width(tone));
@@ -630,27 +794,15 @@ fn transcript_block_view(
                 let s = if tone == TranscriptTone::Assistant {
                     s
                 } else {
-                    // Tracks `items_revision` rather than `frame()` directly
-                    // (same pattern as the auto-expand effect above /
-                    // `changes_bar_view`'s `changes` memo): `current_tool_block`
-                    // reads only `frame.items` (call_id/tool_id/input/status/
-                    // approval are all items-derived), and every status
-                    // transition that can flip `needs_confirmation()` -- an
-                    // `ApprovalRequested`/`ToolCallFinished` item -- is
-                    // always a plain push, never coalesced in place, so it's
-                    // guaranteed to bump `items_revision` whenever this could
-                    // have changed. This is the dominant hot path measured
-                    // by `horizon profile` (`docs/agent-ui-performance-
-                    // design.md`): a raw-`frame()` read here re-derived every
-                    // Tool block's state on every streamed token, session-
-                    // wide.
-                    let confirming = is_tool && {
-                        items_revision.get();
-                        crate::profiling::timed("transcript.current_tool_block", || {
-                            untrack(|| current_tool_block(&frame(), block_id))
-                        })
-                    }
-                    .is_some_and(|tool| tool.needs_confirmation());
+                    // Reads this block's own content signal (leg 1 spike)
+                    // rather than re-deriving from `frame` -- this was the
+                    // dominant hot path measured by `horizon profile`
+                    // (`docs/agent-ui-performance-design.md`): a raw-`frame()`
+                    // read here re-derived every Tool block's state on every
+                    // streamed token, session-wide. Now only *this* block's
+                    // own signal changing wakes this closure.
+                    let confirming = tool_signal
+                        .is_some_and(|signal| signal.with(|tool| tool.needs_confirmation()));
                     let (background, border) = if confirming {
                         style::tool_block_colors(true)
                     } else {
@@ -720,21 +872,23 @@ fn turn_end_rule_view(
 }
 
 /// The block's one-line header. `Tool`-kind blocks route to
-/// `tool_view::tool_header_view`, whose text/color re-derive live from
-/// `frame` on every status transition; every other kind keeps the
-/// pre-slice-1 static label (computed once -- these blocks' headers never
-/// change over their lifetime, only their body text streams in).
+/// `tool_view::tool_header_view`, whose text/color re-derive from
+/// `tool_signal` (the block's own content signal, leg 1 spike) on every
+/// status transition; every other kind keeps the pre-slice-1 static label
+/// (computed once -- these blocks' headers never change over their
+/// lifetime, only their body text streams in).
 fn transcript_header_view(
-    block_id: usize,
     tone: TranscriptTone,
     kind: BlockKind,
     expanded: RwSignal<bool>,
     manual_override: RwSignal<Option<bool>>,
-    frame: impl Fn() -> AgentFrame + Copy + 'static,
+    tool_signal: Option<RwSignal<ToolBlock>>,
 ) -> impl IntoView {
     match kind {
-        BlockKind::Tool(tool) => {
-            tool_view::tool_header_view(block_id, tool, expanded, frame).into_any()
+        BlockKind::Tool(_) => {
+            let tool_signal = tool_signal
+                .expect("a Tool-kind block must already have its content signal seeded above");
+            tool_view::tool_header_view(tool_signal, expanded).into_any()
         }
         BlockKind::Text { .. } => {
             let text = block_label(tone, &kind);
@@ -760,37 +914,39 @@ fn transcript_header_view(
 }
 
 fn transcript_body_view(
-    block_id: usize,
     tone: TranscriptTone,
-    kind: BlockKind,
     expanded: RwSignal<bool>,
-    frame: impl Fn() -> AgentFrame + Copy + 'static,
+    text_signal: Option<RwSignal<String>>,
+    tool_signal: Option<RwSignal<ToolBlock>>,
     approval: ApprovalController,
 ) -> impl IntoView {
-    match kind {
-        BlockKind::Tool(tool) => {
-            tool_view::tool_body_view(block_id, tool, expanded, frame, approval).into_any()
-        }
-        BlockKind::Text {
-            label: text_label, ..
-        } => markdown_block_view(block_id, tone, text_label, expanded, frame).into_any(),
+    if let Some(tool_signal) = tool_signal {
+        tool_view::tool_body_view(tool_signal, expanded, approval).into_any()
+    } else {
+        let text_signal = text_signal
+            .expect("a Text-kind block must already have its content signal seeded above");
+        markdown_block_view(tone, expanded, text_signal).into_any()
     }
 }
 
+/// Renders a streaming text block's markdown, reading `text` -- the block's
+/// own content signal (leg 1 spike, `docs/agent-ui-performance-design.md`)
+/// -- instead of re-deriving from the whole `frame` on every fire: before
+/// this, *every* mounted text block's `dyn_stack` content closure below
+/// subscribed to the raw `frame` signal directly, so all of them re-parsed
+/// their markdown on every streamed token session-wide, not just the one
+/// block whose text actually grew.
 fn markdown_block_view(
-    block_id: usize,
     tone: TranscriptTone,
-    body_label: Option<&'static str>,
     expanded: RwSignal<bool>,
-    frame: impl Fn() -> AgentFrame + Copy + 'static,
+    text: RwSignal<String>,
 ) -> impl IntoView {
     dyn_stack(
         move || {
             if tone == TranscriptTone::Thinking && !expanded.get() {
                 Vec::new()
             } else {
-                let text = current_block_text(&frame(), block_id, tone, body_label);
-                markdown_lines(&text)
+                text.with(|text| markdown_lines(text))
             }
         },
         move |line| (line.index, line.kind, line.text.clone()),
@@ -909,21 +1065,29 @@ mod tests {
 
     // --- reactive gating sufficiency (agent-ui-performance over-tracking fix) -
     //
-    // These build the exact reactive-graph shape `transcript_block_view` wires
-    // up (a `frame` signal, an `items_revision`/`turn_in_flight` memo gating a
-    // downstream `create_effect` that reads `frame()` `untrack`ed) as a
-    // standalone graph -- floem's reactive runtime is a plain thread-local, so
-    // `create_effect`/`create_memo` work outside any mounted view. This proves
-    // the fix actually cuts recompute frequency (not just that the underlying
-    // pure functions are safe to gate this way), and pins the two coarse keys'
-    // *sufficiency*: an event that must not be missed always shows up as a
-    // recompute, and streamed-token noise never does. Mirrors the convention
-    // `changes.rs`'s `streaming_text_deltas_leave_item_count_and_changes_
-    // untouched`/`a_tool_call_finishing_always_grows_item_count` set for the
+    // These build the exact reactive-graph shapes `agent_frame_view` wires up
+    // as standalone graphs -- floem's reactive runtime is a plain
+    // thread-local, so `create_effect`/`create_memo`/`RwSignal` work outside
+    // any mounted view. This proves the fixes actually cut recompute
+    // frequency (not just that the underlying pure functions are safe to
+    // gate this way), and pins each mechanism's *sufficiency*: an event that
+    // must not be missed always shows up as a recompute, and streamed-token
+    // noise never does. Mirrors the convention `changes.rs`'s
+    // `streaming_text_deltas_leave_item_count_and_changes_untouched`/
+    // `a_tool_call_finishing_always_grows_item_count` set for the
     // `session_changes` fix this one reuses the pattern from.
 
+    /// Leg 1 spike's content-signal bridge, replayed standalone: proves the
+    /// full chain (bridge effect -> `RwSignal<ToolBlock>` -> a downstream
+    /// consumer, standing in for `tool_view`'s reactive closures) only wakes
+    /// the consumer when *this* block's own tool content actually changes,
+    /// not on every `frame` write. Unlike `current_tool_block_gating_
+    /// recomputes_only_on_items_revision_changes` (the pre-signal version
+    /// this replaces), the downstream consumer here reads the *signal*, not
+    /// `frame()` -- so this also proves blocks the bridge never touches
+    /// (because their id has no live signal) don't spuriously wake either.
     #[test]
-    fn current_tool_block_gating_recomputes_only_on_items_revision_changes() {
+    fn tool_content_signal_only_updates_on_a_real_status_change() {
         let frame_signal = RwSignal::new(AgentFrame {
             state: None,
             items: vec![
@@ -939,14 +1103,40 @@ mod tests {
             ],
         });
         let frame = move || frame_signal.get();
-        let items_revision = create_memo(move |_| frame().items.len());
 
+        let tool_content: Rc<RefCell<HashMap<usize, RwSignal<ToolBlock>>>> =
+            Rc::new(RefCell::new(HashMap::new()));
+        let initial = transcript::current_tool_block(&frame_signal.get_untracked(), 0)
+            .expect("block 0 is a tool call");
+        let tool_signal = get_or_create_tool_signal(&tool_content, 0, &initial);
+
+        // The bridge effect, wired exactly as `agent_frame_view` wires it.
+        let call_id_to_block: Rc<RefCell<HashMap<ToolCallId, usize>>> =
+            Rc::new(RefCell::new(HashMap::new()));
+        let previous_items_len = Rc::new(RefCell::new(0usize));
+        create_effect(move |_| {
+            let frame_snapshot = frame();
+            let diff = transcript::diff_block_content(
+                &frame_snapshot,
+                *previous_items_len.borrow(),
+                &mut call_id_to_block.borrow_mut(),
+            );
+            *previous_items_len.borrow_mut() = frame_snapshot.items.len();
+            let tool_content = tool_content.borrow();
+            for (id, tool) in diff.tool {
+                if let Some(signal) = tool_content.get(&id) {
+                    set_if_changed(*signal, tool);
+                }
+            }
+        });
+
+        // A downstream consumer standing in for `tool_view`'s reactive
+        // closures: reads only the signal, never `frame()` directly.
         let runs = Rc::new(RefCell::new(0));
         let runs_probe = runs.clone();
         create_effect(move |_| {
-            items_revision.get();
+            tool_signal.get();
             *runs_probe.borrow_mut() += 1;
-            untrack(|| current_tool_block(&frame(), 0));
         });
         assert_eq!(*runs.borrow(), 1, "the initial run");
 
@@ -961,11 +1151,11 @@ mod tests {
         assert_eq!(
             *runs.borrow(),
             1,
-            "a coalesced, unrelated text delta must not re-trigger the tool-block re-check"
+            "a coalesced, unrelated text delta must not wake this tool block's signal"
         );
 
         // A genuine status-changing item (`ToolCallFinished`) is always a
-        // plain push -- must still re-trigger the re-check.
+        // plain push -- must still update the signal.
         frame_signal.update(|frame| {
             frame
                 .items
@@ -977,7 +1167,7 @@ mod tests {
         assert_eq!(
             *runs.borrow(),
             2,
-            "a real status-changing item must still re-trigger the re-check"
+            "a real status-changing item must still update the signal"
         );
     }
 

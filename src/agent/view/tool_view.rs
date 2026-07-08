@@ -6,19 +6,23 @@
 //! about. Unknown tools fall back to a raw input/output dump -- the only
 //! place raw JSON reaches the transcript.
 //!
-//! Both the header and the body re-derive their content from `frame()`
-//! reactively (via `transcript::current_tool_block`) rather than from the
-//! `ToolBlock` snapshot captured when the view was first built: the
-//! surrounding `dyn_stack` (`agent_frame_view`) keys blocks by `(id, tone)`,
-//! which stays constant across a tool call's whole Preparing/Requested/
-//! Started/Finished lifecycle (see `transcript::transcript_blocks`'s doc
-//! comment), so `dyn_stack` never rebuilds this view for a later status
-//! transition -- the same reason `markdown_block_view` reads
-//! `current_block_text` instead of a captured value.
+//! Both the header and the body re-derive their content from `tool`, a
+//! per-block `RwSignal<ToolBlock>` `mod.rs`'s `transcript_block_view`
+//! creates once per block and keeps live via its content-signal bridge
+//! effect, rather than from a one-off snapshot captured when the view was
+//! first built: the surrounding `dyn_stack` (`agent_frame_view`) keys
+//! blocks by `(id, tone)`, which stays constant across a tool call's whole
+//! Preparing/Requested/Started/Finished lifecycle (see
+//! `transcript::transcript_blocks`'s doc comment), so `dyn_stack` never
+//! rebuilds this view for a later status transition -- the same reason
+//! `markdown_block_view` reads its own per-block text signal instead of a
+//! captured value. Reading the signal directly here (rather than the whole
+//! `frame`, `docs/agent-ui-performance-design.md` leg 1's spike) means only
+//! *this* block's own status changes wake these closures, not every
+//! streamed token session-wide.
 
 use floem::prelude::*;
 
-use crate::agent::frame::AgentFrame;
 use crate::ui::fonts::font_family;
 use crate::ui::theme;
 
@@ -26,7 +30,7 @@ use super::approval::{self, ApprovalController};
 use super::diff::{self, DiffLineKind};
 use super::style;
 use super::tool_header;
-use super::transcript::{current_tool_block, is_error_output, ToolBlock, ToolStatus};
+use super::transcript::{is_error_output, ToolBlock, ToolStatus};
 
 /// How many lines of a tool body's preformatted content (write preview,
 /// bash output, read content, match lists) are shown before collapsing the
@@ -43,60 +47,45 @@ const BODY_LINE_CAP: usize = 40;
 const BODY_PREVIEW_MAX_HEIGHT_WHILE_CONFIRMING: f64 = 320.0;
 
 pub(super) fn tool_header_view(
-    block_id: usize,
-    initial: ToolBlock,
+    tool: RwSignal<ToolBlock>,
     expanded: RwSignal<bool>,
-    frame: impl Fn() -> AgentFrame + Copy + 'static,
 ) -> impl IntoView {
-    let text_initial = initial.clone();
-    let color_initial = initial;
-
-    label(move || {
-        let tool = current_tool_block(&frame(), block_id).unwrap_or_else(|| text_initial.clone());
-        tool_header::header_line(&tool)
-    })
-    .on_click_stop(move |_| {
-        expanded.update(|expanded| *expanded = !*expanded);
-    })
-    .style(move |s| {
-        let tool = current_tool_block(&frame(), block_id).unwrap_or_else(|| color_initial.clone());
-        let confirming = tool.needs_confirmation();
-        // Forced open (`docs/agent-output-ui-design.md` decision 8:
-        // "is_open |= needs_confirmation") while a decision is pending --
-        // the underlying `expanded` signal keeps whatever the user last set
-        // it to, so a manual collapse click still registers and the block
-        // returns to that choice once the call resolves.
-        let is_open = expanded.get() || confirming;
-        let s = style::header_row_style(s, super::transcript::TranscriptTone::Tool, is_open)
-            .color(style::tool_status_color(&tool.status));
-        if confirming {
-            let (background, border) = style::tool_block_colors(true);
-            s.background(background).border_color(border)
-        } else {
-            s
-        }
-    })
+    label(move || tool.with(tool_header::header_line))
+        .on_click_stop(move |_| {
+            expanded.update(|expanded| *expanded = !*expanded);
+        })
+        .style(move |s| {
+            let confirming = tool.with(ToolBlock::needs_confirmation);
+            // Forced open (`docs/agent-output-ui-design.md` decision 8:
+            // "is_open |= needs_confirmation") while a decision is pending --
+            // the underlying `expanded` signal keeps whatever the user last
+            // set it to, so a manual collapse click still registers and the
+            // block returns to that choice once the call resolves.
+            let is_open = expanded.get() || confirming;
+            let s = style::header_row_style(s, super::transcript::TranscriptTone::Tool, is_open)
+                .color(tool.with(|tool| style::tool_status_color(&tool.status)));
+            if confirming {
+                let (background, border) = style::tool_block_colors(true);
+                s.background(background).border_color(border)
+            } else {
+                s
+            }
+        })
 }
 
 pub(super) fn tool_body_view(
-    block_id: usize,
-    initial: ToolBlock,
+    tool: RwSignal<ToolBlock>,
     expanded: RwSignal<bool>,
-    frame: impl Fn() -> AgentFrame + Copy + 'static,
     approval_controller: ApprovalController,
 ) -> impl IntoView {
-    let lines_initial = initial.clone();
-    let visible_initial = initial;
-
     let preview = scroll(
         dyn_stack(
             move || {
-                let tool =
-                    current_tool_block(&frame(), block_id).unwrap_or_else(|| lines_initial.clone());
-                if !(expanded.get() || tool.needs_confirmation()) {
+                let needs_confirmation = tool.with(ToolBlock::needs_confirmation);
+                if !(expanded.get() || needs_confirmation) {
                     return Vec::new();
                 }
-                tool_body_lines(&tool)
+                tool.with(tool_body_lines)
             },
             move |line| (line.index, line.kind, line.text.clone()),
             tool_body_line_view,
@@ -104,9 +93,7 @@ pub(super) fn tool_body_view(
         .style(|s| s.width_full().flex_col().padding_horiz(14).padding_vert(10)),
     )
     .style(move |s| {
-        let tool =
-            current_tool_block(&frame(), block_id).unwrap_or_else(|| visible_initial.clone());
-        let confirming = tool.needs_confirmation();
+        let confirming = tool.with(ToolBlock::needs_confirmation);
         if !(expanded.get() || confirming) {
             return s.hide();
         }
@@ -120,7 +107,7 @@ pub(super) fn tool_body_view(
 
     v_stack((
         preview,
-        approval::approval_control_row(block_id, frame, approval_controller),
+        approval::approval_control_row(tool, approval_controller),
     ))
     .style(|s| s.width_full().flex_col())
 }
