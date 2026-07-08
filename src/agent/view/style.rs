@@ -11,7 +11,6 @@ pub(super) fn block_label_size(tone: TranscriptTone) -> f32 {
         TranscriptTone::User => 12.0,
         TranscriptTone::Assistant => 12.0,
         TranscriptTone::Thinking => 12.0,
-        TranscriptTone::Status => 12.0,
         _ => 11.0,
     }
 }
@@ -26,7 +25,6 @@ pub(super) fn block_max_width(tone: TranscriptTone) -> f32 {
 
 pub(super) fn block_text_color(tone: TranscriptTone) -> Color {
     match tone {
-        TranscriptTone::Status => theme::text_muted(),
         TranscriptTone::Thinking => theme::text_muted(),
         TranscriptTone::Tool => theme::text_primary(),
         TranscriptTone::Error => theme::danger(),
@@ -34,15 +32,20 @@ pub(super) fn block_text_color(tone: TranscriptTone) -> Color {
     }
 }
 
+/// `Status` has no arm here: `status_block` still constructs it, but only
+/// `mod.rs`'s `status_text` memo consumes that block (for its text, not its
+/// tone), never `dyn_stack` -- so this match can never actually see it. Kept
+/// as a catch-all rather than a dedicated arm so a real dead-tone panic
+/// can't reach production if that ever changes.
 pub(super) fn block_colors(tone: TranscriptTone) -> (Color, Color) {
     match tone {
         TranscriptTone::User => (theme::user_message_surface(), theme::user_message_border()),
         TranscriptTone::Assistant => (theme::surface_raised(), theme::border_default()),
         TranscriptTone::Thinking => (theme::surface_panel(), theme::border_subtle()),
-        TranscriptTone::Status => (theme::surface_chrome(), theme::border_default()),
         TranscriptTone::Tool => (theme::surface_raised(), theme::border_default()),
         TranscriptTone::Error => (theme::surface_raised(), theme::danger()),
         TranscriptTone::Lifecycle => (theme::surface_raised(), theme::border_subtle()),
+        _ => (theme::surface_raised(), theme::border_default()),
     }
 }
 

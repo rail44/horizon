@@ -48,7 +48,19 @@ pub(crate) fn command_palette(state: CommandPaletteState) -> impl IntoView {
     let palette_stage = control_input.command.palette.palette_stage;
     let palette_focus_request = state.palette_focus_request;
 
+    // Gated on `palette_open` *before* touching `workspace`/`frames`: while
+    // closed, this returns without subscribing to either, so the memo's only
+    // dependency is `palette_open` itself. Without this guard the memo
+    // tracks `frames` unconditionally, and `frames` is notified on every
+    // agent token and every terminal byte app-wide -- so it would re-walk
+    // every agent session's frame (deep-cloning each `AgentFrame`, see
+    // `Frames::agent_frame`) on every token even while the palette view is
+    // merely `.hide()`d, not unmounted. `palette_open.get()` is read first
+    // so opening the palette (which flips it) still recomputes immediately.
     let items = create_memo(move |_| {
+        if !palette_open.get() {
+            return Vec::new();
+        }
         let query = palette_query.get();
         let stage = palette_stage.get();
         workspace.with(|ws| frames.with(|fr| palette_rows(ws, fr, stage, &query)))
@@ -135,4 +147,44 @@ pub(crate) fn command_palette(state: CommandPaletteState) -> impl IntoView {
             .border_color(theme::accent())
             .background(theme::surface_base())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::command_actions::CommandActionState;
+    use crate::workspace::Workspace;
+
+    /// Mirrors the `items` memo's gating logic built in `command_palette`
+    /// above (that function also builds a full view tree, so it isn't
+    /// itself unit-testable) against a live `create_memo` + `RwSignal`s, to
+    /// pin the reactive behavior the perf fix depends on: the memo must
+    /// yield an empty list while `palette_open` is false, and populate
+    /// correctly the instant it flips to true.
+    #[test]
+    fn items_memo_stays_empty_while_closed_and_populates_once_open() {
+        let command = CommandActionState::for_test(Workspace::mvp());
+        let workspace = command.workspace();
+        let frames = command.frames();
+        let palette_open = command.palette.palette_open;
+        let palette_query = command.palette.palette_query;
+        let palette_stage = command.palette.palette_stage;
+
+        palette_open.set(false);
+
+        let items = create_memo(move |_| {
+            if !palette_open.get() {
+                return Vec::new();
+            }
+            let query = palette_query.get();
+            let stage = palette_stage.get();
+            workspace.with(|ws| frames.with(|fr| palette_rows(ws, fr, stage, &query)))
+        });
+
+        assert!(items.get_untracked().is_empty());
+
+        palette_open.set(true);
+
+        assert!(!items.get_untracked().is_empty());
+    }
 }

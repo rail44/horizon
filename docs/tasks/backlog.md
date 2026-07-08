@@ -275,15 +275,19 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     never proven). First migration form accepts "sessiond reload
     terminates terminal sessions; agent sessions restore from the log."
     See docs/research/session-daemon.md §2.E.
-21. **Dead `TranscriptTone::Status` match arms** — after leg 1 moved the
-    status line out of the block pipeline into `status_indicator_view`
-    chrome (`c4e3478`), `style.rs`'s `block_label_size`/`block_text_color`/
-    `block_colors` and `labels.rs`'s `shows_label`/`block_label` still
-    carry `TranscriptTone::Status` arms that the `dyn_stack` never reaches
-    any more (the variant is still constructed by `status_block`, just not
-    rendered as a block). Harmless, cosmetic cleanup — remove the arms, or
-    drop the `Status` tone from the chrome path entirely. Recorded
-    2026-07-08 (leg-1 review Observation).
+21. *(resolved 2026-07-08)* **Dead `TranscriptTone::Status` match arms** —
+    after leg 1 moved the status line out of the block pipeline into
+    `status_indicator_view` chrome (`c4e3478`), `style.rs`'s
+    `block_label_size`/`block_text_color`/`block_colors` still carried
+    explicit `TranscriptTone::Status` arms that the `dyn_stack` never
+    reaches any more (the variant is still constructed by `status_block`,
+    just not rendered as a block); those three arms are now removed,
+    falling through to each function's existing catch-all (`block_colors`
+    had none, so it gained one). `labels.rs`'s `shows_label`/`block_label`
+    turned out to have no literal `TranscriptTone::Status` arm to begin
+    with (`shows_label` is a boolean expression over `User`/`Assistant`
+    only; `block_label` matches on `BlockKind`, not `tone`) — no change
+    needed there.
 22. **Airtight in-place mutation tracking (reducer reports the mutated
     index)** — leg 1's `in_place_mutable_item_indices`
     (`crates/horizon-agent/src/frame.rs`) is a stopgap: it re-derives the
