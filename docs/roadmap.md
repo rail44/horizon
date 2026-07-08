@@ -108,6 +108,21 @@ wave items where possible; design docs on first use.
   geometric navigation: `hjkl` resolves to the nearest pane in that
   direction by rectangle geometry, `workspace::nav`, rather than tree
   structure — `j`/`k` are no longer no-ops).
+- **Agent UI performance defenses** — all three legs shipped
+  (`docs/agent-ui-performance-design.md`), the answer to the
+  `session_changes` reactive over-tracking regression class. Leg 2
+  (ast-grep gate) and leg 3 (agent-readable `horizon profile`
+  measurement) landed 2026-07-08; leg 1 — the primary, airtight
+  defense — landed 2026-07-08 (`c4e3478`): per-block content signals
+  make the raw `frame` unreachable from hot per-block closures, kept
+  live by one bridge effect with an O(1) `diff_block_content` keyed off
+  a co-located `in_place_mutable_item_indices` source of truth
+  (`crates/horizon-agent/src/frame.rs`); the ephemeral status line moved
+  to `session_state`-driven chrome; `approval.rs` migrated off raw
+  `frame()`. Measured effect: the ~96-block-per-item re-derivation
+  fan-out (~15ms/streamed item) collapses to one O(1) bridge pass.
+  Follow-ups in backlog 21–22 (dead `Status` arms; the airtight
+  reducer-reports-index form).
 
 ## Next (unclaimed — pick freely)
 
@@ -120,19 +135,6 @@ wave items where possible; design docs on first use.
   same way as the Changes aggregation — proposed by application-ui
   slice 5; pairs with backlog 16 (turn metadata) as the two small
   contract extensions unblocking the UI's remaining improvements.
-- **Agent UI performance defenses** (`docs/agent-ui-performance-design.md`)
-  — three legs against reactive over-tracking (the `session_changes`
-  regression class). Legs 2 (ast-grep gate) and 3 (agent-readable
-  `horizon profile` measurement, capture aimed at hot reactive
-  closures) launched as worker tasks from the project session
-  2026-07-08. Leg 1 (the raw-`frame`-unreachable API boundary — the
-  only airtight defense, since static analysis misses the indirect
-  form) is **implemented** (2026-07-08): per-block content signals plus
-  a single bridge effect, hardened with a co-located
-  `in_place_mutable_item_indices` source of truth in
-  `crates/horizon-agent/src/frame.rs` for the reducer's in-place
-  coalescing targets, and the `approval.rs` inline approve/deny row
-  migrated off raw `frame()` reads.
 
 ## Later (deliberately unshaped)
 

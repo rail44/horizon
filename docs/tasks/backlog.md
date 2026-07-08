@@ -275,3 +275,24 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     never proven). First migration form accepts "sessiond reload
     terminates terminal sessions; agent sessions restore from the log."
     See docs/research/session-daemon.md §2.E.
+21. **Dead `TranscriptTone::Status` match arms** — after leg 1 moved the
+    status line out of the block pipeline into `status_indicator_view`
+    chrome (`c4e3478`), `style.rs`'s `block_label_size`/`block_text_color`/
+    `block_colors` and `labels.rs`'s `shows_label`/`block_label` still
+    carry `TranscriptTone::Status` arms that the `dyn_stack` never reaches
+    any more (the variant is still constructed by `status_block`, just not
+    rendered as a block). Harmless, cosmetic cleanup — remove the arms, or
+    drop the `Status` tone from the chrome path entirely. Recorded
+    2026-07-08 (leg-1 review Observation).
+22. **Airtight in-place mutation tracking (reducer reports the mutated
+    index)** — leg 1's `in_place_mutable_item_indices`
+    (`crates/horizon-agent/src/frame.rs`) is a stopgap: it re-derives the
+    small set of indices a next fold *could* mutate, correct for every
+    real-provider sequence but with two documented latent gaps (concurrent
+    multi-key `ToolCallPreparing` byte counts; and its growth-branch
+    correctness resting on one-event-per-fire delivery, no `batch()`). The
+    airtight form has `apply_agent_event_to_frame` report exactly which
+    index it mutated/appended, threaded to the bridge as the single source
+    of truth — removing both gaps. Wants doing before any change that
+    batches frame delivery or a provider that interleaves tool-arg
+    streaming. Recorded 2026-07-08 (leg-1 review Observation + design doc).
