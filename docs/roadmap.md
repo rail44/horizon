@@ -56,13 +56,14 @@ wave items where possible; design docs on first use.
    (`docs/session-daemon-design.md`): expand agentd → `sessiond`
    hosting both kinds, whole terminal brain moved (no PTY-only stage),
    sister contracts, row-diff push. Migration starts headless with the
-   `horizon-terminal-core` crate extraction. **In flight 2026-07-08**
-   (owner-driven session): the extraction's one cross-crate dependency
-   is theme-color resolution, and how that cut is made pre-decides the
-   daemon frame representation — daemon-resolves-RGB (aligns with the
-   row-diff `TerminalLine` `PartialEq`) vs UI-resolves-index (zero
-   round-trip live re-color, but changes the frame type). **Session
-   relationship model designed 2026-07-07**
+   `horizon-terminal-core` crate extraction, whose slice design is now
+   **settled 2026-07-09** (`session-daemon-design.md` decisions 8, 9 +
+   the row-diff amendment to 4): color resolves in the UI (the daemon
+   emits logical colors, not RGB — so row-diff is theme-independent and
+   live re-theming needs no daemon round-trip), and the extracted crate
+   is the byte-driven brain (VT core + session loop) while PTY ownership
+   stays in `sessiond`. Design complete; awaiting an implementation
+   session. **Session relationship model designed 2026-07-07**
    (`docs/session-relationship-design.md`): lineage is a first-class
    layout-orthogonal derivation tree — the same tree worktree
    isolation, delegation, and messaging all use. Foundation landed

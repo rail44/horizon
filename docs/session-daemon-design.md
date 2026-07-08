@@ -1,9 +1,11 @@
 # Session Daemon — Design Decisions
 
-Status: decided 2026-07-07 (owner consultation in the project session).
-The exploration material and option analysis is
-`docs/research/session-daemon.md`; this file records the decisions and
-is the scope reference for the migration. Implementation not started.
+Status: decided 2026-07-07 (owner consultation in the project session);
+the `horizon-terminal-core` extraction-slice decisions (8, 9, and the
+color amendment to 4) added 2026-07-09. The exploration material and
+option analysis is `docs/research/session-daemon.md`; this file records
+the decisions and is the scope reference for the migration.
+Implementation not started.
 
 Motive: terminal sessions must outlive the UI process (a UI crash or
 restart must not kill the shell and its children), and delegated
@@ -58,7 +60,10 @@ hosted by a daemon, with the UI as a reconnecting client.
    full snapshot to establish the diff baseline. True alacritty_terminal
    damage tracking (the heavier real-diff option) is deferred: adopt it
    only if bandwidth measurement on redraw-heavy panes (e.g. large
-   `htop`) shows the row-diff is insufficient.
+   `htop`) shows the row-diff is insufficient. The rows compared here
+   carry *logical* colors, not resolved RGB (decision 8), so a theme
+   change produces zero row diffs — the UI re-paints from the same
+   logical rows rather than re-diffing every row.
 
 5. **Reload terminates terminal sessions; keep live-PTY hand-off out of
    the critical path.** Agent state is an append-only log (restorable on
@@ -93,6 +98,42 @@ hosted by a daemon, with the UI as a reconnecting client.
    Starting only new session kinds in the daemon, or a partial PTY
    split, are both rejected (they miss the motive / were excluded by
    decision 1).
+
+8. **Color resolves in the UI, not the daemon; logical colors on the
+   wire.** Today `TerminalCore` resolves each cell to raw RGB at snapshot
+   time (reading `ui::theme::terminal_colors()` — its one cross-crate
+   dependency, and the thing that blocks the extraction). Instead it
+   emits each cell's *logical* color — an ANSI/256 index, a named color,
+   or "default fg/bg" — and the UI resolves index→RGB at paint time with
+   its own theme. Rationale: `sessiond` may serve one terminal to more
+   than one client (decision 6's hedge; a future headless viewer), and a
+   client's theme is its own presentation, not shared daemon state —
+   baking one theme into the daemon frame would be wrong for a
+   differently-themed second client. Consequences: (a) the frame/row
+   payload carries logical colors, feeding decision 4's theme-independent
+   row-diff; (b) `Reload Config` live re-theming needs no daemon
+   round-trip (the UI re-resolves on the next paint); (c) it removes
+   `TerminalCore`'s last cross-crate dependency, unblocking decision 9.
+
+9. **`horizon-terminal-core` is the byte-driven brain; the PTY stays in
+   `sessiond`.** The crate extracted in decision 7 step 0 contains the VT
+   core (`TerminalCore` + emulation: bytes → frame) and the session loop
+   (`run_terminal_core`: the 16ms coalescing / snapshot / sync-update
+   failsafe), driven purely by byte channels. It does *not* contain the
+   spawn layer (`portable-pty`, threads, environment setup) — that stays
+   in `sessiond`, which already owns process/FS concerns (worktrees,
+   isolation, lineage, per `session-relationship-design.md`). Rationale:
+   the crate stays headless-pure (no `portable-pty` dependency; the
+   existing `terminal/tests.rs` already drives the core exactly this
+   way), the "brain" moves while the PTY "body" is spawned by the host,
+   and PTY spawning (fork+exec, fd management) is a host/process concern.
+   Consistent with decision 1 (the daemon owns PTY + core): `sessiond`
+   the binary owns the PTY and *uses* this crate for the brain.
+   Extraction done-definition (verification, not an owner decision): the
+   crate builds standalone with **no floem/`ui` dependency** (that is what
+   "extracted" means), and a golden test confirms the visual output —
+   colors included, once resolved with the default theme — is unchanged
+   from before the color cut.
 
 ## Connection to delegation (stage 1)
 
