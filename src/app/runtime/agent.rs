@@ -54,7 +54,10 @@ fn surface_agent_runtime_unavailable(
 ) {
     let message =
         "Agent runtime unavailable -- use \"Reload Agent Runtime\" to reconnect.".to_string();
-    frames.update(|frames| {
+    // `with_untracked`, not `update` -- see `agentd_runtime::
+    // fold_agent_session_events`'s matching comment for why an agent-frame
+    // write must not also notify the outer `RwSignal<Frames>`.
+    frames.with_untracked(|frames| {
         frames.update_agent_frame(
             session_id,
             AgentFrame {

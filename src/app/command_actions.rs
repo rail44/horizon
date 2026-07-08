@@ -634,10 +634,18 @@ fn resolve_and_send_approval(
 ) {
     let frames = state.frames();
     let sessions = state.sessions();
-    let frame = frames.with_untracked(|frames| frames.agent_frame(session_id));
+    // Fully untracked (not just the outer `agent_frame_untracked`): this
+    // reads once to decide what to do next, not to render, so it must not
+    // leave a live subscription behind if `resolve_and_send_approval` ever
+    // runs from inside an active reactive scope (e.g. the CLI control-plane
+    // bridge's request-pump effect -- see `agentd_runtime::
+    // fold_agent_session_events`'s doc comment for that exact hazard).
+    let frame = frames.with_untracked(|frames| frames.agent_frame_untracked(session_id));
     let command = match resolve_approval(&frame, session_id.into(), call_id, decision) {
         ApprovalOutcome::Executed { frame, command, .. } => {
-            frames.update(|frames| frames.update_agent_frame(session_id, frame));
+            // `with_untracked`, not `update` -- see `agentd_runtime::
+            // fold_agent_session_events`'s matching comment.
+            frames.with_untracked(|frames| frames.update_agent_frame(session_id, frame));
             command
         }
         // `bash` on approve: the running-state frame is ready to publish,
@@ -646,7 +654,7 @@ fn resolve_and_send_approval(
         // `Command::ToolCallResult` is sent later by the effect
         // `app/runtime/agent.rs::spawn_agent_session` sets up for it.
         ApprovalOutcome::Started { frame, .. } => {
-            frames.update(|frames| frames.update_agent_frame(session_id, frame));
+            frames.with_untracked(|frames| frames.update_agent_frame(session_id, frame));
             return;
         }
         ApprovalOutcome::Forward(command) => command,
@@ -679,6 +687,18 @@ fn cancel_agent_turn(state: CommandActionState, session_id: SessionId) {
 /// Direction. Taking the first match is the smaller-to-build option and is
 /// sufficient to prove the frozen-detach case, since in practice there is
 /// normally at most one pending approval at a time.
+///
+/// Deliberately reads through `Frames::agent_frame` (tracked, via each
+/// visited session's own handle), not `agent_frame_untracked`, even though
+/// the palette's caller is the only one of the two that actually needs
+/// live reactivity here: the palette's `command_state` check must
+/// re-derive when a pending approval appears/resolves, and this function is
+/// shared with the one-shot command-dispatch caller above, which has no
+/// live view to gate on anyway. A one-shot caller invoked from inside some
+/// unrelated active effect could in principle pick up a spurious
+/// subscription this way; splitting the two call sites onto separate
+/// tracked/untracked helpers is future work if that ever proves to matter
+/// in practice (see `docs/reactive-store-design.md`'s open questions).
 pub(crate) fn find_pending_agent_approval(
     workspace: &Workspace,
     frames: &Frames,
@@ -742,7 +762,7 @@ mod tests {
         );
 
         let call_id = ToolCallId("call-1".to_string());
-        let mut frames = Frames::default();
+        let frames = Frames::default();
         frames.update_agent_frame(
             session_id,
             AgentFrame {

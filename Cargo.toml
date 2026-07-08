@@ -21,6 +21,12 @@ floem_renderer = { git = "https://github.com/lapce/floem", rev = "31fa8f444c37f4
 horizon-agent = { path = "crates/horizon-agent" }
 horizon-control = { path = "crates/horizon-control" }
 horizon-ctl = { path = "crates/horizon-ctl" }
+# Already an indirect dependency via floem (`lapce/floem`'s own manual-
+# sharding-discipline collections use it) -- promoted to direct so
+# `session::frames`' `RwSignal<im::HashMap<..>>` collection (`docs/
+# reactive-store-design.md`) can use it. Pinned to the version floem already
+# resolves to, so this adds no new crate to the build.
+im = "15.1"
 libc = "0.2"
 portable-pty = "0.9.0"
 serde = { version = "1.0", features = ["derive"] }

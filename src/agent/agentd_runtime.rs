@@ -585,7 +585,15 @@ pub(crate) fn fold_agent_session_events(
             if let Some(event) = events.get() {
                 observe_config_write(&event, &config_write_calls, config_reload_requests);
                 let frame = runtime_state.extend_provider_events(std::iter::once(event));
-                frames.update(|frames| frames.update_agent_frame(session_id, frame));
+                // `with_untracked`, not `update`: `update_agent_frame` writes
+                // straight into `session_id`'s own field signals (`docs/
+                // reactive-store-design.md`) and must not also notify the
+                // outer `RwSignal<Frames>` -- that would wake every reader
+                // of *any* session's frame (or the unrelated `terminal` map
+                // bundled into the same `Frames`) on every single streamed
+                // token, exactly the over-tracking this migration exists to
+                // cut.
+                frames.with_untracked(|frames| frames.update_agent_frame(session_id, frame));
             }
         });
     });

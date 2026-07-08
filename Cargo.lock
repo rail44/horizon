@@ -2354,6 +2354,7 @@ dependencies = [
  "horizon-agent",
  "horizon-control",
  "horizon-ctl",
+ "im",
  "libc",
  "portable-pty",
  "serde",

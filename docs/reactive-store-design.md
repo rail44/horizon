@@ -173,6 +173,65 @@ backstop.
 - Ordering of the migration (agent Frames first; terminal Frames; then the
   palette/pane consumers).
 
+## Slice 1 implementation notes (agent Frames, landed)
+
+Resolves the open questions above for the agent half of the migration;
+terminal Frames and the palette/pane-header consumers are still on the old
+whole-`Frames` path (untouched, not regressed).
+
+- **`im` dependency**: present transitively via floem already (`cargo tree -i
+  im` showed `floem -> im`), promoted to a direct dependency at the version
+  already resolved (`im = "15.1"`) — no new crate enters the build.
+- **Field decomposition**: `AgentFrameHandle` (`src/session/frames/
+  agent_frame_handle.rs`) has three fields — `state: RwSignal<Option
+  <SessionState>>`, `items: RwSignal<Vec<AgentFrameItem>>`, and
+  `state_entry: RwSignal<StateEntry>` (the elapsed-time sidecar `Frames` used
+  to keep in a flat `HashMap`, moved onto the handle since it's genuinely
+  per-session data). `items` stays one whole-`Vec` signal, not a per-item
+  signal collection: leg-1's own per-block `RwSignal<String>`/`RwSignal
+  <ToolBlock>` maps (`agent::view::mod`) already provide item-level
+  granularity for the transcript's two hot block kinds, one layer up — this
+  slice's job was giving that existing mechanism a correctly-scoped `frame()`
+  to read from, not duplicating it at the data layer (which would also wrongly
+  pull view-only types like `ToolBlock` down into `session::frames`).
+- **Nesting a fine-grained signal inside the coarse `RwSignal<Frames>`**: every
+  call site already threads a single `RwSignal<Frames>` everywhere (~30
+  files). Rather than changing that surface, `Frames.agent` is itself an inner
+  `RwSignal<im::HashMap<SessionId, AgentFrameHandle>>` *field* of the `Frames`
+  struct — cheap to hold (an `RwSignal` is `Copy`, so cloning `Frames` no
+  longer deep-clones the agent side at all). The write side then bypasses the
+  *outer* signal for agent writes entirely: `update_agent_frame` takes `&self`
+  and is called via `frames.with_untracked(|f| f.update_agent_frame(..))`, not
+  `frames.update(..)`, so an agent-frame write never notifies the outer
+  `RwSignal<Frames>` (which would otherwise wake every reader of *any*
+  session's frame, or of the unrelated `terminal` map bundled into the same
+  struct). Terminal writes are untouched and still go through `frames.update`.
+  This is the actual mechanism that cuts cross-session over-tracking, and it
+  required zero changes to the read call sites in `workspace::view::pane`/
+  `agent::view` — `Frames::agent_frame`/`agent_state_entered_at` kept their
+  existing signatures, just reimplemented against the handle.
+- **Writer targeting**: `apply_frame` (`AgentFrameHandle`) writes `state` and
+  `items` independently and wraps both in `batch()` (needed because `agent::
+  tools::approval::resolve_approval`'s `Executed`/`Started` outcomes can fold
+  several events — hence both fields — into one `AgentFrame` before a single
+  `apply_frame` call). `items`'s own write is further targeted via a pure,
+  unit-tested `plan_items_write` that reuses `in_place_mutable_item_indices`
+  (the reducer's existing source of truth) to distinguish "append the new
+  tail" from "patch these specific indices" from "unchanged, skip the write",
+  rather than unconditionally replacing the whole vec on every fold.
+- **Known imprecision, not fixed this slice**: `command_actions::
+  find_pending_agent_approval`/`find_agent_turn_in_flight` are shared between
+  a tracked caller (the command palette's enabled-state memo, which needs live
+  reactivity) and untracked callers (one-shot command dispatch, which
+  shouldn't leave a subscription behind if invoked from inside some unrelated
+  active effect, e.g. the CLI control-plane bridge). They're left on the
+  tracked `agent_frame` accessor, correct for the palette; a one-shot caller
+  could in principle pick up a spurious subscription. Splitting the two call
+  sites onto separate accessors is straightforward future work if this ever
+  proves to matter in practice. `resolve_and_send_approval`'s own direct read
+  was fixed to use `agent_frame_untracked` since that one has no tracked
+  caller to accommodate.
+
 ## References
 
 - floem_reactive (pinned rev 31fa8f4): `reactive/src/{runtime,signal,trigger,
