@@ -223,9 +223,17 @@ pub(super) fn transcript_blocks(frame: &AgentFrame) -> Vec<TranscriptBlock> {
         blocks.push(block);
     }
 
-    if let Some(status) = status_block(frame.state, blocks.len(), blocks.last()) {
-        blocks.push(status);
-    }
+    // The ephemeral status line ("Agent is replying...", "Agent failed",
+    // ...) used to be appended here as a synthetic block derived from
+    // `frame.state`. Leg 1 hardening moved it out: it isn't backed by any
+    // `frame.items` entry, so the per-block content-signal bridge
+    // (`diff_block_content`, which only walks `frame.items`) can never
+    // refresh it, and a state-only transition with no new item (e.g.
+    // `Running -> Failed`) would leave it frozen on stale text. See
+    // `mod.rs`'s `status_indicator_view` for where it lives now --
+    // rendered as chrome outside the block list, driven by its own
+    // `session_state`/`items_revision` memo, calling [`status_block`]
+    // directly instead of going through this function.
     blocks
 }
 
@@ -460,7 +468,18 @@ fn message_block(id: usize, message: &Message) -> TranscriptBlock {
     }
 }
 
-fn status_block(
+/// The transcript's ephemeral status text ("Agent is replying...", "Agent
+/// failed", ...) for `state`, given `last_block` (the transcript's last
+/// *real* block, i.e. `transcript_blocks`' own result before this used to
+/// be folded in). `id` only sets the returned block's `id` field -- callers
+/// that don't render it as an actual `TranscriptBlock` (see `mod.rs`'s
+/// `status_indicator_view`, which only reads `.kind`) can pass any value.
+/// `pub(super)` rather than folded back into `transcript_blocks`: this is
+/// no longer called from there (leg 1 hardening, see that function's doc
+/// comment) -- `status_indicator_view` calls it directly instead, deriving
+/// the live status line from a `frame.state`-keyed memo rather than a
+/// per-block content signal that has no backing item to react to.
+pub(super) fn status_block(
     state: Option<SessionState>,
     id: usize,
     last_block: Option<&TranscriptBlock>,
@@ -566,6 +585,17 @@ pub(super) struct BlockContentDiff {
 /// rather than this function assuming the literal last item, which misses
 /// interleaved-thinking providers (reasoning, then text, then reasoning
 /// again within one turn).
+///
+/// The growth branch (`previous_items_len..current_len`) assumes frame
+/// delivery is one event per bridge fire -- `agentd_runtime`'s frame
+/// updates aren't wrapped in a `batch()`, so each fire's `frame_snapshot`
+/// reflects exactly one folded event. If that ever changes (events
+/// batched before this effect observes `frame`), a `ToolCallPreparing ->
+/// ToolCallRequested` variant-change at an *old* index folded in the same
+/// batch as a following push would be missed: the growth branch only
+/// walks the newly appended range, and the in-place branch never runs at
+/// all when `items.len()` also grew in the same fire. A future batching
+/// change must revisit this function.
 pub(super) fn diff_block_content(
     frame: &AgentFrame,
     previous_items_len: usize,
@@ -1313,6 +1343,41 @@ mod tests {
         // Only the merged tool block -- no separate ephemeral "Approval
         // required" status block once the tool block itself carries it.
         assert_eq!(blocks.len(), 1);
+
+        // `status_block` is no longer folded into `transcript_blocks` (leg
+        // 1 hardening) -- `mod.rs`'s `status_indicator_view` calls it
+        // directly, so the suppression logic itself is tested the same way
+        // here, against the real last block `transcript_blocks` produced.
+        assert!(status_block(frame.state, blocks.len(), blocks.last()).is_none());
+    }
+
+    // --- status_block (leg 1 hardening: no longer folded into
+    // transcript_blocks, since a synthetic block with no backing item can
+    // never be refreshed by `diff_block_content`'s item-keyed diff) -------
+
+    #[test]
+    fn status_block_shows_the_initial_reply_status_with_no_items_yet() {
+        let status = status_block(Some(SessionState::Running), 0, None).expect("a status block");
+
+        assert_eq!(status.tone, TranscriptTone::Status);
+        match status.kind {
+            BlockKind::Text { text, .. } => assert_eq!(text, "Agent is replying..."),
+            BlockKind::Tool(_) => panic!("expected a text block"),
+        }
+    }
+
+    #[test]
+    fn status_block_hides_the_initial_reply_status_once_the_stream_has_started() {
+        let last_block = TranscriptBlock {
+            id: 0,
+            tone: TranscriptTone::Thinking,
+            kind: BlockKind::Text {
+                label: Some("thinking"),
+                text: "thinking".to_string(),
+            },
+        };
+
+        assert!(status_block(Some(SessionState::Running), 1, Some(&last_block)).is_none());
     }
 
     // --- content-signal bridge diff (agent-ui-performance leg 1 spike) ----

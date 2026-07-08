@@ -398,6 +398,21 @@ pub fn apply_tool_call_progress_to_frame(frame: &mut AgentFrame, progress: ToolC
 ///
 /// Adding a new in-place-mutation arm to the reducer means adding its
 /// target kind here too.
+///
+/// Known limitation: the `ToolCallPreparing` target is the *last* one per
+/// turn segment only, same as the reducer's own
+/// `apply_tool_call_progress_to_frame` (keyed by matching `key`, but still
+/// only ever searching for "the last matching item"). Genuinely concurrent
+/// multi-key tool-argument streaming (two different in-flight preparing
+/// items in the same turn segment, each ticking independently) would leave
+/// a non-last preparing item's byte count stale here. Not reachable today:
+/// the rig provider streams one tool's arguments at a time into a single
+/// shared progress buffer, and the reducer's `ToolCallRequested`
+/// supersession arm is itself unkeyed (matches "the last `ToolCallPreparing`",
+/// not "the one with this call's key"), so concurrent preparing isn't
+/// cleanly supported by the reducer either -- fully-keyed handling on both
+/// sides is deferred to the airtight "reducer reports the mutated index"
+/// follow-up this function is a stopgap for.
 pub fn in_place_mutable_item_indices(frame: &AgentFrame) -> Vec<usize> {
     let mut indices = Vec::new();
     let mut push_index = |index: Option<usize>| {

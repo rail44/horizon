@@ -31,8 +31,8 @@ use markdown::{markdown_lines, MarkdownLine, MarkdownLineKind};
 use style::{block_colors, block_max_width, block_text_color};
 use transcript::{
     compute_transcript_window, diff_block_content, is_thinking_streaming, latest_user_block_id,
-    show_turn_end_rule, starts_new_turn, BlockKind, ToolBlock, TranscriptBlock, TranscriptTone,
-    TranscriptWindow,
+    show_turn_end_rule, starts_new_turn, status_block, transcript_blocks, BlockKind, ToolBlock,
+    TranscriptBlock, TranscriptTone, TranscriptWindow,
 };
 
 /// How much taller the transcript's measured content height must get,
@@ -98,6 +98,42 @@ pub(crate) fn agent_frame_view(
     });
     let turn_in_flight = create_memo(move |_| {
         crate::profiling::timed("transcript.turn_in_flight", || frame().is_turn_in_flight())
+    });
+
+    // A full-fidelity (not coarsened to a bool) proxy for `frame.state`,
+    // `PartialEq`-gated like every memo above -- what the status indicator
+    // below needs instead of `turn_in_flight`'s collapsed boolean, since its
+    // *text* differs across every terminal state (`Cancelled`/`Failed`/
+    // `Terminated`/...), not just "in flight or not".
+    let session_state =
+        create_memo(move |_| crate::profiling::timed("transcript.session_state", || frame().state));
+
+    // The transcript's ephemeral status line ("Agent is replying...",
+    // "Agent failed", ...) -- leg 1 hardening (`docs/agent-ui-performance-
+    // design.md`). This used to be a synthetic block `transcript_blocks`
+    // appended, which under leg 1 would be rendered through a per-block
+    // content signal seeded once at mount and refreshed only by
+    // `diff_block_content`'s item-keyed diff -- but this line has no
+    // backing `frame.items` entry, so a state-only transition with no new
+    // item (e.g. `Running -> Failed`, `ToolRunning -> Completed`) would
+    // never reach it, freezing stale text. Recomputed only on
+    // `session_state`/`items_revision` changes (real state transitions or
+    // new items), not per streamed token -- `frame`/`transcript_blocks` are
+    // read `untrack`ed inside, the same shape `is_thinking_streaming`'s
+    // effect above already uses, so this memo doesn't itself become a new
+    // per-token dependency of anything reading it.
+    let status_text = create_memo(move |_| {
+        let state = session_state.get();
+        items_revision.get();
+        crate::profiling::timed("transcript.status_text", || {
+            untrack(|| {
+                let blocks = transcript_blocks(&frame());
+                status_block(state, 0, blocks.last()).map(|block| match block.kind {
+                    BlockKind::Text { text, .. } => text,
+                    BlockKind::Tool(_) => String::new(),
+                })
+            })
+        })
     });
 
     // --- Leg 1 spike: per-block content signals -------------------------
@@ -275,6 +311,7 @@ pub(crate) fn agent_frame_view(
         // boundaries only, which `turn_boundary_rule` supplies per-block via
         // its own margin, not this shared gap.
         .style(|s| s.width_full().flex_col().gap(4)),
+        status_indicator_view(status_text),
         turn_end_rule_view(window, frame),
     ))
     .style(|s| s.width_full().flex_col().gap(4).padding(8));
@@ -871,6 +908,31 @@ fn turn_end_rule_view(
     })
 }
 
+/// The transcript's live status line ("Agent is replying...", "Agent
+/// failed", ...), driven by `status_text` (`agent_frame_view`'s
+/// `session_state`/`items_revision`-gated memo) -- chrome rendered as a
+/// plain sibling in `content`'s `v_stack`, right after the blocks
+/// `dyn_stack` and before `turn_end_rule_view`, the same position the
+/// pre-leg-1 synthetic status block occupied (it was always the last
+/// pushed block, so windowing kept it at the tail). Deliberately *not* a
+/// transcript block/per-block content signal any more (leg 1 hardening,
+/// see `transcript_blocks`' doc comment): there is no `frame.items` entry
+/// backing this text for `diff_block_content` to key a signal refresh off
+/// of, so it must be driven by its own live memo instead.
+fn status_indicator_view(status_text: floem::reactive::Memo<Option<String>>) -> impl IntoView {
+    label(move || status_text.get().unwrap_or_default()).style(move |s| {
+        if status_text.with(Option::is_none) {
+            return s.hide();
+        }
+
+        s.width_full()
+            .font_family(font_family().to_string())
+            .font_size(12)
+            .color(theme::text_muted())
+            .padding_vert(4)
+    })
+}
+
 /// The block's one-line header. `Tool`-kind blocks route to
 /// `tool_view::tool_header_view`, whose text/color re-derive from
 /// `tool_signal` (the block's own content signal, leg 1 spike) on every
@@ -1027,35 +1089,12 @@ mod tests {
         assert_eq!(blocks[0].tone, TranscriptTone::Assistant);
     }
 
-    #[test]
-    fn transcript_blocks_append_ephemeral_status() {
-        let frame = AgentFrame {
-            state: Some(SessionState::Running),
-            items: Vec::new(),
-        };
-
-        let blocks = transcript_blocks(&frame);
-
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].tone, TranscriptTone::Status);
-        assert_eq!(text_of(&blocks[0]), "Agent is replying...");
-    }
-
-    #[test]
-    fn transcript_blocks_hide_reply_status_after_stream_starts() {
-        let frame = AgentFrame {
-            state: Some(SessionState::Running),
-            items: vec![AgentFrameItem::ReasoningDelta(MessageDelta {
-                role: MessageRole::Assistant,
-                text: "thinking".to_string(),
-            })],
-        };
-
-        let blocks = transcript_blocks(&frame);
-
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].tone, TranscriptTone::Thinking);
-    }
+    // `transcript_blocks` no longer appends the ephemeral status line (leg 1
+    // hardening: see that function's doc comment) -- its show/hide logic is
+    // now tested directly against `status_block`/`should_show_initial_
+    // reply_status` in `transcript.rs`'s own tests, and the live reactive
+    // wiring that replaces the old per-item append is tested below in
+    // `status_text_recomputes_on_a_state_only_transition_with_no_new_item`.
 
     #[test]
     fn omitted_summary_pluralizes_the_item_count() {
@@ -1234,5 +1273,51 @@ mod tests {
             "turn-in-flight ending must still re-trigger the auto-expand check \
              even though no item was pushed"
         );
+    }
+
+    /// Leg 1 hardening: the status line is no longer a per-block content
+    /// signal (see `status_indicator_view`'s doc comment for why one can't
+    /// work here -- there's no `frame.items` entry backing it), so it needs
+    /// its own reactive sufficiency check the way `is_thinking_streaming`'s
+    /// gating does above. Replays `agent_frame_view`'s exact
+    /// `session_state`/`items_revision` -> `status_text` wiring standalone
+    /// and proves the two state-only transitions (no item pushed) that a
+    /// naive per-block signal would have frozen on stale text --
+    /// `Running -> Failed` and `ToolRunning -> Completed` -- both still
+    /// update the text/visibility live.
+    #[test]
+    fn status_text_recomputes_on_a_state_only_transition_with_no_new_item() {
+        let frame_signal = RwSignal::new(AgentFrame {
+            state: Some(SessionState::Running),
+            items: Vec::new(),
+        });
+        let frame = move || frame_signal.get();
+        let items_revision = create_memo(move |_| frame().items.len());
+        let session_state = create_memo(move |_| frame().state);
+
+        let status_text = create_memo(move |_| {
+            let state = session_state.get();
+            items_revision.get();
+            untrack(|| {
+                let blocks = transcript_blocks(&frame());
+                status_block(state, 0, blocks.last()).map(|block| match block.kind {
+                    BlockKind::Text { text, .. } => text,
+                    BlockKind::Tool(_) => String::new(),
+                })
+            })
+        });
+
+        assert_eq!(status_text.get(), Some("Agent is replying...".to_string()));
+
+        // `Running -> Failed`, no item pushed at all.
+        frame_signal.update(|frame| frame.state = Some(SessionState::Failed));
+        assert_eq!(status_text.get(), Some("Agent failed".to_string()));
+
+        // `ToolRunning -> Completed`, again no item pushed -- the status
+        // line must also disappear, not just change text.
+        frame_signal.update(|frame| frame.state = Some(SessionState::ToolRunning));
+        assert_eq!(status_text.get(), Some("Running tool...".to_string()));
+        frame_signal.update(|frame| frame.state = Some(SessionState::Completed));
+        assert_eq!(status_text.get(), None);
     }
 }
