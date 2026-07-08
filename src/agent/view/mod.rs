@@ -80,6 +80,25 @@ pub(crate) fn agent_frame_view(
         compute_transcript_window(&frame(), previous)
     });
 
+    // Two coarse structural-revision proxies for `frame`, shared by every
+    // per-block reactive closure below that only needs to know "did the
+    // item log change" / "did the turn's in-flight status change" rather
+    // than the whole frame -- the same intermediate-memo pattern `window`
+    // above already uses, applied to `current_tool_block`'s and
+    // `is_thinking_streaming`'s per-block call sites (`transcript_block_view`)
+    // instead of the transcript's own window/revision. `frame.items` never
+    // shrinks and text deltas coalesce into an existing item in place
+    // (`apply_agent_event_to_frame`), so pure token streaming leaves
+    // `items.len()` unchanged; `frame.state` only changes via a separate
+    // `StateChanged` event that doesn't touch `items` at all, hence the
+    // second, independent proxy.
+    let items_revision = create_memo(move |_| {
+        crate::profiling::timed("transcript.items_revision", || frame().items.len())
+    });
+    let turn_in_flight = create_memo(move |_| {
+        crate::profiling::timed("transcript.turn_in_flight", || frame().is_turn_in_flight())
+    });
+
     // Forced scroll-in (`docs/agent-output-ui-design.md` decision 8): the
     // instant a new tool call becomes the oldest pending approval, jump the
     // viewport to its block regardless of `follow`'s current state --
@@ -129,7 +148,14 @@ pub(crate) fn agent_frame_view(
             move || window.with(|window| window.blocks.clone()),
             move |block| (block.id, block.tone),
             move |block| {
-                transcript_block_view(block, frame, block_ids_for_blocks.clone(), approval.clone())
+                transcript_block_view(
+                    block,
+                    frame,
+                    items_revision,
+                    turn_in_flight,
+                    block_ids_for_blocks.clone(),
+                    approval.clone(),
+                )
             },
         )
         // Dense within a turn (decision 6): whitespace belongs at turn
@@ -209,6 +235,7 @@ pub(crate) fn agent_frame_view(
         // default) height.
         changes_bar_view(
             frame,
+            items_revision,
             window,
             follow,
             detached_since_block,
@@ -245,6 +272,7 @@ const CHANGES_LIST_MAX_HEIGHT: f64 = 200.0;
 /// reasoning as the follow-scroll pills' own jump just above).
 fn changes_bar_view(
     frame: impl Fn() -> AgentFrame + Copy + 'static,
+    items_revision: floem::reactive::Memo<usize>,
     window: floem::reactive::Memo<TranscriptWindow>,
     follow: RwSignal<FollowState>,
     detached_since_block: RwSignal<Option<usize>>,
@@ -252,21 +280,19 @@ fn changes_bar_view(
     jump_to_view: RwSignal<Option<floem::ViewId>>,
 ) -> impl IntoView {
     let expanded = RwSignal::new(false);
-    // A cheap structural-revision proxy for `frame.items`: just the Vec's
-    // length, versus `session_changes`'s full item-log walk below.
-    // `apply_agent_event_to_frame` (`crates/horizon-agent/src/frame.rs`)
-    // never removes items, and text deltas / `MessageCommitted` coalesce
-    // into an existing item in place (`text.push_str`, or an in-place
-    // replace), so pure token streaming leaves `items.len()` unchanged.
-    // `ToolCallRequested` can likewise supersede a pending
+    // `items_revision` (`agent_frame_view`'s shared structural-revision
+    // proxy for `frame.items`) versus `session_changes`'s full item-log walk
+    // below. `apply_agent_event_to_frame` (`crates/horizon-agent/src/
+    // frame.rs`) never removes items, and text deltas / `MessageCommitted`
+    // coalesce into an existing item in place (`text.push_str`, or an
+    // in-place replace), so pure token streaming leaves `items.len()`
+    // unchanged. `ToolCallRequested` can likewise supersede a pending
     // `ToolCallPreparing` item in place -- but the matching
     // `ToolCallFinished` that actually makes `session_changes` see a new
     // file change is always a plain push, never coalesced, so it's
     // guaranteed to bump this count whenever `session_changes`'s output
     // could have changed.
-    let items_revision = create_memo(move |_| {
-        crate::profiling::timed("transcript.items_revision", || frame().items.len())
-    });
+    //
     // Derived straight from `frame.items` (see `changes::session_changes`'s
     // doc comment), so -- like `latest_user_block_id` -- this is immune to
     // the transcript window's 200-block trailing trim: a change made far
@@ -525,6 +551,8 @@ fn viewport_is_at_bottom(viewport: floem::peniko::kurbo::Rect, content_height: f
 fn transcript_block_view(
     block: TranscriptBlock,
     frame: impl Fn() -> AgentFrame + Copy + 'static,
+    items_revision: floem::reactive::Memo<usize>,
+    turn_in_flight: floem::reactive::Memo<bool>,
     block_view_ids: Rc<RefCell<HashMap<usize, floem::ViewId>>>,
     approval: ApprovalController,
 ) -> impl IntoView {
@@ -542,14 +570,29 @@ fn transcript_block_view(
     // Thinking's auto-expand-while-streaming (decision 5): `manual_override`
     // is `None` until the user first clicks the header, after which it wins
     // forever for this block. The effect composes it with the live
-    // `is_thinking_streaming` read on every `frame` change and writes the
-    // result into `expanded` -- the one signal the header/body below
-    // already read, so no other call site needs to change.
+    // `is_thinking_streaming` result and writes it into `expanded` -- the
+    // one signal the header/body below already read, so no other call site
+    // needs to change.
+    //
+    // Tracks `items_revision`/`turn_in_flight` (`agent_frame_view`'s shared
+    // coarse proxies) rather than `frame()` directly, reading `frame()`
+    // itself `untrack`ed -- the same pattern `changes_bar_view`'s `changes`
+    // memo uses for `session_changes`. `is_thinking_streaming` reads
+    // `frame.items` (whether a later item has superseded this one as the
+    // turn's last) *and* `frame.is_turn_in_flight()` (`frame.state`), so
+    // both proxies are needed: `items_revision` alone would miss a turn
+    // ending without any new item being pushed. Either one changing is
+    // exactly the set of frame changes that can flip this effect's result;
+    // a streamed token that only grows this block's own text (coalesced in
+    // place, see `apply_agent_event_to_frame`'s `ReasoningDelta` arm)
+    // changes neither, so this effect no longer re-fires per token.
     let manual_override = RwSignal::new(None::<bool>);
     if tone == TranscriptTone::Thinking {
         create_effect(move |_| {
+            items_revision.get();
+            turn_in_flight.get();
             let auto = crate::profiling::timed("transcript.is_thinking_streaming", || {
-                is_thinking_streaming(&frame(), block_id)
+                untrack(|| is_thinking_streaming(&frame(), block_id))
             });
             expanded.set(manual_override.get().unwrap_or(auto));
         });
@@ -582,16 +625,32 @@ fn transcript_block_view(
                 // boxed, assistant bare text) -- every other tone keeps its
                 // surface/border (`docs/agent-output-ui-design.md` decision
                 // 6). A `Tool` block awaiting approval swaps in the approval
-                // theme roles instead (decision 8), live-checked on every
-                // `frame` change so the tint clears the instant it resolves.
+                // theme roles instead (decision 8), live-checked so the tint
+                // clears the instant it resolves.
                 let s = if tone == TranscriptTone::Assistant {
                     s
                 } else {
-                    let confirming = is_tool
-                        && crate::profiling::timed("transcript.current_tool_block", || {
-                            current_tool_block(&frame(), block_id)
+                    // Tracks `items_revision` rather than `frame()` directly
+                    // (same pattern as the auto-expand effect above /
+                    // `changes_bar_view`'s `changes` memo): `current_tool_block`
+                    // reads only `frame.items` (call_id/tool_id/input/status/
+                    // approval are all items-derived), and every status
+                    // transition that can flip `needs_confirmation()` -- an
+                    // `ApprovalRequested`/`ToolCallFinished` item -- is
+                    // always a plain push, never coalesced in place, so it's
+                    // guaranteed to bump `items_revision` whenever this could
+                    // have changed. This is the dominant hot path measured
+                    // by `horizon profile` (`docs/agent-ui-performance-
+                    // design.md`): a raw-`frame()` read here re-derived every
+                    // Tool block's state on every streamed token, session-
+                    // wide.
+                    let confirming = is_tool && {
+                        items_revision.get();
+                        crate::profiling::timed("transcript.current_tool_block", || {
+                            untrack(|| current_tool_block(&frame(), block_id))
                         })
-                        .is_some_and(|tool| tool.needs_confirmation());
+                    }
+                    .is_some_and(|tool| tool.needs_confirmation());
                     let (background, border) = if confirming {
                         style::tool_block_colors(true)
                     } else {
@@ -780,7 +839,10 @@ fn markdown_line_view(line: MarkdownLine, tone: TranscriptTone) -> impl IntoView
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::contract::{Message, MessageDelta, MessageRole, SessionState};
+    use crate::agent::contract::{
+        Message, MessageDelta, MessageRole, SessionState, ToolCallId, ToolCallRequest,
+        ToolCallResult,
+    };
     use crate::agent::frame::AgentFrameItem;
     use transcript::transcript_blocks;
 
@@ -843,5 +905,144 @@ mod tests {
     fn omitted_summary_pluralizes_the_item_count() {
         assert_eq!(omitted_summary(1), "1 earlier item hidden");
         assert_eq!(omitted_summary(2), "2 earlier items hidden");
+    }
+
+    // --- reactive gating sufficiency (agent-ui-performance over-tracking fix) -
+    //
+    // These build the exact reactive-graph shape `transcript_block_view` wires
+    // up (a `frame` signal, an `items_revision`/`turn_in_flight` memo gating a
+    // downstream `create_effect` that reads `frame()` `untrack`ed) as a
+    // standalone graph -- floem's reactive runtime is a plain thread-local, so
+    // `create_effect`/`create_memo` work outside any mounted view. This proves
+    // the fix actually cuts recompute frequency (not just that the underlying
+    // pure functions are safe to gate this way), and pins the two coarse keys'
+    // *sufficiency*: an event that must not be missed always shows up as a
+    // recompute, and streamed-token noise never does. Mirrors the convention
+    // `changes.rs`'s `streaming_text_deltas_leave_item_count_and_changes_
+    // untouched`/`a_tool_call_finishing_always_grows_item_count` set for the
+    // `session_changes` fix this one reuses the pattern from.
+
+    #[test]
+    fn current_tool_block_gating_recomputes_only_on_items_revision_changes() {
+        let frame_signal = RwSignal::new(AgentFrame {
+            state: None,
+            items: vec![
+                AgentFrameItem::ToolCallRequested(ToolCallRequest {
+                    call_id: ToolCallId("call-1".to_string()),
+                    tool_id: "fs.edit".to_string(),
+                    input: serde_json::json!({}),
+                }),
+                AgentFrameItem::AssistantTextDelta(MessageDelta {
+                    role: MessageRole::Assistant,
+                    text: "unrelated ".to_string(),
+                }),
+            ],
+        });
+        let frame = move || frame_signal.get();
+        let items_revision = create_memo(move |_| frame().items.len());
+
+        let runs = Rc::new(RefCell::new(0));
+        let runs_probe = runs.clone();
+        create_effect(move |_| {
+            items_revision.get();
+            *runs_probe.borrow_mut() += 1;
+            untrack(|| current_tool_block(&frame(), 0));
+        });
+        assert_eq!(*runs.borrow(), 1, "the initial run");
+
+        // A streamed token growing the *existing* `AssistantTextDelta` in
+        // place (`apply_agent_event_to_frame`'s coalescing) -- unrelated to
+        // this tool block and leaves `items.len()` unchanged.
+        frame_signal.update(|frame| {
+            if let AgentFrameItem::AssistantTextDelta(delta) = &mut frame.items[1] {
+                delta.text.push_str("more ");
+            }
+        });
+        assert_eq!(
+            *runs.borrow(),
+            1,
+            "a coalesced, unrelated text delta must not re-trigger the tool-block re-check"
+        );
+
+        // A genuine status-changing item (`ToolCallFinished`) is always a
+        // plain push -- must still re-trigger the re-check.
+        frame_signal.update(|frame| {
+            frame
+                .items
+                .push(AgentFrameItem::ToolCallFinished(ToolCallResult {
+                    call_id: ToolCallId("call-1".to_string()),
+                    output: serde_json::json!({}),
+                }));
+        });
+        assert_eq!(
+            *runs.borrow(),
+            2,
+            "a real status-changing item must still re-trigger the re-check"
+        );
+    }
+
+    #[test]
+    fn is_thinking_streaming_gating_recomputes_on_items_or_turn_state_changes_only() {
+        let frame_signal = RwSignal::new(AgentFrame {
+            state: Some(SessionState::Running),
+            items: vec![AgentFrameItem::ReasoningDelta(MessageDelta {
+                role: MessageRole::Assistant,
+                text: "thinking".to_string(),
+            })],
+        });
+        let frame = move || frame_signal.get();
+        let items_revision = create_memo(move |_| frame().items.len());
+        let turn_in_flight = create_memo(move |_| frame().is_turn_in_flight());
+
+        let runs = Rc::new(RefCell::new(0));
+        let runs_probe = runs.clone();
+        create_effect(move |_| {
+            items_revision.get();
+            turn_in_flight.get();
+            *runs_probe.borrow_mut() += 1;
+            untrack(|| is_thinking_streaming(&frame(), 0));
+        });
+        assert_eq!(*runs.borrow(), 1, "the initial run");
+
+        // Growing the same `ReasoningDelta` in place (streamed thinking
+        // tokens) changes neither `items.len()` nor turn-in-flight status.
+        frame_signal.update(|frame| {
+            if let AgentFrameItem::ReasoningDelta(delta) = &mut frame.items[0] {
+                delta.text.push_str(" more");
+            }
+        });
+        assert_eq!(
+            *runs.borrow(),
+            1,
+            "a coalesced reasoning delta must not re-trigger the auto-expand check"
+        );
+
+        // A later item superseding this one as the turn's last item is
+        // always a plain push -- `items_revision` alone catches this.
+        frame_signal.update(|frame| {
+            frame
+                .items
+                .push(AgentFrameItem::AssistantTextDelta(MessageDelta {
+                    role: MessageRole::Assistant,
+                    text: "reply".to_string(),
+                }));
+        });
+        assert_eq!(
+            *runs.borrow(),
+            2,
+            "a new item superseding this block as the turn's last item must \
+             re-trigger the auto-expand check"
+        );
+
+        // The turn ending changes `frame.state` without touching `items` at
+        // all -- exactly the dependency `items_revision` alone would miss,
+        // which is why `turn_in_flight` is a second, independent proxy.
+        frame_signal.update(|frame| frame.state = Some(SessionState::Completed));
+        assert_eq!(
+            *runs.borrow(),
+            3,
+            "turn-in-flight ending must still re-trigger the auto-expand check \
+             even though no item was pushed"
+        );
     }
 }
