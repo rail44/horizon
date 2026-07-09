@@ -88,11 +88,23 @@ pub(crate) fn close_palette(
 }
 
 /// The session manager modal's own signals (`control_surface::view::
-/// session_manager`): whether it's open, the selected row, the row (if any)
-/// currently awaiting a second `x` press to confirm termination, and a
-/// focus-request counter mirroring `OpenPaletteState::palette_focus_request`
-/// (a plain `open.set(true)` wouldn't retrigger `request_focus` on a no-op
-/// re-open, since the signal's value wouldn't actually change).
+/// session_manager`): whether it's open, the selected row (`selection`, a
+/// raw index into `items::session_manager_items`) plus the identity that
+/// index currently points at (`selected_id`), the row (if any) currently
+/// awaiting a second `x` press to confirm termination, and a focus-request
+/// counter mirroring `OpenPaletteState::palette_focus_request` (a plain
+/// `open.set(true)` wouldn't retrigger `request_focus` on a no-op re-open,
+/// since the signal's value wouldn't actually change).
+///
+/// `selected_id` exists solely so the view's reanchor effect
+/// (`view::session_manager::reanchor_selection`) can tell, when the items
+/// list changes underneath the open modal, which session `selection` was
+/// actually pointing at *before* the change -- a background
+/// `attach_sessions` update can reorder or resize the list while the modal
+/// is open, and a bare index has no memory of the identity it used to
+/// resolve to. It's kept in sync by every site that writes `selection`
+/// directly (row click, `j`/`k` movement, the post-terminate clamp) in
+/// addition to the reanchor effect itself.
 ///
 /// Bundled as its own handle (rather than living on `CommandActionState`
 /// directly) so it's just one field to add there -- `CommandActionState`
@@ -103,6 +115,7 @@ pub(crate) fn close_palette(
 pub(crate) struct SessionManagerHandle {
     pub(crate) open: RwSignal<bool>,
     pub(crate) selection: RwSignal<usize>,
+    pub(crate) selected_id: RwSignal<Option<SessionId>>,
     pub(crate) pending_terminate: RwSignal<Option<SessionId>>,
     pub(crate) focus_request: RwSignal<u64>,
 }
@@ -113,6 +126,7 @@ impl SessionManagerHandle {
         Self {
             open: RwSignal::new(false),
             selection: RwSignal::new(0),
+            selected_id: RwSignal::new(None),
             pending_terminate: RwSignal::new(None),
             focus_request: RwSignal::new(0),
         }
@@ -121,6 +135,10 @@ impl SessionManagerHandle {
 
 pub(crate) fn open_session_manager(handle: SessionManagerHandle) {
     handle.selection.set(0);
+    // No identity to follow yet -- the view's reanchor effect picks this up
+    // on the next run (triggered by `open` flipping true) and resolves it
+    // to whatever row 0 actually is.
+    handle.selected_id.set(None);
     handle.pending_terminate.set(None);
     handle.open.set(true);
     handle.focus_request.update(|request| *request += 1);

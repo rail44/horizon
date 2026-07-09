@@ -59,6 +59,7 @@ pub(super) fn session_manager_handle(state: &AppState) -> SessionManagerHandle {
     SessionManagerHandle {
         open: state.session_manager_open,
         selection: state.session_manager_selection,
+        selected_id: state.session_manager_selected_id,
         pending_terminate: state.session_manager_pending_terminate,
         focus_request: state.session_manager_focus_request,
     }

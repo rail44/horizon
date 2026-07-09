@@ -46,6 +46,10 @@ pub(super) struct AppState {
     /// `app::context::session_manager_handle`).
     pub(super) session_manager_open: RwSignal<bool>,
     pub(super) session_manager_selection: RwSignal<usize>,
+    /// The session identity `session_manager_selection` currently resolves
+    /// to -- see `control_surface::SessionManagerHandle::selected_id`'s doc
+    /// comment for why this exists alongside a plain index.
+    pub(super) session_manager_selected_id: RwSignal<Option<SessionId>>,
     pub(super) session_manager_pending_terminate: RwSignal<Option<SessionId>>,
     pub(super) session_manager_focus_request: RwSignal<u64>,
     pub(super) agent_state_status: RwSignal<Option<String>>,
@@ -118,6 +122,7 @@ impl AppState {
             agent_drafts: AgentDrafts::new(),
             session_manager_open: RwSignal::new(false),
             session_manager_selection: RwSignal::new(0_usize),
+            session_manager_selected_id: RwSignal::new(None),
             session_manager_pending_terminate: RwSignal::new(None),
             session_manager_focus_request: RwSignal::new(0_u64),
             agent_state_status,
@@ -193,6 +198,7 @@ impl AppState {
             agent_drafts: AgentDrafts::new(),
             session_manager_open: RwSignal::new(false),
             session_manager_selection: RwSignal::new(0_usize),
+            session_manager_selected_id: RwSignal::new(None),
             session_manager_pending_terminate: RwSignal::new(None),
             session_manager_focus_request: RwSignal::new(0_u64),
             agent_state_status: RwSignal::new(None::<String>),
