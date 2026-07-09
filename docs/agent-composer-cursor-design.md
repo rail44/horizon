@@ -90,24 +90,73 @@ modifier check as ordinary character insertion (no Ctrl/Alt/Meta held).
 
 ### Rendering the cursor without a real text-input widget
 
-`agent_composer` splits `draft.text` at `draft.cursor` and lays out five
-fixed children in one `h_stack` (row):
+The composer originally rendered as five fixed children in one `h_stack`
+(row) — `[before cursor][preedit][caret bar][after cursor][placeholder]` —
+placing the caret at the right character boundary via each label's own
+intrinsic text width. That worked for a single line, but had no way to
+wrap long lines or grow past one line for a manually-entered newline: flex
+placement of intrinsically-sized labels only ever produces one visual
+line, and a hard-coded fixed height capped the box regardless of content.
+Two follow-on bugs came from exactly this: long lines ran off the right
+edge of the window instead of wrapping, and `Enter` submitted
+unconditionally with no way to type a literal newline at all.
 
-```
-[ text before cursor ][ preedit ][ caret bar ][ text after cursor ][ placeholder ]
-```
+The fix (`workspace::view::composer_text::ComposerTextView`) replaces the
+five-label row with a single custom `View` that owns one
+`floem_renderer::text::TextLayout` for the whole composer and draws both
+the glyphs and the caret from it:
 
-Flex row layout places the caret bar exactly at the right character
-boundary using each label's own intrinsic text width — no glyph-position
-math needed. IME preedit is spliced in right at the cursor (previously it
-was always appended at the tail, which only ever looked wrong once the
-cursor could be moved). The placeholder ("Message agent...") is the fifth
-segment, rendered only when both `text` and `preedit` are empty; since the
-other four segments are empty strings in that state, it reads as `|Message
-agent...` with the caret at the very start. The caret itself is a plain
-`empty()` view styled as a narrow filled rect, shown only while `active()`.
+- `draft.text` with any IME `preedit` spliced in at `draft.cursor`
+  (`composer_text::splice_preedit`, unit-tested directly) becomes the
+  content string, laid out via `TextLayout::set_text` with no width
+  constraint to get its natural (unwrapped) size.
+- Once taffy resolves the view's own assigned width (a two-pass technique
+  copied from floem's vendored `Label`'s `TextOverflow::Wrap` handling,
+  `views/label.rs`: size off the natural layout first, then in
+  `compute_layout` compare against the real assigned width and re-wrap +
+  request another layout pass if narrower), a second `TextLayout` is
+  cloned from the first, `set_wrap(Wrap::WordOrGlyph)`, and
+  `set_size(available_width, f32::MAX)`. `TextLayout::size()` after that
+  gives the wrapped content's true height, which becomes the view's
+  height — so the composer's minimum height (`agent_controls::
+  COMPOSER_MIN_HEIGHT`) is a floor, not a cap; it grows for wrapped or
+  multi-line (real `\n`) drafts.
+- The caret is drawn (only while `active()`) via
+  `TextLayout::hit_position(byte_offset)` against that *same* wrapped
+  layout — the same primitive floem's own `text_input` uses for its
+  cursor x (`views/text_input.rs`'s `clip_text`). Because it's one
+  `TextLayout` used for both painting the glyphs and hit-testing the
+  cursor position, there is no second, independently laid-out buffer that
+  could drift out of sync with the visible wrap — the alternative
+  considered (a wrapping `label` plus a separately positioned
+  absolute-offset caret overlay, built from its own matching
+  `TextLayout`) would have needed to keep two layouts' width/attrs in
+  exact lockstep by hand.
+- The placeholder ("Message agent...") substitutes for `text` when both
+  `draft.text` and `preedit` are empty, with `theme::text_subtle()`
+  instead of `theme::text_primary()` — it renders through the exact same
+  `TextLayout`/caret path, so `active()` still draws a caret at its start.
+
+`ViewId::new_taffy_node()`/`set_taffy_style()`/`taffy_layout()` (all public
+on `floem::ViewId`) are what make this kind of custom `View`, with its own
+manual, measured-content leaf node, possible from outside the `floem`
+crate itself — the crate-internal widgets (`Label`, `TextInput`, `Img`)
+reach for the private `ViewId::taffy()` directly, which app code cannot
+call.
+
+`Shift+Enter` now inserts `"\n"` via the existing
+`AgentDraftAction::Insert`/`insert_agent_draft_text` path
+(`app::keymap::agent_draft_action`, checked before the plain-`Enter`
+arm since both match `NamedKey::Enter`) instead of being indistinguishable
+from plain `Enter`. Cursor movement, Backspace, and insertion already
+treated the cursor as a byte offset with no awareness of what character
+sits at any position, so `\n` needed no special-casing there — it moves
+and deletes exactly like any other single-byte character (see
+`workspace::input::tests::newline_from_shift_enter_behaves_like_an_ordinary_character`).
 
 This intentionally does not support mouse click-to-position-cursor or text
-selection — out of scope for the two reported bugs (cursor not shown, arrow
-keys inert), and both are still absent from the old label-based composer
-today.
+selection — out of scope for the bugs above, and both are still absent
+from the composer today. `floem::views::text_input` remains unused for the
+same two reasons as before (IME, single-target keyboard dispatch) —
+neither reason was about single-line-vs-multiline, so nothing about
+wrapping or `Shift+Enter` changes that conclusion.

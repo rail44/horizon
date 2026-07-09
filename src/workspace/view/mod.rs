@@ -6,6 +6,7 @@ use floem::reactive::create_effect;
 
 mod agent_controls;
 mod chrome;
+mod composer_text;
 mod layout_tree;
 mod pane;
 mod tab_strip;

@@ -713,6 +713,35 @@ mod tests {
     }
 
     #[test]
+    fn newline_from_shift_enter_behaves_like_an_ordinary_character() {
+        // `AgentDraftAction::Insert("\n")` is what `app::keymap::
+        // agent_draft_action` now returns for Shift+Enter -- confirms `\n`
+        // moves and deletes like any other single-byte character instead of
+        // needing special-casing (the cursor is a plain byte offset, so
+        // nothing here is newline-aware).
+        let draft = RwSignal::new(AgentDraft::default());
+        apply_all(
+            draft,
+            [
+                AgentDraftAction::Insert("ab".to_string()),
+                AgentDraftAction::Insert("\n".to_string()),
+                AgentDraftAction::Insert("cd".to_string()),
+                // Cursor is at the end of "ab\ncd" (byte 5); two left-moves
+                // land it right after the '\n' (byte 3), so Backspace
+                // deletes exactly that newline.
+                AgentDraftAction::MoveLeft,
+                AgentDraftAction::MoveLeft,
+                AgentDraftAction::Backspace,
+            ],
+        );
+
+        draft.with_untracked(|draft| {
+            assert_eq!(draft.text, "abcd");
+            assert_eq!(draft.cursor, 2);
+        });
+    }
+
+    #[test]
     fn submit_sends_trimmed_text_and_resets_cursor() {
         let (tx, rx) = crossbeam_channel::unbounded();
         let draft = RwSignal::new(AgentDraft::default());

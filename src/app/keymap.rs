@@ -52,8 +52,15 @@ pub(crate) fn next_grapheme_boundary_approx(text: &str, at: usize) -> usize {
     }
 }
 
+/// `Shift+Enter` inserts a literal newline into the draft (the composer
+/// wraps and grows to show it -- see `workspace::view::composer_text`);
+/// plain `Enter` (no `Shift`) still submits. Checked before the plain-Enter
+/// arm below since both match the same `NamedKey::Enter`.
 pub(crate) fn agent_draft_action(key: &Key, modifiers: Modifiers) -> Option<AgentDraftAction> {
     match key {
+        Key::Named(NamedKey::Enter) if modifiers.shift() => {
+            Some(AgentDraftAction::Insert("\n".to_string()))
+        }
         Key::Named(NamedKey::Enter) => Some(AgentDraftAction::Submit),
         Key::Named(NamedKey::Backspace) => Some(AgentDraftAction::Backspace),
         Key::Named(NamedKey::ArrowLeft) if agent_accepts_text_input(modifiers) => {
@@ -774,6 +781,20 @@ mod tests {
         assert_eq!(
             agent_draft_action(&Key::Named(NamedKey::Backspace), Modifiers::default()),
             Some(AgentDraftAction::Backspace)
+        );
+    }
+
+    #[test]
+    fn agent_draft_shift_enter_inserts_a_newline_instead_of_submitting() {
+        assert_eq!(
+            agent_draft_action(&Key::Named(NamedKey::Enter), Modifiers::SHIFT),
+            Some(AgentDraftAction::Insert("\n".to_string()))
+        );
+        // Plain Enter (no Shift) must still submit -- the regression this
+        // guards against is Shift+Enter accidentally submitting too.
+        assert_eq!(
+            agent_draft_action(&Key::Named(NamedKey::Enter), Modifiers::default()),
+            Some(AgentDraftAction::Submit)
         );
     }
 
