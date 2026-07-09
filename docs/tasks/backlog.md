@@ -300,18 +300,22 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     of truth — removing both gaps. Wants doing before any change that
     batches frame delivery or a provider that interleaves tool-arg
     streaming. Recorded 2026-07-08 (leg-1 review Observation + design doc).
-23. **OSC palette-override narrowing (reclaimed in daemon migration)** —
-    Foundation 4's color cut (`10eae86`, session-daemon-design.md
-    decision 8) moved cell-color resolution UI-side: `TerminalCore` now
-    emits logical colors and the view resolves index→RGB against the live
-    theme at layout-build time. Consequence: a running program's live OSC
-    4/10/11/12 palette overrides no longer reach cell rendering (only the
-    crate's own OSC query *replies* still honor them). Owner-surfaced at F4
-    review and accept-and-deferred — it is reclaimed later in the daemon
-    migration (once the frame/row payload carries the logical colors and
-    the UI owns a per-client palette that OSC overrides can mutate). Not a
-    regression to chase now; a known narrowing to close when the daemon
-    terminal-hosting slice (foundation 4 step 1) lands. Recorded 2026-07-09.
+23. *(resolved 2026-07-09)* **OSC palette-override narrowing (reclaimed in
+    daemon migration)** — Foundation 4's color cut (`10eae86`,
+    session-daemon-design.md decision 8) moved cell-color resolution
+    UI-side, and as a side effect a running program's live OSC 4/10/11/12
+    palette overrides stopped reaching cell rendering (only the crate's own
+    OSC query *replies* still honored them). Owner asked to resolve it in
+    the same work rather than defer to the daemon slice. Closed by `45acf81`:
+    `TerminalFrame::palette_overrides` carries the override table as a sparse
+    logical-index → literal-RGB list, populated from `Term::colors()` at
+    snapshot time and consulted by `terminal::view::color::resolve_color`
+    before the theme (a literal override wins for its slot; the theme governs
+    only non-overridden slots — coherent with decision 8's per-client
+    theming). The incremental row-diff in `set_state` is bypassed with a full
+    rebuild when the override table changes, so an app repainting its palette
+    onto an already-drawn screen actually recolors. Forward-compatible with
+    sessiond: the table rides the frame and will cross the wire unchanged.
 24. **Composer IME candidate-window placement** — the multi-line wrapping
     composer (`44f2dd7`) still positions the IME preedit/candidate window
     at a fixed `Point::new(10.0, 6.0)` in `agent_controls.rs`, inherited
@@ -322,3 +326,18 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     hit the caret rect already uses) and feed it to the IME position. Small,
     self-contained; deferred from the composer fix to keep that scope to the
     two reported bugs. Recorded 2026-07-09.
+25. **`Reload Config` live re-theme doesn't recolor already-drawn terminal
+    rows** — the twin of the OSC-override repaint gap fixed in `45acf81`
+    (backlog 23). Terminal cells carry logical colors (decision 8);
+    `terminal::view::layout::build_span_cells` resolves them against
+    `resolved_colors()` only when a row is (re)built, and the incremental
+    `update_line_layouts` skips rows whose `TerminalLine` is unchanged. A
+    palette *override* change now forces a full rebuild via `set_state`, but
+    a *theme* change (`Reload Config`) arrives on a different path (a config
+    event, not a frame diff) and nothing invalidates the view's row cache, so
+    a static screen keeps its old RGB until content changes. Already noted in
+    session-daemon-design.md ("Reload Config does not push a live theme update
+    into already-spawned sessions"). Fix: on theme reload, invalidate the
+    terminal view's cached rows (clear + full rebuild, the same move
+    `set_state` makes for palette_overrides) so the live re-resolve decision 8
+    promised actually happens. Small, self-contained. Recorded 2026-07-09.

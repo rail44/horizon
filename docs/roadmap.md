@@ -67,8 +67,13 @@ wave items where possible; design docs on first use.
    standalone with zero floem/`ui` dependency, hosting `TerminalCore`,
    the sister contract, and the session loop; `horizon`'s `terminal/`
    keeps only the spawn layer (PTY, threads, environment) and the view.
-   Step 1 (renaming to `sessiond` and standing up terminal hosting) is
-   next. **Session relationship model designed 2026-07-07**
+   The one narrowing the color cut introduced — live OSC 4/10/11/12
+   palette overrides no longer reaching cell rendering — was closed the
+   same day (`45acf81`): the override table rides `TerminalFrame` as a
+   sparse logical-index → literal-RGB list and the UI consults it before
+   the theme (backlog 23), forward-compatible with the wire. Step 1
+   (renaming to `sessiond` and standing up terminal hosting) is next.
+   **Session relationship model designed 2026-07-07**
    (`docs/session-relationship-design.md`): lineage is a first-class
    layout-orthogonal derivation tree — the same tree worktree
    isolation, delegation, and messaging all use. Foundation landed
