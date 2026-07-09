@@ -435,6 +435,115 @@ fn should_fold_completion_is_false_once_the_call_already_has_a_finish() {
     );
 }
 
+// --- panic safety: FIFO advance-on-drop ------------------------------------
+
+/// If a job panics, `registry::run_job`'s advance-on-drop guard must still
+/// call `advance` -- otherwise the session's `running` flag never clears
+/// and every later bash call for that session queues forever without ever
+/// being dispatched (the "answered -- running..." wedge). Exercises
+/// `registry::enqueue`/`run_job` directly, independent of `bash::spawn`'s
+/// own panic-catching (`run_job_body`, tested separately below), so this
+/// proves the FIFO's defense-in-depth guard on its own merits.
+#[test]
+fn registry_advances_past_a_panicking_job_so_the_queue_is_not_wedged() {
+    let session_id = SessionId::new();
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    super::registry::enqueue(session_id, Box::new(|| panic!("registry test panic")));
+    // Enqueued immediately behind it. Whether this lands before or after
+    // the first job's panic has already been caught by the thread runtime
+    // and its guard has advanced the queue is a race this test doesn't
+    // need to pin down -- either interleaving must still end with this job
+    // running.
+    super::registry::enqueue(
+        session_id,
+        Box::new(move || {
+            let _ = tx.send(());
+        }),
+    );
+
+    rx.recv_timeout(Duration::from_secs(5)).expect(
+        "the second job must still run even though the job ahead of it in the FIFO panicked",
+    );
+
+    let mut cleaned_up = false;
+    for _ in 0..100 {
+        if !super::registry::is_session_queued(session_id) {
+            cleaned_up = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        cleaned_up,
+        "the session's queue entry should be removed once both jobs have finished"
+    );
+}
+
+// --- panic safety: completion always delivered ------------------------------
+
+#[test]
+fn run_job_body_sends_a_completion_when_work_succeeds() {
+    let call_id = ToolCallId("panic-safe-normal".to_string());
+    let (tx, rx) = crossbeam_channel::unbounded();
+
+    super::run_job_body(
+        SessionId::new(),
+        call_id.clone(),
+        &tx,
+        || json!({ "ok": true }),
+    );
+
+    let completion = rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("completion should be sent");
+    assert_eq!(completion.result.call_id, call_id);
+    assert_eq!(completion.result.output, json!({ "ok": true }));
+}
+
+/// The core guarantee: even if the work function panics (standing in for a
+/// hypothetical panic inside `exec::run`, without actually triggering one),
+/// a `BashCompletion` carrying an `is_error` output is still delivered --
+/// this is what heals a stuck "answered -- running..." tool-call block
+/// instead of leaving it wedged forever.
+#[test]
+fn run_job_body_still_sends_a_completion_when_work_panics() {
+    let call_id = ToolCallId("panic-safe-panic".to_string());
+    let (tx, rx) = crossbeam_channel::unbounded();
+
+    super::run_job_body(SessionId::new(), call_id.clone(), &tx, || {
+        panic!("injected panic, not exec::run's own")
+    });
+
+    let completion = rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("a completion must still be delivered when the work function panics");
+    assert_eq!(completion.result.call_id, call_id);
+    assert_eq!(completion.result.output["is_error"], true);
+    assert!(completion.result.output["message"]
+        .as_str()
+        .expect("message")
+        .contains("injected panic"));
+}
+
+// --- panic safety: exec.rs panic points --------------------------------
+
+/// `Ord::clamp` panics if `min > max`; `resolve_timeout` clamps into
+/// `1..=config.timeout_max_secs`, so a misconfigured `timeout_max_secs` of
+/// 0 used to panic the bash worker thread outright. It must instead fall
+/// back to a valid (>= 1s) timeout.
+#[test]
+fn resolve_timeout_does_not_panic_when_timeout_max_secs_is_zero() {
+    let mut cfg = config();
+    cfg.timeout_max_secs = 0;
+
+    let timeout = super::exec::resolve_timeout(&json!({}), &cfg);
+    assert!(timeout >= Duration::from_secs(1));
+
+    let timeout_with_override = super::exec::resolve_timeout(&json!({ "timeout_secs": 5 }), &cfg);
+    assert!(timeout_with_override >= Duration::from_secs(1));
+}
+
 // --- lossy UTF-8 --------------------------------------------------------
 
 #[test]

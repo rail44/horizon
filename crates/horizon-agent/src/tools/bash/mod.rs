@@ -9,6 +9,18 @@
 //! this module's `spawn`, whose eventual result is delivered back to the UI
 //! thread over a channel (`app/runtime/agent.rs` wires it up) rather than
 //! being returned synchronously.
+//!
+//! Panic safety: a job's work function running to completion without
+//! panicking is not something the rest of this module can assume. If it
+//! panicked uncaught, two things would break at once -- the approved tool
+//! call would never get a `ToolCallFinished` (nothing left to send the
+//! `BashCompletion` that would produce one), and `registry`'s per-session
+//! FIFO would never `advance` past it (see that module's own panic-safety
+//! notes), wedging every later bash call for the session behind it forever.
+//! `spawn` catches a panic from its work function (`run_job_body`, below)
+//! specifically to prevent the first; `registry::run_job`'s advance-on-drop
+//! guard prevents the second independently, as defense in depth for any
+//! future job that doesn't route through `run_job_body`.
 
 mod exec;
 mod output;
@@ -64,12 +76,68 @@ pub fn spawn(
     registry::enqueue(
         session_id,
         Box::new(move || {
-            let output = exec::run(&call_id, &input, &cwd, &config);
-            let _ = result_tx.send(BashCompletion {
-                result: ToolCallResult { call_id, output },
+            let run_call_id = call_id.clone();
+            run_job_body(session_id, call_id, &result_tx, move || {
+                exec::run(&run_call_id, &input, &cwd, &config)
             });
         }),
     );
+}
+
+/// Runs `work` (in practice, `exec::run`) and *always* sends a
+/// `BashCompletion` on `result_tx` -- even if `work` panics. This is the fix
+/// for the "answered -- running..." wedge a bare panic used to cause: without
+/// catching it here, a panic on this job's thread would skip the
+/// `result_tx.send` below entirely, so the approved tool call never gets a
+/// `ToolCallFinished` and stays stuck forever. Catching also means this
+/// function itself returns normally, so the job closure `registry::run_job`
+/// spawned returns normally too and `advance` still fires on schedule --
+/// the FIFO doesn't wedge on the *next* call either.
+///
+/// `work` must be `UnwindSafe`: `bash::spawn`'s call site wraps a plain
+/// `FnOnce` closure (no shared/interior-mutable state visible to the
+/// closure that catching a panic mid-mutation could leave inconsistent),
+/// so this is a real guarantee, not an assertion papered over.
+fn run_job_body(
+    session_id: SessionId,
+    call_id: ToolCallId,
+    result_tx: &Sender<BashCompletion>,
+    work: impl FnOnce() -> Value + std::panic::UnwindSafe,
+) {
+    let output = match std::panic::catch_unwind(work) {
+        Ok(output) => output,
+        Err(payload) => {
+            // `&*payload`, not `&payload`: `payload` is a `Box<dyn Any +
+            // Send>`, and coercing `&Box<dyn Any + Send>` straight to
+            // `&(dyn Any + Send)` unsizes the *Box* itself into the trait
+            // object (its own, distinct `Any` impl) rather than derefing
+            // through to the payload inside -- every `downcast_ref` would
+            // silently miss. Deref first so the trait object is built from
+            // the actual payload.
+            let message = panic_payload_message(&*payload);
+            eprintln!("bash worker panicked (session {session_id:?}, call {call_id:?}): {message}");
+            exec::panic_output(&format!("bash worker panicked: {message}"))
+        }
+    };
+    let _ = result_tx.send(BashCompletion {
+        result: ToolCallResult { call_id, output },
+    });
+}
+
+/// Extracts a human-readable message from a caught panic's payload. Panic
+/// payloads are almost always `&'static str` (a string-literal panic
+/// message) or `String` (a formatted one, e.g. from `panic!("{x}")`) --
+/// anything else is an unusual payload type (`panic_any` with a custom
+/// type), which this reports generically rather than failing to build a
+/// completion at all.
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "<non-string panic payload>".to_string()
+    }
 }
 
 /// Kills the running child for `call_id`, if this session has one in

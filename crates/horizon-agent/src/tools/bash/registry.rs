@@ -106,6 +106,18 @@ pub(super) fn is_registered(call_id: &ToolCallId) -> bool {
     lock(table()).contains_key(call_id)
 }
 
+/// Test hook: whether `session_id` currently has a queue entry (running
+/// and/or queued jobs). `advance` removes the entry the instant a session's
+/// queue fully drains, so a lingering entry after all known jobs have
+/// finished would mean the FIFO is wedged.
+#[cfg(test)]
+pub(super) fn is_session_queued(session_id: SessionId) -> bool {
+    session_queues()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .contains_key(&session_id)
+}
+
 // --- per-session bash FIFO ---------------------------------------------
 //
 // `docs/agent-tools-design.md`, "Bash Containment": a session's approved
@@ -117,6 +129,14 @@ pub(super) fn is_registered(call_id: &ToolCallId) -> bool {
 // creation/teardown. A session's entry is created lazily on its first call
 // and removed the instant its queue drains, so this table never accumulates
 // entries for sessions that aren't actively running bash.
+//
+// Panic safety: `advance` is the only place `running` is ever cleared, so a
+// job that panics without it running would leave the session's queue
+// permanently stuck "running" -- every later call for that session would
+// enqueue and never dispatch. `run_job` guarantees `advance` runs exactly
+// once per job via an RAII guard (`AdvanceGuard`, below) constructed before
+// `job()` and dropped after, regardless of whether `job()` returns normally
+// or unwinds.
 
 type Job = Box<dyn FnOnce() + Send>;
 
@@ -156,9 +176,34 @@ pub(super) fn enqueue(session_id: SessionId, job: Job) {
 
 fn run_job(session_id: SessionId, job: Job) {
     std::thread::spawn(move || {
+        // Constructed *before* `job()` runs and dropped after, so `advance`
+        // fires exactly once whether `job()` returns normally or unwinds.
+        // `bash::spawn`'s jobs already catch their own panics (see that
+        // module's panic-safety notes) and so never reach the unwind path
+        // here in practice -- this guard is defense in depth for `run_job`
+        // as a general mechanism, not specific to the bash tool's own job
+        // shape.
+        let _advance_guard = AdvanceGuard::new(session_id);
         job();
-        advance(session_id);
     });
+}
+
+/// RAII: calls `advance(session_id)` on drop, which happens on `job()`
+/// returning normally *or* unwinding -- see `run_job`.
+struct AdvanceGuard {
+    session_id: SessionId,
+}
+
+impl AdvanceGuard {
+    fn new(session_id: SessionId) -> Self {
+        Self { session_id }
+    }
+}
+
+impl Drop for AdvanceGuard {
+    fn drop(&mut self) {
+        advance(self.session_id);
+    }
 }
 
 /// Called from a just-finished job's own thread: hands the next queued job

@@ -100,12 +100,20 @@ fn run_inner(
     ))
 }
 
-fn resolve_timeout(input: &Value, config: &BashToolConfig) -> Duration {
+// `pub(super)`, not private: exercised directly from `tests.rs` so the
+// zero-`timeout_max_secs` edge case (see the doc comment below) is proven
+// against the function itself, not just indirectly through `run`.
+pub(super) fn resolve_timeout(input: &Value, config: &BashToolConfig) -> Duration {
     let secs = input
         .get("timeout_secs")
         .and_then(Value::as_u64)
         .unwrap_or(config.timeout_default_secs);
-    Duration::from_secs(secs.clamp(1, config.timeout_max_secs))
+    // `Ord::clamp` panics if `min > max`; guard against a misconfigured
+    // `timeout_max_secs` of 0 (which would make the clamp's max less than
+    // its min of 1) rather than let that panic take down the whole bash
+    // FIFO for the session (see the panic-safety notes on `bash::spawn` and
+    // `registry::run_job`).
+    Duration::from_secs(secs.clamp(1, config.timeout_max_secs.max(1)))
 }
 
 async fn run_async(
@@ -165,8 +173,21 @@ async fn run_async(
         }
     };
 
-    let stdout = child.stdout.take().expect("stdout was configured as piped");
-    let stderr = child.stderr.take().expect("stderr was configured as piped");
+    // `Stdio::piped()` above should guarantee both handles are `Some` --
+    // but this is exactly the kind of "should never happen" spot that has
+    // taken down a session's entire bash FIFO before (see the module-level
+    // panic-safety notes), so treat a `None` as a harness failure to
+    // report, not a panic to propagate. Reap the child (best-effort; it may
+    // still be running) before bailing, so it isn't left behind.
+    let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        return error_output(
+            "failed to start bash: stdout/stderr pipe was not available",
+            None,
+            config,
+        );
+    };
     let stdout_buf = Arc::new(StdMutex::new(Vec::new()));
     let stderr_buf = Arc::new(StdMutex::new(Vec::new()));
     let mut stdout_task = tokio::spawn(pump(stdout, stdout_buf.clone()));
@@ -390,6 +411,17 @@ fn signal_suffix(status: ExitStatus) -> String {
 #[cfg(not(unix))]
 fn signal_suffix(_status: ExitStatus) -> String {
     String::new()
+}
+
+/// Builds the same `{ is_error, message }` shape as `error_output`'s
+/// no-partial-output case, for `bash::spawn` (`mod.rs`) to use when the work
+/// function itself panics (caught via `catch_unwind`, never reaching this
+/// module's normal error paths at all) -- see that module's panic-safety
+/// notes. A separate, `config`-free constructor rather than reusing
+/// `error_output` directly: there's no partial output to cap/spill in the
+/// panic case, so there's nothing for a `BashToolConfig` to do.
+pub(super) fn panic_output(message: &str) -> Value {
+    json!({ "is_error": true, "message": message })
 }
 
 fn error_output(message: &str, partial_output: Option<Vec<u8>>, config: &BashToolConfig) -> Value {
