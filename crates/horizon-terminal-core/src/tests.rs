@@ -51,6 +51,63 @@ fn vt_stream_preserves_ansi_foreground_color() {
     }));
 }
 
+/// `docs/session-daemon-design.md` decision 8: an app's live OSC 4 palette
+/// override now rides the frame as `TerminalFrame::palette_overrides`, a
+/// sparse index→RGB table the host consults at paint time (see
+/// `terminal::view::color::resolve_color`'s test coverage for the host
+/// half).
+#[test]
+fn osc_4_palette_override_is_captured_in_the_frame() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt(b"\x1b]4;1;rgb:00/ff/00\x1b\\");
+
+    let frame = core.snapshot_frame();
+    assert_eq!(
+        frame
+            .palette_overrides
+            .iter()
+            .find(|(index, _)| *index == 1),
+        Some(&(1, [0, 255, 0]))
+    );
+}
+
+/// OSC 10 (set foreground) writes `NamedColor::Foreground as usize == 256`
+/// in `Term::colors()`, so the override shows up at index 256.
+#[test]
+fn osc_10_foreground_override_lands_at_index_256() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt(b"\x1b]10;rgb:11/22/33\x07");
+
+    let frame = core.snapshot_frame();
+    assert_eq!(
+        frame
+            .palette_overrides
+            .iter()
+            .find(|(index, _)| *index == 256),
+        Some(&(256, [17, 34, 51]))
+    );
+}
+
+/// OSC 104 (reset color) clears a previously-set slot back out of the
+/// sparse table entirely, rather than leaving a stale entry behind.
+#[test]
+fn osc_104_reset_clears_a_previously_set_slot() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt(b"\x1b]4;1;rgb:00/ff/00\x1b\\");
+    assert!(core
+        .snapshot_frame()
+        .palette_overrides
+        .iter()
+        .any(|(index, _)| *index == 1));
+
+    core.write_vt(b"\x1b]104;1\x1b\\");
+    assert!(!core
+        .snapshot_frame()
+        .palette_overrides
+        .iter()
+        .any(|(index, _)| *index == 1));
+}
+
 #[test]
 fn vt_stream_tracks_wide_character_columns() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 4));

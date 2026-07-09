@@ -9,6 +9,15 @@ pub struct TerminalFrame {
     pub lines: Vec<TerminalLine>,
     pub cursor: Option<TerminalCursor>,
     pub mouse_reporting: bool,
+    /// Sparse table of this session's live OSC 4/10/11/12 palette overrides
+    /// (`alacritty_terminal::term::color::Colors`), sorted ascending by
+    /// index for deterministic `Eq`/`PartialEq` — see
+    /// `docs/session-daemon-design.md` decision 8. Index space: 0..=15 base
+    /// ANSI, 16..=255 the color cube, 256/257/258
+    /// foreground/background/cursor (`NamedColor::Foreground`/`Background`/
+    /// `Cursor`). Consulted by `terminal::view::color::resolve_color` before
+    /// falling back to the per-client theme.
+    pub palette_overrides: Vec<(u16, [u8; 3])>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -48,6 +57,7 @@ impl TerminalFrame {
             lines,
             cursor: None,
             mouse_reporting: false,
+            palette_overrides: Vec::new(),
         }
     }
 }

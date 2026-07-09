@@ -10,7 +10,11 @@
 //! back to the app right now — it cannot be deferred to a UI paint the way
 //! a cell's color can — so it keeps its own copy, resolved against
 //! [`TerminalColorScheme`] rather than a live theme this crate has no
-//! access to.
+//! access to. The live OSC 4/10/11/12 overrides (`overrides` below) also
+//! ride the frame as `TerminalFrame::palette_overrides` so the host's own
+//! cell-rendering resolution can honor them too — this module's read of
+//! `Term::colors()` and that snapshot are two independent consumers of the
+//! same underlying state, not a narrowing.
 
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::vte::ansi::{NamedColor, Rgb};

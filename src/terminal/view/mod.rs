@@ -123,7 +123,30 @@ impl TerminalTextView {
     }
 
     fn set_state(&mut self, state: TerminalViewState) {
-        update_line_layouts(&mut self.lines, &self.frame.lines, &state.frame.lines);
+        // The incremental path in `update_line_layouts` only rebuilds rows
+        // whose `TerminalLine` changed since the last frame. A palette
+        // override change (OSC 4/10/11/12) can leave every row's content
+        // identical while still changing the RGB a cell should resolve to
+        // -- the common case of an app repainting its palette onto an
+        // already-drawn screen -- so that diff alone would rebuild zero
+        // rows and silently drop the update. When the overrides differ,
+        // force a full rebuild instead of the incremental one.
+        if self.frame.palette_overrides == state.frame.palette_overrides {
+            update_line_layouts(
+                &mut self.lines,
+                &self.frame.lines,
+                &state.frame.lines,
+                &state.frame.palette_overrides,
+            );
+        } else {
+            self.lines.clear();
+            update_line_layouts(
+                &mut self.lines,
+                &[],
+                &state.frame.lines,
+                &state.frame.palette_overrides,
+            );
+        }
         self.frame = state.frame;
         self.preedit = build_preedit_layout(state.preedit.as_deref());
         self.id.request_paint();
@@ -407,7 +430,7 @@ mod tests {
     use crate::terminal::TerminalLine;
     use crate::terminal::TerminalSelectionPoint;
     use crate::terminal::TerminalSpan;
-    use alacritty_terminal::vte::ansi::Rgb;
+    use alacritty_terminal::vte::ansi::{NamedColor, Rgb};
     use floem::text::FamilyOwned;
     use horizon_terminal_core::TerminalColor;
     use std::time::Duration;
@@ -828,6 +851,7 @@ mod tests {
                 bg: TerminalColor::Spec(Rgb { r: 4, g: 5, b: 6 }),
             },
             &test_family(),
+            &[],
         );
 
         assert_eq!(cells.len(), 3);
@@ -845,6 +869,7 @@ mod tests {
                 bg: TerminalColor::Spec(Rgb { r: 4, g: 5, b: 6 }),
             },
             &test_family(),
+            &[],
         );
 
         assert_eq!(cells.len(), 3);
@@ -865,6 +890,7 @@ mod tests {
                 bg: TerminalColor::Spec(Rgb { r: 4, g: 5, b: 6 }),
             },
             &test_family(),
+            &[],
         );
 
         assert_eq!(
@@ -887,6 +913,7 @@ mod tests {
                 bg: TerminalColor::Spec(Rgb { r: 4, g: 5, b: 6 }),
             },
             &test_family(),
+            &[],
         );
 
         assert_eq!(
@@ -914,14 +941,14 @@ mod tests {
     fn update_line_layouts_rebuilds_only_changed_rows() {
         let old = vec![test_line("aaa"), test_line("bbb")];
         let mut lines = Vec::new();
-        _test_update_line_layouts(&mut lines, &[], &old);
+        _test_update_line_layouts(&mut lines, &[], &old, &[]);
         assert_eq!(lines.len(), 2);
 
         // Row 0 changes, row 1 stays identical: both rows must reflect the
         // new content (rebuilt or retained), and the retained row's cell
         // metadata must be untouched.
         let new = vec![test_line("zzz"), test_line("bbb")];
-        _test_update_line_layouts(&mut lines, &old, &new);
+        _test_update_line_layouts(&mut lines, &old, &new, &[]);
 
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].len(), 3);
@@ -933,14 +960,60 @@ mod tests {
     #[test]
     fn update_line_layouts_grows_and_truncates_rows() {
         let mut lines = Vec::new();
-        _test_update_line_layouts(&mut lines, &[], &[test_line("a")]);
+        _test_update_line_layouts(&mut lines, &[], &[test_line("a")], &[]);
         assert_eq!(lines.len(), 1);
 
         let grown = vec![test_line("a"), test_line("b"), test_line("c")];
-        _test_update_line_layouts(&mut lines, &[test_line("a")], &grown);
+        _test_update_line_layouts(&mut lines, &[test_line("a")], &grown, &[]);
         assert_eq!(lines.len(), 3);
 
-        _test_update_line_layouts(&mut lines, &grown, &[test_line("a")]);
+        _test_update_line_layouts(&mut lines, &grown, &[test_line("a")], &[]);
         assert_eq!(lines.len(), 1);
+    }
+
+    /// Guards the step-6 repaint fix: `update_line_layouts`'s incremental
+    /// path only rebuilds rows whose `TerminalLine` differs, so a frame that
+    /// changes ONLY `palette_overrides` (identical lines) must still force a
+    /// full rebuild in `set_state`, or the override would silently never
+    /// reach the paint path.
+    #[test]
+    fn set_state_forces_a_full_rebuild_when_only_palette_overrides_change() {
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let named_line = TerminalLine {
+            spans: vec![TerminalSpan {
+                text: "A".to_string(),
+                columns: 1,
+                fg: TerminalColor::Named(NamedColor::Foreground),
+                bg: TerminalColor::Named(NamedColor::Background),
+            }],
+        };
+        let mut frame = TerminalFrame::from_text(String::new());
+        frame.lines = vec![named_line];
+
+        let mut view = TerminalTextView::new(
+            ViewId::new(),
+            TerminalViewState {
+                frame: frame.clone(),
+                preedit: None,
+            },
+            Some(tx),
+            Box::new(|| Point::ZERO),
+            Box::new(|_, _| {}),
+        );
+
+        let theme_fg = crate::terminal::config::resolved_colors().foreground;
+        assert_eq!(view.lines[0][0].fg, theme_fg);
+
+        // Same lines as the initial frame (no row content changed), but a
+        // new OSC 10 foreground override (index 256 == NamedColor::Foreground)
+        // now applies.
+        let mut overridden_frame = frame;
+        overridden_frame.palette_overrides = vec![(256, [9, 8, 7])];
+        view.set_state(TerminalViewState {
+            frame: overridden_frame,
+            preedit: None,
+        });
+
+        assert_eq!(view.lines[0][0].fg, [9, 8, 7]);
     }
 }

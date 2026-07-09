@@ -8,20 +8,51 @@
 //! (now in `horizon-terminal-core`) used to resolve this itself, reading
 //! `ui::theme::terminal_colors()` -- its one cross-crate dependency, and the
 //! thing blocking the extraction. The resolution table itself
-//! (`resolve_color`/`named_rgb`/`indexed_rgb`) moved here unchanged; only
-//! the per-session live OSC 4/10/11/12 palette overrides
-//! (`alacritty_terminal::term::color::Colors`, core-only state that never
-//! crosses the frame boundary) are no longer available here, so an app that
-//! redefines a palette color at runtime no longer affects cell *rendering*
-//! -- only `TerminalCore`'s own OSC 4/10/11/12 *query replies* still honor
-//! it (see `horizon_terminal_core::TerminalColor`'s doc comment).
+//! (`resolve_color`/`named_rgb`/`indexed_rgb`) moved here unchanged. The
+//! per-session live OSC 4/10/11/12 palette overrides
+//! (`alacritty_terminal::term::color::Colors`) ride the frame as
+//! `TerminalFrame::palette_overrides`, a sparse index->RGB table this module
+//! checks before falling back to the theme -- an app that redefines a
+//! palette color at runtime does affect cell rendering, and a literal
+//! override always wins over the (possibly per-client, in the future) theme
+//! for that slot.
 
 use alacritty_terminal::vte::ansi::{NamedColor, Rgb};
 use horizon_terminal_core::TerminalColor;
 
 use crate::terminal::config::TerminalColors;
 
-pub(super) fn resolve_color(color: TerminalColor, scheme: TerminalColors) -> [u8; 3] {
+/// `overrides` is `TerminalFrame::palette_overrides`: sorted ascending by
+/// index, so lookups are a binary search rather than a linear scan.
+pub(super) fn resolve_color(
+    color: TerminalColor,
+    scheme: TerminalColors,
+    overrides: &[(u16, [u8; 3])],
+) -> [u8; 3] {
+    // Bold/dim promote a named color to its Bright*/Dim* variant
+    // (`core::render::cell_fg`), and those variants sit past index 258 with
+    // no OSC slot of their own (only the base role at 256/257/258 is
+    // settable via OSC 10/11/12) -- e.g. a bold default-fg cell carries
+    // `BrightForeground`, which never matches an override and always falls
+    // through to the theme. Documented minor edge, not worth promoting the
+    // lookup to the base role since that would apply an OSC-10 fg override
+    // to text that intentionally isn't the plain default foreground.
+    let override_index = match color {
+        TerminalColor::Spec(_) => None,
+        TerminalColor::Indexed(index) => Some(index as u16),
+        TerminalColor::Named(named) => Some(named as usize as u16),
+    };
+    if let Some(rgb) = override_index
+        .and_then(|index| {
+            overrides
+                .binary_search_by_key(&index, |(index, _)| *index)
+                .ok()
+        })
+        .map(|pos| overrides[pos].1)
+    {
+        return rgb;
+    }
+
     match color {
         TerminalColor::Spec(Rgb { r, g, b }) => [r, g, b],
         TerminalColor::Indexed(index) => indexed_rgb(index, scheme),
@@ -128,13 +159,58 @@ mod tests {
             .iter()
             .find(|span| span.text == "r")
             .expect("a red-colored span should exist");
-        assert_eq!(resolve_color(red_span.fg, scheme), [224, 108, 117]);
+        assert_eq!(resolve_color(red_span.fg, scheme, &[]), [224, 108, 117]);
 
         let plain_span = first_line
             .spans
             .iter()
             .find(|span| span.text == "p")
             .expect("a default-colored span should exist");
-        assert_eq!(resolve_color(plain_span.fg, scheme), scheme.foreground);
+        assert_eq!(resolve_color(plain_span.fg, scheme, &[]), scheme.foreground);
+    }
+
+    /// An OSC 4/10/11/12 palette override for a cell's index wins over the
+    /// theme (`docs/session-daemon-design.md` decision 8's restored
+    /// rendering path): a literal override always beats the per-client
+    /// theme for that slot.
+    #[test]
+    fn indexed_color_with_a_matching_override_returns_the_override_rgb() {
+        let scheme = crate::terminal::config::resolved_colors();
+        let overrides = [(1u16, [9, 8, 7])];
+
+        assert_eq!(
+            resolve_color(TerminalColor::Indexed(1), scheme, &overrides),
+            [9, 8, 7]
+        );
+    }
+
+    /// An index with no matching override falls through to the theme,
+    /// unaffected by unrelated overrides in the table.
+    #[test]
+    fn indexed_color_without_a_matching_override_falls_back_to_the_theme() {
+        let scheme = crate::terminal::config::resolved_colors();
+        let overrides = [(1u16, [9, 8, 7])];
+
+        assert_eq!(
+            resolve_color(TerminalColor::Indexed(2), scheme, &overrides),
+            indexed_rgb(2, scheme)
+        );
+    }
+
+    /// OSC 10 (set foreground) writes `NamedColor::Foreground as usize ==
+    /// 256`; a `Named(Foreground)` cell picks that override up.
+    #[test]
+    fn named_foreground_with_a_matching_override_returns_the_override_rgb() {
+        let scheme = crate::terminal::config::resolved_colors();
+        let overrides = [(256u16, [1, 2, 3])];
+
+        assert_eq!(
+            resolve_color(
+                TerminalColor::Named(NamedColor::Foreground),
+                scheme,
+                &overrides
+            ),
+            [1, 2, 3]
+        );
     }
 }

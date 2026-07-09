@@ -71,7 +71,20 @@ pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> Term
         cursor: cursor_position(content.cursor.point.line.0, content.cursor.point.column.0),
         mouse_reporting: term.mode().intersects(TermMode::MOUSE_MODE)
             && term.mode().contains(TermMode::SGR_MOUSE),
+        palette_overrides: palette_overrides(term),
     }
+}
+
+/// This session's live OSC 4/10/11/12 palette overrides
+/// (`Term::colors()`), as a sparse `(index, rgb)` table — see
+/// `TerminalFrame::palette_overrides`. `alacritty_terminal::term::color::COUNT`
+/// iterated in ascending order already yields the sorted order that field's
+/// `Eq`/`PartialEq` relies on.
+fn palette_overrides(term: &Term<EventSink>) -> Vec<(u16, [u8; 3])> {
+    let colors = term.colors();
+    (0..alacritty_terminal::term::color::COUNT)
+        .filter_map(|i| colors[i].map(|rgb| (i as u16, [rgb.r, rgb.g, rgb.b])))
+        .collect()
 }
 
 fn push_styled_cell(

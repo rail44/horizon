@@ -34,7 +34,7 @@ pub(super) enum BlockElement {
 
 pub(super) fn build_line_layouts(frame: &TerminalFrame) -> Vec<Vec<CellLayout>> {
     let mut lines = Vec::new();
-    update_line_layouts(&mut lines, &[], &frame.lines);
+    update_line_layouts(&mut lines, &[], &frame.lines, &frame.palette_overrides);
     lines
 }
 
@@ -51,6 +51,7 @@ pub(super) fn update_line_layouts(
     lines: &mut Vec<Vec<CellLayout>>,
     old: &[TerminalLine],
     new: &[TerminalLine],
+    overrides: &[(u16, [u8; 3])],
 ) {
     let family = terminal_font_family();
 
@@ -62,7 +63,7 @@ pub(super) fn update_line_layouts(
 
         let mut cells = Vec::new();
         for span in &new_line.spans {
-            cells.extend(build_span_cells(span, &family));
+            cells.extend(build_span_cells(span, &family, overrides));
         }
         if row < lines.len() {
             lines[row] = cells;
@@ -77,13 +78,14 @@ pub(super) fn update_line_layouts(
 pub(super) fn build_span_cells(
     span: &crate::terminal::TerminalSpan,
     family: &[FamilyOwned],
+    overrides: &[(u16, [u8; 3])],
 ) -> Vec<CellLayout> {
     // Resolved once per span (`docs/session-daemon-design.md` decision 8:
     // `span.fg`/`bg` are logical colors now -- `TerminalCore` no longer
     // resolves them against a theme at all), not once per cell.
     let scheme = crate::terminal::config::resolved_colors();
-    let fg = color::resolve_color(span.fg, scheme);
-    let bg = color::resolve_color(span.bg, scheme);
+    let fg = color::resolve_color(span.fg, scheme, overrides);
+    let bg = color::resolve_color(span.bg, scheme, overrides);
 
     if span.text.is_empty() {
         return (0..span.columns)

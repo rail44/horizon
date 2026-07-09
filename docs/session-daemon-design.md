@@ -180,20 +180,24 @@ foreseen at the design-decision stage:
   `SessionId`, applied to config instead since `SessionId` never actually
   crosses into this crate). `TerminalCore::set_color_scheme` pushes the
   host's live theme in once, at `TerminalSession::spawn` time.
-- **Known, accepted narrowing: per-session live OSC 4/10/11/12 palette
-  overrides no longer affect cell *rendering*.** Before the cut,
-  `core::render::resolve_color` checked `Term::colors()` (the live
+- **Per-session live OSC 4/10/11/12 palette overrides ride the frame and
+  are honored at paint time.** The initial cut left a narrowing here:
+  `core::render::resolve_color` used to check `Term::colors()` (the live
   per-session override table an app can set at runtime) before falling
-  back to the theme. That table is core-only state; it doesn't cross the
-  `TerminalFrame` boundary now that cells carry logical colors, so an app
-  that redefines a palette slot at runtime no longer recolors already- (or
-  newly-) rendered text — only that same app's OSC 4/10/11/12 *query
-  replies* still honor it (the crate still has `Term::colors()` for that,
-  see above). Not covered by any pre-existing test (only the query-reply
-  behavior was tested) and consistent with decision 8's own text, which
-  names only "index / named / default" as what a logical color carries.
-  Flagged here rather than silently accepted because a real app (e.g. a
-  shell theme that reprograms the palette) could visibly regress.
+  back to the theme, but that table was core-only state that didn't cross
+  the `TerminalFrame` boundary once cells carry logical colors, so an app
+  that redefined a palette slot at runtime stopped recoloring rendered
+  text — only that same app's OSC 4/10/11/12 *query replies* still honored
+  it. This has since been closed: `TerminalFrame::palette_overrides`
+  carries the override table as a sparse logical-index → literal-RGB list
+  (sorted, for the frame's `Eq`), populated from `Term::colors()` at
+  snapshot time and consulted by `terminal::view::color::resolve_color`
+  before the theme. A literal override always wins for its slot; the theme
+  governs only non-overridden slots, which stays coherent with decision
+  8's multi-client theming (a differently-themed second client still shows
+  the app's literal override for that slot). `TerminalCore`'s own OSC
+  4/10/11/12 *query replies* are unaffected — a separate, still-crate-local
+  read of the same `Term::colors()` state.
 - **`Reload Config` does not push a live theme update into already-spawned
   sessions' `TerminalCoreOptions`.** `set_color_scheme` is called once, at
   spawn; nothing currently calls it again on reload (matching the
