@@ -21,7 +21,7 @@ pub(crate) use horizon_terminal_core::{
     TerminalMouseKind, TerminalMouseModifiers, TerminalMouseReport, TerminalScroll,
     TerminalSelectionPoint, TerminalSize, TerminalSpan, TerminalUpdate,
 };
-pub(crate) use session::{initial_terminal_text, TerminalSession};
+pub(crate) use session::{initial_terminal_text, sample_cwd, TerminalSession};
 
 #[cfg(test)]
 pub(crate) use session::terminal_command;

@@ -1,4 +1,5 @@
 use std::env;
+use std::path::Path;
 use std::thread;
 
 use crossbeam_channel::{Receiver, Sender};
@@ -9,11 +10,13 @@ use horizon_terminal_core::{
 use portable_pty::{native_pty_system, PtySize};
 use thiserror::Error;
 
+pub(crate) use self::cwd::sample_cwd;
 #[cfg(test)]
 pub(crate) use self::environment::terminal_command;
 use self::runtime::{read_pty, run_writer};
 use crate::session::SessionId;
 
+mod cwd;
 mod environment;
 mod runtime;
 mod trace;
@@ -33,12 +36,20 @@ pub(crate) enum TerminalSessionError {
 pub(crate) struct TerminalSession {
     tx: Sender<TerminalCommand>,
     rx: Receiver<TerminalUpdate>,
+    /// The spawned shell's OS pid, when the PTY backend reports one (not
+    /// all platforms do -- `portable_pty::Child::process_id`'s doc
+    /// comment). Lets a later spawn resolve "this terminal session's
+    /// *current* cwd" on demand (`docs/session-relationship-design.md`'s
+    /// "cwd sourcing is shell-independent") without keeping the `Child`
+    /// handle itself alive -- see `Self::pid`/`crate::terminal::sample_cwd`.
+    pid: Option<u32>,
 }
 
 impl TerminalSession {
     pub(crate) fn spawn(
         size: TerminalSize,
         session_id: SessionId,
+        cwd: &Path,
     ) -> Result<Self, TerminalSessionError> {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtySize {
@@ -55,10 +66,14 @@ impl TerminalSession {
             &terminal_config.shell_args,
             &terminal_config.term,
             session_id,
+            cwd,
         );
-        pair.slave
+        let child = pair
+            .slave
             .spawn_command(cmd)
             .map_err(TerminalSessionError::Spawn)?;
+        let pid = child.process_id();
+        drop(child);
         drop(pair.slave);
 
         let mut reader = pair
@@ -132,6 +147,7 @@ impl TerminalSession {
         Ok(Self {
             tx: command_tx,
             rx: update_rx,
+            pid,
         })
     }
 
@@ -141,6 +157,13 @@ impl TerminalSession {
 
     pub(crate) fn updates(&self) -> Receiver<TerminalUpdate> {
         self.rx.clone()
+    }
+
+    /// The spawned shell's pid, for `Registry` to retain past this
+    /// (otherwise ephemeral) `TerminalSession` value's lifetime -- see
+    /// `Registry::insert_terminal`/`Registry::terminal_cwd`.
+    pub(crate) fn pid(&self) -> Option<u32> {
+        self.pid
     }
 }
 

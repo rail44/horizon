@@ -16,7 +16,7 @@ use crate::workspace::{
     SplitAxis, Workspace,
 };
 
-use super::runtime::{spawn_session, SessionRuntimeState};
+use super::runtime::{resolve_new_session_cwd, spawn_session, SessionRuntimeState};
 
 /// Reason recorded for a tool-call denial that doesn't carry an explicit
 /// user-supplied reason — shared by the palette's auto-resolved
@@ -477,6 +477,14 @@ fn reload_config(state: CommandActionState) {
 /// to resolve to any pane -- already rejected earlier by
 /// `external_commands::dispatch_invoke`'s pre-check, so this is defense in
 /// depth, not the primary error path.
+///
+/// The spawn-source session, for `runtime::resolve_new_session_cwd`
+/// (`docs/session-relationship-design.md` decision 3, "start where I'm
+/// looking"), is `split_target`'s session when explicit (a placement-first
+/// split derives from the pane it splits) or the *currently* active session
+/// otherwise (a plain new tab still derives from whatever pane the caller
+/// was looking at) -- read before `workspace.update` below mutates which
+/// pane is active.
 fn create_session(
     state: CommandActionState,
     kind: PaneKind,
@@ -485,6 +493,10 @@ fn create_session(
     activate: bool,
 ) -> Option<SessionId> {
     let workspace = state.workspace();
+    let source_session_id = split_target
+        .map(|(target, _axis)| target)
+        .or_else(|| workspace.with_untracked(|ws| ws.active_session_id()));
+    let cwd = resolve_new_session_cwd(source_session_id, workspace, state.runtime.sessions());
     let mut session_id = None;
     workspace.update(|ws| {
         session_id = match split_target {
@@ -496,7 +508,7 @@ fn create_session(
         }
     });
     let session_id = session_id?;
-    spawn_session(kind, role_id, session_id, &state.runtime);
+    spawn_session(kind, role_id, session_id, cwd, &state.runtime);
     if activate {
         request_active_pane_focus(workspace, state.pane_focus_requests.clone());
     }
@@ -846,9 +858,9 @@ mod tests {
 
         let mut sessions = Registry::default();
         let (attached_tx, attached_rx) = crossbeam_channel::unbounded();
-        sessions.insert_terminal(attached_session, attached_tx);
+        sessions.insert_terminal(attached_session, attached_tx, None);
         let (detached_terminal_tx, detached_terminal_rx) = crossbeam_channel::unbounded();
-        sessions.insert_terminal(detached_terminal, detached_terminal_tx);
+        sessions.insert_terminal(detached_terminal, detached_terminal_tx, None);
         let (detached_agent_tx, detached_agent_rx) = crossbeam_channel::unbounded();
         let (_events_tx, events_rx) = crossbeam_channel::unbounded();
         sessions.insert_agent(

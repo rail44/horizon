@@ -1,4 +1,5 @@
 use std::env;
+use std::path::Path;
 
 use portable_pty::CommandBuilder;
 
@@ -46,9 +47,11 @@ pub(crate) fn terminal_command(
     args: &[String],
     term: &str,
     session_id: SessionId,
+    cwd: &Path,
 ) -> CommandBuilder {
     let mut cmd = CommandBuilder::new(shell);
     cmd.args(args);
+    cmd.cwd(cwd);
     configure_terminal_environment(&mut cmd, term, session_id);
     cmd
 }

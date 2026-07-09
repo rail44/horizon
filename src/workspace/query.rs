@@ -329,7 +329,11 @@ impl Workspace {
             .unwrap_or_else(|| pane.title())
     }
 
-    pub(super) fn session_pane_kind(&self, session_id: SessionId) -> Option<PaneKind> {
+    /// `pub(crate)`, not `pub(super)`, so `app::runtime::spawn_cwd` can
+    /// resolve a spawn-source session's kind without going through the
+    /// pane layer (a *detached* source session -- one with no pane at all
+    /// -- still has a kind, just no `PaneId` to look one up from).
+    pub(crate) fn session_pane_kind(&self, session_id: SessionId) -> Option<PaneKind> {
         self.session(session_id)
             .map(|session| PaneKind::from(session.kind))
     }

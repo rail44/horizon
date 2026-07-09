@@ -1,4 +1,5 @@
 mod agent;
+mod spawn_cwd;
 mod terminal;
 
 use std::path::PathBuf;
@@ -14,6 +15,7 @@ use crate::terminal::TerminalCommand;
 use crate::workspace::{PaneKind, Workspace};
 
 use agent::spawn_agent_session;
+pub(crate) use spawn_cwd::resolve_new_session_cwd;
 use terminal::spawn_terminal_session;
 
 #[derive(Clone)]
@@ -93,11 +95,15 @@ pub(crate) fn shutdown() {}
 /// `role_id` selects a role-tagged agent session (`horizon_agent::roles`);
 /// it only means something for `PaneKind::Agent` -- a terminal spawn
 /// ignores it, and every caller but the `New Configuration Agent` command
-/// passes `None` today.
+/// passes `None` today. `cwd` (`spawn_cwd::resolve_new_session_cwd`'s
+/// result) only means something for `PaneKind::Terminal` today -- see
+/// `spawn_cwd`'s module doc comment for why agent creation doesn't consume
+/// it yet.
 pub(crate) fn spawn_session(
     kind: PaneKind,
     role_id: Option<RoleId>,
     session_id: SessionId,
+    cwd: PathBuf,
     state: &SessionRuntimeState,
 ) {
     match kind {
@@ -107,6 +113,7 @@ pub(crate) fn spawn_session(
             state.sessions,
             state.terminal_dump.clone(),
             state.clipboard_dump.clone(),
+            cwd,
         ),
         PaneKind::Agent => spawn_agent_session(
             session_id,
@@ -183,7 +190,7 @@ mod tests {
         session_id: SessionId,
     ) -> crossbeam_channel::Receiver<TerminalCommand> {
         let (tx, rx) = crossbeam_channel::unbounded();
-        sessions.update(|registry| registry.insert_terminal(session_id, tx));
+        sessions.update(|registry| registry.insert_terminal(session_id, tx, None));
         rx
     }
 

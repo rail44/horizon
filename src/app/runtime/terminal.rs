@@ -14,11 +14,12 @@ pub(super) fn spawn_terminal_session(
     sessions: RwSignal<Registry>,
     terminal_dump: Option<PathBuf>,
     clipboard_dump: Option<PathBuf>,
+    cwd: PathBuf,
 ) {
-    match TerminalSession::spawn(TerminalSize::default(), session_id) {
+    match TerminalSession::spawn(TerminalSize::default(), session_id, &cwd) {
         Ok(session) => {
             sessions.update(|registry| {
-                registry.insert_terminal(session_id, session.sender());
+                registry.insert_terminal(session_id, session.sender(), session.pid());
             });
             let updates = create_signal_from_channel(session.updates());
             create_effect(move |_| {

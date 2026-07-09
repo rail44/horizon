@@ -8,7 +8,9 @@ use crate::control_surface::PaletteStage;
 use crate::session::{Frames, Registry, SessionId};
 use crate::workspace::{AgentDrafts, PaneFocusRequests, Workspace};
 
-use super::runtime::{spawn_session, wire_focus_reporting, SessionRuntimeState};
+use super::runtime::{
+    resolve_new_session_cwd, spawn_session, wire_focus_reporting, SessionRuntimeState,
+};
 
 #[derive(Clone)]
 pub(super) struct AppState {
@@ -153,9 +155,14 @@ impl AppState {
 
     pub(super) fn spawn_initial_sessions(&self) {
         let runtime = self.session_runtime_state();
+        // No spawn-source pane exists yet at startup, so every initial
+        // session falls back to Horizon's own launch cwd
+        // (`resolve_new_session_cwd`'s "no source" branch) -- unchanged
+        // from the behavior before terminal-cwd sourcing existed.
+        let cwd = resolve_new_session_cwd(None, self.workspace, self.sessions);
         for session in self.workspace.with(|ws| ws.session_summaries()) {
             if session.attached {
-                spawn_session(session.kind.into(), None, session.id, &runtime);
+                spawn_session(session.kind.into(), None, session.id, cwd.clone(), &runtime);
             }
         }
     }
