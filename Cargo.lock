@@ -2347,13 +2347,13 @@ version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
- "base64",
  "crossbeam-channel",
  "floem",
  "floem_renderer",
  "horizon-agent",
  "horizon-control",
  "horizon-ctl",
+ "horizon-terminal-core",
  "im",
  "libc",
  "portable-pty",
@@ -2422,6 +2422,17 @@ dependencies = [
  "horizon-control",
  "libc",
  "serde_json",
+]
+
+[[package]]
+name = "horizon-terminal-core"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "base64",
+ "crossbeam-channel",
+ "termwiz",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]

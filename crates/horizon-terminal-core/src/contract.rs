@@ -1,12 +1,12 @@
 use termwiz::input::{KeyCode, Modifiers};
 
-use crate::terminal::types::{
+use crate::types::{
     KeyEventKind, TerminalFrame, TerminalMouseReport, TerminalScroll, TerminalSelectionPoint,
     TerminalSize,
 };
 
 #[derive(Clone, Debug)]
-pub(crate) enum TerminalCommand {
+pub enum TerminalCommand {
     Input(Vec<u8>),
     Key {
         key: KeyCode,
@@ -30,7 +30,7 @@ pub(crate) enum TerminalCommand {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum TerminalUpdate {
+pub enum TerminalUpdate {
     Snapshot(TerminalFrame),
     Title(Option<String>),
     Bell,
@@ -39,7 +39,10 @@ pub(crate) enum TerminalUpdate {
     Error(String),
 }
 
-pub(super) enum SelectionCommand {
+/// Demuxed selection sub-commands (`TerminalCommand::SelectionStart`/
+/// `SelectionUpdate`/`CopySelection`), routed onto their own channel by the
+/// host's PTY writer thread — see [`crate::CoreReceivers`].
+pub enum SelectionCommand {
     Start(TerminalSelectionPoint),
     Update(TerminalSelectionPoint),
     Copy,

@@ -33,7 +33,7 @@ use alacritty_terminal::term::TermMode;
 use termwiz::escape::csi::KittyKeyboardFlags;
 use termwiz::input::{KeyCode, Modifiers, CSI, SS3};
 
-use crate::terminal::types::KeyEventKind;
+use crate::types::KeyEventKind;
 
 /// Read the terminal's negotiated Kitty progressive-enhancement flags off
 /// its live `TermMode` (set by `CSI > flags u` / `CSI = flags ; mode u`,

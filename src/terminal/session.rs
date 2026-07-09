@@ -2,18 +2,18 @@ use std::env;
 use std::thread;
 
 use crossbeam_channel::{Receiver, Sender};
+use horizon_terminal_core::{
+    run_terminal_core, CoreReceivers, CoreSenders, TerminalCommand, TerminalCore,
+    TerminalCoreOptions, TerminalSize, TerminalUpdate,
+};
 use portable_pty::{native_pty_system, PtySize};
 use thiserror::Error;
 
-pub(crate) use self::contract::{TerminalCommand, TerminalUpdate};
 #[cfg(test)]
 pub(crate) use self::environment::terminal_command;
-use self::runtime::{read_pty, run_terminal_core, run_writer, CoreReceivers, CoreSenders};
-use super::core::TerminalCore;
-use super::types::TerminalSize;
+use self::runtime::{read_pty, run_writer};
 use crate::session::SessionId;
 
-mod contract;
 mod environment;
 mod runtime;
 mod trace;
@@ -89,6 +89,11 @@ impl TerminalSession {
         let trace_short_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
         let reader_trace_id = trace_short_id.clone();
 
+        let core_options = TerminalCoreOptions {
+            scrollback_lines: terminal_config.scrollback_lines,
+            color_scheme: super::config::terminal_color_scheme(),
+        };
+
         thread::spawn(move || {
             read_pty(&mut *reader, pty_tx, read_update_tx, &reader_trace_id);
         });
@@ -102,7 +107,14 @@ impl TerminalSession {
                 selection_rx,
                 focus_rx,
             };
-            run_terminal_core(size, pty_rx, receivers, response_tx, update_tx);
+            run_terminal_core(
+                size,
+                core_options,
+                pty_rx,
+                receivers,
+                response_tx,
+                update_tx,
+            );
         });
         thread::spawn(move || {
             let senders = CoreSenders {

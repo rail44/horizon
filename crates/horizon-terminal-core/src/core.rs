@@ -10,10 +10,11 @@ use termwiz::escape::csi::KittyKeyboardFlags;
 use termwiz::input::{KeyCode, KeyCodeEncodeModes, KeyboardEncoding, Modifiers};
 
 use self::color::resolve_query_color;
+pub use self::color::TerminalColorScheme;
 use self::events::{EventSink, TerminalEvents};
 use self::input::{arrow_scroll_input, sgr_mouse_input, sgr_mouse_wheel_input};
-use super::protocol::kitty_keyboard;
-use super::types::{
+use crate::protocol::kitty_keyboard;
+use crate::types::{
     KeyEventKind, TerminalFrame, TerminalMouseKind, TerminalMouseReport, TerminalScroll,
     TerminalSelectionPoint, TerminalSize,
 };
@@ -22,6 +23,16 @@ mod color;
 mod events;
 mod input;
 mod render;
+
+/// Built-in fallback for `Term`'s `scrolling_history` (`TermConfig`), used
+/// by [`TerminalCore::new`] — the crate has no dependency on the host's
+/// config file (`docs/session-daemon-design.md` decision 9), so a real
+/// session always goes through [`TerminalCore::with_scrollback`] instead,
+/// fed from `terminal::config::TerminalConfig` on the host side. Matches
+/// the host's own built-in default (`terminal::config::
+/// DEFAULT_SCROLLBACK_LINES`) so a bare `new` — every test in this crate —
+/// still exercises realistic scrollback depth.
+pub(crate) const DEFAULT_SCROLLBACK_LINES: usize = 10_000;
 
 /// `Term::report_private_mode` (alacritty_terminal's DECRQM handler, in
 /// upstream `term/mod.rs`) always answers a query for private mode 2026
@@ -60,20 +71,32 @@ fn rewrite_sync_update_decrqm(pty_writes: &mut [Vec<u8>]) {
     }
 }
 
-pub(crate) struct TerminalCore {
+pub struct TerminalCore {
     term: Term<EventSink>,
     parser: Processor,
     events: EventSink,
     size: TerminalSize,
+    /// Default colors for OSC 4/10/11/12 query replies
+    /// (`core::color::resolve_query_color`) — see [`TerminalColorScheme`]'s
+    /// doc comment. Set from [`TerminalColorScheme::default`] until the
+    /// host pushes its live theme via [`Self::set_color_scheme`].
+    color_scheme: TerminalColorScheme,
 }
 
 impl TerminalCore {
-    pub(crate) fn new(size: TerminalSize) -> Self {
+    pub fn new(size: TerminalSize) -> Self {
+        Self::with_scrollback(size, DEFAULT_SCROLLBACK_LINES)
+    }
+
+    /// Like [`Self::new`], but with an explicit scrollback depth —
+    /// `TerminalSession::spawn` uses this, feeding the host's configured
+    /// `[terminal].scrollback_lines` (`terminal::config::TerminalConfig`)
+    /// in rather than this crate's own built-in default.
+    pub fn with_scrollback(size: TerminalSize, scrollback_lines: usize) -> Self {
         let events = EventSink::default();
-        let terminal_config = super::config::TerminalConfig::from_env();
         let config = TermConfig {
             kitty_keyboard: true,
-            scrolling_history: terminal_config.scrollback_lines,
+            scrolling_history: scrollback_lines,
             // OSC 52 clipboard write only, no read: a terminal app can copy
             // to the system clipboard (`Event::ClipboardStore`, see
             // `core::events::TerminalEvents::clipboard_writes`) but can
@@ -95,10 +118,20 @@ impl TerminalCore {
             parser: Processor::new(),
             events,
             size,
+            color_scheme: TerminalColorScheme::default(),
         }
     }
 
-    pub(crate) fn write_vt(&mut self, bytes: &[u8]) -> TerminalEvents {
+    /// Push the host's live color scheme in, for [`Self`]'s own OSC
+    /// 4/10/11/12 default-reply resolution (`docs/session-daemon-design.md`
+    /// decision 9's crate-local mirror pattern) — called once right after
+    /// construction (`TerminalSession::spawn`), since this crate has no way
+    /// to observe `Reload Config` itself.
+    pub fn set_color_scheme(&mut self, scheme: TerminalColorScheme) {
+        self.color_scheme = scheme;
+    }
+
+    pub fn write_vt(&mut self, bytes: &[u8]) -> TerminalEvents {
         // Captured *before* `advance` runs (which can itself close the
         // window if `bytes` ends a synchronized-update sequence): a DECRQM
         // reply queued while the window was open is only actually flushed
@@ -118,7 +151,7 @@ impl TerminalCore {
     /// `Instant::now()` from *inside* a call fed new bytes (see the doc
     /// comment above `SYNC_UPDATE_DECRQM_RESET`), so an idle PTY with no more
     /// data leaves a window open forever. `None` while no window is open.
-    pub(crate) fn sync_flush_deadline(&self) -> Option<Instant> {
+    pub fn sync_flush_deadline(&self) -> Option<Instant> {
         self.parser.sync_timeout().sync_timeout()
     }
 
@@ -129,7 +162,7 @@ impl TerminalCore {
     /// with that same deadline as its timeout and calls
     /// `Processor::stop_sync` when it elapses). A no-op, PTY-write-wise, if
     /// no window is open.
-    pub(crate) fn flush_sync_update(&mut self) -> TerminalEvents {
+    pub fn flush_sync_update(&mut self) -> TerminalEvents {
         let sync_output_was_active = self.parser.sync_timeout().pending_timeout();
         self.parser.stop_sync(&mut self.term);
         self.finish_advance(sync_output_was_active)
@@ -156,7 +189,7 @@ impl TerminalCore {
         // `pty_writes` like any other response so callers only ever see one
         // kind of outbound byte stream.
         for (index, format) in events.color_requests.drain(..) {
-            let rgb = resolve_query_color(index, self.term.colors());
+            let rgb = resolve_query_color(index, self.term.colors(), &self.color_scheme);
             events.pty_writes.push(format(rgb).into_bytes());
         }
         for format in events.window_size_requests.drain(..) {
@@ -181,16 +214,16 @@ impl TerminalCore {
         events
     }
 
-    pub(crate) fn resize(&mut self, size: TerminalSize) {
+    pub fn resize(&mut self, size: TerminalSize) {
         self.size = size;
         self.term.resize(size);
     }
 
-    pub(crate) fn scroll_display(&mut self, lines: i32) {
+    pub fn scroll_display(&mut self, lines: i32) {
         self.term.scroll_display(Scroll::Delta(lines));
     }
 
-    pub(crate) fn handle_scroll(&mut self, scroll: TerminalScroll) -> Option<Vec<u8>> {
+    pub fn handle_scroll(&mut self, scroll: TerminalScroll) -> Option<Vec<u8>> {
         if self.application_scroll_mode() {
             return Some(self.scroll_input(scroll));
         }
@@ -199,7 +232,7 @@ impl TerminalCore {
         None
     }
 
-    pub(crate) fn handle_mouse_report(&self, report: TerminalMouseReport) -> Option<Vec<u8>> {
+    pub fn handle_mouse_report(&self, report: TerminalMouseReport) -> Option<Vec<u8>> {
         let mode = *self.term.mode();
         if !mode.intersects(TermMode::MOUSE_MODE) || !mode.contains(TermMode::SGR_MOUSE) {
             return None;
@@ -214,7 +247,7 @@ impl TerminalCore {
         Some(sgr_mouse_input(report))
     }
 
-    pub(crate) fn paste_input(&self, text: &str) -> Vec<u8> {
+    pub fn paste_input(&self, text: &str) -> Vec<u8> {
         if self.term.mode().contains(TermMode::BRACKETED_PASTE) {
             let mut input = Vec::with_capacity(text.len() + 12);
             input.extend_from_slice(b"\x1b[200~");
@@ -237,7 +270,7 @@ impl TerminalCore {
     /// report (nothing in the spec promises otherwise), so the caller
     /// (`terminal::session::runtime`) is free to call this on every real
     /// focus transition without this method tracking any history itself.
-    pub(crate) fn focus_input(&self, focused: bool) -> Option<Vec<u8>> {
+    pub fn focus_input(&self, focused: bool) -> Option<Vec<u8>> {
         if !self.term.mode().contains(TermMode::FOCUS_IN_OUT) {
             return None;
         }
@@ -249,24 +282,24 @@ impl TerminalCore {
     }
 
     #[cfg(test)]
-    pub(crate) fn display_offset(&self) -> usize {
+    pub fn display_offset(&self) -> usize {
         self.term.grid().display_offset()
     }
 
     #[cfg(test)]
-    pub(crate) fn alternate_screen(&self) -> bool {
+    pub fn alternate_screen(&self) -> bool {
         self.term.mode().contains(TermMode::ALT_SCREEN)
     }
 
-    pub(crate) fn snapshot_text(&self) -> String {
+    pub fn snapshot_text(&self) -> String {
         self.snapshot_frame().text
     }
 
-    pub(crate) fn snapshot_frame(&self) -> TerminalFrame {
+    pub fn snapshot_frame(&self) -> TerminalFrame {
         render::snapshot_frame(&self.term, self.size)
     }
 
-    pub(crate) fn encode_key(&self, key: KeyCode, mods: Modifiers, event: KeyEventKind) -> String {
+    pub fn encode_key(&self, key: KeyCode, mods: Modifiers, event: KeyEventKind) -> String {
         let mode = *self.term.mode();
         let flags = kitty_keyboard::flags_from_mode(mode);
 
@@ -330,23 +363,23 @@ impl TerminalCore {
             .unwrap_or_default()
     }
 
-    pub(crate) fn key_input(&self, key: KeyCode, mods: Modifiers, event: KeyEventKind) -> Vec<u8> {
+    pub fn key_input(&self, key: KeyCode, mods: Modifiers, event: KeyEventKind) -> Vec<u8> {
         self.encode_key(key, mods, event).into_bytes()
     }
 
-    pub(crate) fn start_selection(&mut self, point: TerminalSelectionPoint) {
+    pub fn start_selection(&mut self, point: TerminalSelectionPoint) {
         let point = self.selection_point(point);
         self.term.selection = Some(Selection::new(SelectionType::Simple, point, Side::Left));
     }
 
-    pub(crate) fn update_selection(&mut self, point: TerminalSelectionPoint) {
+    pub fn update_selection(&mut self, point: TerminalSelectionPoint) {
         let point = self.selection_point(point);
         if let Some(selection) = self.term.selection.as_mut() {
             selection.update(point, Side::Right);
         }
     }
 
-    pub(crate) fn selected_text(&self) -> Option<String> {
+    pub fn selected_text(&self) -> Option<String> {
         self.term.selection_to_string()
     }
 

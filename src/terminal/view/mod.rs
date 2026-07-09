@@ -19,6 +19,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Instant;
 
+mod color;
 mod input;
 mod layout;
 mod metrics;
@@ -406,7 +407,9 @@ mod tests {
     use crate::terminal::TerminalLine;
     use crate::terminal::TerminalSelectionPoint;
     use crate::terminal::TerminalSpan;
+    use alacritty_terminal::vte::ansi::Rgb;
     use floem::text::FamilyOwned;
+    use horizon_terminal_core::TerminalColor;
     use std::time::Duration;
 
     fn test_line(text: &str) -> TerminalLine {
@@ -414,8 +417,8 @@ mod tests {
             spans: vec![TerminalSpan {
                 text: text.to_string(),
                 columns: text.chars().count(),
-                fg: [1, 2, 3],
-                bg: [4, 5, 6],
+                fg: TerminalColor::Spec(Rgb { r: 1, g: 2, b: 3 }),
+                bg: TerminalColor::Spec(Rgb { r: 4, g: 5, b: 6 }),
             }],
         }
     }
@@ -821,8 +824,8 @@ mod tests {
             &TerminalSpan {
                 text: String::new(),
                 columns: 3,
-                fg: [1, 2, 3],
-                bg: [4, 5, 6],
+                fg: TerminalColor::Spec(Rgb { r: 1, g: 2, b: 3 }),
+                bg: TerminalColor::Spec(Rgb { r: 4, g: 5, b: 6 }),
             },
             &test_family(),
         );
@@ -838,8 +841,8 @@ mod tests {
             &TerminalSpan {
                 text: "A日e\u{301}".to_string(),
                 columns: 4,
-                fg: [1, 2, 3],
-                bg: [4, 5, 6],
+                fg: TerminalColor::Spec(Rgb { r: 1, g: 2, b: 3 }),
+                bg: TerminalColor::Spec(Rgb { r: 4, g: 5, b: 6 }),
             },
             &test_family(),
         );
@@ -858,8 +861,8 @@ mod tests {
             &TerminalSpan {
                 text: "█▄▀".to_string(),
                 columns: 3,
-                fg: [1, 2, 3],
-                bg: [4, 5, 6],
+                fg: TerminalColor::Spec(Rgb { r: 1, g: 2, b: 3 }),
+                bg: TerminalColor::Spec(Rgb { r: 4, g: 5, b: 6 }),
             },
             &test_family(),
         );
@@ -880,8 +883,8 @@ mod tests {
             &TerminalSpan {
                 text: "▏▎▍▌▋▊▉▁▂▃▄▅▆▇".to_string(),
                 columns: 14,
-                fg: [1, 2, 3],
-                bg: [4, 5, 6],
+                fg: TerminalColor::Spec(Rgb { r: 1, g: 2, b: 3 }),
+                bg: TerminalColor::Spec(Rgb { r: 4, g: 5, b: 6 }),
             },
             &test_family(),
         );

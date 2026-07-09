@@ -4,6 +4,6 @@
 //! rather than leaning on termwiz's (broken, at Horizon's pin) built-in
 //! support, and for the resident `KITTY_COMPLIANCE` table that answers
 //! "where are we against the spec" from the terminal
-//! (`cargo test print_compliance_matrix -- --nocapture`).
+//! (`cargo test -p horizon-terminal-core print_compliance_matrix -- --nocapture`).
 
 pub(crate) mod kitty_keyboard;

@@ -33,7 +33,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
-use crate::terminal::types::TerminalSize;
+use crate::terminal::TerminalSize;
 
 const TRACE_ENV_VAR: &str = "HORIZON_PTY_TRACE";
 const HEX_SAMPLE_LEN: usize = 256;

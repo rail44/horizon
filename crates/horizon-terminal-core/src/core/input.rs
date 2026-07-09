@@ -1,4 +1,4 @@
-use crate::terminal::types::{
+use crate::types::{
     TerminalMouseButton, TerminalMouseKind, TerminalMouseModifiers, TerminalMouseReport,
 };
 

@@ -135,6 +135,89 @@ hosted by a daemon, with the UI as a reconnecting client.
    colors included, once resolved with the default theme — is unchanged
    from before the color cut.
 
+## Step 0 implementation notes (2026-07-09)
+
+The extraction (decisions 7's step 0, 8, 9) is implemented:
+`crates/horizon-terminal-core` holds `TerminalCore`/emulation
+(`core.rs`/`core/{color,events,input,render}.rs`), the kitty keyboard
+protocol (`protocol/kitty_keyboard.rs`), the shared types
+(`types.rs`/`types/*`), the sister contract (`contract.rs`:
+`TerminalCommand`/`TerminalUpdate`/`SelectionCommand`), and the session
+loop (`session_loop.rs`: `run_terminal_core`, coalescing, the sync-update
+failsafe). `horizon`'s `terminal/` keeps only the spawn layer
+(`session.rs`, `session/{environment,runtime,trace}.rs` — PTY ownership,
+threads, environment, `HORIZON_PTY_TRACE`) and the view
+(`terminal/view/*`), and re-exports the crate's public surface from
+`terminal/mod.rs` so no call site outside `terminal/` had to change import
+paths. A few judgment calls surfaced only once cutting the code, not
+foreseen at the design-decision stage:
+
+- **A second cross-crate config dependency, resolved the same way as
+  color.** `TerminalCore::new` also read `terminal::config::TerminalConfig`
+  directly (for `scrolling_history`) — a second cross-crate read decision 9
+  didn't name (it only called out color as "the one cross-crate
+  dependency"). Fixed with the same crate-local pattern as color:
+  `TerminalCore::new` keeps a built-in default (`DEFAULT_SCROLLBACK_LINES`,
+  matching the host's own default) for the crate's own tests, and
+  `TerminalCore::with_scrollback`/a new `TerminalCoreOptions` struct (also
+  carrying the color scheme, see below) is what a real session actually
+  uses, fed from the host at `TerminalSession::spawn`.
+- **Logical color reuses `alacritty_terminal`'s own `Color`/`NamedColor`/
+  `Rgb` types directly** (`horizon_terminal_core::TerminalColor` is a
+  `pub use` alias of `vte::ansi::Color`), rather than a hand-rolled parallel
+  enum — a cell's color already arrives in exactly this shape from the VT
+  parser, alacritty_terminal is not a UI dependency (so this doesn't
+  compromise the zero-floem-dependency requirement), and it avoids an
+  otherwise-pure duplication. The host's `terminal::view::color` module
+  moved `resolve_color`/`named_rgb`/`indexed_rgb` over unchanged, operating
+  on the same type.
+- **OSC 4/10/11/12 query replies still need real RGB, right now, from
+  inside the crate** — that feature (not cell rendering) is the one place
+  this crate still resolves a logical color to RGB, since a byte reply to
+  the app can't be deferred to a UI paint. It resolves against
+  `TerminalColorScheme`, a plain-data mirror of the host's `TerminalColors`
+  (the same "crate-local newtype" pattern the task brief pointed at for
+  `SessionId`, applied to config instead since `SessionId` never actually
+  crosses into this crate). `TerminalCore::set_color_scheme` pushes the
+  host's live theme in once, at `TerminalSession::spawn` time.
+- **Known, accepted narrowing: per-session live OSC 4/10/11/12 palette
+  overrides no longer affect cell *rendering*.** Before the cut,
+  `core::render::resolve_color` checked `Term::colors()` (the live
+  per-session override table an app can set at runtime) before falling
+  back to the theme. That table is core-only state; it doesn't cross the
+  `TerminalFrame` boundary now that cells carry logical colors, so an app
+  that redefines a palette slot at runtime no longer recolors already- (or
+  newly-) rendered text — only that same app's OSC 4/10/11/12 *query
+  replies* still honor it (the crate still has `Term::colors()` for that,
+  see above). Not covered by any pre-existing test (only the query-reply
+  behavior was tested) and consistent with decision 8's own text, which
+  names only "index / named / default" as what a logical color carries.
+  Flagged here rather than silently accepted because a real app (e.g. a
+  shell theme that reprograms the palette) could visibly regress.
+- **`Reload Config` does not push a live theme update into already-spawned
+  sessions' `TerminalCoreOptions`.** `set_color_scheme` is called once, at
+  spawn; nothing currently calls it again on reload (matching the
+  pre-extraction behavior for *cell* colors, which also only picked up a
+  new theme on the next PTY-driven snapshot, not instantly — floem's
+  `TextLayout` bakes a glyph's color in at shape time regardless). Only OSC
+  4/10/11/12 *query-reply* defaults are affected by this gap; wiring a
+  broadcast to live sessions on reload is future work if it matters in
+  practice.
+- **`TerminalEvents` widened from `pub(crate)` to `pub`.** `TerminalCore::
+  write_vt`/`flush_sync_update` are necessarily part of the crate's public
+  API (the host's `initial_terminal_text` calls `write_vt` directly), so
+  its return type can't be less visible than the methods returning it
+  (`private_interfaces` lint, promoted to an error under `-D warnings`).
+
+Extraction done-definition, verified: `cargo build -p horizon-terminal-core`
+succeeds with zero `floem`/`ui` dependency (`cargo tree` confirms), every
+pre-existing terminal test moved with the code and is green (53 tests in
+the crate, plus session-loop/kitty-protocol tests), and a new golden test
+(`terminal::view::color::tests::known_bytes_resolve_to_the_pre_cut_rgb_values_under_the_default_theme`,
+host-side) confirms a known byte sequence's logical-color frame resolves to
+the exact RGB values (`[224, 108, 117]` for ANSI red, etc.) the pre-cut
+`TerminalCore` used to bake in directly.
+
 ## Connection to delegation (stage 1)
 
 The terminal's move to `sessiond` supplies a delegation precondition,

@@ -1,44 +1,45 @@
+use alacritty_terminal::vte::ansi::NamedColor;
 use unicode_width::UnicodeWidthChar;
 
-use crate::terminal::config::resolved_colors;
+use super::color::TerminalColor;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct TerminalFrame {
-    pub(crate) text: String,
-    pub(crate) lines: Vec<TerminalLine>,
-    pub(crate) cursor: Option<TerminalCursor>,
-    pub(crate) mouse_reporting: bool,
+pub struct TerminalFrame {
+    pub text: String,
+    pub lines: Vec<TerminalLine>,
+    pub cursor: Option<TerminalCursor>,
+    pub mouse_reporting: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct TerminalLine {
-    pub(crate) spans: Vec<TerminalSpan>,
+pub struct TerminalLine {
+    pub spans: Vec<TerminalSpan>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct TerminalSpan {
-    pub(crate) text: String,
-    pub(crate) columns: usize,
-    pub(crate) fg: [u8; 3],
-    pub(crate) bg: [u8; 3],
+pub struct TerminalSpan {
+    pub text: String,
+    pub columns: usize,
+    pub fg: TerminalColor,
+    pub bg: TerminalColor,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct TerminalCursor {
-    pub(crate) row: usize,
-    pub(crate) col: usize,
+pub struct TerminalCursor {
+    pub row: usize,
+    pub col: usize,
 }
 
 impl TerminalFrame {
-    pub(crate) fn from_text(text: String) -> Self {
+    pub fn from_text(text: String) -> Self {
         let lines = text
             .lines()
             .map(|line| TerminalLine {
                 spans: vec![TerminalSpan {
                     columns: line.chars().map(char_width).sum(),
                     text: line.to_string(),
-                    fg: resolved_colors().foreground,
-                    bg: resolved_colors().background,
+                    fg: TerminalColor::Named(NamedColor::Foreground),
+                    bg: TerminalColor::Named(NamedColor::Background),
                 }],
             })
             .collect();

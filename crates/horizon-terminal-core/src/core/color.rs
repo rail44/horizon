@@ -3,16 +3,84 @@
 //! `TerminalCore::write_vt`).
 //!
 //! `core::render` has an equivalent table (`resolve_color`/`named_rgb`/
-//! `indexed_rgb`) for painting cells, but it is private to that module and
-//! out of scope to touch here, so the mapping is duplicated for the
-//! query-response path. If ownership ever allows touching `render.rs`,
-//! promoting that table to `pub(super)` and reusing it here would remove
-//! the duplication.
+//! `indexed_rgb`) for painting cells, but that one moved to the host
+//! (`terminal::view`, `docs/session-daemon-design.md` decision 8) once cell
+//! colors stopped needing an immediate RGB answer at all. This module's
+//! table stays here because a color *query reply* is a byte sequence sent
+//! back to the app right now — it cannot be deferred to a UI paint the way
+//! a cell's color can — so it keeps its own copy, resolved against
+//! [`TerminalColorScheme`] rather than a live theme this crate has no
+//! access to.
 
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::vte::ansi::{NamedColor, Rgb};
 
-use crate::terminal::config::{resolved_colors, TerminalColors};
+/// Crate-local mirror of the host's `ui::theme`-derived color roles
+/// (`terminal::config::TerminalColors`). This crate has no dependency on
+/// `ui::theme`/floem at all (`docs/session-daemon-design.md` decision 9), so
+/// the host converts its live theme into this plain-data struct and pushes
+/// it in via `TerminalCore::set_color_scheme` — the same "crate-local
+/// newtype / plain-data mirror" pattern `crates/horizon-agent` already uses
+/// for `SessionId`.
+///
+/// [`Default`] duplicates the host's own built-in theme defaults
+/// (`ui::theme`'s `ansi` module and `text_primary`/`surface_base`/`accent`
+/// roles) so a freshly constructed `TerminalCore` that never receives an
+/// explicit scheme (every test in this crate) still answers color queries
+/// with the same values Horizon has always shipped. In the running app this
+/// default is only ever transiently observed (`TerminalSession::spawn`
+/// pushes the live theme immediately after construction).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TerminalColorScheme {
+    pub foreground: Rgb,
+    pub background: Rgb,
+    pub cursor: Rgb,
+    pub black: Rgb,
+    pub red: Rgb,
+    pub green: Rgb,
+    pub yellow: Rgb,
+    pub blue: Rgb,
+    pub magenta: Rgb,
+    pub cyan: Rgb,
+    pub white: Rgb,
+    pub bright_black: Rgb,
+    pub bright_red: Rgb,
+    pub bright_green: Rgb,
+    pub bright_yellow: Rgb,
+    pub bright_blue: Rgb,
+    pub bright_magenta: Rgb,
+    pub bright_cyan: Rgb,
+    pub bright_white: Rgb,
+}
+
+impl Default for TerminalColorScheme {
+    fn default() -> Self {
+        const fn rgb(r: u8, g: u8, b: u8) -> Rgb {
+            Rgb { r, g, b }
+        }
+        Self {
+            foreground: rgb(233, 236, 242),
+            background: rgb(22, 24, 29),
+            cursor: rgb(132, 220, 198),
+            black: rgb(35, 38, 46),
+            red: rgb(224, 108, 117),
+            green: rgb(152, 195, 121),
+            yellow: rgb(229, 192, 123),
+            blue: rgb(97, 175, 239),
+            magenta: rgb(198, 120, 221),
+            cyan: rgb(86, 182, 194),
+            white: rgb(222, 226, 234),
+            bright_black: rgb(95, 99, 112),
+            bright_red: rgb(255, 123, 127),
+            bright_green: rgb(181, 214, 140),
+            bright_yellow: rgb(245, 211, 139),
+            bright_blue: rgb(120, 194, 255),
+            bright_magenta: rgb(218, 140, 255),
+            bright_cyan: rgb(103, 205, 216),
+            bright_white: rgb(255, 255, 255),
+        }
+    }
+}
 
 /// Resolve the RGB value alacritty_terminal should report for color query
 /// `index`: 0..16 base ANSI, 16..232 color cube, 232..256 grayscale ramp,
@@ -20,15 +88,19 @@ use crate::terminal::config::{resolved_colors, TerminalColors};
 /// `alacritty_terminal::term::color::Colors` docs — these are the only
 /// indices reachable via OSC 4/10/11/12). `overrides` is the live palette
 /// (`Term::colors()`): an app that already set this slot via OSC
-/// 4/10/11/12 gets that value back; otherwise Horizon's configured theme.
-pub(super) fn resolve_query_color(index: usize, overrides: &Colors) -> Rgb {
+/// 4/10/11/12 gets that value back; otherwise `scheme`.
+pub(super) fn resolve_query_color(
+    index: usize,
+    overrides: &Colors,
+    scheme: &TerminalColorScheme,
+) -> Rgb {
     if let Some(rgb) = overrides[index] {
         return rgb;
     }
-    default_rgb(index, resolved_colors())
+    default_rgb(index, *scheme)
 }
 
-fn default_rgb(index: usize, scheme: TerminalColors) -> Rgb {
+fn default_rgb(index: usize, scheme: TerminalColorScheme) -> Rgb {
     if index < 16 {
         return named_rgb(base_ansi_color(index), scheme);
     }
@@ -83,8 +155,8 @@ fn base_ansi_color(index: usize) -> NamedColor {
     }
 }
 
-fn named_rgb(color: NamedColor, scheme: TerminalColors) -> Rgb {
-    let [r, g, b] = match color {
+fn named_rgb(color: NamedColor, scheme: TerminalColorScheme) -> Rgb {
+    match color {
         NamedColor::Black => scheme.black,
         NamedColor::Red => scheme.red,
         NamedColor::Green => scheme.green,
@@ -108,6 +180,5 @@ fn named_rgb(color: NamedColor, scheme: TerminalColors) -> Rgb {
         // OSC 4/10/11/12 (index is always < 256, or exactly 256/257/258),
         // so this arm is defensive rather than load-bearing.
         _ => scheme.foreground,
-    };
-    Rgb { r, g, b }
+    }
 }

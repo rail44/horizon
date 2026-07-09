@@ -27,10 +27,10 @@ type WindowSizeFormatter = Arc<dyn Fn(WindowSize) -> String + Send + Sync>;
 const OSC52_CLIPBOARD_WRITE_CAP: usize = 256 * 1024;
 
 #[derive(Clone, Default)]
-pub(crate) struct TerminalEvents {
-    pub(crate) pty_writes: Vec<Vec<u8>>,
-    pub(crate) title: Option<String>,
-    pub(crate) bell_count: usize,
+pub struct TerminalEvents {
+    pub pty_writes: Vec<Vec<u8>>,
+    pub title: Option<String>,
+    pub bell_count: usize,
     /// OSC 52 clipboard-write payloads (`Event::ClipboardStore`) accepted
     /// this call, already capped at `OSC52_CLIPBOARD_WRITE_CAP` -- see
     /// `EventSink::send_event`. Both OSC 52 targets alacritty_terminal
@@ -44,7 +44,7 @@ pub(crate) struct TerminalEvents {
     /// from a terminal app is a deliberate security decision (an app could
     /// otherwise read whatever's on the system clipboard from under the
     /// user), not something this module has to separately filter.
-    pub(crate) clipboard_writes: Vec<String>,
+    pub clipboard_writes: Vec<String>,
     /// Pending color queries, resolved against `Term::colors()` and
     /// Horizon's theme by `TerminalCore::write_vt` once the parser call
     /// that produced them returns (the callback needs the terminal's

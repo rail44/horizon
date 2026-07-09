@@ -11,7 +11,7 @@
 /// non-`Press` kind changes the bytes actually sent — see that module's doc
 /// for how (and when) it does.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum KeyEventKind {
+pub enum KeyEventKind {
     Press,
     Repeat,
     Release,
@@ -25,7 +25,7 @@ impl KeyEventKind {
     /// `Repeat` counts as "down": without `REPORT_EVENT_TYPES` negotiated, a
     /// repeat must produce byte-for-byte the same output as an ordinary
     /// press (see `kitty_keyboard`'s module doc).
-    pub(crate) fn is_down(self) -> bool {
+    pub fn is_down(self) -> bool {
         !matches!(self, KeyEventKind::Release)
     }
 }

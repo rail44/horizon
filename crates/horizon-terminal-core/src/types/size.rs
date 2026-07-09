@@ -5,17 +5,17 @@ const DEFAULT_COLS: u16 = 100;
 const DEFAULT_ROWS: u16 = 32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct TerminalSize {
-    pub(crate) cols: u16,
-    pub(crate) rows: u16,
+pub struct TerminalSize {
+    pub cols: u16,
+    pub rows: u16,
     /// Grid width in pixels (`cols * cell_width`), forwarded to the PTY's
     /// `ws_xpixel` field so every process reading `TIOCGWINSZ` — not just
     /// Horizon's own renderer — sees real geometry instead of zeros. Derived
     /// in `terminal::view` from measured font metrics; `0` means "not yet
     /// known" (e.g. before the view has laid out once).
-    pub(crate) pixel_width: u16,
+    pub pixel_width: u16,
     /// Grid height in pixels (`rows * line_height`); see `pixel_width`.
-    pub(crate) pixel_height: u16,
+    pub pixel_height: u16,
 }
 
 impl Default for TerminalSize {
@@ -29,12 +29,13 @@ impl Default for TerminalSize {
     }
 }
 
-#[cfg(test)]
 impl TerminalSize {
     /// Character-cell geometry only, pixel dimensions left at `0`. Used by
-    /// tests that only care about `cols`/`rows`; production pixel geometry
-    /// is derived in `terminal::view` from measured font metrics.
-    pub(crate) fn new(cols: u16, rows: u16) -> Self {
+    /// tests (both in this crate and in the `horizon` host crate, which
+    /// cannot see this crate's own `#[cfg(test)]` items) that only care
+    /// about `cols`/`rows`; production pixel geometry is derived in
+    /// `terminal::view` from measured font metrics.
+    pub fn new(cols: u16, rows: u16) -> Self {
         Self {
             cols,
             rows,

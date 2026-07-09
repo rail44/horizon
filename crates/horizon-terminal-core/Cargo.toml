@@ -1,0 +1,24 @@
+[package]
+name = "horizon-terminal-core"
+version = "0.1.0"
+edition = "2021"
+
+# `docs/session-daemon-design.md` decision 9: the terminal's byte-driven
+# brain (VT emulation + the 16ms-coalescing/sync-failsafe session loop),
+# extracted headless -- no `floem`/`ui` dependency, mirroring
+# `crates/horizon-agent`. PTY ownership (`portable-pty`, threads,
+# environment) stays in the `horizon` binary; this crate only ever sees
+# bytes in and commands/updates out over plain channels.
+[dependencies]
+alacritty_terminal = "0.26.0"
+crossbeam-channel = "0.5"
+termwiz = "0.23.3"
+unicode-width = "0.2"
+
+[dev-dependencies]
+# Only used to build OSC 52 clipboard-write test fixtures, same as the
+# pre-extraction `horizon` crate's dev-dependency this one replaces.
+base64 = "0.22"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

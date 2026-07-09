@@ -100,12 +100,16 @@ contents:
 
 - `workspace/` — the core domain: tabs, panes, layout tree, session
   attachments, operations/queries, pane input routing, and workspace views.
-- `terminal/` — PTY-backed terminal sessions (emulation core, session
-  runtime, rendering/input/IME views). The kitty-keyboard-protocol
+- `terminal/` — PTY-backed terminal sessions: the spawn layer (PTY
+  ownership, threads, environment, the `HORIZON_PTY_TRACE` tap) and
+  rendering/input/IME views. `TerminalCore`/emulation, the session
+  command/update contract, and the byte-channel-driven session loop live in
+  `crates/horizon-terminal-core` (a library crate, no floem dependency) —
+  see `docs/session-daemon-design.md`. The kitty-keyboard-protocol
   conformance matrix (`KITTY_COMPLIANCE`,
-  `src/terminal/protocol/kitty_keyboard.rs`) is resident, code-adjacent
-  documentation; print it with `cargo test -p horizon print_compliance_matrix
-  -- --nocapture`.
+  `crates/horizon-terminal-core/src/protocol/kitty_keyboard.rs`) is
+  resident, code-adjacent documentation; print it with `cargo test -p
+  horizon-terminal-core print_compliance_matrix -- --nocapture`.
 - `agent/` — Horizon's seam onto AI agent sessions: the client/reconnect
   logic for `horizon-agentd` (`agentd_client.rs`, `agentd_runtime.rs`) and
   agent views. The provider contract, providers, tools, and persistence

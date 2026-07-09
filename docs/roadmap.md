@@ -62,8 +62,13 @@ wave items where possible; design docs on first use.
    emits logical colors, not RGB — so row-diff is theme-independent and
    live re-theming needs no daemon round-trip), and the extracted crate
    is the byte-driven brain (VT core + session loop) while PTY ownership
-   stays in `sessiond`. Design complete; awaiting an implementation
-   session. **Session relationship model designed 2026-07-07**
+   stays in `sessiond`. **Migration step 0 (the `horizon-terminal-core`
+   extraction) shipped 2026-07-09**: `crates/horizon-terminal-core` builds
+   standalone with zero floem/`ui` dependency, hosting `TerminalCore`,
+   the sister contract, and the session loop; `horizon`'s `terminal/`
+   keeps only the spawn layer (PTY, threads, environment) and the view.
+   Step 1 (renaming to `sessiond` and standing up terminal hosting) is
+   next. **Session relationship model designed 2026-07-07**
    (`docs/session-relationship-design.md`): lineage is a first-class
    layout-orthogonal derivation tree — the same tree worktree
    isolation, delegation, and messaging all use. Foundation landed

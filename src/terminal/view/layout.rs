@@ -6,7 +6,7 @@ use floem::{
 use unicode_width::UnicodeWidthChar;
 
 use super::metrics::terminal_font_family;
-use super::{font_size, line_height};
+use super::{color, font_size, line_height};
 
 pub(super) struct CellLayout {
     pub(super) text: TextLayout,
@@ -78,9 +78,16 @@ pub(super) fn build_span_cells(
     span: &crate::terminal::TerminalSpan,
     family: &[FamilyOwned],
 ) -> Vec<CellLayout> {
+    // Resolved once per span (`docs/session-daemon-design.md` decision 8:
+    // `span.fg`/`bg` are logical colors now -- `TerminalCore` no longer
+    // resolves them against a theme at all), not once per cell.
+    let scheme = crate::terminal::config::resolved_colors();
+    let fg = color::resolve_color(span.fg, scheme);
+    let bg = color::resolve_color(span.bg, scheme);
+
     if span.text.is_empty() {
         return (0..span.columns)
-            .map(|_| empty_cell(span.bg))
+            .map(|_| empty_cell(bg))
             .collect::<Vec<_>>();
     }
 
@@ -104,8 +111,8 @@ pub(super) fn build_span_cells(
             cells.push(text_cell(
                 std::mem::take(&mut current),
                 current_columns,
-                span.fg,
-                span.bg,
+                fg,
+                bg,
                 family,
             ));
         }
@@ -117,15 +124,15 @@ pub(super) fn build_span_cells(
         cells.push(text_cell(
             std::mem::take(&mut current),
             current_columns,
-            span.fg,
-            span.bg,
+            fg,
+            bg,
             family,
         ));
     }
 
     let used_columns = cells.iter().map(|cell| cell.columns).sum::<usize>();
     if used_columns < span.columns {
-        cells.extend((used_columns..span.columns).map(|_| empty_cell(span.bg)));
+        cells.extend((used_columns..span.columns).map(|_| empty_cell(bg)));
     }
 
     cells

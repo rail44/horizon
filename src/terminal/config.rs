@@ -140,6 +140,39 @@ pub(crate) fn resolved_colors() -> TerminalColors {
     theme::terminal_colors()
 }
 
+/// [`resolved_colors`], converted into `horizon-terminal-core`'s own
+/// plain-data mirror (`horizon_terminal_core::TerminalColorScheme`) --
+/// pushed into a session's `TerminalCore` at spawn time
+/// (`TerminalSession::spawn`) so its OSC 4/10/11/12 query replies answer
+/// with the live theme rather than that crate's own built-in default (see
+/// `TerminalColorScheme`'s doc comment: the crate has no dependency on
+/// `ui::theme` at all, per `docs/session-daemon-design.md` decision 9).
+pub(crate) fn terminal_color_scheme() -> horizon_terminal_core::TerminalColorScheme {
+    let colors = resolved_colors();
+    let rgb = |[r, g, b]: [u8; 3]| alacritty_terminal::vte::ansi::Rgb { r, g, b };
+    horizon_terminal_core::TerminalColorScheme {
+        foreground: rgb(colors.foreground),
+        background: rgb(colors.background),
+        cursor: rgb(colors.cursor),
+        black: rgb(colors.black),
+        red: rgb(colors.red),
+        green: rgb(colors.green),
+        yellow: rgb(colors.yellow),
+        blue: rgb(colors.blue),
+        magenta: rgb(colors.magenta),
+        cyan: rgb(colors.cyan),
+        white: rgb(colors.white),
+        bright_black: rgb(colors.bright_black),
+        bright_red: rgb(colors.bright_red),
+        bright_green: rgb(colors.bright_green),
+        bright_yellow: rgb(colors.bright_yellow),
+        bright_blue: rgb(colors.bright_blue),
+        bright_magenta: rgb(colors.bright_magenta),
+        bright_cyan: rgb(colors.bright_cyan),
+        bright_white: rgb(colors.bright_white),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
