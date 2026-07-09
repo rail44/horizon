@@ -95,7 +95,15 @@ wave items where possible; design docs on first use.
    hurts — via upstream `floem_store` or a lean port of reactive_stores'
    path→Trigger design. leg-1 / `PaneKeyedSignals` are early instances of
    the pattern. Not the earlier "build a general store now" — Lapce scaling
-   on discipline alone justifies deferring.
+   on discipline alone justifies deferring. **`Frames` sharding shipped
+   2026-07-09** as two slices: slice 1 (`728d17f`'s predecessor
+   `foundation5-frames-slice1`) put agent frames behind per-field
+   `RwSignal`s in per-session child scopes with an `agent_handle`/
+   `agent_handle_untracked` accessor boundary; slice 2 (`728d17f`) migrated
+   the pane.rs read consumers off the outer `RwSignal<Frames>` subscription.
+   Terminal frames still ride the plain `HashMap`; migrating them is the
+   next slice, best folded into the session-daemon terminal-hosting work
+   (foundation 4 step 1).
 
 ## In flight
 
@@ -106,7 +114,11 @@ wave items where possible; design docs on first use.
   `docs/agent-output-ui-design.md` (tool blocks, density/turn
   boundaries, follow-scroll, inline approval, Changes overview).
   Owner visual pass pending; remaining improvements wait on the two
-  small contract extensions (Todo tool below, backlog 16).
+  small contract extensions (Todo tool below, backlog 16). Composer
+  fixes shipped 2026-07-09 (`44f2dd7`): multi-line word/glyph wrap +
+  Shift+Enter-for-newline, a custom one-`TextLayout` view mirroring
+  floem's `Label` two-pass wrap (`docs/agent-composer-cursor-design.md`);
+  IME candidate-window placement follow-up in backlog.
 - **Placement-first session creation** — shipped 2026-07-07: `Split
   Pane…` / `New Tab…` + registry-driven view chooser over the CLI's
   `CreateSession` vocabulary; the four direct creation commands

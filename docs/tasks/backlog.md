@@ -300,3 +300,25 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     of truth — removing both gaps. Wants doing before any change that
     batches frame delivery or a provider that interleaves tool-arg
     streaming. Recorded 2026-07-08 (leg-1 review Observation + design doc).
+23. **OSC palette-override narrowing (reclaimed in daemon migration)** —
+    Foundation 4's color cut (`10eae86`, session-daemon-design.md
+    decision 8) moved cell-color resolution UI-side: `TerminalCore` now
+    emits logical colors and the view resolves index→RGB against the live
+    theme at layout-build time. Consequence: a running program's live OSC
+    4/10/11/12 palette overrides no longer reach cell rendering (only the
+    crate's own OSC query *replies* still honor them). Owner-surfaced at F4
+    review and accept-and-deferred — it is reclaimed later in the daemon
+    migration (once the frame/row payload carries the logical colors and
+    the UI owns a per-client palette that OSC overrides can mutate). Not a
+    regression to chase now; a known narrowing to close when the daemon
+    terminal-hosting slice (foundation 4 step 1) lands. Recorded 2026-07-09.
+24. **Composer IME candidate-window placement** — the multi-line wrapping
+    composer (`44f2dd7`) still positions the IME preedit/candidate window
+    at a fixed `Point::new(10.0, 6.0)` in `agent_controls.rs`, inherited
+    from the single-line composer. With wrapping and multi-line drafts the
+    caret is rarely there, so the candidate window detaches from the actual
+    insertion point — more visibly wrong than before. Fix: track the
+    caret's `hit_position` from `composer_text.rs`'s `TextLayout` (the same
+    hit the caret rect already uses) and feed it to the IME position. Small,
+    self-contained; deferred from the composer fix to keep that scope to the
+    two reported bugs. Recorded 2026-07-09.
