@@ -84,24 +84,12 @@ impl AgentFrame {
     /// (`workspace::view::agent_controls::agent_approval_banner`), which
     /// answers the oldest pending call first and shows a "+N more" hint for
     /// the rest -- see the tool-approval interaction rework's "targeting
-    /// discipline" design note.
+    /// discipline" design note. Delegates to [`pending_approval_call_ids_in`]
+    /// so a caller holding only the `items` field (not a whole `AgentFrame`)
+    /// -- e.g. `session::frames::AgentFrameHandle`'s own `items` signal --
+    /// can reuse the exact same logic without a whole-frame clone.
     pub fn pending_approval_call_ids(&self) -> Vec<ToolCallId> {
-        let mut pending = Vec::<ToolCallId>::new();
-        for item in &self.items {
-            match item {
-                AgentFrameItem::ApprovalRequested(request) => {
-                    if !pending.contains(&request.call_id) {
-                        pending.push(request.call_id.clone());
-                    }
-                }
-                AgentFrameItem::ToolCallFinished(result) => {
-                    pending.retain(|call_id| call_id != &result.call_id);
-                }
-                _ => {}
-            }
-        }
-
-        pending
+        pending_approval_call_ids_in(&self.items)
     }
 
     /// The next tool-call approval to act on: the oldest still-pending
@@ -123,16 +111,11 @@ impl AgentFrame {
     }
 
     /// Whether a turn is currently in flight (streaming, running a tool, or
-    /// waiting on tool-call approval) and therefore cancellable.
+    /// waiting on tool-call approval) and therefore cancellable. Delegates
+    /// to [`state_indicates_turn_in_flight`] -- see that function's doc
+    /// comment for why this is factored out.
     pub fn is_turn_in_flight(&self) -> bool {
-        matches!(
-            self.state,
-            Some(
-                SessionState::Running
-                    | SessionState::WaitingForApproval
-                    | SessionState::ToolRunning
-            )
-        )
+        state_indicates_turn_in_flight(self.state)
     }
 
     /// Whether `call_id` already has a terminal `ToolCallFinished` in the
@@ -167,6 +150,44 @@ impl AgentFrame {
             .iter()
             .any(|item| matches!(item, AgentFrameItem::ToolCallStarted(id) if id == call_id))
     }
+}
+
+/// The pure core of [`AgentFrame::pending_approval_call_ids`], operating on
+/// just an `items` slice rather than a whole `AgentFrame` -- lets a caller
+/// holding only the `items` field signal (not `state` too) reuse this logic
+/// without constructing a whole frame first. `session::frames::
+/// AgentFrameHandle` (`docs/reactive-store-design.md`'s foundation-5 Frames
+/// migration) is exactly this kind of caller: reading only `items` there
+/// means a pane's pending-approval indicator doesn't also subscribe to
+/// `state` changes it has no use for.
+pub fn pending_approval_call_ids_in(items: &[AgentFrameItem]) -> Vec<ToolCallId> {
+    let mut pending = Vec::<ToolCallId>::new();
+    for item in items {
+        match item {
+            AgentFrameItem::ApprovalRequested(request) => {
+                if !pending.contains(&request.call_id) {
+                    pending.push(request.call_id.clone());
+                }
+            }
+            AgentFrameItem::ToolCallFinished(result) => {
+                pending.retain(|call_id| call_id != &result.call_id);
+            }
+            _ => {}
+        }
+    }
+
+    pending
+}
+
+/// The pure core of [`AgentFrame::is_turn_in_flight`], operating on just the
+/// `state` field -- see [`pending_approval_call_ids_in`]'s doc comment for
+/// why this split exists: `AgentFrameHandle::state`'s own field signal can
+/// answer "is a turn in flight" without a caller reading `items` too.
+pub fn state_indicates_turn_in_flight(state: Option<SessionState>) -> bool {
+    matches!(
+        state,
+        Some(SessionState::Running | SessionState::WaitingForApproval | SessionState::ToolRunning)
+    )
 }
 
 #[cfg(test)]
@@ -477,5 +498,69 @@ fn role_label(role: MessageRole) -> &'static str {
     match role {
         MessageRole::User => "user",
         MessageRole::Assistant => "assistant",
+    }
+}
+
+#[cfg(test)]
+mod field_scoped_reads_tests {
+    //! `pending_approval_call_ids_in`/`state_indicates_turn_in_flight` are
+    //! the pure logic factored out of `AgentFrame::pending_approval_call_ids`/
+    //! `is_turn_in_flight` (`docs/reactive-store-design.md`'s foundation-5
+    //! agent-consumer migration) so a caller holding only one `AgentFrame`
+    //! field's signal can compute the same answer without the other field.
+    //! `AgentFrame`'s own methods already delegate to these, so this pins
+    //! the extraction didn't change behavior.
+    use super::*;
+
+    fn approval_requested(call_id: &str) -> AgentFrameItem {
+        AgentFrameItem::ApprovalRequested(ApprovalRequest {
+            call_id: ToolCallId(call_id.to_string()),
+            reason: "writes a file".to_string(),
+        })
+    }
+
+    fn tool_call_finished(call_id: &str) -> AgentFrameItem {
+        AgentFrameItem::ToolCallFinished(ToolCallResult {
+            call_id: ToolCallId(call_id.to_string()),
+            output: serde_json::json!({}),
+        })
+    }
+
+    #[test]
+    fn pending_approval_call_ids_in_tracks_requests_and_resolutions() {
+        assert_eq!(pending_approval_call_ids_in(&[]), Vec::new());
+
+        let items = vec![approval_requested("a"), approval_requested("b")];
+        assert_eq!(
+            pending_approval_call_ids_in(&items),
+            vec![ToolCallId("a".to_string()), ToolCallId("b".to_string())]
+        );
+
+        let items = vec![
+            approval_requested("a"),
+            approval_requested("b"),
+            tool_call_finished("a"),
+        ];
+        assert_eq!(
+            pending_approval_call_ids_in(&items),
+            vec![ToolCallId("b".to_string())]
+        );
+    }
+
+    #[test]
+    fn state_indicates_turn_in_flight_matches_the_in_flight_states_only() {
+        assert!(state_indicates_turn_in_flight(Some(SessionState::Running)));
+        assert!(state_indicates_turn_in_flight(Some(
+            SessionState::WaitingForApproval
+        )));
+        assert!(state_indicates_turn_in_flight(Some(
+            SessionState::ToolRunning
+        )));
+
+        assert!(!state_indicates_turn_in_flight(None));
+        assert!(!state_indicates_turn_in_flight(Some(SessionState::Created)));
+        assert!(!state_indicates_turn_in_flight(Some(
+            SessionState::Completed
+        )));
     }
 }

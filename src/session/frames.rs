@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::time::Instant;
 
 use floem::reactive::{RwSignal, Scope, SignalGet, SignalUpdate, SignalWith};
 
@@ -132,13 +131,6 @@ impl Frames {
         handle.apply_frame(frame);
     }
 
-    /// When the visible agent session's `AgentFrame.state` last changed --
-    /// `None` if the session has never had a frame recorded.
-    pub(crate) fn agent_state_entered_at(&self, session_id: SessionId) -> Option<Instant> {
-        self.agent_handle(session_id)
-            .map(|handle| handle.state_entry().get().entered_at())
-    }
-
     pub(crate) fn remove_session(&mut self, session_id: SessionId) {
         self.terminal.remove(&session_id);
         if let Some(handle) = self
@@ -193,54 +185,93 @@ mod tests {
         assert_eq!(frames.agent_frame_untracked(session_id), frame);
     }
 
+    /// Reactive-sufficiency check for `docs/reactive-store-design.md`'s
+    /// slice-2 migration: `workspace::view::pane`'s `pending_approval`
+    /// closure was moved off the tracked-outer `Frames::agent_frame` onto
+    /// this exact shape (`frames.with_untracked` to grab the handle via the
+    /// still-tracked `agent_handle`, then a field-scoped `items().with(...)`
+    /// read) specifically to *drop* the outer `RwSignal<Frames>`
+    /// subscription -- this proves that drop didn't also break the
+    /// approval-focus wiring's ability to notice a freshly-arrived
+    /// `ApprovalRequested` item (the y/n buttons' actual signal source).
+    ///
+    /// Models an already-running session (a prior frame establishes the
+    /// handle first, matching every real approval prompt -- a session is
+    /// never brand new the moment it asks for one), not a session's
+    /// very-first-ever frame: `update_agent_frame`'s handle-creation branch
+    /// (`Frames::update_agent_frame`) does an un-batched membership insert
+    /// *then* `apply_frame`, which are two separate signal writes and so,
+    /// for a subscriber tracking both membership and `items`, two separate
+    /// re-runs -- expected and harmless (it only affects a session's first
+    /// frame), but a distraction from what this test is actually checking.
     #[test]
-    fn agent_state_entered_at_resets_only_on_state_change() {
-        use crate::agent::contract::SessionState;
+    fn field_scoped_pending_approval_read_wakes_on_a_new_approval_request() {
+        use crate::agent::contract::{ApprovalRequest, SessionState, ToolCallId};
+        use crate::agent::frame::{pending_approval_call_ids_in, AgentFrameItem};
+        use floem::reactive::create_effect;
+        use std::cell::RefCell;
+        use std::rc::Rc;
 
         let session_id = SessionId::new();
-        let frames = Frames::default();
-        assert_eq!(frames.agent_state_entered_at(session_id), None);
+        // Wrapped in an outer `RwSignal`, matching how every real call site
+        // holds `Frames` -- the property under test is specifically about
+        // dropping *this* signal's subscription, so a bare (unwrapped)
+        // `Frames` wouldn't exercise it.
+        let frames = RwSignal::new(Frames::default());
+        // Establishes the handle before the effect below ever subscribes,
+        // so the effect's own first run already sees a real (not just-
+        // created) handle -- an already-running session, not one whose
+        // very first frame happens to be the approval request.
+        frames.with_untracked(|frames| {
+            frames.update_agent_frame(
+                session_id,
+                AgentFrame {
+                    state: Some(SessionState::Running),
+                    items: Vec::new(),
+                },
+            );
+        });
 
-        frames.update_agent_frame(
-            session_id,
-            AgentFrame {
-                state: Some(SessionState::Running),
-                items: Vec::new(),
-            },
-        );
-        let first_entered_at = frames
-            .agent_state_entered_at(session_id)
-            .expect("entry recorded for a session with a state");
+        let runs = Rc::new(RefCell::new(0));
+        let runs_probe = runs.clone();
+        let last_pending: Rc<RefCell<Option<ToolCallId>>> = Rc::new(RefCell::new(None));
+        let last_pending_probe = last_pending.clone();
+        create_effect(move |_| {
+            let pending = frames
+                .with_untracked(|frames| frames.agent_handle(session_id))
+                .and_then(|handle| {
+                    handle
+                        .items()
+                        .with(|items| pending_approval_call_ids_in(items).into_iter().next())
+                });
+            *runs_probe.borrow_mut() += 1;
+            *last_pending_probe.borrow_mut() = pending;
+        });
+        assert_eq!(*runs.borrow(), 1, "the initial run");
+        assert_eq!(*last_pending.borrow(), None);
 
-        // Re-observing the same state must not reset the timestamp.
-        frames.update_agent_frame(
-            session_id,
-            AgentFrame {
-                state: Some(SessionState::Running),
-                items: vec![crate::agent::frame::AgentFrameItem::Message(Message {
-                    role: MessageRole::Assistant,
-                    text: "still running".to_string(),
-                })],
-            },
-        );
+        let call_id = ToolCallId("call-1".to_string());
+        frames.with_untracked(|frames| {
+            frames.update_agent_frame(
+                session_id,
+                AgentFrame {
+                    state: Some(SessionState::WaitingForApproval),
+                    items: vec![AgentFrameItem::ApprovalRequested(ApprovalRequest {
+                        call_id: call_id.clone(),
+                        reason: "writes a file".to_string(),
+                    })],
+                },
+            );
+        });
+
         assert_eq!(
-            frames.agent_state_entered_at(session_id),
-            Some(first_entered_at)
+            *runs.borrow(),
+            2,
+            "a freshly-arrived ApprovalRequested item must wake a subscriber \
+             that only reads items() -- the outer-untracked, handle-scoped \
+             shape pending_approval now uses"
         );
-
-        // A genuine state transition must produce a fresh timestamp.
-        std::thread::sleep(std::time::Duration::from_millis(5));
-        frames.update_agent_frame(
-            session_id,
-            AgentFrame {
-                state: Some(SessionState::WaitingForUser),
-                items: Vec::new(),
-            },
-        );
-        let second_entered_at = frames
-            .agent_state_entered_at(session_id)
-            .expect("entry still recorded after a state change");
-        assert!(second_entered_at > first_entered_at);
+        assert_eq!(*last_pending.borrow(), Some(call_id));
     }
 
     /// `remove_session` must dispose the departing session's handle scope

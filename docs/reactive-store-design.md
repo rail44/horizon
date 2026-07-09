@@ -232,6 +232,76 @@ whole-`Frames` path (untouched, not regressed).
   was fixed to use `agent_frame_untracked` since that one has no tracked
   caller to accommodate.
 
+## Slice 2 implementation notes (agent read consumers, landed)
+
+Slice 1 fixed the *write* side (an agent-frame write never notifies the
+outer `RwSignal<Frames>`); the *read* side kept using the tracked compat
+`Frames::agent_frame(id)`, wrapped at every call site in `frames.with(...)`
+-- which still subscribes the caller to the outer signal, so a terminal
+write (`frames.update`, unmigrated) or any other pane's re-render still
+woke every agent pane's per-pane closures. This slice moves `workspace::
+view::pane`'s hot per-pane closures (`agent_session_state`,
+`pending_approval`/`pending_approval_extra`, `turn_in_flight`,
+`agent_status_text`, and the `agent_frame` closure feeding `agent::view::
+agent_frame_view`) off that pattern:
+
+- **Outer signal**: every migrated closure grabs `&Frames` via `frames.
+  with_untracked(...)` instead of `frames.with(...)` -- dropping the outer
+  `RwSignal<Frames>` subscription entirely. Nested reads inside the closure
+  (the membership signal, a handle's own field signals) still track
+  normally: `with_untracked` only skips tracking the signal it's called on,
+  not the reactive context for reads nested inside its closure.
+- **Membership**: kept on the tracked `Frames::agent_handle(id)` (not the
+  fully-untracked `agent_handle_untracked`), deliberately. A session's
+  `AgentFrameHandle` is created asynchronously -- on the first agentd event
+  reaching `fold_agent_session_events`'s effect, which can run after the
+  pane already mounted -- so a closure that grabbed the handle fully
+  untracked before it existed would never notice it appearing; `agent_handle`
+  tracks the coarse membership signal (fires only on session create/remove,
+  not on any session's field writes), which is exactly the reactivity this
+  case needs without reintroducing per-write over-tracking.
+- **Field-scoped reads**: `agent_session_state`/`turn_in_flight` read only
+  the handle's `state()` signal; `pending_approval`/`pending_approval_extra`
+  read only `items()`; `agent_status_text`'s elapsed-time lookup reads only
+  `state_entry()`. None of these construct a whole `AgentFrame` any more, so
+  a streamed token (which only ever touches `items`) no longer wakes the
+  `state`-only closures, and vice versa. Two pure helpers were factored out
+  of `AgentFrame`'s own methods in `crates/horizon-agent/src/frame.rs` so
+  this reuse doesn't duplicate logic: `pending_approval_call_ids_in(&[
+  AgentFrameItem])` (the core of `pending_approval_call_ids`) and
+  `state_indicates_turn_in_flight(Option<SessionState>)` (the core of
+  `is_turn_in_flight`) -- `AgentFrame`'s methods now delegate to these.
+- **The transcript's own `agent_frame` closure** (passed into `agent::view::
+  agent_frame_view`) still needs both `state` and `items` -- it's the whole
+  transcript, and leg 1's `items_revision`/`turn_in_flight`/`session_state`
+  memos already narrow further downstream of it. It was migrated to
+  construct `AgentFrame { state: handle.state().get(), items: handle.
+  items().get() }` directly (bypassing the compat `agent_frame` function,
+  though the values it reads are identical to what that function computes)
+  rather than calling the compat accessor, so no hot closure calls `Frames::
+  agent_frame` any more -- only the still-out-of-scope palette command-state
+  reads (`command_actions::find_pending_agent_approval`/
+  `find_agent_turn_in_flight`, one-shot/palette-memo, see the known
+  imprecision above) and tests do.
+- **Dead code**: migrating `agent_status_text`'s last caller off `Frames::
+  agent_state_entered_at` left that method (and its dedicated unit test)
+  genuinely unused in production code -- `cargo clippy --all-targets`
+  compiles the lib target without `cfg(test)` as a separate unit from the
+  test target, so "only a test calls it" still trips `dead_code`. Removed
+  both; the state-entry-advances-only-on-a-real-transition behavior it
+  tested is still covered at the `AgentFrameHandle` level (`agent_frame_
+  handle.rs`'s own `handle_apply_frame_advances_state_entry_only_on_a_real_
+  transition` test).
+- **`src/agent/view/`**: audited for a hot closure still reading a whole
+  frame straight from `Frames` -- none found. Every view in that module
+  only ever receives `frame: impl Fn() -> AgentFrame` as a parameter (from
+  `pane_view`'s `agent_frame` closure above); it never touches `session::
+  Frames` itself. Leg 1's per-block content signals and the `items_revision`/
+  `turn_in_flight`/`session_state` narrowing memos there were already the
+  correct shape and needed no change.
+- **Terminal Frames migration** (next in the doc's ordering) and the
+  `command_actions` palette reads were untouched, per this slice's scope.
+
 ## References
 
 - floem_reactive (pinned rev 31fa8f4): `reactive/src/{runtime,signal,trigger,

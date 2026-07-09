@@ -142,11 +142,33 @@ pub(super) fn pane_view(state: PaneViewState, pane_id: PaneId) -> impl IntoView 
         };
         frames.with(|frames| frames.terminal_frame(session_id))
     };
+    // `agent_frame_view` (`agent::view`) genuinely needs both `state` and
+    // `items` -- it's the whole transcript, gated further downstream by its
+    // own narrowing memos (`items_revision`/`turn_in_flight`/`session_state`,
+    // leg 1). The fix here is dropping the *outer* `RwSignal<Frames>`
+    // subscription: `frames.with_untracked` grabs `&Frames` without
+    // tracking it, so a terminal write (`frames.update`, still notifying
+    // the outer signal -- terminal Frames aren't migrated yet, `docs/
+    // reactive-store-design.md`) or another pane's agent session no longer
+    // wakes this closure. `agent_handle` is still tracked on the inner
+    // membership signal (`session::Frames`'s own doc comment on that
+    // accessor), which is what lets this closure notice the session's first
+    // frame arriving asynchronously after the pane already mounted --
+    // reading the two field signals directly below (rather than calling the
+    // whole-frame compat `Frames::agent_frame`) is what keeps this scoped to
+    // exactly this session, matching what that compat accessor already does
+    // internally.
     let agent_frame = move || {
         let Some(session_id) = workspace.with(|ws| ws.agent_session_id(pane_id)) else {
             return AgentFrame::empty();
         };
-        frames.with(|frames| frames.agent_frame(session_id))
+        let Some(handle) = frames.with_untracked(|frames| frames.agent_handle(session_id)) else {
+            return AgentFrame::empty();
+        };
+        AgentFrame {
+            state: handle.state().get(),
+            items: handle.items().get(),
+        }
     };
 
     let title = move || {
@@ -170,9 +192,18 @@ pub(super) fn pane_view(state: PaneViewState, pane_id: PaneId) -> impl IntoView 
     // `gate_pending_approval`) so an approval click can't race an
     // in-flight cancellation into executing the tool anyway.
     let cancel_requested = RwSignal::new(false);
+    // Reads only the session's own `state` field signal (not `items` too,
+    // the way the whole-frame compat accessor would) -- this closure re-runs
+    // on every streamed token if it also subscribes to `items`, which is
+    // exactly the over-tracking `docs/reactive-store-design.md`'s Frames
+    // migration exists to cut. `frames.with_untracked` drops the outer
+    // `RwSignal<Frames>` subscription (see `agent_frame` above); the second
+    // `?` still runs `agent_handle`, so membership is tracked regardless of
+    // which branch returns.
     let agent_session_state = move || {
         let session_id = workspace.with(|ws| ws.agent_session_id(pane_id))?;
-        frames.with(|frames| frames.agent_frame(session_id).state)
+        let handle = frames.with_untracked(|frames| frames.agent_handle(session_id))?;
+        handle.state().get()
     };
     create_effect(move |previous: Option<Option<SessionState>>| {
         let state = agent_session_state();
@@ -183,24 +214,36 @@ pub(super) fn pane_view(state: PaneViewState, pane_id: PaneId) -> impl IntoView 
         }
         state
     });
+    // Both approval reads below only need `items` (`pending_approval_call_ids_in`
+    // never looks at `state`), so they read the handle's `items()` field
+    // signal directly rather than the whole-frame compat accessor -- a
+    // `state`-only transition (no new item) no longer wakes either closure.
     let pending_approval = move || {
         let session_id = workspace.with(|ws| ws.agent_session_id(pane_id))?;
-        let pending =
-            frames.with(|frames| frames.agent_frame(session_id).pending_approval_call_id());
+        let pending = frames
+            .with_untracked(|frames| frames.agent_handle(session_id))
+            .and_then(|handle| {
+                handle.items().with(|items| {
+                    crate::agent::frame::pending_approval_call_ids_in(items)
+                        .into_iter()
+                        .next()
+                })
+            });
         gate_pending_approval(cancel_requested.get(), pending)
     };
     let pending_approval_extra = move || {
         let Some(session_id) = workspace.with(|ws| ws.agent_session_id(pane_id)) else {
             return 0;
         };
-        frames
-            .with(|frames| {
-                frames
-                    .agent_frame(session_id)
-                    .pending_approval_call_ids()
-                    .len()
+        let pending_count = frames
+            .with_untracked(|frames| frames.agent_handle(session_id))
+            .map(|handle| {
+                handle
+                    .items()
+                    .with(|items| crate::agent::frame::pending_approval_call_ids_in(items).len())
             })
-            .saturating_sub(1)
+            .unwrap_or(0);
+        pending_count.saturating_sub(1)
     };
     // Which of the pane's two key-focus targets is live right now -- the
     // message-box composer, or the inline approval control row (see
@@ -233,11 +276,21 @@ pub(super) fn pane_view(state: PaneViewState, pane_id: PaneId) -> impl IntoView 
         }
         pending
     });
+    // `state`-only read, via `state_indicates_turn_in_flight` (the same pure
+    // logic `AgentFrame::is_turn_in_flight` delegates to) -- doesn't
+    // subscribe to `items`, so a streamed token no longer re-triggers the
+    // header's elapsed-time ticker below.
     let turn_in_flight = move || {
         let Some(session_id) = workspace.with(|ws| ws.agent_session_id(pane_id)) else {
             return false;
         };
-        frames.with(|frames| frames.agent_frame(session_id).is_turn_in_flight())
+        frames
+            .with_untracked(|frames| frames.agent_handle(session_id))
+            .is_some_and(|handle| {
+                handle
+                    .state()
+                    .with(|state| crate::agent::frame::state_indicates_turn_in_flight(*state))
+            })
     };
     // Drives the pane header's elapsed-time display ("running · 12s") while
     // a turn is in flight. Nothing else in the frame changes while the
@@ -273,7 +326,13 @@ pub(super) fn pane_view(state: PaneViewState, pane_id: PaneId) -> impl IntoView 
         }
         let state = agent_session_state()?;
         let session_id = workspace.with(|ws| ws.agent_session_id(pane_id))?;
-        let entered_at = frames.with(|frames| frames.agent_state_entered_at(session_id))?;
+        // Only `state_entry`, mirroring `Frames::agent_state_entered_at`'s
+        // own body but through `with_untracked` so this doesn't also
+        // subscribe to the outer `RwSignal<Frames>` (see `agent_frame`'s
+        // doc comment above).
+        let entered_at = frames
+            .with_untracked(|frames| frames.agent_handle(session_id))
+            .map(|handle| handle.state_entry().get().entered_at())?;
         let elapsed =
             turn_in_flight().then(|| now_tick.get().saturating_duration_since(entered_at));
         Some(agent_pane_status_label(state, elapsed))
