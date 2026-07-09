@@ -341,3 +341,36 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     terminal view's cached rows (clear + full rebuild, the same move
     `set_state` makes for palette_overrides) so the live re-resolve decision 8
     promised actually happens. Small, self-contained. Recorded 2026-07-09.
+26. **[RESOLVED 22a4f47] "Terminate detached session" tore down the ACTIVE
+    agent pane** — the owner ran Terminate on a detached session in the
+    session-manager modal and it also terminated the live/active agent.
+    Actual root cause was not a `session_id` mismatch but the **selection
+    index going stale after the list mutates**: `ConfirmTerminate` derived
+    its target from the currently-highlighted *row index*, and a background
+    change to the session list (a session detaching/attaching) shifted the
+    rows under a fixed index, so the highlighted row — and thus the killed
+    session — was no longer the one the owner had selected. Fix (`22a4f47`):
+    bind terminate to session *identity*, not index — a `selected_id:
+    RwSignal<Option<SessionId>>` tracks the chosen `SessionId`, a pure
+    `terminate_target(items, pending)` dispatches that id (cancelling if it
+    has vanished from the list), and a `reanchor_selection` effect keeps the
+    highlight following the same `SessionId` across list changes. The
+    id-targeting hypothesis below was the pre-investigation guess; kept for
+    the record. The terminate machinery
+    itself is correctly id-targeted (`session_manager.rs` dispatches
+    `TerminateSession { session_id: row.session_id }`; `Workspace::
+    terminate_session` removes only that id and detaches only panes whose
+    `session_id == Some(that id)`), so the fault is almost certainly upstream
+    in WHICH `session_id` the "detached" row carries — i.e. the active pane's
+    own agentd session being surfaced as a detached row. `attach_sessions`
+    calls `register_detached_session(PaneKind::Agent, session_id)` for every
+    id in agentd's `session_list` (`src/agent/agentd_runtime.rs`); a mismatch
+    between the `SessionId` a live pane holds and the id agentd reports (a
+    pane created before connect vs. the id agentd resumed, or an
+    `agent::SessionId`↔`session::SessionId` conversion seam) would list the
+    active session as detached, so terminating that row tears down the live
+    pane. Also rule out a stale session-manager selection index after the
+    list mutates. Start by logging `detached_session_summaries()`'s id set
+    against the active pane's session id at terminate time. Separate from the
+    bash-approval wedge (backlog: the registry panic-safety fix). Recorded
+    2026-07-09.

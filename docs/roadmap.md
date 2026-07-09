@@ -114,6 +114,13 @@ wave items where possible; design docs on first use.
 
 - **Session manager modal** — shipped 2026-07-06 (`20603dd`): palette
   is Commands-only, sessions managed via the Manage Sessions command.
+  Terminate-targeting fix 2026-07-09 (`22a4f47`): terminate is bound to
+  the selected session's *identity* (`selected_id: RwSignal<Option<
+  SessionId>>` + a pure `terminate_target`), not its row index, so a
+  background list mutation can no longer shift the highlight onto — and
+  kill — the wrong (active) session; a `reanchor_selection` effect keeps
+  the highlight following its `SessionId` across list changes
+  (dogfooding backlog 26).
 - **Agent output UI** (application-ui) — implementation complete
   2026-07-07: stage 2 shipped as slices 1-5 per
   `docs/agent-output-ui-design.md` (tool blocks, density/turn
