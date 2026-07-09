@@ -211,3 +211,10 @@ The pre-commit hook refuses commits on `main` unless
 
 Check `docs/roadmap.md` — it is the single direction document (in
 flight / next / later). Status is not duplicated here.
+
+Owner-filed dogfooding issues ride a **separate, faster lifecycle** from
+the roadmap: they are written one-file-each under `docs/issues/` (see
+`docs/issues/README.md`) by an issue-filing session, and the project
+session triages them by priority and merge-conflict and dispatches the
+chosen ones to workers through the same review queue. Filing an issue is
+not a request to fix it now.
