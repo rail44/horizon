@@ -374,3 +374,18 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     against the active pane's session id at terminate time. Separate from the
     bash-approval wedge (backlog: the registry panic-safety fix). Recorded
     2026-07-09.
+27. **`horizon-agentd` respawn/replay e2e tests flake under the full parallel
+    nextest run** — `killed_agentd_respawns_and_replays_transcript_with_open_
+    turn_cancelled` and `drained_agentd_respawns_and_preserves_a_completed_
+    session` (`crates/horizon-agentd/tests/e2e.rs`) intermittently fail with
+    `the pre-crash user message must survive replay, got: []` when run inside
+    the whole `cargo nextest run --workspace` suite, yet pass deterministically
+    in isolation and on retry. The empty replay suggests a respawn races the
+    transcript flush (or a shared-resource contention — sockets, DuckDB
+    projection rebuild, the real gpt-4o-mini call) when many e2e tests run
+    concurrently. Disruptive because it fails the pre-commit integration gate
+    for unrelated (e.g. docs-only) commits — hit exactly that during the
+    backlog-26 doc commit 2026-07-09. Fix options: make the replay assertion
+    wait for the flush to settle (poll with a timeout rather than reading once),
+    or serialize these respawn e2e tests via a nextest test-group so they don't
+    contend. Recorded 2026-07-09.
