@@ -1,5 +1,5 @@
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum CommandId {
+pub enum CommandId {
     SplitRight,
     SplitDown,
     NewTab,
@@ -17,43 +17,43 @@ pub(crate) enum CommandId {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CommandCategory {
+pub enum CommandCategory {
     Workspace,
     Agent,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CommandSpec {
-    pub(crate) id: CommandId,
-    pub(crate) title: &'static str,
-    pub(crate) category: CommandCategory,
-    pub(crate) description: &'static str,
+pub struct CommandSpec {
+    pub id: CommandId,
+    pub title: &'static str,
+    pub category: CommandCategory,
+    pub description: &'static str,
     /// Marks a command as destructive (ends a session, discards state, ...)
     /// so surfaces that list commands (the palette) can give it a visually
     /// distinct treatment, per `docs/ux-principles.md`'s "termination should
     /// be explicit and visually distinct from closing a surface". Carried on
     /// the spec rather than matched off `title` so future destructive
     /// commands inherit the treatment automatically.
-    pub(crate) destructive: bool,
+    pub destructive: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CommandState {
-    pub(crate) tab_count: usize,
-    pub(crate) visible_pane_count: usize,
-    pub(crate) has_active_session: bool,
-    pub(crate) detached_session_count: usize,
-    pub(crate) has_pending_approval: bool,
-    pub(crate) has_turn_in_flight: bool,
+pub struct CommandState {
+    pub tab_count: usize,
+    pub visible_pane_count: usize,
+    pub has_active_session: bool,
+    pub detached_session_count: usize,
+    pub has_pending_approval: bool,
+    pub has_turn_in_flight: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CommandEntry {
-    pub(crate) spec: CommandSpec,
-    pub(crate) enabled: bool,
+pub struct CommandEntry {
+    pub spec: CommandSpec,
+    pub enabled: bool,
 }
 
-pub(crate) fn core_commands() -> Vec<CommandSpec> {
+pub fn core_commands() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
             id: CommandId::SplitRight,
@@ -156,7 +156,7 @@ pub(crate) fn core_commands() -> Vec<CommandSpec> {
     ]
 }
 
-pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
+pub fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
     match command_id {
         CommandId::SplitRight
         | CommandId::SplitDown
@@ -174,7 +174,7 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
     }
 }
 
-pub(crate) fn command_entries(state: CommandState) -> Vec<CommandEntry> {
+pub fn command_entries(state: CommandState) -> Vec<CommandEntry> {
     core_commands()
         .into_iter()
         .map(|spec| CommandEntry {
@@ -184,7 +184,7 @@ pub(crate) fn command_entries(state: CommandState) -> Vec<CommandEntry> {
         .collect()
 }
 
-pub(crate) fn filter_command_entries(entries: Vec<CommandEntry>, query: &str) -> Vec<CommandEntry> {
+pub fn filter_command_entries(entries: Vec<CommandEntry>, query: &str) -> Vec<CommandEntry> {
     let query = normalize_query(query);
     entries
         .into_iter()
@@ -201,7 +201,7 @@ pub(crate) fn filter_command_entries(entries: Vec<CommandEntry>, query: &str) ->
         .collect()
 }
 
-pub(crate) fn clamp_palette_selection(selection: usize, item_count: usize) -> usize {
+pub fn clamp_palette_selection(selection: usize, item_count: usize) -> usize {
     if item_count == 0 {
         return 0;
     }

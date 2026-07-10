@@ -1,5 +1,8 @@
 pub(crate) mod command_actions;
-pub(crate) mod commands;
+// The pure command model moved to the shared workspace-model crate
+// (docs/gpui-migration-design.md M3); this alias keeps crate::app::commands
+// paths working unchanged.
+pub(crate) use horizon_workspace::commands;
 pub(crate) mod config;
 mod context;
 pub(crate) mod external_commands;

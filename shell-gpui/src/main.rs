@@ -2,6 +2,7 @@
 //! workspace shell (tab strip + recursive splits over the shared
 //! `horizon-workspace` model), each pane hosting a terminal.
 
+mod palette;
 mod terminal;
 mod theme;
 mod workspace;

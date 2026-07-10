@@ -13,10 +13,13 @@ use std::collections::HashMap;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use gpui_component::list::{List, ListEvent, ListState};
 use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable, ResizablePanelGroup};
+use horizon_workspace::commands::{command_entries, CommandId, CommandState};
 use horizon_workspace::types::LayoutNode;
 use horizon_workspace::{Direction, PaneId, PaneKind, SplitAxis, Workspace};
 
+use crate::palette::PaletteDelegate;
 use crate::terminal::TerminalView;
 use crate::theme;
 
@@ -33,7 +36,8 @@ actions!(
         NewTab,
         SplitPane,
         ClosePane,
-        NextTab
+        NextTab,
+        OpenPalette
     ]
 );
 
@@ -56,6 +60,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("s", SplitPane, Some(MODE_CONTEXT)),
         KeyBinding::new("x", ClosePane, Some(MODE_CONTEXT)),
         KeyBinding::new("tab", NextTab, Some(MODE_CONTEXT)),
+        KeyBinding::new(":", OpenPalette, Some(MODE_CONTEXT)),
     ]);
 }
 
@@ -65,6 +70,8 @@ pub struct WorkspaceShell {
     // Focused while workspace mode is active, so mode keys dispatch here
     // instead of reaching the terminal.
     focus_handle: FocusHandle,
+    palette: Option<Entity<ListState<PaletteDelegate>>>,
+    _palette_subscription: Option<Subscription>,
 }
 
 impl WorkspaceShell {
@@ -73,6 +80,8 @@ impl WorkspaceShell {
             workspace: Workspace::mvp(),
             panes: HashMap::new(),
             focus_handle: cx.focus_handle(),
+            palette: None,
+            _palette_subscription: None,
         };
         shell.reconcile(window, cx);
         shell.focus_active(window, cx);
@@ -140,18 +149,95 @@ impl WorkspaceShell {
         self.focus_active(window, cx);
     }
 
-    fn split_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn split_pane(&mut self, axis: SplitAxis, window: &mut Window, cx: &mut Context<Self>) {
         self.workspace.exit_workspace_mode();
         if let Some(target) = self.workspace.active_session_id() {
-            self.workspace.split_session_with_new_session(
-                target,
-                PaneKind::Terminal,
-                SplitAxis::Horizontal,
-                true,
-            );
+            self.workspace
+                .split_session_with_new_session(target, PaneKind::Terminal, axis, true);
         }
         self.reconcile(window, cx);
         self.focus_active(window, cx);
+    }
+
+    /// The M3 dispatch point: every surface (palette, keybindings, and
+    /// later the control plane) funnels through here — the GPUI
+    /// counterpart of the Floem shell's `execute_command`.
+    fn execute(&mut self, id: CommandId, window: &mut Window, cx: &mut Context<Self>) {
+        match id {
+            CommandId::SplitRight => self.split_pane(SplitAxis::Horizontal, window, cx),
+            CommandId::SplitDown => self.split_pane(SplitAxis::Vertical, window, cx),
+            CommandId::NewTab => self.new_tab(window, cx),
+            CommandId::FocusNextPane => {
+                self.workspace.focus_next();
+                self.focus_active(window, cx);
+                cx.notify();
+            }
+            CommandId::CloseActivePane => self.close_pane(window, cx),
+            CommandId::CloseActiveTab => {
+                self.workspace.exit_workspace_mode();
+                self.workspace.close_active_tab();
+                self.reconcile(window, cx);
+                self.focus_active(window, cx);
+            }
+            // Without the Registry (M3b) a closed pane's session dies with
+            // its view, so close and terminate coincide for now — the
+            // distinction returns with detach support.
+            CommandId::TerminateActiveSession => self.close_pane(window, cx),
+            // Unwired until their subsystems arrive: session manager and
+            // detached sessions (M3b), agent commands (M4), config reload
+            // (M3 config port).
+            CommandId::TerminateAllDetachedSessions
+            | CommandId::ApproveToolCall
+            | CommandId::DenyToolCall
+            | CommandId::CancelAgentTurn
+            | CommandId::ReloadAgentRuntime
+            | CommandId::OpenSessionManager
+            | CommandId::ReloadConfig => {}
+        }
+    }
+
+    fn command_state(&self) -> CommandState {
+        CommandState {
+            tab_count: self.workspace.tab_count(),
+            visible_pane_count: self.workspace.visible_panes().len(),
+            has_active_session: self.workspace.active_session_id().is_some(),
+            detached_session_count: self.workspace.detached_session_count(),
+            has_pending_approval: false,
+            has_turn_in_flight: false,
+        }
+    }
+
+    fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.workspace.exit_workspace_mode();
+        let entries = command_entries(self.command_state());
+        let list =
+            cx.new(|cx| ListState::new(PaletteDelegate::new(entries), window, cx).searchable(true));
+        let subscription = cx.subscribe_in(
+            &list,
+            window,
+            |shell, list, event: &ListEvent, window, cx| match event {
+                ListEvent::Confirm(index) => {
+                    let entry = list.read(cx).delegate().entry_at(*index).cloned();
+                    shell.close_palette(window, cx);
+                    if let Some(entry) = entry.filter(|entry| entry.enabled) {
+                        shell.execute(entry.spec.id, window, cx);
+                    }
+                }
+                ListEvent::Cancel => shell.close_palette(window, cx),
+                ListEvent::Select(_) => {}
+            },
+        );
+        window.focus(&list.focus_handle(cx), cx);
+        self.palette = Some(list);
+        self._palette_subscription = Some(subscription);
+        cx.notify();
+    }
+
+    fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.palette = None;
+        self._palette_subscription = None;
+        self.focus_active(window, cx);
+        cx.notify();
     }
 
     fn close_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -296,18 +382,58 @@ impl Render for WorkspaceShell {
                 shell.mode_cancel(window, cx);
             }))
             .on_action(cx.listener(|shell, _: &NewTab, window, cx| {
-                shell.new_tab(window, cx);
+                shell.execute(CommandId::NewTab, window, cx);
             }))
             .on_action(cx.listener(|shell, _: &SplitPane, window, cx| {
-                shell.split_pane(window, cx);
+                shell.execute(CommandId::SplitRight, window, cx);
             }))
             .on_action(cx.listener(|shell, _: &ClosePane, window, cx| {
-                shell.close_pane(window, cx);
+                shell.execute(CommandId::CloseActivePane, window, cx);
             }))
             .on_action(cx.listener(|shell, _: &NextTab, window, cx| {
                 shell.next_tab(window, cx);
             }))
+            .on_action(cx.listener(|shell, _: &OpenPalette, window, cx| {
+                shell.open_palette(window, cx);
+            }))
             .child(self.render_tab_strip(cx))
-            .child(div().flex_1().min_h_0().children(content))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .children(content)
+                    .when_some(self.palette.clone(), |this, palette| {
+                        this.child(
+                            div()
+                                .id("palette-backdrop")
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .size_full()
+                                .flex()
+                                .justify_center()
+                                .items_start()
+                                .pt(px(64.0))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|shell, _, window, cx| {
+                                        shell.close_palette(window, cx);
+                                    }),
+                                )
+                                .child(
+                                    div()
+                                        .w(px(560.0))
+                                        .h(px(400.0))
+                                        .bg(rgb(0x1b1e26))
+                                        .border_1()
+                                        .border_color(rgb(0x2a2e3a))
+                                        .rounded_md()
+                                        .overflow_hidden()
+                                        .child(List::new(&palette)),
+                                ),
+                        )
+                    }),
+            )
     }
 }
