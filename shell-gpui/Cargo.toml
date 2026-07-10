@@ -1,0 +1,26 @@
+# The GPUI shell — deliberately its own workspace (empty [workspace]
+# table) so gpui's dependency tree never mixes into the Floem lockfile.
+# Folds into the root workspace when the Floem shell retires — see
+# docs/gpui-migration-design.md.
+[package]
+name = "horizon-shell-gpui"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+alacritty_terminal = "0.26.0"
+anyhow = "1.0"
+crossbeam-channel = "0.5"
+futures = "0.3"
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit"] }
+gpui-component = { git = "https://github.com/longbridge/gpui-component" }
+horizon-terminal-core = { path = "../crates/horizon-terminal-core" }
+portable-pty = "0.9.0"
+termwiz = "0.23.3"
+unicode-width = "0.2"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
