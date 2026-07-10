@@ -13,15 +13,17 @@
 
 mod input;
 mod pty;
+mod session;
+
+pub use session::TerminalSession;
 
 use std::cell::Cell;
 use std::rc::Rc;
 
-use futures::StreamExt;
 use gpui::*;
 use horizon_terminal_core::{
     KeyEventKind, TerminalCommand, TerminalFrame, TerminalMouseButton, TerminalMouseKind,
-    TerminalMouseReport, TerminalScroll, TerminalSize, TerminalUpdate,
+    TerminalMouseReport, TerminalScroll, TerminalSize,
 };
 
 use self::input::{
@@ -45,7 +47,9 @@ struct PaintMetrics {
 }
 
 pub struct TerminalView {
-    frame: Option<TerminalFrame>,
+    // The pane's session — owned by the shell's session store, not this
+    // view, so a closed pane detaches rather than terminates.
+    session: Entity<TerminalSession>,
     tx: crossbeam_channel::Sender<TerminalCommand>,
     focus_handle: FocusHandle,
     // Shared with the paint closure (which only gets &mut App, not the
@@ -60,93 +64,42 @@ pub struct TerminalView {
     // The button held while the app has mouse reporting on, so drags and
     // the release report the same button the press did.
     reporting_button: Option<TerminalMouseButton>,
-    exited: bool,
+    _session_observation: Subscription,
 }
 
 impl TerminalView {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let initial = TerminalSize {
-            cols: 80,
-            rows: 24,
-            pixel_width: 0,
-            pixel_height: 0,
-        };
-        let session = pty::spawn(initial).expect("failed to spawn PTY session");
-        let update_rx = session.rx;
-
-        if let Ok(script) = std::env::var("HORIZON_GPUI_DRIVE") {
-            let key_enter = std::env::var_os("HORIZON_GPUI_DRIVE_ENTER").is_some();
-            let drive_tx = session.tx.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(1500));
-                let _ = drive_tx.send(TerminalCommand::Input(script.into_bytes()));
-                if key_enter {
-                    let _ = drive_tx.send(TerminalCommand::Key {
-                        key: termwiz::input::KeyCode::Enter,
-                        modifiers: termwiz::input::Modifiers::NONE,
-                        event: KeyEventKind::Press,
-                    });
-                }
-            });
-        }
-
-        // Bridge the blocking crossbeam receiver onto GPUI's async world.
-        let (async_tx, mut async_rx) = futures::channel::mpsc::unbounded();
-        std::thread::spawn(move || {
-            while let Ok(update) = update_rx.recv() {
-                if async_tx.unbounded_send(update).is_err() {
-                    return;
-                }
-            }
-        });
-        let dump_path = std::env::var_os("HORIZON_GPUI_DUMP").map(std::path::PathBuf::from);
-        cx.spawn(async move |this, cx| {
-            while let Some(update) = async_rx.next().await {
-                let apply = this.update(cx, |view: &mut TerminalView, cx| {
-                    match update {
-                        TerminalUpdate::Snapshot(frame) => {
-                            if let Some(path) = &dump_path {
-                                let _ = std::fs::write(path, dump_frame(&frame));
-                            }
-                            view.frame = Some(frame);
-                        }
-                        TerminalUpdate::Exited => view.exited = true,
-                        TerminalUpdate::Error(error) => eprintln!("terminal error: {error}"),
-                        // OSC 52 writes and CopySelection results both
-                        // arrive here; the session decides what lands on
-                        // the clipboard, the host just applies it.
-                        TerminalUpdate::Clipboard(text) => {
-                            cx.write_to_clipboard(ClipboardItem::new_string(text));
-                        }
-                        TerminalUpdate::Title(_) | TerminalUpdate::Bell => {}
-                    }
-                    cx.notify();
-                });
-                if apply.is_err() {
-                    return;
-                }
-            }
-        })
-        .detach();
-
+    pub fn new(
+        session: Entity<TerminalSession>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let tx = session.read(cx).sender();
+        let observation = cx.observe(&session, |_, _, cx| cx.notify());
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
 
         Self {
-            frame: None,
-            tx: session.tx,
+            session,
+            tx,
             focus_handle,
-            last_size: Rc::new(Cell::new(initial)),
+            last_size: Rc::new(Cell::new(TerminalSize {
+                cols: 80,
+                rows: 24,
+                pixel_width: 0,
+                pixel_height: 0,
+            })),
             metrics: Rc::new(Cell::new(None)),
             ime_marked_text: None,
             selecting: false,
             reporting_button: None,
-            exited: false,
+            _session_observation: observation,
         }
     }
 
-    fn mouse_reporting(&self) -> bool {
-        self.frame
+    fn mouse_reporting(&self, cx: &App) -> bool {
+        self.session
+            .read(cx)
+            .frame
             .as_ref()
             .is_some_and(|frame| frame.mouse_reporting)
     }
@@ -164,11 +117,11 @@ impl TerminalView {
         ))
     }
 
-    fn handle_mouse_down(&mut self, event: &MouseDownEvent) {
+    fn handle_mouse_down(&mut self, event: &MouseDownEvent, cx: &App) {
         let Some(point) = self.cell_at(event.position) else {
             return;
         };
-        if self.mouse_reporting() {
+        if self.mouse_reporting(cx) {
             let Some(button) = terminal_mouse_button(event.button) else {
                 return;
             };
@@ -185,11 +138,11 @@ impl TerminalView {
         }
     }
 
-    fn handle_mouse_move(&mut self, event: &MouseMoveEvent) {
+    fn handle_mouse_move(&mut self, event: &MouseMoveEvent, cx: &App) {
         let Some(point) = self.cell_at(event.position) else {
             return;
         };
-        if self.mouse_reporting() {
+        if self.mouse_reporting(cx) {
             let Some(button) = self.reporting_button else {
                 return;
             };
@@ -204,11 +157,11 @@ impl TerminalView {
         }
     }
 
-    fn handle_mouse_up(&mut self, event: &MouseUpEvent) {
+    fn handle_mouse_up(&mut self, event: &MouseUpEvent, cx: &App) {
         let Some(point) = self.cell_at(event.position) else {
             return;
         };
-        if self.mouse_reporting() {
+        if self.mouse_reporting(cx) {
             let button = self
                 .reporting_button
                 .take()
@@ -257,8 +210,10 @@ impl TerminalView {
         });
     }
 
-    fn keys_as_escape_codes(&self) -> bool {
-        self.frame
+    fn keys_as_escape_codes(&self, cx: &App) -> bool {
+        self.session
+            .read(cx)
+            .frame
             .as_ref()
             .is_some_and(|frame| frame.keys_as_escape_codes)
     }
@@ -292,7 +247,7 @@ impl TerminalView {
                 _ => {}
             }
         }
-        let Some(key) = term_key_code(keystroke, self.keys_as_escape_codes()) else {
+        let Some(key) = term_key_code(keystroke, self.keys_as_escape_codes(cx)) else {
             return;
         };
         let kind = if event.is_held {
@@ -364,7 +319,7 @@ impl EntityInputHandler for TerminalView {
         // text-input pipeline's copy must be dropped or it double-feeds.
         // An IME commit is the exception: it never went through the Key
         // path and always lands as text.
-        if !was_composing && self.keys_as_escape_codes() {
+        if !was_composing && self.keys_as_escape_codes(cx) {
             cx.notify();
             return;
         }
@@ -395,9 +350,9 @@ impl EntityInputHandler for TerminalView {
         range_utf16: std::ops::Range<usize>,
         element_bounds: Bounds<Pixels>,
         window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        let cursor = self.frame.as_ref()?.cursor?;
+        let cursor = self.session.read(cx).frame.as_ref()?.cursor?;
         let text_system = window.text_system();
         let font_id = text_system.resolve_font(&font(FONT_FAMILY));
         let cell_width = text_system
@@ -439,17 +394,17 @@ impl Render for TerminalView {
             view: &mut TerminalView,
             event: &MouseDownEvent,
             _window: &mut Window,
-            _cx: &mut Context<TerminalView>,
+            cx: &mut Context<TerminalView>,
         ) {
-            view.handle_mouse_down(event);
+            view.handle_mouse_down(event, cx);
         }
         fn on_up(
             view: &mut TerminalView,
             event: &MouseUpEvent,
             _window: &mut Window,
-            _cx: &mut Context<TerminalView>,
+            cx: &mut Context<TerminalView>,
         ) {
-            view.handle_mouse_up(event);
+            view.handle_mouse_up(event, cx);
         }
         div()
             .size_full()
@@ -467,8 +422,8 @@ impl Render for TerminalView {
             .on_mouse_up(MouseButton::Left, cx.listener(on_up))
             .on_mouse_up(MouseButton::Middle, cx.listener(on_up))
             .on_mouse_up(MouseButton::Right, cx.listener(on_up))
-            .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _window, _cx| {
-                view.handle_mouse_move(event);
+            .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _window, cx| {
+                view.handle_mouse_move(event, cx);
             }))
             .on_scroll_wheel(cx.listener(|view, event: &ScrollWheelEvent, _window, _cx| {
                 view.handle_scroll_wheel(event);
@@ -527,11 +482,11 @@ fn paint_terminal(
         let _ = tx.send(TerminalCommand::Resize(size));
     }
 
-    let (frame, marked_text) = {
+    let (session, marked_text) = {
         let view = entity.read(cx);
-        (view.frame.clone(), view.ime_marked_text.clone())
+        (view.session.clone(), view.ime_marked_text.clone())
     };
-    let Some(frame) = frame else {
+    let Some(frame) = session.read(cx).frame.clone() else {
         return;
     };
 

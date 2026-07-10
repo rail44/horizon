@@ -3,6 +3,7 @@
 //! `horizon-workspace` model), each pane hosting a terminal.
 
 mod palette;
+mod session_manager;
 mod terminal;
 mod theme;
 mod workspace;

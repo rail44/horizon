@@ -20,8 +20,10 @@ use horizon_workspace::types::LayoutNode;
 use horizon_workspace::{Direction, PaneId, PaneKind, SplitAxis, Workspace};
 
 use crate::palette::PaletteDelegate;
-use crate::terminal::TerminalView;
+use crate::session_manager::SessionManagerDelegate;
+use crate::terminal::{TerminalSession, TerminalView};
 use crate::theme;
+use horizon_workspace::SessionId;
 
 actions!(
     workspace,
@@ -66,39 +68,80 @@ pub fn init(cx: &mut App) {
 
 pub struct WorkspaceShell {
     workspace: Workspace,
+    // The session store — the GPUI shell's Registry counterpart: PTY
+    // sessions live here keyed by SessionId, independent of pane views,
+    // so closing a pane detaches (session survives, scrollback intact)
+    // and terminating is the explicit destructive path.
+    sessions: HashMap<SessionId, Entity<TerminalSession>>,
     panes: HashMap<PaneId, Entity<TerminalView>>,
     // Focused while workspace mode is active, so mode keys dispatch here
     // instead of reaching the terminal.
     focus_handle: FocusHandle,
     palette: Option<Entity<ListState<PaletteDelegate>>>,
     _palette_subscription: Option<Subscription>,
+    session_manager: Option<Entity<ListState<SessionManagerDelegate>>>,
+    _session_manager_subscription: Option<Subscription>,
 }
 
 impl WorkspaceShell {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut shell = Self {
             workspace: Workspace::mvp(),
+            sessions: HashMap::new(),
             panes: HashMap::new(),
             focus_handle: cx.focus_handle(),
             palette: None,
             _palette_subscription: None,
+            session_manager: None,
+            _session_manager_subscription: None,
         };
         shell.reconcile(window, cx);
         shell.focus_active(window, cx);
         shell
     }
 
-    /// Bring the PaneId → view map in line with the model: spawn views
-    /// for new panes, drop views whose panes are gone. In M2 every pane
-    /// hosts its own fresh terminal; the Registry (detach/reattach)
-    /// arrives with M3.
+    /// Bring the session store and the PaneId → view map in line with
+    /// the model. Sessions the model no longer knows (terminated) are
+    /// shut down and dropped; sessions without panes stay alive
+    /// (detached); every pane gets a view bound to its session's entity,
+    /// so a reattached pane resumes with scrollback intact.
     fn reconcile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let ids = self.workspace.all_pane_ids();
-        self.panes.retain(|id, _| ids.contains(id));
-        for id in ids {
-            self.panes
+        let known: std::collections::HashSet<SessionId> = self
+            .workspace
+            .session_summaries()
+            .iter()
+            .map(|summary| summary.id)
+            .collect();
+        self.sessions.retain(|id, session| {
+            let keep = known.contains(id);
+            if !keep {
+                session.read(cx).shutdown();
+            }
+            keep
+        });
+        for id in known {
+            self.sessions
                 .entry(id)
-                .or_insert_with(|| cx.new(|cx| TerminalView::new(window, cx)));
+                .or_insert_with(|| cx.new(TerminalSession::spawn));
+        }
+
+        let pane_ids = self.workspace.all_pane_ids();
+        self.panes.retain(|id, _| pane_ids.contains(id));
+        for pane_id in pane_ids {
+            if self.panes.contains_key(&pane_id) {
+                continue;
+            }
+            let Some(session) = self
+                .workspace
+                .terminal_session_id(pane_id)
+                .and_then(|id| self.sessions.get(&id).cloned())
+            else {
+                continue;
+            };
+            self.panes.insert(
+                pane_id,
+                cx.new(|cx| TerminalView::new(session.clone(), window, cx)),
+            );
         }
         cx.notify();
     }
@@ -179,21 +222,73 @@ impl WorkspaceShell {
                 self.reconcile(window, cx);
                 self.focus_active(window, cx);
             }
-            // Without the Registry (M3b) a closed pane's session dies with
-            // its view, so close and terminate coincide for now — the
-            // distinction returns with detach support.
-            CommandId::TerminateActiveSession => self.close_pane(window, cx),
-            // Unwired until their subsystems arrive: session manager and
-            // detached sessions (M3b), agent commands (M4), config reload
-            // (M3 config port).
-            CommandId::TerminateAllDetachedSessions
-            | CommandId::ApproveToolCall
+            CommandId::TerminateActiveSession => {
+                self.workspace.exit_workspace_mode();
+                self.workspace.terminate_active_session();
+                self.reconcile(window, cx);
+                self.focus_active(window, cx);
+            }
+            CommandId::TerminateAllDetachedSessions => {
+                for summary in self.workspace.detached_session_summaries() {
+                    self.workspace.terminate_session(summary.id);
+                }
+                self.reconcile(window, cx);
+            }
+            CommandId::OpenSessionManager => self.open_session_manager(window, cx),
+            // Unwired until their subsystems arrive: agent commands (M4),
+            // config reload (M3 config port).
+            CommandId::ApproveToolCall
             | CommandId::DenyToolCall
             | CommandId::CancelAgentTurn
             | CommandId::ReloadAgentRuntime
-            | CommandId::OpenSessionManager
             | CommandId::ReloadConfig => {}
         }
+    }
+
+    fn open_session_manager(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.workspace.exit_workspace_mode();
+        let summaries = self.workspace.session_summaries();
+        let list = cx.new(|cx| {
+            ListState::new(SessionManagerDelegate::new(summaries), window, cx).searchable(true)
+        });
+        let subscription = cx.subscribe_in(
+            &list,
+            window,
+            |shell, list, event: &ListEvent, window, cx| match event {
+                ListEvent::Confirm(index) => {
+                    let summary = list.read(cx).delegate().summary_at(*index).cloned();
+                    shell.close_session_manager(window, cx);
+                    if let Some(summary) = summary {
+                        if summary.attached {
+                            if let Some((tab, pane)) =
+                                shell.workspace.pane_location_for_session(summary.id)
+                            {
+                                shell.workspace.activate_pane_index(tab, pane);
+                            }
+                        } else {
+                            shell
+                                .workspace
+                                .attach_existing_session_to_split_activated(summary.id, true);
+                        }
+                        shell.reconcile(window, cx);
+                        shell.focus_active(window, cx);
+                    }
+                }
+                ListEvent::Cancel => shell.close_session_manager(window, cx),
+                ListEvent::Select(_) => {}
+            },
+        );
+        window.focus(&list.focus_handle(cx), cx);
+        self.session_manager = Some(list);
+        self._session_manager_subscription = Some(subscription);
+        cx.notify();
+    }
+
+    fn close_session_manager(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.session_manager = None;
+        self._session_manager_subscription = None;
+        self.focus_active(window, cx);
+        cx.notify();
     }
 
     fn command_state(&self) -> CommandState {
@@ -431,6 +526,37 @@ impl Render for WorkspaceShell {
                                         .rounded_md()
                                         .overflow_hidden()
                                         .child(List::new(&palette)),
+                                ),
+                        )
+                    })
+                    .when_some(self.session_manager.clone(), |this, manager| {
+                        this.child(
+                            div()
+                                .id("session-manager-backdrop")
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .size_full()
+                                .flex()
+                                .justify_center()
+                                .items_start()
+                                .pt(px(64.0))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|shell, _, window, cx| {
+                                        shell.close_session_manager(window, cx);
+                                    }),
+                                )
+                                .child(
+                                    div()
+                                        .w(px(560.0))
+                                        .h(px(400.0))
+                                        .bg(rgb(0x1b1e26))
+                                        .border_1()
+                                        .border_color(rgb(0x2a2e3a))
+                                        .rounded_md()
+                                        .overflow_hidden()
+                                        .child(List::new(&manager)),
                                 ),
                         )
                     }),
