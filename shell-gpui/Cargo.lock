@@ -2740,6 +2740,7 @@ dependencies = [
  "gpui-component",
  "gpui_platform",
  "horizon-terminal-core",
+ "horizon-workspace",
  "portable-pty",
  "termwiz",
  "unicode-width",
@@ -2753,6 +2754,14 @@ dependencies = [
  "crossbeam-channel",
  "termwiz",
  "unicode-width",
+]
+
+[[package]]
+name = "horizon-workspace"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "uuid",
 ]
 
 [[package]]

@@ -21,6 +21,7 @@ horizon-terminal-core = { path = "../crates/horizon-terminal-core" }
 portable-pty = "0.9.0"
 termwiz = "0.23.3"
 unicode-width = "0.2"
+horizon-workspace = { version = "0.1.0", path = "../crates/horizon-workspace" }
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

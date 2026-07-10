@@ -422,6 +422,12 @@ impl EntityInputHandler for TerminalView {
     }
 }
 
+impl Focusable for TerminalView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
 impl Render for TerminalView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
