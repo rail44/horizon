@@ -20,15 +20,29 @@ use std::rc::Rc;
 use futures::StreamExt;
 use gpui::*;
 use horizon_terminal_core::{
-    KeyEventKind, TerminalCommand, TerminalFrame, TerminalSize, TerminalUpdate,
+    KeyEventKind, TerminalCommand, TerminalFrame, TerminalMouseButton, TerminalMouseKind,
+    TerminalMouseReport, TerminalScroll, TerminalSize, TerminalUpdate,
 };
 
+use self::input::{
+    cell_from_position, scroll_lines_from_wheel, term_key_code, term_modifiers,
+    terminal_mouse_button, terminal_mouse_modifiers,
+};
 use crate::theme;
-use self::input::{term_key_code, term_modifiers};
 
 const FONT_FAMILY: &str = "Menlo";
 const FONT_SIZE: f32 = 13.0;
 const LINE_HEIGHT: f32 = 17.0;
+
+/// Paint-time geometry shared with event handlers (which need to convert
+/// window-relative pixel positions into cell coordinates). Written every
+/// paint, read by the mouse handlers.
+#[derive(Clone, Copy)]
+struct PaintMetrics {
+    origin: Point<Pixels>,
+    cell_width: Pixels,
+    line_height: Pixels,
+}
 
 pub struct TerminalView {
     frame: Option<TerminalFrame>,
@@ -37,9 +51,15 @@ pub struct TerminalView {
     // Shared with the paint closure (which only gets &mut App, not the
     // entity) so bounds-driven resize can be deduped without an update.
     last_size: Rc<Cell<TerminalSize>>,
+    metrics: Rc<Cell<Option<PaintMetrics>>>,
     // IME preedit — client-side only, never sent to the PTY. The commit
     // path (replace_text_in_range) writes raw UTF-8 bytes instead.
     ime_marked_text: Option<String>,
+    // Local text selection drag in progress (mouse-reporting off).
+    selecting: bool,
+    // The button held while the app has mouse reporting on, so drags and
+    // the release report the same button the press did.
+    reporting_button: Option<TerminalMouseButton>,
     exited: bool,
 }
 
@@ -92,9 +112,13 @@ impl TerminalView {
                         }
                         TerminalUpdate::Exited => view.exited = true,
                         TerminalUpdate::Error(error) => eprintln!("terminal error: {error}"),
-                        TerminalUpdate::Title(_)
-                        | TerminalUpdate::Bell
-                        | TerminalUpdate::Clipboard(_) => {}
+                        // OSC 52 writes and CopySelection results both
+                        // arrive here; the session decides what lands on
+                        // the clipboard, the host just applies it.
+                        TerminalUpdate::Clipboard(text) => {
+                            cx.write_to_clipboard(ClipboardItem::new_string(text));
+                        }
+                        TerminalUpdate::Title(_) | TerminalUpdate::Bell => {}
                     }
                     cx.notify();
                 });
@@ -113,9 +137,124 @@ impl TerminalView {
             tx: session.tx,
             focus_handle,
             last_size: Rc::new(Cell::new(initial)),
+            metrics: Rc::new(Cell::new(None)),
             ime_marked_text: None,
+            selecting: false,
+            reporting_button: None,
             exited: false,
         }
+    }
+
+    fn mouse_reporting(&self) -> bool {
+        self.frame
+            .as_ref()
+            .is_some_and(|frame| frame.mouse_reporting)
+    }
+
+    fn cell_at(
+        &self,
+        position: Point<Pixels>,
+    ) -> Option<horizon_terminal_core::TerminalSelectionPoint> {
+        let metrics = self.metrics.get()?;
+        Some(cell_from_position(
+            position,
+            metrics.origin,
+            metrics.cell_width,
+            metrics.line_height,
+        ))
+    }
+
+    fn handle_mouse_down(&mut self, event: &MouseDownEvent) {
+        let Some(point) = self.cell_at(event.position) else {
+            return;
+        };
+        if self.mouse_reporting() {
+            let Some(button) = terminal_mouse_button(event.button) else {
+                return;
+            };
+            self.reporting_button = Some(button);
+            let _ = self.tx.send(TerminalCommand::Mouse(TerminalMouseReport {
+                kind: TerminalMouseKind::Press,
+                button,
+                point,
+                modifiers: terminal_mouse_modifiers(&event.modifiers),
+            }));
+        } else if event.button == MouseButton::Left {
+            self.selecting = true;
+            let _ = self.tx.send(TerminalCommand::SelectionStart(point));
+        }
+    }
+
+    fn handle_mouse_move(&mut self, event: &MouseMoveEvent) {
+        let Some(point) = self.cell_at(event.position) else {
+            return;
+        };
+        if self.mouse_reporting() {
+            let Some(button) = self.reporting_button else {
+                return;
+            };
+            let _ = self.tx.send(TerminalCommand::Mouse(TerminalMouseReport {
+                kind: TerminalMouseKind::Drag,
+                button,
+                point,
+                modifiers: terminal_mouse_modifiers(&event.modifiers),
+            }));
+        } else if self.selecting {
+            let _ = self.tx.send(TerminalCommand::SelectionUpdate(point));
+        }
+    }
+
+    fn handle_mouse_up(&mut self, event: &MouseUpEvent) {
+        let Some(point) = self.cell_at(event.position) else {
+            return;
+        };
+        if self.mouse_reporting() {
+            let button = self
+                .reporting_button
+                .take()
+                .or_else(|| terminal_mouse_button(event.button));
+            let Some(button) = button else {
+                return;
+            };
+            let _ = self.tx.send(TerminalCommand::Mouse(TerminalMouseReport {
+                kind: TerminalMouseKind::Release,
+                button,
+                point,
+                modifiers: terminal_mouse_modifiers(&event.modifiers),
+            }));
+        } else if event.button == MouseButton::Left && self.selecting {
+            self.selecting = false;
+            let _ = self.tx.send(TerminalCommand::SelectionUpdate(point));
+        }
+    }
+
+    fn handle_scroll_wheel(&mut self, event: &ScrollWheelEvent) {
+        let Some(point) = self.cell_at(event.position) else {
+            return;
+        };
+        if let Some(lines) = scroll_lines_from_wheel(&event.delta) {
+            let _ = self
+                .tx
+                .send(TerminalCommand::Scroll(TerminalScroll { lines, point }));
+        }
+    }
+
+    // Release events have a wire representation only under kitty
+    // REPORT_EVENT_TYPES; the core decides emission, so the view maps
+    // every key it can name (passing `true` skips the text-vs-key
+    // routing gate — releases never ride the text pipeline).
+    fn handle_key_up(&mut self, event: &KeyUpEvent) {
+        if self.ime_marked_text.is_some() {
+            return;
+        }
+        let Some(key) = term_key_code(&event.keystroke, true) else {
+            return;
+        };
+        let _ = self.tx.send(TerminalCommand::Key {
+            key,
+            modifiers: term_modifiers(&event.keystroke.modifiers),
+            event: KeyEventKind::Release,
+        });
     }
 
     fn keys_as_escape_codes(&self) -> bool {
@@ -124,7 +263,7 @@ impl TerminalView {
             .is_some_and(|frame| frame.keys_as_escape_codes)
     }
 
-    fn handle_key(&mut self, event: &KeyDownEvent) {
+    fn handle_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         // While the IME is composing, every keystroke belongs to the IME
         // (candidate selection etc.) — letting it through would
         // double-feed the terminal. The composed result arrives via
@@ -133,6 +272,26 @@ impl TerminalView {
             return;
         }
         let keystroke = &event.keystroke;
+        // Cmd+C / Cmd+V are host shortcuts, not terminal input (the
+        // command-model binding arrives with M3; these are the M1 stand-in).
+        if keystroke.modifiers.platform && !keystroke.modifiers.control {
+            match keystroke.key.as_str() {
+                "c" => {
+                    let _ = self.tx.send(TerminalCommand::CopySelection);
+                    return;
+                }
+                "v" => {
+                    if let Some(text) = cx
+                        .read_from_clipboard()
+                        .and_then(|item| item.text().map(|text| text.to_string()))
+                    {
+                        let _ = self.tx.send(TerminalCommand::Paste(text));
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
         let Some(key) = term_key_code(keystroke, self.keys_as_escape_codes()) else {
             return;
         };
@@ -268,13 +427,45 @@ impl Render for TerminalView {
         let entity = cx.entity();
         let tx = self.tx.clone();
         let last_size = self.last_size.clone();
+        let metrics = self.metrics.clone();
         let focus_handle = self.focus_handle.clone();
+        fn on_down(
+            view: &mut TerminalView,
+            event: &MouseDownEvent,
+            _window: &mut Window,
+            _cx: &mut Context<TerminalView>,
+        ) {
+            view.handle_mouse_down(event);
+        }
+        fn on_up(
+            view: &mut TerminalView,
+            event: &MouseUpEvent,
+            _window: &mut Window,
+            _cx: &mut Context<TerminalView>,
+        ) {
+            view.handle_mouse_up(event);
+        }
         div()
             .size_full()
             .bg(rgb(theme::BACKGROUND))
             .track_focus(&self.focus_handle)
-            .on_key_down(cx.listener(|view, event: &KeyDownEvent, _window, _cx| {
-                view.handle_key(event);
+            .on_key_down(cx.listener(|view, event: &KeyDownEvent, _window, cx| {
+                view.handle_key(event, cx);
+            }))
+            .on_key_up(cx.listener(|view, event: &KeyUpEvent, _window, _cx| {
+                view.handle_key_up(event);
+            }))
+            .on_mouse_down(MouseButton::Left, cx.listener(on_down))
+            .on_mouse_down(MouseButton::Middle, cx.listener(on_down))
+            .on_mouse_down(MouseButton::Right, cx.listener(on_down))
+            .on_mouse_up(MouseButton::Left, cx.listener(on_up))
+            .on_mouse_up(MouseButton::Middle, cx.listener(on_up))
+            .on_mouse_up(MouseButton::Right, cx.listener(on_up))
+            .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _window, _cx| {
+                view.handle_mouse_move(event);
+            }))
+            .on_scroll_wheel(cx.listener(|view, event: &ScrollWheelEvent, _window, _cx| {
+                view.handle_scroll_wheel(event);
             }))
             .child(
                 canvas(
@@ -285,7 +476,7 @@ impl Render for TerminalView {
                             ElementInputHandler::new(bounds, entity.clone()),
                             cx,
                         );
-                        paint_terminal(bounds, &entity, &tx, &last_size, window, cx);
+                        paint_terminal(bounds, &entity, &tx, &last_size, &metrics, window, cx);
                     },
                 )
                 .size_full(),
@@ -298,6 +489,7 @@ fn paint_terminal(
     entity: &Entity<TerminalView>,
     tx: &crossbeam_channel::Sender<TerminalCommand>,
     last_size: &Rc<Cell<TerminalSize>>,
+    metrics: &Rc<Cell<Option<PaintMetrics>>>,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -310,6 +502,11 @@ fn paint_terminal(
         .advance(font_id, font_size, 'M')
         .map(|size| size.width)
         .unwrap_or(px(8.0));
+    metrics.set(Some(PaintMetrics {
+        origin: bounds.origin,
+        cell_width,
+        line_height,
+    }));
 
     let cols = (f32::from(bounds.size.width) / f32::from(cell_width)).floor() as u16;
     let rows = (f32::from(bounds.size.height) / f32::from(line_height)).floor() as u16;

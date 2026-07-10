@@ -47,6 +47,12 @@ crates. nextest runs each test in its own process (no cross-test env
 leakage) but does not run doctests; the workspace currently has none —
 add `cargo test --doc` here if that changes.
 
+`shell-gpui/` (the GPUI shell, `docs/gpui-migration-design.md`) is a
+**separate workspace** the root `--workspace` runs never touch — after
+changes there, additionally run `cargo fmt` and `cargo clippy
+--all-targets -- -D warnings` inside `shell-gpui/` (the pre-commit hook
+does; no test leg yet, add nextest there when the crate grows tests).
+
 The `ast-grep` step is the leg-2 static-analysis backstop against the
 "over-tracking" reactive anti-pattern (raw `frame()` read + `.items` walk in
 a `create_memo`/`create_effect` closure, no `untrack`) — see
