@@ -185,11 +185,15 @@ wave items where possible; design docs on first use.
   questions in `docs/gpui-migration-consideration.md`, prior-art survey
   in `docs/research/gpui-terminal-implementations.md`, spike code kept
   as reference in `spikes/gpui-terminal/` (standalone, outside the
-  workspace). Next: a migration design doc (state architecture —
-  signals → Entity/notify, parallel shell binary, migration order,
-  GUI-verify rebuild) before any Floem code is touched. The ACP client
-  item below is deliberately framework-agnostic (agentd-side placement)
-  and proceeds in parallel.
+  workspace). Design decided same day in
+  `docs/gpui-migration-design.md`: parallel `shell-gpui/` workspace,
+  signals → Entity/notify state mapping (transcript defenses deleted
+  not ported), own N-ary layout tree kept (DockArea rejected —
+  inverted nesting, no spatial-nav vocabulary), milestones M0–M5 with
+  M1 (terminal panes) first; each of M1–M4 is a review-queue-sized
+  unit, unclaimed and ready for domain sessions. The ACP client item
+  below is deliberately framework-agnostic (agentd-side placement) and
+  proceeds in parallel.
 
 ## Next (unclaimed — pick freely)
 
