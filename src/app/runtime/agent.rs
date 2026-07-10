@@ -38,7 +38,11 @@ pub(super) fn spawn_agent_session(
     // `role_id` is `Some(..)` only for the `New Configuration Agent`
     // command today (`app::command_actions`); every other spawn path stays
     // role-less -- see `horizon_agent::roles` for what a role changes.
-    let handle = connection.start_session(session_id.into(), provider_id, role_id);
+    let handle = connection.start_session(
+        crate::agent::agent_session_id(session_id),
+        provider_id,
+        role_id,
+    );
     fold_agent_session_events(session_id, handle, frames, sessions, config_reload_requests);
 }
 

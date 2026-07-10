@@ -2354,6 +2354,7 @@ dependencies = [
  "horizon-control",
  "horizon-ctl",
  "horizon-terminal-core",
+ "horizon-workspace",
  "im",
  "libc",
  "portable-pty",
@@ -2434,6 +2435,14 @@ dependencies = [
  "crossbeam-channel",
  "termwiz",
  "unicode-width 0.2.2",
+]
+
+[[package]]
+name = "horizon-workspace"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "uuid",
 ]
 
 [[package]]

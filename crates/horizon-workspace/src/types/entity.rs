@@ -1,15 +1,15 @@
-use crate::session::SessionId;
+use crate::SessionId;
 
 use super::{LayoutNode, PaneId, PaneKind, SessionKind, TabId};
 
 #[derive(Clone, Debug)]
-pub(crate) struct Workspace {
-    pub(in crate::workspace) tabs: Vec<Tab>,
-    pub(in crate::workspace) panes: Vec<Pane>,
-    pub(in crate::workspace) sessions: Vec<WorkspaceSession>,
-    pub(in crate::workspace) active_tab: TabId,
-    pub(in crate::workspace) next_terminal_display_number: usize,
-    pub(in crate::workspace) next_agent_display_number: usize,
+pub struct Workspace {
+    pub tabs: Vec<Tab>,
+    pub panes: Vec<Pane>,
+    pub sessions: Vec<WorkspaceSession>,
+    pub active_tab: TabId,
+    pub next_terminal_display_number: usize,
+    pub next_agent_display_number: usize,
     /// Workspace mode's cursor (`docs/workspace-mode-design.md`): `None`
     /// outside the mode, where the cursor is simply defined to be wherever
     /// focus is (see `Workspace::cursor_pane_id`) so the two can never
@@ -20,37 +20,33 @@ pub(crate) struct Workspace {
     /// `hjkl` resolves geometrically via `workspace::nav`, which only
     /// speaks in `PaneId`s). See `workspace::mode` for the state
     /// transitions.
-    pub(in crate::workspace) workspace_mode_cursor: Option<PaneId>,
+    pub workspace_mode_cursor: Option<PaneId>,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct Tab {
-    pub(crate) id: TabId,
-    pub(crate) root: LayoutNode,
-    pub(crate) active: PaneId,
+pub struct Tab {
+    pub id: TabId,
+    pub root: LayoutNode,
+    pub active: PaneId,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WorkspaceSession {
-    pub(crate) id: SessionId,
-    pub(crate) kind: SessionKind,
-    pub(crate) display_number: usize,
-    pub(crate) title: String,
+pub struct WorkspaceSession {
+    pub id: SessionId,
+    pub kind: SessionKind,
+    pub display_number: usize,
+    pub title: String,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct Pane {
-    pub(crate) id: PaneId,
-    pub(crate) kind: PaneKind,
-    pub(crate) session_id: Option<SessionId>,
+pub struct Pane {
+    pub id: PaneId,
+    pub kind: PaneKind,
+    pub session_id: Option<SessionId>,
 }
 
 impl WorkspaceSession {
-    pub(in crate::workspace) fn new(
-        id: SessionId,
-        kind: SessionKind,
-        display_number: usize,
-    ) -> Self {
+    pub fn new(id: SessionId, kind: SessionKind, display_number: usize) -> Self {
         Self {
             id,
             kind,
@@ -61,7 +57,7 @@ impl WorkspaceSession {
 }
 
 impl Pane {
-    pub(in crate::workspace) fn new(kind: PaneKind, session_id: Option<SessionId>) -> Self {
+    pub fn new(kind: PaneKind, session_id: Option<SessionId>) -> Self {
         Self {
             id: PaneId::new(),
             kind,
@@ -69,7 +65,7 @@ impl Pane {
         }
     }
 
-    pub(crate) fn title(&self) -> String {
+    pub fn title(&self) -> String {
         pane_kind_title(self.kind).to_string()
     }
 }

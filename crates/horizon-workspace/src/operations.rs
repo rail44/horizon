@@ -2,10 +2,10 @@ use super::types::{
     LayoutNode, Pane, PaneId, PaneKind, SessionKind, SplitAxis, Tab, TabId, Workspace,
     WorkspaceSession,
 };
-use crate::session::SessionId;
+use crate::SessionId;
 
 impl Workspace {
-    pub(crate) fn mvp() -> Self {
+    pub fn mvp() -> Self {
         let session_id = SessionId::new();
         let terminal = Pane::new(PaneKind::Terminal, Some(session_id));
         let active = terminal.id;
@@ -26,7 +26,7 @@ impl Workspace {
         }
     }
 
-    pub(crate) fn open_tab(&mut self, kind: PaneKind, session_id: Option<SessionId>) -> PaneId {
+    pub fn open_tab(&mut self, kind: PaneKind, session_id: Option<SessionId>) -> PaneId {
         self.ensure_session(kind, session_id);
         let pane = Pane::new(kind, session_id);
         let pane_id = pane.id;
@@ -53,7 +53,7 @@ impl Workspace {
     /// `app::command_actions::create_session`, the one caller (`activate:
     /// true` for a human surface's dive, `false` for the control plane's
     /// default).
-    pub(crate) fn open_tab_with_new_session_activated(
+    pub fn open_tab_with_new_session_activated(
         &mut self,
         kind: PaneKind,
         activate: bool,
@@ -68,13 +68,13 @@ impl Workspace {
     }
 
     /// Test-only now: its last production caller was
-    /// `split_active_with_new_session` (also `#[cfg(test)]` now -- see its
+    /// `split_active_with_new_session` (also `#[cfg(any(test, feature = "test-fixtures"))]` now -- see its
     /// doc comment), retired by `docs/roadmap.md`'s "Placement-first session
     /// creation". Kept as a test fixture helper: it's the common
     /// "split the active tab with an explicit session id" shape most tests
     /// across `workspace`/`app`/`control_surface` build their fixtures with.
-    #[cfg(test)]
-    pub(crate) fn split_active(&mut self, kind: PaneKind, session_id: Option<SessionId>) -> PaneId {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn split_active(&mut self, kind: PaneKind, session_id: Option<SessionId>) -> PaneId {
         self.split_tab(
             self.active_tab,
             kind,
@@ -149,8 +149,8 @@ impl Workspace {
     /// reporting test) since re-deriving "split with a new session of the
     /// active pane's own kind" at each call site would be more code than
     /// this one method.
-    #[cfg(test)]
-    pub(crate) fn split_active_with_new_session(&mut self) -> Option<(PaneKind, SessionId)> {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn split_active_with_new_session(&mut self) -> Option<(PaneKind, SessionId)> {
         let kind = self.visible_pane_kind(self.active_visible_index())?;
         let session_id = SessionId::new();
         self.split_active(kind, Some(session_id));
@@ -173,7 +173,7 @@ impl Workspace {
     /// error before reaching here, see `app::external_commands::
     /// dispatch_invoke`'s pre-check; this is defense in depth, not the
     /// primary error path).
-    pub(crate) fn split_session_with_new_session(
+    pub fn split_session_with_new_session(
         &mut self,
         target_session_id: SessionId,
         kind: PaneKind,
@@ -213,7 +213,7 @@ impl Workspace {
     /// explicit-target lookup): there is no other tab to place a *detached*
     /// session's pane next to. `None` if `session_id` isn't a session this
     /// workspace knows about at all.
-    pub(crate) fn attach_existing_session_to_split_activated(
+    pub fn attach_existing_session_to_split_activated(
         &mut self,
         session_id: SessionId,
         activate: bool,
@@ -228,7 +228,7 @@ impl Workspace {
         ))
     }
 
-    pub(crate) fn activate_tab_index(&mut self, index: usize) -> bool {
+    pub fn activate_tab_index(&mut self, index: usize) -> bool {
         let Some(tab) = self.tabs.get(index) else {
             return false;
         };
@@ -236,7 +236,7 @@ impl Workspace {
         true
     }
 
-    pub(crate) fn activate_pane_index(&mut self, tab_index: usize, pane_index: usize) -> bool {
+    pub fn activate_pane_index(&mut self, tab_index: usize, pane_index: usize) -> bool {
         let Some(tab) = self.tabs.get(tab_index) else {
             return false;
         };
@@ -254,7 +254,7 @@ impl Workspace {
         false
     }
 
-    pub(crate) fn close_tab_index(&mut self, index: usize) -> Vec<SessionId> {
+    pub fn close_tab_index(&mut self, index: usize) -> Vec<SessionId> {
         if self.tabs.len() <= 1 {
             return Vec::new();
         }
@@ -294,8 +294,8 @@ impl Workspace {
     /// fixture helper -- "activate pane N by its visible index" is a common
     /// setup shape across `workspace`/`app`/`control_surface` tests
     /// unrelated to workspace mode.
-    #[cfg(test)]
-    pub(crate) fn activate_visible_pane(&mut self, index: usize) -> bool {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn activate_visible_pane(&mut self, index: usize) -> bool {
         let Some(pane_id) = self.visible_pane_id(index) else {
             return false;
         };
@@ -312,7 +312,7 @@ impl Workspace {
     /// needs to activate by id directly rather than re-deriving a visible
     /// index first. `false`, a no-op, if `pane_id` isn't currently visible
     /// in the active tab.
-    pub(crate) fn activate_pane(&mut self, pane_id: PaneId) -> bool {
+    pub fn activate_pane(&mut self, pane_id: PaneId) -> bool {
         if !self.visible_pane_ids().contains(&pane_id) {
             return false;
         }
@@ -323,7 +323,7 @@ impl Workspace {
         true
     }
 
-    pub(crate) fn detach_pane(&mut self, pane_id: PaneId) -> Option<SessionId> {
+    pub fn detach_pane(&mut self, pane_id: PaneId) -> Option<SessionId> {
         let session_id = self
             .panes
             .iter()
@@ -354,7 +354,7 @@ impl Workspace {
         session_id
     }
 
-    pub(crate) fn close_visible_pane(&mut self, index: usize) -> Option<SessionId> {
+    pub fn close_visible_pane(&mut self, index: usize) -> Option<SessionId> {
         if self.visible_pane_ids().len() <= 1 {
             return None;
         }
@@ -368,7 +368,7 @@ impl Workspace {
     /// exact pane it means, per `docs/recursive-layout-design.md`'s slice 2
     /// (the recursive renderer builds panes by `PaneId`, not visible
     /// index). Same last-pane-in-the-tab guard.
-    pub(crate) fn close_pane(&mut self, pane_id: PaneId) -> Option<SessionId> {
+    pub fn close_pane(&mut self, pane_id: PaneId) -> Option<SessionId> {
         if self.visible_pane_ids().len() <= 1 {
             return None;
         }
@@ -376,15 +376,15 @@ impl Workspace {
         self.detach_pane(pane_id)
     }
 
-    pub(crate) fn close_active_pane(&mut self) -> Option<SessionId> {
+    pub fn close_active_pane(&mut self) -> Option<SessionId> {
         self.close_visible_pane(self.active_visible_index())
     }
 
-    pub(crate) fn close_active_tab(&mut self) -> Vec<SessionId> {
+    pub fn close_active_tab(&mut self) -> Vec<SessionId> {
         self.close_tab_index(self.active_tab_index())
     }
 
-    pub(crate) fn focus_next(&mut self) {
+    pub fn focus_next(&mut self) {
         let visible = self.visible_pane_ids();
         if visible.is_empty() {
             return;

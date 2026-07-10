@@ -1,8 +1,8 @@
 use super::types::{PaneKind, SessionKind, Workspace, WorkspaceSession};
-use crate::session::SessionId;
+use crate::SessionId;
 
 impl Workspace {
-    pub(crate) fn terminate_session(&mut self, session_id: SessionId) -> bool {
+    pub fn terminate_session(&mut self, session_id: SessionId) -> bool {
         let Some(_) = self.session(session_id) else {
             return false;
         };
@@ -22,12 +22,12 @@ impl Workspace {
         true
     }
 
-    pub(crate) fn terminate_active_session(&mut self) -> Option<SessionId> {
+    pub fn terminate_active_session(&mut self) -> Option<SessionId> {
         let session_id = self.active_session_id()?;
         self.terminate_session(session_id).then_some(session_id)
     }
 
-    pub(crate) fn session_is_referenced(&self, session_id: SessionId) -> bool {
+    pub fn session_is_referenced(&self, session_id: SessionId) -> bool {
         self.panes
             .iter()
             .any(|pane| pane.session_id == Some(session_id))
@@ -42,11 +42,11 @@ impl Workspace {
     /// already does for a brand-new pane's session); one it's never seen
     /// shows up immediately as a detached session ("survival made
     /// visible"), attachable/terminable like any other.
-    pub(crate) fn register_detached_session(&mut self, kind: PaneKind, session_id: SessionId) {
+    pub fn register_detached_session(&mut self, kind: PaneKind, session_id: SessionId) {
         self.ensure_session(kind, Some(session_id));
     }
 
-    pub(super) fn ensure_session(&mut self, kind: PaneKind, session_id: Option<SessionId>) {
+    pub fn ensure_session(&mut self, kind: PaneKind, session_id: Option<SessionId>) {
         let Some(session_id) = session_id else {
             return;
         };

@@ -17,11 +17,11 @@ use super::types::{LayoutNode, PaneId, SplitAxis};
 /// pixel geometry through this layer. `x`/`y` are the top-left corner,
 /// `w`/`h` the extent.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct Rect {
-    pub(super) x: f32,
-    pub(super) y: f32,
-    pub(super) w: f32,
-    pub(super) h: f32,
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
 }
 
 impl Rect {
@@ -55,7 +55,7 @@ impl Rect {
 /// `Vertical` divides height). Order matches `LayoutNode::pane_ids`'s
 /// pre-order, which `nearest_in_direction` relies on as its final,
 /// deterministic tie-break.
-pub(super) fn pane_rects(node: &LayoutNode) -> Vec<(PaneId, Rect)> {
+pub fn pane_rects(node: &LayoutNode) -> Vec<(PaneId, Rect)> {
     let mut out = Vec::new();
     collect_rects(node, Rect::UNIT, &mut out);
     out
@@ -104,7 +104,7 @@ fn collect_rects(node: &LayoutNode, rect: Rect, out: &mut Vec<(PaneId, Rect)>) {
 /// a deterministic tie-break for the fully symmetric cases (see this
 /// module's tests). Returns `None` when nothing qualifies (`current` is at
 /// that edge) or `current` itself isn't in `rects`.
-pub(super) fn nearest_in_direction(
+pub fn nearest_in_direction(
     rects: &[(PaneId, Rect)],
     current: PaneId,
     direction: Direction,
@@ -159,7 +159,7 @@ fn overlap_span(a_start: f32, a_end: f32, b_start: f32, b_end: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::types::LayoutChild;
+    use crate::types::LayoutChild;
 
     fn rect_of(rects: &[(PaneId, Rect)], id: PaneId) -> Rect {
         rects

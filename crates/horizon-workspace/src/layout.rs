@@ -8,9 +8,9 @@ use super::types::{LayoutChild, LayoutNode, PaneId, SplitAxis};
 /// anchor: every `PaneId` in a tree is unique, so a subtree's leftmost leaf
 /// uniquely identifies it among its siblings.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct RenderChild {
-    pub(super) anchor: PaneId,
-    pub(super) weight: f32,
+pub struct RenderChild {
+    pub anchor: PaneId,
+    pub weight: f32,
 }
 
 /// The immediate rendering plan for one `Split` level -- its axis and, per
@@ -19,7 +19,7 @@ pub(super) struct RenderChild {
 /// floem-independent function of the tree (`docs/recursive-layout-
 /// design.md`'s slice 2) so the shape fed to `workspace::view`'s recursive
 /// renderer is unit-testable without mounting floem.
-pub(super) fn split_render_plan(node: &LayoutNode) -> Option<(SplitAxis, Vec<RenderChild>)> {
+pub fn split_render_plan(node: &LayoutNode) -> Option<(SplitAxis, Vec<RenderChild>)> {
     match node {
         LayoutNode::Pane(_) => None,
         LayoutNode::Split { axis, children } => Some((
@@ -39,7 +39,7 @@ pub(super) fn split_render_plan(node: &LayoutNode) -> Option<(SplitAxis, Vec<Ren
 }
 
 impl LayoutNode {
-    pub(super) fn pane_ids(&self) -> Vec<PaneId> {
+    pub fn pane_ids(&self) -> Vec<PaneId> {
         match self {
             Self::Pane(pane_id) => vec![*pane_id],
             Self::Split { children, .. } => children
@@ -49,7 +49,7 @@ impl LayoutNode {
         }
     }
 
-    pub(super) fn first_pane(&self) -> Option<PaneId> {
+    pub fn first_pane(&self) -> Option<PaneId> {
         match self {
             Self::Pane(pane_id) => Some(*pane_id),
             Self::Split { children, .. } => {
@@ -67,7 +67,7 @@ impl LayoutNode {
     /// design.md`'s shallow-nesting invariant); a same-axis nesting can
     /// only arise here if the tree already violated the invariant going in,
     /// which none of this module's own mutations do.
-    pub(super) fn without_pane(&self, pane_id: PaneId) -> Option<Self> {
+    pub fn without_pane(&self, pane_id: PaneId) -> Option<Self> {
         match self {
             Self::Pane(id) if *id == pane_id => None,
             Self::Pane(id) => Some(Self::Pane(*id)),
@@ -104,12 +104,7 @@ impl LayoutNode {
     /// subtree. `target` being this node's own bare root (no parent
     /// `Split` to absorb into or wrap within) is handled here too, since a
     /// leaf can always be wrapped in place via `*self = ...`.
-    pub(super) fn split_pane(
-        &mut self,
-        target: PaneId,
-        new_pane_id: PaneId,
-        axis: SplitAxis,
-    ) -> bool {
+    pub fn split_pane(&mut self, target: PaneId, new_pane_id: PaneId, axis: SplitAxis) -> bool {
         if matches!(self, Self::Pane(id) if *id == target) {
             *self = Self::Split {
                 axis,
@@ -180,7 +175,7 @@ impl LayoutNode {
     /// normalized first, so by the time this level splices/collapses, any
     /// nested same-axis run has already been pulled up as far as it can go
     /// below this level.
-    pub(super) fn flatten(&mut self) {
+    pub fn flatten(&mut self) {
         let Self::Split { axis, children } = self else {
             return;
         };
@@ -225,12 +220,12 @@ impl LayoutNode {
     /// Test-only invariant checks (`docs/recursive-layout-design.md`'s
     /// shallow-nesting invariant): no `Split` has a single child, and no
     /// `Split` child shares its parent's axis.
-    #[cfg(test)]
-    pub(super) fn is_canonical(&self) -> bool {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn is_canonical(&self) -> bool {
         self.is_canonical_under(None)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     fn is_canonical_under(&self, parent_axis: Option<SplitAxis>) -> bool {
         match self {
             Self::Pane(_) => true,

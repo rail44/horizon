@@ -24,7 +24,7 @@ use super::types::{PaneId, Workspace};
 /// navigation decision) -- see `workspace::nav::nearest_in_direction`, the
 /// pure function [`Workspace::move_cursor`] delegates to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Direction {
+pub enum Direction {
     Left,
     Right,
     Up,
@@ -33,7 +33,7 @@ pub(crate) enum Direction {
 
 impl Workspace {
     /// Whether workspace mode is currently active.
-    pub(crate) fn is_workspace_mode_active(&self) -> bool {
+    pub fn is_workspace_mode_active(&self) -> bool {
         self.workspace_mode_cursor.is_some()
     }
 
@@ -43,7 +43,7 @@ impl Workspace {
     /// reset the cursor back to focus, per
     /// `docs/workspace-mode-design.md`'s "re-pressing the entry key while
     /// already in the mode does nothing".
-    pub(crate) fn enter_workspace_mode(&mut self) {
+    pub fn enter_workspace_mode(&mut self) {
         if self.workspace_mode_cursor.is_some() {
             return;
         }
@@ -63,7 +63,7 @@ impl Workspace {
     /// `ctrl-w l` at an edge do nothing) rather than the existing
     /// `focus_next`'s wrap-around cycling, which is a different, older
     /// command this deliberately doesn't reuse.
-    pub(crate) fn move_cursor(&mut self, direction: Direction) {
+    pub fn move_cursor(&mut self, direction: Direction) {
         let Some(current) = self.workspace_mode_cursor else {
             return;
         };
@@ -78,7 +78,7 @@ impl Workspace {
 
     /// `Enter`: focus follows the cursor, then the mode ends. A no-op when
     /// the mode isn't active.
-    pub(crate) fn commit_workspace_mode(&mut self) {
+    pub fn commit_workspace_mode(&mut self) {
         let Some(pane_id) = self.workspace_mode_cursor else {
             return;
         };
@@ -89,7 +89,7 @@ impl Workspace {
     /// `Esc`: cancels the mode. Focus never moved while the mode was
     /// active, so simply discarding the cursor is enough to "snap it back"
     /// -- there is nothing else to restore.
-    pub(crate) fn cancel_workspace_mode(&mut self) {
+    pub fn cancel_workspace_mode(&mut self) {
         self.workspace_mode_cursor = None;
     }
 
@@ -104,7 +104,7 @@ impl Workspace {
     /// case.
     ///
     /// [`commit_workspace_mode`]: Self::commit_workspace_mode
-    pub(crate) fn commit_workspace_mode_to(&mut self, pane_id: PaneId) {
+    pub fn commit_workspace_mode_to(&mut self, pane_id: PaneId) {
         if self.workspace_mode_cursor.is_none() {
             return;
         }
@@ -126,7 +126,7 @@ impl Workspace {
     /// -- see `workspace::mode_input`) -- this just makes the helper
     /// reusable across both call shapes without an extra active-check at
     /// each call site.
-    pub(crate) fn exit_workspace_mode(&mut self) {
+    pub fn exit_workspace_mode(&mut self) {
         self.workspace_mode_cursor = None;
     }
 }
@@ -134,8 +134,8 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::SessionId;
-    use crate::workspace::types::{PaneKind, SplitAxis};
+    use crate::types::{PaneKind, SplitAxis};
+    use crate::SessionId;
 
     #[test]
     fn cursor_follows_focus_outside_the_mode() {

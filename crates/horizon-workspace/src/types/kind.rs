@@ -1,11 +1,11 @@
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PaneKind {
+pub enum PaneKind {
     Terminal,
     Agent,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SessionKind {
+pub enum SessionKind {
     Terminal,
     Agent,
 }
@@ -29,7 +29,7 @@ impl From<SessionKind> for PaneKind {
 }
 
 impl SessionKind {
-    pub(crate) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::Terminal => "terminal",
             Self::Agent => "agent",

@@ -1,13 +1,16 @@
+//! The Floem shell's workspace layer. The domain model — tabs, panes,
+//! the layout tree, session attachments, operations/queries, mode
+//! state, spatial navigation — lives in `crates/horizon-workspace`
+//! (shared with `shell-gpui/`, see docs/gpui-migration-design.md);
+//! this module keeps the shell-specific halves (pane input routing and
+//! views) and re-exports the model so existing `crate::workspace::*`
+//! and `super::*` paths keep working unchanged.
+
 mod input;
-mod layout;
-mod mode;
 mod mode_input;
-mod nav;
-mod operations;
-mod query;
-mod session;
-mod types;
 pub(crate) mod view;
+
+pub(crate) use horizon_workspace::{layout, mode, types};
 
 pub(crate) use input::{
     active_agent, active_agent_draft, active_terminal_sender, active_text_input_pane,
@@ -20,9 +23,3 @@ pub(crate) use mode_input::{
     agent_escape_requests_workspace_mode, handle_workspace_mode_key, ModeAction,
 };
 pub(crate) use types::{PaneId, PaneKind, SessionKind, SplitAxis, Workspace};
-
-#[cfg(test)]
-use types::{PaneSummary, SessionSummary, TabSummary};
-
-#[cfg(test)]
-mod tests;

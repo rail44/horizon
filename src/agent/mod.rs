@@ -28,16 +28,15 @@ pub(crate) use horizon_agent::{config, contract, frame, live, tools};
 
 use contract::SessionId as AgentSessionId;
 
-impl From<crate::session::SessionId> for AgentSessionId {
-    fn from(id: crate::session::SessionId) -> Self {
-        Self::from_uuid(id.as_uuid())
-    }
+// Free functions instead of `From` impls: with `SessionId` extracted to
+// `horizon-workspace`, both id types are foreign here and the orphan
+// rule forbids the impls this shell used to define.
+pub(crate) fn agent_session_id(id: crate::session::SessionId) -> AgentSessionId {
+    AgentSessionId::from_uuid(id.as_uuid())
 }
 
-impl From<AgentSessionId> for crate::session::SessionId {
-    fn from(id: AgentSessionId) -> Self {
-        Self::from_uuid(id.as_uuid())
-    }
+pub(crate) fn workspace_session_id(id: AgentSessionId) -> crate::session::SessionId {
+    crate::session::SessionId::from_uuid(id.as_uuid())
 }
 
 /// How often, in seconds, the workspace pane header's agent turn-in-flight

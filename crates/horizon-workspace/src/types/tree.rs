@@ -8,7 +8,7 @@ use super::PaneId;
 /// `Split`, no child `Split` sharing its parent's axis) by the layout
 /// operations in `super::layout`, not by this type itself.
 #[derive(Clone, Debug)]
-pub(crate) enum LayoutNode {
+pub enum LayoutNode {
     Pane(PaneId),
     Split {
         axis: SplitAxis,
@@ -21,13 +21,13 @@ pub(crate) enum LayoutNode {
 /// against the sum of all siblings' weights (no constraint solver -- see
 /// `docs/recursive-layout-design.md`'s Sizing decision).
 #[derive(Clone, Debug)]
-pub(crate) struct LayoutChild {
-    pub(crate) node: LayoutNode,
-    pub(crate) weight: f32,
+pub struct LayoutChild {
+    pub node: LayoutNode,
+    pub weight: f32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SplitAxis {
+pub enum SplitAxis {
     Horizontal,
     Vertical,
 }

@@ -528,7 +528,7 @@ pub(crate) fn attach_sessions(
     config_reload_requests: RwSignal<u64>,
 ) {
     for summary in summaries {
-        let session_id: SessionId = summary.session_id.into();
+        let session_id: SessionId = crate::agent::workspace_session_id(summary.session_id);
         // A no-op if the workspace already has a pane referencing this
         // session ("sessions Horizon has panes for reattach seamlessly");
         // otherwise registers it as a fresh detached session ("sessions

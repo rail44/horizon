@@ -6,6 +6,7 @@ members = [
     "crates/horizon-control",
     "crates/horizon-ctl",
     "crates/horizon-terminal-core",
+    "crates/horizon-workspace",
 ]
 
 [package]
@@ -23,6 +24,7 @@ horizon-agent = { path = "crates/horizon-agent" }
 horizon-control = { path = "crates/horizon-control" }
 horizon-ctl = { path = "crates/horizon-ctl" }
 horizon-terminal-core = { path = "crates/horizon-terminal-core" }
+horizon-workspace = { path = "crates/horizon-workspace" }
 # Already an indirect dependency via floem (`lapce/floem`'s own manual-
 # sharding-discipline collections use it) -- promoted to direct so
 # `session::frames`' `RwSignal<im::HashMap<..>>` collection (`docs/
@@ -42,6 +44,9 @@ toml = "0.8"
 unicode-width = "0.2"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 wasmtime = "46.0.1"
+
+[dev-dependencies]
+horizon-workspace = { path = "crates/horizon-workspace", features = ["test-fixtures"] }
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

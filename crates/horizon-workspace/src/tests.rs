@@ -1,6 +1,6 @@
-use super::types::LayoutNode;
+use super::types::{LayoutNode, PaneSummary, SessionSummary, TabSummary};
 use super::*;
-use crate::session::SessionId;
+use crate::SessionId;
 
 #[test]
 fn terminal_pane_references_top_level_session() {

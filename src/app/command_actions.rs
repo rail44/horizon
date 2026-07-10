@@ -622,7 +622,7 @@ fn cleanup_terminated_session(
     // No-op for terminal sessions; for agent sessions this drops the
     // per-session tool state so a stale approval click can no longer
     // execute against a terminated session.
-    unregister_session_runtime(session_id.into());
+    unregister_session_runtime(crate::agent::agent_session_id(session_id));
     frames.update(|frames| frames.remove_session(session_id));
 }
 
@@ -653,7 +653,12 @@ fn resolve_and_send_approval(
     // bridge's request-pump effect -- see `agentd_runtime::
     // fold_agent_session_events`'s doc comment for that exact hazard).
     let frame = frames.with_untracked(|frames| frames.agent_frame_untracked(session_id));
-    let command = match resolve_approval(&frame, session_id.into(), call_id, decision) {
+    let command = match resolve_approval(
+        &frame,
+        crate::agent::agent_session_id(session_id),
+        call_id,
+        decision,
+    ) {
         ApprovalOutcome::Executed { frame, command, .. } => {
             // `with_untracked`, not `update` -- see `agentd_runtime::
             // fold_agent_session_events`'s matching comment.
