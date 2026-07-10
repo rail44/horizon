@@ -174,6 +174,8 @@ branch, never commit to or push `main` directly, and hand your branch
 back through the review queue below. Subagent workers already follow
 the same shape (worktree branch handoff, `.claude/agents/worker.md`);
 this section extends it to every session working in this repository.
+Codex sessions additionally follow `.codex/delegation-workflow.md` for
+model-tier guidance, delegation boundaries, and root/worker responsibilities.
 Before editing anything, confirm `git rev-parse --show-toplevel` points at
 your own worktree, not the shared main checkout — a domain session has
 edited the main checkout directly by mistake before, and that is exactly
