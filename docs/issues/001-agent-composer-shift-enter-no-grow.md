@@ -1,7 +1,7 @@
 ---
 id: 001
 title: Agent composer ignores a trailing Shift+Enter — box does not grow and the caret stays on line 1
-status: open
+status: triaged
 severity: high
 area: agent
 ---
@@ -83,3 +83,26 @@ string when the draft ends in `\n`, and derive the caret's line/x from
 text with empty lines. `docs/agent-composer-cursor-design.md` should be
 updated with whichever workaround is chosen, since it currently records
 `hit_position` as the trusted primitive.
+
+## Triage
+
+Priority: **high.** The composer is a core, constantly-used surface; the
+repro is deterministic and any multi-line draft (Shift+Enter) is visibly
+broken — the box does not grow and the caret desyncs from `draft.cursor`.
+
+**Dispatch-ready.** The filing session already isolated the two upstream
+floem defects and named a concrete workaround path (lay out a
+sentinel-terminated string when the draft ends in `\n`; derive the caret's
+line/x from `lines_range()` + `layout_runs()` instead of trusting
+`hit_position` on text with empty lines), so a worker can take this without
+a further design pass. The fix must update
+`docs/agent-composer-cursor-design.md`, which currently records
+`hit_position` as the trusted primitive.
+
+**Pairs with backlog 24** (composer IME candidate-window placement) — same
+file `src/workspace/view/composer_text.rs`, same `hit_position` primitive;
+doing them together avoids touching that layout code twice. No conflict
+with the in-flight terminal-cwd work.
+
+Worker dispatch waits on the owner's timing (per the issues flow: the
+project session triages; the owner directs when a fix worker launches).

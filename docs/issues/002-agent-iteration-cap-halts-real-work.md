@@ -1,7 +1,7 @@
 ---
 id: 002
 title: Agent halts mid-task at "25 consecutive tool-driven turns" with no way to continue but retyping
-status: open
+status: triaged
 severity: high
 area: agent
 ---
@@ -79,3 +79,31 @@ guard's default `doom_loop_window = 3` halts after three identical
 `(tool, args, output)` fingerprints. Three is aggressive — e.g. a `bash`
 tool re-running the same command with the same output three times in one
 interaction is not obviously a loop.
+
+## Triage
+
+Priority: **high** — the owner hit this mid-task during real use, which is
+exactly the dogfooding signal; as shipped it makes long agent tasks
+unusable. But it is **larger and not mechanically dispatch-ready**: not a
+code defect, it is the turn-loop guard's tuning catching normal agentic
+work, and the fix spans five things that want to be decided together:
+
+- (a) the `iteration_cap` value / whether it becomes adaptive;
+- (b) surfacing `TurnEndReason::Halted` distinctly from `Event::Error` so a
+  guard pause does not read as a provider failure (UI);
+- (c) a first-class **Continue** command (`CommandId`) so resuming is one
+  action, not composing a message;
+- (d) making `iteration_cap` apply without a runtime respawn — today only
+  `horizon-agentd` reads it once at start and `Reload Config` does not
+  apply it;
+- (e) the adjacent `doom_loop_window = 3`, aggressive for legitimate
+  repeated commands.
+
+(a)/(c)/(d)/(e) are design judgments that belong in a **short owner
+consult** plus an update to `docs/agent-tools-design.md` ("Error Model and
+Loop Guards"); (b) is UI. Recommendation: a design pass **before** dispatch,
+not handing the raw issue to a worker. Touches `crates/horizon-agent`
+(`providers/rig/session.rs`), `horizon-agentd` (`main.rs`), and agent UI
+views; no conflict with the in-flight terminal-cwd work.
+
+Worker dispatch waits on the owner's timing, and after the design pass.

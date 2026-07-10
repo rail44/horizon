@@ -56,6 +56,32 @@ merge it sets `status: resolved` and records the commit. `wont-fix` /
 The issue file is the durable record; the branch handoff still goes
 through `.claude/review-queue/` (untracked) exactly as roadmap work does.
 
+## Handoff — how a filed issue reaches the project session
+
+Issues are handed off **exactly like a normal feature branch**, because
+that is the one channel the project session already watches. Writing an
+issue file on a branch is not enough on its own — the project session works
+from `origin/main` and will not see an un-handed-off branch. So the filing
+session:
+
+1. commits the `docs/issues/NNN-*.md` file(s) on its branch and pushes it;
+2. drops a `.claude/review-queue/<slug>.request.md` pointing at the branch
+   (the same request other work uses), which is what actually notifies the
+   project session.
+
+The project session then reviews and **merges the branch like any other**
+(issue files are additive and low-conflict, usually a clean fast-forward),
+which lands them under `docs/issues/` on `main` — and only then are they
+triageable. Triage (the `## Triage` section + `status: triaged`) happens on
+`main` after the merge.
+
+**Worker dispatch timing is owner-directed.** Triage does not
+automatically launch a fix worker. The project session triages and waits;
+the owner says when (and in what order) a triaged issue is dispatched to a
+worker. (Decided 2026-07-10, after issues 001/002 were filed on a branch
+with no review-queue request and so went undetected — the missing step this
+section now records.)
+
 ## Relationship to the other rails
 
 - **`docs/roadmap.md`** — foundation direction (in flight / next / later).
