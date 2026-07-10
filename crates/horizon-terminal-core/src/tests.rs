@@ -29,6 +29,27 @@ fn key_up_events_do_not_emit_legacy_input() {
     assert_eq!(encoded, "");
 }
 
+/// `TerminalFrame::keys_as_escape_codes` is the host view's routing
+/// signal (send printable keys as `TerminalCommand::Key`, not plain
+/// text) — it must track kitty's "report all keys" flag (8) and only
+/// that flag: disambiguate-only (1) leaves plain text keys on the text
+/// path, and popping the flags restores it.
+#[test]
+fn frame_mirrors_report_all_keys_flag() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    assert!(!core.snapshot_frame().keys_as_escape_codes);
+
+    core.write_vt(b"\x1b[>1u");
+    assert!(!core.snapshot_frame().keys_as_escape_codes);
+    core.write_vt(b"\x1b[<u");
+
+    core.write_vt(b"\x1b[>8u");
+    assert!(core.snapshot_frame().keys_as_escape_codes);
+
+    core.write_vt(b"\x1b[<u");
+    assert!(!core.snapshot_frame().keys_as_escape_codes);
+}
+
 /// `docs/session-daemon-design.md` decision 8: a cell's color is a logical
 /// value (here, `NamedColor::Red`/`NamedColor::Foreground`), not a resolved
 /// RGB triple — resolving against a theme is the host's job now

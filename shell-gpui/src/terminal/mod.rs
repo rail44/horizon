@@ -118,6 +118,12 @@ impl TerminalView {
         }
     }
 
+    fn keys_as_escape_codes(&self) -> bool {
+        self.frame
+            .as_ref()
+            .is_some_and(|frame| frame.keys_as_escape_codes)
+    }
+
     fn handle_key(&mut self, event: &KeyDownEvent) {
         // While the IME is composing, every keystroke belongs to the IME
         // (candidate selection etc.) — letting it through would
@@ -127,7 +133,7 @@ impl TerminalView {
             return;
         }
         let keystroke = &event.keystroke;
-        let Some(key) = term_key_code(keystroke) else {
+        let Some(key) = term_key_code(keystroke, self.keys_as_escape_codes()) else {
             return;
         };
         let kind = if event.is_held {
@@ -193,7 +199,16 @@ impl EntityInputHandler for TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.ime_marked_text = None;
+        let was_composing = self.ime_marked_text.take().is_some();
+        // Under kitty "report all keys", a plain printable keypress was
+        // already sent as TerminalCommand::Key from on_key_down; the
+        // text-input pipeline's copy must be dropped or it double-feeds.
+        // An IME commit is the exception: it never went through the Key
+        // path and always lands as text.
+        if !was_composing && self.keys_as_escape_codes() {
+            cx.notify();
+            return;
+        }
         let _ = self
             .tx
             .send(TerminalCommand::Input(text.as_bytes().to_vec()));

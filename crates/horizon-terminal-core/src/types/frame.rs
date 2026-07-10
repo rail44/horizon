@@ -9,6 +9,16 @@ pub struct TerminalFrame {
     pub lines: Vec<TerminalLine>,
     pub cursor: Option<TerminalCursor>,
     pub mouse_reporting: bool,
+    /// Whether the attached app negotiated kitty's "report all keys as
+    /// escape codes" progressive enhancement (`TermMode::
+    /// REPORT_ALL_KEYS_AS_ESC`). Mirrored on the frame — like
+    /// `mouse_reporting` — because it is the *host view's* routing
+    /// signal: while set, printable text keys must reach the session as
+    /// `TerminalCommand::Key` (so `TerminalCore::encode_key` emits the
+    /// negotiated kitty encoding) instead of the host's plain-text
+    /// input path. Encoding itself never depends on this field; the
+    /// core consults live `TermMode` per key event.
+    pub keys_as_escape_codes: bool,
     /// Sparse table of this session's live OSC 4/10/11/12 palette overrides
     /// (`alacritty_terminal::term::color::Colors`), sorted ascending by
     /// index for deterministic `Eq`/`PartialEq` — see
@@ -57,6 +67,7 @@ impl TerminalFrame {
             lines,
             cursor: None,
             mouse_reporting: false,
+            keys_as_escape_codes: false,
             palette_overrides: Vec::new(),
         }
     }

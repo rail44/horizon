@@ -8,11 +8,16 @@
 
 use gpui::{Keystroke, Modifiers};
 
-/// Named/function keys always map; character keys map only when Ctrl is
-/// held (otherwise they are text and belong to the input-handler
-/// pipeline). Alt-held characters are left to macOS option-composition
-/// pending the option-as-alt policy decision (M1).
-pub(crate) fn term_key_code(keystroke: &Keystroke) -> Option<termwiz::input::KeyCode> {
+/// Named/function keys always map; character keys map when Ctrl is held
+/// (never text) or when the session negotiated kitty's "report all keys
+/// as escape codes" (`keys_as_escape_codes`, mirrored on the frame) —
+/// otherwise they are text and belong to the input-handler pipeline.
+/// Alt-held characters are left to macOS option-composition pending the
+/// option-as-alt policy decision (M1).
+pub(crate) fn term_key_code(
+    keystroke: &Keystroke,
+    keys_as_escape_codes: bool,
+) -> Option<termwiz::input::KeyCode> {
     use termwiz::input::KeyCode;
 
     let named = match keystroke.key.as_str() {
@@ -49,7 +54,7 @@ pub(crate) fn term_key_code(keystroke: &Keystroke) -> Option<termwiz::input::Key
     if chars.next().is_some() {
         return None;
     }
-    keystroke.modifiers.control.then_some(KeyCode::Char(ch))
+    (keystroke.modifiers.control || keys_as_escape_codes).then_some(KeyCode::Char(ch))
 }
 
 pub(crate) fn term_modifiers(modifiers: &Modifiers) -> termwiz::input::Modifiers {

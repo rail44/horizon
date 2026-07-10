@@ -71,6 +71,7 @@ pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> Term
         cursor: cursor_position(content.cursor.point.line.0, content.cursor.point.column.0),
         mouse_reporting: term.mode().intersects(TermMode::MOUSE_MODE)
             && term.mode().contains(TermMode::SGR_MOUSE),
+        keys_as_escape_codes: term.mode().contains(TermMode::REPORT_ALL_KEYS_AS_ESC),
         palette_overrides: palette_overrides(term),
     }
 }
