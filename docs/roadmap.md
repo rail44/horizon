@@ -178,6 +178,19 @@ wave items where possible; design docs on first use.
   Follow-ups in backlog 21–22 (dead `Status` arms; the airtight
   reducer-reports-index form).
 
+- **GPUI migration — GO decided 2026-07-10** (owner session): the UI
+  shell moves from Floem to GPUI + gpui-component. The spike (S0–S4:
+  toolchain, grid rendering, key routing, IME, dock integration) passed
+  owner verification end to end; decision record and integration
+  questions in `docs/gpui-migration-consideration.md`, prior-art survey
+  in `docs/research/gpui-terminal-implementations.md`, spike code kept
+  as reference in `spikes/gpui-terminal/` (standalone, outside the
+  workspace). Next: a migration design doc (state architecture —
+  signals → Entity/notify, parallel shell binary, migration order,
+  GUI-verify rebuild) before any Floem code is touched. The ACP client
+  item below is deliberately framework-agnostic (agentd-side placement)
+  and proceeds in parallel.
+
 ## Next (unclaimed — pick freely)
 
 - **Model-routing OpenAI-compatible API**: router over synthetic.new,
@@ -189,6 +202,18 @@ wave items where possible; design docs on first use.
   same way as the Changes aggregation — proposed by application-ui
   slice 5; pairs with backlog 16 (turn metadata) as the two small
   contract extensions unblocking the UI's remaining improvements.
+- **ACP client — external agents in agent panes**: host ACP-speaking
+  agents (Claude Code via `claude-agent-acp`, Codex/Gemini adapters) as
+  agent sessions. Motivation: auth stays agent-side (org-account OAuth,
+  no API key needed) and harness quality is delegated to the agent
+  vendor. Build on the official `agent-client-protocol` Rust crate; the
+  contract was shaped for this mapping up front
+  (`docs/agent-runtime-split-design.md`, "ACP compatibility
+  guardrails"). Key in-session decision: placement — a separate ACP
+  session path in Horizon vs an ACP-proxy provider inside
+  horizon-agentd (detach/persistence semantics differ). v1 scope:
+  spawn + prompt + `session/update` streaming + permission mapping;
+  client fs/terminal capabilities deferred.
 
 ## Later (deliberately unshaped)
 
