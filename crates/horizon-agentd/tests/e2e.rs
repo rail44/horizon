@@ -69,11 +69,12 @@ impl AgentdProcess {
     /// own fresh, empty log path so runs are fast, deterministic, and never
     /// touch real user data.
     fn spawn() -> Self {
-        let socket_path = std::env::temp_dir().join(format!(
-            "horizon-agentd-e2e-{}-{}.sock",
-            std::process::id(),
-            uuid::Uuid::new_v4()
-        ));
+        // Keep the socket path well under SUN_LEN (~104 bytes on macOS):
+        // temp_dir() alone is ~50 bytes, so a long descriptive file name
+        // pushes bind() into "path must be shorter than SUN_LEN". The
+        // event log is a regular file and free of that limit.
+        let short_id = &uuid::Uuid::new_v4().simple().to_string()[..8];
+        let socket_path = std::env::temp_dir().join(format!("hzn-e2e-{short_id}.sock"));
         let event_log_path = std::env::temp_dir().join(format!(
             "horizon-agentd-e2e-events-{}-{}.jsonl",
             std::process::id(),
@@ -1082,9 +1083,8 @@ async fn streaming_tool_call_progress_reaches_the_client_but_never_the_event_log
 #[tokio::test]
 async fn corrupt_event_log_lines_are_reported_to_the_client_once_per_connection() {
     let socket_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-{}-{}.sock",
-        std::process::id(),
-        uuid::Uuid::new_v4()
+        "hzn-e2e-{}.sock",
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
     ));
     let event_log_path = std::env::temp_dir().join(format!(
         "horizon-agentd-e2e-events-{}-{}.jsonl",
@@ -1526,9 +1526,8 @@ async fn drained_agentd_respawns_and_preserves_a_completed_session() {
 #[tokio::test]
 async fn resume_skips_sessions_whose_log_already_ended_in_a_terminal_state() {
     let socket_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-{}-{}.sock",
-        std::process::id(),
-        uuid::Uuid::new_v4()
+        "hzn-e2e-{}.sock",
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
     ));
     let event_log_path = std::env::temp_dir().join(format!(
         "horizon-agentd-e2e-events-{}-{}.jsonl",
@@ -1597,9 +1596,8 @@ async fn resume_skips_sessions_whose_log_already_ended_in_a_terminal_state() {
 #[tokio::test]
 async fn hello_answers_immediately_while_session_list_waits_for_a_slow_resume() {
     let socket_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-{}-{}.sock",
-        std::process::id(),
-        uuid::Uuid::new_v4()
+        "hzn-e2e-{}.sock",
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
     ));
     let event_log_path = std::env::temp_dir().join(format!(
         "horizon-agentd-e2e-events-{}-{}.jsonl",
@@ -1664,9 +1662,8 @@ async fn hello_answers_immediately_while_session_list_waits_for_a_slow_resume() 
 #[tokio::test]
 async fn second_agentd_against_a_live_socket_exits_before_reading_its_own_log() {
     let socket_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-{}-{}.sock",
-        std::process::id(),
-        uuid::Uuid::new_v4()
+        "hzn-e2e-{}.sock",
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
     ));
     let event_log_path = std::env::temp_dir().join(format!(
         "horizon-agentd-e2e-events-{}-{}.jsonl",
@@ -1766,9 +1763,8 @@ async fn second_agentd_against_a_live_socket_exits_before_reading_its_own_log() 
 #[tokio::test]
 async fn duckdb_rebuild_delay_does_not_block_hello_or_session_list() {
     let socket_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-{}-{}.sock",
-        std::process::id(),
-        uuid::Uuid::new_v4()
+        "hzn-e2e-{}.sock",
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
     ));
     let event_log_path = std::env::temp_dir().join(format!(
         "horizon-agentd-e2e-events-{}-{}.jsonl",
@@ -1846,9 +1842,8 @@ async fn duckdb_rebuild_delay_does_not_block_hello_or_session_list() {
 #[tokio::test]
 async fn unchanged_log_skips_duckdb_rebuild_on_respawn() {
     let socket_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-{}-{}.sock",
-        std::process::id(),
-        uuid::Uuid::new_v4()
+        "hzn-e2e-{}.sock",
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
     ));
     let event_log_path = std::env::temp_dir().join(format!(
         "horizon-agentd-e2e-events-{}-{}.jsonl",
@@ -1899,9 +1894,8 @@ async fn unchanged_log_skips_duckdb_rebuild_on_respawn() {
 #[tokio::test]
 async fn stale_log_triggers_duckdb_rebuild_on_respawn() {
     let socket_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-{}-{}.sock",
-        std::process::id(),
-        uuid::Uuid::new_v4()
+        "hzn-e2e-{}.sock",
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
     ));
     let event_log_path = std::env::temp_dir().join(format!(
         "horizon-agentd-e2e-events-{}-{}.jsonl",

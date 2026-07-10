@@ -689,7 +689,7 @@ pub(super) fn pane_view(state: PaneViewState, pane_id: PaneId) -> impl IntoView 
         s.height_full()
             .min_width(0.0)
             .flex_basis(0.0)
-            .flex_grow(1.0)
+            .flex_grow(1.0_f32)
             .background(background)
             .border(border_width)
             .border_color(border)

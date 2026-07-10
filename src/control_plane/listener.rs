@@ -104,11 +104,13 @@ mod tests {
     use std::io::BufReader;
     use std::time::{Duration, Instant};
 
+    // Keep socket paths well under SUN_LEN (~104 bytes on macOS):
+    // temp_dir() alone is ~50 bytes, so long descriptive names push
+    // bind() into `InvalidInput`.
     fn unique_path(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
-            "horizon-control-listener-test-{label}-{}-{}.sock",
-            std::process::id(),
-            uuid::Uuid::new_v4()
+            "hzn-cl-{label}-{}.sock",
+            &uuid::Uuid::new_v4().simple().to_string()[..8]
         ))
     }
 

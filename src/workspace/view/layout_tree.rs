@@ -148,7 +148,7 @@ fn split_view(
             .height_full()
             .min_height(0.0)
             .flex_basis(0.0)
-            .flex_grow(1.0)
+            .flex_grow(1.0_f32)
             .gap(1)
             .padding(1)
             .background(theme::border_subtle())

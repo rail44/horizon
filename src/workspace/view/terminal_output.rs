@@ -34,6 +34,6 @@ pub(super) fn terminal_output(
             .min_width(0.0)
             .min_height(0.0)
             .flex_basis(0.0)
-            .flex_grow(1.0)
+            .flex_grow(1.0_f32)
     })
 }

@@ -254,7 +254,7 @@ pub(crate) fn approval_control_row(
             return s.hide();
         }
         s.flex_basis(0.0)
-            .flex_grow(1.0)
+            .flex_grow(1.0_f32)
             .min_width(0.0)
             .font_family(font_family().to_string())
             .font_size(11)

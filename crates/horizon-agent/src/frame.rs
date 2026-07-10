@@ -164,10 +164,8 @@ pub fn pending_approval_call_ids_in(items: &[AgentFrameItem]) -> Vec<ToolCallId>
     let mut pending = Vec::<ToolCallId>::new();
     for item in items {
         match item {
-            AgentFrameItem::ApprovalRequested(request) => {
-                if !pending.contains(&request.call_id) {
-                    pending.push(request.call_id.clone());
-                }
+            AgentFrameItem::ApprovalRequested(request) if !pending.contains(&request.call_id) => {
+                pending.push(request.call_id.clone());
             }
             AgentFrameItem::ToolCallFinished(result) => {
                 pending.retain(|call_id| call_id != &result.call_id);

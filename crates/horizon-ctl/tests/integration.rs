@@ -51,15 +51,15 @@ fn serve_one_connection(
     }
 }
 
+// Keep socket paths well under SUN_LEN (~104 bytes on macOS):
+// temp_dir() alone is ~50 bytes, so long descriptive names push bind()
+// into `InvalidInput`.
 fn temp_socket_path(label: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "horizon-ctl-it-{label}-{}-{}.sock",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ))
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!("hzn-ctl-{label}-{:x}.sock", nanos & 0xffff_ffff))
 }
 
 fn our_hello_ack() -> EnvelopeBody {

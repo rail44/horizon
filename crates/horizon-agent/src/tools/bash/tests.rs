@@ -203,6 +203,11 @@ fn cwd_tracking_persists_a_cd_across_calls_with_no_sentinel_leakage() {
 fn cwd_tracking_leaves_cwd_unchanged_when_the_command_never_cds() {
     let base = std::env::temp_dir().join(format!("horizon-bash-cwd-noop-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&base).expect("create test dir");
+    // Canonicalize so the comparison survives macOS's `/var` ->
+    // `/private/var` symlink: the shell reports its PWD resolved, so an
+    // unresolved expectation fails even though the directory never
+    // changed.
+    let base = base.canonicalize().expect("canonicalize test dir");
     let cwd = cwd_handle(base.clone());
 
     let _ = super::exec::run(
@@ -388,9 +393,12 @@ fn bash_child_runs_at_the_configured_niceness_or_falls_back_gracefully() {
     // preconditions; `PRIO_PROCESS` + pid 0 means "the calling process".
     let ambient_nice = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
 
+    // `ps -o nice=` works on both Linux and macOS; the previous
+    // `/proc/self/stat` read was Linux-only and could never pass on
+    // macOS (no procfs).
     let output = super::exec::run(
         &call_id,
-        &json!({ "command": "cat /proc/self/stat | awk '{print $19}'" }),
+        &json!({ "command": "ps -o nice= -p $$" }),
         &cwd,
         &config(),
     );

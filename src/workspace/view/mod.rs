@@ -62,6 +62,6 @@ pub(crate) fn workspace_view(state: WorkspaceViewState) -> impl IntoView {
             .width_full()
             .min_height(0.0)
             .flex_basis(0.0)
-            .flex_grow(1.0)
+            .flex_grow(1.0_f32)
     })
 }

@@ -390,10 +390,10 @@ fn outstanding_tool_call_ids(frame: &AgentFrame) -> Vec<ToolCallId> {
     let mut outstanding = Vec::new();
     for item in &frame.items {
         match item {
-            AgentFrameItem::ToolCallRequested(request) => {
-                if !outstanding.contains(&request.call_id) {
-                    outstanding.push(request.call_id.clone());
-                }
+            AgentFrameItem::ToolCallRequested(request)
+                if !outstanding.contains(&request.call_id) =>
+            {
+                outstanding.push(request.call_id.clone());
             }
             AgentFrameItem::ToolCallFinished(result) => {
                 outstanding.retain(|call_id| call_id != &result.call_id);

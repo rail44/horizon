@@ -80,7 +80,7 @@ pub(crate) fn list_row(
                 .flex_col()
                 .min_width(0.0)
                 .flex_basis(0.0)
-                .flex_grow(1.0)
+                .flex_grow(1.0_f32)
         }),
     ))
     .on_click_stop(move |_| on_select())

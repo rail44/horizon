@@ -372,7 +372,7 @@ pub(crate) fn agent_frame_view(
     .style(|s| {
         s.width_full()
             .flex_basis(0.0)
-            .flex_grow(1.0)
+            .flex_grow(1.0_f32)
             .min_height(0.0)
     });
 
@@ -400,7 +400,7 @@ pub(crate) fn agent_frame_view(
 
         s.width_full()
             .flex_basis(0.0)
-            .flex_grow(1.0)
+            .flex_grow(1.0_f32)
             .min_height(0.0)
             .background(theme::terminal_background())
     })
@@ -478,7 +478,7 @@ fn changes_bar_view(
         })
         .style(|s| {
             s.flex_basis(0.0)
-                .flex_grow(1.0)
+                .flex_grow(1.0_f32)
                 .min_width(0.0)
                 .font_size(11)
                 .color(theme::text_muted())
@@ -550,7 +550,7 @@ fn changes_file_row_view(
     h_stack((
         label(move || path.clone()).style(move |s| {
             s.flex_basis(0.0)
-                .flex_grow(1.0)
+                .flex_grow(1.0_f32)
                 .min_width(0.0)
                 .font_family(font_family().to_string())
                 .font_size(12)
@@ -811,7 +811,7 @@ fn transcript_block_view(
         h_stack((
             label(String::new).style(move |s| {
                 if tone == TranscriptTone::User {
-                    s.flex_basis(0.0).flex_grow(1.0).min_width(40.0)
+                    s.flex_basis(0.0).flex_grow(1.0_f32).min_width(40.0)
                 } else {
                     s.hide()
                 }
@@ -850,7 +850,7 @@ fn transcript_block_view(
 
                 match tone {
                     TranscriptTone::User => s,
-                    _ => s.flex_basis(0.0).flex_grow(1.0),
+                    _ => s.flex_basis(0.0).flex_grow(1.0_f32),
                 }
             }),
         ))

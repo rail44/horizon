@@ -1098,9 +1098,12 @@ mod tests {
     /// wedged old `horizon-agentd` that never actually drains.
     #[test]
     fn wait_for_drain_times_out_against_a_socket_that_keeps_accepting() {
+        // Keep the socket path well under SUN_LEN (~104 bytes on macOS):
+        // temp_dir() alone is ~50 bytes here, so a long descriptive file
+        // name pushes bind() into `InvalidInput`.
         let path = std::env::temp_dir().join(format!(
-            "horizon-agentd-runtime-test-live-socket-{}.sock",
-            uuid::Uuid::new_v4()
+            "hzn-drain-{}.sock",
+            &uuid::Uuid::new_v4().simple().to_string()[..8]
         ));
         let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind test listener");
         // Accept (and immediately drop) connections in the background so
