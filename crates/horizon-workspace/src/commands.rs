@@ -11,7 +11,7 @@ pub enum CommandId {
     ApproveToolCall,
     DenyToolCall,
     CancelAgentTurn,
-    ReloadAgentRuntime,
+    ReloadSessionRuntime,
     OpenSessionManager,
     ReloadConfig,
 }
@@ -133,10 +133,10 @@ pub fn core_commands() -> Vec<CommandSpec> {
             destructive: false,
         },
         CommandSpec {
-            id: CommandId::ReloadAgentRuntime,
-            title: "Reload Agent Runtime",
+            id: CommandId::ReloadSessionRuntime,
+            title: "Reload Session Runtime",
             category: CommandCategory::Agent,
-            description: "Restart horizon-agentd and reconnect every agent session.",
+            description: "Restart horizon-sessiond and reconnect every agent session.",
             destructive: false,
         },
         CommandSpec {
@@ -162,7 +162,7 @@ pub fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
         | CommandId::SplitDown
         | CommandId::NewTab
         | CommandId::FocusNextPane
-        | CommandId::ReloadAgentRuntime
+        | CommandId::ReloadSessionRuntime
         | CommandId::OpenSessionManager
         | CommandId::ReloadConfig => true,
         CommandId::CloseActivePane => state.visible_pane_count > 1,

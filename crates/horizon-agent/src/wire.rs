@@ -1,4 +1,4 @@
-//! The JSONL wire envelope for `horizon-agentd`'s socket protocol -- see
+//! The JSONL wire envelope for `horizon-sessiond`'s socket protocol -- see
 //! `docs/agent-runtime-split-design.md`'s decision 4 and ACP guardrails 1-2.
 //!
 //! **Guardrail 1 (contract ≠ wire)**: this module references
@@ -10,8 +10,8 @@
 //! **Guardrail 2 (framing over any stream)**: [`read_envelope`]/
 //! [`write_envelope`] are generic over `tokio::io::{AsyncBufRead,
 //! AsyncWrite}` -- nothing here names `UnixStream` or any other concrete
-//! transport. Callers (`horizon-agentd`'s connection handler, Horizon's
-//! `agent::agentd_client`) wrap whatever socket/pipe they have (typically
+//! transport. Callers (`horizon-sessiond`'s connection handler, Horizon's
+//! `agent::connection`) wrap whatever socket/pipe they have (typically
 //! `tokio::io::BufReader::new(unix_stream_read_half)` for the read side)
 //! and pass it in here.
 
@@ -113,8 +113,8 @@ pub enum Control {
     /// hello can't be honored (currently: a `contract_version` mismatch) --
     /// carries a human-readable reason so the receiving side can build an
     /// error string directly from the wire without re-deriving it. See
-    /// `horizon-agentd`'s connection handler (sender) and
-    /// `agent::agentd_client::handshake` in the `horizon` crate (receiver).
+    /// `horizon-sessiond`'s connection handler (sender) and
+    /// `agent::connection` in the `horizon` crate (receiver).
     HandshakeRejected(String),
     /// Ephemeral tool-call-argument-streaming preview
     /// (`contract::ProviderEvent::tool_call_progress`), session-scoped via
@@ -127,21 +127,21 @@ pub enum Control {
     /// control message instead: reuses `contract::ToolCallProgress` as-is
     /// (guardrail 1 is about the *direction* `wire` -> `contract` already
     /// established by every other `Control` payload, not about which module
-    /// owns a struct). See `horizon-agentd`'s `session::handle_provider_event`
-    /// (sender) and `horizon`'s `agent::agentd_runtime::dispatch_incoming`
+    /// owns a struct). See `horizon-sessiond`'s `session::handle_provider_event`
+    /// (sender) and `horizon`'s `agent::connection::dispatch_incoming`
     /// (receiver, which folds it through the exact same
     /// `apply_tool_call_progress_to_frame` path a persisted event would).
     ToolCallProgress(ToolCallProgress),
     /// This process's own startup event-log corruption diagnostics
     /// (`persistence::event_log::ReadReport::skipped_summary`), sent once
-    /// per connection -- after `horizon-agentd`'s startup resume finishes,
+    /// per connection -- after `horizon-sessiond`'s startup resume finishes,
     /// never blocking `Hello`'s immediate reply the way answering inside
-    /// `Hello` itself would (see `horizon-agentd::main`'s bind-first
+    /// `Hello` itself would (see `horizon-sessiond::main`'s bind-first
     /// ordering doc comment; `session_list`/`session_load` already block on
     /// the same readiness gate for the same reason). Connection-global, like
     /// [`Control::SessionList`] -- omitted entirely when nothing was
-    /// skipped. See `horizon-agentd`'s `main::run_session_hosting_loop`
-    /// (sender) and `horizon`'s `agent::agentd_runtime::dispatch_incoming`
+    /// skipped. See `horizon-sessiond`'s `main::run_session_hosting_loop`
+    /// (sender) and `horizon`'s `agent::connection::dispatch_incoming`
     /// (receiver, which folds it into `agent_state_status`, the status
     /// bar's existing signal).
     SkippedLines(String),
@@ -168,20 +168,20 @@ pub struct SessionNew {
     pub session_id: SessionId,
     pub provider_id: ProviderId,
     pub role_id: Option<RoleId>,
-    /// The directory `horizon-agentd`'s file tools should confine this
+    /// The directory `horizon-sessiond`'s file tools should confine this
     /// session to (`tools::state::ToolSessionState::workspace_root`).
     /// `None` keeps today's behavior -- the session falls back to
-    /// `horizon-agentd`'s own process cwd (`session::run_session`'s
+    /// `horizon-sessiond`'s own process cwd (`session::run_session`'s
     /// `ToolSessionState::for_current_dir` call). Unlike `role_id` above,
     /// this is a brand-new field, not a reshape of an existing one, so it's
     /// purely additive: `#[serde(default)]` lets a peer's `SessionNew`
     /// written before this field existed still parse (as `None`), mirroring
     /// `persistence::event_log::Record::role_id`'s own additive-field
     /// precedent rather than [`CONTRACT_VERSION`]'s breaking-change one.
-    /// Populated by Horizon's `agentd_runtime::start_session` with the
+    /// Populated by Horizon's `SessiondHandle::start_session` with the
     /// Horizon process's own cwd (falling back to `None` only if that cwd
     /// can't be read) -- so a session's workspace root tracks whichever
-    /// Horizon window spawned it, not `horizon-agentd`'s own cwd (one
+    /// Horizon window spawned it, not `horizon-sessiond`'s own cwd (one
     /// shared, long-lived daemon per user, started from whatever directory
     /// happened to be current the first time it was launched).
     #[serde(default)]

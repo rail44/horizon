@@ -5,7 +5,7 @@ use super::DuckdbStoreHandle;
 /// A one-time-settable, multi-reader-blocking handle onto the live DuckDB
 /// projection `Store` that this process's event-log writer thread opens
 /// (see `event_log::writer`'s doc comments) -- shared between
-/// `horizon-agentd`'s `AgentdState` (the recall tools' context, via
+/// `horizon-sessiond`'s `SessiondState` (the recall tools' context, via
 /// `tools::ToolSessionState`/`RecallContext`) and the rig provider
 /// (`providers::rig`'s `load_rig_history`), both of which need "block until
 /// the writer thread's own rebuild-or-open decision lands, then read the
@@ -56,7 +56,7 @@ impl Default for SharedDuckdbStore {
 
 impl SharedDuckdbStore {
     /// An empty, not-yet-decided cell -- for the one real production
-    /// instance shared between `horizon-agentd`'s `AgentdState` and the rig
+    /// instance shared between `horizon-sessiond`'s `SessiondState` and the rig
     /// provider, populated later via [`Self::set`] once the event-log
     /// writer thread's own rebuild-or-open decision lands.
     pub fn new() -> Self {

@@ -39,7 +39,7 @@ pub(super) fn spawn_rig_session(
 
     thread::spawn(move || {
         // Blocks this dedicated thread (never the caller of `start_session`,
-        // and never agentd's async accept loop) until the event-log
+        // and never sessiond's async accept loop) until the event-log
         // writer's own rebuild-or-open decision has landed -- see
         // `SharedDuckdbStore`'s doc comment for why this must be a genuine
         // wait, not "read whatever's there right now": reading too early

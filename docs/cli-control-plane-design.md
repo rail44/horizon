@@ -17,8 +17,8 @@ an agent driving the workspace uses the same contract.
 
 Reuses the `wire.rs` framing philosophy (transport-generic envelope,
 structural version field, hello handshake) and the socket-path
-discipline agentd already practices. Unix file permissions are the
-authorization boundary, as in agentd and most surveyed prior art
+discipline sessiond already practices. Unix file permissions are the
+authorization boundary, as in sessiond and most surveyed prior art
 (tmux, i3/sway, emacsclient-local). Horizon's main process has no
 tokio runtime: the listener is a `std` UnixListener on a dedicated OS
 thread, and accepted commands cross into the reactive graph via the
@@ -32,7 +32,7 @@ The listener lives in the Horizon app process today. The contract is
 written so the endpoint can move to the future tmux-style session
 daemon without breaking clients: sessions are referenced by
 `SessionId` only, the contract assumes multiple concurrent clients
-(agentd's single-connection simplification is deliberately not
+(sessiond's single-connection simplification is deliberately not
 inherited), and discovery goes through a socket path that clients
 never hardcode (see below).
 
@@ -80,7 +80,7 @@ Horizon exports its control socket path into every pane's environment
 enclosing instance by default — tmux/zellij/i3's convergent answer —
 which makes the stable/dev nested-instance workflow resolve itself:
 the inner instance shadows the variable for its own panes. An explicit
-flag/env override always wins (same shape as `horizon-agentd
+flag/env override always wins (same shape as `horizon-sessiond
 --socket`).
 
 ### Targets are explicit in v1
@@ -113,11 +113,11 @@ Four amendments settled after v1 shipped and was exercised end-to-end:
    exits (tmux's model). The separate `horizon-ctl` binary is retired;
    its client code survives as a library the root binary dispatches to.
 2. **Fixed well-known socket path.** The single-instance norm justifies
-   `$XDG_RUNTIME_DIR/horizon/control.sock` (agentd's discipline,
+   `$XDG_RUNTIME_DIR/horizon/control.sock` (sessiond's discipline,
    including stale-socket handling) instead of the per-pid path — so
    the client works from anywhere, not just inside panes.
    `HORIZON_SOCKET` remains the override and is still injected into
-   panes/agentd, which is what keeps a nested dev instance addressable
+   panes/sessiond, which is what keeps a nested dev instance addressable
    (it shadows the variable for its own panes). A second instance
    finding a responsive owner does not steal the socket: it starts
    without a control listener and logs a warning.

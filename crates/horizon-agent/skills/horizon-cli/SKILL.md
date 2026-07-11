@@ -81,7 +81,7 @@ truth for which ones are destructive in this build.
 
 ## Runtime/config reload
 
-- `horizon reload-agent-runtime` — respawn `horizon-agentd` (recovers from a
+- `horizon reload-session-runtime` — respawn `horizon-sessiond` (recovers from a
   stale/rebuilt agent binary).
 - `horizon reload-config` — re-read Horizon's config file (theme/keybindings
   apply live; everything else needs a restart regardless).

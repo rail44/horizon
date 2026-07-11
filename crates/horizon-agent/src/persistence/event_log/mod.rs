@@ -273,7 +273,7 @@ mod tests {
     /// A record written before `role_id` existed has no such key in its
     /// JSON at all -- `#[serde(default)]` must still parse it (as `None`),
     /// not treat it as corrupt. Regression guard for resuming a log written
-    /// by a pre-role build of `horizon-agentd`.
+    /// by a pre-role build of `horizon-sessiond`.
     #[test]
     fn reads_a_pre_role_record_with_no_role_id_key() {
         let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));

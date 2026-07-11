@@ -1,5 +1,13 @@
 # Agent Runtime Split (horizon-agentd)
 
+> **Current status (2026-07-12):** the process described by this historical
+> landing record is now named `horizon-sessiond` (`crates/horizon-sessiond`).
+> Its socket override is `HORIZON_SESSIOND_SOCKET`, and the reload command is
+> `Reload Session Runtime` / `reload-session-runtime`. The implementation still
+> hosts agent sessions only at this point; terminal hosting is the next step.
+> Names below preserve the stages and symbols as they existed when each step
+> landed.
+
 Decision record and implementation guide, agreed 2026-07-04. Motivation:
 change agent code without killing sessions (the daily-driver requirement),
 make the agent mechanism a reusable asset, give delegated agent sessions a

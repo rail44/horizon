@@ -27,7 +27,7 @@ use crate::tools::bash::BashCompletion;
 /// fields mean recall degrades to a clear error instead of a silent no-op
 /// or a silent "search everything".
 ///
-/// Only `horizon-agentd`'s real session construction site
+/// Only `horizon-sessiond`'s real session construction site
 /// (`session::run_session`) populates both fields. Every other
 /// `ToolSessionState` construction site -- this crate's own tests
 /// (`ToolSessionState::new`/`without_root`), and Horizon's UI-side
@@ -77,7 +77,7 @@ struct Inner {
     /// embedded builtins plus any `.horizon/skills/` discovered from the
     /// session's cwd, per `skills`' module doc (v2). Empty
     /// ([`SkillRegistry::default`]) at every construction site except the
-    /// one production call site (`horizon-agentd`'s `session::run_session`),
+    /// one production call site (`horizon-sessiond`'s `session::run_session`),
     /// which installs the real per-session registry via
     /// [`ToolSessionState::with_skills`] right after construction --
     /// mirroring how [`RecallContext`] is threaded in, except this seat is
@@ -133,7 +133,7 @@ impl ToolSessionState {
     }
 
     /// Installs this session's real skill registry after construction --
-    /// the one production call site (`horizon-agentd`'s
+    /// the one production call site (`horizon-sessiond`'s
     /// `session::run_session`) uses this to attach the per-session
     /// [`SkillRegistry::discover`] result once it's built, without adding a
     /// parameter to [`Self::for_current_dir`] (see [`Inner::skills`]'s doc
@@ -155,7 +155,7 @@ impl ToolSessionState {
     /// never a fallback root that fails open. `tools` is the resolved
     /// `[agent]` tool tuning, and `recall` is this session's recall context
     /// (see [`RecallContext`]) -- both passed in by the caller
-    /// (`horizon-agentd`'s `session::run_session`, the one production call
+    /// (`horizon-sessiond`'s `session::run_session`, the one production call
     /// site) rather than resolved here — this crate can't read Horizon's
     /// config file itself (see `config`'s module doc), and the caller has
     /// already resolved a full `AgentConfig` (and knows its own session id)

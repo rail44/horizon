@@ -57,7 +57,7 @@ impl Store {
 
     /// The projection's high-water mark: the largest `last_sequence` any
     /// session has recorded, or `None` if `agent_sessions` is empty. Not
-    /// test-only: `horizon-agentd`'s startup rebuild-skip check (task 2 of
+    /// test-only: `horizon-sessiond`'s startup rebuild-skip check (task 2 of
     /// the readiness fix) compares this against the event log's own final
     /// record sequence to decide whether the projection is already current
     /// -- cheap enough to run before every rebuild decision since it's a

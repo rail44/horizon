@@ -1,5 +1,5 @@
-//! End-to-end test against the real `horizon-agentd` binary (spawned via
-//! `CARGO_BIN_EXE_horizon-agentd`, only available because this test lives in
+//! End-to-end test against the real `horizon-sessiond` binary (spawned via
+//! `CARGO_BIN_EXE_horizon-sessiond`, only available because this test lives in
 //! the same package as the `[[bin]]` target) -- see
 //! `docs/agent-runtime-split-design.md`'s step 2 deliverables.
 
@@ -25,22 +25,22 @@ use tokio::io::BufReader;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::UnixStream;
 
-/// The env var `horizon-agentd`'s `main` reads to artificially delay its
+/// The env var `horizon-sessiond`'s `main` reads to artificially delay its
 /// event-log-read-plus-resume phase -- see that binary's own doc comment on
 /// the constant of the same name. Test-only; never set outside this file.
-const TEST_RESUME_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_RESUME_DELAY_MS";
+const TEST_RESUME_DELAY_MS_VAR: &str = "HORIZON_SESSIOND_TEST_RESUME_DELAY_MS";
 
-/// The env var `horizon-agentd`'s `main` reads to artificially delay its
+/// The env var `horizon-sessiond`'s `main` reads to artificially delay its
 /// background DuckDB rebuild task -- the DuckDB analogue of
 /// [`TEST_RESUME_DELAY_MS_VAR`], letting a test prove `hello`/`session_list`
 /// stay reachable while a slow rebuild is still running. Test-only; never
 /// set outside this file.
-const TEST_DUCKDB_REBUILD_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_DUCKDB_REBUILD_DELAY_MS";
+const TEST_DUCKDB_REBUILD_DELAY_MS_VAR: &str = "HORIZON_SESSIOND_TEST_DUCKDB_REBUILD_DELAY_MS";
 
-/// Owns the spawned `horizon-agentd` child and its socket path; kills the
+/// Owns the spawned `horizon-sessiond` child and its socket path; kills the
 /// child and removes the socket file on drop so a failing assertion doesn't
 /// leak either across test runs.
-struct AgentdProcess {
+struct SessiondProcess {
     child: Child,
     socket_path: PathBuf,
     event_log_path: PathBuf,
@@ -57,8 +57,8 @@ struct AgentdProcess {
     stderr_lines: Option<Arc<Mutex<Vec<String>>>>,
 }
 
-impl AgentdProcess {
-    /// Spawns `horizon-agentd` pointed at a throwaway event log path and a
+impl SessiondProcess {
+    /// Spawns `horizon-sessiond` pointed at a throwaway event log path and a
     /// nonexistent config file -- **hermetic on purpose**: without this,
     /// the binary's own config loader (`horizon_agent::config::
     /// load_file_config`) falls back to this machine's real
@@ -76,7 +76,7 @@ impl AgentdProcess {
         let short_id = &uuid::Uuid::new_v4().simple().to_string()[..8];
         let socket_path = std::env::temp_dir().join(format!("hzn-e2e-{short_id}.sock"));
         let event_log_path = std::env::temp_dir().join(format!(
-            "horizon-agentd-e2e-events-{}-{}.jsonl",
+            "horizon-sessiond-e2e-events-{}-{}.jsonl",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
@@ -92,7 +92,7 @@ impl AgentdProcess {
         Self::spawn_at_with_resume_delay(socket_path, event_log_path, None)
     }
 
-    /// Same as [`Self::spawn_at`], but additionally sets `horizon-agentd`'s
+    /// Same as [`Self::spawn_at`], but additionally sets `horizon-sessiond`'s
     /// test-only [`TEST_RESUME_DELAY_MS_VAR`] hook when `resume_delay_ms` is
     /// `Some` -- for the bind-first ordering test, which needs the
     /// log-read-plus-resume phase to take long enough that hello answering
@@ -104,7 +104,7 @@ impl AgentdProcess {
         resume_delay_ms: Option<u64>,
     ) -> Self {
         let missing_config_path = std::env::temp_dir().join(format!(
-            "horizon-agentd-e2e-no-such-config-{}-{}.toml",
+            "horizon-sessiond-e2e-no-such-config-{}-{}.toml",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
@@ -117,11 +117,11 @@ impl AgentdProcess {
         // fresh temp path for the same hermeticity reason `event_log_path`
         // already gets one.
         let state_db_path = std::env::temp_dir().join(format!(
-            "horizon-agentd-e2e-state-{}-{}.duckdb",
+            "horizon-sessiond-e2e-state-{}-{}.duckdb",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
-        let mut command = Command::new(env!("CARGO_BIN_EXE_horizon-agentd"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_horizon-sessiond"));
         command
             .arg("--socket")
             .arg(&socket_path)
@@ -136,7 +136,7 @@ impl AgentdProcess {
                 command.env_remove(TEST_RESUME_DELAY_MS_VAR);
             }
         }
-        let child = command.spawn().expect("failed to spawn horizon-agentd");
+        let child = command.spawn().expect("failed to spawn horizon-sessiond");
         Self {
             child,
             socket_path,
@@ -146,7 +146,7 @@ impl AgentdProcess {
         }
     }
 
-    /// Same as [`Self::spawn_at`], but additionally sets `horizon-agentd`'s
+    /// Same as [`Self::spawn_at`], but additionally sets `horizon-sessiond`'s
     /// test-only [`TEST_DUCKDB_REBUILD_DELAY_MS_VAR`] hook -- for proving
     /// the DuckDB rebuild (task 1 of the readiness fix) no longer sits on
     /// the resume-readiness path `hello`/`session_list` block on.
@@ -156,16 +156,16 @@ impl AgentdProcess {
         rebuild_delay_ms: u64,
     ) -> Self {
         let missing_config_path = std::env::temp_dir().join(format!(
-            "horizon-agentd-e2e-no-such-config-{}-{}.toml",
+            "horizon-sessiond-e2e-no-such-config-{}-{}.toml",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
         let state_db_path = std::env::temp_dir().join(format!(
-            "horizon-agentd-e2e-state-{}-{}.duckdb",
+            "horizon-sessiond-e2e-state-{}-{}.duckdb",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
-        let child = Command::new(env!("CARGO_BIN_EXE_horizon-agentd"))
+        let child = Command::new(env!("CARGO_BIN_EXE_horizon-sessiond"))
             .arg("--socket")
             .arg(&socket_path)
             .env("HORIZON_CONFIG", &missing_config_path)
@@ -177,7 +177,7 @@ impl AgentdProcess {
                 rebuild_delay_ms.to_string(),
             )
             .spawn()
-            .expect("failed to spawn horizon-agentd");
+            .expect("failed to spawn horizon-sessiond");
         Self {
             child,
             socket_path,
@@ -200,11 +200,11 @@ impl AgentdProcess {
         state_db_path: PathBuf,
     ) -> Self {
         let missing_config_path = std::env::temp_dir().join(format!(
-            "horizon-agentd-e2e-no-such-config-{}-{}.toml",
+            "horizon-sessiond-e2e-no-such-config-{}-{}.toml",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
-        let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-agentd"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-sessiond"))
             .arg("--socket")
             .arg(&socket_path)
             .env("HORIZON_CONFIG", &missing_config_path)
@@ -214,7 +214,7 @@ impl AgentdProcess {
             .env_remove(TEST_DUCKDB_REBUILD_DELAY_MS_VAR)
             .stderr(Stdio::piped())
             .spawn()
-            .expect("failed to spawn horizon-agentd");
+            .expect("failed to spawn horizon-sessiond");
 
         let stderr_lines = Arc::new(Mutex::new(Vec::new()));
         let reader_lines = stderr_lines.clone();
@@ -275,7 +275,7 @@ impl AgentdProcess {
     }
 }
 
-impl Drop for AgentdProcess {
+impl Drop for SessiondProcess {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -293,7 +293,7 @@ async fn connect_with_retry(path: &std::path::Path) -> UnixStream {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     panic!(
-        "horizon-agentd never accepted a connection on {}",
+        "horizon-sessiond never accepted a connection on {}",
         path.display()
     );
 }
@@ -305,7 +305,7 @@ async fn wait_for_exit(child: &mut Child) -> std::process::ExitStatus {
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    panic!("horizon-agentd did not exit in time");
+    panic!("horizon-sessiond did not exit in time");
 }
 
 /// Connects and completes the `hello` handshake, returning the split halves
@@ -333,7 +333,7 @@ async fn connect_and_handshake(
     let reply = wire::read_envelope(&mut reader)
         .await
         .unwrap()
-        .expect("agentd should reply to hello");
+        .expect("sessiond should reply to hello");
     assert!(
         matches!(reply.body, EnvelopeBody::Control(Control::Hello(_))),
         "expected a hello reply, got {:?}",
@@ -358,7 +358,7 @@ async fn collect_events_until(
         let envelope = wire::read_envelope(reader)
             .await
             .unwrap()
-            .expect("agentd should keep streaming events, not close the connection");
+            .expect("sessiond should keep streaming events, not close the connection");
         assert_eq!(
             envelope.session_id,
             Some(session_id),
@@ -378,8 +378,8 @@ async fn collect_events_until(
 
 #[tokio::test]
 async fn hello_ping_session_list_and_drain_over_the_real_socket() {
-    let mut agentd = AgentdProcess::spawn();
-    let stream = connect_with_retry(&agentd.socket_path).await;
+    let mut sessiond = SessiondProcess::spawn();
+    let stream = connect_with_retry(&sessiond.socket_path).await;
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
 
@@ -397,12 +397,15 @@ async fn hello_ping_session_list_and_drain_over_the_real_socket() {
     let reply = wire::read_envelope(&mut reader)
         .await
         .unwrap()
-        .expect("agentd should reply to hello");
+        .expect("sessiond should reply to hello");
     let EnvelopeBody::Control(Control::Hello(hello)) = reply.body else {
         panic!("expected a hello reply, got {:?}", reply.body);
     };
     assert_eq!(hello.contract_version, CONTRACT_VERSION);
-    assert!(!hello.binary_id.is_empty());
+    assert_eq!(
+        hello.binary_id,
+        concat!("horizon-sessiond/", env!("CARGO_PKG_VERSION"))
+    );
 
     wire::write_envelope(&mut write_half, &Envelope::control(Control::Ping))
         .await
@@ -423,17 +426,17 @@ async fn hello_ping_session_list_and_drain_over_the_real_socket() {
         .await
         .unwrap();
 
-    let status = wait_for_exit(&mut agentd.child).await;
+    let status = wait_for_exit(&mut sessiond.child).await;
     assert!(
         status.success(),
-        "horizon-agentd should exit 0 after drain, got {status:?}"
+        "horizon-sessiond should exit 0 after drain, got {status:?}"
     );
 }
 
 #[tokio::test]
 async fn a_hello_with_the_wrong_contract_version_is_rejected_with_a_reason() {
-    let agentd = AgentdProcess::spawn();
-    let stream = connect_with_retry(&agentd.socket_path).await;
+    let sessiond = SessiondProcess::spawn();
+    let stream = connect_with_retry(&sessiond.socket_path).await;
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
 
@@ -452,7 +455,7 @@ async fn a_hello_with_the_wrong_contract_version_is_rejected_with_a_reason() {
     let reply = wire::read_envelope(&mut reader)
         .await
         .unwrap()
-        .expect("agentd should still answer, with a rejection");
+        .expect("sessiond should still answer, with a rejection");
     let EnvelopeBody::Control(Control::HandshakeRejected(reason)) = reply.body else {
         panic!("expected a handshake rejection, got {:?}", reply.body);
     };
@@ -478,7 +481,7 @@ fn mock_provider_id() -> ProviderId {
 /// `(SessionId, Vec<Event>)` pair, via the same `WriterHandle`/`Appender`
 /// machinery `horizon-agent`'s own event-log tests use -- for tests below
 /// that need a specific pre-existing log (particular sessions in particular
-/// terminal/live states) *before* `horizon-agentd` itself ever runs, rather
+/// terminal/live states) *before* `horizon-sessiond` itself ever runs, rather
 /// than building one up by talking to a live process. Every record gets
 /// [`mock_provider_id`] as its provider id, matching what `send_session_new`
 /// uses, so resumed sessions' `SessionSummary`s are directly comparable to
@@ -544,7 +547,7 @@ async fn send_session_new_with_role(
 
 /// Reads envelopes until a `Control::HostToolRequest` scoped to `session_id`
 /// arrives, tolerating (and discarding) any event envelopes ahead of it --
-/// agentd forwards the host tool's own `ToolCallRequested`/`ToolCallStarted`/
+/// sessiond forwards the host tool's own `ToolCallRequested`/`ToolCallStarted`/
 /// `ToolCallFinished` events only *after* the round trip completes (see
 /// `session::handle_provider_event`), but earlier events in the same turn
 /// (e.g. the triggering `StateChanged`/`MessageCommitted`) can arrive first.
@@ -570,8 +573,8 @@ async fn read_host_tool_request(
 /// coherent transcript (the user's message, then the assistant's reply).
 #[tokio::test]
 async fn session_new_then_user_message_streams_events_in_order() {
-    let agentd = AgentdProcess::spawn();
-    let (mut reader, mut writer) = connect_and_handshake(&agentd.socket_path).await;
+    let sessiond = SessiondProcess::spawn();
+    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
 
     let session_id = SessionId::new();
     send_session_new(&mut writer, session_id).await;
@@ -623,11 +626,11 @@ async fn session_new_then_user_message_streams_events_in_order() {
 }
 
 /// `session_list` reflects a session created via `session_new` on the same
-/// connection -- agentd, not an empty stub (step 2's behavior).
+/// connection -- sessiond, not an empty stub (step 2's behavior).
 #[tokio::test]
 async fn session_list_reflects_live_sessions_after_session_new() {
-    let agentd = AgentdProcess::spawn();
-    let (mut reader, mut writer) = connect_and_handshake(&agentd.socket_path).await;
+    let sessiond = SessiondProcess::spawn();
+    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
 
     let session_id = SessionId::new();
     send_session_new(&mut writer, session_id).await;
@@ -659,14 +662,14 @@ async fn session_list_reflects_live_sessions_after_session_new() {
     panic!("SessionListResult never arrived");
 }
 
-/// An auto-allow *host* tool (`workspace.snapshot`) executes agentd-side but
+/// An auto-allow *host* tool (`workspace.snapshot`) executes sessiond-side but
 /// can't answer itself -- it must round-trip a `host_tool_request` over the
 /// connection (guardrail 4) and fold the client's `host_tool_response` into
 /// the same `ToolCallFinished` event an ordinary auto tool would produce.
 #[tokio::test]
-async fn auto_tool_executes_agentd_side_via_host_tool_round_trip() {
-    let agentd = AgentdProcess::spawn();
-    let (mut reader, mut writer) = connect_and_handshake(&agentd.socket_path).await;
+async fn auto_tool_executes_sessiond_side_via_host_tool_round_trip() {
+    let sessiond = SessiondProcess::spawn();
+    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
 
     let session_id = SessionId::new();
     send_session_new(&mut writer, session_id).await;
@@ -716,12 +719,12 @@ async fn auto_tool_executes_agentd_side_via_host_tool_round_trip() {
 }
 
 /// Approval round trip: an `ApprovalRequested` event flows out, an
-/// `ApproveToolCall` command flows back in, and agentd resolves it (decision
-/// 2: "resolved in agentd") and reports the result as an ordinary event.
+/// `ApproveToolCall` command flows back in, and sessiond resolves it (decision
+/// 2: "resolved in sessiond") and reports the result as an ordinary event.
 #[tokio::test]
 async fn approval_round_trip_request_out_approve_in_result_event_out() {
-    let agentd = AgentdProcess::spawn();
-    let (mut reader, mut writer) = connect_and_handshake(&agentd.socket_path).await;
+    let sessiond = SessiondProcess::spawn();
+    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
 
     let session_id = SessionId::new();
     send_session_new(&mut writer, session_id).await;
@@ -775,16 +778,16 @@ async fn approval_round_trip_request_out_approve_in_result_event_out() {
     );
 }
 
-/// `bash` runs agentd-side: approving a real `bash` tool call spawns an
-/// actual subprocess in agentd (via `tools::bash::spawn`, the same code
+/// `bash` runs sessiond-side: approving a real `bash` tool call spawns an
+/// actual subprocess in sessiond (via `tools::bash::spawn`, the same code
 /// path Horizon used to run in-process) and the eventual result -- not just
 /// the running-state events -- arrives back over the wire as an ordinary
 /// event, proving the async completion (delivered internally on its own
 /// channel, see `session::fold_bash_completion`) makes it out.
 #[tokio::test]
-async fn bash_runs_agentd_side_and_reports_its_result_over_the_wire() {
-    let agentd = AgentdProcess::spawn();
-    let (mut reader, mut writer) = connect_and_handshake(&agentd.socket_path).await;
+async fn bash_runs_sessiond_side_and_reports_its_result_over_the_wire() {
+    let sessiond = SessiondProcess::spawn();
+    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
 
     let session_id = SessionId::new();
     send_session_new(&mut writer, session_id).await;
@@ -841,7 +844,7 @@ async fn bash_runs_agentd_side_and_reports_its_result_over_the_wire() {
         panic!("expected a ToolCallFinished event for {call_id:?}, got: {events:?}");
     };
     assert_eq!(result.output["exit_code"], 0);
-    assert_eq!(result.output["output"], "agentd-bash-ok\n");
+    assert_eq!(result.output["output"], "sessiond-bash-ok\n");
 }
 
 /// Regression test for the 2026-07 repeated-approval OOM incident: a banner
@@ -859,8 +862,8 @@ async fn bash_runs_agentd_side_and_reports_its_result_over_the_wire() {
 /// even dequeued.
 #[tokio::test]
 async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
-    let agentd = AgentdProcess::spawn();
-    let (mut reader, mut writer) = connect_and_handshake(&agentd.socket_path).await;
+    let sessiond = SessiondProcess::spawn();
+    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
 
     let session_id = SessionId::new();
     send_session_new(&mut writer, session_id).await;
@@ -935,7 +938,7 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
     // this connection happened to observe over the wire.
     let mut report = None;
     for _ in 0..100 {
-        let candidate = horizon_agent::persistence::event_log::read(&agentd.event_log_path)
+        let candidate = horizon_agent::persistence::event_log::read(&sessiond.event_log_path)
             .expect("the on-disk event log should parse cleanly");
         if candidate.records.iter().any(|record| {
             matches!(&record.event, Event::ToolCallFinished(result) if result.call_id == call_id)
@@ -962,7 +965,7 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
 //
 // `docs/agent-runtime-split-design.md`'s step-3 notes recorded two UX
 // features lost in the split: the tool-call-argument streaming preview
-// never crossed the wire (filtered out before forwarding), and agentd's
+// never crossed the wire (filtered out before forwarding), and sessiond's
 // startup event-log corruption diagnostics were only ever printed to its
 // own stderr. Both are restored; these two tests prove it end to end over
 // the real socket, not just at the crate's own in-process seam (see
@@ -974,12 +977,12 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
 /// `ProviderEvent::tool_call_progress` ticks before the real
 /// `ToolCallRequested` -- these must still reach a connected client (now as
 /// `Control::ToolCallProgress`, since `contract::Event` has no slot for
-/// them) even though tool execution/policy mapping moved into agentd, and
+/// them) even though tool execution/policy mapping moved into sessiond, and
 /// they must never appear in the durable on-disk event log in any form.
 #[tokio::test]
 async fn streaming_tool_call_progress_reaches_the_client_but_never_the_event_log() {
-    let agentd = AgentdProcess::spawn();
-    let (mut reader, mut writer) = connect_and_handshake(&agentd.socket_path).await;
+    let sessiond = SessiondProcess::spawn();
+    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
 
     let session_id = SessionId::new();
     send_session_new(&mut writer, session_id).await;
@@ -1001,7 +1004,7 @@ async fn streaming_tool_call_progress_reaches_the_client_but_never_the_event_log
         let envelope = wire::read_envelope(&mut reader)
             .await
             .unwrap()
-            .expect("agentd should keep streaming events while the session is live");
+            .expect("sessiond should keep streaming events while the session is live");
         assert_eq!(envelope.session_id, Some(session_id));
         match envelope.body {
             EnvelopeBody::Control(Control::ToolCallProgress(progress)) => {
@@ -1041,7 +1044,7 @@ async fn streaming_tool_call_progress_reaches_the_client_but_never_the_event_log
     // asserting anything about the file's contents.
     let mut report = None;
     for _ in 0..100 {
-        let candidate = horizon_agent::persistence::event_log::read(&agentd.event_log_path)
+        let candidate = horizon_agent::persistence::event_log::read(&sessiond.event_log_path)
             .expect("the on-disk event log should parse cleanly");
         let has_tool_call_requested = candidate.records.iter().any(|record| {
             matches!(
@@ -1061,7 +1064,7 @@ async fn streaming_tool_call_progress_reaches_the_client_but_never_the_event_log
         "every persisted line must still be a well-formed record, got: {report:?}"
     );
 
-    let log_contents = std::fs::read_to_string(&agentd.event_log_path)
+    let log_contents = std::fs::read_to_string(&sessiond.event_log_path)
         .expect("event log should exist and be readable");
     assert!(
         !log_contents
@@ -1074,7 +1077,7 @@ async fn streaming_tool_call_progress_reaches_the_client_but_never_the_event_log
 
 /// A corrupt line found during this process's own startup event-log read
 /// must be reported to a connecting client once, as a dedicated
-/// `Control::SkippedLines` message -- not just printed to agentd's stderr --
+/// `Control::SkippedLines` message -- not just printed to sessiond's stderr --
 /// so Horizon's status bar (`agent_state_status`) can surface it. Sent
 /// after `hello` (never blocking it -- see `main`'s bind-first ordering)
 /// but, for a log this small, well before anything else would arrive on a
@@ -1087,19 +1090,19 @@ async fn corrupt_event_log_lines_are_reported_to_the_client_once_per_connection(
         &uuid::Uuid::new_v4().simple().to_string()[..8]
     ));
     let event_log_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-events-{}-{}.jsonl",
+        "horizon-sessiond-e2e-events-{}-{}.jsonl",
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
     std::fs::write(&event_log_path, "not valid json\n").expect("write corrupt fixture log");
 
-    let agentd = AgentdProcess::spawn_at(socket_path, event_log_path);
-    let (mut reader, _writer) = connect_and_handshake(&agentd.socket_path).await;
+    let sessiond = SessiondProcess::spawn_at(socket_path, event_log_path);
+    let (mut reader, _writer) = connect_and_handshake(&sessiond.socket_path).await;
 
     let envelope = wire::read_envelope(&mut reader)
         .await
         .unwrap()
-        .expect("agentd should report its startup diagnostics rather than close the connection");
+        .expect("sessiond should report its startup diagnostics rather than close the connection");
     let EnvelopeBody::Control(Control::SkippedLines(summary)) = envelope.body else {
         panic!(
             "expected a SkippedLines control message, got {:?}",
@@ -1191,7 +1194,7 @@ async fn wait_for_persisted_event(
     );
 }
 
-/// Step 4's headline scenario: `kill -9` a live `horizon-agentd` mid-session
+/// Step 4's headline scenario: `kill -9` a live `horizon-sessiond` mid-session
 /// (while a turn is genuinely still open -- parked in `WaitingForApproval`
 /// with no timer to close it on its own), respawn a fresh process pointed at
 /// the same event log, and confirm replay does what the design promises:
@@ -1200,10 +1203,10 @@ async fn wait_for_persisted_event(
 /// (listed by `session_list`, answers a fresh `session_load`), and a new
 /// user message works normally.
 #[tokio::test]
-async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled() {
-    let agentd = AgentdProcess::spawn();
-    let socket_path = agentd.socket_path.clone();
-    let event_log_path = agentd.event_log_path.clone();
+async fn killed_sessiond_respawns_and_replays_transcript_with_open_turn_cancelled() {
+    let sessiond = SessiondProcess::spawn();
+    let socket_path = sessiond.socket_path.clone();
+    let event_log_path = sessiond.event_log_path.clone();
     let (mut reader, mut writer) = connect_and_handshake(&socket_path).await;
 
     let session_id = SessionId::new();
@@ -1237,12 +1240,12 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
     })
     .await;
 
-    agentd.kill_and_wait();
+    sessiond.kill_and_wait();
 
     // A fresh process, pointed at the same socket and event log paths --
     // simulating a real restart (e.g. after a crash, or the binary being
     // rebuilt), not a clean shutdown.
-    let respawned = AgentdProcess::spawn_at(socket_path, event_log_path);
+    let respawned = SessiondProcess::spawn_at(socket_path, event_log_path);
     let (mut reader, mut writer) = connect_and_handshake(&respawned.socket_path).await;
 
     wire::write_envelope(&mut writer, &Envelope::control(Control::SessionList))
@@ -1326,9 +1329,9 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
 /// `SessionEntry` must reflect it in `session_list`.
 #[tokio::test]
 async fn resume_restores_the_sessions_role_after_a_crash_and_respawn() {
-    let agentd = AgentdProcess::spawn();
-    let socket_path = agentd.socket_path.clone();
-    let event_log_path = agentd.event_log_path.clone();
+    let sessiond = SessiondProcess::spawn();
+    let socket_path = sessiond.socket_path.clone();
+    let event_log_path = sessiond.event_log_path.clone();
     let (mut reader, mut writer) = connect_and_handshake(&socket_path).await;
 
     let session_id = SessionId::new();
@@ -1346,9 +1349,9 @@ async fn resume_restores_the_sessions_role_after_a_crash_and_respawn() {
     })
     .await;
 
-    agentd.kill_and_wait();
+    sessiond.kill_and_wait();
 
-    let respawned = AgentdProcess::spawn_at(socket_path, event_log_path);
+    let respawned = SessiondProcess::spawn_at(socket_path, event_log_path);
     let (mut reader, mut writer) = connect_and_handshake(&respawned.socket_path).await;
 
     wire::write_envelope(&mut writer, &Envelope::control(Control::SessionList))
@@ -1367,14 +1370,14 @@ async fn resume_restores_the_sessions_role_after_a_crash_and_respawn() {
 }
 
 /// `session_load` bootstrap (no crash involved this time): a client that
-/// disconnects and reconnects to the *same* running `horizon-agentd` must
+/// disconnects and reconnects to the *same* running `horizon-sessiond` must
 /// see the session's frame come back identical to the one it had live,
 /// proving `session_load`'s replayed events are genuinely fold-equivalent
 /// to the events the client already saw -- not just "some events".
 #[tokio::test]
 async fn session_load_after_reconnect_rebuilds_an_equivalent_frame() {
-    let agentd = AgentdProcess::spawn();
-    let (mut reader, mut writer) = connect_and_handshake(&agentd.socket_path).await;
+    let sessiond = SessiondProcess::spawn();
+    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
 
     let session_id = SessionId::new();
     send_session_new(&mut writer, session_id).await;
@@ -1411,12 +1414,12 @@ async fn session_load_after_reconnect_rebuilds_an_equivalent_frame() {
     .await;
     let live_frame = agent_frame_from_events(&live_events);
 
-    // Disconnect (drop both halves) without draining agentd -- the session
+    // Disconnect (drop both halves) without draining sessiond -- the session
     // keeps running; only this client's connection goes away.
     drop(reader);
     drop(writer);
 
-    let (mut reader, mut writer) = connect_and_handshake(&agentd.socket_path).await;
+    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
     send_session_load(&mut writer, session_id).await;
     let replayed_events = collect_replayed_events(&mut reader, session_id).await;
     let replayed_frame = agent_frame_from_events(&replayed_events);
@@ -1427,21 +1430,21 @@ async fn session_load_after_reconnect_rebuilds_an_equivalent_frame() {
     );
 }
 
-/// The server-side substance of the `Reload Agent Runtime` command
-/// (`agent::agentd_runtime::reload_agent_runtime` on the Horizon side, not
-/// exercisable from this crate's tests -- `CARGO_BIN_EXE_horizon-agentd` is
+/// The server-side substance of the `Reload Session Runtime` command
+/// (`WorkspaceShell::reload_session_runtime` on the Horizon side, not
+/// exercisable from this crate's tests -- `CARGO_BIN_EXE_horizon-sessiond` is
 /// only set for *this* package's own integration tests, per step 2's
 /// notes): drain a live session gracefully (not a crash this time), respawn
 /// against the same paths, and confirm the session survives with its
 /// transcript intact and ready for more traffic -- the same guarantee
-/// `killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled`
+/// `killed_sessiond_respawns_and_replays_transcript_with_open_turn_cancelled`
 /// proves for a hard kill, proven here for the clean-shutdown path the
 /// reload command actually drives.
 #[tokio::test]
-async fn drained_agentd_respawns_and_preserves_a_completed_session() {
-    let mut agentd = AgentdProcess::spawn();
-    let socket_path = agentd.socket_path.clone();
-    let event_log_path = agentd.event_log_path.clone();
+async fn drained_sessiond_respawns_and_preserves_a_completed_session() {
+    let mut sessiond = SessiondProcess::spawn();
+    let socket_path = sessiond.socket_path.clone();
+    let event_log_path = sessiond.event_log_path.clone();
     let (mut reader, mut writer) = connect_and_handshake(&socket_path).await;
 
     let session_id = SessionId::new();
@@ -1469,10 +1472,10 @@ async fn drained_agentd_respawns_and_preserves_a_completed_session() {
     wire::write_envelope(&mut writer, &Envelope::control(Control::Drain))
         .await
         .unwrap();
-    let status = wait_for_exit(&mut agentd.child).await;
+    let status = wait_for_exit(&mut sessiond.child).await;
     assert!(status.success(), "drain should exit 0, got {status:?}");
 
-    let respawned = AgentdProcess::spawn_at(socket_path, event_log_path);
+    let respawned = SessiondProcess::spawn_at(socket_path, event_log_path);
     let (mut reader, mut writer) = connect_and_handshake(&respawned.socket_path).await;
 
     wire::write_envelope(&mut writer, &Envelope::control(Control::SessionList))
@@ -1510,11 +1513,11 @@ async fn drained_agentd_respawns_and_preserves_a_completed_session() {
 
 // --- bind-first startup ordering + dead-session resume filter ---------------
 //
-// Regression coverage for a real startup failure: `horizon-agentd` used to
+// Regression coverage for a real startup failure: `horizon-sessiond` used to
 // read its event log and resume every session it found *before* binding the
 // socket. On a big log this took long enough that Horizon's connect-retry
 // budget timed out, concluded nothing was listening, and spawned a second
-// `horizon-agentd` -- which itself replayed the whole log again before
+// `horizon-sessiond` -- which itself replayed the whole log again before
 // discovering the first instance already owned the socket. Separately,
 // every session ever created (including long-dead ones) was being resumed
 // on every restart, growing startup cost with history forever.
@@ -1530,7 +1533,7 @@ async fn resume_skips_sessions_whose_log_already_ended_in_a_terminal_state() {
         &uuid::Uuid::new_v4().simple().to_string()[..8]
     ));
     let event_log_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-events-{}-{}.jsonl",
+        "horizon-sessiond-e2e-events-{}-{}.jsonl",
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
@@ -1570,8 +1573,8 @@ async fn resume_skips_sessions_whose_log_already_ended_in_a_terminal_state() {
         ],
     );
 
-    let agentd = AgentdProcess::spawn_at(socket_path, event_log_path);
-    let (mut reader, mut writer) = connect_and_handshake(&agentd.socket_path).await;
+    let sessiond = SessiondProcess::spawn_at(socket_path, event_log_path);
+    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
 
     wire::write_envelope(&mut writer, &Envelope::control(Control::SessionList))
         .await
@@ -1600,7 +1603,7 @@ async fn hello_answers_immediately_while_session_list_waits_for_a_slow_resume() 
         &uuid::Uuid::new_v4().simple().to_string()[..8]
     ));
     let event_log_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-events-{}-{}.jsonl",
+        "horizon-sessiond-e2e-events-{}-{}.jsonl",
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
@@ -1618,14 +1621,14 @@ async fn hello_answers_immediately_while_session_list_waits_for_a_slow_resume() 
     );
 
     const RESUME_DELAY_MS: u64 = 2000;
-    let agentd = AgentdProcess::spawn_at_with_resume_delay(
+    let sessiond = SessiondProcess::spawn_at_with_resume_delay(
         socket_path,
         event_log_path,
         Some(RESUME_DELAY_MS),
     );
 
     let hello_started = Instant::now();
-    let (mut reader, mut writer) = connect_and_handshake(&agentd.socket_path).await;
+    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
     let hello_elapsed = hello_started.elapsed();
     assert!(
         hello_elapsed < Duration::from_millis(RESUME_DELAY_MS / 2),
@@ -1653,20 +1656,20 @@ async fn hello_answers_immediately_while_session_list_waits_for_a_slow_resume() 
     );
 }
 
-/// Fix 1's other half: a second `horizon-agentd` pointed at a socket path a
+/// Fix 1's other half: a second `horizon-sessiond` pointed at a socket path a
 /// live instance already owns must detect that and exit *before* it ever
 /// reads its own event log -- proven by asserting the second instance's
 /// stderr never mentions resuming a session, not just that it eventually
 /// exits non-zero (which the old, wrongly-ordered code also did, just after
 /// wastefully replaying the whole log first).
 #[tokio::test]
-async fn second_agentd_against_a_live_socket_exits_before_reading_its_own_log() {
+async fn second_sessiond_against_a_live_socket_exits_before_reading_its_own_log() {
     let socket_path = std::env::temp_dir().join(format!(
         "hzn-e2e-{}.sock",
         &uuid::Uuid::new_v4().simple().to_string()[..8]
     ));
     let event_log_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-events-{}-{}.jsonl",
+        "horizon-sessiond-e2e-events-{}-{}.jsonl",
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
@@ -1683,7 +1686,7 @@ async fn second_agentd_against_a_live_socket_exits_before_reading_its_own_log() 
         )],
     );
 
-    let first = AgentdProcess::spawn_at(socket_path.clone(), event_log_path.clone());
+    let first = SessiondProcess::spawn_at(socket_path.clone(), event_log_path.clone());
     // Wait for the first instance to be up and to have finished resuming
     // (via `SessionList`'s own readiness gate) before racing a second one
     // against it, so this test is only exercising the "socket already
@@ -1697,21 +1700,21 @@ async fn second_agentd_against_a_live_socket_exits_before_reading_its_own_log() 
     drop(writer);
 
     let missing_config_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-no-such-config-{}-{}.toml",
+        "horizon-sessiond-e2e-no-such-config-{}-{}.toml",
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
-    // Same hermeticity fix as `AgentdProcess::spawn_at_with_resume_delay`:
+    // Same hermeticity fix as `SessiondProcess::spawn_at_with_resume_delay`:
     // an unset `HORIZON_AGENT_STATE_DB` now resolves to a real default path
     // rather than "no DuckDB", so point it at its own throwaway path too --
     // though this instance is expected to bail (see below) before ever
     // reaching the code that would open it.
     let state_db_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-state-{}-{}.duckdb",
+        "horizon-sessiond-e2e-state-{}-{}.duckdb",
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
-    let mut second = Command::new(env!("CARGO_BIN_EXE_horizon-agentd"))
+    let mut second = Command::new(env!("CARGO_BIN_EXE_horizon-sessiond"))
         .arg("--socket")
         .arg(&socket_path)
         .env("HORIZON_CONFIG", &missing_config_path)
@@ -1720,7 +1723,7 @@ async fn second_agentd_against_a_live_socket_exits_before_reading_its_own_log() 
         .env_remove(TEST_RESUME_DELAY_MS_VAR)
         .stderr(Stdio::piped())
         .spawn()
-        .expect("failed to spawn second horizon-agentd");
+        .expect("failed to spawn second horizon-sessiond");
 
     let status = wait_for_exit(&mut second).await;
     assert!(
@@ -1750,7 +1753,7 @@ async fn second_agentd_against_a_live_socket_exits_before_reading_its_own_log() 
 // --- DuckDB rebuild off the readiness path + skip-when-current -------------
 //
 // Regression coverage for the two other diagnosed causes of a slow-feeling
-// `Reload Agent Runtime`/restart: the DuckDB projection rebuild used to run
+// `Reload Session Runtime`/restart: the DuckDB projection rebuild used to run
 // synchronously *before* readiness (`hello`/`session_list`/`session_new`
 // all waited on it), and it always ran a full rebuild even when the log
 // hadn't changed since the projection was last built.
@@ -1767,7 +1770,7 @@ async fn duckdb_rebuild_delay_does_not_block_hello_or_session_list() {
         &uuid::Uuid::new_v4().simple().to_string()[..8]
     ));
     let event_log_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-events-{}-{}.jsonl",
+        "horizon-sessiond-e2e-events-{}-{}.jsonl",
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
@@ -1785,14 +1788,14 @@ async fn duckdb_rebuild_delay_does_not_block_hello_or_session_list() {
     );
 
     const REBUILD_DELAY_MS: u64 = 2000;
-    let agentd = AgentdProcess::spawn_at_with_duckdb_rebuild_delay(
+    let sessiond = SessiondProcess::spawn_at_with_duckdb_rebuild_delay(
         socket_path,
         event_log_path,
         REBUILD_DELAY_MS,
     );
 
     let hello_started = Instant::now();
-    let (mut reader, mut writer) = connect_and_handshake(&agentd.socket_path).await;
+    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
     let hello_elapsed = hello_started.elapsed();
     assert!(
         hello_elapsed < Duration::from_millis(REBUILD_DELAY_MS / 2),
@@ -1837,7 +1840,7 @@ async fn duckdb_rebuild_delay_does_not_block_hello_or_session_list() {
 /// the log across every restart and make "unchanged" impossible to set up
 /// at all. A terminated session is skipped by `resume_persisted_sessions`
 /// entirely (see `session_is_dead`), so nothing appends to the log just
-/// from starting `horizon-agentd` -- exactly the genuinely-static-log case
+/// from starting `horizon-sessiond` -- exactly the genuinely-static-log case
 /// the skip optimization targets.
 #[tokio::test]
 async fn unchanged_log_skips_duckdb_rebuild_on_respawn() {
@@ -1846,12 +1849,12 @@ async fn unchanged_log_skips_duckdb_rebuild_on_respawn() {
         &uuid::Uuid::new_v4().simple().to_string()[..8]
     ));
     let event_log_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-events-{}-{}.jsonl",
+        "horizon-sessiond-e2e-events-{}-{}.jsonl",
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
     let state_db_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-state-{}-{}.duckdb",
+        "horizon-sessiond-e2e-state-{}-{}.duckdb",
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
@@ -1869,7 +1872,7 @@ async fn unchanged_log_skips_duckdb_rebuild_on_respawn() {
         )],
     );
 
-    let first = AgentdProcess::spawn_at_with_duckdb_options(
+    let first = SessiondProcess::spawn_at_with_duckdb_options(
         socket_path.clone(),
         event_log_path.clone(),
         state_db_path.clone(),
@@ -1881,7 +1884,7 @@ async fn unchanged_log_skips_duckdb_rebuild_on_respawn() {
     first.kill_and_wait();
 
     let second =
-        AgentdProcess::spawn_at_with_duckdb_options(socket_path, event_log_path, state_db_path);
+        SessiondProcess::spawn_at_with_duckdb_options(socket_path, event_log_path, state_db_path);
     connect_and_handshake(&second.socket_path).await;
     second
         .wait_for_stderr_line("DuckDB projection already current, skipping rebuild")
@@ -1898,12 +1901,12 @@ async fn stale_log_triggers_duckdb_rebuild_on_respawn() {
         &uuid::Uuid::new_v4().simple().to_string()[..8]
     ));
     let event_log_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-events-{}-{}.jsonl",
+        "horizon-sessiond-e2e-events-{}-{}.jsonl",
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
     let state_db_path = std::env::temp_dir().join(format!(
-        "horizon-agentd-e2e-state-{}-{}.duckdb",
+        "horizon-sessiond-e2e-state-{}-{}.duckdb",
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
@@ -1920,7 +1923,7 @@ async fn stale_log_triggers_duckdb_rebuild_on_respawn() {
         )],
     );
 
-    let first = AgentdProcess::spawn_at_with_duckdb_options(
+    let first = SessiondProcess::spawn_at_with_duckdb_options(
         socket_path.clone(),
         event_log_path.clone(),
         state_db_path.clone(),
@@ -1931,7 +1934,7 @@ async fn stale_log_triggers_duckdb_rebuild_on_respawn() {
         .await;
     first.kill_and_wait();
 
-    // Append a new session to the *same* log file while agentd is down --
+    // Append a new session to the *same* log file while sessiond is down --
     // advances the log's tail sequence past what the projection recorded.
     let second_session = SessionId::new();
     write_session_fixture(
@@ -1946,7 +1949,7 @@ async fn stale_log_triggers_duckdb_rebuild_on_respawn() {
     );
 
     let second =
-        AgentdProcess::spawn_at_with_duckdb_options(socket_path, event_log_path, state_db_path);
+        SessiondProcess::spawn_at_with_duckdb_options(socket_path, event_log_path, state_db_path);
     connect_and_handshake(&second.socket_path).await;
     let rebuilt_line = second
         .wait_for_stderr_line("DuckDB projection rebuilt (")

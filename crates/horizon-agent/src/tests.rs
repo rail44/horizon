@@ -214,7 +214,7 @@ fn runtime_state_store_accumulates_events_into_frame() {
     assert_eq!(store.frame(), frame);
 }
 
-/// `LiveState::with_event_log_and_history` is `horizon-agentd`'s seam for
+/// `LiveState::with_event_log_and_history` is `horizon-sessiond`'s seam for
 /// resuming a persisted session at startup (`docs/agent-runtime-split-
 /// design.md` step 4): the seeded history must show up in the very first
 /// frame (not just after a fresh event arrives) and in `events()` — the

@@ -1,4 +1,4 @@
-//! `horizon-agentd`: steps 2-4 of `docs/agent-runtime-split-design.md`'s
+//! `horizon-sessiond`: steps 2-4 of `docs/agent-runtime-split-design.md`'s
 //! agent-runtime split. Owns the Unix socket, the `hello` handshake, and (as
 //! of step 3) real agent sessions: `session_new` spawns the provider/tool/
 //! persistence machinery this binary hosts (see `session::run_session`),
@@ -15,7 +15,7 @@
 //! milliseconds), and the old ordering did all of that *before* binding: a
 //! client racing to connect during that window would time out its own
 //! retry budget, conclude nothing was listening, and spawn a second
-//! `horizon-agentd` -- which itself would replay the whole log a second
+//! `horizon-sessiond` -- which itself would replay the whole log a second
 //! time before discovering the first instance already owns the socket (see
 //! `bind_listener`'s stale-socket handling). Binding first makes that whole
 //! failure mode structurally impossible in the normal path: a client's
@@ -30,12 +30,12 @@
 //! whether that background work has finished; `session_list`/`session_load`/
 //! `session_new` would return an incomplete (or, right after bind, empty)
 //! view of history if answered too early, so they block on [`session::
-//! AgentdState::wait_until_resume_ready`] first -- a readiness gate, not a
+//! SessiondState::wait_until_resume_ready`] first -- a readiness gate, not a
 //! protocol change.
 //!
 //! **The DuckDB rebuild is off the readiness path too.** It used to run
-//! synchronously inside [`open_persistence`], *before* [`AgentdState::
-//! set_writer`]/[`session::resume_persisted_sessions`]/[`AgentdState::
+//! synchronously inside [`open_persistence`], *before* [`SessiondState::
+//! set_writer`]/[`session::resume_persisted_sessions`]/[`SessiondState::
 //! mark_resume_ready`] -- meaning every readiness-gated request waited on a
 //! full synchronous rebuild of a derived, non-authoritative read model that
 //! no session actually needs (sessions resume from the JSONL log directly).
@@ -47,7 +47,7 @@
 //! background writer thread (`horizon_agent::persistence::event_log::
 //! writer`) does the rebuild-or-skip itself, right after it sends
 //! `WriterInit::Ready` (which is what [`open_persistence`]'s blocking
-//! `init_rx.recv()` -- and therefore [`AgentdState::mark_resume_ready`] --
+//! `init_rx.recv()` -- and therefore [`SessiondState::mark_resume_ready`] --
 //! actually waits on) and before it starts draining/durably writing further
 //! appends. Readiness still doesn't wait on DuckDB at all, and the same
 //! skip-when-current freshness check still applies (see that module's
@@ -68,25 +68,24 @@ use horizon_agent::persistence::event_log::{Record, WriterHandle, WriterInit};
 use horizon_agent::persistence::projection::duckdb::{DuckdbStoreHandle, SharedDuckdbStore};
 use horizon_agent::socket::default_socket_path;
 use horizon_agent::wire::{self, Control, Envelope, EnvelopeBody, Hello, CONTRACT_VERSION};
-use session::{AgentdState, Connection};
+use session::{Connection, SessiondState};
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::{
     unix::{OwnedReadHalf, OwnedWriteHalf},
     UnixListener, UnixStream,
 };
 
-/// Reported in this binary's `hello` reply's `binary_id` -- the crate
-/// version, not the semantic "contract version" ([`CONTRACT_VERSION`],
-/// carried separately in the same [`Hello`]).
-const BINARY_ID: &str = env!("CARGO_PKG_VERSION");
+/// Reported in this binary's `hello` reply's `binary_id`. The semantic
+/// contract version is carried separately in the same [`Hello`].
+const BINARY_ID: &str = concat!("horizon-sessiond/", env!("CARGO_PKG_VERSION"));
 
-/// Test-only hook (`crates/horizon-agentd/tests/e2e.rs`): when set to a
+/// Test-only hook (`crates/horizon-sessiond/tests/e2e.rs`): when set to a
 /// number of milliseconds, [`spawn_resume_task`] sleeps that long before
 /// opening the event log, so a test can prove the bind-first ordering
 /// (hello answers well before this delay elapses; `session_list`/
 /// `session_load` don't) instead of relying on incidental timing. Never set
 /// in production.
-const TEST_RESUME_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_RESUME_DELAY_MS";
+const TEST_RESUME_DELAY_MS_VAR: &str = "HORIZON_SESSIOND_TEST_RESUME_DELAY_MS";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -96,7 +95,7 @@ async fn main() -> anyhow::Result<()> {
     let file_config = config::load_file_config();
     let agent_config = AgentConfig::from_env_and_file(&file_config);
     eprintln!(
-        "horizon-agentd: starting on {} (model={})",
+        "horizon-sessiond: starting on {} (model={})",
         socket_path.display(),
         agent_config.rig.model
     );
@@ -109,12 +108,12 @@ async fn main() -> anyhow::Result<()> {
     // -- see `SharedDuckdbStore`'s doc comment. Created empty here (before
     // the event log's writer thread, and therefore any real DuckDB store,
     // exists) and handed to both the provider registry (the rig provider's
-    // history replay) and `AgentdState` (the recall tools' context);
+    // history replay) and `SessiondState` (the recall tools' context);
     // populated later, once, by `spawn_resume_task`'s propagator.
     let duckdb_cell = SharedDuckdbStore::new();
     let providers =
         ProviderRegistry::builtin_with_config(agent_config.clone(), duckdb_cell.clone());
-    let state = Arc::new(AgentdState::new(
+    let state = Arc::new(SessiondState::new(
         providers,
         agent_config.clone(),
         None,
@@ -145,7 +144,7 @@ async fn main() -> anyhow::Result<()> {
 /// reintroduce DuckDB onto the readiness path this function's own doc
 /// comment describes avoiding.
 fn spawn_resume_task(
-    state: Arc<AgentdState>,
+    state: Arc<SessiondState>,
     agent_config: AgentConfig,
     duckdb_cell: SharedDuckdbStore,
 ) {
@@ -157,7 +156,7 @@ fn spawn_resume_task(
             open_persistence(&agent_config);
         state.set_writer(writer);
         state.set_skipped_lines_summary(skipped_lines_summary);
-        // Step 4: "agentd restart = read own log, rebuild rig_history, mark
+        // Step 4: "sessiond restart = read own log, rebuild rig_history, mark
         // turns that died mid-flight as cancelled ... sessions are live
         // again".
         session::resume_persisted_sessions(&state, records);
@@ -193,15 +192,15 @@ fn test_resume_delay() -> Option<Duration> {
 /// so the caller can resume every session they belong to
 /// ([`session::resume_persisted_sessions`]), and the human-readable
 /// skipped-lines summary (if any corrupt/torn lines were found) so
-/// [`spawn_resume_task`] can stash it on [`AgentdState`] for `main::
+/// [`spawn_resume_task`] can stash it on [`SessiondState`] for `main::
 /// run_session_hosting_loop` to forward to a connecting client -- restoring
 /// the step-3 trim recorded in `docs/agent-runtime-split-design.md`
 /// ("Skipped-lines status reporting is omitted").
 ///
 /// Opens via [`WriterHandle::open_silently`] rather than [`WriterHandle::
-/// open`]: this function already prints its own `horizon-agentd`-prefixed
+/// open`]: this function already prints its own `horizon-sessiond`-prefixed
 /// skipped-lines summary just below, so the shared writer module's own
-/// generic summary line would otherwise double up in agentd's stderr.
+/// generic summary line would otherwise double up in sessiond's stderr.
 /// `open_silently`'s `duckdb_path` argument is this binary's only real
 /// production use of the live DuckDB projection (see the module doc): the
 /// event log's own writer thread rebuilds (or skips, if already current)
@@ -230,7 +229,7 @@ fn open_persistence(
             let skipped_summary = report.skipped_summary();
             if let Some(summary) = &skipped_summary {
                 eprintln!(
-                    "horizon-agentd: {summary} while opening {}",
+                    "horizon-sessiond: {summary} while opening {}",
                     agent_config.persistence.event_log_path.display()
                 );
             }
@@ -238,13 +237,13 @@ fn open_persistence(
         }
         Ok(WriterInit::Failed(error)) => {
             eprintln!(
-                "horizon-agentd: event log unavailable ({error}); persistence disabled for this run"
+                "horizon-sessiond: event log unavailable ({error}); persistence disabled for this run"
             );
             (None, Vec::new(), None, duckdb_rx)
         }
         Err(_) => {
             eprintln!(
-                "horizon-agentd: event log writer thread exited before reporting startup status; \
+                "horizon-sessiond: event log writer thread exited before reporting startup status; \
                  persistence disabled for this run"
             );
             (None, Vec::new(), None, duckdb_rx)
@@ -255,7 +254,7 @@ fn open_persistence(
 async fn run(
     listener: UnixListener,
     socket_path: &Path,
-    state: Arc<AgentdState>,
+    state: Arc<SessiondState>,
 ) -> anyhow::Result<()> {
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
 
@@ -264,11 +263,11 @@ async fn run(
             accepted = listener.accept() => {
                 let (stream, _addr) = accepted?;
                 if let Err(err) = handle_connection(stream, state.clone()).await {
-                    eprintln!("horizon-agentd: connection error: {err}");
+                    eprintln!("horizon-sessiond: connection error: {err}");
                 }
             }
             _ = sigterm.recv() => {
-                eprintln!("horizon-agentd: SIGTERM received, shutting down");
+                eprintln!("horizon-sessiond: SIGTERM received, shutting down");
                 break;
             }
         }
@@ -287,7 +286,7 @@ async fn run(
 /// independent writer task), then [`run_session_hosting_loop`], which needs
 /// genuine read/write concurrency since a hosted session can push events at
 /// any time, not just in reply to something Horizon sent.
-async fn handle_connection(stream: UnixStream, state: Arc<AgentdState>) -> anyhow::Result<()> {
+async fn handle_connection(stream: UnixStream, state: Arc<SessiondState>) -> anyhow::Result<()> {
     let (read_half, mut writer) = stream.into_split();
     let mut reader = BufReader::new(read_half);
 
@@ -296,13 +295,13 @@ async fn handle_connection(stream: UnixStream, state: Arc<AgentdState>) -> anyho
             Ok(Some(envelope)) => envelope,
             Ok(None) => return Ok(()),
             Err(err) => {
-                eprintln!("horizon-agentd: malformed message, closing connection: {err}");
+                eprintln!("horizon-sessiond: malformed message, closing connection: {err}");
                 return Ok(());
             }
         };
 
         let EnvelopeBody::Control(control) = envelope.body else {
-            eprintln!("horizon-agentd: command/event received before hello, ignoring");
+            eprintln!("horizon-sessiond: command/event received before hello, ignoring");
             continue;
         };
 
@@ -310,11 +309,11 @@ async fn handle_connection(stream: UnixStream, state: Arc<AgentdState>) -> anyho
             Control::Hello(hello) => {
                 if hello.contract_version != CONTRACT_VERSION {
                     let reason = format!(
-                        "contract version mismatch: horizon-agentd speaks v{CONTRACT_VERSION}, \
+                        "contract version mismatch: horizon-sessiond speaks v{CONTRACT_VERSION}, \
                          client sent v{} -- reload required",
                         hello.contract_version
                     );
-                    eprintln!("horizon-agentd: rejecting handshake: {reason}");
+                    eprintln!("horizon-sessiond: rejecting handshake: {reason}");
                     let _ = wire::write_envelope(
                         &mut writer,
                         &Envelope::control(Control::HandshakeRejected(reason)),
@@ -338,11 +337,11 @@ async fn handle_connection(stream: UnixStream, state: Arc<AgentdState>) -> anyho
             Control::Drain => {
                 let _ = writer.flush().await;
                 flush_event_log_before_exit(state.writer());
-                eprintln!("horizon-agentd: drained, exiting");
+                eprintln!("horizon-sessiond: drained, exiting");
                 std::process::exit(0);
             }
             other => {
-                eprintln!("horizon-agentd: {other:?} received before hello, ignoring");
+                eprintln!("horizon-sessiond: {other:?} received before hello, ignoring");
             }
         }
     }
@@ -369,7 +368,7 @@ async fn handle_connection(stream: UnixStream, state: Arc<AgentdState>) -> anyho
 async fn run_session_hosting_loop(
     mut reader: BufReader<OwnedReadHalf>,
     mut writer: OwnedWriteHalf,
-    state: Arc<AgentdState>,
+    state: Arc<SessiondState>,
 ) -> anyhow::Result<()> {
     let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Envelope>();
     let connection = Connection::new(outgoing_tx.clone(), state);
@@ -386,7 +385,7 @@ async fn run_session_hosting_loop(
     // corruption diagnostics once for this connection, without blocking
     // this function's own read loop (or `hello`, answered before this
     // function ever runs) on the same readiness gate `SessionList`/
-    // `SessionLoad` already use -- see `AgentdState::skipped_lines_summary`'s
+    // `SessionLoad` already use -- see `SessiondState::skipped_lines_summary`'s
     // doc comment and `docs/agent-runtime-split-design.md`'s step 3 notes.
     {
         let connection = connection.clone();
@@ -407,7 +406,7 @@ async fn run_session_hosting_loop(
                 return Ok(());
             }
             Err(err) => {
-                eprintln!("horizon-agentd: malformed message, closing connection: {err}");
+                eprintln!("horizon-sessiond: malformed message, closing connection: {err}");
                 connection.disconnect();
                 return Ok(());
             }
@@ -421,7 +420,7 @@ async fn run_session_hosting_loop(
                 // Bind-first fix: block until `resume_persisted_sessions`
                 // has finished, so a client that connects while it's still
                 // running doesn't see an incomplete (or empty) session
-                // list -- see the module doc and `AgentdState::
+                // list -- see the module doc and `SessiondState::
                 // wait_until_resume_ready`.
                 connection.wait_until_resume_ready().await;
                 let _ = outgoing_tx.send(Envelope::control(Control::SessionListResult(
@@ -434,7 +433,7 @@ async fn run_session_hosting_loop(
                 // (`state.writer()` -- `LiveState::with_event_log_and_history`
                 // vs. `with_disabled_persistence`) is decided once, at spawn
                 // time. A `session_new` handled before `spawn_resume_task`
-                // finishes calling `AgentdState::set_writer` would silently
+                // finishes calling `SessiondState::set_writer` would silently
                 // spawn with persistence disabled for that session's entire
                 // lifetime -- unnoticeable over the wire (folding/forwarding
                 // happens either way) but permanently invisible to a later
@@ -468,15 +467,17 @@ async fn run_session_hosting_loop(
             }
             EnvelopeBody::Control(Control::Drain) => {
                 flush_event_log_before_exit(connection.writer());
-                eprintln!("horizon-agentd: drained, exiting");
+                eprintln!("horizon-sessiond: drained, exiting");
                 std::process::exit(0);
             }
             EnvelopeBody::Command(command) => match envelope.session_id {
                 Some(session_id) => connection.route_command(session_id, command),
-                None => eprintln!("horizon-agentd: command envelope missing session_id, ignoring"),
+                None => {
+                    eprintln!("horizon-sessiond: command envelope missing session_id, ignoring")
+                }
             },
             other => {
-                eprintln!("horizon-agentd: unexpected message during session hosting: {other:?}");
+                eprintln!("horizon-sessiond: unexpected message during session hosting: {other:?}");
             }
         }
     }
@@ -500,7 +501,7 @@ async fn run_session_hosting_loop(
 fn flush_event_log_before_exit(writer: Option<WriterHandle>) {
     if let Some(writer) = writer {
         if let Err(error) = writer.flush() {
-            eprintln!("horizon-agentd: failed to flush event log before draining: {error}");
+            eprintln!("horizon-sessiond: failed to flush event log before draining: {error}");
         }
     }
 }
@@ -515,7 +516,7 @@ fn our_hello_envelope() -> Envelope {
 
 /// Binds `path`, handling the stale-socket case: if a socket file already
 /// exists there but nothing is accepting connections on it (a previous
-/// `horizon-agentd` that didn't shut down cleanly), remove it and rebind.
+/// `horizon-sessiond` that didn't shut down cleanly), remove it and rebind.
 /// If something *is* accepting, refuses to steal the path out from under a
 /// live instance.
 async fn bind_listener(path: &Path) -> anyhow::Result<UnixListener> {
@@ -523,13 +524,13 @@ async fn bind_listener(path: &Path) -> anyhow::Result<UnixListener> {
         match UnixStream::connect(path).await {
             Ok(_stream) => {
                 anyhow::bail!(
-                    "{} is already accepting connections -- is another horizon-agentd running?",
+                    "{} is already accepting connections -- is another horizon-sessiond running?",
                     path.display()
                 );
             }
             Err(_) => {
                 eprintln!(
-                    "horizon-agentd: removing stale socket {} (nothing was accepting)",
+                    "horizon-sessiond: removing stale socket {} (nothing was accepting)",
                     path.display()
                 );
                 std::fs::remove_file(path)?;

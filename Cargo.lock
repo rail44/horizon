@@ -3355,19 +3355,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "horizon-agentd"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "crossbeam-channel",
- "horizon-agent",
- "libc",
- "serde_json",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "horizon-config"
 version = "0.1.0"
 dependencies = [
@@ -3403,6 +3390,19 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "horizon-sessiond"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossbeam-channel",
+ "horizon-agent",
+ "libc",
+ "serde_json",
  "tokio",
  "uuid",
 ]

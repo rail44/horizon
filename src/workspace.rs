@@ -23,7 +23,7 @@ use horizon_workspace::commands::{command_entries, CommandId, CommandState};
 use horizon_workspace::types::LayoutNode;
 use horizon_workspace::{Direction, PaneId, PaneKind, SplitAxis, Workspace};
 
-use crate::agent::{wait_for_drain, AgentSession, AgentView, AgentdHandle};
+use crate::agent::{wait_for_drain, AgentSession, AgentView, SessiondHandle};
 use crate::keymap;
 use crate::palette::PaletteDelegate;
 use crate::session_manager::SessionManagerDelegate;
@@ -218,9 +218,9 @@ pub struct WorkspaceShell {
     pending_terminal_cwds: HashMap<SessionId, std::path::PathBuf>,
     // Lazily connected on the first agent session (the Floem shell
     // connects async at startup; lazy-blocking is the v1 tradeoff here).
-    agentd: Option<AgentdHandle>,
+    sessiond: Option<SessiondHandle>,
     panes: HashMap<PaneId, PaneView>,
-    // This window — needed by `Reload Agent Runtime`'s post-resume step,
+    // This window — needed by `Reload Session Runtime`'s post-resume step,
     // which rebuilds pane views from a background thread's async
     // continuation (no `&mut Window` of its own to reuse).
     window: AnyWindowHandle,
@@ -254,7 +254,7 @@ impl WorkspaceShell {
             agent_sessions: HashMap::new(),
             pending_roles: HashMap::new(),
             pending_terminal_cwds: HashMap::new(),
-            agentd: None,
+            sessiond: None,
             panes: HashMap::new(),
             window: window.window_handle(),
             focus_handle: cx.focus_handle(),
@@ -324,7 +324,7 @@ impl WorkspaceShell {
                     if self.agent_sessions.contains_key(&summary.id) {
                         continue;
                     }
-                    let handle = match self.agentd(cx) {
+                    let handle = match self.sessiond(cx) {
                         Ok(handle) => handle,
                         Err(error) => {
                             eprintln!("agent session unavailable: {error}");
@@ -373,17 +373,17 @@ impl WorkspaceShell {
         cx.notify();
     }
 
-    /// Lazily connects to `horizon-agentd` (spawning it if needed);
+    /// Lazily connects to `horizon-sessiond` (spawning it if needed);
     /// [`Self::spawn_startup_resume`] usually gets there first.
-    fn agentd(&mut self, cx: &mut Context<Self>) -> Result<AgentdHandle, String> {
-        if let Some(handle) = &self.agentd {
+    fn sessiond(&mut self, cx: &mut Context<Self>) -> Result<SessiondHandle, String> {
+        if let Some(handle) = &self.sessiond {
             return Ok(handle.clone());
         }
-        let (handle, host_tool_rx) = AgentdHandle::connect(
+        let (handle, host_tool_rx) = SessiondHandle::connect(
             &horizon_agent::socket::default_socket_path(),
             &self.socket_path,
         )?;
-        self.adopt_agentd(handle.clone(), host_tool_rx, cx);
+        self.adopt_sessiond(handle.clone(), host_tool_rx, cx);
         Ok(handle)
     }
 
@@ -391,13 +391,13 @@ impl WorkspaceShell {
     /// `workspace.snapshot` requests are answered on the UI thread from
     /// the live model, mirroring the Floem shell's
     /// `wire_host_tool_responder`.
-    fn adopt_agentd(
+    fn adopt_sessiond(
         &mut self,
-        handle: AgentdHandle,
+        handle: SessiondHandle,
         host_tool_rx: crossbeam_channel::Receiver<horizon_agent::wire::HostToolRequest>,
         cx: &mut Context<Self>,
     ) {
-        self.agentd = Some(handle.clone());
+        self.sessiond = Some(handle.clone());
 
         let (async_tx, mut async_rx) = futures::channel::mpsc::unbounded();
         std::thread::spawn(move || {
@@ -431,16 +431,16 @@ impl WorkspaceShell {
         .detach();
     }
 
-    /// Agentd resume: connect to agentd on a background thread (never
+    /// Sessiond resume: connect to sessiond on a background thread (never
     /// blocking the caller — the Floem shell's
-    /// `connect_agentd_at_startup_async`/`reload_agent_runtime` shape),
+    /// `connect_sessiond_at_startup_async`/`reload_session_runtime` shape),
     /// list the sessions it still hosts, and adopt each as a detached
     /// session: registered in the model (so the session manager shows it)
     /// and attached over the wire (so its replayed transcript is ready
     /// when a pane picks it up). Shared by two callers: startup
     /// ([`Self::new`], against a freshly opened window with no agent
-    /// panes yet) and `Reload Agent Runtime`
-    /// ([`Self::reload_agent_runtime`], after the old connection has
+    /// panes yet) and `Reload Session Runtime`
+    /// ([`Self::reload_session_runtime`], after the old connection has
     /// drained — see that function's doc comment for why its
     /// `agent_sessions`/agent-pane views are already cleared by the time
     /// this runs). Either way, the post-adopt `reconcile`/`focus_active`
@@ -448,19 +448,19 @@ impl WorkspaceShell {
     /// just reattached — a no-op at startup (no agent panes exist yet)
     /// and the reload's actual pane-rebuild step.
     fn spawn_startup_resume(&self, cx: &mut Context<Self>) {
-        let agentd_socket = horizon_agent::socket::default_socket_path();
+        let sessiond_socket = horizon_agent::socket::default_socket_path();
         let control_socket = self.socket_path.clone();
         let window_handle = self.window;
         let (startup_tx, mut startup_rx) = futures::channel::mpsc::unbounded();
-        std::thread::spawn(
-            move || match AgentdHandle::connect(&agentd_socket, &control_socket) {
+        std::thread::spawn(move || {
+            match SessiondHandle::connect(&sessiond_socket, &control_socket) {
                 Ok((handle, host_tool_rx)) => {
                     let summaries = handle.session_list();
                     let _ = startup_tx.unbounded_send((handle, host_tool_rx, summaries));
                 }
-                Err(error) => eprintln!("agentd connect failed: {error}"),
-            },
-        );
+                Err(error) => eprintln!("sessiond connect failed: {error}"),
+            }
+        });
         cx.spawn(async move |this, cx| {
             use futures::StreamExt as _;
             let Some((handle, host_tool_rx, summaries)) = startup_rx.next().await else {
@@ -468,8 +468,8 @@ impl WorkspaceShell {
             };
             let _ = window_handle.update(cx, |_, window, cx| {
                 let _ = this.update(cx, |shell, cx| {
-                    if shell.agentd.is_none() {
-                        shell.adopt_agentd(handle.clone(), host_tool_rx, cx);
+                    if shell.sessiond.is_none() {
+                        shell.adopt_sessiond(handle.clone(), host_tool_rx, cx);
                     }
                     for summary in summaries {
                         let session_id = SessionId::from_uuid(summary.session_id.as_uuid());
@@ -493,24 +493,23 @@ impl WorkspaceShell {
         .detach();
     }
 
-    /// `Reload Agent Runtime`: drain the current agentd connection (if
+    /// `Reload Session Runtime`: drain the current sessiond connection (if
     /// any), wait for the old process to actually exit
     /// ([`wait_for_drain`]), then run the same
     /// connect/`session_list`/adopt/reconcile flow as startup resume
     /// ([`Self::spawn_startup_resume`]) against the (possibly
-    /// just-rebuilt) binary — "drain -> agentd flushes and exits ->
-    /// Horizon spawns the rebuilt binary -> reconnect -> session_load",
-    /// mirroring the Floem shell's `agentd_runtime::reload_agent_runtime`.
+    /// just-rebuilt) binary — "drain -> sessiond flushes and exits ->
+    /// Horizon spawns the rebuilt binary -> reconnect -> session_load".
     ///
-    /// Called with `self.agentd` already taken and every stale agent
+    /// Called with `self.sessiond` already taken and every stale agent
     /// session entity/pane view already dropped (`execute`'s
-    /// `CommandId::ReloadAgentRuntime` arm) — nothing should try to route
+    /// `CommandId::ReloadSessionRuntime` arm) — nothing should try to route
     /// a command through the dying connection while this is in flight,
-    /// and `spawn_startup_resume`'s "already known" checks (`shell.agentd
+    /// and `spawn_startup_resume`'s "already known" checks (`shell.sessiond
     /// .is_none()`, `shell.agent_sessions.contains_key`) must see the
     /// pre-reload state as gone, not stale, so it reattaches every
     /// session rather than skipping them.
-    fn reload_agent_runtime(&self, old: Option<AgentdHandle>, cx: &mut Context<Self>) {
+    fn reload_session_runtime(&self, old: Option<SessiondHandle>, cx: &mut Context<Self>) {
         let socket_path = horizon_agent::socket::default_socket_path();
         let (drained_tx, mut drained_rx) = futures::channel::mpsc::unbounded();
         std::thread::spawn(move || {
@@ -518,7 +517,7 @@ impl WorkspaceShell {
                 handle.drain();
             }
             if let Err(error) = wait_for_drain(&socket_path) {
-                eprintln!("horizon-agentd did not drain cleanly: {error}");
+                eprintln!("horizon-sessiond did not drain cleanly: {error}");
             }
             let _ = drained_tx.unbounded_send(());
         });
@@ -795,10 +794,10 @@ impl WorkspaceShell {
                 }
                 Err(error) => eprintln!("reload-config failed: {error}"),
             },
-            CommandId::ReloadAgentRuntime => {
-                let old = self.agentd.take();
+            CommandId::ReloadSessionRuntime => {
+                let old = self.sessiond.take();
                 // The model keeps the sessions/panes; only the stale
-                // views/handles are dropped — `reload_agent_runtime`'s
+                // views/handles are dropped — `reload_session_runtime`'s
                 // resume repopulates `agent_sessions` (via `session_load`)
                 // and `reconcile` rebuilds a fresh `AgentView` for every
                 // pane whose session id comes back.
@@ -806,7 +805,7 @@ impl WorkspaceShell {
                 self.panes
                     .retain(|_, view| !matches!(view, PaneView::Agent(_)));
                 cx.notify();
-                self.reload_agent_runtime(old, cx);
+                self.reload_session_runtime(old, cx);
             }
         }
     }
