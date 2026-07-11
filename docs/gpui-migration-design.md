@@ -214,6 +214,14 @@ routing, IME guard, command dispatch); (3) macOS screenshot capture
 needs Screen Recording permission granted to the dev terminal — a
 one-time setup documented in the gui-verify skill when M5 lands.
 
+Leg (1) is implemented: `scripts/check-gpui-terminal.sh` builds a
+`printf` drive script from `HORIZON_GPUI_DRIVE`/`_DRIVE_ENTER`, polls
+`HORIZON_GPUI_DUMP` for a marker plus a 256-color and a truecolor span,
+and asserts both color kinds (`Indexed(208)`, `Spec(Rgb`) show up in the
+span table. It refuses to run against an already-running
+`horizon-shell-gpui` unless `--force-kill` is passed. Legs (2) and (3)
+are still open.
+
 ## Deliberately not ported
 
 Per the state inventory: `create_signal_from_channel` bridges (6 sites
