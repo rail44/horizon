@@ -2,13 +2,16 @@
 //! `AgentFrame`, a gpui-component `Input` composer (reuse over port —
 //! its IME handling replaces the Floem composer's hand-rolled one), and
 //! inline approval buttons. Rendering is deliberately simple — every
-//! frame item paints as a block; the virtualized-List + Markdown
-//! upgrade is recorded for the M5 polish pass.
+//! frame item paints as a block; assistant text renders through
+//! gpui-component's `TextView` Markdown element (reuse over port), other
+//! items stay plain text. The virtualized-List upgrade is recorded for
+//! the M5 polish pass.
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::text::TextView;
 use horizon_agent::contract::{MessageRole, SessionState};
 use horizon_agent::frame::{pending_approval_call_ids_in, AgentFrameItem};
 
@@ -75,14 +78,44 @@ impl AgentView {
                 )
                 .into_any_element()
         };
+        // Assistant content renders as Markdown (gpui-component's `TextView`,
+        // reuse over port); the element id keys its managed parse state, so
+        // it must stay stable across re-renders of the same transcript item.
+        let markdown_block =
+            |label: &str, label_color: u32, id: (&'static str, usize), text: String| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(rgb(label_color))
+                            .child(label.to_string()),
+                    )
+                    .child(
+                        TextView::markdown(id, text)
+                            .text_size(px(13.0))
+                            .text_color(rgb(0xe9ecf2)),
+                    )
+                    .into_any_element()
+            };
         match item {
             AgentFrameItem::Message(message) => Some(match message.role {
                 MessageRole::User => block("you", 0x84dcc6, message.text.clone()),
-                MessageRole::Assistant => block("agent", 0x61afef, message.text.clone()),
+                MessageRole::Assistant => markdown_block(
+                    "agent",
+                    0x61afef,
+                    ("agent-message", index),
+                    message.text.clone(),
+                ),
             }),
-            AgentFrameItem::AssistantTextDelta(delta) => {
-                Some(block("agent…", 0x61afef, delta.text.clone()))
-            }
+            AgentFrameItem::AssistantTextDelta(delta) => Some(markdown_block(
+                "agent…",
+                0x61afef,
+                ("agent-delta", index),
+                delta.text.clone(),
+            )),
             AgentFrameItem::ReasoningDelta(delta) => {
                 Some(block("thinking", 0x5f6370, delta.text.clone()))
             }
