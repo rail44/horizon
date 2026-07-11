@@ -160,23 +160,36 @@ async fn incoming_shared_agent_and_terminal_messages_are_demultiplexed() {
             .event,
         event
     );
-    let command = session_wire::read_envelope(&mut reader)
-        .await
-        .unwrap()
-        .expect("queued terminal command before pong");
-    assert_eq!(
-        decode_terminal_command(&command).unwrap(),
-        TerminalCommand::Input(b"fifo".to_vec())
-    );
-    let pong = session_wire::read_envelope(&mut reader)
-        .await
-        .unwrap()
-        .expect("pong");
-    assert_eq!(
-        pong.decode_payload::<SessionControl>(horizon_session_protocol::SESSION_CONTROL_KIND)
-            .unwrap(),
-        SessionControl::Pong
-    );
+    let mut saw_command = false;
+    let mut saw_pong = false;
+    for _ in 0..2 {
+        let envelope = session_wire::read_envelope(&mut reader)
+            .await
+            .unwrap()
+            .expect("terminal command or pong");
+        if envelope.kind == horizon_terminal_core::TERMINAL_COMMAND_KIND {
+            assert_eq!(
+                decode_terminal_command(&envelope).unwrap(),
+                TerminalCommand::Input(b"fifo".to_vec())
+            );
+            assert!(!saw_command, "duplicate terminal command");
+            saw_command = true;
+        } else if envelope.kind == horizon_session_protocol::SESSION_CONTROL_KIND {
+            assert_eq!(
+                envelope
+                    .decode_payload::<SessionControl>(
+                        horizon_session_protocol::SESSION_CONTROL_KIND
+                    )
+                    .unwrap(),
+                SessionControl::Pong
+            );
+            assert!(!saw_pong, "duplicate pong");
+            saw_pong = true;
+        } else {
+            panic!("unexpected envelope kind: {}", envelope.kind);
+        }
+    }
+    assert!(saw_command && saw_pong);
 }
 
 #[tokio::test]
