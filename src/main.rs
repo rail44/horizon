@@ -10,6 +10,7 @@ mod control_plane;
 mod keymap;
 mod palette;
 mod session_manager;
+mod sessiond;
 mod terminal;
 mod terminal_focus;
 mod theme;

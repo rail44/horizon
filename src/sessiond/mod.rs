@@ -1,0 +1,311 @@
+//! Horizon's single eager client runtime for the shared session daemon.
+
+mod connection;
+mod routing;
+
+use std::path::Path;
+use std::sync::Arc;
+
+use crossbeam_channel::{unbounded, Receiver, Sender};
+use horizon_agent::contract::{self, Command, ProviderEvent};
+use horizon_agent::wire::{self, Control, Envelope, HostToolRequest, HostToolResponse};
+use horizon_session_protocol::{Envelope as RawEnvelope, SessionControl};
+use horizon_terminal_core::{
+    encode_terminal_command, encode_terminal_control, TerminalCommand, TerminalControl,
+    TerminalSpawnSpec, TerminalUpdate,
+};
+use routing::Routes;
+use uuid::Uuid;
+
+#[derive(Clone)]
+pub(crate) struct SessiondHandle {
+    outgoing: tokio::sync::mpsc::UnboundedSender<RawEnvelope>,
+    routes: Arc<Routes>,
+    control: Arc<connection::RuntimeControl>,
+    _lifetime: Arc<RuntimeLifetime>,
+}
+
+struct RuntimeLifetime {
+    control: Arc<connection::RuntimeControl>,
+}
+
+impl Drop for RuntimeLifetime {
+    fn drop(&mut self) {
+        self.control.cancel();
+    }
+}
+
+pub(crate) struct SessiondResponder {
+    outgoing: tokio::sync::mpsc::WeakUnboundedSender<RawEnvelope>,
+}
+
+pub(crate) struct AgentSessionHandle {
+    inner: contract::SessionHandle,
+    session_id: contract::SessionId,
+    routes: Arc<Routes>,
+}
+
+pub(crate) struct TerminalSessionHandle {
+    commands: Sender<TerminalCommand>,
+    updates: Receiver<TerminalUpdate>,
+    session_id: Uuid,
+    routes: Arc<Routes>,
+}
+
+impl AgentSessionHandle {
+    pub(crate) fn sender(&self) -> Sender<Command> {
+        self.inner.sender()
+    }
+
+    pub(crate) fn events(&self) -> Receiver<ProviderEvent> {
+        self.inner.events()
+    }
+}
+
+impl Drop for AgentSessionHandle {
+    fn drop(&mut self) {
+        self.routes.unregister_agent(self.session_id);
+    }
+}
+
+impl TerminalSessionHandle {
+    pub(crate) fn sender(&self) -> Sender<TerminalCommand> {
+        self.commands.clone()
+    }
+
+    pub(crate) fn updates(&self) -> Receiver<TerminalUpdate> {
+        self.updates.clone()
+    }
+}
+
+impl Drop for TerminalSessionHandle {
+    fn drop(&mut self) {
+        self.routes.unregister_terminal(self.session_id);
+    }
+}
+
+impl SessiondResponder {
+    pub(crate) fn respond_host_tool(&self, response: HostToolResponse) {
+        let envelope = Envelope::control(Control::HostToolResponse(response));
+        let Ok(raw) = wire::encode_envelope(&envelope) else {
+            return;
+        };
+        if let Some(outgoing) = self.outgoing.upgrade() {
+            let _ = outgoing.send(raw);
+        }
+    }
+}
+
+impl SessiondHandle {
+    pub(crate) fn same_runtime(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.routes, &other.routes)
+    }
+
+    /// Starts the one process-wide socket runtime and returns before connect
+    /// or Hello completes. Typed requests enqueue onto one raw FIFO meanwhile.
+    pub(crate) fn start(
+        socket_path: &Path,
+        control_socket: &Path,
+    ) -> (Self, Receiver<HostToolRequest>) {
+        let (handle, host_tools, outgoing) = Self::parts();
+        let weak_outgoing = handle.outgoing.downgrade();
+        connection::spawn(
+            socket_path.to_path_buf(),
+            control_socket.to_path_buf(),
+            outgoing,
+            weak_outgoing,
+            handle.routes.clone(),
+            handle.control.clone(),
+        );
+        (handle, host_tools)
+    }
+
+    fn parts() -> (
+        Self,
+        Receiver<HostToolRequest>,
+        tokio::sync::mpsc::UnboundedReceiver<RawEnvelope>,
+    ) {
+        let (raw_tx, raw_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (host_tool_tx, host_tool_rx) = unbounded();
+        let routes = Arc::new(Routes::new(host_tool_tx));
+        let control = Arc::new(connection::RuntimeControl::new());
+        let lifetime = Arc::new(RuntimeLifetime {
+            control: control.clone(),
+        });
+        (
+            Self {
+                outgoing: raw_tx,
+                routes,
+                control,
+                _lifetime: lifetime,
+            },
+            host_tool_rx,
+            raw_rx,
+        )
+    }
+
+    #[cfg(test)]
+    fn start_on_stream<S>(stream: S) -> (Self, Receiver<HostToolRequest>)
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        let (handle, host_tools, outgoing) = Self::parts();
+        let weak_outgoing = handle.outgoing.downgrade();
+        connection::spawn_test_stream(
+            stream,
+            outgoing,
+            weak_outgoing,
+            handle.routes.clone(),
+            handle.control.clone(),
+        );
+        (handle, host_tools)
+    }
+
+    pub(crate) fn start_session(
+        &self,
+        session_id: contract::SessionId,
+        provider_id: contract::ProviderId,
+        role_id: Option<horizon_agent::roles::RoleId>,
+    ) -> AgentSessionHandle {
+        let handle = self.register_agent(session_id);
+        self.enqueue_agent(Envelope::control(Control::SessionNew(wire::SessionNew {
+            session_id,
+            provider_id,
+            role_id,
+            workspace_root: std::env::current_dir().ok(),
+        })));
+        handle
+    }
+
+    pub(crate) fn attach_session(&self, session_id: contract::SessionId) -> AgentSessionHandle {
+        let handle = self.register_agent(session_id);
+        self.enqueue_agent(Envelope::control(Control::SessionLoad(wire::SessionLoad {
+            session_id,
+        })));
+        handle
+    }
+
+    fn register_agent(&self, session_id: contract::SessionId) -> AgentSessionHandle {
+        let (command_tx, command_rx) = unbounded::<Command>();
+        let (event_tx, event_rx) = unbounded::<ProviderEvent>();
+        self.routes.register_agent(session_id, event_tx);
+
+        let outgoing = self.outgoing.clone();
+        std::thread::spawn(move || {
+            while let Ok(command) = command_rx.recv() {
+                let envelope = Envelope::command(session_id, command);
+                let Ok(raw) = wire::encode_envelope(&envelope) else {
+                    continue;
+                };
+                if outgoing.send(raw).is_err() {
+                    break;
+                }
+            }
+        });
+        AgentSessionHandle {
+            inner: contract::SessionHandle::new(command_tx, event_rx),
+            session_id,
+            routes: self.routes.clone(),
+        }
+    }
+
+    pub(crate) fn start_terminal(
+        &self,
+        session_id: Uuid,
+        spec: TerminalSpawnSpec,
+    ) -> TerminalSessionHandle {
+        let (command_tx, command_rx) = unbounded::<TerminalCommand>();
+        let (update_tx, update_rx) = unbounded::<TerminalUpdate>();
+        self.routes.register_terminal(session_id, update_tx);
+
+        match encode_terminal_control(session_id, &TerminalControl::Create(Box::new(spec))) {
+            Ok(envelope) => {
+                let _ = self.outgoing.send(envelope);
+            }
+            Err(error) => eprintln!("failed to encode terminal create: {error}"),
+        }
+
+        let outgoing = self.outgoing.clone();
+        std::thread::spawn(move || {
+            while let Ok(command) = command_rx.recv() {
+                let Ok(envelope) = encode_terminal_command(session_id, &command) else {
+                    continue;
+                };
+                if outgoing.send(envelope).is_err() {
+                    break;
+                }
+            }
+        });
+
+        TerminalSessionHandle {
+            commands: command_tx,
+            updates: update_rx,
+            session_id,
+            routes: self.routes.clone(),
+        }
+    }
+
+    pub(crate) fn responder(&self) -> SessiondResponder {
+        SessiondResponder {
+            outgoing: self.outgoing.downgrade(),
+        }
+    }
+
+    pub(crate) fn session_list(&self) -> Vec<wire::SessionSummary> {
+        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+        self.routes.set_pending_session_list(reply_tx);
+        self.enqueue_agent(Envelope::control(Control::SessionList));
+        reply_rx.recv().unwrap_or_default()
+    }
+
+    pub(crate) fn drain(&self) {
+        if let Ok(envelope) = RawEnvelope::session_control(&SessionControl::Drain) {
+            let _ = self.outgoing.send(envelope);
+        }
+    }
+
+    pub(crate) fn begin_reload(&self) -> bool {
+        if self.control.is_established() {
+            self.drain();
+            true
+        } else {
+            self.control.cancel();
+            false
+        }
+    }
+
+    pub(crate) fn stop_and_wait(&self) {
+        self.control.cancel();
+        self.control.wait_stopped();
+    }
+
+    fn enqueue_agent(&self, envelope: Envelope) {
+        match wire::encode_envelope(&envelope) {
+            Ok(raw) => {
+                let _ = self.outgoing.send(raw);
+            }
+            Err(error) => eprintln!("failed to encode agent envelope: {error}"),
+        }
+    }
+}
+
+pub(crate) fn wait_for_drain(socket_path: &Path) -> Result<(), String> {
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+    const POLL: std::time::Duration = std::time::Duration::from_millis(50);
+    let deadline = std::time::Instant::now() + TIMEOUT;
+    loop {
+        if std::os::unix::net::UnixStream::connect(socket_path).is_err() {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(format!(
+                "horizon-sessiond did not drain within {:.1}s",
+                TIMEOUT.as_secs_f64()
+            ));
+        }
+        std::thread::sleep(POLL);
+    }
+}
+
+#[cfg(test)]
+mod tests;

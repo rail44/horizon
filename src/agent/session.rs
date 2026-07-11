@@ -8,20 +8,23 @@
 use crossbeam_channel::Sender;
 use futures::StreamExt;
 use gpui::*;
-use horizon_agent::contract::{Command, SessionHandle, ToolCallId};
+use horizon_agent::contract::{Command, ToolCallId};
 use horizon_agent::frame::AgentFrame;
 use horizon_agent::live::LiveState;
+
+use crate::sessiond::AgentSessionHandle;
 
 pub struct AgentSession {
     commands: Sender<Command>,
     pub frame: AgentFrame,
+    _wire: AgentSessionHandle,
 }
 
 impl AgentSession {
     /// Wraps a freshly started (or attached) session handle: pumps its
     /// event stream through the live fold onto this entity. The pump task
     /// is owned by the entity — it ends when the entity drops.
-    pub fn new(handle: SessionHandle, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(handle: AgentSessionHandle, cx: &mut Context<Self>) -> Self {
         let commands = handle.sender();
         let events = handle.events();
 
@@ -50,6 +53,7 @@ impl AgentSession {
         Self {
             commands,
             frame: AgentFrame::empty(),
+            _wire: handle,
         }
     }
 

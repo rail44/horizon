@@ -3308,7 +3308,6 @@ name = "horizon"
 version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
- "anyhow",
  "crossbeam-channel",
  "futures",
  "gpui",
@@ -3321,9 +3320,7 @@ dependencies = [
  "horizon-session-protocol",
  "horizon-terminal-core",
  "horizon-workspace",
- "portable-pty",
  "serde_json",
- "sysinfo 0.39.6",
  "termwiz",
  "tokio",
  "unicode-width 0.2.2",

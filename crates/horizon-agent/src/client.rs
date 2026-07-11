@@ -5,17 +5,13 @@
 //! by name: "surfaced to the user as reload required").
 //!
 //! `horizon-sessiond` is the *only* place agent sessions run -- there is no
-//! in-process fallback or daemon feature flag. [`connect_and_split`] is the
-//! entry point `src/agent/connection.rs` uses to get a live, handshaken
-//! connection it then keeps multiplexing sessions over; this module itself
-//! stays limited to connect-or-spawn plus the handshake.
+//! in-process fallback or daemon feature flag. The shared `src/sessiond`
+//! runtime uses [`connect_or_spawn_retrying`] to obtain the raw stream, then
+//! owns the cross-domain handshake and multiplexing itself.
 //!
-//! Horizon has no async runtime of its own (floem drives its own event
-//! loop, not tokio); callers that need to run this module's `async` fns
-//! from plain (non-async) Horizon code spin up their own throwaway tokio
-//! runtime on a background OS thread (see `SessiondHandle::connect`) so a slow
-//! or failing `horizon-sessiond` never blocks window
-//! startup.
+//! Horizon has no process-wide Tokio runtime; `src/sessiond` owns a dedicated
+//! current-thread runtime on a background OS thread so a slow or failing
+//! daemon never blocks window startup.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -49,8 +45,8 @@ const SESSIOND_BINARY_NAME: &str = "horizon-sessiond";
 /// Connects to `horizon-sessiond` at `socket_path` (spawning it if nothing is
 /// listening yet), completes the hello handshake, and hands back the split
 /// halves ready for the session-hosting traffic that follows a successful
-/// handshake -- the production `SessiondHandle::connect` builds its
-/// read/write tasks on top of.
+/// handshake. Kept as the bounded typed helper used by this module's tests;
+/// the production shared runtime uses [`connect_or_spawn_retrying`].
 pub async fn connect_and_split(
     socket_path: &Path,
     control_socket: &Path,
@@ -68,6 +64,29 @@ async fn connect_or_spawn(socket_path: &Path, control_socket: &Path) -> Result<U
     }
     spawn_sessiond(socket_path, control_socket)?;
     retry_connect(socket_path).await
+}
+
+/// Connects immediately when sessiond is already listening; otherwise starts
+/// it once and keeps retrying with capped backoff until its socket is ready.
+/// The Horizon-side shared runtime owns the handshake and all routing after
+/// this returns.
+pub async fn connect_or_spawn_retrying(
+    socket_path: &Path,
+    control_socket: &Path,
+) -> Result<UnixStream, String> {
+    if let Ok(stream) = UnixStream::connect(socket_path).await {
+        return Ok(stream);
+    }
+    spawn_sessiond(socket_path, control_socket)?;
+
+    let mut delay = RETRY_DELAY;
+    loop {
+        match UnixStream::connect(socket_path).await {
+            Ok(stream) => return Ok(stream),
+            Err(_) => tokio::time::sleep(delay).await,
+        }
+        delay = (delay * 2).min(Duration::from_secs(1));
+    }
 }
 
 fn spawn_sessiond(socket_path: &Path, control_socket: &Path) -> Result<(), String> {

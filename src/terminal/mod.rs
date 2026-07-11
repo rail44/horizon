@@ -11,12 +11,9 @@
 //!   after startup; `HORIZON_GPUI_DRIVE_ENTER=1` sends the trailing
 //!   newline as a `TerminalCommand::Key` to exercise the core encoder.
 
-mod cwd;
 mod input;
-mod pty;
 mod session;
 
-pub(crate) use cwd::sample_cwd;
 pub use session::TerminalSession;
 
 use std::cell::Cell;

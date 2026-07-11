@@ -29,11 +29,11 @@ cargo test
 cargo run
 ```
 
-`cargo run` alone only rebuilds the root `horizon` binary; agent sessions run
-in `horizon-sessiond` (`crates/horizon-sessiond`), a separate workspace member
-Horizon spawns on demand. Run `cargo build --workspace` at least once (and
-again after touching `crates/horizon-agent`/`crates/horizon-sessiond`) or agent
-panes will fail to find a runtime to spawn. `just dev` builds the whole
+`cargo run` alone only rebuilds the root `horizon` binary; terminal and agent
+sessions run in `horizon-sessiond` (`crates/horizon-sessiond`), a separate
+workspace member Horizon spawns on demand. Run `cargo build --workspace` at least once (and
+again after touching the runtime crates) or panes will fail to find a runtime
+to spawn. `just dev` builds the whole
 workspace and launches the freshly built binary directly (bypassing `cargo
 run`'s environment leakage into Horizon and sessiond); pass CLI subcommand
 arguments after it, e.g. `just dev sessions`.
@@ -56,9 +56,9 @@ supports these manual smoke checks:
 - `tab 1`, `tab 2`, ...: switches to the matching tab.
 - `terminate active session`: terminates the active session.
 - `manage sessions`: opens the session manager modal (see below).
-- `reload session runtime`: restarts `horizon-sessiond` and reconnects every
-  agent session — use after rebuilding the agent crates, or to recover from
-  a lost connection.
+- `reload session runtime`: restarts `horizon-sessiond`, closes terminal
+  sessions, and reconnects persisted agent sessions — use after rebuilding
+  the session runtime crates, or to recover from a lost connection.
 
 Running the `manage sessions` command opens a separate modal listing every
 session the workspace knows about: arrows move the selection, `Enter`

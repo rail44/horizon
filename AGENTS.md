@@ -21,8 +21,8 @@ cargo run
 ```
 
 `cargo build --workspace` is the canonical build command: `cargo run` alone
-only rebuilds the root `horizon` binary, and Horizon's agent sessions run
-entirely inside `horizon-sessiond` (`crates/horizon-sessiond`), a separate
+only rebuilds the root `horizon` binary, and Horizon's terminal and agent
+sessions run inside `horizon-sessiond` (`crates/horizon-sessiond`), a separate
 workspace member Horizon spawns on demand (see
 `docs/agent-runtime-split-design.md`). If that binary was never built (or is
 stale after an agent-side change), `cargo run` still starts Horizon but
@@ -102,17 +102,17 @@ The shell is GPUI-based (the Floem shell retired at tag
   tree, session attachments, operations/queries, mode state, spatial
   navigation, the pure command model, and the `workspace.snapshot`
   payload — is `crates/horizon-workspace`.
-- `terminal/` — the terminal pane: PTY spawn layer (`pty.rs`, cwd
-  sampling in `cwd.rs`), the per-session model entity (`session.rs`),
-  and the view (grid painting, key/mouse/IME handling, `input.rs`
-  mapping). Emulation and the session loop live in
-  `crates/horizon-terminal-core` — see `docs/session-daemon-design.md`;
+- `sessiond/` — the shell's one eager shared client runtime: non-blocking
+  connect/spawn, raw agent/terminal routing, and explicit drain.
+- `terminal/` — the terminal pane: the daemon-backed per-session model entity
+  (`session.rs`) and the view (grid painting, key/mouse/IME handling,
+  `input.rs` mapping). PTY ownership lives in `crates/horizon-sessiond`;
+  emulation and the session loop live in `crates/horizon-terminal-core` — see
+  `docs/session-daemon-design.md`;
   print the kitty conformance matrix with `cargo test -p
   horizon-terminal-core print_compliance_matrix -- --nocapture`.
-- `agent/` — the agent pane: the sessiond connection (`connection.rs`,
-  reusing `horizon-agent`'s shared `client` for spawn/handshake),
-  per-session model entities (`session.rs`, folding events through the
-  shared `LiveState`), and the view (Markdown transcript, composer,
+- `agent/` — the agent pane: per-session model entities (`session.rs`, folding
+  events through the shared `LiveState`), and the view (Markdown transcript, composer,
   approvals). Contract/providers/tools/persistence live in
   `crates/horizon-agent`, hosted by `crates/horizon-sessiond` — see
   `docs/agent-runtime-split-design.md`.
