@@ -5,6 +5,7 @@ members = [
     "crates/horizon-agentd",
     "crates/horizon-control",
     "crates/horizon-ctl",
+    "crates/horizon-session-protocol",
     "crates/horizon-terminal-core",
     "crates/horizon-config",
     "crates/horizon-workspace",
