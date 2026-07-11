@@ -11,6 +11,11 @@ use horizon_workspace::types::SessionSummary;
 pub struct SessionManagerDelegate {
     all: Vec<SessionSummary>,
     filtered: Vec<SessionSummary>,
+    // Whether the most recent confirm was the secondary one (cmd-enter /
+    // right click) — the List calls `confirm` before emitting
+    // `ListEvent::Confirm`, so the shell's event handler reads this to
+    // pick attach-or-jump (primary) vs terminate (secondary).
+    last_confirm_secondary: bool,
 }
 
 impl SessionManagerDelegate {
@@ -18,11 +23,23 @@ impl SessionManagerDelegate {
         Self {
             filtered: sessions.clone(),
             all: sessions,
+            last_confirm_secondary: false,
         }
     }
 
     pub fn summary_at(&self, index: IndexPath) -> Option<&SessionSummary> {
         self.filtered.get(index.row)
+    }
+
+    pub fn last_confirm_secondary(&self) -> bool {
+        self.last_confirm_secondary
+    }
+
+    /// Replaces the listed sessions (after a terminate, keeping the
+    /// modal open on fresh data).
+    pub fn reset(&mut self, sessions: Vec<SessionSummary>) {
+        self.filtered = sessions.clone();
+        self.all = sessions;
     }
 }
 
@@ -94,5 +111,14 @@ impl ListDelegate for SessionManagerDelegate {
         _window: &mut Window,
         _cx: &mut Context<ListState<Self>>,
     ) {
+    }
+
+    fn confirm(
+        &mut self,
+        secondary: bool,
+        _window: &mut Window,
+        _cx: &mut Context<ListState<Self>>,
+    ) {
+        self.last_confirm_secondary = secondary;
     }
 }

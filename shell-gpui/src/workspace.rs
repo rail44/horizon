@@ -30,6 +30,7 @@ use crate::session_manager::SessionManagerDelegate;
 use crate::terminal::{sample_cwd, TerminalSession, TerminalView};
 use crate::terminal_focus::focus_transition;
 use crate::theme;
+use crate::view_chooser::{Placement, ViewChooserDelegate};
 use horizon_terminal_core::TerminalCommand;
 use horizon_workspace::types::SessionKind;
 use horizon_workspace::SessionId;
@@ -230,6 +231,10 @@ pub struct WorkspaceShell {
     _palette_subscription: Option<Subscription>,
     session_manager: Option<Entity<ListState<SessionManagerDelegate>>>,
     _session_manager_subscription: Option<Subscription>,
+    view_chooser: Option<Entity<ListState<ViewChooserDelegate>>>,
+    _view_chooser_subscription: Option<Subscription>,
+    // The placement the open view chooser will apply on confirm.
+    pending_placement: Option<Placement>,
     // The terminal session `sync_terminal_focus` last sent `Focus(true)`
     // to, so a transition can send `Focus(false)` to the one it's about
     // to stop being true for. See `focus_transition`.
@@ -257,6 +262,9 @@ impl WorkspaceShell {
             _palette_subscription: None,
             session_manager: None,
             _session_manager_subscription: None,
+            view_chooser: None,
+            _view_chooser_subscription: None,
+            pending_placement: None,
             last_focused_terminal: None,
         };
         // Window activation/deactivation doesn't otherwise touch the
@@ -631,17 +639,88 @@ impl WorkspaceShell {
             .unwrap_or_else(|| std::path::PathBuf::from("."))
     }
 
-    fn new_tab(&mut self, kind: PaneKind, window: &mut Window, cx: &mut Context<Self>) {
+    /// The one interactive session-creation path: what the view chooser
+    /// confirms with. Terminal cwd and agent role ride the same staging
+    /// maps `reconcile` consumes.
+    fn create_session(
+        &mut self,
+        kind: PaneKind,
+        role_id: Option<horizon_agent::roles::RoleId>,
+        placement: Placement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.workspace.exit_workspace_mode();
         let cwd = matches!(kind, PaneKind::Terminal).then(|| self.resolve_new_terminal_cwd(cx));
-        let session_id = self
-            .workspace
-            .open_tab_with_new_session_activated(kind, true);
-        if let Some(cwd) = cwd {
-            self.pending_terminal_cwds.insert(session_id, cwd);
+        let session_id = match placement {
+            Placement::NewTab => Some(
+                self.workspace
+                    .open_tab_with_new_session_activated(kind, true),
+            ),
+            Placement::SplitRight | Placement::SplitDown => {
+                let axis = if placement == Placement::SplitRight {
+                    SplitAxis::Horizontal
+                } else {
+                    SplitAxis::Vertical
+                };
+                self.workspace.active_session_id().and_then(|target| {
+                    self.workspace
+                        .split_session_with_new_session(target, kind, axis, true)
+                })
+            }
+        };
+        if let Some(session_id) = session_id {
+            if let Some(cwd) = cwd {
+                self.pending_terminal_cwds.insert(session_id, cwd);
+            }
+            if let Some(role_id) = role_id {
+                self.pending_roles.insert(session_id, role_id);
+            }
         }
         self.reconcile(window, cx);
         self.focus_active(window, cx);
+    }
+
+    fn open_view_chooser(
+        &mut self,
+        placement: Placement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.workspace.exit_workspace_mode();
+        self.pending_placement = Some(placement);
+        let list =
+            cx.new(|cx| ListState::new(ViewChooserDelegate::new(), window, cx).searchable(true));
+        let subscription = cx.subscribe_in(
+            &list,
+            window,
+            |shell, list, event: &ListEvent, window, cx| match event {
+                ListEvent::Confirm(index) => {
+                    let choice = list.read(cx).delegate().choice_at(*index).cloned();
+                    let placement = shell.pending_placement.take();
+                    shell.close_view_chooser(window, cx);
+                    if let (Some(choice), Some(placement)) = (choice, placement) {
+                        shell.create_session(choice.kind, choice.role_id, placement, window, cx);
+                    }
+                }
+                ListEvent::Cancel => {
+                    shell.pending_placement = None;
+                    shell.close_view_chooser(window, cx);
+                }
+                ListEvent::Select(_) => {}
+            },
+        );
+        window.focus(&list.focus_handle(cx), cx);
+        self.view_chooser = Some(list);
+        self._view_chooser_subscription = Some(subscription);
+        cx.notify();
+    }
+
+    fn close_view_chooser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.view_chooser = None;
+        self._view_chooser_subscription = None;
+        self.focus_active(window, cx);
+        cx.notify();
     }
 
     /// The active pane's agent session, when it is an agent pane.
@@ -651,31 +730,14 @@ impl WorkspaceShell {
         self.agent_sessions.get(&session_id).cloned()
     }
 
-    fn split_pane(&mut self, axis: SplitAxis, window: &mut Window, cx: &mut Context<Self>) {
-        self.workspace.exit_workspace_mode();
-        if let Some(target) = self.workspace.active_session_id() {
-            let cwd = self.resolve_new_terminal_cwd(cx);
-            if let Some(session_id) = self.workspace.split_session_with_new_session(
-                target,
-                PaneKind::Terminal,
-                axis,
-                true,
-            ) {
-                self.pending_terminal_cwds.insert(session_id, cwd);
-            }
-        }
-        self.reconcile(window, cx);
-        self.focus_active(window, cx);
-    }
-
     /// The M3 dispatch point: every surface (palette, keybindings, and
     /// later the control plane) funnels through here — the GPUI
     /// counterpart of the Floem shell's `execute_command`.
     fn execute(&mut self, id: CommandId, window: &mut Window, cx: &mut Context<Self>) {
         match id {
-            CommandId::SplitRight => self.split_pane(SplitAxis::Horizontal, window, cx),
-            CommandId::SplitDown => self.split_pane(SplitAxis::Vertical, window, cx),
-            CommandId::NewTab => self.new_tab(PaneKind::Terminal, window, cx),
+            CommandId::SplitRight => self.open_view_chooser(Placement::SplitRight, window, cx),
+            CommandId::SplitDown => self.open_view_chooser(Placement::SplitDown, window, cx),
+            CommandId::NewTab => self.open_view_chooser(Placement::NewTab, window, cx),
             CommandId::FocusNextPane => {
                 self.workspace.focus_next();
                 self.focus_active(window, cx);
@@ -771,23 +833,43 @@ impl WorkspaceShell {
             window,
             |shell, list, event: &ListEvent, window, cx| match event {
                 ListEvent::Confirm(index) => {
-                    let summary = list.read(cx).delegate().summary_at(*index).cloned();
-                    shell.close_session_manager(window, cx);
-                    if let Some(summary) = summary {
-                        if summary.attached {
-                            if let Some((tab, pane)) =
-                                shell.workspace.pane_location_for_session(summary.id)
-                            {
-                                shell.workspace.activate_pane_index(tab, pane);
-                            }
-                        } else {
-                            shell
-                                .workspace
-                                .attach_existing_session_to_split_activated(summary.id, true);
-                        }
+                    let (summary, secondary) = {
+                        let delegate = list.read(cx).delegate();
+                        (
+                            delegate.summary_at(*index).cloned(),
+                            delegate.last_confirm_secondary(),
+                        )
+                    };
+                    let Some(summary) = summary else {
+                        return;
+                    };
+                    if secondary {
+                        // Secondary confirm (cmd-enter / right click)
+                        // terminates the session; the modal stays open
+                        // on refreshed data.
+                        shell.workspace.terminate_session(summary.id);
                         shell.reconcile(window, cx);
-                        shell.focus_active(window, cx);
+                        let sessions = shell.workspace.session_summaries();
+                        list.update(cx, |list, cx| {
+                            list.delegate_mut().reset(sessions);
+                            cx.notify();
+                        });
+                        return;
                     }
+                    shell.close_session_manager(window, cx);
+                    if summary.attached {
+                        if let Some((tab, pane)) =
+                            shell.workspace.pane_location_for_session(summary.id)
+                        {
+                            shell.workspace.activate_pane_index(tab, pane);
+                        }
+                    } else {
+                        shell
+                            .workspace
+                            .attach_existing_session_to_split_activated(summary.id, true);
+                    }
+                    shell.reconcile(window, cx);
+                    shell.focus_active(window, cx);
                 }
                 ListEvent::Cancel => shell.close_session_manager(window, cx),
                 ListEvent::Select(_) => {}
@@ -1149,7 +1231,7 @@ impl Render for WorkspaceShell {
                 shell.execute(CommandId::NewTab, window, cx);
             }))
             .on_action(cx.listener(|shell, _: &NewAgentTab, window, cx| {
-                shell.new_tab(PaneKind::Agent, window, cx);
+                shell.create_session(PaneKind::Agent, None, Placement::NewTab, window, cx);
             }))
             .on_action(cx.listener(|shell, _: &SplitPane, window, cx| {
                 shell.execute(CommandId::SplitRight, window, cx);
@@ -1201,6 +1283,38 @@ impl Render for WorkspaceShell {
                                         .rounded_md()
                                         .overflow_hidden()
                                         .child(List::new(&palette)),
+                                ),
+                        )
+                    })
+                    .when_some(self.view_chooser.clone(), |this, chooser| {
+                        this.child(
+                            div()
+                                .id("view-chooser-backdrop")
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .size_full()
+                                .flex()
+                                .justify_center()
+                                .items_start()
+                                .pt(px(64.0))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|shell, _, window, cx| {
+                                        shell.pending_placement = None;
+                                        shell.close_view_chooser(window, cx);
+                                    }),
+                                )
+                                .child(
+                                    div()
+                                        .w(px(420.0))
+                                        .h(px(220.0))
+                                        .bg(rgb(0x1b1e26))
+                                        .border_1()
+                                        .border_color(rgb(0x2a2e3a))
+                                        .rounded_md()
+                                        .overflow_hidden()
+                                        .child(List::new(&chooser)),
                                 ),
                         )
                     })

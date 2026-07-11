@@ -13,6 +13,7 @@ mod session_manager;
 mod terminal;
 mod terminal_focus;
 mod theme;
+mod view_chooser;
 mod workspace;
 
 use std::io::{self, IsTerminal as _};
