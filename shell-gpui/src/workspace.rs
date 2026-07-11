@@ -23,7 +23,7 @@ use horizon_workspace::commands::{command_entries, CommandId, CommandState};
 use horizon_workspace::types::LayoutNode;
 use horizon_workspace::{Direction, PaneId, PaneKind, SplitAxis, Workspace};
 
-use crate::agent::{AgentSession, AgentView, AgentdHandle};
+use crate::agent::{wait_for_drain, AgentSession, AgentView, AgentdHandle};
 use crate::keymap;
 use crate::palette::PaletteDelegate;
 use crate::session_manager::SessionManagerDelegate;
@@ -209,6 +209,10 @@ pub struct WorkspaceShell {
     // connects async at startup; lazy-blocking is the v1 tradeoff here).
     agentd: Option<AgentdHandle>,
     panes: HashMap<PaneId, PaneView>,
+    // This window — needed by `Reload Agent Runtime`'s post-resume step,
+    // which rebuilds pane views from a background thread's async
+    // continuation (no `&mut Window` of its own to reuse).
+    window: AnyWindowHandle,
     // Focused while workspace mode is active, so mode keys dispatch here
     // instead of reaching the terminal.
     focus_handle: FocusHandle,
@@ -232,6 +236,7 @@ impl WorkspaceShell {
             pending_roles: HashMap::new(),
             agentd: None,
             panes: HashMap::new(),
+            window: window.window_handle(),
             focus_handle: cx.focus_handle(),
             palette: None,
             _palette_subscription: None,
@@ -387,16 +392,26 @@ impl WorkspaceShell {
         .detach();
     }
 
-    /// Startup continuity: connect to agentd on a background thread
-    /// (never blocking the first frame — the Floem shell's
-    /// `connect_agentd_at_startup_async` shape), list the sessions it
-    /// still hosts, and adopt each as a detached session: registered in
-    /// the model (so the session manager shows it) and attached over the
-    /// wire (so its replayed transcript is ready when a pane picks it
-    /// up).
+    /// Agentd resume: connect to agentd on a background thread (never
+    /// blocking the caller — the Floem shell's
+    /// `connect_agentd_at_startup_async`/`reload_agent_runtime` shape),
+    /// list the sessions it still hosts, and adopt each as a detached
+    /// session: registered in the model (so the session manager shows it)
+    /// and attached over the wire (so its replayed transcript is ready
+    /// when a pane picks it up). Shared by two callers: startup
+    /// ([`Self::new`], against a freshly opened window with no agent
+    /// panes yet) and `Reload Agent Runtime`
+    /// ([`Self::reload_agent_runtime`], after the old connection has
+    /// drained — see that function's doc comment for why its
+    /// `agent_sessions`/agent-pane views are already cleared by the time
+    /// this runs). Either way, the post-adopt `reconcile`/`focus_active`
+    /// pass rebuilds any agent pane view whose session id this resume
+    /// just reattached — a no-op at startup (no agent panes exist yet)
+    /// and the reload's actual pane-rebuild step.
     fn spawn_startup_resume(&self, cx: &mut Context<Self>) {
         let agentd_socket = horizon_agent::socket::default_socket_path();
         let control_socket = self.socket_path.clone();
+        let window_handle = self.window;
         let (startup_tx, mut startup_rx) = futures::channel::mpsc::unbounded();
         std::thread::spawn(
             move || match AgentdHandle::connect(&agentd_socket, &control_socket) {
@@ -404,7 +419,7 @@ impl WorkspaceShell {
                     let summaries = handle.session_list();
                     let _ = startup_tx.unbounded_send((handle, host_tool_rx, summaries));
                 }
-                Err(error) => eprintln!("agentd connect at startup failed: {error}"),
+                Err(error) => eprintln!("agentd connect failed: {error}"),
             },
         );
         cx.spawn(async move |this, cx| {
@@ -412,26 +427,68 @@ impl WorkspaceShell {
             let Some((handle, host_tool_rx, summaries)) = startup_rx.next().await else {
                 return;
             };
-            let _ = this.update(cx, |shell, cx| {
-                if shell.agentd.is_none() {
-                    shell.adopt_agentd(handle.clone(), host_tool_rx, cx);
-                }
-                for summary in summaries {
-                    let session_id = SessionId::from_uuid(summary.session_id.as_uuid());
-                    if shell.agent_sessions.contains_key(&session_id) {
-                        continue;
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = this.update(cx, |shell, cx| {
+                    if shell.agentd.is_none() {
+                        shell.adopt_agentd(handle.clone(), host_tool_rx, cx);
                     }
-                    shell
-                        .workspace
-                        .register_detached_session(PaneKind::Agent, session_id);
-                    let session_handle = handle.attach_session(summary.session_id);
-                    shell.agent_sessions.insert(
-                        session_id,
-                        cx.new(|cx| AgentSession::new(session_handle, cx)),
-                    );
-                }
-                cx.notify();
+                    for summary in summaries {
+                        let session_id = SessionId::from_uuid(summary.session_id.as_uuid());
+                        if shell.agent_sessions.contains_key(&session_id) {
+                            continue;
+                        }
+                        shell
+                            .workspace
+                            .register_detached_session(PaneKind::Agent, session_id);
+                        let session_handle = handle.attach_session(summary.session_id);
+                        shell.agent_sessions.insert(
+                            session_id,
+                            cx.new(|cx| AgentSession::new(session_handle, cx)),
+                        );
+                    }
+                    shell.reconcile(window, cx);
+                    shell.focus_active(window, cx);
+                });
             });
+        })
+        .detach();
+    }
+
+    /// `Reload Agent Runtime`: drain the current agentd connection (if
+    /// any), wait for the old process to actually exit
+    /// ([`wait_for_drain`]), then run the same
+    /// connect/`session_list`/adopt/reconcile flow as startup resume
+    /// ([`Self::spawn_startup_resume`]) against the (possibly
+    /// just-rebuilt) binary — "drain -> agentd flushes and exits ->
+    /// Horizon spawns the rebuilt binary -> reconnect -> session_load",
+    /// mirroring the Floem shell's `agentd_runtime::reload_agent_runtime`.
+    ///
+    /// Called with `self.agentd` already taken and every stale agent
+    /// session entity/pane view already dropped (`execute`'s
+    /// `CommandId::ReloadAgentRuntime` arm) — nothing should try to route
+    /// a command through the dying connection while this is in flight,
+    /// and `spawn_startup_resume`'s "already known" checks (`shell.agentd
+    /// .is_none()`, `shell.agent_sessions.contains_key`) must see the
+    /// pre-reload state as gone, not stale, so it reattaches every
+    /// session rather than skipping them.
+    fn reload_agent_runtime(&self, old: Option<AgentdHandle>, cx: &mut Context<Self>) {
+        let socket_path = horizon_agent::socket::default_socket_path();
+        let (drained_tx, mut drained_rx) = futures::channel::mpsc::unbounded();
+        std::thread::spawn(move || {
+            if let Some(handle) = old {
+                handle.drain();
+            }
+            if let Err(error) = wait_for_drain(&socket_path) {
+                eprintln!("horizon-agentd did not drain cleanly: {error}");
+            }
+            let _ = drained_tx.unbounded_send(());
+        });
+        cx.spawn(async move |this, cx| {
+            use futures::StreamExt as _;
+            if drained_rx.next().await.is_none() {
+                return;
+            }
+            let _ = this.update(cx, |shell, cx| shell.spawn_startup_resume(cx));
         })
         .detach();
     }
@@ -564,8 +621,19 @@ impl WorkspaceShell {
                 }
                 Err(error) => eprintln!("reload-config failed: {error}"),
             },
-            // Unwired until the drain/respawn sequence is ported (M5).
-            CommandId::ReloadAgentRuntime => {}
+            CommandId::ReloadAgentRuntime => {
+                let old = self.agentd.take();
+                // The model keeps the sessions/panes; only the stale
+                // views/handles are dropped — `reload_agent_runtime`'s
+                // resume repopulates `agent_sessions` (via `session_load`)
+                // and `reconcile` rebuilds a fresh `AgentView` for every
+                // pane whose session id comes back.
+                self.agent_sessions.clear();
+                self.panes
+                    .retain(|_, view| !matches!(view, PaneView::Agent(_)));
+                cx.notify();
+                self.reload_agent_runtime(old, cx);
+            }
         }
     }
 

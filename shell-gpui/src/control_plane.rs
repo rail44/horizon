@@ -3,9 +3,9 @@
 //! Floem shell; this module is the GPUI-side UI-thread bridge (the
 //! `ChannelExecutor` counterpart of the Floem shell's
 //! `control_plane::bridge`) plus a dispatcher over the shell's
-//! `execute()`/model. The external vocabulary here is the subset whose
-//! subsystems have landed — only `reload-agent-runtime` (the agentd
-//! drain/respawn sequence) still returns an error, pending M5.
+//! `execute()`/model. The external vocabulary here mirrors every landed
+//! subsystem, including `reload-agent-runtime` (the agentd
+//! drain/respawn/resume sequence, `WorkspaceShell::reload_agent_runtime`).
 
 use std::time::Duration;
 
@@ -215,9 +215,9 @@ fn dispatch_invoke(
                 Err(message) => error_body(message),
             }
         }
-        // Still pending: the agentd drain/respawn sequence.
-        other @ "reload-agent-runtime" => {
-            error_body(format!("`{other}` is not available in this shell yet"))
+        "reload-agent-runtime" => {
+            shell.execute_external(CommandId::ReloadAgentRuntime, window, cx);
+            EnvelopeBody::Ok
         }
         other => error_body(format!("unknown external command `{other}`")),
     }

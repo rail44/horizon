@@ -155,6 +155,48 @@ impl AgentdHandle {
             .recv_timeout(std::time::Duration::from_secs(5))
             .unwrap_or_default()
     }
+
+    /// Asks agentd to drain: flush and exit (mirrors the Floem shell's
+    /// `agentd_runtime::AgentdConnection::drain`). Best-effort and
+    /// fire-and-forget — the caller (`Reload Agent Runtime`) doesn't wait
+    /// for a reply, just for the old process to actually be gone, observed
+    /// indirectly via [`wait_for_drain`].
+    pub fn drain(&self) {
+        let _ = self.outgoing.send(Envelope::control(Control::Drain));
+    }
+}
+
+/// How long [`wait_for_drain`] polls for the old `horizon-agentd` to
+/// actually stop accepting connections before giving up — mirrors the
+/// Floem shell's `agentd_runtime::DRAIN_TIMEOUT`.
+const DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Poll interval for [`wait_for_drain`] — mirrors the Floem shell's
+/// `agentd_runtime::DRAIN_POLL_INTERVAL`.
+const DRAIN_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Blocks the calling thread until nothing answers a connection attempt on
+/// `socket_path` — i.e. the drained old `horizon-agentd` has actually
+/// exited — or [`DRAIN_TIMEOUT`] elapses, in which case it's reported as a
+/// failure rather than silently falling through to a spawn-or-connect
+/// attempt that might reattach to a still-alive old process. Mirrors the
+/// Floem shell's `agentd_runtime::wait_for_drain`; synchronous
+/// (`std::os::unix::net`, not tokio) since the caller has no async runtime
+/// of its own.
+pub fn wait_for_drain(socket_path: &Path) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + DRAIN_TIMEOUT;
+    loop {
+        if std::os::unix::net::UnixStream::connect(socket_path).is_err() {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(format!(
+                "horizon-agentd did not drain within {:.1}s",
+                DRAIN_TIMEOUT.as_secs_f64()
+            ));
+        }
+        thread::sleep(DRAIN_POLL_INTERVAL);
+    }
 }
 
 async fn run_connection(

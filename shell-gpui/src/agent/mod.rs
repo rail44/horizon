@@ -6,6 +6,6 @@ mod connection;
 mod session;
 mod view;
 
-pub use connection::AgentdHandle;
+pub use connection::{wait_for_drain, AgentdHandle};
 pub use session::AgentSession;
 pub use view::AgentView;
