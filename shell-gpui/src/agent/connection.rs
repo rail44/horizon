@@ -29,6 +29,9 @@ type AgentSessionId = contract::SessionId;
 pub struct AgentdHandle {
     outgoing: tokio::sync::mpsc::UnboundedSender<Envelope>,
     session_events: Arc<Mutex<HashMap<AgentSessionId, Sender<ProviderEvent>>>>,
+    // Answers the one-at-a-time session_list round trip (same
+    // no-request-id simplification as the Floem shell).
+    pending_session_list: Arc<Mutex<Option<Sender<Vec<wire::SessionSummary>>>>>,
 }
 
 impl AgentdHandle {
@@ -62,9 +65,15 @@ impl AgentdHandle {
             runtime.block_on(run_connection(&socket_path, &control_socket, outcome_tx));
         });
 
-        outcome_rx.recv().unwrap_or_else(|_| {
-            Err("horizon-agentd connection thread exited before reporting an outcome".to_string())
-        })
+        // Bounded so a wedged agentd (accepting but never handshaking)
+        // can't hang the caller — which may be the UI thread on the lazy
+        // path. `Reload Agent Runtime` (drain/respawn) is the recovery
+        // for the wedged daemon itself.
+        outcome_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap_or_else(|_| {
+                Err("timed out waiting for the horizon-agentd handshake".to_string())
+            })
     }
 
     /// Starts a fresh session over this connection and hands back the
@@ -116,6 +125,36 @@ impl AgentdHandle {
             .outgoing
             .send(Envelope::control(Control::HostToolResponse(response)));
     }
+
+    /// Attaches to a session agentd already hosts (resumed from its log):
+    /// sends `session_load`, so committed events replay onto the handle.
+    pub fn attach_session(&self, session_id: AgentSessionId) -> contract::SessionHandle {
+        let handle = self.register_session_routing(session_id);
+        let _ = self
+            .outgoing
+            .send(Envelope::control(Control::SessionLoad(wire::SessionLoad {
+                session_id,
+            })));
+        handle
+    }
+
+    /// Asks agentd for every session it hosts, blocking up to five
+    /// seconds — called from the startup background thread, never the UI
+    /// thread.
+    pub fn session_list(&self) -> Vec<wire::SessionSummary> {
+        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+        *self.pending_session_list.lock().unwrap() = Some(reply_tx);
+        if self
+            .outgoing
+            .send(Envelope::control(Control::SessionList))
+            .is_err()
+        {
+            return Vec::new();
+        }
+        reply_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap_or_default()
+    }
 }
 
 async fn run_connection(
@@ -136,10 +175,12 @@ async fn run_connection(
     let session_events: Arc<Mutex<HashMap<AgentSessionId, Sender<ProviderEvent>>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let (host_tool_tx, host_tool_rx) = unbounded::<HostToolRequest>();
+    let pending_session_list = Arc::new(Mutex::new(None));
 
     let handle = AgentdHandle {
         outgoing: outgoing_tx.clone(),
         session_events: session_events.clone(),
+        pending_session_list: pending_session_list.clone(),
     };
     if outcome_tx.send(Ok((handle, host_tool_rx))).is_err() {
         return;
@@ -155,9 +196,13 @@ async fn run_connection(
     let read_task = async move {
         loop {
             match wire::read_envelope(&mut reader).await {
-                Ok(Some(envelope)) => {
-                    dispatch_incoming(envelope, &session_events, &outgoing_tx, &host_tool_tx)
-                }
+                Ok(Some(envelope)) => dispatch_incoming(
+                    envelope,
+                    &session_events,
+                    &outgoing_tx,
+                    &host_tool_tx,
+                    &pending_session_list,
+                ),
                 Ok(None) | Err(_) => return,
             }
         }
@@ -173,6 +218,7 @@ fn dispatch_incoming(
     session_events: &Arc<Mutex<HashMap<AgentSessionId, Sender<ProviderEvent>>>>,
     outgoing: &tokio::sync::mpsc::UnboundedSender<Envelope>,
     host_tool_tx: &Sender<HostToolRequest>,
+    pending_session_list: &Arc<Mutex<Option<Sender<Vec<wire::SessionSummary>>>>>,
 ) {
     match envelope.body {
         EnvelopeBody::Event(event) => {
@@ -196,6 +242,11 @@ fn dispatch_incoming(
         // shell's wire_host_tool_responder.
         EnvelopeBody::Control(Control::HostToolRequest(request)) => {
             let _ = host_tool_tx.send(request);
+        }
+        EnvelopeBody::Control(Control::SessionListResult(summaries)) => {
+            if let Some(reply) = pending_session_list.lock().unwrap().take() {
+                let _ = reply.send(summaries);
+            }
         }
         EnvelopeBody::Control(Control::Ping) => {
             let _ = outgoing.send(Envelope::control(Control::Pong));

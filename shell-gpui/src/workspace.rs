@@ -144,6 +144,7 @@ impl WorkspaceShell {
         };
         shell.reconcile(window, cx);
         shell.focus_active(window, cx);
+        shell.spawn_startup_resume(cx);
         shell
     }
 
@@ -231,10 +232,8 @@ impl WorkspaceShell {
         cx.notify();
     }
 
-    /// Lazily connects to `horizon-agentd` (spawning it if needed) and
-    /// wires the host-tool responder: `workspace.snapshot` requests are
-    /// answered on the UI thread from the live model, mirroring the
-    /// Floem shell's `wire_host_tool_responder`.
+    /// Lazily connects to `horizon-agentd` (spawning it if needed);
+    /// [`Self::spawn_startup_resume`] usually gets there first.
     fn agentd(&mut self, cx: &mut Context<Self>) -> Result<AgentdHandle, String> {
         if let Some(handle) = &self.agentd {
             return Ok(handle.clone());
@@ -243,6 +242,20 @@ impl WorkspaceShell {
             &horizon_agent::socket::default_socket_path(),
             &self.socket_path,
         )?;
+        self.adopt_agentd(handle.clone(), host_tool_rx, cx);
+        Ok(handle)
+    }
+
+    /// Stores a fresh connection and wires the host-tool responder:
+    /// `workspace.snapshot` requests are answered on the UI thread from
+    /// the live model, mirroring the Floem shell's
+    /// `wire_host_tool_responder`.
+    fn adopt_agentd(
+        &mut self,
+        handle: AgentdHandle,
+        host_tool_rx: crossbeam_channel::Receiver<horizon_agent::wire::HostToolRequest>,
+        cx: &mut Context<Self>,
+    ) {
         self.agentd = Some(handle.clone());
 
         let (async_tx, mut async_rx) = futures::channel::mpsc::unbounded();
@@ -253,7 +266,6 @@ impl WorkspaceShell {
                 }
             }
         });
-        let responder = handle.clone();
         cx.spawn(async move |this, cx| {
             use futures::StreamExt as _;
             while let Some(request) = async_rx.next().await {
@@ -269,15 +281,62 @@ impl WorkspaceShell {
                     .unwrap_or_else(
                         |_| serde_json::json!({ "error": "the workspace shell is gone" }),
                     );
-                responder.respond_host_tool(horizon_agent::wire::HostToolResponse {
+                handle.respond_host_tool(horizon_agent::wire::HostToolResponse {
                     request_id: request.request_id,
                     output,
                 });
             }
         })
         .detach();
+    }
 
-        Ok(handle)
+    /// Startup continuity: connect to agentd on a background thread
+    /// (never blocking the first frame — the Floem shell's
+    /// `connect_agentd_at_startup_async` shape), list the sessions it
+    /// still hosts, and adopt each as a detached session: registered in
+    /// the model (so the session manager shows it) and attached over the
+    /// wire (so its replayed transcript is ready when a pane picks it
+    /// up).
+    fn spawn_startup_resume(&self, cx: &mut Context<Self>) {
+        let agentd_socket = horizon_agent::socket::default_socket_path();
+        let control_socket = self.socket_path.clone();
+        let (startup_tx, mut startup_rx) = futures::channel::mpsc::unbounded();
+        std::thread::spawn(
+            move || match AgentdHandle::connect(&agentd_socket, &control_socket) {
+                Ok((handle, host_tool_rx)) => {
+                    let summaries = handle.session_list();
+                    let _ = startup_tx.unbounded_send((handle, host_tool_rx, summaries));
+                }
+                Err(error) => eprintln!("agentd connect at startup failed: {error}"),
+            },
+        );
+        cx.spawn(async move |this, cx| {
+            use futures::StreamExt as _;
+            let Some((handle, host_tool_rx, summaries)) = startup_rx.next().await else {
+                return;
+            };
+            let _ = this.update(cx, |shell, cx| {
+                if shell.agentd.is_none() {
+                    shell.adopt_agentd(handle.clone(), host_tool_rx, cx);
+                }
+                for summary in summaries {
+                    let session_id = SessionId::from_uuid(summary.session_id.as_uuid());
+                    if shell.agent_sessions.contains_key(&session_id) {
+                        continue;
+                    }
+                    shell
+                        .workspace
+                        .register_detached_session(PaneKind::Agent, session_id);
+                    let session_handle = handle.attach_session(summary.session_id);
+                    shell.agent_sessions.insert(
+                        session_id,
+                        cx.new(|cx| AgentSession::new(session_handle, cx)),
+                    );
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn focus_active(&self, window: &mut Window, cx: &mut Context<Self>) {
