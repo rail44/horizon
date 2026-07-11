@@ -28,7 +28,9 @@ use crate::keymap;
 use crate::palette::PaletteDelegate;
 use crate::session_manager::SessionManagerDelegate;
 use crate::terminal::{sample_cwd, TerminalSession, TerminalView};
+use crate::terminal_focus::focus_transition;
 use crate::theme;
+use horizon_terminal_core::TerminalCommand;
 use horizon_workspace::types::SessionKind;
 use horizon_workspace::SessionId;
 
@@ -228,6 +230,10 @@ pub struct WorkspaceShell {
     _palette_subscription: Option<Subscription>,
     session_manager: Option<Entity<ListState<SessionManagerDelegate>>>,
     _session_manager_subscription: Option<Subscription>,
+    // The terminal session `sync_terminal_focus` last sent `Focus(true)`
+    // to, so a transition can send `Focus(false)` to the one it's about
+    // to stop being true for. See `focus_transition`.
+    last_focused_terminal: Option<SessionId>,
 }
 
 impl WorkspaceShell {
@@ -251,7 +257,16 @@ impl WorkspaceShell {
             _palette_subscription: None,
             session_manager: None,
             _session_manager_subscription: None,
+            last_focused_terminal: None,
         };
+        // Window activation/deactivation doesn't otherwise touch the
+        // model, so it needs its own observer alongside `focus_active`'s
+        // call to `sync_terminal_focus` (every model mutation that can
+        // change the active pane).
+        cx.observe_window_activation(window, |shell, window, cx| {
+            shell.sync_terminal_focus(window, cx);
+        })
+        .detach();
         shell.reconcile(window, cx);
         shell.focus_active(window, cx);
         shell.spawn_startup_resume(cx);
@@ -509,13 +524,53 @@ impl WorkspaceShell {
         .detach();
     }
 
-    fn focus_active(&self, window: &mut Window, cx: &mut Context<Self>) {
+    fn focus_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(view) = self
             .workspace
             .cursor_pane_id()
             .and_then(|id| self.panes.get(&id))
         {
             window.focus(&view.focus_handle(cx), cx);
+        }
+        self.sync_terminal_focus(window, cx);
+    }
+
+    /// Composes Horizon's own window focus with which pane is active into
+    /// a single `TerminalCommand::Focus` transition to the session store
+    /// — the GPUI counterpart of the Floem shell's
+    /// `app::runtime::wire_focus_reporting`. Only the active pane's
+    /// terminal ever believes it has focus: an agent pane active (or the
+    /// window itself losing OS focus) means "no terminal focused," so the
+    /// previously-focused terminal (if any) gets `Focus(false)` and the
+    /// newly-focused one (if any) gets `Focus(true)` — never both to the
+    /// same session, and nothing at all when the composed target hasn't
+    /// changed. Called from every mutation that can change the active
+    /// pane ([`Self::focus_active`], [`Self::activate_pane`]) and from
+    /// the window-activation observer registered in [`Self::new`].
+    fn sync_terminal_focus(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let (unfocus, focus) = focus_transition(
+            window.is_window_active(),
+            self.workspace.active_terminal_session_id(),
+            self.last_focused_terminal,
+        );
+        if unfocus.is_none() && focus.is_none() {
+            return;
+        }
+        if let Some(session_id) = unfocus {
+            self.send_terminal_focus(session_id, false, cx);
+        }
+        if let Some(session_id) = focus {
+            self.send_terminal_focus(session_id, true, cx);
+        }
+        self.last_focused_terminal = focus;
+    }
+
+    fn send_terminal_focus(&self, session_id: SessionId, focused: bool, cx: &mut Context<Self>) {
+        if let Some(session) = self.sessions.get(&session_id) {
+            let _ = session
+                .read(cx)
+                .sender()
+                .send(TerminalCommand::Focus(focused));
         }
     }
 
@@ -973,8 +1028,9 @@ impl WorkspaceShell {
         cx.notify();
     }
 
-    fn activate_pane(&mut self, pane_id: PaneId, cx: &mut Context<Self>) {
+    fn activate_pane(&mut self, pane_id: PaneId, window: &mut Window, cx: &mut Context<Self>) {
         self.workspace.activate_pane(pane_id);
+        self.sync_terminal_focus(window, cx);
         cx.notify();
     }
 
@@ -1025,7 +1081,9 @@ impl WorkspaceShell {
                     .border_color(border)
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |shell, _, _, cx| shell.activate_pane(pane_id, cx)),
+                        cx.listener(move |shell, _, window, cx| {
+                            shell.activate_pane(pane_id, window, cx)
+                        }),
                     )
                     .children(view.map(|view| view.element()))
                     .into_any_element()

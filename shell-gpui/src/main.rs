@@ -11,6 +11,7 @@ mod keymap;
 mod palette;
 mod session_manager;
 mod terminal;
+mod terminal_focus;
 mod theme;
 mod workspace;
 
