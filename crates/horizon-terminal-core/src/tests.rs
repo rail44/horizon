@@ -1,7 +1,9 @@
 use termwiz::input::{KeyCode, Modifiers};
 
 use super::*;
-use alacritty_terminal::vte::ansi::NamedColor;
+use alacritty_terminal::vte::ansi::{NamedColor, Rgb};
+use serde::{de::DeserializeOwned, Serialize};
+use std::fmt::Debug;
 
 #[test]
 fn vt_stream_updates_snapshot() {
@@ -1460,4 +1462,209 @@ fn legacy_text_key_matches_pre_existing_bytes_over_printable_range_and_ctrl_tabl
     assert!(core
         .key_input(KeyCode::Char('a'), Modifiers::SUPER, KeyEventKind::Press)
         .is_empty());
+}
+
+fn assert_serde_round_trip<T>(value: T)
+where
+    T: Serialize + DeserializeOwned + Debug + Eq,
+{
+    let encoded = serde_json::to_vec(&value).unwrap();
+    let decoded = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(value, decoded);
+}
+
+fn test_frame(rows: &[&str]) -> TerminalFrame {
+    let lines = rows
+        .iter()
+        .map(|text| TerminalLine {
+            spans: vec![TerminalSpan {
+                text: (*text).to_string(),
+                columns: text.chars().count(),
+                fg: TerminalColor::Named(NamedColor::Foreground),
+                bg: TerminalColor::Named(NamedColor::Background),
+            }],
+        })
+        .collect::<Vec<_>>();
+    TerminalFrame {
+        text: rows.join("\n"),
+        lines,
+        cursor: None,
+        mouse_reporting: false,
+        keys_as_escape_codes: false,
+        palette_overrides: Vec::new(),
+    }
+}
+
+#[test]
+fn terminal_commands_and_selection_commands_round_trip_through_serde() {
+    let point = TerminalSelectionPoint { row: 3, col: 7 };
+    let mouse = TerminalMouseReport {
+        kind: TerminalMouseKind::Drag,
+        button: TerminalMouseButton::Left,
+        point,
+        modifiers: TerminalMouseModifiers {
+            shift: true,
+            alt: false,
+            control: true,
+        },
+    };
+    let commands = vec![
+        TerminalCommand::Input(vec![0, 1, 255]),
+        TerminalCommand::Key {
+            key: KeyCode::Char('x'),
+            modifiers: Modifiers::CTRL | Modifiers::ALT,
+            event: KeyEventKind::Repeat,
+        },
+        TerminalCommand::Paste("paste".into()),
+        TerminalCommand::Resize(TerminalSize {
+            cols: 120,
+            rows: 40,
+            pixel_width: 960,
+            pixel_height: 800,
+        }),
+        TerminalCommand::Scroll(TerminalScroll { lines: -2, point }),
+        TerminalCommand::Mouse(mouse),
+        TerminalCommand::SelectionStart(point),
+        TerminalCommand::SelectionUpdate(point),
+        TerminalCommand::CopySelection,
+        TerminalCommand::Focus(true),
+        TerminalCommand::Shutdown,
+    ];
+    for command in commands {
+        assert_serde_round_trip(command);
+    }
+
+    for command in [
+        SelectionCommand::Start(point),
+        SelectionCommand::Update(point),
+        SelectionCommand::Copy,
+    ] {
+        assert_serde_round_trip(command);
+    }
+}
+
+#[test]
+fn terminal_updates_and_external_value_types_round_trip_through_serde() {
+    let updates = vec![
+        TerminalUpdate::Snapshot(test_frame(&["one", "two"])),
+        TerminalUpdate::Title(Some("title".into())),
+        TerminalUpdate::Title(None),
+        TerminalUpdate::Bell,
+        TerminalUpdate::Clipboard("clipboard".into()),
+        TerminalUpdate::Exited,
+        TerminalUpdate::Error("error".into()),
+    ];
+    for update in updates {
+        assert_serde_round_trip(update);
+    }
+
+    for color in [
+        TerminalColor::Named(NamedColor::BrightCyan),
+        TerminalColor::Indexed(217),
+        TerminalColor::Spec(Rgb { r: 1, g: 2, b: 3 }),
+    ] {
+        assert_serde_round_trip(color);
+    }
+    assert_serde_round_trip(KeyCode::Function(12));
+    assert_serde_round_trip(Modifiers::SHIFT | Modifiers::SUPER);
+}
+
+#[test]
+fn frame_diff_no_op_has_no_changes() {
+    let frame = test_frame(&["one", "two"]);
+    let diff = compute_frame_diff(&frame, &frame);
+
+    assert!(diff.changed_rows.is_empty());
+    assert_eq!(diff.row_count, 2);
+    assert_eq!(diff.cursor, None);
+    assert_eq!(diff.mouse_reporting, None);
+    assert_eq!(diff.keys_as_escape_codes, None);
+    assert_eq!(diff.palette_overrides, None);
+    assert_eq!(apply_frame_diff(&frame, &diff), frame);
+}
+
+#[test]
+fn frame_diff_changes_only_replaced_rows() {
+    let old = test_frame(&["one", "two", "three"]);
+    let new = test_frame(&["one", "changed", "three"]);
+    let diff = compute_frame_diff(&old, &new);
+
+    assert_eq!(diff.changed_rows.len(), 1);
+    assert_eq!(diff.changed_rows[0].index, 1);
+    assert_eq!(apply_frame_diff(&old, &diff), new);
+}
+
+#[test]
+fn frame_diff_grows_and_shrinks_rows() {
+    let short = test_frame(&["one"]);
+    let long = test_frame(&["one", "two", "three"]);
+
+    let grow = compute_frame_diff(&short, &long);
+    assert_eq!(grow.row_count, 3);
+    assert_eq!(grow.changed_rows.len(), 2);
+    assert_eq!(apply_frame_diff(&short, &grow), long);
+
+    let shrink = compute_frame_diff(&long, &short);
+    assert_eq!(shrink.row_count, 1);
+    assert!(shrink.changed_rows.is_empty());
+    assert_eq!(apply_frame_diff(&long, &shrink), short);
+}
+
+#[test]
+fn frame_diff_tracks_each_metadata_change_without_rows() {
+    let old = test_frame(&["same"]);
+    let mut cursor = old.clone();
+    cursor.cursor = Some(TerminalCursor { row: 0, col: 2 });
+    let mut mouse = old.clone();
+    mouse.mouse_reporting = true;
+    let mut keys = old.clone();
+    keys.keys_as_escape_codes = true;
+    let mut palette = old.clone();
+    palette.palette_overrides = vec![(3, [10, 20, 30])];
+
+    for expected in [cursor, mouse, keys, palette] {
+        let diff = compute_frame_diff(&old, &expected);
+        assert!(diff.changed_rows.is_empty());
+        assert_eq!(apply_frame_diff(&old, &diff), expected);
+    }
+}
+
+#[test]
+fn frame_diff_apply_reconstructs_snapshot_text_from_styled_rows() {
+    let old = test_frame(&["old"]);
+    let mut new = test_frame(&["placeholder", "wide"]);
+    new.lines[0].spans = vec![
+        TerminalSpan {
+            text: String::new(),
+            columns: 2,
+            fg: TerminalColor::Named(NamedColor::Foreground),
+            bg: TerminalColor::Named(NamedColor::Background),
+        },
+        TerminalSpan {
+            text: "value".into(),
+            columns: 5,
+            fg: TerminalColor::Indexed(12),
+            bg: TerminalColor::Spec(Rgb { r: 4, g: 5, b: 6 }),
+        },
+    ];
+    new.lines[1].spans = vec![TerminalSpan {
+        text: "界".into(),
+        columns: 2,
+        fg: TerminalColor::Named(NamedColor::Foreground),
+        bg: TerminalColor::Named(NamedColor::Background),
+    }];
+    new.text = "  value\n界".into();
+    new.cursor = Some(TerminalCursor { row: 1, col: 2 });
+    new.mouse_reporting = true;
+    new.keys_as_escape_codes = true;
+    new.palette_overrides = vec![(256, [7, 8, 9])];
+
+    let diff = compute_frame_diff(&old, &new);
+    assert_serde_round_trip(diff.clone());
+    assert_eq!(apply_frame_diff(&old, &diff), new);
+
+    let hidden = test_frame(&["  value", "界"]);
+    let hide_diff = compute_frame_diff(&new, &hidden);
+    assert_eq!(hide_diff.cursor, Some(None));
+    assert_eq!(apply_frame_diff(&new, &hide_diff), hidden);
 }

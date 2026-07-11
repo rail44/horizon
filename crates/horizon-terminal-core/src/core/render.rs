@@ -4,10 +4,10 @@ use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Rgb};
 use unicode_width::UnicodeWidthChar;
 
 use crate::core::events::EventSink;
+use crate::types::frame_text;
 use crate::types::{TerminalCursor, TerminalFrame, TerminalLine, TerminalSize, TerminalSpan};
 
 pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> TerminalFrame {
-    let mut rows = vec![String::new(); size.rows as usize];
     let mut styled_rows = vec![TerminalLine { spans: Vec::new() }; size.rows as usize];
     let content = term.renderable_content();
 
@@ -18,7 +18,7 @@ pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> Term
         }
 
         let row = row as usize;
-        if row >= rows.len() {
+        if row >= styled_rows.len() {
             continue;
         }
 
@@ -49,21 +49,15 @@ pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> Term
             (fg, bg)
         };
         let columns = cell_width(cell.c, cell.flags);
-        rows[row].push(cell.c);
         push_styled_cell(&mut styled_rows[row], cell.c, columns, fg, bg);
         if let Some(zerowidth) = cell.zerowidth() {
-            rows[row].extend(zerowidth);
             for ch in zerowidth {
                 push_styled_cell(&mut styled_rows[row], *ch, 0, fg, bg);
             }
         }
     }
 
-    let text = rows
-        .into_iter()
-        .map(|row| row.trim_end().to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = frame_text(&styled_rows);
 
     TerminalFrame {
         text,

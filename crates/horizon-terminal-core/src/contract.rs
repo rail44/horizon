@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use termwiz::input::{KeyCode, Modifiers};
 
 use crate::types::{
@@ -5,7 +6,7 @@ use crate::types::{
     TerminalSize,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum TerminalCommand {
     Input(Vec<u8>),
     Key {
@@ -29,7 +30,7 @@ pub enum TerminalCommand {
     Shutdown,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum TerminalUpdate {
     Snapshot(TerminalFrame),
     Title(Option<String>),
@@ -42,6 +43,7 @@ pub enum TerminalUpdate {
 /// Demuxed selection sub-commands (`TerminalCommand::SelectionStart`/
 /// `SelectionUpdate`/`CopySelection`), routed onto their own channel by the
 /// host's PTY writer thread — see [`crate::CoreReceivers`].
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SelectionCommand {
     Start(TerminalSelectionPoint),
     Update(TerminalSelectionPoint),

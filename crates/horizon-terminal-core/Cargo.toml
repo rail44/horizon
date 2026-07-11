@@ -12,13 +12,15 @@ edition = "2021"
 [dependencies]
 alacritty_terminal = "0.26.0"
 crossbeam-channel = "0.5"
-termwiz = "0.23.3"
+serde = { version = "1.0", features = ["derive"] }
+termwiz = { version = "0.23.3", features = ["use_serde"] }
 unicode-width = "0.2"
 
 [dev-dependencies]
 # Only used to build OSC 52 clipboard-write test fixtures, same as the
 # pre-extraction `horizon` crate's dev-dependency this one replaces.
 base64 = "0.22"
+serde_json = "1.0"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

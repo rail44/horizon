@@ -3414,6 +3414,8 @@ dependencies = [
  "alacritty_terminal",
  "base64",
  "crossbeam-channel",
+ "serde",
+ "serde_json",
  "termwiz",
  "unicode-width 0.2.2",
 ]
@@ -7819,6 +7821,7 @@ dependencies = [
  "pest",
  "pest_derive",
  "phf 0.11.3",
+ "serde",
  "sha2 0.10.9",
  "signal-hook 0.3.18",
  "siphasher",
@@ -8944,6 +8947,7 @@ checksum = "692daff6d93d94e29e4114544ef6d5c942a7ed998b37abdc19b17136ea428eb7"
 dependencies = [
  "getrandom 0.3.4",
  "mac_address",
+ "serde",
  "sha2 0.10.9",
  "thiserror 1.0.69",
  "uuid",
@@ -8958,6 +8962,7 @@ dependencies = [
  "csscolorparser",
  "deltae",
  "lazy_static",
+ "serde",
  "wezterm-dynamic",
 ]
 

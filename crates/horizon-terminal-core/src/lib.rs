@@ -22,8 +22,9 @@ pub use contract::{SelectionCommand, TerminalCommand, TerminalUpdate};
 pub use core::{TerminalColorScheme, TerminalCore};
 pub use session_loop::{run_terminal_core, CoreReceivers, CoreSenders, TerminalCoreOptions};
 pub use types::{
-    KeyEventKind, TerminalColor, TerminalCursor, TerminalFrame, TerminalLine, TerminalMouseButton,
-    TerminalMouseKind, TerminalMouseModifiers, TerminalMouseReport, TerminalScroll,
+    apply_frame_diff, compute_frame_diff, KeyEventKind, TerminalColor, TerminalCursor,
+    TerminalFrame, TerminalFrameDiff, TerminalLine, TerminalMouseButton, TerminalMouseKind,
+    TerminalMouseModifiers, TerminalMouseReport, TerminalRowDiff, TerminalScroll,
     TerminalSelectionPoint, TerminalSize, TerminalSpan,
 };
 
