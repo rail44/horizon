@@ -51,13 +51,24 @@ fn run_client(args: &[String]) -> ExitCode {
     ExitCode::from(code)
 }
 
+actions!(horizon, [Quit]);
+
 fn run_gui() {
     gpui_platform::application().run(move |cx| {
         gpui_component::init(cx);
         workspace::init(cx);
-        // Foreground-app activation: without this, clicking the window
-        // focuses it but macOS keeps the previous app's name in the menu
-        // bar (the process never becomes the active application).
+        // macOS treats a process with no main menu as owning no menu bar,
+        // so the previous app's menu (and name) would linger even with
+        // this window focused — installing a minimal menu is what makes
+        // Horizon show up as the active application. Activation at launch
+        // still needs the explicit activate(true).
+        cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
+        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+        cx.set_menus(vec![Menu {
+            name: "Horizon".into(),
+            items: vec![MenuItem::action("Quit Horizon", Quit)],
+            disabled: false,
+        }]);
         cx.activate(true);
 
         cx.spawn(async move |cx| {
