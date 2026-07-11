@@ -19,12 +19,16 @@ use horizon_agent::contract::{self, Command, ProviderEvent};
 use horizon_agent::wire::{
     self, Control, Envelope, EnvelopeBody, HostToolRequest, HostToolResponse,
 };
+use horizon_session_protocol::{
+    self as session_wire, Envelope as RawEnvelope, SessionControl, SESSION_CONTROL_KIND,
+};
 
 type AgentSessionId = contract::SessionId;
 
 #[derive(Clone)]
 pub struct SessiondHandle {
     outgoing: tokio::sync::mpsc::UnboundedSender<Envelope>,
+    shared_outgoing: tokio::sync::mpsc::UnboundedSender<RawEnvelope>,
     session_events: Arc<Mutex<HashMap<AgentSessionId, Sender<ProviderEvent>>>>,
     // Answers the one-at-a-time session_list round trip (same
     // no-request-id simplification as the Floem shell).
@@ -157,7 +161,9 @@ impl SessiondHandle {
     /// for a reply, just for the old process to actually be gone, observed
     /// indirectly via [`wait_for_drain`].
     pub fn drain(&self) {
-        let _ = self.outgoing.send(Envelope::control(Control::Drain));
+        if let Ok(envelope) = RawEnvelope::session_control(&SessionControl::Drain) {
+            let _ = self.shared_outgoing.send(envelope);
+        }
     }
 }
 
@@ -208,6 +214,8 @@ async fn run_connection(
         };
 
     let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Envelope>();
+    let (raw_outgoing_tx, mut raw_outgoing_rx) =
+        tokio::sync::mpsc::unbounded_channel::<RawEnvelope>();
     let session_events: Arc<Mutex<HashMap<AgentSessionId, Sender<ProviderEvent>>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let (host_tool_tx, host_tool_rx) = unbounded::<HostToolRequest>();
@@ -215,6 +223,7 @@ async fn run_connection(
 
     let handle = SessiondHandle {
         outgoing: outgoing_tx.clone(),
+        shared_outgoing: raw_outgoing_tx.clone(),
         session_events: session_events.clone(),
         pending_session_list: pending_session_list.clone(),
     };
@@ -222,23 +231,49 @@ async fn run_connection(
         return;
     }
 
-    let write_task = async move {
+    let raw_agent_tx = raw_outgoing_tx.clone();
+    tokio::spawn(async move {
         while let Some(envelope) = outgoing_rx.recv().await {
-            if wire::write_envelope(&mut writer, &envelope).await.is_err() {
+            if let Ok(raw) = wire::encode_envelope(&envelope) {
+                if raw_agent_tx.send(raw).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+    let write_task = async move {
+        while let Some(envelope) = raw_outgoing_rx.recv().await {
+            if session_wire::write_envelope(&mut writer, &envelope)
+                .await
+                .is_err()
+            {
                 break;
             }
         }
     };
     let read_task = async move {
         loop {
-            match wire::read_envelope(&mut reader).await {
-                Ok(Some(envelope)) => dispatch_incoming(
-                    envelope,
-                    &session_events,
-                    &outgoing_tx,
-                    &host_tool_tx,
-                    &pending_session_list,
-                ),
+            match session_wire::read_envelope(&mut reader).await {
+                Ok(Some(raw)) if raw.kind == SESSION_CONTROL_KIND => {
+                    if matches!(
+                        raw.decode_payload::<SessionControl>(SESSION_CONTROL_KIND),
+                        Ok(SessionControl::Ping)
+                    ) {
+                        if let Ok(pong) = RawEnvelope::session_control(&SessionControl::Pong) {
+                            let _ = raw_outgoing_tx.send(pong);
+                        }
+                    }
+                }
+                Ok(Some(raw)) => {
+                    if let Ok(envelope) = wire::decode_envelope(raw) {
+                        dispatch_incoming(
+                            envelope,
+                            &session_events,
+                            &host_tool_tx,
+                            &pending_session_list,
+                        );
+                    }
+                }
                 Ok(None) | Err(_) => return,
             }
         }
@@ -252,7 +287,6 @@ async fn run_connection(
 fn dispatch_incoming(
     envelope: Envelope,
     session_events: &Arc<Mutex<HashMap<AgentSessionId, Sender<ProviderEvent>>>>,
-    outgoing: &tokio::sync::mpsc::UnboundedSender<Envelope>,
     host_tool_tx: &Sender<HostToolRequest>,
     pending_session_list: &Arc<Mutex<Option<Sender<Vec<wire::SessionSummary>>>>>,
 ) {
@@ -283,9 +317,6 @@ fn dispatch_incoming(
             if let Some(reply) = pending_session_list.lock().unwrap().take() {
                 let _ = reply.send(summaries);
             }
-        }
-        EnvelopeBody::Control(Control::Ping) => {
-            let _ = outgoing.send(Envelope::control(Control::Pong));
         }
         EnvelopeBody::Control(_) | EnvelopeBody::Command(_) => {}
     }

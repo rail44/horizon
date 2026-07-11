@@ -8,7 +8,7 @@
 use futures::StreamExt;
 use gpui::*;
 use horizon_terminal_core::{
-    KeyEventKind, TerminalCommand, TerminalFrame, TerminalSize, TerminalUpdate,
+    apply_frame_diff, KeyEventKind, TerminalCommand, TerminalFrame, TerminalSize, TerminalUpdate,
 };
 
 use super::pty;
@@ -83,6 +83,17 @@ impl TerminalSession {
                                 let _ = std::fs::write(path, super::dump_frame(&frame));
                             }
                             session.frame = Some(frame);
+                        }
+                        TerminalUpdate::FrameDiff(diff) => {
+                            if let Some(frame) = session.frame.as_ref() {
+                                let frame = apply_frame_diff(frame, &diff);
+                                if let Some(path) = &dump_path {
+                                    let _ = std::fs::write(path, super::dump_frame(&frame));
+                                }
+                                session.frame = Some(frame);
+                            } else {
+                                eprintln!("terminal frame diff received without a baseline");
+                            }
                         }
                         TerminalUpdate::Exited => session.exited = true,
                         TerminalUpdate::Error(error) => eprintln!("terminal error: {error}"),

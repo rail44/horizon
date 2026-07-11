@@ -26,8 +26,8 @@ use crate::roles::RoleId;
 
 /// Shared handshake types, errors, and the contract/wire version this build
 /// speaks. The version is carried by every envelope and independently by
-/// [`Hello::contract_version`]. Version 2 replaced [`SessionNew`]'s former
-/// `config_overrides` placeholder with the typed `role_id` field.
+/// [`Hello::contract_version`]. Version 3 introduces qualified sister-domain
+/// kinds and moves shared lifecycle controls into `horizon-session-protocol`.
 ///
 /// The definitions now live in `horizon-session-protocol`; these re-exports
 /// preserve this module's public API while terminal and agent messages share
@@ -36,9 +36,12 @@ pub use horizon_session_protocol::{
     Hello, WireError, SESSION_PROTOCOL_VERSION as CONTRACT_VERSION,
 };
 
-/// One JSONL message: `{"v":2,"session_id":..,"kind":"command"|"event"|
-/// "control","payload":..}`. `session_id` is `None` for connection-global
-/// control messages (`hello`, `ping`, `drain`, `session_list`) and `Some`
+pub const AGENT_CONTROL_KIND: &str = "agent_control";
+pub const AGENT_COMMAND_KIND: &str = "agent_command";
+pub const AGENT_EVENT_KIND: &str = "agent_event";
+
+/// One JSONL agent-domain message. `session_id` is `None` for
+/// connection-global agent controls such as `session_list` and `Some`
 /// for anything scoped to one agent session.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Envelope {
@@ -79,7 +82,8 @@ impl Envelope {
 }
 
 /// The envelope's `kind`/`payload` pair. Serializes adjacently tagged
-/// (`{"kind":"command","payload":{..}}`) via the derive below; deserializing
+/// (`{"kind":"agent_command","payload":{..}}`) through the raw-envelope
+/// adapter; deserializing
 /// needs the version check *before* picking which contract type to decode
 /// `payload` as, so [`read_envelope`] performs the shared structural read
 /// before decoding this enum -- see [`WireError::UnknownKind`]/
@@ -92,30 +96,17 @@ pub enum EnvelopeBody {
     Control(Control),
 }
 
-/// Control-message payloads (decision 4 in the design doc), plus
-/// [`Control::HandshakeRejected`] -- a step-2 addition, not in the
-/// original design list; see `docs/agent-runtime-split-design.md`'s "Step 2
-/// implementation notes" for why.
+/// Agent-domain control messages. Shared connection lifecycle controls live
+/// in `horizon_session_protocol::SessionControl`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Control {
-    Hello(Hello),
     SessionList,
     SessionListResult(Vec<SessionSummary>),
     SessionNew(SessionNew),
     SessionLoad(SessionLoad),
     HostToolRequest(HostToolRequest),
     HostToolResponse(HostToolResponse),
-    Ping,
-    Pong,
-    Drain,
-    /// Sent instead of a normal [`Control::Hello`] reply when the peer's
-    /// hello can't be honored (currently: a `contract_version` mismatch) --
-    /// carries a human-readable reason so the receiving side can build an
-    /// error string directly from the wire without re-deriving it. See
-    /// `horizon-sessiond`'s connection handler (sender) and
-    /// `agent::connection` in the `horizon` crate (receiver).
-    HandshakeRejected(String),
     /// Ephemeral tool-call-argument-streaming preview
     /// (`contract::ProviderEvent::tool_call_progress`), session-scoped via
     /// the envelope's own `session_id` (not this payload). `contract::Event`
@@ -213,21 +204,39 @@ pub struct HostToolResponse {
 /// Writes one envelope as a single newline-terminated JSON line and flushes
 /// the writer, so a peer reading line-by-line (e.g. [`read_envelope`]) sees
 /// it immediately rather than waiting on a fuller buffer.
-pub async fn write_envelope<W>(writer: &mut W, envelope: &Envelope) -> Result<(), WireError>
-where
-    W: AsyncWrite + Unpin,
-{
+pub fn encode_envelope(envelope: &Envelope) -> Result<ProtocolEnvelope, WireError> {
     let (kind, payload) = match &envelope.body {
-        EnvelopeBody::Command(command) => ("command", serde_json::to_value(command)?),
-        EnvelopeBody::Event(event) => ("event", serde_json::to_value(event)?),
-        EnvelopeBody::Control(control) => ("control", serde_json::to_value(control)?),
+        EnvelopeBody::Command(command) => (AGENT_COMMAND_KIND, serde_json::to_value(command)?),
+        EnvelopeBody::Event(event) => (AGENT_EVENT_KIND, serde_json::to_value(event)?),
+        EnvelopeBody::Control(control) => (AGENT_CONTROL_KIND, serde_json::to_value(control)?),
     };
-    let protocol_envelope = ProtocolEnvelope {
+    Ok(ProtocolEnvelope {
         v: envelope.v,
         session_id: envelope.session_id.map(SessionId::as_uuid),
         kind: kind.to_string(),
         payload,
+    })
+}
+
+pub fn decode_envelope(raw: ProtocolEnvelope) -> Result<Envelope, WireError> {
+    let body = match raw.kind.as_str() {
+        AGENT_COMMAND_KIND => EnvelopeBody::Command(serde_json::from_value(raw.payload)?),
+        AGENT_EVENT_KIND => EnvelopeBody::Event(serde_json::from_value(raw.payload)?),
+        AGENT_CONTROL_KIND => EnvelopeBody::Control(serde_json::from_value(raw.payload)?),
+        other => return Err(WireError::UnknownKind(other.to_string())),
     };
+    Ok(Envelope {
+        v: raw.v,
+        session_id: raw.session_id.map(SessionId::from_uuid),
+        body,
+    })
+}
+
+pub async fn write_envelope<W>(writer: &mut W, envelope: &Envelope) -> Result<(), WireError>
+where
+    W: AsyncWrite + Unpin,
+{
+    let protocol_envelope = encode_envelope(envelope)?;
     horizon_session_protocol::write_envelope(writer, &protocol_envelope).await
 }
 
@@ -243,17 +252,7 @@ where
     let Some(raw) = horizon_session_protocol::read_envelope(reader).await? else {
         return Ok(None);
     };
-    let body = match raw.kind.as_str() {
-        "command" => EnvelopeBody::Command(serde_json::from_value(raw.payload)?),
-        "event" => EnvelopeBody::Event(serde_json::from_value(raw.payload)?),
-        "control" => EnvelopeBody::Control(serde_json::from_value(raw.payload)?),
-        other => return Err(WireError::UnknownKind(other.to_string())),
-    };
-    Ok(Some(Envelope {
-        v: raw.v,
-        session_id: raw.session_id.map(SessionId::from_uuid),
-        body,
-    }))
+    Ok(Some(decode_envelope(raw)?))
 }
 
 #[cfg(test)]
@@ -278,11 +277,6 @@ mod tests {
 
     fn sample_controls() -> Vec<Control> {
         vec![
-            Control::Hello(Hello {
-                contract_version: CONTRACT_VERSION,
-                binary_id: "0.1.0".to_string(),
-                capabilities: vec!["sessions".to_string()],
-            }),
             Control::SessionList,
             Control::SessionListResult(vec![SessionSummary {
                 session_id: SessionId::new(),
@@ -307,10 +301,6 @@ mod tests {
                 request_id: RequestId("req-1".to_string()),
                 output: serde_json::json!({"ok": true}),
             }),
-            Control::Ping,
-            Control::Pong,
-            Control::Drain,
-            Control::HandshakeRejected("contract version mismatch".to_string()),
             Control::ToolCallProgress(ToolCallProgress {
                 key: "call-1".to_string(),
                 tool_id: Some("fs.read".to_string()),
@@ -326,7 +316,7 @@ mod tests {
     /// an additive one.
     #[test]
     fn contract_version_was_bumped_for_the_role_id_field() {
-        assert_eq!(CONTRACT_VERSION, 2);
+        assert_eq!(CONTRACT_VERSION, 3);
     }
 
     /// Unlike `role_id` above, `SessionNew.workspace_root` is a brand-new,
@@ -336,7 +326,7 @@ mod tests {
     /// bumping it out of habit the next time a `SessionNew` field is added.
     #[test]
     fn contract_version_was_not_bumped_for_the_additive_workspace_root_field() {
-        assert_eq!(CONTRACT_VERSION, 2);
+        assert_eq!(CONTRACT_VERSION, 3);
     }
 
     /// A `session_new` control message written by a peer built before
@@ -353,7 +343,7 @@ mod tests {
         let line = serde_json::json!({
             "v": CONTRACT_VERSION,
             "session_id": null,
-            "kind": "control",
+            "kind": AGENT_CONTROL_KIND,
             "payload": {
                 "session_new": {
                     "session_id": session_id,
@@ -488,8 +478,8 @@ mod tests {
         client
             .write_all(
                 format!(
-                    "{{\"v\":{CONTRACT_VERSION},\"kind\":\"control\",\"session_id\":null,\
-                     \"payload\":\"ping\",\"future_field\":42}}\n"
+                    "{{\"v\":{CONTRACT_VERSION},\"kind\":\"agent_control\",\"session_id\":null,\
+                     \"payload\":\"session_list\",\"future_field\":42}}\n"
                 )
                 .as_bytes(),
             )
@@ -501,6 +491,6 @@ mod tests {
             .await
             .unwrap()
             .expect("envelope should parse despite the unrecognized field");
-        assert_eq!(envelope.body, EnvelopeBody::Control(Control::Ping));
+        assert_eq!(envelope.body, EnvelopeBody::Control(Control::SessionList));
     }
 }

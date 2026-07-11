@@ -20,7 +20,10 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::wire::{self, Control, Envelope, EnvelopeBody, Hello, CONTRACT_VERSION};
+use horizon_session_protocol::{
+    self as session_wire, Hello, SessionControl, SESSION_CONTROL_KIND,
+    SESSION_PROTOCOL_VERSION as CONTRACT_VERSION,
+};
 #[cfg(test)]
 use tokio::io::AsyncRead;
 use tokio::io::{AsyncBufRead, AsyncWrite, BufReader};
@@ -169,29 +172,30 @@ where
         binary_id: concat!("horizon/", env!("CARGO_PKG_VERSION")).to_string(),
         capabilities: Vec::new(),
     };
-    wire::write_envelope(writer, &Envelope::control(Control::Hello(our_hello)))
+    let hello_envelope = session_wire::Envelope::session_control(&SessionControl::Hello(our_hello))
+        .map_err(|err| format!("failed to encode hello for horizon-sessiond: {err}"))?;
+    session_wire::write_envelope(writer, &hello_envelope)
         .await
         .map_err(|err| format!("failed to send hello to horizon-sessiond: {err}"))?;
 
-    let envelope = wire::read_envelope(reader)
+    let envelope = session_wire::read_envelope(reader)
         .await
         .map_err(|err| format!("failed to read horizon-sessiond's hello reply: {err}"))?
         .ok_or_else(|| {
             "horizon-sessiond closed the connection before replying to hello".to_string()
         })?;
 
-    match envelope.body {
-        EnvelopeBody::Control(Control::Hello(hello))
-            if hello.contract_version == CONTRACT_VERSION =>
-        {
-            Ok(hello)
-        }
-        EnvelopeBody::Control(Control::Hello(hello)) => Err(format!(
+    let control: SessionControl = envelope
+        .decode_payload(SESSION_CONTROL_KIND)
+        .map_err(|err| format!("failed to decode horizon-sessiond's hello reply: {err}"))?;
+    match control {
+        SessionControl::Hello(hello) if hello.contract_version == CONTRACT_VERSION => Ok(hello),
+        SessionControl::Hello(hello) => Err(format!(
             "horizon-sessiond contract version mismatch: horizon speaks v{CONTRACT_VERSION}, \
              sessiond speaks v{} -- reload required",
             hello.contract_version
         )),
-        EnvelopeBody::Control(Control::HandshakeRejected(reason)) => {
+        SessionControl::HandshakeRejected(reason) => {
             Err(format!("horizon-sessiond rejected the handshake: {reason}"))
         }
         other => Err(format!(
@@ -223,19 +227,23 @@ mod tests {
         );
     }
 
-    async fn fake_sessiond_reply(server_side: tokio::io::DuplexStream, reply: Envelope) {
+    async fn fake_sessiond_reply(server_side: tokio::io::DuplexStream, reply: SessionControl) {
         let (read_half, mut write_half) = tokio::io::split(server_side);
         let mut reader = BufReader::new(read_half);
-        let hello = wire::read_envelope(&mut reader)
+        let hello = session_wire::read_envelope(&mut reader)
             .await
             .unwrap()
             .expect("client should send a hello");
+        let control: SessionControl = hello.decode_payload(SESSION_CONTROL_KIND).unwrap();
         assert!(matches!(
-            hello.body,
-            EnvelopeBody::Control(Control::Hello(Hello { binary_id, .. }))
+            control,
+            SessionControl::Hello(Hello { binary_id, .. })
                 if binary_id == concat!("horizon/", env!("CARGO_PKG_VERSION"))
         ));
-        wire::write_envelope(&mut write_half, &reply).await.unwrap();
+        let reply = session_wire::Envelope::session_control(&reply).unwrap();
+        session_wire::write_envelope(&mut write_half, &reply)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -243,11 +251,11 @@ mod tests {
         let (client_side, server_side) = tokio::io::duplex(4096);
         let server = tokio::spawn(fake_sessiond_reply(
             server_side,
-            Envelope::control(Control::Hello(Hello {
+            SessionControl::Hello(Hello {
                 contract_version: CONTRACT_VERSION,
                 binary_id: "test-sessiond".to_string(),
                 capabilities: vec![],
-            })),
+            }),
         ));
 
         let hello = handshake(client_side)
@@ -263,11 +271,11 @@ mod tests {
         let (client_side, server_side) = tokio::io::duplex(4096);
         let server = tokio::spawn(fake_sessiond_reply(
             server_side,
-            Envelope::control(Control::Hello(Hello {
+            SessionControl::Hello(Hello {
                 contract_version: CONTRACT_VERSION + 1,
                 binary_id: "stale-sessiond".to_string(),
                 capabilities: vec![],
-            })),
+            }),
         ));
 
         let error = handshake(client_side).await.unwrap_err();
@@ -281,7 +289,7 @@ mod tests {
         let (client_side, server_side) = tokio::io::duplex(4096);
         let server = tokio::spawn(fake_sessiond_reply(
             server_side,
-            Envelope::control(Control::HandshakeRejected("nope".to_string())),
+            SessionControl::HandshakeRejected("nope".to_string()),
         ));
 
         let error = handshake(client_side).await.unwrap_err();
@@ -300,7 +308,7 @@ mod tests {
         let server = tokio::spawn(async move {
             let (read_half, _write_half) = tokio::io::split(server_side);
             let mut reader = BufReader::new(read_half);
-            wire::read_envelope(&mut reader)
+            session_wire::read_envelope(&mut reader)
                 .await
                 .unwrap()
                 .expect("client should send a hello");

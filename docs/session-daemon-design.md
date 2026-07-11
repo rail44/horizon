@@ -4,8 +4,9 @@ Status: decided 2026-07-07 (owner consultation in the project session);
 the `horizon-terminal-core` extraction-slice decisions (8, 9, and the
 color amendment to 4) added 2026-07-09. The exploration material and
 option analysis is `docs/research/session-daemon.md`; this file records
-the decisions and is the scope reference for the migration.
-Implementation not started.
+the decisions and is the scope reference for the migration. Step 0 and the
+daemon half of Step 1 are implemented; GPUI terminal routing remains in the
+next integration slice.
 
 Motive: terminal sessions must outlive the UI process (a UI crash or
 restart must not kill the shell and its children), and delegated
@@ -262,6 +263,38 @@ became Horizon's sole frontend:
 - **Daemon identity includes its name.** Handshake diagnostics use a
   `horizon-sessiond/<version>` binary id rather than the former ambiguous
   version-only value.
+
+## Step 1 daemon implementation notes (2026-07-12)
+
+The daemon-side hosting slice is implemented. The shared session protocol is
+version 3: lifecycle traffic uses `session_control`, while agent and terminal
+traffic use qualified `agent_*` and `terminal_*` kinds. Before `Hello`,
+`sessiond` accepts only shared controls; its successful handshake advertises
+both `agent` and `terminal` capabilities. Existing agent commands, events,
+persistence, and resume behavior remain on the same connection behind the
+agent-qualified kinds.
+
+`TerminalControl::Create` carries the resolved spawn inputs recorded above;
+`Attach` addresses an existing daemon-owned terminal by session UUID. The
+daemon retains the PTY, child pid, command channel, and latest full frame when
+the GPUI connection disappears. Spawn-source cwd resolution samples the live
+source child in the daemon and falls back to the supplied cwd when the source
+is absent or cannot be sampled.
+
+Frame baselines are connection-local. Create and every Attach on a new
+connection send a full `TerminalUpdate::Snapshot`; later core snapshots are
+converted to `TerminalUpdate::FrameDiff` against that connection's last sent
+frame. Disconnect drops only the send cursor and attachment set, not the PTY
+or retained frame. `Shutdown` kills the child through a retained PTY child
+killer, PTY EOF/error produces a final `Exited`, and the daemon then removes
+the terminal from its process-lifetime session table. Shared `Drain` requests
+shutdown for every hosted terminal before the daemon exits.
+
+Real-socket E2E coverage exercises initial full snapshot, applicable row
+diffs, disconnect/reconnect Attach, PTY survival, fallback/source cwd, and
+Shutdown/Exited cleanup. This slice includes only the minimal GPUI wire
+adaptation needed to keep the workspace compiling and apply received frame
+diffs; creation routing and workspace ownership move in the next slice.
 
 ## Connection to delegation (stage 1)
 

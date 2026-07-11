@@ -18,8 +18,14 @@ use horizon_agent::frame::agent_frame_from_events;
 use horizon_agent::persistence::event_log::{Appender, WriterHandle, WriterInit};
 use horizon_agent::roles::RoleId;
 use horizon_agent::wire::{
-    self, Control, Envelope, EnvelopeBody, Hello, HostToolRequest, HostToolResponse, SessionLoad,
+    self, Control, Envelope, EnvelopeBody, HostToolRequest, HostToolResponse, SessionLoad,
     SessionNew, SessionSummary, CONTRACT_VERSION,
+};
+use horizon_session_protocol::{self as session_wire, Hello, SessionControl, SESSION_CONTROL_KIND};
+use horizon_terminal_core::{
+    apply_frame_diff, decode_terminal_update, encode_terminal_command, encode_terminal_control,
+    TerminalColorScheme, TerminalCommand, TerminalControl, TerminalFrame, TerminalSize,
+    TerminalSpawnSpec, TerminalUpdate,
 };
 use tokio::io::BufReader;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
@@ -320,27 +326,117 @@ async fn connect_and_handshake(
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
 
-    wire::write_envelope(
+    write_shared(
         &mut write_half,
-        &Envelope::control(Control::Hello(Hello {
+        SessionControl::Hello(Hello {
             contract_version: CONTRACT_VERSION,
             binary_id: "test-client".to_string(),
             capabilities: Vec::new(),
-        })),
+        }),
     )
-    .await
-    .unwrap();
-    let reply = wire::read_envelope(&mut reader)
-        .await
-        .unwrap()
-        .expect("sessiond should reply to hello");
-    assert!(
-        matches!(reply.body, EnvelopeBody::Control(Control::Hello(_))),
-        "expected a hello reply, got {:?}",
-        reply.body
-    );
+    .await;
+    let reply = read_shared(&mut reader).await;
+    assert!(matches!(reply, SessionControl::Hello(_)));
 
     (reader, write_half)
+}
+
+async fn write_shared(writer: &mut OwnedWriteHalf, control: SessionControl) {
+    let envelope = session_wire::Envelope::session_control(&control).unwrap();
+    session_wire::write_envelope(writer, &envelope)
+        .await
+        .unwrap();
+}
+
+async fn read_shared(reader: &mut BufReader<OwnedReadHalf>) -> SessionControl {
+    let envelope = session_wire::read_envelope(reader)
+        .await
+        .unwrap()
+        .expect("sessiond should send a shared control");
+    envelope.decode_payload(SESSION_CONTROL_KIND).unwrap()
+}
+
+async fn write_terminal_control(
+    writer: &mut OwnedWriteHalf,
+    session_id: uuid::Uuid,
+    control: TerminalControl,
+) {
+    let envelope = encode_terminal_control(session_id, &control).unwrap();
+    session_wire::write_envelope(writer, &envelope)
+        .await
+        .unwrap();
+}
+
+async fn write_terminal_command(
+    writer: &mut OwnedWriteHalf,
+    session_id: uuid::Uuid,
+    command: TerminalCommand,
+) {
+    let envelope = encode_terminal_command(session_id, &command).unwrap();
+    session_wire::write_envelope(writer, &envelope)
+        .await
+        .unwrap();
+}
+
+async fn read_terminal_update(
+    reader: &mut BufReader<OwnedReadHalf>,
+    session_id: uuid::Uuid,
+) -> TerminalUpdate {
+    let envelope =
+        tokio::time::timeout(Duration::from_secs(5), session_wire::read_envelope(reader))
+            .await
+            .expect("timed out waiting for a terminal update")
+            .unwrap()
+            .expect("sessiond should keep the terminal connection open");
+    assert_eq!(envelope.session_id, Some(session_id));
+    decode_terminal_update(&envelope).unwrap()
+}
+
+fn terminal_spec(
+    fallback_cwd: PathBuf,
+    spawn_source_session_id: Option<uuid::Uuid>,
+) -> TerminalSpawnSpec {
+    TerminalSpawnSpec {
+        shell: "/bin/sh".into(),
+        args: vec!["-i".into()],
+        term: "xterm-256color".into(),
+        scrollback_lines: 1_000,
+        color_scheme: TerminalColorScheme::default(),
+        control_socket: "/tmp/horizon-sessiond-e2e-control.sock".into(),
+        fallback_cwd,
+        spawn_source_session_id,
+        initial_size: TerminalSize::new(80, 24),
+    }
+}
+
+async fn collect_terminal_frame_until(
+    reader: &mut BufReader<OwnedReadHalf>,
+    session_id: uuid::Uuid,
+    mut frame: TerminalFrame,
+    needle: &str,
+) -> (TerminalFrame, bool) {
+    let mut saw_diff = false;
+    for _ in 0..100 {
+        match read_terminal_update(reader, session_id).await {
+            TerminalUpdate::Snapshot(snapshot) => frame = snapshot,
+            TerminalUpdate::FrameDiff(diff) => {
+                saw_diff = true;
+                frame = apply_frame_diff(&frame, &diff);
+            }
+            TerminalUpdate::Error(error) => {
+                panic!("terminal error while waiting for {needle:?}: {error}")
+            }
+            TerminalUpdate::Exited => panic!("terminal exited while waiting for {needle:?}"),
+            TerminalUpdate::Title(_) | TerminalUpdate::Bell | TerminalUpdate::Clipboard(_) => {}
+        }
+        if frame.text.contains(needle) {
+            return (frame, saw_diff);
+        }
+    }
+    panic!(
+        "gave up waiting for {needle:?}; last frame: {:?}",
+        frame.text
+    );
 }
 
 /// Reads envelopes until `predicate` matches one and returns every event
@@ -383,35 +479,29 @@ async fn hello_ping_session_list_and_drain_over_the_real_socket() {
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
 
-    wire::write_envelope(
+    write_shared(
         &mut write_half,
-        &Envelope::control(Control::Hello(Hello {
+        SessionControl::Hello(Hello {
             contract_version: CONTRACT_VERSION,
             binary_id: "test-client".to_string(),
             capabilities: Vec::new(),
-        })),
+        }),
     )
-    .await
-    .unwrap();
+    .await;
 
-    let reply = wire::read_envelope(&mut reader)
-        .await
-        .unwrap()
-        .expect("sessiond should reply to hello");
-    let EnvelopeBody::Control(Control::Hello(hello)) = reply.body else {
-        panic!("expected a hello reply, got {:?}", reply.body);
+    let reply = read_shared(&mut reader).await;
+    let SessionControl::Hello(hello) = reply else {
+        panic!("expected a hello reply, got {reply:?}");
     };
     assert_eq!(hello.contract_version, CONTRACT_VERSION);
     assert_eq!(
         hello.binary_id,
         concat!("horizon-sessiond/", env!("CARGO_PKG_VERSION"))
     );
+    assert_eq!(hello.capabilities, ["agent", "terminal"]);
 
-    wire::write_envelope(&mut write_half, &Envelope::control(Control::Ping))
-        .await
-        .unwrap();
-    let reply = wire::read_envelope(&mut reader).await.unwrap().unwrap();
-    assert_eq!(reply.body, EnvelopeBody::Control(Control::Pong));
+    write_shared(&mut write_half, SessionControl::Ping).await;
+    assert_eq!(read_shared(&mut reader).await, SessionControl::Pong);
 
     wire::write_envelope(&mut write_half, &Envelope::control(Control::SessionList))
         .await
@@ -422,15 +512,139 @@ async fn hello_ping_session_list_and_drain_over_the_real_socket() {
         EnvelopeBody::Control(Control::SessionListResult(Vec::new()))
     );
 
-    wire::write_envelope(&mut write_half, &Envelope::control(Control::Drain))
-        .await
-        .unwrap();
+    write_shared(&mut write_half, SessionControl::Drain).await;
 
     let status = wait_for_exit(&mut sessiond.child).await;
     assert!(
         status.success(),
         "horizon-sessiond should exit 0 after drain, got {status:?}"
     );
+}
+
+#[tokio::test]
+async fn terminal_create_diff_reconnect_attach_and_shutdown_over_the_real_socket() {
+    let sessiond = SessiondProcess::spawn();
+    let session_id = uuid::Uuid::new_v4();
+    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
+
+    write_terminal_control(
+        &mut writer,
+        session_id,
+        TerminalControl::Create(Box::new(terminal_spec(std::env::temp_dir(), None))),
+    )
+    .await;
+    let TerminalUpdate::Snapshot(initial) = read_terminal_update(&mut reader, session_id).await
+    else {
+        panic!("terminal create must begin with a full snapshot");
+    };
+
+    write_terminal_command(
+        &mut writer,
+        session_id,
+        TerminalCommand::Input(b"printf 'HORIZON_DIFF_MARKER\\n'\n".to_vec()),
+    )
+    .await;
+    let (frame, saw_diff) =
+        collect_terminal_frame_until(&mut reader, session_id, initial, "HORIZON_DIFF_MARKER").await;
+    assert!(
+        saw_diff,
+        "updates after the create baseline should be diffs"
+    );
+
+    drop(writer);
+    drop(reader);
+    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
+    write_terminal_control(&mut writer, session_id, TerminalControl::Attach).await;
+    let TerminalUpdate::Snapshot(attached) = read_terminal_update(&mut reader, session_id).await
+    else {
+        panic!("attach on a new connection must reset to a full snapshot");
+    };
+    assert!(attached.text.contains("HORIZON_DIFF_MARKER"));
+    assert!(frame.text.contains("HORIZON_DIFF_MARKER"));
+
+    write_terminal_command(
+        &mut writer,
+        session_id,
+        TerminalCommand::Input(b"printf 'HORIZON_REATTACH_MARKER\\n'\n".to_vec()),
+    )
+    .await;
+    let (_, saw_diff) =
+        collect_terminal_frame_until(&mut reader, session_id, attached, "HORIZON_REATTACH_MARKER")
+            .await;
+    assert!(saw_diff, "reattached PTY should continue streaming diffs");
+
+    write_terminal_command(&mut writer, session_id, TerminalCommand::Shutdown).await;
+    for _ in 0..20 {
+        if matches!(
+            read_terminal_update(&mut reader, session_id).await,
+            TerminalUpdate::Exited
+        ) {
+            return;
+        }
+    }
+    panic!("terminal shutdown did not produce an exited update");
+}
+
+#[tokio::test]
+async fn terminal_spawn_uses_fallback_and_source_session_cwds() {
+    let sessiond = SessiondProcess::spawn();
+    let root = std::env::temp_dir().join(format!("hzn-cwd-e2e-{}", uuid::Uuid::new_v4()));
+    let source_cwd = root.join("source");
+    let fallback_cwd = root.join("fallback");
+    std::fs::create_dir_all(&source_cwd).unwrap();
+    std::fs::create_dir_all(&fallback_cwd).unwrap();
+
+    let source_id = uuid::Uuid::new_v4();
+    let target_id = uuid::Uuid::new_v4();
+    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
+    write_terminal_control(
+        &mut writer,
+        source_id,
+        TerminalControl::Create(Box::new(terminal_spec(source_cwd.clone(), None))),
+    )
+    .await;
+    let TerminalUpdate::Snapshot(source_initial) =
+        read_terminal_update(&mut reader, source_id).await
+    else {
+        panic!("source terminal create must begin with a snapshot");
+    };
+    write_terminal_command(
+        &mut writer,
+        source_id,
+        TerminalCommand::Input(b"printf 'SOURCE_CWD:%s\\n' \"$PWD\"\n".to_vec()),
+    )
+    .await;
+    let source_needle = format!("SOURCE_CWD:{}", source_cwd.display());
+    let _ =
+        collect_terminal_frame_until(&mut reader, source_id, source_initial, &source_needle).await;
+
+    write_terminal_control(
+        &mut writer,
+        target_id,
+        TerminalControl::Create(Box::new(terminal_spec(
+            fallback_cwd.clone(),
+            Some(source_id),
+        ))),
+    )
+    .await;
+    let TerminalUpdate::Snapshot(target_initial) =
+        read_terminal_update(&mut reader, target_id).await
+    else {
+        panic!("target terminal create must begin with a snapshot");
+    };
+    write_terminal_command(
+        &mut writer,
+        target_id,
+        TerminalCommand::Input(b"printf 'TARGET_CWD:%s\\n' \"$PWD\"\n".to_vec()),
+    )
+    .await;
+    let target_needle = format!("TARGET_CWD:{}", source_cwd.display());
+    let _ =
+        collect_terminal_frame_until(&mut reader, target_id, target_initial, &target_needle).await;
+
+    write_terminal_command(&mut writer, source_id, TerminalCommand::Shutdown).await;
+    write_terminal_command(&mut writer, target_id, TerminalCommand::Shutdown).await;
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[tokio::test]
@@ -441,23 +655,19 @@ async fn a_hello_with_the_wrong_contract_version_is_rejected_with_a_reason() {
     let mut reader = BufReader::new(read_half);
 
     let wrong_version = CONTRACT_VERSION + 1;
-    wire::write_envelope(
+    write_shared(
         &mut write_half,
-        &Envelope::control(Control::Hello(Hello {
+        SessionControl::Hello(Hello {
             contract_version: wrong_version,
             binary_id: "test-client".to_string(),
             capabilities: Vec::new(),
-        })),
+        }),
     )
-    .await
-    .unwrap();
+    .await;
 
-    let reply = wire::read_envelope(&mut reader)
-        .await
-        .unwrap()
-        .expect("sessiond should still answer, with a rejection");
-    let EnvelopeBody::Control(Control::HandshakeRejected(reason)) = reply.body else {
-        panic!("expected a handshake rejection, got {:?}", reply.body);
+    let reply = read_shared(&mut reader).await;
+    let SessionControl::HandshakeRejected(reason) = reply else {
+        panic!("expected a handshake rejection, got {reply:?}");
     };
     assert!(
         reason.contains("reload required"),
@@ -467,7 +677,7 @@ async fn a_hello_with_the_wrong_contract_version_is_rejected_with_a_reason() {
     // Rejected handshakes end the connection -- the next read observes a
     // clean close rather than the server continuing to serve requests for
     // a client whose contract version it can't trust.
-    let next = wire::read_envelope(&mut reader).await.unwrap();
+    let next = session_wire::read_envelope(&mut reader).await.unwrap();
     assert!(next.is_none(), "expected the connection to be closed");
 }
 
@@ -1469,9 +1679,7 @@ async fn drained_sessiond_respawns_and_preserves_a_completed_session() {
     })
     .await;
 
-    wire::write_envelope(&mut writer, &Envelope::control(Control::Drain))
-        .await
-        .unwrap();
+    write_shared(&mut writer, SessionControl::Drain).await;
     let status = wait_for_exit(&mut sessiond.child).await;
     assert!(status.success(), "drain should exit 0, got {status:?}");
 

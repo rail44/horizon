@@ -155,6 +155,7 @@ pub fn run_terminal_core(
     } = receivers;
     let mut core = TerminalCore::with_scrollback(size, options.scrollback_lines);
     core.set_color_scheme(options.color_scheme);
+    let _ = update_tx.send(TerminalUpdate::Snapshot(core.snapshot_frame()));
 
     // Session-side frame coalescing state (see `notify_snapshot`). Backdate
     // `last_sent` so the very first mutation always sends immediately.

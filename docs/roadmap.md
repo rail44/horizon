@@ -76,8 +76,11 @@ wave items where possible; design docs on first use.
    `horizon-session-protocol` crate now owns shared JSONL framing while the
    existing agent wire adapts without changing its v2 surface, and
    `horizon-terminal-core` exposes a serializable sister contract plus sparse
-   theme-independent row diffs. Renaming to `sessiond` and standing up
-   terminal hosting is next.
+   theme-independent row diffs. **The Step 1 daemon half landed 2026-07-12**:
+   protocol v3 qualifies the shared/agent/terminal vocabularies, `sessiond`
+   owns terminal PTYs and retained frames, and real-socket E2E covers diff
+   baselines, reconnect/attach, cwd sourcing, and shutdown. GPUI creation
+   routing and workspace ownership are the next integration slice.
    **Session relationship model designed 2026-07-07**
    (`docs/session-relationship-design.md`): lineage is a first-class
    layout-orthogonal derivation tree — the same tree worktree
