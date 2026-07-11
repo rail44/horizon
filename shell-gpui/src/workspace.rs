@@ -27,7 +27,7 @@ use crate::agent::{wait_for_drain, AgentSession, AgentView, AgentdHandle};
 use crate::keymap;
 use crate::palette::PaletteDelegate;
 use crate::session_manager::SessionManagerDelegate;
-use crate::terminal::{TerminalSession, TerminalView};
+use crate::terminal::{sample_cwd, TerminalSession, TerminalView};
 use crate::theme;
 use horizon_workspace::types::SessionKind;
 use horizon_workspace::SessionId;
@@ -205,6 +205,14 @@ pub struct WorkspaceShell {
     // call only yields a `SessionId`, so the role has nowhere else to
     // ride until reconcile turns that id into a live agent session.
     pending_roles: HashMap<SessionId, horizon_agent::roles::RoleId>,
+    // Staged by `new_tab`/`split_pane`/`external_new_session` (resolved
+    // from the spawn-source terminal *before* the workspace mutation
+    // that creates the new session activates it -- see
+    // `Self::resolve_new_terminal_cwd`'s doc comment for why it must run
+    // first) and consumed by `reconcile` when it actually spawns the PTY,
+    // for the same "info has nowhere else to ride" reason as
+    // `pending_roles`.
+    pending_terminal_cwds: HashMap<SessionId, std::path::PathBuf>,
     // Lazily connected on the first agent session (the Floem shell
     // connects async at startup; lazy-blocking is the v1 tradeoff here).
     agentd: Option<AgentdHandle>,
@@ -234,6 +242,7 @@ impl WorkspaceShell {
             sessions: HashMap::new(),
             agent_sessions: HashMap::new(),
             pending_roles: HashMap::new(),
+            pending_terminal_cwds: HashMap::new(),
             agentd: None,
             panes: HashMap::new(),
             window: window.window_handle(),
@@ -275,11 +284,18 @@ impl WorkspaceShell {
         for summary in summaries {
             match summary.kind {
                 SessionKind::Terminal => {
-                    let socket_path = self.socket_path.clone();
                     let id = summary.id;
-                    self.sessions.entry(id).or_insert_with(|| {
-                        cx.new(|cx| TerminalSession::spawn(id, &socket_path, cx))
-                    });
+                    if !self.sessions.contains_key(&id) {
+                        let socket_path = self.socket_path.clone();
+                        let cwd = self
+                            .pending_terminal_cwds
+                            .remove(&id)
+                            .unwrap_or_else(Self::default_terminal_cwd);
+                        self.sessions.insert(
+                            id,
+                            cx.new(|cx| TerminalSession::spawn(id, &socket_path, &cwd, cx)),
+                        );
+                    }
                 }
                 SessionKind::Agent => {
                     if self.agent_sessions.contains_key(&summary.id) {
@@ -531,10 +547,44 @@ impl WorkspaceShell {
         cx.notify();
     }
 
+    /// The cwd a newly spawned terminal should start in --
+    /// `docs/session-relationship-design.md` decision 3's "workspace_root
+    /// source" ("start where I'm looking"): the currently active
+    /// terminal session's live cwd, sampled via its retained pid
+    /// (`crate::terminal::sample_cwd`), falling back to `$HOME` (then
+    /// `.`) when there is no active terminal session or its cwd can't be
+    /// determined.
+    ///
+    /// Must be called *before* the workspace mutation that creates the
+    /// new session: once that mutation activates it (`new_tab`/
+    /// `split_pane` always activate; `external_new_session` sometimes
+    /// does), `Workspace::active_terminal_session_id` would resolve to
+    /// the new, not-yet-spawned session itself instead of the true
+    /// spawn source.
+    fn resolve_new_terminal_cwd(&self, cx: &mut Context<Self>) -> std::path::PathBuf {
+        self.workspace
+            .active_terminal_session_id()
+            .and_then(|id| self.sessions.get(&id))
+            .and_then(|session| session.read(cx).pid())
+            .and_then(sample_cwd)
+            .unwrap_or_else(Self::default_terminal_cwd)
+    }
+
+    fn default_terminal_cwd() -> std::path::PathBuf {
+        std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+    }
+
     fn new_tab(&mut self, kind: PaneKind, window: &mut Window, cx: &mut Context<Self>) {
         self.workspace.exit_workspace_mode();
-        self.workspace
+        let cwd = matches!(kind, PaneKind::Terminal).then(|| self.resolve_new_terminal_cwd(cx));
+        let session_id = self
+            .workspace
             .open_tab_with_new_session_activated(kind, true);
+        if let Some(cwd) = cwd {
+            self.pending_terminal_cwds.insert(session_id, cwd);
+        }
         self.reconcile(window, cx);
         self.focus_active(window, cx);
     }
@@ -549,8 +599,15 @@ impl WorkspaceShell {
     fn split_pane(&mut self, axis: SplitAxis, window: &mut Window, cx: &mut Context<Self>) {
         self.workspace.exit_workspace_mode();
         if let Some(target) = self.workspace.active_session_id() {
-            self.workspace
-                .split_session_with_new_session(target, PaneKind::Terminal, axis, true);
+            let cwd = self.resolve_new_terminal_cwd(cx);
+            if let Some(session_id) = self.workspace.split_session_with_new_session(
+                target,
+                PaneKind::Terminal,
+                axis,
+                true,
+            ) {
+                self.pending_terminal_cwds.insert(session_id, cwd);
+            }
         }
         self.reconcile(window, cx);
         self.focus_active(window, cx);
@@ -716,6 +773,7 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        let cwd = matches!(kind, PaneKind::Terminal).then(|| self.resolve_new_terminal_cwd(cx));
         let session_id = match split {
             Some((target, axis)) => self
                 .workspace
@@ -725,6 +783,9 @@ impl WorkspaceShell {
                 .workspace
                 .open_tab_with_new_session_activated(kind, activate),
         };
+        if let Some(cwd) = cwd {
+            self.pending_terminal_cwds.insert(session_id, cwd);
+        }
         if let Some(role_id) = role_id {
             self.pending_roles.insert(session_id, role_id);
         }

@@ -28,6 +28,7 @@ unicode-width = "0.2"
 horizon-workspace = { version = "0.1.0", path = "../crates/horizon-workspace" }
 horizon-control = { version = "0.1.0", path = "../crates/horizon-control" }
 serde_json = "1.0"
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 uuid = "1.18"
 horizon-agent = { version = "0.1.0", path = "../crates/horizon-agent" }
 tokio = { version = "1.52", features = ["rt", "net", "io-util", "time", "macros"] }

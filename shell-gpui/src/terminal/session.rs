@@ -17,12 +17,19 @@ pub struct TerminalSession {
     tx: crossbeam_channel::Sender<TerminalCommand>,
     pub frame: Option<TerminalFrame>,
     pub exited: bool,
+    /// The spawned shell's OS pid, when the PTY backend reports one (not
+    /// all platforms do -- `portable_pty::Child::process_id`'s doc
+    /// comment). Lets a later spawn resolve "this terminal session's
+    /// *current* cwd" on demand (`crate::terminal::sample_cwd`) without
+    /// keeping the `Child` handle itself alive.
+    pid: Option<u32>,
 }
 
 impl TerminalSession {
     pub fn spawn(
         session_id: horizon_workspace::SessionId,
         socket_path: &std::path::Path,
+        cwd: &std::path::Path,
         cx: &mut Context<Self>,
     ) -> Self {
         let initial = TerminalSize {
@@ -32,7 +39,8 @@ impl TerminalSession {
             pixel_height: 0,
         };
         let session =
-            pty::spawn(initial, session_id, socket_path).expect("failed to spawn PTY session");
+            pty::spawn(initial, session_id, socket_path, cwd).expect("failed to spawn PTY session");
+        let pid = session.pid;
         let update_rx = session.rx;
 
         // Headless test driver: type HORIZON_GPUI_DRIVE's bytes into the
@@ -99,6 +107,7 @@ impl TerminalSession {
             tx: session.tx,
             frame: None,
             exited: false,
+            pid,
         }
     }
 
@@ -110,5 +119,11 @@ impl TerminalSession {
     /// writer loop (and with it the PTY) down.
     pub fn shutdown(&self) {
         let _ = self.tx.send(TerminalCommand::Shutdown);
+    }
+
+    /// The spawned shell's pid, for a later spawn to sample this
+    /// session's current cwd (`crate::terminal::sample_cwd`).
+    pub fn pid(&self) -> Option<u32> {
+        self.pid
     }
 }

@@ -21,12 +21,16 @@ use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 pub struct SpikeSession {
     pub tx: Sender<TerminalCommand>,
     pub rx: Receiver<TerminalUpdate>,
+    /// The spawned shell's OS pid, when the PTY backend reports one --
+    /// see `TerminalSession::pid`'s doc comment.
+    pub pid: Option<u32>,
 }
 
 pub fn spawn(
     size: TerminalSize,
     session_id: SessionId,
     socket_path: &Path,
+    cwd: &Path,
 ) -> anyhow::Result<SpikeSession> {
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(PtySize {
@@ -54,10 +58,9 @@ pub fn spawn(
     // `--split`'s bare "here" form resolves without naming a session.
     cmd.env("HORIZON_SOCKET", socket_path);
     cmd.env("HORIZON_SESSION_ID", session_id.as_uuid().to_string());
-    if let Some(home) = env::var_os("HOME") {
-        cmd.cwd(home);
-    }
+    cmd.cwd(cwd);
     let child = pair.slave.spawn_command(cmd)?;
+    let pid = child.process_id();
     drop(child);
     drop(pair.slave);
 
@@ -120,6 +123,7 @@ pub fn spawn(
     Ok(SpikeSession {
         tx: command_tx,
         rx: update_rx,
+        pid,
     })
 }
 
