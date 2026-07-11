@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 /// Classifies a key event per the Kitty keyboard protocol's "event types"
 /// (<https://sw.kovidgoyal.net/kitty/keyboard-protocol/>, gated on the
 /// `REPORT_EVENT_TYPES` progressive-enhancement flag): an initial press, an
@@ -10,7 +12,7 @@
 /// `terminal::protocol::kitty_keyboard`, which is the only place a
 /// non-`Press` kind changes the bytes actually sent — see that module's doc
 /// for how (and when) it does.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum KeyEventKind {
     Press,
     Repeat,
