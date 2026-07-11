@@ -71,8 +71,13 @@ wave items where possible; design docs on first use.
    palette overrides no longer reaching cell rendering — was closed the
    same day (`45acf81`): the override table rides `TerminalFrame` as a
    sparse logical-index → literal-RGB list and the UI consults it before
-   the theme (backlog 23), forward-compatible with the wire. Step 1
-   (renaming to `sessiond` and standing up terminal hosting) is next.
+   the theme (backlog 23), forward-compatible with the wire. **Step 1
+   protocol groundwork shipped 2026-07-11**: the neutral
+   `horizon-session-protocol` crate now owns shared JSONL framing while the
+   existing agent wire adapts without changing its v2 surface, and
+   `horizon-terminal-core` exposes a serializable sister contract plus sparse
+   theme-independent row diffs. Renaming to `sessiond` and standing up
+   terminal hosting is next.
    **Session relationship model designed 2026-07-07**
    (`docs/session-relationship-design.md`): lineage is a first-class
    layout-orthogonal derivation tree — the same tree worktree
