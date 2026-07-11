@@ -1,6 +1,8 @@
 pub(crate) mod agent;
 pub(crate) mod app;
-pub(crate) mod config;
+// The config loader moved to crates/horizon-config (shared with
+// shell-gpui); this alias keeps crate::config paths working unchanged.
+pub(crate) use horizon_config as config;
 pub(crate) mod control_plane;
 pub(crate) mod control_surface;
 pub(crate) mod plugins;

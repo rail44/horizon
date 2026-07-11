@@ -36,9 +36,18 @@ pub fn spawn(
         pixel_height: size.pixel_height,
     })?;
 
-    let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let config = &horizon_config::load().terminal;
+    // Existing env vars keep winning (the config crate's precedence
+    // rule): SHELL beats [terminal].shell.
+    let shell = env::var("SHELL")
+        .ok()
+        .or_else(|| config.shell.clone())
+        .unwrap_or_else(|| "/bin/sh".to_string());
     let mut cmd = CommandBuilder::new(shell);
-    cmd.env("TERM", "xterm-256color");
+    if let Some(args) = &config.shell_args {
+        cmd.args(args);
+    }
+    cmd.env("TERM", config.term.as_deref().unwrap_or("xterm-256color"));
     // The pane's control-plane coordinates, mirroring the Floem shell's
     // `terminal::session::environment`: HORIZON_SOCKET so a CLI invoked
     // from this pane reaches this instance, HORIZON_SESSION_ID so
@@ -82,7 +91,13 @@ pub fn spawn(
         };
         run_terminal_core(
             size,
-            TerminalCoreOptions::default(),
+            TerminalCoreOptions {
+                scrollback_lines: horizon_config::load()
+                    .terminal
+                    .scrollback_lines
+                    .unwrap_or(TerminalCoreOptions::default().scrollback_lines),
+                color_scheme: crate::theme::terminal_color_scheme(),
+            },
             pty_rx,
             receivers,
             response_tx,

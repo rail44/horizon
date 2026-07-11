@@ -3291,6 +3291,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-config"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "horizon-control"
 version = "0.1.0"
 dependencies = [
@@ -3312,6 +3320,7 @@ dependencies = [
  "gpui-component",
  "gpui_platform",
  "horizon-agent",
+ "horizon-config",
  "horizon-control",
  "horizon-terminal-core",
  "horizon-workspace",

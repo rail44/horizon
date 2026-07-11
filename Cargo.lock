@@ -2351,6 +2351,7 @@ dependencies = [
  "floem",
  "floem_renderer",
  "horizon-agent",
+ "horizon-config",
  "horizon-control",
  "horizon-ctl",
  "horizon-terminal-core",
@@ -2405,6 +2406,15 @@ dependencies = [
  "libc",
  "serde_json",
  "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "horizon-config"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "toml 0.8.23",
  "uuid",
 ]
 

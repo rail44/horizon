@@ -1,0 +1,17 @@
+# Horizon's config-file loader (config.toml: agent, provider, terminal,
+# theme, keybindings), extracted framework-free so both shells share one
+# loader — see docs/gpui-migration-design.md (the M5 config port).
+[package]
+name = "horizon-config"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[dev-dependencies]
+uuid = { version = "1.18", features = ["v4"] }

@@ -32,9 +32,36 @@ use self::input::{
 };
 use crate::theme;
 
-const FONT_FAMILY: &str = "Menlo";
-const FONT_SIZE: f32 = 13.0;
-const LINE_HEIGHT: f32 = 17.0;
+// Font values come from config.toml ([ui].font_family, [terminal].
+// font_size/line_height) and are startup-only, like the Floem shell.
+fn font_family() -> String {
+    static FAMILY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    FAMILY
+        .get_or_init(|| {
+            horizon_config::load()
+                .ui
+                .font_family
+                .clone()
+                .unwrap_or_else(|| "Menlo".to_string())
+        })
+        .clone()
+}
+
+fn font_size() -> f32 {
+    static SIZE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *SIZE.get_or_init(|| horizon_config::load().terminal.font_size.unwrap_or(13.0))
+}
+
+fn line_height() -> f32 {
+    static HEIGHT: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *HEIGHT.get_or_init(|| {
+        horizon_config::load()
+            .terminal
+            .line_height
+            .map(|value| value as f32)
+            .unwrap_or_else(|| (font_size() * 17.0 / 13.0).round())
+    })
+}
 
 /// Paint-time geometry shared with event handlers (which need to convert
 /// window-relative pixel positions into cell coordinates). Written every
@@ -354,17 +381,20 @@ impl EntityInputHandler for TerminalView {
     ) -> Option<Bounds<Pixels>> {
         let cursor = self.session.read(cx).frame.as_ref()?.cursor?;
         let text_system = window.text_system();
-        let font_id = text_system.resolve_font(&font(FONT_FAMILY));
+        let font_id = text_system.resolve_font(&font(font_family()));
         let cell_width = text_system
-            .advance(font_id, px(FONT_SIZE), 'M')
+            .advance(font_id, px(font_size()), 'M')
             .map(|size| size.width)
             .unwrap_or(px(8.0));
         let origin = element_bounds.origin
             + point(
                 cell_width * cursor.col as f32 + cell_width * range_utf16.start as f32,
-                px(LINE_HEIGHT) * cursor.row as f32,
+                px(line_height()) * cursor.row as f32,
             );
-        Some(Bounds::new(origin, gpui::size(cell_width, px(LINE_HEIGHT))))
+        Some(Bounds::new(
+            origin,
+            gpui::size(cell_width, px(line_height())),
+        ))
     }
 
     fn character_index_for_point(
@@ -408,7 +438,7 @@ impl Render for TerminalView {
         }
         div()
             .size_full()
-            .bg(rgb(theme::BACKGROUND))
+            .bg(rgb(theme::background()))
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(|view, event: &KeyDownEvent, _window, cx| {
                 view.handle_key(event, cx);
@@ -455,9 +485,9 @@ fn paint_terminal(
     cx: &mut App,
 ) {
     let text_system = window.text_system().clone();
-    let font = font(FONT_FAMILY);
-    let font_size = px(FONT_SIZE);
-    let line_height = px(LINE_HEIGHT);
+    let font = font(font_family());
+    let font_size = px(font_size());
+    let line_height = px(line_height());
     let font_id = text_system.resolve_font(&font);
     let cell_width = text_system
         .advance(font_id, font_size, 'M')

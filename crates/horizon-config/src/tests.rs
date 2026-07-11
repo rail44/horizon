@@ -220,7 +220,7 @@ fn a_file_with_only_some_knobs_set_leaves_the_rest_none() {
     assert_eq!(loaded.agent.doom_loop_window, None);
     assert_eq!(loaded.provider.model, None);
     assert!(loaded.keybindings.is_empty());
-    assert_eq!(loaded.theme, crate::config::RawThemeConfig::default());
+    assert_eq!(loaded.theme, crate::RawThemeConfig::default());
 
     let _ = std::fs::remove_file(&path);
 }

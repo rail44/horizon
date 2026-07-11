@@ -6,6 +6,7 @@ members = [
     "crates/horizon-control",
     "crates/horizon-ctl",
     "crates/horizon-terminal-core",
+    "crates/horizon-config",
     "crates/horizon-workspace",
 ]
 
@@ -24,6 +25,7 @@ horizon-agent = { path = "crates/horizon-agent" }
 horizon-control = { path = "crates/horizon-control" }
 horizon-ctl = { path = "crates/horizon-ctl" }
 horizon-terminal-core = { path = "crates/horizon-terminal-core" }
+horizon-config = { path = "crates/horizon-config" }
 horizon-workspace = { path = "crates/horizon-workspace" }
 # Already an indirect dependency via floem (`lapce/floem`'s own manual-
 # sharding-discipline collections use it) -- promoted to direct so

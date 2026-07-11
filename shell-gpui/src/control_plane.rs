@@ -168,15 +168,20 @@ fn dispatch_invoke(
             shell.external_terminate_all_detached(window, cx);
             EnvelopeBody::Ok
         }
-        // Still pending: roles (new-config-agent) and per-session
-        // approve/deny/cancel need role/config plumbing and per-session
-        // targeting; reload verbs land with the M5 config port.
+        "reload-config" => {
+            shell.execute_external(CommandId::ReloadConfig, window, cx);
+            EnvelopeBody::Ok
+        }
+        // Still pending: roles (new-config-agent), per-session
+        // approve/deny/cancel targeting, and the agentd drain/respawn
+        // sequence.
         other @ ("new-config-agent"
         | "approve"
         | "deny"
         | "cancel-turn"
-        | "reload-agent-runtime"
-        | "reload-config") => error_body(format!("`{other}` is not available in this shell yet")),
+        | "reload-agent-runtime") => {
+            error_body(format!("`{other}` is not available in this shell yet"))
+        }
         other => error_body(format!("unknown external command `{other}`")),
     }
 }

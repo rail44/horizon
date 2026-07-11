@@ -51,19 +51,19 @@ const HOME_VAR: &str = "HOME";
 /// file at all (`RawConfig::default()`).
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
-pub(crate) struct RawConfig {
-    pub(crate) agent: RawAgentConfig,
-    pub(crate) provider: RawProviderConfig,
-    pub(crate) terminal: RawTerminalConfig,
-    pub(crate) ui: RawUiConfig,
+pub struct RawConfig {
+    pub agent: RawAgentConfig,
+    pub provider: RawProviderConfig,
+    pub terminal: RawTerminalConfig,
+    pub ui: RawUiConfig,
     /// Key chord string (e.g. `"ctrl+shift+t"`) to `CommandId` string (e.g.
     /// `"new-terminal"`) — parsed and validated by `app::keymap`. Also
     /// accepts the reserved pseudo-command `"open-palette"` (not a real
     /// `CommandId`), which overrides the chord that opens the command
     /// palette itself.
-    pub(crate) keybindings: HashMap<String, String>,
+    pub keybindings: HashMap<String, String>,
     /// `[theme]`: the app's one color scheme. See [`RawThemeConfig`].
-    pub(crate) theme: RawThemeConfig,
+    pub theme: RawThemeConfig,
 }
 
 /// `[agent]`: tuning values for the bash/fs tools and the turn-loop guards.
@@ -71,54 +71,54 @@ pub(crate) struct RawConfig {
 /// built-in defaults each field falls back to when unset here.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
 #[serde(default)]
-pub(crate) struct RawAgentConfig {
-    pub(crate) bash_timeout_default_secs: Option<u64>,
-    pub(crate) bash_timeout_max_secs: Option<u64>,
-    pub(crate) bash_output_cap_chars: Option<usize>,
-    pub(crate) bash_drain_grace_secs: Option<u64>,
-    pub(crate) fs_read_line_cap: Option<usize>,
-    pub(crate) fs_grep_max_bytes: Option<u64>,
-    pub(crate) fs_traversal_max_files: Option<usize>,
+pub struct RawAgentConfig {
+    pub bash_timeout_default_secs: Option<u64>,
+    pub bash_timeout_max_secs: Option<u64>,
+    pub bash_output_cap_chars: Option<usize>,
+    pub bash_drain_grace_secs: Option<u64>,
+    pub fs_read_line_cap: Option<usize>,
+    pub fs_grep_max_bytes: Option<u64>,
+    pub fs_traversal_max_files: Option<usize>,
     /// Default number of matches `fs.grep` returns when a call doesn't pass
     /// its own `limit` — distinct from `fs_grep_max_bytes`/
     /// `fs_traversal_max_files` above, which cap how much of the tree a
     /// single traversal *scans*, not how many of the matches found get
     /// returned.
-    pub(crate) fs_grep_result_limit: Option<usize>,
+    pub fs_grep_result_limit: Option<usize>,
     /// Same idea as `fs_grep_result_limit`, for `fs.glob`.
-    pub(crate) fs_glob_result_limit: Option<usize>,
-    pub(crate) iteration_cap: Option<u32>,
-    pub(crate) doom_loop_window: Option<usize>,
+    pub fs_glob_result_limit: Option<usize>,
+    pub iteration_cap: Option<u32>,
+    pub doom_loop_window: Option<usize>,
     /// Token budget for the conversation history sent to the provider on
     /// each turn. See `agent::config::RigAgentConfig::history_token_budget`
     /// for the built-in default and why it's applied unconditionally.
-    pub(crate) history_token_budget: Option<usize>,
+    pub history_token_budget: Option<usize>,
     /// How often, in milliseconds, streamed assistant-text/reasoning deltas
     /// and tool-call-argument progress are coalesced into an emitted event.
     /// See `providers::rig::stream`'s `StreamDeltaBuffer`/
     /// `ToolCallProgressBuffer`.
-    pub(crate) stream_flush_interval_ms: Option<u64>,
+    pub stream_flush_interval_ms: Option<u64>,
     /// Character count that forces an early flush of a streamed
     /// assistant-text/reasoning delta, ahead of the time-based flush above.
-    pub(crate) stream_flush_chars: Option<usize>,
+    pub stream_flush_chars: Option<usize>,
     /// How often, in seconds, the workspace pane header's agent
     /// turn-in-flight elapsed-time display ("running · 12s") re-renders.
     /// See `workspace::view::pane`'s `schedule_tick`.
-    pub(crate) pane_status_tick_secs: Option<u64>,
+    pub pane_status_tick_secs: Option<u64>,
     /// Overrides the append-only agent event log (JSONL) path. The
     /// `HORIZON_AGENT_EVENT_LOG` env var, if set, wins over this.
-    pub(crate) event_log_path: Option<String>,
+    pub event_log_path: Option<String>,
     /// Overrides the DuckDB projection database path used to replay
     /// per-session rig history. The `HORIZON_AGENT_STATE_DB` env var, if
     /// set, wins over this. Unset (here and via env) means no persisted
     /// memory.
-    pub(crate) state_db_path: Option<String>,
+    pub state_db_path: Option<String>,
     /// Character cap on the "Repository instructions" system-prompt section
     /// built from `AGENTS.md`/`CLAUDE.md` files found while walking from
     /// the session's working directory up to the repository root. See
     /// `agent::config::RigAgentConfig::repository_instructions_cap_chars`
     /// for the built-in default and its rationale.
-    pub(crate) repository_instructions_cap_chars: Option<usize>,
+    pub repository_instructions_cap_chars: Option<usize>,
 }
 
 /// `[provider]`: model selection, base URL, and request parameters for the
@@ -126,16 +126,16 @@ pub(crate) struct RawAgentConfig {
 /// doc.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
-pub(crate) struct RawProviderConfig {
-    pub(crate) model: Option<String>,
-    pub(crate) base_url: Option<String>,
+pub struct RawProviderConfig {
+    pub model: Option<String>,
+    pub base_url: Option<String>,
     /// Sampling temperature passed to rig's completion request. Unset (the
     /// default) means "let the provider use its own default" — rig never
     /// sends the field at all in that case.
-    pub(crate) temperature: Option<f64>,
+    pub temperature: Option<f64>,
     /// Max output tokens passed to rig's completion request. Unset (the
     /// default) means "let the provider use its own default".
-    pub(crate) max_tokens: Option<u64>,
+    pub max_tokens: Option<u64>,
 }
 
 /// `[terminal]`: cell rendering metrics, scrollback, the spawned shell, and
@@ -143,19 +143,19 @@ pub(crate) struct RawProviderConfig {
 /// built-in defaults each field falls back to when unset here.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
-pub(crate) struct RawTerminalConfig {
-    pub(crate) font_size: Option<f32>,
-    pub(crate) line_height: Option<f64>,
-    pub(crate) scrollback_lines: Option<usize>,
+pub struct RawTerminalConfig {
+    pub font_size: Option<f32>,
+    pub line_height: Option<f64>,
+    pub scrollback_lines: Option<usize>,
     /// Overrides the spawned shell program. The `SHELL` env var, if set,
     /// wins over this (matching the existing "existing env vars keep
     /// winning" precedence rule).
-    pub(crate) shell: Option<String>,
+    pub shell: Option<String>,
     /// Extra argv entries passed to the spawned shell (e.g. `["-l"]` for a
     /// login shell). No corresponding env var.
-    pub(crate) shell_args: Option<Vec<String>>,
+    pub shell_args: Option<Vec<String>>,
     /// The `TERM` value presented to the spawned shell.
-    pub(crate) term: Option<String>,
+    pub term: Option<String>,
 }
 
 /// `[theme]`: the app's one color scheme — named role overrides for the
@@ -169,13 +169,13 @@ pub(crate) struct RawTerminalConfig {
 /// reshaping either table's keys.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
-pub(crate) struct RawThemeConfig {
-    pub(crate) ansi: RawThemeAnsiConfig,
+pub struct RawThemeConfig {
+    pub ansi: RawThemeAnsiConfig,
     /// Palette name (matching a `ui::theme` accessor, e.g. `"accent"`) to a
     /// `#rrggbb`/`#rgb` hex string. Flattened so this and `ansi` above share
     /// the same `[theme]` table in TOML.
     #[serde(flatten)]
-    pub(crate) colors: HashMap<String, String>,
+    pub colors: HashMap<String, String>,
 }
 
 /// `[theme.ansi]`: the 16 base ANSI color slots, each an optional
@@ -183,23 +183,23 @@ pub(crate) struct RawThemeConfig {
 /// defaults each falls back to when unset here.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
-pub(crate) struct RawThemeAnsiConfig {
-    pub(crate) black: Option<String>,
-    pub(crate) red: Option<String>,
-    pub(crate) green: Option<String>,
-    pub(crate) yellow: Option<String>,
-    pub(crate) blue: Option<String>,
-    pub(crate) magenta: Option<String>,
-    pub(crate) cyan: Option<String>,
-    pub(crate) white: Option<String>,
-    pub(crate) bright_black: Option<String>,
-    pub(crate) bright_red: Option<String>,
-    pub(crate) bright_green: Option<String>,
-    pub(crate) bright_yellow: Option<String>,
-    pub(crate) bright_blue: Option<String>,
-    pub(crate) bright_magenta: Option<String>,
-    pub(crate) bright_cyan: Option<String>,
-    pub(crate) bright_white: Option<String>,
+pub struct RawThemeAnsiConfig {
+    pub black: Option<String>,
+    pub red: Option<String>,
+    pub green: Option<String>,
+    pub yellow: Option<String>,
+    pub blue: Option<String>,
+    pub magenta: Option<String>,
+    pub cyan: Option<String>,
+    pub white: Option<String>,
+    pub bright_black: Option<String>,
+    pub bright_red: Option<String>,
+    pub bright_green: Option<String>,
+    pub bright_yellow: Option<String>,
+    pub bright_blue: Option<String>,
+    pub bright_magenta: Option<String>,
+    pub bright_cyan: Option<String>,
+    pub bright_white: Option<String>,
 }
 
 /// `[ui]`: cross-domain UI primitives — the app-wide font family (shared by
@@ -208,10 +208,10 @@ pub(crate) struct RawThemeAnsiConfig {
 /// built-in defaults.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
-pub(crate) struct RawUiConfig {
-    pub(crate) font_family: Option<String>,
-    pub(crate) window_width: Option<f64>,
-    pub(crate) window_height: Option<f64>,
+pub struct RawUiConfig {
+    pub font_family: Option<String>,
+    pub window_width: Option<f64>,
+    pub window_height: Option<f64>,
 }
 
 /// Loads and caches the config file for the lifetime of the process. Config
@@ -224,7 +224,7 @@ pub(crate) struct RawUiConfig {
 /// that genuinely need to parse a file use `load_from_path` directly (see
 /// `src/config/tests.rs`) or read `config.example.toml` by path (the
 /// example-file drift guards).
-pub(crate) fn load() -> &'static RawConfig {
+pub fn load() -> &'static RawConfig {
     static CONFIG: OnceLock<RawConfig> = OnceLock::new();
     #[cfg(test)]
     {
@@ -338,7 +338,7 @@ fn load_from_path(path: Option<&Path>) -> RawConfig {
 /// as a plain argument rather than reading the environment, so it's exactly
 /// as safe to compile and call from a test as `load_from_path` is -- see
 /// this module's tests.
-pub(crate) fn reload_from_path(path: Option<&Path>) -> Result<RawConfig, String> {
+pub fn reload_from_path(path: Option<&Path>) -> Result<RawConfig, String> {
     match read_config(path) {
         ConfigRead::Missing => Ok(RawConfig::default()),
         ConfigRead::Parsed(config) => Ok(*config),
@@ -362,7 +362,7 @@ pub(crate) fn reload_from_path(path: Option<&Path>) -> Result<RawConfig, String>
 /// tests) and the theme/keymap apply functions it feeds
 /// (`ui::theme::apply_reload`'s and `app::keymap::Keymap::reload`'s own
 /// tests) are each covered on their own.
-pub(crate) fn reload() -> Result<RawConfig, String> {
+pub fn reload() -> Result<RawConfig, String> {
     #[cfg(test)]
     {
         Ok(RawConfig::default())

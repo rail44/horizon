@@ -31,6 +31,7 @@ serde_json = "1.0"
 uuid = "1.18"
 horizon-agent = { version = "0.1.0", path = "../crates/horizon-agent" }
 tokio = { version = "1.52", features = ["rt", "net", "io-util", "time", "macros"] }
+horizon-config = { version = "0.1.0", path = "../crates/horizon-config" }
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

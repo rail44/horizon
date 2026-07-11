@@ -200,7 +200,7 @@ impl Render for AgentView {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(theme::BACKGROUND))
+            .bg(rgb(theme::background()))
             .track_focus(&self.focus_handle)
             .child(
                 div()

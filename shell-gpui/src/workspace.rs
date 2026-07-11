@@ -365,10 +365,27 @@ impl WorkspaceShell {
                     session.read(cx).cancel();
                 }
             }
-            // Unwired until their subsystems arrive: agent runtime reload
-            // (needs drain/respawn), config reload (config port — both M5).
-            CommandId::ReloadAgentRuntime | CommandId::ReloadConfig => {}
+            CommandId::ReloadConfig => match horizon_config::reload() {
+                Ok(raw) => {
+                    theme::reload_from(&raw);
+                    window.refresh();
+                }
+                Err(error) => eprintln!("reload-config failed: {error}"),
+            },
+            // Unwired until the drain/respawn sequence is ported (M5).
+            CommandId::ReloadAgentRuntime => {}
         }
+    }
+
+    /// `execute` for control-plane callers — public without exposing the
+    /// whole command surface.
+    pub(crate) fn execute_external(
+        &mut self,
+        id: CommandId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.execute(id, window, cx);
     }
 
     fn open_session_manager(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -626,7 +643,7 @@ impl WorkspaceShell {
                 } else if is_active {
                     rgb(0x3a3f4e)
                 } else {
-                    rgb(theme::BACKGROUND)
+                    rgb(theme::background())
                 };
                 let view = self.panes.get(&pane_id).cloned();
                 div()
@@ -669,7 +686,7 @@ impl Render for WorkspaceShell {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(theme::BACKGROUND))
+            .bg(rgb(theme::background()))
             .key_context(if mode_active {
                 MODE_CONTEXT
             } else {
