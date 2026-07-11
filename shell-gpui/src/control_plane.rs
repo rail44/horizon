@@ -16,7 +16,7 @@ use horizon_control::contract::{EnvelopeBody, Invoke, Query, SessionEntry, Sessi
 use horizon_control::host::executor::{error_body, ControlExecutor, ControlRequest};
 use horizon_control::host::listener;
 use horizon_workspace::commands::{core_commands, CommandId};
-use horizon_workspace::{SessionId, SplitAxis};
+use horizon_workspace::{PaneKind, SessionId, SplitAxis};
 
 use crate::workspace::WorkspaceShell;
 
@@ -92,7 +92,7 @@ fn wire(
                             ControlRequest::Invoke(invoke) => {
                                 dispatch_invoke(shell, invoke, window, cx)
                             }
-                            ControlRequest::Query(query) => dispatch_query(shell, query),
+                            ControlRequest::Query(query) => dispatch_query(shell, query, cx),
                         })
                         .unwrap_or_else(|_| error_body("the workspace shell is gone"))
                 })
@@ -111,7 +111,12 @@ fn dispatch_invoke(
 ) -> EnvelopeBody {
     let args = &invoke.args;
     match invoke.command.as_str() {
-        "new-terminal" => {
+        "new-terminal" | "new-agent" => {
+            let kind = if invoke.command == "new-agent" {
+                PaneKind::Agent
+            } else {
+                PaneKind::Terminal
+            };
             let split = match optional_session_id_arg(args, "split") {
                 Ok(split) => split,
                 Err(message) => return error_body(message),
@@ -120,7 +125,17 @@ fn dispatch_invoke(
                 Ok(activate) => activate,
                 Err(message) => return error_body(message),
             };
-            match shell.external_new_terminal(split, activate, window, cx) {
+            let prompt = match args.get("prompt") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::String(prompt)) if kind == PaneKind::Agent => {
+                    Some(prompt.clone())
+                }
+                Some(serde_json::Value::String(_)) => {
+                    return error_body("`prompt` is only accepted for agent sessions")
+                }
+                Some(_) => return error_body("`prompt` must be a string"),
+            };
+            match shell.external_new_session(kind, split, activate, prompt, window, cx) {
                 Ok(()) => EnvelopeBody::Ok,
                 Err(message) => error_body(message),
             }
@@ -153,10 +168,10 @@ fn dispatch_invoke(
             shell.external_terminate_all_detached(window, cx);
             EnvelopeBody::Ok
         }
-        // The agent vocabulary lands with M4; reload-config with the
-        // config port.
-        other @ ("new-agent"
-        | "new-config-agent"
+        // Still pending: roles (new-config-agent) and per-session
+        // approve/deny/cancel need role/config plumbing and per-session
+        // targeting; reload verbs land with the M5 config port.
+        other @ ("new-config-agent"
         | "approve"
         | "deny"
         | "cancel-turn"
@@ -166,7 +181,11 @@ fn dispatch_invoke(
     }
 }
 
-fn dispatch_query(shell: &WorkspaceShell, query: &Query) -> EnvelopeBody {
+fn dispatch_query(
+    shell: &WorkspaceShell,
+    query: &Query,
+    cx: &mut Context<WorkspaceShell>,
+) -> EnvelopeBody {
     match query.what.as_str() {
         "sessions" => EnvelopeBody::Sessions(Sessions {
             sessions: shell
@@ -181,7 +200,7 @@ fn dispatch_query(shell: &WorkspaceShell, query: &Query) -> EnvelopeBody {
                 .collect(),
         }),
         "state" => {
-            let state = shell.command_state();
+            let state = shell.command_state_with(cx);
             EnvelopeBody::State(State {
                 tab_count: state.tab_count,
                 visible_pane_count: state.visible_pane_count,

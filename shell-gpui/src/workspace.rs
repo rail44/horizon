@@ -19,11 +19,42 @@ use horizon_workspace::commands::{command_entries, CommandId, CommandState};
 use horizon_workspace::types::LayoutNode;
 use horizon_workspace::{Direction, PaneId, PaneKind, SplitAxis, Workspace};
 
+use crate::agent::{AgentSession, AgentView, AgentdHandle};
 use crate::palette::PaletteDelegate;
 use crate::session_manager::SessionManagerDelegate;
 use crate::terminal::{TerminalSession, TerminalView};
 use crate::theme;
+use horizon_workspace::types::SessionKind;
 use horizon_workspace::SessionId;
+
+type AgentSessionId = horizon_agent::contract::SessionId;
+
+fn agent_session_id(id: SessionId) -> AgentSessionId {
+    AgentSessionId::from_uuid(id.as_uuid())
+}
+
+/// One pane's view, by session kind.
+#[derive(Clone)]
+enum PaneView {
+    Terminal(Entity<TerminalView>),
+    Agent(Entity<AgentView>),
+}
+
+impl PaneView {
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        match self {
+            PaneView::Terminal(view) => view.focus_handle(cx),
+            PaneView::Agent(view) => view.focus_handle(cx),
+        }
+    }
+
+    fn element(&self) -> AnyElement {
+        match self {
+            PaneView::Terminal(view) => view.clone().into_any_element(),
+            PaneView::Agent(view) => view.clone().into_any_element(),
+        }
+    }
+}
 
 actions!(
     workspace,
@@ -36,6 +67,7 @@ actions!(
         ModeCommit,
         ModeCancel,
         NewTab,
+        NewAgentTab,
         SplitPane,
         ClosePane,
         NextTab,
@@ -59,6 +91,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("enter", ModeCommit, Some(MODE_CONTEXT)),
         KeyBinding::new("escape", ModeCancel, Some(MODE_CONTEXT)),
         KeyBinding::new("t", NewTab, Some(MODE_CONTEXT)),
+        KeyBinding::new("a", NewAgentTab, Some(MODE_CONTEXT)),
         KeyBinding::new("s", SplitPane, Some(MODE_CONTEXT)),
         KeyBinding::new("x", ClosePane, Some(MODE_CONTEXT)),
         KeyBinding::new("tab", NextTab, Some(MODE_CONTEXT)),
@@ -76,7 +109,11 @@ pub struct WorkspaceShell {
     // so closing a pane detaches (session survives, scrollback intact)
     // and terminating is the explicit destructive path.
     sessions: HashMap<SessionId, Entity<TerminalSession>>,
-    panes: HashMap<PaneId, Entity<TerminalView>>,
+    agent_sessions: HashMap<SessionId, Entity<AgentSession>>,
+    // Lazily connected on the first agent session (the Floem shell
+    // connects async at startup; lazy-blocking is the v1 tradeoff here).
+    agentd: Option<AgentdHandle>,
+    panes: HashMap<PaneId, PaneView>,
     // Focused while workspace mode is active, so mode keys dispatch here
     // instead of reaching the terminal.
     focus_handle: FocusHandle,
@@ -96,6 +133,8 @@ impl WorkspaceShell {
             workspace: Workspace::mvp(),
             socket_path,
             sessions: HashMap::new(),
+            agent_sessions: HashMap::new(),
+            agentd: None,
             panes: HashMap::new(),
             focus_handle: cx.focus_handle(),
             palette: None,
@@ -114,12 +153,9 @@ impl WorkspaceShell {
     /// (detached); every pane gets a view bound to its session's entity,
     /// so a reattached pane resumes with scrollback intact.
     fn reconcile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let known: std::collections::HashSet<SessionId> = self
-            .workspace
-            .session_summaries()
-            .iter()
-            .map(|summary| summary.id)
-            .collect();
+        let summaries = self.workspace.session_summaries();
+        let known: std::collections::HashSet<SessionId> =
+            summaries.iter().map(|summary| summary.id).collect();
         self.sessions.retain(|id, session| {
             let keep = known.contains(id);
             if !keep {
@@ -127,11 +163,43 @@ impl WorkspaceShell {
             }
             keep
         });
-        for id in known {
-            let socket_path = self.socket_path.clone();
-            self.sessions
-                .entry(id)
-                .or_insert_with(|| cx.new(|cx| TerminalSession::spawn(id, &socket_path, cx)));
+        self.agent_sessions.retain(|id, session| {
+            let keep = known.contains(id);
+            if !keep {
+                session.read(cx).shutdown();
+            }
+            keep
+        });
+        for summary in summaries {
+            match summary.kind {
+                SessionKind::Terminal => {
+                    let socket_path = self.socket_path.clone();
+                    let id = summary.id;
+                    self.sessions.entry(id).or_insert_with(|| {
+                        cx.new(|cx| TerminalSession::spawn(id, &socket_path, cx))
+                    });
+                }
+                SessionKind::Agent => {
+                    if self.agent_sessions.contains_key(&summary.id) {
+                        continue;
+                    }
+                    let handle = match self.agentd() {
+                        Ok(handle) => handle,
+                        Err(error) => {
+                            eprintln!("agent session unavailable: {error}");
+                            continue;
+                        }
+                    };
+                    let provider_id =
+                        horizon_agent::contract::ProviderRegistry::default().default_provider_id();
+                    let session_handle =
+                        handle.start_session(agent_session_id(summary.id), provider_id, None);
+                    self.agent_sessions.insert(
+                        summary.id,
+                        cx.new(|cx| AgentSession::new(session_handle, cx)),
+                    );
+                }
+            }
         }
 
         let pane_ids = self.workspace.all_pane_ids();
@@ -140,19 +208,40 @@ impl WorkspaceShell {
             if self.panes.contains_key(&pane_id) {
                 continue;
             }
-            let Some(session) = self
+            if let Some(session) = self
                 .workspace
                 .terminal_session_id(pane_id)
                 .and_then(|id| self.sessions.get(&id).cloned())
-            else {
-                continue;
-            };
-            self.panes.insert(
-                pane_id,
-                cx.new(|cx| TerminalView::new(session.clone(), window, cx)),
-            );
+            {
+                self.panes.insert(
+                    pane_id,
+                    PaneView::Terminal(cx.new(|cx| TerminalView::new(session.clone(), window, cx))),
+                );
+            } else if let Some(session) = self
+                .workspace
+                .agent_session_id(pane_id)
+                .and_then(|id| self.agent_sessions.get(&id).cloned())
+            {
+                self.panes.insert(
+                    pane_id,
+                    PaneView::Agent(cx.new(|cx| AgentView::new(session.clone(), window, cx))),
+                );
+            }
         }
         cx.notify();
+    }
+
+    /// Lazily connects to `horizon-agentd` (spawning it if needed).
+    fn agentd(&mut self) -> Result<AgentdHandle, String> {
+        if let Some(handle) = &self.agentd {
+            return Ok(handle.clone());
+        }
+        let handle = AgentdHandle::connect(
+            &horizon_agent::socket::default_socket_path(),
+            &self.socket_path,
+        )?;
+        self.agentd = Some(handle.clone());
+        Ok(handle)
     }
 
     fn focus_active(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -193,12 +282,19 @@ impl WorkspaceShell {
         cx.notify();
     }
 
-    fn new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn new_tab(&mut self, kind: PaneKind, window: &mut Window, cx: &mut Context<Self>) {
         self.workspace.exit_workspace_mode();
         self.workspace
-            .open_tab_with_new_session_activated(PaneKind::Terminal, true);
+            .open_tab_with_new_session_activated(kind, true);
         self.reconcile(window, cx);
         self.focus_active(window, cx);
+    }
+
+    /// The active pane's agent session, when it is an agent pane.
+    fn active_agent_session(&self) -> Option<Entity<AgentSession>> {
+        let pane_id = self.workspace.cursor_pane_id()?;
+        let session_id = self.workspace.agent_session_id(pane_id)?;
+        self.agent_sessions.get(&session_id).cloned()
     }
 
     fn split_pane(&mut self, axis: SplitAxis, window: &mut Window, cx: &mut Context<Self>) {
@@ -218,7 +314,7 @@ impl WorkspaceShell {
         match id {
             CommandId::SplitRight => self.split_pane(SplitAxis::Horizontal, window, cx),
             CommandId::SplitDown => self.split_pane(SplitAxis::Vertical, window, cx),
-            CommandId::NewTab => self.new_tab(window, cx),
+            CommandId::NewTab => self.new_tab(PaneKind::Terminal, window, cx),
             CommandId::FocusNextPane => {
                 self.workspace.focus_next();
                 self.focus_active(window, cx);
@@ -244,13 +340,34 @@ impl WorkspaceShell {
                 self.reconcile(window, cx);
             }
             CommandId::OpenSessionManager => self.open_session_manager(window, cx),
-            // Unwired until their subsystems arrive: agent commands (M4),
-            // config reload (M3 config port).
-            CommandId::ApproveToolCall
-            | CommandId::DenyToolCall
-            | CommandId::CancelAgentTurn
-            | CommandId::ReloadAgentRuntime
-            | CommandId::ReloadConfig => {}
+            CommandId::ApproveToolCall => {
+                if let Some(session) = self.active_agent_session() {
+                    let pending = horizon_agent::frame::pending_approval_call_ids_in(
+                        &session.read(cx).frame.items,
+                    );
+                    if let Some(call_id) = pending.first() {
+                        session.read(cx).approve(call_id.clone());
+                    }
+                }
+            }
+            CommandId::DenyToolCall => {
+                if let Some(session) = self.active_agent_session() {
+                    let pending = horizon_agent::frame::pending_approval_call_ids_in(
+                        &session.read(cx).frame.items,
+                    );
+                    if let Some(call_id) = pending.first() {
+                        session.read(cx).deny(call_id.clone());
+                    }
+                }
+            }
+            CommandId::CancelAgentTurn => {
+                if let Some(session) = self.active_agent_session() {
+                    session.read(cx).cancel();
+                }
+            }
+            // Unwired until their subsystems arrive: agent runtime reload
+            // (needs drain/respawn), config reload (config port — both M5).
+            CommandId::ReloadAgentRuntime | CommandId::ReloadConfig => {}
         }
     }
 
@@ -306,26 +423,33 @@ impl WorkspaceShell {
 
     /// External (control-plane) operations — the CLI's verbs, mirroring
     /// the Floem shell's `external_commands` semantics: `activate:
-    /// false` never steals focus.
-    pub(crate) fn external_new_terminal(
+    /// false` never steals focus. `prompt` (agent sessions only) sends
+    /// the first user message right after the session starts — the
+    /// create-with-prompt composite from the CLI design.
+    pub(crate) fn external_new_session(
         &mut self,
+        kind: PaneKind,
         split: Option<(SessionId, SplitAxis)>,
         activate: bool,
+        prompt: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        match split {
-            Some((target, axis)) => {
-                self.workspace
-                    .split_session_with_new_session(target, PaneKind::Terminal, axis, activate)
-                    .ok_or_else(|| "unknown split target session".to_string())?;
-            }
-            None => {
-                self.workspace
-                    .open_tab_with_new_session_activated(PaneKind::Terminal, activate);
+        let session_id = match split {
+            Some((target, axis)) => self
+                .workspace
+                .split_session_with_new_session(target, kind, axis, activate)
+                .ok_or_else(|| "unknown split target session".to_string())?,
+            None => self
+                .workspace
+                .open_tab_with_new_session_activated(kind, activate),
+        };
+        self.reconcile(window, cx);
+        if let Some(prompt) = prompt {
+            if let Some(session) = self.agent_sessions.get(&session_id) {
+                session.read(cx).send_user_message(prompt);
             }
         }
-        self.reconcile(window, cx);
         if activate {
             self.focus_active(window, cx);
         }
@@ -373,20 +497,35 @@ impl WorkspaceShell {
         self.reconcile(window, cx);
     }
 
-    pub(crate) fn command_state(&self) -> CommandState {
+    pub(crate) fn command_state_with(&self, cx: &App) -> CommandState {
+        let (has_pending_approval, has_turn_in_flight) = self
+            .active_agent_session()
+            .map(|session| {
+                let session = session.read(cx);
+                let pending =
+                    !horizon_agent::frame::pending_approval_call_ids_in(&session.frame.items)
+                        .is_empty();
+                let in_flight = matches!(
+                    session.frame.state,
+                    Some(horizon_agent::contract::SessionState::Running)
+                        | Some(horizon_agent::contract::SessionState::ToolRunning)
+                );
+                (pending, in_flight)
+            })
+            .unwrap_or((false, false));
         CommandState {
             tab_count: self.workspace.tab_count(),
             visible_pane_count: self.workspace.visible_panes().len(),
             has_active_session: self.workspace.active_session_id().is_some(),
             detached_session_count: self.workspace.detached_session_count(),
-            has_pending_approval: false,
-            has_turn_in_flight: false,
+            has_pending_approval,
+            has_turn_in_flight,
         }
     }
 
     fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.workspace.exit_workspace_mode();
-        let entries = command_entries(self.command_state());
+        let entries = command_entries(self.command_state_with(cx));
         let list =
             cx.new(|cx| ListState::new(PaletteDelegate::new(entries), window, cx).searchable(true));
         let subscription = cx.subscribe_in(
@@ -498,7 +637,7 @@ impl WorkspaceShell {
                         MouseButton::Left,
                         cx.listener(move |shell, _, _, cx| shell.activate_pane(pane_id, cx)),
                     )
-                    .children(view)
+                    .children(view.map(|view| view.element()))
                     .into_any_element()
             }
             LayoutNode::Split { axis, children } => {
@@ -560,6 +699,9 @@ impl Render for WorkspaceShell {
             }))
             .on_action(cx.listener(|shell, _: &NewTab, window, cx| {
                 shell.execute(CommandId::NewTab, window, cx);
+            }))
+            .on_action(cx.listener(|shell, _: &NewAgentTab, window, cx| {
+                shell.new_tab(PaneKind::Agent, window, cx);
             }))
             .on_action(cx.listener(|shell, _: &SplitPane, window, cx| {
                 shell.execute(CommandId::SplitRight, window, cx);

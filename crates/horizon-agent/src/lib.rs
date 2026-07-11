@@ -11,6 +11,9 @@
 //! config-file loading, the `workspace.snapshot` host tool) — see that
 //! module for the seam.
 
+// The connect/spawn/handshake client for horizon-agentd, shared by both
+// shells (docs/gpui-migration-design.md M4).
+pub mod client;
 pub mod config;
 pub mod contract;
 pub mod frame;

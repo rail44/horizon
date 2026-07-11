@@ -19,7 +19,9 @@
 //! spawns/reconnects sessions — lives in `agent::view`,
 //! `agent::agentd_client`, `agent::agentd_runtime`, and `app::runtime::agent`.
 
-pub(crate) mod agentd_client;
+// The agentd connect/spawn/handshake client moved to horizon-agent::client
+// (shared with shell-gpui); this alias keeps existing paths working.
+pub(crate) use horizon_agent::client as agentd_client;
 pub(crate) mod agentd_runtime;
 mod host_tools;
 pub(crate) mod view;

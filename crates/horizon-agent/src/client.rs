@@ -23,7 +23,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use horizon_agent::wire::{self, Control, Envelope, EnvelopeBody, Hello, CONTRACT_VERSION};
+use crate::wire::{self, Control, Envelope, EnvelopeBody, Hello, CONTRACT_VERSION};
 #[cfg(test)]
 use tokio::io::AsyncRead;
 use tokio::io::{AsyncBufRead, AsyncWrite, BufReader};
@@ -51,27 +51,28 @@ const AGENTD_BINARY_NAME: &str = "horizon-agentd";
 /// halves ready for the session-hosting traffic that follows a successful
 /// handshake -- the production entry point `agentd_runtime::AgentdConnection
 /// ::connect` builds its read/write tasks on top of.
-pub(crate) async fn connect_and_split(
+pub async fn connect_and_split(
     socket_path: &Path,
+    control_socket: &Path,
 ) -> Result<(BufReader<OwnedReadHalf>, OwnedWriteHalf, Hello), String> {
-    let stream = connect_or_spawn(socket_path).await?;
+    let stream = connect_or_spawn(socket_path, control_socket).await?;
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
     let hello = handshake_over(&mut reader, &mut write_half).await?;
     Ok((reader, write_half, hello))
 }
 
-async fn connect_or_spawn(socket_path: &Path) -> Result<UnixStream, String> {
+async fn connect_or_spawn(socket_path: &Path, control_socket: &Path) -> Result<UnixStream, String> {
     if let Ok(stream) = UnixStream::connect(socket_path).await {
         return Ok(stream);
     }
-    spawn_agentd(socket_path)?;
+    spawn_agentd(socket_path, control_socket)?;
     retry_connect(socket_path).await
 }
 
-fn spawn_agentd(socket_path: &Path) -> Result<(), String> {
+fn spawn_agentd(socket_path: &Path, control_socket: &Path) -> Result<(), String> {
     let binary = resolve_agentd_binary();
-    agentd_command(&binary, socket_path)
+    agentd_command(&binary, socket_path, control_socket)
         .spawn()
         .map(|_child| ())
         .map_err(|err| {
@@ -90,12 +91,16 @@ fn spawn_agentd(socket_path: &Path) -> Result<(), String> {
 /// `docs/cli-control-plane-design.md`'s "Discovery" decision. Split out from
 /// `spawn_agentd` so the env injection is directly assertable without
 /// actually spawning a process (see this module's tests).
-fn agentd_command(binary: &Path, socket_path: &Path) -> std::process::Command {
+fn agentd_command(
+    binary: &Path,
+    socket_path: &Path,
+    control_socket: &Path,
+) -> std::process::Command {
     let mut command = std::process::Command::new(binary);
-    command.arg("--socket").arg(socket_path).env(
-        "HORIZON_SOCKET",
-        crate::control_plane::default_socket_path(),
-    );
+    command
+        .arg("--socket")
+        .arg(socket_path)
+        .env("HORIZON_SOCKET", control_socket);
     command
 }
 
@@ -207,6 +212,7 @@ mod tests {
         let command = agentd_command(
             Path::new("/usr/bin/horizon-agentd"),
             Path::new("/tmp/x.sock"),
+            Path::new("/tmp/horizon-control-test.sock"),
         );
 
         let value = command
@@ -216,7 +222,7 @@ mod tests {
 
         assert_eq!(
             value,
-            Some(crate::control_plane::default_socket_path().as_os_str())
+            Some(std::ffi::OsStr::new("/tmp/horizon-control-test.sock"))
         );
     }
 

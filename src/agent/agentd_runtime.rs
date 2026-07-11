@@ -361,14 +361,18 @@ fn answer_host_tool_request(workspace: &Workspace, tool_id: &str) -> serde_json:
 /// handshake, reports the outcome back to [`AgentdConnection::connect`]'s
 /// caller exactly once, then keeps reading/writing until the socket closes.
 async fn run_connection(socket_path: &Path, outcome_tx: std::sync::mpsc::Sender<ConnectOutcome>) {
-    let (mut reader, mut writer, _hello) =
-        match crate::agent::agentd_client::connect_and_split(socket_path).await {
-            Ok(parts) => parts,
-            Err(err) => {
-                let _ = outcome_tx.send(Err(err));
-                return;
-            }
-        };
+    let (mut reader, mut writer, _hello) = match crate::agent::agentd_client::connect_and_split(
+        socket_path,
+        &crate::control_plane::default_socket_path(),
+    )
+    .await
+    {
+        Ok(parts) => parts,
+        Err(err) => {
+            let _ = outcome_tx.send(Err(err));
+            return;
+        }
+    };
 
     let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Envelope>();
     let session_events = Arc::new(Mutex::new(HashMap::new()));

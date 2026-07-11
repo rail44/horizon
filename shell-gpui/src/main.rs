@@ -3,6 +3,7 @@
 //! `horizon-workspace` model) hosts a terminal per pane; the control
 //! plane listens on the well-known socket.
 
+mod agent;
 mod control_plane;
 mod palette;
 mod session_manager;
