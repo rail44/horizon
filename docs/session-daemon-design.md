@@ -222,6 +222,47 @@ host-side) confirms a known byte sequence's logical-color frame resolves to
 the exact RGB values (`[224, 108, 117]` for ANSI red, etc.) the pre-cut
 `TerminalCore` used to bake in directly.
 
+## Step 1 implementation decisions (2026-07-11)
+
+The owner approved these concrete boundary choices after the GPUI shell
+became Horizon's sole frontend:
+
+- **Neutral shared framing crate.** `horizon-session-protocol` owns the
+  JSONL envelope, handshake, wire session identifier, and framing. Agent and
+  terminal command/event types remain sister vocabularies in
+  `horizon-agent` and `horizon-terminal-core`; neither domain crate depends
+  on the other.
+- **Sparse terminal frame patches.** Attach/reconnect sends a full
+  `TerminalFrame`. Later pushes carry changed indexed rows, the final row
+  count, and only changed cursor/mouse/kitty-mode/palette metadata. Frame
+  text is reconstructed from rows by one shared terminal-core helper rather
+  than repeated in every patch.
+- **Creation inputs cross once; process state stays daemon-side.** Horizon
+  sends a resolved terminal spawn specification (shell, arguments, TERM,
+  scrollback, OSC-query color scheme, control socket, and fallback cwd).
+  `sessiond`, which owns the child pid and session tables, resolves a
+  spawn-source session's live cwd. No synchronous UI-thread cwd RPC or
+  daemon pid leakage is introduced.
+- **Startup remains non-blocking.** A shared `SessiondRuntime` queues initial
+  and user-requested creates until its asynchronous connection is ready;
+  window creation never waits on the daemon.
+- **GPUI entities are the update boundary.** Each terminal session already
+  lives in its own `Entity<TerminalSession>` and notifies only its observers.
+  The Floem-era per-field signal-sharding proposal is obsolete; no second
+  reactive store is added. Row patches are applied to the entity's frame and
+  GPUI performs one entity notification.
+- **Hard rename, no migration compatibility layer.** This is a pre-release,
+  single-owner project without a deployed compatibility surface. The binary,
+  socket, environment override, reload command, and diagnostics move
+  directly from `agentd` to `sessiond`; no legacy socket drain probe,
+  environment alias, or reload-command alias is retained. Existing agent
+  persistence schemas and agent/provider configuration names do not change.
+  The development environment is checked once for a surviving old daemon at
+  integration time instead of carrying permanent migration code.
+- **Daemon identity includes its name.** Handshake diagnostics use a
+  `horizon-sessiond/<version>` binary id rather than the former ambiguous
+  version-only value.
+
 ## Connection to delegation (stage 1)
 
 The terminal's move to `sessiond` supplies a delegation precondition,

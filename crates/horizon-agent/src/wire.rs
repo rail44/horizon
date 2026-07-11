@@ -17,33 +17,26 @@
 
 use std::path::PathBuf;
 
+use horizon_session_protocol::Envelope as ProtocolEnvelope;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncBufRead, AsyncWrite};
 
 use crate::contract::{Command, Event, ProviderId, RequestId, SessionId, ToolCallProgress};
 use crate::roles::RoleId;
 
-/// The contract/wire version this build speaks. Carried both by every
-/// envelope's `v` field (checked structurally by [`read_envelope`] -- an
-/// envelope from an incompatible wire format can't be assumed to parse into
-/// today's `Command`/`Event`/[`Control`] shapes) and, independently, by
-/// [`Hello::contract_version`] (the semantic version compared during the
-/// hello handshake -- see `horizon-agentd`'s connection handler and
-/// Horizon's `agent::agentd_client`). The two checks are deliberately
-/// separate: a future transport without an envelope at all (ACP's JSON-RPC
-/// over stdio, guardrail 2) has no `v` field to check, so `Hello` carries
-/// its own copy that survives independently of this envelope format.
+/// Shared handshake types, errors, and the contract/wire version this build
+/// speaks. The version is carried by every envelope and independently by
+/// [`Hello::contract_version`]. Version 2 replaced [`SessionNew`]'s former
+/// `config_overrides` placeholder with the typed `role_id` field.
 ///
-/// Bumped 1 -> 2 (`docs/plans/agent-foundation/03-roles-and-config-agent.md`):
-/// [`SessionNew`]'s placeholder `config_overrides` field is replaced outright
-/// by a real, typed `role_id` -- the "later step" its own former doc comment
-/// said would define real override fields. Not additive (the field is
-/// renamed and reshaped, not just added), so old and new peers must not
-/// silently talk past each other -- the version bump makes that a rejected
-/// handshake ([`Control::HandshakeRejected`]) instead.
-pub const CONTRACT_VERSION: u32 = 2;
+/// The definitions now live in `horizon-session-protocol`; these re-exports
+/// preserve this module's public API while terminal and agent messages share
+/// one session-daemon connection.
+pub use horizon_session_protocol::{
+    Hello, WireError, SESSION_PROTOCOL_VERSION as CONTRACT_VERSION,
+};
 
-/// One JSONL message: `{"v":1,"session_id":..,"kind":"command"|"event"|
+/// One JSONL message: `{"v":2,"session_id":..,"kind":"command"|"event"|
 /// "control","payload":..}`. `session_id` is `None` for connection-global
 /// control messages (`hello`, `ping`, `drain`, `session_list`) and `Some`
 /// for anything scoped to one agent session.
@@ -88,8 +81,9 @@ impl Envelope {
 /// The envelope's `kind`/`payload` pair. Serializes adjacently tagged
 /// (`{"kind":"command","payload":{..}}`) via the derive below; deserializing
 /// needs the version check *before* picking which contract type to decode
-/// `payload` as, so reading is hand-rolled in [`parse_line`] rather than
-/// derived -- see [`WireError::UnknownKind`]/[`WireError::VersionMismatch`].
+/// `payload` as, so [`read_envelope`] performs the shared structural read
+/// before decoding this enum -- see [`WireError::UnknownKind`]/
+/// [`WireError::VersionMismatch`].
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
 pub enum EnvelopeBody {
@@ -151,18 +145,6 @@ pub enum Control {
     /// (receiver, which folds it into `agent_state_status`, the status
     /// bar's existing signal).
     SkippedLines(String),
-}
-
-/// Sent by whichever side speaks first (Horizon's `agentd_client` connects
-/// and sends this; `horizon-agentd` answers with its own, or with
-/// [`Control::HandshakeRejected`]). `contract_version` is the semantic
-/// contract version -- see [`CONTRACT_VERSION`]'s doc comment; a mismatch is
-/// the handshake's job to detect and surface, not this module's.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Hello {
-    pub contract_version: u32,
-    pub binary_id: String,
-    pub capabilities: Vec<String>,
 }
 
 /// One entry of a [`Control::SessionListResult`] reply.
@@ -228,25 +210,6 @@ pub struct HostToolResponse {
     pub output: serde_json::Value,
 }
 
-/// Explicit, non-panicking failure modes for [`read_envelope`]. The two
-/// cases the design calls out by name (unknown `kind`, version mismatch)
-/// get their own variants rather than falling through to a bare
-/// [`serde_json::Error`], so callers can match on them instead of
-/// string-sniffing a JSON error message.
-#[derive(Debug, thiserror::Error)]
-pub enum WireError {
-    #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("malformed envelope json: {0}")]
-    Json(#[from] serde_json::Error),
-    #[error("unknown envelope kind: {0:?}")]
-    UnknownKind(String),
-    #[error("torn line: connection closed mid-message")]
-    TornLine,
-    #[error("envelope wire version mismatch: this build speaks v{expected}, received v{found}")]
-    VersionMismatch { expected: u32, found: u32 },
-}
-
 /// Writes one envelope as a single newline-terminated JSON line and flushes
 /// the writer, so a peer reading line-by-line (e.g. [`read_envelope`]) sees
 /// it immediately rather than waiting on a fuller buffer.
@@ -254,11 +217,18 @@ pub async fn write_envelope<W>(writer: &mut W, envelope: &Envelope) -> Result<()
 where
     W: AsyncWrite + Unpin,
 {
-    let mut line = serde_json::to_string(envelope)?;
-    line.push('\n');
-    writer.write_all(line.as_bytes()).await?;
-    writer.flush().await?;
-    Ok(())
+    let (kind, payload) = match &envelope.body {
+        EnvelopeBody::Command(command) => ("command", serde_json::to_value(command)?),
+        EnvelopeBody::Event(event) => ("event", serde_json::to_value(event)?),
+        EnvelopeBody::Control(control) => ("control", serde_json::to_value(control)?),
+    };
+    let protocol_envelope = ProtocolEnvelope {
+        v: envelope.v,
+        session_id: envelope.session_id.map(SessionId::as_uuid),
+        kind: kind.to_string(),
+        payload,
+    };
+    horizon_session_protocol::write_envelope(writer, &protocol_envelope).await
 }
 
 /// Reads one newline-delimited envelope. `Ok(None)` means the peer closed
@@ -270,51 +240,20 @@ pub async fn read_envelope<R>(reader: &mut R) -> Result<Option<Envelope>, WireEr
 where
     R: AsyncBufRead + Unpin,
 {
-    let mut line = String::new();
-    let bytes_read = reader.read_line(&mut line).await?;
-    if bytes_read == 0 {
+    let Some(raw) = horizon_session_protocol::read_envelope(reader).await? else {
         return Ok(None);
-    }
-    if !line.ends_with('\n') {
-        return Err(WireError::TornLine);
-    }
-    parse_line(line.trim_end_matches(['\n', '\r'])).map(Some)
-}
-
-/// Unknown-field tolerance comes for free from `serde`'s default behavior
-/// (no `deny_unknown_fields` on `RawEnvelope` or any payload type above);
-/// this function's own job is the two checks that *do* need to be explicit
-/// -- the wire version ([`WireError::VersionMismatch`]) and the `kind` tag
-/// ([`WireError::UnknownKind`]) -- ahead of decoding `payload` into a
-/// specific contract type.
-fn parse_line(line: &str) -> Result<Envelope, WireError> {
-    #[derive(Deserialize)]
-    struct RawEnvelope {
-        v: u32,
-        kind: String,
-        #[serde(default)]
-        session_id: Option<SessionId>,
-        payload: serde_json::Value,
-    }
-
-    let raw: RawEnvelope = serde_json::from_str(line)?;
-    if raw.v != CONTRACT_VERSION {
-        return Err(WireError::VersionMismatch {
-            expected: CONTRACT_VERSION,
-            found: raw.v,
-        });
-    }
+    };
     let body = match raw.kind.as_str() {
         "command" => EnvelopeBody::Command(serde_json::from_value(raw.payload)?),
         "event" => EnvelopeBody::Event(serde_json::from_value(raw.payload)?),
         "control" => EnvelopeBody::Control(serde_json::from_value(raw.payload)?),
         other => return Err(WireError::UnknownKind(other.to_string())),
     };
-    Ok(Envelope {
+    Ok(Some(Envelope {
         v: raw.v,
-        session_id: raw.session_id,
+        session_id: raw.session_id.map(SessionId::from_uuid),
         body,
-    })
+    }))
 }
 
 #[cfg(test)]
