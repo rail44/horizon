@@ -6,20 +6,22 @@
 //! module dies with the Floem shell at M5 — the duplication is
 //! transition-scoped, not permanent.
 //!
-//! Deliberately not carried over yet: `session_list`-at-startup resume
-//! (the GPUI workspace starts fresh; recorded for M5 parity) and real
-//! host-tool answers — `workspace.snapshot` requests get an error
-//! payload until the workspace snapshot moves somewhere both shells can
-//! call it.
+//! Host-tool requests route out on the returned receiver and are
+//! answered on the UI thread (`WorkspaceShell::agentd` wires the
+//! responder). Deliberately not carried over yet: `session_list`-at-
+//! startup resume (the GPUI workspace starts fresh; recorded for M5
+//! parity).
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use crossbeam_channel::{unbounded, Sender};
+use crossbeam_channel::{unbounded, Receiver, Sender};
 use horizon_agent::contract::{self, Command, ProviderEvent};
-use horizon_agent::wire::{self, Control, Envelope, EnvelopeBody, HostToolResponse};
+use horizon_agent::wire::{
+    self, Control, Envelope, EnvelopeBody, HostToolRequest, HostToolResponse,
+};
 
 type AgentSessionId = contract::SessionId;
 
@@ -32,8 +34,14 @@ pub struct AgentdHandle {
 impl AgentdHandle {
     /// Connects to `horizon-agentd` (spawning it if needed), blocking the
     /// caller until the handshake finishes — acceptable once at startup,
-    /// mirroring the Floem shell's `AgentdConnection::connect`.
-    pub fn connect(socket_path: &Path, control_socket: &Path) -> Result<Self, String> {
+    /// mirroring the Floem shell's `AgentdConnection::connect`. The
+    /// returned receiver carries host-tool requests (e.g.
+    /// `workspace.snapshot`) the shell must answer via
+    /// [`Self::respond_host_tool`].
+    pub fn connect(
+        socket_path: &Path,
+        control_socket: &Path,
+    ) -> Result<(Self, Receiver<HostToolRequest>), String> {
         let socket_path = socket_path.to_path_buf();
         let control_socket = control_socket.to_path_buf();
         let (outcome_tx, outcome_rx) = std::sync::mpsc::channel();
@@ -102,12 +110,18 @@ impl AgentdHandle {
 
         contract::SessionHandle::new(command_tx, event_rx)
     }
+
+    pub fn respond_host_tool(&self, response: HostToolResponse) {
+        let _ = self
+            .outgoing
+            .send(Envelope::control(Control::HostToolResponse(response)));
+    }
 }
 
 async fn run_connection(
     socket_path: &Path,
     control_socket: &Path,
-    outcome_tx: std::sync::mpsc::Sender<Result<AgentdHandle, String>>,
+    outcome_tx: std::sync::mpsc::Sender<Result<(AgentdHandle, Receiver<HostToolRequest>), String>>,
 ) {
     let (mut reader, mut writer, _hello) =
         match horizon_agent::client::connect_and_split(socket_path, control_socket).await {
@@ -121,12 +135,13 @@ async fn run_connection(
     let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Envelope>();
     let session_events: Arc<Mutex<HashMap<AgentSessionId, Sender<ProviderEvent>>>> =
         Arc::new(Mutex::new(HashMap::new()));
+    let (host_tool_tx, host_tool_rx) = unbounded::<HostToolRequest>();
 
     let handle = AgentdHandle {
         outgoing: outgoing_tx.clone(),
         session_events: session_events.clone(),
     };
-    if outcome_tx.send(Ok(handle)).is_err() {
+    if outcome_tx.send(Ok((handle, host_tool_rx))).is_err() {
         return;
     }
 
@@ -140,7 +155,9 @@ async fn run_connection(
     let read_task = async move {
         loop {
             match wire::read_envelope(&mut reader).await {
-                Ok(Some(envelope)) => dispatch_incoming(envelope, &session_events, &outgoing_tx),
+                Ok(Some(envelope)) => {
+                    dispatch_incoming(envelope, &session_events, &outgoing_tx, &host_tool_tx)
+                }
                 Ok(None) | Err(_) => return,
             }
         }
@@ -155,6 +172,7 @@ fn dispatch_incoming(
     envelope: Envelope,
     session_events: &Arc<Mutex<HashMap<AgentSessionId, Sender<ProviderEvent>>>>,
     outgoing: &tokio::sync::mpsc::UnboundedSender<Envelope>,
+    host_tool_tx: &Sender<HostToolRequest>,
 ) {
     match envelope.body {
         EnvelopeBody::Event(event) => {
@@ -173,17 +191,11 @@ fn dispatch_incoming(
                 let _ = sender.send(ProviderEvent::tool_call_progress(progress));
             }
         }
-        // Host tools are answered with an error payload until the
-        // workspace snapshot is callable from this shell (module doc).
+        // Host tools are answered on the UI thread (the workspace lives
+        // there) — routed out to the shell's pump, mirroring the Floem
+        // shell's wire_host_tool_responder.
         EnvelopeBody::Control(Control::HostToolRequest(request)) => {
-            let _ = outgoing.send(Envelope::control(Control::HostToolResponse(
-                HostToolResponse {
-                    request_id: request.request_id,
-                    output: serde_json::json!({
-                        "error": "host tools are not available in this shell yet"
-                    }),
-                },
-            )));
+            let _ = host_tool_tx.send(request);
         }
         EnvelopeBody::Control(Control::Ping) => {
             let _ = outgoing.send(Envelope::control(Control::Pong));

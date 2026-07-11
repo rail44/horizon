@@ -183,7 +183,7 @@ impl WorkspaceShell {
                     if self.agent_sessions.contains_key(&summary.id) {
                         continue;
                     }
-                    let handle = match self.agentd() {
+                    let handle = match self.agentd(cx) {
                         Ok(handle) => handle,
                         Err(error) => {
                             eprintln!("agent session unavailable: {error}");
@@ -231,16 +231,52 @@ impl WorkspaceShell {
         cx.notify();
     }
 
-    /// Lazily connects to `horizon-agentd` (spawning it if needed).
-    fn agentd(&mut self) -> Result<AgentdHandle, String> {
+    /// Lazily connects to `horizon-agentd` (spawning it if needed) and
+    /// wires the host-tool responder: `workspace.snapshot` requests are
+    /// answered on the UI thread from the live model, mirroring the
+    /// Floem shell's `wire_host_tool_responder`.
+    fn agentd(&mut self, cx: &mut Context<Self>) -> Result<AgentdHandle, String> {
         if let Some(handle) = &self.agentd {
             return Ok(handle.clone());
         }
-        let handle = AgentdHandle::connect(
+        let (handle, host_tool_rx) = AgentdHandle::connect(
             &horizon_agent::socket::default_socket_path(),
             &self.socket_path,
         )?;
         self.agentd = Some(handle.clone());
+
+        let (async_tx, mut async_rx) = futures::channel::mpsc::unbounded();
+        std::thread::spawn(move || {
+            while let Ok(request) = host_tool_rx.recv() {
+                if async_tx.unbounded_send(request).is_err() {
+                    return;
+                }
+            }
+        });
+        let responder = handle.clone();
+        cx.spawn(async move |this, cx| {
+            use futures::StreamExt as _;
+            while let Some(request) = async_rx.next().await {
+                let output = this
+                    .update(cx, |shell, _| match request.tool_id.as_str() {
+                        "workspace.snapshot" => {
+                            horizon_workspace::snapshot::workspace_snapshot(&shell.workspace)
+                        }
+                        other => serde_json::json!({
+                            "error": format!("unknown host tool `{other}`")
+                        }),
+                    })
+                    .unwrap_or_else(
+                        |_| serde_json::json!({ "error": "the workspace shell is gone" }),
+                    );
+                responder.respond_host_tool(horizon_agent::wire::HostToolResponse {
+                    request_id: request.request_id,
+                    output,
+                });
+            }
+        })
+        .detach();
+
         Ok(handle)
     }
 

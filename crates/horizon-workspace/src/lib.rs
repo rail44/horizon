@@ -13,6 +13,7 @@ pub mod operations;
 pub mod query;
 pub mod session;
 mod session_id;
+pub mod snapshot;
 pub mod types;
 
 pub use mode::Direction;

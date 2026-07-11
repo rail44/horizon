@@ -14,10 +14,9 @@
 //! concrete `HostTools` this module's own tests (and nothing else) exercise
 //! the seam through.
 
-use serde_json::json;
-
 #[cfg(test)]
 use crate::agent::tools::HostTools;
+#[cfg(test)]
 use crate::workspace::Workspace;
 
 /// Wraps a `&Workspace` so it can be passed wherever the agent crate wants
@@ -35,54 +34,16 @@ impl HostTools for WorkspaceHostTools<'_> {
     }
 }
 
-pub(crate) fn workspace_snapshot(workspace: &Workspace) -> serde_json::Value {
-    json!({
-        "tab_count": workspace.tab_count(),
-        "detached_session_count": workspace.detached_session_count(),
-        "active_title": workspace.active_title(),
-        "active_visible_index": workspace.active_visible_index(),
-        "tabs": workspace
-            .tab_summaries()
-            .into_iter()
-            .map(|tab| json!({
-                "index": tab.index,
-                "title": tab.title,
-                "active": tab.active,
-                "pane_count": tab.pane_count,
-                "active_session_id": tab.active_session_id.map(|id| format!("{id:?}")),
-            }))
-            .collect::<Vec<_>>(),
-        "panes": workspace
-            .pane_summaries()
-            .into_iter()
-            .map(|pane| json!({
-                "tab_index": pane.tab_index,
-                "pane_index": pane.pane_index,
-                "title": pane.title,
-                "kind": format!("{:?}", pane.kind).to_ascii_lowercase(),
-                "active": pane.active,
-                "tab_active": pane.tab_active,
-            }))
-            .collect::<Vec<_>>(),
-        "sessions": workspace
-            .session_summaries()
-            .into_iter()
-            .map(|session| json!({
-                "id": format!("{:?}", session.id),
-                "kind": format!("{:?}", session.kind).to_ascii_lowercase(),
-                "display_number": session.display_number,
-                "title": session.title,
-                "attached": session.attached,
-            }))
-            .collect::<Vec<_>>(),
-    })
-}
+// The snapshot payload itself moved to horizon-workspace::snapshot
+// (shared with shell-gpui); kept as a thin alias for existing callers.
+pub(crate) use horizon_workspace::snapshot::workspace_snapshot;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::agent::contract::{Command, Event, ToolCallId, ToolCallRequest};
     use crate::agent::tools::{execute_agent_tool, process_agent_provider_event, Execution};
+    use serde_json::json;
 
     fn dummy_tool_state() -> crate::agent::tools::ToolSessionState {
         crate::agent::tools::ToolSessionState::for_current_dir(
