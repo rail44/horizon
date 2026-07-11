@@ -1545,8 +1545,11 @@ fn terminal_commands_and_selection_commands_round_trip_through_serde() {
 
 #[test]
 fn terminal_updates_and_external_value_types_round_trip_through_serde() {
+    let old_frame = test_frame(&["old"]);
+    let new_frame = test_frame(&["new"]);
     let updates = vec![
         TerminalUpdate::Snapshot(test_frame(&["one", "two"])),
+        TerminalUpdate::FrameDiff(compute_frame_diff(&old_frame, &new_frame)),
         TerminalUpdate::Title(Some("title".into())),
         TerminalUpdate::Title(None),
         TerminalUpdate::Bell,
@@ -1567,6 +1570,41 @@ fn terminal_updates_and_external_value_types_round_trip_through_serde() {
     }
     assert_serde_round_trip(KeyCode::Function(12));
     assert_serde_round_trip(Modifiers::SHIFT | Modifiers::SUPER);
+}
+
+#[test]
+fn terminal_wire_uses_qualified_kinds_and_round_trips_spawn_specs() {
+    let session_id = uuid::Uuid::nil();
+    let spec = TerminalSpawnSpec {
+        shell: "/bin/sh".into(),
+        args: vec!["-i".into()],
+        term: "xterm-256color".into(),
+        scrollback_lines: 10_000,
+        color_scheme: TerminalColorScheme::default(),
+        control_socket: "/tmp/horizon.sock".into(),
+        fallback_cwd: "/tmp".into(),
+        spawn_source_session_id: Some(session_id),
+        initial_size: TerminalSize::new(80, 24),
+    };
+
+    let control = TerminalControl::Create(Box::new(spec));
+    let envelope = encode_terminal_control(session_id, &control).unwrap();
+    assert_eq!(envelope.kind, TERMINAL_CONTROL_KIND);
+    assert_eq!(envelope.session_id, Some(session_id));
+    assert_eq!(decode_terminal_control(&envelope).unwrap(), control);
+
+    let command = TerminalCommand::Input(b"echo wire\n".to_vec());
+    let envelope = encode_terminal_command(session_id, &command).unwrap();
+    assert_eq!(envelope.kind, TERMINAL_COMMAND_KIND);
+    assert_eq!(decode_terminal_command(&envelope).unwrap(), command);
+
+    let update = TerminalUpdate::FrameDiff(compute_frame_diff(
+        &test_frame(&["before"]),
+        &test_frame(&["after"]),
+    ));
+    let envelope = encode_terminal_update(session_id, &update).unwrap();
+    assert_eq!(envelope.kind, TERMINAL_UPDATE_KIND);
+    assert_eq!(decode_terminal_update(&envelope).unwrap(), update);
 }
 
 #[test]

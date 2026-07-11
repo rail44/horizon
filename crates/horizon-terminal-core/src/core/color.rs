@@ -18,6 +18,7 @@
 
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::vte::ansi::{NamedColor, Rgb};
+use serde::{Deserialize, Serialize};
 
 /// Crate-local mirror of the host's `ui::theme`-derived color roles
 /// (`terminal::config::TerminalColors`). This crate has no dependency on
@@ -34,7 +35,7 @@ use alacritty_terminal::vte::ansi::{NamedColor, Rgb};
 /// with the same values Horizon has always shipped. In the running app this
 /// default is only ever transiently observed (`TerminalSession::spawn`
 /// pushes the live theme immediately after construction).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TerminalColorScheme {
     pub foreground: Rgb,
     pub background: Rgb,

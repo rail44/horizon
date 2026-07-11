@@ -3318,6 +3318,7 @@ dependencies = [
  "horizon-config",
  "horizon-control",
  "horizon-ctl",
+ "horizon-session-protocol",
  "horizon-terminal-core",
  "horizon-workspace",
  "portable-pty",
@@ -3401,8 +3402,12 @@ dependencies = [
  "anyhow",
  "crossbeam-channel",
  "horizon-agent",
+ "horizon-session-protocol",
+ "horizon-terminal-core",
  "libc",
+ "portable-pty",
  "serde_json",
+ "sysinfo 0.39.6",
  "tokio",
  "uuid",
 ]
@@ -3414,10 +3419,12 @@ dependencies = [
  "alacritty_terminal",
  "base64",
  "crossbeam-channel",
+ "horizon-session-protocol",
  "serde",
  "serde_json",
  "termwiz",
  "unicode-width 0.2.2",
+ "uuid",
 ]
 
 [[package]]

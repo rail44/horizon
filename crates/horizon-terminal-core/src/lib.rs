@@ -7,10 +7,10 @@
 //! `crates/horizon-agent` already went through.
 //!
 //! Out of scope, deliberately: PTY ownership (`portable-pty`, threads,
-//! environment setup) and color *resolution* against a live theme both stay
-//! on the host side (`horizon`'s `terminal::session`/`terminal::view`) —
-//! this crate only ever sees bytes in, and hands back logical
-//! colors/commands/updates over plain channels.
+//! environment setup) stays in `horizon-sessiond`, while color *resolution*
+//! against a live theme stays in Horizon's `terminal::view`. This crate only
+//! ever sees bytes in, and hands back logical colors/commands/updates over
+//! plain channels.
 
 mod contract;
 mod core;
@@ -18,7 +18,12 @@ mod protocol;
 mod session_loop;
 mod types;
 
-pub use contract::{SelectionCommand, TerminalCommand, TerminalUpdate};
+pub use contract::{
+    decode_terminal_command, decode_terminal_control, decode_terminal_update,
+    encode_terminal_command, encode_terminal_control, encode_terminal_update, SelectionCommand,
+    TerminalCommand, TerminalControl, TerminalSpawnSpec, TerminalUpdate, TERMINAL_COMMAND_KIND,
+    TERMINAL_CONTROL_KIND, TERMINAL_UPDATE_KIND,
+};
 pub use core::{TerminalColorScheme, TerminalCore};
 pub use session_loop::{run_terminal_core, CoreReceivers, CoreSenders, TerminalCoreOptions};
 pub use types::{

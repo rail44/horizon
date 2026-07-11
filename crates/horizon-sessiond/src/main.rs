@@ -57,6 +57,7 @@
 //! (`docs/agent-duckdb-state-design.md`'s "Runtime Boundary" addendum).
 
 mod session;
+mod terminal;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -67,8 +68,15 @@ use horizon_agent::contract::ProviderRegistry;
 use horizon_agent::persistence::event_log::{Record, WriterHandle, WriterInit};
 use horizon_agent::persistence::projection::duckdb::{DuckdbStoreHandle, SharedDuckdbStore};
 use horizon_agent::socket::default_socket_path;
-use horizon_agent::wire::{self, Control, Envelope, EnvelopeBody, Hello, CONTRACT_VERSION};
+use horizon_agent::wire::{self as agent_wire, Control, Envelope, EnvelopeBody, CONTRACT_VERSION};
+use horizon_session_protocol::{
+    self as session_wire, Envelope as RawEnvelope, Hello, SessionControl, SESSION_CONTROL_KIND,
+};
+use horizon_terminal_core::{
+    decode_terminal_command, decode_terminal_control, TERMINAL_COMMAND_KIND, TERMINAL_CONTROL_KIND,
+};
 use session::{Connection, SessiondState};
+use terminal::TerminalHost;
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::{
     unix::{OwnedReadHalf, OwnedWriteHalf},
@@ -121,8 +129,9 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     spawn_resume_task(state.clone(), agent_config, duckdb_cell);
+    let terminals = TerminalHost::new();
 
-    run(listener, &socket_path, state).await
+    run(listener, &socket_path, state, terminals).await
 }
 
 /// Opens this process's own event log writer, resumes every session found
@@ -255,6 +264,7 @@ async fn run(
     listener: UnixListener,
     socket_path: &Path,
     state: Arc<SessiondState>,
+    terminals: TerminalHost,
 ) -> anyhow::Result<()> {
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
 
@@ -262,12 +272,13 @@ async fn run(
         tokio::select! {
             accepted = listener.accept() => {
                 let (stream, _addr) = accepted?;
-                if let Err(err) = handle_connection(stream, state.clone()).await {
+                if let Err(err) = handle_connection(stream, state.clone(), terminals.clone()).await {
                     eprintln!("horizon-sessiond: connection error: {err}");
                 }
             }
             _ = sigterm.recv() => {
                 eprintln!("horizon-sessiond: SIGTERM received, shutting down");
+                terminals.shutdown_all();
                 break;
             }
         }
@@ -286,12 +297,16 @@ async fn run(
 /// independent writer task), then [`run_session_hosting_loop`], which needs
 /// genuine read/write concurrency since a hosted session can push events at
 /// any time, not just in reply to something Horizon sent.
-async fn handle_connection(stream: UnixStream, state: Arc<SessiondState>) -> anyhow::Result<()> {
+async fn handle_connection(
+    stream: UnixStream,
+    state: Arc<SessiondState>,
+    terminals: TerminalHost,
+) -> anyhow::Result<()> {
     let (read_half, mut writer) = stream.into_split();
     let mut reader = BufReader::new(read_half);
 
     loop {
-        let envelope = match wire::read_envelope(&mut reader).await {
+        let envelope = match session_wire::read_envelope(&mut reader).await {
             Ok(Some(envelope)) => envelope,
             Ok(None) => return Ok(()),
             Err(err) => {
@@ -300,13 +315,20 @@ async fn handle_connection(stream: UnixStream, state: Arc<SessiondState>) -> any
             }
         };
 
-        let EnvelopeBody::Control(control) = envelope.body else {
-            eprintln!("horizon-sessiond: command/event received before hello, ignoring");
+        if envelope.kind != SESSION_CONTROL_KIND {
+            eprintln!("horizon-sessiond: domain message received before hello, ignoring");
             continue;
+        }
+        let control: SessionControl = match envelope.decode_payload(SESSION_CONTROL_KIND) {
+            Ok(control) => control,
+            Err(error) => {
+                eprintln!("horizon-sessiond: malformed shared control before hello: {error}");
+                return Ok(());
+            }
         };
 
         match control {
-            Control::Hello(hello) => {
+            SessionControl::Hello(hello) => {
                 if hello.contract_version != CONTRACT_VERSION {
                     let reason = format!(
                         "contract version mismatch: horizon-sessiond speaks v{CONTRACT_VERSION}, \
@@ -314,39 +336,30 @@ async fn handle_connection(stream: UnixStream, state: Arc<SessiondState>) -> any
                         hello.contract_version
                     );
                     eprintln!("horizon-sessiond: rejecting handshake: {reason}");
-                    let _ = wire::write_envelope(
-                        &mut writer,
-                        &Envelope::control(Control::HandshakeRejected(reason)),
-                    )
-                    .await;
+                    let rejected =
+                        RawEnvelope::session_control(&SessionControl::HandshakeRejected(reason))?;
+                    let _ = session_wire::write_envelope(&mut writer, &rejected).await;
                     return Ok(());
                 }
-                wire::write_envelope(&mut writer, &our_hello_envelope()).await?;
+                session_wire::write_envelope(&mut writer, &our_hello_envelope()?).await?;
                 break;
             }
-            Control::Ping => {
-                wire::write_envelope(&mut writer, &Envelope::control(Control::Pong)).await?;
+            SessionControl::Ping => {
+                let pong = RawEnvelope::session_control(&SessionControl::Pong)?;
+                session_wire::write_envelope(&mut writer, &pong).await?;
             }
-            Control::SessionList => {
-                wire::write_envelope(
-                    &mut writer,
-                    &Envelope::control(Control::SessionListResult(Vec::new())),
-                )
-                .await?;
-            }
-            Control::Drain => {
+            SessionControl::Drain => {
                 let _ = writer.flush().await;
+                terminals.shutdown_all();
                 flush_event_log_before_exit(state.writer());
                 eprintln!("horizon-sessiond: drained, exiting");
                 std::process::exit(0);
             }
-            other => {
-                eprintln!("horizon-sessiond: {other:?} received before hello, ignoring");
-            }
+            other => eprintln!("horizon-sessiond: {other:?} received before hello, ignoring"),
         }
     }
 
-    run_session_hosting_loop(reader, writer, state).await
+    run_session_hosting_loop(reader, writer, state, terminals).await
 }
 
 /// The post-handshake phase: a writer task owns the socket's write half and
@@ -369,13 +382,32 @@ async fn run_session_hosting_loop(
     mut reader: BufReader<OwnedReadHalf>,
     mut writer: OwnedWriteHalf,
     state: Arc<SessiondState>,
+    terminals: TerminalHost,
 ) -> anyhow::Result<()> {
-    let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Envelope>();
-    let connection = Connection::new(outgoing_tx.clone(), state);
+    let (raw_outgoing_tx, mut raw_outgoing_rx) =
+        tokio::sync::mpsc::unbounded_channel::<RawEnvelope>();
+    let (agent_outgoing_tx, mut agent_outgoing_rx) =
+        tokio::sync::mpsc::unbounded_channel::<Envelope>();
+    let connection = Connection::new(agent_outgoing_tx.clone(), state);
+    terminals.connect(raw_outgoing_tx.clone());
+
+    let raw_agent_tx = raw_outgoing_tx.clone();
+    tokio::spawn(async move {
+        while let Some(envelope) = agent_outgoing_rx.recv().await {
+            if let Ok(raw) = agent_wire::encode_envelope(&envelope) {
+                if raw_agent_tx.send(raw).is_err() {
+                    break;
+                }
+            }
+        }
+    });
 
     tokio::spawn(async move {
-        while let Some(envelope) = outgoing_rx.recv().await {
-            if wire::write_envelope(&mut writer, &envelope).await.is_err() {
+        while let Some(envelope) = raw_outgoing_rx.recv().await {
+            if session_wire::write_envelope(&mut writer, &envelope)
+                .await
+                .is_err()
+            {
                 break;
             }
         }
@@ -389,7 +421,7 @@ async fn run_session_hosting_loop(
     // doc comment and `docs/agent-runtime-split-design.md`'s step 3 notes.
     {
         let connection = connection.clone();
-        let outgoing_tx = outgoing_tx.clone();
+        let outgoing_tx = agent_outgoing_tx.clone();
         tokio::spawn(async move {
             connection.wait_until_resume_ready().await;
             if let Some(summary) = connection.skipped_lines_summary() {
@@ -399,23 +431,75 @@ async fn run_session_hosting_loop(
     }
 
     loop {
-        let envelope = match wire::read_envelope(&mut reader).await {
+        let raw = match session_wire::read_envelope(&mut reader).await {
             Ok(Some(envelope)) => envelope,
             Ok(None) => {
                 connection.disconnect();
+                terminals.disconnect();
                 return Ok(());
             }
             Err(err) => {
                 eprintln!("horizon-sessiond: malformed message, closing connection: {err}");
                 connection.disconnect();
+                terminals.disconnect();
                 return Ok(());
             }
         };
 
-        match envelope.body {
-            EnvelopeBody::Control(Control::Ping) => {
-                let _ = outgoing_tx.send(Envelope::control(Control::Pong));
+        if raw.kind == SESSION_CONTROL_KIND {
+            match raw.decode_payload::<SessionControl>(SESSION_CONTROL_KIND) {
+                Ok(SessionControl::Ping) => {
+                    if let Ok(pong) = RawEnvelope::session_control(&SessionControl::Pong) {
+                        let _ = raw_outgoing_tx.send(pong);
+                    }
+                }
+                Ok(SessionControl::Drain) => {
+                    terminals.shutdown_all();
+                    flush_event_log_before_exit(connection.writer());
+                    eprintln!("horizon-sessiond: drained, exiting");
+                    std::process::exit(0);
+                }
+                Ok(other) => {
+                    eprintln!("horizon-sessiond: unexpected shared control: {other:?}");
+                }
+                Err(error) => eprintln!("horizon-sessiond: malformed shared control: {error}"),
             }
+            continue;
+        }
+
+        if raw.kind == TERMINAL_CONTROL_KIND {
+            let Some(session_id) = raw.session_id else {
+                eprintln!("horizon-sessiond: terminal control missing session_id, ignoring");
+                continue;
+            };
+            match decode_terminal_control(&raw) {
+                Ok(control) => terminals.handle_control(session_id, control),
+                Err(error) => eprintln!("horizon-sessiond: malformed terminal control: {error}"),
+            }
+            continue;
+        }
+
+        if raw.kind == TERMINAL_COMMAND_KIND {
+            let Some(session_id) = raw.session_id else {
+                eprintln!("horizon-sessiond: terminal command missing session_id, ignoring");
+                continue;
+            };
+            match decode_terminal_command(&raw) {
+                Ok(command) => terminals.handle_command(session_id, command),
+                Err(error) => eprintln!("horizon-sessiond: malformed terminal command: {error}"),
+            }
+            continue;
+        }
+
+        let envelope = match agent_wire::decode_envelope(raw) {
+            Ok(envelope) => envelope,
+            Err(error) => {
+                eprintln!("horizon-sessiond: unknown or malformed domain message: {error}");
+                continue;
+            }
+        };
+
+        match envelope.body {
             EnvelopeBody::Control(Control::SessionList) => {
                 // Bind-first fix: block until `resume_persisted_sessions`
                 // has finished, so a client that connects while it's still
@@ -423,7 +507,7 @@ async fn run_session_hosting_loop(
                 // list -- see the module doc and `SessiondState::
                 // wait_until_resume_ready`.
                 connection.wait_until_resume_ready().await;
-                let _ = outgoing_tx.send(Envelope::control(Control::SessionListResult(
+                let _ = agent_outgoing_tx.send(Envelope::control(Control::SessionListResult(
                     connection.session_list(),
                 )));
             }
@@ -459,16 +543,11 @@ async fn run_session_hosting_loop(
                 // next for this session, keeping replay ordering simple.
                 let events = connection.replay_events(load.session_id).await;
                 for event in events {
-                    let _ = outgoing_tx.send(Envelope::event(load.session_id, event));
+                    let _ = agent_outgoing_tx.send(Envelope::event(load.session_id, event));
                 }
             }
             EnvelopeBody::Control(Control::HostToolResponse(response)) => {
                 connection.handle_host_tool_response(response);
-            }
-            EnvelopeBody::Control(Control::Drain) => {
-                flush_event_log_before_exit(connection.writer());
-                eprintln!("horizon-sessiond: drained, exiting");
-                std::process::exit(0);
             }
             EnvelopeBody::Command(command) => match envelope.session_id {
                 Some(session_id) => connection.route_command(session_id, command),
@@ -486,7 +565,7 @@ async fn run_session_hosting_loop(
 /// Blocks until every event-log record enqueued so far has actually been
 /// written and flushed to disk (see [`WriterHandle::flush`]'s doc comment),
 /// then returns -- called right before `std::process::exit(0)` on a
-/// `Control::Drain`. An `Appender::append_provider_events` call only
+/// `SessionControl::Drain`. An `Appender::append_provider_events` call only
 /// enqueues onto the writer's own background thread (see `WriterHandle::
 /// open`'s "Ordering guarantee"); forwarding the resulting event to a
 /// connected client happens after that same enqueue, not after it becomes
@@ -506,11 +585,11 @@ fn flush_event_log_before_exit(writer: Option<WriterHandle>) {
     }
 }
 
-fn our_hello_envelope() -> Envelope {
-    Envelope::control(Control::Hello(Hello {
+fn our_hello_envelope() -> Result<RawEnvelope, session_wire::WireError> {
+    RawEnvelope::session_control(&SessionControl::Hello(Hello {
         contract_version: CONTRACT_VERSION,
         binary_id: BINARY_ID.to_string(),
-        capabilities: vec!["sessions".to_string()],
+        capabilities: vec!["agent".to_string(), "terminal".to_string()],
     }))
 }
 

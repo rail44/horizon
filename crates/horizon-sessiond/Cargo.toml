@@ -7,8 +7,12 @@ edition = "2021"
 anyhow = "1.0"
 crossbeam-channel = "0.5"
 horizon-agent = { path = "../horizon-agent" }
+horizon-session-protocol = { path = "../horizon-session-protocol" }
+horizon-terminal-core = { path = "../horizon-terminal-core" }
 libc = "0.2"
+portable-pty = "0.9.0"
 serde_json = "1.0"
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-util", "signal", "sync", "time"] }
 uuid = { version = "1.18", features = ["v4"] }
 
