@@ -7,7 +7,11 @@
 //! The key bindings registered in [`init`] are M2 stand-ins wired
 //! straight to model calls — M3 replaces them with the command model
 //! (`CommandId` + keymap config), at which point every handler here
-//! becomes a binding to a command instead.
+//! becomes a binding to a command instead. [`init`]'s `[keybindings]`
+//! layer (parsed via `keymap::gpui_keystroke`/`keymap::command_for`) is
+//! the first piece of that: config-bound chords dispatch through
+//! [`RunCommand`] to [`WorkspaceShell::execute`] instead of a
+//! model-call handler.
 
 use std::collections::HashMap;
 
@@ -20,6 +24,7 @@ use horizon_workspace::types::LayoutNode;
 use horizon_workspace::{Direction, PaneId, PaneKind, SplitAxis, Workspace};
 
 use crate::agent::{AgentSession, AgentView, AgentdHandle};
+use crate::keymap;
 use crate::palette::PaletteDelegate;
 use crate::session_manager::SessionManagerDelegate;
 use crate::terminal::{TerminalSession, TerminalView};
@@ -75,11 +80,39 @@ actions!(
     ]
 );
 
+/// A `[keybindings]`-config-driven binding to a `CommandId` — gpui actions
+/// used with `KeyBinding` are compile-time types, so a config chord can't
+/// bind directly to one of the many `CommandId` variants the way a unit
+/// action binds to one fixed handler. `RunCommand` carries the resolved
+/// id as data instead, so a single action type covers every simple
+/// command a `[keybindings]` entry can name (see `keymap::command_for`).
+/// `no_json`: never built from a JSON keymap (only ever constructed
+/// directly in [`init`]), so it skips gpui's `Deserialize`/`JsonSchema`
+/// requirements for action fields.
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = workspace, no_json)]
+struct RunCommand {
+    id: CommandId,
+}
+
 const MODE_CONTEXT: &str = "WorkspaceMode";
 
+/// Built-in default chord for [`ToggleWorkspaceMode`] — mirrors the Floem
+/// shell's `DEFAULT_WORKSPACE_MODE_CHORD`. Not bound when a
+/// `[keybindings]` entry overrides it via the reserved
+/// `keymap::WORKSPACE_MODE_PSEUDO_COMMAND` (see [`init`]).
+const DEFAULT_WORKSPACE_MODE_KEYSTROKE: &str = "ctrl-'";
+
 pub fn init(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("ctrl-'", ToggleWorkspaceMode, None),
+    let config = horizon_config::load();
+
+    let workspace_mode_override = config
+        .keybindings
+        .iter()
+        .find(|(_, command)| command.as_str() == keymap::WORKSPACE_MODE_PSEUDO_COMMAND)
+        .map(|(chord, _)| chord.as_str());
+
+    let mut bindings = vec![
         KeyBinding::new("h", ModeMoveLeft, Some(MODE_CONTEXT)),
         KeyBinding::new("j", ModeMoveDown, Some(MODE_CONTEXT)),
         KeyBinding::new("k", ModeMoveUp, Some(MODE_CONTEXT)),
@@ -96,7 +129,63 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("x", ClosePane, Some(MODE_CONTEXT)),
         KeyBinding::new("tab", NextTab, Some(MODE_CONTEXT)),
         KeyBinding::new(":", OpenPalette, Some(MODE_CONTEXT)),
-    ]);
+    ];
+
+    match workspace_mode_override {
+        Some(chord) => match keymap::gpui_keystroke(chord) {
+            Some(keystroke) => {
+                bindings.push(KeyBinding::new(&keystroke, ToggleWorkspaceMode, None))
+            }
+            None => {
+                eprintln!(
+                    "horizon config: skipping keybinding `{chord}` = \
+                     `{}`: unrecognized chord",
+                    keymap::WORKSPACE_MODE_PSEUDO_COMMAND
+                );
+                bindings.push(KeyBinding::new(
+                    DEFAULT_WORKSPACE_MODE_KEYSTROKE,
+                    ToggleWorkspaceMode,
+                    None,
+                ));
+            }
+        },
+        None => bindings.push(KeyBinding::new(
+            DEFAULT_WORKSPACE_MODE_KEYSTROKE,
+            ToggleWorkspaceMode,
+            None,
+        )),
+    }
+
+    // `[keybindings]` config entries layer on top of the built-ins above:
+    // later-registered bindings take precedence in gpui at the same
+    // context depth (`Keymap::bindings_for_input`'s doc comment — "the
+    // ones added to the keymap later take precedence"), so pushing these
+    // after the built-ins is enough for a config entry to override one
+    // bound to the same chord.
+    for (chord, command) in &config.keybindings {
+        if command == keymap::WORKSPACE_MODE_PSEUDO_COMMAND {
+            continue; // handled above
+        }
+        let Some(keystroke) = keymap::gpui_keystroke(chord) else {
+            eprintln!(
+                "horizon config: skipping keybinding `{chord}` = `{command}`: unrecognized chord"
+            );
+            continue;
+        };
+        if command == keymap::OPEN_PALETTE_PSEUDO_COMMAND {
+            bindings.push(KeyBinding::new(&keystroke, OpenPalette, None));
+            continue;
+        }
+        let Some(id) = keymap::command_for(command) else {
+            eprintln!(
+                "horizon config: skipping keybinding `{chord}` = `{command}`: unknown command id"
+            );
+            continue;
+        };
+        bindings.push(KeyBinding::new(&keystroke, RunCommand { id }, None));
+    }
+
+    cx.bind_keys(bindings);
 }
 
 pub struct WorkspaceShell {
@@ -826,6 +915,9 @@ impl Render for WorkspaceShell {
             }))
             .on_action(cx.listener(|shell, _: &OpenPalette, window, cx| {
                 shell.open_palette(window, cx);
+            }))
+            .on_action(cx.listener(|shell, action: &RunCommand, window, cx| {
+                shell.execute(action.id, window, cx);
             }))
             .child(self.render_tab_strip(cx))
             .child(
