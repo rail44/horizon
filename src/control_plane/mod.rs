@@ -31,10 +31,12 @@
 //!   `Workspace` or any `RwSignal` directly.
 
 mod bridge;
-mod connection;
-mod executor;
-mod listener;
-mod socket;
+
+// The transport (socket resolution, listener, per-connection handling,
+// the ControlExecutor seam) moved to horizon-control::host, shared with
+// shell-gpui (docs/gpui-migration-design.md M3); bridge - the one
+// floem-specific layer - stays here.
+use horizon_control::host::{listener, socket};
 
 use crate::app::command_actions::CommandActionState;
 

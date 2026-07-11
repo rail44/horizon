@@ -31,7 +31,7 @@ use std::path::PathBuf;
 /// bind, and every terminal/agentd spawn site that injects `HORIZON_SOCKET`
 /// -- can call this independently and always agree, with no shared mutable
 /// state required.
-pub(crate) fn default_socket_path() -> PathBuf {
+pub fn default_socket_path() -> PathBuf {
     let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR").ok();
     // SAFETY: `getuid()` is a plain syscall wrapper with no preconditions.
     let uid = unsafe { libc::getuid() };

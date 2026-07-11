@@ -2729,6 +2729,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-control"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "horizon-shell-gpui"
 version = "0.1.0"
 dependencies = [
@@ -2739,11 +2749,14 @@ dependencies = [
  "gpui",
  "gpui-component",
  "gpui_platform",
+ "horizon-control",
  "horizon-terminal-core",
  "horizon-workspace",
  "portable-pty",
+ "serde_json",
  "termwiz",
  "unicode-width",
+ "uuid",
 ]
 
 [[package]]

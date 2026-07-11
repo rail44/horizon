@@ -7,6 +7,7 @@
 
 use std::env;
 use std::io::{Read, Write};
+use std::path::Path;
 use std::thread;
 
 use crossbeam_channel::{Receiver, Sender};
@@ -14,6 +15,7 @@ use horizon_terminal_core::{
     run_terminal_core, CoreReceivers, CoreSenders, SelectionCommand, TerminalCommand,
     TerminalCoreOptions, TerminalSize, TerminalUpdate,
 };
+use horizon_workspace::SessionId;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 
 pub struct SpikeSession {
@@ -21,7 +23,11 @@ pub struct SpikeSession {
     pub rx: Receiver<TerminalUpdate>,
 }
 
-pub fn spawn(size: TerminalSize) -> anyhow::Result<SpikeSession> {
+pub fn spawn(
+    size: TerminalSize,
+    session_id: SessionId,
+    socket_path: &Path,
+) -> anyhow::Result<SpikeSession> {
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(PtySize {
         rows: size.rows,
@@ -33,6 +39,12 @@ pub fn spawn(size: TerminalSize) -> anyhow::Result<SpikeSession> {
     let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     let mut cmd = CommandBuilder::new(shell);
     cmd.env("TERM", "xterm-256color");
+    // The pane's control-plane coordinates, mirroring the Floem shell's
+    // `terminal::session::environment`: HORIZON_SOCKET so a CLI invoked
+    // from this pane reaches this instance, HORIZON_SESSION_ID so
+    // `--split`'s bare "here" form resolves without naming a session.
+    cmd.env("HORIZON_SOCKET", socket_path);
+    cmd.env("HORIZON_SESSION_ID", session_id.as_uuid().to_string());
     if let Some(home) = env::var_os("HOME") {
         cmd.cwd(home);
     }

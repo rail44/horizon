@@ -34,7 +34,7 @@ use horizon_control::contract::EnvelopeBody;
 use crate::app::command_actions::CommandActionState;
 use crate::app::external_commands;
 
-use super::executor::{error_body, ControlExecutor, ControlRequest};
+use horizon_control::host::executor::{error_body, ControlExecutor, ControlRequest};
 
 /// How long [`ChannelExecutor::execute`] waits for the UI thread to answer
 /// before giving up -- generous for what should be a same-process, same-

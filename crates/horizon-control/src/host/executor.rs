@@ -3,12 +3,12 @@
 //! testable without floem or a live `Workspace` -- the mission's "接続処理
 //! は「リクエスト → 応答」を返す実行チャネルに対して書く" requirement.
 
-use horizon_control::contract::{EnvelopeBody, ErrorMessage, Invoke, Query};
+use crate::contract::{EnvelopeBody, ErrorMessage, Invoke, Query};
 
 /// One accepted request, already split out of its envelope's `kind`/
 /// `payload` -- everything [`ControlExecutor::execute`] needs to answer it.
 #[derive(Clone, Debug)]
-pub(super) enum ControlRequest {
+pub enum ControlRequest {
     Invoke(Invoke),
     Query(Query),
 }
@@ -18,14 +18,14 @@ pub(super) enum ControlRequest {
 /// produced. [`super::bridge::ChannelExecutor`] is the real implementation
 /// (bridges to the UI thread); this module's own tests, and
 /// `connection`'s, use a stub that never touches floem at all.
-pub(super) trait ControlExecutor: Send + Sync {
+pub trait ControlExecutor: Send + Sync {
     fn execute(&self, request: ControlRequest) -> EnvelopeBody;
 }
 
 /// Builds an `EnvelopeBody::Error` -- the shared shape every executor
 /// implementation's failure path (a bad command name, a timeout waiting for
 /// the UI thread, ...) converges on.
-pub(super) fn error_body(message: impl Into<String>) -> EnvelopeBody {
+pub fn error_body(message: impl Into<String>) -> EnvelopeBody {
     EnvelopeBody::Error(ErrorMessage {
         message: message.into(),
     })

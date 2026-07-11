@@ -20,7 +20,7 @@ use super::executor::ControlExecutor;
 /// failure is logged to stderr and the thread simply exits; there is no
 /// retry, matching this feature's "best-effort, not load-bearing" status
 /// (see `control_plane::start`'s doc comment).
-pub(super) fn spawn(socket_path: PathBuf, executor: impl ControlExecutor + 'static) {
+pub fn spawn(socket_path: PathBuf, executor: impl ControlExecutor + 'static) {
     let executor: Arc<dyn ControlExecutor> = Arc::new(executor);
     thread::spawn(move || {
         let listener = match bind(&socket_path) {
@@ -75,7 +75,7 @@ fn accept_loop(listener: UnixListener, executor: &Arc<dyn ControlExecutor>) {
 /// the path out from under it. `spawn`'s caller treats that refusal as a
 /// non-fatal bind failure: this instance simply starts without a control
 /// listener and logs a warning, it never bails Horizon's own startup.
-pub(super) fn bind(path: &Path) -> io::Result<UnixListener> {
+pub fn bind(path: &Path) -> io::Result<UnixListener> {
     if path.exists() {
         match UnixStream::connect(path) {
             Ok(_stream) => {
@@ -98,9 +98,9 @@ pub(super) fn bind(path: &Path) -> io::Result<UnixListener> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::control_plane::executor::ControlRequest;
-    use horizon_control::contract::{Envelope, EnvelopeBody, Hello, CONTROL_VERSION};
-    use horizon_control::wire;
+    use crate::contract::{Envelope, EnvelopeBody, Hello, CONTROL_VERSION};
+    use crate::host::executor::ControlRequest;
+    use crate::wire;
     use std::io::BufReader;
     use std::time::{Duration, Instant};
 

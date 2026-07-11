@@ -20,4 +20,5 @@
 //! over `std::io::{Write, BufRead}`.
 
 pub mod contract;
+pub mod host;
 pub mod wire;

@@ -68,6 +68,9 @@ pub fn init(cx: &mut App) {
 
 pub struct WorkspaceShell {
     workspace: Workspace,
+    // This instance's control socket — every spawned pane gets it as
+    // HORIZON_SOCKET so CLIs invoked inside reach back here.
+    socket_path: std::path::PathBuf,
     // The session store — the GPUI shell's Registry counterpart: PTY
     // sessions live here keyed by SessionId, independent of pane views,
     // so closing a pane detaches (session survives, scrollback intact)
@@ -84,9 +87,14 @@ pub struct WorkspaceShell {
 }
 
 impl WorkspaceShell {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        socket_path: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut shell = Self {
             workspace: Workspace::mvp(),
+            socket_path,
             sessions: HashMap::new(),
             panes: HashMap::new(),
             focus_handle: cx.focus_handle(),
@@ -120,9 +128,10 @@ impl WorkspaceShell {
             keep
         });
         for id in known {
+            let socket_path = self.socket_path.clone();
             self.sessions
                 .entry(id)
-                .or_insert_with(|| cx.new(TerminalSession::spawn));
+                .or_insert_with(|| cx.new(|cx| TerminalSession::spawn(id, &socket_path, cx)));
         }
 
         let pane_ids = self.workspace.all_pane_ids();
@@ -291,7 +300,80 @@ impl WorkspaceShell {
         cx.notify();
     }
 
-    fn command_state(&self) -> CommandState {
+    pub(crate) fn session_summaries(&self) -> Vec<horizon_workspace::types::SessionSummary> {
+        self.workspace.session_summaries()
+    }
+
+    /// External (control-plane) operations — the CLI's verbs, mirroring
+    /// the Floem shell's `external_commands` semantics: `activate:
+    /// false` never steals focus.
+    pub(crate) fn external_new_terminal(
+        &mut self,
+        split: Option<(SessionId, SplitAxis)>,
+        activate: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        match split {
+            Some((target, axis)) => {
+                self.workspace
+                    .split_session_with_new_session(target, PaneKind::Terminal, axis, activate)
+                    .ok_or_else(|| "unknown split target session".to_string())?;
+            }
+            None => {
+                self.workspace
+                    .open_tab_with_new_session_activated(PaneKind::Terminal, activate);
+            }
+        }
+        self.reconcile(window, cx);
+        if activate {
+            self.focus_active(window, cx);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn external_attach(
+        &mut self,
+        session_id: SessionId,
+        activate: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        self.workspace
+            .attach_existing_session_to_split_activated(session_id, activate)
+            .ok_or_else(|| "unknown session".to_string())?;
+        self.reconcile(window, cx);
+        if activate {
+            self.focus_active(window, cx);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn external_terminate(
+        &mut self,
+        session_id: SessionId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if !self.workspace.terminate_session(session_id) {
+            return Err("unknown session".to_string());
+        }
+        self.reconcile(window, cx);
+        Ok(())
+    }
+
+    pub(crate) fn external_terminate_all_detached(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for summary in self.workspace.detached_session_summaries() {
+            self.workspace.terminate_session(summary.id);
+        }
+        self.reconcile(window, cx);
+    }
+
+    pub(crate) fn command_state(&self) -> CommandState {
         CommandState {
             tab_count: self.workspace.tab_count(),
             visible_pane_count: self.workspace.visible_panes().len(),

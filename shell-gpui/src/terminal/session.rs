@@ -20,14 +20,19 @@ pub struct TerminalSession {
 }
 
 impl TerminalSession {
-    pub fn spawn(cx: &mut Context<Self>) -> Self {
+    pub fn spawn(
+        session_id: horizon_workspace::SessionId,
+        socket_path: &std::path::Path,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let initial = TerminalSize {
             cols: 80,
             rows: 24,
             pixel_width: 0,
             pixel_height: 0,
         };
-        let session = pty::spawn(initial).expect("failed to spawn PTY session");
+        let session =
+            pty::spawn(initial, session_id, socket_path).expect("failed to spawn PTY session");
         let update_rx = session.rx;
 
         // Headless test driver: type HORIZON_GPUI_DRIVE's bytes into the

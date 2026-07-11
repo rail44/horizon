@@ -14,10 +14,8 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 
-use horizon_control::contract::{
-    Envelope, EnvelopeBody, ErrorMessage, HelloAck, Rejected, CONTROL_VERSION,
-};
-use horizon_control::wire::{self, WireError};
+use crate::contract::{Envelope, EnvelopeBody, ErrorMessage, HelloAck, Rejected, CONTROL_VERSION};
+use crate::wire::{self, WireError};
 
 use super::executor::{ControlExecutor, ControlRequest};
 
@@ -32,7 +30,7 @@ const BINARY_ID: &str = env!("CARGO_PKG_VERSION");
 /// misbehaving peer -- every failure mode is a [`WireError`] the caller
 /// ([`super::listener::spawn`]'s per-connection thread) logs and moves on
 /// from, exactly like every other connection.
-pub(super) fn handle_connection(
+pub fn handle_connection(
     stream: UnixStream,
     executor: &dyn ControlExecutor,
 ) -> Result<(), WireError> {
@@ -119,7 +117,7 @@ fn reject(writer: &mut impl Write, id: u64, reason: &str) -> Result<(), WireErro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use horizon_control::contract::{Hello, Invoke, Query};
+    use crate::contract::{Hello, Invoke, Query};
     use std::thread;
 
     /// A stub [`ControlExecutor`] that always answers with the same
