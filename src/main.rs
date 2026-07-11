@@ -1,40 +1,41 @@
-use std::io::{self, IsTerminal};
+//! The GPUI shell binary — see docs/gpui-migration-design.md. The
+//! workspace shell (tab strip + recursive splits over the shared
+//! `horizon-workspace` model) hosts a terminal per pane; the control
+//! plane listens on the well-known socket. Like the Floem shell's
+//! binary, any subcommand routes to the control-plane client
+//! (`horizon_ctl::run`) instead of launching the GUI.
+
+mod agent;
+mod control_plane;
+mod keymap;
+mod palette;
+mod session_manager;
+mod terminal;
+mod terminal_focus;
+mod theme;
+mod view_chooser;
+mod workspace;
+
+use std::io::{self, IsTerminal as _};
 use std::process::ExitCode;
 
-use floem::{window::WindowConfig, AppEvent, Application};
-use horizon::{app_view, window_size};
+use gpui::*;
+use gpui_component::Root;
 
-/// Single-binary dispatch (`docs/cli-control-plane-design.md`'s Second
-/// revision, "Single binary, subcommand client"): `horizon` with no
-/// arguments launches the GUI exactly as before; `horizon <subcommand> ...`
-/// runs the control-plane client (the former standalone `horizon-ctl`
-/// binary, now `horizon_ctl::run`) and exits without ever touching floem.
+use crate::workspace::WorkspaceShell;
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if should_run_as_client(&args) {
+    if !args.is_empty() {
         return run_client(&args);
     }
     run_gui();
     ExitCode::SUCCESS
 }
 
-/// Whether `args` (already stripped of `argv[0]`) selects the control-plane
-/// client instead of the GUI: any subcommand at all routes to
-/// [`run_client`], exactly like the standalone `horizon-ctl` binary used to;
-/// empty `args` launches the GUI exactly as before. Split out so a test can
-/// prove the empty-argv case picks the GUI branch without ever constructing
-/// a `floem::Application` (no display needed).
-fn should_run_as_client(args: &[String]) -> bool {
-    !args.is_empty()
-}
-
-/// Runs the control-plane client and returns its exit code -- see
-/// `horizon_ctl::run`'s doc comment for what the codes mean.
-/// `HORIZON_SOCKET`/`HORIZON_SESSION_ID` are the two environment overrides
-/// the design doc's Discovery/Placement-vocabulary decisions rely on (both
-/// injected into every pane's environment, see `docs/cli-control-plane-
-/// design.md`); reading them here (rather than inside `horizon_ctl::run`)
-/// keeps that function a pure mapping from its arguments to an exit code.
+/// The control-plane client, exactly like the Floem shell's binary:
+/// `HORIZON_SOCKET`/`HORIZON_SESSION_ID` env overrides are read here so
+/// `horizon_ctl::run` stays a pure mapping from arguments to exit code.
 fn run_client(args: &[String]) -> ExitCode {
     let env_socket = std::env::var("HORIZON_SOCKET").ok();
     let env_session_id = std::env::var("HORIZON_SESSION_ID").ok();
@@ -51,49 +52,47 @@ fn run_client(args: &[String]) -> ExitCode {
     ExitCode::from(code)
 }
 
-/// The GUI entry point -- unchanged from before this file gained a
-/// subcommand branch (see [`main`]), so the no-argument path is exactly as
-/// it always was.
+actions!(horizon, [Quit]);
+
 fn run_gui() {
-    Application::new()
-        // Flush buffered runtime state (the agent event log's writer
-        // thread — see `horizon::shutdown`) on a normal exit. `main`
-        // returning doesn't drop the process-global writer static, so
-        // without this hook whatever's still sitting in its buffer at
-        // shutdown is silently lost instead of merely torn.
-        .on_event(|event| {
-            if matches!(event, AppEvent::WillTerminate) {
-                horizon::shutdown();
-            }
+    gpui_platform::application().run(move |cx| {
+        gpui_component::init(cx);
+        workspace::init(cx);
+        // macOS treats a process with no main menu as owning no menu bar,
+        // so the previous app's menu (and name) would linger even with
+        // this window focused — installing a minimal menu is what makes
+        // Horizon show up as the active application. Activation at launch
+        // still needs the explicit activate(true).
+        cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
+        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+        cx.set_menus(vec![Menu {
+            name: "Horizon".into(),
+            items: vec![MenuItem::action("Quit Horizon", Quit)],
+            disabled: false,
+        }]);
+        cx.activate(true);
+
+        cx.spawn(async move |cx| {
+            let ui = &horizon_config::load().ui;
+            let size = size(
+                px(ui.window_width.unwrap_or(1100.0) as f32),
+                px(ui.window_height.unwrap_or(720.0) as f32),
+            );
+            let options = cx.update(|cx| WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size, cx))),
+                ..Default::default()
+            });
+            cx.open_window(options, |window, cx| {
+                // Resolve the socket path before the first pane spawns so
+                // every child process sees HORIZON_SOCKET from the start
+                // (the Floem shell closes the same race in AppState::new).
+                let socket_path = horizon_control::host::socket::default_socket_path();
+                let shell = cx.new(|cx| WorkspaceShell::new(socket_path.clone(), window, cx));
+                control_plane::start(shell.downgrade(), window.window_handle(), socket_path, cx);
+                cx.new(|cx| Root::new(shell, window, cx))
+            })
+            .expect("Failed to open window");
         })
-        .window(
-            |_| app_view(),
-            Some(
-                WindowConfig::default()
-                    .title("Horizon")
-                    .size(window_size())
-                    .show_titlebar(true)
-                    .undecorated(false),
-            ),
-        )
-        .run();
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn no_arguments_selects_the_gui_path() {
-        assert!(!should_run_as_client(&[]));
-    }
-
-    #[test]
-    fn any_subcommand_selects_the_client_path() {
-        assert!(should_run_as_client(&["sessions".to_string()]));
-        assert!(should_run_as_client(&[
-            "--json".to_string(),
-            "state".to_string()
-        ]));
-    }
+        .detach();
+    });
 }

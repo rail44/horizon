@@ -1,180 +1,129 @@
-use std::env;
-use std::path::Path;
-use std::thread;
+//! The per-session terminal model entity (docs/gpui-migration-design.md's
+//! `TerminalSessionModel`): owns the PTY wiring and the latest frame,
+//! independent of any pane view. Closing a pane drops the *view*; this
+//! entity — and the live PTY behind it — survives in the shell's session
+//! store until an explicit terminate. That separation is the
+//! close-vs-terminate invariant (docs/ux-principles.md) in GPUI terms.
 
-use crossbeam_channel::{Receiver, Sender};
+use futures::StreamExt;
+use gpui::*;
 use horizon_terminal_core::{
-    run_terminal_core, CoreReceivers, CoreSenders, TerminalCommand, TerminalCore,
-    TerminalCoreOptions, TerminalSize, TerminalUpdate,
+    KeyEventKind, TerminalCommand, TerminalFrame, TerminalSize, TerminalUpdate,
 };
-use portable_pty::{native_pty_system, PtySize};
-use thiserror::Error;
 
-pub(crate) use self::cwd::sample_cwd;
-#[cfg(test)]
-pub(crate) use self::environment::terminal_command;
-use self::runtime::{read_pty, run_writer};
-use crate::session::SessionId;
+use super::pty;
 
-mod cwd;
-mod environment;
-mod runtime;
-mod trace;
-
-#[derive(Debug, Error)]
-pub(crate) enum TerminalSessionError {
-    #[error("failed to create PTY pair")]
-    Pty(#[from] anyhow::Error),
-    #[error("failed to clone PTY reader")]
-    Reader(#[source] anyhow::Error),
-    #[error("failed to clone PTY writer")]
-    Writer(#[source] anyhow::Error),
-    #[error("failed to spawn shell")]
-    Spawn(#[source] anyhow::Error),
-}
-
-pub(crate) struct TerminalSession {
-    tx: Sender<TerminalCommand>,
-    rx: Receiver<TerminalUpdate>,
+pub struct TerminalSession {
+    tx: crossbeam_channel::Sender<TerminalCommand>,
+    pub frame: Option<TerminalFrame>,
+    pub exited: bool,
     /// The spawned shell's OS pid, when the PTY backend reports one (not
     /// all platforms do -- `portable_pty::Child::process_id`'s doc
     /// comment). Lets a later spawn resolve "this terminal session's
-    /// *current* cwd" on demand (`docs/session-relationship-design.md`'s
-    /// "cwd sourcing is shell-independent") without keeping the `Child`
-    /// handle itself alive -- see `Self::pid`/`crate::terminal::sample_cwd`.
+    /// *current* cwd" on demand (`crate::terminal::sample_cwd`) without
+    /// keeping the `Child` handle itself alive.
     pid: Option<u32>,
 }
 
 impl TerminalSession {
-    pub(crate) fn spawn(
-        size: TerminalSize,
-        session_id: SessionId,
-        cwd: &Path,
-    ) -> Result<Self, TerminalSessionError> {
-        let pty_system = native_pty_system();
-        let pair = pty_system.openpty(PtySize {
-            rows: size.rows,
-            cols: size.cols,
-            pixel_width: size.pixel_width,
-            pixel_height: size.pixel_height,
-        })?;
-
-        let terminal_config = super::config::TerminalConfig::from_env();
-        let shell = super::config::resolve_shell(env::var("SHELL").ok(), terminal_config.shell);
-        let cmd = environment::terminal_command(
-            &shell,
-            &terminal_config.shell_args,
-            &terminal_config.term,
-            session_id,
-            cwd,
-        );
-        let child = pair
-            .slave
-            .spawn_command(cmd)
-            .map_err(TerminalSessionError::Spawn)?;
-        let pid = child.process_id();
-        drop(child);
-        drop(pair.slave);
-
-        let mut reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(TerminalSessionError::Reader)?;
-        let mut writer = pair
-            .master
-            .take_writer()
-            .map_err(TerminalSessionError::Writer)?;
-
-        let (command_tx, command_rx) = crossbeam_channel::unbounded();
-        let (update_tx, update_rx) = crossbeam_channel::unbounded();
-        let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
-        let (resize_tx, resize_rx) = crossbeam_channel::unbounded();
-        let (scroll_tx, scroll_rx) = crossbeam_channel::unbounded();
-        let (mouse_tx, mouse_rx) = crossbeam_channel::unbounded();
-        let (paste_tx, paste_rx) = crossbeam_channel::unbounded();
-        let (key_tx, key_rx) = crossbeam_channel::unbounded();
-        let (selection_tx, selection_rx) = crossbeam_channel::unbounded();
-        let (focus_tx, focus_rx) = crossbeam_channel::unbounded();
-        let master = pair.master;
-        let response_tx = command_tx.clone();
-        let read_update_tx = update_tx.clone();
-        // Identifies this session's `HORIZON_PTY_TRACE` output file only;
-        // unrelated to the workspace-level `SessionId` (not available here)
-        // and not persisted anywhere else.
-        let trace_short_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
-        let reader_trace_id = trace_short_id.clone();
-
-        let core_options = TerminalCoreOptions {
-            scrollback_lines: terminal_config.scrollback_lines,
-            color_scheme: super::config::terminal_color_scheme(),
+    pub fn spawn(
+        session_id: horizon_workspace::SessionId,
+        socket_path: &std::path::Path,
+        cwd: &std::path::Path,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let initial = TerminalSize {
+            cols: 80,
+            rows: 24,
+            pixel_width: 0,
+            pixel_height: 0,
         };
+        let session =
+            pty::spawn(initial, session_id, socket_path, cwd).expect("failed to spawn PTY session");
+        let pid = session.pid;
+        let update_rx = session.rx;
 
-        thread::spawn(move || {
-            read_pty(&mut *reader, pty_tx, read_update_tx, &reader_trace_id);
-        });
-        thread::spawn(move || {
-            let receivers = CoreReceivers {
-                resize_rx,
-                scroll_rx,
-                mouse_rx,
-                paste_rx,
-                key_rx,
-                selection_rx,
-                focus_rx,
-            };
-            run_terminal_core(
-                size,
-                core_options,
-                pty_rx,
-                receivers,
-                response_tx,
-                update_tx,
-            );
-        });
-        thread::spawn(move || {
-            let senders = CoreSenders {
-                resize_tx,
-                scroll_tx,
-                mouse_tx,
-                paste_tx,
-                key_tx,
-                selection_tx,
-                focus_tx,
-            };
-            run_writer(master, &mut *writer, command_rx, senders, &trace_short_id);
-        });
+        // Headless test driver: type HORIZON_GPUI_DRIVE's bytes into the
+        // session shortly after startup; HORIZON_GPUI_DRIVE_ENTER=1 sends
+        // the newline as a Key to exercise the core encoder.
+        if let Ok(script) = std::env::var("HORIZON_GPUI_DRIVE") {
+            let key_enter = std::env::var_os("HORIZON_GPUI_DRIVE_ENTER").is_some();
+            let drive_tx = session.tx.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+                let _ = drive_tx.send(TerminalCommand::Input(script.into_bytes()));
+                if key_enter {
+                    let _ = drive_tx.send(TerminalCommand::Key {
+                        key: termwiz::input::KeyCode::Enter,
+                        modifiers: termwiz::input::Modifiers::NONE,
+                        event: KeyEventKind::Press,
+                    });
+                }
+            });
+        }
 
-        Ok(Self {
-            tx: command_tx,
-            rx: update_rx,
-            pid,
+        // Bridge the blocking crossbeam receiver onto GPUI's async world.
+        // The pump task is owned by this entity: it ends when the entity
+        // drops (terminate) or the channel closes (PTY exit).
+        let (async_tx, mut async_rx) = futures::channel::mpsc::unbounded();
+        std::thread::spawn(move || {
+            while let Ok(update) = update_rx.recv() {
+                if async_tx.unbounded_send(update).is_err() {
+                    return;
+                }
+            }
+        });
+        let dump_path = std::env::var_os("HORIZON_GPUI_DUMP").map(std::path::PathBuf::from);
+        cx.spawn(async move |this, cx| {
+            while let Some(update) = async_rx.next().await {
+                let apply = this.update(cx, |session: &mut TerminalSession, cx| {
+                    match update {
+                        TerminalUpdate::Snapshot(frame) => {
+                            if let Some(path) = &dump_path {
+                                let _ = std::fs::write(path, super::dump_frame(&frame));
+                            }
+                            session.frame = Some(frame);
+                        }
+                        TerminalUpdate::Exited => session.exited = true,
+                        TerminalUpdate::Error(error) => eprintln!("terminal error: {error}"),
+                        // OSC 52 writes and CopySelection results both
+                        // arrive here; the session decides what lands on
+                        // the clipboard, the host just applies it.
+                        TerminalUpdate::Clipboard(text) => {
+                            cx.write_to_clipboard(ClipboardItem::new_string(text));
+                        }
+                        TerminalUpdate::Title(_) | TerminalUpdate::Bell => {}
+                    }
+                    cx.notify();
+                });
+                if apply.is_err() {
+                    return;
+                }
+            }
         })
+        .detach();
+
+        Self {
+            tx: session.tx,
+            frame: None,
+            exited: false,
+            pid,
+        }
     }
 
-    pub(crate) fn sender(&self) -> Sender<TerminalCommand> {
+    pub fn sender(&self) -> crossbeam_channel::Sender<TerminalCommand> {
         self.tx.clone()
     }
 
-    pub(crate) fn updates(&self) -> Receiver<TerminalUpdate> {
-        self.rx.clone()
+    /// The explicit destructive half of close-vs-terminate: tears the
+    /// writer loop (and with it the PTY) down.
+    pub fn shutdown(&self) {
+        let _ = self.tx.send(TerminalCommand::Shutdown);
     }
 
-    /// The spawned shell's pid, for `Registry` to retain past this
-    /// (otherwise ephemeral) `TerminalSession` value's lifetime -- see
-    /// `Registry::insert_terminal`/`Registry::terminal_cwd`.
-    pub(crate) fn pid(&self) -> Option<u32> {
+    /// The spawned shell's pid, for a later spawn to sample this
+    /// session's current cwd (`crate::terminal::sample_cwd`).
+    pub fn pid(&self) -> Option<u32> {
         self.pid
     }
-}
-
-pub(crate) fn initial_terminal_text() -> String {
-    let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let mut core = TerminalCore::default();
-    core.write_vt(
-        format!(
-            "Terminal plugin\r\n\r\nPTY backend: portable-pty\r\nVT core: alacritty_terminal\r\nInput encoding: termwiz\r\n\r\nDefault shell: {shell}\r\n\r\nLive PTY session wiring is available in horizon::terminal::TerminalSession.\r\n"
-        )
-        .as_bytes(),
-    );
-    core.snapshot_text()
 }

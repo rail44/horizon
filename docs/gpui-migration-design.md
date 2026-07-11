@@ -203,11 +203,16 @@ Concrete mappings:
   startup resume `67db08d`, then a five-worker wave: Markdown
   transcript `697a475`, `[keybindings]` `d56b5d0`, agent CLI verbs +
   roles `12a28fd`, `check-gpui-terminal.sh` `56b7b17`, Reload Agent
-  Runtime `aa85509` — every M4-deferred item is now wired). Still
-  open, all judgment-bearing: virtualized-List transcript (measure
-  first), README smoke checklist parity pass, `horizon` binary name
-  switch, Floem shell + over-tracking defenses deleted, workspaces
-  merged (owner decision).
+  Runtime `aa85509` — every M4-deferred item is now wired). **Retirement
+  executed 2026-07-11** with the owner's go: parity gaps closed (CLI
+  dispatch, [ui] window size, cwd inheritance, focus reporting,
+  follow-scroll, macOS app menu, view chooser, session-manager
+  terminate), the Floem shell tagged `floem-shell-final` and deleted,
+  `shell-gpui/` folded into the root workspace as the `horizon`
+  binary, and the over-tracking defenses (ast-grep rule + hook leg)
+  retired with the reactivity model they guarded. Still open,
+  deliberately: virtualized-List transcript (measure first — revisit
+  if long transcripts lag).
 
 Each of M1–M4 is a review-queue-sized unit; M0 rides with M1.
 

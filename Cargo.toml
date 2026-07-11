@@ -16,39 +16,30 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1.0"
 alacritty_terminal = "0.26.0"
+anyhow = "1.0"
 crossbeam-channel = "0.5"
-floem = { git = "https://github.com/lapce/floem", rev = "31fa8f444c37f4c314f47d88c23ffdbc25f2ab53", features = ["crossbeam"] }
-floem_renderer = { git = "https://github.com/lapce/floem", rev = "31fa8f444c37f4c314f47d88c23ffdbc25f2ab53" }
+futures = "0.3"
+# gpui/gpui-component ride git HEAD by spec; the committed Cargo.lock is
+# the actual pin (rev-pinning gpui in [dependencies] would split it from
+# gpui-component's own unpinned gpui dep into two incompatible
+# instances). Bump deliberately with `cargo update`.
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit"] }
+gpui-component = { git = "https://github.com/longbridge/gpui-component" }
 horizon-agent = { path = "crates/horizon-agent" }
+horizon-config = { path = "crates/horizon-config" }
 horizon-control = { path = "crates/horizon-control" }
 horizon-ctl = { path = "crates/horizon-ctl" }
 horizon-terminal-core = { path = "crates/horizon-terminal-core" }
-horizon-config = { path = "crates/horizon-config" }
 horizon-workspace = { path = "crates/horizon-workspace" }
-# Already an indirect dependency via floem (`lapce/floem`'s own manual-
-# sharding-discipline collections use it) -- promoted to direct so
-# `session::frames`' `RwSignal<im::HashMap<..>>` collection (`docs/
-# reactive-store-design.md`) can use it. Pinned to the version floem already
-# resolves to, so this adds no new crate to the build.
-im = "15.1"
-libc = "0.2"
 portable-pty = "0.9.0"
-serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-similar = "3.1"
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 termwiz = "0.23.3"
-thiserror = "2.0"
-tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
-toml = "0.8"
+tokio = { version = "1.52", features = ["rt", "net", "io-util", "time", "macros"] }
 unicode-width = "0.2"
 uuid = { version = "1.18", features = ["v4", "serde"] }
-wasmtime = "46.0.1"
-
-[dev-dependencies]
-horizon-workspace = { path = "crates/horizon-workspace", features = ["test-fixtures"] }
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

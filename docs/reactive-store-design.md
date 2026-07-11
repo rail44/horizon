@@ -1,3 +1,9 @@
+> **Superseded 2026-07-11**: the Floem shell this design governed was
+> retired (tag `floem-shell-final`) in favor of the GPUI shell, whose
+> Entity/notify model removes the whole-signal reactivity problem this
+> doc worked around — see `docs/gpui-migration-design.md`. Kept as the
+> record of why the state was decomposed the way it still is.
+
 # Reactive fine-grained state — Design (foundation 5)
 
 Status: decided 2026-07-08 (project session with owner), after a four-way

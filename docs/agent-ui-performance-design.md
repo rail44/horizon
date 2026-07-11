@@ -1,3 +1,9 @@
+> **Superseded 2026-07-11**: the over-tracking hazard class this doc
+> defended against was specific to the Floem shell's fine-grained
+> reactivity; the GPUI shell (tag `floem-shell-final` marks the switch)
+> renders per-entity and the defenses (per-block signals, untrack, the
+> ast-grep rule) retired with it — see `docs/gpui-migration-design.md`.
+
 # Agent UI Performance — Design
 
 Status: decided 2026-07-08 (owner consultation in the project session).

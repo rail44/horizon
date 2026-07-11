@@ -31,7 +31,7 @@ usage() {
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 
-binary="$repo_root/shell-gpui/target/debug/horizon-shell-gpui"
+binary="$repo_root/target/debug/horizon"
 out=""
 force_kill=0
 

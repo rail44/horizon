@@ -178,6 +178,13 @@ wave items where possible; design docs on first use.
   Follow-ups in backlog 21–22 (dead `Status` arms; the airtight
   reducer-reports-index form).
 
+- **GPUI migration — completed 2026-07-11**: the shell is GPUI now.
+  Retirement executed with the owner's go: parity closed against the
+  README smoke checklist, the Floem shell tagged `floem-shell-final`
+  and deleted, `shell-gpui/` folded into the root workspace as the
+  `horizon` binary, over-tracking defenses retired. Full record in
+  `docs/gpui-migration-design.md`. Original entry follows for
+  provenance.
 - **GPUI migration — GO decided 2026-07-10** (owner session): the UI
   shell moves from Floem to GPUI + gpui-component. The spike (S0–S4:
   toolchain, grid rendering, key routing, IME, dock integration) passed

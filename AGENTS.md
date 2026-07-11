@@ -32,13 +32,12 @@ or use `Reload Agent Runtime` from the command palette to retry after
 rebuilding.
 
 There is no CI. The local quality gate below is mandatory before finishing
-any work — run it yourself and make sure all four are clean:
+any work — run it yourself and make sure all three are clean:
 
 ```sh
 cargo fmt
 cargo clippy --workspace --all-targets -- -D warnings
 cargo nextest run --workspace
-ast-grep scan --error -r .config/ast-grep/overtracking.yml src crates
 ```
 
 `--workspace` is load-bearing: bare `cargo clippy`/`cargo nextest run`
@@ -47,26 +46,11 @@ crates. nextest runs each test in its own process (no cross-test env
 leakage) but does not run doctests; the workspace currently has none —
 add `cargo test --doc` here if that changes.
 
-`shell-gpui/` (the GPUI shell, `docs/gpui-migration-design.md`) is a
-**separate workspace** the root `--workspace` runs never touch — after
-changes there, additionally run `cargo fmt`, `cargo clippy
---all-targets -- -D warnings`, and `cargo nextest run` inside
-`shell-gpui/` (the pre-commit hook does all three).
-
-The `ast-grep` step is the leg-2 static-analysis backstop against the
-"over-tracking" reactive anti-pattern (raw `frame()` read + `.items` walk in
-a `create_memo`/`create_effect` closure, no `untrack`) — see
-`docs/agent-ui-performance-design.md`. It only catches the direct form (the
-rule file documents the intraprocedural limitation); it is a backstop, not
-the primary defense.
-
-The same gate runs as a pre-commit hook (`hooks/pre-commit`), which hard-fails
-if `ast-grep` isn't on `PATH` rather than skipping the check. One-time setup
-per clone:
+The same gate runs as a pre-commit hook (`hooks/pre-commit`). One-time
+setup per clone:
 
 ```sh
 git config core.hooksPath hooks
-npm install -g @ast-grep/cli   # or: cargo install ast-grep --locked
 ```
 
 ## Configuration
@@ -80,17 +64,18 @@ only, with one exception: `Reload Config` (palette / `reload-config`
 keybinding id / CLI `horizon reload-config`) re-reads the file and applies
 `[theme]` (chrome, `[theme.ansi]`, and the derived terminal colors) and
 `[keybindings]` live; every other section still needs a restart. See
-`config.example.toml` at the repo root for every knob, and `src/config/` for
-the loader.
+`config.example.toml` at the repo root for every knob, and
+`crates/horizon-config` for the loader.
 
 ## GUI Verification
 
-Agents cannot see the GUI directly. Two scripts drive it headlessly:
-`scripts/check-terminal-visual.sh` runs a one-shot visual check (terminal
-dump + screenshot), and `scripts/run-terminal-smoke.sh` runs the full
-scenario suite on top of it. Authoritative details — env vars, artifact
-paths, system deps, and caveats — live in the `gui-verify` skill
-(`.claude/skills/gui-verify/SKILL.md`); read it before using either script.
+Agents cannot see the GUI directly. The shell has built-in headless taps
+(`HORIZON_GPUI_DUMP=<path>` mirrors every terminal frame plus a span
+color table to a file; `HORIZON_GPUI_DRIVE=<bytes>` types input into the
+first session shortly after startup), and `scripts/check-gpui-terminal.sh`
+drives them as a one-shot check (marker text plus 256-color and truecolor
+span assertions). Details live in the `gui-verify` skill
+(`.claude/skills/gui-verify/SKILL.md`).
 
 Manual smoke after `cargo run`: press `ctrl+'` to enter workspace mode
 (`docs/workspace-mode-design.md`), then `:` to open the control surface —
@@ -104,40 +89,43 @@ README.md for the manual command checklist (`new tab`, `split pane`,
 Domain responsibilities (stable); browse each directory for its current
 contents:
 
-- `workspace/` — the core domain: tabs, panes, layout tree, session
-  attachments, operations/queries, pane input routing, and workspace views.
-- `terminal/` — PTY-backed terminal sessions: the spawn layer (PTY
-  ownership, threads, environment, the `HORIZON_PTY_TRACE` tap) and
-  rendering/input/IME views. `TerminalCore`/emulation, the session
-  command/update contract, and the byte-channel-driven session loop live in
-  `crates/horizon-terminal-core` (a library crate, no floem dependency) —
-  see `docs/session-daemon-design.md`. The kitty-keyboard-protocol
-  conformance matrix (`KITTY_COMPLIANCE`,
-  `crates/horizon-terminal-core/src/protocol/kitty_keyboard.rs`) is
-  resident, code-adjacent documentation; print it with `cargo test -p
+The shell is GPUI-based (the Floem shell retired at tag
+`floem-shell-final`; the migration record is
+`docs/gpui-migration-design.md`). Domain logic lives in shared crates;
+`src/` holds only the view projections and wiring:
+
+- `workspace.rs` — the shell root (`WorkspaceShell`): renders the shared
+  workspace model (tab strip, recursive splits on gpui-component's
+  resizable primitives), owns the session stores (terminal + agent, the
+  close-vs-detach seam), workspace mode, command dispatch (`execute`),
+  and the modals' lifecycles. The model itself — tabs, panes, layout
+  tree, session attachments, operations/queries, mode state, spatial
+  navigation, the pure command model, and the `workspace.snapshot`
+  payload — is `crates/horizon-workspace`.
+- `terminal/` — the terminal pane: PTY spawn layer (`pty.rs`, cwd
+  sampling in `cwd.rs`), the per-session model entity (`session.rs`),
+  and the view (grid painting, key/mouse/IME handling, `input.rs`
+  mapping). Emulation and the session loop live in
+  `crates/horizon-terminal-core` — see `docs/session-daemon-design.md`;
+  print the kitty conformance matrix with `cargo test -p
   horizon-terminal-core print_compliance_matrix -- --nocapture`.
-- `agent/` — Horizon's seam onto AI agent sessions: the client/reconnect
-  logic for `horizon-agentd` (`agentd_client.rs`, `agentd_runtime.rs`) and
-  agent views. The provider contract, providers, tools, and persistence
-  themselves live in `crates/horizon-agent` (a library crate, no floem
-  dependency) and are hosted by `crates/horizon-agentd` (the daemon binary
-  every agent session actually runs in) — see
+- `agent/` — the agent pane: the agentd connection (`connection.rs`,
+  reusing `horizon-agent`'s shared `client` for spawn/handshake),
+  per-session model entities (`session.rs`, folding events through the
+  shared `LiveState`), and the view (Markdown transcript, composer,
+  approvals). Contract/providers/tools/persistence live in
+  `crates/horizon-agent`, hosted by `crates/horizon-agentd` — see
   `docs/agent-runtime-split-design.md`.
-- `session/` — shared session primitives (`SessionId`, `Registry`, `Frames`)
-  used across session kinds.
-- `app/` — composition root: the command model (`commands.rs` defines
-  `CommandId`, `command_actions.rs` executes), keymap, session spawning,
-  app-level state and view.
-- `control_surface/` — the command palette (opened with `:` from workspace
-  mode, see `docs/workspace-mode-design.md`) and the session manager modal
-  (attach/terminate any session, opened via its "Manage Sessions" command).
-- `control_plane/` — the CLI control-plane listener: a fixed well-known
-  Unix socket, one thread per connection, bridged onto the UI thread so
-  commands still execute through the command model. The contract lives
-  in `crates/horizon-control`; the client is `horizon <subcommand>`
-  itself (client code in the lib-only `crates/horizon-ctl`). Panes get
-  `HORIZON_SOCKET`/`HORIZON_SESSION_ID` in their environment. See
+- `palette.rs` / `session_manager.rs` / `view_chooser.rs` — the control
+  surface modals, all delegates over gpui-component's searchable List.
+- `control_plane.rs` — the GPUI-side bridge and dispatcher for the CLI
+  control plane; the transport is shared in `horizon-control::host`, the
+  client is `horizon <subcommand>` itself (`crates/horizon-ctl`). Panes
+  get `HORIZON_SOCKET`/`HORIZON_SESSION_ID` in their environment. See
   `docs/cli-control-plane-design.md`.
+- `keymap.rs` — `[keybindings]` chord/command translation;
+  `theme.rs` — config-driven color scheme; `terminal_focus.rs` — the
+  focus-reporting decision; `main.rs` — CLI-vs-GUI entry point.
 - `ui/` — cross-domain UI primitives only. Domain-specific views live next
   to their domains.
 - `plugins/` — WASM plugin groundwork; the future path for hot-reloadable
