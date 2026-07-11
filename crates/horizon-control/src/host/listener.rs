@@ -1,6 +1,6 @@
 //! The control plane's accept loop: a dedicated OS thread that binds
 //! [`super::socket::default_socket_path`] and spawns one more thread per
-//! accepted connection -- deliberately not `horizon-agentd`'s "one
+//! accepted connection -- deliberately not `horizon-sessiond`'s "one
 //! connection at a time" simplification (`docs/cli-control-plane-design.md`'s
 //! "Endpoint" decision: the CLI contract assumes multiple concurrent
 //! clients from v1).
@@ -45,7 +45,7 @@ pub fn spawn(socket_path: PathBuf, executor: impl ControlExecutor + 'static) {
 /// Accepts connections until the socket itself errors out (the process is
 /// exiting, or the socket file was removed out from under the listener) --
 /// spawning a fresh thread per connection so one slow or wedged client can
-/// never delay accepting the next, unlike `horizon-agentd`'s own accept loop
+/// never delay accepting the next, unlike `horizon-sessiond`'s own accept loop
 /// (see the module doc).
 fn accept_loop(listener: UnixListener, executor: &Arc<dyn ControlExecutor>) {
     for accepted in listener.incoming() {
@@ -66,7 +66,7 @@ fn accept_loop(listener: UnixListener, executor: &Arc<dyn ControlExecutor>) {
 }
 
 /// Binds `path`, handling the stale-socket case exactly like `horizon-
-/// agentd`'s own `bind_listener` (`crates/horizon-agentd/src/main.rs`): if a
+/// sessiond`'s own `bind_listener` (`crates/horizon-sessiond/src/main.rs`): if a
 /// socket file already exists there but nothing answers a connection attempt
 /// (a previous Horizon process that didn't shut down cleanly), remove it and
 /// rebind; if something *is* accepting -- a second Horizon instance racing
@@ -179,9 +179,9 @@ mod tests {
         )
     }
 
-    /// Proves the design's "not agentd's one-connection-at-a-time"
+    /// Proves the design's "not sessiond's one-connection-at-a-time"
     /// decision: a connection that never sends anything (holding the accept
-    /// loop's would-be single slot in an agentd-style server) must not stop
+    /// loop's would-be single slot in an sessiond-style server) must not stop
     /// a second, fully-driven connection from being served.
     #[test]
     fn listener_serves_a_second_connection_while_a_first_sits_idle() {
@@ -190,7 +190,7 @@ mod tests {
 
         let idle_connection = connect_with_retry(&path);
         // Deliberately never write anything on `idle_connection` -- it just
-        // holds a slot open the way agentd's single accepted connection
+        // holds a slot open the way sessiond's single accepted connection
         // would.
 
         let mut second = connect_with_retry(&path);

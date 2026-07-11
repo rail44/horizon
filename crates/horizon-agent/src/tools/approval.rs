@@ -23,7 +23,7 @@ pub enum ApprovalOutcome {
     /// only needs to publish the whole updated frame locally (e.g. the
     /// in-process pane, via `Frames::update_agent_frame`) can ignore this
     /// and use `frame` directly; a caller relaying over a transport that
-    /// expects a discrete event stream (`horizon-agentd`, forwarding to
+    /// expects a discrete event stream (`horizon-sessiond`, forwarding to
     /// Horizon over the wire — see `docs/agent-runtime-split-design.md`
     /// step 3) forwards `events` instead, since a whole-frame snapshot isn't
     /// the wire's event-envelope shape. `frame` is the session's updated
@@ -43,8 +43,8 @@ pub enum ApprovalOutcome {
     /// exposed — but there is no `command` yet. The eventual result arrives
     /// later on `SessionRuntime::bash_results` and is folded (and forwarded
     /// to the provider) by the effect `app/runtime/agent.rs::
-    /// spawn_agent_session` (or, in agentd mode, the equivalent session-loop
-    /// code in `horizon-agentd`) sets up for it, not by this call.
+    /// spawn_agent_session` (or, in sessiond mode, the equivalent session-loop
+    /// code in `horizon-sessiond`) sets up for it, not by this call.
     Started {
         events: Vec<Event>,
         frame: AgentFrame,
@@ -64,7 +64,7 @@ pub enum ApprovalOutcome {
     /// side effects (or, for `bash`, spawn a second concurrent process for
     /// the same call), and forwarding would emit a second `ToolCallResult`.
     /// Every caller that reaches this logs the drop rather than silently
-    /// swallowing it — see `horizon-agentd`'s `session::resolve_and_forward`.
+    /// swallowing it — see `horizon-sessiond`'s `session::resolve_and_forward`.
     AlreadyResolved,
 }
 

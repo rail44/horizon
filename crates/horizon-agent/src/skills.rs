@@ -144,7 +144,7 @@ const SKILL_BODY_CAP_CHARS: usize = 24_000;
 /// note), sorted by id for deterministic listing order. Composed once per
 /// session (not a global static) because repository discovery is
 /// cwd-dependent -- see `providers::rig::session::session_extra_sections`
-/// and `horizon-agentd`'s `session::run_session`, the two production sites
+/// and `horizon-sessiond`'s `session::run_session`, the two production sites
 /// that build one via [`Self::discover`].
 #[derive(Default)]
 pub struct SkillRegistry {

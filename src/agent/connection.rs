@@ -1,16 +1,13 @@
-//! The GPUI shell's connection to `horizon-agentd`: a lean mirror of the
-//! Floem shell's `agentd_runtime` connection half, reusing the shared
+//! The GPUI shell's connection to `horizon-sessiond`, reusing the shared
 //! `horizon_agent::client` (connect/spawn/handshake) and `wire`. One OS
 //! thread runs a current-thread tokio runtime with the read/write loops;
-//! events route to per-session crossbeam senders. The Floem twin of this
-//! module dies with the Floem shell at M5 — the duplication is
-//! transition-scoped, not permanent.
+//! events route to per-session crossbeam senders.
 //!
 //! Host-tool requests route out on the returned receiver and are
-//! answered on the UI thread (`WorkspaceShell::adopt_agentd` wires the
+//! answered on the UI thread (`WorkspaceShell::adopt_sessiond` wires the
 //! responder); `session_list` + `attach_session` serve both
-//! startup resume and `Reload Agent Runtime`
-//! (`WorkspaceShell::spawn_startup_resume`/`reload_agent_runtime`).
+//! startup resume and `Reload Session Runtime`
+//! (`WorkspaceShell::spawn_startup_resume`/`reload_session_runtime`).
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -26,7 +23,7 @@ use horizon_agent::wire::{
 type AgentSessionId = contract::SessionId;
 
 #[derive(Clone)]
-pub struct AgentdHandle {
+pub struct SessiondHandle {
     outgoing: tokio::sync::mpsc::UnboundedSender<Envelope>,
     session_events: Arc<Mutex<HashMap<AgentSessionId, Sender<ProviderEvent>>>>,
     // Answers the one-at-a-time session_list round trip (same
@@ -34,10 +31,9 @@ pub struct AgentdHandle {
     pending_session_list: Arc<Mutex<Option<Sender<Vec<wire::SessionSummary>>>>>,
 }
 
-impl AgentdHandle {
-    /// Connects to `horizon-agentd` (spawning it if needed), blocking the
-    /// caller until the handshake finishes — acceptable once at startup,
-    /// mirroring the Floem shell's `AgentdConnection::connect`. The
+impl SessiondHandle {
+    /// Connects to `horizon-sessiond` (spawning it if needed), blocking the
+    /// caller until the handshake finishes — acceptable once at startup. The
     /// returned receiver carries host-tool requests (e.g.
     /// `workspace.snapshot`) the shell must answer via
     /// [`Self::respond_host_tool`].
@@ -57,7 +53,7 @@ impl AgentdHandle {
                 Ok(runtime) => runtime,
                 Err(err) => {
                     let _ = outcome_tx.send(Err(format!(
-                        "could not start a runtime for horizon-agentd: {err}"
+                        "could not start a runtime for horizon-sessiond: {err}"
                     )));
                     return;
                 }
@@ -65,14 +61,14 @@ impl AgentdHandle {
             runtime.block_on(run_connection(&socket_path, &control_socket, outcome_tx));
         });
 
-        // Bounded so a wedged agentd (accepting but never handshaking)
+        // Bounded so a wedged sessiond (accepting but never handshaking)
         // can't hang the caller — which may be the UI thread on the lazy
-        // path. `Reload Agent Runtime` (drain/respawn) is the recovery
+        // path. `Reload Session Runtime` (drain/respawn) is the recovery
         // for the wedged daemon itself.
         outcome_rx
             .recv_timeout(std::time::Duration::from_secs(10))
             .unwrap_or_else(|_| {
-                Err("timed out waiting for the horizon-agentd handshake".to_string())
+                Err("timed out waiting for the horizon-sessiond handshake".to_string())
             })
     }
 
@@ -126,7 +122,7 @@ impl AgentdHandle {
             .send(Envelope::control(Control::HostToolResponse(response)));
     }
 
-    /// Attaches to a session agentd already hosts (resumed from its log):
+    /// Attaches to a session that sessiond already hosts (resumed from its log):
     /// sends `session_load`, so committed events replay onto the handle.
     pub fn attach_session(&self, session_id: AgentSessionId) -> contract::SessionHandle {
         let handle = self.register_session_routing(session_id);
@@ -138,7 +134,7 @@ impl AgentdHandle {
         handle
     }
 
-    /// Asks agentd for every session it hosts, blocking up to five
+    /// Asks sessiond for every session it hosts, blocking up to five
     /// seconds — called from the startup background thread, never the UI
     /// thread.
     pub fn session_list(&self) -> Vec<wire::SessionSummary> {
@@ -156,9 +152,8 @@ impl AgentdHandle {
             .unwrap_or_default()
     }
 
-    /// Asks agentd to drain: flush and exit (mirrors the Floem shell's
-    /// `agentd_runtime::AgentdConnection::drain`). Best-effort and
-    /// fire-and-forget — the caller (`Reload Agent Runtime`) doesn't wait
+    /// Asks sessiond to drain: flush and exit. Best-effort and
+    /// fire-and-forget — the caller (`Reload Session Runtime`) doesn't wait
     /// for a reply, just for the old process to actually be gone, observed
     /// indirectly via [`wait_for_drain`].
     pub fn drain(&self) {
@@ -166,21 +161,18 @@ impl AgentdHandle {
     }
 }
 
-/// How long [`wait_for_drain`] polls for the old `horizon-agentd` to
-/// actually stop accepting connections before giving up — mirrors the
-/// Floem shell's `agentd_runtime::DRAIN_TIMEOUT`.
+/// How long [`wait_for_drain`] polls for the old `horizon-sessiond` to
+/// actually stop accepting connections before giving up.
 const DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// Poll interval for [`wait_for_drain`] — mirrors the Floem shell's
-/// `agentd_runtime::DRAIN_POLL_INTERVAL`.
+/// Poll interval for [`wait_for_drain`].
 const DRAIN_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// Blocks the calling thread until nothing answers a connection attempt on
-/// `socket_path` — i.e. the drained old `horizon-agentd` has actually
+/// `socket_path` — i.e. the drained old `horizon-sessiond` has actually
 /// exited — or [`DRAIN_TIMEOUT`] elapses, in which case it's reported as a
 /// failure rather than silently falling through to a spawn-or-connect
-/// attempt that might reattach to a still-alive old process. Mirrors the
-/// Floem shell's `agentd_runtime::wait_for_drain`; synchronous
+/// attempt that might reattach to a still-alive old process. Synchronous
 /// (`std::os::unix::net`, not tokio) since the caller has no async runtime
 /// of its own.
 pub fn wait_for_drain(socket_path: &Path) -> Result<(), String> {
@@ -191,7 +183,7 @@ pub fn wait_for_drain(socket_path: &Path) -> Result<(), String> {
         }
         if std::time::Instant::now() >= deadline {
             return Err(format!(
-                "horizon-agentd did not drain within {:.1}s",
+                "horizon-sessiond did not drain within {:.1}s",
                 DRAIN_TIMEOUT.as_secs_f64()
             ));
         }
@@ -202,7 +194,9 @@ pub fn wait_for_drain(socket_path: &Path) -> Result<(), String> {
 async fn run_connection(
     socket_path: &Path,
     control_socket: &Path,
-    outcome_tx: std::sync::mpsc::Sender<Result<(AgentdHandle, Receiver<HostToolRequest>), String>>,
+    outcome_tx: std::sync::mpsc::Sender<
+        Result<(SessiondHandle, Receiver<HostToolRequest>), String>,
+    >,
 ) {
     let (mut reader, mut writer, _hello) =
         match horizon_agent::client::connect_and_split(socket_path, control_socket).await {
@@ -219,7 +213,7 @@ async fn run_connection(
     let (host_tool_tx, host_tool_rx) = unbounded::<HostToolRequest>();
     let pending_session_list = Arc::new(Mutex::new(None));
 
-    let handle = AgentdHandle {
+    let handle = SessiondHandle {
         outgoing: outgoing_tx.clone(),
         session_events: session_events.clone(),
         pending_session_list: pending_session_list.clone(),

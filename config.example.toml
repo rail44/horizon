@@ -193,7 +193,7 @@ window_height = 720.0
 # split-down (same chooser, but vertically), new-tab (opens the chooser to
 # open a new tab), focus-next-pane, close-active-pane,
 # close-active-tab, terminate-active-session, approve-tool-call,
-# deny-tool-call, cancel-agent-turn, reload-agent-runtime, reload-config,
+# deny-tool-call, cancel-agent-turn, reload-session-runtime, reload-config,
 # manage-sessions (opens the session manager modal). The reserved pseudo-command
 # `open-palette` is also accepted here — it isn't a real `CommandId` (opening
 # the palette isn't an operation the palette itself can list or run), and

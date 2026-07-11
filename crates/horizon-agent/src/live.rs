@@ -117,9 +117,9 @@ impl LiveState {
 
     /// Same as [`Self::with_event_log`], seeded with `history` (already-
     /// committed events, e.g. read back from the JSONL log at
-    /// `horizon-agentd` startup) so a resumed session's very first fold
+    /// `horizon-sessiond` startup) so a resumed session's very first fold
     /// reflects the whole transcript, not just what arrives from here on —
-    /// `docs/agent-runtime-split-design.md` step 4's "agentd restart ...
+    /// `docs/agent-runtime-split-design.md` step 4's "sessiond restart ...
     /// sessions are live again". `history` itself is never re-appended (it's
     /// already durable); only events folded in *after* this call go through
     /// `writer`.
@@ -156,9 +156,9 @@ impl LiveState {
 
     /// Every fold-relevant event this session has accumulated so far
     /// (already-committed history plus everything folded in since) — the
-    /// source `horizon-agentd`'s `session_load` handling re-emits to a
+    /// source `horizon-sessiond`'s `session_load` handling re-emits to a
     /// (re)connecting client (`docs/agent-runtime-split-design.md` step 4's
-    /// "agentd re-emits the fold-relevant committed events for that
+    /// "sessiond re-emits the fold-relevant committed events for that
     /// session"). Deliberately the same list a fresh `agent_frame_from_events`
     /// call over would rebuild the identical frame from, so a client's own
     /// fold of the replayed events reproduces this session's frame exactly.

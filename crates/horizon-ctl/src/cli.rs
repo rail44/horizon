@@ -83,7 +83,7 @@ pub enum Subcommand {
     CancelTurn {
         session_id: String,
     },
-    ReloadAgentRuntime,
+    ReloadSessionRuntime,
     ReloadConfig,
     Sessions,
     State,
@@ -122,7 +122,7 @@ Subcommands:\n  \
   approve <session-id> <call-id>\n  \
   deny <session-id> <call-id>\n  \
   cancel-turn <session-id>\n  \
-  reload-agent-runtime\n  \
+  reload-session-runtime\n  \
   reload-config\n  \
   sessions\n  \
   state\n  \
@@ -259,9 +259,9 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             reject_extra(&mut positionals, "cancel-turn")?;
             Subcommand::CancelTurn { session_id }
         }
-        "reload-agent-runtime" => {
-            reject_extra(&mut positionals, "reload-agent-runtime")?;
-            Subcommand::ReloadAgentRuntime
+        "reload-session-runtime" => {
+            reject_extra(&mut positionals, "reload-session-runtime")?;
+            Subcommand::ReloadSessionRuntime
         }
         "reload-config" => {
             reject_extra(&mut positionals, "reload-config")?;
@@ -351,7 +351,7 @@ pub fn resolve_socket_path(cli_socket: Option<PathBuf>, env_socket: Option<Strin
 /// `control_plane::socket::default_socket_path`'s doc comment explains why)
 /// the server side's own default -- both sides independently arrive at the
 /// same path, the same shape `horizon_agent::socket::default_socket_path`
-/// already uses between `horizon-agentd` and Horizon's own agent client.
+/// already uses between `horizon-sessiond` and Horizon's own agent client.
 fn default_socket_path() -> PathBuf {
     let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR").ok();
     // SAFETY: `getuid()` is a plain syscall wrapper with no preconditions.
@@ -636,8 +636,10 @@ mod tests {
             }
         );
         assert_eq!(
-            parse(&args(&["reload-agent-runtime"])).unwrap().subcommand,
-            Subcommand::ReloadAgentRuntime
+            parse(&args(&["reload-session-runtime"]))
+                .unwrap()
+                .subcommand,
+            Subcommand::ReloadSessionRuntime
         );
         assert_eq!(
             parse(&args(&["reload-config"])).unwrap().subcommand,

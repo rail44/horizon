@@ -32,7 +32,7 @@ pub fn external_name(subcommand: &Subcommand) -> &'static str {
         Subcommand::Approve { .. } => "approve",
         Subcommand::Deny { .. } => "deny",
         Subcommand::CancelTurn { .. } => "cancel-turn",
-        Subcommand::ReloadAgentRuntime => "reload-agent-runtime",
+        Subcommand::ReloadSessionRuntime => "reload-session-runtime",
         Subcommand::ReloadConfig => "reload-config",
         Subcommand::Sessions => "sessions",
         Subcommand::State => "state",
@@ -110,7 +110,7 @@ pub fn to_request(subcommand: &Subcommand, resolved_split: Option<&str>) -> Requ
             "cancel-turn",
             serde_json::json!({ "session_id": session_id }),
         ),
-        Subcommand::ReloadAgentRuntime => invoke("reload-agent-runtime", serde_json::json!({})),
+        Subcommand::ReloadSessionRuntime => invoke("reload-session-runtime", serde_json::json!({})),
         Subcommand::ReloadConfig => invoke("reload-config", serde_json::json!({})),
         Subcommand::Sessions => Request::Query(Query {
             what: "sessions".to_string(),
@@ -331,10 +331,10 @@ mod tests {
     }
 
     #[test]
-    fn reload_agent_runtime_and_reload_config_are_bare_invokes() {
+    fn reload_session_runtime_and_reload_config_are_bare_invokes() {
         assert_eq!(
-            external_name(&Subcommand::ReloadAgentRuntime),
-            "reload-agent-runtime"
+            external_name(&Subcommand::ReloadSessionRuntime),
+            "reload-session-runtime"
         );
         assert_eq!(external_name(&Subcommand::ReloadConfig), "reload-config");
 

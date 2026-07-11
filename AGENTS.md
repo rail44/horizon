@@ -22,13 +22,13 @@ cargo run
 
 `cargo build --workspace` is the canonical build command: `cargo run` alone
 only rebuilds the root `horizon` binary, and Horizon's agent sessions run
-entirely inside `horizon-agentd` (`crates/horizon-agentd`), a separate
+entirely inside `horizon-sessiond` (`crates/horizon-sessiond`), a separate
 workspace member Horizon spawns on demand (see
 `docs/agent-runtime-split-design.md`). If that binary was never built (or is
 stale after an agent-side change), `cargo run` still starts Horizon but
 agent panes fail to spawn a runtime — run `cargo build --workspace` first
-(and again after touching `crates/horizon-agent`/`crates/horizon-agentd`),
-or use `Reload Agent Runtime` from the command palette to retry after
+(and again after touching `crates/horizon-agent`/`crates/horizon-sessiond`),
+or use `Reload Session Runtime` from the command palette to retry after
 rebuilding.
 
 There is no CI. The local quality gate below is mandatory before finishing
@@ -41,7 +41,7 @@ cargo nextest run --workspace
 ```
 
 `--workspace` is load-bearing: bare `cargo clippy`/`cargo nextest run`
-from the repo root silently skip the `horizon-agentd`/`horizon-agent`
+from the repo root silently skip the `horizon-sessiond`/`horizon-agent`
 crates. nextest runs each test in its own process (no cross-test env
 leakage) but does not run doctests; the workspace currently has none —
 add `cargo test --doc` here if that changes.
@@ -109,12 +109,12 @@ The shell is GPUI-based (the Floem shell retired at tag
   `crates/horizon-terminal-core` — see `docs/session-daemon-design.md`;
   print the kitty conformance matrix with `cargo test -p
   horizon-terminal-core print_compliance_matrix -- --nocapture`.
-- `agent/` — the agent pane: the agentd connection (`connection.rs`,
+- `agent/` — the agent pane: the sessiond connection (`connection.rs`,
   reusing `horizon-agent`'s shared `client` for spawn/handshake),
   per-session model entities (`session.rs`, folding events through the
   shared `LiveState`), and the view (Markdown transcript, composer,
   approvals). Contract/providers/tools/persistence live in
-  `crates/horizon-agent`, hosted by `crates/horizon-agentd` — see
+  `crates/horizon-agent`, hosted by `crates/horizon-sessiond` — see
   `docs/agent-runtime-split-design.md`.
 - `palette.rs` / `session_manager.rs` / `view_chooser.rs` — the control
   surface modals, all delegates over gpui-component's searchable List.

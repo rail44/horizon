@@ -20,7 +20,7 @@ use crate::tools::state::ToolSessionState;
 /// through to this crate's own auto-allow tools (`tools::fs`). See
 /// `docs/agent-runtime-split-design.md`'s "Tools execute in the child"
 /// guardrail — this is the seam that will grow into the host-tool channel
-/// once tool execution moves into `horizon-agentd`.
+/// once tool execution moves into `horizon-sessiond`.
 pub trait HostTools {
     /// Executes a host-owned auto-allow tool, returning `None` if `tool_id`
     /// isn't one this implementation handles.

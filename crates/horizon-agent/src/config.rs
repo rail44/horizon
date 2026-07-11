@@ -14,7 +14,7 @@
 //! own mirror of the `[agent]`/`[provider]` sections of Horizon's config
 //! file schema; Horizon converts its `RawConfig` into this shape at the
 //! seam (see `horizon`'s `src/agent/config.rs`) before calling
-//! [`AgentConfig::from_env_and_file`]. `horizon-agentd`'s own config
+//! [`AgentConfig::from_env_and_file`]. `horizon-sessiond`'s own config
 //! loading (split step 2) will need an analogous conversion, or may parse
 //! its file directly into this shape.
 
@@ -26,7 +26,7 @@ use serde::Deserialize;
 /// Mirrors the `[agent]`/`[provider]` sections of Horizon's config-file
 /// schema (`crate::config::RawConfig` in the `horizon` binary crate) — see
 /// the module doc for why this crate can't use that type directly. Derives
-/// `Deserialize` (used by [`load_file_config`], `horizon-agentd`'s own
+/// `Deserialize` (used by [`load_file_config`], `horizon-sessiond`'s own
 /// loader) with `#[serde(default)]` throughout so a file missing the
 /// `[agent]`/`[provider]` sections entirely, or Horizon's full config file
 /// (with its other sections this crate doesn't model at all -- `[terminal]`,
@@ -72,9 +72,9 @@ pub struct AgentFileProviderConfig {
     pub max_tokens: Option<u64>,
 }
 
-// --- loading AgentFileConfig from Horizon's config file (horizon-agentd) --
+// --- loading AgentFileConfig from Horizon's config file (horizon-sessiond) --
 //
-// `horizon-agentd` can't depend on the `horizon` binary crate's own loader
+// `horizon-sessiond` can't depend on the `horizon` binary crate's own loader
 // (`crate::config::load()` there, gated behind Horizon's UI/workspace
 // dependencies), so it needs its own copy of the file-location logic. This
 // duplicates Horizon's `HORIZON_CONFIG` > `$XDG_CONFIG_HOME/horizon/
@@ -85,7 +85,7 @@ pub struct AgentFileProviderConfig {
 // reads is intentional: [`AgentFileConfig`]'s `#[serde(default)]` (no
 // `deny_unknown_fields`) means Horizon's other top-level sections
 // (`[terminal]`, `[ui]`, `[keybindings]`, `[theme]`) parse here too, just
-// silently ignored, so `horizon-agentd` only ever sees `[agent]`/
+// silently ignored, so `horizon-sessiond` only ever sees `[agent]`/
 // `[provider]`.
 
 /// Overrides the config file path outright -- the same variable Horizon's
@@ -95,7 +95,7 @@ const CONFIG_PATH_VAR: &str = "HORIZON_CONFIG";
 const XDG_CONFIG_HOME_VAR: &str = "XDG_CONFIG_HOME";
 
 /// Loads `[agent]`/`[provider]` from Horizon's single config file, for
-/// standalone use by `horizon-agentd`. A missing file (the common case) or
+/// standalone use by `horizon-sessiond`. A missing file (the common case) or
 /// a present-but-unparsable one both fall back to
 /// [`AgentFileConfig::default()`] -- the latter with a warning on stderr --
 /// matching Horizon's own "never crash on a bad config file" policy
@@ -105,7 +105,7 @@ pub fn load_file_config() -> AgentFileConfig {
 }
 
 /// `pub(crate)` (not just `fn`) so `tools::config` can target exactly the
-/// file `horizon-agentd` itself resolves and reads -- see that module's own
+/// file `horizon-sessiond` itself resolves and reads -- see that module's own
 /// doc comment on why `config.write` deliberately reaches outside the
 /// per-session `workspace_root` confinement to edit this one host-owned
 /// path.
@@ -574,7 +574,7 @@ pub fn default_state_db_path_from(xdg_data_home: Option<String>, home: Option<St
 /// always resolves to `Some` in practice) rather than switching to a bare
 /// `PathBuf`, so [`AgentPersistenceConfig::duckdb_path`]'s existing
 /// `Option<PathBuf>` shape -- and every `if let Some(duckdb_path) = ...`
-/// built on it (e.g. `horizon-agentd`'s startup rebuild) -- doesn't need
+/// built on it (e.g. `horizon-sessiond`'s startup rebuild) -- doesn't need
 /// to change shape along with this default.
 pub fn resolve_state_db_path(
     env_value: Option<String>,
@@ -1097,7 +1097,7 @@ mod tests {
         assert_eq!(config.fs.glob_result_limit, DEFAULT_FS_GLOB_RESULT_LIMIT);
     }
 
-    // --- horizon-agentd's standalone file-config loader ---------------------
+    // --- horizon-sessiond's standalone file-config loader ---------------------
 
     #[test]
     fn resolves_config_file_path_env_over_xdg_over_home_fallback() {

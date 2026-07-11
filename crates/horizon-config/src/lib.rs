@@ -357,7 +357,7 @@ pub fn reload_from_path(path: Option<&Path>) -> Result<RawConfig, String> {
 /// process must never observe the developer's real
 /// `~/.config/horizon/config.toml`. `app::command_actions::reload_config`
 /// (this function's one caller) is therefore not unit-tested directly --
-/// like `reload_agent_runtime`, which spawns a real process, there is
+/// like `reload_session_runtime`, which spawns a real process, there is
 /// nothing left to exercise here once `reload_from_path` (this module's
 /// tests) and the theme/keymap apply functions it feeds
 /// (`ui::theme::apply_reload`'s and `app::keymap::Keymap::reload`'s own

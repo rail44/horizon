@@ -1108,7 +1108,7 @@ fn resolve_approval_second_approve_of_a_still_running_bash_call_is_noop() {
         panic!("first approve should start bash");
     };
     // The frame the second approve would actually see (production folds
-    // this exact frame, e.g. `horizon-agentd`'s `resolve_and_forward` reads
+    // this exact frame, e.g. `horizon-sessiond`'s `resolve_and_forward` reads
     // `live_state.frame()` fresh for every inbound command) already shows
     // `ToolCallStarted` but not yet `ToolCallFinished` -- the vulnerable
     // window.

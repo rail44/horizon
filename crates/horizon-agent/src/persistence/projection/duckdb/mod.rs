@@ -38,7 +38,7 @@ pub struct Store {
     conn: Connection,
     /// Whether opening this store had to migrate a pre-`event_at`
     /// `agent_events` table (see [`Self::migrate_legacy_agent_events_schema`]).
-    /// Not test-only: `horizon-agentd`'s startup rebuild-skip check
+    /// Not test-only: `horizon-sessiond`'s startup rebuild-skip check
     /// (task 2 of the readiness fix) reads this via [`Self::
     /// migrated_legacy_schema`] to know it must not trust the projection's
     /// existing `agent_sessions.last_sequence` high-water mark -- a
@@ -1335,7 +1335,7 @@ mod tests {
     /// End-to-end for the *live* projection (task 1 of the recall work),
     /// not just the rebuild-at-startup path the tests above cover: drives
     /// real appends through `event_log::WriterHandle::open_silently(path,
-    /// Some(duckdb_path))` -- the exact seam `horizon-agentd`'s
+    /// Some(duckdb_path))` -- the exact seam `horizon-sessiond`'s
     /// `open_persistence` uses -- then queries through the *shared*
     /// `Arc<Mutex<Store>>` handle the writer thread itself hands back (via
     /// the second `open_silently` receiver), not a fresh independent

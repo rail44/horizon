@@ -358,7 +358,7 @@ impl ProviderRegistry {
 
     /// `duckdb_cell` is shared with (a clone of) whatever else in the
     /// process needs the same live DuckDB projection handle once it exists
-    /// (`horizon-agentd`'s `AgentdState`, for the recall tools) -- see
+    /// (`horizon-sessiond`'s `SessiondState`, for the recall tools) -- see
     /// `persistence::projection::duckdb::SharedDuckdbStore`'s doc comment.
     /// It's threaded in here (rather than resolved internally) because this
     /// registry -- and the rig provider it constructs -- is built at
@@ -390,7 +390,7 @@ impl ProviderRegistry {
     /// dispatching to the provider -- an unresolvable role id returns
     /// `None` here exactly like an unknown `provider_id` does, so a caller
     /// that already treats `None` as "fail loudly, don't start a role-less
-    /// session instead" (see `roles`'s module doc; `horizon-agentd`'s
+    /// session instead" (see `roles`'s module doc; `horizon-sessiond`'s
     /// `session::run_session` is the one production caller) gets that
     /// behavior for both failure modes without extra plumbing. This is the
     /// single choke point every session start goes through, so a role is

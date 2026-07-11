@@ -30,12 +30,12 @@ cargo run
 ```
 
 `cargo run` alone only rebuilds the root `horizon` binary; agent sessions run
-in `horizon-agentd` (`crates/horizon-agentd`), a separate workspace member
+in `horizon-sessiond` (`crates/horizon-sessiond`), a separate workspace member
 Horizon spawns on demand. Run `cargo build --workspace` at least once (and
-again after touching `crates/horizon-agent`/`crates/horizon-agentd`) or agent
+again after touching `crates/horizon-agent`/`crates/horizon-sessiond`) or agent
 panes will fail to find a runtime to spawn. `just dev` builds the whole
 workspace and launches the freshly built binary directly (bypassing `cargo
-run`'s environment leakage into Horizon and agentd); pass CLI subcommand
+run`'s environment leakage into Horizon and sessiond); pass CLI subcommand
 arguments after it, e.g. `just dev sessions`.
 
 After `cargo run`, press `ctrl+'` to enter workspace mode, then `:` to open
@@ -56,7 +56,7 @@ supports these manual smoke checks:
 - `tab 1`, `tab 2`, ...: switches to the matching tab.
 - `terminate active session`: terminates the active session.
 - `manage sessions`: opens the session manager modal (see below).
-- `reload agent runtime`: restarts `horizon-agentd` and reconnects every
+- `reload session runtime`: restarts `horizon-sessiond` and reconnects every
   agent session — use after rebuilding the agent crates, or to recover from
   a lost connection.
 
@@ -75,7 +75,7 @@ so a subcommand run from inside a pane targets the enclosing instance and
 `new-agent [--prompt <text>]`, `attach <session-id>`,
 `terminate-session <session-id>`, `terminate-all-detached`,
 `approve`/`deny <session-id> <call-id>`, `cancel-turn <session-id>`,
-`reload-agent-runtime`, `sessions`, `state` (each takes `--split`/`--active`
+`reload-session-runtime`, `sessions`, `state` (each takes `--split`/`--active`
 where placement/focus applies). See `docs/cli-control-plane-design.md` for
 the full contract.
 

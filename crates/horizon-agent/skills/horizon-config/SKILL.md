@@ -118,7 +118,7 @@ the active pane horizontally), `split-down` (same chooser, but vertically),
 `new-tab` (opens the chooser to open a new tab),
 `focus-next-pane`, `close-active-pane`, `close-active-tab`,
 `terminate-active-session`, `approve-tool-call`, `deny-tool-call`,
-`cancel-agent-turn`, `reload-agent-runtime`, `reload-config`. Two reserved
+`cancel-agent-turn`, `reload-session-runtime`, `reload-config`. Two reserved
 pseudo-command ids are also accepted here even though they are not real
 commands: `open-palette` (overrides the chord that opens the command
 palette) and `workspace-mode` (overrides the chord that enters workspace

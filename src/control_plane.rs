@@ -4,8 +4,8 @@
 //! `ChannelExecutor` counterpart of the Floem shell's
 //! `control_plane::bridge`) plus a dispatcher over the shell's
 //! `execute()`/model. The external vocabulary here mirrors every landed
-//! subsystem, including `reload-agent-runtime` (the agentd
-//! drain/respawn/resume sequence, `WorkspaceShell::reload_agent_runtime`).
+//! subsystem, including `reload-session-runtime` (the sessiond
+//! drain/respawn/resume sequence, `WorkspaceShell::reload_session_runtime`).
 
 use std::time::Duration;
 
@@ -215,8 +215,8 @@ fn dispatch_invoke(
                 Err(message) => error_body(message),
             }
         }
-        "reload-agent-runtime" => {
-            shell.execute_external(CommandId::ReloadAgentRuntime, window, cx);
+        "reload-session-runtime" => {
+            shell.execute_external(CommandId::ReloadSessionRuntime, window, cx);
             EnvelopeBody::Ok
         }
         other => error_body(format!("unknown external command `{other}`")),

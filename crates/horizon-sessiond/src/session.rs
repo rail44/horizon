@@ -16,13 +16,13 @@
 //! `DenyToolCall` envelope) happen on the same thread, so the thread-local
 //! registry works correctly without making any of this `Send`. Blocking is
 //! also what makes the host-tool round trip simple (see
-//! [`AgentdHostTools::execute_auto`]): the session thread genuinely blocks
+//! [`SessiondHostTools::execute_auto`]): the session thread genuinely blocks
 //! on a channel recv while Horizon answers over the wire, which would
 //! deadlock a single-threaded async runtime but is harmless on its own
 //! dedicated thread.
 //!
 //! **Sessions are scoped to the process, not the connection (step 4).**
-//! `AgentdState::sessions`/`pending_host_tool_requests`/`outgoing` are
+//! `SessiondState::sessions`/`pending_host_tool_requests`/`outgoing` are
 //! process-lifetime (built once in `main`, shared via `Arc`) rather than
 //! recreated per accepted connection: a session's thread outlives any one
 //! connection, and a fresh connection re-targets the *same* running
@@ -82,9 +82,9 @@ const REPLAY_TIMEOUT: Duration = Duration::from_secs(5);
 type SharedOutgoing = Mutex<Option<UnboundedSender<Envelope>>>;
 
 /// Process-lifetime state, built once in `main` and shared (via `Arc`) by
-/// every connection `horizon-agentd` ever serves, and by every session
+/// every connection `horizon-sessiond` ever serves, and by every session
 /// thread regardless of which (if any) connection is currently live.
-pub(crate) struct AgentdState {
+pub(crate) struct SessiondState {
     pub(crate) providers: ProviderRegistry,
     pub(crate) agent_config: AgentConfig,
     /// `None` until [`Self::set_writer`] runs (or forever, if the event log
@@ -127,7 +127,7 @@ pub(crate) struct AgentdState {
     duckdb_cell: SharedDuckdbStore,
 }
 
-impl AgentdState {
+impl SessiondState {
     pub(crate) fn new(
         providers: ProviderRegistry,
         agent_config: AgentConfig,
@@ -227,7 +227,7 @@ struct SessionEntry {
 /// to `run_session`'s process-cwd default, same as before this field
 /// existed.
 fn spawn_session_thread(
-    state: Arc<AgentdState>,
+    state: Arc<SessiondState>,
     session_id: SessionId,
     provider_id: ProviderId,
     role_id: Option<RoleId>,
@@ -262,7 +262,7 @@ fn spawn_session_thread(
     });
 }
 
-/// `docs/agent-runtime-split-design.md` step 4, "agentd start": reads the
+/// `docs/agent-runtime-split-design.md` step 4, "sessiond start": reads the
 /// startup read's records and, for each session found (grouped here by
 /// `session_id`), resumes it live: any turn still open at that session's
 /// tail (`AgentFrame::is_turn_in_flight`, the same "is a turn in flight"
@@ -281,7 +281,7 @@ fn spawn_session_thread(
 /// ever created makes startup cost (and thread count) grow without bound
 /// with history -- exactly what was observed as "every historical session
 /// comes back as a ghost" before this filter existed.
-pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<Record>) {
+pub(crate) fn resume_persisted_sessions(state: &Arc<SessiondState>, records: Vec<Record>) {
     let Some(writer) = state.writer() else {
         return;
     };
@@ -316,7 +316,7 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
 
         let frame = agent_frame_from_events(&events);
         if session_is_dead(&frame) {
-            eprintln!("horizon-agentd: skipping resume of {session_id:?} (already terminated)");
+            eprintln!("horizon-sessiond: skipping resume of {session_id:?} (already terminated)");
             continue;
         }
 
@@ -345,14 +345,14 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
             {
                 Ok(()) => events.extend(closing),
                 Err(error) => eprintln!(
-                    "horizon-agentd: failed to commit interrupted turn as cancelled for \
+                    "horizon-sessiond: failed to commit interrupted turn as cancelled for \
                      {session_id:?}: {error}"
                 ),
             }
         }
 
         eprintln!(
-            "horizon-agentd: resumed session {session_id:?} ({} event(s))",
+            "horizon-sessiond: resumed session {session_id:?} ({} event(s))",
             events.len()
         );
         spawn_session_thread(
@@ -404,14 +404,14 @@ fn outstanding_tool_call_ids(frame: &AgentFrame) -> Vec<ToolCallId> {
     outstanding
 }
 
-/// One connection's view onto the process-lifetime [`AgentdState`] — thin by
-/// design (step 4): every map that used to live here moved to `AgentdState`
+/// One connection's view onto the process-lifetime [`SessiondState`] — thin by
+/// design (step 4): every map that used to live here moved to `SessiondState`
 /// so sessions survive a reconnect, leaving `Connection` as just the `Arc`
 /// handle plus the methods that make sense scoped to "the current
 /// connection" (installing/clearing `outgoing`).
 #[derive(Clone)]
 pub(crate) struct Connection {
-    state: Arc<AgentdState>,
+    state: Arc<SessiondState>,
 }
 
 impl Connection {
@@ -420,7 +420,7 @@ impl Connection {
     /// connection immediately start receiving events from sessions that
     /// were already running (resumed at startup, or left over from a prior
     /// connection on this same process).
-    pub(crate) fn new(outgoing: UnboundedSender<Envelope>, state: Arc<AgentdState>) -> Self {
+    pub(crate) fn new(outgoing: UnboundedSender<Envelope>, state: Arc<SessiondState>) -> Self {
         *state.outgoing.lock().unwrap() = Some(outgoing);
         Self { state }
     }
@@ -464,12 +464,12 @@ impl Connection {
             Some(sender) => {
                 let _ = sender.send(command);
             }
-            None => eprintln!("horizon-agentd: command for unknown session {session_id:?}"),
+            None => eprintln!("horizon-sessiond: command for unknown session {session_id:?}"),
         }
     }
 
     /// Routes an incoming `Control::HostToolResponse` back to whichever
-    /// session thread's [`AgentdHostTools::execute_auto`] call is blocked
+    /// session thread's [`SessiondHostTools::execute_auto`] call is blocked
     /// waiting for this exact `request_id`.
     pub(crate) fn handle_host_tool_response(&self, response: HostToolResponse) {
         let sender = self
@@ -483,7 +483,7 @@ impl Connection {
         }
     }
 
-    /// Delegates to [`AgentdState::wait_until_resume_ready`] -- see `main`'s
+    /// Delegates to [`SessiondState::wait_until_resume_ready`] -- see `main`'s
     /// bind-first startup fix: `Control::SessionList`/`Control::SessionLoad`
     /// must block on this before answering, so a client that connects while
     /// `resume_persisted_sessions` is still running doesn't see an
@@ -492,7 +492,7 @@ impl Connection {
         self.state.wait_until_resume_ready().await;
     }
 
-    /// Delegates to [`AgentdState::skipped_lines_summary`] -- see `main::
+    /// Delegates to [`SessiondState::skipped_lines_summary`] -- see `main::
     /// run_session_hosting_loop`, which waits for [`Self::wait_until_resume_ready`]
     /// first so this always reflects the finished startup read.
     pub(crate) fn skipped_lines_summary(&self) -> Option<String> {
@@ -513,7 +513,7 @@ impl Connection {
             .collect()
     }
 
-    /// Delegates to [`AgentdState::writer`] -- `main`'s `Control::Drain`
+    /// Delegates to [`SessiondState::writer`] -- `main`'s `Control::Drain`
     /// handling uses this to flush the event log's writer channel to disk
     /// before the process exits. An `append` returning only means a record
     /// was *enqueued*; the writer's background thread is what actually
@@ -569,7 +569,7 @@ impl Connection {
 /// Sends `envelope` through whichever connection currently owns `outgoing`,
 /// silently dropping it if none does (no client to see it right now -- see
 /// the module doc). Returns whether the send was actually attempted and
-/// accepted by the channel, for the one caller ([`AgentdHostTools::
+/// accepted by the channel, for the one caller ([`SessiondHostTools::
 /// execute_auto`]) that needs to fail fast rather than wait out its full
 /// timeout when nothing is listening.
 fn send_envelope(outgoing: &SharedOutgoing, envelope: Envelope) -> bool {
@@ -587,12 +587,12 @@ fn send_envelope(outgoing: &SharedOutgoing, envelope: Envelope) -> bool {
 /// Horizon's own `agent::host_tools::WorkspaceHostTools` answers
 /// in-process) -- everything else falls through to `None`, letting
 /// `execute_agent_tool` try the crate's own `tools::fs` auto tools next.
-struct AgentdHostTools {
+struct SessiondHostTools {
     session_id: SessionId,
-    state: Arc<AgentdState>,
+    state: Arc<SessiondState>,
 }
 
-impl HostTools for AgentdHostTools {
+impl HostTools for SessiondHostTools {
     fn execute_auto(&self, tool_id: &str, input: &serde_json::Value) -> Option<serde_json::Value> {
         if tool_id != "workspace.snapshot" {
             return None;
@@ -670,7 +670,7 @@ fn run_session(
     provider_id: ProviderId,
     role_id: Option<RoleId>,
     workspace_root: Option<PathBuf>,
-    state: &Arc<AgentdState>,
+    state: &Arc<SessiondState>,
     inbound_rx: Receiver<Command>,
     replay_rx: Receiver<Sender<Vec<Event>>>,
     history: Vec<Event>,
@@ -702,7 +702,7 @@ fn run_session(
     // Blocks this session's own dedicated thread (never `main`'s accept
     // loop, and never the readiness gate `session_list`/`session_new`
     // block on) until the event-log writer thread's own DuckDB
-    // rebuild-or-open decision has landed -- see `AgentdState::
+    // rebuild-or-open decision has landed -- see `SessiondState::
     // wait_for_duckdb_store`'s doc comment.
     let recall = RecallContext {
         session_id: Some(session_id),
@@ -739,7 +739,7 @@ fn run_session(
         bash_results_tx,
     );
 
-    let host = AgentdHostTools {
+    let host = SessiondHostTools {
         session_id,
         state: state.clone(),
     };
@@ -807,14 +807,14 @@ fn run_session(
 /// history or the persisted log; see `ToolCallProgress`'s own doc comment),
 /// so wrapping it in `Envelope::event` isn't an option. This restores the
 /// streaming-tool-call-argument-preview feature the module's step 3 notes in
-/// `docs/agent-runtime-split-design.md` recorded as trimmed for agentd mode.
+/// `docs/agent-runtime-split-design.md` recorded as trimmed for sessiond mode.
 /// `process_agent_provider_event` never mixes progress and real events in
 /// one `Processing` (a progress tick always comes back alone), so splitting
 /// `horizon_events` into the two forwarding shapes below is exhaustive in
 /// practice, not just by construction.
 fn handle_provider_event(
     host: &dyn HostTools,
-    state: &Arc<AgentdState>,
+    state: &Arc<SessiondState>,
     tool_state: &ToolSessionState,
     live_state: &LiveState,
     commands_tx: &Sender<Command>,
@@ -853,7 +853,7 @@ fn handle_provider_event(
 /// agent.rs::fold_bash_completion` exactly, forwarding the same events over
 /// the wire instead of updating a local `Frames` signal.
 fn fold_bash_completion(
-    state: &Arc<AgentdState>,
+    state: &Arc<SessiondState>,
     live_state: &LiveState,
     commands_tx: &Sender<Command>,
     session_id: SessionId,
@@ -878,12 +878,12 @@ fn fold_bash_completion(
 
 /// A `Command` envelope arriving from Horizon for this session.
 /// `ApproveToolCall`/`DenyToolCall` are resolved right here (decision 2:
-/// "Approval decisions stay in Horizon... resolved in agentd") via the same
+/// "Approval decisions stay in Horizon... resolved in sessiond") via the same
 /// `resolve_approval` Horizon's in-process pane click handler
 /// (`app::command_actions::resolve_and_send_approval`) uses; everything else
 /// forwards straight to the provider, unchanged.
 fn dispatch_inbound_command(
-    state: &Arc<AgentdState>,
+    state: &Arc<SessiondState>,
     live_state: &LiveState,
     commands_tx: &Sender<Command>,
     session_id: SessionId,
@@ -913,7 +913,7 @@ fn dispatch_inbound_command(
 }
 
 fn resolve_and_forward(
-    state: &Arc<AgentdState>,
+    state: &Arc<SessiondState>,
     live_state: &LiveState,
     commands_tx: &Sender<Command>,
     session_id: SessionId,
@@ -948,10 +948,10 @@ fn resolve_and_forward(
         // repeated-approval OOM incident) from re-executing anything: every
         // one after the first lands here and is dropped, logged rather than
         // silently swallowed so a runaway burst like that incident's is
-        // visible in agentd's own stderr.
+        // visible in sessiond's own stderr.
         ApprovalOutcome::AlreadyResolved => {
             eprintln!(
-                "horizon-agentd: dropped duplicate approve/deny for session {session_id:?}, \
+                "horizon-sessiond: dropped duplicate approve/deny for session {session_id:?}, \
                  call {logged_call_id:?} (already resolved)"
             );
         }

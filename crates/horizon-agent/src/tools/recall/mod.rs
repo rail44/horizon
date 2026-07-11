@@ -23,7 +23,7 @@
 //! history. See `persistence::projection::duckdb::SharedDuckdbStore`'s doc
 //! comment for the full story, and the `agent-inspect` skill's DuckDB
 //! section for what that means for *external* (e.g. `duckdb -readonly` CLI)
-//! access while `horizon-agentd` is running.
+//! access while `horizon-sessiond` is running.
 
 use serde_json::{json, Value};
 

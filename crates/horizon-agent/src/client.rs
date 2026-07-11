@@ -1,23 +1,20 @@
-//! Horizon-side client for `horizon-agentd`: spawn-or-connect (decision 4 in
+//! Horizon-side client for `horizon-sessiond`: spawn-or-connect (decision 4 in
 //! `docs/agent-runtime-split-design.md`) and the `hello` handshake, with a
 //! contract-version mismatch surfaced as a plain `String` error rather than
 //! silently ignored (the design's replay/reconnect section calls this out
 //! by name: "surfaced to the user as reload required").
 //!
-//! As of step 4, `horizon-agentd` is the *only* place agent sessions run --
-//! there is no in-process fallback and no `[agent].agentd` flag to gate this
-//! on (the flag was step 2/3 scaffolding, retired once agentd could host a
-//! session end to end; see `docs/agent-runtime-split-design.md`'s step 4
-//! notes). [`connect_and_split`] is the entry point `agentd_runtime::
-//! AgentdConnection::connect` calls to get a live, handshaken connection it
-//! then keeps multiplexing sessions over; this module itself stays limited
-//! to connect-or-spawn plus the handshake.
+//! `horizon-sessiond` is the *only* place agent sessions run -- there is no
+//! in-process fallback or daemon feature flag. [`connect_and_split`] is the
+//! entry point `src/agent/connection.rs` uses to get a live, handshaken
+//! connection it then keeps multiplexing sessions over; this module itself
+//! stays limited to connect-or-spawn plus the handshake.
 //!
 //! Horizon has no async runtime of its own (floem drives its own event
 //! loop, not tokio); callers that need to run this module's `async` fns
 //! from plain (non-async) Horizon code spin up their own throwaway tokio
-//! runtime on a background OS thread (see `agentd_runtime::AgentdConnection
-//! ::connect`) so a slow or failing `horizon-agentd` never blocks window
+//! runtime on a background OS thread (see `SessiondHandle::connect`) so a slow
+//! or failing `horizon-sessiond` never blocks window
 //! startup.
 
 use std::path::{Path, PathBuf};
@@ -31,10 +28,10 @@ use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::UnixStream;
 
 /// Total retry-connect budget: `RETRY_ATTEMPTS * RETRY_DELAY` = 2s. Verified
-/// still generous after `horizon-agentd`'s bind-first startup fix (it binds
+/// still generous after `horizon-sessiond`'s bind-first startup fix (it binds
 /// the socket as its first action, before reading its event log or
 /// resuming any session -- see that binary's `main` module doc): a freshly
-/// spawned agentd's `connect` now succeeds within milliseconds of process
+/// spawned sessiond's `connect` now succeeds within milliseconds of process
 /// start regardless of event-log size, since nothing before `bind_listener`
 /// touches the log. Before that fix, this budget had to cover the *entire*
 /// log-read-plus-resume duration too, which is what let a big log's replay
@@ -42,15 +39,15 @@ use tokio::net::UnixStream;
 const RETRY_ATTEMPTS: u32 = 40;
 const RETRY_DELAY: Duration = Duration::from_millis(50);
 
-/// The binary name `horizon-agentd` is spawned as/looked up as -- see
-/// [`resolve_agentd_binary`].
-const AGENTD_BINARY_NAME: &str = "horizon-agentd";
+/// The binary name `horizon-sessiond` is spawned as/looked up as -- see
+/// [`resolve_sessiond_binary`].
+const SESSIOND_BINARY_NAME: &str = "horizon-sessiond";
 
-/// Connects to `horizon-agentd` at `socket_path` (spawning it if nothing is
+/// Connects to `horizon-sessiond` at `socket_path` (spawning it if nothing is
 /// listening yet), completes the hello handshake, and hands back the split
 /// halves ready for the session-hosting traffic that follows a successful
-/// handshake -- the production entry point `agentd_runtime::AgentdConnection
-/// ::connect` builds its read/write tasks on top of.
+/// handshake -- the production `SessiondHandle::connect` builds its
+/// read/write tasks on top of.
 pub async fn connect_and_split(
     socket_path: &Path,
     control_socket: &Path,
@@ -66,32 +63,32 @@ async fn connect_or_spawn(socket_path: &Path, control_socket: &Path) -> Result<U
     if let Ok(stream) = UnixStream::connect(socket_path).await {
         return Ok(stream);
     }
-    spawn_agentd(socket_path, control_socket)?;
+    spawn_sessiond(socket_path, control_socket)?;
     retry_connect(socket_path).await
 }
 
-fn spawn_agentd(socket_path: &Path, control_socket: &Path) -> Result<(), String> {
-    let binary = resolve_agentd_binary();
-    agentd_command(&binary, socket_path, control_socket)
+fn spawn_sessiond(socket_path: &Path, control_socket: &Path) -> Result<(), String> {
+    let binary = resolve_sessiond_binary();
+    sessiond_command(&binary, socket_path, control_socket)
         .spawn()
         .map(|_child| ())
         .map_err(|err| {
             format!(
                 "failed to spawn {} ({err}) -- run `cargo build --workspace` to build \
-                 horizon-agentd, then try again",
+                 horizon-sessiond, then try again",
                 binary.display()
             )
         })
 }
 
-/// Builds the `horizon-agentd --socket <path>` command [`spawn_agentd`]
-/// spawns, injecting `HORIZON_SOCKET` into its environment so agentd's own
+/// Builds the `horizon-sessiond --socket <path>` command [`spawn_sessiond`]
+/// spawns, injecting `HORIZON_SOCKET` into its environment so sessiond's own
 /// `bash` tool (and anything else a session might shell out to) defaults to
 /// targeting *this* Horizon instance's control socket --
 /// `docs/cli-control-plane-design.md`'s "Discovery" decision. Split out from
-/// `spawn_agentd` so the env injection is directly assertable without
+/// `spawn_sessiond` so the env injection is directly assertable without
 /// actually spawning a process (see this module's tests).
-fn agentd_command(
+fn sessiond_command(
     binary: &Path,
     socket_path: &Path,
     control_socket: &Path,
@@ -104,27 +101,27 @@ fn agentd_command(
     command
 }
 
-/// Where to look for the `horizon-agentd` binary: first, right next to
+/// Where to look for the `horizon-sessiond` binary: first, right next to
 /// Horizon's own executable (the shape `cargo build --workspace`/`cargo run`
 /// produces -- both binaries land in the same `target/debug` or
 /// `target/release` directory), falling back to a bare name resolved
 /// through `PATH` (an installed deployment, or a developer who's put it
 /// there themselves). The dev-flow gotcha this exists for: `cargo run`
 /// alone only rebuilds the `horizon` binary, and `target/debug` is not on
-/// `PATH` by default, so a bare `Command::new("horizon-agentd")` would
+/// `PATH` by default, so a bare `Command::new("horizon-sessiond")` would
 /// reliably fail to find a workspace build even though one exists two
-/// directories away -- see [`spawn_agentd`]'s error message for the
+/// directories away -- see [`spawn_sessiond`]'s error message for the
 /// resulting actionable hint when neither location has it.
-fn resolve_agentd_binary() -> PathBuf {
+fn resolve_sessiond_binary() -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let candidate = dir.join(AGENTD_BINARY_NAME);
+            let candidate = dir.join(SESSIOND_BINARY_NAME);
             if candidate.is_file() {
                 return candidate;
             }
         }
     }
-    PathBuf::from(AGENTD_BINARY_NAME)
+    PathBuf::from(SESSIOND_BINARY_NAME)
 }
 
 async fn retry_connect(socket_path: &Path) -> Result<UnixStream, String> {
@@ -135,7 +132,7 @@ async fn retry_connect(socket_path: &Path) -> Result<UnixStream, String> {
         }
     }
     Err(format!(
-        "timed out waiting for horizon-agentd to accept connections on {}",
+        "timed out waiting for horizon-sessiond to accept connections on {}",
         socket_path.display()
     ))
 }
@@ -169,18 +166,18 @@ where
 {
     let our_hello = Hello {
         contract_version: CONTRACT_VERSION,
-        binary_id: env!("CARGO_PKG_VERSION").to_string(),
+        binary_id: concat!("horizon/", env!("CARGO_PKG_VERSION")).to_string(),
         capabilities: Vec::new(),
     };
     wire::write_envelope(writer, &Envelope::control(Control::Hello(our_hello)))
         .await
-        .map_err(|err| format!("failed to send hello to horizon-agentd: {err}"))?;
+        .map_err(|err| format!("failed to send hello to horizon-sessiond: {err}"))?;
 
     let envelope = wire::read_envelope(reader)
         .await
-        .map_err(|err| format!("failed to read horizon-agentd's hello reply: {err}"))?
+        .map_err(|err| format!("failed to read horizon-sessiond's hello reply: {err}"))?
         .ok_or_else(|| {
-            "horizon-agentd closed the connection before replying to hello".to_string()
+            "horizon-sessiond closed the connection before replying to hello".to_string()
         })?;
 
     match envelope.body {
@@ -190,15 +187,15 @@ where
             Ok(hello)
         }
         EnvelopeBody::Control(Control::Hello(hello)) => Err(format!(
-            "horizon-agentd contract version mismatch: horizon speaks v{CONTRACT_VERSION}, \
-             agentd speaks v{} -- reload required",
+            "horizon-sessiond contract version mismatch: horizon speaks v{CONTRACT_VERSION}, \
+             sessiond speaks v{} -- reload required",
             hello.contract_version
         )),
         EnvelopeBody::Control(Control::HandshakeRejected(reason)) => {
-            Err(format!("horizon-agentd rejected the handshake: {reason}"))
+            Err(format!("horizon-sessiond rejected the handshake: {reason}"))
         }
         other => Err(format!(
-            "horizon-agentd sent an unexpected reply to hello: {other:?}"
+            "horizon-sessiond sent an unexpected reply to hello: {other:?}"
         )),
     }
 }
@@ -208,9 +205,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn agentd_command_injects_the_control_socket_env_var() {
-        let command = agentd_command(
-            Path::new("/usr/bin/horizon-agentd"),
+    fn sessiond_command_injects_the_control_socket_env_var() {
+        let command = sessiond_command(
+            Path::new("/usr/bin/horizon-sessiond"),
             Path::new("/tmp/x.sock"),
             Path::new("/tmp/horizon-control-test.sock"),
         );
@@ -226,24 +223,29 @@ mod tests {
         );
     }
 
-    async fn fake_agentd_reply(server_side: tokio::io::DuplexStream, reply: Envelope) {
+    async fn fake_sessiond_reply(server_side: tokio::io::DuplexStream, reply: Envelope) {
         let (read_half, mut write_half) = tokio::io::split(server_side);
         let mut reader = BufReader::new(read_half);
-        wire::read_envelope(&mut reader)
+        let hello = wire::read_envelope(&mut reader)
             .await
             .unwrap()
             .expect("client should send a hello");
+        assert!(matches!(
+            hello.body,
+            EnvelopeBody::Control(Control::Hello(Hello { binary_id, .. }))
+                if binary_id == concat!("horizon/", env!("CARGO_PKG_VERSION"))
+        ));
         wire::write_envelope(&mut write_half, &reply).await.unwrap();
     }
 
     #[tokio::test]
     async fn handshake_succeeds_when_the_peer_answers_with_a_matching_hello() {
         let (client_side, server_side) = tokio::io::duplex(4096);
-        let server = tokio::spawn(fake_agentd_reply(
+        let server = tokio::spawn(fake_sessiond_reply(
             server_side,
             Envelope::control(Control::Hello(Hello {
                 contract_version: CONTRACT_VERSION,
-                binary_id: "test-agentd".to_string(),
+                binary_id: "test-sessiond".to_string(),
                 capabilities: vec![],
             })),
         ));
@@ -253,17 +255,17 @@ mod tests {
             .expect("handshake should succeed");
         server.await.unwrap();
 
-        assert_eq!(hello.binary_id, "test-agentd");
+        assert_eq!(hello.binary_id, "test-sessiond");
     }
 
     #[tokio::test]
     async fn handshake_surfaces_a_contract_version_mismatch_as_an_error_string() {
         let (client_side, server_side) = tokio::io::duplex(4096);
-        let server = tokio::spawn(fake_agentd_reply(
+        let server = tokio::spawn(fake_sessiond_reply(
             server_side,
             Envelope::control(Control::Hello(Hello {
                 contract_version: CONTRACT_VERSION + 1,
-                binary_id: "stale-agentd".to_string(),
+                binary_id: "stale-sessiond".to_string(),
                 capabilities: vec![],
             })),
         ));
@@ -277,7 +279,7 @@ mod tests {
     #[tokio::test]
     async fn handshake_surfaces_a_rejection_reason_as_an_error_string() {
         let (client_side, server_side) = tokio::io::duplex(4096);
-        let server = tokio::spawn(fake_agentd_reply(
+        let server = tokio::spawn(fake_sessiond_reply(
             server_side,
             Envelope::control(Control::HandshakeRejected("nope".to_string())),
         ));
