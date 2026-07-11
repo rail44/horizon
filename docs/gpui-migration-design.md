@@ -186,8 +186,18 @@ Concrete mappings:
   CLI verified end to end. Still open from this milestone: the config
   port (config.toml keymap/theme + Reload Config) — folded into M5's
   parity pass.
-- **M4 — agent panes**: transcript on virtualized List, composer with
-  the S3 IME pattern, approvals, roles/skills UI.
+- **M4 — agent panes. Landed 2026-07-11** (`c73343d`): the agentd
+  client (connect/spawn/handshake) moved to `horizon-agent::client`
+  (shared); shell-gpui runs a lean connection (per-session event
+  routing, tokio on one OS thread) whose Floem twin retires with M5;
+  `AgentSession` entities fold events through the shared `LiveState`;
+  the pane view has a block-per-item transcript, status line, inline
+  approvals, and a gpui-component Input composer. `new-agent` (with
+  `--prompt`) verified end to end over the CLI against live agentd.
+  Deferred to M5: virtualized-List/Markdown transcript polish,
+  host-tool answers (`workspace.snapshot` gets an error reply),
+  `session_list` resume-at-startup, roles (`new-config-agent`),
+  per-session CLI approve/deny/cancel targeting.
 - **M5 — parity + retirement**: GUI verification rebuild, README smoke
   checklist parity, `horizon` binary name switches to the GPUI shell,
   Floem shell + over-tracking defenses deleted, workspaces merged.
