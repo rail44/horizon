@@ -198,9 +198,16 @@ Concrete mappings:
   host-tool answers (`workspace.snapshot` gets an error reply),
   `session_list` resume-at-startup, roles (`new-config-agent`),
   per-session CLI approve/deny/cancel targeting.
-- **M5 — parity + retirement**: GUI verification rebuild, README smoke
-  checklist parity, `horizon` binary name switches to the GPUI shell,
-  Floem shell + over-tracking defenses deleted, workspaces merged.
+- **M5 — parity + retirement. Mechanical half landed 2026-07-11**
+  (config port `3735c5a`, workspace.snapshot host tool `80143ab`,
+  startup resume `67db08d`, then a five-worker wave: Markdown
+  transcript `697a475`, `[keybindings]` `d56b5d0`, agent CLI verbs +
+  roles `12a28fd`, `check-gpui-terminal.sh` `56b7b17`, Reload Agent
+  Runtime `aa85509` — every M4-deferred item is now wired). Still
+  open, all judgment-bearing: virtualized-List transcript (measure
+  first), README smoke checklist parity pass, `horizon` binary name
+  switch, Floem shell + over-tracking defenses deleted, workspaces
+  merged (owner decision).
 
 Each of M1–M4 is a review-queue-sized unit; M0 rides with M1.
 

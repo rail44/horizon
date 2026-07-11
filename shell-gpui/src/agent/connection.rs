@@ -7,10 +7,10 @@
 //! transition-scoped, not permanent.
 //!
 //! Host-tool requests route out on the returned receiver and are
-//! answered on the UI thread (`WorkspaceShell::agentd` wires the
-//! responder). Deliberately not carried over yet: `session_list`-at-
-//! startup resume (the GPUI workspace starts fresh; recorded for M5
-//! parity).
+//! answered on the UI thread (`WorkspaceShell::adopt_agentd` wires the
+//! responder); `session_list` + `attach_session` serve both
+//! startup resume and `Reload Agent Runtime`
+//! (`WorkspaceShell::spawn_startup_resume`/`reload_agent_runtime`).
 
 use std::collections::HashMap;
 use std::path::Path;
