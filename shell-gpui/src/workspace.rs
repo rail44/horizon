@@ -199,6 +199,12 @@ pub struct WorkspaceShell {
     // and terminating is the explicit destructive path.
     sessions: HashMap<SessionId, Entity<TerminalSession>>,
     agent_sessions: HashMap<SessionId, Entity<AgentSession>>,
+    // Staged by `external_new_session` (a role-tagged create, e.g.
+    // `new-config-agent`) and consumed by `reconcile` when it actually
+    // starts the session — the model's `open_tab_with_new_session_*`
+    // call only yields a `SessionId`, so the role has nowhere else to
+    // ride until reconcile turns that id into a live agent session.
+    pending_roles: HashMap<SessionId, horizon_agent::roles::RoleId>,
     // Lazily connected on the first agent session (the Floem shell
     // connects async at startup; lazy-blocking is the v1 tradeoff here).
     agentd: Option<AgentdHandle>,
@@ -223,6 +229,7 @@ impl WorkspaceShell {
             socket_path,
             sessions: HashMap::new(),
             agent_sessions: HashMap::new(),
+            pending_roles: HashMap::new(),
             agentd: None,
             panes: HashMap::new(),
             focus_handle: cx.focus_handle(),
@@ -282,8 +289,9 @@ impl WorkspaceShell {
                     };
                     let provider_id =
                         horizon_agent::contract::ProviderRegistry::default().default_provider_id();
+                    let role_id = self.pending_roles.remove(&summary.id);
                     let session_handle =
-                        handle.start_session(agent_session_id(summary.id), provider_id, None);
+                        handle.start_session(agent_session_id(summary.id), provider_id, role_id);
                     self.agent_sessions.insert(
                         summary.id,
                         cx.new(|cx| AgentSession::new(session_handle, cx)),
@@ -626,10 +634,14 @@ impl WorkspaceShell {
     /// the Floem shell's `external_commands` semantics: `activate:
     /// false` never steals focus. `prompt` (agent sessions only) sends
     /// the first user message right after the session starts — the
-    /// create-with-prompt composite from the CLI design.
+    /// create-with-prompt composite from the CLI design. `role_id` is
+    /// fixed by the caller (e.g. `new-config-agent`), never client-supplied
+    /// — see `pending_roles`.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn external_new_session(
         &mut self,
         kind: PaneKind,
+        role_id: Option<horizon_agent::roles::RoleId>,
         split: Option<(SessionId, SplitAxis)>,
         activate: bool,
         prompt: Option<String>,
@@ -645,6 +657,9 @@ impl WorkspaceShell {
                 .workspace
                 .open_tab_with_new_session_activated(kind, activate),
         };
+        if let Some(role_id) = role_id {
+            self.pending_roles.insert(session_id, role_id);
+        }
         self.reconcile(window, cx);
         if let Some(prompt) = prompt {
             if let Some(session) = self.agent_sessions.get(&session_id) {
@@ -684,6 +699,51 @@ impl WorkspaceShell {
             return Err("unknown session".to_string());
         }
         self.reconcile(window, cx);
+        Ok(())
+    }
+
+    /// Session-targeted approve/deny/cancel, for a control-plane caller
+    /// that names an explicit `session_id` rather than "whichever pane is
+    /// active" (unlike `CommandId::ApproveToolCall`/`DenyToolCall`/
+    /// `CancelAgentTurn`, which resolve against `active_agent_session`).
+    pub(crate) fn external_approve(
+        &mut self,
+        session_id: SessionId,
+        call_id: horizon_agent::contract::ToolCallId,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let session = self
+            .agent_sessions
+            .get(&session_id)
+            .ok_or_else(|| "unknown session".to_string())?;
+        session.read(cx).approve(call_id);
+        Ok(())
+    }
+
+    pub(crate) fn external_deny(
+        &mut self,
+        session_id: SessionId,
+        call_id: horizon_agent::contract::ToolCallId,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let session = self
+            .agent_sessions
+            .get(&session_id)
+            .ok_or_else(|| "unknown session".to_string())?;
+        session.read(cx).deny(call_id);
+        Ok(())
+    }
+
+    pub(crate) fn external_cancel(
+        &mut self,
+        session_id: SessionId,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let session = self
+            .agent_sessions
+            .get(&session_id)
+            .ok_or_else(|| "unknown session".to_string())?;
+        session.read(cx).cancel();
         Ok(())
     }
 

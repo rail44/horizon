@@ -4,8 +4,8 @@
 //! `ChannelExecutor` counterpart of the Floem shell's
 //! `control_plane::bridge`) plus a dispatcher over the shell's
 //! `execute()`/model. The external vocabulary here is the subset whose
-//! subsystems have landed — agent invokes (`new-agent`, `approve`, ...)
-//! return errors until M4.
+//! subsystems have landed — only `reload-agent-runtime` (the agentd
+//! drain/respawn sequence) still returns an error, pending M5.
 
 use std::time::Duration;
 
@@ -111,11 +111,16 @@ fn dispatch_invoke(
 ) -> EnvelopeBody {
     let args = &invoke.args;
     match invoke.command.as_str() {
-        "new-terminal" | "new-agent" => {
-            let kind = if invoke.command == "new-agent" {
-                PaneKind::Agent
-            } else {
+        "new-terminal" | "new-agent" | "new-config-agent" => {
+            let kind = if invoke.command == "new-terminal" {
                 PaneKind::Terminal
+            } else {
+                PaneKind::Agent
+            };
+            let role_id = if invoke.command == "new-config-agent" {
+                Some(config_agent_role_id())
+            } else {
+                None
             };
             let split = match optional_session_id_arg(args, "split") {
                 Ok(split) => split,
@@ -135,7 +140,7 @@ fn dispatch_invoke(
                 }
                 Some(_) => return error_body("`prompt` must be a string"),
             };
-            match shell.external_new_session(kind, split, activate, prompt, window, cx) {
+            match shell.external_new_session(kind, role_id, split, activate, prompt, window, cx) {
                 Ok(()) => EnvelopeBody::Ok,
                 Err(message) => error_body(message),
             }
@@ -172,14 +177,46 @@ fn dispatch_invoke(
             shell.execute_external(CommandId::ReloadConfig, window, cx);
             EnvelopeBody::Ok
         }
-        // Still pending: roles (new-config-agent), per-session
-        // approve/deny/cancel targeting, and the agentd drain/respawn
-        // sequence.
-        other @ ("new-config-agent"
-        | "approve"
-        | "deny"
-        | "cancel-turn"
-        | "reload-agent-runtime") => {
+        "approve" => {
+            let session_id = match session_id_arg(args, "session_id") {
+                Ok(id) => id,
+                Err(message) => return error_body(message),
+            };
+            let call_id = match call_id_arg(args, "call_id") {
+                Ok(id) => id,
+                Err(message) => return error_body(message),
+            };
+            match shell.external_approve(session_id, call_id, cx) {
+                Ok(()) => EnvelopeBody::Ok,
+                Err(message) => error_body(message),
+            }
+        }
+        "deny" => {
+            let session_id = match session_id_arg(args, "session_id") {
+                Ok(id) => id,
+                Err(message) => return error_body(message),
+            };
+            let call_id = match call_id_arg(args, "call_id") {
+                Ok(id) => id,
+                Err(message) => return error_body(message),
+            };
+            match shell.external_deny(session_id, call_id, cx) {
+                Ok(()) => EnvelopeBody::Ok,
+                Err(message) => error_body(message),
+            }
+        }
+        "cancel-turn" => {
+            let session_id = match session_id_arg(args, "session_id") {
+                Ok(id) => id,
+                Err(message) => return error_body(message),
+            };
+            match shell.external_cancel(session_id, cx) {
+                Ok(()) => EnvelopeBody::Ok,
+                Err(message) => error_body(message),
+            }
+        }
+        // Still pending: the agentd drain/respawn sequence.
+        other @ "reload-agent-runtime" => {
             error_body(format!("`{other}` is not available in this shell yet"))
         }
         other => error_body(format!("unknown external command `{other}`")),
@@ -267,4 +304,23 @@ fn activate_arg(args: &serde_json::Value) -> Result<bool, String> {
         Some(serde_json::Value::Bool(activate)) => Ok(*activate),
         Some(_) => Err("`activate` must be a boolean".to_string()),
     }
+}
+
+fn call_id_arg(
+    args: &serde_json::Value,
+    key: &str,
+) -> Result<horizon_agent::contract::ToolCallId, String> {
+    match args.get(key) {
+        Some(serde_json::Value::String(raw)) => {
+            Ok(horizon_agent::contract::ToolCallId(raw.clone()))
+        }
+        Some(_) => Err(format!("`{key}` must be a string")),
+        None => Err(format!("`{key}` is required")),
+    }
+}
+
+/// `new-config-agent`'s fixed role id, mirroring the Floem shell's
+/// `command_actions::config_agent_role_id`.
+fn config_agent_role_id() -> horizon_agent::roles::RoleId {
+    horizon_agent::roles::RoleId(horizon_agent::roles::CONFIG_ROLE.id.to_string())
 }
