@@ -25,7 +25,7 @@ futures = "0.3"
 # gpui-component's own unpinned gpui dep into two incompatible
 # instances). Bump deliberately with `cargo update`.
 gpui = { git = "https://github.com/zed-industries/zed" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit"] }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "wayland"] }
 gpui-component = { git = "https://github.com/longbridge/gpui-component" }
 horizon-agent = { path = "crates/horizon-agent" }
 horizon-config = { path = "crates/horizon-config" }
