@@ -130,23 +130,62 @@ overview, session manager), DockArea can be reconsidered for that
 chrome alone. The S4 spike stays valid as the `Panel`/component
 feasibility proof; its DockArea usage is not the production shape.
 
+## Reuse over port (owner direction, 2026-07-10)
+
+Where the adopted stack already provides a capability, Horizon's own
+Floem-era implementation is dropped and the stack is reused — porting
+is reserved for domain code the stack cannot know (workspace tree
+semantics, command model, the terminal-core seam, agent contract).
+Concrete mappings:
+
+- **Theme**: gpui-component's theme system (`cx.theme()`, ThemeColor,
+  built-in dark mode) replaces `ui/theme`'s hand-rolled chrome
+  resolution; Horizon keeps only the config-file mapping (`[theme]`,
+  `[theme.ansi]`) projected onto it plus the terminal ANSI resolver.
+- **Control-surface UI (M3)**: gpui-component Modal/Input/List replace
+  the hand-rolled palette and session-manager view primitives
+  (`ui/selectable_list`, `ui/list_row`, `ui/hint_chip`); the command
+  catalog/filter logic (pure) is what carries over.
+- **Composer (M4)**: gpui-component's Input component (with its own
+  IME handling) replaces the Floem composer's hand-rolled text
+  editing; Horizon keeps the draft semantics and submit wiring.
+- **Transcript (M4)**: native Markdown + virtualized List, as already
+  decided.
+- **Splits (M2)**: `resizable` primitives, as already decided.
+- **Scrollbar**: gpui-component's Scrollbar when a scrollback
+  indicator lands.
+
 ## Migration order
 
 - **M0 — scaffold**: `shell-gpui/` workspace, config loader reuse,
   theme global, Root + window shell, command-model skeleton
   (`commands.rs` shared, dispatch stubbed).
-- **M1 — terminal panes**: productionize the spike. Kitty/DECCKM flags
-  mirrored on `TerminalFrame` (like `mouse_reporting`) driving
-  text-vs-Key routing; option-as-alt policy; key releases + modifier
-  transitions (termy is the MIT reference); mouse reporting, selection,
-  scrollback, clipboard (OSC 52), cwd sampling.
+- **M1 — terminal panes**: productionize the spike. Kitty flags
+  mirrored on `TerminalFrame` driving text-vs-Key routing; key
+  releases; mouse reporting, selection, scrollback, clipboard
+  (OSC 52). **Landed 2026-07-10** (commits `9a0bfb1`, `08223dc`).
+  Deliberately deferred to their consumers: spawn-layer env
+  (`HORIZON_SESSION_ID`/`HORIZON_SOCKET` → M3 control plane), cwd
+  sampling (→ M2 spawn-from-pane inheritance), `HORIZON_PTY_TRACE`
+  tap (→ with gui-verify rebuild), option-as-alt policy (→ M3 config
+  knob), modifier-transition synthesis (not in the Floem shell either;
+  kitty matrix documents it).
 - **M2 — workspace shell**: the N-ary tree's GPUI view projection
   (splits via `h_resizable`/`v_resizable`, own tab strip); workspace
   mode's spatial navigation; pane focus; close vs. terminate
   semantics.
-- **M3 — control surface**: palette + session manager modals (filter
-  memos become computed values on the modal entity), keymap, command
-  dispatch conversion, control-plane bridge pump.
+- **M3 — control surface. Landed 2026-07-10/11** (`1ceb806`,
+  `90916a0`, `43ac402`): the pure command model moved to
+  horizon-workspace and `execute()` is the single dispatch point;
+  palette and session manager ride gpui-component's searchable List;
+  the session store restored close-vs-terminate (per-session
+  `TerminalSession` entities, detach/reattach with scrollback intact);
+  the control-plane transport moved to `horizon-control::host` (shared)
+  with a GPUI-side bridge, panes export
+  `HORIZON_SOCKET`/`HORIZON_SESSION_ID`, and the unchanged `horizon`
+  CLI verified end to end. Still open from this milestone: the config
+  port (config.toml keymap/theme + Reload Config) — folded into M5's
+  parity pass.
 - **M4 — agent panes**: transcript on virtualized List, composer with
   the S3 IME pattern, approvals, roles/skills UI.
 - **M5 — parity + retirement**: GUI verification rebuild, README smoke
