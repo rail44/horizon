@@ -54,6 +54,10 @@ fn run_gui() {
     gpui_platform::application().run(move |cx| {
         gpui_component::init(cx);
         workspace::init(cx);
+        // Foreground-app activation: without this, clicking the window
+        // focuses it but macOS keeps the previous app's name in the menu
+        // bar (the process never becomes the active application).
+        cx.activate(true);
 
         cx.spawn(async move |cx| {
             let ui = &horizon_config::load().ui;

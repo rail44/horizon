@@ -22,13 +22,24 @@ pub struct AgentView {
     session: Entity<AgentSession>,
     composer: Entity<InputState>,
     focus_handle: FocusHandle,
+    transcript_scroll: ScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
 
 impl AgentView {
     pub fn new(session: Entity<AgentSession>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let composer = cx.new(|cx| InputState::new(window, cx).placeholder("Message the agent…"));
-        let mut subscriptions = vec![cx.observe(&session, |_, _, cx| cx.notify())];
+        // Follow-scroll (the Floem shell's `follow_scroll` parity): while
+        // the user sits at the bottom, new content keeps the view pinned
+        // there; once they scroll up, updates leave them alone. The
+        // stickiness check runs *before* the re-render, on the pre-update
+        // geometry.
+        let mut subscriptions = vec![cx.observe(&session, |view: &mut AgentView, _, cx| {
+            if view.at_transcript_bottom() {
+                view.transcript_scroll.scroll_to_bottom();
+            }
+            cx.notify();
+        })];
         subscriptions.push(cx.subscribe_in(
             &composer,
             window,
@@ -40,6 +51,9 @@ impl AgentView {
                     }
                     view.session.read(cx).send_user_message(text);
                     composer.update(cx, |composer, cx| composer.set_value("", window, cx));
+                    // Sending always re-pins to the bottom, wherever the
+                    // user had scrolled to.
+                    view.transcript_scroll.scroll_to_bottom();
                 }
             },
         ));
@@ -49,8 +63,17 @@ impl AgentView {
             session,
             composer,
             focus_handle,
+            transcript_scroll: ScrollHandle::new(),
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Whether the transcript is scrolled (near) to the bottom — offsets
+    /// grow negative as the view scrolls down, so "at bottom" is an
+    /// offset within a few pixels of `-max_offset`.
+    fn at_transcript_bottom(&self) -> bool {
+        let max = self.transcript_scroll.max_offset().y;
+        max <= px(0.0) || self.transcript_scroll.offset().y <= -(max - px(8.0))
     }
 
     fn render_item(
@@ -238,6 +261,7 @@ impl Render for AgentView {
             .child(
                 div()
                     .id("agent-transcript")
+                    .track_scroll(&self.transcript_scroll)
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
