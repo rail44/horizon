@@ -3309,6 +3309,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-ctl"
+version = "0.1.0"
+dependencies = [
+ "horizon-control",
+ "libc",
+ "serde_json",
+]
+
+[[package]]
 name = "horizon-shell-gpui"
 version = "0.1.0"
 dependencies = [
@@ -3322,6 +3331,7 @@ dependencies = [
  "horizon-agent",
  "horizon-config",
  "horizon-control",
+ "horizon-ctl",
  "horizon-terminal-core",
  "horizon-workspace",
  "portable-pty",
