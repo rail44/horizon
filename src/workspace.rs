@@ -23,15 +23,18 @@ use horizon_workspace::commands::{command_entries, CommandId, CommandState};
 use horizon_workspace::types::LayoutNode;
 use horizon_workspace::{Direction, PaneId, PaneKind, SplitAxis, Workspace};
 
-use crate::agent::{wait_for_drain, AgentSession, AgentView, SessiondHandle};
+use crate::agent::{AgentSession, AgentView};
 use crate::keymap;
 use crate::palette::PaletteDelegate;
 use crate::session_manager::SessionManagerDelegate;
-use crate::terminal::{sample_cwd, TerminalSession, TerminalView};
+use crate::sessiond::{wait_for_drain, SessiondHandle, SessiondResponder};
+use crate::terminal::{TerminalSession, TerminalView};
 use crate::terminal_focus::focus_transition;
 use crate::theme;
 use crate::view_chooser::{Placement, ViewChooserDelegate};
-use horizon_terminal_core::TerminalCommand;
+use horizon_terminal_core::{
+    TerminalCommand, TerminalCoreOptions, TerminalSize, TerminalSpawnSpec,
+};
 use horizon_workspace::types::SessionKind;
 use horizon_workspace::SessionId;
 
@@ -39,6 +42,40 @@ type AgentSessionId = horizon_agent::contract::SessionId;
 
 fn agent_session_id(id: SessionId) -> AgentSessionId {
     AgentSessionId::from_uuid(id.as_uuid())
+}
+
+#[derive(Clone)]
+struct PendingTerminalSpawn {
+    source_session_id: Option<SessionId>,
+    fallback_cwd: std::path::PathBuf,
+}
+
+fn prepare_workspace_for_runtime_reload(workspace: &mut Workspace) {
+    let terminals = workspace
+        .session_summaries()
+        .into_iter()
+        .filter(|summary| summary.kind == SessionKind::Terminal)
+        .map(|summary| summary.id)
+        .collect::<Vec<_>>();
+    for session_id in terminals {
+        workspace.terminate_session(session_id);
+    }
+}
+
+fn terminal_spawn_source(
+    explicit_source: Option<SessionId>,
+    active_session: Option<SessionId>,
+) -> Option<SessionId> {
+    explicit_source.or(active_session)
+}
+
+fn terminal_fallback_cwd(
+    current_dir: Option<std::path::PathBuf>,
+    home: Option<std::path::PathBuf>,
+) -> std::path::PathBuf {
+    current_dir
+        .or(home)
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
 /// One pane's view, by session kind.
@@ -208,17 +245,15 @@ pub struct WorkspaceShell {
     // call only yields a `SessionId`, so the role has nowhere else to
     // ride until reconcile turns that id into a live agent session.
     pending_roles: HashMap<SessionId, horizon_agent::roles::RoleId>,
-    // Staged by `new_tab`/`split_pane`/`external_new_session` (resolved
-    // from the spawn-source terminal *before* the workspace mutation
-    // that creates the new session activates it -- see
-    // `Self::resolve_new_terminal_cwd`'s doc comment for why it must run
-    // first) and consumed by `reconcile` when it actually spawns the PTY,
-    // for the same "info has nowhere else to ride" reason as
-    // `pending_roles`.
-    pending_terminal_cwds: HashMap<SessionId, std::path::PathBuf>,
-    // Lazily connected on the first agent session (the Floem shell
-    // connects async at startup; lazy-blocking is the v1 tradeoff here).
+    // Staged before session-creating workspace mutations and consumed by
+    // reconcile. Sessiond resolves the source session's live cwd; Horizon
+    // carries only the source id and fallback spawn input.
+    pending_terminal_spawns: HashMap<SessionId, PendingTerminalSpawn>,
+    // Created eagerly before the first reconcile. Its raw FIFO accepts
+    // terminal and agent requests while connect/Hello proceeds in the
+    // background.
     sessiond: Option<SessiondHandle>,
+    reload_in_progress: bool,
     panes: HashMap<PaneId, PaneView>,
     // This window — needed by `Reload Session Runtime`'s post-resume step,
     // which rebuilds pane views from a background thread's async
@@ -247,14 +282,17 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let (sessiond, host_tool_rx) =
+            SessiondHandle::start(&horizon_agent::socket::default_socket_path(), &socket_path);
         let mut shell = Self {
             workspace: Workspace::mvp(),
             socket_path,
             sessions: HashMap::new(),
             agent_sessions: HashMap::new(),
             pending_roles: HashMap::new(),
-            pending_terminal_cwds: HashMap::new(),
-            sessiond: None,
+            pending_terminal_spawns: HashMap::new(),
+            sessiond: Some(sessiond.clone()),
+            reload_in_progress: false,
             panes: HashMap::new(),
             window: window.window_handle(),
             focus_handle: cx.focus_handle(),
@@ -275,9 +313,10 @@ impl WorkspaceShell {
             shell.sync_terminal_focus(window, cx);
         })
         .detach();
+        shell.wire_host_tools(sessiond.responder(), host_tool_rx, cx);
         shell.reconcile(window, cx);
         shell.focus_active(window, cx);
-        shell.spawn_startup_resume(cx);
+        shell.spawn_agent_resume(sessiond, cx);
         shell
     }
 
@@ -309,27 +348,28 @@ impl WorkspaceShell {
                 SessionKind::Terminal => {
                     let id = summary.id;
                     if !self.sessions.contains_key(&id) {
-                        let socket_path = self.socket_path.clone();
-                        let cwd = self
-                            .pending_terminal_cwds
-                            .remove(&id)
-                            .unwrap_or_else(Self::default_terminal_cwd);
-                        self.sessions.insert(
-                            id,
-                            cx.new(|cx| TerminalSession::spawn(id, &socket_path, &cwd, cx)),
-                        );
+                        let pending =
+                            self.pending_terminal_spawns.remove(&id).unwrap_or_else(|| {
+                                PendingTerminalSpawn {
+                                    source_session_id: None,
+                                    fallback_cwd: Self::default_terminal_cwd(),
+                                }
+                            });
+                        let Some(sessiond) = self.sessiond.as_ref() else {
+                            continue;
+                        };
+                        let wire = sessiond
+                            .start_terminal(id.as_uuid(), self.terminal_spawn_spec(pending));
+                        self.sessions
+                            .insert(id, cx.new(|cx| TerminalSession::spawn(wire, cx)));
                     }
                 }
                 SessionKind::Agent => {
                     if self.agent_sessions.contains_key(&summary.id) {
                         continue;
                     }
-                    let handle = match self.sessiond(cx) {
-                        Ok(handle) => handle,
-                        Err(error) => {
-                            eprintln!("agent session unavailable: {error}");
-                            continue;
-                        }
+                    let Some(handle) = self.sessiond.clone() else {
+                        continue;
                     };
                     let provider_id =
                         horizon_agent::contract::ProviderRegistry::default().default_provider_id();
@@ -373,32 +413,16 @@ impl WorkspaceShell {
         cx.notify();
     }
 
-    /// Lazily connects to `horizon-sessiond` (spawning it if needed);
-    /// [`Self::spawn_startup_resume`] usually gets there first.
-    fn sessiond(&mut self, cx: &mut Context<Self>) -> Result<SessiondHandle, String> {
-        if let Some(handle) = &self.sessiond {
-            return Ok(handle.clone());
-        }
-        let (handle, host_tool_rx) = SessiondHandle::connect(
-            &horizon_agent::socket::default_socket_path(),
-            &self.socket_path,
-        )?;
-        self.adopt_sessiond(handle.clone(), host_tool_rx, cx);
-        Ok(handle)
-    }
-
-    /// Stores a fresh connection and wires the host-tool responder:
+    /// Wires the host-tool responder for the already-adopted runtime:
     /// `workspace.snapshot` requests are answered on the UI thread from
     /// the live model, mirroring the Floem shell's
     /// `wire_host_tool_responder`.
-    fn adopt_sessiond(
+    fn wire_host_tools(
         &mut self,
-        handle: SessiondHandle,
+        responder: SessiondResponder,
         host_tool_rx: crossbeam_channel::Receiver<horizon_agent::wire::HostToolRequest>,
         cx: &mut Context<Self>,
     ) {
-        self.sessiond = Some(handle.clone());
-
         let (async_tx, mut async_rx) = futures::channel::mpsc::unbounded();
         std::thread::spawn(move || {
             while let Ok(request) = host_tool_rx.recv() {
@@ -422,7 +446,7 @@ impl WorkspaceShell {
                     .unwrap_or_else(
                         |_| serde_json::json!({ "error": "the workspace shell is gone" }),
                     );
-                handle.respond_host_tool(horizon_agent::wire::HostToolResponse {
+                responder.respond_host_tool(horizon_agent::wire::HostToolResponse {
                     request_id: request.request_id,
                     output,
                 });
@@ -431,10 +455,8 @@ impl WorkspaceShell {
         .detach();
     }
 
-    /// Sessiond resume: connect to sessiond on a background thread (never
-    /// blocking the caller — the Floem shell's
-    /// `connect_sessiond_at_startup_async`/`reload_session_runtime` shape),
-    /// list the sessions it still hosts, and adopt each as a detached
+    /// Lists the agent sessions hosted by the already-adopted runtime on a
+    /// background thread, then adopts each as a detached
     /// session: registered in the model (so the session manager shows it)
     /// and attached over the wire (so its replayed transcript is ready
     /// when a pane picks it up). Shared by two callers: startup
@@ -447,29 +469,26 @@ impl WorkspaceShell {
     /// pass rebuilds any agent pane view whose session id this resume
     /// just reattached — a no-op at startup (no agent panes exist yet)
     /// and the reload's actual pane-rebuild step.
-    fn spawn_startup_resume(&self, cx: &mut Context<Self>) {
-        let sessiond_socket = horizon_agent::socket::default_socket_path();
-        let control_socket = self.socket_path.clone();
+    fn spawn_agent_resume(&self, handle: SessiondHandle, cx: &mut Context<Self>) {
         let window_handle = self.window;
         let (startup_tx, mut startup_rx) = futures::channel::mpsc::unbounded();
+        let list_handle = handle.clone();
         std::thread::spawn(move || {
-            match SessiondHandle::connect(&sessiond_socket, &control_socket) {
-                Ok((handle, host_tool_rx)) => {
-                    let summaries = handle.session_list();
-                    let _ = startup_tx.unbounded_send((handle, host_tool_rx, summaries));
-                }
-                Err(error) => eprintln!("sessiond connect failed: {error}"),
-            }
+            let summaries = list_handle.session_list();
+            let _ = startup_tx.unbounded_send(summaries);
         });
         cx.spawn(async move |this, cx| {
             use futures::StreamExt as _;
-            let Some((handle, host_tool_rx, summaries)) = startup_rx.next().await else {
+            let Some(summaries) = startup_rx.next().await else {
                 return;
             };
             let _ = window_handle.update(cx, |_, window, cx| {
                 let _ = this.update(cx, |shell, cx| {
-                    if shell.sessiond.is_none() {
-                        shell.adopt_sessiond(handle.clone(), host_tool_rx, cx);
+                    let Some(adopted) = shell.sessiond.clone() else {
+                        return;
+                    };
+                    if !adopted.same_runtime(&handle) {
+                        return;
                     }
                     for summary in summaries {
                         let session_id = SessionId::from_uuid(summary.session_id.as_uuid());
@@ -479,7 +498,7 @@ impl WorkspaceShell {
                         shell
                             .workspace
                             .register_detached_session(PaneKind::Agent, session_id);
-                        let session_handle = handle.attach_session(summary.session_id);
+                        let session_handle = adopted.attach_session(summary.session_id);
                         shell.agent_sessions.insert(
                             session_id,
                             cx.new(|cx| AgentSession::new(session_handle, cx)),
@@ -493,31 +512,23 @@ impl WorkspaceShell {
         .detach();
     }
 
-    /// `Reload Session Runtime`: drain the current sessiond connection (if
-    /// any), wait for the old process to actually exit
-    /// ([`wait_for_drain`]), then run the same
-    /// connect/`session_list`/adopt/reconcile flow as startup resume
-    /// ([`Self::spawn_startup_resume`]) against the (possibly
-    /// just-rebuilt) binary — "drain -> sessiond flushes and exits ->
-    /// Horizon spawns the rebuilt binary -> reconnect -> session_load".
-    ///
-    /// Called with `self.sessiond` already taken and every stale agent
-    /// session entity/pane view already dropped (`execute`'s
-    /// `CommandId::ReloadSessionRuntime` arm) — nothing should try to route
-    /// a command through the dying connection while this is in flight,
-    /// and `spawn_startup_resume`'s "already known" checks (`shell.sessiond
-    /// .is_none()`, `shell.agent_sessions.contains_key`) must see the
-    /// pre-reload state as gone, not stale, so it reattaches every
-    /// session rather than skipping them.
+    /// Drains the explicit old runtime on a background thread, then creates
+    /// exactly one fresh eager runtime and lists/loads persisted agents. The
+    /// caller has already removed terminal model sessions and dropped every
+    /// stale entity/view without sending semantic agent shutdown commands.
     fn reload_session_runtime(&self, old: Option<SessiondHandle>, cx: &mut Context<Self>) {
         let socket_path = horizon_agent::socket::default_socket_path();
+        let restart_socket = socket_path.clone();
+        let control_socket = self.socket_path.clone();
         let (drained_tx, mut drained_rx) = futures::channel::mpsc::unbounded();
         std::thread::spawn(move || {
             if let Some(handle) = old {
-                handle.drain();
-            }
-            if let Err(error) = wait_for_drain(&socket_path) {
-                eprintln!("horizon-sessiond did not drain cleanly: {error}");
+                if handle.begin_reload() {
+                    if let Err(error) = wait_for_drain(&socket_path) {
+                        eprintln!("horizon-sessiond did not drain cleanly: {error}");
+                    }
+                }
+                handle.stop_and_wait();
             }
             let _ = drained_tx.unbounded_send(());
         });
@@ -526,7 +537,14 @@ impl WorkspaceShell {
             if drained_rx.next().await.is_none() {
                 return;
             }
-            let _ = this.update(cx, |shell, cx| shell.spawn_startup_resume(cx));
+            let _ = this.update(cx, |shell, cx| {
+                let (handle, host_tool_rx) =
+                    SessiondHandle::start(&restart_socket, &control_socket);
+                shell.sessiond = Some(handle.clone());
+                shell.reload_in_progress = false;
+                shell.wire_host_tools(handle.responder(), host_tool_rx, cx);
+                shell.spawn_agent_resume(handle, cx);
+            });
         })
         .detach();
     }
@@ -609,33 +627,45 @@ impl WorkspaceShell {
         cx.notify();
     }
 
-    /// The cwd a newly spawned terminal should start in --
-    /// `docs/session-relationship-design.md` decision 3's "workspace_root
-    /// source" ("start where I'm looking"): the currently active
-    /// terminal session's live cwd, sampled via its retained pid
-    /// (`crate::terminal::sample_cwd`), falling back to `$HOME` (then
-    /// `.`) when there is no active terminal session or its cwd can't be
-    /// determined.
-    ///
-    /// Must be called *before* the workspace mutation that creates the
-    /// new session: once that mutation activates it (`new_tab`/
-    /// `split_pane` always activate; `external_new_session` sometimes
-    /// does), `Workspace::active_terminal_session_id` would resolve to
-    /// the new, not-yet-spawned session itself instead of the true
-    /// spawn source.
-    fn resolve_new_terminal_cwd(&self, cx: &mut Context<Self>) -> std::path::PathBuf {
-        self.workspace
-            .active_terminal_session_id()
-            .and_then(|id| self.sessions.get(&id))
-            .and_then(|session| session.read(cx).pid())
-            .and_then(sample_cwd)
-            .unwrap_or_else(Self::default_terminal_cwd)
+    fn pending_terminal_spawn(&self, explicit_source: Option<SessionId>) -> PendingTerminalSpawn {
+        PendingTerminalSpawn {
+            source_session_id: terminal_spawn_source(
+                explicit_source,
+                self.workspace.active_session_id(),
+            ),
+            fallback_cwd: Self::default_terminal_cwd(),
+        }
     }
 
     fn default_terminal_cwd() -> std::path::PathBuf {
-        std::env::var_os("HOME")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
+        terminal_fallback_cwd(
+            std::env::current_dir().ok(),
+            std::env::var_os("HOME").map(std::path::PathBuf::from),
+        )
+    }
+
+    fn terminal_spawn_spec(&self, pending: PendingTerminalSpawn) -> TerminalSpawnSpec {
+        let config = &horizon_config::load().terminal;
+        let shell = std::env::var("SHELL")
+            .ok()
+            .or_else(|| config.shell.clone())
+            .unwrap_or_else(|| "/bin/sh".to_string());
+        TerminalSpawnSpec {
+            shell,
+            args: config.shell_args.clone().unwrap_or_default(),
+            term: config
+                .term
+                .clone()
+                .unwrap_or_else(|| "xterm-256color".to_string()),
+            scrollback_lines: config
+                .scrollback_lines
+                .unwrap_or(TerminalCoreOptions::default().scrollback_lines),
+            color_scheme: theme::terminal_color_scheme(),
+            control_socket: self.socket_path.clone(),
+            fallback_cwd: pending.fallback_cwd,
+            spawn_source_session_id: pending.source_session_id.map(SessionId::as_uuid),
+            initial_size: TerminalSize::new(80, 24),
+        }
     }
 
     /// The one interactive session-creation path: what the view chooser
@@ -650,7 +680,8 @@ impl WorkspaceShell {
         cx: &mut Context<Self>,
     ) {
         self.workspace.exit_workspace_mode();
-        let cwd = matches!(kind, PaneKind::Terminal).then(|| self.resolve_new_terminal_cwd(cx));
+        let terminal_spawn =
+            matches!(kind, PaneKind::Terminal).then(|| self.pending_terminal_spawn(None));
         let session_id = match placement {
             Placement::NewTab => Some(
                 self.workspace
@@ -669,8 +700,8 @@ impl WorkspaceShell {
             }
         };
         if let Some(session_id) = session_id {
-            if let Some(cwd) = cwd {
-                self.pending_terminal_cwds.insert(session_id, cwd);
+            if let Some(spawn) = terminal_spawn {
+                self.pending_terminal_spawns.insert(session_id, spawn);
             }
             if let Some(role_id) = role_id {
                 self.pending_roles.insert(session_id, role_id);
@@ -795,15 +826,17 @@ impl WorkspaceShell {
                 Err(error) => eprintln!("reload-config failed: {error}"),
             },
             CommandId::ReloadSessionRuntime => {
+                if self.reload_in_progress {
+                    return;
+                }
+                self.reload_in_progress = true;
                 let old = self.sessiond.take();
-                // The model keeps the sessions/panes; only the stale
-                // views/handles are dropped — `reload_session_runtime`'s
-                // resume repopulates `agent_sessions` (via `session_load`)
-                // and `reconcile` rebuilds a fresh `AgentView` for every
-                // pane whose session id comes back.
+                prepare_workspace_for_runtime_reload(&mut self.workspace);
+                self.pending_terminal_spawns.clear();
+                self.sessions.clear();
                 self.agent_sessions.clear();
-                self.panes
-                    .retain(|_, view| !matches!(view, PaneView::Agent(_)));
+                self.panes.clear();
+                self.last_focused_terminal = None;
                 cx.notify();
                 self.reload_session_runtime(old, cx);
             }
@@ -909,7 +942,8 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        let cwd = matches!(kind, PaneKind::Terminal).then(|| self.resolve_new_terminal_cwd(cx));
+        let terminal_spawn = matches!(kind, PaneKind::Terminal)
+            .then(|| self.pending_terminal_spawn(split.map(|(target, _)| target)));
         let session_id = match split {
             Some((target, axis)) => self
                 .workspace
@@ -919,8 +953,8 @@ impl WorkspaceShell {
                 .workspace
                 .open_tab_with_new_session_activated(kind, activate),
         };
-        if let Some(cwd) = cwd {
-            self.pending_terminal_cwds.insert(session_id, cwd);
+        if let Some(spawn) = terminal_spawn {
+            self.pending_terminal_spawns.insert(session_id, spawn);
         }
         if let Some(role_id) = role_id {
             self.pending_roles.insert(session_id, role_id);
@@ -1349,5 +1383,54 @@ impl Render for WorkspaceShell {
                         )
                     }),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        prepare_workspace_for_runtime_reload, terminal_fallback_cwd, terminal_spawn_source,
+    };
+    use horizon_workspace::{PaneKind, SessionId, SessionKind, Workspace};
+
+    #[test]
+    fn explicit_split_target_wins_as_terminal_spawn_source() {
+        let explicit = SessionId::new();
+        let active = SessionId::new();
+        assert_eq!(
+            terminal_spawn_source(Some(explicit), Some(active)),
+            Some(explicit)
+        );
+        assert_eq!(terminal_spawn_source(None, Some(active)), Some(active));
+    }
+
+    #[test]
+    fn terminal_fallback_prefers_current_dir_then_home_then_dot() {
+        let cwd = std::path::PathBuf::from("/workspace");
+        let home = std::path::PathBuf::from("/home/test");
+        assert_eq!(
+            terminal_fallback_cwd(Some(cwd.clone()), Some(home.clone())),
+            cwd
+        );
+        assert_eq!(terminal_fallback_cwd(None, Some(home.clone())), home);
+        assert_eq!(
+            terminal_fallback_cwd(None, None),
+            std::path::PathBuf::from(".")
+        );
+    }
+
+    #[test]
+    fn reload_prep_removes_terminals_but_retains_agent_model_and_pane() {
+        let mut workspace = Workspace::mvp();
+        let agent_id = workspace.open_tab_with_new_session_activated(PaneKind::Agent, true);
+        assert!(workspace.pane_location_for_session(agent_id).is_some());
+
+        prepare_workspace_for_runtime_reload(&mut workspace);
+
+        let summaries = workspace.session_summaries();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].id, agent_id);
+        assert_eq!(summaries[0].kind, SessionKind::Agent);
+        assert!(workspace.pane_location_for_session(agent_id).is_some());
     }
 }

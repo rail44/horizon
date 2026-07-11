@@ -5,8 +5,7 @@ the `horizon-terminal-core` extraction-slice decisions (8, 9, and the
 color amendment to 4) added 2026-07-09. The exploration material and
 option analysis is `docs/research/session-daemon.md`; this file records
 the decisions and is the scope reference for the migration. Step 0 and the
-daemon half of Step 1 are implemented; GPUI terminal routing remains in the
-next integration slice.
+Step 1 is implemented end to end.
 
 Motive: terminal sessions must outlive the UI process (a UI crash or
 restart must not kill the shell and its children), and delegated
@@ -264,7 +263,7 @@ became Horizon's sole frontend:
   `horizon-sessiond/<version>` binary id rather than the former ambiguous
   version-only value.
 
-## Step 1 daemon implementation notes (2026-07-12)
+## Step 1 implementation notes (2026-07-12)
 
 The daemon-side hosting slice is implemented. The shared session protocol is
 version 3: lifecycle traffic uses `session_control`, while agent and terminal
@@ -292,9 +291,26 @@ shutdown for every hosted terminal before the daemon exits.
 
 Real-socket E2E coverage exercises initial full snapshot, applicable row
 diffs, disconnect/reconnect Attach, PTY survival, fallback/source cwd, and
-Shutdown/Exited cleanup. This slice includes only the minimal GPUI wire
-adaptation needed to keep the workspace compiling and apply received frame
-diffs; creation routing and workspace ownership move in the next slice.
+Shutdown/Exited cleanup.
+
+The GPUI integration uses one eager `src/sessiond` runtime for both domains.
+It returns before connect/Hello, queues typed agent and terminal requests in
+one raw FIFO, retries the initial connection indefinitely with capped backoff,
+and never starts a competing lazy connection. After one connection has been
+established, an unexpected disconnect reports errors to every registered
+route and stops; Step 1 does not reconnect or replay automatically. Dropping
+the runtime is non-destructive, while `Reload Session Runtime` is the explicit
+Drain path.
+
+Terminal GPUI entities now contain only the daemon command/update handle and
+latest frame. Horizon sends `TerminalSpawnSpec` once, with the pre-mutation
+spawn-source session id and a `current_dir` → `$HOME` → `.` fallback cwd;
+sessiond owns PTY spawn, live cwd sampling, and process lifetime. Reload
+removes terminal sessions from the workspace model because Drain terminates
+their live children, retains agent
+sessions/panes, starts exactly one new runtime, then lists and loads the
+persisted agents before rebuilding their entities and views. Terminal listing
+and reattach across runtime reload remain Step 2 work.
 
 ## Connection to delegation (stage 1)
 

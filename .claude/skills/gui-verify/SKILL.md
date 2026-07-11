@@ -39,7 +39,7 @@ Caveats:
   lacks).
 - The control socket is fixed per-uid (`/tmp/horizon-control-<uid>.sock`);
   a second instance logs a bind failure and runs without external
-  control. Use `HORIZON_AGENTD_SOCKET` + scratch `HORIZON_AGENT_EVENT_LOG`/
-  `HORIZON_AGENT_STATE_DB` to isolate agentd when a test spawns agent
+  control. Use `HORIZON_SESSIOND_SOCKET` + scratch `HORIZON_AGENT_EVENT_LOG`/
+  `HORIZON_AGENT_STATE_DB` to isolate sessiond when a test spawns agent
   sessions (mind macOS's ~104-byte `SUN_LEN` socket-path limit).
 - Kill only processes your test started.

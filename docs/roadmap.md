@@ -76,18 +76,18 @@ wave items where possible; design docs on first use.
    `horizon-session-protocol` crate now owns shared JSONL framing while the
    existing agent wire adapts without changing its v2 surface, and
    `horizon-terminal-core` exposes a serializable sister contract plus sparse
-   theme-independent row diffs. **The Step 1 daemon half landed 2026-07-12**:
+   theme-independent row diffs. **Step 1 completed 2026-07-12**:
    protocol v3 qualifies the shared/agent/terminal vocabularies, `sessiond`
-   owns terminal PTYs and retained frames, and real-socket E2E covers diff
-   baselines, reconnect/attach, cwd sourcing, and shutdown. GPUI creation
-   routing and workspace ownership are the next integration slice.
+   owns terminal PTYs and retained frames, and GPUI uses one eager shared
+   runtime with queued terminal creation, row-diff routing, source-cwd
+   inheritance, explicit reload semantics, and no local PTY ownership.
    **Session relationship model designed 2026-07-07**
    (`docs/session-relationship-design.md`): lineage is a first-class
    layout-orthogonal derivation tree — the same tree worktree
    isolation, delegation, and messaging all use. Foundation landed
-   (per-session `workspace_root`, `9110c7c`); remaining is terminal-cwd
-   sourcing (shell-independent process-info crate + pid capture), the
-   lineage tree, origin-defaulted isolation/worktree creation, and
+   (per-session `workspace_root`, `9110c7c`); terminal cwd sourcing now rides
+   the sessiond spawn-source id. Remaining is the lineage tree,
+   origin-defaulted isolation/worktree creation, and
    control surfacing (open-directory command + session-manager lineage
    view).
 5. **Fine-grained reactive state** — floem's `floem_reactive` tracks whole
