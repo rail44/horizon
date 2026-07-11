@@ -24,9 +24,8 @@ cargo nextest run --workspace
 
 # The GPUI shell is its own workspace (docs/gpui-migration-design.md),
 # invisible to the root --workspace runs above — gate it separately.
-# No nextest leg yet: the crate has no tests; add one when it does.
 echo "pre-commit: shell-gpui gate (second workspace)"
-(cd shell-gpui && cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings)
+(cd shell-gpui && cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings && cargo nextest run)
 
 echo "pre-commit: ast-grep scan (over-tracking lint, docs/agent-ui-performance-design.md leg 2)"
 if ! command -v ast-grep >/dev/null 2>&1; then

@@ -49,9 +49,9 @@ add `cargo test --doc` here if that changes.
 
 `shell-gpui/` (the GPUI shell, `docs/gpui-migration-design.md`) is a
 **separate workspace** the root `--workspace` runs never touch — after
-changes there, additionally run `cargo fmt` and `cargo clippy
---all-targets -- -D warnings` inside `shell-gpui/` (the pre-commit hook
-does; no test leg yet, add nextest there when the crate grows tests).
+changes there, additionally run `cargo fmt`, `cargo clippy
+--all-targets -- -D warnings`, and `cargo nextest run` inside
+`shell-gpui/` (the pre-commit hook does all three).
 
 The `ast-grep` step is the leg-2 static-analysis backstop against the
 "over-tracking" reactive anti-pattern (raw `frame()` read + `.items` walk in
