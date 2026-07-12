@@ -152,11 +152,15 @@ wave items where possible; design docs on first use.
   §16-Q4: implementable, no gpui fork, a production
   `horizon-winit-platform` estimated at 3,000–5,000 lines; remaining
   unknowns are mouse/clipboard/multi-window/scale-factor plus
-  native-Wayland preedit content observation. **Adoption decision
-  pending owner.** Spin-off finding: backlog-30 (double-Enter after
-  IME confirm, plausibly live in today's terminal). Interim state
-  shipped 2026-07-12: gpui-component `TitleBar` CSD on Linux
-  (`3e09030`).
+  native-Wayland preedit content observation. Production crate
+  shipped 2026-07-12 (`c952649`): `crates/horizon-winit-platform`
+  behind `HORIZON_WINDOWING=winit` / `[ui] windowing` (default stays
+  native; exit criteria for flipping in
+  `docs/winit-backend-design.md`), headless terminal check green
+  under winit, owner dogfooding pending. Spin-off finding fixed
+  2026-07-12: backlog-30 double-Enter after IME confirm (`5c812dd`).
+  Interim state shipped 2026-07-12: gpui-component `TitleBar` CSD on
+  Linux (`3e09030`), skipped automatically under winit's own CSD.
 - **Session manager modal** — shipped 2026-07-06 (`20603dd`): palette
   is Commands-only, sessions managed via the Manage Sessions command.
   Terminate-targeting fix 2026-07-09 (`22a4f47`): terminate is bound to
