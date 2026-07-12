@@ -617,6 +617,134 @@ Both explanations are consistent with the evidence; distinguishing them
 further would need the owner's own memory of which IME mode they were in
 during that session, which isn't recoverable from logs.
 
+### Second follow-up: the confirmed root cause — a missing text-input fallback
+
+The owner captured a `HORIZON_INPUT_TRACE` trace of their own daily-driver
+typing (the diagnostic added in the previous follow-up) and it pinpointed
+the bug precisely, invalidating both prior hypotheses (X11/XIM state, and
+"IME direct mode delivers a commit-only event"):
+
+```
+winit KeyboardInput physical_key=Code(KeyA) state=Pressed
+handle_key entry key="a"
+handle_key key="a" dropped: unmapped (keys_as_escape_codes=false)
+```
+
+— and nothing else. No `Ime::Commit` ever arrives for a direct-ASCII-mode
+character on this desktop; ibus passes the physical key straight through
+as an ordinary `wl_keyboard`/`WindowEvent::KeyboardInput` event, exactly
+as it should. Composition mode's own trace (`Preedit('あ')` → `Commit('あ')`
+→ `replace_text_in_range` → sent) confirmed that path was never the
+problem either.
+
+**Root cause.** `TerminalView::handle_key` (`src/terminal/mod.rs`)
+deliberately does nothing for a plain printable key when NOT in kitty
+"report all keys" mode — `term_key_code` returns `None` for a bare letter
+unless `keys_as_escape_codes` or Ctrl is set, by design: printable text
+outside kitty mode is supposed to arrive through the text-input pipeline
+(`replace_text_in_range`) instead, matching the Linux convention
+`src/terminal/mod.rs`'s own module doc already documented
+("plain printable text on Linux arrives only through the
+`EntityInputHandler` pipeline, matching gpui_linux"). But
+`crates/horizon-winit-platform` never implemented the half of that
+convention that makes it true: gpui_linux's own wayland and x11 backends
+(`WaylandWindowState::handle_input` /
+`X11WindowState::handle_input` in the pinned checkout,
+`~/.cargo/git/checkouts/zed-a70e2ad075855582/5f8a741/crates/gpui_linux/src/linux/{wayland,x11}/window.rs`)
+both do this after dispatching a `KeyDown`: if gpui's own callback left
+`propagate == true` (nothing consumed it) and the keystroke carries
+`key_char`, feed that text straight to the active `PlatformInputHandler`
+via `replace_text_in_range(None, key_char)` — there's no separate IME
+event coming for it. `horizon-winit-platform` had no equivalent, so an
+unhandled plain key was silently dropped with nowhere left to go. This
+reproduces on every OS `horizon-winit-platform` targets, not just this
+one desktop; it just happens that kitty mode (which routes printables
+through the Key path instead) and active IME composition (which routes
+them through `Ime::Commit`) both mask it, so it only ever surfaced as
+"direct-ASCII IME mode eats keys."
+
+**Fix.** `WinitWindowInner::maybe_feed_unhandled_key_as_text` (`window.rs`)
+mirrors gpui_linux's fallback: `app_handler.rs`'s `KeyboardInput` handler
+now captures `dispatch_input`'s `DispatchEventResult` and, for `Pressed`
+events, calls it with the keystroke and `result.propagate`. The decision
+itself (`text_fallback_decision`, a free function so it's unit-testable
+without a live window) feeds the text only when all of: nothing else
+already handled the key (`propagate`), no IME composition is in progress
+(a new `WinitWindowState::ime_composing: bool`, set from `Ime::Preedit`/
+`Commit`/`Disabled`, mirroring gpui_linux's own `composing: bool` on its
+wayland client state — this is the one thing the pinned gpui_linux
+snippet doesn't show inline, because on Wayland it lives one layer up
+from `handle_input`, and on X11 it's implicit since XIM already swallows
+composing keys before they ever reach `KeyboardInput` at all), the
+modifiers are plain-or-Shift-only (mirrors gpui_linux's own
+`is_subset_of(&Modifiers::shift())` gate — Ctrl/Alt/Cmd combos are never
+text), and the keystroke actually carries `key_char`.
+
+**A second bug found and fixed along the way, via live testing (not the
+owner's report — this one never reached them):** implementing the
+fallback and testing it live (isolated `Xvfb`, `HORIZON_INPUT_TRACE=1`)
+immediately surfaced a double-Enter: `handle_key` already sends Enter via
+`TerminalCommand::Key` (Enter is in `term_key_code`'s unconditional named-key
+list, handled regardless of kitty mode), but since `TerminalView`'s
+`on_key_down` never calls `cx.stop_propagation()` anywhere,
+`result.propagate` stays `true` even for a key `handle_key` fully handled
+— and winit's own `KeyEvent::text` is documented (and confirmed live) to
+be `Some("\r")` for Enter, so the new fallback fired too, sending a second
+`\r` via `replace_text_in_range`. Root cause:
+`winit_key_event_to_keystroke` (`crates/horizon-winit-platform/src/input.rs`)
+was copying winit's raw `event.text` into `Keystroke::key_char`
+unconditionally, including for every `Key::Named` variant — but
+`Keystroke::key_char`'s own documented contract is "the character that
+could have been typed," and gpui_linux's `keystroke_from_xkb` never sets
+it for named keys either. Fixed at the source: `key_char` is now `None`
+for every `Key::Named` variant except `Space` (the one named key
+`term_key_code` has *no* unconditional case for — like an ordinary letter,
+it only maps under kitty mode or Ctrl, so direct-ASCII-mode delivery
+depends on the fallback the same way a letter does; nulling its
+`key_char` too silently broke the space bar, caught by the same live
+`Xvfb` retest before landing). Verified live end-to-end after both fixes:
+`hi there` typed under a direct-ASCII (non-kitty) bash prompt appears
+exactly once in the terminal frame, and Enter executes it exactly once
+(`handle_key ... sent: TerminalCommand::Key` followed by
+`text-fallback skip: SkipNoText`, not a second send).
+
+**Watch-interaction analysis** (from the task brief, resolved via the
+`propagate`-never-set-false discovery above rather than needing separate
+handling for each):
+
+1. *Kitty mode, both paths could fire.* Since `TerminalView` never calls
+   `stop_propagation`, `propagate` stays `true` even when `handle_key`
+   already sent a kitty-mode printable via the Key path — so the fallback
+   *does* still fire for those too, landing on `KeyTextDedup`
+   (`src/terminal/mod.rs`, from the previous follow-up) as the actual line
+   of defense against a double-feed, exactly as anticipated. Verified live
+   (`printf` piped through a working `bash` prompt to flip on kitty
+   reporting via `CSI > 1 u`, then typed 'a'): the trace shows `handle_key
+   ... sent: TerminalCommand::Key` immediately followed by
+   `text-fallback fire` → `replace_text_in_range ... dropped: duplicate of
+   a key-path send` — composes correctly, no double character.
+2. *IME composition must not trigger the fallback.* `ime_composing` gates
+   this unconditionally, checked before the modifiers/key_char checks —
+   see `text_fallback_decision`'s `SkipComposing` case and its priority
+   test (`composing_gate_wins_even_when_also_unhandled_and_has_text`).
+3. *A key consumed by a gpui action/keybinding (Tab, List navigation, ...)
+   must not text-fallback.* These are all named keys with no `key_char`
+   (Tab, arrows, Enter, Escape, ...), so `SkipNoText` excludes them
+   regardless of whether anything set `propagate = false` — the same
+   `is_named`/`Space`-exception fix above is what keeps this true; before
+   it, Tab/Enter/etc. all carried a spurious `key_char` from winit's raw
+   `text` field and would have needed `propagate` to actually go false to
+   stay excluded, which (per point 1) it doesn't in this codebase today.
+
+**Tests.** `text_fallback_decision` has nine colocated unit tests
+(`crates/horizon-winit-platform/src/window.rs`) covering `Feed`, each
+`Skip*` reason independently, the composing-wins-over-everything priority
+case, and Shift-allowed-but-Ctrl/Alt/Cmd-excluded modifiers. Full
+correctness (the fallback firing/not-firing correctly *and* composing
+with `KeyTextDedup`) was additionally verified live end-to-end rather than
+only at the unit-test seam, since the interaction with the rest of the
+input pipeline is exactly what the two live-testing bugs above were.
+
 ## Out of scope
 
 Multi-window, screen capture, drag&drop file opening, Windows menu-bar

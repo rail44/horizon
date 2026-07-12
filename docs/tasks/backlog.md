@@ -654,3 +654,32 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     now-eliminated fsync cost) — a prepared-statement or DuckDB `Appender`
     bulk-insert pass could speed up the first-ever-boot/post-migration
     case further if it becomes a practical problem.
+
+33. **Unconfirmed: does a resumed/respawned terminal session's kitty
+    keyboard mode (`TermMode::REPORT_ALL_KEYS_AS_ESC`,
+    `TerminalFrame::keys_as_escape_codes`) survive correctly, or can a
+    live shell end up with the flag desynced from what the shell itself
+    believes?** Surfaced investigating the direct-ASCII-mode input-loss
+    bug (fixed on `main` — see `docs/winit-backend-design.md`'s
+    "text-input fallback" section): the owner's `HORIZON_INPUT_TRACE`
+    capture showed `keys_as_escape_codes=false` in their actual fish
+    session, which normally enables kitty mode at startup. Investigated
+    only enough to characterize, not resolve (task brief: file, don't
+    fix): terminal sessions in `horizon-sessiond` are create-or-attach,
+    not replay-from-log — `TerminalHost::attach` reconnects a client to
+    an already-live `wezterm_term::Term` (`crates/horizon-sessiond/src/
+    terminal.rs`), and `keys_as_escape_codes` is read fresh off that same
+    live `Term`'s mode bits on every render
+    (`crates/horizon-terminal-core/src/core/render.rs:68`) — so plain UI
+    attach/detach/reattach (the daemon itself staying up) shouldn't lose
+    it. The more likely culprit, unconfirmed: if `horizon-sessiond`
+    itself restarts (crash/respawn — a path the e2e suite already
+    exercises, e.g. `killed_sessiond_respawns_and_replays_transcript...`),
+    the PTY and its `Term` are process-owned and can't survive that; the
+    terminal session would need a full shell respawn, and whether the new
+    shell's startup re-runs fish's kitty-mode-enable the same way (or
+    whether fish's own enablement is itself conditional on something that
+    differs for a respawned vs. an originally-launched shell) wasn't
+    checked. Next step if picked up: reproduce with
+    `HORIZON_INPUT_TRACE` plus a deliberate `horizon-sessiond` kill/respawn
+    against a fish session, and diff `keys_as_escape_codes` before/after.

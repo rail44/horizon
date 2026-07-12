@@ -16,8 +16,8 @@
 use std::rc::Rc;
 
 use gpui::{
-    KeyDownEvent, KeyUpEvent, ModifiersChangedEvent, MouseDownEvent, MouseExitEvent,
-    MouseMoveEvent, MouseUpEvent, PlatformInput, ScrollWheelEvent,
+    DispatchEventResult, KeyDownEvent, KeyUpEvent, ModifiersChangedEvent, MouseDownEvent,
+    MouseExitEvent, MouseMoveEvent, MouseUpEvent, PlatformInput, ScrollWheelEvent,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
@@ -203,15 +203,25 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
                 );
                 let modifiers = inner.state.borrow().modifiers;
                 if let Some(keystroke) = winit_key_event_to_keystroke(&event, modifiers) {
+                    let pressed = event.state == ElementState::Pressed;
                     let input = match event.state {
                         ElementState::Pressed => PlatformInput::KeyDown(KeyDownEvent {
-                            keystroke,
+                            keystroke: keystroke.clone(),
                             is_held: event.repeat,
                             prefer_character_input: false,
                         }),
-                        ElementState::Released => PlatformInput::KeyUp(KeyUpEvent { keystroke }),
+                        ElementState::Released => PlatformInput::KeyUp(KeyUpEvent {
+                            keystroke: keystroke.clone(),
+                        }),
                     };
-                    dispatch_input(&inner, input);
+                    let result = dispatch_input(&inner, input);
+                    // Mirrors gpui_linux's own text-input fallback — see
+                    // `WinitWindowInner::maybe_feed_unhandled_key_as_text`'s
+                    // doc. Only for KeyDown: gpui_linux's own fallback never
+                    // looks at KeyUp either.
+                    if pressed {
+                        inner.maybe_feed_unhandled_key_as_text(&keystroke, result.propagate);
+                    }
                     inner.window.request_redraw();
                 }
             }
@@ -338,8 +348,15 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
     }
 }
 
-fn dispatch_input(inner: &WinitWindowInner, input: PlatformInput) {
+/// Returns gpui's own `DispatchEventResult` (defaulting to
+/// `propagate: true` — "nothing handled it" — when no callback is
+/// registered yet, matching gpui_linux's equivalent) so `KeyboardInput`'s
+/// handler can decide whether `maybe_feed_unhandled_key_as_text` should
+/// run.
+fn dispatch_input(inner: &WinitWindowInner, input: PlatformInput) -> DispatchEventResult {
     if let Some(callback) = inner.callbacks.borrow_mut().input.as_mut() {
-        callback(input);
+        callback(input)
+    } else {
+        DispatchEventResult::default()
     }
 }
