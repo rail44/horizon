@@ -161,8 +161,9 @@ fn enter_after_the_window_passes_through_a_mouse_click_commit() {
 // (kitty "report all keys" mode) -- without dropping a commit that has no
 // matching physical key, which is what an IME "direct"/ASCII input mode
 // produces (it consumes the physical key itself and only ever forwards
-// `commit_string`; see docs/winit-backend-design.md's "direct-mode IME
-// commit" section). The three cases every change here must keep correct:
+// `commit_string`; see docs/winit-backend-design.md's "Resolved incidents"
+// -> "Keyboard input pipeline" -> Stage 2). The three cases every change
+// here must keep correct:
 //
 // 1. Ordinary kitty-mode typing: both `handle_key` and
 //    `replace_text_in_range` fire for the same keystroke -- the second
