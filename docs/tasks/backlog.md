@@ -374,35 +374,87 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     against the active pane's session id at terminate time. Separate from the
     bash-approval wedge (backlog: the registry panic-safety fix). Recorded
     2026-07-09.
-27. **`horizon-agentd` respawn/replay e2e tests flake under the full parallel
-    nextest run** — `killed_agentd_respawns_and_replays_transcript_with_open_
-    turn_cancelled` and `drained_agentd_respawns_and_preserves_a_completed_
-    session` (`crates/horizon-agentd/tests/e2e.rs`) intermittently fail with
-    `the pre-crash user message must survive replay, got: []` when run inside
-    the whole `cargo nextest run --workspace` suite, yet pass deterministically
-    in isolation and on retry. The empty replay suggests a respawn races the
-    transcript flush (or a shared-resource contention — sockets, DuckDB
-    projection rebuild, the real gpt-4o-mini call) when many e2e tests run
-    concurrently. Disruptive because it fails the pre-commit integration gate
-    for unrelated (e.g. docs-only) commits — hit exactly that during the
-    backlog-26 doc commit 2026-07-09. Fix options: make the replay assertion
-    wait for the flush to settle (poll with a timeout rather than reading once),
-    or serialize these respawn e2e tests via a nextest test-group so they don't
-    contend. Recorded 2026-07-09.
-28. **`horizon-sessiond` socket e2e flakes under the full parallel nextest
-    run** — `terminal_create_diff_reconnect_attach_and_shutdown_over_the_
-    real_socket` (`crates/horizon-sessiond`, e2e) intermittently fails on a
-    ~10s timeout inside `cargo nextest run --workspace`, yet passes
-    instantly (~0.08s) standalone and on full-suite re-runs. Hit 3-4 times
-    on 2026-07-12 across worker gates and integration-merge gates; an early
-    "another live Horizon instance caused contention" theory was
-    disproven when it fired with no concurrent instance running. Same
-    shape as backlog-27 (agentd respawn e2e flakes): parallel-suite
-    resource contention around real sockets, with the same fix options —
-    poll-with-timeout instead of a fixed deadline, or a nextest
-    test-group serializing the socket e2e tests. Disruptive for the same
-    reason: it fails integration gates for unrelated merges. Recorded
-    2026-07-12.
+27. **[RESOLVED 5c3f725] `horizon-sessiond` respawn/replay e2e tests
+    flake under the full parallel nextest run** — Post-sessiond-merge names:
+    `killed_sessiond_respawns_and_replays_transcript_with_open_turn_cancelled`
+    and `drained_sessiond_respawns_and_preserves_a_completed_session`
+    (`crates/horizon-sessiond/tests/e2e.rs`; this entry originally named the
+    pre-merge `horizon-agentd` crate/test names). Root cause found: a real
+    product race, not just test flakiness. `Control::SessionList`/
+    `SessionLoad`'s readiness gate (`SessiondState::mark_resume_ready`) only
+    proves a resumed session's `SessionEntry` exists in the session map —
+    not that its dedicated OS thread has reached the loop that answers a
+    replay request. That thread does real work first, including blocking on
+    `SessiondState::wait_for_duckdb_store()` (a DuckDB rebuild-or-open wait
+    that is deliberately *not* ordered against the readiness gate). Under
+    parallel-suite contention that wait can genuinely exceed the old 5s
+    `REPLAY_TIMEOUT` (`crates/horizon-sessiond/src/session.rs`), which
+    silently defaulted to an empty `Vec` on timeout — indistinguishable from
+    a genuinely empty session — producing exactly the observed `got: []`.
+    Fixed by raising `REPLAY_TIMEOUT` to 60s (a rare-to-ever-hit safety net,
+    not a hot path) and by fixing the test harness's own
+    `collect_replayed_events`, which independently had a 500ms
+    quiescence-window read *on its first read too* — tighter than even the
+    old server-side budget — now split into a generous first-read timeout
+    (60s, covering real contention) followed by the original tight 500ms
+    quiescence window for the rest of the burst (events after the first
+    arrive back-to-back with no material gap). Also added a nextest
+    test-group (`.config/nextest.toml`) serializing the whole
+    `horizon-sessiond::e2e` binary (`max-threads = 1`) as belt-and-braces
+    against self-contention, given the repeated merge-tax history.
+28. **[PARTIALLY RESOLVED 5c3f725, e478e6e] `horizon-sessiond` socket e2e
+    flakes under the full parallel nextest run** — `terminal_create_diff_
+    reconnect_attach_and_shutdown_over_the_real_socket` (`crates/
+    horizon-sessiond/tests/e2e.rs`) spawns a real PTY backed by a real
+    interactive shell (`/bin/sh -i`). Under **realistic** load -- a plain
+    `cargo nextest run --workspace` with no extra synthetic stress, the
+    actual shape of the original flake reports -- this is dramatically
+    better but not literally zero: 30/30 clean runs across two rounds
+    before the retry fix below, then 14/15 in a third round run after a
+    follow-up correctness fix to that same retry (same failure signature:
+    `terminal_create_diff_...` at exactly the 120s ceiling). One failure
+    in 45 realistic-mode runs is a large improvement over the original
+    "6+ times in one day" merge-tax rate, but the honest statement is
+    "much rarer," not "eliminated." Under a **deliberately extreme**
+    synthetic stress (a tight loop of `cargo build -p horizon --release`
+    + `cargo clean`, sustained for many minutes, well beyond "another
+    worker's live build") a residual failure rate persists -- roughly
+    10-20% per run across several measurement rounds -- and traces to a
+    genuine, well-evidenced (though not live-captured) upstream hazard
+    rather than plain scheduling slowness: see the `portable-pty`
+    fork-safety backlog entry. Two rounds of raising `read_terminal_
+    update`'s fixed timeout (10s to 60s to 120s, `TERMINAL_UPDATE_TIMEOUT`
+    in `tests/e2e.rs`) each got defeated by a failure landing at *exactly*
+    the new ceiling -- the signature of a genuine stall, not merely
+    "slower under load" -- which is what prompted the deeper
+    investigation. Landed fixes: (1) the timeout raise above, generous
+    for the realistic case; (2) a nextest test-group
+    (`.config/nextest.toml`) serializing every test in the `horizon-
+    sessiond::e2e` binary against each other (`max-threads = 1`), removing
+    self-contention as a variable; (3) a production fix in `crates/
+    horizon-sessiond/src/terminal.rs`'s `TerminalHost::create` --
+    previously a stuck PTY spawn could wedge that connection's entire
+    message loop forever (`Command::spawn` blocks its calling thread with
+    no way to interrupt it); now each spawn attempt is bounded to 10s
+    (`TERMINAL_SPAWN_TIMEOUT`) on its own thread with up to 3 retries
+    before reporting a `TerminalUpdate::Error`, converting an unrecoverable
+    freeze into a bounded, retriable failure; (4) a follow-up correctness
+    fix to (3) caught in review: the original retry design let a late,
+    abandoned attempt's success unconditionally overwrite a session an
+    earlier retry had already installed, and both attempts' threads would
+    then call `forward_updates` for the same id, interleaving two
+    different shells' output into one pane. `TerminalHost::install_if_
+    vacant` now makes installation first-wins (`HashMap::Entry`, checked
+    under the lock) and kills/shuts down a losing late duplicate rather
+    than letting it live on unobserved (`HostedTerminal` has no `Drop`
+    impl, so this must be explicit) -- covered by two unit tests
+    (`terminal::tests::install_if_vacant_*`). None of this is a full fix
+    for the root cause -- which, per the residual failure rate above, is
+    not eliminated under the extreme synthetic case, and now demonstrably
+    not fully eliminated under realistic load either. Left open for a
+    follow-up: see the `portable-pty` backlog entry for options (upgrade,
+    vendor patch, or accept the retry mitigation as the practical ceiling
+    given how rare it now is).
 29. **Git dependencies carry no `rev` pins in Cargo.toml — Cargo.lock is
     the only pin** — the root `Cargo.toml` declares `gpui`, `gpui_platform`,
     `gpui-component`, and `gpui-component-assets` as bare `git = ...` deps
@@ -469,3 +521,70 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     window, which this guard intentionally passes through (only
     Enter/Return is treated as a plausible confirming key) — revisit only
     if dogfooding observes doubled characters.
+31. **Suspected upstream fork-safety hazard in `portable-pty` 0.9.0's PTY
+    spawn — can wedge a terminal spawn under extreme concurrent load, at a
+    rate a bounded retry only partially masks** — found while validating
+    the backlog-27/28 fix (raised e2e timeouts to a generous 120s, then hit
+    *exactly* that ceiling twice in a row -- once at 60.071s against the
+    old ceiling, again at 120.084s against the new one -- while
+    stress-testing with a continuous `cargo build -p horizon --release` +
+    `cargo clean` loop). Hitting the ceiling exactly, on the very first PTY
+    update after `Create`, both times is the signature of a genuine hang,
+    not merely "slower under load" (a scaling delay would show up at
+    varying points below the ceiling, not pinned to it).
+    `crates/horizon-sessiond/src/terminal.rs`'s `spawn_terminal` calls
+    `portable_pty`'s `MasterPty::spawn_command`
+    (`portable-pty-0.9.0/src/unix.rs:228`), which sets a `pre_exec` closure
+    run in the fork()'d child *before* `execve`. That closure calls
+    `close_random_fds()` (`unix.rs:152`), which does `std::fs::
+    read_dir("/dev/fd")` — a heap-allocating, non-async-signal-safe
+    operation. Rust's own `pre_exec` docs warn exactly about this: if
+    another thread in the (heavily multi-threaded, Tokio + per-session +
+    per-terminal OS threads) parent held e.g. glibc's malloc arena lock at
+    the instant of `fork()`, the child inherits that lock permanently
+    locked (the thread that would release it doesn't exist in the child's
+    copy), so any allocation in the child -- exactly what `read_dir` does --
+    blocks forever, and the process never reaches `execve`.
+    **Not confirmed live**: a follow-up run instrumented with per-step
+    diagnostic logging (entry to `create`, before/after each spawn thread,
+    before/after `recv_timeout`) failed to reproduce the hang across 25
+    consecutive tries under similar stress, so the exact stall point was
+    never actually observed mid-hang -- this remains a well-evidenced
+    hypothesis from the code and Rust's documented hazard, not a proven
+    live capture.
+    **Mitigation landed, not a full fix**: `TerminalHost::create` now
+    bounds each spawn attempt to 10s on its own thread and retries up to 3
+    times before reporting a `TerminalUpdate::Error`, so a stuck spawn can
+    no longer wedge a connection's message loop forever (see backlog-28).
+    A review pass on that mitigation caught a second, distinct bug it
+    introduced (fixed in the same follow-up): the original design let a
+    late, abandoned attempt's success unconditionally overwrite a session
+    an earlier retry had already installed, so both attempts' `forward_
+    updates` loops could end up running for the same `session_id`,
+    interleaving two different shells' output into one pane.
+    `TerminalHost::install_if_vacant` now makes installation first-wins
+    and kills a losing late duplicate instead. Measured with the full
+    mitigation in place: focused stress runs of just this test under the
+    same sustained synthetic load still showed a residual failure rate
+    around 10% (4/40 in one round), i.e. the retry reduces but does not
+    eliminate the observed rate under *extreme* synthetic contention.
+    Under realistic load (plain `cargo nextest run --workspace`, no extra
+    synthetic stress -- the actual shape of the original flake reports)
+    it held at 30/30 clean across two rounds before the install-race
+    follow-up, then hit once in 15 runs after it (same failure signature,
+    same test, same ~120s ceiling) -- so "rare," not "eliminated," is the
+    honest characterization even under realistic load; see backlog-28 for
+    the combined count.
+    Out of scope to fix at the root here (patching/vendoring a third-party
+    crate is a separate, larger decision) -- options for a follow-up:
+    upgrade `portable-pty` if a fixed release ever ships, `[patch]` a local
+    fork that drops or reworks `close_random_fds`, increase `MAX_SPAWN_
+    ATTEMPTS`/add inter-attempt backoff in `terminal.rs` if the residual
+    rate ever proves disruptive in practice, or get a live capture (attach
+    `strace`/`gdb` to a hung `horizon-sessiond` test process before its
+    `Drop`-triggered cleanup fires) to actually confirm or rule out the
+    fork-safety hypothesis. Worth tracking because this isn't just a test
+    hazard -- if real, it means a real user's terminal spawn could
+    occasionally still fail (now reported as an error rather than freezing
+    forever, per the mitigation above) under heavy host load. Recorded
+    2026-07-12.

@@ -72,9 +72,28 @@ use tokio::sync::Notify;
 const HOST_TOOL_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// How long [`Connection::replay_events`] waits for a live session's own
-/// thread to answer a replay request. Purely a local channel hop (no I/O),
-/// so this only ever protects against a session thread that's wedged.
-const REPLAY_TIMEOUT: Duration = Duration::from_secs(5);
+/// thread to answer a replay request. **Not** purely a local channel hop:
+/// a just-resumed session's thread does real work before it ever reaches
+/// the loop that drains the `replay` channel, including blocking on
+/// [`SessiondState::wait_for_duckdb_store`] -- which is deliberately *not*
+/// ordered against [`SessiondState::mark_resume_ready`] (`Control::
+/// SessionList`/`SessionLoad`'s own readiness gate), so a client can see a
+/// resumed session as "listed" before its thread has gotten anywhere near
+/// this channel. Under real contention (many sessiond processes competing
+/// for CPU/disk, e.g. the full workspace test suite running in parallel)
+/// that DuckDB rebuild-or-open wait can genuinely take several seconds,
+/// and a timeout here has no way to distinguish "thread not there yet"
+/// from "session truly has no history" -- it silently falls back to an
+/// empty `Vec` either way (see the call site). A production `session_load`
+/// racing this hard would misreport a real session as empty, so this is
+/// sized generously to make that misfire vanishingly rare while still
+/// bounding a genuinely wedged session thread. (Originally 5s -- too tight
+/// under load, see `docs/tasks/backlog.md` #27. This crate's e2e tests
+/// independently hit a comparable real-PTY stall past 60s under a
+/// deliberately extreme concurrent `cargo build --release` loop during that
+/// fix's own validation -- see `TERMINAL_UPDATE_TIMEOUT`'s doc comment in
+/// `tests/e2e.rs` -- so this is sized with the same margin.)
+const REPLAY_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The connection-swappable outgoing envelope queue every session thread
 /// sends through — see the module doc's "sessions are scoped to the

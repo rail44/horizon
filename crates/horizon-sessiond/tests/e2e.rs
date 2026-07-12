@@ -407,12 +407,30 @@ async fn write_terminal_command(
         .unwrap();
 }
 
+/// How long a single [`read_terminal_update`] call waits for the next
+/// update. This test spawns a *real* PTY backed by a real interactive shell
+/// (`terminal_spec`'s `/bin/sh -i`) -- fork/exec, shell rc processing, and
+/// the `read_pty` thread that pumps its output all cost real wall-clock
+/// time that a CPU-starved host (e.g. the full workspace suite running in
+/// parallel, or a concurrent `cargo build`) can genuinely stretch past a
+/// tight budget; this isn't a fixed local computation with a knowable
+/// upper bound. Generous on purpose (`docs/tasks/backlog.md` #28: 10s was
+/// observed to flake under exactly this kind of contention even with no
+/// other horizon-sessiond instance involved; even 60s was observed to flake
+/// once during this fix's own validation, under a deliberately extreme
+/// concurrent `cargo build --release` loop) -- the nextest test-group in
+/// `.config/nextest.toml` also serializes this binary's own tests against
+/// each other so they don't contend with themselves, but a large ceiling
+/// here still protects against contention from processes outside this test
+/// run.
+const TERMINAL_UPDATE_TIMEOUT: Duration = Duration::from_secs(120);
+
 async fn read_terminal_update(
     reader: &mut BufReader<OwnedReadHalf>,
     session_id: uuid::Uuid,
 ) -> TerminalUpdate {
     let envelope =
-        tokio::time::timeout(Duration::from_secs(10), session_wire::read_envelope(reader))
+        tokio::time::timeout(TERMINAL_UPDATE_TIMEOUT, session_wire::read_envelope(reader))
             .await
             .expect("timed out waiting for a terminal update")
             .unwrap()
@@ -1485,22 +1503,44 @@ async fn send_session_load(writer: &mut OwnedWriteHalf, session_id: SessionId) {
 /// returning them in order -- used for `session_load`'s replay burst, which
 /// (unlike `collect_events_until`'s callers) has no single terminal event to
 /// watch for: the reply is just "however many committed events this session
-/// has", full stop. A generous quiet window (bigger than a same-host
-/// loopback round trip needs) distinguishes "done replaying" from "still
-/// coming".
+/// has", full stop.
+///
+/// Two different waits, not one: the *first* read waits out
+/// [`REPLAY_FIRST_EVENT_TIMEOUT`], because on the server side
+/// `Connection::replay_events` (`crates/horizon-sessiond/src/session.rs`)
+/// can legitimately take that long under contention -- a just-resumed
+/// session's thread does real work (including a DuckDB rebuild-or-open
+/// wait) before it's able to answer at all, and that wait is deliberately
+/// not ordered against the `session_list`/`session_load` readiness gate a
+/// client already passed by the time it calls this. Every read *after* the
+/// first only needs a short quiet window: once the burst starts, the
+/// server sends every event back-to-back with no per-event wait, so a
+/// window "bigger than a same-host loopback round trip needs" reliably
+/// distinguishes "done replaying" from "still coming". Using the long
+/// timeout for every read (the original shape) would work too but makes a
+/// genuinely-empty session's replay take the full generous timeout to
+/// confirm; using the short window for the first read (also the original
+/// shape) is what made this collector race the server's own contention
+/// budget and report a real session as empty (`docs/tasks/backlog.md`
+/// #27).
 async fn collect_replayed_events(
     reader: &mut BufReader<OwnedReadHalf>,
     session_id: SessionId,
 ) -> Vec<Event> {
+    const REPLAY_FIRST_EVENT_TIMEOUT: Duration = Duration::from_secs(120);
+    const REPLAY_QUIESCENCE_WINDOW: Duration = Duration::from_millis(500);
+
     let mut events = Vec::new();
+    let mut budget = REPLAY_FIRST_EVENT_TIMEOUT;
     loop {
-        match tokio::time::timeout(Duration::from_millis(500), wire::read_envelope(reader)).await {
+        match tokio::time::timeout(budget, wire::read_envelope(reader)).await {
             Ok(Ok(Some(envelope))) => {
                 assert_eq!(envelope.session_id, Some(session_id));
                 let EnvelopeBody::Event(event) = envelope.body else {
                     panic!("expected an event envelope, got {:?}", envelope.body);
                 };
                 events.push(event);
+                budget = REPLAY_QUIESCENCE_WINDOW;
             }
             Ok(Ok(None)) => panic!("connection closed while collecting replayed events"),
             Ok(Err(err)) => panic!("wire error while collecting replayed events: {err}"),

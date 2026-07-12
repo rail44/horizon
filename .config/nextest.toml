@@ -1,0 +1,26 @@
+# nextest configuration -- see https://nexte.st/docs/configuration for the
+# full schema.
+
+# `horizon-sessiond`'s `e2e` integration test binary (crates/horizon-sessiond/
+# tests/e2e.rs) spawns a real `horizon-sessiond` child process per test --
+# some tests additionally spawn a real PTY backed by a real shell. Under
+# nextest's default per-binary parallelism, that means dozens of real
+# processes (and, in the terminal tests, real PTYs) all competing for CPU at
+# once, racing wall-clock timeouts against both each other *and* whatever
+# else happens to be running on the machine (a concurrent `cargo build`, a
+# sibling worker's own gate run, ...). This tripped the merge gate at least
+# 6 times on 2026-07-12 alone (`docs/tasks/backlog.md` #27, #28: an empty
+# `session_load` replay racing a resumed session's own startup work, and a
+# real-PTY terminal test's fixed timeout). Real per-test fixes (generous
+# poll ceilings instead of tight fixed timeouts, a production timeout bump)
+# landed alongside this config, but given the repeated merge-tax history
+# this test-group is deliberate belt-and-braces on top of those: serializing
+# the binary's tests against *each other* removes self-contention entirely
+# as a variable, even though it can't do anything about contention from
+# processes outside this nextest invocation.
+[[profile.default.overrides]]
+filter = 'binary_id(horizon-sessiond::e2e)'
+test-group = 'sessiond-e2e'
+
+[test-groups.sessiond-e2e]
+max-threads = 1
