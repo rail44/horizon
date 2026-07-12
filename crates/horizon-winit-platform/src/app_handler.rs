@@ -29,6 +29,7 @@ use crate::input::{
     winit_key_event_to_keystroke, winit_modifiers_to_gpui, winit_mouse_button_to_gpui,
     winit_scroll_delta_to_gpui, winit_touch_phase_to_gpui,
 };
+use crate::input_trace::input_trace;
 use crate::platform::WinitPlatform;
 use crate::window::WinitWindowInner;
 
@@ -194,6 +195,12 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
                 );
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                input_trace!(
+                    "winit KeyboardInput physical_key={:?} state={:?} repeat={}",
+                    event.physical_key,
+                    event.state,
+                    event.repeat
+                );
                 let modifiers = inner.state.borrow().modifiers;
                 if let Some(keystroke) = winit_key_event_to_keystroke(&event, modifiers) {
                     let input = match event.state {

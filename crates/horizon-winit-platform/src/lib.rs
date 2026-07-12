@@ -18,6 +18,7 @@ mod cursor;
 mod dispatcher;
 mod display;
 mod input;
+mod input_trace;
 #[cfg(target_os = "macos")]
 mod macos_menu;
 mod platform;

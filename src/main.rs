@@ -7,6 +7,7 @@
 
 mod agent;
 mod control_plane;
+mod input_trace;
 mod keymap;
 mod palette;
 mod session_manager;

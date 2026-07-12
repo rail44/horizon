@@ -17,7 +17,16 @@ once at session spawn (`src/terminal/session.rs`):
 - `HORIZON_GPUI_DRIVE=<bytes>` — typed as raw PTY input into the first
   session ~1.5s after startup. `HORIZON_GPUI_DRIVE_ENTER=1` sends the
   trailing Enter through the key encoder (exercises the core-side kitty
-  path).
+  path). This bypasses the real winit→gpui key/IME pipeline entirely
+  (writes straight to the session's command channel), so it cannot
+  verify that pipeline — use `HORIZON_INPUT_TRACE` for that.
+- `HORIZON_INPUT_TRACE=1` (or a file path) — traces every hop of the
+  real key/IME pipeline: winit's `KeyboardInput`/`Ime` arrival
+  (`crates/horizon-winit-platform`), `TerminalView::handle_key`/
+  `replace_text_in_range` entry and verdict (`src/terminal/mod.rs`), and
+  the PTY-send decision. One `input-trace:`-prefixed line per event, key
+  names and event kinds only — never the actual typed/composed text.
+  Zero cost when unset.
 
 One-shot check script:
 
