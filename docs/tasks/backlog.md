@@ -414,4 +414,11 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     Given the known rev×toolchain coupling pain (gpui-migration-design.md's
     termy/pathfinder note), pin explicit `rev =` values in Cargo.toml so
     the pin survives lockfile regeneration and is visible in review diffs.
-    Small mechanical task. Recorded 2026-07-12.
+    Small mechanical task. Recorded 2026-07-12. **Resolved 2026-07-12**
+    with a narrower shape than written: `gpui`/`gpui_platform` cannot carry
+    a manifest `rev` (it splits the graph against gpui-component's own
+    unpinned edge; `[patch]` to the same source is rejected by Cargo —
+    both verified empirically). Landed instead: explicit rev pins on the
+    gpui-component family, a recovery-command comment in Cargo.toml, and
+    `--locked` on the gate's clippy/nextest invocations (AGENTS.md +
+    hooks/pre-commit) so silent lock re-resolution fails loudly.
