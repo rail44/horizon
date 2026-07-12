@@ -38,7 +38,6 @@ futures = "0.3"
 # nextest with `--locked`, so any such drift fails the gate loudly instead
 # of silently re-resolving (see AGENTS.md / hooks/pre-commit).
 gpui = { git = "https://github.com/zed-industries/zed" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "wayland"] }
 # gpui-component/gpui-component-assets have no such conflict (nothing
 # else in the graph depends on them), so they carry an explicit pin.
 # Bump deliberately: update the rev below, then
@@ -60,13 +59,21 @@ tokio = { version = "1.52", features = ["rt", "net", "io-util", "time", "macros"
 unicode-width = "0.2"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 
-# Linux-only opt-in windowing backend (HORIZON_WINDOWING=winit / [ui]
-# windowing = "winit", see docs/winit-backend-design.md) — target-gated so
-# the crate (and its winit/gpui_wgpu/arboard dependency edge) is only ever
-# pulled into the build graph on Linux; the call site in src/main.rs is
-# itself `#[cfg(target_os = "linux")]`-gated to match.
+# The Linux windowing backend (see docs/winit-backend-design.md) —
+# target-gated so the crate (and its winit/gpui_wgpu/arboard dependency
+# edge) is only ever pulled into the build graph on Linux; the call site in
+# src/main.rs is itself `#[cfg(target_os = "linux")]`-gated to match.
 [target.'cfg(target_os = "linux")'.dependencies]
 horizon-winit-platform = { path = "crates/horizon-winit-platform" }
+
+# `gpui_platform` (gpui's own platform backend) is only called directly by
+# this crate on non-Linux targets (`src/main.rs`'s `build_application`) —
+# on Linux, `horizon-winit-platform` is the only windowing path. Note this
+# is manifest hygiene only, not a build-graph reduction:
+# `gpui-component`'s own (unconditional) dependency on `gpui_platform`
+# still pulls `gpui_linux` transitively into the Linux build regardless.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "wayland"] }
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

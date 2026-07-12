@@ -2,12 +2,13 @@
 //! `gpui_wgpu`. Production port of the `spikes/gpui-winit/` prototype (see
 //! `docs/research/winit-backend-spike.md` for the findings this crate
 //! backs up, and `docs/winit-backend-design.md` for this crate's own
-//! architecture and the opt-in switch that selects it).
+//! architecture and how `src/main.rs` selects it).
 //!
 //! Every functional module is gated `#[cfg(target_os = "linux")]`: on other
-//! platforms this crate exposes nothing, so `src/main.rs`'s windowing
-//! switch must itself be `#[cfg(target_os = "linux")]`-gated at the call
-//! site and fall back to the native `gpui_platform` backend elsewhere.
+//! platforms this crate exposes nothing, so `src/main.rs`'s
+//! `build_application` must itself be `#[cfg(target_os = "linux")]`-gated
+//! at the call site and fall back to the native `gpui_platform` backend
+//! elsewhere.
 
 #[cfg(target_os = "linux")]
 mod active_loop;

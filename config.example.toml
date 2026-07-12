@@ -182,13 +182,6 @@ term = "xterm-kitty"
 font_family = "Iosevka Nerd Font Mono, Symbols Nerd Font Mono, Noto Sans Mono CJK JP, monospace, Noto Sans CJK JP"
 window_width = 1100.0
 window_height = 720.0
-# Windowing backend: "native" (default, gpui's own Linux backend) or
-# "winit" (horizon-winit-platform, Linux-only -- decorated windows via
-# sctk-adwaita on Wayland compositors like GNOME/Mutter that refuse
-# server-side decoration; silently falls back to "native" on other
-# platforms). The HORIZON_WINDOWING env var, if set, wins over this.
-# Startup-only. See docs/winit-backend-design.md.
-windowing = "native"
 
 # ---------------------------------------------------------------------------
 # [keybindings] — key chord string -> command id, layered on top of
