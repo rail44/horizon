@@ -117,6 +117,10 @@ pub struct TerminalView {
     // IME preedit — client-side only, never sent to the PTY. The commit
     // path (replace_text_in_range) writes raw UTF-8 bytes instead.
     ime_marked_text: Option<String>,
+    // Guards against the "phantom" physical Enter that Wayland's
+    // text-input-v3 delivers independently of an IME commit (see
+    // docs/tasks/backlog.md #30).
+    ime_commit_guard: ImeCommitGuard,
     // Local text selection drag in progress (mouse-reporting off).
     selecting: bool,
     // The button held while the app has mouse reporting on, so drags and
@@ -148,6 +152,7 @@ impl TerminalView {
             })),
             metrics: Rc::new(Cell::new(None)),
             ime_marked_text: None,
+            ime_commit_guard: ImeCommitGuard::default(),
             selecting: false,
             reporting_button: None,
             _session_observation: observation,
@@ -285,6 +290,16 @@ impl TerminalView {
             return;
         }
         let keystroke = &event.keystroke;
+        // A physical Enter that confirmed an IME composition arrives as
+        // an independent KeyDownEvent right after the commit already
+        // cleared ime_marked_text above (Wayland's text-input-v3 never
+        // lets the compositor consume keys on the client's behalf — see
+        // docs/tasks/backlog.md #30). The guard is consumed by the very
+        // next key event regardless of outcome, so it can't leak into a
+        // later, unrelated keystroke.
+        if self.ime_commit_guard.should_suppress(&keystroke.key) {
+            return;
+        }
         // Cmd+C / Cmd+V are host shortcuts, not terminal input (the
         // command-model binding arrives with M3; these are the M1 stand-in).
         if keystroke.modifiers.platform && !keystroke.modifiers.control {
@@ -323,6 +338,38 @@ impl TerminalView {
 
 fn utf16_len(text: &str) -> usize {
     text.chars().map(char::len_utf16).sum()
+}
+
+/// The pure decision behind the IME "phantom Enter" guard
+/// (docs/tasks/backlog.md #30): Wayland's text-input-v3 delivers the
+/// physical key that confirmed an IME composition as an independent
+/// `KeyDownEvent` *after* the commit already cleared marked text, so a
+/// naive `ime_marked_text.is_some()` check can't tell that keydown apart
+/// from an ordinary, unrelated keystroke.
+///
+/// `note_commit` arms the guard when a composition was just committed.
+/// `should_suppress` is then called with the very next key event's name
+/// (regardless of what that key is) and unconditionally disarms the
+/// guard — so it can only ever affect the one keydown immediately
+/// following a commit, never a later one. It reports "suppress" only
+/// when that key is Enter/Return, the one key that plausibly caused the
+/// commit; every other key (a phantom Space redelivery, ordinary typing,
+/// ...) passes through unaffected.
+#[derive(Default)]
+struct ImeCommitGuard {
+    armed: bool,
+}
+
+impl ImeCommitGuard {
+    fn note_commit(&mut self, was_composing: bool) {
+        if was_composing {
+            self.armed = true;
+        }
+    }
+
+    fn should_suppress(&mut self, key: &str) -> bool {
+        std::mem::take(&mut self.armed) && key == "enter"
+    }
 }
 
 impl EntityInputHandler for TerminalView {
@@ -372,6 +419,7 @@ impl EntityInputHandler for TerminalView {
         cx: &mut Context<Self>,
     ) {
         let was_composing = self.ime_marked_text.take().is_some();
+        self.ime_commit_guard.note_commit(was_composing);
         // Under kitty "report all keys", a plain printable keypress was
         // already sent as TerminalCommand::Key from on_key_down; the
         // text-input pipeline's copy must be dropped or it double-feeds.

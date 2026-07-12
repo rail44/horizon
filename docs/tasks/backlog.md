@@ -444,3 +444,18 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     `was_composing`, cleared at the next `on_key_down` regardless of
     outcome) rather than relying solely on `ime_marked_text.is_some()`.
     Recorded 2026-07-12.
+    *(fixed 2026-07-12)* Confirmed vulnerable: `TerminalView::handle_key`
+    in `src/terminal/mod.rs` did exactly what the analysis predicted —
+    once `replace_text_in_range` clears `ime_marked_text` on commit, the
+    following phantom `KeyDownEvent` for Enter falls through the guard
+    and sends `\r`. Fixed with a pure `ImeCommitGuard` (armed by
+    `replace_text_in_range` on `was_composing`, consumed unconditionally
+    by the next `handle_key` call, suppressing only when that key is
+    Enter) — covered by unit tests in `src/terminal/tests.rs` for the
+    single-suppression, rapid-typing, Space/candidate-commit, and
+    consecutive-composition cases. Live repro with a real IME was out of
+    scope (native Wayland blocks key injection); final visual
+    confirmation is deferred to owner dogfooding. The agent composer
+    (`src/agent/view.rs`) uses gpui-component's `Input`/`InputState`
+    widget rather than a hand-rolled `EntityInputHandler`, so this guard
+    doesn't apply there — left as-is.
