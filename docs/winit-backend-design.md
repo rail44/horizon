@@ -427,6 +427,106 @@ what this fix's own validation added instead: a real-desktop, real-compositor
 repeated-run protocol smoke (see the review request / worker report for
 this item's exact numbers).
 
+## Investigation: total keyboard-input death on the owner's daily driver (2026-07-12)
+
+Symptom reported: neither terminal nor agent panes accept *any* keyboard
+input on `main` (`7ab2cc1`), while mouse interaction (click, scroll, drag)
+keeps working. Input had worked earlier the same day, both in the leg 1/2
+spike and in the owner's opt-in dogfooding of this crate at merge
+`c952649`.
+
+**Code path ruled out.** `git diff c952649 7ab2cc1` across every file on
+the winit→gpui→pane key path — `app_handler.rs`'s `WindowEvent::KeyboardInput`
+arm and `dispatch_input`, `window.rs`'s callback wiring and
+`set_ime_allowed(true)`, `input.rs`'s keystroke mapping, `workspace.rs`'s
+focus wiring (`focus_active`, `track_focus`), and `terminal/mod.rs`'s
+`handle_key`/`ime_marked_text` guard — shows no functional change; the only
+diffs in that span are macOS-only additions (`macos_menu.rs`, muda wiring)
+and the unrelated `completed_frame()` no-op documented above. Confirmed
+live: with temporary `eprintln!` instrumentation at each hop (raw winit
+`KeyEvent`, the mapped `Keystroke`, `dispatch_input`'s callback result, and
+`TerminalView::handle_key`'s entry), a real end-to-end keypress — injected
+via `xdotool key --window <XID>` against an isolated build (own
+`HORIZON_SESSIOND_SOCKET`/`HORIZON_WORKSPACE_STATE`/etc., never touching the
+owner's live instance) under a throwaway `Xvfb :77` display — flows
+correctly through every hop with the current, *unmodified* code:
+`WindowEvent::KeyboardInput` → `Keystroke` → `PlatformInput::KeyDown` →
+`TerminalView::handle_key`. The pipeline itself is intact.
+
+**A real, reproducible key-eating mechanism was found, but on the X11
+fallback path, not proven on native Wayland.** The same isolated build,
+run instead against the real desktop's XWayland `DISPLAY=:0` (forcing
+winit's X11 backend per the spike's technique — unset `WAYLAND_DISPLAY`/
+`WAYLAND_SOCKET`), delivered **zero** `WindowEvent::KeyboardInput` events
+for real, properly-focused keypresses (confirmed via `xdotool
+getactivewindow` reporting the test window active, and real `MouseDown`/
+`MouseUp` delivering correctly for a click at the same moment) — every
+single injected key vanished, repeatably, across several attempts and
+several key values. Toggling one line — `window.set_ime_allowed(true)` →
+`false` in `WinitWindowInner::new` (`window.rs`), a temporary diagnostic
+edit, reverted after the experiment — immediately restored delivery on the
+identical window, identical desktop, identical ibus/mozc session. Root
+cause, confirmed by reading winit 0.30.13's own source
+(`platform_impl/linux/x11/event_processor.rs:131-179`): with IME allowed,
+*every* X11 event is routed through `XFilterEvent` before winit ever sees
+it; if the IME (ibus's XIM server here — `ibus-daemon --xim`, running
+continuously since before this session) claims an event via
+`XFilterEvent`, winit discards it silently and never emits
+`WindowEvent::KeyboardInput`. An XIM implementation that's gotten into a
+bad state can therefore make a client believe it's receiving *zero* key
+events forever, with no error, no crash, and mouse unaffected — matching
+the reported symptom exactly. `window.set_ime_allowed(true)` is untouched
+in every commit since this crate's introduction (`56f28ba`), including the
+dogfooded merge, so this specific line is not itself a code regression;
+whatever is different is the ibus/XIM session's own state, not Horizon's
+code.
+
+**Why this doesn't fully explain the report.** The owner's daily driver
+runs on native Wayland (the sole path now — no `HORIZON_WINDOWING`
+override exists to force X11), and winit's Wayland keyboard path
+(`platform_impl/linux/wayland/seat/keyboard/mod.rs`) has no equivalent
+gate: `wl_keyboard` events reach the client unconditionally, independent
+of `zwp_text_input_v3` state — confirmed by grepping that file for any
+IME/text-input reference (none). So the XIM mechanism above cannot be
+*the* mechanism on Wayland, even though the same physically-stuck IME
+daemon is a live suspect for an analogous but different Wayland-side
+failure (e.g. GNOME Shell's own compositor-level input-method integration
+getting stuck, which is outside winit's or Horizon's code and not
+reproducible without safe access to the owner's real compositor). Testing
+this directly was not attempted: native Wayland has no safe, targeted
+synthetic-injection path available here (`wtype` uses
+`zwp_virtual_keyboard_manager_v1`, which has no per-window targeting and
+would land on whatever surface the *real* compositor currently treats as
+focused — an unacceptable risk on the owner's live shared desktop), and
+restarting the shared `ibus-daemon` to test the recovery hypothesis was
+correctly declined as another live-desktop side effect.
+
+**Conclusion: no code fix landed.** The investigation did not find a
+`main`-introduced code regression in the key-dispatch pipeline; it found
+and precisely reproduced one real IME-related failure mode (X11/XIM) that
+is a plausible sibling of, but not proven identical to, whatever the owner
+is hitting on native Wayland. The fastest next diagnostic for the owner:
+switch input source / restart the input method (or log out and back in)
+and see whether that alone restores keyboard input in the *existing*
+running Horizon — if it does, this is IME-daemon state, not a Horizon bug,
+and no code change is needed here.
+
+**Masking question, answered.** `HORIZON_GPUI_DRIVE`
+(`src/terminal/session.rs`) does **not** exercise the winit→gpui key path
+at all: it spawns a thread that sends `TerminalCommand::Input`/`::Key`
+directly on the session's command channel, entirely bypassing
+`WindowEvent::KeyboardInput`, `PlatformInput::KeyDown`, gpui's focus/dispatch
+tree, and `TerminalView::handle_key`. `scripts/check-gpui-terminal.sh`
+(which drives this tap) could not have caught this regression class even
+if one existed — same masking pattern as the configure-stall bug above,
+where the frame-dump tap sits below the render pipeline; here the drive
+tap sits below the *input* pipeline. No cheap fix is proposed: a real
+synthetic-injection check would need either a safe native-Wayland
+injection story (none available on this host) or a permanently-running
+`Xvfb`+`xdotool` smoke gated behind an explicit opt-in env var, which is a
+new piece of test infrastructure, not a one-line addition — left for a
+follow-up if the owner wants it.
+
 ## Out of scope
 
 Multi-window, screen capture, drag&drop file opening, Windows menu-bar
