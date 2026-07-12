@@ -57,7 +57,19 @@ impl Store {
         Ok(())
     }
 
-    pub(super) fn project_event(&self, record: EventRecordRef) -> Result<()> {
+    /// Projects `record` into its dedicated transcript/tool/approval table.
+    /// Returns `Ok(true)` when this was a legacy `TurnEnded` event with no
+    /// `turn_id` whose `agent_turns` projection was skipped as a result --
+    /// see [`Self::insert_turn`]'s doc comment. Every other event returns
+    /// `Ok(false)`, including the no-dedicated-table markers below. Callers
+    /// that process many records in one pass (a rebuild, an incremental
+    /// catch-up) sum this flag across the batch and print one combined
+    /// summary instead of one line per event -- see
+    /// `import::apply_records`'s doc comment. The rare *live* case (a
+    /// same-run event genuinely missing a `turn_id`, which should not
+    /// happen for a current provider) is handled by
+    /// `event_log::writer::run_writer`'s own warn-once latch.
+    pub(super) fn project_event(&self, record: EventRecordRef) -> Result<bool> {
         let EventRecordRef {
             event_id,
             session_id,
@@ -67,13 +79,16 @@ impl Store {
         } = record;
         match event {
             Event::MessageCommitted(message) => {
-                self.insert_message(event_id, session_id, sequence, message, false)
+                self.insert_message(event_id, session_id, sequence, message, false)?;
+                Ok(false)
             }
             Event::ReasoningDelta(delta) | Event::AssistantTextDelta(delta) => {
-                self.insert_delta(event_id, session_id, sequence, delta)
+                self.insert_delta(event_id, session_id, sequence, delta)?;
+                Ok(false)
             }
             Event::ToolCallRequested(request) => {
-                self.insert_tool_call(event_id, session_id, sequence, request)
+                self.insert_tool_call(event_id, session_id, sequence, request)?;
+                Ok(false)
             }
             // A human approved this call -- the order-derived counterpart to
             // the deny short-circuit handled in `insert_tool_result` below
@@ -82,13 +97,16 @@ impl Store {
             // pending (`outcome IS NULL`); a call with no approval row at
             // all (never gated) simply matches nothing.
             Event::ToolCallStarted(call_id) => {
-                self.mark_approval_outcome(session_id, &call_id.0, "approved")
+                self.mark_approval_outcome(session_id, &call_id.0, "approved")?;
+                Ok(false)
             }
             Event::ToolCallFinished(result) => {
-                self.insert_tool_result(event_id, session_id, sequence, result)
+                self.insert_tool_result(event_id, session_id, sequence, result)?;
+                Ok(false)
             }
             Event::ApprovalRequested(request) => {
-                self.insert_approval(event_id, session_id, sequence, request)
+                self.insert_approval(event_id, session_id, sequence, request)?;
+                Ok(false)
             }
             Event::TurnEnded(reason) => self.insert_turn(event_id, session_id, turn_id, *reason),
             // No projection table wants these yet: they're timing markers
@@ -102,7 +120,7 @@ impl Store {
             | Event::ProviderRequestFirstToken
             | Event::ProviderRequestFinished
             | Event::Error(_)
-            | Event::Exited(_) => Ok(()),
+            | Event::Exited(_) => Ok(false),
         }
     }
 
@@ -261,22 +279,23 @@ impl Store {
     /// mirrors the existing per-tool-call granularity, no derived
     /// durations). `turn_id` should always be `Some` for a real
     /// `TurnEnded` (see `Event::TurnEnded`'s doc comment); if it's ever
-    /// `None`, this warns to stderr and skips rather than panicking --
-    /// this is a rebuildable, non-authoritative projection, so a bad event
-    /// here must not take down the writer thread or the rebuild.
+    /// `None` (a legacy pre-turn_id event, the common real-world case
+    /// against an archived log), this skips the projection and returns
+    /// `Ok(true)` rather than panicking or printing here -- this is a
+    /// rebuildable, non-authoritative projection, so a bad event here must
+    /// not take down the writer thread or the rebuild, and a caller
+    /// replaying thousands of legacy records at once must not print one
+    /// line per skip (see [`Self::project_event`]'s doc comment for who
+    /// reports this and how).
     fn insert_turn(
         &self,
         event_id: &str,
         session_id: &str,
         turn_id: Option<&str>,
         reason: TurnEndReason,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let Some(turn_id) = turn_id else {
-            eprintln!(
-                "horizon-agent: TurnEnded event {event_id} for session {session_id} has no \
-                 turn_id; skipping agent_turns projection"
-            );
-            return Ok(());
+            return Ok(true);
         };
         self.conn.execute(
             "INSERT INTO agent_turns (session_id, turn_id, end_reason, ended_event_id)
@@ -286,7 +305,7 @@ impl Store {
                 ended_event_id = excluded.ended_event_id",
             params![session_id, turn_id, turn_end_reason_text(reason), event_id],
         )?;
-        Ok(())
+        Ok(false)
     }
 }
 

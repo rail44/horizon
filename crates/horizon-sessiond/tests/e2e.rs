@@ -2288,8 +2288,18 @@ async fn unchanged_log_skips_duckdb_rebuild_on_respawn() {
 }
 
 /// Task 2's other half: a log that grew (or otherwise changed) since the
-/// projection was last built must still trigger a full rebuild -- the skip
-/// optimization must never cause stale data to look "current".
+/// projection was last built must still be reconciled -- the skip
+/// optimization must never cause stale data to look "current". Since
+/// backlog-32's incremental-catch-up work, a log that merely *grew* (this
+/// test's case: a second session's events appended while sessiond was
+/// down, with the existing mark still a valid prefix of the new tail) is
+/// reconciled by catching up just the new tail rather than a full rebuild
+/// -- see `event_log::writer::ProjectionCurrency::Behind`, and its sibling
+/// unit tests in that module (`behind_mark_triggers_incremental_catch_up_
+/// that_preserves_earlier_rows`, `ahead_mark_falls_back_to_a_full_rebuild`)
+/// for the full-rebuild-fallback cases (an ahead mark, or a missing store)
+/// that are cheaper to exercise as in-process unit tests than as a second
+/// `horizon-sessiond` e2e spawn.
 #[tokio::test]
 async fn stale_log_triggers_duckdb_rebuild_on_respawn() {
     let socket_path = std::env::temp_dir().join(format!(
@@ -2347,11 +2357,12 @@ async fn stale_log_triggers_duckdb_rebuild_on_respawn() {
     let second =
         SessiondProcess::spawn_at_with_duckdb_options(socket_path, event_log_path, state_db_path);
     connect_and_handshake(&second.socket_path).await;
-    let rebuilt_line = second
-        .wait_for_stderr_line("DuckDB projection rebuilt (")
+    let catch_up_line = second
+        .wait_for_stderr_line("DuckDB projection caught up incrementally (")
         .await;
     assert!(
-        !rebuilt_line.contains("skipping"),
-        "a stale (grown) log must trigger a fresh rebuild, not the skip path: {rebuilt_line}"
+        !catch_up_line.contains("already current"),
+        "a stale (grown) log must trigger real reconciliation work, not the skip path: \
+         {catch_up_line}"
     );
 }
