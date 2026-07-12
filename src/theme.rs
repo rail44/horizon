@@ -9,8 +9,9 @@
 //! (`docs/agent-output-ui-amendment.md`'s stage-B prerequisite, extended
 //! in stage C): [`text_primary`], [`accent`], [`danger`], [`warning`],
 //! [`success`], [`info`], [`text_muted`], [`text_subtle`],
-//! [`surface_panel`] (the running-turn card's panel background), and the
-//! four `diff_added_*`/`diff_removed_*` roles, each an `Hsla` resolved
+//! [`surface_panel`] (unpainted today -- kept for a future lifted-panel
+//! view; see its doc comment), and the four `diff_added_*`/
+//! `diff_removed_*` roles, each an `Hsla` resolved
 //! through the same `[theme]` scheme as everything else here.
 //! `src/agent/view.rs` is the only consumer today. Names follow
 //! gpui-component's own
@@ -252,10 +253,15 @@ pub fn text_subtle() -> Hsla {
     packed_hsla(scheme().text_subtle)
 }
 
-/// A panel surface, subtly lifted above the base background — the
-/// running-turn card's fill (`docs/agent-output-ui-amendment.md` stage
-/// C), so the card reads as a panel rather than a bare accent border on
-/// the transcript background.
+/// A panel surface, subtly lifted above the base background. Not
+/// currently painted anywhere: the running-turn card
+/// (`docs/agent-output-ui-amendment.md` stage C) turned out, once
+/// checked against the mock (2a/3b/7a), to have no distinct fill of its
+/// own — only its header strip gets a faint accent tint (see
+/// `src/agent/view.rs`'s `accent_tint`), and the row area matches the
+/// transcript background. Kept as an available, config-overridable role
+/// for a future view that does want a lifted panel surface.
+#[allow(dead_code)]
 pub fn surface_panel() -> Hsla {
     packed_hsla(scheme().surface_panel)
 }
