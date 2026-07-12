@@ -53,6 +53,39 @@ setup per clone:
 git config core.hooksPath hooks
 ```
 
+## Build setup
+
+`crates/horizon-agent` links DuckDB dynamically by default (non-bundled):
+install a system libduckdb before building. On Void Linux:
+`sudo xbps-install duckdb-devel`; elsewhere, install your distro's DuckDB
+dev package or the equivalent (macOS: `brew install duckdb`). No env vars
+are needed once the lib/headers are on the default system paths (Linux:
+`/usr/lib` + `/usr/include`, auto-discovered — verify with `ldd` on a
+built binary if unsure). For a manually-placed prebuilt lib elsewhere, set
+`DUCKDB_LIB_DIR`/`DUCKDB_INCLUDE_DIR` (libduckdb-sys's standard discovery).
+Version skew note: libduckdb-sys 1.10504.0 (the pin as of this writing)
+encodes an expected DuckDB 1.5.4; Void's `duckdb-devel` currently ships
+1.5.0 — confirmed ABI-compatible (full `horizon-agent` suite green against
+it), but re-verify on any libduckdb-sys bump or when Void catches up.
+Machines without a system libduckdb can build with
+`cargo build --workspace --features horizon-agent/bundled-duckdb`, which
+compiles DuckDB from source instead (slow — it's the single largest
+compile unit in this workspace).
+
+Every worktree of this repo (main checkout, `git worktree` clones,
+`.claude/worktrees/agent-*` workers) shares one build cache: the tracked
+`.cargo/config.toml` sets `build.build-dir` to a path under `CARGO_HOME`
+(`{cargo-cache-home}/horizon-build-dir`), so intermediate build artifacts
+for crates.io/git dependencies (the bulk of a from-scratch build) are
+built once and reused by every worktree, while final artifacts (the
+binaries) stay in each worktree's own `target/`. No manual setup needed —
+the config is checked in. Concurrent builds across worktrees are safe
+(cargo's own advisory lock serializes overlapping writers) but will queue
+behind each other on a cold cache; this is an accepted tradeoff for the
+disk/CPU savings. This makes the old worker convention of reflinking the
+main checkout's `target/` into a fresh worktree mostly redundant for the
+heavy artifacts (only the now-small per-worktree `target/` benefits).
+
 ## Configuration
 
 Horizon reads one optional TOML file: `$XDG_CONFIG_HOME/horizon/config.toml`

@@ -1,0 +1,31 @@
+# Shared build-dir across every worktree of this repo (main checkout, `git
+# worktree` clones, `.claude/worktrees/agent-*` workers). This file is
+# tracked in git, so every worktree checks it out independently and gets
+# the same setting without per-shell exports or a global `~/.cargo/config.toml`
+# edit.
+#
+# `build.build-dir` (stable since cargo 1.91) separates *intermediate*
+# build artifacts (deps/, incremental/, build script output — the bulk of
+# a Rust workspace's disk footprint) from *final* artifacts (the actual
+# binaries), which stay in the default `target-dir` (still
+# `<workspace-root>/target`, left unset here). `{cargo-cache-home}`
+# resolves to `CARGO_HOME` (typically `~/.cargo`), a fixed machine-wide
+# path — unlike a relative path, it resolves to the SAME directory
+# regardless of which worktree's `.cargo/config.toml` is read (relative
+# paths in cargo config resolve relative to that config file's own parent
+# directory, which differs per worktree, so a relative path here would
+# defeat sharing rather than enable it).
+#
+# Path deps (this workspace's own crates) still get their own cache
+# entries per worktree (their Cargo SourceId is the absolute manifest
+# path, so it differs by worktree) — cheap, since they're small. The
+# expensive part (duckdb, arrow, tokio, gpui and its dependency tree, ...)
+# comes from crates.io/git sources whose SourceId doesn't depend on the
+# worktree path, so it's shared for real.
+#
+# Concurrent builds across worktrees are safe: cargo takes its usual
+# advisory lock on the build-dir, so overlapping builds serialize rather
+# than corrupt anything (a warm shared cache makes the wait short in
+# practice). See AGENTS.md "Build setup".
+[build]
+build-dir = "{cargo-cache-home}/horizon-build-dir"

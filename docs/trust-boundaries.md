@@ -70,9 +70,10 @@ instance nested inside the stable one.
   opt-in -- see `docs/agent-duckdb-state-design.md`'s "Runtime Boundary"),
   so the exit cost stays small: it's a derived view, not a second source of
   truth, so dropping it is a rebuild-path removal, not a data migration.
-  Note: `DUCKDB_DOWNLOAD_LIB` is a no-op under the `bundled` feature
-  (verified against libduckdb-sys 1.10504.0); relieving build cost would
-  require the non-bundled path and is not currently worth it.
+  As of the 2026-07-13 build-infra work, non-bundled (dynamically linked
+  against a system/distro libduckdb) is the default — see AGENTS.md "Build
+  setup"; `bundled-duckdb` remains a pass-through feature for machines
+  without a system libduckdb.
 - **alacritty_terminal + termwiz + portable-pty** — a deliberate three-way
   split: output interpretation / keyboard input encoding (incl. the kitty
   protocol; alacritty_terminal exposes no input-encoding API) / PTY and
