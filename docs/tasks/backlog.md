@@ -237,12 +237,18 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     fixed in the plan-03 E2E (detached-scope creation): documented in
     docs/agent-roles-and-skills-design.md but deliberately not fixed
     there. Flagged 2026-07-06 by the agent-foundation session.
-16. **Turn metadata in agent frames** — the transcript's turn footer
-    wants model id and turn duration, but the contract's
-    ProviderRequest* events are timing markers that never reach the
-    frame. Needs a small contract-level addition (agent-foundation);
-    the UI receiving end is trivial. Proposed by application-ui
-    slice 2 (2026-07-07).
+16. *(resolved 2026-07-12)* **Turn metadata in agent frames** — the
+    transcript's turn footer wants model id and turn duration, but the
+    contract's ProviderRequest* events are timing markers that never
+    reach the frame. Resolved as stage A of the turn-receipts work:
+    `Event::TurnEnded` now folds into a new `AgentFrameItem::TurnEnded
+    { reason, model, elapsed }`, with `model` derived from the turn's
+    most recent `ProviderRequestSent` and `elapsed` from a reducer-side
+    `TurnClock` sidecar (exact for a live fold, a near-zero
+    approximation for cold replay — see `docs/agent-output-ui-
+    amendment.md`'s Contract addendum for the trade-off). No UI change;
+    the receiving end (turn receipts, running-card footer) is the next
+    stage.
 17. **color-grid smoke fails on xdotool quoting/spacing** — pre-existing
     environment quirk, unrelated to the placement-first change (fails
     identically standalone); distinct from the backlog-14 Xvfb family.

@@ -199,10 +199,10 @@ mod tests {
                         call_id: call_id.clone(),
                         reason: "needs approval".to_string(),
                     }),
-                    Event::ToolCallFinished(ToolCallResult {
+                    Event::ToolCallFinished(ToolCallResult::new(
                         call_id,
-                        output: serde_json::json!({ "tab_count": 1 }),
-                    }),
+                        serde_json::json!({ "tab_count": 1 }),
+                    )),
                 ],
             )
             .expect("append events");
@@ -237,10 +237,10 @@ mod tests {
                         call_id: call_id.clone(),
                         reason: "approval".to_string(),
                     }),
-                    Event::ToolCallFinished(ToolCallResult {
+                    Event::ToolCallFinished(ToolCallResult::new(
                         call_id,
-                        output: serde_json::json!({ "ok": true }),
-                    }),
+                        serde_json::json!({ "ok": true }),
+                    )),
                 ],
             )
             .expect("append events");
@@ -375,10 +375,10 @@ mod tests {
                             tool_id: "workspace.snapshot".to_string(),
                             input: serde_json::json!({}),
                         }),
-                        Event::ToolCallFinished(ToolCallResult {
+                        Event::ToolCallFinished(ToolCallResult::new(
                             call_id,
-                            output: serde_json::json!({ "tab_count": 1 }),
-                        }),
+                            serde_json::json!({ "tab_count": 1 }),
+                        )),
                     ],
                 )
                 .expect("append events");
@@ -508,10 +508,10 @@ mod tests {
                         call_id: call_id.clone(),
                         reason: "approval".to_string(),
                     }),
-                    Event::ToolCallFinished(ToolCallResult {
+                    Event::ToolCallFinished(ToolCallResult::new(
                         call_id,
-                        output: serde_json::json!({ "tab_count": 1 }),
-                    }),
+                        serde_json::json!({ "tab_count": 1 }),
+                    )),
                 ],
             )
             .expect("append first session");
@@ -639,15 +639,15 @@ mod tests {
                 turn_id: Some("turn-1".to_string()),
                 provider_id: Some(ProviderId("builtin.agent.rig".to_string())),
                 role_id: None,
-                event_kind: event_kind(&Event::ToolCallFinished(ToolCallResult {
-                    call_id: call_id.clone(),
-                    output: serde_json::json!({ "ok": true }),
-                }))
+                event_kind: event_kind(&Event::ToolCallFinished(ToolCallResult::new(
+                    call_id.clone(),
+                    serde_json::json!({ "ok": true }),
+                )))
                 .to_string(),
-                event: Event::ToolCallFinished(ToolCallResult {
+                event: Event::ToolCallFinished(ToolCallResult::new(
                     call_id,
-                    output: serde_json::json!({ "ok": true }),
-                }),
+                    serde_json::json!({ "ok": true }),
+                )),
                 provider_payload: None,
                 created_at_unix_ms: 3,
             },
@@ -1053,19 +1053,19 @@ mod tests {
                         tool_id: "fs.read".to_string(),
                         input: serde_json::json!({}),
                     }),
-                    Event::ToolCallFinished(ToolCallResult {
-                        call_id: ok_call,
-                        output: serde_json::json!({ "ok": true }),
-                    }),
+                    Event::ToolCallFinished(ToolCallResult::new(
+                        ok_call,
+                        serde_json::json!({ "ok": true }),
+                    )),
                     Event::ToolCallRequested(ToolCallRequest {
                         call_id: err_call.clone(),
                         tool_id: "fs.read".to_string(),
                         input: serde_json::json!({}),
                     }),
-                    Event::ToolCallFinished(ToolCallResult {
-                        call_id: err_call,
-                        output: serde_json::json!({ "is_error": true, "message": "nope" }),
-                    }),
+                    Event::ToolCallFinished(ToolCallResult::new(
+                        err_call,
+                        serde_json::json!({ "is_error": true, "message": "nope" }),
+                    )),
                 ],
             )
             .expect("append events");
@@ -1103,10 +1103,10 @@ mod tests {
                         reason: "needs approval".to_string(),
                     }),
                     Event::ToolCallStarted(call_id.clone()),
-                    Event::ToolCallFinished(ToolCallResult {
+                    Event::ToolCallFinished(ToolCallResult::new(
                         call_id,
-                        output: serde_json::json!({ "ok": true }),
-                    }),
+                        serde_json::json!({ "ok": true }),
+                    )),
                 ],
             )
             .expect("append events");
@@ -1138,13 +1138,13 @@ mod tests {
                     // A deny short-circuits: `ToolCallFinished` arrives with
                     // no `ToolCallStarted` in between (`tools::approval::
                     // synchronous_result(ran=false)`).
-                    Event::ToolCallFinished(ToolCallResult {
+                    Event::ToolCallFinished(ToolCallResult::new(
                         call_id,
-                        output: serde_json::json!({
+                        serde_json::json!({
                             "is_error": true,
                             "message": "denied by user"
                         }),
-                    }),
+                    )),
                 ],
             )
             .expect("append events");
@@ -1263,10 +1263,10 @@ mod tests {
                 session_id,
                 Some("turn-1"),
                 Some("assistant.default"),
-                Event::ToolCallFinished(ToolCallResult {
+                Event::ToolCallFinished(ToolCallResult::new(
                     call_id,
-                    output: serde_json::json!({ "ok": true }),
-                }),
+                    serde_json::json!({ "ok": true }),
+                )),
                 4,
             ),
             label_record(
@@ -1557,10 +1557,10 @@ mod tests {
                 call_id: ToolCallId(format!("call-{}", index - 1)),
                 reason: "benchmark approval".to_string(),
             }),
-            8 => Event::ToolCallFinished(ToolCallResult {
-                call_id: ToolCallId(format!("call-{}", index - 2)),
-                output: serde_json::json!({ "ok": true, "index": index }),
-            }),
+            8 => Event::ToolCallFinished(ToolCallResult::new(
+                ToolCallId(format!("call-{}", index - 2)),
+                serde_json::json!({ "ok": true, "index": index }),
+            )),
             _ => Event::MessageCommitted(Message {
                 role: MessageRole::Assistant,
                 text: format!("assistant final {index}"),

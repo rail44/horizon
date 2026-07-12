@@ -217,13 +217,13 @@ impl Provider for MockProvider {
                             events_tx.send(Event::StateChanged(SessionState::ToolRunning).into());
                         let _ = events_tx.send(Event::ToolCallStarted(call_id.clone()).into());
                         let _ = events_tx.send(
-                            Event::ToolCallFinished(ToolCallResult {
-                                call_id: call_id.clone(),
-                                output: serde_json::json!({
+                            Event::ToolCallFinished(ToolCallResult::new(
+                                call_id.clone(),
+                                serde_json::json!({
                                     "approved": true,
                                     "result": "mock tool completed",
                                 }),
-                            })
+                            ))
                             .into(),
                         );
                         let _ = events_tx.send(
@@ -239,13 +239,13 @@ impl Provider for MockProvider {
                     Command::DenyToolCall { call_id, reason } => {
                         pending_tool_call = None;
                         let _ = events_tx.send(
-                            Event::ToolCallFinished(ToolCallResult {
-                                call_id: call_id.clone(),
-                                output: serde_json::json!({
+                            Event::ToolCallFinished(ToolCallResult::new(
+                                call_id.clone(),
+                                serde_json::json!({
                                     "approved": false,
                                     "reason": reason,
                                 }),
-                            })
+                            ))
                             .into(),
                         );
                         let _ = events_tx.send(

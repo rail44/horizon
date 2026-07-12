@@ -349,10 +349,10 @@ fn search_hits_carry_is_error_and_turn_outcome_labels() {
             turn_id: Some("turn-1".to_string()),
             provider_id: None,
             role_id: None,
-            event: Event::ToolCallFinished(ToolCallResult {
+            event: Event::ToolCallFinished(ToolCallResult::new(
                 call_id,
-                output: serde_json::json!({ "is_error": true, "message": "widget not found" }),
-            }),
+                serde_json::json!({ "is_error": true, "message": "widget not found" }),
+            )),
             provider_payload: None,
         })
         .expect("append tool result");
@@ -500,10 +500,10 @@ fn read_entries_carry_is_error_on_tool_results() {
                     tool_id: "fs.read".to_string(),
                     input: serde_json::json!({}),
                 }),
-                Event::ToolCallFinished(ToolCallResult {
+                Event::ToolCallFinished(ToolCallResult::new(
                     call_id,
-                    output: serde_json::json!({ "is_error": true, "message": "nope" }),
-                }),
+                    serde_json::json!({ "is_error": true, "message": "nope" }),
+                )),
             ],
         )
         .expect("seed session");
