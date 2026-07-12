@@ -1,28 +1,51 @@
 //! The agent pane view: transcript over the session entity's live
 //! `AgentFrame`, a gpui-component `Input` composer (reuse over port —
 //! its IME handling replaces the Floem composer's hand-rolled one), and
-//! inline approval buttons. Rendering is deliberately simple — every
-//! frame item paints as a block; assistant text renders through
+//! inline approval buttons. Frame items are grouped into turn segments
+//! (`turns::group_into_turns`, `docs/agent-output-ui-amendment.md` stage
+//! C): a completed turn renders as a user message, assistant prose, and
+//! one receipt line; the in-progress turn renders as one accent-bordered
+//! card, one row per tool call. Assistant text renders through
 //! gpui-component's `TextView` Markdown element (reuse over port), other
 //! items stay plain text. The virtualized-List upgrade is recorded for
 //! the M5 polish pass.
+
+use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::tag::Tag;
 use gpui_component::text::TextView;
+use gpui_component::Sizable as _;
 use horizon_agent::contract::{MessageRole, SessionState};
-use horizon_agent::frame::{pending_approval_call_ids_in, AgentFrameItem};
+use horizon_agent::frame::{
+    pending_approval_call_ids_in, state_indicates_turn_in_flight, AgentFrameItem,
+};
 
 use super::session::AgentSession;
+use super::turns;
 use crate::theme;
+
+/// View-local tracking of the currently running turn's start, so the
+/// running card's elapsed-seconds header keeps ticking across renders
+/// without depending on any wall-clock data from the contract (frame
+/// items carry none — see `frame::TurnClock`'s doc comment). Reset
+/// whenever the running turn's opening item index changes, i.e. a new
+/// turn started.
+#[derive(Clone, Copy)]
+struct RunningTurnClock {
+    turn_start_index: usize,
+    started_at: Instant,
+}
 
 pub struct AgentView {
     session: Entity<AgentSession>,
     composer: Entity<InputState>,
     focus_handle: FocusHandle,
     transcript_scroll: ScrollHandle,
+    running_turn_clock: Option<RunningTurnClock>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -35,6 +58,7 @@ impl AgentView {
         // stickiness check runs *before* the re-render, on the pre-update
         // geometry.
         let mut subscriptions = vec![cx.observe(&session, |view: &mut AgentView, _, cx| {
+            view.sync_running_turn_clock(cx);
             if view.at_transcript_bottom() {
                 view.transcript_scroll.scroll_to_bottom();
             }
@@ -59,11 +83,30 @@ impl AgentView {
         ));
         let focus_handle = cx.focus_handle();
 
+        // The running card's elapsed-seconds ticker: a coarse 1s timer
+        // that just requests a re-render while a turn is in flight. Owned
+        // by the entity (spawned from its own `Context`) the same way
+        // `AgentSession`'s event pump is — `this.update` starts failing
+        // once the view drops, ending the loop.
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(Duration::from_secs(1)).await;
+            let alive = this.update(cx, |view, cx| {
+                if view.running_turn_clock.is_some() {
+                    cx.notify();
+                }
+            });
+            if alive.is_err() {
+                return;
+            }
+        })
+        .detach();
+
         Self {
             session,
             composer,
             focus_handle,
             transcript_scroll: ScrollHandle::new(),
+            running_turn_clock: None,
             _subscriptions: subscriptions,
         }
     }
@@ -74,6 +117,39 @@ impl AgentView {
     fn at_transcript_bottom(&self) -> bool {
         let max = self.transcript_scroll.max_offset().y;
         max <= px(0.0) || self.transcript_scroll.offset().y <= -(max - px(8.0))
+    }
+
+    /// Resets [`RunningTurnClock`] whenever the running turn's opening
+    /// item index changes (a new turn started) or clears it once no turn
+    /// is in flight — called from the session-change observer, before
+    /// the next render reads it.
+    fn sync_running_turn_clock(&mut self, cx: &mut Context<Self>) {
+        let running_turn_start = {
+            let frame = &self.session.read(cx).frame;
+            if !state_indicates_turn_in_flight(frame.state) {
+                None
+            } else {
+                turns::group_into_turns(&frame.items)
+                    .last()
+                    .filter(|span| span.ended.is_none())
+                    .map(|span| span.start)
+            }
+        };
+        match running_turn_start {
+            None => self.running_turn_clock = None,
+            Some(start) => {
+                let needs_reset = self
+                    .running_turn_clock
+                    .as_ref()
+                    .is_none_or(|clock| clock.turn_start_index != start);
+                if needs_reset {
+                    self.running_turn_clock = Some(RunningTurnClock {
+                        turn_start_index: start,
+                        started_at: Instant::now(),
+                    });
+                }
+            }
+        }
     }
 
     fn render_item(
@@ -215,11 +291,323 @@ impl AgentView {
                 Some(block("exited", theme::text_muted(), format!("{reason:?}")))
             }
             AgentFrameItem::ToolCallStarted(_) => None,
-            // Turn receipts are a future UI slice (`docs/agent-output-ui-
-            // amendment.md`'s decision 1) -- this pre-redesign view doesn't
-            // render them yet, same treatment as `ToolCallStarted` above.
+            // Consumed by turn grouping (`turns::group_into_turns`) into
+            // the turn's receipt line; never reaches this per-item path in
+            // practice (see `Render::render`'s span walk), kept only as a
+            // defensive no-op.
             AgentFrameItem::TurnEnded { .. } => None,
         }
+    }
+
+    /// Renders one turn segment: the opening user message, then either
+    /// the completed turn's receipt line or the in-progress turn's
+    /// running card, then any remaining assistant prose / `Error`/
+    /// `Exited` items in their original order (decision 1-2's layout;
+    /// tool-call and reasoning items fold into the receipt/card instead
+    /// of rendering individually).
+    fn render_turn(
+        &self,
+        base_index: usize,
+        items: &[AgentFrameItem],
+        ended: Option<&turns::TurnEnd>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut blocks: Vec<AnyElement> = Vec::new();
+        if let Some(user_item) = items.first() {
+            if let Some(el) = self.render_item(base_index, user_item, cx) {
+                blocks.push(el);
+            }
+        }
+        match ended {
+            Some(end) => blocks.push(self.render_receipt(items, end)),
+            None => blocks.push(self.render_running_card(base_index, items, cx)),
+        }
+        for (offset, item) in items.iter().enumerate().skip(1) {
+            let index = base_index + offset;
+            match item {
+                AgentFrameItem::Message(_)
+                | AgentFrameItem::AssistantTextDelta(_)
+                | AgentFrameItem::Error(_)
+                | AgentFrameItem::Exited(_) => {
+                    if let Some(el) = self.render_item(index, item, cx) {
+                        blocks.push(el);
+                    }
+                }
+                // The running turn renders its approval block as its own
+                // row inside the card (`render_running_card`). A completed
+                // turn's own approvals have all resolved by the time
+                // `TurnEnded` folds (in the normal case) -- their resolved
+                // tool call already shows up as a receipt chip, so
+                // re-rendering the answered box here would leave it
+                // visible forever (the owner-reported fold bug). Only the
+                // shouldn't-happen case -- a turn that ended (`Halted`/
+                // `Cancelled`) with a request still genuinely unresolved --
+                // still renders it (`turns::is_approval_still_pending`).
+                AgentFrameItem::ApprovalRequested(request)
+                    if ended.is_some()
+                        && turns::is_approval_still_pending(items, &request.call_id) =>
+                {
+                    if let Some(el) = self.render_item(index, item, cx) {
+                        blocks.push(el);
+                    }
+                }
+                _ => {}
+            }
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .children(blocks)
+            .into_any_element()
+    }
+
+    /// The completed turn's one-line receipt (decision 1): the `▸`
+    /// expansion affordance (inert until stage D), one chip per tool
+    /// call, the end-reason status text, and the model id (muted, at the
+    /// row's end). A uniform text size and muted `·` separators between
+    /// the chip group, the status, and the model id keep it reading as
+    /// one quiet line rather than loose fragments.
+    fn render_receipt(&self, items: &[AgentFrameItem], end: &turns::TurnEnd) -> AnyElement {
+        let tool_calls = turns::build_tool_call_views(items);
+        let status = turns::receipt_status(end);
+        let status_color = if status.is_error {
+            theme::danger()
+        } else {
+            theme::text_muted()
+        };
+        let receipt_text =
+            |color: Hsla, text: String| div().text_size(px(11.0)).text_color(color).child(text);
+        let separator = || receipt_text(theme::text_subtle(), "·".to_string());
+
+        let mut row = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap_2()
+            .py_0p5()
+            .child(receipt_text(theme::text_subtle(), "▸".to_string()));
+        for call in &tool_calls {
+            row = row.child(self.render_receipt_chip(call));
+        }
+        if !tool_calls.is_empty() {
+            row = row.child(separator());
+        }
+        row = row.child(receipt_text(status_color, status.text));
+        if let Some(model) = &end.model {
+            row = row.child(separator());
+            row = row.child(receipt_text(theme::text_subtle(), model.clone()));
+        }
+        row.into_any_element()
+    }
+
+    /// One receipt chip: a plain verb + check/error mark for most tools,
+    /// a file chip (name + diffstat, when derivable) for fs.edit/
+    /// fs.write, and a bash chip (command head + mark) for bash.
+    fn render_receipt_chip(&self, call: &turns::ToolCallView) -> AnyElement {
+        let (mark, mark_color) = if !call.finished {
+            ("…", theme::text_subtle())
+        } else if call.is_error {
+            ("✗", theme::danger())
+        } else {
+            ("✓", theme::success())
+        };
+
+        let content: AnyElement = match &call.kind {
+            turns::ToolCallKind::File {
+                file_name,
+                diffstat,
+            } => {
+                let mut label = div().flex().flex_row().items_center().gap_1().child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(theme::text_muted())
+                        .child(file_name.clone()),
+                );
+                if let Some((added, removed)) = diffstat.filter(|_| call.finished) {
+                    label = label
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(theme::success())
+                                .child(format!("+{added}")),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(theme::danger())
+                                .child(format!("−{removed}")),
+                        );
+                } else if !call.finished {
+                    label = label.child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme::text_subtle())
+                            .child(mark),
+                    );
+                }
+                label.into_any_element()
+            }
+            turns::ToolCallKind::Bash { command_head } => div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(theme::text_muted())
+                        .child(format!("bash {command_head}")),
+                )
+                .child(div().text_size(px(11.0)).text_color(mark_color).child(mark))
+                .into_any_element(),
+            turns::ToolCallKind::Generic => div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(theme::text_muted())
+                        .child(call.verb.to_lowercase()),
+                )
+                .child(div().text_size(px(11.0)).text_color(mark_color).child(mark))
+                .into_any_element(),
+        };
+
+        // `Tag::custom` (rather than `Tag::secondary()`/etc.) so the chip's
+        // colors resolve through Horizon's own `theme` roles, not
+        // gpui-component's independent, uncustomized global `Theme` (see
+        // `src/theme.rs`'s module doc).
+        Tag::custom(
+            transparent_black(),
+            theme::text_muted(),
+            theme::text_subtle(),
+        )
+        .rounded_full()
+        .xsmall()
+        .child(content)
+        .into_any_element()
+    }
+
+    /// The in-progress turn's card (decision 2): an accent-bordered
+    /// container with a header (state label + `n / m` progress + ticking
+    /// elapsed seconds — room left for the stage-F stop button) and one
+    /// row per tool call, plus any pending approval block.
+    fn render_running_card(
+        &self,
+        base_index: usize,
+        items: &[AgentFrameItem],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let tool_calls = turns::build_tool_call_views(items);
+        let (finished, total) = turns::progress(&tool_calls);
+        let elapsed = self
+            .running_turn_clock
+            .map(|clock| clock.started_at.elapsed())
+            .unwrap_or_default();
+        let state_label = self
+            .session
+            .read(cx)
+            .frame
+            .state
+            .map(running_state_label)
+            .unwrap_or("running…");
+
+        let header = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(theme::accent())
+                    .child(state_label),
+            )
+            // Spacer: also reserves the stage-F stop button's layout room,
+            // between the state label and the progress/elapsed text.
+            .child(div().flex_1())
+            .child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(theme::text_muted())
+                    .child(format!(
+                        "{finished} / {total} · {}",
+                        turns::humanize_duration(elapsed)
+                    )),
+            );
+
+        let mut card = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_3()
+            .rounded_sm()
+            .border_1()
+            .border_color(theme::accent())
+            .bg(theme::surface_panel())
+            .child(header);
+
+        for call in &tool_calls {
+            card = card.child(self.render_tool_call_row(call));
+        }
+        for (offset, item) in items.iter().enumerate() {
+            if matches!(item, AgentFrameItem::ApprovalRequested(_)) {
+                if let Some(el) = self.render_item(base_index + offset, item, cx) {
+                    card = card.child(el);
+                }
+            }
+        }
+
+        card.into_any_element()
+    }
+
+    /// One running-card row: status glyph (running/finished/error) +
+    /// verb + target + result summary once finished — the base design's
+    /// one-line tool-summary vocabulary (`docs/agent-output-ui-
+    /// design.md` decision 2).
+    fn render_tool_call_row(&self, call: &turns::ToolCallView) -> AnyElement {
+        let (glyph, glyph_color) = if !call.finished {
+            ("●", theme::text_subtle())
+        } else if call.is_error {
+            ("✗", theme::danger())
+        } else {
+            ("✓", theme::success())
+        };
+
+        let mut text = call.verb.clone();
+        if let Some(target) = &call.target {
+            text.push(' ');
+            text.push_str(target);
+        }
+        if call.finished {
+            if let Some(summary) = &call.result_summary {
+                text.push_str(" · ");
+                text.push_str(summary);
+            }
+        }
+
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(glyph_color)
+                    .child(glyph),
+            )
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(theme::text_primary())
+                    .child(text),
+            )
+            .into_any_element()
     }
 
     fn status_line(&self, cx: &App) -> String {
@@ -238,6 +626,19 @@ impl AgentView {
     }
 }
 
+/// The running card's header label for the three in-flight
+/// `SessionState`s (`state_indicates_turn_in_flight`'s own set) — any
+/// other state falls back to the generic label defensively, since this
+/// is only ever called while a turn is in flight.
+fn running_state_label(state: SessionState) -> &'static str {
+    match state {
+        SessionState::Running => "running…",
+        SessionState::ToolRunning => "tool running…",
+        SessionState::WaitingForApproval => "waiting for approval",
+        _ => "running…",
+    }
+}
+
 impl Focusable for AgentView {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         // Focusing the pane focuses the composer — the pane's one text
@@ -248,14 +649,50 @@ impl Focusable for AgentView {
 
 impl Render for AgentView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let items: Vec<AnyElement> = {
-            let frame_items = self.session.read(cx).frame.items.clone();
-            frame_items
-                .iter()
-                .enumerate()
-                .filter_map(|(index, item)| self.render_item(index, item, cx))
-                .collect()
-        };
+        let frame_items = self.session.read(cx).frame.items.clone();
+        let turn_in_flight = state_indicates_turn_in_flight(self.session.read(cx).frame.state);
+        let turn_spans = turns::group_into_turns(&frame_items);
+
+        let mut blocks: Vec<AnyElement> = Vec::new();
+        let mut turn_cursor = 0usize;
+        let mut index = 0usize;
+        while index < frame_items.len() {
+            if let Some(span) = turn_spans.get(turn_cursor) {
+                if span.start == index {
+                    let items = &frame_items[span.start..span.end];
+                    match &span.ended {
+                        Some(end) => {
+                            blocks.push(self.render_turn(span.start, items, Some(end), cx))
+                        }
+                        None if turn_in_flight => {
+                            blocks.push(self.render_turn(span.start, items, None, cx))
+                        }
+                        // Defensive: a dangling turn span with no
+                        // `TurnEnded` while no turn is in flight
+                        // (shouldn't happen by contract) — fall back to
+                        // rendering its items individually rather than
+                        // silently dropping them.
+                        None => {
+                            for (offset, item) in items.iter().enumerate() {
+                                if let Some(el) = self.render_item(span.start + offset, item, cx) {
+                                    blocks.push(el);
+                                }
+                            }
+                        }
+                    }
+                    index = span.end;
+                    turn_cursor += 1;
+                    continue;
+                }
+            }
+            // Items outside any turn span (before the first user message,
+            // or between spans) render individually, unchanged.
+            if let Some(el) = self.render_item(index, &frame_items[index], cx) {
+                blocks.push(el);
+            }
+            index += 1;
+        }
+
         let status = self.status_line(cx);
 
         div()
@@ -275,7 +712,7 @@ impl Render for AgentView {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .children(items),
+                    .children(blocks),
             )
             .when(!status.is_empty(), |this| {
                 this.child(
