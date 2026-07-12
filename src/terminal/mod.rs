@@ -121,6 +121,13 @@ pub struct TerminalView {
     // text-input-v3 delivers independently of an IME commit (see
     // docs/tasks/backlog.md #30).
     ime_commit_guard: ImeCommitGuard,
+    // Recognizes `replace_text_in_range`'s copy of a plain keystroke
+    // `handle_key` already sent via the Key path (kitty "report all
+    // keys" mode) so it can be dropped without dropping a commit that has
+    // no matching physical key — the case an IME "direct"/ASCII input
+    // mode produces when it consumes the physical key itself and only
+    // ever forwards `commit_string`. See `KeyTextDedup`'s doc.
+    key_text_dedup: KeyTextDedup,
     // Local text selection drag in progress (mouse-reporting off).
     selecting: bool,
     // The button held while the app has mouse reporting on, so drags and
@@ -153,6 +160,7 @@ impl TerminalView {
             metrics: Rc::new(Cell::new(None)),
             ime_marked_text: None,
             ime_commit_guard: ImeCommitGuard::default(),
+            key_text_dedup: KeyTextDedup::default(),
             selecting: false,
             reporting_button: None,
             _session_observation: observation,
@@ -323,6 +331,19 @@ impl TerminalView {
         let Some(key) = term_key_code(keystroke, self.keys_as_escape_codes(cx)) else {
             return;
         };
+        // Record a plain-char send so `replace_text_in_range` can
+        // recognize its own copy of *this* keystroke as the double-feed
+        // `KeyTextDedup`'s doc describes, rather than an IME's only
+        // delivery. Control combos are excluded: an IME never echoes them
+        // as commit text, so they'd only pollute the record with a
+        // mismatch.
+        if !keystroke.modifiers.control {
+            if let (termwiz::input::KeyCode::Char(_), Some(text)) =
+                (&key, keystroke.key_char.as_deref())
+            {
+                self.key_text_dedup.note_key_sent(text);
+            }
+        }
         let kind = if event.is_held {
             KeyEventKind::Repeat
         } else {
@@ -395,6 +416,58 @@ impl ImeCommitGuard {
     }
 }
 
+/// Generous vs. the gap between `handle_key` sending a `TerminalCommand::Key`
+/// and the platform's text-input pipeline independently echoing the same
+/// keystroke as `replace_text_in_range` text (observed same-burst, well
+/// under a millisecond in practice), comfortably below any plausible
+/// human-typing interval — so a *stale* match past this window is treated
+/// as a fresh, unrelated commit rather than silently swallowed.
+const KEY_TEXT_DEDUP_WINDOW: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// The pure decision behind the direct-mode-IME-commit fix: under kitty
+/// "report all keys", an ordinary printable keystroke is sent via the Key
+/// path (`handle_key`) *and* independently echoed by the platform's
+/// text-input pipeline (`replace_text_in_range`) — the latter must be
+/// dropped or it double-feeds the terminal. The old code assumed *every*
+/// non-composing commit under kitty mode was one of these echoes; that's
+/// false for an IME "direct"/ASCII input mode, which can consume the
+/// physical key itself and deliver *only* the commit, with no matching
+/// `handle_key` call ever happening — the old assumption silently dropped
+/// the only copy.
+///
+/// `note_key_sent` records the text a Key-path send just delivered.
+/// `is_duplicate_of_recent_key` is then called with `replace_text_in_range`'s
+/// text and reports "duplicate, drop it" only when that text exactly
+/// matches a key-path send from within [`KEY_TEXT_DEDUP_WINDOW`] — an
+/// unmatched commit (no recent key, or a mismatched one) passes through
+/// untouched, exactly the direct-mode-IME-commit case this exists to fix.
+/// One-shot like `ImeCommitGuard`: a lookup always consumes the pending
+/// record, matched or not, so it can only ever affect the one commit
+/// immediately following a key send.
+#[derive(Default)]
+struct KeyTextDedup {
+    pending: Option<(String, std::time::Instant)>,
+}
+
+impl KeyTextDedup {
+    fn note_key_sent(&mut self, text: &str) {
+        self.pending = Some((text.to_string(), std::time::Instant::now()));
+    }
+
+    fn is_duplicate_of_recent_key(&mut self, text: &str) -> bool {
+        self.is_duplicate_of_recent_key_at(text, std::time::Instant::now())
+    }
+
+    /// Clock-injected core so the decision stays pure and testable without
+    /// sleeping.
+    fn is_duplicate_of_recent_key_at(&mut self, text: &str, now: std::time::Instant) -> bool {
+        let Some((pending_text, at)) = self.pending.take() else {
+            return false;
+        };
+        pending_text == text && now.saturating_duration_since(at) < KEY_TEXT_DEDUP_WINDOW
+    }
+}
+
 impl EntityInputHandler for TerminalView {
     fn text_for_range(
         &mut self,
@@ -443,12 +516,22 @@ impl EntityInputHandler for TerminalView {
     ) {
         let was_composing = self.ime_marked_text.take().is_some();
         self.ime_commit_guard.note_commit(was_composing);
-        // Under kitty "report all keys", a plain printable keypress was
-        // already sent as TerminalCommand::Key from on_key_down; the
-        // text-input pipeline's copy must be dropped or it double-feeds.
-        // An IME commit is the exception: it never went through the Key
-        // path and always lands as text.
-        if !was_composing && self.keys_as_escape_codes(cx) {
+        // Under kitty "report all keys", an ordinary printable keypress is
+        // sent as TerminalCommand::Key from on_key_down *and* independently
+        // echoed here by the platform's text-input pipeline — that copy
+        // must be dropped or it double-feeds. An IME composition commit is
+        // one exception: it never went through the Key path (`was_composing`
+        // covers that). The other: an IME "direct"/ASCII input mode can
+        // consume the physical key itself and deliver *only* this commit,
+        // with no matching `handle_key` call at all — `key_text_dedup`
+        // tells the two apart by whether a matching key-path send actually
+        // happened, instead of assuming kitty mode implies one always did
+        // (see docs/winit-backend-design.md's "direct-mode IME commit"
+        // section for the bug this replaced).
+        if !was_composing
+            && self.keys_as_escape_codes(cx)
+            && self.key_text_dedup.is_duplicate_of_recent_key(text)
+        {
             cx.notify();
             return;
         }

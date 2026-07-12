@@ -527,6 +527,96 @@ injection story (none available on this host) or a permanently-running
 new piece of test infrastructure, not a one-line addition — left for a
 follow-up if the owner wants it.
 
+### Follow-up, same day: the real mechanism was a dedup bug, not IME/XIM state
+
+The owner narrowed the symptom further after the investigation above:
+keys are lost **only** while the Japanese IME is in direct/ASCII input
+mode; composition mode works. That inverts the earlier framing — this is
+a `main`-code bug, not (only) IME-daemon state, and it's now fixed.
+
+**Root cause.** `TerminalView::replace_text_in_range`
+(`src/terminal/mod.rs`) had a dedup branch for kitty "report all keys"
+mode: an ordinary printable keystroke is sent via the Key path
+(`handle_key` → `TerminalCommand::Key`) *and* independently echoed by the
+platform's text-input pipeline (`replace_text_in_range`) — the second copy
+has to be dropped or the terminal double-feeds. The old guard was
+`if !was_composing && keys_as_escape_codes { return; }` — it assumed *every*
+non-composing commit under kitty mode was one of these echoes. That's true
+for ordinary typing, but false for an IME "direct"/ASCII input mode: ibus
+can consume the physical key itself (never reaching winit as
+`WindowEvent::KeyboardInput`, so `handle_key` never runs) and deliver
+*only* `commit_string` — which arrives here as `Ime::Commit` →
+`replace_text_in_range` with `was_composing == false` (there was no
+preceding marked/preedit text — direct mode has no composition at all).
+The old guard couldn't tell that apart from the ordinary case and dropped
+the *only* copy — total, silent input loss, exactly reproducing "neither
+terminal nor agent panes accept any keyboard input" whenever the owner's
+daily-driver fish shell (which sets `TERM=xterm-kitty` and requests kitty
+keyboard modes, so this branch is live) had the IME in direct mode.
+
+**Fix.** `KeyTextDedup` (`src/terminal/mod.rs`, next to the pre-existing
+`ImeCommitGuard`) replaces the blanket assumption with an actual match:
+`handle_key` records the text of every plain-char Key-path send;
+`replace_text_in_range` only drops its copy if that record matches the
+commit's text within a short window (50ms — generous vs. the same-burst
+gap between the two paths, comfortably below human-typing intervals).
+An unmatched commit (no recent key, or a mismatched one — the direct-mode
+case) now passes through instead of being silently swallowed. Composition
+commits are unaffected (`was_composing` still short-circuits before this
+check ever runs). Six colocated pure-decision tests
+(`src/terminal/tests.rs`) cover the three-case matrix directly on
+`KeyTextDedup`: ordinary kitty-mode typing still dedups
+(`kitty_mode_typing_drops_the_duplicate_echo`), a composition commit with
+no key send is never treated as a duplicate
+(`composition_commit_with_no_key_send_is_never_a_duplicate`), and a
+direct-mode commit with no prior key passes through
+(`direct_mode_commit_with_no_prior_key_is_not_a_duplicate`) — plus
+mismatch, one-shot-consumption, and stale-window edge cases.
+
+**Verification attempted, partially inconclusive.** The generic mechanism
+— `Ime::Commit` arriving with no matching `WindowEvent::KeyboardInput` —
+is directly confirmed structurally (winit's X11 backend can swallow a key
+via `XFilterEvent` before ever surfacing `KeyboardInput`, per
+`platform_impl/linux/x11/event_processor.rs`) and was observed live:
+retesting the real desktop with `handle_ime` instrumented showed genuine
+`Ime::Preedit`/commit-cycle traffic with no matching `KeyboardInput` for
+the same keystroke while composing. Reproducing *mozc's own* direct-mode
+behavior specifically (rather than the generic mechanism) was attempted
+in two safe environments — a fully isolated `Xvfb`+private-D-Bus+private
+`ibus-daemon` instance (never touching the shared session), and a careful,
+minimal real-desktop retest — but the real desktop's ibus was in
+composition mode throughout (not direct mode) at the times tested, and
+mozc's own mode-switch hotkeys (`Hiragana_Katakana`) didn't register on
+the isolated instance (likely missing the `ibus-x11` helper process and/or
+per-user keymap config that a full desktop session provides). Forcing
+mozc into the owner's exact "just switched to direct mode" state safely,
+without touching the owner's live session, was not achieved within this
+investigation's time budget. The fix itself does not depend on
+reproducing that exact state: it's correct for *any* mechanism that
+produces a `replace_text_in_range` call with no matching physical key,
+which is the structural class of bug the owner described, and the pure
+unit tests exercise that decision directly.
+
+**Why did this work during the pre-unify dogfooding, then?** Two
+independent things bit at once and are easy to conflate. First, the
+*total* silence found in the investigation above (zero `KeyboardInput`,
+zero `Ime` events at all) is consistent with a genuinely stuck XIM/ibus
+session state — the owner ran `ibus restart` while narrowing this down,
+and after that this session's real desktop showed normal
+`Preedit`/`Commit` traffic again, exactly where it had shown nothing
+before. That's IME-daemon state, unrelated to any Horizon commit, and
+plausibly wasn't present (or wasn't yet stuck) during the earlier
+dogfooding session. Second, and separately, the dedup bug itself is a
+`main`-code issue that predates this investigation — the `!was_composing
+&& keys_as_escape_codes` guard has looked like this since kitty-mode
+reporting was added, so it's plausible the owner's dogfooding session
+simply never happened to have the IME in direct mode while typing in a
+kitty-mode shell for long enough to notice a single dropped keystroke
+(easy to miss; a stuck *ibus session* silences everything, which is not).
+Both explanations are consistent with the evidence; distinguishing them
+further would need the owner's own memory of which IME mode they were in
+during that session, which isn't recoverable from logs.
+
 ## Out of scope
 
 Multi-window, screen capture, drag&drop file opening, Windows menu-bar

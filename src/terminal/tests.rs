@@ -2,7 +2,10 @@
 // glob-exports gpui's own `test` attribute macro and shadows `std::test`,
 // sending plain `#[test]` fns through gpui's async test harness instead
 // (see `src/terminal/session.rs`'s tests module for the same workaround).
-use super::{font_from_stack, ImeCommitGuard, DEFAULT_FONT_FAMILY, IME_COMMIT_PHANTOM_WINDOW};
+use super::{
+    font_from_stack, ImeCommitGuard, KeyTextDedup, DEFAULT_FONT_FAMILY, IME_COMMIT_PHANTOM_WINDOW,
+    KEY_TEXT_DEDUP_WINDOW,
+};
 
 #[test]
 fn stack_parses_primary_and_fallbacks() {
@@ -151,4 +154,87 @@ fn enter_after_the_window_passes_through_a_mouse_click_commit() {
     // candidate -> press Enter to send the line), it must not be eaten.
     let well_after_the_window = before + IME_COMMIT_PHANTOM_WINDOW * 3;
     assert!(!guard.should_suppress_at("enter", well_after_the_window));
+}
+
+// `KeyTextDedup` drives `TerminalView::replace_text_in_range`'s decision to
+// drop its copy of a keystroke `handle_key` already sent via the Key path
+// (kitty "report all keys" mode) -- without dropping a commit that has no
+// matching physical key, which is what an IME "direct"/ASCII input mode
+// produces (it consumes the physical key itself and only ever forwards
+// `commit_string`; see docs/winit-backend-design.md's "direct-mode IME
+// commit" section). The three cases every change here must keep correct:
+//
+// 1. Ordinary kitty-mode typing: both `handle_key` and
+//    `replace_text_in_range` fire for the same keystroke -- the second
+//    copy must still be dropped (`kitty_mode_typing_drops_the_duplicate_echo`).
+// 2. An IME composition commit: never went through the Key path at all --
+//    must always pass through, matched or not
+//    (`composition_commit_with_no_key_send_is_never_a_duplicate`; the real
+//    call site also short-circuits this via `was_composing`, but the
+//    dedup itself must be safe standalone too).
+// 3. A direct-mode IME commit with no matching physical key: must pass
+//    through, not be silently dropped -- the bug this type fixes
+//    (`direct_mode_commit_with_no_prior_key_is_not_a_duplicate`).
+
+#[test]
+fn kitty_mode_typing_drops_the_duplicate_echo() {
+    let mut dedup = KeyTextDedup::default();
+    // handle_key sent 'a' via TerminalCommand::Key...
+    dedup.note_key_sent("a");
+    // ...and the text-input pipeline echoes the same keystroke moments
+    // later -- recognized as the same delivery, so the second copy must
+    // be dropped or the terminal double-feeds.
+    assert!(dedup.is_duplicate_of_recent_key("a"));
+}
+
+#[test]
+fn composition_commit_with_no_key_send_is_never_a_duplicate() {
+    let mut dedup = KeyTextDedup::default();
+    // No handle_key call happened for a composed IME commit (it never
+    // goes through the Key path) -- nothing pending, so the multi-char
+    // composed text is never mistaken for a duplicate.
+    assert!(!dedup.is_duplicate_of_recent_key("えっ"));
+}
+
+#[test]
+fn direct_mode_commit_with_no_prior_key_is_not_a_duplicate() {
+    let mut dedup = KeyTextDedup::default();
+    // The bug this type fixes: an IME "direct"/ASCII input mode consumes
+    // the physical key and delivers *only* this commit -- handle_key
+    // never ran, so nothing is pending, and the commit must pass through
+    // as the sole delivery rather than being dropped as an assumed echo.
+    assert!(!dedup.is_duplicate_of_recent_key("a"));
+}
+
+#[test]
+fn mismatched_text_is_not_a_duplicate() {
+    let mut dedup = KeyTextDedup::default();
+    dedup.note_key_sent("a");
+    // An unrelated commit landing right after an unrelated key send must
+    // not be swallowed just because kitty mode is on.
+    assert!(!dedup.is_duplicate_of_recent_key("b"));
+}
+
+#[test]
+fn is_one_shot_like_ime_commit_guard() {
+    let mut dedup = KeyTextDedup::default();
+    dedup.note_key_sent("a");
+    assert!(dedup.is_duplicate_of_recent_key("a"));
+    // The match already consumed the pending record; a second, unrelated
+    // commit of the same text right after (no new key send) must not
+    // match again.
+    assert!(!dedup.is_duplicate_of_recent_key("a"));
+}
+
+#[test]
+fn stale_key_outside_the_window_is_not_a_duplicate() {
+    let mut dedup = KeyTextDedup::default();
+    let before = std::time::Instant::now();
+    dedup.note_key_sent("a");
+    // A pathologically delayed echo past the window is treated as an
+    // unrelated, standalone commit rather than assumed-matched -- a
+    // double-feed (visible duplicate character) is a far smaller cost
+    // than the alternative failure mode (silently dropping real input).
+    let well_after_the_window = before + KEY_TEXT_DEDUP_WINDOW * 3;
+    assert!(!dedup.is_duplicate_of_recent_key_at("a", well_after_the_window));
 }
