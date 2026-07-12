@@ -3,6 +3,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender};
 use horizon_session_protocol::Envelope;
@@ -16,6 +17,12 @@ use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, Pt
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
+
+/// How long [`TerminalHost::create`] waits for a PTY spawn before reporting
+/// an error instead of blocking forever -- see that method's doc comment
+/// for the suspected `portable-pty` fork-safety hazard this guards
+/// against.
+const TERMINAL_SPAWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
 pub(crate) struct TerminalHost {
@@ -100,21 +107,94 @@ impl TerminalHost {
         }
     }
 
+    /// Spawns a PTY for `session_id`, retrying a bounded number of times if
+    /// an individual attempt doesn't report back within [`TERMINAL_SPAWN_
+    /// TIMEOUT`], and installs the session on the first successful attempt.
+    ///
+    /// This exists because of a suspected (code-verified, but not captured
+    /// live -- see `docs/tasks/backlog.md`'s entry on it) hazard in
+    /// `portable-pty` 0.9.0: its `spawn_command` sets a `pre_exec` closure
+    /// that calls `close_random_fds`, which does a heap allocation
+    /// (`std::fs::read_dir`) in the forked child *before* `exec` -- not
+    /// fork-safe in a process this multi-threaded. If another thread held
+    /// e.g. glibc's malloc lock at the instant of `fork`, the child
+    /// inherits it permanently locked and can never reach `exec`; `std::
+    /// process::Command::spawn` blocks the *calling* thread until the
+    /// child execs or reports failure, so a wedged child would wedge the
+    /// caller too, forever, with no way to interrupt it from the outside.
+    /// During this fix's own validation, the same terminal-creation call
+    /// was observed hanging past even a 120s ceiling under contention, at
+    /// a failure rate too high (up to ~20% of runs under sustained load)
+    /// to treat as negligible or purely a test artifact -- but a follow-up
+    /// run instrumented with fine-grained diagnostics did not reproduce it
+    /// live, so the exact mechanism remains a well-evidenced hypothesis,
+    /// not a confirmed root cause.
+    ///
+    /// Regardless of the precise mechanism, bounding this call is correct
+    /// on its own merits: nothing should let one connection's terminal
+    /// creation block that connection's entire message loop forever. Each
+    /// attempt runs on its own thread with a bounded wait -- there is no
+    /// API to cancel a blocked `Command::spawn`, so a timed-out attempt's
+    /// thread (and, if it's genuinely wedged, the half-started child
+    /// process) is deliberately abandoned rather than joined. If the
+    /// hazard above is the real cause, a *fresh* attempt (a new `fork` at
+    /// a different instant) has good odds of avoiding the same collision,
+    /// so retrying should convert an occasional failure into a rarer one
+    /// without ever surfacing it to the caller. If an abandoned attempt
+    /// does eventually succeed after this method has already moved on, it
+    /// still installs its session -- a merely-slow (not wedged) spawn
+    /// isn't wasted, just not waited for.
     fn create(&self, session_id: Uuid, spec: TerminalSpawnSpec) {
         if self.sessions.lock().unwrap().contains_key(&session_id) {
             return;
         }
         self.mark_attached(session_id);
         let cwd = self.resolve_cwd(&spec);
-        match spawn_terminal(session_id, &spec, &cwd) {
-            Ok((session, update_rx)) => {
-                self.sessions.lock().unwrap().insert(session_id, session);
-                self.forward_updates(session_id, update_rx);
-            }
-            Err(error) => {
-                self.send_update(session_id, TerminalUpdate::Error(error.to_string()));
+
+        const MAX_SPAWN_ATTEMPTS: u32 = 3;
+        for attempt in 1..=MAX_SPAWN_ATTEMPTS {
+            let host = self.clone();
+            let spec_for_thread = spec.clone();
+            let cwd_for_thread = cwd.clone();
+            let (result_tx, result_rx) = crossbeam_channel::bounded(1);
+            thread::spawn(move || {
+                match spawn_terminal(session_id, &spec_for_thread, &cwd_for_thread) {
+                    Ok((session, update_rx)) => {
+                        host.sessions.lock().unwrap().insert(session_id, session);
+                        let _ = result_tx.send(Ok(()));
+                        host.forward_updates(session_id, update_rx);
+                    }
+                    Err(error) => {
+                        let _ = result_tx.send(Err(error.to_string()));
+                    }
+                }
+            });
+
+            match result_rx.recv_timeout(TERMINAL_SPAWN_TIMEOUT) {
+                Ok(Ok(())) => return,
+                Ok(Err(error)) => {
+                    // A real spawn error (bad shell, permissions, ...), not
+                    // a hang -- retrying won't help, report it immediately.
+                    self.send_update(session_id, TerminalUpdate::Error(error));
+                    return;
+                }
+                Err(_timeout) => {
+                    eprintln!(
+                        "horizon-sessiond: terminal spawn attempt {attempt}/\
+                         {MAX_SPAWN_ATTEMPTS} for {session_id} did not report back within \
+                         {TERMINAL_SPAWN_TIMEOUT:?}; retrying with a fresh attempt"
+                    );
+                }
             }
         }
+
+        self.send_update(
+            session_id,
+            TerminalUpdate::Error(format!(
+                "terminal failed to start after {MAX_SPAWN_ATTEMPTS} attempts (this is rare; \
+                 retrying the command usually works)"
+            )),
+        );
     }
 
     fn list(&self, request_id: Uuid) {
