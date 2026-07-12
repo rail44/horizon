@@ -402,28 +402,33 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     test-group (`.config/nextest.toml`) serializing the whole
     `horizon-sessiond::e2e` binary (`max-threads = 1`) as belt-and-braces
     against self-contention, given the repeated merge-tax history.
-28. **[PARTIALLY RESOLVED 5c3f725] `horizon-sessiond` socket e2e
+28. **[PARTIALLY RESOLVED 5c3f725, PENDING-COMMIT] `horizon-sessiond` socket e2e
     flakes under the full parallel nextest run** — `terminal_create_diff_
     reconnect_attach_and_shutdown_over_the_real_socket` (`crates/
     horizon-sessiond/tests/e2e.rs`) spawns a real PTY backed by a real
     interactive shell (`/bin/sh -i`). Under **realistic** load -- a plain
     `cargo nextest run --workspace` with no extra synthetic stress, the
-    actual shape of the original flake reports -- this is now fully
-    stable: 15/15 clean runs, twice over (once before, once after the
-    production fix below), with zero failures. Under a **deliberately
-    extreme** synthetic stress (a tight loop of `cargo build -p horizon
-    --release` + `cargo clean`, sustained for many minutes, well beyond
-    "another worker's live build") a residual failure rate persists --
-    roughly 10-20% per run across several measurement rounds -- and traces
-    to a genuine, well-evidenced (though not live-captured) upstream hazard
-    rather than plain scheduling slowness: see the new backlog entry on
-    `portable-pty`'s fork-safety issue. Two rounds of raising
-    `read_terminal_update`'s fixed timeout (10s to 60s to 120s,
-    `TERMINAL_UPDATE_TIMEOUT` in `tests/e2e.rs`) each got defeated by a
-    failure landing at *exactly* the new ceiling -- the signature of a
-    genuine stall, not merely "slower under load" -- which is what
-    prompted the deeper investigation. Landed fixes: (1) the timeout raise
-    above, generous for the realistic case; (2) a nextest test-group
+    actual shape of the original flake reports -- this is dramatically
+    better but not literally zero: 30/30 clean runs across two rounds
+    before the retry fix below, then 14/15 in a third round run after a
+    follow-up correctness fix to that same retry (same failure signature:
+    `terminal_create_diff_...` at exactly the 120s ceiling). One failure
+    in 45 realistic-mode runs is a large improvement over the original
+    "6+ times in one day" merge-tax rate, but the honest statement is
+    "much rarer," not "eliminated." Under a **deliberately extreme**
+    synthetic stress (a tight loop of `cargo build -p horizon --release`
+    + `cargo clean`, sustained for many minutes, well beyond "another
+    worker's live build") a residual failure rate persists -- roughly
+    10-20% per run across several measurement rounds -- and traces to a
+    genuine, well-evidenced (though not live-captured) upstream hazard
+    rather than plain scheduling slowness: see the `portable-pty`
+    fork-safety backlog entry. Two rounds of raising `read_terminal_
+    update`'s fixed timeout (10s to 60s to 120s, `TERMINAL_UPDATE_TIMEOUT`
+    in `tests/e2e.rs`) each got defeated by a failure landing at *exactly*
+    the new ceiling -- the signature of a genuine stall, not merely
+    "slower under load" -- which is what prompted the deeper
+    investigation. Landed fixes: (1) the timeout raise above, generous
+    for the realistic case; (2) a nextest test-group
     (`.config/nextest.toml`) serializing every test in the `horizon-
     sessiond::e2e` binary against each other (`max-threads = 1`), removing
     self-contention as a variable; (3) a production fix in `crates/
@@ -433,13 +438,23 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     no way to interrupt it); now each spawn attempt is bounded to 10s
     (`TERMINAL_SPAWN_TIMEOUT`) on its own thread with up to 3 retries
     before reporting a `TerminalUpdate::Error`, converting an unrecoverable
-    freeze into a bounded, retriable failure. This is a real reliability
-    improvement in its own right, independent of whether it fully
-    addresses the root cause -- which, per the residual failure rate
-    above, it does not eliminate under the extreme synthetic case. Left
-    open for a follow-up: see the `portable-pty` backlog entry for options
-    (upgrade, vendor patch, or accept the retry mitigation as sufficient
-    given realistic load is now clean).
+    freeze into a bounded, retriable failure; (4) a follow-up correctness
+    fix to (3) caught in review: the original retry design let a late,
+    abandoned attempt's success unconditionally overwrite a session an
+    earlier retry had already installed, and both attempts' threads would
+    then call `forward_updates` for the same id, interleaving two
+    different shells' output into one pane. `TerminalHost::install_if_
+    vacant` now makes installation first-wins (`HashMap::Entry`, checked
+    under the lock) and kills/shuts down a losing late duplicate rather
+    than letting it live on unobserved (`HostedTerminal` has no `Drop`
+    impl, so this must be explicit) -- covered by two unit tests
+    (`terminal::tests::install_if_vacant_*`). None of this is a full fix
+    for the root cause -- which, per the residual failure rate above, is
+    not eliminated under the extreme synthetic case, and now demonstrably
+    not fully eliminated under realistic load either. Left open for a
+    follow-up: see the `portable-pty` backlog entry for options (upgrade,
+    vendor patch, or accept the retry mitigation as the practical ceiling
+    given how rare it now is).
 29. **Git dependencies carry no `rev` pins in Cargo.toml — Cargo.lock is
     the only pin** — the root `Cargo.toml` declares `gpui`, `gpui_platform`,
     `gpui-component`, and `gpui-component-assets` as bare `git = ...` deps
@@ -516,14 +531,25 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     bounds each spawn attempt to 10s on its own thread and retries up to 3
     times before reporting a `TerminalUpdate::Error`, so a stuck spawn can
     no longer wedge a connection's message loop forever (see backlog-28).
-    Measured with this mitigation in place: focused stress runs of just
-    this test under the same sustained synthetic load still showed a
-    residual failure rate around 10% (4/40 in one round), i.e. the retry
-    reduces but does not eliminate the observed rate under *extreme*
-    synthetic contention. Under realistic load (plain `cargo nextest run
-    --workspace`, no extra synthetic stress -- the actual shape of the
-    original flake reports) it was never observed at all, across 30
-    combined clean-mode runs before and after the retry mitigation.
+    A review pass on that mitigation caught a second, distinct bug it
+    introduced (fixed in the same follow-up): the original design let a
+    late, abandoned attempt's success unconditionally overwrite a session
+    an earlier retry had already installed, so both attempts' `forward_
+    updates` loops could end up running for the same `session_id`,
+    interleaving two different shells' output into one pane.
+    `TerminalHost::install_if_vacant` now makes installation first-wins
+    and kills a losing late duplicate instead. Measured with the full
+    mitigation in place: focused stress runs of just this test under the
+    same sustained synthetic load still showed a residual failure rate
+    around 10% (4/40 in one round), i.e. the retry reduces but does not
+    eliminate the observed rate under *extreme* synthetic contention.
+    Under realistic load (plain `cargo nextest run --workspace`, no extra
+    synthetic stress -- the actual shape of the original flake reports)
+    it held at 30/30 clean across two rounds before the install-race
+    follow-up, then hit once in 15 runs after it (same failure signature,
+    same test, same ~120s ceiling) -- so "rare," not "eliminated," is the
+    honest characterization even under realistic load; see backlog-28 for
+    the combined count.
     Out of scope to fix at the root here (patching/vendoring a third-party
     crate is a separate, larger decision) -- options for a follow-up:
     upgrade `portable-pty` if a fixed release ever ships, `[patch]` a local

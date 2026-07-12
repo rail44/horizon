@@ -1,3 +1,4 @@
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -140,10 +141,24 @@ impl TerminalHost {
     /// hazard above is the real cause, a *fresh* attempt (a new `fork` at
     /// a different instant) has good odds of avoiding the same collision,
     /// so retrying should convert an occasional failure into a rarer one
-    /// without ever surfacing it to the caller. If an abandoned attempt
-    /// does eventually succeed after this method has already moved on, it
-    /// still installs its session -- a merely-slow (not wedged) spawn
-    /// isn't wasted, just not waited for.
+    /// without ever surfacing it to the caller.
+    ///
+    /// Install is **first-wins**: if an abandoned attempt does eventually
+    /// succeed after a later retry already installed a session for this
+    /// `session_id`, the late duplicate is killed and discarded (see the
+    /// `Entry::Occupied` branch below) rather than overwriting the
+    /// winning `HostedTerminal` or having both threads call
+    /// `forward_updates` for the same id, which would interleave two
+    /// different shells' output into one pane. `HostedTerminal` has no
+    /// `Drop` impl -- it's a cheap, `Clone`-able handle, not an owner --
+    /// so a discarded session's real child process and background
+    /// threads are killed/signalled explicitly rather than relying on it
+    /// going out of scope. One edge case needs no extra code, just
+    /// awareness: if *every* attempt has already timed out and this
+    /// method has reported the final error to the client, a late success
+    /// still wins the (now-empty) entry and installs normally -- the pane
+    /// saw an error, but the session is alive daemon-side and recoverable
+    /// via Manage Sessions, which is an acceptable outcome.
     fn create(&self, session_id: Uuid, spec: TerminalSpawnSpec) {
         if self.sessions.lock().unwrap().contains_key(&session_id) {
             return;
@@ -160,9 +175,16 @@ impl TerminalHost {
             thread::spawn(move || {
                 match spawn_terminal(session_id, &spec_for_thread, &cwd_for_thread) {
                     Ok((session, update_rx)) => {
-                        host.sessions.lock().unwrap().insert(session_id, session);
-                        let _ = result_tx.send(Ok(()));
-                        host.forward_updates(session_id, update_rx);
+                        if host.install_if_vacant(session_id, session) {
+                            let _ = result_tx.send(Ok(()));
+                            host.forward_updates(session_id, update_rx);
+                        }
+                        // Occupied: a different attempt (an earlier one that
+                        // timed out here but finished late, or a fresh
+                        // `create` for the same id that raced this one) has
+                        // already won -- `install_if_vacant` already killed
+                        // and discarded this duplicate, so there is nothing
+                        // left to do with `update_rx` but let it drop.
                     }
                     Err(error) => {
                         let _ = result_tx.send(Err(error.to_string()));
@@ -195,6 +217,38 @@ impl TerminalHost {
                  retrying the command usually works)"
             )),
         );
+    }
+
+    /// The first-wins decision [`Self::create`]'s spawn threads share: installs
+    /// `session` for `session_id` and returns `true` if no session was
+    /// already installed for that id, or discards `session` (killing its
+    /// real child process and telling its background loop to shut down --
+    /// see the note on `HostedTerminal` having no `Drop` impl) and returns
+    /// `false` if one already was. The lock is held only long enough to
+    /// decide; the losing session's teardown happens after releasing it.
+    fn install_if_vacant(&self, session_id: Uuid, session: HostedTerminal) -> bool {
+        let discarded = {
+            let mut sessions = self.sessions.lock().unwrap();
+            match sessions.entry(session_id) {
+                Entry::Vacant(entry) => {
+                    entry.insert(session);
+                    None
+                }
+                Entry::Occupied(_) => Some(session),
+            }
+        };
+        match discarded {
+            None => true,
+            Some(discarded) => {
+                eprintln!(
+                    "horizon-sessiond: discarding a late duplicate terminal spawn for \
+                     {session_id} (an earlier attempt already won)"
+                );
+                let _ = discarded.killer.lock().unwrap().kill();
+                let _ = discarded.command_tx.send(TerminalCommand::Shutdown);
+                false
+            }
+        }
     }
 
     fn list(&self, request_id: Uuid) {
@@ -536,4 +590,95 @@ fn sample_cwd(pid: u32) -> Option<PathBuf> {
         .process(sysinfo_pid)
         .and_then(|process| process.cwd())
         .map(Path::to_path_buf)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// A no-op `ChildKiller` standing in for a real PTY's -- these tests
+    /// exercise `TerminalHost::install_if_vacant`'s first-wins *decision*
+    /// (the seam this whole fix is about), not a real PTY spawn, so a real
+    /// `portable_pty` child is unnecessary weight; `killed` just records
+    /// whether `kill` was ever called.
+    #[derive(Debug, Clone)]
+    struct FakeKiller {
+        killed: Arc<AtomicBool>,
+    }
+
+    impl ChildKiller for FakeKiller {
+        fn kill(&mut self) -> std::io::Result<()> {
+            self.killed.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+            Box::new(self.clone())
+        }
+    }
+
+    /// A `HostedTerminal` with a fake killer and its own command channel,
+    /// plus handles to observe both -- everything `install_if_vacant`
+    /// needs to decide with and, on the losing path, tear down.
+    fn fake_session() -> (HostedTerminal, Receiver<TerminalCommand>, Arc<AtomicBool>) {
+        let (command_tx, command_rx) = crossbeam_channel::unbounded();
+        let killed = Arc::new(AtomicBool::new(false));
+        let killer = FakeKiller {
+            killed: killed.clone(),
+        };
+        let session = HostedTerminal {
+            command_tx,
+            latest_frame: Arc::new(Mutex::new(None)),
+            pid: None,
+            killer: Arc::new(Mutex::new(Box::new(killer))),
+        };
+        (session, command_rx, killed)
+    }
+
+    #[test]
+    fn install_if_vacant_installs_the_first_session_for_a_fresh_id() {
+        let host = TerminalHost::new();
+        let session_id = Uuid::new_v4();
+        let (session, _command_rx, killed) = fake_session();
+
+        assert!(host.install_if_vacant(session_id, session));
+
+        assert!(host.sessions.lock().unwrap().contains_key(&session_id));
+        assert!(
+            !killed.load(Ordering::SeqCst),
+            "the only (winning) attempt must not be killed"
+        );
+    }
+
+    /// The race the review comment on this fix called out: a slow-but-not-
+    /// wedged attempt (`create`'s abandoned retry) can finish after a
+    /// faster retry already installed a session for the same id. The late
+    /// arrival must lose, not overwrite the live session or get its
+    /// `forward_updates` loop started (which would interleave two shells'
+    /// output into one pane).
+    #[test]
+    fn install_if_vacant_discards_and_kills_a_late_duplicate() {
+        let host = TerminalHost::new();
+        let session_id = Uuid::new_v4();
+        let (winner, _winner_command_rx, winner_killed) = fake_session();
+        let (loser, loser_command_rx, loser_killed) = fake_session();
+
+        assert!(host.install_if_vacant(session_id, winner));
+        assert!(!host.install_if_vacant(session_id, loser));
+
+        assert!(
+            !winner_killed.load(Ordering::SeqCst),
+            "the winning session must survive"
+        );
+        assert!(
+            loser_killed.load(Ordering::SeqCst),
+            "the losing session's real process must be killed, not just dropped"
+        );
+        assert_eq!(
+            loser_command_rx.try_recv(),
+            Ok(TerminalCommand::Shutdown),
+            "the losing session's background loop must be told to shut down"
+        );
+    }
 }
