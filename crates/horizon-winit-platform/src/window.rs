@@ -45,6 +45,55 @@ fn describe_ime(ime: &winit::event::Ime) -> String {
     }
 }
 
+/// The pure decision behind
+/// [`WinitWindowInner::maybe_feed_unhandled_key_as_text`] — see that
+/// method's doc for the *why*. Kept as a free function (rather than inline
+/// in the method) so it's testable without a real `WinitWindowInner`
+/// (`RefCell`-backed state, a live `PlatformInputHandler`, ...).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TextFallbackDecision {
+    /// Nothing else handled this key, no composition is in progress, and
+    /// it carries text — the platform layer is this keystroke's only
+    /// remaining chance to reach the active input handler.
+    Feed,
+    /// A downstream listener (an `on_key_down` handler, a bound action,
+    /// gpui's own dispatch, ...) already stopped propagation — mirrors
+    /// gpui_linux's `if !result.propagate { return }`.
+    SkipHandled,
+    /// An IME composition is in progress (a non-empty `Preedit` arrived
+    /// with no `Commit`/`Disabled` since) — the composed result arrives
+    /// via `Ime::Commit` on its own; feeding the raw romaji/kana keystrokes
+    /// here too would insert them as literal text alongside it.
+    SkipComposing,
+    /// Anything beyond a plain keystroke or Shift (Ctrl/Alt/Cmd combos,
+    /// function keys held with a modifier) is not text input — mirrors
+    /// gpui_linux's `modifiers.is_subset_of(&Modifiers::shift())` gate on
+    /// both its wayland and x11 backends.
+    SkipModifiers,
+    /// The keystroke carries no text (arrows, Tab, Escape, a bare
+    /// modifier, ...) — nothing to feed.
+    SkipNoText,
+}
+
+fn text_fallback_decision(
+    propagate: bool,
+    ime_composing: bool,
+    modifiers: Modifiers,
+    key_char: Option<&str>,
+) -> TextFallbackDecision {
+    if !propagate {
+        TextFallbackDecision::SkipHandled
+    } else if ime_composing {
+        TextFallbackDecision::SkipComposing
+    } else if !modifiers.is_subset_of(&Modifiers::shift()) {
+        TextFallbackDecision::SkipModifiers
+    } else if key_char.is_none() {
+        TextFallbackDecision::SkipNoText
+    } else {
+        TextFallbackDecision::Feed
+    }
+}
+
 // `PlatformWindow`'s callback setters take these exact closure shapes
 // (mirroring gpui_web/gpui_linux's own window callback structs, which have
 // the same complexity); factoring each into a named `type` would only
@@ -77,6 +126,15 @@ pub(crate) struct WinitWindowState {
     /// clicks-in-a-row and is never cleared on release.
     pub(crate) pressed_button: Option<MouseButton>,
     pub(crate) click_tracker: ClickTracker,
+    /// True from a non-empty `Ime::Preedit` until the matching
+    /// `Ime::Commit`/empty-`Preedit`/`Disabled` — mirrors gpui_linux's
+    /// wayland client's own `composing: bool` (`WaylandClientStatePtr`'s
+    /// `Dispatch` impl in the pinned checkout). Gates
+    /// `maybe_feed_unhandled_key_as_text`: the romaji/kana keys a user
+    /// presses *while* composing must never be independently fed to the
+    /// input handler as literal text — the composed result already
+    /// arrives via `Ime::Commit` when composition ends.
+    pub(crate) ime_composing: bool,
 }
 
 /// Shared with the winit `ApplicationHandler`, which drives `state` and
@@ -134,6 +192,7 @@ impl WinitWindowInner {
                 // `new_selected_range` goes to `None`, same as gpui_linux)
                 // rather than inventing a richer contract gpui's Linux
                 // backend doesn't itself provide.
+                self.state.borrow_mut().ime_composing = !text.is_empty();
                 if text.is_empty() {
                     input_handler.unmark_text();
                 } else {
@@ -142,9 +201,11 @@ impl WinitWindowInner {
                 }
             }
             winit::event::Ime::Commit(text) => {
+                self.state.borrow_mut().ime_composing = false;
                 input_handler.replace_text_in_range(None, &text);
             }
             winit::event::Ime::Disabled => {
+                self.state.borrow_mut().ime_composing = false;
                 if let Some(marked) = input_handler.marked_text_range() {
                     input_handler.replace_text_in_range(Some(marked), "");
                 }
@@ -158,6 +219,64 @@ impl WinitWindowInner {
             }
         }
 
+        self.state.borrow_mut().input_handler = Some(input_handler);
+        self.window.request_redraw();
+    }
+
+    /// Mirrors gpui_linux's own text-input fallback — wayland's
+    /// `WaylandWindowState::handle_input` and x11's `X11WindowState::handle_input`
+    /// in the pinned checkout both do this same thing after dispatching a
+    /// `PlatformInput::KeyDown`: if nothing downstream consumed it
+    /// (`propagate` still true) and the keystroke carries text, feed that
+    /// text to the active input handler directly, since no separate IME
+    /// event is coming for it. `horizon-winit-platform` had no equivalent —
+    /// a plain printable key that nothing else handles (the common case
+    /// outside kitty "report all keys" mode, see `src/terminal/mod.rs`'s
+    /// module doc) was silently dropped instead of ever reaching the
+    /// terminal. See docs/winit-backend-design.md's "text-input fallback"
+    /// section for how this was diagnosed (a permanent `input-trace:` trace
+    /// facility, driven by the owner's own daily-driver capture) and why
+    /// composition-mode input already worked without it (a real
+    /// `Ime::Commit` covers that path; `ime_composing` here is what keeps
+    /// this fallback from also firing on the raw keys typed *while*
+    /// composing).
+    ///
+    /// `propagate`: the `DispatchEventResult` from dispatching this
+    /// `KeyDown` through gpui's own callback — `true` means nothing
+    /// downstream (an `on_key_down` listener, a bound action, ...) stopped
+    /// propagation, matching gpui_linux's exact gate. Only ever called for
+    /// `ElementState::Pressed` — gpui_linux's own fallback only looks at
+    /// `PlatformInput::KeyDown`, never `KeyUp`.
+    pub(crate) fn maybe_feed_unhandled_key_as_text(
+        &self,
+        keystroke: &gpui::Keystroke,
+        propagate: bool,
+    ) {
+        let ime_composing = self.state.borrow().ime_composing;
+        let decision = text_fallback_decision(
+            propagate,
+            ime_composing,
+            keystroke.modifiers,
+            keystroke.key_char.as_deref(),
+        );
+        let TextFallbackDecision::Feed = decision else {
+            input_trace!("winit text-fallback skip: {decision:?}");
+            return;
+        };
+        // `Feed` only reaches here when `key_char` is `Some` (see
+        // `text_fallback_decision`).
+        let key_char = keystroke.key_char.as_deref().unwrap();
+        let mut state = self.state.borrow_mut();
+        let Some(mut input_handler) = state.input_handler.take() else {
+            input_trace!("winit text-fallback skip: no active input handler");
+            return;
+        };
+        drop(state);
+        input_trace!(
+            "winit text-fallback fire: feeding {} to input handler",
+            crate::input_trace::describe_text(key_char)
+        );
+        input_handler.replace_text_in_range(None, key_char);
         self.state.borrow_mut().input_handler = Some(input_handler);
         self.window.request_redraw();
     }
@@ -253,6 +372,7 @@ impl WinitPlatformWindow {
             mouse_position: Point::default(),
             pressed_button: None,
             click_tracker: ClickTracker::new(),
+            ime_composing: false,
         };
 
         let inner = Rc::new(WinitWindowInner {
@@ -518,4 +638,134 @@ impl gpui::PlatformWindow for WinitPlatformWindow {
     }
 
     fn set_client_inset(&self, _inset: Pixels) {}
+}
+
+#[cfg(test)]
+mod tests {
+    //! Drives `text_fallback_decision` directly — the pure seam behind
+    //! `maybe_feed_unhandled_key_as_text`, extracted specifically so this
+    //! doesn't need a live `WinitWindowInner`/`PlatformInputHandler`. See
+    //! that function's doc for the mirrored gpui_linux behavior each case
+    //! below is guarding.
+
+    use super::{text_fallback_decision, TextFallbackDecision};
+    use gpui::Modifiers;
+
+    fn plain() -> Modifiers {
+        Modifiers::default()
+    }
+
+    #[test]
+    fn unhandled_plain_key_with_text_is_fed() {
+        // The direct-ASCII-mode bug this exists to fix: a plain printable
+        // key nothing else consumed, not composing, must reach the
+        // terminal as text.
+        assert_eq!(
+            text_fallback_decision(true, false, plain(), Some("a")),
+            TextFallbackDecision::Feed
+        );
+    }
+
+    #[test]
+    fn shift_only_modifier_still_feeds() {
+        // Shift is part of ordinary typing (capital letters, punctuation)
+        // -- gpui_linux's own gate allows it too.
+        assert_eq!(
+            text_fallback_decision(true, false, Modifiers::shift(), Some("A")),
+            TextFallbackDecision::Feed
+        );
+    }
+
+    #[test]
+    fn already_handled_key_is_skipped() {
+        // Watch case 1 (kitty mode): handle_key already sent the key via
+        // TerminalCommand::Key. If gpui reports it handled (propagate ==
+        // false), the fallback must not also fire -- KeyTextDedup is only
+        // the second line of defense for when propagate stays true anyway.
+        assert_eq!(
+            text_fallback_decision(false, false, plain(), Some("a")),
+            TextFallbackDecision::SkipHandled
+        );
+    }
+
+    #[test]
+    fn composing_key_is_never_fed_even_if_unhandled() {
+        // Watch case 2: the romaji/kana keys typed *while* an IME
+        // composition is in progress must never be independently inserted
+        // as literal text -- the composed result arrives via its own
+        // Ime::Commit. This takes priority over every other condition.
+        assert_eq!(
+            text_fallback_decision(true, true, plain(), Some("k")),
+            TextFallbackDecision::SkipComposing
+        );
+    }
+
+    #[test]
+    fn composing_gate_wins_even_when_also_unhandled_and_has_text() {
+        // Same as above, phrased as a priority check: composing wins over
+        // an otherwise-Feed-eligible combination.
+        assert_eq!(
+            text_fallback_decision(true, true, Modifiers::shift(), Some("K")),
+            TextFallbackDecision::SkipComposing
+        );
+    }
+
+    #[test]
+    fn control_modifier_is_skipped() {
+        assert_eq!(
+            text_fallback_decision(
+                true,
+                false,
+                Modifiers {
+                    control: true,
+                    ..Modifiers::default()
+                },
+                Some("c")
+            ),
+            TextFallbackDecision::SkipModifiers
+        );
+    }
+
+    #[test]
+    fn alt_modifier_is_skipped() {
+        assert_eq!(
+            text_fallback_decision(
+                true,
+                false,
+                Modifiers {
+                    alt: true,
+                    ..Modifiers::default()
+                },
+                Some("a")
+            ),
+            TextFallbackDecision::SkipModifiers
+        );
+    }
+
+    #[test]
+    fn platform_modifier_is_skipped() {
+        assert_eq!(
+            text_fallback_decision(
+                true,
+                false,
+                Modifiers {
+                    platform: true,
+                    ..Modifiers::default()
+                },
+                Some("v")
+            ),
+            TextFallbackDecision::SkipModifiers
+        );
+    }
+
+    #[test]
+    fn no_key_char_is_skipped() {
+        // Watch case 3: named keys (Tab, arrows, Enter, ...) carry no
+        // key_char, so a bound List/keybinding action never risks a text
+        // fallback regardless of whether it stopped propagation.
+        assert_eq!(
+            text_fallback_decision(true, false, plain(), None),
+            TextFallbackDecision::SkipNoText
+        );
+    }
 }

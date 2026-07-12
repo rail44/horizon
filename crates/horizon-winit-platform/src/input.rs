@@ -137,12 +137,38 @@ pub(crate) fn winit_key_event_to_keystroke(
     event: &KeyEvent,
     modifiers: Modifiers,
 ) -> Option<Keystroke> {
-    let (key, modifiers) = match &event.logical_key {
-        Key::Character(text) => normalize_letter_case(text.to_string(), modifiers),
-        Key::Named(named) => (named_key_string(*named)?.to_string(), modifiers),
+    let (key, modifiers, carries_text) = match &event.logical_key {
+        Key::Character(text) => {
+            let (key, modifiers) = normalize_letter_case(text.to_string(), modifiers);
+            (key, modifiers, true)
+        }
+        // Space is the one winit `Named` key `term_key_code`
+        // (src/terminal/input.rs) has no unconditional case for -- like any
+        // other printable character, it only maps there when kitty mode or
+        // Ctrl is active, so (unlike Enter/Tab/arrows/...) it still needs
+        // `key_char` to reach the text-input fallback in direct-ASCII mode
+        // the same way a letter does.
+        Key::Named(NamedKey::Space) => ("space".to_string(), modifiers, true),
+        // Every other named key (Enter, Tab, Backspace, Escape, arrows,
+        // Home/End, PageUp/PageDown, Delete, Insert, F1-F24) is one
+        // `term_key_code` always handles regardless of kitty mode -- it
+        // carries no printable text of its own, matching
+        // `Keystroke::key_char`'s own contract ("the character that could
+        // have been typed") and gpui_linux's `keystroke_from_xkb`, which
+        // never sets it for these either. winit's raw `event.text`
+        // sometimes disagrees (Enter's `text` is `Some("\r")`, for
+        // instance) -- surfacing that here would make `key_char.is_some()`
+        // (the text-input fallback's gate in `window.rs`, and the dedup
+        // guard in `src/terminal/mod.rs`) treat an always-otherwise-handled
+        // named key as unhandled printable text, double-feeding it.
+        Key::Named(named) => (named_key_string(*named)?.to_string(), modifiers, false),
         Key::Unidentified(_) | Key::Dead(_) => return None,
     };
-    let key_char = event.text.as_ref().map(|text| text.to_string());
+    let key_char = if carries_text {
+        event.text.as_ref().map(|text| text.to_string())
+    } else {
+        None
+    };
     Some(Keystroke {
         modifiers,
         key,
