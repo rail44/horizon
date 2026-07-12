@@ -212,6 +212,12 @@ pub struct RawUiConfig {
     pub font_family: Option<String>,
     pub window_width: Option<f64>,
     pub window_height: Option<f64>,
+    /// Windowing backend: `"native"` (default, gpui's own Linux backend)
+    /// or `"winit"` (the `horizon-winit-platform` crate, Linux-only —
+    /// silently falls back to native on other platforms). The
+    /// `HORIZON_WINDOWING` env var, if set, wins over this. Startup-only,
+    /// like the rest of `[ui]`. See docs/winit-backend-design.md.
+    pub windowing: Option<String>,
 }
 
 /// Loads and caches the config file for the lifetime of the process. Config

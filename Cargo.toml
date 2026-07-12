@@ -9,6 +9,7 @@ members = [
     "crates/horizon-terminal-core",
     "crates/horizon-config",
     "crates/horizon-workspace",
+    "crates/horizon-winit-platform",
 ]
 
 [package]
@@ -58,6 +59,14 @@ termwiz = "0.23.3"
 tokio = { version = "1.52", features = ["rt", "net", "io-util", "time", "macros"] }
 unicode-width = "0.2"
 uuid = { version = "1.18", features = ["v4", "serde"] }
+
+# Linux-only opt-in windowing backend (HORIZON_WINDOWING=winit / [ui]
+# windowing = "winit", see docs/winit-backend-design.md) — target-gated so
+# the crate (and its winit/gpui_wgpu/arboard dependency edge) is only ever
+# pulled into the build graph on Linux; the call site in src/main.rs is
+# itself `#[cfg(target_os = "linux")]`-gated to match.
+[target.'cfg(target_os = "linux")'.dependencies]
+horizon-winit-platform = { path = "crates/horizon-winit-platform" }
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }
