@@ -7,9 +7,10 @@ use std::thread;
 use crossbeam_channel::{Receiver, Sender};
 use horizon_session_protocol::Envelope;
 use horizon_terminal_core::{
-    compute_frame_diff, encode_terminal_update, run_terminal_core, CoreReceivers, CoreSenders,
-    SelectionCommand, TerminalCommand, TerminalControl, TerminalCoreOptions, TerminalFrame,
-    TerminalSpawnSpec, TerminalUpdate,
+    compute_frame_diff, encode_terminal_control, encode_terminal_update, run_terminal_core,
+    CoreReceivers, CoreSenders, SelectionCommand, TerminalAttachResult, TerminalCommand,
+    TerminalControl, TerminalCoreOptions, TerminalFrame, TerminalSpawnSpec, TerminalSummary,
+    TerminalUpdate,
 };
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
@@ -56,10 +57,20 @@ impl TerminalHost {
         *self.connection.lock().unwrap() = None;
     }
 
-    pub(crate) fn handle_control(&self, session_id: Uuid, control: TerminalControl) {
+    pub(crate) fn handle_control(&self, session_id: Option<Uuid>, control: TerminalControl) {
         match control {
-            TerminalControl::Create(spec) => self.create(session_id, *spec),
-            TerminalControl::Attach => self.attach(session_id),
+            TerminalControl::List { request_id } => self.list(request_id),
+            TerminalControl::Create(spec) => {
+                if let Some(session_id) = session_id {
+                    self.create(session_id, *spec);
+                }
+            }
+            TerminalControl::Attach { request_id } => {
+                if let Some(session_id) = session_id {
+                    self.attach(session_id, request_id);
+                }
+            }
+            TerminalControl::ListResult { .. } | TerminalControl::AttachResult { .. } => {}
         }
     }
 
@@ -106,9 +117,36 @@ impl TerminalHost {
         }
     }
 
-    fn attach(&self, session_id: Uuid) {
+    fn list(&self, request_id: Uuid) {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap()
+            .keys()
+            .copied()
+            .map(|session_id| TerminalSummary { session_id })
+            .collect::<Vec<_>>();
+        sessions.sort_unstable_by_key(|summary| summary.session_id);
+        self.send_control(
+            None,
+            TerminalControl::ListResult {
+                request_id,
+                sessions,
+            },
+        );
+    }
+
+    fn attach(&self, session_id: Uuid, request_id: Uuid) {
         let sessions = self.sessions.lock().unwrap();
         let Some(session) = sessions.get(&session_id) else {
+            drop(sessions);
+            self.send_control(
+                Some(session_id),
+                TerminalControl::AttachResult {
+                    request_id,
+                    result: TerminalAttachResult::NotFound,
+                },
+            );
             return;
         };
         let latest = session.latest_frame.lock().unwrap();
@@ -118,6 +156,15 @@ impl TerminalHost {
         };
         connection.attached.insert(session_id);
         connection.baselines.remove(&session_id);
+        if let Ok(envelope) = encode_terminal_control(
+            Some(session_id),
+            &TerminalControl::AttachResult {
+                request_id,
+                result: TerminalAttachResult::Attached,
+            },
+        ) {
+            let _ = connection.outgoing.send(envelope);
+        }
         if let Some(frame) = latest.as_ref() {
             if let Ok(envelope) =
                 encode_terminal_update(session_id, &TerminalUpdate::Snapshot(frame.clone()))
@@ -154,6 +201,14 @@ impl TerminalHost {
                 if connection.attached.contains(&session_id) {
                     let _ = connection.outgoing.send(envelope);
                 }
+            }
+        }
+    }
+
+    fn send_control(&self, session_id: Option<Uuid>, control: TerminalControl) {
+        if let Ok(envelope) = encode_terminal_control(session_id, &control) {
+            if let Some(connection) = self.connection.lock().unwrap().as_ref() {
+                let _ = connection.outgoing.send(envelope);
             }
         }
     }

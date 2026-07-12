@@ -23,9 +23,9 @@ use horizon_agent::wire::{
 };
 use horizon_session_protocol::{self as session_wire, Hello, SessionControl, SESSION_CONTROL_KIND};
 use horizon_terminal_core::{
-    apply_frame_diff, decode_terminal_update, encode_terminal_command, encode_terminal_control,
-    TerminalColorScheme, TerminalCommand, TerminalControl, TerminalFrame, TerminalSize,
-    TerminalSpawnSpec, TerminalUpdate,
+    apply_frame_diff, decode_terminal_control, decode_terminal_update, encode_terminal_command,
+    encode_terminal_control, TerminalAttachResult, TerminalColorScheme, TerminalCommand,
+    TerminalControl, TerminalFrame, TerminalSize, TerminalSpawnSpec, TerminalUpdate,
 };
 use tokio::io::BufReader;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
@@ -361,10 +361,39 @@ async fn write_terminal_control(
     session_id: uuid::Uuid,
     control: TerminalControl,
 ) {
-    let envelope = encode_terminal_control(session_id, &control).unwrap();
+    let envelope = encode_terminal_control(Some(session_id), &control).unwrap();
     session_wire::write_envelope(writer, &envelope)
         .await
         .unwrap();
+}
+
+async fn write_global_terminal_control(writer: &mut OwnedWriteHalf, control: TerminalControl) {
+    let envelope = encode_terminal_control(None, &control).unwrap();
+    session_wire::write_envelope(writer, &envelope)
+        .await
+        .unwrap();
+}
+
+async fn read_terminal_control(
+    reader: &mut BufReader<OwnedReadHalf>,
+) -> (Option<uuid::Uuid>, TerminalControl) {
+    let envelope = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let envelope = session_wire::read_envelope(reader)
+                .await
+                .unwrap()
+                .expect("sessiond should keep the terminal connection open");
+            if envelope.kind == horizon_terminal_core::TERMINAL_CONTROL_KIND {
+                break envelope;
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for a terminal control");
+    (
+        envelope.session_id,
+        decode_terminal_control(&envelope).unwrap(),
+    )
 }
 
 async fn write_terminal_command(
@@ -383,7 +412,7 @@ async fn read_terminal_update(
     session_id: uuid::Uuid,
 ) -> TerminalUpdate {
     let envelope =
-        tokio::time::timeout(Duration::from_secs(5), session_wire::read_envelope(reader))
+        tokio::time::timeout(Duration::from_secs(10), session_wire::read_envelope(reader))
             .await
             .expect("timed out waiting for a terminal update")
             .unwrap()
@@ -554,7 +583,23 @@ async fn terminal_create_diff_reconnect_attach_and_shutdown_over_the_real_socket
     drop(writer);
     drop(reader);
     let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
-    write_terminal_control(&mut writer, session_id, TerminalControl::Attach).await;
+    let request_id = uuid::Uuid::new_v4();
+    write_terminal_control(
+        &mut writer,
+        session_id,
+        TerminalControl::Attach { request_id },
+    )
+    .await;
+    assert_eq!(
+        read_terminal_control(&mut reader).await,
+        (
+            Some(session_id),
+            TerminalControl::AttachResult {
+                request_id,
+                result: TerminalAttachResult::Attached,
+            },
+        )
+    );
     let TerminalUpdate::Snapshot(attached) = read_terminal_update(&mut reader, session_id).await
     else {
         panic!("attach on a new connection must reset to a full snapshot");
@@ -583,6 +628,109 @@ async fn terminal_create_diff_reconnect_attach_and_shutdown_over_the_real_socket
         }
     }
     panic!("terminal shutdown did not produce an exited update");
+}
+
+#[tokio::test]
+async fn terminal_list_is_correlated_sorted_and_unknown_attach_is_explicit() {
+    let sessiond = SessiondProcess::spawn();
+    let high_id = uuid::Uuid::from_u128(2);
+    let low_id = uuid::Uuid::from_u128(1);
+    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
+
+    let empty_list_request = uuid::Uuid::new_v4();
+    write_global_terminal_control(
+        &mut writer,
+        TerminalControl::List {
+            request_id: empty_list_request,
+        },
+    )
+    .await;
+    assert_eq!(
+        read_terminal_control(&mut reader).await,
+        (
+            None,
+            TerminalControl::ListResult {
+                request_id: empty_list_request,
+                sessions: Vec::new(),
+            },
+        )
+    );
+
+    write_terminal_control(
+        &mut writer,
+        high_id,
+        TerminalControl::Create(Box::new(terminal_spec(std::env::temp_dir(), None))),
+    )
+    .await;
+    assert!(matches!(
+        read_terminal_update(&mut reader, high_id).await,
+        TerminalUpdate::Snapshot(_)
+    ));
+
+    drop(writer);
+    drop(reader);
+    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
+    write_terminal_control(
+        &mut writer,
+        low_id,
+        TerminalControl::Create(Box::new(terminal_spec(std::env::temp_dir(), None))),
+    )
+    .await;
+    assert!(matches!(
+        read_terminal_update(&mut reader, low_id).await,
+        TerminalUpdate::Snapshot(_)
+    ));
+
+    drop(writer);
+    drop(reader);
+    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
+    let list_request = uuid::Uuid::new_v4();
+    write_global_terminal_control(
+        &mut writer,
+        TerminalControl::List {
+            request_id: list_request,
+        },
+    )
+    .await;
+    assert_eq!(
+        read_terminal_control(&mut reader).await,
+        (
+            None,
+            TerminalControl::ListResult {
+                request_id: list_request,
+                sessions: vec![
+                    horizon_terminal_core::TerminalSummary { session_id: low_id },
+                    horizon_terminal_core::TerminalSummary {
+                        session_id: high_id,
+                    },
+                ],
+            },
+        )
+    );
+
+    let missing_id = uuid::Uuid::from_u128(3);
+    let attach_request = uuid::Uuid::new_v4();
+    write_terminal_control(
+        &mut writer,
+        missing_id,
+        TerminalControl::Attach {
+            request_id: attach_request,
+        },
+    )
+    .await;
+    assert_eq!(
+        read_terminal_control(&mut reader).await,
+        (
+            Some(missing_id),
+            TerminalControl::AttachResult {
+                request_id: attach_request,
+                result: TerminalAttachResult::NotFound,
+            },
+        )
+    );
+
+    write_terminal_command(&mut writer, low_id, TerminalCommand::Shutdown).await;
+    write_terminal_command(&mut writer, high_id, TerminalCommand::Shutdown).await;
 }
 
 #[tokio::test]

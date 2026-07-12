@@ -29,9 +29,33 @@ pub struct TerminalSpawnSpec {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TerminalSummary {
+    pub session_id: Uuid,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum TerminalAttachResult {
+    Attached,
+    NotFound,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum TerminalControl {
+    List {
+        request_id: Uuid,
+    },
+    ListResult {
+        request_id: Uuid,
+        sessions: Vec<TerminalSummary>,
+    },
     Create(Box<TerminalSpawnSpec>),
-    Attach,
+    Attach {
+        request_id: Uuid,
+    },
+    AttachResult {
+        request_id: Uuid,
+        result: TerminalAttachResult,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -70,10 +94,10 @@ pub enum TerminalUpdate {
 }
 
 pub fn encode_terminal_control(
-    session_id: Uuid,
+    session_id: Option<Uuid>,
     control: &TerminalControl,
 ) -> Result<ProtocolEnvelope, WireError> {
-    ProtocolEnvelope::from_typed(TERMINAL_CONTROL_KIND, Some(session_id), control)
+    ProtocolEnvelope::from_typed(TERMINAL_CONTROL_KIND, session_id, control)
 }
 
 pub fn encode_terminal_command(

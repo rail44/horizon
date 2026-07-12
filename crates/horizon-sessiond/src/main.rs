@@ -73,7 +73,8 @@ use horizon_session_protocol::{
     self as session_wire, Envelope as RawEnvelope, Hello, SessionControl, SESSION_CONTROL_KIND,
 };
 use horizon_terminal_core::{
-    decode_terminal_command, decode_terminal_control, TERMINAL_COMMAND_KIND, TERMINAL_CONTROL_KIND,
+    decode_terminal_command, decode_terminal_control, TerminalControl, TERMINAL_COMMAND_KIND,
+    TERMINAL_CONTROL_KIND,
 };
 use session::{Connection, SessiondState};
 use terminal::TerminalHost;
@@ -468,12 +469,21 @@ async fn run_session_hosting_loop(
         }
 
         if raw.kind == TERMINAL_CONTROL_KIND {
-            let Some(session_id) = raw.session_id else {
-                eprintln!("horizon-sessiond: terminal control missing session_id, ignoring");
-                continue;
-            };
             match decode_terminal_control(&raw) {
-                Ok(control) => terminals.handle_control(session_id, control),
+                Ok(control @ TerminalControl::List { .. }) if raw.session_id.is_none() => {
+                    terminals.handle_control(None, control);
+                }
+                Ok(control @ (TerminalControl::Create(_) | TerminalControl::Attach { .. }))
+                    if raw.session_id.is_some() =>
+                {
+                    terminals.handle_control(raw.session_id, control);
+                }
+                Ok(control) => {
+                    eprintln!(
+                        "horizon-sessiond: terminal control has invalid scope or direction: \
+                         {control:?}"
+                    );
+                }
                 Err(error) => eprintln!("horizon-sessiond: malformed terminal control: {error}"),
             }
             continue;

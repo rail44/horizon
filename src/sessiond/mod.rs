@@ -11,8 +11,8 @@ use horizon_agent::contract::{self, Command, ProviderEvent};
 use horizon_agent::wire::{self, Control, Envelope, HostToolRequest, HostToolResponse};
 use horizon_session_protocol::{Envelope as RawEnvelope, SessionControl};
 use horizon_terminal_core::{
-    encode_terminal_command, encode_terminal_control, TerminalCommand, TerminalControl,
-    TerminalSpawnSpec, TerminalUpdate,
+    encode_terminal_command, encode_terminal_control, TerminalAttachResult, TerminalCommand,
+    TerminalControl, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
 };
 use routing::Routes;
 use uuid::Uuid;
@@ -214,16 +214,22 @@ impl SessiondHandle {
         session_id: Uuid,
         spec: TerminalSpawnSpec,
     ) -> TerminalSessionHandle {
-        let (command_tx, command_rx) = unbounded::<TerminalCommand>();
-        let (update_tx, update_rx) = unbounded::<TerminalUpdate>();
-        self.routes.register_terminal(session_id, update_tx);
+        let handle = self.register_terminal(session_id);
 
-        match encode_terminal_control(session_id, &TerminalControl::Create(Box::new(spec))) {
+        match encode_terminal_control(Some(session_id), &TerminalControl::Create(Box::new(spec))) {
             Ok(envelope) => {
                 let _ = self.outgoing.send(envelope);
             }
             Err(error) => eprintln!("failed to encode terminal create: {error}"),
         }
+
+        handle
+    }
+
+    fn register_terminal(&self, session_id: Uuid) -> TerminalSessionHandle {
+        let (command_tx, command_rx) = unbounded::<TerminalCommand>();
+        let (update_tx, update_rx) = unbounded::<TerminalUpdate>();
+        self.routes.register_terminal(session_id, update_tx);
 
         let outgoing = self.outgoing.clone();
         std::thread::spawn(move || {
@@ -243,6 +249,57 @@ impl SessiondHandle {
             session_id,
             routes: self.routes.clone(),
         }
+    }
+
+    pub(crate) fn terminal_list(&self) -> Result<Vec<TerminalSummary>, String> {
+        let request_id = Uuid::new_v4();
+        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+        self.routes.set_pending_terminal_list(request_id, reply_tx);
+        let envelope = match encode_terminal_control(None, &TerminalControl::List { request_id }) {
+            Ok(envelope) => envelope,
+            Err(error) => {
+                self.routes.cancel_pending_terminal_list(request_id);
+                return Err(error.to_string());
+            }
+        };
+        if self.outgoing.send(envelope).is_err() {
+            self.routes.cancel_pending_terminal_list(request_id);
+            return Err("session runtime stopped before terminal list was sent".to_string());
+        }
+        reply_rx
+            .recv()
+            .map_err(|_| "session runtime stopped before the terminal list completed".to_string())?
+    }
+
+    pub(crate) fn attach_terminals(
+        &self,
+        session_ids: Vec<Uuid>,
+    ) -> Vec<(Uuid, TerminalSessionHandle)> {
+        let mut pending = Vec::with_capacity(session_ids.len());
+        for session_id in session_ids {
+            let request_id = Uuid::new_v4();
+            let handle = self.register_terminal(session_id);
+            let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+            self.routes
+                .set_pending_terminal_attach(request_id, session_id, reply_tx);
+            let control = TerminalControl::Attach { request_id };
+            let sent = encode_terminal_control(Some(session_id), &control)
+                .ok()
+                .is_some_and(|envelope| self.outgoing.send(envelope).is_ok());
+            if sent {
+                pending.push((session_id, handle, reply_rx));
+            } else {
+                self.routes.cancel_pending_terminal_attach(request_id);
+            }
+        }
+
+        pending
+            .into_iter()
+            .filter_map(|(session_id, handle, reply)| match reply.recv() {
+                Ok(Ok(TerminalAttachResult::Attached)) => Some((session_id, handle)),
+                Ok(Ok(TerminalAttachResult::NotFound)) | Ok(Err(_)) | Err(_) => None,
+            })
+            .collect()
     }
 
     pub(crate) fn responder(&self) -> SessiondResponder {

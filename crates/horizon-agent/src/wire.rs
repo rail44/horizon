@@ -310,23 +310,21 @@ mod tests {
         ]
     }
 
-    /// Documents the bump this module's own doc comment on
-    /// [`CONTRACT_VERSION`] explains -- `SessionNew.role_id` replacing the
-    /// dead `config_overrides` placeholder is a breaking wire change, not
-    /// an additive one.
+    /// The shared contract has since advanced for the breaking terminal
+    /// discovery/attach vocabulary introduced alongside session recovery.
     #[test]
-    fn contract_version_was_bumped_for_the_role_id_field() {
-        assert_eq!(CONTRACT_VERSION, 3);
+    fn contract_version_includes_correlated_terminal_recovery() {
+        assert_eq!(CONTRACT_VERSION, 4);
     }
 
     /// Unlike `role_id` above, `SessionNew.workspace_root` is a brand-new,
     /// `#[serde(default)]` field, not a reshape of an existing one -- see
     /// its own doc comment. Additive changes don't need a version bump, so
-    /// this pins `CONTRACT_VERSION` unchanged as a regression guard against
-    /// bumping it out of habit the next time a `SessionNew` field is added.
+    /// Its addition did not itself require a version bump; the current value
+    /// reflects a later breaking change in the terminal sister vocabulary.
     #[test]
     fn contract_version_was_not_bumped_for_the_additive_workspace_root_field() {
-        assert_eq!(CONTRACT_VERSION, 3);
+        assert_eq!(CONTRACT_VERSION, 4);
     }
 
     /// A `session_new` control message written by a peer built before

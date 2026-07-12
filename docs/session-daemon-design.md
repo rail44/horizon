@@ -321,7 +321,7 @@ The owner approved the first UI-restart recovery slice with these boundaries:
   `ListResult` and `Attach` / `AttachResult` traffic carries request ids so
   asynchronous replies can be matched without relying on ordering. Listing is
   deterministic. If a listed terminal exits before adoption, Attach returns
-  `NotFound` and Horizon removes the stale workspace entry.
+  `NotFound` and Horizon never registers a stale workspace entry.
 - **Startup remains immediate and conservative.** Horizon opens a fresh
   terminal without waiting for discovery. Surviving daemon terminals are
   registered as detached sessions and adopted in the background, making them

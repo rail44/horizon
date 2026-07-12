@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use horizon_agent::contract::{Event, ProviderId, SessionId, SessionState};
@@ -190,6 +191,190 @@ async fn incoming_shared_agent_and_terminal_messages_are_demultiplexed() {
         }
     }
     assert!(saw_command && saw_pong);
+}
+
+#[tokio::test]
+async fn concurrent_terminal_lists_are_correlated_by_request_id() {
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let (handle, _host_tools) = SessiondHandle::start_on_stream(client);
+    let (read_half, mut writer) = tokio::io::split(server);
+    let mut reader = BufReader::new(read_half);
+    receive_hello_and_reply(&mut reader, &mut writer).await;
+
+    let first_handle = handle.clone();
+    let first = std::thread::spawn(move || first_handle.terminal_list().unwrap());
+    let second_handle = handle.clone();
+    let second = std::thread::spawn(move || second_handle.terminal_list().unwrap());
+    let first_request = session_wire::read_envelope(&mut reader)
+        .await
+        .unwrap()
+        .expect("first terminal list request");
+    let second_request = session_wire::read_envelope(&mut reader)
+        .await
+        .unwrap()
+        .expect("second terminal list request");
+    let TerminalControl::List {
+        request_id: first_request_id,
+    } = decode_terminal_control(&first_request).unwrap()
+    else {
+        panic!("expected terminal list request");
+    };
+    let TerminalControl::List {
+        request_id: second_request_id,
+    } = decode_terminal_control(&second_request).unwrap()
+    else {
+        panic!("expected terminal list request");
+    };
+    let first_session = Uuid::new_v4();
+    let second_session = Uuid::new_v4();
+
+    session_wire::write_envelope(
+        &mut writer,
+        &encode_terminal_control(
+            None,
+            &TerminalControl::ListResult {
+                request_id: second_request_id,
+                sessions: vec![TerminalSummary {
+                    session_id: second_session,
+                }],
+            },
+        )
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    session_wire::write_envelope(
+        &mut writer,
+        &encode_terminal_control(
+            None,
+            &TerminalControl::ListResult {
+                request_id: first_request_id,
+                sessions: vec![TerminalSummary {
+                    session_id: first_session,
+                }],
+            },
+        )
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let mut returned = vec![
+        first.join().unwrap()[0].session_id,
+        second.join().unwrap()[0].session_id,
+    ];
+    returned.sort_unstable();
+    let mut expected = vec![first_session, second_session];
+    expected.sort_unstable();
+    assert_eq!(returned, expected);
+}
+
+#[tokio::test]
+async fn terminal_batch_attach_keeps_attached_sessions_and_drops_not_found() {
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let (handle, _host_tools) = SessiondHandle::start_on_stream(client);
+    let (read_half, mut writer) = tokio::io::split(server);
+    let mut reader = BufReader::new(read_half);
+    receive_hello_and_reply(&mut reader, &mut writer).await;
+    let attached_id = Uuid::new_v4();
+    let missing_id = Uuid::new_v4();
+    let attach_handle = handle.clone();
+    let attached =
+        std::thread::spawn(move || attach_handle.attach_terminals(vec![attached_id, missing_id]));
+
+    let mut requests = HashMap::new();
+    for _ in 0..2 {
+        let envelope = session_wire::read_envelope(&mut reader)
+            .await
+            .unwrap()
+            .expect("terminal attach request");
+        let TerminalControl::Attach { request_id } = decode_terminal_control(&envelope).unwrap()
+        else {
+            panic!("expected terminal attach request");
+        };
+        requests.insert(envelope.session_id.unwrap(), request_id);
+    }
+
+    session_wire::write_envelope(
+        &mut writer,
+        &encode_terminal_control(
+            Some(missing_id),
+            &TerminalControl::AttachResult {
+                request_id: requests[&missing_id],
+                result: TerminalAttachResult::NotFound,
+            },
+        )
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    session_wire::write_envelope(
+        &mut writer,
+        &encode_terminal_control(
+            Some(attached_id),
+            &TerminalControl::AttachResult {
+                request_id: requests[&attached_id],
+                result: TerminalAttachResult::Attached,
+            },
+        )
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    let snapshot = TerminalUpdate::Snapshot(TerminalFrame::from_text("survived".into()));
+    session_wire::write_envelope(
+        &mut writer,
+        &encode_terminal_update(attached_id, &snapshot).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let mut sessions = attached.join().unwrap();
+    assert_eq!(sessions.len(), 1);
+    let (session_id, session) = sessions.pop().unwrap();
+    assert_eq!(session_id, attached_id);
+    assert_eq!(
+        session
+            .updates()
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap(),
+        snapshot
+    );
+}
+
+#[tokio::test]
+async fn terminal_attach_rejects_a_result_for_a_different_session() {
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let (handle, _host_tools) = SessiondHandle::start_on_stream(client);
+    let (read_half, mut writer) = tokio::io::split(server);
+    let mut reader = BufReader::new(read_half);
+    receive_hello_and_reply(&mut reader, &mut writer).await;
+    let requested_id = Uuid::new_v4();
+    let attach_handle = handle.clone();
+    let attached = std::thread::spawn(move || attach_handle.attach_terminals(vec![requested_id]));
+    let request = session_wire::read_envelope(&mut reader)
+        .await
+        .unwrap()
+        .expect("terminal attach request");
+    let TerminalControl::Attach { request_id } = decode_terminal_control(&request).unwrap() else {
+        panic!("expected terminal attach request");
+    };
+
+    session_wire::write_envelope(
+        &mut writer,
+        &encode_terminal_control(
+            Some(Uuid::new_v4()),
+            &TerminalControl::AttachResult {
+                request_id,
+                result: TerminalAttachResult::Attached,
+            },
+        )
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert!(attached.join().unwrap().is_empty());
 }
 
 #[tokio::test]

@@ -9,9 +9,9 @@ use uuid::Uuid;
 
 /// The shared session-daemon envelope and handshake version.
 ///
-/// Version 3 introduces qualified agent/terminal domain kinds and moves
-/// connection lifecycle controls into this neutral shared vocabulary.
-pub const SESSION_PROTOCOL_VERSION: u32 = 3;
+/// Version 4 adds correlated terminal discovery and attach controls; attach
+/// changed shape, so older peers cannot safely decode the terminal vocabulary.
+pub const SESSION_PROTOCOL_VERSION: u32 = 4;
 
 pub const SESSION_CONTROL_KIND: &str = "session_control";
 

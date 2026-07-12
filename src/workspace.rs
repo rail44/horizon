@@ -37,6 +37,7 @@ use horizon_terminal_core::{
 };
 use horizon_workspace::types::SessionKind;
 use horizon_workspace::SessionId;
+use uuid::Uuid;
 
 type AgentSessionId = horizon_agent::contract::SessionId;
 
@@ -76,6 +77,20 @@ fn terminal_fallback_cwd(
     current_dir
         .or(home)
         .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
+fn terminal_resume_candidates(
+    summaries: Vec<horizon_terminal_core::TerminalSummary>,
+    known: &std::collections::HashSet<SessionId>,
+) -> Vec<Uuid> {
+    let mut seen = std::collections::HashSet::new();
+    summaries
+        .into_iter()
+        .filter_map(|summary| {
+            let id = SessionId::from_uuid(summary.session_id);
+            (!known.contains(&id) && seen.insert(id)).then_some(summary.session_id)
+        })
+        .collect()
 }
 
 /// One pane's view, by session kind.
@@ -316,6 +331,7 @@ impl WorkspaceShell {
         shell.wire_host_tools(sessiond.responder(), host_tool_rx, cx);
         shell.reconcile(window, cx);
         shell.focus_active(window, cx);
+        shell.spawn_terminal_resume(sessiond.clone(), cx);
         shell.spawn_agent_resume(sessiond, cx);
         shell
     }
@@ -495,6 +511,17 @@ impl WorkspaceShell {
                         if shell.agent_sessions.contains_key(&session_id) {
                             continue;
                         }
+                        if shell
+                            .workspace
+                            .session_pane_kind(session_id)
+                            .is_some_and(|kind| kind != PaneKind::Agent)
+                        {
+                            eprintln!(
+                                "ignoring agent session {}: its id is already used by a terminal",
+                                session_id.as_uuid()
+                            );
+                            continue;
+                        }
                         shell
                             .workspace
                             .register_detached_session(PaneKind::Agent, session_id);
@@ -503,6 +530,86 @@ impl WorkspaceShell {
                             session_id,
                             cx.new(|cx| AgentSession::new(session_handle, cx)),
                         );
+                    }
+                    shell.reconcile(window, cx);
+                    shell.focus_active(window, cx);
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// Discovers terminal sessions left alive by an earlier UI process and
+    /// adopts them as detached sessions without delaying the fresh startup
+    /// terminal. Listing and attaching are split by a UI-thread comparison:
+    /// the just-created terminal (and any session created while List is in
+    /// flight) must not have its existing route replaced by an Attach.
+    fn spawn_terminal_resume(&self, handle: SessiondHandle, cx: &mut Context<Self>) {
+        let window_handle = self.window;
+        let (list_tx, mut list_rx) = futures::channel::mpsc::unbounded();
+        let list_handle = handle.clone();
+        std::thread::spawn(move || {
+            let _ = list_tx.unbounded_send(list_handle.terminal_list());
+        });
+        cx.spawn(async move |this, cx| {
+            use futures::StreamExt as _;
+            let Some(Ok(summaries)) = list_rx.next().await else {
+                return;
+            };
+            let candidates = this
+                .update(cx, |shell, _| {
+                    let Some(adopted) = shell.sessiond.as_ref() else {
+                        return Vec::new();
+                    };
+                    if !adopted.same_runtime(&handle) {
+                        return Vec::new();
+                    }
+                    let known = shell
+                        .workspace
+                        .session_summaries()
+                        .into_iter()
+                        .map(|summary| summary.id)
+                        .collect();
+                    terminal_resume_candidates(summaries, &known)
+                })
+                .unwrap_or_default();
+            if candidates.is_empty() {
+                return;
+            }
+
+            let (attach_tx, mut attach_rx) = futures::channel::mpsc::unbounded();
+            let attach_handle = handle.clone();
+            std::thread::spawn(move || {
+                let attached = attach_handle.attach_terminals(candidates);
+                let _ = attach_tx.unbounded_send(attached);
+            });
+            let Some(attached) = attach_rx.next().await else {
+                return;
+            };
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = this.update(cx, |shell, cx| {
+                    let Some(adopted) = shell.sessiond.as_ref() else {
+                        return;
+                    };
+                    if !adopted.same_runtime(&handle) {
+                        return;
+                    }
+                    for (wire_id, wire) in attached {
+                        let session_id = SessionId::from_uuid(wire_id);
+                        if shell
+                            .workspace
+                            .session_summaries()
+                            .iter()
+                            .any(|summary| summary.id == session_id)
+                        {
+                            continue;
+                        }
+                        shell
+                            .workspace
+                            .register_detached_session(PaneKind::Terminal, session_id);
+                        shell
+                            .sessions
+                            .insert(session_id, cx.new(|cx| TerminalSession::spawn(wire, cx)));
                     }
                     shell.reconcile(window, cx);
                     shell.focus_active(window, cx);
@@ -1389,8 +1496,10 @@ impl Render for WorkspaceShell {
 #[cfg(test)]
 mod tests {
     use super::{
-        prepare_workspace_for_runtime_reload, terminal_fallback_cwd, terminal_spawn_source,
+        prepare_workspace_for_runtime_reload, terminal_fallback_cwd, terminal_resume_candidates,
+        terminal_spawn_source,
     };
+    use horizon_terminal_core::TerminalSummary;
     use horizon_workspace::{PaneKind, SessionId, SessionKind, Workspace};
 
     #[test]
@@ -1416,6 +1525,32 @@ mod tests {
         assert_eq!(
             terminal_fallback_cwd(None, None),
             std::path::PathBuf::from(".")
+        );
+    }
+
+    #[test]
+    fn terminal_resume_candidates_exclude_known_cross_kind_ids_and_duplicates() {
+        let fresh_terminal = SessionId::new();
+        let known_agent = SessionId::new();
+        let first_survivor = SessionId::new();
+        let second_survivor = SessionId::new();
+        let known = [fresh_terminal, known_agent].into_iter().collect();
+        let summaries = [
+            fresh_terminal,
+            first_survivor,
+            known_agent,
+            first_survivor,
+            second_survivor,
+        ]
+        .into_iter()
+        .map(|id| TerminalSummary {
+            session_id: id.as_uuid(),
+        })
+        .collect();
+
+        assert_eq!(
+            terminal_resume_candidates(summaries, &known),
+            vec![first_survivor.as_uuid(), second_survivor.as_uuid()]
         );
     }
 

@@ -1588,10 +1588,37 @@ fn terminal_wire_uses_qualified_kinds_and_round_trips_spawn_specs() {
     };
 
     let control = TerminalControl::Create(Box::new(spec));
-    let envelope = encode_terminal_control(session_id, &control).unwrap();
+    let envelope = encode_terminal_control(Some(session_id), &control).unwrap();
     assert_eq!(envelope.kind, TERMINAL_CONTROL_KIND);
     assert_eq!(envelope.session_id, Some(session_id));
     assert_eq!(decode_terminal_control(&envelope).unwrap(), control);
+
+    let control = TerminalControl::List {
+        request_id: uuid::Uuid::from_u128(1),
+    };
+    let envelope = encode_terminal_control(None, &control).unwrap();
+    assert_eq!(envelope.kind, TERMINAL_CONTROL_KIND);
+    assert_eq!(envelope.session_id, None);
+    assert_eq!(decode_terminal_control(&envelope).unwrap(), control);
+
+    let request_id = uuid::Uuid::from_u128(2);
+    for control in [
+        TerminalControl::ListResult {
+            request_id,
+            sessions: vec![TerminalSummary { session_id }],
+        },
+        TerminalControl::Attach { request_id },
+        TerminalControl::AttachResult {
+            request_id,
+            result: TerminalAttachResult::Attached,
+        },
+        TerminalControl::AttachResult {
+            request_id,
+            result: TerminalAttachResult::NotFound,
+        },
+    ] {
+        assert_serde_round_trip(control);
+    }
 
     let command = TerminalCommand::Input(b"echo wire\n".to_vec());
     let envelope = encode_terminal_command(session_id, &command).unwrap();

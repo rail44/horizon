@@ -5,7 +5,10 @@ use crossbeam_channel::Sender;
 use horizon_agent::contract::{self, Event, ProviderEvent};
 use horizon_agent::wire::{self, Control, EnvelopeBody, HostToolRequest};
 use horizon_session_protocol::{Envelope as RawEnvelope, SessionControl, SESSION_CONTROL_KIND};
-use horizon_terminal_core::{decode_terminal_update, TerminalUpdate, TERMINAL_UPDATE_KIND};
+use horizon_terminal_core::{
+    decode_terminal_control, decode_terminal_update, TerminalAttachResult, TerminalControl,
+    TerminalSummary, TerminalUpdate, TERMINAL_CONTROL_KIND, TERMINAL_UPDATE_KIND,
+};
 use uuid::Uuid;
 
 pub(super) enum Incoming {
@@ -22,6 +25,8 @@ struct RouteState {
     agent: HashMap<contract::SessionId, Sender<ProviderEvent>>,
     terminal: HashMap<Uuid, Sender<TerminalUpdate>>,
     pending_session_list: Option<Sender<Vec<wire::SessionSummary>>>,
+    pending_terminal_lists: HashMap<Uuid, Sender<Result<Vec<TerminalSummary>, String>>>,
+    pending_terminal_attaches: HashMap<Uuid, (Uuid, Sender<Result<TerminalAttachResult, String>>)>,
     failure: Option<String>,
 }
 
@@ -32,6 +37,8 @@ impl Routes {
                 agent: HashMap::new(),
                 terminal: HashMap::new(),
                 pending_session_list: None,
+                pending_terminal_lists: HashMap::new(),
+                pending_terminal_attaches: HashMap::new(),
                 failure: None,
             }),
             host_tools,
@@ -79,6 +86,51 @@ impl Routes {
         state.pending_session_list = Some(sender);
     }
 
+    pub(super) fn set_pending_terminal_list(
+        &self,
+        request_id: Uuid,
+        sender: Sender<Result<Vec<TerminalSummary>, String>>,
+    ) {
+        let mut state = self.state.lock().unwrap();
+        if let Some(message) = state.failure.clone() {
+            let _ = sender.send(Err(message));
+            return;
+        }
+        state.pending_terminal_lists.insert(request_id, sender);
+    }
+
+    pub(super) fn set_pending_terminal_attach(
+        &self,
+        request_id: Uuid,
+        session_id: Uuid,
+        sender: Sender<Result<TerminalAttachResult, String>>,
+    ) {
+        let mut state = self.state.lock().unwrap();
+        if let Some(message) = state.failure.clone() {
+            let _ = sender.send(Err(message));
+            return;
+        }
+        state
+            .pending_terminal_attaches
+            .insert(request_id, (session_id, sender));
+    }
+
+    pub(super) fn cancel_pending_terminal_list(&self, request_id: Uuid) {
+        self.state
+            .lock()
+            .unwrap()
+            .pending_terminal_lists
+            .remove(&request_id);
+    }
+
+    pub(super) fn cancel_pending_terminal_attach(&self, request_id: Uuid) {
+        self.state
+            .lock()
+            .unwrap()
+            .pending_terminal_attaches
+            .remove(&request_id);
+    }
+
     pub(super) fn dispatch(&self, raw: RawEnvelope) -> Result<Incoming, String> {
         if raw.kind == SESSION_CONTROL_KIND {
             return match raw.decode_payload::<SessionControl>(SESSION_CONTROL_KIND) {
@@ -105,6 +157,44 @@ impl Routes {
                 || exited
             {
                 state.terminal.remove(&session_id);
+            }
+            return Ok(Incoming::Handled);
+        }
+
+        if raw.kind == TERMINAL_CONTROL_KIND {
+            let control = decode_terminal_control(&raw)
+                .map_err(|error| format!("malformed terminal control: {error}"))?;
+            let mut state = self.state.lock().unwrap();
+            match control {
+                TerminalControl::ListResult {
+                    request_id,
+                    sessions,
+                } => {
+                    if let Some(reply) = state.pending_terminal_lists.remove(&request_id) {
+                        let _ = reply.send(Ok(sessions));
+                    }
+                }
+                TerminalControl::AttachResult { request_id, result } => {
+                    let session_id = raw
+                        .session_id
+                        .ok_or_else(|| "terminal attach result missing session_id".to_string())?;
+                    if let Some((expected_session_id, reply)) =
+                        state.pending_terminal_attaches.remove(&request_id)
+                    {
+                        if session_id != expected_session_id {
+                            let _ = reply.send(Err(format!(
+                                "terminal attach result session mismatch: expected {expected_session_id}, got {session_id}"
+                            )));
+                            return Err(
+                                "terminal attach result targeted the wrong session".to_string()
+                            );
+                        }
+                        let _ = reply.send(Ok(result));
+                    }
+                }
+                TerminalControl::List { .. }
+                | TerminalControl::Create(_)
+                | TerminalControl::Attach { .. } => {}
             }
             return Ok(Incoming::Handled);
         }
@@ -136,13 +226,29 @@ impl Routes {
     }
 
     pub(super) fn connection_failed(&self, message: String) {
-        let (terminal_routes, agent_routes, pending) = {
+        let (terminal_routes, agent_routes, pending, terminal_lists, terminal_attaches) = {
             let mut state = self.state.lock().unwrap();
             state.failure = Some(message.clone());
             let terminal_routes = state.terminal.values().cloned().collect::<Vec<_>>();
             let agent_routes = state.agent.values().cloned().collect::<Vec<_>>();
             let pending = state.pending_session_list.take();
-            (terminal_routes, agent_routes, pending)
+            let terminal_lists = state
+                .pending_terminal_lists
+                .drain()
+                .map(|(_, sender)| sender)
+                .collect::<Vec<_>>();
+            let terminal_attaches = state
+                .pending_terminal_attaches
+                .drain()
+                .map(|(_, (_, sender))| sender)
+                .collect::<Vec<_>>();
+            (
+                terminal_routes,
+                agent_routes,
+                pending,
+                terminal_lists,
+                terminal_attaches,
+            )
         };
         for sender in terminal_routes {
             let _ = sender.send(TerminalUpdate::Error(message.clone()));
@@ -155,6 +261,12 @@ impl Routes {
         }
         if let Some(reply) = pending {
             let _ = reply.send(Vec::new());
+        }
+        for reply in terminal_lists {
+            let _ = reply.send(Err(message.clone()));
+        }
+        for reply in terminal_attaches {
+            let _ = reply.send(Err(message.clone()));
         }
     }
 
