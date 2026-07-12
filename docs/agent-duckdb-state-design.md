@@ -190,6 +190,81 @@ DuckDB is rebuilt from JSONL and is not the primary append path.
 > practical implications (prefer the JSONL log while agentd is live, or
 > stop agentd first for a guaranteed-current read).
 
+> **Addendum (2026-07-12, backlog-32 -- incremental catch-up).** The
+> startup reconciliation described above ("rebuild, or skip if already
+> current") is no longer binary. Against a real archived corpus
+> (~16k records) the freshness check itself was already correct -- a
+> completed rebuild's `agent_sessions.last_sequence` mark did match the
+> log's tail exactly, confirmed by inspecting the resulting file with an
+> external `duckdb -readonly` CLI invocation -- but *every* real boot still
+> triggered a full rebuild anyway, for two compounding reasons neither of
+> which was the originally-suspected "a skipped record doesn't advance the
+> mark" mechanism (that mechanism does not exist: `Store::append_record`
+> updates `agent_events`/`agent_sessions` unconditionally, before
+> `project_event` ever runs, so a projection that ignores an event has
+> still *processed* it):
+>
+> 1. **No incremental path existed.** Any growth at all -- even a handful
+>    of records from a resumed session's own live turn-cancellation
+>    fixups (`session::resume_persisted_sessions`) -- forced a full
+>    rebuild of the *entire* history, because there was no way to project
+>    just the new tail.
+> 2. **The full rebuild was pathologically slow.** Each record's append did
+>    several individually auto-committed (and fsynced) statements; with no
+>    surrounding transaction, ~16k records took minutes rather than
+>    seconds. That combination -- any growth forces a full rebuild, and a
+>    full rebuild is minutes long -- is what a real dogfooding workflow
+>    (repeated restarts during active development) reads as "always
+>    rebuilds".
+>
+> The fix (`event_log::writer::rebuild_and_open_duckdb_projection`,
+> `persistence::projection::duckdb::{import, append}`): the freshness
+> check now returns one of three outcomes
+> (`event_log::writer::ProjectionCurrency`) instead of a bool --
+> **Current** (mark matches the tail, skip entirely, unchanged), **Behind**
+> (mark is a known amount short of the tail: project only `sequence >
+> mark` via `Store::catch_up_from_event_log_records`), or **RebuildNeeded**
+> (mark ahead of the tail, or absent while the log is non-empty -- the
+> projection's own state can't be trusted as a prefix of the current log,
+> so a full rebuild is the only safe fallback, alongside the pre-existing
+> post-schema-migration case). Both the full-rebuild and incremental-
+> catch-up apply paths now run inside one DuckDB transaction
+> (`import::apply_records`) instead of one auto-commit per statement.
+>
+> **A second, independent atomicity bug surfaced while testing the
+> incremental path**, worth recording since it would have made incremental
+> catch-up unsound on its own: `Store::append_record`'s several statements
+> (an `agent_events` insert, an `agent_sessions` upsert, a
+> projection-table insert) were not themselves transactional, so a process
+> killed between the first and the rest left `agent_events` with a row
+> `agent_sessions.last_sequence` didn't yet reflect -- invisible to a full
+> rebuild (which always reinserts everything and would just hit a harmless
+> "already there" outcome... except it would have been a primary-key
+> violation there too before this fix), but fatal to an incremental
+> catch-up that trusts the mark to mean "everything at or below this
+> sequence is already fully present": it would try to insert that same
+> `event_id` again and fail on `agent_events`'s primary key. Reproduced in
+> practice by `horizon-sessiond`'s own e2e suite
+> (`stale_log_triggers_duckdb_rebuild_on_respawn`) once a resumed session's
+> live thread appended a record near a hard `SIGKILL`. Fixed by wrapping
+> `Store::append_record`'s own body in its own transaction for the live
+> per-event path, while the batch paths call the untransacted
+> `append_record_uncommitted` directly inside their own single
+> batch-spanning transaction (DuckDB has no nested-transaction support).
+>
+> Per-statement SQL compilation (not just the fsync-per-statement cost the
+> transaction wrap eliminates) remains a real cost for the *full* rebuild
+> path against a large corpus -- observed at several minutes even after
+> this fix, since it still issues one ad-hoc `Connection::execute` per
+> statement rather than a prepared statement or DuckDB's bulk `Appender`
+> API. Not addressed here: the full rebuild is now a rare fallback (mark
+> ahead/absent, or post-migration), not the every-boot path, so the
+> incremental catch-up -- fast, since it only touches the new tail -- is
+> what actually fixes the reported "always rebuilds" symptom. A future
+> pass could still speed up the fallback rebuild itself if it becomes a
+> practical problem (a first-ever boot against a large pre-existing log,
+> or a schema migration).
+
 The projection runs by default now, at `$XDG_DATA_HOME/horizon/agent-state.duckdb`
 (falling back to `~/.local/share/horizon/agent-state.duckdb`) -- there is no
 "unset = disabled" state any more. `HORIZON_AGENT_STATE_DB` (or the config

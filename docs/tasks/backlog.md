@@ -613,3 +613,44 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     Note the rebuild already runs off the readiness path (test hook
     proves it), so this is waste + noise, not the startup hang — that was
     the winit configure stall, fixed separately. Recorded 2026-07-12.
+
+    **Resolved 2026-07-12.** Root cause confirmed against the real corpus,
+    and it was neither suspected mechanism: (a) does not exist in the code
+    — `Store::append_record` updates `agent_events`/`agent_sessions`
+    unconditionally before `project_event` ever runs, so a skipped
+    projection still advances the mark; a completed rebuild's mark was
+    verified (via an external `duckdb -readonly` CLI read) to exactly
+    match the log's true tail. The actual cause was two compounding gaps:
+    (1) no incremental catch-up existed, so *any* log growth — even a
+    handful of records from a resumed session's own live turn-cancellation
+    fixups — forced a full rebuild of the entire history; (2) the full
+    rebuild had no surrounding transaction (each record's several
+    statements auto-committed, and fsynced, individually), taking minutes
+    against ~16k records. Fixed: `event_log::writer::
+    rebuild_and_open_duckdb_projection` now decides between three
+    outcomes (`ProjectionCurrency::{Current, Behind, RebuildNeeded}`) —
+    current (skip), behind (incremental catch-up via `Store::
+    catch_up_from_event_log_records`, projecting only `sequence > mark`),
+    or rebuild-needed (mark ahead of the tail, absent while the log is
+    non-empty, or a schema migration). Both apply paths now run inside one
+    DuckDB transaction. A second, independent atomicity bug surfaced
+    while testing the incremental path and was fixed alongside it:
+    `Store::append_record`'s own several statements were not themselves
+    transactional, so a process killed mid-append could leave
+    `agent_events` with a row `agent_sessions.last_sequence` didn't yet
+    reflect — harmless to a full rebuild but fatal to incremental catch-up
+    (a duplicate-key error), reproduced by `horizon-sessiond`'s own e2e
+    suite. Resume noise (item 3) collapsed into one summary line per class
+    (already-terminated sessions, legacy no-turn_id `TurnEnded` events).
+    Real-corpus validation (16,417 records, 3 boots in a row): boot 1
+    (first-ever, full rebuild) 175s; boot 2 and boot 3 (incremental
+    catch-up of 1 new record each, from a resumed session's own live
+    turn-cancellation fixup) 1s each — versus every boot taking ~238s
+    before this fix. See `docs/agent-duckdb-state-design.md`'s
+    2026-07-12 addendum for the full writeup. Not fixed (flagged as
+    future work, not urgent since the full rebuild is now a rare
+    fallback): the full-rebuild path itself is still slow in absolute
+    terms (per-statement ad-hoc SQL compilation, not just the
+    now-eliminated fsync cost) — a prepared-statement or DuckDB `Appender`
+    bulk-insert pass could speed up the first-ever-boot/post-migration
+    case further if it becomes a practical problem.

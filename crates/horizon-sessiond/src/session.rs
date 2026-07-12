@@ -299,7 +299,11 @@ fn spawn_session_thread(
 /// would just leave it parked forever, and doing this for *every* session
 /// ever created makes startup cost (and thread count) grow without bound
 /// with history -- exactly what was observed as "every historical session
-/// comes back as a ghost" before this filter existed.
+/// comes back as a ghost" before this filter existed. How many sessions hit
+/// this skip is counted and reported as one combined summary line after the
+/// loop, not printed per session -- a real archived log can carry dozens of
+/// long-dead sessions, which used to bury the "resumed session" lines for
+/// the ones that actually matter.
 pub(crate) fn resume_persisted_sessions(state: &Arc<SessiondState>, records: Vec<Record>) {
     let Some(writer) = state.writer() else {
         return;
@@ -312,6 +316,12 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<SessiondState>, records: Vec
             .or_default()
             .push(record);
     }
+
+    // Counted rather than printed per session (see the loop below): a real
+    // archived log can carry dozens of long-dead sessions, and a line per
+    // one drowned out the genuinely interesting "resumed session" lines
+    // right next to it.
+    let mut skipped_terminated = 0usize;
 
     for (session_id, mut session_records) in by_session {
         session_records.sort_by_key(|record| record.sequence);
@@ -335,7 +345,7 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<SessiondState>, records: Vec
 
         let frame = agent_frame_from_events(&events);
         if session_is_dead(&frame) {
-            eprintln!("horizon-sessiond: skipping resume of {session_id:?} (already terminated)");
+            skipped_terminated += 1;
             continue;
         }
 
@@ -381,6 +391,13 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<SessiondState>, records: Vec
             role_id,
             None,
             events,
+        );
+    }
+
+    if skipped_terminated > 0 {
+        eprintln!(
+            "horizon-sessiond: skipped resume of {skipped_terminated} already-terminated \
+             session(s)"
         );
     }
 }

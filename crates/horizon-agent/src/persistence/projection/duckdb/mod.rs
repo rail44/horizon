@@ -18,6 +18,8 @@ use schema::INITIALIZE_SCHEMA_SQL;
 
 use records::AgentStoredEvent;
 
+pub use import::ApplyRecordsReport;
+
 #[cfg(test)]
 pub use records::{
     AgentStoredApproval, AgentStoredMessage, AgentStoredSessionSnapshot, AgentStoredToolCall,

@@ -317,8 +317,8 @@ fn start_up(
     Ok((file, report, next_sequence))
 }
 
-/// Opens (creating parent directories as needed) and fully rebuilds the
-/// DuckDB projection at `duckdb_path` from `records` -- this is where
+/// Opens (creating parent directories as needed) and reconciles the DuckDB
+/// projection at `duckdb_path` against `records` -- this is where
 /// `horizon-sessiond`'s old `main::rebuild_duckdb_projection` (a separate,
 /// short-lived `Store::open` spawned only after readiness) now lives,
 /// folded into the event-log writer's own startup so the `Store` returned
@@ -327,14 +327,29 @@ fn start_up(
 /// project live instead of only at the next restart (see
 /// `docs/agent-duckdb-state-design.md`'s "Runtime Boundary" addendum).
 ///
-/// Preserves the prior freshness-skip behavior: unless [`Store::
-/// migrated_legacy_schema`] just ran (which invalidates the projection's
-/// own high-water mark, per that method's doc comment), a rebuild is
-/// skipped when [`Store::max_last_sequence`] already matches the log's own
-/// tail sequence. The exact same "rebuilt (N record(s))"/"already current,
-/// skipping rebuild" stderr lines the old code printed are preserved too,
-/// so operators (and `horizon-sessiond`'s own e2e tests, which poll for these
-/// strings) see the same signals.
+/// Three outcomes, decided by [`duckdb_projection_currency`] (unless
+/// [`Store::migrated_legacy_schema`] just ran, which invalidates the
+/// projection's own high-water mark and forces a full rebuild
+/// unconditionally -- see that method's doc comment):
+///
+/// - **Current**: the mark already matches the log's tail. No work; prints
+///   "already current, skipping rebuild".
+/// - **Behind**: the mark is behind the tail by a known amount. Only the
+///   records beyond it are projected ([`Store::catch_up_from_event_log_records`]);
+///   prints "caught up incrementally (N record(s))". Falls back to a full
+///   rebuild if the catch-up itself errors.
+/// - **RebuildNeeded** (mark ahead of the tail, or absent while the log is
+///   non-empty) or a freshness-check error: a full rebuild
+///   ([`Store::replace_from_event_log_records`]); prints
+///   "rebuilt (N record(s))" -- the original, pre-incremental-catch-up
+///   line, kept unchanged so operators (and `horizon-sessiond`'s own e2e
+///   tests, which poll for these exact strings) see the same signal for
+///   this case.
+///
+/// Either apply path can also skip a legacy `TurnEnded` event with no
+/// `turn_id` (see [`Store::project_event`]'s doc comment); rather than one
+/// stderr line per such event, [`log_turn_id_missing_summary`] prints one
+/// combined count after the apply.
 ///
 /// Failure (creating the parent directory, opening the store, or the
 /// rebuild itself) is reported to stderr and returns `None`: a rebuildable,
@@ -391,38 +406,105 @@ fn rebuild_and_open_duckdb_projection(
     };
 
     if !store.migrated_legacy_schema() {
-        match duckdb_projection_is_current(&store, records) {
-            Ok(true) => {
+        match duckdb_projection_currency(&store, records) {
+            Ok(ProjectionCurrency::Current) => {
                 eprintln!("horizon-sessiond: DuckDB projection already current, skipping rebuild");
                 return Some(Arc::new(Mutex::new(store)));
             }
-            Ok(false) => {}
+            Ok(ProjectionCurrency::Behind(mark)) => {
+                let tail = records
+                    .iter()
+                    .filter(|record| record.sequence as i64 > mark)
+                    .cloned();
+                match store.catch_up_from_event_log_records(tail) {
+                    Ok(report) => {
+                        log_turn_id_missing_summary(report.turn_id_missing);
+                        eprintln!(
+                            "horizon-sessiond: DuckDB projection caught up incrementally \
+                             ({} record(s))",
+                            report.applied
+                        );
+                        return Some(Arc::new(Mutex::new(store)));
+                    }
+                    Err(error) => eprintln!(
+                        "horizon-sessiond: DuckDB incremental catch-up failed ({error}), \
+                         falling back to a full rebuild"
+                    ),
+                }
+            }
+            Ok(ProjectionCurrency::RebuildNeeded) => {}
             Err(error) => eprintln!(
                 "horizon-sessiond: DuckDB projection freshness check failed ({error}), rebuilding"
             ),
         }
     }
 
-    let record_count = records.len();
-    if let Err(error) = store.replace_from_event_log_records(records.iter().cloned()) {
-        eprintln!(
-            "horizon-sessiond: DuckDB projection rebuild failed ({error}); live projection \
-             disabled for this run"
-        );
-        return None;
+    match store.replace_from_event_log_records(records.iter().cloned()) {
+        Ok(report) => {
+            log_turn_id_missing_summary(report.turn_id_missing);
+            eprintln!(
+                "horizon-sessiond: DuckDB projection rebuilt ({} record(s))",
+                report.applied
+            );
+            Some(Arc::new(Mutex::new(store)))
+        }
+        Err(error) => {
+            eprintln!(
+                "horizon-sessiond: DuckDB projection rebuild failed ({error}); live projection \
+                 disabled for this run"
+            );
+            None
+        }
     }
-    eprintln!("horizon-sessiond: DuckDB projection rebuilt ({record_count} record(s))");
-    Some(Arc::new(Mutex::new(store)))
 }
 
-/// Whether `store`'s existing high-water mark already matches `records`'
-/// own final sequence -- mirrors the check `horizon-sessiond`'s old
-/// `main::duckdb_projection_is_current` used to make before the rebuild
-/// moved here. `records` is already sorted ascending by `event_log::read`,
-/// so its last element carries the log's overall maximum sequence.
-fn duckdb_projection_is_current(store: &Store, records: &[Record]) -> Result<bool> {
+/// One combined stderr line for however many legacy no-`turn_id`
+/// `TurnEnded` events a rebuild or incremental catch-up skipped -- a no-op
+/// when `count` is zero. Replaces what used to be one
+/// "TurnEnded ... has no turn_id; skipping agent_turns projection" line per
+/// event (see [`Store::project_event`]'s doc comment), which drowned out
+/// everything else in stderr against a real archived log with thousands of
+/// pre-`turn_id` events.
+fn log_turn_id_missing_summary(count: usize) {
+    if count > 0 {
+        eprintln!(
+            "horizon-agent: skipped agent_turns projection for {count} legacy TurnEnded \
+             event(s) with no turn_id"
+        );
+    }
+}
+
+/// How [`rebuild_and_open_duckdb_projection`] should reconcile `store`'s
+/// existing high-water mark against the event log's own tail sequence.
+enum ProjectionCurrency {
+    /// The mark already matches the log's tail -- nothing to do.
+    Current,
+    /// The mark is behind the log's tail by a known amount: projecting only
+    /// `sequence > mark` reaches the same end state as a full rebuild, at a
+    /// fraction of the cost against a large real log.
+    Behind(i64),
+    /// The mark is ahead of the log's tail, or absent while the log is
+    /// non-empty -- either way the projection's own state can't be trusted
+    /// to be a prefix of the current log (a reset/corrupted store, or one
+    /// built against a log that has since been replaced), so a full rebuild
+    /// is the only safe path.
+    RebuildNeeded,
+}
+
+/// Compares `store`'s existing high-water mark ([`Store::max_last_sequence`])
+/// against `records`' own tail sequence to decide which
+/// [`ProjectionCurrency`] applies. `records` is already sorted ascending by
+/// `event_log::read`, so its last element carries the log's overall maximum
+/// sequence.
+fn duckdb_projection_currency(store: &Store, records: &[Record]) -> Result<ProjectionCurrency> {
     let log_final_sequence = records.last().map(|record| record.sequence as i64);
-    Ok(store.max_last_sequence()? == log_final_sequence)
+    let mark = store.max_last_sequence()?;
+    Ok(match (mark, log_final_sequence) {
+        (None, None) => ProjectionCurrency::Current,
+        (Some(mark), Some(tail)) if mark == tail => ProjectionCurrency::Current,
+        (Some(mark), Some(tail)) if mark < tail => ProjectionCurrency::Behind(mark),
+        _ => ProjectionCurrency::RebuildNeeded,
+    })
 }
 
 /// Test-only hook, mirroring `horizon-sessiond::main`'s own resume-delay hook
@@ -468,6 +550,7 @@ fn run_writer(
 ) {
     let mut writer = BufWriter::new(file);
     let mut warned_duckdb_append_failure = false;
+    let mut warned_duckdb_turn_id_missing = false;
 
     while let Ok(command) = rx.recv() {
         match command {
@@ -499,14 +582,31 @@ fn run_writer(
                         let store = store
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner());
-                        if let Err(error) = store.append_record(&record) {
-                            if !warned_duckdb_append_failure {
+                        match store.append_record(&record) {
+                            Ok(true) if !warned_duckdb_turn_id_missing => {
+                                // A live TurnEnded with no turn_id should not
+                                // happen for a current provider (see
+                                // `Store::project_event`'s doc comment) --
+                                // rare enough that a warn-once latch, not a
+                                // batched summary, is the right shape here.
                                 eprintln!(
-                                    "horizon-sessiond: DuckDB projection append failed ({error}); \
-                                     further append failures in this run won't be logged \
-                                     individually -- the next restart's rebuild reconciles"
+                                    "horizon-agent: a live TurnEnded event had no turn_id; its \
+                                     agent_turns projection was skipped -- further occurrences \
+                                     in this run won't be logged individually"
                                 );
-                                warned_duckdb_append_failure = true;
+                                warned_duckdb_turn_id_missing = true;
+                            }
+                            Ok(_) => {}
+                            Err(error) => {
+                                if !warned_duckdb_append_failure {
+                                    eprintln!(
+                                        "horizon-sessiond: DuckDB projection append failed \
+                                         ({error}); further append failures in this run won't \
+                                         be logged individually -- the next restart's rebuild \
+                                         reconciles"
+                                    );
+                                    warned_duckdb_append_failure = true;
+                                }
                             }
                         }
                     }
@@ -548,6 +648,40 @@ mod tests {
             event: Event::StateChanged(SessionState::Running),
             provider_payload: None,
             created_at_unix_ms: sequence + 1,
+        }
+    }
+
+    /// A legacy pre-`turn_id` `TurnEnded` record -- the shape a real
+    /// archived event log carries for sessions created before `turn_id`
+    /// existed. Its `agent_turns` projection is always skipped (see
+    /// `projection::Store::insert_turn`'s doc comment); this is the record
+    /// this module's own currency/incremental tests use to prove that skip
+    /// still advances the projection's high-water mark.
+    fn legacy_turn_ended_record(session_id: SessionId, sequence: u64) -> Record {
+        Record {
+            turn_id: None,
+            event_kind: "turn_ended".to_string(),
+            event: Event::TurnEnded(crate::contract::TurnEndReason::Completed),
+            ..record_at(session_id, sequence)
+        }
+    }
+
+    /// A record carrying a distinctive, inspectable `MessageCommitted` body
+    /// -- used by the incremental-catch-up/full-rebuild-fallback tests
+    /// below to tell the two apply paths apart by their *effect* rather
+    /// than by scraping stderr: a full rebuild clears and reinserts
+    /// everything it's given, so a mutated payload at an old sequence
+    /// number would visibly overwrite the original row, while an
+    /// incremental catch-up only touches records past the existing mark and
+    /// must leave earlier rows exactly as they were.
+    fn message_record(session_id: SessionId, sequence: u64, text: &str) -> Record {
+        Record {
+            event_kind: "message_committed".to_string(),
+            event: Event::MessageCommitted(crate::contract::Message {
+                role: crate::contract::MessageRole::User,
+                text: text.to_string(),
+            }),
+            ..record_at(session_id, sequence)
         }
     }
 
@@ -674,5 +808,203 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(path);
+    }
+
+    // --- currency check + incremental catch-up (backlog-32) ----------------
+
+    fn temp_duckdb_path(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "horizon-agent-writer-{label}-{}.duckdb",
+            Uuid::new_v4()
+        ))
+    }
+
+    /// The bug this guards: `duckdb_projection_currency` must find the
+    /// projection current even when the log it was built from contains a
+    /// record whose own projection is deliberately skipped (a legacy
+    /// no-`turn_id` `TurnEnded`) -- `agent_events`/`agent_sessions` are
+    /// still updated for that record (see `append::Store::append_record`'s
+    /// doc comment), so the high-water mark advances past it exactly like
+    /// any other record.
+    #[test]
+    fn currency_check_is_current_after_seeding_with_a_skipped_record() {
+        let store = Store::open_in_memory().expect("open in-memory store");
+        let session_id = SessionId::new();
+        let records = vec![
+            record_at(session_id, 0),
+            legacy_turn_ended_record(session_id, 1),
+        ];
+
+        let report = store
+            .replace_from_event_log_records(records.clone())
+            .expect("seed store");
+        assert_eq!(
+            report.turn_id_missing, 1,
+            "the legacy TurnEnded's own projection must be skipped"
+        );
+
+        match duckdb_projection_currency(&store, &records).expect("currency check") {
+            ProjectionCurrency::Current => {}
+            _ => panic!(
+                "a skipped record must still advance agent_sessions.last_sequence, so a \
+                 re-check of the same log must read as current"
+            ),
+        }
+    }
+
+    /// End-to-end version of the check above, through the real entry point
+    /// (`rebuild_and_open_duckdb_projection`) two "boots" in a row against
+    /// an unchanged, skip-containing log: the second boot must not touch
+    /// the store at all. Proven by `agent_sessions.updated_at`, which every
+    /// write path (`Store::upsert_session`) stamps with `now()` -- if the
+    /// second boot did any work (a rebuild or a catch-up), that timestamp
+    /// would move; "already current" is the only outcome that leaves it
+    /// alone.
+    #[test]
+    fn already_current_on_second_boot_after_a_skip_containing_log() {
+        let duckdb_path = temp_duckdb_path("already-current");
+        let session_id = SessionId::new();
+        let records = vec![
+            record_at(session_id, 0),
+            legacy_turn_ended_record(session_id, 1),
+        ];
+
+        let first_boot =
+            rebuild_and_open_duckdb_projection(&duckdb_path, &records).expect("first boot store");
+        let first_updated_at = {
+            let guard = first_boot.lock().unwrap();
+            guard.sessions().expect("sessions")[0].updated_at.clone()
+        };
+        drop(first_boot);
+
+        thread::sleep(Duration::from_millis(20));
+
+        let second_boot =
+            rebuild_and_open_duckdb_projection(&duckdb_path, &records).expect("second boot store");
+        let second_updated_at = {
+            let guard = second_boot.lock().unwrap();
+            guard.sessions().expect("sessions")[0].updated_at.clone()
+        };
+
+        assert_eq!(
+            first_updated_at, second_updated_at,
+            "a second boot against an unchanged (skip-containing) log must skip the rebuild \
+             entirely; any real write would have advanced agent_sessions.updated_at"
+        );
+
+        drop(second_boot);
+        let _ = std::fs::remove_file(&duckdb_path);
+        let _ = std::fs::remove_file(duckdb_path.with_extension("duckdb.wal"));
+    }
+
+    /// Work item 2: when the mark is behind the log's tail, only the tail
+    /// is projected -- proven by mutating the payload of an *earlier*
+    /// sequence between the two boots. A full rebuild clears and reinserts
+    /// everything it's given, so it would pick up the mutation; an
+    /// incremental catch-up never re-touches a sequence at or before the
+    /// existing mark, so the original payload must survive.
+    #[test]
+    fn behind_mark_triggers_incremental_catch_up_that_preserves_earlier_rows() {
+        let duckdb_path = temp_duckdb_path("incremental");
+        let session_id = SessionId::new();
+
+        let first_boot_records = vec![message_record(session_id, 0, "first")];
+        let first_boot = rebuild_and_open_duckdb_projection(&duckdb_path, &first_boot_records)
+            .expect("first boot store");
+        drop(first_boot);
+
+        // The log grew by one record; sequence 0's payload is deliberately
+        // different from what boot 1 saw.
+        let second_boot_records = vec![
+            message_record(
+                session_id,
+                0,
+                "MUTATED -- must not appear if this was incremental",
+            ),
+            message_record(session_id, 1, "second"),
+        ];
+        let second_boot = rebuild_and_open_duckdb_projection(&duckdb_path, &second_boot_records)
+            .expect("second boot store");
+
+        let guard = second_boot.lock().unwrap();
+        let messages = guard.messages_for_session(session_id).expect("messages");
+        assert_eq!(messages.len(), 2);
+        assert_eq!(
+            messages[0].text, "first",
+            "an incremental catch-up must not re-touch rows at or before the existing mark"
+        );
+        assert_eq!(messages[1].text, "second");
+        drop(guard);
+
+        drop(second_boot);
+        let _ = std::fs::remove_file(&duckdb_path);
+        let _ = std::fs::remove_file(duckdb_path.with_extension("duckdb.wal"));
+    }
+
+    /// Work item 2's other named fallback case: a missing store (nothing to
+    /// catch up from) always does a full rebuild -- the ordinary first-boot
+    /// path, asserted explicitly here since the incremental-catch-up branch
+    /// above could otherwise plausibly regress it into the wrong shape.
+    #[test]
+    fn missing_store_falls_back_to_a_full_rebuild() {
+        let duckdb_path = temp_duckdb_path("missing-store");
+        let session_id = SessionId::new();
+        let records = vec![message_record(session_id, 0, "hello")];
+
+        let store =
+            rebuild_and_open_duckdb_projection(&duckdb_path, &records).expect("rebuilt store");
+        let guard = store.lock().unwrap();
+        let messages = guard.messages_for_session(session_id).expect("messages");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].text, "hello");
+        drop(guard);
+
+        drop(store);
+        let _ = std::fs::remove_file(&duckdb_path);
+        let _ = std::fs::remove_file(duckdb_path.with_extension("duckdb.wal"));
+    }
+
+    /// Work item 2's other named fallback case: a mark *ahead* of the log's
+    /// tail (a shorter log than what the projection was last built from --
+    /// e.g. a truncated or replaced event log) must trigger a full rebuild,
+    /// not an incremental catch-up (there is no well-defined "tail beyond
+    /// the mark" when the mark is already past the end) and not a stale
+    /// "already current". Proven by a row that only a full rebuild's own
+    /// `clear_all_agent_state` would remove: if the second boot wrongly
+    /// treated this as current or tried to catch up, the row from the
+    /// now-absent sequence 1 would still be there.
+    #[test]
+    fn ahead_mark_falls_back_to_a_full_rebuild() {
+        let duckdb_path = temp_duckdb_path("ahead-mark");
+        let session_id = SessionId::new();
+
+        let first_boot_records = vec![
+            message_record(session_id, 0, "a"),
+            message_record(session_id, 1, "b"),
+        ];
+        let first_boot = rebuild_and_open_duckdb_projection(&duckdb_path, &first_boot_records)
+            .expect("first boot store");
+        drop(first_boot);
+
+        // Second "boot" sees a *shorter* log than what the projection was
+        // built from -- the store's mark (1) is now ahead of this log's own
+        // tail (0).
+        let second_boot_records = vec![message_record(session_id, 0, "a")];
+        let second_boot = rebuild_and_open_duckdb_projection(&duckdb_path, &second_boot_records)
+            .expect("second boot store");
+
+        let guard = second_boot.lock().unwrap();
+        let messages = guard.messages_for_session(session_id).expect("messages");
+        assert_eq!(
+            messages.len(),
+            1,
+            "an ahead mark must trigger a full rebuild reflecting only what the log currently \
+             has, not a stale extra row left over from the old state"
+        );
+        drop(guard);
+
+        drop(second_boot);
+        let _ = std::fs::remove_file(&duckdb_path);
+        let _ = std::fs::remove_file(duckdb_path.with_extension("duckdb.wal"));
     }
 }
