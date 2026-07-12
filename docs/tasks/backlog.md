@@ -588,26 +588,28 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     occasionally still fail (now reported as an error rather than freezing
     forever, per the mitigation above) under heavy host load. Recorded
     2026-07-12.
-32. **Agent event log never compacts — `terminate detached` cleanup doesn't
-    reclaim it, and startup replays the entire history before the UI is
-    served** — observed live 2026-07-12 on the owner's machine: a 13MB
-    `agent-events.jsonl` accumulated over normal dogfooding replayed
-    16,337 records at sessiond startup, emitting one console line per
-    terminated session ("skipping resume of ... (already terminated)",
-    dozens of lines), per-event `TurnEnded ... has no turn_id; skipping
-    agent_turns projection` warnings for old-schema events, and "skipped
-    8 corrupt lines". While the replay + DuckDB projection rebuild runs,
-    the freshly launched UI's first terminal pane sits blank and workspace
-    restore appears hung — the daemon serves them only after finishing.
-    Terminating a session appends a tombstone but never removes its
-    events, so this cost grows without bound and the owner's periodic
-    "terminate detached" hygiene has no effect on it. Fix directions,
-    likely all three: (a) compact the event log (rewrite dropping
-    terminated sessions' events, either at terminate time or as startup
-    GC after a size threshold); (b) don't serialize serving the hello/
-    terminal/restore path behind the full replay — resume lazily or in
-    the background; (c) demote the per-event old-schema projection
-    warnings to one summary line. Interim workaround applied 2026-07-12:
-    archived `agent-events.jsonl` / `agent-state.duckdb{,.wal}` to
-    `.archived-20260712` suffixes in `~/.local/share/horizon/`.
-    Recorded 2026-07-12.
+32. **DuckDB projection rebuilds from scratch on every real-world boot —
+    the currency check exists but never passes on real data** — reframed
+    2026-07-12 after owner review (the original "retention policy" framing
+    was wrong: past-session searchability is a deliberate agent-facing
+    feature; retention is a given). The intended design is already the
+    right one: the writer keeps the `Store` open and projects live, and at
+    boot `duckdb_projection_is_current` (event_log/writer.rs) skips the
+    rebuild when the store's `max_last_sequence` matches the log tail —
+    isolated runs do print "already current, skipping rebuild". On the
+    owner's real data it printed "projection rebuilt (16,337 record(s))"
+    on every boot instead. Suspected desync causes, in likelihood order:
+    (a) records the live projection skips (the "skipped 8 corrupt lines"
+    and per-event "TurnEnded ... has no turn_id; skipping agent_turns
+    projection" paths) may not advance the high-water mark, so the mark
+    can never catch the log tail once one exists; (b) unclean daemon death
+    losing the WAL/mark flush. Work items: (1) root-cause with the real
+    corpus — `~/.local/share/horizon/agent-events.jsonl.archived-20260712`
+    (13MB, 16,337 records, includes the corrupt lines and legacy no-turn_id
+    events) is a ready-made fixture; (2) when the mark IS behind, ingest
+    only the tail beyond it instead of a full rebuild (owner's proposal:
+    persisted projection + incremental catch-up); (3) quiet the resume
+    noise (one summary line instead of per-session/per-event lines).
+    Note the rebuild already runs off the readiness path (test hook
+    proves it), so this is waste + noise, not the startup hang — that was
+    the winit configure stall, fixed separately. Recorded 2026-07-12.
