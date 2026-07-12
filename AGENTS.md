@@ -36,8 +36,8 @@ any work — run it yourself and make sure all three are clean:
 
 ```sh
 cargo fmt
-cargo clippy --workspace --all-targets -- -D warnings
-cargo nextest run --workspace
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo nextest run --workspace --locked
 ```
 
 `--workspace` is load-bearing: bare `cargo clippy`/`cargo nextest run`

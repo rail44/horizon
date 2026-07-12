@@ -33,7 +33,9 @@ futures = "0.3"
 # `cargo generate-lockfile` re-resolves them to a new upstream HEAD),
 # restore the intended commit (currently 5f8a7413a31769e0882357f90dc424b3962ac72d) with
 # `cargo update -p gpui --precise <sha> -p gpui_platform --precise <sha>`
-# or bump deliberately the same way.
+# or bump deliberately the same way. The quality gate now runs clippy and
+# nextest with `--locked`, so any such drift fails the gate loudly instead
+# of silently re-resolving (see AGENTS.md / hooks/pre-commit).
 gpui = { git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "wayland"] }
 # gpui-component/gpui-component-assets have no such conflict (nothing
