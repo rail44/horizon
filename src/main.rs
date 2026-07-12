@@ -15,7 +15,6 @@ mod terminal;
 mod terminal_focus;
 mod theme;
 mod view_chooser;
-mod windowing;
 mod workspace;
 mod workspace_state;
 
@@ -57,30 +56,16 @@ fn run_client(args: &[String]) -> ExitCode {
 
 actions!(horizon, [Quit]);
 
-/// Builds the `Application` for the resolved windowing backend
-/// (`windowing::resolve`, `HORIZON_WINDOWING` env > `[ui] windowing`
-/// config > `"native"` default), alongside whether that backend already
-/// draws its own complete window chrome (used by `WorkspaceShell::new` to
-/// skip its own `TitleBar` — see the field doc on
-/// `WorkspaceShell::native_decorations`). `Windowing::Winit` is only
-/// meaningful on Linux — `horizon-winit-platform` isn't even a dependency
-/// of this crate on other platforms (see the root Cargo.toml's
-/// target-gated dependency), so selecting it elsewhere silently falls back
-/// to native with a warning and `native_decorations: false`, matching the
-/// task's "cross-platform build stays green, opt-in switch is a silent
-/// no-op fallback" requirement. See docs/winit-backend-design.md.
-fn build_application() -> (Application, bool) {
-    match windowing::resolve(
-        std::env::var("HORIZON_WINDOWING").ok(),
-        horizon_config::load().ui.windowing.clone(),
-    ) {
-        windowing::Windowing::Native => (gpui_platform::application(), false),
-        windowing::Windowing::Winit => winit_application(),
-    }
-}
-
+/// Builds the `Application` for this platform, alongside whether that
+/// backend already draws its own complete window chrome (used by
+/// `WorkspaceShell::new` to skip its own `TitleBar` — see the field doc on
+/// `WorkspaceShell::native_decorations`). On Linux this is always
+/// `horizon-winit-platform` (real sctk-adwaita CSD decorations — see
+/// docs/winit-backend-design.md); every other OS keeps gpui's own platform
+/// backend, which relies on Horizon's `TitleBar` for chrome (e.g. macOS's
+/// transparent-inset traffic-light layout).
 #[cfg(target_os = "linux")]
-fn winit_application() -> (Application, bool) {
+fn build_application() -> (Application, bool) {
     (
         Application::with_platform(horizon_winit_platform::platform()),
         true,
@@ -88,10 +73,7 @@ fn winit_application() -> (Application, bool) {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn winit_application() -> (Application, bool) {
-    eprintln!(
-        "horizon: HORIZON_WINDOWING=winit is only supported on Linux -- using the native backend"
-    );
+fn build_application() -> (Application, bool) {
     (gpui_platform::application(), false)
 }
 

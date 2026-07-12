@@ -3,8 +3,18 @@
 Adoption step of the roadmap's "winit windowing backend" item, following
 the spike (`spikes/gpui-winit/`, legs 1+2, `docs/research/winit-backend-spike.md`).
 This doc records the production `crates/horizon-winit-platform` crate: its
-architecture, the opt-in switch, what differs behaviorally from
-`gpui_linux`, and what's still open before the default could flip.
+architecture, the compile-time selection, what differs behaviorally from
+`gpui_linux`, and (historically) what was open before the default flipped.
+
+**2026-07-12: flipped to the only Linux path.** The owner dogfooded the
+`"winit"` backend (decorations, IME, mouse, and clipboard all confirmed
+working) and approved making it the sole Linux windowing path. The
+`HORIZON_WINDOWING`/`[ui] windowing` opt-in switch is gone; `src/main.rs`
+now selects the backend at compile time (`#[cfg(target_os = "linux")]`),
+matching the target-gated `horizon-winit-platform` dependency in the root
+`Cargo.toml`. The "Exit criteria for flipping the default" section below is
+kept as a historical record of what was verified (and what wasn't) going
+into that decision — it no longer describes open work.
 
 ## Why
 
@@ -152,27 +162,25 @@ set. The native/macOS paths are untouched (`native_decorations` is always
 `false` there — macOS still wants `TitleBar` for its transparent-inset
 traffic-light layout, matching the existing comment in `main.rs`).
 
-## The opt-in switch
+## Compile-time selection
 
-`HORIZON_WINDOWING` env var > `[ui] windowing` config value > built-in
-default `"native"` — the standard env > config > default precedence (see
-AGENTS.md's Configuration section). Resolution is pure
-(`src/windowing.rs::resolve`, unit tested) and startup-only, like the rest
-of `[ui]`.
+There is no runtime switch: `src/main.rs`'s `build_application` picks the
+backend at compile time via `#[cfg(target_os = "linux")]`.
 
-- `"native"` (default): `gpui_platform::application()`, i.e. gpui's own
-  Linux backend — completely untouched by this work.
-- `"winit"`: `Application::with_platform(horizon_winit_platform::platform())`.
-  Only meaningful on Linux (`#[cfg(target_os = "linux")]` at the call site
-  in `src/main.rs`); selecting it on another OS logs a warning to stderr
-  and silently falls back to `"native"` — `horizon-winit-platform` isn't
-  even a dependency of the `horizon` crate on non-Linux targets, so there
-  is nothing else it could do.
-- Unrecognized values (typos) warn on stderr and fall back to `"native"`,
-  matching `horizon_config`'s own "warn and skip, never fail startup"
-  policy for other malformed config entries.
+- On Linux: `Application::with_platform(horizon_winit_platform::platform())`,
+  with `native_decorations: true` (see "The double-chrome fork" above).
+- On every other OS: `gpui_platform::application()` — gpui's own platform
+  backend, untouched by this work — with `native_decorations: false`, so
+  `WorkspaceShell` keeps drawing its own `TitleBar` (macOS's transparent
+  traffic-light layout).
 
-`config.example.toml`'s `[ui]` section documents the key.
+The root `Cargo.toml` mirrors this at the manifest level:
+`horizon-winit-platform` is a `[target.'cfg(target_os = "linux")'.dependencies]`
+entry, and `gpui_platform` is a
+`[target.'cfg(not(target_os = "linux"))'.dependencies]` entry (manifest
+hygiene only — `gpui-component` itself depends on `gpui_platform`
+unconditionally, so `gpui_linux` still builds transitively into the Linux
+graph regardless of our own crate's direct dependency).
 
 ## What differs behaviorally from `gpui_linux`
 
@@ -244,7 +252,11 @@ end-to-end with real ibus/mozc — this crate changes nothing there). The
 mouse/cursor/clipboard *mapping logic* is unit tested; the *live
 input-to-window* leg is the residual gap before flipping the default.
 
-## Exit criteria for flipping the default
+## Exit criteria for flipping the default (historical)
+
+Superseded 2026-07-12 by direct owner dogfooding approval (see the top of
+this doc) — kept as the record of what this list originally required
+before the flip, not as open work.
 
 Before `"winit"` could become the built-in default (not just opt-in):
 
@@ -264,5 +276,5 @@ Before `"winit"` could become the built-in default (not just opt-in):
 4. Enough dogfooding time on the opt-in switch to catch anything the
    above verification gaps miss.
 
-Until then, `"native"` stays the default; `"winit"` is available today for
-anyone who wants sctk-adwaita decorations and is willing to opt in.
+(Historical: at the time this list was written, `"native"` was still the
+default and `"winit"` was opt-in. See the top of this doc for the flip.)

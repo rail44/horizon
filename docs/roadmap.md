@@ -161,6 +161,13 @@ wave items where possible; design docs on first use.
   2026-07-12: backlog-30 double-Enter after IME confirm (`5c812dd`).
   Interim state shipped 2026-07-12: gpui-component `TitleBar` CSD on
   Linux (`3e09030`), skipped automatically under winit's own CSD.
+  Flipped to the only Linux path 2026-07-12, after owner dogfooding
+  approval (decorations/IME/mouse/clipboard OK): the opt-in switch
+  (`HORIZON_WINDOWING`/`[ui] windowing`) is gone, `src/main.rs` now
+  selects `horizon-winit-platform` at compile time
+  (`#[cfg(target_os = "linux")]`) with `gpui_platform::application()`
+  kept only for non-Linux targets. `docs/winit-backend-design.md`'s
+  exit-criteria section is now historical.
 - **Session manager modal** — shipped 2026-07-06 (`20603dd`): palette
   is Commands-only, sessions managed via the Manage Sessions command.
   Terminate-targeting fix 2026-07-09 (`22a4f47`): terminate is bound to
