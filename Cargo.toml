@@ -20,16 +20,32 @@ edition = "2021"
 alacritty_terminal = "0.26.0"
 crossbeam-channel = "0.5"
 futures = "0.3"
-# gpui/gpui-component ride git HEAD by spec; the committed Cargo.lock is
-# the actual pin (rev-pinning gpui in [dependencies] would split it from
-# gpui-component's own unpinned gpui dep into two incompatible
-# instances). Bump deliberately with `cargo update`.
+# gpui/gpui_platform are deliberately left unpinned here: gpui-component's
+# own Cargo.toml depends on gpui/gpui_platform without a `rev` too, and
+# adding one only to *our* edge splits the graph into two incompatible
+# `gpui` instances ("multiple different versions of crate `gpui`" compile
+# errors) since Cargo treats a rev-pinned git source and a floating one as
+# different SourceIds even when they currently resolve to the same
+# commit. A `[patch]` override was also tried and rejected by Cargo
+# itself ("patches must point to different sources") — there is no
+# manifest-level fix. The committed Cargo.lock is therefore the only pin
+# for these two; if it ever drifts (e.g. a `cargo update`/
+# `cargo generate-lockfile` re-resolves them to a new upstream HEAD),
+# restore the intended commit (currently 5f8a7413a31769e0882357f90dc424b3962ac72d) with
+# `cargo update -p gpui --precise <sha> -p gpui_platform --precise <sha>`
+# or bump deliberately the same way. The quality gate now runs clippy and
+# nextest with `--locked`, so any such drift fails the gate loudly instead
+# of silently re-resolving (see AGENTS.md / hooks/pre-commit).
 gpui = { git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "wayland"] }
-gpui-component = { git = "https://github.com/longbridge/gpui-component" }
+# gpui-component/gpui-component-assets have no such conflict (nothing
+# else in the graph depends on them), so they carry an explicit pin.
+# Bump deliberately: update the rev below, then
+# `cargo update -p gpui-component -p gpui-component-assets`.
+gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "0775df394083c1ed74f36f846b78868d1267398f" }
 # Bundled SVGs gpui-component's own components (e.g. `TitleBar`'s window
 # control icons) resolve through the asset source registered below.
-gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "0775df394083c1ed74f36f846b78868d1267398f" }
 horizon-agent = { path = "crates/horizon-agent" }
 horizon-config = { path = "crates/horizon-config" }
 horizon-control = { path = "crates/horizon-control" }

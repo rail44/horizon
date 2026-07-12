@@ -16,8 +16,8 @@ fi
 echo "pre-commit: cargo fmt --check"
 cargo fmt --all -- --check
 
-echo "pre-commit: cargo clippy --workspace --all-targets -- -D warnings"
-cargo clippy --workspace --all-targets -- -D warnings
+echo "pre-commit: cargo clippy --workspace --all-targets --locked -- -D warnings"
+cargo clippy --workspace --all-targets --locked -- -D warnings
 
-echo "pre-commit: cargo nextest run --workspace"
-cargo nextest run --workspace
+echo "pre-commit: cargo nextest run --workspace --locked"
+cargo nextest run --workspace --locked
