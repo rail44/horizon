@@ -13,6 +13,8 @@
 
 mod input;
 mod session;
+#[cfg(test)]
+mod tests;
 
 pub use session::TerminalSession;
 
@@ -33,17 +35,47 @@ use crate::theme;
 
 // Font values come from config.toml ([ui].font_family, [terminal].
 // font_size/line_height) and are startup-only, like the Floem shell.
-fn font_family() -> String {
-    static FAMILY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    FAMILY
-        .get_or_init(|| {
-            horizon_config::load()
-                .ui
-                .font_family
-                .clone()
-                .unwrap_or_else(|| "Menlo".to_string())
-        })
-        .clone()
+//
+// `font_family` is a CSS-style comma-separated font stack (as used by the
+// retired Floem shell): the first entry is the primary family, the rest
+// are fallbacks. gpui's `Font::fallbacks` (backed by cosmic-text on Linux)
+// tries each fallback in order when the primary is missing a glyph. Note
+// this matching is by *exact* family-name string against a font file's
+// embedded name -- fontconfig generic aliases like "monospace" are not
+// resolved the way `fc-match` would resolve them, so only literal family
+// names (e.g. "DejaVu Sans Mono") actually work as stack entries; unknown
+// names are silently dropped rather than causing a resolution failure.
+#[cfg(target_os = "macos")]
+const DEFAULT_FONT_FAMILY: &str = "Menlo";
+#[cfg(not(target_os = "macos"))]
+const DEFAULT_FONT_FAMILY: &str = "DejaVu Sans Mono";
+
+/// Parse a comma-separated font stack into a `gpui::Font`: the first
+/// non-empty, trimmed entry becomes the primary family, any remaining
+/// entries become `Font::fallbacks`. Falls back to [`DEFAULT_FONT_FAMILY`]
+/// if `raw` has no usable entries.
+fn font_from_stack(raw: &str) -> Font {
+    let mut entries = raw.split(',').map(str::trim).filter(|s| !s.is_empty());
+    let primary = entries.next().unwrap_or(DEFAULT_FONT_FAMILY).to_string();
+    let fallbacks: Vec<String> = entries.map(str::to_string).collect();
+    let mut resolved = font(primary);
+    if !fallbacks.is_empty() {
+        resolved.fallbacks = Some(FontFallbacks::from_fonts(fallbacks));
+    }
+    resolved
+}
+
+fn resolved_font() -> Font {
+    static FONT: std::sync::OnceLock<Font> = std::sync::OnceLock::new();
+    FONT.get_or_init(|| {
+        let raw = horizon_config::load()
+            .ui
+            .font_family
+            .clone()
+            .unwrap_or_else(|| DEFAULT_FONT_FAMILY.to_string());
+        font_from_stack(&raw)
+    })
+    .clone()
 }
 
 fn font_size() -> f32 {
@@ -380,7 +412,7 @@ impl EntityInputHandler for TerminalView {
     ) -> Option<Bounds<Pixels>> {
         let cursor = self.session.read(cx).frame.as_ref()?.cursor?;
         let text_system = window.text_system();
-        let font_id = text_system.resolve_font(&font(font_family()));
+        let font_id = text_system.resolve_font(&resolved_font());
         let cell_width = text_system
             .advance(font_id, px(font_size()), 'M')
             .map(|size| size.width)
@@ -484,7 +516,7 @@ fn paint_terminal(
     cx: &mut App,
 ) {
     let text_system = window.text_system().clone();
-    let font = font(font_family());
+    let font = resolved_font();
     let font_size = px(font_size());
     let line_height = px(line_height());
     let font_id = text_system.resolve_font(&font);
