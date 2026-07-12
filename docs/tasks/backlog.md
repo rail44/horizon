@@ -402,7 +402,7 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     test-group (`.config/nextest.toml`) serializing the whole
     `horizon-sessiond::e2e` binary (`max-threads = 1`) as belt-and-braces
     against self-contention, given the repeated merge-tax history.
-28. **[PARTIALLY RESOLVED 5c3f725, PENDING-COMMIT] `horizon-sessiond` socket e2e
+28. **[PARTIALLY RESOLVED 5c3f725, e478e6e] `horizon-sessiond` socket e2e
     flakes under the full parallel nextest run** — `terminal_create_diff_
     reconnect_attach_and_shutdown_over_the_real_socket` (`crates/
     horizon-sessiond/tests/e2e.rs`) spawns a real PTY backed by a real
