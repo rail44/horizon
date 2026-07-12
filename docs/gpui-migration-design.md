@@ -236,6 +236,15 @@ are still open.
 
 ## Window chrome on Linux (post-retirement, 2026-07-12)
 
+**Superseded 2026-07-12, same day**: this section describes the interim
+`gpui_platform` + hand-drawn `TitleBar` chrome. `horizon-winit-platform`
+later replaced it on Linux, then was unified onto every OS —
+`gpui_platform` is gone from the dependency tree and Horizon's `TitleBar`
+is deleted outright; winit draws all window chrome now. See
+`docs/winit-backend-design.md`'s "TitleBar removed entirely" and "No more
+per-OS backend selection" sections for the current state. Kept below as
+the historical record of the chrome approach that came before it.
+
 GNOME/Mutter never grants server-side `xdg-decoration` for Wayland
 clients — regardless of what a window requests, the compositor's
 decoration-configure event always negotiates client-side, so a window

@@ -571,8 +571,12 @@ impl EntityInputHandler for TerminalView {
         // with no matching `handle_key` call at all — `key_text_dedup`
         // tells the two apart by whether a matching key-path send actually
         // happened, instead of assuming kitty mode implies one always did
-        // (see docs/winit-backend-design.md's "direct-mode IME commit"
-        // section for the bug this replaced).
+        // (see docs/winit-backend-design.md's "Resolved incidents" ->
+        // "Keyboard input pipeline" -> Stage 2 for the bug this replaced;
+        // Stage 3 in the same section is why this dedup is still live even
+        // for a plain, non-IME echo — the winit-side text-input fallback
+        // fires unconditionally alongside the Key path since propagation
+        // never stops).
         if !was_composing
             && self.keys_as_escape_codes(cx)
             && self.key_text_dedup.is_duplicate_of_recent_key(text)

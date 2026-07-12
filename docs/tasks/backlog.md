@@ -661,7 +661,8 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     live shell end up with the flag desynced from what the shell itself
     believes?** Surfaced investigating the direct-ASCII-mode input-loss
     bug (fixed on `main` — see `docs/winit-backend-design.md`'s
-    "text-input fallback" section): the owner's `HORIZON_INPUT_TRACE`
+    "Resolved incidents" -> "Keyboard input pipeline" -> Stage 3): the
+    owner's `HORIZON_INPUT_TRACE`
     capture showed `keys_as_escape_codes=false` in their actual fish
     session, which normally enables kitty mode at startup. Investigated
     only enough to characterize, not resolve (task brief: file, don't

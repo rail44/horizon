@@ -5,7 +5,9 @@ the spike (`spikes/gpui-winit/`, legs 1+2, `docs/research/winit-backend-spike.md
 This doc records the production `crates/horizon-winit-platform` crate: its
 architecture, what differs behaviorally from gpui's own per-OS backends,
 and (historically) what was open before the default flipped and before
-every OS was unified on it.
+every OS was unified on it. Investigations and bugs found and fixed along
+the way are consolidated in "Resolved incidents" at the end, in the order
+they happened, rather than interleaved with the architecture description.
 
 **2026-07-12: unified every OS on `horizon-winit-platform`, `gpui_platform`
 removed.** Owner decision: the per-OS windowing split (winit on Linux,
@@ -42,8 +44,9 @@ mouse, and clipboard all confirmed working) and approved making it the
 sole Linux windowing path; the `HORIZON_WINDOWING`/`[ui] windowing` opt-in
 switch was removed then (superseded now — there is no switch of any kind
 left, on any OS). The "Exit criteria for flipping the default" section
-below is kept as a historical record of what was verified (and what
-wasn't) going into that decision — it no longer describes open work.
+below (now folded into "Resolved incidents") is kept as a historical
+record of what was verified (and what wasn't) going into that decision —
+it no longer describes open work.
 
 ## Why
 
@@ -104,6 +107,11 @@ Module map (`crates/horizon-winit-platform/src/`):
   stub).
 - `macos_menu.rs` (`#[cfg(target_os = "macos")]` only) — the `muda`-backed
   native app menu; see "macOS: native app menu" below.
+- `input_trace.rs` — the winit-side half of the permanent
+  `HORIZON_INPUT_TRACE` diagnostic facility (see AGENTS.md's GUI
+  Verification section); `src/input_trace.rs` carries the gpui-side half.
+  Duplicated deliberately rather than shared, since the two crates have no
+  other reason to depend on each other.
 
 Cross-platform: every module except `macos_menu.rs` builds on every OS
 (`lib.rs` has no `#[cfg(target_os = "linux")]` gate at all any more). The
@@ -198,14 +206,15 @@ traffic-light layout. Now that winit is the only backend and it draws
 complete native chrome on every OS (sctk-adwaita CSD on Linux, native
 decorations on macOS/Windows), there is no OS left where Horizon needs to
 draw its own bar. `WorkspaceShell`'s `native_decorations: bool` field and
-its `.when(!self.native_decorations, ...)` `TitleBar` child (`src/workspace.rs`)
-are both deleted; `WorkspaceShell::new` dropped the corresponding
-constructor parameter. `src/main.rs`'s `WindowOptions.titlebar` is now a
-plain `TitlebarOptions { title: Some("Horizon".into()), appears_transparent:
-false, traffic_light_position: None }` — `WinitPlatform::open_window` only
-ever reads `titlebar.title` (see `platform.rs`), so the transparency/
-traffic-light fields (gpui-component's own hand-drawn-titlebar concept)
-are moot now and set to their plain defaults.
+its `.when(!self.native_decorations, ...)` `TitleBar` child (`src/workspace.rs`,
+both since deleted) are both gone; `WorkspaceShell::new` dropped the
+corresponding constructor parameter. `src/main.rs`'s `WindowOptions.titlebar`
+is now a plain `TitlebarOptions { title: Some("Horizon".into()),
+appears_transparent: false, traffic_light_position: None }` —
+`WinitPlatform::open_window` only ever reads `titlebar.title` (see
+`platform.rs`), so the transparency/traffic-light fields (gpui-component's
+own hand-drawn-titlebar concept) are moot now and set to their plain
+defaults.
 
 `gpui-component-assets`' `.with_assets` registration in `src/main.rs`
 stays, despite `TitleBar` (the original reason it was added) being gone:
@@ -345,14 +354,9 @@ observed running.
   API to ask it to do otherwise).
 - **IME.** Functionally proven identical in the spike (leg 2): same
   `EntityInputHandler` calls, same preedit/commit/candidate-bounds
-  behavior. One caveat carried over unchanged from spike §16-Q2: a
-  composition confirmed via the physical Enter key can deliver the IME
-  commit *and* a plain `KeyboardInput` press for that same Enter as two
-  independent events (Wayland's text-input-v3 design never withholds key
-  events from the client) — this is a pre-existing risk in Horizon's
-  `TerminalView::on_key_down` IME guard shared with `gpui_linux`, not
-  something this crate introduces; tracked as dogfooding backlog-30, not
-  fixed here.
+  behavior. See "Resolved incidents" below for the physical-key/IME-commit
+  double-processing risk this carried over from `gpui_linux` (backlog-30)
+  and how it was fixed.
 - **Mouse/cursor/clipboard.** New code (the spike didn't touch these).
   Pure mapping/tracking logic is unit tested (`input.rs`, `cursor.rs`);
   not yet exercised against a live compositor pointer/clipboard event in
@@ -360,7 +364,74 @@ observed running.
 - **Multi-monitor.** `display.rs` is a single fixed-size stub, same as the
   spike. Real per-monitor bounds/DPI is out of scope (see below).
 
-## Known failure mode: lost main-thread wakeup / configure stall (fixed)
+## Out of scope
+
+Multi-window, screen capture, drag&drop file opening, Windows menu-bar
+support (`set_menus`/`activate` stay documented no-ops there — see "macOS:
+native app menu" above), and — within the macOS menu itself — accelerator
+labels, dynamic enable/disable, the Services menu, and the dock menu (see
+the same section). Also carried over from the spike: native-Wayland
+preedit *content* observation remains unverified (only confirmed via
+winit's X11 fallback backend, spike §14.2-14.3 — same `winit::event::Ime`
+code path either way, so this doesn't affect the code itself, only how
+confidently the content was watched).
+
+## Verification limits
+
+This host is Linux-only: there is no macOS SDK, so the macOS-gated code
+(`macos_menu.rs`, and the `#[cfg(target_os = "macos")]` branches in
+`platform.rs`/`app_handler.rs`/`clipboard.rs`) has **never been compiled**,
+only written and reviewed by symmetry with the Linux implementation and
+against gpui's/muda's/winit's documented APIs (source read directly from
+the pinned/registry checkouts, not from memory). **The owner's next macOS
+build is the actual verification gate for all of it** — menu
+construction, the click -> `Action` dispatch path, and activation. Windows
+is in the same unbuilt position but carries less new code (menus/
+activation stay no-ops there, same as before).
+
+## Verification
+
+Ran headless (`HORIZON_GPUI_DUMP`/`HORIZON_GPUI_DRIVE` taps, see the
+`gui-verify` skill) with `HORIZON_WINDOWING=winit` (historical — this env
+var no longer exists; see "Resolved incidents" / the top of this doc for
+the unification), isolated `HORIZON_SESSIOND_SOCKET`/`HORIZON_WORKSPACE_STATE`/
+`HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB`: a real decorated
+winit-backed window opened, a terminal session spawned and rendered,
+raw-PTY-injected marker text plus a 256-color (`Indexed(208)`) and
+truecolor (`Spec(Rgb{r:10,g:20,b:30})`) span all appeared correctly in the
+frame dump — proving the render/PTY/frame pipeline works end-to-end under
+this backend, and that the headless taps are indeed backend-independent as
+the task brief predicted. No panics in either run.
+
+`scripts/check-gpui-terminal.sh` itself could not be run as a literal
+script invocation: its `pgrep -x "$binary_name"` safety guard (refuses to
+run alongside another process literally named `horizon`) tripped against
+an already-running owner Horizon instance on this shared desktop at
+verification time — an environmental collision unrelated to winit
+(the same guard would block a "native" backend run too). The check above
+manually reproduces the script's exact env vars, drive command, and
+pass/fail assertions with the winit backend selected, and all three
+passed.
+
+**Not verified in this pass** (would require real OS-level input
+injection — `xdotool`/`ydotool`/a virtual-keyboard protocol — which the
+task brief flags as an incident-class risk on a shared desktop, per the
+`xdotool windowactivate` incident recorded in the spike doc §17): live
+mouse click/drag selection, live scroll, live clipboard copy/paste, live
+cursor-style transitions, and a fresh live IME round-trip through this
+specific crate build (the spike already proved the *ported* IME code path
+end-to-end with real ibus/mozc — this crate changes nothing there). The
+mouse/cursor/clipboard *mapping logic* is unit tested; the *live
+input-to-window* leg is the residual gap before flipping the default.
+
+## Resolved incidents
+
+Bugs found and fixed during this crate's development and dogfooding, kept
+in chronological order for context on why the code (guards, the text
+fallback, `completed_frame()`'s no-op) looks the way it does. All are
+resolved; nothing here describes open work.
+
+### Configure stall: lost main-thread wakeup on Wayland (fixed 2026-07-12)
 
 Symptom (owner's daily driver, captive-reproducible on GNOME/Wayland):
 Horizon freezes on its last-painted frame forever — most visibly stuck on
@@ -411,7 +482,8 @@ This is a Wayland protocol-ordering bug, not a dispatcher-level lost
 wakeup — `dispatcher.rs`'s `dispatch_on_main_thread` (`EventLoopProxy`-based)
 was audited and has a regression test
 (`dispatcher::tests::concurrent_main_thread_posts_all_get_processed`)
-confirming concurrent background-thread posts are never dropped. Why the existing headless checks (`scripts/check-gpui-terminal.sh`,
+confirming concurrent background-thread posts are never dropped. Why the
+existing headless checks (`scripts/check-gpui-terminal.sh`,
 `scripts/check-workspace-restore.sh`) never caught this, confirmed by
 running both against the pre-fix binary (still pass, 3/3 and 1/1):
 `HORIZON_GPUI_DUMP` (`src/terminal/session.rs`) writes its frame dump
@@ -427,7 +499,16 @@ what this fix's own validation added instead: a real-desktop, real-compositor
 repeated-run protocol smoke (see the review request / worker report for
 this item's exact numbers).
 
-## Investigation: total keyboard-input death on the owner's daily driver (2026-07-12)
+### Keyboard input pipeline: a three-stage investigation (2026-07-12)
+
+The owner reported total keyboard-input loss on their daily driver, and
+the eventual fix (a missing text-input fallback) went through two wrong
+hypotheses first. Kept in order because each stage's negative result
+narrowed the next, and the code today (`ImeCommitGuard`, `KeyTextDedup`,
+and `crates/horizon-winit-platform`'s text-input fallback) is the sum of
+all three, not just the last one.
+
+#### Stage 1: no code regression found; a real but unproven X11/XIM sibling issue
 
 Symptom reported: neither terminal nor agent panes accept *any* keyboard
 input on `main` (`7ab2cc1`), while mouse interaction (click, scroll, drag)
@@ -501,15 +582,11 @@ focused — an unacceptable risk on the owner's live shared desktop), and
 restarting the shared `ibus-daemon` to test the recovery hypothesis was
 correctly declined as another live-desktop side effect.
 
-**Conclusion: no code fix landed.** The investigation did not find a
-`main`-introduced code regression in the key-dispatch pipeline; it found
-and precisely reproduced one real IME-related failure mode (X11/XIM) that
-is a plausible sibling of, but not proven identical to, whatever the owner
-is hitting on native Wayland. The fastest next diagnostic for the owner:
-switch input source / restart the input method (or log out and back in)
-and see whether that alone restores keyboard input in the *existing*
-running Horizon — if it does, this is IME-daemon state, not a Horizon bug,
-and no code change is needed here.
+**Conclusion of stage 1: no code fix landed.** The investigation did not
+find a `main`-introduced code regression in the key-dispatch pipeline; it
+found and precisely reproduced one real IME-related failure mode (X11/XIM)
+that is a plausible sibling of, but not proven identical to, whatever the
+owner was hitting on native Wayland.
 
 **Masking question, answered.** `HORIZON_GPUI_DRIVE`
 (`src/terminal/session.rs`) does **not** exercise the winit→gpui key path
@@ -520,19 +597,18 @@ tree, and `TerminalView::handle_key`. `scripts/check-gpui-terminal.sh`
 (which drives this tap) could not have caught this regression class even
 if one existed — same masking pattern as the configure-stall bug above,
 where the frame-dump tap sits below the render pipeline; here the drive
-tap sits below the *input* pipeline. No cheap fix is proposed: a real
-synthetic-injection check would need either a safe native-Wayland
-injection story (none available on this host) or a permanently-running
-`Xvfb`+`xdotool` smoke gated behind an explicit opt-in env var, which is a
-new piece of test infrastructure, not a one-line addition — left for a
-follow-up if the owner wants it.
+tap sits below the *input* pipeline. This is what motivated adding
+`HORIZON_INPUT_TRACE` (see below): a permanent, always-available trace of
+the real pipeline the owner could capture from their own daily-driver
+session, rather than needing another one-off `eprintln!` instrumentation
+pass each time.
 
-### Follow-up, same day: the real mechanism was a dedup bug, not IME/XIM state
+#### Stage 2: the real mechanism was a `KeyTextDedup` bug, not IME/XIM state
 
-The owner narrowed the symptom further after the investigation above:
-keys are lost **only** while the Japanese IME is in direct/ASCII input
-mode; composition mode works. That inverts the earlier framing — this is
-a `main`-code bug, not (only) IME-daemon state, and it's now fixed.
+The owner narrowed the symptom further after stage 1: keys are lost
+**only** while the Japanese IME is in direct/ASCII input mode; composition
+mode works. That inverts the earlier framing — this is a `main`-code bug,
+not (only) IME-daemon state.
 
 **Root cause.** `TerminalView::replace_text_in_range`
 (`src/terminal/mod.rs`) had a dedup branch for kitty "report all keys"
@@ -599,30 +675,30 @@ unit tests exercise that decision directly.
 
 **Why did this work during the pre-unify dogfooding, then?** Two
 independent things bit at once and are easy to conflate. First, the
-*total* silence found in the investigation above (zero `KeyboardInput`,
-zero `Ime` events at all) is consistent with a genuinely stuck XIM/ibus
-session state — the owner ran `ibus restart` while narrowing this down,
-and after that this session's real desktop showed normal
-`Preedit`/`Commit` traffic again, exactly where it had shown nothing
-before. That's IME-daemon state, unrelated to any Horizon commit, and
-plausibly wasn't present (or wasn't yet stuck) during the earlier
-dogfooding session. Second, and separately, the dedup bug itself is a
-`main`-code issue that predates this investigation — the `!was_composing
-&& keys_as_escape_codes` guard has looked like this since kitty-mode
-reporting was added, so it's plausible the owner's dogfooding session
-simply never happened to have the IME in direct mode while typing in a
-kitty-mode shell for long enough to notice a single dropped keystroke
-(easy to miss; a stuck *ibus session* silences everything, which is not).
-Both explanations are consistent with the evidence; distinguishing them
-further would need the owner's own memory of which IME mode they were in
-during that session, which isn't recoverable from logs.
+*total* silence found in stage 1 (zero `KeyboardInput`, zero `Ime` events
+at all) is consistent with a genuinely stuck XIM/ibus session state — the
+owner ran `ibus restart` while narrowing this down, and after that this
+session's real desktop showed normal `Preedit`/`Commit` traffic again,
+exactly where it had shown nothing before. That's IME-daemon state,
+unrelated to any Horizon commit, and plausibly wasn't present (or wasn't
+yet stuck) during the earlier dogfooding session. Second, and separately,
+the dedup bug itself is a `main`-code issue that predates this
+investigation — the `!was_composing && keys_as_escape_codes` guard has
+looked like this since kitty-mode reporting was added, so it's plausible
+the owner's dogfooding session simply never happened to have the IME in
+direct mode while typing in a kitty-mode shell for long enough to notice a
+single dropped keystroke (easy to miss; a stuck *ibus session* silences
+everything, which is not). Both explanations are consistent with the
+evidence; distinguishing them further would need the owner's own memory of
+which IME mode they were in during that session, which isn't recoverable
+from logs.
 
-### Second follow-up: the confirmed root cause — a missing text-input fallback
+#### Stage 3: the confirmed root cause — a missing text-input fallback
 
 The owner captured a `HORIZON_INPUT_TRACE` trace of their own daily-driver
-typing (the diagnostic added in the previous follow-up) and it pinpointed
-the bug precisely, invalidating both prior hypotheses (X11/XIM state, and
-"IME direct mode delivers a commit-only event"):
+typing (the diagnostic added in stage 1's aftermath) and it pinpointed the
+bug precisely, invalidating both prior hypotheses (X11/XIM state, and "IME
+direct mode delivers a commit-only event"):
 
 ```
 winit KeyboardInput physical_key=Code(KeyA) state=Pressed
@@ -716,13 +792,18 @@ handling for each):
    `stop_propagation`, `propagate` stays `true` even when `handle_key`
    already sent a kitty-mode printable via the Key path — so the fallback
    *does* still fire for those too, landing on `KeyTextDedup`
-   (`src/terminal/mod.rs`, from the previous follow-up) as the actual line
+   (`src/terminal/mod.rs`, from stage 2 above) as the actual line
    of defense against a double-feed, exactly as anticipated. Verified live
    (`printf` piped through a working `bash` prompt to flip on kitty
    reporting via `CSI > 1 u`, then typed 'a'): the trace shows `handle_key
    ... sent: TerminalCommand::Key` immediately followed by
    `text-fallback fire` → `replace_text_in_range ... dropped: duplicate of
-   a key-path send` — composes correctly, no double character.
+   a key-path send` — composes correctly, no double character. This is
+   also why `KeyTextDedup` is not dead code today even though its
+   original 2026-07-12 motivation (guarding against an IME's own kitty-mode
+   echo) turned out narrower than believed: the text fallback is now a
+   *second*, always-firing source of the same echo whenever propagation
+   isn't stopped, which is unconditionally the case in this view.
 2. *IME composition must not trigger the fallback.* `ime_composing` gates
    this unconditionally, checked before the modifiers/key_char checks —
    see `text_fallback_decision`'s `SkipComposing` case and its priority
@@ -745,66 +826,51 @@ with `KeyTextDedup`) was additionally verified live end-to-end rather than
 only at the unit-test seam, since the interaction with the rest of the
 input pipeline is exactly what the two live-testing bugs above were.
 
-## Out of scope
+Backlog #33 files a narrower, still-open follow-up question from this same
+investigation (whether a resumed/respawned session's kitty-mode flag
+survives correctly) — deliberately not resolved here, per the task brief's
+"don't block on it."
 
-Multi-window, screen capture, drag&drop file opening, Windows menu-bar
-support (`set_menus`/`activate` stay documented no-ops there — see "macOS:
-native app menu" above), and — within the macOS menu itself — accelerator
-labels, dynamic enable/disable, the Services menu, and the dock menu (see
-the same section). Also carried over from the spike: native-Wayland
-preedit *content* observation remains unverified (only confirmed via
-winit's X11 fallback backend, spike §14.2-14.3 — same `winit::event::Ime`
-code path either way, so this doesn't affect the code itself, only how
-confidently the content was watched).
+### `ImeCommitGuard`: phantom Enter after an IME commit (fixed 2026-07-12, backlog-30)
 
-## Verification limits
+Found while implementing IME for the winit backend spike (leg 2), then
+confirmed live against `TerminalView` itself: Wayland's text-input-v3
+protocol (unlike X11's XIM) never lets the compositor consume keys on the
+client's behalf, so a physical Enter that confirms an IME conversion still
+arrives as an independent `KeyDownEvent`, *after* the `replace_text_in_range`
+call that confirmed the composition already cleared `ime_marked_text`. A
+naive `ime_marked_text.is_some()` check can't tell that keydown apart from
+an ordinary, unrelated keystroke, so the phantom Enter fell through to
+normal key handling and sent an extra `\r` to the PTY.
 
-This host is Linux-only: there is no macOS SDK, so the macOS-gated code
-(`macos_menu.rs`, and the `#[cfg(target_os = "macos")]` branches in
-`platform.rs`/`app_handler.rs`/`clipboard.rs`) has **never been compiled**,
-only written and reviewed by symmetry with the Linux implementation and
-against gpui's/muda's/winit's documented APIs (source read directly from
-the pinned/registry checkouts, not from memory). **The owner's next macOS
-build is the actual verification gate for all of it** — menu
-construction, the click -> `Action` dispatch path, and activation. Windows
-is in the same unbuilt position but carries less new code (menus/
-activation stay no-ops there, same as before).
+Fixed with a pure `ImeCommitGuard` (`src/terminal/mod.rs`): armed by
+`replace_text_in_range` on `was_composing`, consumed unconditionally by
+the next `handle_key` call, suppressing only when that key is Enter *and*
+it arrived within a 100ms window of the commit — review feedback caught
+that a composition committed by mouse click on the candidate window
+produces no phantom key at all, so an unbounded guard would swallow a
+later genuine Enter (e.g. compose → click candidate → press Enter to send
+the line). Covered by unit tests in `src/terminal/tests.rs` for the
+single-suppression, rapid-typing, Space/candidate-commit,
+consecutive-composition, and within-window/after-window cases. Live repro
+with a real IME was out of scope for that pass (native Wayland blocks key
+injection); final visual confirmation was left to owner dogfooding, which
+has since happened without a reported regression. The agent composer
+(`src/agent/view.rs`) uses gpui-component's `Input`/`InputState` widget
+rather than a hand-rolled `EntityInputHandler`, so this guard doesn't
+apply there — left as-is. Known residual, not handled speculatively: an
+IME configured to auto-commit on a punctuation key would deliver that
+punctuation as its own phantom key within the window, which this guard
+intentionally passes through (only Enter/Return is treated as a plausible
+confirming key).
 
-## Verification
+This guard is unrelated to, and unaffected by, stage 3's text-input
+fallback above: named keys (including Enter) never carry `key_char` after
+that stage's fix, so the fallback never fires for Enter at all —
+`ImeCommitGuard` is still the only mechanism suppressing this specific
+phantom `KeyDownEvent`.
 
-Ran headless (`HORIZON_GPUI_DUMP`/`HORIZON_GPUI_DRIVE` taps, see the
-`gui-verify` skill) with `HORIZON_WINDOWING=winit`, isolated
-`HORIZON_SESSIOND_SOCKET`/`HORIZON_WORKSPACE_STATE`/
-`HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB`: a real decorated
-winit-backed window opened, a terminal session spawned and rendered,
-raw-PTY-injected marker text plus a 256-color (`Indexed(208)`) and
-truecolor (`Spec(Rgb{r:10,g:20,b:30})`) span all appeared correctly in the
-frame dump — proving the render/PTY/frame pipeline works end-to-end under
-this backend, and that the headless taps are indeed backend-independent as
-the task brief predicted. No panics in either run.
-
-`scripts/check-gpui-terminal.sh` itself could not be run as a literal
-script invocation: its `pgrep -x "$binary_name"` safety guard (refuses to
-run alongside another process literally named `horizon`) tripped against
-an already-running owner Horizon instance on this shared desktop at
-verification time — an environmental collision unrelated to winit
-(the same guard would block a "native" backend run too). The check above
-manually reproduces the script's exact env vars, drive command, and
-pass/fail assertions with the winit backend selected, and all three
-passed.
-
-**Not verified in this pass** (would require real OS-level input
-injection — `xdotool`/`ydotool`/a virtual-keyboard protocol — which the
-task brief flags as an incident-class risk on a shared desktop, per the
-`xdotool windowactivate` incident recorded in the spike doc §17): live
-mouse click/drag selection, live scroll, live clipboard copy/paste, live
-cursor-style transitions, and a fresh live IME round-trip through this
-specific crate build (the spike already proved the *ported* IME code path
-end-to-end with real ibus/mozc — this crate changes nothing there). The
-mouse/cursor/clipboard *mapping logic* is unit tested; the *live
-input-to-window* leg is the residual gap before flipping the default.
-
-## Exit criteria for flipping the default (historical)
+### Exit criteria for flipping the default (historical, superseded)
 
 Superseded 2026-07-12 by direct owner dogfooding approval (see the top of
 this doc) — kept as the record of what this list originally required
