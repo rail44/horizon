@@ -245,10 +245,10 @@ fn rebuilds_rig_memory_messages_from_horizon_transcript_events() {
             tool_id: "workspace.snapshot".to_string(),
             input: serde_json::json!({}),
         }),
-        Event::ToolCallFinished(ToolCallResult {
-            call_id: ToolCallId("call-1".to_string()),
-            output: serde_json::json!({ "tab_count": 1 }),
-        }),
+        Event::ToolCallFinished(ToolCallResult::new(
+            ToolCallId("call-1".to_string()),
+            serde_json::json!({ "tab_count": 1 }),
+        )),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::Assistant,
             text: "There is one tab.".to_string(),
@@ -330,13 +330,13 @@ fn horizon_mediated_tool_result_can_continue_as_rig_history() {
     };
 
     events.push(Event::ToolCallStarted(request.call_id.clone()));
-    events.push(Event::ToolCallFinished(ToolCallResult {
-        call_id: request.call_id.clone(),
-        output: serde_json::json!({
+    events.push(Event::ToolCallFinished(ToolCallResult::new(
+        request.call_id.clone(),
+        serde_json::json!({
             "tab_count": 1,
             "active_title": "Agent #1",
         }),
-    }));
+    )));
 
     let messages = rig_messages_from_horizon_events(&events);
 
@@ -513,10 +513,7 @@ fn halt_turn_loop_records_real_result_and_cancels_only_other_pending_calls() {
         },
     )]);
     let mut cancelled: HashSet<ToolCallId> = HashSet::new();
-    let arrived = ToolCallResult {
-        call_id: id_a.clone(),
-        output: serde_json::json!({ "tab_count": 2 }),
-    };
+    let arrived = ToolCallResult::new(id_a.clone(), serde_json::json!({ "tab_count": 2 }));
     let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
     for _ in 0..=TEST_ITERATION_CAP {
         guard.record_tool_turn();
@@ -688,10 +685,10 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
     // exists to stop. Distinct outputs keep doom-loop detection out of the
     // way so the iteration cap is what trips.
     for i in 0..TEST_ITERATION_CAP {
-        let _ = tx.send(Command::ToolCallResult(ToolCallResult {
-            call_id: call_id.clone(),
-            output: serde_json::json!({ "loop_again": true, "n": i }),
-        }));
+        let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
+            call_id.clone(),
+            serde_json::json!({ "loop_again": true, "n": i }),
+        )));
         assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
         assert!(matches!(
             recv(&rx).event,
@@ -705,10 +702,10 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
     // observable through the session handle) and, since it already finished
     // for real app-side, no contradictory cancelled ToolCallFinished may be
     // emitted for it: the halt is exactly Error then WaitingForUser.
-    let _ = tx.send(Command::ToolCallResult(ToolCallResult {
-        call_id: call_id.clone(),
-        output: serde_json::json!({ "loop_again": true, "n": "final" }),
-    }));
+    let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
+        call_id.clone(),
+        serde_json::json!({ "loop_again": true, "n": "final" }),
+    )));
     match recv(&rx).event {
         Event::Error(error) => assert!(error.message.contains("consecutive tool-driven turns")),
         other => panic!("expected the iteration-cap error, got {other:?}"),
@@ -753,10 +750,10 @@ fn rig_session_drops_unsolicited_tool_result_without_running_a_turn() {
     // No tool call was ever requested, so this result is unsolicited: it
     // must not start a turn (which would append an orphan tool-result
     // message to rig_history) and must not advance the loop guards.
-    let _ = tx.send(Command::ToolCallResult(ToolCallResult {
-        call_id: ToolCallId("never-requested".to_string()),
-        output: serde_json::json!({ "ok": true }),
-    }));
+    let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
+        ToolCallId("never-requested".to_string()),
+        serde_json::json!({ "ok": true }),
+    )));
     assert!(
         rx.recv_timeout(std::time::Duration::from_millis(200))
             .is_err(),
@@ -884,10 +881,7 @@ fn fold_batched_tool_result_holds_non_last_results_and_leaves_the_last_for_the_c
     // First of three: two more calls are still outstanding, so the result
     // is folded directly into history (in arrival order) and no turn runs.
     pending.remove(&call_a);
-    let result_a = ToolCallResult {
-        call_id: call_a.clone(),
-        output: serde_json::json!({ "contents": "a" }),
-    };
+    let result_a = ToolCallResult::new(call_a.clone(), serde_json::json!({ "contents": "a" }));
     assert_eq!(
         fold_batched_tool_result(&mut history, &pending, &result_a),
         BatchStep::Continue
@@ -896,10 +890,7 @@ fn fold_batched_tool_result_holds_non_last_results_and_leaves_the_last_for_the_c
 
     // Second of three: same story.
     pending.remove(&call_b);
-    let result_b = ToolCallResult {
-        call_id: call_b.clone(),
-        output: serde_json::json!({ "contents": "b" }),
-    };
+    let result_b = ToolCallResult::new(call_b.clone(), serde_json::json!({ "contents": "b" }));
     assert_eq!(
         fold_batched_tool_result(&mut history, &pending, &result_b),
         BatchStep::Continue
@@ -912,10 +903,7 @@ fn fold_batched_tool_result_holds_non_last_results_and_leaves_the_last_for_the_c
     // (`run_cancellable_turn`/`complete_rig_turn`) appends it right before
     // the resulting assistant message.
     pending.remove(&call_c);
-    let result_c = ToolCallResult {
-        call_id: call_c.clone(),
-        output: serde_json::json!({ "contents": "c" }),
-    };
+    let result_c = ToolCallResult::new(call_c.clone(), serde_json::json!({ "contents": "c" }));
     assert_eq!(
         fold_batched_tool_result(&mut history, &pending, &result_c),
         BatchStep::RunTurn
@@ -968,10 +956,10 @@ fn rig_session_batches_parallel_tool_results_into_one_follow_up_completion() {
     // Deliver all but the batch's last result: no completion may run while
     // any of the batch is still outstanding.
     for call_id in &call_ids[..call_ids.len() - 1] {
-        let _ = tx.send(Command::ToolCallResult(ToolCallResult {
-            call_id: call_id.clone(),
-            output: serde_json::json!({ "ok": true }),
-        }));
+        let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
+            call_id.clone(),
+            serde_json::json!({ "ok": true }),
+        )));
         assert!(
             rx.recv_timeout(std::time::Duration::from_millis(200))
                 .is_err(),
@@ -981,10 +969,10 @@ fn rig_session_batches_parallel_tool_results_into_one_follow_up_completion() {
 
     // The batch's last result completes it: exactly one follow-up
     // completion fires.
-    let _ = tx.send(Command::ToolCallResult(ToolCallResult {
-        call_id: call_ids[call_ids.len() - 1].clone(),
-        output: serde_json::json!({ "ok": true }),
-    }));
+    let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
+        call_ids[call_ids.len() - 1].clone(),
+        serde_json::json!({ "ok": true }),
+    )));
     assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
     assert!(matches!(
         recv(&rx).event,
@@ -1029,10 +1017,10 @@ fn rig_session_cancel_mid_batch_drops_remaining_results_and_recovers() {
     }
 
     // Only the first of the batch resolves before the user cancels.
-    let _ = tx.send(Command::ToolCallResult(ToolCallResult {
-        call_id: call_ids[0].clone(),
-        output: serde_json::json!({ "ok": true }),
-    }));
+    let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
+        call_ids[0].clone(),
+        serde_json::json!({ "ok": true }),
+    )));
     assert!(
         rx.recv_timeout(std::time::Duration::from_millis(200))
             .is_err(),
@@ -1066,10 +1054,10 @@ fn rig_session_cancel_mid_batch_drops_remaining_results_and_recovers() {
     // The real results for the cancelled calls arrive late: accepted and
     // dropped silently — no turn restart, nothing observable on the wire.
     for call_id in remaining {
-        let _ = tx.send(Command::ToolCallResult(ToolCallResult {
-            call_id: call_id.clone(),
-            output: serde_json::json!({ "ok": true }),
-        }));
+        let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
+            call_id.clone(),
+            serde_json::json!({ "ok": true }),
+        )));
     }
     assert!(
         rx.recv_timeout(std::time::Duration::from_millis(200))
@@ -1149,10 +1137,10 @@ fn rig_session_iteration_cap_counts_one_tool_turn_per_batch() {
             } else {
                 serde_json::json!({ "index": index })
             };
-            let _ = tx.send(Command::ToolCallResult(ToolCallResult {
-                call_id: call_id.clone(),
+            let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
+                call_id.clone(),
                 output,
-            }));
+            )));
             if is_last {
                 assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
             } else {
@@ -1176,10 +1164,10 @@ fn rig_session_iteration_cap_counts_one_tool_turn_per_batch() {
     }
     for (index, call_id) in call_ids.iter().enumerate() {
         let is_last = index == call_ids.len() - 1;
-        let _ = tx.send(Command::ToolCallResult(ToolCallResult {
-            call_id: call_id.clone(),
-            output: serde_json::json!({ "index": index }),
-        }));
+        let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
+            call_id.clone(),
+            serde_json::json!({ "index": index }),
+        )));
         if !is_last {
             assert!(
                 rx.recv_timeout(std::time::Duration::from_millis(200))
