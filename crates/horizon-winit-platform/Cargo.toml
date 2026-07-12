@@ -55,5 +55,12 @@ winit = "0.30"
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = { version = "0.19", default-features = false }
 
+# Test-only: constructs `gpui::RunnableVariant` (`async_task::Runnable<RunnableMeta>`)
+# directly in dispatcher.rs's tests, without spinning up a full `gpui::App`.
+# Already in the lock file transitively (gpui/scheduler use it) — this just
+# names the exact version we compile against.
+[dev-dependencies]
+async-task = "4.7"
+
 [lints.clippy]
 all = { level = "warn", priority = -1 }

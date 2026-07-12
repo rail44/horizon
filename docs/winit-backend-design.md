@@ -360,6 +360,73 @@ observed running.
 - **Multi-monitor.** `display.rs` is a single fixed-size stub, same as the
   spike. Real per-monitor bounds/DPI is out of scope (see below).
 
+## Known failure mode: lost main-thread wakeup / configure stall (fixed)
+
+Symptom (owner's daily driver, captive-reproducible on GNOME/Wayland):
+Horizon freezes on its last-painted frame forever — most visibly stuck on
+"Restoring session..." — while the app model keeps progressing (the control
+plane still answers, background threads keep running); only the window
+stops repainting. `WAYLAND_DEBUG=1` traces showed the content surface
+committing exactly once, ever, then going completely silent (client and
+compositor) for the rest of the process's life, with no correlation to
+resize/focus events that followed.
+
+Root cause: `PlatformWindow::draw` (`window.rs`) performs the *actual* GPU
+present (`gpui_wgpu::WgpuRenderer::draw`'s internal `frame.present()`,
+which issues the real `wl_surface.commit()`), and only *afterward* does
+gpui call `completed_frame()` — which used to forward to
+`winit::Window::pre_present_notify()`. On Wayland that arms a
+`wl_surface.frame` request (per the protocol, "the frame request takes
+effect on the next `wl_surface.commit`"), but by the time it fired the
+matching commit had already gone out *without* it attached — so the
+request sat queued, orphaned, associated with no commit the compositor
+would ever see. winit's own Wayland backend refuses to deliver any further
+`WindowEvent::RedrawRequested` while a frame-callback request it sent is
+still outstanding (`frame_callback_state == Requested`, gating
+`RedrawRequested` in `winit`'s `wayland/event_loop/mod.rs`) — so once one
+request got orphaned, no future redraw could ever be requested again,
+including the one a resize's `WindowEvent::Resized` handler asks for via
+`request_redraw()`. This reproduced on **every** run under a plain
+`timeout 12 ./target/debug/horizon` (isolated env, real desktop) — not
+merely "sometimes" — because it happens on literally the first frame's
+`completed_frame()` call; the intermittent *user-visible* symptom the
+owner saw was just whether some other legitimate redraw happened to sneak
+past before the orphaned request's turn came up.
+
+Fix: `WinitPlatformWindow::completed_frame()` no longer calls
+`pre_present_notify()` at all — it's a deliberate no-op. Pacing doesn't
+regress: `WgpuSurfaceConfig::preferred_present_mode` is `None`, so
+`gpui_wgpu` configures the surface Fifo, and the *blocking*
+`get_current_texture`/`present` calls inside `draw` already provide real
+vsync pacing while focused (this was already documented — see
+`app_handler.rs`'s module doc); the ~30fps inactive-window cap is gpui's
+own wall-clock `min_frame_interval` throttle, independent of any platform
+hook. The invariant this fix enforces: **every `configure`/resize
+deterministically leads to a fresh commit** — `Resized`/`ScaleFactorChanged`
+call `request_redraw()`, and since winit's Wayland gate can no longer get
+stuck (it never arms a frame-callback request to begin with), that
+`RedrawRequested` is guaranteed to be delivered.
+
+This is a Wayland protocol-ordering bug, not a dispatcher-level lost
+wakeup — `dispatcher.rs`'s `dispatch_on_main_thread` (`EventLoopProxy`-based)
+was audited and has a regression test
+(`dispatcher::tests::concurrent_main_thread_posts_all_get_processed`)
+confirming concurrent background-thread posts are never dropped. Why the existing headless checks (`scripts/check-gpui-terminal.sh`,
+`scripts/check-workspace-restore.sh`) never caught this, confirmed by
+running both against the pre-fix binary (still pass, 3/3 and 1/1):
+`HORIZON_GPUI_DUMP` (`src/terminal/session.rs`) writes its frame dump
+straight from the terminal session model on every session update,
+entirely independent of the `gpui`/`gpui_wgpu`/winit paint pipeline this
+bug lives in — so both scripts fully verify terminal *content* correctness
+without the GPU ever actually presenting a single frame. Neither drives a
+real resize either. There's no cheap hook to extend here: the gap is
+structural (the taps sit below the whole rendering pipeline, by design —
+they need to work headless in CI-less environments with no GPU/compositor
+guarantees), so closing it needs a *different* kind of check, which is
+what this fix's own validation added instead: a real-desktop, real-compositor
+repeated-run protocol smoke (see the review request / worker report for
+this item's exact numbers).
+
 ## Out of scope
 
 Multi-window, screen capture, drag&drop file opening, Windows menu-bar
