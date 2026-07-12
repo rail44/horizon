@@ -157,6 +157,25 @@ impl AgentFrame {
         self.pending_approval_call_ids().into_iter().next()
     }
 
+    /// [`Self::pending_approval_call_ids`], excluding any request whose
+    /// own turn has since ended -- see
+    /// [`actionable_pending_approval_call_ids_in`]'s doc comment. This is
+    /// the version any *dispatch* path (the approve-tool-call/
+    /// deny-tool-call palette commands, the command-availability gate
+    /// deciding whether to offer them at all) must use, never the plain
+    /// [`Self::pending_approval_call_ids`].
+    pub fn actionable_pending_approval_call_ids(&self) -> Vec<ToolCallId> {
+        actionable_pending_approval_call_ids_in(&self.items)
+    }
+
+    /// The next *actionable* tool-call approval to act on. See
+    /// [`Self::actionable_pending_approval_call_ids`].
+    pub fn actionable_pending_approval_call_id(&self) -> Option<ToolCallId> {
+        self.actionable_pending_approval_call_ids()
+            .into_iter()
+            .next()
+    }
+
     /// The most recent `ToolCallRequested` item for `call_id`, if any. Used
     /// to recover a pending tool call's `tool_id`/`input` at approval time,
     /// since the approve/deny UI only carries the `call_id` forward.
@@ -229,6 +248,50 @@ pub fn pending_approval_call_ids_in(items: &[AgentFrameItem]) -> Vec<ToolCallId>
             AgentFrameItem::ToolCallFinished(result) => {
                 pending.retain(|call_id| call_id != &result.call_id);
             }
+            _ => {}
+        }
+    }
+
+    pending
+}
+
+/// [`pending_approval_call_ids_in`], with one more rule: a `TurnEnded`
+/// clears every request still outstanding at that point, since none of
+/// them can ever resolve normally now (root-caused 2026-07-13 -- see
+/// `docs/agent-output-ui-amendment.md`'s post-review note). An
+/// `ApprovalRequested` whose own turn ended without a matching
+/// `ToolCallFinished` is a *ghost*: mid-turn interjection (sending
+/// another message while an earlier tool call's approval is still
+/// unresolved -- next-turn delivery is deliberate even mid-flight,
+/// decision 6) can leave one behind, and the session loop that owned its
+/// approval gate has since moved on to a different turn entirely, so
+/// there is no live daemon-side gate left to answer a decision for it.
+///
+/// [`pending_approval_call_ids_in`] itself is deliberately left alone --
+/// `turns::is_approval_still_pending` (the completed-turn transcript's
+/// defensive "still shows a dangling approval box" case) needs the
+/// *unscoped* reading precisely because it's asking about a request
+/// within its own already-ended turn's item slice, where the turn's own
+/// closing `TurnEnded` is the last item; scoping would make that check
+/// always report "not pending" and silently swallow the one case it
+/// exists to catch. This function is for every other caller: anything
+/// that dispatches an approve/deny by picking the oldest pending
+/// call_id (the palette's approve-tool-call/deny-tool-call commands) or
+/// decides whether to offer them at all -- those must never target or
+/// advertise a ghost, since doing so blocks every later dispatch behind
+/// a call that can no longer resolve (the "one approval worked, then
+/// everything looked permanently stuck" report).
+pub fn actionable_pending_approval_call_ids_in(items: &[AgentFrameItem]) -> Vec<ToolCallId> {
+    let mut pending = Vec::<ToolCallId>::new();
+    for item in items {
+        match item {
+            AgentFrameItem::ApprovalRequested(request) if !pending.contains(&request.call_id) => {
+                pending.push(request.call_id.clone());
+            }
+            AgentFrameItem::ToolCallFinished(result) => {
+                pending.retain(|call_id| call_id != &result.call_id);
+            }
+            AgentFrameItem::TurnEnded { .. } => pending.clear(),
             _ => {}
         }
     }
@@ -609,6 +672,9 @@ mod field_scoped_reads_tests {
     //! field's signal can compute the same answer without the other field.
     //! `AgentFrame`'s own methods already delegate to these, so this pins
     //! the extraction didn't change behavior.
+    //! `actionable_pending_approval_call_ids_in` (2026-07-13) is the
+    //! ghost-excluding sibling of `pending_approval_call_ids_in` -- see
+    //! its own doc comment for why the two must stay distinct.
     use super::*;
 
     fn approval_requested(call_id: &str) -> AgentFrameItem {
@@ -623,6 +689,80 @@ mod field_scoped_reads_tests {
             ToolCallId(call_id.to_string()),
             serde_json::json!({}),
         ))
+    }
+
+    fn turn_ended() -> AgentFrameItem {
+        AgentFrameItem::TurnEnded {
+            reason: TurnEndReason::Completed,
+            model: None,
+            elapsed: Duration::from_secs(1),
+        }
+    }
+
+    #[test]
+    fn actionable_pending_approval_call_ids_in_excludes_a_ghost_ordered_before_a_live_request() {
+        // Root-caused 2026-07-13: a mid-turn interjection can leave an
+        // earlier approval unresolved when its own turn ends -- that
+        // ghost must never sit ahead of the genuinely live one in
+        // dispatch order.
+        let items = vec![
+            approval_requested("ghost"),
+            turn_ended(),
+            approval_requested("live"),
+        ];
+        assert_eq!(
+            actionable_pending_approval_call_ids_in(&items),
+            vec![ToolCallId("live".to_string())]
+        );
+        // The unscoped reading, by contrast, still (correctly, for its
+        // own different purpose) reports both -- `is_approval_still_
+        // pending`'s defensive completed-turn check relies on exactly
+        // this to notice a request that never resolved before its own
+        // turn ended.
+        assert_eq!(
+            pending_approval_call_ids_in(&items),
+            vec![
+                ToolCallId("ghost".to_string()),
+                ToolCallId("live".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn actionable_pending_approval_call_ids_in_is_empty_once_every_pending_turn_has_ended() {
+        let items = vec![
+            approval_requested("a"),
+            approval_requested("b"),
+            turn_ended(),
+        ];
+        assert_eq!(actionable_pending_approval_call_ids_in(&items), Vec::new());
+    }
+
+    #[test]
+    fn actionable_pending_approval_call_ids_in_matches_the_plain_reading_within_one_open_turn() {
+        // No `TurnEnded` in sight yet: both readings agree, so a normal,
+        // still-in-flight approval dispatches exactly as before.
+        let items = vec![approval_requested("a"), approval_requested("b")];
+        assert_eq!(
+            actionable_pending_approval_call_ids_in(&items),
+            pending_approval_call_ids_in(&items)
+        );
+    }
+
+    #[test]
+    fn actionable_pending_approval_call_ids_in_still_resolves_normally_within_its_own_turn() {
+        // A request resolved (approved/denied) before its own turn ends
+        // is not a ghost -- it should never appear at all, scoped or not.
+        let items = vec![
+            approval_requested("a"),
+            tool_call_finished("a"),
+            turn_ended(),
+            approval_requested("b"),
+        ];
+        assert_eq!(
+            actionable_pending_approval_call_ids_in(&items),
+            vec![ToolCallId("b".to_string())]
+        );
     }
 
     #[test]

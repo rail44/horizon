@@ -22,9 +22,7 @@ use gpui_component::tag::Tag;
 use gpui_component::text::TextView;
 use gpui_component::Sizable as _;
 use horizon_agent::contract::{MessageRole, SessionState, ToolCallId};
-use horizon_agent::frame::{
-    pending_approval_call_ids_in, state_indicates_turn_in_flight, AgentFrameItem,
-};
+use horizon_agent::frame::{state_indicates_turn_in_flight, AgentFrameItem};
 
 use super::session::AgentSession;
 use super::turns;
@@ -266,8 +264,20 @@ impl AgentView {
                 Some(block("tool result", theme::success(), clipped))
             }
             AgentFrameItem::ApprovalRequested(request) => {
-                let pending = pending_approval_call_ids_in(&self.session.read(cx).frame.items)
-                    .contains(&request.call_id);
+                // The actionable (ghost-excluding) reading: this arm only
+                // renders at all for the defensive completed-turn-with-a-
+                // dangling-approval case (`turns::is_approval_still_pending`,
+                // which deliberately keeps the *unscoped* reading for its own
+                // purpose -- see that function's doc comment). By the time a
+                // request's own turn has ended without resolving, it's a
+                // ghost with no live daemon-side gate left to answer a
+                // decision (`docs/agent-output-ui-amendment.md`'s post-review
+                // note) -- so buttons never show here; the box is purely
+                // informational.
+                let pending = horizon_agent::frame::actionable_pending_approval_call_ids_in(
+                    &self.session.read(cx).frame.items,
+                )
+                .contains(&request.call_id);
                 let call_id = request.call_id.clone();
                 let deny_id = request.call_id.clone();
                 Some(
@@ -1007,7 +1017,20 @@ impl AgentView {
         let text = tool_call_line_text(call);
         let waiting = call.approval == turns::ApprovalState::Waiting;
 
+        // Gives the row itself a stable, call_id-scoped identity -- the
+        // same convention `render_expandable_tool_call_row`'s header
+        // already uses (`.id(row_id)`), which this row lacked: only its
+        // Approve/Deny `Button`s carried an explicit id, the row wrapping
+        // them didn't. Owner feedback 2026-07-13 (round 4): the inline
+        // buttons never registered a click at all, even for the live,
+        // correctly-`Waiting` call -- an unstable/implicit-identity
+        // ancestor in a row list that re-renders every second (the
+        // elapsed-seconds ticker) is the most concrete, evidence-aligned
+        // candidate found; this makes the row's identity as explicit and
+        // stable as its buttons' own.
+        let row_id = ElementId::from(format!("running-row-{}", call.call_id.0));
         let mut row = div()
+            .id(row_id)
             .flex()
             .flex_row()
             .items_center()

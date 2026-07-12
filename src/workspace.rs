@@ -1269,7 +1269,7 @@ impl WorkspaceShell {
             CommandId::OpenSessionManager => self.open_session_manager(window, cx),
             CommandId::ApproveToolCall => {
                 if let Some(session) = self.active_agent_session() {
-                    let pending = horizon_agent::frame::pending_approval_call_ids_in(
+                    let pending = horizon_agent::frame::actionable_pending_approval_call_ids_in(
                         &session.read(cx).frame.items,
                     );
                     if let Some(call_id) = pending.first() {
@@ -1279,7 +1279,7 @@ impl WorkspaceShell {
             }
             CommandId::DenyToolCall => {
                 if let Some(session) = self.active_agent_session() {
-                    let pending = horizon_agent::frame::pending_approval_call_ids_in(
+                    let pending = horizon_agent::frame::actionable_pending_approval_call_ids_in(
                         &session.read(cx).frame.items,
                     );
                     if let Some(call_id) = pending.first() {
@@ -1557,9 +1557,10 @@ impl WorkspaceShell {
             .active_agent_session()
             .map(|session| {
                 let session = session.read(cx);
-                let pending =
-                    !horizon_agent::frame::pending_approval_call_ids_in(&session.frame.items)
-                        .is_empty();
+                let pending = !horizon_agent::frame::actionable_pending_approval_call_ids_in(
+                    &session.frame.items,
+                )
+                .is_empty();
                 let in_flight = matches!(
                     session.frame.state,
                     Some(horizon_agent::contract::SessionState::Running)

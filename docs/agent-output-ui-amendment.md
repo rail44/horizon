@@ -350,3 +350,78 @@ deviation rather than asking for a mock update):
   `Debug` dump) as a defensive measure, since it's still — in principle
   — reachable through the one remaining legitimate outside-any-span case
   (items preceding a resumed history's first user message).
+- **Ghost approvals excluded from the actionable dispatch queue (round
+  4: "the current running turn's approval can't be approved or denied —
+  it's just stuck").** Investigated from the persisted event log of a
+  real, then-live session: a mid-turn interjection (round 3's own
+  fix target) can leave an earlier tool call's `ApprovalRequested`
+  genuinely unresolved when *its own* turn ends — a "ghost" with no
+  live daemon-side gate left to answer a decision for it (the session
+  loop that owned that approval moved on to a later turn's own request
+  entirely). `AgentFrame::pending_approval_call_ids`/
+  `pending_approval_call_ids_in` (oldest-request-first, no turn-boundary
+  awareness) would still return a ghost at the front of the queue
+  forever, so the palette's approve-tool-call/deny-tool-call commands
+  (`pending.first()`) kept dispatching decisions at a call that could
+  never resolve — "one approval worked, then everything looked stuck"
+  is exactly what silently targeting a ghost looks like from the
+  outside. Fixed with a new sibling reading,
+  `actionable_pending_approval_call_ids_in` (`crates/horizon-agent/src/
+  frame.rs`): identical fold, plus one rule — a `TurnEnded` clears every
+  request still outstanding at that point. The *original* function is
+  deliberately left untouched and still used for
+  `turns::is_approval_still_pending` (the completed-turn transcript's
+  own defensive "still shows a dangling approval box" case), which
+  needs the unscoped reading precisely because it's asking about a
+  request within its own already-ended turn's slice. Every dispatch/
+  gating call site — the two palette commands, the command-availability
+  gate, and the standalone approval box's button-visibility check — now
+  reads the actionable version instead.
+  - **What actually emitted the `TurnEnded(Cancelled)` behind the ghost,
+    given the owner never clicked a cancel/stop control**:
+    `horizon-sessiond`'s own `resume_persisted_sessions` (crash/restart
+    recovery, `crates/horizon-sessiond/src/session.rs`) synthesizes
+    exactly this — drains every outstanding tool call as cancelled, then
+    a `TurnEnded(Cancelled)` — for any session found `is_turn_in_flight()`
+    (which includes `WaitingForApproval`) when sessiond starts back up.
+    This runs automatically on every sessiond respawn, including
+    `Reload Session Runtime` after a rebuild — exactly the iterate/
+    rebuild/reload loop this very review cycle was running. No explicit
+    cancel needed at all; it's correct, intentional cleanup on its own
+    (verified: it does drain the *entire* outstanding set, not just
+    part of it) — the bug was purely that the frame's own pending-queue
+    reading never learned to treat what it left behind as inert. No
+    daemon-side change was needed once that was understood.
+  - Tests (`crates/horizon-agent/src/frame.rs`): a ghost ordered before
+    a live request is excluded and the live one dispatches first; every
+    pending call in an ended turn empties the queue; the scoped and
+    unscoped readings agree within one still-open turn (no regression
+    to the common case); a request resolved before its own turn ends is
+    never mistaken for a ghost.
+- **Inline Approve/Deny buttons (round 4).** Reported alongside the
+  above: the row-level buttons (round 3) never dispatched a click at
+  all, even for a request confirmed live and correctly classified
+  `Waiting` — distinct from the ghost-queue issue, since a row's own
+  button targets its exact `call_id` directly and never goes through
+  the oldest-first queue. Static review (id uniqueness, closure
+  capture, nesting) found the button construction sound and structurally
+  close to the previously-working standalone box's; physical click-level
+  reproduction was attempted (an isolated headless instance driving a
+  real bash-approval `Waiting` row) but had to be abandoned before a
+  verdict — the test environment's inherited `WAYLAND_DISPLAY` meant a
+  headless GUI instance risked opening on the owner's real desktop
+  instead of the intended offscreen `Xvfb` display, so it was killed
+  immediately rather than risked further (no window was confirmed to
+  have reached the real screen; the owner's own session and data were
+  unaffected throughout). Applied the most concrete, evidence-aligned
+  fix identified without full verification: the row itself (unlike
+  `render_expandable_tool_call_row`'s header, which already carries
+  `.id(row_id)`) had no explicit element id of its own — only its
+  buttons did. Gave it one (`running-row-{call_id}`), matching the
+  codebase's own established convention for interactive rows. Flagged
+  here as unverified at the click level; if the owner's next rebuild
+  still shows the buttons inert, that rules this fix out and the next
+  session should pursue physical reproduction via a proper isolated
+  X11 `Xvfb` launch with `WAYLAND_DISPLAY` explicitly unset (not just
+  `DISPLAY` set), or a `gpui::TestAppContext`-based click-simulation
+  test (no precedent for one exists yet in this codebase).
