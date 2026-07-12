@@ -374,7 +374,7 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     against the active pane's session id at terminate time. Separate from the
     bash-approval wedge (backlog: the registry panic-safety fix). Recorded
     2026-07-09.
-27. **[RESOLVED PENDING-COMMIT] `horizon-sessiond` respawn/replay e2e tests
+27. **[RESOLVED 5c3f725] `horizon-sessiond` respawn/replay e2e tests
     flake under the full parallel nextest run** — Post-sessiond-merge names:
     `killed_sessiond_respawns_and_replays_transcript_with_open_turn_cancelled`
     and `drained_sessiond_respawns_and_preserves_a_completed_session`
@@ -402,7 +402,7 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     test-group (`.config/nextest.toml`) serializing the whole
     `horizon-sessiond::e2e` binary (`max-threads = 1`) as belt-and-braces
     against self-contention, given the repeated merge-tax history.
-28. **[PARTIALLY RESOLVED PENDING-COMMIT] `horizon-sessiond` socket e2e
+28. **[PARTIALLY RESOLVED 5c3f725] `horizon-sessiond` socket e2e
     flakes under the full parallel nextest run** — `terminal_create_diff_
     reconnect_attach_and_shutdown_over_the_real_socket` (`crates/
     horizon-sessiond/tests/e2e.rs`) spawns a real PTY backed by a real
