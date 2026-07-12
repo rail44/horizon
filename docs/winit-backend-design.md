@@ -870,6 +870,124 @@ that stage's fix, so the fallback never fires for Enter at all —
 `ImeCommitGuard` is still the only mechanism suppressing this specific
 phantom `KeyDownEvent`.
 
+### Idle CPU: the redraw loop never actually stopped (fixed 2026-07-13)
+
+Symptom (owner-reported, matching an independent dogfooding complaint
+"horizon using a lot of CPU"): an isolated, completely idle instance (no
+interaction, one fresh terminal pane) burned meaningfully more CPU than a
+truly idle GUI app should — measured climbing over the first ~20s of a
+`ps -o pcpu` sample series on the reporting environment.
+
+**Instrumented first, per the task brief, rather than guessing.** Added a
+permanent per-second counter (`FrameLoopStats`, `app_handler.rs`) tracing
+how many `WindowEvent::RedrawRequested` cycles actually ran, via the
+existing `HORIZON_INPUT_TRACE` sink. On this investigation's own test host
+the counter immediately showed the real mechanism: a **flat, rock-steady
+60fps** `RedrawRequested` rate — not accumulating, not multiplying, just
+never stopping — for the entire duration of an idle run (60+ seconds
+observed). `ps -o pcpu`'s own cumulative-average computation naturally
+*ramps toward* a new steady state over its first several samples after a
+process jumps from near-zero to sustained load at launch, which is
+consistent with — though not conclusively identical to — the "climbing"
+shape reported; a companion `/proc/[pid]/stat`-delta measurement (true
+per-interval CPU, immune to that ramp artifact) showed a flat ~14–15% the
+entire time on this host, not a climb. Either way, the redraw-loop finding
+explains sustained elevated idle CPU regardless of which curve shape a
+given `ps` sampling protocol shows for it.
+
+**Root cause.** `app_handler.rs`'s `WindowEvent::RedrawRequested` handler
+unconditionally called `inner.window.request_redraw()` again at the end of
+every cycle — a free-running loop "matching gpui_web's rAF pattern" per
+the (now outdated) module doc, intentional at the time. Two compounding
+effects made this expensive rather than merely wasteful-but-cheap:
+
+1. gpui's own `on_request_frame` closure (`gpui/src/window.rs`, the
+   pinned checkout) only skips a frame's real GPU cost when
+   `!request_frame_options.require_presentation` *and* nothing else marks
+   `needs_present` — but our handler always passed
+   `require_presentation: true`, unconditionally forcing a real
+   `window.present()` call every single cycle regardless of
+   `invalidator.is_dirty()`. A present at native display refresh rate,
+   forever, is not free even when the frame content never changes.
+2. Nothing coalesced the request: winit's `request_redraw`/
+   `RedrawRequested` contract gives platforms no "is there more to draw"
+   signal back from gpui's callback (unlike, say, a real Wayland
+   `wl_surface.frame` protocol callback, which only fires again after an
+   actual commit — see `gpui_linux`'s wayland backend, which relies on
+   exactly that self-terminating chain and passes
+   `require_presentation: false` via `RequestFrameOptions::default()`).
+   Blindly re-requesting is the only *safe* default with no such signal,
+   which is presumably why gpui_web does the same thing — but a browser
+   tab's `requestAnimationFrame` gets throttled/paused by the browser
+   runtime itself when nothing is visibly changing, a mechanism native
+   winit has no equivalent of. Porting the pattern without that safety
+   net is what turned "some CPU" into "a continuous 60fps present loop,
+   forever, even fully idle."
+
+**Fix: coalesce with an explicit dirty flag, consumed once per
+iteration.** `WinitWindowInner::needs_redraw` (`window.rs`, a
+`Cell<bool>`) replaces every direct `window.request_redraw()` call outside
+the one-time bootstrap in `resumed()`. Every `WindowEvent` that could make
+something dirty (`Resized`, `ScaleFactorChanged`, `Focused`,
+`KeyboardInput`, `Ime`, `CursorMoved`, `CursorLeft`, `ModifiersChanged`,
+`MouseInput`, `MouseWheel`) marks it via `mark_needs_redraw()` instead of
+requesting a redraw directly; `CursorMoved`/`CursorLeft`/`ModifiersChanged`
+gained an *explicit* mark for the first time (previously they relied
+entirely on the free-running loop eventually picking up any resulting
+hover/cursor-icon change — a reliance that no longer holds). `user_event`'s
+`Wake` case — posted by `WinitDispatcher::dispatch_on_main_thread`/
+`dispatch_after` for any gpui main-thread work, which covers everything a
+raw `WindowEvent` can't see: animation timers, a background thread's
+`cx.notify()` reaching the main thread through `Entity::update` (the
+terminal session's own async frame-update loop is exactly this case) —
+conservatively marks *every* window dirty, since there's no way to tell
+which one (if any) actually needs it from here. `about_to_wait` is the
+sole remaining place that calls `winit::window::Window::request_redraw`:
+once per event-loop iteration, only for windows whose flag is set,
+consuming it (`Cell::take`) as it goes — so a burst of several events in
+one iteration still yields exactly one redraw request, and a genuinely
+idle window (nothing marks the flag) means `about_to_wait` requests
+nothing at all. `RedrawRequested` itself no longer re-arms anything.
+
+**Result.** The same 60s idle measurement now shows near-0% CPU
+(`/proc/[pid]/stat`-delta reading 0.0% on essentially every sample; `ps
+-o pcpu` decaying from a few percent of pure launch-cost dilution down
+toward ~1%) and the frame-loop counter shows single-digit total redraws
+over 90+ seconds of idle, instead of thousands. Verified interaction
+still repaints promptly: typed characters land in the terminal frame
+immediately (checked via `HORIZON_GPUI_DUMP`), and mouse movement alone
+(no keyboard/resize activity) still triggers redraws via the new
+`CursorMoved` mark.
+
+**No return of the configure stall.** `completed_frame()` — the
+Wayland-protocol-specific mechanism the original stall lived in (arming
+`wl_surface.frame` via `pre_present_notify`, since fixed by making it a
+no-op) — is untouched by this change entirely; this fix only touches
+*when* `request_redraw` gets called, never `completed_frame`. The
+"every configure/resize deterministically leads to a fresh commit"
+invariant the stall fix required still holds: `Resized`/
+`ScaleFactorChanged` still unconditionally mark the window dirty, and
+`about_to_wait` runs immediately after every batch of `WindowEvent`s, so a
+resize still reliably produces a `RedrawRequested` on the very next
+iteration. Direct empirical re-verification of the original 15-run
+protocol wasn't possible as originally shaped: it depended on
+`WAYLAND_DEBUG=1` commit *volume* (hundreds/run) as the "still alive"
+signal, which assumed the old free-running ~60fps loop — under the fix,
+few-total-commits is now the *correct*, expected idle behavior, so
+volume alone can't distinguish "healthy and mostly idle" from "stalled".
+It's also not runnable at all as originally scripted: native Wayland
+surfaces have no X11 window ID, so there's no `xdotool` handle to script
+a resize against without touching the owner's live compositor. Instead,
+verified the specific invariant directly — `WindowEvent::Resized`
+handling is identical code on every backend winit supports (the platform
+that produced the event doesn't change how `app_handler.rs` reacts to
+it) — via 5 runs on the X11 backend under an isolated `Xvfb` display,
+using this fix's own frame-loop counter as the "did a redraw actually
+happen" signal in place of `WAYLAND_DEBUG` commits: 3 resizes each
+followed by a check that the redraw counter advanced, then one more
+unrelated key input to confirm the window was still alive and repainting
+afterward (not stuck) — 5/5 passed.
+
 ### Exit criteria for flipping the default (historical, superseded)
 
 Superseded 2026-07-12 by direct owner dogfooding approval (see the top of
