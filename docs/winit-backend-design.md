@@ -988,6 +988,141 @@ followed by a check that the redraw counter advanced, then one more
 unrelated key input to confirm the window was still alive and repainting
 afterward (not stuck) — 5/5 passed.
 
+### Composer IME double-insert: `handle_ime` clearing the marked range before `Commit` (fixed 2026-07-13)
+
+Symptom (owner dogfooding report): confirming a Japanese IME composition
+in the **agent pane's composer** inserted the composed string **twice**.
+The terminal did not double for the same action — the recent text-input
+fallback and dedup work (this section's earlier "Keyboard input pipeline"
+entry) had already been verified working there.
+
+**Root cause.** `handle_ime`'s `Ime::Preedit` arm called
+`input_handler.unmark_text()` whenever winit reported an *empty* preedit
+string. winit consistently emits an empty `Preedit` immediately before
+the `Commit` that finalizes a composition — already documented, and
+reproduced directly, in `docs/research/winit-backend-spike.md` §16 Q2
+("the order `Preedit("", None)` -> `Commit(text)` was consistent" across
+every log the leg-2 spike captured). Both `EntityInputHandler`
+implementations this crate drives resolve `replace_text_in_range`'s
+`None` range to the *current marked range* if one is set, falling back to
+the plain text-cursor position only when nothing is marked — confirmed by
+reading each implementation directly:
+
+- **gpui-component's `InputState`** (behind the agent composer; pinned
+  checkout `crates/ui/src/input/state.rs`): `replace_text_in_range`'s
+  range resolves to `range_utf16` if given, else `self.ime_marked_range`
+  if set, else `self.selected_range`. `unmark_text` is a *trivial* clear
+  (`self.ime_marked_range = None;`) — it does **not** touch `self.text`,
+  which already has the preedit content inserted from the earlier
+  `replace_and_mark_text_in_range` call. So: unmark (clears
+  `ime_marked_range`, leaves the already-inserted preedit text in the
+  buffer) → `Commit`'s `replace_text_in_range(None, text)` falls through
+  to `self.selected_range` (sitting right after that still-present
+  preedit text) instead of the marked range → the same text gets inserted
+  a second time, right next to the first.
+- **This crate's own terminal** (`src/terminal/mod.rs`) never has this
+  *symptom* — its `ime_marked_text` is a client-side-only overlay string,
+  never actually written into the PTY buffer during `Preedit`, so there's
+  no "already-present text" for a duplicate insert to land next to. But
+  the same premature-unmark ordering *was* silently miscomputing
+  `was_composing` there too: `replace_text_in_range`'s
+  `self.ime_marked_text.take().is_some()` read `false` for a genuine
+  composition commit (already cleared by the empty-`Preedit`'s
+  `unmark_text` moments earlier), when it should read `true`. This
+  happened to stay harmless only because `KeyTextDedup`'s dedup lookup
+  never matches a multi-character composed string against a recorded
+  single-keypress send — but it also meant `ImeCommitGuard::note_commit`
+  was being armed with the wrong value on every real composition commit
+  (see "Verification" below for why this needs confirming, not assuming,
+  post-fix).
+- **gpui_linux's own reference implementation** (pinned checkout,
+  `crates/gpui_linux/src/linux/wayland/window.rs::handle_ime`) confirms
+  the fix direction: its `ImeInput::InsertText` arm — the wayland client's
+  `CommitString` handler routes multi-character commits here — is exactly
+  `input_handler.replace_text_in_range(None, &text)`, nothing else. It
+  never calls `unmark_text` from a commit path at all.
+
+**Fix.** `handle_ime`'s empty-`Preedit` arm no longer calls
+`unmark_text()`. `Commit`'s own `replace_text_in_range` already clears
+the marked range as part of doing the replacement in both
+implementations (gpui-component: `self.ime_marked_range.take();` at the
+end of `replace_text_in_range`; the terminal:
+`self.ime_marked_text.take()` at the top), so there's no leak on the
+normal compose → commit path — matching gpui_linux's own behavior.
+`Ime::Disabled` still explicitly unmarks (a composition genuinely
+interrupted by the IME turning off mid-way is an unambiguous signal, unlike
+a bare empty `Preedit`). A composition cancelled with no `Commit` and no
+`Disabled` (e.g. some IMEs on Escape) can leave a stale marked range until
+the next real edit — which naturally overwrites/consumes it via the same
+None-range-targets-marked-range convention any subsequent
+`EntityInputHandler` call already uses — narrow, self-healing visual
+staleness, clearly preferable to silently duplicating committed text.
+Traced via a new `input-trace:` line on the empty-Preedit no-op path, for
+symmetry with every other `handle_ime` branch.
+
+**Verification.** Confirmed via live testing that this change doesn't
+regress the two paths already covered by the prior investigation:
+
+- Composer plain (non-IME) typing: unaffected — this fix only touches the
+  empty-`Preedit` branch, which never fires for ordinary keystrokes routed
+  through the text-input fallback; confirmed live (isolated instance, real
+  desktop, X11-forced), typed characters land in the composer via the
+  fallback exactly as before.
+- Terminal direct-ASCII: unaffected, confirmed live (same setup) — a
+  plain, non-composing key still flows `handle_key` (unmapped, direct
+  mode) → text-fallback → `replace_text_in_range` → sent, unchanged.
+- `KeyTextDedup`/`ImeCommitGuard`'s own colocated unit tests (already
+  covering "given `was_composing=true`, the dedup/suppression logic
+  behaves correctly") continue to pass unmodified — those pure structs
+  were already correct; only the *integration* (`handle_ime` now actually
+  delivering `was_composing=true` to them for a real composition) needed
+  fixing, and that's not a decision-level seam this codebase's testing
+  convention can isolate without a live `gpui`/window context (no test
+  here uses `TestAppContext`/`#[gpui::test]`, matching every prior
+  investigation in this doc).
+
+**Not achieved: a full live round-trip of a real multi-character Japanese
+composition through either the composer or the terminal**, despite
+substantial effort across two approaches:
+
+1. A fully isolated private D-Bus + `ibus-daemon` (+`ibus-x11` helper) on
+   a throwaway `Xvfb` display, mirroring the technique used successfully
+   for the `ime-direct-ascii` investigation's mozc testing — this time
+   the daemon/helper repeatedly failed to establish a working IPC
+   connection to each other (`ibus-x11`: "Can not connect to ibus
+   daemon"; separately, the daemon's own address-file keying picked up a
+   stale `WAYLAND_DISPLAY` from the environment instead of the intended
+   isolated `DISPLAY`), and mozc's own mode defaults to direct/ASCII on a
+   fresh engine selection with no reliable programmatic way found to force
+   Hiragana composition without a working keybinding path.
+2. The real desktop's own already-configured ibus/mozc session
+   (X11-forced, as used successfully elsewhere in this investigation
+   chain) — repeatedly landed in direct-ASCII mode rather than
+   composition mode at test time, and the composition that *did* start a
+   couple of times (`Preedit('あ')`, `Preedit('い')`) reverted to empty
+   before a follow-up `xdotool windowfocus` call (needed to work around
+   this same desktop's focus-delivery flakiness, documented throughout
+   this doc's other entries) could be avoided — X11 focus-out is a
+   plausible, common IME policy trigger for "cancel the current
+   composition." One test attempt to try `super+space` (GNOME's default
+   input-source-switch shortcut) as a workaround **changed the real,
+   system-wide active input source** (a global compositor-level shortcut,
+   not scoped to the test window) — caught and reverted immediately
+   (`ibus engine mozc-jp`) once noticed, but recorded here as a caution:
+   that specific shortcut is not safe to script against a shared desktop.
+
+Given this, the fix is backed by direct, thorough source-code
+verification of the exact mechanism in both `EntityInputHandler`
+implementations it touches (not inference — the actual
+`replace_text_in_range`/`unmark_text` bodies were read line-by-line) and
+by this crate's own prior research record of the event ordering it
+depends on, rather than by a fresh empirical capture of the full
+compose-then-commit round trip. If the owner's next dogfooding session
+still shows doubling in either pane, the `HORIZON_INPUT_TRACE`
+`winit Ime ...` lines around the `Commit` — specifically whether an
+`empty Preedit: not unmarking` line appears immediately before it — are
+the first thing to check.
+
 ### Exit criteria for flipping the default (historical, superseded)
 
 Superseded 2026-07-12 by direct owner dogfooding approval (see the top of
