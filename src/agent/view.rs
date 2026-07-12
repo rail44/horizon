@@ -213,6 +213,10 @@ impl AgentView {
                 Some(block("exited", 0x8a90a0, format!("{reason:?}")))
             }
             AgentFrameItem::ToolCallStarted(_) => None,
+            // Turn receipts are a future UI slice (`docs/agent-output-ui-
+            // amendment.md`'s decision 1) -- this pre-redesign view doesn't
+            // render them yet, same treatment as `ToolCallStarted` above.
+            AgentFrameItem::TurnEnded { .. } => None,
         }
     }
 

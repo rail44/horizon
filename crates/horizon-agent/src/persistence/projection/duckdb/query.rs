@@ -597,10 +597,10 @@ mod recall_tests {
                         tool_id: "fs.grep".to_string(),
                         input: serde_json::json!({ "pattern": "fox" }),
                     }),
-                    Event::ToolCallFinished(ToolCallResult {
+                    Event::ToolCallFinished(ToolCallResult::new(
                         call_id,
-                        output: serde_json::json!({ "matches": ["a red fox"] }),
-                    }),
+                        serde_json::json!({ "matches": ["a red fox"] }),
+                    )),
                 ],
             )
             .expect("append events");
@@ -841,10 +841,10 @@ mod recall_tests {
                         call_id: call_id.clone(),
                         reason: "needs approval".to_string(),
                     }),
-                    Event::ToolCallFinished(ToolCallResult {
+                    Event::ToolCallFinished(ToolCallResult::new(
                         call_id,
-                        output: serde_json::json!({ "ok": true }),
-                    }),
+                        serde_json::json!({ "ok": true }),
+                    )),
                 ],
             )
             .expect("append events");

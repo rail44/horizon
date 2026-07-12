@@ -124,9 +124,13 @@ pub enum Event {
     /// 3). Emitted by the session loop right before the `StateChanged` that
     /// follows a turn's end (see `providers::rig::session`), so it still
     /// carries the ending turn's `turn_id` under `persistence::event_log`'s
-    /// existing tracking. Folds as a no-op everywhere a frame is built from
-    /// events (see `frame::apply_agent_event_to_frame`) — it exists for
-    /// persisted forensics and bootstrap, not pane rendering.
+    /// existing tracking. Folded into an `AgentFrameItem::TurnEnded` receipt
+    /// by `frame::apply_agent_event_to_frame` (see
+    /// `docs/agent-output-ui-amendment.md`'s 2026-07-12 addendum) — the
+    /// model id and elapsed duration attached to that item are derived at
+    /// fold time (from the turn's most recent `ProviderRequestSent` and a
+    /// reducer-side wall clock, respectively), not carried on this event
+    /// itself, so this variant's own wire shape stays unchanged.
     TurnEnded(TurnEndReason),
 }
 
@@ -276,6 +280,38 @@ pub struct ToolCallRequest {
 pub struct ToolCallResult {
     pub call_id: ToolCallId,
     pub output: serde_json::Value,
+    /// Explicit success/failure outcome, lifted out of `output`'s
+    /// `"is_error"` JSON convention (every tool in `tools::` already writes
+    /// it on failure -- `docs/agent-feedback-design.md`'s decision 1;
+    /// `persistence::projection::duckdb`'s `insert_tool_result` already
+    /// reads that same convention independently) so a consumer like the
+    /// turn-receipts UI (`docs/agent-output-ui-amendment.md`'s 2026-07-12
+    /// addendum) has a typed field instead of having to sniff `output`
+    /// itself. Use [`Self::new`] rather than a struct literal to keep this
+    /// derived automatically. `#[serde(default)]` (false, i.e. success) so
+    /// a `Record` written before this field existed still deserializes --
+    /// matching the same convention's "absence means success" reading.
+    #[serde(default)]
+    pub is_error: bool,
+}
+
+impl ToolCallResult {
+    /// Builds a result with `is_error` derived from `output`'s `"is_error"`
+    /// convention -- see the field's own doc comment. The single
+    /// constructor every production call site should go through, so the
+    /// convention lives in one place rather than being re-checked (or
+    /// forgotten) at each tool.
+    pub fn new(call_id: ToolCallId, output: serde_json::Value) -> Self {
+        let is_error = output
+            .get("is_error")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        Self {
+            call_id,
+            output,
+            is_error,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
