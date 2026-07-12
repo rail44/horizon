@@ -3312,6 +3312,7 @@ dependencies = [
  "futures",
  "gpui",
  "gpui-component",
+ "gpui-component-assets",
  "gpui_platform",
  "horizon-agent",
  "horizon-config",

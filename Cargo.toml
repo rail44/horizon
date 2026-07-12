@@ -27,6 +27,9 @@ futures = "0.3"
 gpui = { git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "wayland"] }
 gpui-component = { git = "https://github.com/longbridge/gpui-component" }
+# Bundled SVGs gpui-component's own components (e.g. `TitleBar`'s window
+# control icons) resolve through the asset source registered below.
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
 horizon-agent = { path = "crates/horizon-agent" }
 horizon-config = { path = "crates/horizon-config" }
 horizon-control = { path = "crates/horizon-control" }
