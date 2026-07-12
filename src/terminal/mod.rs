@@ -10,6 +10,12 @@
 //! - `HORIZON_GPUI_DRIVE=<bytes>` types bytes into the session shortly
 //!   after startup; `HORIZON_GPUI_DRIVE_ENTER=1` sends the trailing
 //!   newline as a `TerminalCommand::Key` to exercise the core encoder.
+//!   Note this bypasses `handle_key`/`replace_text_in_range` below
+//!   entirely (it writes straight to the session's command channel), so
+//!   it cannot exercise or verify the real input pipeline the rest of
+//!   this file implements.
+//! - `HORIZON_INPUT_TRACE=1` (or a file path) traces every hop of the
+//!   real input pipeline instead — see `crate::input_trace`.
 
 mod input;
 mod session;
@@ -31,6 +37,7 @@ use self::input::{
     cell_from_position, scroll_lines_from_wheel, term_key_code, term_modifiers,
     terminal_mouse_button, terminal_mouse_modifiers,
 };
+use crate::input_trace::input_trace;
 use crate::theme;
 
 // Font values come from config.toml ([ui].font_family, [terminal].
@@ -290,14 +297,21 @@ impl TerminalView {
     }
 
     fn handle_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        let keystroke = &event.keystroke;
+        input_trace!(
+            "handle_key entry key={:?} modifiers={:?} is_held={}",
+            keystroke.key,
+            keystroke.modifiers,
+            event.is_held
+        );
         // While the IME is composing, every keystroke belongs to the IME
         // (candidate selection etc.) — letting it through would
         // double-feed the terminal. The composed result arrives via
         // replace_text_in_range instead.
         if self.ime_marked_text.is_some() {
+            input_trace!("handle_key key={:?} dropped: ime composing", keystroke.key);
             return;
         }
-        let keystroke = &event.keystroke;
         // A physical Enter that confirmed an IME composition arrives as
         // an independent KeyDownEvent right after the commit already
         // cleared ime_marked_text above (Wayland's text-input-v3 never
@@ -306,6 +320,10 @@ impl TerminalView {
         // next key event regardless of outcome, so it can't leak into a
         // later, unrelated keystroke.
         if self.ime_commit_guard.should_suppress(&keystroke.key) {
+            input_trace!(
+                "handle_key key={:?} dropped: ime_commit_guard suppressed (phantom enter)",
+                keystroke.key
+            );
             return;
         }
         // Cmd+C / Cmd+V are host shortcuts, not terminal input (the
@@ -314,6 +332,7 @@ impl TerminalView {
             match keystroke.key.as_str() {
                 "c" => {
                     let _ = self.tx.send(TerminalCommand::CopySelection);
+                    input_trace!("handle_key key={:?} sent: CopySelection", keystroke.key);
                     return;
                 }
                 "v" => {
@@ -321,7 +340,17 @@ impl TerminalView {
                         .read_from_clipboard()
                         .and_then(|item| item.text().map(|text| text.to_string()))
                     {
+                        input_trace!(
+                            "handle_key key={:?} sent: Paste {}",
+                            keystroke.key,
+                            crate::input_trace::describe_text(&text)
+                        );
                         let _ = self.tx.send(TerminalCommand::Paste(text));
+                    } else {
+                        input_trace!(
+                            "handle_key key={:?} dropped: clipboard empty",
+                            keystroke.key
+                        );
                     }
                     return;
                 }
@@ -329,6 +358,11 @@ impl TerminalView {
             }
         }
         let Some(key) = term_key_code(keystroke, self.keys_as_escape_codes(cx)) else {
+            input_trace!(
+                "handle_key key={:?} dropped: unmapped (keys_as_escape_codes={})",
+                keystroke.key,
+                self.keys_as_escape_codes(cx)
+            );
             return;
         };
         // Record a plain-char send so `replace_text_in_range` can
@@ -349,6 +383,11 @@ impl TerminalView {
         } else {
             KeyEventKind::Press
         };
+        input_trace!(
+            "handle_key key={:?} sent: TerminalCommand::Key kind={:?}",
+            keystroke.key,
+            kind
+        );
         let _ = self.tx.send(TerminalCommand::Key {
             key,
             modifiers: term_modifiers(&keystroke.modifiers),
@@ -515,6 +554,12 @@ impl EntityInputHandler for TerminalView {
         cx: &mut Context<Self>,
     ) {
         let was_composing = self.ime_marked_text.take().is_some();
+        input_trace!(
+            "replace_text_in_range entry {} was_composing={} keys_as_escape_codes={}",
+            crate::input_trace::describe_text(text),
+            was_composing,
+            self.keys_as_escape_codes(cx)
+        );
         self.ime_commit_guard.note_commit(was_composing);
         // Under kitty "report all keys", an ordinary printable keypress is
         // sent as TerminalCommand::Key from on_key_down *and* independently
@@ -532,9 +577,14 @@ impl EntityInputHandler for TerminalView {
             && self.keys_as_escape_codes(cx)
             && self.key_text_dedup.is_duplicate_of_recent_key(text)
         {
+            input_trace!("replace_text_in_range dropped: duplicate of a key-path send");
             cx.notify();
             return;
         }
+        input_trace!(
+            "replace_text_in_range sent: TerminalCommand::Input {}",
+            crate::input_trace::describe_text(text)
+        );
         let _ = self
             .tx
             .send(TerminalCommand::Input(text.as_bytes().to_vec()));

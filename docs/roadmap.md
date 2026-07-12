@@ -198,7 +198,10 @@ wave items where possible; design docs on first use.
   fixes shipped 2026-07-09 (`44f2dd7`): multi-line word/glyph wrap +
   Shift+Enter-for-newline, a custom one-`TextLayout` view mirroring
   floem's `Label` two-pass wrap (`docs/agent-composer-cursor-design.md`);
-  IME candidate-window placement follow-up in backlog.
+  IME candidate-window placement follow-up in backlog. Owner design
+  review 2026-07-12 approved a transcript revision on top of this
+  (turn receipts, running-turn card, composer approval mode) — see
+  `docs/agent-output-ui-amendment.md`; tracked as its own Next item.
 - **Placement-first session creation** — shipped 2026-07-07: `Split
   Pane…` / `New Tab…` + registry-driven view chooser over the CLI's
   `CreateSession` vocabulary; the four direct creation commands
@@ -272,6 +275,14 @@ wave items where possible; design docs on first use.
 
 ## Next (unclaimed — pick freely)
 
+- **Agent transcript revision — turn receipts + approval-mode
+  composer**: implement `docs/agent-output-ui-amendment.md`
+  (owner-approved 2026-07-12, mocks vendored under
+  `docs/assets/agent-ui-options/`). Four steps in the doc's suggested
+  order: running-turn card + turn receipts, receipt inline expansion,
+  approval-mode composer (supersedes agent-output-ui decision 8),
+  failure display + stop button. Reuses the shipped per-tool
+  renderers; all colors via theme roles.
 - **Model-routing OpenAI-compatible API**: router over synthetic.new,
   co-located as an independent crate — no horizon dependencies
   (extractable later), SSE streaming required (horizon-agent assumes

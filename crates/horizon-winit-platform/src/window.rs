@@ -27,6 +27,23 @@ use gpui::{
 use gpui_wgpu::{GpuContext, WgpuRenderer, WgpuSurfaceConfig};
 
 use crate::input::ClickTracker;
+use crate::input_trace::input_trace;
+
+/// `input_trace!`'s redacted rendering of a winit `Ime` event — variant
+/// name plus (for `Preedit`/`Commit`) `input_trace::describe_text`'s
+/// first-char+length summary, never the composed/committed text itself.
+fn describe_ime(ime: &winit::event::Ime) -> String {
+    match ime {
+        winit::event::Ime::Enabled => "Enabled".to_string(),
+        winit::event::Ime::Disabled => "Disabled".to_string(),
+        winit::event::Ime::Preedit(text, _cursor_range) => {
+            format!("Preedit({})", crate::input_trace::describe_text(text))
+        }
+        winit::event::Ime::Commit(text) => {
+            format!("Commit({})", crate::input_trace::describe_text(text))
+        }
+    }
+}
 
 // `PlatformWindow`'s callback setters take these exact closure shapes
 // (mirroring gpui_web/gpui_linux's own window callback structs, which have
@@ -92,9 +109,14 @@ impl WinitWindowInner {
     /// "only reposition on real composition content" is the available
     /// equivalent guard here.
     pub(crate) fn handle_ime(&self, ime: winit::event::Ime) {
+        input_trace!("winit Ime {}", describe_ime(&ime));
         let mut state = self.state.borrow_mut();
         let Some(mut input_handler) = state.input_handler.take() else {
+            // No logger is initialized in production, so `log::warn!` is
+            // normally silent here — if this is where events die, the
+            // trace line is the only way to see it.
             log::warn!("Ime event with no active input handler: {ime:?}");
+            input_trace!("winit Ime dropped: no active input handler");
             return;
         };
         drop(state);
