@@ -4,8 +4,9 @@ Status: decided 2026-07-07 (owner consultation in the project session);
 the `horizon-terminal-core` extraction-slice decisions (8, 9, and the
 color amendment to 4) added 2026-07-09. The exploration material and
 option analysis is `docs/research/session-daemon.md`; this file records
-the decisions and is the scope reference for the migration. Step 0 and the
-Step 1 is implemented end to end.
+the decisions and is the scope reference for the migration. Steps 0 and 1
+are implemented end to end; the Step 2A recovery boundary was approved on
+2026-07-12.
 
 Motive: terminal sessions must outlive the UI process (a UI crash or
 restart must not kill the shell and its children), and delegated
@@ -307,10 +308,38 @@ latest frame. Horizon sends `TerminalSpawnSpec` once, with the pre-mutation
 spawn-source session id and a `current_dir` → `$HOME` → `.` fallback cwd;
 sessiond owns PTY spawn, live cwd sampling, and process lifetime. Reload
 removes terminal sessions from the workspace model because Drain terminates
-their live children, retains agent
-sessions/panes, starts exactly one new runtime, then lists and loads the
-persisted agents before rebuilding their entities and views. Terminal listing
-and reattach across runtime reload remain Step 2 work.
+their live children, retains agent sessions/panes, starts exactly one new
+runtime, then lists and loads the persisted agents before rebuilding their
+entities and views. Reload remains deliberately destructive for terminals;
+terminal discovery and adoption after a UI-process restart are Step 2A work.
+
+## Step 2A recovery decisions (2026-07-12)
+
+The owner approved the first UI-restart recovery slice with these boundaries:
+
+- **Discovery stays in the terminal sister contract.** Terminal `List` /
+  `ListResult` and `Attach` / `AttachResult` traffic carries request ids so
+  asynchronous replies can be matched without relying on ordering. Listing is
+  deterministic. If a listed terminal exits before adoption, Attach returns
+  `NotFound` and Horizon removes the stale workspace entry.
+- **Startup remains immediate and conservative.** Horizon opens a fresh
+  terminal without waiting for discovery. Surviving daemon terminals are
+  registered as detached sessions and adopted in the background, making them
+  available through Session Manager without choosing one to foreground.
+- **Workspace presentation is not daemon identity.** The session UUID remains
+  stable, but `Terminal #N` display numbers are assigned by each UI process and
+  may change after restart. Stable user-visible names and restoration of tabs,
+  split layout, focus, and attachments are a separate Step 2B persistence
+  design rather than additions to the daemon summary.
+- **Recovery means a new UI client, not transparent transport healing.** This
+  slice covers a UI process exiting and a new process discovering the terminals
+  retained by the still-running daemon. Automatic reconnect after an
+  established sessiond connection fails, stale-client takeover, and
+  multi-client fan-out remain deferred.
+- **Reload keeps its explicit destructive meaning.** `Reload Session Runtime`
+  still drains sessiond and terminates live terminals; Step 2A does not attempt
+  live-PTY transfer across daemon replacement or reinterpret reload as UI
+  restart recovery.
 
 ## Connection to delegation (stage 1)
 

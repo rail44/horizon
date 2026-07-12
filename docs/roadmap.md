@@ -81,6 +81,15 @@ wave items where possible; design docs on first use.
    owns terminal PTYs and retained frames, and GPUI uses one eager shared
    runtime with queued terminal creation, row-diff routing, source-cwd
    inheritance, explicit reload semantics, and no local PTY ownership.
+   **Step 2A recovery design settled 2026-07-12**: a new UI process opens a
+   fresh terminal immediately, then discovers daemon-retained terminals and
+   adopts them as detached Session Manager entries. Terminal listing and
+   attach results are request-correlated; stale list entries fail adoption as
+   `NotFound`. Session UUIDs remain stable while UI display numbers remain
+   ephemeral. Exact tab/split/focus/attachment restoration is a separate Step
+   2B workspace-persistence design. Established-connection auto-reconnect and
+   multi-client takeover remain deferred, and `Reload Session Runtime` remains
+   explicitly terminal-destructive. Step 2A implementation is in flight.
    **Session relationship model designed 2026-07-07**
    (`docs/session-relationship-design.md`): lineage is a first-class
    layout-orthogonal derivation tree — the same tree worktree
