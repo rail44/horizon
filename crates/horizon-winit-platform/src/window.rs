@@ -420,9 +420,25 @@ impl gpui::PlatformWindow for WinitPlatformWindow {
         self.inner.state.borrow_mut().renderer.draw(scene);
     }
 
-    fn completed_frame(&self) {
-        self.inner.window.pre_present_notify();
-    }
+    /// Deliberately does *not* forward to `winit::Window::pre_present_notify`
+    /// — on Wayland, that call arms a `wl_surface.frame` request that only
+    /// takes effect on the *next* `wl_surface.commit`, and gpui always calls
+    /// `completed_frame()` strictly after the commit that
+    /// `PlatformWindow::draw` just performed (`WgpuRenderer::draw`'s
+    /// internal `frame.present()`), not before it — the ordering
+    /// `pre_present_notify`'s own contract requires. Calling it here sends
+    /// an orphaned frame-callback request the compositor never associates
+    /// with a commit, which permanently wedges winit's Wayland backend (it
+    /// withholds every future `WindowEvent::RedrawRequested` until that
+    /// request's callback fires, and it never will). Pacing is already
+    /// covered without this: `WgpuSurfaceConfig::preferred_present_mode` is
+    /// `None`, so `gpui_wgpu` configures the surface Fifo, and
+    /// `get_current_texture`/`present` (inside `draw`, above) block for
+    /// real vsync pacing while focused; the inactive-window ~30fps cap is
+    /// gpui's own wall-clock throttle (`min_frame_interval` in
+    /// `Window::on_request_frame`'s closure), independent of any platform
+    /// hook. See docs/winit-backend-design.md's "known failure mode" section.
+    fn completed_frame(&self) {}
 
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
         self.inner.state.borrow().renderer.sprite_atlas().clone()
