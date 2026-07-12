@@ -334,10 +334,19 @@ impl AgentView {
                     }
                 }
                 // The running turn renders its approval block as its own
-                // row inside the card (`render_running_card`); a completed
-                // turn shouldn't normally still carry a pending one, but
-                // render it defensively rather than silently drop it.
-                AgentFrameItem::ApprovalRequested(_) if ended.is_some() => {
+                // row inside the card (`render_running_card`). A completed
+                // turn's own approvals have all resolved by the time
+                // `TurnEnded` folds (in the normal case) -- their resolved
+                // tool call already shows up as a receipt chip, so
+                // re-rendering the answered box here would leave it
+                // visible forever (the owner-reported fold bug). Only the
+                // shouldn't-happen case -- a turn that ended (`Halted`/
+                // `Cancelled`) with a request still genuinely unresolved --
+                // still renders it (`turns::is_approval_still_pending`).
+                AgentFrameItem::ApprovalRequested(request)
+                    if ended.is_some()
+                        && turns::is_approval_still_pending(items, &request.call_id) =>
+                {
                     if let Some(el) = self.render_item(index, item, cx) {
                         blocks.push(el);
                     }
@@ -356,7 +365,9 @@ impl AgentView {
     /// The completed turn's one-line receipt (decision 1): the `▸`
     /// expansion affordance (inert until stage D), one chip per tool
     /// call, the end-reason status text, and the model id (muted, at the
-    /// row's end).
+    /// row's end). A uniform text size and muted `·` separators between
+    /// the chip group, the status, and the model id keep it reading as
+    /// one quiet line rather than loose fragments.
     fn render_receipt(&self, items: &[AgentFrameItem], end: &turns::TurnEnd) -> AnyElement {
         let tool_calls = turns::build_tool_call_views(items);
         let status = turns::receipt_status(end);
@@ -365,6 +376,9 @@ impl AgentView {
         } else {
             theme::text_muted()
         };
+        let receipt_text =
+            |color: Hsla, text: String| div().text_size(px(11.0)).text_color(color).child(text);
+        let separator = || receipt_text(theme::text_subtle(), "·".to_string());
 
         let mut row = div()
             .flex()
@@ -372,28 +386,18 @@ impl AgentView {
             .flex_wrap()
             .items_center()
             .gap_2()
-            .child(
-                div()
-                    .text_size(px(10.0))
-                    .text_color(theme::text_subtle())
-                    .child("▸"),
-            );
+            .py_0p5()
+            .child(receipt_text(theme::text_subtle(), "▸".to_string()));
         for call in &tool_calls {
             row = row.child(self.render_receipt_chip(call));
         }
-        row = row.child(
-            div()
-                .text_size(px(11.0))
-                .text_color(status_color)
-                .child(status.text),
-        );
+        if !tool_calls.is_empty() {
+            row = row.child(separator());
+        }
+        row = row.child(receipt_text(status_color, status.text));
         if let Some(model) = &end.model {
-            row = row.child(
-                div()
-                    .text_size(px(10.0))
-                    .text_color(theme::text_subtle())
-                    .child(model.clone()),
-            );
+            row = row.child(separator());
+            row = row.child(receipt_text(theme::text_subtle(), model.clone()));
         }
         row.into_any_element()
     }
@@ -539,11 +543,12 @@ impl AgentView {
         let mut card = div()
             .flex()
             .flex_col()
-            .gap_1p5()
-            .p_2()
+            .gap_2()
+            .p_3()
             .rounded_sm()
             .border_1()
             .border_color(theme::accent())
+            .bg(theme::surface_panel())
             .child(header);
 
         for call in &tool_calls {

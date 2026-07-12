@@ -6,12 +6,14 @@
 //! and `Reload Config` swaps it live via [`reload_from`].
 //!
 //! The bottom half of this module is the agent-pane's theme-role layer
-//! (`docs/agent-output-ui-amendment.md`'s stage-B prerequisite):
-//! [`text_primary`], [`accent`], [`danger`], [`warning`], [`success`],
-//! [`info`], [`text_muted`], [`text_subtle`], and the four
-//! `diff_added_*`/`diff_removed_*` roles, each an `Hsla` resolved through
-//! the same `[theme]` scheme as everything else here. `src/agent/view.rs`
-//! is the only consumer today. Names follow gpui-component's own
+//! (`docs/agent-output-ui-amendment.md`'s stage-B prerequisite, extended
+//! in stage C): [`text_primary`], [`accent`], [`danger`], [`warning`],
+//! [`success`], [`info`], [`text_muted`], [`text_subtle`],
+//! [`surface_panel`] (the running-turn card's panel background), and the
+//! four `diff_added_*`/`diff_removed_*` roles, each an `Hsla` resolved
+//! through the same `[theme]` scheme as everything else here.
+//! `src/agent/view.rs` is the only consumer today. Names follow
+//! gpui-component's own
 //! `ThemeColor` vocabulary where a matching role exists there (`accent`,
 //! `danger`, `warning`, `success`, `info`) — but the values are Horizon's
 //! own, resolved independently of gpui-component's global `Theme`
@@ -65,6 +67,11 @@ const DIFF_ADDED_SURFACE_DEFAULT: u32 = 0x1e2b22;
 const DIFF_ADDED_TEXT_DEFAULT: u32 = 0x98c379;
 const DIFF_REMOVED_SURFACE_DEFAULT: u32 = 0x2b1e20;
 const DIFF_REMOVED_TEXT_DEFAULT: u32 = 0xe06c75;
+// A subtle lift above `BACKGROUND_DEFAULT` (0x16181d) -- the running-turn
+// card's panel surface (`docs/agent-output-ui-amendment.md` stage C's
+// styling follow-up), so the card reads as its own panel rather than a
+// bare border floating on the transcript background.
+const SURFACE_PANEL_DEFAULT: u32 = 0x1c1f26;
 
 const ANSI16_DEFAULT: [u32; 16] = [
     0x23262e, // black
@@ -102,6 +109,7 @@ struct Scheme {
     diff_added_text: u32,
     diff_removed_surface: u32,
     diff_removed_text: u32,
+    surface_panel: u32,
 }
 
 fn scheme_from(raw: &RawConfig) -> Scheme {
@@ -158,6 +166,7 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
         diff_added_text: chrome("diff_added_text", None, DIFF_ADDED_TEXT_DEFAULT),
         diff_removed_surface: chrome("diff_removed_surface", None, DIFF_REMOVED_SURFACE_DEFAULT),
         diff_removed_text: chrome("diff_removed_text", None, DIFF_REMOVED_TEXT_DEFAULT),
+        surface_panel: chrome("surface_panel", None, SURFACE_PANEL_DEFAULT),
     }
 }
 
@@ -241,6 +250,14 @@ pub fn text_muted() -> Hsla {
 /// text).
 pub fn text_subtle() -> Hsla {
     packed_hsla(scheme().text_subtle)
+}
+
+/// A panel surface, subtly lifted above the base background — the
+/// running-turn card's fill (`docs/agent-output-ui-amendment.md` stage
+/// C), so the card reads as a panel rather than a bare accent border on
+/// the transcript background.
+pub fn surface_panel() -> Hsla {
+    packed_hsla(scheme().surface_panel)
 }
 
 // The four diff roles below have no caller yet — `docs/agent-output-ui-
@@ -445,5 +462,17 @@ mod tests {
         assert_eq!(scheme().danger, 0x123456);
         // An unrelated role still resolves to its built-in default.
         assert_eq!(scheme().accent, 0x84dcc6);
+    }
+
+    #[test]
+    fn surface_panel_defaults_to_a_lift_above_the_base_background_and_is_overridable() {
+        let default_scheme = scheme_from(&RawConfig::default());
+        assert_eq!(default_scheme.surface_panel, SURFACE_PANEL_DEFAULT);
+        assert_ne!(default_scheme.surface_panel, default_scheme.background);
+
+        let overridden = scheme_from(&config_with(&[("surface_panel", "#202020")]));
+        assert_eq!(overridden.surface_panel, 0x202020);
+        // Untouched roles keep their built-in defaults.
+        assert_eq!(overridden.background, BACKGROUND_DEFAULT);
     }
 }

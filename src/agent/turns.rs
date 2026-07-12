@@ -10,7 +10,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use horizon_agent::contract::{Message, MessageRole, ToolCallId, ToolCallResult, TurnEndReason};
-use horizon_agent::frame::AgentFrameItem;
+use horizon_agent::frame::{pending_approval_call_ids_in, AgentFrameItem};
 use serde_json::Value;
 
 /// One turn's items, sliced from `AgentFrame::items` by index range
@@ -231,6 +231,27 @@ pub(crate) fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallVie
         .collect()
 }
 
+/// Whether `call_id`'s approval request is still unresolved within
+/// `turn_items` -- a single turn's own item slice is enough to answer
+/// this without consulting the whole frame: every tool call this crate
+/// emits, Horizon-executed or provider-forwarded, resolves via a
+/// `ToolCallFinished` with the same `call_id` (see
+/// `crates/horizon-agent/src/tools/approval.rs`'s `synchronous_result`,
+/// the one path every approve/deny decision funnels through) before its
+/// turn can end in the normal case, so the resolving item -- if any --
+/// already lives in the same span as the request. A turn that ends with
+/// a still-pending approval (e.g. `Halted`) is the shouldn't-happen case
+/// this stays `true` for, so a completed turn still renders it rather
+/// than silently dropping it (`docs/agent-output-ui-amendment.md` stage
+/// C's owner-reported fold bug: answered approvals must fold into the
+/// receipt like any other tool activity, not linger as boxes forever).
+pub(crate) fn is_approval_still_pending(
+    turn_items: &[AgentFrameItem],
+    call_id: &ToolCallId,
+) -> bool {
+    pending_approval_call_ids_in(turn_items).contains(call_id)
+}
+
 /// `(finished, total)` tool-call counts for a running card's `n / m`
 /// progress header.
 pub(crate) fn progress(tool_calls: &[ToolCallView]) -> (usize, usize) {
@@ -424,7 +445,7 @@ fn line_diffstat(old: &str, new: &str) -> (u32, u32) {
 
 #[cfg(test)]
 mod tests {
-    use horizon_agent::contract::{ToolCallId, ToolCallRequest, ToolCallResult};
+    use horizon_agent::contract::{ApprovalRequest, ToolCallId, ToolCallRequest, ToolCallResult};
     use serde_json::json;
 
     use super::*;
@@ -706,5 +727,33 @@ mod tests {
         ];
         let views = build_tool_call_views(&items);
         assert_eq!(progress(&views), (2, 3));
+    }
+
+    fn approval_requested(call_id: &str) -> AgentFrameItem {
+        AgentFrameItem::ApprovalRequested(ApprovalRequest {
+            call_id: ToolCallId(call_id.to_string()),
+            reason: "writes a file".to_string(),
+        })
+    }
+
+    #[test]
+    fn a_resolved_approval_within_the_turn_is_no_longer_pending() {
+        let call_id = ToolCallId("a".to_string());
+        let items = vec![
+            approval_requested("a"),
+            tool_finished("a", json!({"path": "x.rs", "replaced": true})),
+        ];
+        assert!(!is_approval_still_pending(&items, &call_id));
+    }
+
+    #[test]
+    fn an_unresolved_approval_is_still_pending_defensively() {
+        // Shouldn't happen by contract (a turn shouldn't end with a
+        // dangling approval), but a `Halted`/`Cancelled` turn could leave
+        // one -- the completed-turn receipt still renders it rather than
+        // silently dropping it.
+        let call_id = ToolCallId("a".to_string());
+        let items = vec![approval_requested("a")];
+        assert!(is_approval_still_pending(&items, &call_id));
     }
 }
