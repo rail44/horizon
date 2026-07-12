@@ -253,46 +253,34 @@ pub fn text_subtle() -> Hsla {
     packed_hsla(scheme().text_subtle)
 }
 
-/// A panel surface, subtly lifted above the base background. Not
-/// currently painted anywhere: the running-turn card
-/// (`docs/agent-output-ui-amendment.md` stage C) turned out, once
-/// checked against the mock (2a/3b/7a), to have no distinct fill of its
-/// own — only its header strip gets a faint accent tint (see
-/// `src/agent/view.rs`'s `accent_tint`), and the row area matches the
-/// transcript background. Kept as an available, config-overridable role
-/// for a future view that does want a lifted panel surface.
-#[allow(dead_code)]
+/// A panel surface, subtly lifted above the base background. The
+/// running-turn card (`docs/agent-output-ui-amendment.md` stage C)
+/// turned out, once checked against the mock (2a/3b/7a), to have no
+/// distinct fill of its own beyond its header strip's faint accent tint
+/// (see `src/agent/view.rs`'s `accent_tint`); stage D reuses this role
+/// for the expanded receipt's own highlighted row header (mock 6a's
+/// `#fafafa` panel tint on the expanded call's row).
 pub fn surface_panel() -> Hsla {
     packed_hsla(scheme().surface_panel)
 }
 
-// The four diff roles below have no caller yet — `docs/agent-output-ui-
-// design.md` decision 4 (fs.edit diff rendering) is a later slice than
-// this theme-role prerequisite. `#[allow(dead_code)]` keeps them from
-// tripping `-D warnings` in the meantime; their `Scheme` fields (and
-// config overridability) are exercised by this module's tests.
-
-/// Diff-added line background (fs.edit rendering; no gpui-component
-/// equivalent).
-#[allow(dead_code)]
+/// Diff-added line background (fs.edit's reconstructed-diff body, stage
+/// D; no gpui-component equivalent).
 pub fn diff_added_surface() -> Hsla {
     packed_hsla(scheme().diff_added_surface)
 }
 
 /// Diff-added sign-column color.
-#[allow(dead_code)]
 pub fn diff_added_text() -> Hsla {
     packed_hsla(scheme().diff_added_text)
 }
 
 /// Diff-removed line background.
-#[allow(dead_code)]
 pub fn diff_removed_surface() -> Hsla {
     packed_hsla(scheme().diff_removed_surface)
 }
 
 /// Diff-removed sign-column color.
-#[allow(dead_code)]
 pub fn diff_removed_text() -> Hsla {
     packed_hsla(scheme().diff_removed_text)
 }

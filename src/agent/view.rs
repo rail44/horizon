@@ -11,6 +11,7 @@
 //! items stay plain text. The virtualized-List upgrade is recorded for
 //! the M5 polish pass.
 
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder as _;
@@ -20,7 +21,7 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::tag::Tag;
 use gpui_component::text::TextView;
 use gpui_component::Sizable as _;
-use horizon_agent::contract::{MessageRole, SessionState};
+use horizon_agent::contract::{MessageRole, SessionState, ToolCallId};
 use horizon_agent::frame::{
     pending_approval_call_ids_in, state_indicates_turn_in_flight, AgentFrameItem,
 };
@@ -47,6 +48,15 @@ pub struct AgentView {
     focus_handle: FocusHandle,
     transcript_scroll: ScrollHandle,
     running_turn_clock: Option<RunningTurnClock>,
+    /// Stage D: which completed turns' receipts are expanded, keyed by
+    /// their `TurnEnded` item's frame index (stable across re-renders —
+    /// see `render_receipt`'s caller). View-local, per the amendment's
+    /// invariant; never persisted, never part of the frame model.
+    expanded_receipts: HashSet<usize>,
+    /// Stage D: which expanded-receipt rows are individually expanded,
+    /// keyed by `call_id` -- unique across the whole session, so one flat
+    /// set suffices across every receipt.
+    expanded_rows: HashSet<ToolCallId>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -108,8 +118,26 @@ impl AgentView {
             focus_handle,
             transcript_scroll: ScrollHandle::new(),
             running_turn_clock: None,
+            expanded_receipts: HashSet::new(),
+            expanded_rows: HashSet::new(),
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Toggles a completed turn's receipt expansion (decision 3's `▸`/`▾`).
+    fn toggle_receipt(&mut self, receipt_key: usize, cx: &mut Context<Self>) {
+        if !self.expanded_receipts.remove(&receipt_key) {
+            self.expanded_receipts.insert(receipt_key);
+        }
+        cx.notify();
+    }
+
+    /// Toggles one expanded-receipt row's own body expansion.
+    fn toggle_row(&mut self, call_id: ToolCallId, cx: &mut Context<Self>) {
+        if !self.expanded_rows.remove(&call_id) {
+            self.expanded_rows.insert(call_id);
+        }
+        cx.notify();
     }
 
     /// Whether the transcript is scrolled (near) to the bottom — offsets
@@ -320,7 +348,15 @@ impl AgentView {
             }
         }
         match ended {
-            Some(end) => blocks.push(self.render_receipt(items, end)),
+            // The turn's closing `TurnEnded` item is always the last item
+            // in `items` (inclusive span end) -- its frame index is the
+            // stable key `expanded_receipts` keys off, surviving
+            // re-renders/notifies without depending on the turn's
+            // position in the (possibly windowed) rendered list.
+            Some(end) => {
+                let receipt_key = base_index + items.len() - 1;
+                blocks.push(self.render_receipt(receipt_key, items, end, cx))
+            }
             None => blocks.push(self.render_running_card(base_index, items, cx)),
         }
         for (offset, item) in items.iter().enumerate().skip(1) {
@@ -363,13 +399,23 @@ impl AgentView {
             .into_any_element()
     }
 
-    /// The completed turn's one-line receipt (decision 1): the `▸`
-    /// expansion affordance (inert until stage D), one chip per tool
-    /// call, the end-reason status text, and the model id (muted, at the
-    /// row's end). A uniform text size and muted `·` separators between
-    /// the chip group, the status, and the model id keep it reading as
-    /// one quiet line rather than loose fragments.
-    fn render_receipt(&self, items: &[AgentFrameItem], end: &turns::TurnEnd) -> AnyElement {
+    /// The completed turn's one-line receipt (decision 1): the `▸`/`▾`
+    /// expansion affordance (stage D: clickable, pointer cursor), one
+    /// chip per tool call, the end-reason status text, and the model id
+    /// (muted, at the row's end). A uniform text size and muted `·`
+    /// separators between the chip group, the status, and the model id
+    /// keep it reading as one quiet line rather than loose fragments.
+    /// Clicking anywhere on the row toggles `receipt_key`'s expansion
+    /// (mock 6a): the per-call row list (decision 3) renders beneath,
+    /// each row individually expandable in turn
+    /// (`render_expandable_tool_call_row`).
+    fn render_receipt(
+        &self,
+        receipt_key: usize,
+        items: &[AgentFrameItem],
+        end: &turns::TurnEnd,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let tool_calls = turns::build_tool_call_views(items);
         let status = turns::receipt_status(end);
         let status_color = if status.is_error {
@@ -381,14 +427,22 @@ impl AgentView {
             |color: Hsla, text: String| div().text_size(px(11.0)).text_color(color).child(text);
         let separator = || receipt_text(theme::text_subtle(), "·".to_string());
 
+        let expanded = self.expanded_receipts.contains(&receipt_key);
+        let arrow = if expanded { "▾" } else { "▸" };
+
         let mut row = div()
+            .id(ElementId::from(format!("receipt-{receipt_key}")))
             .flex()
             .flex_row()
             .flex_wrap()
             .items_center()
             .gap_2()
             .py_0p5()
-            .child(receipt_text(theme::text_subtle(), "▸".to_string()));
+            .cursor_pointer()
+            .on_click(cx.listener(move |view, _, _, cx| {
+                view.toggle_receipt(receipt_key, cx);
+            }))
+            .child(receipt_text(theme::text_subtle(), arrow.to_string()));
         for call in &tool_calls {
             row = row.child(self.render_receipt_chip(call));
         }
@@ -409,7 +463,228 @@ impl AgentView {
                     .child(model.clone()),
             );
         }
-        row.into_any_element()
+
+        let mut wrapper = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(row.into_any_element());
+        if expanded && !tool_calls.is_empty() {
+            wrapper = wrapper.child(self.render_expanded_receipt_rows(items, &tool_calls, cx));
+        }
+        wrapper.into_any_element()
+    }
+
+    /// The expanded receipt's per-call row list (mock 6a's "opened
+    /// receipt: in-place per-call row list, rows individually
+    /// expandable"): a bordered, rounded container -- styled off the
+    /// mock's own `border:1px solid #e4e4e7;border-radius:8px;
+    /// overflow:hidden` panel -- holding one [`render_expandable_tool_call_row`]
+    /// per call.
+    fn render_expanded_receipt_rows(
+        &self,
+        items: &[AgentFrameItem],
+        tool_calls: &[turns::ToolCallView],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut list = div()
+            .flex()
+            .flex_col()
+            .rounded_sm()
+            .border_1()
+            .border_color(theme::text_subtle().alpha(0.25))
+            .overflow_hidden();
+        let row_count = tool_calls.len();
+        for (row_index, call) in tool_calls.iter().enumerate() {
+            list = list.child(self.render_expandable_tool_call_row(
+                items,
+                call,
+                row_index + 1 < row_count,
+                cx,
+            ));
+        }
+        list.into_any_element()
+    }
+
+    /// One expanded-receipt row: the same glyph + verb/target/summary
+    /// line vocabulary as [`render_tool_call_row`] (the running card's
+    /// non-expandable row), plus a leading `▸`/`▾` toggle and a click
+    /// handler that reveals this call's [`turns::ToolCallBody`] beneath
+    /// it (decision 3's "each row expands further individually"). The
+    /// mock highlights an expanded row's header with a faint panel tint
+    /// (`#fafafa`) -- `theme::surface_panel()` is that role here.
+    /// `divider`'s border-bottom moves to the outer wrapper (rather than
+    /// the header alone) so it still separates this row's body from the
+    /// next row when expanded, mirroring the mock's own row grouping.
+    fn render_expandable_tool_call_row(
+        &self,
+        items: &[AgentFrameItem],
+        call: &turns::ToolCallView,
+        divider: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let expanded = self.expanded_rows.contains(&call.call_id);
+        let arrow = if expanded { "▾" } else { "▸" };
+        let (glyph, glyph_color) = tool_call_glyph(call);
+        let text = tool_call_line_text(call);
+        let call_id = call.call_id.clone();
+        let row_id = ElementId::from(format!("receipt-row-{}", call.call_id.0));
+
+        let header = div()
+            .id(row_id)
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_1()
+            .cursor_pointer()
+            .when(expanded, |this| this.bg(theme::surface_panel()))
+            .on_click(cx.listener(move |view, _, _, cx| {
+                view.toggle_row(call_id.clone(), cx);
+            }))
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(10.0))
+                    .text_color(theme::text_subtle())
+                    .child(arrow),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(12.0))
+                    .text_color(glyph_color)
+                    .child(glyph),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .text_size(px(12.0))
+                    .text_color(theme::text_muted())
+                    .child(text),
+            );
+
+        let mut wrapper = div().flex().flex_col();
+        if divider {
+            wrapper = wrapper
+                .border_b_1()
+                .border_color(theme::text_subtle().alpha(0.3));
+        }
+        wrapper = wrapper.child(header);
+        if expanded {
+            if let Some(body) = turns::tool_call_body(items, &call.call_id) {
+                wrapper = wrapper.child(
+                    div()
+                        .px_3()
+                        .pb_2()
+                        .child(self.render_tool_call_body(&call.call_id, &body)),
+                );
+            }
+        }
+        wrapper.into_any_element()
+    }
+
+    /// Renders one [`turns::ToolCallBody`] -- the reusable per-tool body
+    /// machinery decision 3 asks for (fs.edit diff, fs.write preview,
+    /// bash command+output, terse summaries, raw-JSON fallback), kept
+    /// independent of the expansion-toggle wiring above so a future
+    /// running-card row (stage F's failed-call log) can call it directly.
+    /// Every line-list body wraps in a height-bounded, internally
+    /// scrollable container so one body can't swallow the transcript.
+    /// `call_id` seeds the scrollable containers' element ids, stable
+    /// across re-renders (GPUI's `overflow_y_scroll` needs a `Stateful`
+    /// element -- i.e. one that's been given an id -- to track scroll
+    /// offset at all).
+    fn render_tool_call_body(
+        &self,
+        call_id: &ToolCallId,
+        body: &turns::ToolCallBody,
+    ) -> AnyElement {
+        match body {
+            turns::ToolCallBody::Diff { lines, omitted } => {
+                let mut container = div()
+                    .id(ElementId::from(format!("body-diff-{}", call_id.0)))
+                    .flex()
+                    .flex_col()
+                    .max_h(px(240.0))
+                    .overflow_y_scroll();
+                for line in lines {
+                    container = container.child(render_diff_line(line));
+                }
+                if *omitted > 0 {
+                    container = container.child(truncation_note(*omitted));
+                }
+                container.into_any_element()
+            }
+            turns::ToolCallBody::ContentPreview {
+                label,
+                lines,
+                omitted,
+            } => div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .py_1()
+                .child(
+                    div()
+                        .text_size(px(10.0))
+                        .text_color(theme::text_subtle())
+                        .child(label.clone()),
+                )
+                .child(render_line_body(
+                    format!("body-content-{}", call_id.0),
+                    lines,
+                    *omitted,
+                ))
+                .into_any_element(),
+            turns::ToolCallBody::Command {
+                command,
+                exit_code,
+                lines,
+                omitted,
+            } => {
+                let mut header_text = format!("$ {command}");
+                if let Some(exit_code) = exit_code {
+                    header_text.push_str(&format!("  · exit {exit_code}"));
+                }
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .py_1()
+                    .child(
+                        div()
+                            .font_family("monospace")
+                            .text_size(px(11.5))
+                            .text_color(theme::text_primary())
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .child(header_text),
+                    )
+                    .child(render_line_body(
+                        format!("body-command-{}", call_id.0),
+                        lines,
+                        *omitted,
+                    ))
+                    .into_any_element()
+            }
+            turns::ToolCallBody::Summary(text) => div()
+                .py_1()
+                .text_size(px(12.0))
+                .text_color(theme::text_muted())
+                .child(text.clone())
+                .into_any_element(),
+            turns::ToolCallBody::Raw { lines, omitted } => {
+                render_line_body(format!("body-raw-{}", call_id.0), lines, *omitted)
+            }
+        }
     }
 
     /// One receipt chip: a plain verb + check/error mark for most tools,
@@ -612,26 +887,13 @@ impl AgentView {
     /// `whitespace_nowrap` so a long unbroken string (a deep file path,
     /// a long bash command head) truncates instead of pushing past the
     /// card's bounds — the glyph stays `flex_none` so it never shrinks.
+    /// Running-card rows stay non-expandable (stage D scopes expansion
+    /// to receipts only); [`tool_call_glyph`]/[`tool_call_line_text`]
+    /// factor out the content this shares with
+    /// [`render_expandable_tool_call_row`]'s expandable version.
     fn render_tool_call_row(&self, call: &turns::ToolCallView, divider: bool) -> AnyElement {
-        let (glyph, glyph_color) = if !call.finished {
-            ("●", theme::accent())
-        } else if call.is_error {
-            ("✗", theme::danger())
-        } else {
-            ("✓", theme::success())
-        };
-
-        let mut text = call.verb.clone();
-        if let Some(target) = &call.target {
-            text.push(' ');
-            text.push_str(target);
-        }
-        if call.finished {
-            if let Some(summary) = &call.result_summary {
-                text.push_str(" · ");
-                text.push_str(summary);
-            }
-        }
+        let (glyph, glyph_color) = tool_call_glyph(call);
+        let text = tool_call_line_text(call);
 
         div()
             .flex()
@@ -679,6 +941,130 @@ impl AgentView {
             Some(SessionState::Terminated) => "terminated".to_string(),
         }
     }
+}
+
+/// The status glyph (running/finished/error) shared by the running
+/// card's row (`render_tool_call_row`) and the expanded receipt's
+/// expandable row (`render_expandable_tool_call_row`).
+fn tool_call_glyph(call: &turns::ToolCallView) -> (&'static str, Hsla) {
+    if !call.finished {
+        ("●", theme::accent())
+    } else if call.is_error {
+        ("✗", theme::danger())
+    } else {
+        ("✓", theme::success())
+    }
+}
+
+/// The verb + target + result-summary line text shared by the same two
+/// row renderers as [`tool_call_glyph`].
+fn tool_call_line_text(call: &turns::ToolCallView) -> String {
+    let mut text = call.verb.clone();
+    if let Some(target) = &call.target {
+        text.push(' ');
+        text.push_str(target);
+    }
+    if call.finished {
+        if let Some(summary) = &call.result_summary {
+            text.push_str(" · ");
+            text.push_str(summary);
+        }
+    }
+    text
+}
+
+/// One reconstructed diff line (decision 4): the line background carries
+/// the change (`theme::diff_added_surface`/`diff_removed_surface`), the
+/// sign column colors separately (`diff_added_text`/`diff_removed_text`);
+/// a `Context` line (the common prefix/suffix `reconstruct_line_diff`
+/// trimmed) paints with neither, since the reconstruction has no access
+/// to the file's real line numbers to show instead.
+fn render_diff_line(line: &turns::DiffLine) -> AnyElement {
+    let (surface, sign, sign_color) = match line.kind {
+        turns::DiffLineKind::Context => (None, " ", theme::text_subtle()),
+        turns::DiffLineKind::Added => (
+            Some(theme::diff_added_surface()),
+            "+",
+            theme::diff_added_text(),
+        ),
+        turns::DiffLineKind::Removed => (
+            Some(theme::diff_removed_surface()),
+            "−",
+            theme::diff_removed_text(),
+        ),
+    };
+
+    let mut row = div().flex().flex_row().gap_2().px_2();
+    if let Some(surface) = surface {
+        row = row.bg(surface);
+    }
+    row.child(
+        div()
+            .flex_none()
+            .w(px(14.0))
+            .font_family("monospace")
+            .text_size(px(11.5))
+            .text_color(sign_color)
+            .child(sign),
+    )
+    .child(
+        div()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden()
+            .text_ellipsis()
+            .whitespace_nowrap()
+            .font_family("monospace")
+            .text_size(px(11.5))
+            .text_color(theme::text_muted())
+            .child(line.text.clone()),
+    )
+    .into_any_element()
+}
+
+/// A preformatted-text line body (fs.write's content preview, bash's
+/// captured output, the raw-JSON fallback): one row per line, each
+/// truncating rather than wrapping (`min_w_0` + `overflow_hidden` +
+/// `text_ellipsis` + `whitespace_nowrap` — the same C.1 overflow idiom
+/// `render_tool_call_row` uses) so a long line can't push past the
+/// card's bounds. Wrapped in a height-bounded, internally scrollable
+/// container so a large body can't swallow the transcript.
+fn render_line_body(id: impl Into<ElementId>, lines: &[String], omitted: usize) -> AnyElement {
+    let mut container = div()
+        .id(id)
+        .flex()
+        .flex_col()
+        .max_h(px(240.0))
+        .overflow_y_scroll();
+    for line in lines {
+        container = container.child(
+            div()
+                .min_w_0()
+                .overflow_hidden()
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .font_family("monospace")
+                .text_size(px(11.5))
+                .text_color(theme::text_muted())
+                .child(line.clone()),
+        );
+    }
+    if omitted > 0 {
+        container = container.child(truncation_note(omitted));
+    }
+    container.into_any_element()
+}
+
+/// The note appended when a body's line cap trims trailing content
+/// (content previews/raw JSON: trailing lines past the cap; bash output:
+/// leading lines before the kept tail — either way, "omitted" count of
+/// lines not shown).
+fn truncation_note(omitted: usize) -> AnyElement {
+    div()
+        .text_size(px(10.5))
+        .text_color(theme::text_subtle())
+        .child(format!("… {omitted} more line(s) trimmed"))
+        .into_any_element()
 }
 
 /// A muted echo of the accent role — the running card's border and

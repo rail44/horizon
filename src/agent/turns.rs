@@ -418,7 +418,49 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 /// enough to report `+added -removed` for `fs.edit`'s single
 /// old_string/new_string replacement, which is the shape every `fs.edit`
 /// call has today (see `crates/horizon-agent/src/tools/fs/edit.rs`).
+/// Derived from [`reconstruct_line_diff`] rather than computed
+/// independently, so the receipt chip's counts and the expanded body's
+/// diff can never drift apart.
 fn line_diffstat(old: &str, new: &str) -> (u32, u32) {
+    let lines = reconstruct_line_diff(old, new);
+    let added = lines
+        .iter()
+        .filter(|line| line.kind == DiffLineKind::Added)
+        .count() as u32;
+    let removed = lines
+        .iter()
+        .filter(|line| line.kind == DiffLineKind::Removed)
+        .count() as u32;
+    (added, removed)
+}
+
+/// One line of a reconstructed diff body (stage D's fs.edit expansion,
+/// `docs/agent-output-ui-design.md` decision 4): `Context` lines are the
+/// common prefix/suffix trimmed below, painted with neither role;
+/// `Added`/`Removed` pair with `theme::diff_added_*`/`diff_removed_*` in
+/// the view (line background carries the change, sign column colored
+/// separately).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DiffLineKind {
+    Context,
+    Added,
+    Removed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DiffLine {
+    pub kind: DiffLineKind,
+    pub text: String,
+}
+
+/// Reconstructs a full line diff between `old` and `new` by trimming the
+/// common prefix/suffix (kept as `Context` lines) and pairing the
+/// remaining middle as removed-then-added -- not a full diff algorithm
+/// (no interior-line matching), matching `fs.edit`'s single
+/// old_string/new_string replacement shape. Operates on `&str` lines
+/// throughout, so multibyte content (e.g. Japanese text) round-trips
+/// unmodified -- no byte-level slicing here.
+fn reconstruct_line_diff(old: &str, new: &str) -> Vec<DiffLine> {
     let old_lines: Vec<&str> = old.lines().collect();
     let new_lines: Vec<&str> = new.lines().collect();
 
@@ -438,9 +480,293 @@ fn line_diffstat(old: &str, new: &str) -> (u32, u32) {
         suffix += 1;
     }
 
-    let removed = (old_lines.len() - prefix - suffix) as u32;
-    let added = (new_lines.len() - prefix - suffix) as u32;
-    (added, removed)
+    let mut lines = Vec::new();
+    for text in &old_lines[..prefix] {
+        lines.push(DiffLine {
+            kind: DiffLineKind::Context,
+            text: (*text).to_string(),
+        });
+    }
+    for text in &old_lines[prefix..old_lines.len() - suffix] {
+        lines.push(DiffLine {
+            kind: DiffLineKind::Removed,
+            text: (*text).to_string(),
+        });
+    }
+    for text in &new_lines[prefix..new_lines.len() - suffix] {
+        lines.push(DiffLine {
+            kind: DiffLineKind::Added,
+            text: (*text).to_string(),
+        });
+    }
+    for text in &old_lines[old_lines.len() - suffix..] {
+        lines.push(DiffLine {
+            kind: DiffLineKind::Context,
+            text: (*text).to_string(),
+        });
+    }
+    lines
+}
+
+/// A tool call's expanded-row body (stage D, decision 3's "each row
+/// expands further individually"), keyed off the tool id the same way
+/// [`ToolCallKind`] is. Every line-list variant is already height-capped
+/// by [`build_tool_call_body`]; the view additionally wraps them in a
+/// scrollable, height-bounded container so one body can't swallow the
+/// transcript. Deliberately reusable beyond the receipt: stage F's
+/// failed-call log (running-card row) wants the same per-tool body
+/// machinery, so this and [`tool_call_body`] take a plain item slice +
+/// call id rather than anything receipt-specific.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ToolCallBody {
+    /// fs.edit -- a reconstructed line diff; `omitted` counts any lines
+    /// trimmed by the cap.
+    Diff {
+        lines: Vec<DiffLine>,
+        omitted: usize,
+    },
+    /// fs.write -- a content preview labeled created/overwritten from the
+    /// output, head-capped (the start of a new file matters most).
+    ContentPreview {
+        label: String,
+        lines: Vec<String>,
+        omitted: usize,
+    },
+    /// bash -- the command, its exit code (when the call didn't error
+    /// before producing one), and captured output, tail-capped (the
+    /// final pass/fail summary matters most -- mirrors
+    /// `tools::bash::output::cap`'s own head/tail trade-off note).
+    Command {
+        command: String,
+        exit_code: Option<i64>,
+        lines: Vec<String>,
+        omitted: usize,
+    },
+    /// fs.read/glob/grep and other known-but-terse tools -- one summary
+    /// line (path + range, match counts, ...).
+    Summary(String),
+    /// An unrecognized tool id -- the base design's raw-JSON fallback,
+    /// pretty-printed and head-capped.
+    Raw { lines: Vec<String>, omitted: usize },
+}
+
+/// Diff body line cap -- generous, since a single `fs.edit` replacement is
+/// normally small; guards against an unusually large one still bounding
+/// the number of elements the view has to build.
+const MAX_DIFF_LINES: usize = 300;
+/// fs.write content-preview line cap (head-capped: the file's start
+/// matters most for a preview).
+const CONTENT_PREVIEW_MAX_LINES: usize = 200;
+/// bash captured-output line cap (tail-capped: the final summary line
+/// matters most, see `ToolCallBody::Command`'s doc comment).
+const BASH_OUTPUT_TAIL_LINES: usize = 100;
+/// Raw-JSON-fallback line cap (head-capped).
+const RAW_FALLBACK_MAX_LINES: usize = 200;
+
+/// Caps `lines` to its first `max_lines` entries, returning `(kept,
+/// omitted)` -- used wherever the head of the content matters most (diff
+/// bodies, content previews, the raw-JSON fallback).
+fn cap_lines_head<T>(mut lines: Vec<T>, max_lines: usize) -> (Vec<T>, usize) {
+    if lines.len() <= max_lines {
+        (lines, 0)
+    } else {
+        let omitted = lines.len() - max_lines;
+        lines.truncate(max_lines);
+        (lines, omitted)
+    }
+}
+
+/// Caps `lines` to its last `max_lines` entries -- used for bash output,
+/// where the tail (the final pass/fail summary) matters most.
+fn cap_lines_tail(mut lines: Vec<String>, max_lines: usize) -> (Vec<String>, usize) {
+    if lines.len() <= max_lines {
+        (lines, 0)
+    } else {
+        let omitted = lines.len() - max_lines;
+        let kept = lines.split_off(lines.len() - max_lines);
+        (kept, omitted)
+    }
+}
+
+/// The tool ids [`classify`] gives a dedicated verb/target/summary to --
+/// shared with [`build_tool_call_body`] so a genuinely unrecognized tool
+/// id (a future tool this crate hasn't been taught about yet) still falls
+/// back to the raw-JSON body rather than a blank one, per decision 3's
+/// "raw JSON pretty-print only as the unknown-tool fallback".
+fn is_known_tool_id(tool_id: &str) -> bool {
+    matches!(
+        tool_id,
+        "fs.edit"
+            | "fs.write"
+            | "bash"
+            | "fs.read"
+            | "fs.grep"
+            | "fs.glob"
+            | "workspace.snapshot"
+            | "config.read"
+            | "config.write"
+            | "recall.search"
+            | "recall.read"
+            | "skill.read"
+    )
+}
+
+/// A terse one-line summary for a known-but-not-specially-bodied tool
+/// call. fs.read/grep/glob get shapes derived from their actual output
+/// JSON (see `crates/horizon-agent/src/tools/fs/{read,grep,glob}.rs`);
+/// every other known tool id falls back to [`classify`]'s own
+/// verb/target/summary, reused rather than duplicated.
+fn terse_summary(tool_id: &str, input: &Value, output: Option<&Value>) -> String {
+    match tool_id {
+        "fs.read" => {
+            let path = str_field(input, "path").unwrap_or_default();
+            let range = output.and_then(|output| {
+                let start = output.get("start_line").and_then(Value::as_u64)?;
+                let end = output.get("end_line").and_then(Value::as_u64)?;
+                let total = output.get("total_lines").and_then(Value::as_u64)?;
+                Some(format!("lines {start}-{end} of {total}"))
+            });
+            match range {
+                Some(range) => format!("{path} · {range}"),
+                None => path.to_string(),
+            }
+        }
+        "fs.grep" => {
+            let pattern = str_field(input, "pattern").unwrap_or_default();
+            let base = str_field(input, "base_path").unwrap_or_default();
+            let count = output
+                .and_then(|output| output.get("returned_count"))
+                .and_then(Value::as_u64);
+            match count {
+                Some(count) => format!("\"{pattern}\" in {base} · {count} matches"),
+                None => format!("\"{pattern}\" in {base}"),
+            }
+        }
+        "fs.glob" => {
+            let pattern = str_field(input, "pattern").unwrap_or_default();
+            let base = str_field(input, "base_path").unwrap_or_default();
+            let count = output
+                .and_then(|output| output.get("returned_count"))
+                .and_then(Value::as_u64);
+            match count {
+                Some(count) => format!("{pattern} in {base} · {count} matches"),
+                None => format!("{pattern} in {base}"),
+            }
+        }
+        _ => {
+            let (verb, target, result_summary, _kind) = classify(tool_id, input, output);
+            match (target, result_summary) {
+                (Some(target), Some(summary)) => format!("{verb} {target} · {summary}"),
+                (Some(target), None) => format!("{verb} {target}"),
+                (None, Some(summary)) => format!("{verb} · {summary}"),
+                (None, None) => verb,
+            }
+        }
+    }
+}
+
+fn pretty_json(value: &Value) -> String {
+    serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+}
+
+/// Builds the raw-JSON fallback body's lines for a tool id [`classify`]
+/// doesn't recognize.
+fn raw_json_fallback(tool_id: &str, input: &Value, output: Option<&Value>) -> (Vec<String>, usize) {
+    let mut text = format!("{tool_id}\ninput: {}", pretty_json(input));
+    if let Some(output) = output {
+        text.push_str(&format!("\noutput: {}", pretty_json(output)));
+    }
+    cap_lines_head(
+        text.lines().map(str::to_string).collect(),
+        RAW_FALLBACK_MAX_LINES,
+    )
+}
+
+/// Maps a tool call's id/input/(optional) output to its [`ToolCallBody`]
+/// -- the per-tool body renderers of decision 3: fs.edit gets a
+/// reconstructed diff, fs.write a content preview, bash a command+output
+/// block, and every other known tool id a terse summary; a truly unknown
+/// id falls back to raw JSON.
+pub(crate) fn build_tool_call_body(
+    tool_id: &str,
+    input: &Value,
+    output: Option<&Value>,
+) -> ToolCallBody {
+    match tool_id {
+        "fs.edit" => {
+            let old = str_field(input, "old_string").unwrap_or_default();
+            let new = str_field(input, "new_string").unwrap_or_default();
+            let (lines, omitted) = cap_lines_head(reconstruct_line_diff(old, new), MAX_DIFF_LINES);
+            ToolCallBody::Diff { lines, omitted }
+        }
+        "fs.write" => {
+            let label = output
+                .and_then(|output| output.get("created"))
+                .and_then(Value::as_bool)
+                .map(|created| if created { "created" } else { "overwritten" })
+                .unwrap_or("written")
+                .to_string();
+            let content = str_field(input, "content").unwrap_or_default();
+            let (lines, omitted) = cap_lines_head(
+                content.lines().map(str::to_string).collect(),
+                CONTENT_PREVIEW_MAX_LINES,
+            );
+            ToolCallBody::ContentPreview {
+                label,
+                lines,
+                omitted,
+            }
+        }
+        "bash" => {
+            let command = str_field(input, "command").unwrap_or_default().to_string();
+            let exit_code = output
+                .and_then(|output| output.get("exit_code"))
+                .and_then(Value::as_i64);
+            let output_text = output
+                .and_then(|output| output.get("output"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let all_lines: Vec<String> = output_text.lines().map(str::to_string).collect();
+            let (lines, omitted) = cap_lines_tail(all_lines, BASH_OUTPUT_TAIL_LINES);
+            ToolCallBody::Command {
+                command,
+                exit_code,
+                lines,
+                omitted,
+            }
+        }
+        _ if is_known_tool_id(tool_id) => {
+            ToolCallBody::Summary(terse_summary(tool_id, input, output))
+        }
+        _ => {
+            let (lines, omitted) = raw_json_fallback(tool_id, input, output);
+            ToolCallBody::Raw { lines, omitted }
+        }
+    }
+}
+
+/// Finds `call_id`'s request/result within `items` (a single turn's item
+/// slice, same contract as [`build_tool_call_views`]) and builds its
+/// [`ToolCallBody`]. `None` if `call_id` has no matching request in
+/// `items` at all (shouldn't happen for a row the caller already built a
+/// [`ToolCallView`] from).
+pub(crate) fn tool_call_body(
+    items: &[AgentFrameItem],
+    call_id: &ToolCallId,
+) -> Option<ToolCallBody> {
+    let request = items.iter().find_map(|item| match item {
+        AgentFrameItem::ToolCallRequested(request) if &request.call_id == call_id => Some(request),
+        _ => None,
+    })?;
+    let result = items.iter().find_map(|item| match item {
+        AgentFrameItem::ToolCallFinished(result) if &result.call_id == call_id => Some(result),
+        _ => None,
+    });
+    Some(build_tool_call_body(
+        &request.tool_id,
+        &request.input,
+        result.map(|result| &result.output),
+    ))
 }
 
 #[cfg(test)]
@@ -755,5 +1081,302 @@ mod tests {
         let call_id = ToolCallId("a".to_string());
         let items = vec![approval_requested("a")];
         assert!(is_approval_still_pending(&items, &call_id));
+    }
+
+    fn diff_texts(lines: &[DiffLine]) -> Vec<(DiffLineKind, &str)> {
+        lines
+            .iter()
+            .map(|line| (line.kind, line.text.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn reconstruct_line_diff_handles_a_pure_insert() {
+        let lines = reconstruct_line_diff("a\nb", "a\nnew\nb");
+        assert_eq!(
+            diff_texts(&lines),
+            vec![
+                (DiffLineKind::Context, "a"),
+                (DiffLineKind::Added, "new"),
+                (DiffLineKind::Context, "b"),
+            ]
+        );
+    }
+
+    #[test]
+    fn reconstruct_line_diff_handles_a_pure_delete() {
+        let lines = reconstruct_line_diff("a\nold\nb", "a\nb");
+        assert_eq!(
+            diff_texts(&lines),
+            vec![
+                (DiffLineKind::Context, "a"),
+                (DiffLineKind::Removed, "old"),
+                (DiffLineKind::Context, "b"),
+            ]
+        );
+    }
+
+    #[test]
+    fn reconstruct_line_diff_handles_a_mixed_change() {
+        let lines = reconstruct_line_diff("a\nold1\nold2\nb", "a\nnew1\nb");
+        assert_eq!(
+            diff_texts(&lines),
+            vec![
+                (DiffLineKind::Context, "a"),
+                (DiffLineKind::Removed, "old1"),
+                (DiffLineKind::Removed, "old2"),
+                (DiffLineKind::Added, "new1"),
+                (DiffLineKind::Context, "b"),
+            ]
+        );
+    }
+
+    #[test]
+    fn reconstruct_line_diff_of_identical_strings_is_all_context() {
+        let lines = reconstruct_line_diff("a\nb\nc", "a\nb\nc");
+        assert_eq!(
+            diff_texts(&lines),
+            vec![
+                (DiffLineKind::Context, "a"),
+                (DiffLineKind::Context, "b"),
+                (DiffLineKind::Context, "c"),
+            ]
+        );
+    }
+
+    #[test]
+    fn reconstruct_line_diff_round_trips_multibyte_content() {
+        let lines = reconstruct_line_diff(
+            "こんにちは\n古い行\nさようなら",
+            "こんにちは\n新しい行\nさようなら",
+        );
+        assert_eq!(
+            diff_texts(&lines),
+            vec![
+                (DiffLineKind::Context, "こんにちは"),
+                (DiffLineKind::Removed, "古い行"),
+                (DiffLineKind::Added, "新しい行"),
+                (DiffLineKind::Context, "さようなら"),
+            ]
+        );
+    }
+
+    #[test]
+    fn line_diffstat_matches_the_reconstructed_diffs_own_counts() {
+        assert_eq!(line_diffstat("a\nold1\nold2\nb", "a\nnew1\nb"), (1, 2));
+        assert_eq!(line_diffstat("a\nb\nc", "a\nb\nc"), (0, 0));
+    }
+
+    #[test]
+    fn cap_lines_head_trims_the_tail_and_reports_the_omitted_count() {
+        let (kept, omitted) = cap_lines_head(vec![1, 2, 3, 4, 5], 3);
+        assert_eq!(kept, vec![1, 2, 3]);
+        assert_eq!(omitted, 2);
+
+        let (kept, omitted) = cap_lines_head(vec![1, 2], 3);
+        assert_eq!(kept, vec![1, 2]);
+        assert_eq!(omitted, 0);
+    }
+
+    #[test]
+    fn cap_lines_tail_trims_the_head_and_reports_the_omitted_count() {
+        let lines = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let (kept, omitted) = cap_lines_tail(lines, 2);
+        assert_eq!(kept, vec!["b".to_string(), "c".to_string()]);
+        assert_eq!(omitted, 1);
+    }
+
+    #[test]
+    fn build_tool_call_body_reconstructs_an_fs_edit_diff() {
+        let body = build_tool_call_body(
+            "fs.edit",
+            &json!({
+                "path": "src/agent/view.rs",
+                "old_string": "line1\nold\nline3",
+                "new_string": "line1\nnew a\nnew b\nline3",
+            }),
+            Some(&json!({"path": "src/agent/view.rs", "replaced": true})),
+        );
+        match body {
+            ToolCallBody::Diff { lines, omitted } => {
+                assert_eq!(omitted, 0);
+                assert_eq!(
+                    diff_texts(&lines),
+                    vec![
+                        (DiffLineKind::Context, "line1"),
+                        (DiffLineKind::Removed, "old"),
+                        (DiffLineKind::Added, "new a"),
+                        (DiffLineKind::Added, "new b"),
+                        (DiffLineKind::Context, "line3"),
+                    ]
+                );
+            }
+            other => panic!("expected a Diff body, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_tool_call_body_labels_fs_write_created_vs_overwritten() {
+        let created = build_tool_call_body(
+            "fs.write",
+            &json!({"path": "new.rs", "content": "fn main() {}"}),
+            Some(&json!({"path": "new.rs", "bytes_written": 12, "created": true})),
+        );
+        match created {
+            ToolCallBody::ContentPreview {
+                label,
+                lines,
+                omitted,
+            } => {
+                assert_eq!(label, "created");
+                assert_eq!(lines, vec!["fn main() {}".to_string()]);
+                assert_eq!(omitted, 0);
+            }
+            other => panic!("expected a ContentPreview body, got {other:?}"),
+        }
+
+        let overwritten = build_tool_call_body(
+            "fs.write",
+            &json!({"path": "old.rs", "content": "x"}),
+            Some(&json!({"path": "old.rs", "bytes_written": 1, "created": false})),
+        );
+        match overwritten {
+            ToolCallBody::ContentPreview { label, .. } => assert_eq!(label, "overwritten"),
+            other => panic!("expected a ContentPreview body, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_tool_call_body_carries_bash_command_exit_code_and_output() {
+        let body = build_tool_call_body(
+            "bash",
+            &json!({"command": "cargo test"}),
+            Some(&json!({"exit_code": 0, "output": "line1\nline2\n", "truncated": false})),
+        );
+        match body {
+            ToolCallBody::Command {
+                command,
+                exit_code,
+                lines,
+                omitted,
+            } => {
+                assert_eq!(command, "cargo test");
+                assert_eq!(exit_code, Some(0));
+                assert_eq!(lines, vec!["line1".to_string(), "line2".to_string()]);
+                assert_eq!(omitted, 0);
+            }
+            other => panic!("expected a Command body, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_tool_call_body_tail_caps_a_long_bash_output() {
+        let output_text = (0..(BASH_OUTPUT_TAIL_LINES + 10))
+            .map(|line_number| format!("line {line_number}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let body = build_tool_call_body(
+            "bash",
+            &json!({"command": "seq"}),
+            Some(&json!({"exit_code": 0, "output": output_text})),
+        );
+        match body {
+            ToolCallBody::Command { lines, omitted, .. } => {
+                assert_eq!(omitted, 10);
+                assert_eq!(lines.len(), BASH_OUTPUT_TAIL_LINES);
+                // The tail is kept, not the head.
+                assert_eq!(lines.last().unwrap(), "line 109");
+            }
+            other => panic!("expected a Command body, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_tool_call_body_summarizes_fs_read_with_the_line_range() {
+        let body = build_tool_call_body(
+            "fs.read",
+            &json!({"path": "src/lib.rs"}),
+            Some(&json!({"start_line": 1, "end_line": 40, "total_lines": 120})),
+        );
+        assert_eq!(
+            body,
+            ToolCallBody::Summary("src/lib.rs · lines 1-40 of 120".to_string())
+        );
+    }
+
+    #[test]
+    fn build_tool_call_body_summarizes_fs_grep_with_the_match_count() {
+        let body = build_tool_call_body(
+            "fs.grep",
+            &json!({"base_path": ".", "pattern": "notify"}),
+            Some(&json!({"returned_count": 3})),
+        );
+        assert_eq!(
+            body,
+            ToolCallBody::Summary("\"notify\" in . · 3 matches".to_string())
+        );
+    }
+
+    #[test]
+    fn build_tool_call_body_summarizes_fs_glob_with_the_match_count() {
+        let body = build_tool_call_body(
+            "fs.glob",
+            &json!({"base_path": ".", "pattern": "*.rs"}),
+            Some(&json!({"returned_count": 5})),
+        );
+        assert_eq!(
+            body,
+            ToolCallBody::Summary("*.rs in . · 5 matches".to_string())
+        );
+    }
+
+    #[test]
+    fn build_tool_call_body_falls_back_to_raw_json_for_an_unknown_tool() {
+        let body = build_tool_call_body(
+            "some.future.tool",
+            &json!({"foo": "bar"}),
+            Some(&json!({"ok": true})),
+        );
+        match body {
+            ToolCallBody::Raw { lines, omitted } => {
+                assert_eq!(omitted, 0);
+                let joined = lines.join("\n");
+                assert!(joined.contains("some.future.tool"));
+                assert!(joined.contains("\"foo\""));
+                assert!(joined.contains("\"ok\""));
+            }
+            other => panic!("expected a Raw body, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tool_call_body_finds_the_matching_call_within_a_turns_items() {
+        let items = vec![
+            tool_requested("a", "fs.read", json!({"path": "a.rs"})),
+            tool_requested(
+                "b",
+                "fs.edit",
+                json!({"path": "b.rs", "old_string": "x", "new_string": "y"}),
+            ),
+            tool_finished("a", json!({"total_lines": 10})),
+            tool_finished("b", json!({"path": "b.rs", "replaced": true})),
+        ];
+        let call_id = ToolCallId("b".to_string());
+        match tool_call_body(&items, &call_id) {
+            Some(ToolCallBody::Diff { lines, .. }) => {
+                assert_eq!(
+                    diff_texts(&lines),
+                    vec![(DiffLineKind::Removed, "x"), (DiffLineKind::Added, "y")]
+                );
+            }
+            other => panic!("expected a Diff body for call `b`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tool_call_body_is_none_for_an_unknown_call_id() {
+        let items = vec![tool_requested("a", "fs.read", json!({"path": "a.rs"}))];
+        let call_id = ToolCallId("missing".to_string());
+        assert!(tool_call_body(&items, &call_id).is_none());
     }
 }
