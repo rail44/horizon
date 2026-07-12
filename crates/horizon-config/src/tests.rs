@@ -135,6 +135,55 @@ fn load_from_path_parses_a_well_formed_file() {
     let _ = std::fs::remove_file(&path);
 }
 
+#[test]
+fn theme_colors_accepts_arbitrary_role_keys_with_no_schema_change() {
+    // `[theme].colors` is a flattened `HashMap<String, String>` (see
+    // `RawThemeConfig`), so adding a new named role -- e.g. the
+    // agent-pane roles `src/theme.rs` resolves (`danger`, `warning`,
+    // `diff_added_text`, ...) -- never needs a loader change here; this
+    // guards that assumption stays true.
+    let path = std::env::temp_dir().join(format!(
+        "horizon-config-test-theme-roles-{}.toml",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::write(
+        &path,
+        r##"
+            [theme]
+            accent = "#84dcc6"
+            danger = "#e06c75"
+            diff_added_surface = "#1e2b22"
+            diff_added_text = "#98c379"
+        "##,
+    )
+    .unwrap();
+
+    let loaded = load_from_path(Some(&path));
+
+    assert_eq!(
+        loaded.theme.colors.get("danger").map(String::as_str),
+        Some("#e06c75")
+    );
+    assert_eq!(
+        loaded
+            .theme
+            .colors
+            .get("diff_added_surface")
+            .map(String::as_str),
+        Some("#1e2b22")
+    );
+    assert_eq!(
+        loaded
+            .theme
+            .colors
+            .get("diff_added_text")
+            .map(String::as_str),
+        Some("#98c379")
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
 // --- reload_from_path: Reload Config's fresh re-parse -------------------
 //
 // Unlike `load_from_path` above (folds every non-success case into

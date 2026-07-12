@@ -82,7 +82,7 @@ impl AgentView {
         item: &AgentFrameItem,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let block = |label: &str, label_color: u32, text: String| {
+        let block = |label: &str, label_color: Hsla, text: String| {
             div()
                 .flex()
                 .flex_col()
@@ -90,13 +90,13 @@ impl AgentView {
                 .child(
                     div()
                         .text_size(px(10.0))
-                        .text_color(rgb(label_color))
+                        .text_color(label_color)
                         .child(label.to_string()),
                 )
                 .child(
                     div()
                         .text_size(px(13.0))
-                        .text_color(rgb(0xe9ecf2))
+                        .text_color(theme::text_primary())
                         .child(text),
                 )
                 .into_any_element()
@@ -105,7 +105,7 @@ impl AgentView {
         // reuse over port); the element id keys its managed parse state, so
         // it must stay stable across re-renders of the same transcript item.
         let markdown_block =
-            |label: &str, label_color: u32, id: (&'static str, usize), text: String| {
+            |label: &str, label_color: Hsla, id: (&'static str, usize), text: String| {
                 div()
                     .flex()
                     .flex_col()
@@ -113,38 +113,38 @@ impl AgentView {
                     .child(
                         div()
                             .text_size(px(10.0))
-                            .text_color(rgb(label_color))
+                            .text_color(label_color)
                             .child(label.to_string()),
                     )
                     .child(
                         TextView::markdown(id, text)
                             .text_size(px(13.0))
-                            .text_color(rgb(0xe9ecf2)),
+                            .text_color(theme::text_primary()),
                     )
                     .into_any_element()
             };
         match item {
             AgentFrameItem::Message(message) => Some(match message.role {
-                MessageRole::User => block("you", 0x84dcc6, message.text.clone()),
+                MessageRole::User => block("you", theme::accent(), message.text.clone()),
                 MessageRole::Assistant => markdown_block(
                     "agent",
-                    0x61afef,
+                    theme::info(),
                     ("agent-message", index),
                     message.text.clone(),
                 ),
             }),
             AgentFrameItem::AssistantTextDelta(delta) => Some(markdown_block(
                 "agent…",
-                0x61afef,
+                theme::info(),
                 ("agent-delta", index),
                 delta.text.clone(),
             )),
             AgentFrameItem::ReasoningDelta(delta) => {
-                Some(block("thinking", 0x5f6370, delta.text.clone()))
+                Some(block("thinking", theme::text_subtle(), delta.text.clone()))
             }
             AgentFrameItem::ToolCallRequested(request) => Some(block(
                 "tool",
-                0xe5c07b,
+                theme::warning(),
                 format!("{} {}", request.tool_id, request.input),
             )),
             AgentFrameItem::ToolCallFinished(result) => {
@@ -154,7 +154,7 @@ impl AgentView {
                 } else {
                     output
                 };
-                Some(block("tool result", 0x98c379, clipped))
+                Some(block("tool result", theme::success(), clipped))
             }
             AgentFrameItem::ApprovalRequested(request) => {
                 let pending = pending_approval_call_ids_in(&self.session.read(cx).frame.items)
@@ -169,11 +169,11 @@ impl AgentView {
                         .p_2()
                         .rounded_sm()
                         .border_1()
-                        .border_color(rgb(0xe5c07b))
+                        .border_color(theme::warning())
                         .child(
                             div()
                                 .text_size(px(12.0))
-                                .text_color(rgb(0xe5c07b))
+                                .text_color(theme::warning())
                                 .child(format!("approval requested: {}", request.reason)),
                         )
                         .when(pending, |this| {
@@ -205,12 +205,14 @@ impl AgentView {
             }
             AgentFrameItem::ToolCallPreparing(progress) => Some(block(
                 "tool (preparing)",
-                0x5f6370,
+                theme::text_subtle(),
                 format!("{:?}", progress),
             )),
-            AgentFrameItem::Error(error) => Some(block("error", 0xe06c75, format!("{error:?}"))),
+            AgentFrameItem::Error(error) => {
+                Some(block("error", theme::danger(), format!("{error:?}")))
+            }
             AgentFrameItem::Exited(reason) => {
-                Some(block("exited", 0x8a90a0, format!("{reason:?}")))
+                Some(block("exited", theme::text_muted(), format!("{reason:?}")))
             }
             AgentFrameItem::ToolCallStarted(_) => None,
         }
@@ -277,7 +279,7 @@ impl Render for AgentView {
                         .px_2()
                         .py_0p5()
                         .text_size(px(11.0))
-                        .text_color(rgb(0x8a90a0))
+                        .text_color(theme::text_muted())
                         .child(status),
                 )
             })
