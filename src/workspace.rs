@@ -19,6 +19,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::list::{List, ListEvent, ListState};
 use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable, ResizablePanelGroup};
+use gpui_component::TitleBar;
 use horizon_workspace::commands::{command_entries, CommandId, CommandState};
 use horizon_workspace::types::{LayoutNode, TabId};
 use horizon_workspace::{
@@ -1814,6 +1815,16 @@ impl Render for WorkspaceShell {
             .on_action(cx.listener(|shell, action: &RunCommand, window, cx| {
                 shell.execute(action.id, window, cx);
             }))
+            .child(
+                TitleBar::new().child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .text_size(px(12.0))
+                        .text_color(rgb(0x8a90a0))
+                        .child("Horizon"),
+                ),
+            )
             .child(self.render_tab_strip(cx))
             .child(
                 div()

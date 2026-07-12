@@ -22,7 +22,7 @@ use std::io::{self, IsTerminal as _};
 use std::process::ExitCode;
 
 use gpui::*;
-use gpui_component::Root;
+use gpui_component::{Root, TitleBar};
 
 use crate::workspace::WorkspaceShell;
 
@@ -57,44 +57,68 @@ fn run_client(args: &[String]) -> ExitCode {
 actions!(horizon, [Quit]);
 
 fn run_gui() {
-    gpui_platform::application().run(move |cx| {
-        gpui_component::init(cx);
-        workspace::init(cx);
-        // macOS treats a process with no main menu as owning no menu bar,
-        // so the previous app's menu (and name) would linger even with
-        // this window focused — installing a minimal menu is what makes
-        // Horizon show up as the active application. Activation at launch
-        // still needs the explicit activate(true).
-        cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
-        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
-        cx.set_menus(vec![Menu {
-            name: "Horizon".into(),
-            items: vec![MenuItem::action("Quit Horizon", Quit)],
-            disabled: false,
-        }]);
-        cx.activate(true);
+    // `.with_assets` registers gpui-component's bundled SVGs (icon set,
+    // including the titlebar's minimize/maximize/close glyphs) as the
+    // window's asset source; without it `Icon`/`IconName` lookups resolve
+    // to nothing and the custom titlebar's window controls render blank.
+    gpui_platform::application()
+        .with_assets(gpui_component_assets::Assets)
+        .run(move |cx| {
+            gpui_component::init(cx);
+            workspace::init(cx);
+            // macOS treats a process with no main menu as owning no menu bar,
+            // so the previous app's menu (and name) would linger even with
+            // this window focused — installing a minimal menu is what makes
+            // Horizon show up as the active application. Activation at launch
+            // still needs the explicit activate(true).
+            cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
+            cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+            cx.set_menus(vec![Menu {
+                name: "Horizon".into(),
+                items: vec![MenuItem::action("Quit Horizon", Quit)],
+                disabled: false,
+            }]);
+            cx.activate(true);
 
-        cx.spawn(async move |cx| {
-            let ui = &horizon_config::load().ui;
-            let size = size(
-                px(ui.window_width.unwrap_or(1100.0) as f32),
-                px(ui.window_height.unwrap_or(720.0) as f32),
-            );
-            let options = cx.update(|cx| WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size, cx))),
-                ..Default::default()
-            });
-            cx.open_window(options, |window, cx| {
-                // Resolve the socket path before the first pane spawns so
-                // every child process sees HORIZON_SOCKET from the start
-                // (the Floem shell closes the same race in AppState::new).
-                let socket_path = horizon_control::host::socket::default_socket_path();
-                let shell = cx.new(|cx| WorkspaceShell::new(socket_path.clone(), window, cx));
-                control_plane::start(shell.downgrade(), window.window_handle(), socket_path, cx);
-                cx.new(|cx| Root::new(shell, window, cx))
+            cx.spawn(async move |cx| {
+                let ui = &horizon_config::load().ui;
+                let size = size(
+                    px(ui.window_width.unwrap_or(1100.0) as f32),
+                    px(ui.window_height.unwrap_or(720.0) as f32),
+                );
+                let options = cx.update(|cx| WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size, cx))),
+                    // Drive gpui-component's `TitleBar`, rendered as the shell's
+                    // first child (see `WorkspaceShell::render`). On macOS this
+                    // keeps the native traffic lights (transparent titlebar,
+                    // `TitleBar::title_bar_options()` sets the standard inset)
+                    // and matches Zed's own window setup. On Linux, GNOME/Mutter
+                    // never grants server-side xdg-decoration (it always
+                    // negotiates client-side regardless of what's requested), so
+                    // without a drawn titlebar the window has no chrome at all;
+                    // requesting client decorations explicitly also avoids a
+                    // double titlebar on compositors that *do* honor
+                    // server-side decoration (e.g. KWin).
+                    titlebar: Some(TitleBar::title_bar_options()),
+                    window_decorations: Some(WindowDecorations::Client),
+                    ..Default::default()
+                });
+                cx.open_window(options, |window, cx| {
+                    // Resolve the socket path before the first pane spawns so
+                    // every child process sees HORIZON_SOCKET from the start
+                    // (the Floem shell closes the same race in AppState::new).
+                    let socket_path = horizon_control::host::socket::default_socket_path();
+                    let shell = cx.new(|cx| WorkspaceShell::new(socket_path.clone(), window, cx));
+                    control_plane::start(
+                        shell.downgrade(),
+                        window.window_handle(),
+                        socket_path,
+                        cx,
+                    );
+                    cx.new(|cx| Root::new(shell, window, cx))
+                })
+                .expect("Failed to open window");
             })
-            .expect("Failed to open window");
-        })
-        .detach();
-    });
+            .detach();
+        });
 }

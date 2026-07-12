@@ -234,6 +234,34 @@ span table. It refuses to run against an already-running
 `horizon-shell-gpui` unless `--force-kill` is passed. Legs (2) and (3)
 are still open.
 
+## Window chrome on Linux (post-retirement, 2026-07-12)
+
+GNOME/Mutter never grants server-side `xdg-decoration` for Wayland
+clients — regardless of what a window requests, the compositor's
+decoration-configure event always negotiates client-side, so a window
+that draws nothing of its own (`WindowOptions::default()`, as the
+shell shipped through M5) ends up with no chrome at all: no titlebar,
+no minimize/maximize/close. `main.rs`'s `run_gui` now requests
+`window_decorations: Some(WindowDecorations::Client)` explicitly (this
+also sidesteps a double titlebar on compositors, e.g. KWin, that *do*
+grant server-side decoration on request) and sets `titlebar:
+Some(TitleBar::title_bar_options())`; `WorkspaceShell::render`
+(`src/workspace.rs`) renders gpui-component's `TitleBar` as the root's
+first child, above the tab strip. No platform branch was needed:
+`TitleBar` (`crates/ui/src/title_bar.rs` in the gpui-component repo)
+already handles the macOS/Windows/Linux split internally — on macOS it
+keeps the native traffic lights (the transparent titlebar + inset
+`title_bar_options()` sets is exactly Zed's own window setup) and
+renders no window-control buttons of its own.
+
+Non-obvious gotcha: `TitleBar`'s window-control icons (`IconName`) are
+bundled SVGs resolved through an `AssetSource`, which the shell never
+registered — `Icon` lookups silently render nothing without it. Fixed
+by adding the `gpui-component-assets` crate and chaining
+`.with_assets(gpui_component_assets::Assets)` onto
+`gpui_platform::application()`, matching gpui-component's own
+`window_title` example.
+
 ## Deliberately not ported
 
 Per the state inventory: `create_signal_from_channel` bridges (6 sites
