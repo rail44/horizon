@@ -588,3 +588,26 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     occasionally still fail (now reported as an error rather than freezing
     forever, per the mitigation above) under heavy host load. Recorded
     2026-07-12.
+32. **Agent event log never compacts — `terminate detached` cleanup doesn't
+    reclaim it, and startup replays the entire history before the UI is
+    served** — observed live 2026-07-12 on the owner's machine: a 13MB
+    `agent-events.jsonl` accumulated over normal dogfooding replayed
+    16,337 records at sessiond startup, emitting one console line per
+    terminated session ("skipping resume of ... (already terminated)",
+    dozens of lines), per-event `TurnEnded ... has no turn_id; skipping
+    agent_turns projection` warnings for old-schema events, and "skipped
+    8 corrupt lines". While the replay + DuckDB projection rebuild runs,
+    the freshly launched UI's first terminal pane sits blank and workspace
+    restore appears hung — the daemon serves them only after finishing.
+    Terminating a session appends a tombstone but never removes its
+    events, so this cost grows without bound and the owner's periodic
+    "terminate detached" hygiene has no effect on it. Fix directions,
+    likely all three: (a) compact the event log (rewrite dropping
+    terminated sessions' events, either at terminate time or as startup
+    GC after a size threshold); (b) don't serialize serving the hello/
+    terminal/restore path behind the full replay — resume lazily or in
+    the background; (c) demote the per-event old-schema projection
+    warnings to one summary line. Interim workaround applied 2026-07-12:
+    archived `agent-events.jsonl` / `agent-state.duckdb{,.wal}` to
+    `.archived-20260712` suffixes in `~/.local/share/horizon/`.
+    Recorded 2026-07-12.
