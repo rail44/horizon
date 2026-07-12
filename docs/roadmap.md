@@ -144,12 +144,19 @@ wave items where possible; design docs on first use.
   injecting a winit-based `Platform` through gpui's public
   `Application::with_platform` — no gpui fork. gpui-ce evaluated and
   deferred with explicit re-adoption triggers
-  (`docs/research/gpui-ce-drop-in-spike.md` §8). Leg 1 in flight:
-  standalone prototype under `spikes/gpui-winit/` proving window +
-  wgpu text rendering + keyboard; IME preedit is the known top risk
-  and gets its own leg. Findings land in
-  `docs/research/winit-backend-spike.md`. Interim state shipped
-  2026-07-12: gpui-component `TitleBar` CSD on Linux (`3e09030`).
+  (`docs/research/gpui-ce-drop-in-spike.md` §8). Legs 1+2 shipped
+  2026-07-12 (`bb79a91`, `aac8c30`): the `spikes/gpui-winit/`
+  prototype proves decorations (sctk-adwaita CSD), rendering via
+  gpui_wgpu, keyboard, and real Japanese IME preedit/commit
+  (ibus+mozc). Verdict in `docs/research/winit-backend-spike.md`
+  §16-Q4: implementable, no gpui fork, a production
+  `horizon-winit-platform` estimated at 3,000–5,000 lines; remaining
+  unknowns are mouse/clipboard/multi-window/scale-factor plus
+  native-Wayland preedit content observation. **Adoption decision
+  pending owner.** Spin-off finding: backlog-30 (double-Enter after
+  IME confirm, plausibly live in today's terminal). Interim state
+  shipped 2026-07-12: gpui-component `TitleBar` CSD on Linux
+  (`3e09030`).
 - **Session manager modal** — shipped 2026-07-06 (`20603dd`): palette
   is Commands-only, sessions managed via the Manage Sessions command.
   Terminate-targeting fix 2026-07-09 (`22a4f47`): terminate is bound to
