@@ -32,11 +32,17 @@ use crate::input::{
 use crate::platform::WinitPlatform;
 use crate::window::WinitWindowInner;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) enum WinitUserEvent {
     /// Wakes the event loop so `WinitDispatcher::drain_main_queue` runs;
     /// carries no payload; the queue itself is the payload.
     Wake,
+    /// A muda menu-item click, forwarded from `muda::MenuEvent`'s global
+    /// handler (registered once in `WinitPlatform::new`) — see
+    /// `macos_menu.rs` for why macOS routes menu clicks through here
+    /// rather than handling them synchronously off the event loop.
+    #[cfg(target_os = "macos")]
+    MenuEvent(muda::MenuEvent),
 }
 
 pub(crate) struct WinitAppHandler<'a> {
@@ -81,8 +87,15 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
         }
     }
 
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, _event: WinitUserEvent) {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: WinitUserEvent) {
         let _guard = ActiveLoopGuard::enter(event_loop);
+        match event {
+            WinitUserEvent::Wake => {}
+            #[cfg(target_os = "macos")]
+            WinitUserEvent::MenuEvent(menu_event) => {
+                self.platform.dispatch_menu_action(&menu_event.id);
+            }
+        }
         self.platform.dispatcher.drain_main_queue();
     }
 

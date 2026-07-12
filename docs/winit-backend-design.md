@@ -3,18 +3,47 @@
 Adoption step of the roadmap's "winit windowing backend" item, following
 the spike (`spikes/gpui-winit/`, legs 1+2, `docs/research/winit-backend-spike.md`).
 This doc records the production `crates/horizon-winit-platform` crate: its
-architecture, the compile-time selection, what differs behaviorally from
-`gpui_linux`, and (historically) what was open before the default flipped.
+architecture, what differs behaviorally from gpui's own per-OS backends,
+and (historically) what was open before the default flipped and before
+every OS was unified on it.
 
-**2026-07-12: flipped to the only Linux path.** The owner dogfooded the
-`"winit"` backend (decorations, IME, mouse, and clipboard all confirmed
-working) and approved making it the sole Linux windowing path. The
-`HORIZON_WINDOWING`/`[ui] windowing` opt-in switch is gone; `src/main.rs`
-now selects the backend at compile time (`#[cfg(target_os = "linux")]`),
-matching the target-gated `horizon-winit-platform` dependency in the root
-`Cargo.toml`. The "Exit criteria for flipping the default" section below is
-kept as a historical record of what was verified (and what wasn't) going
-into that decision — it no longer describes open work.
+**2026-07-12: unified every OS on `horizon-winit-platform`, `gpui_platform`
+removed.** Owner decision: the per-OS windowing split (winit on Linux,
+gpui's own `gpui_platform` — `gpui_macos`/`gpui_windows` — everywhere else)
+was itself a weakness, not a stable end state — two backends means two
+things to keep behaviorally consistent, twice the surface for platform
+drift, and a permanent "did the macOS path bit-rot" question. Since winit
+and `gpui_wgpu` were already cross-platform (only a handful of spots in
+`crates/horizon-winit-platform` were genuinely Linux-only — see
+"Architecture" below), unifying was a removal, not a rewrite:
+`src/main.rs`'s `build_application` is now one unconditional
+`Application::with_platform(horizon_winit_platform::platform())` call, the
+root `Cargo.toml`'s `gpui_platform` dependency and target-gating on
+`horizon-winit-platform` are both gone (see "No more per-OS backend
+selection" below), and Horizon's own hand-drawn `TitleBar` is deleted
+outright — winit now draws complete native chrome on every OS, so there is
+no case left where Horizon needs to draw its own (see "TitleBar removed
+entirely" below).
+
+**What this trades on macOS**: `gpui_macos` is zed's own mature, long-used
+backend; `horizon-winit-platform`'s macOS support is new code, written and
+reviewed on this pass but **never built** (no macOS SDK on this host — see
+"Verification limits" below) — the owner's next macOS build is the actual
+verification gate, not this doc. The concrete gap this unification opens on
+macOS: gpui_macos's own native `NSMenu`/`NSApplication` integration is
+replaced by a hand-rolled `muda`-based menu (see "macOS: native app menu"
+below) that covers exactly what Horizon sets today (one "Horizon" menu, one
+"Quit Horizon" item) and nothing more — no accelerator labels, no dynamic
+enable/disable, no Services menu, no dock menu.
+
+Earlier history, kept for context: **2026-07-12, flipped to the only Linux
+path.** The owner dogfooded the `"winit"` backend (decorations, IME,
+mouse, and clipboard all confirmed working) and approved making it the
+sole Linux windowing path; the `HORIZON_WINDOWING`/`[ui] windowing` opt-in
+switch was removed then (superseded now — there is no switch of any kind
+left, on any OS). The "Exit criteria for flipping the default" section
+below is kept as a historical record of what was verified (and what
+wasn't) going into that decision — it no longer describes open work.
 
 ## Why
 
@@ -44,9 +73,10 @@ Module map (`crates/horizon-winit-platform/src/`):
 - `platform.rs` — `WinitPlatform`, the `gpui::Platform` impl. Owns the
   winit `EventLoop`, the dispatcher, the (single, spike-scope) display, the
   open windows list, and the clipboard. Most methods are no-op stubs for
-  functionality out of scope (menus, credentials, path prompts, screen
-  capture) — see spike §8 for which stubs are actually load-bearing at
-  runtime versus never hit.
+  functionality out of scope (credentials, path prompts, screen capture) —
+  see spike §8 for which stubs are actually load-bearing at runtime versus
+  never hit. `set_menus`/`activate` are real (not stubs) on macOS — see
+  "macOS: native app menu" below — and documented no-ops on Linux/Windows.
 - `window.rs` — `WinitPlatformWindow`/`WinitWindowInner`, the
   `gpui::PlatformWindow` impl wrapping one winit `Window` + one
   `WgpuRenderer`. Owns IME (`handle_ime`, ported unchanged from spike leg
@@ -72,21 +102,39 @@ Module map (`crates/horizon-winit-platform/src/`):
 - `dispatcher.rs` / `display.rs` — ported unchanged from the spike
   (`EventLoopProxy`-backed `PlatformDispatcher`; a fixed-size single-display
   stub).
+- `macos_menu.rs` (`#[cfg(target_os = "macos")]` only) — the `muda`-backed
+  native app menu; see "macOS: native app menu" below.
 
-Every module is `#[cfg(target_os = "linux")]`-gated in `lib.rs`; on other
-platforms the crate exposes nothing. `winit`/`gpui_wgpu`/`arboard`/
-`raw-window-handle` are Linux-only dependencies in the crate's own
-`Cargo.toml`, and the root crate's dependency on `horizon-winit-platform`
-itself is target-gated (`[target.'cfg(target_os = "linux")'.dependencies]`
-in the root `Cargo.toml`) — so `cargo build --workspace` on macOS/Windows
-never touches this crate's code or dependency tree at all.
+Cross-platform: every module except `macos_menu.rs` builds on every OS
+(`lib.rs` has no `#[cfg(target_os = "linux")]` gate at all any more). The
+few genuinely OS-specific pieces are `#[cfg]`-gated *inside* their module
+instead:
+
+- `clipboard.rs`'s primary-selection methods (`read_primary`/
+  `write_primary`) are `#[cfg(target_os = "linux")]`, no-ops elsewhere —
+  X11/Wayland's separate middle-click-paste buffer has no equivalent on
+  macOS/Windows, and `arboard` itself only exports the
+  `GetExtLinux`/`SetExtLinux`/`LinuxClipboardKind` types this needs under
+  `cfg(all(unix, not(macos/android/emscripten)))`. Plain
+  read/write-clipboard (`get_text`/`set_text`) is unconditional — arboard
+  supports it on every target Horizon builds for.
+- `platform.rs`'s `set_menus`/`activate` branch on `target_os = "macos"`
+  (see "macOS: native app menu" below); every other `Platform` method is
+  identical on every OS.
+- `macos_menu.rs` itself, and the one manifest dependency it needs
+  (`muda`), are `#[cfg(target_os = "macos")]`-gated — see the crate's own
+  `Cargo.toml` header comment.
+
+`winit`/`gpui_wgpu`/`arboard`/`raw-window-handle`/`uuid` are plain
+dependencies in the crate's own `Cargo.toml` (no target gate), and the
+root crate's dependency on `horizon-winit-platform` is likewise plain —
+`cargo build --workspace` builds this crate's full source on every OS now.
 
 `gpui`/`gpui_wgpu` ride the same unpinned git source as the root crate's
-own `gpui`/`gpui_platform` (see the long comment on those two in the root
-`Cargo.toml`) rather than the spike's pinned rev — mixing a pinned and an
-unpinned source for the same crate splits the dependency graph ("multiple
-different versions of crate `gpui`"), so production code can't keep the
-spike's pin.
+own `gpui` (see the long comment on it in the root `Cargo.toml`) rather
+than the spike's pinned rev — mixing a pinned and an unpinned source for
+the same crate splits the dependency graph ("multiple different versions
+of crate `gpui`"), so production code can't keep the spike's pin.
 
 ## Gaps filled beyond the spike
 
@@ -139,48 +187,151 @@ setting directly, a mechanism outside winit). Stubbed to
 `src/` reads `WindowAppearance`, so this has no observable effect on
 Horizon's own (entirely config-driven) theme.
 
-## The double-chrome fork: skipping Horizon's own TitleBar under winit
+## TitleBar removed entirely
 
-Not in the task's explicit gap list, but discovered while wiring the
-switch: `gpui-component`'s `TitleBar` (`crates/ui/src/title_bar.rs` in the
-pinned checkout) draws its own minimize/maximize/close buttons
-*unconditionally* on Linux — it only reads `window.window_decorations()`
-(`Decorations::Client` vs `Server`) to decide whether to also hook up a
-right-click window-menu handler, not whether to render controls at all.
-Under `gpui_linux`, that's correct: GNOME/Mutter never grants real
-server-side decoration, so `TitleBar` is the *only* chrome that exists.
-Under the winit backend, winit+sctk-adwaita already draws a complete CSD
-frame (title, drag region, minimize/maximize/close) — rendering Horizon's
-own `TitleBar` on top would double both the bar and its buttons.
+Originally (2026-07-12, the Linux-only flip) `gpui-component`'s `TitleBar`
+(`crates/ui/src/title_bar.rs` in the pinned checkout) was still rendered on
+non-Linux OSes — it draws its own minimize/maximize/close buttons
+*unconditionally*, which only made sense back when `gpui_macos` relied on
+Horizon's own hand-drawn titlebar for macOS's transparent-inset
+traffic-light layout. Now that winit is the only backend and it draws
+complete native chrome on every OS (sctk-adwaita CSD on Linux, native
+decorations on macOS/Windows), there is no OS left where Horizon needs to
+draw its own bar. `WorkspaceShell`'s `native_decorations: bool` field and
+its `.when(!self.native_decorations, ...)` `TitleBar` child (`src/workspace.rs`)
+are both deleted; `WorkspaceShell::new` dropped the corresponding
+constructor parameter. `src/main.rs`'s `WindowOptions.titlebar` is now a
+plain `TitlebarOptions { title: Some("Horizon".into()), appears_transparent:
+false, traffic_light_position: None }` — `WinitPlatform::open_window` only
+ever reads `titlebar.title` (see `platform.rs`), so the transparency/
+traffic-light fields (gpui-component's own hand-drawn-titlebar concept)
+are moot now and set to their plain defaults.
 
-Fix: `WorkspaceShell` gained a `native_decorations: bool` field
-(`src/workspace.rs`), threaded from `src/main.rs`'s windowing-backend
-resolution (`true` only when the winit backend is actually active — see
-`build_application`'s return tuple), and `WorkspaceShell::render` skips its
-`TitleBar` child entirely (`.when(!self.native_decorations, ...)`) when
-set. The native/macOS paths are untouched (`native_decorations` is always
-`false` there — macOS still wants `TitleBar` for its transparent-inset
-traffic-light layout, matching the existing comment in `main.rs`).
+`gpui-component-assets`' `.with_assets` registration in `src/main.rs`
+stays, despite `TitleBar` (the original reason it was added) being gone:
+`List`, `Button`, and `TextView` — all still in active use
+(`palette.rs`/`session_manager.rs`/`view_chooser.rs`'s `List`,
+`agent/view.rs`'s `Button`/`TextView`) — resolve their own bundled icons
+through the same registered asset source (confirmed by grepping
+`gpui-component`'s `list/`, `button/`, and `text/` modules for
+`IconName`/icon usage). Removing it would silently blank those icons.
 
-## Compile-time selection
+## No more per-OS backend selection
 
-There is no runtime switch: `src/main.rs`'s `build_application` picks the
-backend at compile time via `#[cfg(target_os = "linux")]`.
+`src/main.rs`'s `build_application` is one unconditional call:
+`Application::with_platform(horizon_winit_platform::platform())` — no
+`#[cfg]`, no tuple return, nothing OS-specific left at this call site. The
+root `Cargo.toml` mirrors this: `horizon-winit-platform` is a plain
+`[dependencies]` entry (was `[target.'cfg(target_os = "linux")'.dependencies]`);
+the `gpui_platform` dependency (gpui's own platform backend, previously
+used on non-Linux) is removed outright — nothing in this crate's own
+source calls `gpui_platform::application()` any more.
 
-- On Linux: `Application::with_platform(horizon_winit_platform::platform())`,
-  with `native_decorations: true` (see "The double-chrome fork" above).
-- On every other OS: `gpui_platform::application()` — gpui's own platform
-  backend, untouched by this work — with `native_decorations: false`, so
-  `WorkspaceShell` keeps drawing its own `TitleBar` (macOS's transparent
-  traffic-light layout).
+This **does** shrink the dependency graph, correcting an assumption made
+going into this task: the task brief expected `gpui-component` to still
+pull `gpui_platform` in transitively regardless (its *workspace* root
+`Cargo.toml` does depend on `gpui_platform`, for its own demo/story
+binary), but the `gpui-component` *library* crate Horizon actually depends
+on (`crates/ui` in the pinned checkout, published as the `gpui-component`
+crate) does not. Confirmed directly: `git diff Cargo.lock` for this change
+shows `gpui_linux`/`gpui_macos`/`gpui_platform`/`gpui_web`/`gpui_windows`
+all disappearing (871 deleted lines against 59 inserted, dominated by
+those five packages' own transitive trees — font-kit, cocoa/objc2,
+windows-sys, wayland/x11 crates only `gpui_platform` needed) once this
+crate's own `gpui_platform` dependency was removed; grepping the new
+`Cargo.lock` for any of those five names returns nothing.
 
-The root `Cargo.toml` mirrors this at the manifest level:
-`horizon-winit-platform` is a `[target.'cfg(target_os = "linux")'.dependencies]`
-entry, and `gpui_platform` is a
-`[target.'cfg(not(target_os = "linux"))'.dependencies]` entry (manifest
-hygiene only — `gpui-component` itself depends on `gpui_platform`
-unconditionally, so `gpui_linux` still builds transitively into the Linux
-graph regardless of our own crate's direct dependency).
+## macOS: native app menu
+
+Winit itself draws no menus (it's a windowing-only crate) — `muda`
+(`crates/horizon-winit-platform/src/macos_menu.rs`) is the standard winit
+companion for this, evaluated and chosen because its README documents the
+exact winit integration pattern this crate already uses elsewhere
+(`muda::MenuEvent::set_event_handler` forwarding through an
+`EventLoopProxy` as a user event, matching how `WinitDispatcher` already
+wakes the loop for background-thread work — see `dispatcher.rs`).
+
+- **`Platform::set_menus`** (`platform.rs`, gated `#[cfg(target_os = "macos")]`)
+  hands gpui's `Vec<Menu>` tree to `MacosMenuState::set_menus`
+  (`macos_menu.rs`), which walks it recursively
+  (`Action`/`Separator`/`Submenu`; `SystemMenu` — macOS's OS-managed
+  Services menu — is the one variant left unimplemented, since Horizon
+  doesn't set one) into a `muda::Menu`, assigns each `Action` item a fresh
+  `muda::MenuId`, stores `MenuId -> Box<dyn Action>` in a `RefCell<HashMap>`,
+  and calls `muda::Menu::init_for_nsapp()`. Scope matches exactly what
+  Horizon sets today (`src/main.rs`): one "Horizon" menu, one "Quit
+  Horizon" action item. Menu items carry no accelerator (no
+  `muda::accelerator::Accelerator` derived from gpui's `Keymap`) — the one
+  shortcut Horizon binds today (`cmd-q` -> `Quit`) already works via
+  gpui's own window-level keybinding dispatch regardless of what the OS
+  menu displays; wiring `Keymap` -> `Accelerator` conversion is left for
+  when Horizon actually needs menu-displayed shortcuts.
+- **Click -> action dispatch.** A menu click fires `muda`'s process-global
+  `MenuEvent` channel; `WinitPlatform::new` registers a handler once
+  (`muda::MenuEvent::set_event_handler`) that forwards it through the
+  winit event loop as a new `WinitUserEvent::MenuEvent` variant (gated
+  `#[cfg(target_os = "macos")]` in `app_handler.rs`, which also dropped
+  the enum's `Copy` derive since `muda::MenuEvent` isn't `Copy`).
+  `WinitAppHandler::user_event` routes it to
+  `WinitPlatform::dispatch_menu_action`, which looks the `MenuId` up in
+  `MacosMenuState`'s map and invokes the `Box<dyn Action>` through
+  whatever callback `Platform::on_app_menu_action` registered — gpui's own
+  `init_app_menus` (called unconditionally from `App`'s constructor) wires
+  that callback to `cx.dispatch_action`, so a click ends up going through
+  exactly the same action-dispatch path `cmd-q` does. `on_app_menu_action`
+  itself now actually stores the callback (`RefCell<Option<Box<dyn FnMut(&dyn
+  Action)>>>` on `WinitPlatform`) instead of discarding it — the
+  pre-unification stub silently dropped it, which would have made any
+  macOS menu click a no-op even if a menu had been drawn.
+- **`Platform::activate`** focuses every open window
+  (`WinitWindowInner::window.focus_window()`) on macOS. There is no winit
+  API for "activate the whole app" (as opposed to one window) post-launch;
+  `WinitPlatform::new` also sets `ActivationPolicy::Regular` via
+  `EventLoopBuilderExtMacOS::with_activation_policy` at event-loop-build
+  time, which is what actually gives the process a normal Dock
+  icon/menu-bar identity and gets it activated on launch (a bare `cargo
+  run` binary has no bundle `Info.plist` to read a policy from
+  otherwise). A real `NSApp.activate(ignoringOtherApps:)` call isn't
+  exposed by winit 0.30's public API; this is the "precisely-documented
+  fallback" for that gap, not a silent drop of the requirement.
+- **Linux and Windows** keep `set_menus`/`activate` as documented no-ops
+  (`#[cfg(not(target_os = "macos"))]` branches in `platform.rs`) — Linux
+  never had this gap (sctk-adwaita's CSD carries no menu bar to begin
+  with, and GNOME/Mutter's app-menu convention is a separate, unrelated
+  mechanism Horizon doesn't target), and Windows menu-bar support is
+  explicitly out of scope for this pass (see "Out of scope" below).
+
+## What differs behaviorally from `gpui_macos`/`gpui_windows`
+
+**Unbuilt on this host — see "Verification limits" below.** This section
+records what the code is *intended* to do, reviewed by symmetry with the
+Linux implementation and gpui's own `Platform` contract, not what's been
+observed running.
+
+- **Decorations.** Native macOS/Windows chrome via winit's own
+  `WindowAttributes::with_decorations(true)` (unconditional, same call as
+  Linux — see `platform.rs::open_window`) instead of `gpui_macos`'s
+  transparent-titlebar-plus-traffic-lights setup or `gpui_windows`'s own
+  chrome. `window_decorations()` always reports `Decorations::Server`
+  (same rationale as Linux — see below).
+- **App menu.** `muda`-backed, not `gpui_macos`'s native `NSMenu`
+  integration — see "macOS: native app menu" above for exactly what's
+  covered and what isn't (no accelerators, no dynamic enable/disable, no
+  Services menu, no dock menu).
+- **Activation.** `ActivationPolicy::Regular` + per-window
+  `focus_window()`, not a direct `NSApp.activate(ignoringOtherApps:)` call
+  — see "macOS: native app menu" above.
+- **IME/keyboard/mouse/cursor/clipboard.** Same code paths as Linux
+  (`app_handler.rs`/`input.rs`/`cursor.rs`/`clipboard.rs` have no
+  Linux-specific gates beyond primary selection — see "Architecture"
+  above), so whatever behavioral parity or gaps exist on Linux (documented
+  below and in "Verification") apply equally to macOS/Windows, modulo
+  actually being unbuilt there.
+- **Window appearance.** Same `WindowAppearance::Dark` stub as Linux (see
+  below) — macOS/Windows *do* have a real light/dark query winit could
+  expose, unlike Linux's freedesktop-portal-only situation, but Horizon's
+  theme is entirely config-driven and reads `WindowAppearance` nowhere, so
+  this wasn't implemented for either OS.
 
 ## What differs behaviorally from `gpui_linux`
 
@@ -209,14 +360,30 @@ graph regardless of our own crate's direct dependency).
 - **Multi-monitor.** `display.rs` is a single fixed-size stub, same as the
   spike. Real per-monitor bounds/DPI is out of scope (see below).
 
-## Out of scope (unchanged from the task brief)
+## Out of scope
 
-Menus beyond no-op stubs, multi-window, screen capture, drag&drop file
-opening, and macOS/Windows support for this crate. Also carried over from
-the spike: native-Wayland preedit *content* observation remains unverified
-(only confirmed via winit's X11 fallback backend, spike §14.2-14.3 — same
-`winit::event::Ime` code path either way, so this doesn't affect the code
-itself, only how confidently the content was watched).
+Multi-window, screen capture, drag&drop file opening, Windows menu-bar
+support (`set_menus`/`activate` stay documented no-ops there — see "macOS:
+native app menu" above), and — within the macOS menu itself — accelerator
+labels, dynamic enable/disable, the Services menu, and the dock menu (see
+the same section). Also carried over from the spike: native-Wayland
+preedit *content* observation remains unverified (only confirmed via
+winit's X11 fallback backend, spike §14.2-14.3 — same `winit::event::Ime`
+code path either way, so this doesn't affect the code itself, only how
+confidently the content was watched).
+
+## Verification limits
+
+This host is Linux-only: there is no macOS SDK, so the macOS-gated code
+(`macos_menu.rs`, and the `#[cfg(target_os = "macos")]` branches in
+`platform.rs`/`app_handler.rs`/`clipboard.rs`) has **never been compiled**,
+only written and reviewed by symmetry with the Linux implementation and
+against gpui's/muda's/winit's documented APIs (source read directly from
+the pinned/registry checkouts, not from memory). **The owner's next macOS
+build is the actual verification gate for all of it** — menu
+construction, the click -> `Action` dispatch path, and activation. Windows
+is in the same unbuilt position but carries less new code (menus/
+activation stay no-ops there, same as before).
 
 ## Verification
 

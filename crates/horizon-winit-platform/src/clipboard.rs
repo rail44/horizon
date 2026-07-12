@@ -10,8 +10,17 @@
 //! is text-only, and `arboard`'s image support pulls in a sizeable
 //! `image`/`objc2-*` dependency tree for no payoff here (see the
 //! `image-data` feature left off in Cargo.toml).
+//!
+//! Primary selection (`read_primary`/`write_primary`, X11/Wayland's
+//! separate middle-click-paste buffer) is Linux-only: `arboard` only
+//! exports `GetExtLinux`/`SetExtLinux`/`LinuxClipboardKind` under
+//! `cfg(all(unix, not(macos/android/emscripten)))`, and macOS/Windows have
+//! no such concept at all, so those two methods are cfg-gated no-ops
+//! outside Linux.
 
-use arboard::{Clipboard, GetExtLinux, LinuxClipboardKind, SetExtLinux};
+use arboard::Clipboard;
+#[cfg(target_os = "linux")]
+use arboard::{GetExtLinux, LinuxClipboardKind, SetExtLinux};
 use gpui::ClipboardItem;
 use std::cell::RefCell;
 
@@ -57,6 +66,7 @@ impl WinitClipboard {
         });
     }
 
+    #[cfg(target_os = "linux")]
     pub(crate) fn read_primary(&self) -> Option<ClipboardItem> {
         let text = self
             .with(|clipboard| {
@@ -70,6 +80,7 @@ impl WinitClipboard {
         (!text.is_empty()).then(|| ClipboardItem::new_string(text))
     }
 
+    #[cfg(target_os = "linux")]
     pub(crate) fn write_primary(&self, item: ClipboardItem) {
         let Some(text) = item.text() else { return };
         self.with(|clipboard| {
@@ -82,4 +93,14 @@ impl WinitClipboard {
             }
         });
     }
+
+    /// X11/Wayland-only concept (see module docs); no-op elsewhere.
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn read_primary(&self) -> Option<ClipboardItem> {
+        None
+    }
+
+    /// X11/Wayland-only concept (see module docs); no-op elsewhere.
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn write_primary(&self, _item: ClipboardItem) {}
 }

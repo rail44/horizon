@@ -167,7 +167,19 @@ wave items where possible; design docs on first use.
   selects `horizon-winit-platform` at compile time
   (`#[cfg(target_os = "linux")]`) with `gpui_platform::application()`
   kept only for non-Linux targets. `docs/winit-backend-design.md`'s
-  exit-criteria section is now historical.
+  exit-criteria section is now historical. Unified on every OS 2026-07-12
+  (owner decision: the per-OS split was itself a weakness):
+  `horizon-winit-platform` is now cross-platform (only clipboard primary
+  selection and the macOS app menu stay `#[cfg]`-gated per OS),
+  `gpui_platform` is fully removed from `src/main.rs`/root `Cargo.toml`,
+  and Horizon's own `TitleBar` is deleted (winit draws complete native
+  chrome everywhere now). macOS gained a real `muda`-backed app menu +
+  `ActivationPolicy::Regular` activation, replacing `gpui_macos`'s native
+  menu integration with a hand-rolled equivalent scoped to exactly what
+  Horizon sets (one menu, one Quit item). **Unbuilt on macOS/Windows**
+  (this host has no macOS SDK) — the owner's next macOS build is the
+  verification gate; see `docs/winit-backend-design.md`'s "Verification
+  limits" section.
 - **Session manager modal** — shipped 2026-07-06 (`20603dd`): palette
   is Commands-only, sessions managed via the Manage Sessions command.
   Terminate-targeting fix 2026-07-09 (`22a4f47`): terminate is bound to
