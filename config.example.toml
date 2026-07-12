@@ -254,6 +254,30 @@ window_height = 720.0
 # cursor_accent = "#e5c07b"
 
 # ---------------------------------------------------------------------------
+# Agent-pane roles (src/theme.rs; docs/agent-output-ui-amendment.md's
+# theme-role layer). `accent`/`text_primary` above are reused as-is; the
+# rest are new, dedicated `[theme]` keys: danger (errors), warning
+# (tool-call requests, pending approval), success (finished tool-call
+# results), info (the assistant message label), text_muted (readable
+# secondary text -- status line, exited state), text_subtle (the most
+# de-emphasized text -- thinking deltas, in-flight tool progress), and
+# diff_added_surface/diff_added_text, diff_removed_surface/
+# diff_removed_text (fs.edit diff rendering -- not painted by any view
+# yet, added ahead of that slice per the amendment doc). Defaults shown
+# below match `src/agent/view.rs`'s look prior to this layer.
+# ---------------------------------------------------------------------------
+# danger = "#e06c75"
+# warning = "#e5c07b"
+# success = "#98c379"
+# info = "#61afef"
+# text_muted = "#8a90a0"
+# text_subtle = "#5f6370"
+# diff_added_surface = "#1e2b22"
+# diff_added_text = "#98c379"
+# diff_removed_surface = "#2b1e20"
+# diff_removed_text = "#e06c75"
+
+# ---------------------------------------------------------------------------
 # [theme.ansi] — the app-wide 16-slot ANSI palette (black…white,
 # bright_black…bright_white), as `#rrggbb`/`#rgb` hex strings. Used by the
 # terminal today (see `src/ui/theme/ansi.rs`); a future agent-transcript

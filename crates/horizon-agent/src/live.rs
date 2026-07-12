@@ -6,14 +6,21 @@ use crate::persistence::event_log;
 use crate::roles::RoleId;
 
 use super::frame::{
-    agent_frame_from_events, apply_agent_event_to_frame, apply_tool_call_progress_to_frame,
-    AgentFrame,
+    agent_frame_and_turn_clock_from_events, apply_agent_event_to_frame,
+    apply_tool_call_progress_to_frame, AgentFrame, TurnClock,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct State {
     events: Vec<Event>,
     frame: AgentFrame,
+    /// Turn bookkeeping continued across every subsequent
+    /// [`Self::extend_provider_events`] call -- see [`TurnClock`]'s doc
+    /// comment. Seeded by replaying `events` once in [`Self::from_history`]
+    /// so a resumed session's live fold picks up exactly where a
+    /// continuously-running session would have been, rather than
+    /// forgetting the in-flight turn's start/model.
+    turn: TurnClock,
 }
 
 impl State {
@@ -28,8 +35,12 @@ impl State {
     /// identical — from the very first fold onward — to one that had been
     /// running the whole time.
     pub fn from_history(events: Vec<Event>) -> Self {
-        let frame = agent_frame_from_events(&events);
-        Self { events, frame }
+        let (frame, turn) = agent_frame_and_turn_clock_from_events(&events);
+        Self {
+            events,
+            frame,
+            turn,
+        }
     }
 
     /// Folds one batch of provider events into the frame. A
@@ -50,7 +61,7 @@ impl State {
                 apply_tool_call_progress_to_frame(&mut self.frame, progress);
                 continue;
             }
-            apply_agent_event_to_frame(&mut self.frame, &event.event);
+            apply_agent_event_to_frame(&mut self.frame, &event.event, &mut self.turn);
             self.events.push(event.event);
         }
         self.frame.clone()

@@ -152,12 +152,14 @@ fn in_place_mutable_item_indices_finds_an_earlier_reasoning_delta_across_an_inte
     // turn -- a further `ReasoningDelta` must coalesce back into item 0 (the
     // earlier `ReasoningDelta`), not item 1 (the literal last item).
     let mut frame = AgentFrame::empty();
+    let mut turn = TurnClock::new();
     apply_agent_event_to_frame(
         &mut frame,
         &agent::Event::ReasoningDelta(agent::MessageDelta {
             role: agent::MessageRole::Assistant,
             text: "think ".to_string(),
         }),
+        &mut turn,
     );
     apply_agent_event_to_frame(
         &mut frame,
@@ -165,6 +167,7 @@ fn in_place_mutable_item_indices_finds_an_earlier_reasoning_delta_across_an_inte
             role: agent::MessageRole::Assistant,
             text: "answer ".to_string(),
         }),
+        &mut turn,
     );
     assert_eq!(frame.items.len(), 2);
 
@@ -174,6 +177,7 @@ fn in_place_mutable_item_indices_finds_an_earlier_reasoning_delta_across_an_inte
             role: agent::MessageRole::Assistant,
             text: "more".to_string(),
         }),
+        &mut turn,
     );
     assert_eq!(
         frame.items.len(),
@@ -392,12 +396,191 @@ fn tool_call_progress_updates_in_place_then_is_superseded_by_the_real_request() 
             tool_id: "fs.write".to_string(),
             input: serde_json::json!({ "path": "/tmp/x" }),
         }),
+        &mut TurnClock::new(),
     );
     assert_eq!(frame.items.len(), 1);
     assert!(matches!(
         &frame.items[0],
         AgentFrameItem::ToolCallRequested(request) if request.tool_id == "fs.write"
     ));
+}
+
+/// `docs/agent-output-ui-amendment.md`'s 2026-07-12 addendum (turn
+/// receipts): a turn's `TurnEnded` fold must carry the end reason, the
+/// model id reported by the turn's `ProviderRequestSent`, and an elapsed
+/// duration measured from the turn's opening `MessageCommitted(User)`.
+#[test]
+fn turn_ended_folds_a_receipt_with_reason_model_and_elapsed() {
+    let mut frame = AgentFrame::empty();
+    let mut turn = TurnClock::new();
+
+    apply_agent_event_to_frame(
+        &mut frame,
+        &agent::Event::MessageCommitted(agent::Message {
+            role: agent::MessageRole::User,
+            text: "question".to_string(),
+        }),
+        &mut turn,
+    );
+    apply_agent_event_to_frame(
+        &mut frame,
+        &agent::Event::ProviderRequestSent(agent::ProviderRequestSent {
+            model: "gpt-4o-mini".to_string(),
+        }),
+        &mut turn,
+    );
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    apply_agent_event_to_frame(
+        &mut frame,
+        &agent::Event::TurnEnded(agent::TurnEndReason::Completed),
+        &mut turn,
+    );
+
+    match frame.items.last().expect("a TurnEnded item") {
+        AgentFrameItem::TurnEnded {
+            reason,
+            model,
+            elapsed,
+        } => {
+            assert_eq!(*reason, agent::TurnEndReason::Completed);
+            assert_eq!(model.as_deref(), Some("gpt-4o-mini"));
+            assert!(
+                *elapsed >= std::time::Duration::from_millis(5),
+                "elapsed {elapsed:?} should cover the sleep between request and turn end"
+            );
+        }
+        other => panic!("expected a TurnEnded item, got {other:?}"),
+    }
+}
+
+/// A turn that ends before any `ProviderRequestSent` (e.g. an immediate
+/// cancel) has no model to report -- `model` must read back `None`, not a
+/// stale value from an earlier turn.
+#[test]
+fn turn_ended_with_no_provider_request_has_no_model() {
+    let frame = agent_frame_from_events(&[
+        agent::Event::MessageCommitted(agent::Message {
+            role: agent::MessageRole::User,
+            text: "question".to_string(),
+        }),
+        agent::Event::TurnEnded(agent::TurnEndReason::Cancelled),
+    ]);
+
+    match frame.items.last().expect("a TurnEnded item") {
+        AgentFrameItem::TurnEnded { reason, model, .. } => {
+            assert_eq!(*reason, agent::TurnEndReason::Cancelled);
+            assert_eq!(*model, None);
+        }
+        other => panic!("expected a TurnEnded item, got {other:?}"),
+    }
+}
+
+/// Old-log replay compat for the elapsed-time trade-off (`TurnClock`'s doc
+/// comment): a `TurnEnded` with nothing preceding it in the replayed slice
+/// (a legacy pre-turn_id log, or a resumed-history slice starting mid-turn)
+/// must still fold without panicking, reading back a near-zero elapsed and
+/// no model rather than reusing stale state.
+#[test]
+fn agent_frame_from_events_folds_a_turn_ended_with_no_preceding_events() {
+    let frame =
+        agent_frame_from_events(&[agent::Event::TurnEnded(agent::TurnEndReason::Cancelled)]);
+
+    match frame.items.as_slice() {
+        [AgentFrameItem::TurnEnded {
+            reason,
+            model,
+            elapsed,
+        }] => {
+            assert_eq!(*reason, agent::TurnEndReason::Cancelled);
+            assert_eq!(*model, None);
+            assert_eq!(*elapsed, std::time::Duration::ZERO);
+        }
+        other => panic!("expected exactly one TurnEnded item, got {other:?}"),
+    }
+}
+
+/// `AgentFrameItem::TurnEnded` is itself a turn boundary (`is_turn_boundary_item`):
+/// content folded after it must not coalesce backward across it into
+/// whatever was accumulating before the turn ended.
+#[test]
+fn turn_ended_is_a_turn_boundary_for_coalescing() {
+    let frame = agent_frame_from_events(&[
+        agent::Event::AssistantTextDelta(agent::MessageDelta {
+            role: agent::MessageRole::Assistant,
+            text: "before".to_string(),
+        }),
+        agent::Event::TurnEnded(agent::TurnEndReason::Completed),
+        agent::Event::AssistantTextDelta(agent::MessageDelta {
+            role: agent::MessageRole::Assistant,
+            text: "after".to_string(),
+        }),
+    ]);
+
+    let deltas: Vec<&str> = frame
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            AgentFrameItem::AssistantTextDelta(delta) => Some(delta.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        deltas,
+        vec!["before", "after"],
+        "the post-TurnEnded delta must not merge into the pre-TurnEnded one"
+    );
+}
+
+/// `docs/agent-output-ui-amendment.md`'s decision 5 (failure display) needs
+/// an explicit success/failure outcome on a finished tool call rather than
+/// the UI sniffing `output`'s `"is_error"` convention itself --
+/// `ToolCallResult::new` is the one place that convention is read.
+#[test]
+fn tool_call_result_new_derives_is_error_from_the_output_convention() {
+    let ok = agent::ToolCallResult::new(
+        agent::ToolCallId("call-1".to_string()),
+        serde_json::json!({ "ok": true }),
+    );
+    assert!(!ok.is_error);
+
+    let failed = agent::ToolCallResult::new(
+        agent::ToolCallId("call-2".to_string()),
+        serde_json::json!({ "is_error": true, "message": "boom" }),
+    );
+    assert!(failed.is_error);
+
+    // Folded straight into the frame item, so the UI reads it off
+    // `AgentFrameItem::ToolCallFinished`'s `ToolCallResult` directly.
+    let frame = agent_frame_from_events(&[agent::Event::ToolCallFinished(failed.clone())]);
+    match frame.items.as_slice() {
+        [AgentFrameItem::ToolCallFinished(result)] => assert!(result.is_error),
+        other => panic!("expected exactly one ToolCallFinished item, got {other:?}"),
+    }
+}
+
+/// Compatibility: a `ToolCallResult` persisted before `is_error` existed as
+/// a field has no such key in its JSON at all -- `#[serde(default)]` must
+/// still deserialize it (as `false`, i.e. success), not treat the record as
+/// corrupt. Mirrors `persistence::event_log`'s own
+/// `reads_a_pre_role_record_with_no_role_id_key` regression guard for the
+/// same additive-field shape.
+#[test]
+fn tool_call_result_deserializes_a_pre_is_error_record_as_success() {
+    let pre_field_json = serde_json::json!({
+        "call_id": "call-1",
+        "output": { "is_error": true, "message": "written before is_error existed" }
+    });
+
+    let result: agent::ToolCallResult =
+        serde_json::from_value(pre_field_json).expect("deserialize pre-is_error record");
+
+    assert_eq!(result.call_id, agent::ToolCallId("call-1".to_string()));
+    assert!(
+        !result.is_error,
+        "a pre-existing record with no is_error key must default to false, \
+         even though its own output JSON says otherwise -- old records simply \
+         don't get the new field's benefit until re-derived"
+    );
 }
 
 #[test]
@@ -442,12 +625,9 @@ fn agent_frame_tracks_pending_approval_until_tool_finishes() {
 
     assert_eq!(frame.pending_approval_call_id(), Some(call_id.clone()));
 
-    frame
-        .items
-        .push(AgentFrameItem::ToolCallFinished(agent::ToolCallResult {
-            call_id,
-            output: serde_json::json!({ "ok": true }),
-        }));
+    frame.items.push(AgentFrameItem::ToolCallFinished(
+        agent::ToolCallResult::new(call_id, serde_json::json!({ "ok": true })),
+    ));
 
     assert_eq!(frame.pending_approval_call_id(), None);
 }
@@ -480,12 +660,9 @@ fn agent_frame_lists_multiple_pending_approvals_oldest_first() {
     );
     assert_eq!(frame.pending_approval_call_id(), Some(first.clone()));
 
-    frame
-        .items
-        .push(AgentFrameItem::ToolCallFinished(agent::ToolCallResult {
-            call_id: first,
-            output: serde_json::json!({ "ok": true }),
-        }));
+    frame.items.push(AgentFrameItem::ToolCallFinished(
+        agent::ToolCallResult::new(first, serde_json::json!({ "ok": true })),
+    ));
 
     assert_eq!(frame.pending_approval_call_ids(), vec![second.clone()]);
     assert_eq!(frame.pending_approval_call_id(), Some(second));
@@ -528,10 +705,10 @@ fn mock_agent_accepts_tool_call_result_command() {
     let tx = handle.sender();
     let rx = handle.events();
 
-    let _ = tx.send(agent::Command::ToolCallResult(agent::ToolCallResult {
-        call_id: agent::ToolCallId("call-1".to_string()),
-        output: serde_json::json!({ "ok": true }),
-    }));
+    let _ = tx.send(agent::Command::ToolCallResult(agent::ToolCallResult::new(
+        agent::ToolCallId("call-1".to_string()),
+        serde_json::json!({ "ok": true }),
+    )));
 
     let saw_ack = std::iter::from_fn(|| rx.recv_timeout(std::time::Duration::from_millis(50)).ok())
         .take(5)
@@ -756,10 +933,10 @@ fn mock_agent_cancel_marks_pending_approval_cancelled_and_recovers() {
 
     // A tool result arriving late for the cancelled call is accepted and
     // silently dropped — no further events are produced for it.
-    let _ = tx.send(agent::Command::ToolCallResult(agent::ToolCallResult {
+    let _ = tx.send(agent::Command::ToolCallResult(agent::ToolCallResult::new(
         call_id,
-        output: serde_json::json!({ "ignored": true }),
-    }));
+        serde_json::json!({ "ignored": true }),
+    )));
     assert!(
         rx.recv_timeout(std::time::Duration::from_millis(200))
             .is_err(),

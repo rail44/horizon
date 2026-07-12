@@ -201,10 +201,7 @@ fn synchronous_result(
     output: Value,
     ran: bool,
 ) -> ApprovalOutcome {
-    let result = ToolCallResult {
-        call_id: call_id.clone(),
-        output,
-    };
+    let result = ToolCallResult::new(call_id.clone(), output);
 
     let mut events = Vec::new();
     if ran {

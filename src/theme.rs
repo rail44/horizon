@@ -4,6 +4,37 @@
 //! The scheme is loaded from the shared config crate (`[theme]` +
 //! `[theme.ansi]` in config.toml) over Horizon's built-in defaults,
 //! and `Reload Config` swaps it live via [`reload_from`].
+//!
+//! The bottom half of this module is the agent-pane's theme-role layer
+//! (`docs/agent-output-ui-amendment.md`'s stage-B prerequisite):
+//! [`text_primary`], [`accent`], [`danger`], [`warning`], [`success`],
+//! [`info`], [`text_muted`], [`text_subtle`], and the four
+//! `diff_added_*`/`diff_removed_*` roles, each an `Hsla` resolved through
+//! the same `[theme]` scheme as everything else here. `src/agent/view.rs`
+//! is the only consumer today. Names follow gpui-component's own
+//! `ThemeColor` vocabulary where a matching role exists there (`accent`,
+//! `danger`, `warning`, `success`, `info`) — but the values are Horizon's
+//! own, resolved independently of gpui-component's global `Theme`
+//! (`cx.theme()`), which the shell initializes at its stock default and
+//! does not otherwise customize (see `gpui_component::init` in
+//! `src/main.rs`). Wiring config into that global as well is a larger,
+//! separate change (it would also restyle every gpui-component widget —
+//! `Button`, `Input`, `List` — across the app, not just this pane) and is
+//! not attempted here.
+//!
+//! This `Scheme`/`scheme_from` pair is deliberately kept as the *one* seam
+//! between `[theme]`/`[theme.ansi]` config and every resolved color in the
+//! app (terminal ANSI, chrome, and now the agent-pane roles above). The
+//! owner's stated direction is for a future pass to derive
+//! gpui-component's `ThemeColor` (its ~140 role fields — accent, danger,
+//! list/selection surfaces, etc.) from this same Horizon palette, so
+//! gpui-component-rendered chrome (modals, `List`, `Button`, `TitleBar`)
+//! follows the user's scheme too. That projection is out of scope here,
+//! but keeping every role resolved through this one struct/function
+//! (rather than, say, agent/view.rs reading `cx.theme()` fields directly
+//! for roles that happen to already exist there) means that future pass
+//! is an extension of `scheme_from` into a `ThemeColor`, not a rework of
+//! call sites across the app.
 
 use std::sync::{OnceLock, RwLock};
 
@@ -15,6 +46,25 @@ use horizon_terminal_core::TerminalColor;
 const BACKGROUND_DEFAULT: u32 = 0x16181d; // SURFACE_BASE_DEFAULT
 const FOREGROUND_DEFAULT: u32 = 0xe9ecf2; // TEXT_PRIMARY_DEFAULT
 const CURSOR_DEFAULT: u32 = 0x84dcc6; // ACCENT_DEFAULT
+
+// Agent-pane role defaults — chosen to match `src/agent/view.rs`'s
+// pre-existing hardcoded hex values exactly, so this layer is a pure
+// plumbing change (see the amendment doc's "changes plumbing, not
+// design"). `danger`/`warning`/`success`/`info` happen to equal the
+// built-in ANSI red/yellow/green/blue defaults (config.example.toml's
+// `[theme.ansi]` comment already anticipated an agent-transcript renderer
+// reusing that palette) but are resolved as independent, dedicated `[theme]`
+// keys so overriding one doesn't silently move the other.
+const DANGER_DEFAULT: u32 = 0xe06c75;
+const WARNING_DEFAULT: u32 = 0xe5c07b;
+const SUCCESS_DEFAULT: u32 = 0x98c379;
+const INFO_DEFAULT: u32 = 0x61afef; // the assistant message label
+const TEXT_MUTED_DEFAULT: u32 = 0x8a90a0; // status line / exited state
+const TEXT_SUBTLE_DEFAULT: u32 = 0x5f6370; // thinking deltas / tool-preparing text
+const DIFF_ADDED_SURFACE_DEFAULT: u32 = 0x1e2b22;
+const DIFF_ADDED_TEXT_DEFAULT: u32 = 0x98c379;
+const DIFF_REMOVED_SURFACE_DEFAULT: u32 = 0x2b1e20;
+const DIFF_REMOVED_TEXT_DEFAULT: u32 = 0xe06c75;
 
 const ANSI16_DEFAULT: [u32; 16] = [
     0x23262e, // black
@@ -41,6 +91,17 @@ struct Scheme {
     foreground: u32,
     cursor: u32,
     ansi: [u32; 16],
+    accent: u32,
+    danger: u32,
+    warning: u32,
+    success: u32,
+    info: u32,
+    text_muted: u32,
+    text_subtle: u32,
+    diff_added_surface: u32,
+    diff_added_text: u32,
+    diff_removed_surface: u32,
+    diff_removed_text: u32,
 }
 
 fn scheme_from(raw: &RawConfig) -> Scheme {
@@ -86,6 +147,17 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
             ansi_slot(&ansi_raw.bright_cyan, ANSI16_DEFAULT[14]),
             ansi_slot(&ansi_raw.bright_white, ANSI16_DEFAULT[15]),
         ],
+        accent: chrome("accent", None, CURSOR_DEFAULT),
+        danger: chrome("danger", None, DANGER_DEFAULT),
+        warning: chrome("warning", None, WARNING_DEFAULT),
+        success: chrome("success", None, SUCCESS_DEFAULT),
+        info: chrome("info", None, INFO_DEFAULT),
+        text_muted: chrome("text_muted", None, TEXT_MUTED_DEFAULT),
+        text_subtle: chrome("text_subtle", None, TEXT_SUBTLE_DEFAULT),
+        diff_added_surface: chrome("diff_added_surface", None, DIFF_ADDED_SURFACE_DEFAULT),
+        diff_added_text: chrome("diff_added_text", None, DIFF_ADDED_TEXT_DEFAULT),
+        diff_removed_surface: chrome("diff_removed_surface", None, DIFF_REMOVED_SURFACE_DEFAULT),
+        diff_removed_text: chrome("diff_removed_text", None, DIFF_REMOVED_TEXT_DEFAULT),
     }
 }
 
@@ -120,6 +192,86 @@ pub fn reload_from(raw: &RawConfig) {
 
 pub fn background() -> u32 {
     scheme().background
+}
+
+fn packed_hsla(value: u32) -> Hsla {
+    rgb(value).into()
+}
+
+/// Default readable body/message text (the agent transcript's message
+/// bodies today).
+pub fn text_primary() -> Hsla {
+    packed_hsla(scheme().foreground)
+}
+
+/// The brand accent — today's "you" message label, shared with the
+/// terminal cursor's fallback color.
+pub fn accent() -> Hsla {
+    packed_hsla(scheme().accent)
+}
+
+/// Danger/error — failed turns and tool errors.
+pub fn danger() -> Hsla {
+    packed_hsla(scheme().danger)
+}
+
+/// Warning — tool-call requests and pending-approval blocks.
+pub fn warning() -> Hsla {
+    packed_hsla(scheme().warning)
+}
+
+/// Success — finished tool-call results.
+pub fn success() -> Hsla {
+    packed_hsla(scheme().success)
+}
+
+/// The assistant message label.
+pub fn info() -> Hsla {
+    packed_hsla(scheme().info)
+}
+
+/// Readable secondary text — the pane's status line and exited-session
+/// text. Less prominent than `text_primary`, more than `text_subtle`.
+pub fn text_muted() -> Hsla {
+    packed_hsla(scheme().text_muted)
+}
+
+/// The most de-emphasized text — thinking deltas and in-flight tool
+/// progress (deliberately quiet, unlike `text_muted`'s readable status
+/// text).
+pub fn text_subtle() -> Hsla {
+    packed_hsla(scheme().text_subtle)
+}
+
+// The four diff roles below have no caller yet — `docs/agent-output-ui-
+// design.md` decision 4 (fs.edit diff rendering) is a later slice than
+// this theme-role prerequisite. `#[allow(dead_code)]` keeps them from
+// tripping `-D warnings` in the meantime; their `Scheme` fields (and
+// config overridability) are exercised by this module's tests.
+
+/// Diff-added line background (fs.edit rendering; no gpui-component
+/// equivalent).
+#[allow(dead_code)]
+pub fn diff_added_surface() -> Hsla {
+    packed_hsla(scheme().diff_added_surface)
+}
+
+/// Diff-added sign-column color.
+#[allow(dead_code)]
+pub fn diff_added_text() -> Hsla {
+    packed_hsla(scheme().diff_added_text)
+}
+
+/// Diff-removed line background.
+#[allow(dead_code)]
+pub fn diff_removed_surface() -> Hsla {
+    packed_hsla(scheme().diff_removed_surface)
+}
+
+/// Diff-removed sign-column color.
+#[allow(dead_code)]
+pub fn diff_removed_text() -> Hsla {
+    packed_hsla(scheme().diff_removed_text)
 }
 
 /// The core-side scheme for OSC 4/10/11/12 query replies, mirrored from
@@ -228,4 +380,70 @@ fn indexed_rgb(index: u8) -> [u8; 3] {
     }
     let gray = 8 + (index - 232) * 10;
     [gray, gray, gray]
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use horizon_config::RawThemeConfig;
+
+    use super::*;
+
+    fn config_with(colors: &[(&str, &str)]) -> RawConfig {
+        RawConfig {
+            theme: RawThemeConfig {
+                colors: colors
+                    .iter()
+                    .map(|(key, value)| (key.to_string(), value.to_string()))
+                    .collect::<HashMap<_, _>>(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn default_scheme_matches_agent_views_pre_existing_hex_values() {
+        let scheme = scheme_from(&RawConfig::default());
+        assert_eq!(scheme.accent, 0x84dcc6);
+        assert_eq!(scheme.danger, 0xe06c75);
+        assert_eq!(scheme.warning, 0xe5c07b);
+        assert_eq!(scheme.success, 0x98c379);
+        assert_eq!(scheme.info, 0x61afef);
+        assert_eq!(scheme.text_muted, 0x8a90a0);
+        assert_eq!(scheme.text_subtle, 0x5f6370);
+        assert_eq!(scheme.foreground, 0xe9ecf2);
+    }
+
+    #[test]
+    fn a_role_override_does_not_leak_into_sibling_roles() {
+        let scheme = scheme_from(&config_with(&[("warning", "#ff00ff")]));
+        assert_eq!(scheme.warning, 0xff00ff);
+        // Untouched roles keep their built-in defaults.
+        assert_eq!(scheme.danger, 0xe06c75);
+        assert_eq!(scheme.success, 0x98c379);
+        assert_eq!(scheme.accent, 0x84dcc6);
+    }
+
+    #[test]
+    fn diff_surface_and_text_roles_are_independently_overridable() {
+        let scheme = scheme_from(&config_with(&[
+            ("diff_added_surface", "#111111"),
+            ("diff_added_text", "#22ff22"),
+        ]));
+        assert_eq!(scheme.diff_added_surface, 0x111111);
+        assert_eq!(scheme.diff_added_text, 0x22ff22);
+        // The removed side is untouched.
+        assert_eq!(scheme.diff_removed_surface, DIFF_REMOVED_SURFACE_DEFAULT);
+        assert_eq!(scheme.diff_removed_text, DIFF_REMOVED_TEXT_DEFAULT);
+    }
+
+    #[test]
+    fn reload_from_swaps_the_live_scheme_role_accessors_read_from() {
+        reload_from(&config_with(&[("danger", "#123456")]));
+        assert_eq!(scheme().danger, 0x123456);
+        // An unrelated role still resolves to its built-in default.
+        assert_eq!(scheme().accent, 0x84dcc6);
+    }
 }

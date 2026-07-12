@@ -79,10 +79,7 @@ fn execute_auto_tool(
     vec![
         Event::StateChanged(SessionState::ToolRunning),
         Event::ToolCallStarted(request.call_id.clone()),
-        Event::ToolCallFinished(ToolCallResult {
-            call_id: request.call_id.clone(),
-            output,
-        }),
+        Event::ToolCallFinished(ToolCallResult::new(request.call_id.clone(), output)),
         // No `StateChanged(WaitingForUser)` here: this call is only one
         // member of whatever batch the originating completion requested (a
         // single completion can request several parallel tool calls — see
@@ -109,8 +106,5 @@ pub fn tool_result_message(result: &ToolCallResult) -> Event {
 /// pending approval belonging to a cancelled turn resolves to a terminal
 /// (non-error) outcome instead of hanging forever.
 pub fn cancelled_tool_call_result(call_id: ToolCallId) -> ToolCallResult {
-    ToolCallResult {
-        call_id,
-        output: json!({ "cancelled": true }),
-    }
+    ToolCallResult::new(call_id, json!({ "cancelled": true }))
 }

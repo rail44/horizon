@@ -120,7 +120,7 @@ fn run_job_body(
         }
     };
     let _ = result_tx.send(BashCompletion {
-        result: ToolCallResult { call_id, output },
+        result: ToolCallResult::new(call_id, output),
     });
 }
 

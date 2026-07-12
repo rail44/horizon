@@ -432,10 +432,10 @@ fn should_fold_completion_is_false_once_the_call_already_has_a_finish() {
 
     frame
         .items
-        .push(AgentFrameItem::ToolCallFinished(ToolCallResult {
-            call_id: call_id.clone(),
-            output: json!({ "cancelled": true }),
-        }));
+        .push(AgentFrameItem::ToolCallFinished(ToolCallResult::new(
+            call_id.clone(),
+            json!({ "cancelled": true }),
+        )));
 
     assert!(
         !super::should_fold_completion(&frame, &call_id),

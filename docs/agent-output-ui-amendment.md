@@ -17,6 +17,44 @@ that canvas. The mocks are drawn on a light theme for review
 legibility only — implementation goes through theme roles as usual
 (no hardcoded colors, per the base doc's invariants).
 
+## Current-state note (GPUI shell, 2026-07-12)
+
+This amendment was written against the Floem-era base design, but the
+GPUI migration (see `docs/gpui-migration-design.md`) rebuilt the agent
+pane lean and did **not** port base slices 1–5. Read the decisions
+with these corrections (owner-confirmed 2026-07-12):
+
+- "Reuses the base slice-1 renderers / turn footer / Changes
+  overview": those exist only in the retired Floem shell. They are
+  built **new**, directly in this amendment's final shape (per-tool
+  renderers become the running card's rows and the receipt's expansion
+  bodies) — no intermediate always-visible-tool-block stage is built.
+- "+N more indicator, as today": the oldest-first queue *logic*
+  survives (`frame::pending_approval_call_ids_in`); the indicator UI
+  was Floem-only and is built new in the approval-mode composer.
+- "AgentPaneFocus still applies": no such focus context exists in
+  GPUI. Approval-mode key capture lives in the composer's own state
+  (Enter = allow, esc = deny, typing reverts to normal input).
+- The base doc's "trailing-window (200 blocks) + revision memoization"
+  invariant was deliberately discarded in the GPUI shell; the live
+  invariant is GPUI-native: expansion state stays view-local, and
+  per-token work stays O(visible), never O(whole-log).
+- "Cancellation is a stop reason, as implemented today": true in the
+  model (`TurnEndReason::Cancelled`); the receipt/chip rendering is
+  new UI.
+- The `retry ×N` chip (decision 5) is **deferred with its data**: the
+  runtime has no retry concept in the contract; the chip returns when
+  one exists.
+- gpui-component assets are reused wherever they fit (owner direction,
+  reconfirmed): theme via the single `Scheme` seam in `src/theme.rs`
+  (see the Contract addendum below and the module doc), components
+  (buttons, lists, badges) surveyed before hand-rolling.
+
+Implementation proceeds as staged branches, each owner-confirmed:
+A contract groundwork, B theme roles (both invisible), then C running
+card + receipts, D inline expansion, E approval-mode composer,
+F failure display + stop button (each visually confirmed).
+
 ## Decisions
 
 ### 1. Turn receipts — a completed turn's tool activity collapses to one line (extends the base design)
@@ -125,3 +163,66 @@ legibility only — implementation goes through theme roles as usual
 3. Approval-mode composer (decision 4) — replaces base slice 4; the
    base doc's key-capture design (AgentPaneFocus) still applies.
 4. Failure display + stop button (decisions 5–6) — small pieces.
+
+## Contract addendum (2026-07-12)
+
+Stage A of the turn-receipts work (`docs/tasks/backlog.md` item 16,
+now resolved): `horizon-agent`'s contract/frame gained the model-only
+groundwork decisions 1–2's receipt line and decision 5's failure
+display need, with no rendering change. Model-only means exactly
+that — the pane view (`src/agent/view.rs`) only got the one match arm
+required to keep compiling; the receipt line, running card, and
+failure display themselves are still unbuilt (next stage).
+
+- **New frame item.** `AgentFrameItem::TurnEnded { reason, model,
+  elapsed }` is pushed when `Event::TurnEnded` folds (previously a
+  no-op there). `reason` is the existing `TurnEndReason`. `model` is
+  `Option<String>`, folded from the turn's most recent
+  `Event::ProviderRequestSent` — `None` for a turn that ends before any
+  provider request (e.g. an immediate cancel). `elapsed` is a
+  `std::time::Duration`.
+- **Elapsed-time trade-off.** No event on the wire carries a
+  wall-clock timestamp today (`persistence::event_log::Record::
+  created_at_unix_ms` exists, but it's stamped by the `Appender` at
+  persistence time, not visible to this crate's pure `Event`-level
+  fold). `elapsed` is instead computed by a reducer-side sidecar
+  (`frame::TurnClock`, threaded through `apply_agent_event_to_frame`
+  the same way `StateEntry` sidecars `AgentFrame`'s own state-elapsed
+  tracking): an `Instant` captured when the turn's opening
+  `MessageCommitted(User)` folds, read back when `TurnEnded` folds.
+  This is exact for a *live* fold (events arrive as they happen) but
+  collapses to near-zero for a *cold replay* (`agent_frame_from_events`,
+  used for persisted-log bootstrap and `duckdb`'s history queries),
+  since a replay folds every historical event in one tight loop.
+  Accepted for stage A: a replayed old turn's receipt shows a
+  near-zero duration rather than an error or a missing field, and
+  never overstates elapsed. A precise persisted duration is a
+  follow-up if it turns out to matter, most likely by deriving it from
+  `duckdb`'s existing `agent_events.created_at_unix_ms` (mirroring
+  `agent_turns`'s own "no derived durations, join through
+  `ended_event_id`" choice) rather than adding a timestamp to `Event`
+  itself.
+- **Explicit tool-call outcome.** `ToolCallResult` gained an
+  `is_error: bool` field, lifted out of `output`'s pre-existing
+  `"is_error"` JSON convention (every tool in `tools::` already
+  follows it — `docs/agent-feedback-design.md` decision 1) so a future
+  UI reads a typed field instead of sniffing `output` itself.
+  `ToolCallResult::new(call_id, output)` derives it automatically and
+  is now the one constructor every call site in this crate goes
+  through, so the convention lives in one place.
+  `AgentFrameItem::ToolCallFinished`'s shape is unchanged (it already
+  wraps the whole `ToolCallResult`), so this needed no frame-level
+  change at all.
+- **No protocol bump.** Both additions are additive with
+  `#[serde(default)]` (`ToolCallResult.is_error` defaults to `false`,
+  matching the JSON convention's own "absence means success" reading)
+  — the same shape `horizon-session-protocol`'s own
+  `Envelope.session_id` used when it was added without moving
+  `SESSION_PROTOCOL_VERSION` (currently 4). A version bump there is
+  reserved for changes an older peer can't safely decode at all; this
+  isn't one. `Event::TurnEnded`'s own wire shape is untouched — model
+  and elapsed are derived at fold time, never persisted.
+- **Explicitly out of scope.** No retry concept (the runtime has none
+  today — deferred by owner decision 2026-07-12, not part of this
+  stage), and no rendering change beyond the one `AgentFrameItem`
+  match arm `src/agent/view.rs` needed to keep compiling.
