@@ -284,3 +284,69 @@ deviation rather than asking for a mock update):
   moved from the closing `TurnEnded` item's frame index to the turn's
   own start index (`TurnSpan::start`) so expansion state survives the
   provisional → final transition.
+- **Approval integrated into the tool-call row (round 3).** From a live
+  screenshot of a real session: "can't tell which tool call corresponds
+  to which approval" (a running card with ~15 stacked yellow
+  `approval requested: …` boxes below it, no visible link back to a
+  specific row) and "an already-approved box doesn't need to be shown
+  anymore" — "the tool call and its approval buttons could share one
+  row, and the fact it was approved can be written as a short phrase in
+  that button area." Approval is now integrated directly into the tool
+  call's own row instead of rendering as a standalone block at all:
+  `ToolCallView` gained `approval: ApprovalState` (`None` / `Waiting` /
+  `Approved` / `Denied`), derived in `turns::build_tool_call_views` from
+  whether the call ever had an `ApprovalRequested` item and, once
+  resolved, whether its result matches `tools::approval::
+  denied_output`'s exact convention (`{"is_error": true, "message":
+  "denied by user"}` — checked by message text, not just `is_error`,
+  since an *approved* call that later fails on its own is also
+  `is_error: true`). A `Waiting` running-card row gets small inline
+  Approve/Deny buttons (wired to that row's own `call_id`, exactly like
+  the old box's buttons) plus a subtle warning tint on the row; a
+  resolved row shows a short muted phrase ("approved"/"denied",
+  danger-colored for denied) in that same area instead. There is no
+  longer any `ApprovalRequested`-as-standalone-box rendering path inside
+  the running card. A completed turn's expanded receipt row surfaces the
+  same one-word phrase but never buttons (history isn't actionable). The
+  oldest-first keyboard/palette approve-tool-call/deny-tool-call
+  commands and the control-plane path are unaffected — they still
+  dispatch by pending-queue order, independent of which row's buttons a
+  pointer happens to click. Stage E's approval-mode composer will layer
+  the keyboard path on top of this; the row buttons remain the pointer
+  path.
+- **Bash folds into prose too (round 3 follow-up).** A second
+  screenshot showed ~15 near-identical bash chips wrapping over five
+  lines — every command shared the same `cd …` prefix, so the 32-char
+  truncated heads were indistinguishable, the same "conveys no
+  information" complaint that motivated the query/edit aggregation.
+  Successful bash calls now fold into `ran {N} command(s)` exactly like
+  query/edit calls (superseding round 2/3's "bash always stays
+  individual" rule); a failed bash call still breaks out as its own
+  chip like any other failed call. After this change, the only chips
+  ever left on a collapsed receipt are failures.
+- **Turn grouping fixed to actually partition the item list (root cause
+  of a live "incomprehensible screen state" report).** From a real,
+  reproduced event sequence (`docs/tasks/backlog.md`-adjacent
+  investigation, 2026-07-13): a user typed another message while an
+  earlier bash call's approval was still unresolved (next-turn delivery
+  is deliberate even mid-flight, decision 6) -- and again, twice more,
+  each retry requesting its own new unresolved approval. `turns::
+  group_into_turns` used to treat every user message as opening a *new*
+  span unconditionally, closing the previous one as a permanently
+  dangling `ended: None` stub it could never retroactively fix. Once the
+  session's state eventually left the in-flight set (here, a cancel),
+  every such stub fell back to the transcript's flat per-item rendering
+  path — raw, unprocessed `tool`/`tool result` JSON, `Debug`-formatted
+  `tool (preparing)`, and standalone approval boxes with no visible link
+  back to their row, stacking indefinitely. Fixed at the root: a user
+  message no longer opens a new span while one is already open — it's
+  just one more item inside the still-open turn (rendered as its own
+  message block via the existing per-item loop already in
+  `AgentView::render_turn`), which stays open, however many
+  interjections land in it, until an actual `TurnEnded` closes it. The
+  invariant is now a doc comment on `group_into_turns` itself, with
+  colocated tests reproducing the real sequence. `ToolCallPreparing`'s
+  rendering was also humanized (verb + byte count instead of a raw
+  `Debug` dump) as a defensive measure, since it's still — in principle
+  — reachable through the one remaining legitimate outside-any-span case
+  (items preceding a resumed history's first user message).

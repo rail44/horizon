@@ -34,26 +34,47 @@ pub(crate) struct TurnEnd {
 }
 
 /// Groups `items` into turn segments: a segment opens at a user
-/// `Message` and closes at the next `TurnEnded` (inclusive). A trailing
-/// segment with no closing `TurnEnded` yet is the turn in progress.
+/// `Message` seen while no segment is currently open, and closes at the
+/// next `TurnEnded` (inclusive). A trailing segment with no closing
+/// `TurnEnded` yet is the turn in progress.
 ///
-/// Defensive: if a user `Message` opens a new segment before the
-/// previous one saw a `TurnEnded` (shouldn't happen by contract -- the
-/// session loop never sends a new turn until the previous one settled),
-/// the stale segment is closed with `ended: None` rather than silently
-/// merging into the new one, so no items are dropped.
+/// **Invariant (root-caused 2026-07-13 from a real, reproduced event
+/// sequence -- see `docs/agent-output-ui-amendment.md`'s post-review
+/// note): every span partitions the item list.** The only items that
+/// legitimately fall *outside* every span are ones before the first user
+/// message (a genuinely resumed history that doesn't open with one).
+/// This used to not hold: a user `Message` unconditionally opened a
+/// *new* segment even while the previous one hadn't seen a `TurnEnded`
+/// yet, closing the stale one with `ended: None` on the theory that this
+/// "shouldn't happen by contract". It does happen, routinely -- sending
+/// from the composer is deliberately next-turn delivery even while a
+/// turn is mid-flight (`docs/agent-output-ui-amendment.md` decision 6),
+/// and a user *will* type another message while an earlier tool call's
+/// approval is still pending (e.g. nudging a turn that looks stuck, or
+/// retrying an approval that didn't seem to take effect). Each such
+/// interjection used to mint a fresh span and stale the previous one
+/// forever (it can never retroactively gain a `TurnEnded`) -- and once
+/// the session's state eventually left the in-flight set (a cancel, or
+/// the turn finally settling), the view's fallback for a dangling
+/// `ended: None` span while not in flight is to render every item in it
+/// *individually*, raw (`render_item`'s per-type fallback: unprocessed
+/// JSON `tool`/`tool result` blocks, `Debug`-formatted `tool
+/// (preparing)`, standalone approval boxes with no visible link to their
+/// row) -- exactly the "incomprehensible screen state" a real session
+/// hit after several rapid interjections while one bash approval sat
+/// unresolved. The fix: a mid-turn interjection no longer opens a new
+/// segment at all -- while a segment is already open, a further user
+/// `Message` is just one more item *within* it (rendered as its own
+/// message block inside the running card/receipt, via the existing
+/// per-item loop in `AgentView::render_turn` -- no separate "interjection
+/// row" needed for this). The segment stays open, however many messages
+/// land in it, until an actual `TurnEnded` closes it -- or, if none ever
+/// arrives, it's the trailing in-progress span, same as always.
 pub(crate) fn group_into_turns(items: &[AgentFrameItem]) -> Vec<TurnSpan> {
     let mut spans = Vec::new();
     let mut current_start: Option<usize> = None;
     for (index, item) in items.iter().enumerate() {
-        if is_user_message(item) {
-            if let Some(start) = current_start.take() {
-                spans.push(TurnSpan {
-                    start,
-                    end: index,
-                    ended: None,
-                });
-            }
+        if is_user_message(item) && current_start.is_none() {
             current_start = Some(index);
         }
         if let AgentFrameItem::TurnEnded {
@@ -272,6 +293,57 @@ pub(crate) struct ToolCallView {
     pub kind: ToolCallKind,
     pub finished: bool,
     pub is_error: bool,
+    /// This call's approval lifecycle (owner feedback 2026-07-13, round
+    /// 3: "which tool call corresponds to which approval" -- integrating
+    /// approval into the row instead of a standalone box). `None` for a
+    /// call that never needed approval at all.
+    pub approval: ApprovalState,
+}
+
+/// A tool call's approval lifecycle, derived in [`build_tool_call_views`]
+/// from whether the call ever had an `ApprovalRequested` item and, if so,
+/// how its eventual `ToolCallFinished` reads (see
+/// [`is_denied_output`] for the denial convention).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApprovalState {
+    /// No `ApprovalRequested` item for this call at all -- an
+    /// auto-approved (or never-requiring-approval) tool.
+    None,
+    /// An `ApprovalRequested` item exists and no `ToolCallFinished` has
+    /// resolved it yet.
+    Waiting,
+    Approved,
+    Denied,
+}
+
+/// The exact denial convention `tools::approval::denied_output` writes
+/// for a Horizon-executed tool's deny path:
+/// `json!({ "is_error": true, "message": "denied by user" })`
+/// (`crates/horizon-agent/src/tools/approval.rs`). Checked by the
+/// message text specifically, not just `is_error`, because an
+/// *approved* call that goes on to fail for its own reasons (e.g.
+/// fs.edit's "old_string not found") is also `is_error: true` but
+/// carries a different message -- `is_error` alone can't tell a denial
+/// from an execution failure.
+fn is_denied_output(output: &Value) -> bool {
+    output.get("is_error").and_then(Value::as_bool) == Some(true)
+        && output.get("message").and_then(Value::as_str) == Some("denied by user")
+}
+
+/// Derives a call's [`ApprovalState`] from whether it ever had an
+/// `ApprovalRequested` item and, if resolved, its result's output.
+fn derive_approval_state(
+    had_approval_request: bool,
+    result: Option<&ToolCallResult>,
+) -> ApprovalState {
+    if !had_approval_request {
+        return ApprovalState::None;
+    }
+    match result {
+        None => ApprovalState::Waiting,
+        Some(result) if is_denied_output(&result.output) => ApprovalState::Denied,
+        Some(_) => ApprovalState::Approved,
+    }
 }
 
 /// Builds one [`ToolCallView`] per distinct tool call requested within
@@ -284,6 +356,7 @@ pub(crate) fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallVie
         tool_id: &'a str,
         input: &'a Value,
         result: Option<&'a ToolCallResult>,
+        had_approval_request: bool,
     }
 
     let mut building: Vec<Building> = Vec::new();
@@ -295,7 +368,16 @@ pub(crate) fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallVie
                     tool_id: &request.tool_id,
                     input: &request.input,
                     result: None,
+                    had_approval_request: false,
                 });
+            }
+            AgentFrameItem::ApprovalRequested(request) => {
+                if let Some(entry) = building
+                    .iter_mut()
+                    .find(|entry| entry.call_id == request.call_id)
+                {
+                    entry.had_approval_request = true;
+                }
             }
             AgentFrameItem::ToolCallFinished(result) => {
                 if let Some(entry) = building
@@ -327,6 +409,7 @@ pub(crate) fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallVie
                 kind,
                 finished: entry.result.is_some(),
                 is_error: entry.result.map(|result| result.is_error).unwrap_or(false),
+                approval: derive_approval_state(entry.had_approval_request, entry.result),
             }
         })
         .collect()
@@ -392,36 +475,34 @@ fn classify_call(tool_id: &str) -> CallClass {
 /// own `read_file_count` instead, expressed as *distinct file paths* so
 /// re-reading the same file within a turn doesn't inflate the count);
 /// `edited_file_count` is the same distinct-path treatment for
-/// successful `Edit`-class calls. `bash_calls` (any outcome) and
+/// successful `Edit`-class calls; `bash_count` is the plain call count
+/// for successful `Bash`-class calls (owner feedback 2026-07-13, round 3
+/// follow-up: a turn with a dozen near-identical `cd … && …` bash chips
+/// conveyed nothing either, the same complaint that motivated the
+/// query/edit aggregation -- bash folds into prose too now).
 /// `individual_calls` (any failed call of any class, plus the defensive
 /// case of a call that never finished within a supposedly completed
-/// turn) render as their own chips rather than folding into a count, so
-/// a failure -- or an anomaly -- never goes silently missing from the
-/// collapsed line.
+/// turn) is the only thing left rendering as its own chip, so a failure
+/// -- or an anomaly -- never goes silently missing from the collapsed
+/// line.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct ReceiptAggregate {
     pub query_count: usize,
     pub read_file_count: usize,
     pub edited_file_count: usize,
-    pub bash_calls: Vec<ToolCallView>,
+    pub bash_count: usize,
     pub individual_calls: Vec<ToolCallView>,
 }
 
 /// Aggregates `tool_calls` (a single receipt's worth, from
 /// [`build_tool_call_views`]) into a [`ReceiptAggregate`]. Order within
-/// `bash_calls`/`individual_calls` follows `tool_calls`' own (first-
-/// request) order.
+/// `individual_calls` follows `tool_calls`' own (first-request) order.
 pub(crate) fn aggregate_receipt(tool_calls: &[ToolCallView]) -> ReceiptAggregate {
     let mut aggregate = ReceiptAggregate::default();
     let mut read_paths: HashSet<String> = HashSet::new();
     let mut edited_paths: HashSet<String> = HashSet::new();
 
     for call in tool_calls {
-        let class = classify_call(&call.tool_id);
-        if class == CallClass::Bash {
-            aggregate.bash_calls.push(call.clone());
-            continue;
-        }
         if call.is_error || !call.finished {
             // A failed call never aggregates, regardless of class (the
             // owner's explicit requirement) -- nor does the defensive
@@ -431,19 +512,19 @@ pub(crate) fn aggregate_receipt(tool_calls: &[ToolCallView]) -> ReceiptAggregate
             aggregate.individual_calls.push(call.clone());
             continue;
         }
-        match class {
+        match classify_call(&call.tool_id) {
             CallClass::Edit => {
                 if let Some(path) = &call.target {
                     edited_paths.insert(path.clone());
                 }
             }
+            CallClass::Bash => aggregate.bash_count += 1,
             CallClass::Query if call.tool_id == "fs.read" => {
                 if let Some(path) = &call.target {
                     read_paths.insert(path.clone());
                 }
             }
             CallClass::Query => aggregate.query_count += 1,
-            CallClass::Bash => unreachable!("Bash already handled above"),
         }
     }
 
@@ -462,10 +543,10 @@ fn pluralize(count: usize, singular: &str, plural: &str) -> String {
 }
 
 /// The collapsed receipt line's prose prefix (owner feedback
-/// 2026-07-13): `None` when every aggregated count is zero (e.g. a
-/// bash-only or all-individual-chips turn), so the line never shows a
-/// hollow "0 tool calls" -- it just goes straight to whatever chips/
-/// status/model follow.
+/// 2026-07-13): `None` when every aggregated count is zero (e.g. an
+/// all-individual-chips turn), so the line never shows a hollow "0 tool
+/// calls" -- it just goes straight to whatever chips/status/model
+/// follow.
 pub(crate) fn receipt_prose(aggregate: &ReceiptAggregate) -> Option<String> {
     let mut parts = Vec::new();
     if aggregate.query_count > 0 {
@@ -481,6 +562,12 @@ pub(crate) fn receipt_prose(aggregate: &ReceiptAggregate) -> Option<String> {
         parts.push(format!(
             "edited {}",
             pluralize(aggregate.edited_file_count, "file", "files")
+        ));
+    }
+    if aggregate.bash_count > 0 {
+        parts.push(format!(
+            "ran {}",
+            pluralize(aggregate.bash_count, "command", "commands")
         ));
     }
     if parts.is_empty() {
@@ -1099,22 +1186,78 @@ mod tests {
     }
 
     #[test]
-    fn a_stray_boundary_without_turn_ended_closes_as_unended_rather_than_dropping_items() {
-        // Defensive case only -- shouldn't happen by contract.
+    fn a_second_user_message_with_no_turn_ended_between_them_merges_into_one_open_span() {
+        // Root-caused 2026-07-13: a mid-turn interjection (the user
+        // typing again before the previous turn closed) must not orphan
+        // the first message into a permanently-dangling span -- it's
+        // just one more item inside the still-open one.
         let items = vec![user_message("first"), user_message("second")];
         let spans = group_into_turns(&items);
-        assert_eq!(spans.len(), 2);
         assert_eq!(
-            spans[0],
-            TurnSpan {
+            spans,
+            vec![TurnSpan {
                 start: 0,
-                end: 1,
-                ended: None
-            }
+                end: 2,
+                ended: None,
+            }]
         );
-        assert_eq!(spans[1].start, 1);
-        assert_eq!(spans[1].end, 2);
-        assert!(spans[1].ended.is_none());
+    }
+
+    #[test]
+    fn a_mid_turn_interjection_while_an_approval_is_pending_stays_in_the_same_open_span() {
+        // Reproduces the real event sequence behind the owner's
+        // 2026-07-13 "partial approve leads to an incomprehensible
+        // screen state" report: the user sent a message while an earlier
+        // bash call's approval was still unresolved, the model retried
+        // the same bash call (a *second* unresolved approval), and the
+        // user interjected again -- and again. Multiple interjections
+        // must not fragment this into several dangling spans.
+        let items = vec![
+            user_message("一旦このMVPでよいです。"),
+            tool_requested("a", "bash", json!({"command": "cargo build"})),
+            approval_requested("a"),
+            // "a" is never resolved -- the user, unable to tell whether
+            // approving it worked, interjects instead of waiting.
+            user_message("a"),
+            tool_requested("b", "bash", json!({"command": "cargo build"})),
+            approval_requested("b"),
+            user_message("なんかapprove出来ないな"),
+            tool_requested("c", "bash", json!({"command": "cargo build"})),
+            approval_requested("c"),
+            user_message("だから出来ないって言ってるでしょ"),
+        ];
+        let spans = group_into_turns(&items);
+        assert_eq!(
+            spans,
+            vec![TurnSpan {
+                start: 0,
+                end: items.len(),
+                ended: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn the_interjection_span_closes_normally_once_a_turn_ended_finally_arrives() {
+        // Continuing the same reproduction: eventually the turn is
+        // cancelled, which finally closes the whole merged span -- every
+        // interjection and its tool calls fold into one receipt, not
+        // several dangling ones.
+        let items = vec![
+            user_message("一旦このMVPでよいです。"),
+            tool_requested("a", "bash", json!({"command": "cargo build"})),
+            approval_requested("a"),
+            user_message("a"),
+            tool_requested("b", "bash", json!({"command": "cargo build"})),
+            approval_requested("b"),
+            turn_ended(TurnEndReason::Cancelled, None, 42),
+        ];
+        let spans = group_into_turns(&items);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].start, 0);
+        assert_eq!(spans[0].end, items.len());
+        let ended = spans[0].ended.as_ref().expect("closed by the TurnEnded");
+        assert_eq!(ended.reason, TurnEndReason::Cancelled);
     }
 
     #[test]
@@ -1210,6 +1353,71 @@ mod tests {
         let views = build_tool_call_views(&items);
         assert!(views[0].is_error);
         assert_eq!(views[0].result_summary.as_deref(), Some("exit 1"));
+    }
+
+    #[test]
+    fn a_call_with_no_approval_request_has_approval_state_none() {
+        let items = vec![
+            tool_requested("a", "fs.read", json!({"path": "a.rs"})),
+            tool_finished("a", json!({"total_lines": 1})),
+        ];
+        let views = build_tool_call_views(&items);
+        assert_eq!(views[0].approval, ApprovalState::None);
+    }
+
+    #[test]
+    fn a_call_with_an_unresolved_approval_request_is_waiting() {
+        let items = vec![
+            tool_requested("a", "bash", json!({"command": "cargo test"})),
+            approval_requested("a"),
+            // no tool_finished yet: still pending.
+        ];
+        let views = build_tool_call_views(&items);
+        assert_eq!(views[0].approval, ApprovalState::Waiting);
+    }
+
+    #[test]
+    fn a_call_resolved_with_the_denied_by_user_convention_is_denied() {
+        let items = vec![
+            tool_requested("a", "bash", json!({"command": "rm -rf /tmp/x"})),
+            approval_requested("a"),
+            tool_finished("a", json!({"is_error": true, "message": "denied by user"})),
+        ];
+        let views = build_tool_call_views(&items);
+        assert_eq!(views[0].approval, ApprovalState::Denied);
+    }
+
+    #[test]
+    fn a_call_resolved_successfully_after_approval_is_approved() {
+        let items = vec![
+            tool_requested("a", "bash", json!({"command": "cargo build"})),
+            approval_requested("a"),
+            tool_finished("a", json!({"exit_code": 0, "output": ""})),
+        ];
+        let views = build_tool_call_views(&items);
+        assert_eq!(views[0].approval, ApprovalState::Approved);
+    }
+
+    #[test]
+    fn an_approved_call_that_then_fails_on_its_own_is_still_approved_not_denied() {
+        // Distinguishes a genuine denial from an *approved* call that
+        // later fails for its own reasons (e.g. fs.edit's old_string not
+        // found) -- both are `is_error: true`, but only the denial
+        // carries the exact "denied by user" message.
+        let items = vec![
+            tool_requested(
+                "a",
+                "fs.edit",
+                json!({"path": "a.rs", "old_string": "x", "new_string": "y"}),
+            ),
+            approval_requested("a"),
+            tool_finished(
+                "a",
+                json!({"is_error": true, "message": "`old_string` not found in `a.rs`"}),
+            ),
+        ];
+        let views = build_tool_call_views(&items);
+        assert_eq!(views[0].approval, ApprovalState::Approved);
     }
 
     #[test]
@@ -1666,11 +1874,11 @@ mod tests {
         assert_eq!(aggregate.query_count, 2); // fs.grep + fs.glob
         assert_eq!(aggregate.read_file_count, 1);
         assert_eq!(aggregate.edited_file_count, 1);
-        assert_eq!(aggregate.bash_calls.len(), 1);
+        assert_eq!(aggregate.bash_count, 1);
         assert!(aggregate.individual_calls.is_empty());
         assert_eq!(
             receipt_prose(&aggregate).as_deref(),
-            Some("2 tool calls · read 1 file · edited 1 file")
+            Some("2 tool calls · read 1 file · edited 1 file · ran 1 command")
         );
     }
 
@@ -1732,15 +1940,13 @@ mod tests {
         ];
         let tool_calls = build_tool_call_views(&items);
         let aggregate = aggregate_receipt(&tool_calls);
-        // The failed read and failed edit never reach the counts...
+        // The failed read, edit, and bash never reach any count...
         assert_eq!(aggregate.read_file_count, 0);
         assert_eq!(aggregate.edited_file_count, 0);
+        assert_eq!(aggregate.bash_count, 0);
         assert_eq!(aggregate.query_count, 1); // only the successful grep
-                                              // ...and stay individually chip-able instead: the failed bash goes
-                                              // through `bash_calls` (bash always stays individual, per its own
-                                              // rule), the failed read/edit through `individual_calls`.
-        assert_eq!(aggregate.bash_calls.len(), 1);
-        assert_eq!(aggregate.individual_calls.len(), 2);
+                                              // ...and stay individually chip-able instead, regardless of class.
+        assert_eq!(aggregate.individual_calls.len(), 3);
         let individual_ids: Vec<&str> = aggregate
             .individual_calls
             .iter()
@@ -1748,6 +1954,7 @@ mod tests {
             .collect();
         assert!(individual_ids.contains(&"bad_read"));
         assert!(individual_ids.contains(&"bad_edit"));
+        assert!(individual_ids.contains(&"bad_bash"));
     }
 
     #[test]
@@ -1756,11 +1963,12 @@ mod tests {
             query_count: 1,
             read_file_count: 1,
             edited_file_count: 1,
+            bash_count: 1,
             ..Default::default()
         };
         assert_eq!(
             receipt_prose(&aggregate).as_deref(),
-            Some("1 tool call · read 1 file · edited 1 file")
+            Some("1 tool call · read 1 file · edited 1 file · ran 1 command")
         );
     }
 
@@ -1770,32 +1978,42 @@ mod tests {
             query_count: 3,
             read_file_count: 2,
             edited_file_count: 5,
+            bash_count: 4,
             ..Default::default()
         };
         assert_eq!(
             receipt_prose(&aggregate).as_deref(),
-            Some("3 tool calls · read 2 files · edited 5 files")
+            Some("3 tool calls · read 2 files · edited 5 files · ran 4 commands")
         );
     }
 
     #[test]
     fn receipt_prose_is_none_when_every_count_is_zero() {
-        // An all-bash or all-individual-chip turn: the collapsed line
-        // still shows its bash/failed chips plus status/elapsed (view
-        // concern), but the prose prefix itself is simply absent.
+        // An all-individual-chip turn (every call failed, or is the
+        // defensive never-finished case): the collapsed line still
+        // shows those chips plus status/elapsed (view concern), but the
+        // prose prefix itself is simply absent.
         assert_eq!(receipt_prose(&ReceiptAggregate::default()), None);
     }
 
     #[test]
-    fn aggregate_receipt_of_an_all_bash_turn_has_no_prose_but_keeps_bash_chips() {
+    fn aggregate_receipt_folds_bash_into_the_ran_commands_count() {
+        // Owner feedback 2026-07-13 (round 3 follow-up): a dozen
+        // near-identical bash chips (e.g. every command sharing the same
+        // `cd … && …` prefix) conveyed nothing -- bash now aggregates
+        // into prose exactly like query/edit calls, leaving no chip
+        // behind for a successful run.
         let items = vec![
             tool_requested("b1", "bash", json!({"command": "cargo build"})),
             tool_finished("b1", json!({"exit_code": 0, "output": ""})),
+            tool_requested("b2", "bash", json!({"command": "cargo test"})),
+            tool_finished("b2", json!({"exit_code": 0, "output": ""})),
         ];
         let tool_calls = build_tool_call_views(&items);
         let aggregate = aggregate_receipt(&tool_calls);
-        assert_eq!(aggregate.bash_calls.len(), 1);
-        assert_eq!(receipt_prose(&aggregate), None);
+        assert_eq!(aggregate.bash_count, 2);
+        assert!(aggregate.individual_calls.is_empty());
+        assert_eq!(receipt_prose(&aggregate).as_deref(), Some("ran 2 commands"));
     }
 
     #[test]
@@ -1894,7 +2112,7 @@ mod tests {
             receipt_prose(&aggregate).as_deref(),
             Some("1 tool call · read 1 file")
         );
-        assert!(aggregate.bash_calls.is_empty());
+        assert_eq!(aggregate.bash_count, 0);
         assert!(aggregate.individual_calls.is_empty());
     }
 }

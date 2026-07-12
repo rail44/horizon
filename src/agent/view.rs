@@ -312,11 +312,21 @@ impl AgentView {
                         .into_any_element(),
                 )
             }
-            AgentFrameItem::ToolCallPreparing(progress) => Some(block(
-                "tool (preparing)",
-                theme::text_subtle(),
-                format!("{:?}", progress),
-            )),
+            // A humane one-liner, not `ToolCallProgress`'s `Debug` dump
+            // (owner feedback 2026-07-13: a raw Debug format leaking
+            // through was part of the "incomprehensible screen state"
+            // report -- see `turns::group_into_turns`'s doc comment for
+            // the actual root cause; this item only reaches the flat
+            // per-item fallback at all in that same narrow edge case, so
+            // it's humanized defensively rather than left raw).
+            AgentFrameItem::ToolCallPreparing(progress) => {
+                let verb = progress.tool_id.as_deref().unwrap_or("tool call");
+                Some(block(
+                    "tool (preparing)",
+                    theme::text_subtle(),
+                    format!("{verb} … ({} bytes streamed)", progress.bytes),
+                ))
+            }
             AgentFrameItem::Error(error) => {
                 Some(block("error", theme::danger(), format!("{error:?}")))
             }
@@ -389,7 +399,7 @@ impl AgentView {
                     cx,
                 ));
             }
-            None => blocks.push(self.render_running_card(base_index, items, cx)),
+            None => blocks.push(self.render_running_card(items, cx)),
         }
         for (offset, item) in items.iter().enumerate().skip(1) {
             let index = base_index + offset;
@@ -500,15 +510,10 @@ impl AgentView {
         if let Some(prose) = &prose {
             row = row.child(receipt_text(theme::text_muted(), prose.clone()));
         }
-        for call in &aggregate.bash_calls {
-            row = row.child(self.render_receipt_chip(call));
-        }
         for call in &aggregate.individual_calls {
             row = row.child(self.render_receipt_chip(call));
         }
-        let has_leading_content = prose.is_some()
-            || !aggregate.bash_calls.is_empty()
-            || !aggregate.individual_calls.is_empty();
+        let has_leading_content = prose.is_some() || !aggregate.individual_calls.is_empty();
         if has_leading_content {
             row = row.child(separator());
         }
@@ -593,7 +598,7 @@ impl AgentView {
         let call_id = call.call_id.clone();
         let row_id = ElementId::from(format!("receipt-row-{}", call.call_id.0));
 
-        let header = div()
+        let mut header = div()
             .id(row_id)
             .flex()
             .flex_row()
@@ -631,6 +636,19 @@ impl AgentView {
                     .text_color(theme::text_muted())
                     .child(text),
             );
+        // Surface the approval fact in a completed turn's expansion row
+        // too (owner feedback 2026-07-13, round 3), same one-word
+        // phrase as the running card -- but never buttons: history isn't
+        // actionable.
+        if let Some((phrase, color)) = approval_phrase(call.approval) {
+            header = header.child(
+                div()
+                    .flex_none()
+                    .text_size(px(11.0))
+                    .text_color(color)
+                    .child(phrase),
+            );
+        }
 
         let mut wrapper = div().flex().flex_col();
         if divider {
@@ -750,14 +768,15 @@ impl AgentView {
         }
     }
 
-    /// One receipt chip -- post-aggregation (owner feedback 2026-07-13),
-    /// only rendered for `aggregate_receipt`'s `bash_calls` (always
-    /// individual: command info is meaningful) and `individual_calls`
-    /// (any failed call, of any class, plus the defensive
-    /// never-finished case): a bash chip (command head + mark), a file
-    /// chip (name + mark -- no diffstat once failed, see below) for a
-    /// failed fs.edit/fs.write, and a plain verb + mark for everything
-    /// else.
+    /// One receipt chip -- post-aggregation (owner feedback 2026-07-13:
+    /// query/edit calls fold into prose, then bash followed suit once a
+    /// dozen near-identical `cd … && …` chips turned out just as
+    /// uninformative), only rendered for `aggregate_receipt`'s
+    /// `individual_calls` -- any failed call, of any class, plus the
+    /// defensive never-finished case: a bash chip (command head + mark)
+    /// for a failed bash call, a file chip (name + mark -- no diffstat
+    /// once failed, see below) for a failed fs.edit/fs.write, and a
+    /// plain verb + mark for everything else.
     fn render_receipt_chip(&self, call: &turns::ToolCallView) -> AnyElement {
         let (mark, mark_color) = if !call.finished {
             ("…", theme::text_subtle())
@@ -865,18 +884,21 @@ impl AgentView {
     /// accent-tinted fill scoped to the header strip only, and a header
     /// (status dot + bold state label — the card's one full-strength
     /// accent element, plus `n / m` progress + ticking elapsed seconds —
-    /// room left for the stage-F stop button) and one row per tool call,
-    /// plus any pending approval block. The row area itself carries no
-    /// distinct panel fill, matching the mock's card having no
-    /// background of its own beyond the header tint. `overflow_hidden`
-    /// keeps row/chip content that would otherwise overflow (long paths,
-    /// command heads) from painting past the card's rounded corners.
-    fn render_running_card(
-        &self,
-        base_index: usize,
-        items: &[AgentFrameItem],
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    /// room left for the stage-F stop button) and one row per tool call.
+    /// The row area itself carries no distinct panel fill, matching the
+    /// mock's card having no background of its own beyond the header
+    /// tint. `overflow_hidden` keeps row/chip content that would
+    /// otherwise overflow (long paths, command heads) from painting past
+    /// the card's rounded corners.
+    ///
+    /// A pending approval renders *inline in its own row*
+    /// (`render_tool_call_row`'s `Waiting` branch), not as a standalone
+    /// box below every row (owner feedback 2026-07-13, round 3: "can't
+    /// tell which tool call corresponds to which approval" -- a screen
+    /// with over a dozen stacked yellow boxes and no visible link back to
+    /// the call that requested each one). There is no longer any
+    /// `ApprovalRequested` rendering path inside the running card at all.
+    fn render_running_card(&self, items: &[AgentFrameItem], cx: &mut Context<Self>) -> AnyElement {
         let tool_calls = turns::build_tool_call_views(items);
         let (finished, total) = turns::progress(&tool_calls);
         let elapsed = self
@@ -941,14 +963,7 @@ impl AgentView {
 
         let row_count = tool_calls.len();
         for (row_index, call) in tool_calls.iter().enumerate() {
-            card = card.child(self.render_tool_call_row(call, row_index + 1 < row_count));
-        }
-        for (offset, item) in items.iter().enumerate() {
-            if matches!(item, AgentFrameItem::ApprovalRequested(_)) {
-                if let Some(el) = self.render_item(base_index + offset, item, cx) {
-                    card = card.child(div().px_3().py_2().child(el));
-                }
-            }
+            card = card.child(self.render_tool_call_row(call, row_index + 1 < row_count, cx));
         }
 
         card.into_any_element()
@@ -968,17 +983,38 @@ impl AgentView {
     /// to receipts only); [`tool_call_glyph`]/[`tool_call_line_text`]
     /// factor out the content this shares with
     /// [`render_expandable_tool_call_row`]'s expandable version.
-    fn render_tool_call_row(&self, call: &turns::ToolCallView, divider: bool) -> AnyElement {
+    ///
+    /// A `Waiting` approval renders inline at the row's right: small
+    /// Approve/Deny buttons wired to this exact `call_id` (owner feedback
+    /// 2026-07-13, round 3 -- integrating approval into the row it
+    /// belongs to, replacing the standalone yellow box that gave no
+    /// visible link back to its tool call), plus a subtle warning tint
+    /// on the whole row so the eye finds it among a dozen other rows. A
+    /// resolved approval (`Approved`/`Denied`) shows a short one-word
+    /// phrase in that same area instead (`approval_phrase`) -- muted for
+    /// approved, danger-colored for denied. The keyboard/palette
+    /// approve-tool-call/deny-tool-call commands and the control-plane
+    /// path are untouched by any of this: they still dispatch by
+    /// pending-queue order (`AgentSession::approve`/`deny`), independent
+    /// of which row's buttons a pointer happens to click.
+    fn render_tool_call_row(
+        &self,
+        call: &turns::ToolCallView,
+        divider: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let (glyph, glyph_color) = tool_call_glyph(call);
         let text = tool_call_line_text(call);
+        let waiting = call.approval == turns::ApprovalState::Waiting;
 
-        div()
+        let mut row = div()
             .flex()
             .flex_row()
             .items_center()
             .gap_2()
             .px_3()
             .py_1()
+            .when(waiting, |this| this.bg(theme::warning().alpha(0.12)))
             .when(divider, |this| {
                 this.border_b_1()
                     .border_color(theme::text_subtle().alpha(0.3))
@@ -1000,8 +1036,47 @@ impl AgentView {
                     .text_size(px(12.0))
                     .text_color(theme::text_muted())
                     .child(text),
-            )
-            .into_any_element()
+            );
+
+        if waiting {
+            let approve_id = call.call_id.clone();
+            let deny_id = call.call_id.clone();
+            row = row.child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .flex_row()
+                    .gap_1()
+                    .child(
+                        Button::new(format!("row-approve-{}", call.call_id.0))
+                            .primary()
+                            .xsmall()
+                            .label("Approve")
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                view.session.read(cx).approve(approve_id.clone());
+                            })),
+                    )
+                    .child(
+                        Button::new(format!("row-deny-{}", call.call_id.0))
+                            .danger()
+                            .xsmall()
+                            .label("Deny")
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                view.session.read(cx).deny(deny_id.clone());
+                            })),
+                    ),
+            );
+        } else if let Some((phrase, color)) = approval_phrase(call.approval) {
+            row = row.child(
+                div()
+                    .flex_none()
+                    .text_size(px(11.0))
+                    .text_color(color)
+                    .child(phrase),
+            );
+        }
+
+        row.into_any_element()
     }
 
     fn status_line(&self, cx: &App) -> String {
@@ -1048,6 +1123,22 @@ fn tool_call_line_text(call: &turns::ToolCallView) -> String {
         }
     }
     text
+}
+
+/// A resolved approval's one-word phrase (owner feedback 2026-07-13,
+/// round 3): shown in place of buttons once a `Waiting` row's decision
+/// lands, and in a completed turn's expanded receipt row (history is not
+/// actionable there, so it's the phrase or nothing -- never buttons).
+/// `None` for `ApprovalState::None` (never needed approval) and
+/// `ApprovalState::Waiting` (that state gets buttons in the running
+/// card, or -- in a receipt, which only shows resolved calls in the
+/// normal case -- nothing extra at all).
+fn approval_phrase(approval: turns::ApprovalState) -> Option<(&'static str, Hsla)> {
+    match approval {
+        turns::ApprovalState::Approved => Some(("approved", theme::text_muted())),
+        turns::ApprovalState::Denied => Some(("denied", theme::danger())),
+        turns::ApprovalState::None | turns::ApprovalState::Waiting => None,
+    }
 }
 
 /// One reconstructed diff line (decision 4): the line background carries
