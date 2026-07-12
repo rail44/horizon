@@ -48,10 +48,14 @@ pub struct AgentView {
     focus_handle: FocusHandle,
     transcript_scroll: ScrollHandle,
     running_turn_clock: Option<RunningTurnClock>,
-    /// Stage D: which completed turns' receipts are expanded, keyed by
-    /// their `TurnEnded` item's frame index (stable across re-renders —
-    /// see `render_receipt`'s caller). View-local, per the amendment's
-    /// invariant; never persisted, never part of the frame model.
+    /// Stage D: which turns' receipts are expanded, keyed by the turn's
+    /// own start index (`TurnSpan::start`, stable for the turn's whole
+    /// lifetime -- see `render_receipt`'s caller). Owner feedback
+    /// 2026-07-13: keying off the start index rather than the closing
+    /// `TurnEnded` item's index means the same key survives the
+    /// provisional -> final receipt transition. View-local, per the
+    /// amendment's invariant; never persisted, never part of the frame
+    /// model.
     expanded_receipts: HashSet<usize>,
     /// Stage D: which expanded-receipt rows are individually expanded,
     /// keyed by `call_id` -- unique across the whole session, so one flat
@@ -347,15 +351,43 @@ impl AgentView {
                 blocks.push(el);
             }
         }
+        // The receipt's expansion key is the turn's own start index
+        // (`base_index`, i.e. `span.start`) -- not the closing
+        // `TurnEnded` item's index, which doesn't exist yet for a
+        // provisional receipt below. Keying off the stable start index
+        // means the same key carries expansion state across the
+        // provisional -> final transition (owner feedback 2026-07-13).
         match ended {
-            // The turn's closing `TurnEnded` item is always the last item
-            // in `items` (inclusive span end) -- its frame index is the
-            // stable key `expanded_receipts` keys off, surviving
-            // re-renders/notifies without depending on the turn's
-            // position in the (possibly windowed) rendered list.
-            Some(end) => {
-                let receipt_key = base_index + items.len() - 1;
-                blocks.push(self.render_receipt(receipt_key, items, end, cx))
+            Some(end) => blocks.push(self.render_receipt(
+                base_index,
+                items,
+                turns::ReceiptTail::Final(end),
+                cx,
+            )),
+            None if turns::running_turn_folds(items) => {
+                // Provisional receipt (owner feedback 2026-07-13): once
+                // every tool call in this turn has finished and the
+                // model has started producing its final response, fold
+                // early rather than waiting for `TurnEnded` -- the same
+                // aggregated-chip receipt line, just with a live ticking
+                // elapsed instead of a final status/model
+                // (`ReceiptTail::Provisional`). If a *new* tool call
+                // arrives after that trailing text (the model keeps
+                // working after starting to answer), `running_turn_folds`
+                // flips back to `false` on the very next render and the
+                // running card returns beneath it instead -- this is
+                // intended behavior, not a glitch: the turn genuinely
+                // isn't "just wrapping up" anymore.
+                let elapsed = self
+                    .running_turn_clock
+                    .map(|clock| clock.started_at.elapsed())
+                    .unwrap_or_default();
+                blocks.push(self.render_receipt(
+                    base_index,
+                    items,
+                    turns::ReceiptTail::Provisional { elapsed },
+                    cx,
+                ));
             }
             None => blocks.push(self.render_running_card(base_index, items, cx)),
         }
@@ -399,15 +431,19 @@ impl AgentView {
             .into_any_element()
     }
 
-    /// The completed turn's one-line receipt (decision 1, aggregated per
-    /// owner feedback 2026-07-13 -- see
-    /// `docs/agent-output-ui-amendment.md`'s post-review note): the
-    /// `▸`/`▾` expansion affordance (accent-tinted, plus a subtle hover
-    /// background on the whole row -- "hard to tell it's clickable"),
-    /// prose counts for the low-signal query/edit calls
-    /// (`turns::receipt_prose`), individual chips only for bash calls
-    /// and any failed call, the end-reason status text, and the model id
-    /// (muted, at the row's end). Clicking anywhere on the row toggles
+    /// The turn's one-line receipt (decision 1, aggregated per owner
+    /// feedback 2026-07-13 -- see `docs/agent-output-ui-amendment.md`'s
+    /// post-review note): the `▸`/`▾` expansion affordance
+    /// (accent-tinted), prose counts for the low-signal query/edit calls
+    /// (`turns::receipt_prose`), individual chips only for bash calls and
+    /// any failed call, then a `tail` -- either the final end-reason
+    /// status + model id, or (a provisional receipt, `render_turn`'s
+    /// early-fold branch) a live ticking elapsed with no status/model
+    /// yet. The row carries a persistent-but-quiet resting-state look
+    /// (a faint border + rounded corners + modest padding -- the same
+    /// muted-border language as the expanded row list below) plus a
+    /// stronger hover background, both round 2 of the "hard to notice
+    /// it's clickable" feedback. Clicking anywhere on the row toggles
     /// `receipt_key`'s expansion (mock 6a): the per-call row list
     /// (decision 3) renders beneath, each row individually expandable in
     /// turn (`render_expandable_tool_call_row`) -- unaggregated, exactly
@@ -416,17 +452,25 @@ impl AgentView {
         &self,
         receipt_key: usize,
         items: &[AgentFrameItem],
-        end: &turns::TurnEnd,
+        tail: turns::ReceiptTail<'_>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let tool_calls = turns::build_tool_call_views(items);
         let aggregate = turns::aggregate_receipt(&tool_calls);
         let prose = turns::receipt_prose(&aggregate);
-        let status = turns::receipt_status(end);
-        let status_color = if status.is_error {
-            theme::danger()
-        } else {
-            theme::text_muted()
+        let (status_text, status_color, model) = match tail {
+            turns::ReceiptTail::Final(end) => {
+                let status = turns::receipt_status(end);
+                let color = if status.is_error {
+                    theme::danger()
+                } else {
+                    theme::text_muted()
+                };
+                (status.text, color, end.model.clone())
+            }
+            turns::ReceiptTail::Provisional { elapsed } => {
+                (turns::humanize_duration(elapsed), theme::text_muted(), None)
+            }
         };
         let receipt_text =
             |color: Hsla, text: String| div().text_size(px(11.0)).text_color(color).child(text);
@@ -442,9 +486,11 @@ impl AgentView {
             .flex_wrap()
             .items_center()
             .gap_2()
-            .px_1()
+            .px_2()
             .py_0p5()
             .rounded_sm()
+            .border_1()
+            .border_color(theme::text_subtle().alpha(0.25))
             .cursor_pointer()
             .hover(|this| this.bg(theme::text_subtle().alpha(0.12)))
             .on_click(cx.listener(move |view, _, _, cx| {
@@ -466,8 +512,8 @@ impl AgentView {
         if has_leading_content {
             row = row.child(separator());
         }
-        row = row.child(receipt_text(status_color, status.text));
-        if let Some(model) = &end.model {
+        row = row.child(receipt_text(status_color, status_text));
+        if let Some(model) = &model {
             row = row.child(separator());
             row = row.child(
                 div()

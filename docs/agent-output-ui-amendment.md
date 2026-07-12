@@ -231,16 +231,20 @@ failure display themselves are still unbuilt (next stage).
 
 ## Post-review adjustments (owner feedback 2026-07-13, stage D)
 
-Two deviations from the mock/decision 1 wording, made on stage D's
-branch after a visual review (owner explicitly accepted both as
-deviations rather than asking for a mock update):
+Deviations from the mock/decision 1 wording, made on stage D's branch
+after two rounds of visual review (owner explicitly accepted each as a
+deviation rather than asking for a mock update):
 
-- **Click affordance.** "It's hard to tell from its looks that the
-  receipt is clickable." The receipt row now shows a subtle hover
-  background (`theme::text_subtle()` at low alpha — an existing role,
-  no new one) and its `▸`/`▾` glyph is accent-tinted rather than muted,
-  so the row reads as interactive on hover/glance without adding
-  chrome to its resting state.
+- **Click affordance (round 1, superseded by round 2 below).** "It's
+  hard to tell from its looks that the receipt is clickable." Round 1
+  added a subtle hover background and an accent-tinted `▸`/`▾` glyph;
+  round 2 feedback ("still hard to notice with hover-only") upgraded
+  the resting state itself: the receipt row now always shows a faint
+  border (`theme::text_subtle()` at low alpha — the same role/alpha the
+  expanded row list's own container border uses) plus rounded corners
+  and modest padding, reading as a quiet pill/button row even before
+  hover; hovering still strengthens the background on top of that. The
+  glyph stays accent-tinted.
 - **Receipt aggregation.** "Rows of glob/grep/read chips carry no
   information — aggregate them into something like 'x times tool
   called', and express the number of files read/edited as prose." The
@@ -259,3 +263,24 @@ deviations rather than asking for a mock update):
   are unaggregated and otherwise unchanged from stage D). Pure
   aggregation logic (`classify_call`, `aggregate_receipt`,
   `receipt_prose`) lives in `src/agent/turns.rs` with colocated tests.
+- **Early fold (round 2): the provisional receipt.** "The fold into a
+  receipt happens after the final response finishes rendering — can it
+  happen when the final response STARTS rendering?" Since "final
+  response" is only knowable retroactively, this is a pure predicate,
+  `turns::running_turn_folds(items)`: true once a running turn's tool
+  calls are all finished (at least one exists) *and* assistant text (a
+  streaming delta or a committed assistant message) appears after the
+  last tool-related item. While true, the transcript renders a
+  **provisional receipt** — the same aggregated prose/chips a finished
+  turn's receipt would show, but with a live ticking elapsed and no end
+  status/model yet (`turns::ReceiptTail::Provisional`) — in place of
+  the running card; the streaming text keeps rendering beneath it
+  exactly as before. `TurnEnded` then finalizes that same receipt row
+  in place (`ReceiptTail::Final`). If the model makes another tool call
+  after the trailing text starts, the predicate flips back to `false`
+  on the next render and the running card reappears — documented on
+  `running_turn_folds` itself as intended, not a glitch: the turn
+  genuinely isn't wrapping up anymore. The receipt's expansion key
+  moved from the closing `TurnEnded` item's frame index to the turn's
+  own start index (`TurnSpan::start`) so expansion state survives the
+  provisional → final transition.

@@ -94,6 +94,100 @@ fn is_user_message(item: &AgentFrameItem) -> bool {
     )
 }
 
+/// Whether `item` is part of a tool call's lifecycle -- used by
+/// [`running_turn_folds`] to find the last such item in a running turn.
+fn is_tool_related(item: &AgentFrameItem) -> bool {
+    matches!(
+        item,
+        AgentFrameItem::ToolCallRequested(_)
+            | AgentFrameItem::ToolCallStarted(_)
+            | AgentFrameItem::ToolCallFinished(_)
+            | AgentFrameItem::ApprovalRequested(_)
+            | AgentFrameItem::ToolCallPreparing(_)
+    )
+}
+
+/// Whether `item` is assistant-authored text -- a streaming delta or a
+/// committed assistant `Message` -- used by [`running_turn_folds`].
+fn is_assistant_text(item: &AgentFrameItem) -> bool {
+    matches!(
+        item,
+        AgentFrameItem::AssistantTextDelta(_)
+            | AgentFrameItem::Message(Message {
+                role: MessageRole::Assistant,
+                ..
+            })
+    )
+}
+
+/// The frame-relative index (within `items`) of the last tool-related
+/// item, if any.
+fn last_tool_related_index(items: &[AgentFrameItem]) -> Option<usize> {
+    items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| is_tool_related(item))
+        .map(|(index, _)| index)
+        .max()
+}
+
+/// Whether a running turn's tool activity is done and its final response
+/// has started rendering -- owner feedback 2026-07-13 ("can the fold
+/// into a receipt happen when the final response STARTS rendering,
+/// rather than after it finishes?"). `items` is the turn's own slice
+/// (from `group_into_turns`, `ended: None`). True when:
+///
+/// 1. the turn has made at least one tool call (an all-prose turn has
+///    nothing worth a receipt for -- it keeps rendering as plain text,
+///    same as today);
+/// 2. every tool call has finished (this alone also covers "no pending
+///    approval": an unresolved approval means its call has no
+///    `ToolCallFinished` yet, so `build_tool_call_views` reports it
+///    unfinished -- the approval box, and the running card behind it,
+///    keep showing exactly as before);
+/// 3. assistant text (a streaming delta or a committed assistant
+///    message) appears *after* the last tool-related item.
+///
+/// While true, the view (`AgentView::render_turn`) renders a
+/// provisional receipt line -- the same aggregated prose/chips as a
+/// final receipt, just with a live ticking elapsed and no end status/
+/// model yet -- in place of the running card; the streaming text itself
+/// keeps rendering the same way it always has, right below.
+///
+/// This is deliberately re-evaluated on every render rather than latched
+/// once true: if the model starts answering and then makes *another*
+/// tool call, condition 3 stops holding (the last tool-related item is
+/// now after the trailing text that used to satisfy it) and this flips
+/// back to `false` on the very next render -- the running card
+/// reappears beneath whatever text had already streamed. That reversal
+/// is intended, not a glitch: the turn genuinely isn't "just wrapping
+/// up" anymore, so the affordances a still-working turn needs (the stop
+/// button, per-row progress) belong back on screen.
+pub(crate) fn running_turn_folds(items: &[AgentFrameItem]) -> bool {
+    let tool_calls = build_tool_call_views(items);
+    if tool_calls.is_empty() {
+        return false;
+    }
+    if !tool_calls.iter().all(|call| call.finished) {
+        return false;
+    }
+    match last_tool_related_index(items) {
+        Some(last_tool_index) => items[last_tool_index + 1..].iter().any(is_assistant_text),
+        None => false,
+    }
+}
+
+/// The receipt row's trailing content (`render_receipt`'s `tail`
+/// parameter): a finished turn's end-reason status + model id, or -- the
+/// early-fold provisional receipt ([`running_turn_folds`], owner
+/// feedback 2026-07-13) -- a live ticking elapsed with neither yet.
+/// Carries a `&TurnEnd` rather than duplicating its fields so `Final`
+/// can never drift from [`receipt_status`]'s own reading of it.
+pub(crate) enum ReceiptTail<'a> {
+    Final(&'a TurnEnd),
+    Provisional { elapsed: Duration },
+}
+
 /// A turn's end-reason rendered as receipt status text -- the
 /// `Cancelled` -> `stopped · {elapsed}` / `Failed`/`Halted` ->
 /// error-marked variants from decision 1's end-reason handling.
@@ -908,7 +1002,9 @@ pub(crate) fn tool_call_body(
 
 #[cfg(test)]
 mod tests {
-    use horizon_agent::contract::{ApprovalRequest, ToolCallId, ToolCallRequest, ToolCallResult};
+    use horizon_agent::contract::{
+        ApprovalRequest, MessageDelta, ToolCallId, ToolCallRequest, ToolCallResult,
+    };
     use serde_json::json;
 
     use super::*;
@@ -922,6 +1018,13 @@ mod tests {
 
     fn assistant_message(text: &str) -> AgentFrameItem {
         AgentFrameItem::Message(Message {
+            role: MessageRole::Assistant,
+            text: text.to_string(),
+        })
+    }
+
+    fn assistant_delta(text: &str) -> AgentFrameItem {
+        AgentFrameItem::AssistantTextDelta(MessageDelta {
             role: MessageRole::Assistant,
             text: text.to_string(),
         })
@@ -1693,5 +1796,105 @@ mod tests {
         let aggregate = aggregate_receipt(&tool_calls);
         assert_eq!(aggregate.bash_calls.len(), 1);
         assert_eq!(receipt_prose(&aggregate), None);
+    }
+
+    #[test]
+    fn running_turn_folds_is_false_with_no_tool_calls() {
+        // An all-prose turn: nothing worth a receipt for -- the text
+        // keeps rendering as it does today, no early fold.
+        let items = vec![user_message("hi"), assistant_delta("hello there")];
+        assert!(!running_turn_folds(&items));
+    }
+
+    #[test]
+    fn running_turn_folds_is_false_while_a_tool_call_is_unfinished() {
+        let items = vec![
+            user_message("fix the bug"),
+            tool_requested("a", "bash", json!({"command": "cargo test"})),
+            // no matching tool_finished("a", ..) yet
+        ];
+        assert!(!running_turn_folds(&items));
+    }
+
+    #[test]
+    fn running_turn_folds_is_false_while_an_approval_is_pending() {
+        // A pending approval means its call has no `ToolCallFinished`
+        // yet, so it's covered by the same "every call finished" check
+        // -- no separate approval-specific branch needed.
+        let items = vec![
+            user_message("delete the file"),
+            approval_requested("a"),
+            // no matching tool_finished("a", ..) yet: still pending.
+        ];
+        assert!(!running_turn_folds(&items));
+    }
+
+    #[test]
+    fn running_turn_folds_is_true_once_tools_are_done_and_text_follows() {
+        let items = vec![
+            user_message("fix the bug"),
+            tool_requested("a", "fs.read", json!({"path": "a.rs"})),
+            tool_finished("a", json!({"total_lines": 10})),
+            assistant_delta("Looking at the code, I"),
+        ];
+        assert!(running_turn_folds(&items));
+    }
+
+    #[test]
+    fn running_turn_folds_flips_back_to_false_when_another_tool_call_follows_text() {
+        // The model started answering, then decided to run one more
+        // tool call -- the turn isn't "just wrapping up" anymore, so the
+        // predicate must flip back (documented as intended, not a
+        // glitch, on `running_turn_folds` itself).
+        let items = vec![
+            user_message("fix the bug"),
+            tool_requested("a", "fs.read", json!({"path": "a.rs"})),
+            tool_finished("a", json!({"total_lines": 10})),
+            assistant_delta("Looking at the code, I"),
+            tool_requested(
+                "b",
+                "fs.edit",
+                json!({"path": "a.rs", "old_string": "x", "new_string": "y"}),
+            ),
+        ];
+        assert!(!running_turn_folds(&items));
+    }
+
+    #[test]
+    fn running_turn_folds_is_true_with_a_committed_assistant_message_too() {
+        // The predicate accepts either a streaming delta or an already-
+        // committed assistant `Message` as "the final response started".
+        let items = vec![
+            user_message("fix the bug"),
+            tool_requested("a", "bash", json!({"command": "cargo test"})),
+            tool_finished("a", json!({"exit_code": 0, "output": "ok"})),
+            assistant_message("Fixed it, tests pass."),
+        ];
+        assert!(running_turn_folds(&items));
+    }
+
+    #[test]
+    fn provisional_receipt_content_matches_the_final_receipts_own_aggregation() {
+        // The provisional line reuses `aggregate_receipt`/`receipt_prose`
+        // verbatim on the running turn's own items -- proving that reuse
+        // produces the same content a final receipt would, once the
+        // turn actually ends the same way.
+        let items = vec![
+            user_message("fix the bug"),
+            tool_requested("a", "fs.grep", json!({"base_path": ".", "pattern": "x"})),
+            tool_finished("a", json!({"returned_count": 2})),
+            tool_requested("b", "fs.read", json!({"path": "a.rs"})),
+            tool_finished("b", json!({"total_lines": 10})),
+            assistant_delta("Looking at the code, I"),
+        ];
+        assert!(running_turn_folds(&items));
+        let tool_calls = build_tool_call_views(&items);
+        let aggregate = aggregate_receipt(&tool_calls);
+        assert_eq!(
+            receipt_prose(&aggregate).as_deref(),
+            Some("1 tool call · read 1 file")
+        );
+        assert!(aggregate.bash_calls.is_empty());
+        assert!(aggregate.individual_calls.is_empty());
     }
 }
