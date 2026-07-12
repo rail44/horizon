@@ -17,6 +17,44 @@ that canvas. The mocks are drawn on a light theme for review
 legibility only — implementation goes through theme roles as usual
 (no hardcoded colors, per the base doc's invariants).
 
+## Current-state note (GPUI shell, 2026-07-12)
+
+This amendment was written against the Floem-era base design, but the
+GPUI migration (see `docs/gpui-migration-design.md`) rebuilt the agent
+pane lean and did **not** port base slices 1–5. Read the decisions
+with these corrections (owner-confirmed 2026-07-12):
+
+- "Reuses the base slice-1 renderers / turn footer / Changes
+  overview": those exist only in the retired Floem shell. They are
+  built **new**, directly in this amendment's final shape (per-tool
+  renderers become the running card's rows and the receipt's expansion
+  bodies) — no intermediate always-visible-tool-block stage is built.
+- "+N more indicator, as today": the oldest-first queue *logic*
+  survives (`frame::pending_approval_call_ids_in`); the indicator UI
+  was Floem-only and is built new in the approval-mode composer.
+- "AgentPaneFocus still applies": no such focus context exists in
+  GPUI. Approval-mode key capture lives in the composer's own state
+  (Enter = allow, esc = deny, typing reverts to normal input).
+- The base doc's "trailing-window (200 blocks) + revision memoization"
+  invariant was deliberately discarded in the GPUI shell; the live
+  invariant is GPUI-native: expansion state stays view-local, and
+  per-token work stays O(visible), never O(whole-log).
+- "Cancellation is a stop reason, as implemented today": true in the
+  model (`TurnEndReason::Cancelled`); the receipt/chip rendering is
+  new UI.
+- The `retry ×N` chip (decision 5) is **deferred with its data**: the
+  runtime has no retry concept in the contract; the chip returns when
+  one exists.
+- gpui-component assets are reused wherever they fit (owner direction,
+  reconfirmed): theme via the single `Scheme` seam in `src/theme.rs`
+  (see the Contract addendum below and the module doc), components
+  (buttons, lists, badges) surveyed before hand-rolling.
+
+Implementation proceeds as staged branches, each owner-confirmed:
+A contract groundwork, B theme roles (both invisible), then C running
+card + receipts, D inline expansion, E approval-mode composer,
+F failure display + stop button (each visually confirmed).
+
 ## Decisions
 
 ### 1. Turn receipts — a completed turn's tool activity collapses to one line (extends the base design)
