@@ -204,6 +204,14 @@ struct RunCommand {
 
 const MODE_CONTEXT: &str = "WorkspaceMode";
 
+/// Alpha applied to `theme::background()` for workspace mode's pane-dimming
+/// scrim — ported from the retired Floem shell's `WORKSPACE_MODE_DIM_ALPHA`
+/// (`docs/workspace-mode-design.md`'s "pane dimming" visualization signal,
+/// the accident-killer: a stray keystroke should read as "nothing here
+/// types normally right now" at a glance). A numeric opacity factor, not a
+/// color, so the color itself stays theme-driven.
+const WORKSPACE_MODE_DIM_ALPHA: f32 = 0.55;
+
 /// Built-in default chord for [`ToggleWorkspaceMode`] — mirrors the Floem
 /// shell's `DEFAULT_WORKSPACE_MODE_CHORD`. Not bound when a
 /// `[keybindings]` entry overrides it via the reserved
@@ -1643,8 +1651,8 @@ impl WorkspaceShell {
         match node {
             LayoutNode::Pane(pane_id) => {
                 let pane_id = *pane_id;
-                let is_cursor = self.workspace.is_workspace_mode_active()
-                    && self.workspace.cursor_pane_id() == Some(pane_id);
+                let mode_active = self.workspace.is_workspace_mode_active();
+                let is_cursor = mode_active && self.workspace.cursor_pane_id() == Some(pane_id);
                 let is_active = self.workspace.is_active_pane(pane_id);
                 let border = if is_cursor {
                     rgb(0x84dcc6) // accent: the mode cursor
@@ -1678,6 +1686,22 @@ impl WorkspaceShell {
                             .text_size(px(12.0))
                             .text_color(rgb(0x8a90a0))
                             .child(restore_label)
+                    })
+                    .when(mode_active, |this| {
+                        // Workspace mode's pane-dimming scrim
+                        // (`docs/workspace-mode-design.md`): drawn over
+                        // every pane uniformly, cursor pane included (its
+                        // own bright border, set above, is the separate
+                        // cursor signal). A plain non-interactive overlay
+                        // — no `.occlude()` — so it stays purely visual
+                        // and the pane-activation `on_mouse_down` above
+                        // keeps firing through it.
+                        this.child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .bg(rgb(theme::background()).opacity(WORKSPACE_MODE_DIM_ALPHA)),
+                        )
                     })
                     .into_any_element()
             }
