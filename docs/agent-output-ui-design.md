@@ -2,6 +2,9 @@
 
 Status: owner-approved 2026-07-06; implementation in slices (this doc
 records the whole design; slice status is tracked in the roadmap).
+Amended 2026-07-12 by `docs/agent-output-ui-amendment.md` (turn
+receipts + running-turn card layered on top; decision 8 / slice 4's
+inline approval superseded by a composer approval mode).
 
 ## Problem
 

@@ -1,0 +1,1546 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics><meta name="design_doc_mode" content="canvas"><style>
+body{margin:0;background:#f0eee9;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Hiragino Sans","Noto Sans JP",sans-serif}
+a{color:#2563eb;text-decoration:none}a:hover{color:#1d4ed8;text-decoration:underline}
+.dv-turn{padding:40px 44px 32px;border-bottom:1px solid rgba(0,0,0,.08);scroll-margin-top:16px}
+.dv-thd{display:flex;align-items:baseline;gap:10px;margin:0 0 8px}
+.dv-tid{font:600 10px ui-monospace,Menlo,monospace;padding:3px 7px;background:#1a1a1a;color:#fff;border-radius:4px;text-decoration:none}
+.dv-tname{font:600 13px/1.2 system-ui,sans-serif;color:#1a1a1a}
+.dv-note{max-width:760px;margin:0 0 24px;font:12px/1.6 system-ui,sans-serif;color:rgba(0,0,0,.55)}
+.dv-opts{display:flex;flex-wrap:wrap;gap:32px;align-items:flex-start}
+.dv-opt{flex:none;display:flex;flex-direction:column;gap:9px;scroll-margin-top:16px}
+.dv-oid{font:600 10.5px ui-monospace,Menlo,monospace;padding:3px 7px;background:rgba(0,0,0,.08);color:#1a1a1a;border-radius:5px;text-decoration:none}
+.dv-olabel{display:flex;align-items:baseline;gap:8px;font:400 11px/1.3 system-ui,sans-serif;color:rgba(0,0,0,.55)}
+.dv-card{max-width:100%;background:#e9e7e2;border:1px solid rgba(0,0,0,.08);border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.06);overflow:hidden;padding:32px}
+.dv-opt:target .dv-oid{background:#2a78d6;color:#fff}
+.dv-next{margin:24px 0 0;font:12px/1.5 system-ui,sans-serif;color:rgba(0,0,0,.5)}
+</style></helmet>
+
+<section class="dv-turn" id="t8">
+<div class="dv-thd"><a class="dv-tid" href="#t8">8</a><span class="dv-tname">判断5: セッション管理 — 過去のエージェントセッションへの入口3案</span></div>
+<p class="dv-note">Horizon には session manager モーダル（manage sessions）・view chooser・palette が既にあり、エージェントセッションは永続化・再接続されます。問うのは「入口をどこに置くか」。<a class="dv-oid" href="#8a">8a</a> は既存モーダルに乗り、エージェント行の情報を増やすだけ。<a class="dv-oid" href="#8b">8b</a> はペインヘッダーにスイッチャー（ux-principles の「ヘッダーは最小」との緊張あり）。<a class="dv-oid" href="#8c">8c</a> は新規エージェントペインを開いた瞬間の開始画面で再開を提示。決定済み: <a class="dv-oid" href="#2a">2a</a> → <a class="dv-oid" href="#3b">3b</a> → <a class="dv-oid" href="#4b">4b</a> → <a class="dv-oid" href="#5a">5a</a> → <a class="dv-oid" href="#6a">6a</a> → <a class="dv-oid" href="#7a">7a</a>（割り込み時 <a class="dv-oid" href="#7b">7b</a>）。</p>
+<div class="dv-opts">
+
+<!-- ============ 8a 既存モーダル拡充 ============ -->
+<div class="dv-opt" id="8a"><div class="dv-olabel"><a class="dv-oid" href="#8a">8a</a><span>session manager に乗る — エージェント行の情報だけ拡充<br><span style="color:#8a6d1f">実装: モーダル・attach/terminate＝<b>既存</b> · 行のメタ情報（最終メッセージ・diffstat）＝<b>小さな拡張</b></span></span></div>
+<div class="dv-card"><div style="width:760px;height:560px;background:#ffffff;border-radius:10px;box-shadow:0 0 0 1px rgba(0,0,0,0.12),0 18px 40px rgba(0,0,0,0.18);display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#18181b;position:relative">
+  <div style="display:flex;align-items:center;height:38px;padding:0 14px;background:#fafafa;border-bottom:1px solid #e4e4e7;flex:none">
+    <div style="display:flex;gap:8px;width:110px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+    <div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#52525b">acme-app</div>
+    <div style="width:110px"></div>
+  </div>
+  <!-- dimmed workspace behind -->
+  <div style="flex:1;background:#fafafa;opacity:0.5;padding:20px 24px">
+    <div style="border:1px solid #e4e4e7;border-radius:8px;padding:10px 14px;background:#ffffff;width:70%">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:06</div>
+      <div style="line-height:1.6">サインアップフォームにも同じ問題がないか…</div>
+    </div>
+  </div>
+  <!-- modal -->
+  <div style="position:absolute;top:70px;left:50%;transform:translateX(-50%);width:560px;background:#ffffff;border:1px solid #d4d4d8;border-radius:12px;box-shadow:0 24px 64px rgba(0,0,0,0.25);overflow:hidden">
+    <div style="display:flex;align-items:center;gap:8px;padding:10px 16px;border-bottom:1px solid #e4e4e7">
+      <span style="font-size:12.5px;font-weight:600">セッション</span>
+      <span style="flex:1"></span>
+      <span style="font-size:11px;color:#a1a1aa">↑↓ 選択 · ⏎ アタッチ · ⌘⏎ 終了 · esc</span>
+    </div>
+    <!-- selected agent row, enriched -->
+    <div style="padding:10px 16px;background:#eff6ff;border-left:2px solid #2563eb">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:12.5px;font-weight:600">Agent #1</span>
+        <span style="display:inline-flex;align-items:center;gap:4px;font-size:10.5px;color:#1d4ed8"><span style="width:6px;height:6px;border-radius:50%;background:#2563eb"></span>実行中</span>
+        <span style="flex:1"></span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:10.5px;color:#71717a">2 ファイル · +4 −2</span>
+      </div>
+      <div style="font-size:11.5px;color:#71717a;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">「サインアップフォームにも同じ問題がないか確認して」 · 24秒前</div>
+    </div>
+    <div style="padding:10px 16px;border-top:1px solid #f4f4f5">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:12.5px;font-weight:600;color:#3f3f46">Agent #3</span>
+        <span style="display:inline-flex;align-items:center;gap:4px;font-size:10.5px;color:#b45309"><span style="width:6px;height:6px;border-radius:50%;background:#d97706"></span>承認待ち</span>
+        <span style="font-size:10.5px;color:#a1a1aa">デタッチ済み</span>
+        <span style="flex:1"></span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:10.5px;color:#71717a">1 ファイル · +12 −3</span>
+      </div>
+      <div style="font-size:11.5px;color:#a1a1aa;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">「設定画面のフォームを新しい Input に移行」 · 8分前</div>
+    </div>
+    <div style="padding:10px 16px;border-top:1px solid #f4f4f5">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:12.5px;font-weight:600;color:#3f3f46">Terminal #2</span>
+        <span style="font-size:10.5px;color:#a1a1aa">デタッチ済み</span>
+        <span style="flex:1"></span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:10.5px;color:#a1a1aa">zsh · ~/acme-app</span>
+      </div>
+    </div>
+    <div style="padding:8px 16px;border-top:1px solid #e4e4e7;background:#fafafa;font-size:11px;color:#a1a1aa">完了済み 4 件を表示…</div>
+  </div>
+</div></div></div>
+
+<!-- ============ 8b ヘッダースイッチャー ============ -->
+<div class="dv-opt" id="8b"><div class="dv-olabel"><a class="dv-oid" href="#8b">8b</a><span>ペインヘッダーのスイッチャー — その場で切替・新規<br><span style="color:#8a6d1f">実装: <b>拡張</b>（ペインローカル UI。ux-principles「ヘッダーは最小」と要調整）</span></span></div>
+<div class="dv-card"><div style="width:760px;height:560px;background:#ffffff;border-radius:10px;box-shadow:0 0 0 1px rgba(0,0,0,0.12),0 18px 40px rgba(0,0,0,0.18);display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#18181b">
+  <div style="display:flex;align-items:center;height:38px;padding:0 14px;background:#fafafa;border-bottom:1px solid #e4e4e7;flex:none">
+    <div style="display:flex;gap:8px;width:110px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+    <div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#52525b">acme-app</div>
+    <div style="width:110px"></div>
+  </div>
+  <!-- pane header with switcher open -->
+  <div style="display:flex;align-items:center;gap:8px;height:30px;padding:0 12px;border-bottom:1px solid #e4e4e7;background:#fafafa;flex:none;position:relative">
+    <span style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;color:#18181b;background:#f4f4f5;border:1px solid #e4e4e7;border-radius:5px;padding:2px 8px">Agent #1 <span style="font-size:9px;color:#a1a1aa">▾</span></span>
+    <span style="display:inline-flex;align-items:center;gap:4px;font-size:10.5px;color:#1d4ed8"><span style="width:6px;height:6px;border-radius:50%;background:#2563eb"></span>実行中</span>
+    <span style="flex:1"></span>
+    <span style="font-size:10px;color:#a1a1aa">×</span>
+    <!-- dropdown -->
+    <div style="position:absolute;top:32px;left:12px;width:340px;background:#ffffff;border:1px solid #d4d4d8;border-radius:10px;box-shadow:0 16px 48px rgba(0,0,0,0.18);overflow:hidden;z-index:2">
+      <div style="padding:8px 12px;background:#eff6ff;border-left:2px solid #2563eb;display:flex;align-items:center;gap:8px">
+        <span style="font-size:12px;font-weight:600">Agent #1</span>
+        <span style="font-size:10.5px;color:#1d4ed8">実行中 · このペイン</span>
+      </div>
+      <div style="padding:8px 12px;border-top:1px solid #f4f4f5;display:flex;align-items:center;gap:8px">
+        <span style="font-size:12px;color:#3f3f46">Agent #3</span>
+        <span style="font-size:10.5px;color:#b45309">承認待ち</span>
+        <span style="flex:1"></span>
+        <span style="font-size:10.5px;color:#a1a1aa">8分前</span>
+      </div>
+      <div style="padding:8px 12px;border-top:1px solid #f4f4f5;display:flex;align-items:center;gap:8px">
+        <span style="font-size:12px;color:#3f3f46">Agent #2 — Input 移行</span>
+        <span style="font-size:10.5px;color:#16a34a">完了</span>
+        <span style="flex:1"></span>
+        <span style="font-size:10.5px;color:#a1a1aa">昨日</span>
+      </div>
+      <div style="padding:8px 12px;border-top:1px solid #e4e4e7;background:#fafafa;display:flex;align-items:center;gap:6px">
+        <span style="font-size:12px;color:#2563eb;font-weight:600">＋ 新しいセッション</span>
+        <span style="flex:1"></span>
+        <span style="font-size:10.5px;color:#a1a1aa">すべて表示 →</span>
+      </div>
+    </div>
+  </div>
+  <div style="flex:1;overflow:hidden;padding:16px 24px;display:flex;flex-direction:column;gap:12px;opacity:0.45">
+    <div style="border:1px solid #e4e4e7;border-radius:8px;padding:10px 14px;background:#fafafa;width:80%">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:06</div>
+      <div style="line-height:1.6">サインアップフォームにも同じ問題がないか確認して</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;color:#71717a;font-size:12px">
+      <span style="width:12px;height:12px;border-radius:50%;border:2px solid #dbeafe;border-top-color:#2563eb;flex:none"></span>
+      <span>確認しています…</span>
+    </div>
+  </div>
+  <div style="padding:0 20px 18px;flex:none;opacity:0.45">
+    <div style="border:1px solid #d4d4d8;border-radius:10px;padding:10px 12px 8px">
+      <div style="font-size:13px;color:#a1a1aa;padding:0 2px 10px">続けて指示する…</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:3px 8px">claude-sonnet-4 <span style="font-size:9px">▾</span></span>
+        <span style="flex:1"></span>
+        <span style="width:26px;height:26px;border-radius:50%;background:#2563eb;color:#ffffff;display:flex;align-items:center;justify-content:center;font-size:13px">↑</span>
+      </div>
+    </div>
+  </div>
+</div></div></div>
+
+<!-- ============ 8c 開始画面 ============ -->
+<div class="dv-opt" id="8c"><div class="dv-olabel"><a class="dv-oid" href="#8c">8c</a><span>開始画面 — 新規ペインを開いた瞬間に「新規 or 再開」<br><span style="color:#8a6d1f">実装: <b>拡張</b>（view chooser 後の空ペイン状態。一覧データは既存の永続化から）</span></span></div>
+<div class="dv-card"><div style="width:760px;height:560px;background:#ffffff;border-radius:10px;box-shadow:0 0 0 1px rgba(0,0,0,0.12),0 18px 40px rgba(0,0,0,0.18);display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#18181b">
+  <div style="display:flex;align-items:center;height:38px;padding:0 14px;background:#fafafa;border-bottom:1px solid #e4e4e7;flex:none">
+    <div style="display:flex;gap:8px;width:110px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+    <div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#52525b">Agent — 新規</div>
+    <div style="width:110px"></div>
+  </div>
+  <div style="flex:1;overflow:hidden;padding:28px 32px;display:flex;flex-direction:column;gap:18px">
+    <!-- new session composer, front and center -->
+    <div style="border:1px solid #d4d4d8;border-radius:12px;padding:14px 14px 10px;box-shadow:0 2px 8px rgba(0,0,0,0.05)">
+      <div style="font-size:14px;color:#a1a1aa;padding:0 2px 14px">何をしますか？</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:3px 8px">claude-sonnet-4 <span style="font-size:9px">▾</span></span>
+        <span style="flex:1"></span>
+        <span style="width:26px;height:26px;border-radius:50%;background:#2563eb;color:#ffffff;display:flex;align-items:center;justify-content:center;font-size:13px">↑</span>
+      </div>
+    </div>
+    <!-- resume list -->
+    <div style="display:flex;flex-direction:column;gap:0">
+      <div style="font-size:11px;font-weight:600;color:#a1a1aa;padding:0 2px 8px;letter-spacing:0.04em">再開</div>
+      <div style="border:1px solid #e4e4e7;border-radius:10px;overflow:hidden">
+        <div style="padding:10px 14px;display:flex;align-items:center;gap:10px">
+          <span style="display:inline-flex;width:7px;height:7px;border-radius:50%;background:#2563eb"></span>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:12.5px;font-weight:600">Agent #1 <span style="font-weight:400;color:#71717a">— ログインフォームのバグ修正</span></div>
+            <div style="font-size:11px;color:#a1a1aa;margin-top:2px">実行中 · 24秒前 · 2 ファイル +4 −2</div>
+          </div>
+          <span style="font-size:11px;color:#a1a1aa">⏎</span>
+        </div>
+        <div style="padding:10px 14px;display:flex;align-items:center;gap:10px;border-top:1px solid #f4f4f5">
+          <span style="display:inline-flex;width:7px;height:7px;border-radius:50%;background:#d97706"></span>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:12.5px;font-weight:600;color:#3f3f46">Agent #3 <span style="font-weight:400;color:#71717a">— 設定画面の Input 移行</span></div>
+            <div style="font-size:11px;color:#a1a1aa;margin-top:2px">承認待ち · 8分前 · 1 ファイル +12 −3</div>
+          </div>
+        </div>
+        <div style="padding:10px 14px;display:flex;align-items:center;gap:10px;border-top:1px solid #f4f4f5">
+          <span style="display:inline-flex;width:7px;height:7px;border-radius:50%;background:#d4d4d8"></span>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:12.5px;font-weight:600;color:#3f3f46">Agent #2 <span style="font-weight:400;color:#71717a">— リリースノート下書き</span></div>
+            <div style="font-size:11px;color:#a1a1aa;margin-top:2px">完了 · 昨日</div>
+          </div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:#a1a1aa;padding:8px 2px 0">すべてのセッション → <span style="border-bottom:1px dotted #d4d4d8">manage sessions</span></div>
+    </div>
+  </div>
+</div></div></div>
+
+</div>
+<p class="dv-next">次の例: 「<a class="dv-oid" href="#8a">8a</a>＋<a class="dv-oid" href="#8c">8c</a> の組み合わせで確定」 · 「次は判断6: 長大化への耐性へ」 · 「ここまでの決定を実装指示書に」</p>
+</section>
+
+<section class="dv-turn" id="t7">
+<div class="dv-thd"><a class="dv-tid" href="#t7">7</a><span class="dv-tname">判断4: 割り込み・巻き戻し — 3案</span></div>
+<p class="dv-note">3案は排他ではなく積み増しの関係。<a class="dv-oid" href="#7a">7a</a> は最小: 停止（cancel-turn）だけ。キャンセルはエラーではなく停止理由として扱う実装が既にあり、ほぼ既存の範囲。<a class="dv-oid" href="#7b">7b</a> は実行中の追加指示（ステアリング）: コンポーザーは実行中も生きていて、送るとターンに割り込む — ループ側の対応が拡張。<a class="dv-oid" href="#7c">7c</a> は編集の巻き戻し: fs.edit の逆適用によるターン単位のチェックポイント — 拡張（exact-string 編集なので逆適用は素直に作れる）。決定済み: <a class="dv-oid" href="#2a">2a</a> → <a class="dv-oid" href="#3b">3b</a> → <a class="dv-oid" href="#4b">4b</a> → <a class="dv-oid" href="#5a">5a</a> → <a class="dv-oid" href="#6a">6a</a>（<a class="dv-oid" href="#6c">6c</a> は将来構想）。</p>
+<div class="dv-opts">
+
+<!-- ============ 7a 停止のみ ============ -->
+<div class="dv-opt" id="7a"><div class="dv-olabel"><a class="dv-oid" href="#7a">7a</a><span>停止のみ — cancel-turn の可視化。キャンセルは静かな停止<br><span style="color:#8a6d1f">実装: cancel-turn・Cancelled 状態＝<b>既存</b> · UI は停止ボタンとレシート表記のみ</span></span></div>
+<div class="dv-card"><div style="width:760px;height:600px;background:#ffffff;border-radius:10px;box-shadow:0 0 0 1px rgba(0,0,0,0.12),0 18px 40px rgba(0,0,0,0.18);display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#18181b">
+  <div style="display:flex;align-items:center;height:38px;padding:0 14px;background:#fafafa;border-bottom:1px solid #e4e4e7;flex:none">
+    <div style="display:flex;gap:8px;width:110px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+    <div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#52525b">Agent #1 — 実行中</div>
+    <div style="width:110px"></div>
+  </div>
+  <div style="flex:1;overflow:hidden;padding:20px 24px;display:flex;flex-direction:column;gap:14px">
+    <!-- 過去: キャンセルされたターンのレシート -->
+    <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:#a1a1aa;padding:0 2px">
+      <span style="font-size:10px">▸</span>
+      <span style="display:inline-flex;align-items:center;gap:4px;border:1px solid #e4e4e7;border-radius:99px;padding:2px 9px;font-family:ui-monospace,'SF Mono',Menlo,monospace;color:#71717a">grep ✓</span>
+      <span style="display:inline-flex;align-items:center;gap:4px;border:1px solid #e4e4e7;border-radius:99px;padding:2px 9px;font-family:ui-monospace,'SF Mono',Menlo,monospace;color:#71717a">fs.read ✓</span>
+      <span style="display:inline-flex;align-items:center;gap:4px;border:1px solid #e4e4e7;border-radius:99px;padding:2px 9px;font-family:ui-monospace,'SF Mono',Menlo,monospace;color:#71717a">停止 · 12秒</span>
+    </div>
+    <div style="line-height:1.7;color:#71717a;padding:0 2px;font-size:12.5px">調査の方向が違いそうだったので停止しました。（ここまでの出力は保持されます）</div>
+    <div style="border:1px solid #e4e4e7;border-radius:8px;padding:10px 14px;background:#fafafa">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:06</div>
+      <div style="line-height:1.6">バリデーションではなく描画通知の問題だと思う。set_error 周辺を見て</div>
+    </div>
+    <!-- 実行中カード + 停止 -->
+    <div style="border:1px solid #bfdbfe;border-radius:8px;overflow:hidden">
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#eff6ff;border-bottom:1px solid #dbeafe">
+        <span style="width:7px;height:7px;border-radius:50%;background:#2563eb;box-shadow:0 0 0 3px #dbeafe"></span>
+        <span style="font-size:12px;font-weight:600;color:#1d4ed8">実行中</span>
+        <span style="flex:1"></span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">1 / 3 · 4s</span>
+        <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#52525b;border:1px solid #d4d4d8;border-radius:5px;padding:2px 9px;background:#ffffff"><span style="width:7px;height:7px;background:#52525b;border-radius:1px"></span>停止 <span style="color:#a1a1aa;font-size:10px">esc esc</span></span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 12px">
+        <span style="width:12px;height:12px;border-radius:50%;border:2px solid #dbeafe;border-top-color:#2563eb;flex:none"></span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#52525b;flex:1">fs.read src/ui/login_form.rs</span>
+      </div>
+    </div>
+  </div>
+  <div style="padding:0 20px 18px;flex:none">
+    <div style="border:1px solid #d4d4d8;border-radius:10px;padding:10px 12px 8px;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
+      <div style="font-size:13px;color:#a1a1aa;padding:0 2px 10px">続けて指示する…（送信は次のターン）</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:3px 8px">claude-sonnet-4 <span style="font-size:9px">▾</span></span>
+        <span style="flex:1"></span>
+        <span style="width:26px;height:26px;border-radius:50%;background:#2563eb;color:#ffffff;display:flex;align-items:center;justify-content:center;font-size:13px">↑</span>
+      </div>
+    </div>
+  </div>
+</div></div></div>
+
+<!-- ============ 7b ステアリング ============ -->
+<div class="dv-opt" id="7b"><div class="dv-olabel"><a class="dv-oid" href="#7b">7b</a><span>ステアリング — 実行中の追加指示がターンに割り込む<br><span style="color:#8a6d1f">実装: 実行中のコマンド受理（並行ループ）＝<b>既存</b> · ターンへの指示注入＝<b>拡張</b></span></span></div>
+<div class="dv-card"><div style="width:760px;height:600px;background:#ffffff;border-radius:10px;box-shadow:0 0 0 1px rgba(0,0,0,0.12),0 18px 40px rgba(0,0,0,0.18);display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#18181b">
+  <div style="display:flex;align-items:center;height:38px;padding:0 14px;background:#fafafa;border-bottom:1px solid #e4e4e7;flex:none">
+    <div style="display:flex;gap:8px;width:110px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+    <div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#52525b">Agent #1 — 実行中</div>
+    <div style="width:110px"></div>
+  </div>
+  <div style="flex:1;overflow:hidden;padding:20px 24px;display:flex;flex-direction:column;gap:14px">
+    <div style="border:1px solid #e4e4e7;border-radius:8px;padding:10px 14px;background:#fafafa">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:06</div>
+      <div style="line-height:1.6">サインアップフォームにも同じ問題がないか確認して</div>
+    </div>
+    <div style="border:1px solid #bfdbfe;border-radius:8px;overflow:hidden">
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#eff6ff;border-bottom:1px solid #dbeafe">
+        <span style="width:7px;height:7px;border-radius:50%;background:#2563eb;box-shadow:0 0 0 3px #dbeafe"></span>
+        <span style="font-size:12px;font-weight:600;color:#1d4ed8">実行中</span>
+        <span style="flex:1"></span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">3 / 4 · 18s</span>
+        <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#52525b;border:1px solid #d4d4d8;border-radius:5px;padding:2px 9px;background:#ffffff"><span style="width:7px;height:7px;background:#52525b;border-radius:1px"></span>停止</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 12px;border-bottom:1px solid #f4f4f5">
+        <span style="font-size:12px;color:#16a34a">✓</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#52525b;flex:1">fs.edit src/ui/signup_form.rs · <span style="color:#16a34a">+2</span> <span style="color:#dc2626">−1</span></span>
+      </div>
+      <!-- injected steering message -->
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 12px;border-bottom:1px solid #f4f4f5;background:#fafafa">
+        <span style="font-size:11px;color:#71717a;flex:none">↪</span>
+        <span style="font-size:12px;color:#3f3f46;flex:1">割り込み: <span style="font-weight:600">テストは signup モジュールだけでいい、全体は回さないで</span></span>
+        <span style="font-size:11px;color:#16a34a">反映済み</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 12px">
+        <span style="width:12px;height:12px;border-radius:50%;border:2px solid #dbeafe;border-top-color:#2563eb;flex:none"></span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#52525b;flex:1">bash cargo test -p acme-ui signup <span style="color:#a1a1aa">— 範囲を修正して実行</span></span>
+      </div>
+    </div>
+  </div>
+  <div style="padding:0 20px 18px;flex:none">
+    <div style="border:1px solid #93c5fd;border-radius:10px;padding:10px 12px 8px;box-shadow:0 2px 10px rgba(37,99,235,0.10)">
+      <div style="font-size:13px;color:#3f3f46;padding:0 2px 10px">実行中に送ると<span style="font-weight:600">このターンに割り込みます</span>｜</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:#1d4ed8;border:1px solid #bfdbfe;background:#eff6ff;border-radius:5px;padding:3px 8px">↪ 割り込み送信</span>
+        <span style="font-size:11px;color:#a1a1aa">⇧⏎ で次ターンに送る</span>
+        <span style="flex:1"></span>
+        <span style="width:26px;height:26px;border-radius:50%;background:#2563eb;color:#ffffff;display:flex;align-items:center;justify-content:center;font-size:13px">↑</span>
+      </div>
+    </div>
+  </div>
+</div></div></div>
+
+<!-- ============ 7c 巻き戻し ============ -->
+<div class="dv-opt" id="7c"><div class="dv-olabel"><a class="dv-oid" href="#7c">7c</a><span>巻き戻し — fs.edit の逆適用によるターン単位チェックポイント<br><span style="color:#8a6d1f">実装: <b>拡張</b>（逆適用エンジン＋mtime 整合チェック。git 併用が前提）</span></span></div>
+<div class="dv-card"><div style="width:760px;height:600px;background:#ffffff;border-radius:10px;box-shadow:0 0 0 1px rgba(0,0,0,0.12),0 18px 40px rgba(0,0,0,0.18);display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#18181b">
+  <div style="display:flex;align-items:center;height:38px;padding:0 14px;background:#fafafa;border-bottom:1px solid #e4e4e7;flex:none">
+    <div style="display:flex;gap:8px;width:110px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+    <div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#52525b">Agent #1 — 完了</div>
+    <div style="width:110px"></div>
+  </div>
+  <div style="flex:1;overflow:hidden;padding:20px 24px;display:flex;flex-direction:column;gap:14px">
+    <div style="border:1px solid #e4e4e7;border-radius:8px;padding:10px 14px;background:#fafafa">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:06</div>
+      <div style="line-height:1.6">サインアップフォームにも同じ問題がないか確認して</div>
+    </div>
+    <!-- opened receipt with undo affordances -->
+    <div style="border:1px solid #e4e4e7;border-radius:8px;overflow:hidden">
+      <div style="display:flex;align-items:center;gap:8px;padding:7px 12px;background:#fafafa;border-bottom:1px solid #e4e4e7;font-size:11px;color:#71717a">
+        <span style="font-size:10px;color:#a1a1aa">▾</span>
+        <span>3 ツール実行 · 24秒</span>
+        <span style="flex:1"></span>
+        <span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#52525b;border:1px solid #d4d4d8;border-radius:5px;padding:2px 9px;background:#ffffff">⟲ このターンの変更を巻き戻す (1 ファイル)</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;border-bottom:1px solid #f4f4f5">
+        <span style="font-size:10px;color:#a1a1aa">▸</span><span style="font-size:12px;color:#16a34a">✓</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#52525b;flex:1">grep "notify" src/ui/signup_form.rs · 1件</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">0.3s</span>
+      </div>
+      <!-- edit row with hover undo -->
+      <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;border-bottom:1px solid #f4f4f5;background:#f8f9fa">
+        <span style="font-size:10px;color:#a1a1aa">▸</span><span style="font-size:12px;color:#16a34a">✓</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#52525b;flex:1">fs.edit src/ui/signup_form.rs · <span style="color:#16a34a">+2</span> <span style="color:#dc2626">−1</span></span>
+        <span style="font-size:11px;color:#52525b;border:1px solid #d4d4d8;border-radius:5px;padding:2px 9px;background:#ffffff">⟲ この編集を取り消す</span>
+        <span style="font-size:10px;color:#d4d4d8">ホバー時</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:6px 12px">
+        <span style="font-size:10px;color:#a1a1aa">▸</span><span style="font-size:12px;color:#16a34a">✓</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#52525b;flex:1">bash cargo test -p acme-ui signup · 9 passed</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">12s</span>
+      </div>
+    </div>
+    <!-- undo confirmation state -->
+    <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#71717a;padding:6px 10px;border:1px dashed #d4d4d8;border-radius:8px">
+      <span style="font-size:12px">⟲</span>
+      <span>巻き戻すと signup_form.rs は編集前の内容に戻ります。ファイルが編集後に手で変更されている場合は中断します（mtime 照合）。</span>
+    </div>
+  </div>
+  <div style="padding:0 20px 18px;flex:none">
+    <div style="border:1px solid #d4d4d8;border-radius:10px;padding:10px 12px 8px;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
+      <div style="font-size:13px;color:#a1a1aa;padding:0 2px 10px">続けて指示する…</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:3px 8px">claude-sonnet-4 <span style="font-size:9px">▾</span></span>
+        <span style="flex:1"></span>
+        <span style="width:26px;height:26px;border-radius:50%;background:#2563eb;color:#ffffff;display:flex;align-items:center;justify-content:center;font-size:13px">↑</span>
+      </div>
+    </div>
+  </div>
+</div></div></div>
+
+</div>
+<p class="dv-next">次の例: 「<a class="dv-oid" href="#7a">7a</a> だけで確定、7b/7c は将来構想へ」 · 「<a class="dv-oid" href="#7b">7b</a> の割り込みが無視された場合の表示も見たい」 · 「次は判断5: セッション管理へ」</p>
+</section>
+
+<section class="dv-turn" id="t6">
+<div class="dv-thd"><a class="dv-tid" href="#t6">6</a><span class="dv-tname">判断3: レシート（▸）を開いた状態 — 3案</span></div>
+<p class="dv-note">場面は共通:「完了ターンの1行レシートをクリックした直後」。実装注記付き — <b>既存</b> = agent-output-ui-design.md の承認済み設計・実装済み機構の範囲 / <b>拡張</b> = 新規機能。<a class="dv-oid" href="#6a">6a</a> はインライン展開: レシートがツールコール毎の1行（slice 1 の既存設計そのもの）に開き、各行はさらに展開可。<a class="dv-oid" href="#6b">6b</a> はポップオーバー: 会話を押し流さず浮いたトレースで表示。<a class="dv-oid" href="#6c">6c</a> は Horizon らしくトレースを別ペインに分割表示（workspace の split を利用）。決定済み: <a class="dv-oid" href="#2a">2a</a> → <a class="dv-oid" href="#3b">3b</a> → <a class="dv-oid" href="#4b">4b</a>（slice 4 を上書き）→ <a class="dv-oid" href="#5a">5a</a>。</p>
+<div class="dv-opts">
+
+<!-- ============ 6a インライン展開 ============ -->
+<div class="dv-opt" id="6a"><div class="dv-olabel"><a class="dv-oid" href="#6a">6a</a><span>インライン展開 — ツールコール毎の行に開く<br><span style="color:#8a6d1f">実装: ツール毎1行＋行展開＝<b>既存</b>（slice 1）· ターン単位レシート＝<b>拡張</b></span></span></div>
+<div class="dv-card"><div style="width:760px;height:640px;background:#ffffff;border-radius:10px;box-shadow:0 0 0 1px rgba(0,0,0,0.12),0 18px 40px rgba(0,0,0,0.18);display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#18181b">
+  <div style="display:flex;align-items:center;height:38px;padding:0 14px;background:#fafafa;border-bottom:1px solid #e4e4e7;flex:none">
+    <div style="display:flex;gap:8px;width:110px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+    <div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#52525b">Agent #1 — 完了</div>
+    <div style="width:110px"></div>
+  </div>
+  <div style="flex:1;overflow:hidden;padding:20px 24px;display:flex;flex-direction:column;gap:14px">
+    <div style="border:1px solid #e4e4e7;border-radius:8px;padding:10px 14px;background:#fafafa">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:02</div>
+      <div style="line-height:1.6">ログインフォームでバリデーションエラーが表示されないバグを修正して</div>
+    </div>
+    <!-- opened receipt: per-call rows -->
+    <div style="border:1px solid #e4e4e7;border-radius:8px;overflow:hidden">
+      <div style="display:flex;align-items:center;gap:8px;padding:7px 12px;background:#fafafa;border-bottom:1px solid #e4e4e7;font-size:11px;color:#71717a">
+        <span style="font-size:10px;color:#a1a1aa">▾</span>
+        <span>4 ツール実行 · 38秒</span>
+        <span style="flex:1"></span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;color:#a1a1aa">claude-sonnet-4</span>
+      </div>
+      <!-- per-call one-line rows (slice 1) -->
+      <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;border-bottom:1px solid #f4f4f5">
+        <span style="font-size:10px;color:#a1a1aa">▸</span><span style="font-size:12px;color:#16a34a">✓</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#52525b;flex:1">grep "validation_error" src/ · 3件</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">0.4s</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;border-bottom:1px solid #f4f4f5">
+        <span style="font-size:10px;color:#a1a1aa">▸</span><span style="font-size:12px;color:#16a34a">✓</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#52525b;flex:1">fs.read src/ui/login_form.rs · 245行</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">0.2s</span>
+      </div>
+      <!-- expanded call: fs.edit diff -->
+      <div style="border-bottom:1px solid #f4f4f5">
+        <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;background:#fafafa">
+          <span style="font-size:10px;color:#a1a1aa">▾</span><span style="font-size:12px;color:#16a34a">✓</span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#52525b;flex:1">fs.edit src/ui/login_form.rs · <span style="color:#16a34a">+2</span> <span style="color:#dc2626">−1</span></span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">0.1s</span>
+        </div>
+        <div style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;line-height:1.75;padding:4px 0">
+          <div style="display:flex;gap:12px;padding:0 12px"><span style="color:#d4d4d8;width:22px;text-align:right;flex:none">128</span><span><span style="color:#7c3aed">fn</span> <span style="color:#0e7490">set_error</span>(&amp;<span style="color:#7c3aed">mut</span> self, err: <span style="color:#0e7490">Option</span>&lt;<span style="color:#0e7490">String</span>&gt;, cx: &amp;<span style="color:#7c3aed">mut</span> <span style="color:#0e7490">Context</span>&lt;<span style="color:#7c3aed">Self</span>&gt;) {</span></div>
+          <div style="display:flex;gap:12px;padding:0 12px;background:#fef2f2"><span style="color:#fca5a5;width:22px;text-align:right;flex:none">−</span><span style="color:#3f3f46">    self.error = err;</span></div>
+          <div style="display:flex;gap:12px;padding:0 12px;background:#f0fdf4"><span style="color:#86efac;width:22px;text-align:right;flex:none">+</span><span style="color:#3f3f46">    self.error = err;</span></div>
+          <div style="display:flex;gap:12px;padding:0 12px;background:#f0fdf4"><span style="color:#86efac;width:22px;text-align:right;flex:none">+</span><span style="color:#3f3f46">    cx.<span style="color:#0e7490">notify</span>();</span></div>
+          <div style="display:flex;gap:12px;padding:0 12px"><span style="color:#d4d4d8;width:22px;text-align:right;flex:none">131</span><span style="color:#3f3f46">}</span></div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:6px 12px">
+        <span style="font-size:10px;color:#a1a1aa">▸</span><span style="font-size:12px;color:#16a34a">✓</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#52525b;flex:1">bash cargo test -p acme-ui login_form · 12 passed</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">31s</span>
+      </div>
+    </div>
+    <div style="line-height:1.7;color:#3f3f46;padding:0 2px"><span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;background:#f4f4f5;border-radius:4px;padding:1px 5px">set_error</span> に <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;background:#f4f4f5;border-radius:4px;padding:1px 5px">cx.notify()</span> を追加して修正しました。テストは12件すべてパスです。</div>
+  </div>
+  <div style="padding:0 20px 18px;flex:none">
+    <div style="border:1px solid #d4d4d8;border-radius:10px;padding:10px 12px 8px;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
+      <div style="font-size:13px;color:#a1a1aa;padding:0 2px 10px">続けて指示する…</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:3px 8px">claude-sonnet-4 <span style="font-size:9px">▾</span></span>
+        <span style="flex:1"></span>
+        <span style="width:26px;height:26px;border-radius:50%;background:#2563eb;color:#ffffff;display:flex;align-items:center;justify-content:center;font-size:13px">↑</span>
+      </div>
+    </div>
+  </div>
+</div></div></div>
+
+<!-- ============ 6b ポップオーバー ============ -->
+<div class="dv-opt" id="6b"><div class="dv-olabel"><a class="dv-oid" href="#6b">6b</a><span>ポップオーバー — 会話を押し流さず浮かせて表示<br><span style="color:#8a6d1f">実装: オーバーレイ表示＝<b>拡張</b>（中身のレンダラーは既存 slice 1 を再利用）</span></span></div>
+<div class="dv-card"><div style="width:760px;height:640px;background:#ffffff;border-radius:10px;box-shadow:0 0 0 1px rgba(0,0,0,0.12),0 18px 40px rgba(0,0,0,0.18);display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#18181b;position:relative">
+  <div style="display:flex;align-items:center;height:38px;padding:0 14px;background:#fafafa;border-bottom:1px solid #e4e4e7;flex:none">
+    <div style="display:flex;gap:8px;width:110px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+    <div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#52525b">Agent #1 — 完了</div>
+    <div style="width:110px"></div>
+  </div>
+  <div style="flex:1;overflow:hidden;padding:20px 24px;display:flex;flex-direction:column;gap:14px">
+    <div style="border:1px solid #e4e4e7;border-radius:8px;padding:10px 14px;background:#fafafa">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:02</div>
+      <div style="line-height:1.6">ログインフォームでバリデーションエラーが表示されないバグを修正して</div>
+    </div>
+    <!-- receipt stays a single line, highlighted as anchor -->
+    <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:#52525b;padding:4px 8px;background:#f4f4f5;border-radius:6px">
+      <span style="font-size:10px">▾</span>
+      <span>4 ツール実行 · login_form.rs <span style="color:#16a34a">+2</span> <span style="color:#dc2626">−1</span> · ✓ 12 passed · 38秒</span>
+    </div>
+    <!-- popover -->
+    <div style="position:relative;height:0">
+      <div style="position:absolute;top:4px;left:24px;width:560px;background:#ffffff;border:1px solid #d4d4d8;border-radius:10px;box-shadow:0 16px 48px rgba(0,0,0,0.18);overflow:hidden;z-index:2">
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 14px;background:#fafafa;border-bottom:1px solid #e4e4e7">
+          <span style="font-size:12px;font-weight:600">ターンの実行トレース</span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">14:02 – 14:03 · claude-sonnet-4</span>
+          <span style="flex:1"></span>
+          <span style="font-size:11px;color:#a1a1aa">esc で閉じる ×</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:6px 14px;border-bottom:1px solid #f4f4f5">
+          <span style="font-size:12px;color:#16a34a">✓</span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#52525b;flex:1">grep "validation_error" src/ · 3件</span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">0.4s</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:6px 14px;border-bottom:1px solid #f4f4f5">
+          <span style="font-size:12px;color:#16a34a">✓</span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#52525b;flex:1">fs.read src/ui/login_form.rs · 245行</span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">0.2s</span>
+        </div>
+        <div style="border-bottom:1px solid #f4f4f5">
+          <div style="display:flex;align-items:center;gap:10px;padding:6px 14px;background:#fafafa">
+            <span style="font-size:12px;color:#16a34a">✓</span>
+            <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#52525b;flex:1">fs.edit src/ui/login_form.rs · <span style="color:#16a34a">+2</span> <span style="color:#dc2626">−1</span></span>
+          </div>
+          <div style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;line-height:1.75;padding:4px 0">
+            <div style="display:flex;gap:12px;padding:0 14px;background:#fef2f2"><span style="color:#fca5a5;width:14px;text-align:right;flex:none">−</span><span style="color:#3f3f46">    self.error = err;</span></div>
+            <div style="display:flex;gap:12px;padding:0 14px;background:#f0fdf4"><span style="color:#86efac;width:14px;text-align:right;flex:none">+</span><span style="color:#3f3f46">    self.error = err;</span></div>
+            <div style="display:flex;gap:12px;padding:0 14px;background:#f0fdf4"><span style="color:#86efac;width:14px;text-align:right;flex:none">+</span><span style="color:#3f3f46">    cx.<span style="color:#0e7490">notify</span>();</span></div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:6px 14px">
+          <span style="font-size:12px;color:#16a34a">✓</span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#52525b;flex:1">bash cargo test -p acme-ui login_form · 12 passed</span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">31s</span>
+        </div>
+      </div>
+    </div>
+    <div style="height:250px;flex:none"></div>
+    <div style="line-height:1.7;color:#3f3f46;padding:0 2px;opacity:0.35"><span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;background:#f4f4f5;border-radius:4px;padding:1px 5px">set_error</span> に <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;background:#f4f4f5;border-radius:4px;padding:1px 5px">cx.notify()</span> を追加して修正しました。テストは12件すべてパスです。</div>
+  </div>
+  <div style="padding:0 20px 18px;flex:none;opacity:0.35">
+    <div style="border:1px solid #d4d4d8;border-radius:10px;padding:10px 12px 8px">
+      <div style="font-size:13px;color:#a1a1aa;padding:0 2px 10px">続けて指示する…</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:3px 8px">claude-sonnet-4 <span style="font-size:9px">▾</span></span>
+        <span style="flex:1"></span>
+        <span style="width:26px;height:26px;border-radius:50%;background:#2563eb;color:#ffffff;display:flex;align-items:center;justify-content:center;font-size:13px">↑</span>
+      </div>
+    </div>
+  </div>
+</div></div></div>
+
+<!-- ============ 6c 別ペイン ============ -->
+<div class="dv-opt" id="6c"><div class="dv-olabel"><a class="dv-oid" href="#6c">6c</a><span>別ペインに開く — workspace の split でトレースを並置<br><span style="color:#8a6d1f">実装: split・ペイン機構＝<b>既存</b> · トレース専用ビュー種別＝<b>拡張</b></span></span></div>
+<div class="dv-card"><div style="width:980px;height:640px;background:#ffffff;border-radius:10px;box-shadow:0 0 0 1px rgba(0,0,0,0.12),0 18px 40px rgba(0,0,0,0.18);display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#18181b">
+  <div style="display:flex;align-items:center;height:38px;padding:0 14px;background:#fafafa;border-bottom:1px solid #e4e4e7;flex:none">
+    <div style="display:flex;gap:8px;width:110px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+    <div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#52525b">acme-app</div>
+    <div style="width:110px"></div>
+  </div>
+  <div style="flex:1;display:flex;overflow:hidden">
+    <!-- left: agent pane -->
+    <div style="flex:1;display:flex;flex-direction:column;border-right:1px solid #e4e4e7;min-width:0">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;border-bottom:1px solid #e4e4e7;background:#fafafa;flex:none">
+        <span style="font-size:11px;font-weight:600;color:#52525b">Agent #1</span>
+        <span style="font-size:10px;color:#a1a1aa">完了</span>
+      </div>
+      <div style="flex:1;overflow:hidden;padding:16px 18px;display:flex;flex-direction:column;gap:12px">
+        <div style="border:1px solid #e4e4e7;border-radius:8px;padding:9px 12px;background:#fafafa">
+          <div style="font-size:11px;color:#a1a1aa;margin-bottom:3px">あなた · 14:02</div>
+          <div style="line-height:1.6;font-size:12.5px">ログインフォームでバリデーションエラーが表示されないバグを修正して</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:#1d4ed8;padding:4px 8px;background:#eff6ff;border-radius:6px;border:1px solid #bfdbfe">
+          <span style="font-size:10px">▸</span>
+          <span>4 ツール実行 · 38秒 — 右ペインで表示中</span>
+        </div>
+        <div style="line-height:1.7;color:#3f3f46;font-size:12.5px;padding:0 2px"><span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;background:#f4f4f5;border-radius:4px;padding:1px 5px">set_error</span> に <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;background:#f4f4f5;border-radius:4px;padding:1px 5px">cx.notify()</span> を追加して修正しました。テストは12件すべてパスです。</div>
+        <div style="flex:1"></div>
+        <div style="border:1px solid #d4d4d8;border-radius:10px;padding:9px 11px 7px;flex:none">
+          <div style="font-size:12px;color:#a1a1aa;padding:0 2px 8px">続けて指示する…</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="display:flex;align-items:center;gap:4px;font-size:10.5px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:2px 7px">claude-sonnet-4 ▾</span>
+            <span style="flex:1"></span>
+            <span style="width:24px;height:24px;border-radius:50%;background:#2563eb;color:#ffffff;display:flex;align-items:center;justify-content:center;font-size:12px">↑</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- right: trace pane -->
+    <div style="width:440px;display:flex;flex-direction:column;flex:none">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;border-bottom:1px solid #e4e4e7;background:#fafafa;flex:none">
+        <span style="font-size:11px;font-weight:600;color:#52525b">トレース — Agent #1 / ターン 1</span>
+        <span style="flex:1"></span>
+        <span style="font-size:10px;color:#a1a1aa">閉じる ×</span>
+      </div>
+      <div style="flex:1;overflow:hidden;padding:12px 0">
+        <div style="display:flex;align-items:center;gap:10px;padding:6px 14px;border-bottom:1px solid #f4f4f5">
+          <span style="font-size:12px;color:#16a34a">✓</span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;color:#52525b;flex:1">grep "validation_error" src/ · 3件</span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:10.5px;color:#a1a1aa">0.4s</span>
+        </div>
+        <div style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;line-height:1.7;color:#71717a;padding:4px 14px 8px;border-bottom:1px solid #f4f4f5">
+          <div>login_form.rs:87  validation_error: Option&lt;String&gt;,</div>
+          <div>login_form.rs:128 fn set_error(&amp;mut self, err…</div>
+          <div>login_form.rs:203 if let Some(err) = &amp;self.validation_error {</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:6px 14px;border-bottom:1px solid #f4f4f5">
+          <span style="font-size:12px;color:#16a34a">✓</span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;color:#52525b;flex:1">fs.read src/ui/login_form.rs · 245行</span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:10.5px;color:#a1a1aa">0.2s</span>
+        </div>
+        <div style="border-bottom:1px solid #f4f4f5">
+          <div style="display:flex;align-items:center;gap:10px;padding:6px 14px;background:#fafafa">
+            <span style="font-size:12px;color:#16a34a">✓</span>
+            <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;color:#52525b;flex:1">fs.edit src/ui/login_form.rs · <span style="color:#16a34a">+2</span> <span style="color:#dc2626">−1</span></span>
+          </div>
+          <div style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;line-height:1.75;padding:4px 0">
+            <div style="display:flex;gap:10px;padding:0 14px"><span style="color:#d4d4d8;width:22px;text-align:right;flex:none">128</span><span><span style="color:#7c3aed">fn</span> <span style="color:#0e7490">set_error</span>(&amp;<span style="color:#7c3aed">mut</span> self, err, cx) {</span></div>
+            <div style="display:flex;gap:10px;padding:0 14px;background:#fef2f2"><span style="color:#fca5a5;width:22px;text-align:right;flex:none">−</span><span style="color:#3f3f46">    self.error = err;</span></div>
+            <div style="display:flex;gap:10px;padding:0 14px;background:#f0fdf4"><span style="color:#86efac;width:22px;text-align:right;flex:none">+</span><span style="color:#3f3f46">    self.error = err;</span></div>
+            <div style="display:flex;gap:10px;padding:0 14px;background:#f0fdf4"><span style="color:#86efac;width:22px;text-align:right;flex:none">+</span><span style="color:#3f3f46">    cx.<span style="color:#0e7490">notify</span>();</span></div>
+            <div style="display:flex;gap:10px;padding:0 14px"><span style="color:#d4d4d8;width:22px;text-align:right;flex:none">131</span><span style="color:#3f3f46">}</span></div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:6px 14px;border-bottom:1px solid #f4f4f5">
+          <span style="font-size:12px;color:#16a34a">✓</span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;color:#52525b;flex:1">bash cargo test -p acme-ui login_form</span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:10.5px;color:#a1a1aa">31s</span>
+        </div>
+        <div style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;line-height:1.7;color:#71717a;padding:4px 14px 8px">
+          <div style="color:#166534">test result: ok. 12 passed; 0 failed; 0 ignored</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div></div></div>
+
+</div>
+<p class="dv-next">次の例: 「<a class="dv-oid" href="#6a">6a</a> で確定して次（判断4: 割り込み・巻き戻し）へ」 · 「<a class="dv-oid" href="#6c">6c</a> のトレースペインを実行中のライブ表示にも使う案」 · 「ここまでの決定を実装指示書にまとめて」</p>
+</section>
+
+<section class="dv-turn" id="t5">
+<div class="dv-thd"><a class="dv-tid" href="#t5">5</a><span class="dv-tname">判断2: 失敗時の見え方 — 3案</span></div>
+<p class="dv-note">場面は共通:「cargo test が 2件失敗した直後」。<a class="dv-oid" href="#5a">5a</a> は自動リカバリー優先 — 失敗は実行中カード内の一行に留まり、エージェントが自分で修正を続行。解決すればレシートに「リトライ1回」と痕跡だけ残る。<a class="dv-oid" href="#5b">5b</a> は「成功は消え、失敗だけ会話に残る」— 未解決の失敗カードはターンが終わっても畳まれない。<a class="dv-oid" href="#5c">5c</a> は <a class="dv-oid" href="#4b">4b</a> と同じ思想で、行き詰まったらコンポーザーが判断モードに変形（再試行 / 修正を指示 / 中止）。決定済み: <a class="dv-oid" href="#2a">2a</a> → <a class="dv-oid" href="#3b">3b</a> → <a class="dv-oid" href="#4b">4b</a>（将来 auto mode）。</p>
+<div class="dv-opts">
+
+<!-- ============ 5a 自動リカバリー ============ -->
+<div class="dv-opt" id="5a"><div class="dv-olabel"><a class="dv-oid" href="#5a">5a</a>自動リカバリー — 失敗はカード内の一行、エージェントが続行</div>
+<div class="dv-card"><div style="width:760px;height:600px;background:#ffffff;border-radius:10px;box-shadow:0 0 0 1px rgba(0,0,0,0.12),0 18px 40px rgba(0,0,0,0.18);display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#18181b">
+  <div style="display:flex;align-items:center;height:38px;padding:0 14px;background:#fafafa;border-bottom:1px solid #e4e4e7;flex:none">
+    <div style="display:flex;gap:8px;width:110px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+    <div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#52525b">アシスタント — acme-app</div>
+    <div style="width:110px;display:flex;justify-content:flex-end"><span style="font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:2px 8px;background:#ffffff">claude-sonnet-4</span></div>
+  </div>
+  <div style="flex:1;overflow:hidden;padding:20px 24px;display:flex;flex-direction:column;gap:14px">
+    <!-- 前ターンのレシート: リトライの痕跡 -->
+    <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:#a1a1aa;padding:0 2px;flex-wrap:wrap">
+      <span style="font-size:10px">▸</span>
+      <span style="display:inline-flex;align-items:center;gap:5px;border:1px solid #e4e4e7;border-radius:99px;padding:2px 9px;font-family:ui-monospace,'SF Mono',Menlo,monospace;color:#52525b"><span style="width:6px;height:6px;border-radius:2px;background:#dea584"></span>login_form.rs <span style="color:#16a34a">+2</span> <span style="color:#dc2626">−1</span></span>
+      <span style="display:inline-flex;align-items:center;gap:4px;border:1px solid #e4e4e7;border-radius:99px;padding:2px 9px;font-family:ui-monospace,'SF Mono',Menlo,monospace;color:#b45309">リトライ ×1</span>
+      <span style="display:inline-flex;align-items:center;gap:4px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:99px;padding:2px 9px;font-family:ui-monospace,'SF Mono',Menlo,monospace;color:#166534">cargo test 12 ✓</span>
+      <span>1分12秒</span>
+    </div>
+    <div style="line-height:1.7;color:#3f3f46;padding:0 2px">修正しました。初回のテストで境界ケースが2件失敗したため、エラーメッセージの組み立てを修正して再実行し、全件パスを確認しています。</div>
+    <div style="border:1px solid #e4e4e7;border-radius:8px;padding:10px 14px;background:#fafafa">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:06</div>
+      <div style="line-height:1.6">サインアップフォームにも同じ問題がないか確認して</div>
+    </div>
+    <!-- 実行中カード: 失敗一行 + 続行 -->
+    <div style="border:1px solid #bfdbfe;border-radius:8px;overflow:hidden">
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#eff6ff;border-bottom:1px solid #dbeafe">
+        <span style="width:7px;height:7px;border-radius:50%;background:#2563eb;box-shadow:0 0 0 3px #dbeafe"></span>
+        <span style="font-size:12px;font-weight:600;color:#1d4ed8">実行中 — テスト失敗を修正しています</span>
+        <span style="flex:1"></span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">4 / 5 · 41s</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 12px;border-bottom:1px solid #f4f4f5">
+        <span style="font-size:12px;color:#16a34a">✓</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#52525b;flex:1">編集 src/ui/signup_form.rs <span style="color:#16a34a">+2</span> <span style="color:#dc2626">−1</span></span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 12px;border-bottom:1px solid #f4f4f5;background:#fef2f2">
+        <span style="font-size:12px;color:#dc2626">✕</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#991b1b;flex:1">cargo test — <span style="font-weight:600">2 failed</span> · signup::empty_email, signup::long_name</span>
+        <span style="font-size:11px;color:#b91c1c;border-bottom:1px dotted #fca5a5">ログ</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 12px">
+        <span style="width:12px;height:12px;border-radius:50%;border:2px solid #dbeafe;border-top-color:#2563eb;flex:none"></span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#52525b;flex:1">失敗した2件を分析して再修正中…</span>
+      </div>
+    </div>
+  </div>
+  <div style="padding:0 20px 18px;flex:none">
+    <div style="border:1px solid #d4d4d8;border-radius:10px;padding:10px 12px 8px;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
+      <div style="font-size:13px;color:#a1a1aa;padding:0 2px 10px">続けて指示する…</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:3px 8px">claude-sonnet-4 <span style="font-size:9px">▾</span></span>
+        <span style="flex:1"></span>
+        <span style="width:26px;height:26px;border-radius:50%;background:#2563eb;color:#ffffff;display:flex;align-items:center;justify-content:center;font-size:13px">↑</span>
+      </div>
+    </div>
+  </div>
+</div></div></div>
+
+<!-- ============ 5b 失敗だけ残る ============ -->
+<div class="dv-opt" id="5b"><div class="dv-olabel"><a class="dv-oid" href="#5b">5b</a>失敗だけ残る — 成功は消え、未解決の失敗は会話に残り続ける</div>
+<div class="dv-card"><div style="width:760px;height:600px;background:#ffffff;border-radius:10px;box-shadow:0 0 0 1px rgba(0,0,0,0.12),0 18px 40px rgba(0,0,0,0.18);display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#18181b">
+  <div style="display:flex;align-items:center;height:38px;padding:0 14px;background:#fafafa;border-bottom:1px solid #e4e4e7;flex:none">
+    <div style="display:flex;gap:8px;width:110px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+    <div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#52525b">アシスタント — acme-app</div>
+    <div style="width:110px;display:flex;justify-content:flex-end"><span style="font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:2px 8px;background:#ffffff">claude-sonnet-4</span></div>
+  </div>
+  <div style="flex:1;overflow:hidden;padding:20px 24px;display:flex;flex-direction:column;gap:14px">
+    <div style="border:1px solid #e4e4e7;border-radius:8px;padding:10px 14px;background:#fafafa">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:06</div>
+      <div style="line-height:1.6">サインアップフォームにも同じ問題がないか確認して</div>
+    </div>
+    <!-- 成功分はレシートに畳まれ済み -->
+    <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:#a1a1aa;padding:0 2px;flex-wrap:wrap">
+      <span style="font-size:10px">▸</span>
+      <span style="display:inline-flex;align-items:center;gap:4px;border:1px solid #e4e4e7;border-radius:99px;padding:2px 9px;font-family:ui-monospace,'SF Mono',Menlo,monospace;color:#71717a">grep ✓</span>
+      <span style="display:inline-flex;align-items:center;gap:5px;border:1px solid #e4e4e7;border-radius:99px;padding:2px 9px;font-family:ui-monospace,'SF Mono',Menlo,monospace;color:#52525b"><span style="width:6px;height:6px;border-radius:2px;background:#dea584"></span>signup_form.rs <span style="color:#16a34a">+2</span> <span style="color:#dc2626">−1</span></span>
+      <span>27秒</span>
+    </div>
+    <!-- 失敗カード: 解決するまで残る -->
+    <div style="border:1px solid #fecaca;border-radius:8px;overflow:hidden">
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#fef2f2;border-bottom:1px solid #fecaca">
+        <span style="width:7px;height:7px;border-radius:50%;background:#dc2626;box-shadow:0 0 0 3px #fee2e2"></span>
+        <span style="font-size:12px;font-weight:600;color:#991b1b">テスト失敗 — 2 / 12</span>
+        <span style="font-size:11px;color:#b45309">解決するまでこのカードは畳まれません</span>
+        <span style="flex:1"></span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">14:07</span>
+      </div>
+      <div style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;line-height:1.75;padding:8px 12px;border-bottom:1px solid #f4f4f5">
+        <div style="color:#991b1b">✕ signup::empty_email — assertion failed: error message shown</div>
+        <div style="color:#991b1b">✕ signup::long_name — assertion failed: error message shown</div>
+        <div style="color:#a1a1aa">  at src/ui/signup_form.rs:203</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;padding:9px 12px">
+        <span style="font-size:12px;font-weight:600;color:#ffffff;background:#18181b;border-radius:6px;padding:5px 14px">修正を任せる</span>
+        <span style="font-size:12px;color:#52525b;border:1px solid #d4d4d8;border-radius:6px;padding:5px 12px">全ログを表示</span>
+        <span style="font-size:12px;color:#52525b;border:1px solid #d4d4d8;border-radius:6px;padding:5px 12px">編集を取り消す</span>
+      </div>
+    </div>
+    <div style="line-height:1.7;color:#3f3f46;padding:0 2px">修正は適用しましたが、境界ケースのテストが2件失敗しています。エラーメッセージの表示条件に別の問題がありそうです。どう進めますか？</div>
+  </div>
+  <div style="padding:0 20px 18px;flex:none">
+    <div style="border:1px solid #d4d4d8;border-radius:10px;padding:10px 12px 8px;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
+      <div style="font-size:13px;color:#a1a1aa;padding:0 2px 10px">続けて指示する…</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:3px 8px">claude-sonnet-4 <span style="font-size:9px">▾</span></span>
+        <span style="flex:1"></span>
+        <span style="width:26px;height:26px;border-radius:50%;background:#2563eb;color:#ffffff;display:flex;align-items:center;justify-content:center;font-size:13px">↑</span>
+      </div>
+    </div>
+  </div>
+</div></div></div>
+
+<!-- ============ 5c コンポーザー判断 ============ -->
+<div class="dv-opt" id="5c"><div class="dv-olabel"><a class="dv-oid" href="#5c">5c</a>コンポーザー判断 — 行き詰まったら入力欄が判断モードに変形（<a class="dv-oid" href="#4b">4b</a> と統一）</div>
+<div class="dv-card"><div style="width:760px;height:600px;background:#ffffff;border-radius:10px;box-shadow:0 0 0 1px rgba(0,0,0,0.12),0 18px 40px rgba(0,0,0,0.18);display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#18181b">
+  <div style="display:flex;align-items:center;height:38px;padding:0 14px;background:#fafafa;border-bottom:1px solid #e4e4e7;flex:none">
+    <div style="display:flex;gap:8px;width:110px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+    <div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#52525b">アシスタント — acme-app</div>
+    <div style="width:110px;display:flex;justify-content:flex-end"><span style="font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:2px 8px;background:#ffffff">claude-sonnet-4</span></div>
+  </div>
+  <div style="flex:1;overflow:hidden;padding:20px 24px;display:flex;flex-direction:column;gap:14px">
+    <div style="border:1px solid #e4e4e7;border-radius:8px;padding:10px 14px;background:#fafafa">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:06</div>
+      <div style="line-height:1.6">サインアップフォームにも同じ問題がないか確認して</div>
+    </div>
+    <!-- カードは中立に停止状態 -->
+    <div style="border:1px solid #e4e4e7;border-radius:8px;overflow:hidden">
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#fafafa;border-bottom:1px solid #e4e4e7">
+        <span style="width:7px;height:7px;border-radius:50%;background:#d97706;box-shadow:0 0 0 3px #fef3c7"></span>
+        <span style="font-size:12px;font-weight:600;color:#52525b">一時停止 — 判断待ち</span>
+        <span style="flex:1"></span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">4 / 5 · 52s</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 12px;border-bottom:1px solid #f4f4f5">
+        <span style="font-size:12px;color:#16a34a">✓</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#52525b;flex:1">編集 src/ui/signup_form.rs <span style="color:#16a34a">+2</span> <span style="color:#dc2626">−1</span></span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 12px">
+        <span style="font-size:12px;color:#dc2626">✕</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#991b1b;flex:1">cargo test — 2 failed <span style="color:#71717a">(リトライ2回、同一の失敗)</span></span>
+        <span style="font-size:11px;color:#71717a;border-bottom:1px dotted #d4d4d8">ログ</span>
+      </div>
+    </div>
+    <div style="line-height:1.7;color:#3f3f46;padding:0 2px">2回修正を試みましたが同じ2件が失敗します。エラー表示の条件分岐そのものに仕様の曖昧さがあり、判断が必要です。</div>
+    <div style="flex:1"></div>
+  </div>
+  <!-- composer in decision mode -->
+  <div style="padding:0 20px 18px;flex:none">
+    <div style="border:1px solid #f59e0b;border-radius:10px;overflow:hidden;box-shadow:0 2px 10px rgba(245,158,11,0.15)">
+      <div style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:#fffbeb">
+        <span style="width:7px;height:7px;border-radius:50%;background:#d97706;box-shadow:0 0 0 3px #fef3c7"></span>
+        <span style="font-size:12px;font-weight:600;color:#92400e">テストが2件失敗したままです。どう進めますか？</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:#ffffff;border-top:1px solid #fde68a">
+        <span style="font-size:12px;font-weight:600;color:#ffffff;background:#18181b;border-radius:6px;padding:5px 14px">別のアプローチで再試行 <span style="font-weight:400;opacity:0.6;font-size:10px">⏎</span></span>
+        <span style="font-size:12px;color:#52525b;border:1px solid #d4d4d8;border-radius:6px;padding:5px 12px">編集を取り消す</span>
+        <span style="font-size:12px;color:#52525b;border:1px solid #d4d4d8;border-radius:6px;padding:5px 12px">ここで終了</span>
+        <span style="flex:1"></span>
+        <span style="font-size:11px;color:#a1a1aa">入力すると指示に切り替わります</span>
+      </div>
+    </div>
+  </div>
+</div></div></div>
+
+</div>
+<p class="dv-next">次の例: 「<a class="dv-oid" href="#5a">5a</a> を基本にして、リトライ上限超過時だけ <a class="dv-oid" href="#5c">5c</a> に落ちる合わせ技」 · 「失敗ログの全文表示の見せ方も見たい」 · 「次は判断3: レシートを開いた状態へ」</p>
+</section>
+
+<section class="dv-turn" id="t4">
+<div class="dv-thd"><a class="dv-tid" href="#t4">4</a><span class="dv-tname">判断1: 承認フロー — <a class="dv-oid" href="#3b">3b</a> ベースで3案</span></div>
+<p class="dv-note">場面は共通:「エージェントが signup_form.rs への編集許可を求めている瞬間」。<a class="dv-oid" href="#4a">4a</a> は実行中カードの中に承認行が挟まる（都度承認・文脈が近い）。<a class="dv-oid" href="#4b">4b</a> はコンポーザーが承認モードに変形（キーボード完結: Enter=許可 / Esc=拒否）。<a class="dv-oid" href="#4c">4c</a> は実行前にプラン一括承認（以後の個別承認なし・自律寄り）。決定済み: <a class="dv-oid" href="#2a">2a</a> レシート集約 → <a class="dv-oid" href="#3b">3b</a> インフォリッチ。</p>
+<div class="dv-opts">
+
+<!-- ============ 4a インライン承認 ============ -->
+<div class="dv-opt" id="4a"><div class="dv-olabel"><a class="dv-oid" href="#4a">4a</a>インライン承認 — 実行中カードの流れの中で都度承認</div>
+<div class="dv-card"><div style="width:760px;height:620px;background:#ffffff;border-radius:10px;box-shadow:0 0 0 1px rgba(0,0,0,0.12),0 18px 40px rgba(0,0,0,0.18);display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#18181b">
+  <div style="display:flex;align-items:center;height:38px;padding:0 14px;background:#fafafa;border-bottom:1px solid #e4e4e7;flex:none">
+    <div style="display:flex;gap:8px;width:110px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+    <div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#52525b">アシスタント — acme-app</div>
+    <div style="width:110px;display:flex;justify-content:flex-end"><span style="font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:2px 8px;background:#ffffff">claude-sonnet-4</span></div>
+  </div>
+  <div style="flex:1;overflow:hidden;padding:20px 24px;display:flex;flex-direction:column;gap:14px">
+    <div style="border:1px solid #e4e4e7;border-radius:8px;padding:10px 14px;background:#fafafa">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:06</div>
+      <div style="line-height:1.6">サインアップフォームにも同じ問題がないか確認して</div>
+    </div>
+    <div style="border:1px solid #bfdbfe;border-radius:8px;overflow:hidden">
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#eff6ff;border-bottom:1px solid #dbeafe">
+        <span style="width:7px;height:7px;border-radius:50%;background:#2563eb;box-shadow:0 0 0 3px #dbeafe"></span>
+        <span style="font-size:12px;font-weight:600;color:#1d4ed8">実行中 — 承認待ち</span>
+        <span style="flex:1"></span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">2 / 4 · 9s</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 12px;border-bottom:1px solid #f4f4f5">
+        <span style="font-size:12px;color:#16a34a">✓</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#52525b;flex:1">grep "notify" src/ui/signup_form.rs — <span style="color:#dc2626">通知漏れ 1箇所</span></span>
+      </div>
+      <!-- approval block -->
+      <div style="background:#fffbeb;border-top:1px solid #fde68a;border-bottom:1px solid #fde68a">
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 12px">
+          <span style="width:7px;height:7px;border-radius:50%;background:#d97706;box-shadow:0 0 0 3px #fef3c7"></span>
+          <span style="font-size:12px;font-weight:600;color:#92400e">編集の許可が必要です</span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#b45309;flex:1">src/ui/signup_form.rs · +2 −1</span>
+        </div>
+        <div style="margin:0 12px;border:1px solid #e4e4e7;border-radius:6px;overflow:hidden;background:#ffffff">
+          <div style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;line-height:1.75;padding:5px 0">
+            <div style="display:flex;gap:12px;padding:0 12px;background:#fef2f2"><span style="color:#fca5a5;width:22px;text-align:right;flex:none">−</span><span style="color:#3f3f46">    self.error = err;</span></div>
+            <div style="display:flex;gap:12px;padding:0 12px;background:#f0fdf4"><span style="color:#86efac;width:22px;text-align:right;flex:none">+</span><span style="color:#3f3f46">    self.error = err;</span></div>
+            <div style="display:flex;gap:12px;padding:0 12px;background:#f0fdf4"><span style="color:#86efac;width:22px;text-align:right;flex:none">+</span><span style="color:#3f3f46">    cx.<span style="color:#0e7490">notify</span>();</span></div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;padding:10px 12px">
+          <span style="font-size:12px;font-weight:600;color:#ffffff;background:#18181b;border-radius:6px;padding:5px 14px">許可 <span style="font-weight:400;opacity:0.6;font-size:10px">⏎</span></span>
+          <span style="font-size:12px;color:#52525b;border:1px solid #d4d4d8;border-radius:6px;padding:5px 12px;background:#ffffff">このセッションでは常に許可</span>
+          <span style="font-size:12px;color:#dc2626;border:1px solid #fecaca;border-radius:6px;padding:5px 12px;background:#ffffff">拒否 <span style="opacity:0.5;font-size:10px">esc</span></span>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 12px;color:#a1a1aa">
+        <span style="width:12px;flex:none;text-align:center">·</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px">cargo test -p acme-ui signup_form <span style="font-size:11px">— 承認後に実行</span></span>
+      </div>
+    </div>
+  </div>
+  <div style="padding:0 20px 18px;flex:none">
+    <div style="border:1px solid #d4d4d8;border-radius:10px;padding:10px 12px 8px;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
+      <div style="font-size:13px;color:#a1a1aa;padding:0 2px 10px">続けて指示する…</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:3px 8px">claude-sonnet-4 <span style="font-size:9px">▾</span></span>
+        <span style="flex:1"></span>
+        <span style="width:26px;height:26px;border-radius:50%;background:#2563eb;color:#ffffff;display:flex;align-items:center;justify-content:center;font-size:13px">↑</span>
+      </div>
+    </div>
+  </div>
+</div></div></div>
+
+<!-- ============ 4b コンポーザー承認 ============ -->
+<div class="dv-opt" id="4b"><div class="dv-olabel"><a class="dv-oid" href="#4b">4b</a>コンポーザー承認 — 入力欄が承認モードに変形、キーボード完結</div>
+<div class="dv-card"><div style="width:760px;height:620px;background:#ffffff;border-radius:10px;box-shadow:0 0 0 1px rgba(0,0,0,0.12),0 18px 40px rgba(0,0,0,0.18);display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#18181b">
+  <div style="display:flex;align-items:center;height:38px;padding:0 14px;background:#fafafa;border-bottom:1px solid #e4e4e7;flex:none">
+    <div style="display:flex;gap:8px;width:110px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+    <div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#52525b">アシスタント — acme-app</div>
+    <div style="width:110px;display:flex;justify-content:flex-end"><span style="font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:2px 8px;background:#ffffff">claude-sonnet-4</span></div>
+  </div>
+  <div style="flex:1;overflow:hidden;padding:20px 24px;display:flex;flex-direction:column;gap:14px">
+    <div style="border:1px solid #e4e4e7;border-radius:8px;padding:10px 14px;background:#fafafa">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:06</div>
+      <div style="line-height:1.6">サインアップフォームにも同じ問題がないか確認して</div>
+    </div>
+    <div style="border:1px solid #bfdbfe;border-radius:8px;overflow:hidden">
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#eff6ff;border-bottom:1px solid #dbeafe">
+        <span style="width:7px;height:7px;border-radius:50%;background:#2563eb;box-shadow:0 0 0 3px #dbeafe"></span>
+        <span style="font-size:12px;font-weight:600;color:#1d4ed8">実行中</span>
+        <span style="flex:1"></span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">2 / 4 · 9s</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 12px;border-bottom:1px solid #f4f4f5">
+        <span style="font-size:12px;color:#16a34a">✓</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#52525b;flex:1">grep "notify" src/ui/signup_form.rs — <span style="color:#dc2626">通知漏れ 1箇所</span></span>
+      </div>
+      <!-- diff stays in the card, neutral -->
+      <div>
+        <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;background:#fafafa;border-bottom:1px solid #f4f4f5">
+          <span style="width:6px;height:6px;border-radius:2px;background:#dea584"></span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;font-weight:600;flex:1">src/ui/signup_form.rs <span style="font-weight:400;color:#b45309">（提案 — 未適用）</span></span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#16a34a">+2</span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#dc2626">−1</span>
+        </div>
+        <div style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;line-height:1.75;padding:5px 0">
+          <div style="display:flex;gap:12px;padding:0 12px;background:#fef2f2"><span style="color:#fca5a5;width:22px;text-align:right;flex:none">−</span><span style="color:#3f3f46">    self.error = err;</span></div>
+          <div style="display:flex;gap:12px;padding:0 12px;background:#f0fdf4"><span style="color:#86efac;width:22px;text-align:right;flex:none">+</span><span style="color:#3f3f46">    self.error = err;</span></div>
+          <div style="display:flex;gap:12px;padding:0 12px;background:#f0fdf4"><span style="color:#86efac;width:22px;text-align:right;flex:none">+</span><span style="color:#3f3f46">    cx.<span style="color:#0e7490">notify</span>();</span></div>
+        </div>
+      </div>
+    </div>
+    <div style="flex:1"></div>
+  </div>
+  <!-- composer in approval mode -->
+  <div style="padding:0 20px 18px;flex:none">
+    <div style="border:1px solid #f59e0b;border-radius:10px;overflow:hidden;box-shadow:0 2px 10px rgba(245,158,11,0.15)">
+      <div style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:#fffbeb">
+        <span style="width:7px;height:7px;border-radius:50%;background:#d97706;box-shadow:0 0 0 3px #fef3c7"></span>
+        <span style="font-size:12px;font-weight:600;color:#92400e">signup_form.rs への編集を許可しますか？</span>
+        <span style="flex:1"></span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#b45309">+2 −1</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:#ffffff;border-top:1px solid #fde68a">
+        <span style="font-size:12px;font-weight:600;color:#ffffff;background:#18181b;border-radius:6px;padding:5px 14px">許可 <span style="font-weight:400;opacity:0.6;font-size:10px">⏎</span></span>
+        <span style="font-size:12px;color:#52525b;border:1px solid #d4d4d8;border-radius:6px;padding:5px 12px">常に許可 <span style="color:#a1a1aa;font-size:10px">⇧⏎</span></span>
+        <span style="font-size:12px;color:#dc2626;border:1px solid #fecaca;border-radius:6px;padding:5px 12px">拒否 <span style="opacity:0.5;font-size:10px">esc</span></span>
+        <span style="flex:1"></span>
+        <span style="font-size:11px;color:#a1a1aa">入力すると指示に切り替わります</span>
+      </div>
+    </div>
+  </div>
+</div></div></div>
+
+<!-- ============ 4c プラン一括承認 ============ -->
+<div class="dv-opt" id="4c"><div class="dv-olabel"><a class="dv-oid" href="#4c">4c</a>プラン一括承認 — 実行前にプランを承認、以後は自律実行</div>
+<div class="dv-card"><div style="width:760px;height:620px;background:#ffffff;border-radius:10px;box-shadow:0 0 0 1px rgba(0,0,0,0.12),0 18px 40px rgba(0,0,0,0.18);display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#18181b">
+  <div style="display:flex;align-items:center;height:38px;padding:0 14px;background:#fafafa;border-bottom:1px solid #e4e4e7;flex:none">
+    <div style="display:flex;gap:8px;width:110px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+    <div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#52525b">アシスタント — acme-app</div>
+    <div style="width:110px;display:flex;justify-content:flex-end"><span style="font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:2px 8px;background:#ffffff">claude-sonnet-4</span></div>
+  </div>
+  <div style="flex:1;overflow:hidden;padding:20px 24px;display:flex;flex-direction:column;gap:14px">
+    <div style="border:1px solid #e4e4e7;border-radius:8px;padding:10px 14px;background:#fafafa">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:06</div>
+      <div style="line-height:1.6">サインアップフォームにも同じ問題がないか確認して</div>
+    </div>
+    <!-- plan proposal card -->
+    <div style="border:1px solid #e4e4e7;border-radius:10px;overflow:hidden">
+      <div style="display:flex;align-items:center;gap:8px;padding:10px 14px;background:#fafafa;border-bottom:1px solid #e4e4e7">
+        <span style="font-size:12.5px;font-weight:600">実行プラン</span>
+        <span style="font-size:11px;color:#a1a1aa">承認後は確認なしで最後まで実行します</span>
+      </div>
+      <div style="padding:6px 0">
+        <div style="display:flex;align-items:center;gap:10px;padding:7px 14px">
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa;width:14px;text-align:right">1</span>
+          <span style="font-size:12.5px;color:#3f3f46;flex:1">signup_form.rs の通知漏れを調査（読み取りのみ）</span>
+          <span style="font-size:11px;color:#a1a1aa;border:1px solid #e4e4e7;border-radius:99px;padding:1px 8px">安全</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:7px 14px">
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa;width:14px;text-align:right">2</span>
+          <span style="font-size:12.5px;color:#3f3f46;flex:1">見つかった場合 <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;background:#f4f4f5;border-radius:4px;padding:1px 5px">cx.notify()</span> を追加する編集</span>
+          <span style="font-size:11px;color:#b45309;border:1px solid #fde68a;background:#fffbeb;border-radius:99px;padding:1px 8px">ファイル編集</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:7px 14px">
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa;width:14px;text-align:right">3</span>
+          <span style="font-size:12.5px;color:#3f3f46;flex:1"><span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;background:#f4f4f5;border-radius:4px;padding:1px 5px">cargo test</span> で検証</span>
+          <span style="font-size:11px;color:#b45309;border:1px solid #fde68a;background:#fffbeb;border-radius:99px;padding:1px 8px">コマンド実行</span>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;padding:10px 14px;border-top:1px solid #f4f4f5">
+        <span style="font-size:12px;font-weight:600;color:#ffffff;background:#18181b;border-radius:6px;padding:5px 14px">プランを承認して実行 <span style="font-weight:400;opacity:0.6;font-size:10px">⏎</span></span>
+        <span style="font-size:12px;color:#52525b;border:1px solid #d4d4d8;border-radius:6px;padding:5px 12px">修正を指示</span>
+        <span style="flex:1"></span>
+        <span style="font-size:11px;color:#a1a1aa">推定 30秒</span>
+      </div>
+    </div>
+  </div>
+  <div style="padding:0 20px 18px;flex:none">
+    <div style="border:1px solid #d4d4d8;border-radius:10px;padding:10px 12px 8px;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
+      <div style="font-size:13px;color:#a1a1aa;padding:0 2px 10px">プランへの修正指示もここから…</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:3px 8px">claude-sonnet-4 <span style="font-size:9px">▾</span></span>
+        <span style="flex:1"></span>
+        <span style="width:26px;height:26px;border-radius:50%;background:#2563eb;color:#ffffff;display:flex;align-items:center;justify-content:center;font-size:13px">↑</span>
+      </div>
+    </div>
+  </div>
+</div></div></div>
+
+</div>
+<p class="dv-next">次の例: 「<a class="dv-oid" href="#4a">4a</a> と <a class="dv-oid" href="#4b">4b</a> の折衷（カード内に文脈、操作はコンポーザー）」 · 「常に許可の粒度（ツール別/セッション別）を詰めて」 · 「次は判断2: 失敗時の見え方へ」</p>
+</section>
+
+<section class="dv-turn" id="t3">
+<div class="dv-thd"><a class="dv-tid" href="#t3">3</a><span class="dv-tname"><a class="dv-oid" href="#2a">2a</a> を確定 — GUI のリッチさの置きどころ2案</span></div>
+<p class="dv-note">どちらも <a class="dv-oid" href="#2a">2a</a> の「完了したら1行レシートに畳む」構造は同じ。<a class="dv-oid" href="#3a">3a</a> はリッチさを「素材と奥行き」に置く — 面の階調、影のレイヤリング、進捗リング、ホバーで現れる操作。情報自体は増やさない。<a class="dv-oid" href="#3b">3b</a> はリッチさを「内容の描画」に置く — diff のシンタックスハイライト、言語ドット付きファイルチップ、構造化されたレシート。面は平坦なまま。</p>
+<div class="dv-opts">
+
+<!-- ============ 3a ソフトマテリアル ============ -->
+<div class="dv-opt" id="3a"><div class="dv-olabel"><a class="dv-oid" href="#3a">3a</a>ソフトマテリアル — 奥行き・面の階調・ホバー操作でリッチに、情報は最小のまま</div>
+<div class="dv-card"><div style="width:780px;height:680px;background:#fcfcfb;border-radius:10px;box-shadow:0 0 0 1px rgba(0,0,0,0.12),0 18px 40px rgba(0,0,0,0.18);display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#18181b">
+  <div style="display:flex;align-items:center;height:40px;padding:0 14px;flex:none">
+    <div style="display:flex;gap:8px;width:110px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+    <div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#52525b">アシスタント — acme-app</div>
+    <div style="width:110px;display:flex;justify-content:flex-end"><span style="font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:6px;padding:2px 8px;background:#ffffff;box-shadow:0 1px 1px rgba(0,0,0,0.03)">claude-sonnet-4</span></div>
+  </div>
+  <div style="flex:1;overflow:hidden;padding:16px 24px 0;display:flex;flex-direction:column;gap:14px">
+    <!-- past turn -->
+    <div style="background:#ffffff;border:1px solid rgba(0,0,0,0.06);border-radius:10px;padding:11px 14px;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:02</div>
+      <div style="line-height:1.6">ログインフォームでバリデーションエラーが表示されないバグを修正して</div>
+    </div>
+    <!-- receipt: quiet, hover reveals action -->
+    <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#a1a1aa;padding:5px 10px;border-radius:8px" style-hover="background:#f4f4f5">
+      <span style="font-size:10px">▸</span>
+      <span>3 ツール実行 · 38秒</span>
+      <span style="display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(0,0,0,0.07);border-radius:6px;padding:2px 8px;background:#ffffff;box-shadow:0 1px 1px rgba(0,0,0,0.03);font-family:ui-monospace,'SF Mono',Menlo,monospace;color:#52525b"><span style="width:6px;height:6px;border-radius:2px;background:#dea584"></span>login_form.rs <span style="color:#16a34a">+2</span> <span style="color:#dc2626">−1</span></span>
+      <span style="color:#16a34a">✓ 12 passed</span>
+    </div>
+    <div style="line-height:1.7;color:#3f3f46;padding:0 4px"><span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;background:#f4f4f5;border-radius:4px;padding:1px 5px">set_error</span> に <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;background:#f4f4f5;border-radius:4px;padding:1px 5px">cx.notify()</span> を追加して修正しました。テストは12件すべてパスです。</div>
+    <!-- current turn -->
+    <div style="background:#ffffff;border:1px solid rgba(0,0,0,0.06);border-radius:10px;padding:11px 14px;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:06</div>
+      <div style="line-height:1.6">サインアップフォームにも同じ問題がないか確認して</div>
+    </div>
+    <!-- live card: layered, glowing, progress ring -->
+    <div style="background:#ffffff;border:1px solid rgba(37,99,235,0.25);border-radius:12px;box-shadow:0 1px 2px rgba(0,0,0,0.04),0 8px 28px rgba(37,99,235,0.10);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 14px">
+        <span style="width:16px;height:16px;border-radius:50%;background:conic-gradient(#2563eb 0 66%,#dbeafe 66% 100%);flex:none;display:flex;align-items:center;justify-content:center"><span style="width:10px;height:10px;border-radius:50%;background:#ffffff"></span></span>
+        <span style="font-size:12.5px;font-weight:600">signup_form.rs を確認中</span>
+        <span style="flex:1"></span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">2 / 3 · 6s</span>
+      </div>
+      <div style="margin:0 14px;height:1px;background:linear-gradient(90deg,rgba(0,0,0,0.06),rgba(0,0,0,0.02))"></div>
+      <!-- done row, hover state shown: action appears -->
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 14px;background:#f8f9fa">
+        <span style="font-size:12px;color:#16a34a">✓</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#52525b">grep "notify" src/ui/signup_form.rs</span>
+        <span style="font-size:11px;color:#a1a1aa">0件</span>
+        <span style="flex:1"></span>
+        <span style="font-size:11px;color:#2563eb;border:1px solid #dbeafe;border-radius:6px;padding:2px 9px;background:#ffffff;box-shadow:0 1px 1px rgba(0,0,0,0.03)">出力を表示</span>
+        <span style="font-size:10px;color:#d4d4d8">ホバー時</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 14px 12px">
+        <span style="width:12px;height:12px;border-radius:50%;border:2px solid #dbeafe;border-top-color:#2563eb;flex:none"></span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#52525b">読み取り src/ui/signup_form.rs</span>
+        <span style="font-size:11px;color:#a1a1aa">198行</span>
+      </div>
+    </div>
+  </div>
+  <!-- composer: floating, elevated -->
+  <div style="padding:14px 20px 18px;flex:none">
+    <div style="background:#ffffff;border:1px solid rgba(0,0,0,0.08);border-radius:12px;padding:11px 12px 9px;box-shadow:0 2px 6px rgba(0,0,0,0.05),0 8px 24px rgba(0,0,0,0.05)">
+      <div style="font-size:13px;color:#a1a1aa;padding:0 2px 10px">続けて指示する…</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:6px;padding:3px 8px;background:#fafafa">claude-sonnet-4 <span style="font-size:9px">▾</span></span>
+        <span style="flex:1"></span>
+        <span style="width:28px;height:28px;border-radius:50%;background:#2563eb;color:#ffffff;display:flex;align-items:center;justify-content:center;font-size:13px;box-shadow:0 2px 6px rgba(37,99,235,0.35)">↑</span>
+      </div>
+    </div>
+  </div>
+</div></div></div>
+
+<!-- ============ 3b インフォリッチ ============ -->
+<div class="dv-opt" id="3b"><div class="dv-olabel"><a class="dv-oid" href="#3b">3b</a>インフォリッチ — 面は平坦なまま、diff ハイライトや構造化レシートで内容をリッチに</div>
+<div class="dv-card"><div style="width:780px;height:680px;background:#ffffff;border-radius:10px;box-shadow:0 0 0 1px rgba(0,0,0,0.12),0 18px 40px rgba(0,0,0,0.18);display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#18181b">
+  <div style="display:flex;align-items:center;height:38px;padding:0 14px;background:#fafafa;border-bottom:1px solid #e4e4e7;flex:none">
+    <div style="display:flex;gap:8px;width:110px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+    <div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#52525b">アシスタント — acme-app</div>
+    <div style="width:110px;display:flex;justify-content:flex-end"><span style="font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:2px 8px;background:#ffffff">claude-sonnet-4</span></div>
+  </div>
+  <div style="flex:1;overflow:hidden;padding:20px 24px;display:flex;flex-direction:column;gap:14px">
+    <div style="border:1px solid #e4e4e7;border-radius:8px;padding:10px 14px;background:#fafafa">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:02</div>
+      <div style="line-height:1.6">ログインフォームでバリデーションエラーが表示されないバグを修正して</div>
+    </div>
+    <!-- structured receipt -->
+    <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:#a1a1aa;padding:0 2px;flex-wrap:wrap">
+      <span style="font-size:10px">▸</span>
+      <span style="display:inline-flex;align-items:center;gap:4px;border:1px solid #e4e4e7;border-radius:99px;padding:2px 9px;font-family:ui-monospace,'SF Mono',Menlo,monospace;color:#71717a">grep ✓</span>
+      <span style="display:inline-flex;align-items:center;gap:4px;border:1px solid #e4e4e7;border-radius:99px;padding:2px 9px;font-family:ui-monospace,'SF Mono',Menlo,monospace;color:#71717a">読み取り ✓</span>
+      <span style="display:inline-flex;align-items:center;gap:5px;border:1px solid #e4e4e7;border-radius:99px;padding:2px 9px;font-family:ui-monospace,'SF Mono',Menlo,monospace;color:#52525b"><span style="width:6px;height:6px;border-radius:2px;background:#dea584"></span>login_form.rs <span style="color:#16a34a">+2</span> <span style="color:#dc2626">−1</span></span>
+      <span style="display:inline-flex;align-items:center;gap:4px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:99px;padding:2px 9px;font-family:ui-monospace,'SF Mono',Menlo,monospace;color:#166534">cargo test 12 ✓</span>
+      <span>38秒</span>
+    </div>
+    <div style="line-height:1.7;color:#3f3f46;padding:0 2px"><span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;background:#f4f4f5;border-radius:4px;padding:1px 5px">set_error</span> に <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;background:#f4f4f5;border-radius:4px;padding:1px 5px">cx.notify()</span> を追加して修正しました。テストは12件すべてパスです。</div>
+    <div style="border:1px solid #e4e4e7;border-radius:8px;padding:10px 14px;background:#fafafa">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:06</div>
+      <div style="line-height:1.6">サインアップフォームにも同じ問題がないか確認して</div>
+    </div>
+    <!-- live card with syntax-highlighted diff preview -->
+    <div style="border:1px solid #bfdbfe;border-radius:8px;overflow:hidden">
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#eff6ff;border-bottom:1px solid #dbeafe">
+        <span style="width:7px;height:7px;border-radius:50%;background:#2563eb;box-shadow:0 0 0 3px #dbeafe"></span>
+        <span style="font-size:12px;font-weight:600;color:#1d4ed8">実行中 — 同じ修正を適用しています</span>
+        <span style="flex:1"></span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">3 / 4 · 11s</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 12px;border-bottom:1px solid #f4f4f5">
+        <span style="font-size:12px;color:#16a34a">✓</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#52525b;flex:1">grep "notify" src/ui/signup_form.rs — <span style="color:#dc2626">通知漏れ 1箇所</span></span>
+      </div>
+      <!-- syntax highlighted diff -->
+      <div style="border-bottom:1px solid #f4f4f5">
+        <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;background:#fafafa;border-bottom:1px solid #f4f4f5">
+          <span style="width:6px;height:6px;border-radius:2px;background:#dea584"></span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;font-weight:600;flex:1">src/ui/signup_form.rs</span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#16a34a">+2</span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#dc2626">−1</span>
+        </div>
+        <div style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;line-height:1.75;padding:6px 0">
+          <div style="display:flex;gap:12px;padding:0 12px"><span style="color:#d4d4d8;width:22px;text-align:right;flex:none">96</span><span><span style="color:#7c3aed">fn</span> <span style="color:#0e7490">set_error</span>(&amp;<span style="color:#7c3aed">mut</span> self, err: <span style="color:#0e7490">Option</span>&lt;<span style="color:#0e7490">String</span>&gt;, cx: &amp;<span style="color:#7c3aed">mut</span> <span style="color:#0e7490">Context</span>&lt;<span style="color:#7c3aed">Self</span>&gt;) {</span></div>
+          <div style="display:flex;gap:12px;padding:0 12px;background:#fef2f2"><span style="color:#fca5a5;width:22px;text-align:right;flex:none">−</span><span style="color:#3f3f46">    self.error = err;</span></div>
+          <div style="display:flex;gap:12px;padding:0 12px;background:#f0fdf4"><span style="color:#86efac;width:22px;text-align:right;flex:none">+</span><span style="color:#3f3f46">    self.error = err;</span></div>
+          <div style="display:flex;gap:12px;padding:0 12px;background:#f0fdf4"><span style="color:#86efac;width:22px;text-align:right;flex:none">+</span><span style="color:#3f3f46">    cx.<span style="color:#0e7490">notify</span>();</span></div>
+          <div style="display:flex;gap:12px;padding:0 12px"><span style="color:#d4d4d8;width:22px;text-align:right;flex:none">99</span><span style="color:#3f3f46">}</span></div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 12px">
+        <span style="width:12px;height:12px;border-radius:50%;border:2px solid #dbeafe;border-top-color:#2563eb;flex:none"></span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#52525b;flex:1">cargo test -p acme-ui signup_form</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#71717a">4 / 9</span>
+      </div>
+      <div style="height:3px;background:#f4f4f5"><span style="display:block;width:44%;height:100%;background:#2563eb"></span></div>
+    </div>
+  </div>
+  <div style="padding:0 20px 18px;flex:none">
+    <div style="border:1px solid #d4d4d8;border-radius:10px;padding:10px 12px 8px;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
+      <div style="font-size:13px;color:#a1a1aa;padding:0 2px 10px">続けて指示する…</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:3px 8px">claude-sonnet-4 <span style="font-size:9px">▾</span></span>
+        <span style="flex:1"></span>
+        <span style="width:26px;height:26px;border-radius:50%;background:#2563eb;color:#ffffff;display:flex;align-items:center;justify-content:center;font-size:13px">↑</span>
+      </div>
+    </div>
+  </div>
+</div></div></div>
+
+</div>
+<p class="dv-next">次の例: 「<a class="dv-oid" href="#3a">3a</a> の面づくりに <a class="dv-oid" href="#3b">3b</a> の diff ハイライトを載せて1案に統合」 · 「レシートの開いた状態も見たい」 · 「完了直後にカードが畳まれるアニメーションの絵コンテを」</p>
+</section>
+
+<section class="dv-turn" id="t2">
+<div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">ツール出力・diff を「残さない」3つのやり方</span></div>
+<p class="dv-note">共通の考え方: 実行中だけ詳細が見え、完了したターンの痕跡は最小化される。<a class="dv-oid" href="#2a">2a</a> は完了ターンを1行のレシートに集約、<a class="dv-oid" href="#2b">2b</a> は会話の外（コンポーザー直上）に一時的なアクティビティ帯を出して完了後は消す、<a class="dv-oid" href="#2c">2c</a> は本文に脚注チップだけ残してオンデマンドでポップオーバー表示。各案とも「完了した過去ターン + 現在」の2ターンを表示しています。</p>
+<div class="dv-opts">
+
+<!-- ============ 2a レシート集約 ============ -->
+<div class="dv-opt" id="2a"><div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a>レシート集約 — 完了ターンのツール実行は1行に畳まれる</div>
+<div class="dv-card"><div style="width:780px;height:660px;background:#ffffff;border-radius:10px;box-shadow:0 0 0 1px rgba(0,0,0,0.12),0 18px 40px rgba(0,0,0,0.18);display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#18181b">
+  <div style="display:flex;align-items:center;height:38px;padding:0 14px;background:#fafafa;border-bottom:1px solid #e4e4e7;flex:none">
+    <div style="display:flex;gap:8px;width:110px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+    <div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#52525b">アシスタント — acme-app</div>
+    <div style="width:110px;display:flex;justify-content:flex-end"><span style="font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:2px 8px;background:#ffffff">claude-sonnet-4</span></div>
+  </div>
+  <div style="flex:1;overflow:hidden;padding:20px 24px;display:flex;flex-direction:column;gap:14px">
+    <!-- past turn: fully settled -->
+    <div style="border:1px solid #e4e4e7;border-radius:8px;padding:10px 14px;background:#fafafa">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:02</div>
+      <div style="line-height:1.6">ログインフォームでバリデーションエラーが表示されないバグを修正して</div>
+    </div>
+    <!-- receipt: all past tool activity in one row -->
+    <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#a1a1aa;padding:0 2px">
+      <span style="font-size:10px">▸</span>
+      <span>3 ツール実行</span><span style="color:#e4e4e7">·</span>
+      <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace">login_form.rs <span style="color:#16a34a">+2</span> <span style="color:#dc2626">−1</span></span><span style="color:#e4e4e7">·</span>
+      <span style="color:#16a34a">✓ 12 passed</span><span style="color:#e4e4e7">·</span>
+      <span>38秒</span>
+    </div>
+    <div style="line-height:1.7;color:#3f3f46;padding:0 2px"><span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;background:#f4f4f5;border-radius:4px;padding:1px 5px">set_error</span> に <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;background:#f4f4f5;border-radius:4px;padding:1px 5px">cx.notify()</span> を追加して修正しました。テストは12件すべてパスです。</div>
+    <!-- current turn -->
+    <div style="border:1px solid #e4e4e7;border-radius:8px;padding:10px 14px;background:#fafafa">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:06</div>
+      <div style="line-height:1.6">サインアップフォームにも同じ問題がないか確認して</div>
+    </div>
+    <!-- live activity: expanded only while running -->
+    <div style="border:1px solid #bfdbfe;border-radius:8px;overflow:hidden">
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#eff6ff;border-bottom:1px solid #dbeafe">
+        <span style="width:7px;height:7px;border-radius:50%;background:#2563eb;box-shadow:0 0 0 3px #dbeafe"></span>
+        <span style="font-size:12px;font-weight:600;color:#1d4ed8">実行中</span>
+        <span style="font-size:11px;color:#71717a">完了するとこのカードは1行に畳まれます</span>
+        <span style="flex:1"></span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">6s</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 12px;border-bottom:1px solid #f4f4f5">
+        <span style="font-size:12px;color:#16a34a">✓</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;font-weight:600">grep</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#71717a;flex:1">"notify" src/ui/signup_form.rs</span>
+        <span style="font-size:11px;color:#71717a">0件</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 12px">
+        <span style="width:12px;height:12px;border-radius:50%;border:2px solid #dbeafe;border-top-color:#2563eb;flex:none"></span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;font-weight:600">読み取り</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#71717a;flex:1">src/ui/signup_form.rs</span>
+      </div>
+    </div>
+  </div>
+  <div style="padding:0 20px 18px;flex:none">
+    <div style="border:1px solid #d4d4d8;border-radius:10px;padding:10px 12px 8px;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
+      <div style="font-size:13px;color:#a1a1aa;padding:0 2px 10px">続けて指示する…</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:3px 8px">claude-sonnet-4 <span style="font-size:9px">▾</span></span>
+        <span style="flex:1"></span>
+        <span style="width:26px;height:26px;border-radius:50%;background:#2563eb;color:#ffffff;display:flex;align-items:center;justify-content:center;font-size:13px">↑</span>
+      </div>
+    </div>
+  </div>
+</div></div></div>
+
+<!-- ============ 2b アクティビティ帯 ============ -->
+<div class="dv-opt" id="2b"><div class="dv-olabel"><a class="dv-oid" href="#2b">2b</a>アクティビティ帯 — 詳細は会話の外、コンポーザー直上に一時表示</div>
+<div class="dv-card"><div style="width:780px;height:660px;background:#ffffff;border-radius:10px;box-shadow:0 0 0 1px rgba(0,0,0,0.12),0 18px 40px rgba(0,0,0,0.18);display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#18181b">
+  <div style="display:flex;align-items:center;height:38px;padding:0 14px;background:#fafafa;border-bottom:1px solid #e4e4e7;flex:none">
+    <div style="display:flex;gap:8px;width:110px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+    <div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#52525b">アシスタント — acme-app</div>
+    <div style="width:110px;display:flex;justify-content:flex-end"><span style="font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:2px 8px;background:#ffffff">claude-sonnet-4</span></div>
+  </div>
+  <!-- conversation: text only, past turn is completely clean -->
+  <div style="flex:1;overflow:hidden;padding:20px 24px;display:flex;flex-direction:column;gap:14px">
+    <div style="border:1px solid #e4e4e7;border-radius:8px;padding:10px 14px;background:#fafafa">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:02</div>
+      <div style="line-height:1.6">ログインフォームでバリデーションエラーが表示されないバグを修正して</div>
+    </div>
+    <div style="line-height:1.7;color:#3f3f46;padding:0 2px"><span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;background:#f4f4f5;border-radius:4px;padding:1px 5px">set_error</span> に <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;background:#f4f4f5;border-radius:4px;padding:1px 5px">cx.notify()</span> を追加して修正しました。テストは12件すべてパスです。 <span style="font-size:11px;color:#a1a1aa;border-bottom:1px dotted #d4d4d8">アクティビティ (3)</span></div>
+    <div style="border:1px solid #e4e4e7;border-radius:8px;padding:10px 14px;background:#fafafa">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:06</div>
+      <div style="line-height:1.6">サインアップフォームにも同じ問題がないか確認して</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;color:#71717a;font-size:12px;padding:0 2px">
+      <span style="width:12px;height:12px;border-radius:50%;border:2px solid #dbeafe;border-top-color:#2563eb;flex:none"></span>
+      <span>確認しています…</span>
+    </div>
+    <div style="flex:1"></div>
+    <!-- ephemeral activity strip: exists only while running -->
+    <div style="border:1px solid #dbeafe;border-radius:10px;background:#f8faff;box-shadow:0 4px 16px rgba(37,99,235,0.08);overflow:hidden;flex:none">
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-bottom:1px solid #dbeafe">
+        <span style="width:7px;height:7px;border-radius:50%;background:#2563eb;box-shadow:0 0 0 3px #dbeafe"></span>
+        <span style="font-size:12px;font-weight:600;color:#1d4ed8">読み取り — src/ui/signup_form.rs</span>
+        <span style="flex:1"></span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">2 / 3</span>
+        <span style="font-size:11px;color:#71717a">完了後に自動で消えます ×</span>
+      </div>
+      <div style="padding:8px 14px;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;line-height:1.7;color:#71717a">
+        <div><span style="color:#16a34a">✓</span> grep "notify" src/ui/signup_form.rs <span style="color:#a1a1aa">— 0件</span></div>
+        <div><span style="color:#2563eb">›</span> 読み取り src/ui/signup_form.rs <span style="color:#a1a1aa">— 198行</span></div>
+      </div>
+    </div>
+  </div>
+  <div style="padding:0 20px 18px;flex:none">
+    <div style="border:1px solid #d4d4d8;border-radius:10px;padding:10px 12px 8px;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
+      <div style="font-size:13px;color:#a1a1aa;padding:0 2px 10px">続けて指示する…</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:3px 8px">claude-sonnet-4 <span style="font-size:9px">▾</span></span>
+        <span style="flex:1"></span>
+        <span style="width:26px;height:26px;border-radius:50%;background:#2563eb;color:#ffffff;display:flex;align-items:center;justify-content:center;font-size:13px">↑</span>
+      </div>
+    </div>
+  </div>
+</div></div></div>
+
+<!-- ============ 2c 脚注チップ ============ -->
+<div class="dv-opt" id="2c"><div class="dv-olabel"><a class="dv-oid" href="#2c">2c</a>脚注チップ — 本文に根拠チップだけ残し、詳細はポップオーバー</div>
+<div class="dv-card"><div style="width:780px;height:660px;background:#ffffff;border-radius:10px;box-shadow:0 0 0 1px rgba(0,0,0,0.12),0 18px 40px rgba(0,0,0,0.18);display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#18181b;position:relative">
+  <div style="display:flex;align-items:center;height:38px;padding:0 14px;background:#fafafa;border-bottom:1px solid #e4e4e7;flex:none">
+    <div style="display:flex;gap:8px;width:110px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+    <div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#52525b">アシスタント — acme-app</div>
+    <div style="width:110px;display:flex;justify-content:flex-end"><span style="font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:2px 8px;background:#ffffff">claude-sonnet-4</span></div>
+  </div>
+  <div style="flex:1;overflow:hidden;padding:20px 24px;display:flex;flex-direction:column;gap:14px">
+    <div style="border:1px solid #e4e4e7;border-radius:8px;padding:10px 14px;background:#fafafa">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:02</div>
+      <div style="line-height:1.6">ログインフォームでバリデーションエラーが表示されないバグを修正して</div>
+    </div>
+    <!-- reply with footnote chips -->
+    <div style="line-height:1.9;color:#3f3f46;padding:0 2px">原因は <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;background:#f4f4f5;border-radius:4px;padding:1px 5px">set_error</span> 後に再描画通知が呼ばれていないことでした<span style="display:inline-flex;align-items:center;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:10px;color:#71717a;border:1px solid #e4e4e7;border-radius:99px;padding:0 6px;margin:0 3px;vertical-align:2px;background:#ffffff">grep</span>。<span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;background:#f4f4f5;border-radius:4px;padding:1px 5px">cx.notify()</span> を追加し<span style="display:inline-flex;align-items:center;gap:3px;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:10px;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:99px;padding:0 6px;margin:0 3px;vertical-align:2px;background:#eff6ff">diff +2 −1</span>、テスト12件のパスを確認しました<span style="display:inline-flex;align-items:center;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:10px;color:#166534;border:1px solid #bbf7d0;border-radius:99px;padding:0 6px;margin:0 3px;vertical-align:2px;background:#f0fdf4">test ✓</span>。</div>
+    <!-- popover anchored to the diff chip (shown open) -->
+    <div style="position:relative;height:0">
+      <div style="position:absolute;top:2px;left:120px;width:440px;background:#ffffff;border:1px solid #d4d4d8;border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,0.14);overflow:hidden;z-index:2">
+        <div style="display:flex;align-items:center;gap:10px;padding:7px 12px;background:#fafafa;border-bottom:1px solid #e4e4e7">
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;font-weight:600;flex:1">src/ui/login_form.rs</span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#16a34a">+2</span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#dc2626">−1</span>
+          <span style="font-size:11px;color:#a1a1aa">×</span>
+        </div>
+        <div style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;line-height:1.7;padding:6px 0">
+          <div style="display:flex;gap:12px;padding:0 12px;color:#3f3f46"><span style="color:#d4d4d8;width:22px;text-align:right;flex:none">128</span><span>fn set_error(&amp;mut self, err: …, cx: &amp;mut Context&lt;Self&gt;) {</span></div>
+          <div style="display:flex;gap:12px;padding:0 12px;background:#fef2f2;color:#991b1b"><span style="color:#fca5a5;width:22px;text-align:right;flex:none">−</span><span>    self.error = err;</span></div>
+          <div style="display:flex;gap:12px;padding:0 12px;background:#f0fdf4;color:#166534"><span style="color:#86efac;width:22px;text-align:right;flex:none">+</span><span>    self.error = err;</span></div>
+          <div style="display:flex;gap:12px;padding:0 12px;background:#f0fdf4;color:#166534"><span style="color:#86efac;width:22px;text-align:right;flex:none">+</span><span>    cx.notify();</span></div>
+          <div style="display:flex;gap:12px;padding:0 12px;color:#3f3f46"><span style="color:#d4d4d8;width:22px;text-align:right;flex:none">131</span><span>}</span></div>
+        </div>
+        <div style="padding:6px 12px;border-top:1px solid #f4f4f5;font-size:11px;color:#a1a1aa">チップをクリックで表示 · 会話には残りません</div>
+      </div>
+    </div>
+    <div style="height:190px;flex:none"></div>
+    <div style="border:1px solid #e4e4e7;border-radius:8px;padding:10px 14px;background:#fafafa">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:06</div>
+      <div style="line-height:1.6">サインアップフォームにも同じ問題がないか確認して</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;color:#71717a;font-size:12px;padding:0 2px">
+      <span style="width:12px;height:12px;border-radius:50%;border:2px solid #dbeafe;border-top-color:#2563eb;flex:none"></span>
+      <span>signup_form.rs を確認しています…</span>
+      <span style="display:inline-flex;align-items:center;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:10px;color:#71717a;border:1px solid #e4e4e7;border-radius:99px;padding:0 6px;background:#ffffff">grep ✓</span>
+      <span style="display:inline-flex;align-items:center;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:10px;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:99px;padding:0 6px;background:#eff6ff">読み取り…</span>
+    </div>
+  </div>
+  <div style="padding:0 20px 18px;flex:none">
+    <div style="border:1px solid #d4d4d8;border-radius:10px;padding:10px 12px 8px;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
+      <div style="font-size:13px;color:#a1a1aa;padding:0 2px 10px">続けて指示する…</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:3px 8px">claude-sonnet-4 <span style="font-size:9px">▾</span></span>
+        <span style="flex:1"></span>
+        <span style="width:26px;height:26px;border-radius:50%;background:#2563eb;color:#ffffff;display:flex;align-items:center;justify-content:center;font-size:13px">↑</span>
+      </div>
+    </div>
+  </div>
+</div></div></div>
+
+</div>
+<p class="dv-next">次の例: 「<a class="dv-oid" href="#2a">2a</a> のレシートに <a class="dv-oid" href="#2c">2c</a> のチップを混ぜて」 · 「<a class="dv-oid" href="#2b">2b</a> の帯が消えた後の状態も見たい」 · 「diff だけは残す版」</p>
+</section>
+
+<section class="dv-turn" id="t1">
+<div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">コーディングエージェント — シングルペイン UI・3案</span></div>
+<p class="dv-note">前提: gpui-component のライトテーマ（zinc 系ニュートラル + ブルーアクセント、1px ボーダー、控えめな角丸）をトークンとして使用。シナリオは共通で「ログインフォームのバリデーションエラーが表示されないバグ修正」。<a class="dv-oid" href="#1a">1a</a> は会話中心で軽い密度、<a class="dv-oid" href="#1b">1b</a> は全ステップ展開の高密度トレース、<a class="dv-oid" href="#1c">1c</a> は実行中状態をフェーズで可視化。</p>
+<div class="dv-opts">
+
+<!-- ============ 1a インラインストリーム ============ -->
+<div class="dv-opt" id="1a"><div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a>インラインストリーム — 会話中心、ツール実行は折りたたみ行</div>
+<div class="dv-card"><div style="width:780px;height:660px;background:#ffffff;border-radius:10px;box-shadow:0 0 0 1px rgba(0,0,0,0.12),0 18px 40px rgba(0,0,0,0.18);display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#18181b">
+  <!-- titlebar -->
+  <div style="display:flex;align-items:center;height:38px;padding:0 14px;background:#fafafa;border-bottom:1px solid #e4e4e7;flex:none">
+    <div style="display:flex;gap:8px;width:110px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+    <div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#52525b">アシスタント — acme-app</div>
+    <div style="width:110px;display:flex;justify-content:flex-end"><span style="font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:2px 8px;background:#ffffff">claude-sonnet-4</span></div>
+  </div>
+  <!-- stream -->
+  <div style="flex:1;overflow:hidden;padding:20px 24px;display:flex;flex-direction:column;gap:14px">
+    <!-- user message -->
+    <div style="border:1px solid #e4e4e7;border-radius:8px;padding:10px 14px;background:#fafafa">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:02</div>
+      <div style="line-height:1.6">ログインフォームでバリデーションエラーが表示されないバグを修正して</div>
+    </div>
+    <!-- thinking collapsed -->
+    <div style="display:flex;align-items:center;gap:6px;color:#71717a;font-size:12px;padding:2px 2px">
+      <span style="font-size:10px;color:#a1a1aa">▸</span><span>思考 — 12秒</span>
+    </div>
+    <!-- tool rows -->
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div style="display:flex;align-items:center;gap:10px;border:1px solid #e4e4e7;border-radius:6px;padding:7px 12px">
+        <span style="font-size:10px;color:#a1a1aa">▸</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;font-weight:600">grep</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#71717a;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">"validation_error" src/</span>
+        <span style="font-size:11px;color:#71717a">3件</span>
+        <span style="font-size:12px;color:#16a34a">✓</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;border:1px solid #e4e4e7;border-radius:6px;padding:7px 12px">
+        <span style="font-size:10px;color:#a1a1aa">▸</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;font-weight:600">読み取り</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#71717a;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">src/ui/login_form.rs</span>
+        <span style="font-size:11px;color:#71717a">245行</span>
+        <span style="font-size:12px;color:#16a34a">✓</span>
+      </div>
+    </div>
+    <!-- diff card expanded -->
+    <div style="border:1px solid #e4e4e7;border-radius:8px;overflow:hidden">
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:#fafafa;border-bottom:1px solid #e4e4e7">
+        <span style="font-size:10px;color:#a1a1aa">▾</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;font-weight:600;flex:1">src/ui/login_form.rs</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#16a34a">+2</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#dc2626">−1</span>
+      </div>
+      <div style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;line-height:1.7;padding:8px 0">
+        <div style="display:flex;gap:14px;padding:0 12px;color:#3f3f46"><span style="color:#d4d4d8;width:24px;text-align:right;flex:none">128</span><span>fn set_error(&amp;mut self, err: Option&lt;String&gt;, cx: &amp;mut Context&lt;Self&gt;) {</span></div>
+        <div style="display:flex;gap:14px;padding:0 12px;background:#fef2f2;color:#991b1b"><span style="color:#fca5a5;width:24px;text-align:right;flex:none">−</span><span>    self.error = err;</span></div>
+        <div style="display:flex;gap:14px;padding:0 12px;background:#f0fdf4;color:#166534"><span style="color:#86efac;width:24px;text-align:right;flex:none">+</span><span>    self.error = err;</span></div>
+        <div style="display:flex;gap:14px;padding:0 12px;background:#f0fdf4;color:#166534"><span style="color:#86efac;width:24px;text-align:right;flex:none">+</span><span>    cx.notify();</span></div>
+        <div style="display:flex;gap:14px;padding:0 12px;color:#3f3f46"><span style="color:#d4d4d8;width:24px;text-align:right;flex:none">131</span><span>}</span></div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;border:1px solid #e4e4e7;border-radius:6px;padding:7px 12px">
+      <span style="font-size:10px;color:#a1a1aa">▸</span>
+      <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;font-weight:600">cargo test</span>
+      <span style="flex:1"></span>
+      <span style="font-size:11px;color:#16a34a">12 passed</span>
+      <span style="font-size:12px;color:#16a34a">✓</span>
+    </div>
+    <!-- agent reply -->
+    <div style="line-height:1.7;color:#3f3f46;padding:0 2px">原因は <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;background:#f4f4f5;border-radius:4px;padding:1px 5px">set_error</span> でエラー state を更新した後に再描画通知が呼ばれていないことでした。<span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;background:#f4f4f5;border-radius:4px;padding:1px 5px">cx.notify()</span> を追加し、既存テスト12件がすべて通ることを確認済みです。</div>
+  </div>
+  <!-- composer -->
+  <div style="padding:0 20px 18px;flex:none">
+    <div style="border:1px solid #d4d4d8;border-radius:10px;padding:10px 12px 8px;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
+      <div style="font-size:13px;color:#a1a1aa;padding:0 2px 10px">続けて指示する…</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:3px 8px">claude-sonnet-4 <span style="font-size:9px">▾</span></span>
+        <span style="font-size:12px;color:#a1a1aa;padding:0 4px">@</span>
+        <span style="flex:1"></span>
+        <span style="width:26px;height:26px;border-radius:50%;background:#2563eb;color:#ffffff;display:flex;align-items:center;justify-content:center;font-size:13px">↑</span>
+      </div>
+    </div>
+  </div>
+</div></div></div>
+
+<!-- ============ 1b トレースガター ============ -->
+<div class="dv-opt" id="1b"><div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a>トレースガター — 高密度、全ステップ展開の監査ビュー</div>
+<div class="dv-card"><div style="width:880px;height:740px;background:#ffffff;border-radius:10px;box-shadow:0 0 0 1px rgba(0,0,0,0.12),0 18px 40px rgba(0,0,0,0.18);display:flex;flex-direction:column;overflow:hidden;font-size:12px;color:#18181b">
+  <!-- titlebar -->
+  <div style="display:flex;align-items:center;height:38px;padding:0 14px;background:#fafafa;border-bottom:1px solid #e4e4e7;flex:none">
+    <div style="display:flex;gap:8px;width:130px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+    <div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#52525b">エージェント実行 #42 — acme-app</div>
+    <div style="width:130px;display:flex;justify-content:flex-end"><span style="display:flex;align-items:center;gap:5px;font-size:11px;color:#166534;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:99px;padding:2px 9px"><span style="width:6px;height:6px;border-radius:50%;background:#16a34a"></span>完了</span></div>
+  </div>
+  <!-- task header -->
+  <div style="padding:12px 22px;border-bottom:1px solid #e4e4e7;flex:none">
+    <div style="font-size:13px;font-weight:600;margin-bottom:4px">ログインフォームのバリデーションエラー表示バグを修正</div>
+    <div style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#71717a">6 ステップ · 3 ツール実行 · 1 ファイル変更 · 38秒 · claude-sonnet-4</div>
+  </div>
+  <!-- trace -->
+  <div style="flex:1;overflow:hidden;padding:18px 22px 0">
+    <div style="display:grid;grid-template-columns:26px 1fr;column-gap:14px">
+      <!-- step 1 -->
+      <div style="display:flex;flex-direction:column;align-items:center"><span style="width:8px;height:8px;border-radius:50%;background:#ffffff;border:2px solid #a1a1aa;flex:none;margin-top:3px"></span><span style="width:1px;flex:1;background:#e4e4e7"></span></div>
+      <div style="padding-bottom:16px">
+        <div style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;font-weight:600;color:#71717a;margin-bottom:4px">01 · 思考 <span style="font-weight:400;color:#a1a1aa">2.1s</span></div>
+        <div style="color:#71717a;line-height:1.6;font-style:italic">エラーが state には入っているのに描画されない可能性が高い。まず validation_error の参照箇所を洗い出し、set_error 周辺の再描画通知を確認する。</div>
+      </div>
+      <!-- step 2 -->
+      <div style="display:flex;flex-direction:column;align-items:center"><span style="width:8px;height:8px;border-radius:50%;background:#16a34a;border:2px solid #bbf7d0;flex:none;margin-top:3px"></span><span style="width:1px;flex:1;background:#e4e4e7"></span></div>
+      <div style="padding-bottom:16px">
+        <div style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;font-weight:600;color:#71717a;margin-bottom:6px">02 · ツール: grep <span style="font-weight:400;color:#a1a1aa">0.4s</span></div>
+        <div style="background:#fafafa;border:1px solid #e4e4e7;border-radius:6px;padding:8px 12px;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;line-height:1.7">
+          <div style="color:#3f3f46">$ grep -rn "validation_error" src/</div>
+          <div style="color:#71717a">src/ui/login_form.rs:87:  validation_error: Option&lt;String&gt;,</div>
+          <div style="color:#71717a">src/ui/login_form.rs:128: fn set_error(&amp;mut self, err: …</div>
+          <div style="color:#71717a">src/ui/login_form.rs:203: if let Some(err) = &amp;self.validation_error {</div>
+        </div>
+      </div>
+      <!-- step 3 -->
+      <div style="display:flex;flex-direction:column;align-items:center"><span style="width:8px;height:8px;border-radius:50%;background:#16a34a;border:2px solid #bbf7d0;flex:none;margin-top:3px"></span><span style="width:1px;flex:1;background:#e4e4e7"></span></div>
+      <div style="padding-bottom:16px">
+        <div style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;font-weight:600;color:#71717a;margin-bottom:4px">03 · ツール: 読み取り <span style="font-weight:400;color:#a1a1aa">0.2s</span></div>
+        <div style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#3f3f46">src/ui/login_form.rs <span style="color:#a1a1aa">— 245行 · L120–140 を精査</span></div>
+      </div>
+      <!-- step 4 diff -->
+      <div style="display:flex;flex-direction:column;align-items:center"><span style="width:8px;height:8px;border-radius:50%;background:#2563eb;border:2px solid #bfdbfe;flex:none;margin-top:3px"></span><span style="width:1px;flex:1;background:#e4e4e7"></span></div>
+      <div style="padding-bottom:16px">
+        <div style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;font-weight:600;color:#71717a;margin-bottom:6px">04 · 編集: src/ui/login_form.rs <span style="font-weight:400;color:#16a34a">+2</span> <span style="font-weight:400;color:#dc2626">−1</span></div>
+        <div style="border:1px solid #e4e4e7;border-radius:6px;overflow:hidden;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;line-height:1.7;padding:6px 0">
+          <div style="display:flex;gap:12px;padding:0 12px;color:#3f3f46"><span style="color:#d4d4d8;width:22px;text-align:right;flex:none">128</span><span>fn set_error(&amp;mut self, err: Option&lt;String&gt;, cx: &amp;mut Context&lt;Self&gt;) {</span></div>
+          <div style="display:flex;gap:12px;padding:0 12px;background:#fef2f2;color:#991b1b"><span style="color:#fca5a5;width:22px;text-align:right;flex:none">−</span><span>    self.error = err;</span></div>
+          <div style="display:flex;gap:12px;padding:0 12px;background:#f0fdf4;color:#166534"><span style="color:#86efac;width:22px;text-align:right;flex:none">+</span><span>    self.error = err;</span></div>
+          <div style="display:flex;gap:12px;padding:0 12px;background:#f0fdf4;color:#166534"><span style="color:#86efac;width:22px;text-align:right;flex:none">+</span><span>    cx.notify();</span></div>
+          <div style="display:flex;gap:12px;padding:0 12px;color:#3f3f46"><span style="color:#d4d4d8;width:22px;text-align:right;flex:none">131</span><span>}</span></div>
+        </div>
+      </div>
+      <!-- step 5 test -->
+      <div style="display:flex;flex-direction:column;align-items:center"><span style="width:8px;height:8px;border-radius:50%;background:#16a34a;border:2px solid #bbf7d0;flex:none;margin-top:3px"></span><span style="width:1px;flex:1;background:#e4e4e7"></span></div>
+      <div style="padding-bottom:16px">
+        <div style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;font-weight:600;color:#71717a;margin-bottom:6px">05 · ツール: cargo test <span style="font-weight:400;color:#a1a1aa">31s</span></div>
+        <div style="background:#fafafa;border:1px solid #e4e4e7;border-radius:6px;padding:8px 12px;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;line-height:1.7">
+          <div style="color:#3f3f46">$ cargo test -p acme-ui login_form</div>
+          <div style="color:#166534">test result: ok. 12 passed; 0 failed; 0 ignored</div>
+        </div>
+      </div>
+      <!-- step 6 -->
+      <div style="display:flex;flex-direction:column;align-items:center"><span style="width:8px;height:8px;border-radius:50%;background:#16a34a;border:2px solid #bbf7d0;flex:none;margin-top:3px"></span></div>
+      <div style="padding-bottom:14px">
+        <div style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;font-weight:600;color:#71717a;margin-bottom:4px">06 · 応答</div>
+        <div style="color:#3f3f46;line-height:1.7;font-size:12px">set_error 内で cx.notify() が呼ばれず再描画が走らないのが原因。通知を追加し、テスト12件パスを確認しました。</div>
+      </div>
+    </div>
+  </div>
+  <!-- composer -->
+  <div style="border-top:1px solid #e4e4e7;padding:10px 22px;display:flex;align-items:center;gap:10px;flex:none">
+    <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#2563eb">›</span>
+    <span style="flex:1;font-size:12px;color:#a1a1aa">続けて指示する…</span>
+    <span style="font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:2px 8px">claude-sonnet-4 ▾</span>
+    <span style="width:24px;height:24px;border-radius:6px;background:#2563eb;color:#ffffff;display:flex;align-items:center;justify-content:center;font-size:12px">↑</span>
+  </div>
+</div></div></div>
+
+<!-- ============ 1c フェーズカード ============ -->
+<div class="dv-opt" id="1c"><div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a>フェーズカード — 実行中の状態をパイプラインで可視化</div>
+<div class="dv-card"><div style="width:820px;height:700px;background:#ffffff;border-radius:10px;box-shadow:0 0 0 1px rgba(0,0,0,0.12),0 18px 40px rgba(0,0,0,0.18);display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#18181b">
+  <!-- titlebar -->
+  <div style="display:flex;align-items:center;height:38px;padding:0 14px;background:#fafafa;border-bottom:1px solid #e4e4e7;flex:none">
+    <div style="display:flex;gap:8px;width:110px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+    <div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#52525b">アシスタント — acme-app</div>
+    <div style="width:110px"></div>
+  </div>
+  <div style="flex:1;overflow:hidden;padding:20px 24px;display:flex;flex-direction:column;gap:14px">
+    <!-- user message -->
+    <div style="border:1px solid #e4e4e7;border-radius:8px;padding:10px 14px;background:#fafafa">
+      <div style="font-size:11px;color:#a1a1aa;margin-bottom:4px">あなた · 14:02</div>
+      <div style="line-height:1.6">ログインフォームでバリデーションエラーが表示されないバグを修正して</div>
+    </div>
+    <!-- run card -->
+    <div style="border:1px solid #e4e4e7;border-radius:10px;overflow:hidden">
+      <!-- header -->
+      <div style="display:flex;align-items:center;gap:10px;padding:11px 16px;background:#fafafa;border-bottom:1px solid #e4e4e7">
+        <span style="width:8px;height:8px;border-radius:50%;background:#2563eb;box-shadow:0 0 0 3px #dbeafe"></span>
+        <span style="font-size:13px;font-weight:600">実行中 — 検証フェーズ</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">経過 24秒</span>
+        <span style="flex:1"></span>
+        <span style="font-size:11px;color:#dc2626;border:1px solid #fecaca;border-radius:5px;padding:3px 10px;background:#ffffff">停止</span>
+      </div>
+      <!-- pipeline -->
+      <div style="display:flex;align-items:center;gap:8px;padding:14px 16px;border-bottom:1px solid #f4f4f5">
+        <span style="display:flex;align-items:center;gap:6px;font-size:12px;color:#166534;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:99px;padding:4px 12px"><span style="font-size:11px">✓</span>調査</span>
+        <span style="width:20px;height:1px;background:#d4d4d8"></span>
+        <span style="display:flex;align-items:center;gap:6px;font-size:12px;color:#166534;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:99px;padding:4px 12px"><span style="font-size:11px">✓</span>修正</span>
+        <span style="width:20px;height:1px;background:#d4d4d8"></span>
+        <span style="display:flex;align-items:center;gap:6px;font-size:12px;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:99px;padding:4px 12px;font-weight:600"><span style="width:6px;height:6px;border-radius:50%;background:#2563eb"></span>検証</span>
+        <span style="width:20px;height:1px;background:#e4e4e7"></span>
+        <span style="font-size:12px;color:#a1a1aa;border:1px dashed #d4d4d8;border-radius:99px;padding:4px 12px">報告</span>
+      </div>
+      <!-- phase: 調査 collapsed -->
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid #f4f4f5">
+        <span style="font-size:10px;color:#a1a1aa">▸</span>
+        <span style="font-size:12px;font-weight:600;color:#52525b;width:44px">調査</span>
+        <span style="font-size:12px;color:#71717a;flex:1">2 ツール実行 · 3 ファイル参照 — 原因を set_error の通知漏れと特定</span>
+        <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">6.2s</span>
+      </div>
+      <!-- phase: 修正 expanded -->
+      <div style="padding:10px 16px 14px;border-bottom:1px solid #f4f4f5">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+          <span style="font-size:10px;color:#a1a1aa">▾</span>
+          <span style="font-size:12px;font-weight:600;color:#52525b;width:44px">修正</span>
+          <span style="font-size:12px;color:#71717a;flex:1">1 ファイル変更</span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">3.8s</span>
+        </div>
+        <div style="border:1px solid #e4e4e7;border-radius:6px;overflow:hidden;margin-left:26px">
+          <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;background:#fafafa;border-bottom:1px solid #e4e4e7">
+            <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;font-weight:600;flex:1">src/ui/login_form.rs</span>
+            <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#16a34a">+2</span>
+            <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#dc2626">−1</span>
+          </div>
+          <div style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;line-height:1.7;padding:6px 0">
+            <div style="display:flex;gap:12px;padding:0 12px;background:#fef2f2;color:#991b1b"><span style="color:#fca5a5;width:14px;text-align:right;flex:none">−</span><span>self.error = err;</span></div>
+            <div style="display:flex;gap:12px;padding:0 12px;background:#f0fdf4;color:#166534"><span style="color:#86efac;width:14px;text-align:right;flex:none">+</span><span>self.error = err;</span></div>
+            <div style="display:flex;gap:12px;padding:0 12px;background:#f0fdf4;color:#166534"><span style="color:#86efac;width:14px;text-align:right;flex:none">+</span><span>cx.notify();</span></div>
+          </div>
+        </div>
+      </div>
+      <!-- phase: 検証 active -->
+      <div style="padding:10px 16px 16px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+          <span style="font-size:10px;color:#a1a1aa">▾</span>
+          <span style="font-size:12px;font-weight:600;color:#1d4ed8;width:44px">検証</span>
+          <span style="font-size:12px;color:#71717a;flex:1">cargo test を実行中…</span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#a1a1aa">14s</span>
+        </div>
+        <div style="margin-left:26px;display:flex;flex-direction:column;gap:8px">
+          <div style="display:flex;align-items:center;gap:10px;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#3f3f46">
+            <span>$ cargo test -p acme-ui login_form</span>
+            <span style="flex:1"></span>
+            <span style="color:#71717a">8 / 12</span>
+          </div>
+          <div style="height:4px;border-radius:99px;background:#f4f4f5;overflow:hidden"><span style="display:block;width:66%;height:100%;border-radius:99px;background:#2563eb"></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <!-- composer -->
+  <div style="padding:0 20px 18px;flex:none">
+    <div style="border:1px solid #d4d4d8;border-radius:10px;padding:10px 12px 8px;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
+      <div style="font-size:13px;color:#a1a1aa;padding:0 2px 10px">実行中でも追加の指示を送れます…</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:#71717a;border:1px solid #e4e4e7;border-radius:5px;padding:3px 8px">claude-sonnet-4 <span style="font-size:9px">▾</span></span>
+        <span style="flex:1"></span>
+        <span style="width:26px;height:26px;border-radius:50%;background:#2563eb;color:#ffffff;display:flex;align-items:center;justify-content:center;font-size:13px">↑</span>
+      </div>
+    </div>
+  </div>
+</div></div></div>
+
+</div>
+<p class="dv-next">次の例: 「<a class="dv-oid" href="#1a">1a</a> をベースに <a class="dv-oid" href="#1b">1b</a> のステップ番号ガターを足して」 · 「<a class="dv-oid" href="#1c">1c</a> の完了状態も見たい」 · 「ダーク版も並べて」</p>
+</section>
+</x-dc>
+</body>
+</html>
+
