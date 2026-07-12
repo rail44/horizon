@@ -389,3 +389,17 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     wait for the flush to settle (poll with a timeout rather than reading once),
     or serialize these respawn e2e tests via a nextest test-group so they don't
     contend. Recorded 2026-07-09.
+28. **`horizon-sessiond` socket e2e flakes under the full parallel nextest
+    run** — `terminal_create_diff_reconnect_attach_and_shutdown_over_the_
+    real_socket` (`crates/horizon-sessiond`, e2e) intermittently fails on a
+    ~10s timeout inside `cargo nextest run --workspace`, yet passes
+    instantly (~0.08s) standalone and on full-suite re-runs. Hit 3-4 times
+    on 2026-07-12 across worker gates and integration-merge gates; an early
+    "another live Horizon instance caused contention" theory was
+    disproven when it fired with no concurrent instance running. Same
+    shape as backlog-27 (agentd respawn e2e flakes): parallel-suite
+    resource contention around real sockets, with the same fix options —
+    poll-with-timeout instead of a fixed deadline, or a nextest
+    test-group serializing the socket e2e tests. Disruptive for the same
+    reason: it fails integration gates for unrelated merges. Recorded
+    2026-07-12.
