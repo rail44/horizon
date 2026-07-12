@@ -403,3 +403,15 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     test-group serializing the socket e2e tests. Disruptive for the same
     reason: it fails integration gates for unrelated merges. Recorded
     2026-07-12.
+29. **Git dependencies carry no `rev` pins in Cargo.toml — Cargo.lock is
+    the only pin** — the root `Cargo.toml` declares `gpui`, `gpui_platform`,
+    `gpui-component`, and `gpui-component-assets` as bare `git = ...` deps
+    with no `rev`/`tag`. Any `cargo generate-lockfile` / `cargo update`
+    therefore silently re-resolves every git dep to its current HEAD, as
+    observed during the gpui-ce drop-in spike
+    (`docs/research/gpui-ce-drop-in-spike.md` §3): non-patched zed crates
+    jumped from the `5f8a741` pin to zed's 2026-07-12 HEAD mid-experiment.
+    Given the known rev×toolchain coupling pain (gpui-migration-design.md's
+    termy/pathfinder note), pin explicit `rev =` values in Cargo.toml so
+    the pin survives lockfile regeneration and is visible in review diffs.
+    Small mechanical task. Recorded 2026-07-12.
