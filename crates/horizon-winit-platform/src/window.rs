@@ -165,10 +165,16 @@ impl WinitWindowInner {
     }
 
     /// Drives a winit `Ime` event into gpui's `EntityInputHandler` pipeline
-    /// through the same three calls gpui_linux's wayland backend makes from
+    /// through the same calls gpui_linux's wayland backend makes from
     /// `zwp_text_input_v3::Event` (`replace_and_mark_text_in_range` for
-    /// preedit, `replace_text_in_range` for commit, `unmark_text` for
-    /// clearing) — see module docs.
+    /// preedit, `replace_text_in_range` for commit) — see module docs.
+    /// `unmark_text` is *not* called from a `Commit`, on either backend:
+    /// gpui_linux's own `ImeInput::InsertText` handler
+    /// (`window.rs::handle_ime` in the pinned checkout) is exactly
+    /// `replace_text_in_range(None, &text)`, nothing else — see the
+    /// `Ime::Preedit` arm below for why unmarking there (rather than
+    /// letting `Commit`'s own `replace_text_in_range` consume the marked
+    /// range) causes a double-insert.
     ///
     /// Candidate-window positioning (`set_ime_cursor_area`) only fires for
     /// a *non-empty* `Preedit` — i.e. only while a composition is genuinely
@@ -212,7 +218,48 @@ impl WinitWindowInner {
                 // backend doesn't itself provide.
                 self.state.borrow_mut().ime_composing = !text.is_empty();
                 if text.is_empty() {
-                    input_handler.unmark_text();
+                    // Deliberately does *not* call `unmark_text()` here.
+                    // winit consistently emits an empty `Preedit`
+                    // immediately before the `Commit` that finalizes a
+                    // composition (documented and reproduced directly in
+                    // docs/research/winit-backend-spike.md §16 Q2: "the
+                    // order Preedit("", None) -> Commit(text) was
+                    // consistent" across every observed log). Unmarking
+                    // here would clear the active input handler's marked
+                    // range before `Commit`'s own `replace_text_in_range`
+                    // gets a chance to use it as *its* replacement target.
+                    // Both `EntityInputHandler` implementations this
+                    // crate drives (this crate's own terminal, and
+                    // gpui-component's `InputState` behind the agent
+                    // composer — verified directly against the pinned
+                    // checkout's `crates/ui/src/input/state.rs`) resolve a
+                    // `None` range to the *current marked range* if one is
+                    // set, falling back to the plain text-cursor position
+                    // only when nothing is marked. If we unmark first,
+                    // `Commit`'s `replace_text_in_range(None, text)` falls
+                    // through to that plain-cursor fallback instead — which
+                    // sits right *after* the already-inserted preedit
+                    // content (gpui-component's `unmark_text` clears the
+                    // marked-range bookkeeping but never touches the
+                    // buffer text it already inserted during `Preedit`),
+                    // so the same text gets inserted a second time right
+                    // next to the first. `Commit`'s own
+                    // `replace_text_in_range` already clears the marked
+                    // range as part of doing the replacement in both
+                    // implementations, so there's no leak on the normal
+                    // compose -> commit path. `Ime::Disabled` below still
+                    // explicitly unmarks for "IME turned off mid-
+                    // composition"; a composition cancelled with no commit
+                    // and no `Disabled` (e.g. Escape, depending on the
+                    // IME) can leave a stale marked range until the next
+                    // real edit, which naturally overwrites/consumes it
+                    // via the same None-range-targets-marked-range
+                    // convention — narrow, self-healing visual staleness,
+                    // clearly preferable to silently duplicating committed
+                    // text.
+                    input_trace!(
+                        "winit Ime empty Preedit: not unmarking (left for Commit/Disabled to resolve)"
+                    );
                 } else {
                     input_handler.replace_and_mark_text_in_range(None, &text, None);
                     reposition_candidate_window = true;
