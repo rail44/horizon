@@ -147,7 +147,7 @@ impl PlatformDispatcher for WinitDispatcher {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     //! Regression coverage for the wakeup invariant this crate's freeze
-    //! investigation (docs/winit-backend-design.md's "known failure mode"
+    //! investigation (docs/winit-backend-design.md's "Resolved incidents" ("Configure stall")
     //! section) needed to rule out: does `dispatch_on_main_thread` ever
     //! drop a post instead of waking the loop? Root-caused elsewhere (a
     //! Wayland frame-callback ordering bug in `window.rs`, not here), but

@@ -251,7 +251,7 @@ impl WinitWindowInner {
     /// a plain printable key that nothing else handles (the common case
     /// outside kitty "report all keys" mode, see `src/terminal/mod.rs`'s
     /// module doc) was silently dropped instead of ever reaching the
-    /// terminal. See docs/winit-backend-design.md's "text-input fallback"
+    /// terminal. See docs/winit-backend-design.md's "Resolved incidents" ("Keyboard input pipeline", Stage 3)
     /// section for how this was diagnosed (a permanent `input-trace:` trace
     /// facility, driven by the owner's own daily-driver capture) and why
     /// composition-mode input already worked without it (a real
@@ -598,7 +598,7 @@ impl gpui::PlatformWindow for WinitPlatformWindow {
     /// real vsync pacing while focused; the inactive-window ~30fps cap is
     /// gpui's own wall-clock throttle (`min_frame_interval` in
     /// `Window::on_request_frame`'s closure), independent of any platform
-    /// hook. See docs/winit-backend-design.md's "known failure mode" section.
+    /// hook. See docs/winit-backend-design.md's "Resolved incidents" ("Configure stall") section.
     fn completed_frame(&self) {}
 
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
