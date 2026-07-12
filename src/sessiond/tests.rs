@@ -452,7 +452,7 @@ async fn established_disconnect_reports_errors_without_reconnecting() {
     let agent_error = agent.events().recv_timeout(Duration::from_secs(1)).unwrap();
     assert!(matches!(agent_error.event, Event::Error(_)));
 
-    assert!(handle.session_list().is_empty());
+    assert!(handle.session_list().unwrap_err().contains("disconnected"));
     let late_terminal = handle.start_terminal(Uuid::new_v4(), spec());
     assert!(matches!(
         late_terminal

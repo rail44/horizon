@@ -308,11 +308,13 @@ impl SessiondHandle {
         }
     }
 
-    pub(crate) fn session_list(&self) -> Vec<wire::SessionSummary> {
+    pub(crate) fn session_list(&self) -> Result<Vec<wire::SessionSummary>, String> {
         let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
         self.routes.set_pending_session_list(reply_tx);
         self.enqueue_agent(Envelope::control(Control::SessionList));
-        reply_rx.recv().unwrap_or_default()
+        reply_rx
+            .recv()
+            .map_err(|_| "session runtime stopped before the agent list completed".to_string())?
     }
 
     pub(crate) fn drain(&self) {

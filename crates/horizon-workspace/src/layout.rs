@@ -1,4 +1,4 @@
-use super::types::{LayoutChild, LayoutNode, PaneId, SplitAxis};
+use super::types::{LayoutChild, LayoutNode, PaneId, SplitAxis, TabId, Workspace};
 
 /// One child in a `Split`'s rendering plan (see [`split_render_plan`]):
 /// `anchor` is the stable identity `workspace::view`'s recursive renderer
@@ -38,7 +38,65 @@ pub fn split_render_plan(node: &LayoutNode) -> Option<(SplitAxis, Vec<RenderChil
     }
 }
 
+impl Workspace {
+    /// Updates one rendered split from pixel sizes reported by the view.
+    /// `split_anchor` plus the immediate child anchors identifies the split:
+    /// a first-pane anchor alone is insufficient because the first nested
+    /// split shares that anchor with each of its ancestors.
+    pub fn set_split_weights(
+        &mut self,
+        tab_id: TabId,
+        split_anchor: PaneId,
+        child_anchors: &[PaneId],
+        sizes: &[f32],
+    ) -> bool {
+        if sizes.len() != child_anchors.len()
+            || sizes.len() < 2
+            || sizes.iter().any(|size| !size.is_finite() || *size <= 0.0)
+        {
+            return false;
+        }
+        let total: f32 = sizes.iter().sum();
+        if !total.is_finite() || total <= 0.0 {
+            return false;
+        }
+        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
+            return false;
+        };
+        tab.root
+            .set_split_weights(split_anchor, child_anchors, sizes, total)
+    }
+}
+
 impl LayoutNode {
+    fn set_split_weights(
+        &mut self,
+        split_anchor: PaneId,
+        expected_child_anchors: &[PaneId],
+        sizes: &[f32],
+        total: f32,
+    ) -> bool {
+        let Self::Split { children, .. } = self else {
+            return false;
+        };
+        let own_anchor = children.first().and_then(|child| child.node.first_pane());
+        let child_anchors: Vec<_> = children
+            .iter()
+            .filter_map(|child| child.node.first_pane())
+            .collect();
+        if own_anchor == Some(split_anchor) && child_anchors == expected_child_anchors {
+            for (child, size) in children.iter_mut().zip(sizes) {
+                child.weight = *size / total;
+            }
+            return true;
+        }
+        children.iter_mut().any(|child| {
+            child
+                .node
+                .set_split_weights(split_anchor, expected_child_anchors, sizes, total)
+        })
+    }
+
     pub fn pane_ids(&self) -> Vec<PaneId> {
         match self {
             Self::Pane(pane_id) => vec![*pane_id],
@@ -244,6 +302,85 @@ impl LayoutNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{PaneKind, SessionId};
+
+    #[test]
+    fn set_split_weights_normalizes_view_sizes() {
+        let mut workspace = Workspace::mvp();
+        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        let tab_id = workspace.active_tab;
+        let root = &workspace.tabs[0].root;
+        let anchors: Vec<_> = match root {
+            LayoutNode::Split { children, .. } => children
+                .iter()
+                .map(|child| child.node.first_pane().expect("pane"))
+                .collect(),
+            LayoutNode::Pane(_) => panic!("expected split"),
+        };
+
+        assert!(workspace.set_split_weights(tab_id, anchors[0], &anchors, &[300.0, 100.0]));
+        let weights: Vec<_> = match &workspace.tabs[0].root {
+            LayoutNode::Split { children, .. } => {
+                children.iter().map(|child| child.weight).collect()
+            }
+            LayoutNode::Pane(_) => panic!("expected split"),
+        };
+        assert_eq!(weights, vec![0.75, 0.25]);
+    }
+
+    #[test]
+    fn set_split_weights_uses_child_anchors_to_disambiguate_nested_splits() {
+        let mut workspace = Workspace::mvp();
+        let first = workspace.active_tab().expect("tab").active;
+        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        workspace.activate_pane(first);
+        workspace.split_session_with_new_session(
+            workspace.active_session_id().expect("session"),
+            PaneKind::Agent,
+            SplitAxis::Vertical,
+            true,
+        );
+        let tab_id = workspace.active_tab;
+        let root = &workspace.tabs[0].root;
+        let (nested_anchor, nested_children) = match root {
+            LayoutNode::Split { children, .. } => match &children[0].node {
+                LayoutNode::Split { children, .. } => (
+                    children[0].node.first_pane().expect("anchor"),
+                    children
+                        .iter()
+                        .map(|child| child.node.first_pane().expect("child anchor"))
+                        .collect::<Vec<_>>(),
+                ),
+                LayoutNode::Pane(_) => panic!("expected nested split"),
+            },
+            LayoutNode::Pane(_) => panic!("expected root split"),
+        };
+
+        assert!(workspace.set_split_weights(tab_id, nested_anchor, &nested_children, &[1.0, 3.0]));
+        let nested_weights = match &workspace.tabs[0].root {
+            LayoutNode::Split { children, .. } => match &children[0].node {
+                LayoutNode::Split { children, .. } => children
+                    .iter()
+                    .map(|child| child.weight)
+                    .collect::<Vec<_>>(),
+                LayoutNode::Pane(_) => panic!("expected nested split"),
+            },
+            LayoutNode::Pane(_) => panic!("expected root split"),
+        };
+        assert_eq!(nested_weights, vec![0.25, 0.75]);
+    }
+
+    #[test]
+    fn set_split_weights_rejects_invalid_measurements_without_mutating() {
+        let mut workspace = Workspace::mvp();
+        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        let tab_id = workspace.active_tab;
+        let anchors = workspace.tabs[0].root.pane_ids();
+        let before = weights(&workspace.tabs[0].root);
+        assert!(!workspace.set_split_weights(tab_id, anchors[0], &anchors, &[1.0]));
+        assert!(!workspace.set_split_weights(tab_id, anchors[0], &anchors, &[f32::NAN, 1.0]));
+        assert_eq!(weights(&workspace.tabs[0].root), before);
+    }
 
     fn weights(node: &LayoutNode) -> Vec<f32> {
         match node {

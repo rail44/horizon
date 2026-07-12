@@ -24,7 +24,7 @@ pub(super) struct Routes {
 struct RouteState {
     agent: HashMap<contract::SessionId, Sender<ProviderEvent>>,
     terminal: HashMap<Uuid, Sender<TerminalUpdate>>,
-    pending_session_list: Option<Sender<Vec<wire::SessionSummary>>>,
+    pending_session_list: Option<Sender<Result<Vec<wire::SessionSummary>, String>>>,
     pending_terminal_lists: HashMap<Uuid, Sender<Result<Vec<TerminalSummary>, String>>>,
     pending_terminal_attaches: HashMap<Uuid, (Uuid, Sender<Result<TerminalAttachResult, String>>)>,
     failure: Option<String>,
@@ -77,10 +77,13 @@ impl Routes {
         self.state.lock().unwrap().terminal.remove(&session_id);
     }
 
-    pub(super) fn set_pending_session_list(&self, sender: Sender<Vec<wire::SessionSummary>>) {
+    pub(super) fn set_pending_session_list(
+        &self,
+        sender: Sender<Result<Vec<wire::SessionSummary>, String>>,
+    ) {
         let mut state = self.state.lock().unwrap();
-        if state.failure.is_some() {
-            let _ = sender.send(Vec::new());
+        if let Some(message) = state.failure.clone() {
+            let _ = sender.send(Err(message));
             return;
         }
         state.pending_session_list = Some(sender);
@@ -217,7 +220,7 @@ impl Routes {
             }
             EnvelopeBody::Control(Control::SessionListResult(summaries)) => {
                 if let Some(reply) = self.state.lock().unwrap().pending_session_list.take() {
-                    let _ = reply.send(summaries);
+                    let _ = reply.send(Ok(summaries));
                 }
             }
             EnvelopeBody::Control(_) | EnvelopeBody::Command(_) => {}
@@ -260,7 +263,7 @@ impl Routes {
             })));
         }
         if let Some(reply) = pending {
-            let _ = reply.send(Vec::new());
+            let _ = reply.send(Err(message.clone()));
         }
         for reply in terminal_lists {
             let _ = reply.send(Err(message.clone()));

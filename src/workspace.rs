@@ -13,15 +13,17 @@
 //! [`RunCommand`] to [`WorkspaceShell::execute`] instead of a
 //! model-call handler.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::list::{List, ListEvent, ListState};
 use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable, ResizablePanelGroup};
 use horizon_workspace::commands::{command_entries, CommandId, CommandState};
-use horizon_workspace::types::LayoutNode;
-use horizon_workspace::{Direction, PaneId, PaneKind, SplitAxis, Workspace};
+use horizon_workspace::types::{LayoutNode, TabId};
+use horizon_workspace::{
+    Direction, PaneId, PaneKind, SessionInventory, SplitAxis, Workspace, WORKSPACE_STATE_VERSION,
+};
 
 use crate::agent::{AgentSession, AgentView};
 use crate::keymap;
@@ -32,6 +34,7 @@ use crate::terminal::{TerminalSession, TerminalView};
 use crate::terminal_focus::focus_transition;
 use crate::theme;
 use crate::view_chooser::{Placement, ViewChooserDelegate};
+use crate::workspace_state::{InvalidState, LoadResult, WorkspaceStateStore};
 use horizon_terminal_core::{
     TerminalCommand, TerminalCoreOptions, TerminalSize, TerminalSpawnSpec,
 };
@@ -63,6 +66,19 @@ fn prepare_workspace_for_runtime_reload(workspace: &mut Workspace) {
     }
 }
 
+fn ensure_workspace_has_pane(workspace: &mut Workspace) -> Option<SessionId> {
+    (workspace.tab_count() == 0)
+        .then(|| workspace.open_tab_with_new_session_activated(PaneKind::Terminal, true))
+}
+
+fn command_blocked_by_restore(restoring: bool, failed: bool, id: CommandId) -> bool {
+    restoring && !(failed && id == CommandId::ReloadSessionRuntime)
+}
+
+fn workspace_mode_blocked_by_restore(restoring: bool, failed: bool) -> bool {
+    restoring && !failed
+}
+
 fn terminal_spawn_source(
     explicit_source: Option<SessionId>,
     active_session: Option<SessionId>,
@@ -91,6 +107,42 @@ fn terminal_resume_candidates(
             (!known.contains(&id) && seen.insert(id)).then_some(summary.session_id)
         })
         .collect()
+}
+
+fn load_workspace_state(store: &mut WorkspaceStateStore) -> (Workspace, bool, bool) {
+    match store.load(u64::from(WORKSPACE_STATE_VERSION)) {
+        Ok(LoadResult::Valid(json)) => match Workspace::from_persisted_json(&json) {
+            Ok(workspace) => (workspace, true, false),
+            Err(horizon_workspace::WorkspaceStateError::UnsupportedVersion {
+                found,
+                supported,
+            }) => {
+                eprintln!(
+                    "workspace state version {found} is unsupported (expected {supported}); preserving the file"
+                );
+                (Workspace::mvp(), false, false)
+            }
+            Err(error) => {
+                eprintln!("ignoring invalid workspace state: {error}");
+                (Workspace::mvp(), false, true)
+            }
+        },
+        Ok(LoadResult::Missing) => (Workspace::mvp(), false, true),
+        Ok(LoadResult::Invalid(InvalidState::UnsupportedVersion { found, supported })) => {
+            eprintln!(
+                "workspace state version {found} is unsupported (expected {supported}); preserving the file"
+            );
+            (Workspace::mvp(), false, false)
+        }
+        Ok(LoadResult::Invalid(InvalidState::Corrupt(error))) => {
+            eprintln!("ignoring corrupt workspace state: {error}");
+            (Workspace::mvp(), false, true)
+        }
+        Err(error) => {
+            eprintln!("failed to load workspace state: {error}");
+            (Workspace::mvp(), false, false)
+        }
+    }
 }
 
 /// One pane's view, by session kind.
@@ -245,6 +297,10 @@ pub fn init(cx: &mut App) {
 
 pub struct WorkspaceShell {
     workspace: Workspace,
+    workspace_state: WorkspaceStateStore,
+    persistence_ready: bool,
+    restoring_workspace: bool,
+    workspace_restore_failed: bool,
     // This instance's control socket — every spawned pane gets it as
     // HORIZON_SOCKET so CLIs invoked inside reach back here.
     socket_path: std::path::PathBuf,
@@ -297,10 +353,17 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let mut workspace_state = WorkspaceStateStore::from_environment();
+        let (workspace, restoring_workspace, persistence_ready) =
+            load_workspace_state(&mut workspace_state);
         let (sessiond, host_tool_rx) =
             SessiondHandle::start(&horizon_agent::socket::default_socket_path(), &socket_path);
         let mut shell = Self {
-            workspace: Workspace::mvp(),
+            workspace,
+            workspace_state,
+            persistence_ready,
+            restoring_workspace,
+            workspace_restore_failed: false,
             socket_path,
             sessions: HashMap::new(),
             agent_sessions: HashMap::new(),
@@ -329,11 +392,43 @@ impl WorkspaceShell {
         })
         .detach();
         shell.wire_host_tools(sessiond.responder(), host_tool_rx, cx);
-        shell.reconcile(window, cx);
-        shell.focus_active(window, cx);
-        shell.spawn_terminal_resume(sessiond.clone(), cx);
-        shell.spawn_agent_resume(sessiond, cx);
+        if shell.restoring_workspace {
+            shell.spawn_workspace_restore(sessiond, cx);
+        } else {
+            shell.reconcile(window, cx);
+            shell.focus_active(window, cx);
+            shell.spawn_terminal_resume(sessiond.clone(), cx);
+            shell.spawn_agent_resume(sessiond, cx);
+        }
         shell
+    }
+
+    fn persist_workspace(&mut self) {
+        if !self.persistence_ready || self.restoring_workspace {
+            return;
+        }
+        let json = match self.workspace.to_persisted_json() {
+            Ok(json) => json,
+            Err(error) => {
+                eprintln!("workspace state is not persistable: {error}");
+                return;
+            }
+        };
+        if let Err(error) = self.workspace_state.save(&json) {
+            eprintln!(
+                "failed to save workspace state to {}: {error}",
+                self.workspace_state.path().display()
+            );
+        }
+    }
+
+    fn fail_workspace_restore(&mut self, error: impl std::fmt::Display, cx: &mut Context<Self>) {
+        if !self.restoring_workspace {
+            return;
+        }
+        eprintln!("workspace restore failed: {error}");
+        self.workspace_restore_failed = true;
+        cx.notify();
     }
 
     /// Bring the session store and the PaneId → view map in line with
@@ -426,6 +521,7 @@ impl WorkspaceShell {
                 );
             }
         }
+        self.persist_workspace();
         cx.notify();
     }
 
@@ -495,8 +591,13 @@ impl WorkspaceShell {
         });
         cx.spawn(async move |this, cx| {
             use futures::StreamExt as _;
-            let Some(summaries) = startup_rx.next().await else {
-                return;
+            let summaries = match startup_rx.next().await {
+                Some(Ok(summaries)) => summaries,
+                Some(Err(error)) => {
+                    eprintln!("failed to list agent sessions: {error}");
+                    Vec::new()
+                }
+                None => Vec::new(),
             };
             let _ = window_handle.update(cx, |_, window, cx| {
                 let _ = this.update(cx, |shell, cx| {
@@ -531,6 +632,187 @@ impl WorkspaceShell {
                             cx.new(|cx| AgentSession::new(session_handle, cx)),
                         );
                     }
+                    shell.reconcile(window, cx);
+                    shell.focus_active(window, cx);
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// Restores a persisted workspace only after both domain inventories are
+    /// authoritative and every retained terminal has acknowledged Attach.
+    /// Until this barrier opens, normal reconcile must not see the saved ids:
+    /// it would interpret a missing entity as a request to create a new
+    /// process with that id.
+    fn spawn_workspace_restore(&self, handle: SessiondHandle, cx: &mut Context<Self>) {
+        let window_handle = self.window;
+        let (list_tx, mut list_rx) = futures::channel::mpsc::unbounded();
+        let list_handle = handle.clone();
+        std::thread::spawn(move || {
+            let result = (|| {
+                let terminals = list_handle.terminal_list()?;
+                let agents = list_handle.session_list()?;
+                Ok::<_, String>((terminals, agents))
+            })();
+            let _ = list_tx.unbounded_send(result);
+        });
+        cx.spawn(async move |this, cx| {
+            use futures::StreamExt as _;
+            let (terminal_summaries, agent_summaries) = match list_rx.next().await {
+                Some(Ok(summaries)) => summaries,
+                Some(Err(error)) => {
+                    let _ = this.update(cx, |shell, cx| {
+                        shell.fail_workspace_restore(error, cx);
+                    });
+                    return;
+                }
+                None => {
+                    let _ = this.update(cx, |shell, cx| {
+                        shell.fail_workspace_restore("inventory worker stopped", cx);
+                    });
+                    return;
+                }
+            };
+
+            let candidates = this
+                .update(cx, |shell, _| {
+                    let adopted = shell.sessiond.as_ref()?;
+                    if !adopted.same_runtime(&handle) {
+                        return None;
+                    }
+
+                    let expected: HashMap<_, _> = shell
+                        .workspace
+                        .session_summaries()
+                        .into_iter()
+                        .map(|summary| (summary.id.as_uuid(), summary.kind))
+                        .collect();
+                    let terminal_ids: HashSet<_> = terminal_summaries
+                        .into_iter()
+                        .map(|summary| summary.session_id)
+                        .collect();
+                    let agent_ids: HashSet<_> = agent_summaries
+                        .into_iter()
+                        .map(|summary| summary.session_id.as_uuid())
+                        .collect();
+                    let conflicts: HashSet<_> =
+                        terminal_ids.intersection(&agent_ids).copied().collect();
+                    for id in &conflicts {
+                        eprintln!(
+                            "ignoring session {id}: it appears in both terminal and agent inventories"
+                        );
+                    }
+
+                    let terminals = terminal_ids
+                        .into_iter()
+                        .filter(|id| !conflicts.contains(id))
+                        .filter(|id| {
+                            let matches = expected
+                                .get(id)
+                                .is_none_or(|kind| *kind == SessionKind::Terminal);
+                            if !matches {
+                                eprintln!(
+                                    "ignoring terminal session {id}: persisted kind is agent"
+                                );
+                            }
+                            matches
+                        })
+                        .collect::<Vec<_>>();
+                    let agents = agent_ids
+                        .into_iter()
+                        .filter(|id| !conflicts.contains(id))
+                        .filter(|id| {
+                            let matches = expected
+                                .get(id)
+                                .is_none_or(|kind| *kind == SessionKind::Agent);
+                            if !matches {
+                                eprintln!(
+                                    "ignoring agent session {id}: persisted kind is terminal"
+                                );
+                            }
+                            matches
+                        })
+                        .collect::<Vec<_>>();
+                    Some((terminals, agents))
+                })
+                .ok()
+                .flatten();
+            let Some((terminal_ids, agent_ids)) = candidates else {
+                return;
+            };
+
+            let (attach_tx, mut attach_rx) = futures::channel::mpsc::unbounded();
+            let attach_handle = handle.clone();
+            std::thread::spawn(move || {
+                let terminals = attach_handle.attach_terminals(terminal_ids);
+                let agents = agent_ids
+                    .into_iter()
+                    .map(|id| {
+                        let session_id = AgentSessionId::from_uuid(id);
+                        (id, attach_handle.attach_session(session_id))
+                    })
+                    .collect::<Vec<_>>();
+                let _ = attach_tx.unbounded_send((terminals, agents));
+            });
+            let Some((terminals, agents)) = attach_rx.next().await else {
+                let _ = this.update(cx, |shell, cx| {
+                    shell.fail_workspace_restore("attach worker stopped", cx);
+                });
+                return;
+            };
+
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = this.update(cx, |shell, cx| {
+                    let Some(adopted) = shell.sessiond.as_ref() else {
+                        return;
+                    };
+                    if !adopted.same_runtime(&handle) {
+                        return;
+                    }
+
+                    let inventory = SessionInventory::new(
+                        terminals
+                            .iter()
+                            .map(|(id, _)| SessionId::from_uuid(*id))
+                            .collect(),
+                        agents
+                            .iter()
+                            .map(|(id, _)| SessionId::from_uuid(*id))
+                            .collect(),
+                    );
+                    if let Err(error) = shell.workspace.reconcile_session_inventory(&inventory) {
+                        shell.fail_workspace_restore(
+                            format_args!("inventory is invalid: {error}"),
+                            cx,
+                        );
+                        return;
+                    }
+
+                    for (id, wire) in terminals {
+                        let session_id = SessionId::from_uuid(id);
+                        if shell.workspace.session_pane_kind(session_id)
+                            == Some(PaneKind::Terminal)
+                        {
+                            shell.sessions.insert(
+                                session_id,
+                                cx.new(|cx| TerminalSession::spawn(wire, cx)),
+                            );
+                        }
+                    }
+                    for (id, wire) in agents {
+                        let session_id = SessionId::from_uuid(id);
+                        if shell.workspace.session_pane_kind(session_id) == Some(PaneKind::Agent) {
+                            shell.agent_sessions.insert(
+                                session_id,
+                                cx.new(|cx| AgentSession::new(wire, cx)),
+                            );
+                        }
+                    }
+
+                    shell.restoring_workspace = false;
+                    shell.workspace_restore_failed = false;
+                    shell.persistence_ready = true;
                     shell.reconcile(window, cx);
                     shell.focus_active(window, cx);
                 });
@@ -645,6 +927,7 @@ impl WorkspaceShell {
                 return;
             }
             let _ = this.update(cx, |shell, cx| {
+                ensure_workspace_has_pane(&mut shell.workspace);
                 let (handle, host_tool_rx) =
                     SessiondHandle::start(&restart_socket, &control_socket);
                 shell.sessiond = Some(handle.clone());
@@ -665,6 +948,7 @@ impl WorkspaceShell {
             window.focus(&view.focus_handle(cx), cx);
         }
         self.sync_terminal_focus(window, cx);
+        self.persist_workspace();
     }
 
     /// Composes Horizon's own window focus with which pane is active into
@@ -680,6 +964,9 @@ impl WorkspaceShell {
     /// pane ([`Self::focus_active`], [`Self::activate_pane`]) and from
     /// the window-activation observer registered in [`Self::new`].
     fn sync_terminal_focus(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.restoring_workspace {
+            return;
+        }
         let (unfocus, focus) = focus_transition(
             window.is_window_active(),
             self.workspace.active_terminal_session_id(),
@@ -707,6 +994,12 @@ impl WorkspaceShell {
     }
 
     fn toggle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if workspace_mode_blocked_by_restore(
+            self.restoring_workspace,
+            self.workspace_restore_failed,
+        ) {
+            return;
+        }
         if self.workspace.is_workspace_mode_active() {
             self.workspace.cancel_workspace_mode();
             self.focus_active(window, cx);
@@ -718,17 +1011,35 @@ impl WorkspaceShell {
     }
 
     fn mode_move(&mut self, direction: Direction, cx: &mut Context<Self>) {
+        if workspace_mode_blocked_by_restore(
+            self.restoring_workspace,
+            self.workspace_restore_failed,
+        ) {
+            return;
+        }
         self.workspace.move_cursor(direction);
         cx.notify();
     }
 
     fn mode_commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if workspace_mode_blocked_by_restore(
+            self.restoring_workspace,
+            self.workspace_restore_failed,
+        ) {
+            return;
+        }
         self.workspace.commit_workspace_mode();
         self.focus_active(window, cx);
         cx.notify();
     }
 
     fn mode_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if workspace_mode_blocked_by_restore(
+            self.restoring_workspace,
+            self.workspace_restore_failed,
+        ) {
+            return;
+        }
         self.workspace.cancel_workspace_mode();
         self.focus_active(window, cx);
         cx.notify();
@@ -786,6 +1097,9 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.restoring_workspace {
+            return;
+        }
         self.workspace.exit_workspace_mode();
         let terminal_spawn =
             matches!(kind, PaneKind::Terminal).then(|| self.pending_terminal_spawn(None));
@@ -871,6 +1185,9 @@ impl WorkspaceShell {
     /// later the control plane) funnels through here — the GPUI
     /// counterpart of the Floem shell's `execute_command`.
     fn execute(&mut self, id: CommandId, window: &mut Window, cx: &mut Context<Self>) {
+        if command_blocked_by_restore(self.restoring_workspace, self.workspace_restore_failed, id) {
+            return;
+        }
         match id {
             CommandId::SplitRight => self.open_view_chooser(Placement::SplitRight, window, cx),
             CommandId::SplitDown => self.open_view_chooser(Placement::SplitDown, window, cx),
@@ -938,7 +1255,16 @@ impl WorkspaceShell {
                 }
                 self.reload_in_progress = true;
                 let old = self.sessiond.take();
-                prepare_workspace_for_runtime_reload(&mut self.workspace);
+                if self.workspace_restore_failed {
+                    self.workspace = Workspace::mvp();
+                    self.restoring_workspace = false;
+                    self.workspace_restore_failed = false;
+                    self.persistence_ready = true;
+                    self.persist_workspace();
+                } else {
+                    prepare_workspace_for_runtime_reload(&mut self.workspace);
+                    self.persist_workspace();
+                }
                 self.pending_terminal_spawns.clear();
                 self.sessions.clear();
                 self.agent_sessions.clear();
@@ -1049,6 +1375,9 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        if self.restoring_workspace {
+            return Err("workspace restore is still in progress".to_string());
+        }
         let terminal_spawn = matches!(kind, PaneKind::Terminal)
             .then(|| self.pending_terminal_spawn(split.map(|(target, _)| target)));
         let session_id = match split {
@@ -1085,6 +1414,9 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        if self.restoring_workspace {
+            return Err("workspace restore is still in progress".to_string());
+        }
         self.workspace
             .attach_existing_session_to_split_activated(session_id, activate)
             .ok_or_else(|| "unknown session".to_string())?;
@@ -1101,6 +1433,9 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        if self.restoring_workspace {
+            return Err("workspace restore is still in progress".to_string());
+        }
         if !self.workspace.terminate_session(session_id) {
             return Err("unknown session".to_string());
         }
@@ -1158,6 +1493,9 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.restoring_workspace {
+            return;
+        }
         for summary in self.workspace.detached_session_summaries() {
             self.workspace.terminate_session(summary.id);
         }
@@ -1224,6 +1562,9 @@ impl WorkspaceShell {
     }
 
     fn close_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.restoring_workspace {
+            return;
+        }
         self.workspace.exit_workspace_mode();
         // The model detaches the session; in M2 the view (and its PTY)
         // simply drops with it — close-vs-terminate parity needs the M3
@@ -1234,6 +1575,9 @@ impl WorkspaceShell {
     }
 
     fn next_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.restoring_workspace {
+            return;
+        }
         let count = self.workspace.tab_count();
         if count > 1 {
             let next = (self.workspace.active_tab_index() + 1) % count;
@@ -1244,6 +1588,9 @@ impl WorkspaceShell {
     }
 
     fn activate_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.restoring_workspace {
+            return;
+        }
         self.workspace.exit_workspace_mode();
         self.workspace.activate_tab_index(index);
         self.focus_active(window, cx);
@@ -1251,8 +1598,12 @@ impl WorkspaceShell {
     }
 
     fn activate_pane(&mut self, pane_id: PaneId, window: &mut Window, cx: &mut Context<Self>) {
+        if self.restoring_workspace {
+            return;
+        }
         self.workspace.activate_pane(pane_id);
         self.sync_terminal_focus(window, cx);
+        self.persist_workspace();
         cx.notify();
     }
 
@@ -1282,7 +1633,13 @@ impl WorkspaceShell {
             }))
     }
 
-    fn render_node(&self, node: &LayoutNode, path: String, cx: &mut Context<Self>) -> AnyElement {
+    fn render_node(
+        &self,
+        tab_id: TabId,
+        node: &LayoutNode,
+        path: String,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         match node {
             LayoutNode::Pane(pane_id) => {
                 let pane_id = *pane_id;
@@ -1297,6 +1654,12 @@ impl WorkspaceShell {
                     rgb(theme::background())
                 };
                 let view = self.panes.get(&pane_id).cloned();
+                let restoring = self.restoring_workspace && view.is_none();
+                let restore_label = if self.workspace_restore_failed {
+                    "Workspace restore failed"
+                } else {
+                    "Restoring session..."
+                };
                 div()
                     .size_full()
                     .border_1()
@@ -1308,6 +1671,14 @@ impl WorkspaceShell {
                         }),
                     )
                     .children(view.map(|view| view.element()))
+                    .when(restoring, |this| {
+                        this.flex()
+                            .items_center()
+                            .justify_center()
+                            .text_size(px(12.0))
+                            .text_color(rgb(0x8a90a0))
+                            .child(restore_label)
+                    })
                     .into_any_element()
             }
             LayoutNode::Split { axis, children } => {
@@ -1315,10 +1686,41 @@ impl WorkspaceShell {
                     SplitAxis::Horizontal => h_resizable(SharedString::from(path.clone())),
                     SplitAxis::Vertical => v_resizable(SharedString::from(path.clone())),
                 };
+                let child_anchors = children
+                    .iter()
+                    .filter_map(|child| child.node.first_pane())
+                    .collect::<Vec<_>>();
+                let split_anchor = child_anchors[0];
+                let weak_shell = cx.entity().downgrade();
+                let resize_anchors = child_anchors.clone();
+                group = group.on_resize(move |state, _, cx| {
+                    let sizes = state
+                        .read(cx)
+                        .sizes()
+                        .iter()
+                        .map(|size| size.as_f32())
+                        .collect::<Vec<_>>();
+                    let _ = weak_shell.update(cx, |shell, cx| {
+                        if shell.restoring_workspace {
+                            return;
+                        }
+                        if shell.workspace.set_split_weights(
+                            tab_id,
+                            split_anchor,
+                            &resize_anchors,
+                            &sizes,
+                        ) {
+                            shell.persist_workspace();
+                            cx.notify();
+                        }
+                    });
+                });
+                let total_weight = children.iter().map(|child| child.weight).sum::<f32>();
                 for (index, child) in children.iter().enumerate() {
                     let child_element =
-                        self.render_node(&child.node, format!("{path}-{index}"), cx);
-                    group = group.child(resizable_panel().child(child_element));
+                        self.render_node(tab_id, &child.node, format!("{path}-{index}"), cx);
+                    let basis = px(child.weight / total_weight * 1_000.0);
+                    group = group.child(resizable_panel().flex_basis(basis).child(child_element));
                 }
                 group.into_any_element()
             }
@@ -1332,8 +1734,8 @@ impl Render for WorkspaceShell {
         let content = self
             .workspace
             .active_tab()
-            .map(|tab| tab.root.clone())
-            .map(|root| self.render_node(&root, "root".to_string(), cx));
+            .map(|tab| (tab.id, tab.root.clone()))
+            .map(|(tab_id, root)| self.render_node(tab_id, &root, format!("{tab_id:?}-root"), cx));
 
         div()
             .size_full()
@@ -1496,11 +1898,22 @@ impl Render for WorkspaceShell {
 #[cfg(test)]
 mod tests {
     use super::{
+        command_blocked_by_restore, ensure_workspace_has_pane, load_workspace_state,
         prepare_workspace_for_runtime_reload, terminal_fallback_cwd, terminal_resume_candidates,
-        terminal_spawn_source,
+        terminal_spawn_source, workspace_mode_blocked_by_restore,
     };
     use horizon_terminal_core::TerminalSummary;
+    use horizon_workspace::commands::CommandId;
     use horizon_workspace::{PaneKind, SessionId, SessionKind, Workspace};
+
+    use crate::workspace_state::WorkspaceStateStore;
+
+    fn state_path(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "horizon-workspace-shell-{label}-{}.json",
+            uuid::Uuid::new_v4()
+        ))
+    }
 
     #[test]
     fn explicit_split_target_wins_as_terminal_spawn_source() {
@@ -1555,6 +1968,48 @@ mod tests {
     }
 
     #[test]
+    fn missing_workspace_state_starts_fresh_and_enables_persistence() {
+        let path = state_path("missing");
+        let mut store = WorkspaceStateStore::new(path);
+        let (workspace, restoring, persistence_ready) = load_workspace_state(&mut store);
+
+        assert_eq!(workspace.tab_count(), 1);
+        assert!(!restoring);
+        assert!(persistence_ready);
+    }
+
+    #[test]
+    fn valid_workspace_state_enters_the_restore_barrier() {
+        let path = state_path("valid");
+        let source = Workspace::mvp();
+        let json = source.to_persisted_json().unwrap();
+        let mut store = WorkspaceStateStore::new(path.clone());
+        store.save(&json).unwrap();
+
+        let (workspace, restoring, persistence_ready) = load_workspace_state(&mut store);
+
+        assert_eq!(workspace.to_persisted_json().unwrap(), json);
+        assert!(restoring);
+        assert!(!persistence_ready);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn unsupported_workspace_state_is_never_overwritten() {
+        let path = state_path("newer");
+        let contents = r#"{"version":999}"#;
+        std::fs::write(&path, contents).unwrap();
+        let mut store = WorkspaceStateStore::new(path.clone());
+
+        let (_, restoring, persistence_ready) = load_workspace_state(&mut store);
+
+        assert!(!restoring);
+        assert!(!persistence_ready);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), contents);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn reload_prep_removes_terminals_but_retains_agent_model_and_pane() {
         let mut workspace = Workspace::mvp();
         let agent_id = workspace.open_tab_with_new_session_activated(PaneKind::Agent, true);
@@ -1567,5 +2022,43 @@ mod tests {
         assert_eq!(summaries[0].id, agent_id);
         assert_eq!(summaries[0].kind, SessionKind::Agent);
         assert!(workspace.pane_location_for_session(agent_id).is_some());
+    }
+
+    #[test]
+    fn runtime_reload_reseeds_a_terminal_when_no_pane_survives() {
+        let mut workspace = Workspace::mvp();
+        prepare_workspace_for_runtime_reload(&mut workspace);
+        assert_eq!(workspace.tab_count(), 0);
+
+        let session_id = ensure_workspace_has_pane(&mut workspace).expect("fresh terminal");
+
+        assert_eq!(workspace.active_session_id(), Some(session_id));
+        assert_eq!(
+            workspace.session_pane_kind(session_id),
+            Some(PaneKind::Terminal)
+        );
+    }
+
+    #[test]
+    fn failed_restore_allows_only_the_explicit_runtime_reload_command() {
+        assert!(command_blocked_by_restore(
+            true,
+            false,
+            CommandId::ReloadSessionRuntime
+        ));
+        assert!(command_blocked_by_restore(true, true, CommandId::NewTab));
+        assert!(!command_blocked_by_restore(
+            true,
+            true,
+            CommandId::ReloadSessionRuntime
+        ));
+        assert!(!command_blocked_by_restore(false, false, CommandId::NewTab));
+    }
+
+    #[test]
+    fn failed_restore_allows_workspace_mode_to_reach_the_reload_command() {
+        assert!(workspace_mode_blocked_by_restore(true, false));
+        assert!(!workspace_mode_blocked_by_restore(true, true));
+        assert!(!workspace_mode_blocked_by_restore(false, false));
     }
 }

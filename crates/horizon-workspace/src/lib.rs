@@ -10,6 +10,7 @@ pub mod layout;
 pub mod mode;
 pub mod nav;
 pub mod operations;
+pub mod persistence;
 pub mod query;
 pub mod session;
 mod session_id;
@@ -17,6 +18,10 @@ pub mod snapshot;
 pub mod types;
 
 pub use mode::Direction;
+pub use persistence::{
+    InventoryError, InventoryReconcile, SessionInventory, WorkspaceStateError,
+    WORKSPACE_STATE_VERSION,
+};
 pub use session_id::SessionId;
 pub use types::{PaneId, PaneKind, SessionKind, SplitAxis, Workspace};
 

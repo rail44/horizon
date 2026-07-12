@@ -86,11 +86,19 @@ wave items where possible; design docs on first use.
    fresh terminal immediately, then discovers daemon-retained terminals and
    adopts them as detached Session Manager entries. Terminal listing and
    attach results are request-correlated; stale list entries fail adoption as
-   `NotFound`. Session UUIDs remain stable while UI display numbers remain
-   ephemeral. Exact tab/split/focus/attachment restoration is a separate Step
-   2B workspace-persistence design. Established-connection auto-reconnect and
-   multi-client takeover remain deferred, and `Reload Session Runtime` remains
-   explicitly terminal-destructive.
+   `NotFound`. **Step 2B workspace persistence shipped 2026-07-12**
+   (`docs/workspace-persistence-design.md`): a
+   versioned UI-owned JSON DTO persists tabs, weighted split topology, focus,
+   attachments, detached sessions, display numbers, and titles through
+   synchronous atomic replacement. A saved workspace restores behind an
+   inventory barrier, pruning missing sessions and adopting daemon-only sessions
+   as detached; inventory failure preserves the saved file. Display numbers and
+   titles are now stable across UI restarts, split resize ratios feed back into
+   the durable model, and agent wire remains on protocol v4. The isolated
+   `check-workspace-restore.sh` E2E verifies tabs, splits, stable terminal ids,
+   and restored frames. Established-connection auto-reconnect, concurrent UI owners,
+   and multi-client takeover remain deferred, and `Reload Session Runtime`
+   remains explicitly terminal-destructive.
    **Session relationship model designed 2026-07-07**
    (`docs/session-relationship-design.md`): lineage is a first-class
    layout-orthogonal derivation tree — the same tree worktree

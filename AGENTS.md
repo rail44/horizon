@@ -77,6 +77,11 @@ drives them as a one-shot check (marker text plus 256-color and truecolor
 span assertions). Details live in the `gui-verify` skill
 (`.claude/skills/gui-verify/SKILL.md`).
 
+`scripts/check-workspace-restore.sh` is the isolated UI-restart recovery
+check: it creates two terminal tabs plus a split, restarts the UI against the
+same sessiond and persisted workspace, and verifies stable session ids,
+layout, and a restored terminal frame.
+
 Manual smoke after `cargo run`: press `ctrl+'` to enter workspace mode
 (`docs/workspace-mode-design.md`), then `:` to open the control surface —
 a Commands-only palette; session management (attach/terminate detached

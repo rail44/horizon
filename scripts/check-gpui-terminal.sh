@@ -91,6 +91,8 @@ echo "out=$out"
 
 dump="$out/dump.txt"
 app_log="$out/app.log"
+sessiond_socket="$out/sessiond.sock"
+sessiond_binary="$(dirname "$binary")/horizon-sessiond"
 
 marker="HORIZON_GPUI_CHECK_MARKER"
 # A single line, typed verbatim as PTY input (this script never
@@ -107,12 +109,19 @@ cleanup() {
     kill "$app_pid" 2>/dev/null || true
     wait "$app_pid" 2>/dev/null || true
   fi
+  while read -r pid; do
+    [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
+  done < <(pgrep -f "^${sessiond_binary} --socket ${sessiond_socket}$" 2>/dev/null || true)
 }
 trap cleanup EXIT
 
 HORIZON_GPUI_DUMP="$dump" \
   HORIZON_GPUI_DRIVE="$drive_cmd" \
   HORIZON_GPUI_DRIVE_ENTER=1 \
+  HORIZON_SESSIOND_SOCKET="$sessiond_socket" \
+  HORIZON_AGENT_EVENT_LOG="$out/events.jsonl" \
+  HORIZON_AGENT_STATE_DB="$out/state.duckdb" \
+  HORIZON_WORKSPACE_STATE="$out/workspace.json" \
   "$binary" >"$app_log" 2>&1 &
 app_pid=$!
 

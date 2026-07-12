@@ -30,7 +30,8 @@ launches the binary with the taps, types a marker plus 256-color and
 truecolor samples, polls the dump up to ~10s, and asserts marker,
 `Indexed(208)`, and `Spec(Rgb` appear. It refuses to run while another
 `horizon` process exists unless `--force-kill` is passed — never force
-it when the owner may be running Horizon.
+it when the owner may be running Horizon. Its workspace state is isolated
+under the output directory.
 
 Caveats:
 - Pixel output is NOT verified — frame dumps prove the model/paint
@@ -38,8 +39,8 @@ Caveats:
   capture requires Screen Recording permission the dev terminal usually
   lacks).
 - The control socket is fixed per-uid (`/tmp/horizon-control-<uid>.sock`);
-  a second instance logs a bind failure and runs without external
-  control. Use `HORIZON_SESSIOND_SOCKET` + scratch `HORIZON_AGENT_EVENT_LOG`/
-  `HORIZON_AGENT_STATE_DB` to isolate sessiond when a test spawns agent
-  sessions (mind macOS's ~104-byte `SUN_LEN` socket-path limit).
+  a second instance logs a bind failure and runs without external control.
+  Both one-shot scripts isolate sessiond, agent persistence, and workspace
+  state under their output directory (mind macOS's ~104-byte `SUN_LEN`
+  socket-path limit).
 - Kill only processes your test started.

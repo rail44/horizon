@@ -341,6 +341,30 @@ The owner approved the first UI-restart recovery slice with these boundaries:
   live-PTY transfer across daemon replacement or reinterpret reload as UI
   restart recovery.
 
+## Step 2B workspace restoration decisions (2026-07-12)
+
+The owner approved the workspace-persistence boundary in
+`docs/workspace-persistence-design.md`; it shipped 2026-07-12. Horizon
+persists a versioned UI-owned JSON DTO containing tabs, weighted split topology,
+focus, attachments, detached-session metadata, display numbers, and titles.
+Writes are synchronous temporary-file-plus-atomic-rename replacements without
+`fsync`.
+
+A valid saved workspace suppresses creation of the usual fresh startup terminal.
+The UI holds the restored topology behind a mutation barrier until terminal and
+agent inventories succeed, then attaches surviving sessions, prunes missing
+ones and collapses their layout, registers inventory-only sessions as detached,
+and creates one fresh terminal only if no pane survives. Inventory failure must
+not overwrite the saved state. Resize results feed back into
+`LayoutChild.weight`, making user-adjusted split ratios part of the durable
+model.
+
+This is a UI persistence feature, not a daemon identity expansion. Agent traffic
+stays on shared protocol v4; the local agent-list API becomes fallible so an
+empty inventory is distinguishable from failure. Multi-UI ownership, automatic
+reconnect after an established connection fails, and non-destructive sessiond
+replacement remain unsupported.
+
 ## Connection to delegation (stage 1)
 
 The terminal's move to `sessiond` supplies a delegation precondition,

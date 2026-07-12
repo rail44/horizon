@@ -91,6 +91,16 @@ command, and asserts the frame dump recorded the marker plus 256-color and
 truecolor spans. It refuses to run while another Horizon instance is
 running unless `--force-kill` is passed.
 
+To verify UI-restart recovery with isolated sockets and state, run:
+
+```sh
+scripts/check-workspace-restore.sh
+```
+
+It creates a second terminal tab and a split through the CLI, restarts only
+the UI, and asserts that all terminal session ids, both tabs, the split, and
+a restored frame survive.
+
 ## Next Integration Points
 
 `docs/roadmap.md` is the source of truth for the current phase plan; this

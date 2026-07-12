@@ -16,6 +16,7 @@ mod terminal_focus;
 mod theme;
 mod view_chooser;
 mod workspace;
+mod workspace_state;
 
 use std::io::{self, IsTerminal as _};
 use std::process::ExitCode;
