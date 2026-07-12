@@ -19,7 +19,6 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::list::{List, ListEvent, ListState};
 use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable, ResizablePanelGroup};
-use gpui_component::TitleBar;
 use horizon_workspace::commands::{command_entries, CommandId, CommandState};
 use horizon_workspace::types::{LayoutNode, TabId};
 use horizon_workspace::{
@@ -396,26 +395,11 @@ pub struct WorkspaceShell {
     // to, so a transition can send `Focus(false)` to the one it's about
     // to stop being true for. See `focus_transition`.
     last_focused_terminal: Option<SessionId>,
-    // True when the active `Platform` already draws a complete title bar
-    // with real window controls (currently: `horizon-winit-platform`'s
-    // sctk-adwaita CSD on Wayland — see docs/winit-backend-design.md).
-    // gpui-component's `TitleBar` draws its own minimize/maximize/close
-    // buttons unconditionally on Linux regardless of decoration mode (it
-    // only reads `Decorations::Client` to decide whether to hook up the
-    // right-click window menu, not whether to render controls at all —
-    // `crates/ui/src/title_bar.rs`'s `WindowControls::render` in the
-    // pinned gpui-component checkout), so rendering it on top of a
-    // platform-drawn title bar would double up both the bar and its
-    // buttons. Skipping our own chrome entirely is the fix; the native
-    // gpui_linux backend still needs it (GNOME/Mutter never grants real
-    // server-side decoration there, so `TitleBar` is the *only* chrome).
-    native_decorations: bool,
 }
 
 impl WorkspaceShell {
     pub fn new(
         socket_path: std::path::PathBuf,
-        native_decorations: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -448,7 +432,6 @@ impl WorkspaceShell {
             _view_chooser_subscription: None,
             pending_placement: None,
             last_focused_terminal: None,
-            native_decorations,
         };
         // Window activation/deactivation doesn't otherwise touch the
         // model, so it needs its own observer alongside `focus_active`'s
@@ -1873,18 +1856,6 @@ impl Render for WorkspaceShell {
             .on_action(cx.listener(|shell, action: &RunCommand, window, cx| {
                 shell.execute(action.id, window, cx);
             }))
-            .when(!self.native_decorations, |this| {
-                this.child(
-                    TitleBar::new().child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .text_size(px(12.0))
-                            .text_color(rgb(0x8a90a0))
-                            .child("Horizon"),
-                    ),
-                )
-            })
             .child(self.render_tab_strip(cx))
             .child(
                 div()

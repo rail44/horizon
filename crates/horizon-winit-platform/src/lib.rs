@@ -2,38 +2,31 @@
 //! `gpui_wgpu`. Production port of the `spikes/gpui-winit/` prototype (see
 //! `docs/research/winit-backend-spike.md` for the findings this crate
 //! backs up, and `docs/winit-backend-design.md` for this crate's own
-//! architecture and how `src/main.rs` selects it).
+//! architecture, the 2026-07-12 decision to unify every OS on this single
+//! backend, and how `src/main.rs` selects it).
 //!
-//! Every functional module is gated `#[cfg(target_os = "linux")]`: on other
-//! platforms this crate exposes nothing, so `src/main.rs`'s
-//! `build_application` must itself be `#[cfg(target_os = "linux")]`-gated
-//! at the call site and fall back to the native `gpui_platform` backend
-//! elsewhere.
+//! Cross-platform: every module below builds on every OS. The few
+//! genuinely OS-specific pieces (arboard's Linux/BSD-only primary
+//! selection, the macOS native app menu) are `#[cfg]`-gated *inside* their
+//! module rather than at this top level — see `clipboard.rs` and
+//! `macos_menu.rs`.
 
-#[cfg(target_os = "linux")]
 mod active_loop;
-#[cfg(target_os = "linux")]
 mod app_handler;
-#[cfg(target_os = "linux")]
 mod clipboard;
-#[cfg(target_os = "linux")]
 mod cursor;
-#[cfg(target_os = "linux")]
 mod dispatcher;
-#[cfg(target_os = "linux")]
 mod display;
-#[cfg(target_os = "linux")]
 mod input;
-#[cfg(target_os = "linux")]
+#[cfg(target_os = "macos")]
+mod macos_menu;
 mod platform;
-#[cfg(target_os = "linux")]
 mod window;
 
 /// Builds a fresh winit-backed `gpui::Platform`, ready to hand to
 /// `gpui::Application::with_platform`. Constructs winit's `EventLoop`
 /// eagerly (mirroring `gpui_platform::application()`'s own eagerness) —
 /// call this once per process.
-#[cfg(target_os = "linux")]
 pub fn platform() -> std::rc::Rc<dyn gpui::Platform> {
     std::rc::Rc::new(platform::WinitPlatform::new())
 }

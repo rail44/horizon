@@ -6,11 +6,14 @@
 //! connection, winit's `ActiveEventLoop` is only reachable from inside an
 //! `ApplicationHandler` callback.
 //!
-//! Most methods below are no-op stubs — menus, credentials, path prompts,
-//! screen capture, multi-window/multi-display. See
-//! docs/winit-backend-design.md for which stubs are load-bearing (ported
-//! from docs/research/winit-backend-spike.md §8's "what actually gets
-//! called" inventory) versus genuinely out of scope for this crate.
+//! Most methods below are no-op stubs — credentials, path prompts, screen
+//! capture, multi-window/multi-display. See docs/winit-backend-design.md
+//! for which stubs are load-bearing (ported from
+//! docs/research/winit-backend-spike.md §8's "what actually gets called"
+//! inventory) versus genuinely out of scope for this crate. `set_menus`/
+//! `activate` are real (not stubs) on macOS — see `macos_menu.rs` and the
+//! design doc's "macOS: native app menu" section; both stay documented
+//! no-ops on Linux and Windows.
 
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
@@ -34,8 +37,12 @@ use crate::clipboard::WinitClipboard;
 use crate::cursor::cursor_style_to_icon;
 use crate::dispatcher::WinitDispatcher;
 use crate::display::WinitDisplay;
+#[cfg(target_os = "macos")]
+use crate::macos_menu::MacosMenuState;
 use crate::window::WinitPlatformWindow;
 use crate::window::WinitWindowInner;
+#[cfg(target_os = "macos")]
+use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
 
 struct WinitKeyboardLayout;
 
@@ -60,14 +67,47 @@ pub(crate) struct WinitPlatform {
     pub(crate) windows: RefCell<Vec<Rc<WinitWindowInner>>>,
     active_window: Cell<Option<AnyWindowHandle>>,
     clipboard: WinitClipboard,
+    // Set by `Platform::on_app_menu_action` (gpui's own `init_app_menus`
+    // wires this to `cx.dispatch_action`); invoked from
+    // `dispatch_menu_action` on macOS, the only platform that ever
+    // produces a menu click. Kept unconditional (not `#[cfg(macos)]`)
+    // since it's a trivial field and `on_app_menu_action` itself is a
+    // normal cross-platform `Platform` method.
+    #[allow(clippy::type_complexity)]
+    app_menu_action_callback: RefCell<Option<Box<dyn FnMut(&dyn Action)>>>,
+    #[cfg(target_os = "macos")]
+    macos_menu: MacosMenuState,
 }
 
 impl WinitPlatform {
     pub(crate) fn new() -> Self {
-        let event_loop: EventLoop<WinitUserEvent> = EventLoop::with_user_event()
-            .build()
-            .expect("failed to build winit event loop");
+        let mut builder = EventLoop::with_user_event();
+        // `ActivationPolicy::Regular` gives the process a normal Dock
+        // icon/menu-bar identity and activates it on launch — without
+        // this, a process with no bundle Info.plist (like a bare `cargo
+        // run` binary) can end up with no way to become the active app.
+        // See docs/winit-backend-design.md's "macOS: native app menu"
+        // section for what this does and doesn't cover.
+        #[cfg(target_os = "macos")]
+        builder.with_activation_policy(ActivationPolicy::Regular);
+        let event_loop: EventLoop<WinitUserEvent> =
+            builder.build().expect("failed to build winit event loop");
         let proxy: EventLoopProxy<WinitUserEvent> = event_loop.create_proxy();
+
+        // Forward muda's global menu-click channel into the winit event
+        // loop as a user event, per muda's own documented winit
+        // integration (its README's "Note for winit or tao users") — this
+        // both wakes the loop (if it's parked in `ControlFlow::Wait`) and
+        // gets the click onto the thread `dispatch_menu_action` expects to
+        // run on. Registered once per process, matching `platform()`'s own
+        // "call this once" contract.
+        #[cfg(target_os = "macos")]
+        {
+            let menu_proxy = proxy.clone();
+            muda::MenuEvent::set_event_handler(Some(move |event: muda::MenuEvent| {
+                let _ = menu_proxy.send_event(WinitUserEvent::MenuEvent(event));
+            }));
+        }
 
         let dispatcher = Arc::new(WinitDispatcher::new(proxy));
         let background_executor = BackgroundExecutor::new(dispatcher.clone());
@@ -87,6 +127,22 @@ impl WinitPlatform {
             windows: RefCell::new(Vec::new()),
             active_window: Cell::new(None),
             clipboard: WinitClipboard::new(),
+            app_menu_action_callback: RefCell::new(None),
+            #[cfg(target_os = "macos")]
+            macos_menu: MacosMenuState::new(),
+        }
+    }
+
+    /// Routes a `muda::MenuEvent`'s id (forwarded through the event loop as
+    /// `WinitUserEvent::MenuEvent`, see `app_handler.rs::user_event`) to
+    /// whatever `Action` `set_menus` associated with it, then into
+    /// whatever callback `Platform::on_app_menu_action` registered (gpui's
+    /// `init_app_menus` wires that to `cx.dispatch_action`).
+    #[cfg(target_os = "macos")]
+    pub(crate) fn dispatch_menu_action(&self, id: &muda::MenuId) {
+        let mut callback = self.app_menu_action_callback.borrow_mut();
+        if let Some(callback) = callback.as_mut() {
+            self.macos_menu.dispatch(id, callback);
         }
     }
 }
@@ -131,6 +187,18 @@ impl Platform for WinitPlatform {
     fn restart(&self, _binary_path: Option<PathBuf>) {}
 
     fn activate(&self, _ignoring_other_apps: bool) {
+        // No winit API brings the whole app (as opposed to one window) to
+        // the front post-launch — `ActivationPolicy::Regular` (set once at
+        // event-loop build time, see `new()`) already gets launch-time
+        // activation; this focuses whatever window(s) exist right now,
+        // which is what a later re-activate (e.g. a future Dock-icon
+        // reopen handler) would want. See docs/winit-backend-design.md's
+        // "macOS: native app menu" section for the fuller rationale and
+        // what a real `NSApp.activate(ignoringOtherApps:)` call would add.
+        #[cfg(target_os = "macos")]
+        for window in self.windows.borrow().iter() {
+            window.window.focus_window();
+        }
         log::trace!("Platform::activate called");
     }
 
@@ -255,11 +323,27 @@ impl Platform for WinitPlatform {
 
     fn on_system_wake(&self, _callback: Box<dyn FnMut()>) {}
 
-    fn set_menus(&self, _menus: Vec<Menu>, _keymap: &Keymap) {}
+    fn set_menus(&self, menus: Vec<Menu>, _keymap: &Keymap) {
+        // `_keymap` is unused: see macos_menu.rs's module doc for why menu
+        // items don't carry OS-displayed accelerators today.
+        #[cfg(target_os = "macos")]
+        self.macos_menu.set_menus(menus);
+        #[cfg(not(target_os = "macos"))]
+        {
+            // Documented no-op on Linux (sctk-adwaita's CSD carries no
+            // menu bar) and Windows (out of scope — see
+            // docs/winit-backend-design.md).
+            let _ = menus;
+        }
+    }
 
     fn set_dock_menu(&self, _menu: Vec<MenuItem>, _keymap: &Keymap) {}
 
-    fn on_app_menu_action(&self, _callback: Box<dyn FnMut(&dyn Action)>) {}
+    fn on_app_menu_action(&self, callback: Box<dyn FnMut(&dyn Action)>) {
+        // Cross-platform storage (see the field doc); only ever driven by
+        // a real click on macOS (`dispatch_menu_action`).
+        *self.app_menu_action_callback.borrow_mut() = Some(callback);
+    }
 
     fn on_will_open_app_menu(&self, _callback: Box<dyn FnMut()>) {}
 

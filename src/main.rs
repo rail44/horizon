@@ -22,7 +22,7 @@ use std::io::{self, IsTerminal as _};
 use std::process::ExitCode;
 
 use gpui::*;
-use gpui_component::{Root, TitleBar};
+use gpui_component::Root;
 
 use crate::workspace::WorkspaceShell;
 
@@ -56,33 +56,24 @@ fn run_client(args: &[String]) -> ExitCode {
 
 actions!(horizon, [Quit]);
 
-/// Builds the `Application` for this platform, alongside whether that
-/// backend already draws its own complete window chrome (used by
-/// `WorkspaceShell::new` to skip its own `TitleBar` — see the field doc on
-/// `WorkspaceShell::native_decorations`). On Linux this is always
-/// `horizon-winit-platform` (real sctk-adwaita CSD decorations — see
-/// docs/winit-backend-design.md); every other OS keeps gpui's own platform
-/// backend, which relies on Horizon's `TitleBar` for chrome (e.g. macOS's
-/// transparent-inset traffic-light layout).
-#[cfg(target_os = "linux")]
-fn build_application() -> (Application, bool) {
-    (
-        Application::with_platform(horizon_winit_platform::platform()),
-        true,
-    )
-}
-
-#[cfg(not(target_os = "linux"))]
-fn build_application() -> (Application, bool) {
-    (gpui_platform::application(), false)
+/// Builds the `Application` — always `horizon-winit-platform` (real native
+/// window chrome on every OS: sctk-adwaita CSD on Linux, native decorations
+/// on macOS/Windows — see docs/winit-backend-design.md). Horizon no longer
+/// draws its own title bar (see `WorkspaceShell::render`); the platform's
+/// own chrome is the only chrome.
+fn build_application() -> Application {
+    Application::with_platform(horizon_winit_platform::platform())
 }
 
 fn run_gui() {
-    let (application, native_decorations) = build_application();
-    // `.with_assets` registers gpui-component's bundled SVGs (icon set,
-    // including the titlebar's minimize/maximize/close glyphs) as the
-    // window's asset source; without it `Icon`/`IconName` lookups resolve
-    // to nothing and the custom titlebar's window controls render blank.
+    let application = build_application();
+    // `.with_assets` registers gpui-component's bundled SVGs (icon set) as
+    // the window's asset source. Horizon no longer renders gpui-component's
+    // `TitleBar` (whose window-control glyphs were the original reason for
+    // this call), but `List`/`Button`/`TextView` — all still in active use
+    // (palette.rs, session_manager.rs, view_chooser.rs, agent/view.rs) —
+    // resolve their own bundled icons through the same asset source, so
+    // this stays.
     application
         .with_assets(gpui_component_assets::Assets)
         .run(move |cx| {
@@ -92,7 +83,9 @@ fn run_gui() {
             // so the previous app's menu (and name) would linger even with
             // this window focused — installing a minimal menu is what makes
             // Horizon show up as the active application. Activation at launch
-            // still needs the explicit activate(true).
+            // still needs the explicit activate(true). `horizon-winit-platform`
+            // implements both via `muda` on macOS and documented no-ops
+            // elsewhere (see that crate's platform.rs/macos_menu.rs).
             cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
             cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
             cx.set_menus(vec![Menu {
@@ -110,19 +103,18 @@ fn run_gui() {
                 );
                 let options = cx.update(|cx| WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size, cx))),
-                    // Drive gpui-component's `TitleBar`, rendered as the shell's
-                    // first child (see `WorkspaceShell::render`). On macOS this
-                    // keeps the native traffic lights (transparent titlebar,
-                    // `TitleBar::title_bar_options()` sets the standard inset)
-                    // and matches Zed's own window setup. On Linux, GNOME/Mutter
-                    // never grants server-side xdg-decoration (it always
-                    // negotiates client-side regardless of what's requested), so
-                    // without a drawn titlebar the window has no chrome at all;
-                    // requesting client decorations explicitly also avoids a
-                    // double titlebar on compositors that *do* honor
-                    // server-side decoration (e.g. KWin).
-                    titlebar: Some(TitleBar::title_bar_options()),
-                    window_decorations: Some(WindowDecorations::Client),
+                    // `horizon-winit-platform` always draws complete native
+                    // chrome itself (see the module doc above) and only reads
+                    // `titlebar.title` for the OS window title — the rest of
+                    // `TitlebarOptions` (transparency, traffic-light inset)
+                    // was gpui-component's own hand-drawn-titlebar concept
+                    // and no longer applies now that Horizon renders no
+                    // title bar of its own.
+                    titlebar: Some(TitlebarOptions {
+                        title: Some("Horizon".into()),
+                        appears_transparent: false,
+                        traffic_light_position: None,
+                    }),
                     ..Default::default()
                 });
                 cx.open_window(options, |window, cx| {
@@ -130,9 +122,7 @@ fn run_gui() {
                     // every child process sees HORIZON_SOCKET from the start
                     // (the Floem shell closes the same race in AppState::new).
                     let socket_path = horizon_control::host::socket::default_socket_path();
-                    let shell = cx.new(|cx| {
-                        WorkspaceShell::new(socket_path.clone(), native_decorations, window, cx)
-                    });
+                    let shell = cx.new(|cx| WorkspaceShell::new(socket_path.clone(), window, cx));
                     control_plane::start(
                         shell.downgrade(),
                         window.window_handle(),
