@@ -219,6 +219,36 @@ const WORKSPACE_MODE_DIM_ALPHA: f32 = 0.55;
 /// `keymap::WORKSPACE_MODE_PSEUDO_COMMAND` (see [`init`]).
 const DEFAULT_WORKSPACE_MODE_KEYSTROKE: &str = "ctrl-'";
 
+/// gpui-component's `List` (shared by the command palette, the view
+/// chooser, and the session manager modal) binds arrow-key selection
+/// movement to its own `ui::SelectUp`/`ui::SelectDown` actions in key
+/// context `"List"` — see gpui-component's `crates/ui/src/list/list.rs`.
+/// That `actions` module is crate-private, so the action types can't be
+/// named from here; `cx.build_action` (gpui's mechanism for resolving an
+/// action by its registered namespaced name, the same path a JSON keymap
+/// file would use) builds an instance dynamically instead. Binding Tab and
+/// Shift+Tab to these same actions in the "List" context is the intended
+/// way to extend a third-party action gpui-component doesn't expose a
+/// public Rust path to, and it lands the behavior on every List-backed
+/// modal for free since they all share this widget.
+fn list_select_binding(cx: &App, keystroke: &str, action_name: &str) -> KeyBinding {
+    let action = cx.build_action(action_name, None).unwrap_or_else(|err| {
+        panic!("gpui-component action `{action_name}` not registered: {err}")
+    });
+    let context_predicate = KeyBindingContextPredicate::parse("List")
+        .expect("`List` is a valid key context predicate")
+        .into();
+    KeyBinding::load(
+        keystroke,
+        action,
+        Some(context_predicate),
+        false,
+        None,
+        cx.keyboard_mapper().as_ref(),
+    )
+    .unwrap_or_else(|err| panic!("invalid keystroke `{keystroke}`: {err}"))
+}
+
 pub fn init(cx: &mut App) {
     let config = horizon_config::load();
 
@@ -300,6 +330,18 @@ pub fn init(cx: &mut App) {
         };
         bindings.push(KeyBinding::new(&keystroke, RunCommand { id }, None));
     }
+
+    // Tab / Shift+Tab move the selection in every List-backed modal
+    // (command palette, view chooser, session manager) the same way
+    // Up/Down already do. gpui-component's `Input` binds "tab" to an
+    // inline-indent action in its own (more specific) "Input" context,
+    // but the List's query input is single-line, so that handler finds
+    // nothing to indent and propagates — letting these "List"-context
+    // bindings fire next even while the query input has focus. See
+    // `list_select_binding`'s doc comment for why the actions are built
+    // dynamically instead of bound by type.
+    bindings.push(list_select_binding(cx, "tab", "ui::SelectDown"));
+    bindings.push(list_select_binding(cx, "shift-tab", "ui::SelectUp"));
 
     cx.bind_keys(bindings);
 }
