@@ -13,7 +13,7 @@
 //! from the spike (docs/research/winit-backend-spike.md §13-15, including
 //! the `set_ime_cursor_area` feedback-loop fix in §15).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -143,9 +143,27 @@ pub(crate) struct WinitWindowInner {
     pub(crate) window: Arc<winit::window::Window>,
     pub(crate) state: RefCell<WinitWindowState>,
     pub(crate) callbacks: RefCell<WinitWindowCallbacks>,
+    /// Coalesces redraw requests into "is a repaint owed at all", set by
+    /// any `WindowEvent` handler that could have made something dirty
+    /// (input, resize, focus, IME) and by `WinitAppHandler::user_event`'s
+    /// `Wake` case (main-thread gpui work — animation timers, a
+    /// background thread's `cx.notify()` — both route through
+    /// `WinitDispatcher::dispatch_on_main_thread`/`dispatch_after`, which
+    /// wake the loop the same way). Consumed exactly once per event-loop
+    /// iteration by `about_to_wait`, the only place that actually calls
+    /// `winit::window::Window::request_redraw` after the bootstrap frame in
+    /// `resumed` — see docs/winit-backend-design.md's "idle CPU" section
+    /// for why `RedrawRequested` no longer re-arms itself unconditionally.
+    pub(crate) needs_redraw: Cell<bool>,
 }
 
 impl WinitWindowInner {
+    /// Marks this window as owing a repaint on the next event-loop
+    /// iteration — see the field doc on [`WinitWindowInner::needs_redraw`].
+    pub(crate) fn mark_needs_redraw(&self) {
+        self.needs_redraw.set(true);
+    }
+
     /// Drives a winit `Ime` event into gpui's `EntityInputHandler` pipeline
     /// through the same three calls gpui_linux's wayland backend makes from
     /// `zwp_text_input_v3::Event` (`replace_and_mark_text_in_range` for
@@ -220,7 +238,7 @@ impl WinitWindowInner {
         }
 
         self.state.borrow_mut().input_handler = Some(input_handler);
-        self.window.request_redraw();
+        self.mark_needs_redraw();
     }
 
     /// Mirrors gpui_linux's own text-input fallback — wayland's
@@ -278,7 +296,7 @@ impl WinitWindowInner {
         );
         input_handler.replace_text_in_range(None, key_char);
         self.state.borrow_mut().input_handler = Some(input_handler);
-        self.window.request_redraw();
+        self.mark_needs_redraw();
     }
 
     /// Shared by `handle_ime` (while composing) and
@@ -379,6 +397,7 @@ impl WinitPlatformWindow {
             window,
             state: RefCell::new(state),
             callbacks: RefCell::new(WinitWindowCallbacks::default()),
+            needs_redraw: Cell::new(false),
         });
 
         Ok(Self {
