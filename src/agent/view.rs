@@ -4,8 +4,9 @@
 //! inline approval buttons. Frame items are grouped into turn segments
 //! (`turns::group_into_turns`, `docs/agent-output-ui-amendment.md` stage
 //! C): a completed turn renders as a user message, assistant prose, and
-//! one receipt line; the in-progress turn renders as one accent-bordered
-//! card, one row per tool call. Assistant text renders through
+//! one receipt line; the in-progress turn renders as one card with a
+//! muted accent-tinted border and header (mock 2a/3b/7a), one row per
+//! tool call. Assistant text renders through
 //! gpui-component's `TextView` Markdown element (reuse over port), other
 //! items stay plain text. The virtualized-List upgrade is recorded for
 //! the M5 polish pass.
@@ -397,7 +398,16 @@ impl AgentView {
         row = row.child(receipt_text(status_color, status.text));
         if let Some(model) = &end.model {
             row = row.child(separator());
-            row = row.child(receipt_text(theme::text_subtle(), model.clone()));
+            row = row.child(
+                div()
+                    .max_w(px(220.0))
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .text_size(px(11.0))
+                    .text_color(theme::text_subtle())
+                    .child(model.clone()),
+            );
         }
         row.into_any_element()
     }
@@ -421,6 +431,10 @@ impl AgentView {
             } => {
                 let mut label = div().flex().flex_row().items_center().gap_1().child(
                     div()
+                        .max_w(px(160.0))
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
                         .text_size(px(11.0))
                         .text_color(theme::text_muted())
                         .child(file_name.clone()),
@@ -492,10 +506,19 @@ impl AgentView {
         .into_any_element()
     }
 
-    /// The in-progress turn's card (decision 2): an accent-bordered
-    /// container with a header (state label + `n / m` progress + ticking
-    /// elapsed seconds — room left for the stage-F stop button) and one
-    /// row per tool call, plus any pending approval block.
+    /// The in-progress turn's card (decision 2; mock 2a/3b/7a's "live
+    /// card"): a thin accent-tinted border around the whole card (the
+    /// mock's border is a muted echo of the accent hue, not a
+    /// full-saturation perimeter — see `accent_tint`), a faint
+    /// accent-tinted fill scoped to the header strip only, and a header
+    /// (status dot + bold state label — the card's one full-strength
+    /// accent element, plus `n / m` progress + ticking elapsed seconds —
+    /// room left for the stage-F stop button) and one row per tool call,
+    /// plus any pending approval block. The row area itself carries no
+    /// distinct panel fill, matching the mock's card having no
+    /// background of its own beyond the header tint. `overflow_hidden`
+    /// keeps row/chip content that would otherwise overflow (long paths,
+    /// command heads) from painting past the card's rounded corners.
     fn render_running_card(
         &self,
         base_index: usize,
@@ -521,9 +544,23 @@ impl AgentView {
             .flex_row()
             .items_center()
             .gap_2()
+            .px_3()
+            .py_1p5()
+            .bg(accent_tint(0.14))
+            .border_b_1()
+            .border_color(accent_tint(0.3))
             .child(
                 div()
+                    .flex_none()
+                    .size(px(6.0))
+                    .rounded_full()
+                    .bg(theme::accent()),
+            )
+            .child(
+                div()
+                    .flex_none()
                     .text_size(px(12.0))
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme::accent())
                     .child(state_label),
             )
@@ -532,6 +569,7 @@ impl AgentView {
             .child(div().flex_1())
             .child(
                 div()
+                    .flex_none()
                     .text_size(px(11.0))
                     .text_color(theme::text_muted())
                     .child(format!(
@@ -543,21 +581,20 @@ impl AgentView {
         let mut card = div()
             .flex()
             .flex_col()
-            .gap_2()
-            .p_3()
             .rounded_sm()
             .border_1()
-            .border_color(theme::accent())
-            .bg(theme::surface_panel())
+            .border_color(accent_tint(0.35))
+            .overflow_hidden()
             .child(header);
 
-        for call in &tool_calls {
-            card = card.child(self.render_tool_call_row(call));
+        let row_count = tool_calls.len();
+        for (row_index, call) in tool_calls.iter().enumerate() {
+            card = card.child(self.render_tool_call_row(call, row_index + 1 < row_count));
         }
         for (offset, item) in items.iter().enumerate() {
             if matches!(item, AgentFrameItem::ApprovalRequested(_)) {
                 if let Some(el) = self.render_item(base_index + offset, item, cx) {
-                    card = card.child(el);
+                    card = card.child(div().px_3().py_2().child(el));
                 }
             }
         }
@@ -568,10 +605,16 @@ impl AgentView {
     /// One running-card row: status glyph (running/finished/error) +
     /// verb + target + result summary once finished — the base design's
     /// one-line tool-summary vocabulary (`docs/agent-output-ui-
-    /// design.md` decision 2).
-    fn render_tool_call_row(&self, call: &turns::ToolCallView) -> AnyElement {
+    /// design.md` decision 2). `divider` draws the mock's subtle
+    /// row-separator border-bottom (omitted on the last row, matching
+    /// the mock). The verb/target/summary text is a single flex child
+    /// with `min_w_0` + `overflow_hidden` + `text_ellipsis` +
+    /// `whitespace_nowrap` so a long unbroken string (a deep file path,
+    /// a long bash command head) truncates instead of pushing past the
+    /// card's bounds — the glyph stays `flex_none` so it never shrinks.
+    fn render_tool_call_row(&self, call: &turns::ToolCallView, divider: bool) -> AnyElement {
         let (glyph, glyph_color) = if !call.finished {
-            ("●", theme::text_subtle())
+            ("●", theme::accent())
         } else if call.is_error {
             ("✗", theme::danger())
         } else {
@@ -595,16 +638,28 @@ impl AgentView {
             .flex_row()
             .items_center()
             .gap_2()
+            .px_3()
+            .py_1()
+            .when(divider, |this| {
+                this.border_b_1()
+                    .border_color(theme::text_subtle().alpha(0.3))
+            })
             .child(
                 div()
+                    .flex_none()
                     .text_size(px(12.0))
                     .text_color(glyph_color)
                     .child(glyph),
             )
             .child(
                 div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
                     .text_size(px(12.0))
-                    .text_color(theme::text_primary())
+                    .text_color(theme::text_muted())
                     .child(text),
             )
             .into_any_element()
@@ -624,6 +679,19 @@ impl AgentView {
             Some(SessionState::Terminated) => "terminated".to_string(),
         }
     }
+}
+
+/// A muted echo of the accent role — the running card's border and
+/// header fill (mock 2a/3b/7a: `#bfdbfe`/`#eff6ff`/`#dbeafe`, all clearly
+/// the same blue hue as the header's full-strength `#1d4ed8` label and
+/// `#2563eb` status dot, just lightened/desaturated toward the page
+/// background). Deriving this from `theme::accent()` via `Hsla::alpha`
+/// (rather than adding independent `[theme]` hex roles for it) keeps the
+/// tint locked to whatever hue the user's `accent` override uses, the
+/// same relationship the mock expresses — a separately configured color
+/// could drift from the accent hue it's meant to echo.
+fn accent_tint(alpha: f32) -> Hsla {
+    theme::accent().alpha(alpha)
 }
 
 /// The running card's header label for the three in-flight

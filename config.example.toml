@@ -261,8 +261,9 @@ window_height = 720.0
 # results), info (the assistant message label), text_muted (readable
 # secondary text -- status line, exited state), text_subtle (the most
 # de-emphasized text -- thinking deltas, in-flight tool progress),
-# surface_panel (the running-turn card's panel fill -- a subtle lift
-# above the base background, stage C of the amendment doc), and
+# surface_panel (a lifted panel surface -- not painted by any view
+# today; the running-turn card turned out to have no distinct fill of
+# its own once checked against the mock, see src/theme.rs), and
 # diff_added_surface/diff_added_text, diff_removed_surface/
 # diff_removed_text (fs.edit diff rendering -- not painted by any view
 # yet, added ahead of that slice per the amendment doc). Defaults shown
