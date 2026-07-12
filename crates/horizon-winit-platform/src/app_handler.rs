@@ -5,13 +5,22 @@
 //! `ActiveLoopGuard` so `Platform::open_window` can reach the
 //! `ActiveEventLoop` if gpui decides to open a window mid-callback.
 //!
-//! Redraw scheduling mirrors gpui_web's requestAnimationFrame loop: each
-//! `RedrawRequested` immediately re-requests the next redraw, so frames
-//! keep flowing as long as the window exists. gpui's own
-//! `on_request_frame` closure (registered in `Window::new`, see
-//! gpui/src/window.rs) throttles this down to ~30fps when unfocused and
-//! relies on the surface's Fifo present mode to pace it to vsync while
-//! focused — we don't need our own throttle on top of that.
+//! Redraw scheduling is event-driven, not a free-running loop: a per-window
+//! `WinitWindowInner::needs_redraw` flag is set by any `WindowEvent` that
+//! could need a repaint (input, resize, focus, IME) and by `user_event`'s
+//! `Wake` case (covers gpui main-thread work with no `WindowEvent` of its
+//! own — animation timers, a background thread's `cx.notify()`), then
+//! consumed exactly once per iteration by `about_to_wait`, which is the
+//! only place that calls `winit::window::Window::request_redraw` after the
+//! bootstrap frame in `resumed`. `RedrawRequested` itself never re-requests
+//! itself — an earlier version did (mirroring gpui_web's
+//! requestAnimationFrame loop, see docs/winit-backend-design.md's "idle
+//! CPU" section for why that ran the GPU present path at full display
+//! refresh rate even fully idle). gpui's own `on_request_frame` closure
+//! (registered in `Window::new`, see gpui/src/window.rs) still throttles
+//! frame *pacing* down to ~30fps when unfocused and relies on the
+//! surface's Fifo present mode for vsync while focused; that's orthogonal
+//! to the *whether-to-redraw-at-all* coalescing this module now owns.
 
 use std::rc::Rc;
 
@@ -46,9 +55,69 @@ pub(crate) enum WinitUserEvent {
     MenuEvent(muda::MenuEvent),
 }
 
+/// A per-second snapshot of how many `WindowEvent::RedrawRequested` cycles
+/// actually ran, traced via the existing `HORIZON_INPUT_TRACE` sink
+/// (`frame-loop: ...` lines). Grew out of the idle-CPU investigation (see
+/// docs/winit-backend-design.md's "idle CPU" section) as the instrument
+/// that first showed the redraw loop running at a flat, unthrottled 60fps
+/// even fully idle; kept as a permanent health signal for the same
+/// regression class — a genuinely idle window should show ~0
+/// `redraw_requested_per_sec` with `total` barely moving, matching
+/// `input_trace`'s own "permanent diagnostic, not temp code" precedent.
+struct FrameLoopStats {
+    window_start: std::time::Instant,
+    window_count: u64,
+    total_count: u64,
+    process_start: std::time::Instant,
+}
+
+impl FrameLoopStats {
+    fn new() -> Self {
+        let now = std::time::Instant::now();
+        Self {
+            window_start: now,
+            window_count: 0,
+            total_count: 0,
+            process_start: now,
+        }
+    }
+
+    fn record_redraw_requested(&mut self) {
+        if let Some(line) = self.record_redraw_requested_at(std::time::Instant::now()) {
+            input_trace!("{line}");
+        }
+    }
+
+    /// Clock-injected core so the decision stays pure and testable without
+    /// sleeping (mirrors `ImeCommitGuard::should_suppress_at`/
+    /// `text_fallback_decision`'s pattern in `src/terminal/mod.rs`/
+    /// `window.rs`). Returns the trace line iff a full second-plus has
+    /// elapsed since the last snapshot; `None` otherwise (the common case —
+    /// most calls just tally into the running window).
+    fn record_redraw_requested_at(&mut self, now: std::time::Instant) -> Option<String> {
+        self.window_count += 1;
+        self.total_count += 1;
+        let elapsed = now.duration_since(self.window_start);
+        if elapsed < std::time::Duration::from_secs(1) {
+            return None;
+        }
+        let fps = self.window_count as f64 / elapsed.as_secs_f64();
+        let line = format!(
+            "frame-loop: redraw_requested_per_sec={:.1} total={} since_start={:.1}s",
+            fps,
+            self.total_count,
+            now.duration_since(self.process_start).as_secs_f64()
+        );
+        self.window_count = 0;
+        self.window_start = now;
+        Some(line)
+    }
+}
+
 pub(crate) struct WinitAppHandler<'a> {
     platform: &'a WinitPlatform,
     on_finish_launching: Option<Box<dyn FnOnce()>>,
+    frame_loop_stats: FrameLoopStats,
 }
 
 impl<'a> WinitAppHandler<'a> {
@@ -56,6 +125,7 @@ impl<'a> WinitAppHandler<'a> {
         Self {
             platform,
             on_finish_launching: Some(on_finish_launching),
+            frame_loop_stats: FrameLoopStats::new(),
         }
     }
 
@@ -91,7 +161,20 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: WinitUserEvent) {
         let _guard = ActiveLoopGuard::enter(event_loop);
         match event {
-            WinitUserEvent::Wake => {}
+            WinitUserEvent::Wake => {
+                // `WinitDispatcher::dispatch_on_main_thread`/`dispatch_after`
+                // send this for any gpui main-thread work -- an animation
+                // timer tick, a background thread's `cx.notify()` reaching
+                // the main thread via `Entity::update`, etc. None of that
+                // is visible to us as a `WindowEvent`, so (conservatively;
+                // we can't tell which window, if any, it was for) mark
+                // every window as owing a redraw rather than risk a
+                // notify-driven update sitting unpainted until some
+                // unrelated `WindowEvent` happens to nudge the loop.
+                for inner in self.platform.windows.borrow().iter() {
+                    inner.mark_needs_redraw();
+                }
+            }
             #[cfg(target_os = "macos")]
             WinitUserEvent::MenuEvent(menu_event) => {
                 self.platform.dispatch_menu_action(&menu_event.id);
@@ -147,7 +230,7 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
                 if let Some(resize) = inner.callbacks.borrow_mut().resize.as_mut() {
                     resize(new_size, scale_factor as f32);
                 }
-                inner.window.request_redraw();
+                inner.mark_needs_redraw();
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 // winit fires this ahead of any `Resized` the OS also sends
@@ -174,14 +257,14 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
                 if let Some(resize) = inner.callbacks.borrow_mut().resize.as_mut() {
                     resize(new_size, scale_factor as f32);
                 }
-                inner.window.request_redraw();
+                inner.mark_needs_redraw();
             }
             WindowEvent::Focused(is_focused) => {
                 inner.state.borrow_mut().is_active = is_focused;
                 if let Some(callback) = inner.callbacks.borrow_mut().active_status_change.as_mut() {
                     callback(is_focused);
                 }
-                inner.window.request_redraw();
+                inner.mark_needs_redraw();
             }
             WindowEvent::ModifiersChanged(modifiers) => {
                 let modifiers = winit_modifiers_to_gpui(modifiers.state());
@@ -193,6 +276,7 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
                         capslock: gpui::Capslock::default(),
                     }),
                 );
+                inner.mark_needs_redraw();
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 input_trace!(
@@ -222,7 +306,7 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
                     if pressed {
                         inner.maybe_feed_unhandled_key_as_text(&keystroke, result.propagate);
                     }
-                    inner.window.request_redraw();
+                    inner.mark_needs_redraw();
                 }
             }
             WindowEvent::Ime(ime) => {
@@ -245,6 +329,12 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
                         modifiers,
                     }),
                 );
+                // Hover-sensitive UI (button/list highlight, cursor icon)
+                // depends on this: unlike the input events below, cursor
+                // motion previously relied entirely on the
+                // unconditionally-looping `RedrawRequested` to eventually
+                // reflect it, which no longer runs while idle.
+                inner.mark_needs_redraw();
             }
             WindowEvent::CursorLeft { .. } => {
                 let (position, modifiers, pressed_button) = {
@@ -259,6 +349,7 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
                         modifiers,
                     }),
                 );
+                inner.mark_needs_redraw();
             }
             WindowEvent::CursorEntered { .. } => {}
             WindowEvent::MouseInput { state, button, .. } => {
@@ -304,7 +395,7 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
                         );
                     }
                 }
-                inner.window.request_redraw();
+                inner.mark_needs_redraw();
             }
             WindowEvent::MouseWheel { delta, phase, .. } => {
                 let (position, modifiers) = {
@@ -320,9 +411,10 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
                         touch_phase: winit_touch_phase_to_gpui(phase),
                     }),
                 );
-                inner.window.request_redraw();
+                inner.mark_needs_redraw();
             }
             WindowEvent::RedrawRequested => {
+                self.frame_loop_stats.record_redraw_requested();
                 let callback = inner.callbacks.borrow_mut().request_frame.take();
                 if let Some(mut callback) = callback {
                     callback(gpui::RequestFrameOptions {
@@ -331,10 +423,20 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
                     });
                     inner.callbacks.borrow_mut().request_frame = Some(callback);
                 }
-                // Keep the loop going, matching gpui_web's rAF-reschedules-
-                // itself pattern; see module docs for the throttle this
-                // relies on.
-                inner.window.request_redraw();
+                // Deliberately does *not* re-request a redraw here anymore
+                // (see docs/winit-backend-design.md's "idle CPU" section):
+                // this used to loop forever, matching gpui_web's rAF
+                // pattern, but neither winit's `RedrawRequested`/
+                // `request_redraw` contract nor gpui's own frame callback
+                // (no return value indicating "there's more to draw") give
+                // a coalescing signal the way a real compositor's
+                // `wl_surface.frame` callback does for gpui_linux's wayland
+                // backend -- so blindly continuing meant the GPU present
+                // path ran forever at full display refresh rate even fully
+                // idle. `about_to_wait` now owns scheduling the next
+                // redraw, consuming `WinitWindowInner::needs_redraw` --
+                // exactly the events below (and any window that already
+                // ran) set before this iteration reaches it.
             }
             _ => {}
         }
@@ -345,6 +447,18 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let _guard = ActiveLoopGuard::enter(event_loop);
         self.platform.dispatcher.drain_main_queue();
+        // The sole place that turns `needs_redraw` into an actual
+        // `winit::window::Window::request_redraw` call — see the field doc
+        // on `WinitWindowInner::needs_redraw`. Runs once per event-loop
+        // iteration regardless of how many `WindowEvent`s/user events fed
+        // into it, so a burst of e.g. several mouse-move events between
+        // wakeups still yields exactly one redraw request, not one per
+        // event.
+        for inner in self.platform.windows.borrow().iter() {
+            if inner.needs_redraw.take() {
+                inner.window.request_redraw();
+            }
+        }
     }
 }
 
@@ -358,5 +472,67 @@ fn dispatch_input(inner: &WinitWindowInner, input: PlatformInput) -> DispatchEve
         callback(input)
     } else {
         DispatchEventResult::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FrameLoopStats;
+    use std::time::Duration;
+
+    #[test]
+    fn no_snapshot_before_a_second_elapses() {
+        let mut stats = FrameLoopStats::new();
+        let t0 = stats.window_start;
+        // A burst of redraws well inside the first second must not emit
+        // anything yet -- just tally.
+        assert_eq!(stats.record_redraw_requested_at(t0), None);
+        assert_eq!(
+            stats.record_redraw_requested_at(t0 + Duration::from_millis(500)),
+            None
+        );
+        assert_eq!(stats.total_count, 2);
+    }
+
+    #[test]
+    fn snapshot_fires_once_a_second_elapses_and_resets_the_window() {
+        let mut stats = FrameLoopStats::new();
+        let t0 = stats.window_start;
+        stats.record_redraw_requested_at(t0);
+        let line = stats
+            .record_redraw_requested_at(t0 + Duration::from_secs(1))
+            .expect("a full second elapsed, a snapshot line was expected");
+        assert!(line.starts_with("frame-loop: redraw_requested_per_sec="));
+        assert!(line.contains("total=2"));
+        // The window resets: the very next call, even a moment later,
+        // shouldn't immediately re-fire.
+        assert_eq!(
+            stats.record_redraw_requested_at(
+                t0 + Duration::from_secs(1) + Duration::from_millis(10)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn fps_reflects_actual_redraw_count_in_the_window() {
+        let mut stats = FrameLoopStats::new();
+        let t0 = stats.window_start;
+        // Five redraws spread across the first second...
+        for i in 0..5 {
+            stats.record_redraw_requested_at(t0 + Duration::from_millis(i * 100));
+        }
+        // ...then the sixth crosses the 1s boundary and reports ~6fps for
+        // this window (6 redraws / ~1.0s), not some unrelated constant --
+        // the whole point of this counter is measuring the *actual* rate,
+        // which is what first showed the pre-fix loop pinned at 60fps
+        // even fully idle.
+        let line = stats
+            .record_redraw_requested_at(t0 + Duration::from_secs(1))
+            .expect("a full second elapsed");
+        assert!(
+            line.contains("redraw_requested_per_sec=6.0"),
+            "expected ~6fps, got: {line}"
+        );
     }
 }
