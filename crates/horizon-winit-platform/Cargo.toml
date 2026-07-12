@@ -1,0 +1,42 @@
+# Production `gpui::Platform` implementation over winit — the adoption step
+# of the winit windowing backend roadmap item. Ports
+# `spikes/gpui-winit/` (docs/research/winit-backend-spike.md, legs 1+2) into
+# a real workspace member. See docs/winit-backend-design.md for the
+# architecture and the opt-in switch.
+#
+# Linux-only: every functional module is gated `#[cfg(target_os = "linux")]`
+# (see src/lib.rs), and winit/gpui_wgpu/arboard/raw-window-handle are
+# Linux-only dependencies below, so `cargo build --workspace` stays green
+# and lean on macOS/Windows even though this crate is an unconditional
+# workspace member.
+#
+# gpui/gpui_wgpu ride the same unpinned git source as the root crate's
+# `gpui`/`gpui_platform` (see the long comment on those two in the root
+# Cargo.toml) rather than the spike's pinned rev — a second, differently
+# pinned `gpui` source would split the dependency graph ("multiple
+# different versions of crate `gpui`").
+[package]
+name = "horizon-winit-platform"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+futures = "0.3"
+gpui = { git = "https://github.com/zed-industries/zed" }
+log = "0.4"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gpui_wgpu = { git = "https://github.com/zed-industries/zed" }
+# wayland-data-control is needed for primary-selection support under native
+# Wayland (X11 always gets it via x11rb, an unconditional arboard
+# dependency on this target regardless of this feature); image-data is
+# left off the default features since Horizon only ever puts text on the
+# clipboard.
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+raw-window-handle = "0.6"
+uuid = "1"
+winit = "0.30"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
