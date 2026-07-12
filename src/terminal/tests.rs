@@ -2,7 +2,7 @@
 // glob-exports gpui's own `test` attribute macro and shadows `std::test`,
 // sending plain `#[test]` fns through gpui's async test harness instead
 // (see `src/terminal/session.rs`'s tests module for the same workaround).
-use super::{font_from_stack, ImeCommitGuard, DEFAULT_FONT_FAMILY};
+use super::{font_from_stack, ImeCommitGuard, DEFAULT_FONT_FAMILY, IME_COMMIT_PHANTOM_WINDOW};
 
 #[test]
 fn stack_parses_primary_and_fallbacks() {
@@ -126,4 +126,29 @@ fn consecutive_compositions_each_suppress_independently() {
     // A second, independent composition later in the same session.
     guard.note_commit(true);
     assert!(guard.should_suppress("enter"));
+}
+
+#[test]
+fn phantom_enter_within_the_window_is_suppressed() {
+    let mut guard = ImeCommitGuard::default();
+    let before = std::time::Instant::now();
+    guard.note_commit(true);
+    // The phantom Enter arrives in the same input burst as the commit —
+    // a few ms later is a realistic delay, comfortably inside the window.
+    let shortly_after = before + std::time::Duration::from_millis(5);
+    assert!(guard.should_suppress_at("enter", shortly_after));
+}
+
+#[test]
+fn enter_after_the_window_passes_through_a_mouse_click_commit() {
+    let mut guard = ImeCommitGuard::default();
+    let before = std::time::Instant::now();
+    guard.note_commit(true);
+    // A composition committed by mouse click on the candidate window
+    // produces no phantom key at all, so the guard stays armed until the
+    // next keydown. If that next keydown is a genuine, unrelated Enter
+    // arriving well after the phantom-key window (compose -> click
+    // candidate -> press Enter to send the line), it must not be eaten.
+    let well_after_the_window = before + IME_COMMIT_PHANTOM_WINDOW * 3;
+    assert!(!guard.should_suppress_at("enter", well_after_the_window));
 }

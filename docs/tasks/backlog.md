@@ -451,11 +451,21 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     and sends `\r`. Fixed with a pure `ImeCommitGuard` (armed by
     `replace_text_in_range` on `was_composing`, consumed unconditionally
     by the next `handle_key` call, suppressing only when that key is
-    Enter) — covered by unit tests in `src/terminal/tests.rs` for the
-    single-suppression, rapid-typing, Space/candidate-commit, and
-    consecutive-composition cases. Live repro with a real IME was out of
-    scope (native Wayland blocks key injection); final visual
+    Enter *and* it arrived within a 100ms window of the commit —
+    review feedback caught that a composition committed by mouse click on
+    the candidate window produces no phantom key at all, so an unbounded
+    guard would swallow a later genuine Enter, e.g. compose → click
+    candidate → press Enter to send the line) — covered by unit tests in
+    `src/terminal/tests.rs` for the single-suppression, rapid-typing,
+    Space/candidate-commit, consecutive-composition, and
+    within-window/after-window cases. Live repro with a real IME was out
+    of scope (native Wayland blocks key injection); final visual
     confirmation is deferred to owner dogfooding. The agent composer
     (`src/agent/view.rs`) uses gpui-component's `Input`/`InputState`
     widget rather than a hand-rolled `EntityInputHandler`, so this guard
-    doesn't apply there — left as-is.
+    doesn't apply there — left as-is. Known residual, not handled
+    speculatively: an IME configured to auto-commit on a punctuation key
+    would deliver that punctuation as its own phantom key within the
+    window, which this guard intentionally passes through (only
+    Enter/Return is treated as a plausible confirming key) — revisit only
+    if dogfooding observes doubled characters.

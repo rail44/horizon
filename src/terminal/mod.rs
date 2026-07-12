@@ -340,6 +340,19 @@ fn utf16_len(text: &str) -> usize {
     text.chars().map(char::len_utf16).sum()
 }
 
+/// A composition confirmed via a physical key (Enter) redelivers that
+/// key as an independent `KeyDownEvent` essentially in the same input
+/// burst as the commit — observed at microseconds-to-low-single-digit
+/// milliseconds in the spike's logs. A composition confirmed by mouse
+/// click on the candidate window produces no phantom key at all, so the
+/// very next keydown may be a genuine, unrelated Enter arriving well
+/// after this window (e.g. "compose → click candidate → press Enter to
+/// send the line", a natural terminal flow). 100ms is a generous ceiling
+/// above the phantom case and comfortably below any plausible human
+/// reaction time, so it distinguishes the two without needing to know
+/// which one committed the composition.
+const IME_COMMIT_PHANTOM_WINDOW: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// The pure decision behind the IME "phantom Enter" guard
 /// (docs/tasks/backlog.md #30): Wayland's text-input-v3 delivers the
 /// physical key that confirmed an IME composition as an independent
@@ -347,28 +360,38 @@ fn utf16_len(text: &str) -> usize {
 /// naive `ime_marked_text.is_some()` check can't tell that keydown apart
 /// from an ordinary, unrelated keystroke.
 ///
-/// `note_commit` arms the guard when a composition was just committed.
-/// `should_suppress` is then called with the very next key event's name
-/// (regardless of what that key is) and unconditionally disarms the
-/// guard — so it can only ever affect the one keydown immediately
-/// following a commit, never a later one. It reports "suppress" only
-/// when that key is Enter/Return, the one key that plausibly caused the
-/// commit; every other key (a phantom Space redelivery, ordinary typing,
-/// ...) passes through unaffected.
+/// `note_commit` arms the guard (recording when) when a composition was
+/// just committed. `should_suppress` is then called with the very next
+/// key event's name (regardless of what that key is) and unconditionally
+/// disarms the guard — so it can only ever affect the one keydown
+/// immediately following a commit, never a later one. It reports
+/// "suppress" only when that key is Enter/Return *and* it arrived within
+/// [`IME_COMMIT_PHANTOM_WINDOW`] of the commit; every other key (a
+/// phantom Space redelivery, ordinary typing, a late genuine Enter after
+/// a mouse-click commit, ...) passes through unaffected.
 #[derive(Default)]
 struct ImeCommitGuard {
-    armed: bool,
+    armed_at: Option<std::time::Instant>,
 }
 
 impl ImeCommitGuard {
     fn note_commit(&mut self, was_composing: bool) {
         if was_composing {
-            self.armed = true;
+            self.armed_at = Some(std::time::Instant::now());
         }
     }
 
     fn should_suppress(&mut self, key: &str) -> bool {
-        std::mem::take(&mut self.armed) && key == "enter"
+        self.should_suppress_at(key, std::time::Instant::now())
+    }
+
+    /// Clock-injected core so the decision stays pure and testable
+    /// without sleeping.
+    fn should_suppress_at(&mut self, key: &str, now: std::time::Instant) -> bool {
+        let Some(armed_at) = self.armed_at.take() else {
+            return false;
+        };
+        key == "enter" && now.saturating_duration_since(armed_at) < IME_COMMIT_PHANTOM_WINDOW
     }
 }
 
