@@ -228,3 +228,34 @@ failure display themselves are still unbuilt (next stage).
   today — deferred by owner decision 2026-07-12, not part of this
   stage), and no rendering change beyond the one `AgentFrameItem`
   match arm `src/agent/view.rs` needed to keep compiling.
+
+## Post-review adjustments (owner feedback 2026-07-13, stage D)
+
+Two deviations from the mock/decision 1 wording, made on stage D's
+branch after a visual review (owner explicitly accepted both as
+deviations rather than asking for a mock update):
+
+- **Click affordance.** "It's hard to tell from its looks that the
+  receipt is clickable." The receipt row now shows a subtle hover
+  background (`theme::text_subtle()` at low alpha — an existing role,
+  no new one) and its `▸`/`▾` glyph is accent-tinted rather than muted,
+  so the row reads as interactive on hover/glance without adding
+  chrome to its resting state.
+- **Receipt aggregation.** "Rows of glob/grep/read chips carry no
+  information — aggregate them into something like 'x times tool
+  called', and express the number of files read/edited as prose." The
+  collapsed receipt line is now prose-first: low-signal query calls
+  (`fs.read`/`fs.grep`/`fs.glob`/`recall.*`/`workspace.snapshot`/
+  `skill.read`/any other non-edit, non-bash tool) fold into `{N} tool
+  call(s)`, with `fs.read` broken out separately as `read {N} file(s)`
+  (distinct paths, not call counts) and edit-class calls
+  (`fs.edit`/`fs.write`) as `edited {N} file(s)` (same distinct-path
+  treatment). Bash calls keep individual chips (the command itself is
+  meaningful); **any failed call, of any class, is never aggregated**
+  — it keeps its own error-marked chip, so a failure stays visible on
+  the collapsed line even though its class would otherwise fold into a
+  count. Individual file chips with diffstat leave the collapsed line
+  entirely (that detail now lives only in the expansion rows, which
+  are unaggregated and otherwise unchanged from stage D). Pure
+  aggregation logic (`classify_call`, `aggregate_receipt`,
+  `receipt_prose`) lives in `src/agent/turns.rs` with colocated tests.

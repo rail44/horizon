@@ -6,6 +6,7 @@
 //! composition, and humanized durations are display concerns, not
 //! contract ones).
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
 
@@ -164,6 +165,11 @@ pub(crate) enum ToolCallKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ToolCallView {
     pub call_id: ToolCallId,
+    /// The raw tool id (e.g. `fs.edit`, `bash`) -- kept alongside the
+    /// display `verb`/`kind` so receipt aggregation
+    /// (`classify_call`/`aggregate_receipt`) can classify precisely
+    /// without re-deriving it from display text.
+    pub tool_id: String,
     pub verb: String,
     pub target: Option<String>,
     /// Set once the call has finished; a still-running call has no
@@ -216,6 +222,7 @@ pub(crate) fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallVie
             let (verb, target, result_summary, kind) = classify(entry.tool_id, entry.input, output);
             ToolCallView {
                 call_id: entry.call_id,
+                tool_id: entry.tool_id.to_string(),
                 verb,
                 target,
                 result_summary: if entry.result.is_some() {
@@ -257,6 +264,136 @@ pub(crate) fn is_approval_still_pending(
 pub(crate) fn progress(tool_calls: &[ToolCallView]) -> (usize, usize) {
     let finished = tool_calls.iter().filter(|call| call.finished).count();
     (finished, tool_calls.len())
+}
+
+/// A tool call's class for collapsed-receipt aggregation (owner feedback
+/// 2026-07-13 -- "rows of glob/grep/read chips carry no information",
+/// see `docs/agent-output-ui-amendment.md`'s post-review note): `Edit`
+/// and `Query` calls fold into prose counts on the receipt line; `Bash`
+/// always stays individual chips (the command itself is meaningful, per
+/// the owner's own framing).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CallClass {
+    Edit,
+    Bash,
+    Query,
+}
+
+/// `fs.edit`/`fs.write` are `Edit`, `bash` is `Bash`, and everything
+/// else -- `fs.read`/`fs.grep`/`fs.glob`/`recall.*`/`workspace.snapshot`/
+/// `skill.read`/any future tool id this crate doesn't otherwise
+/// recognize -- is `Query` (the "read-only, low-signal" bucket the
+/// receipt aggregates, `fs.read` aside, which gets its own
+/// `read_file_count`).
+fn classify_call(tool_id: &str) -> CallClass {
+    match tool_id {
+        "fs.edit" | "fs.write" => CallClass::Edit,
+        "bash" => CallClass::Bash,
+        _ => CallClass::Query,
+    }
+}
+
+/// The collapsed receipt line's aggregated view. `query_count` counts
+/// successful `Query`-class calls *excluding* `fs.read` (which gets its
+/// own `read_file_count` instead, expressed as *distinct file paths* so
+/// re-reading the same file within a turn doesn't inflate the count);
+/// `edited_file_count` is the same distinct-path treatment for
+/// successful `Edit`-class calls. `bash_calls` (any outcome) and
+/// `individual_calls` (any failed call of any class, plus the defensive
+/// case of a call that never finished within a supposedly completed
+/// turn) render as their own chips rather than folding into a count, so
+/// a failure -- or an anomaly -- never goes silently missing from the
+/// collapsed line.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct ReceiptAggregate {
+    pub query_count: usize,
+    pub read_file_count: usize,
+    pub edited_file_count: usize,
+    pub bash_calls: Vec<ToolCallView>,
+    pub individual_calls: Vec<ToolCallView>,
+}
+
+/// Aggregates `tool_calls` (a single receipt's worth, from
+/// [`build_tool_call_views`]) into a [`ReceiptAggregate`]. Order within
+/// `bash_calls`/`individual_calls` follows `tool_calls`' own (first-
+/// request) order.
+pub(crate) fn aggregate_receipt(tool_calls: &[ToolCallView]) -> ReceiptAggregate {
+    let mut aggregate = ReceiptAggregate::default();
+    let mut read_paths: HashSet<String> = HashSet::new();
+    let mut edited_paths: HashSet<String> = HashSet::new();
+
+    for call in tool_calls {
+        let class = classify_call(&call.tool_id);
+        if class == CallClass::Bash {
+            aggregate.bash_calls.push(call.clone());
+            continue;
+        }
+        if call.is_error || !call.finished {
+            // A failed call never aggregates, regardless of class (the
+            // owner's explicit requirement) -- nor does the defensive
+            // "never finished within a completed turn" case, which
+            // shouldn't happen by contract but must not silently vanish
+            // into a count either.
+            aggregate.individual_calls.push(call.clone());
+            continue;
+        }
+        match class {
+            CallClass::Edit => {
+                if let Some(path) = &call.target {
+                    edited_paths.insert(path.clone());
+                }
+            }
+            CallClass::Query if call.tool_id == "fs.read" => {
+                if let Some(path) = &call.target {
+                    read_paths.insert(path.clone());
+                }
+            }
+            CallClass::Query => aggregate.query_count += 1,
+            CallClass::Bash => unreachable!("Bash already handled above"),
+        }
+    }
+
+    aggregate.read_file_count = read_paths.len();
+    aggregate.edited_file_count = edited_paths.len();
+    aggregate
+}
+
+/// `1 {singular}` / `{count} {plural}`.
+fn pluralize(count: usize, singular: &str, plural: &str) -> String {
+    if count == 1 {
+        format!("1 {singular}")
+    } else {
+        format!("{count} {plural}")
+    }
+}
+
+/// The collapsed receipt line's prose prefix (owner feedback
+/// 2026-07-13): `None` when every aggregated count is zero (e.g. a
+/// bash-only or all-individual-chips turn), so the line never shows a
+/// hollow "0 tool calls" -- it just goes straight to whatever chips/
+/// status/model follow.
+pub(crate) fn receipt_prose(aggregate: &ReceiptAggregate) -> Option<String> {
+    let mut parts = Vec::new();
+    if aggregate.query_count > 0 {
+        parts.push(pluralize(aggregate.query_count, "tool call", "tool calls"));
+    }
+    if aggregate.read_file_count > 0 {
+        parts.push(format!(
+            "read {}",
+            pluralize(aggregate.read_file_count, "file", "files")
+        ));
+    }
+    if aggregate.edited_file_count > 0 {
+        parts.push(format!(
+            "edited {}",
+            pluralize(aggregate.edited_file_count, "file", "files")
+        ));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" · "))
+    }
 }
 
 /// Maps a tool id to its display verb, target, (would-be) result
@@ -1378,5 +1515,183 @@ mod tests {
         let items = vec![tool_requested("a", "fs.read", json!({"path": "a.rs"}))];
         let call_id = ToolCallId("missing".to_string());
         assert!(tool_call_body(&items, &call_id).is_none());
+    }
+
+    #[test]
+    fn classify_call_sorts_every_tool_id_into_its_class() {
+        assert_eq!(classify_call("fs.edit"), CallClass::Edit);
+        assert_eq!(classify_call("fs.write"), CallClass::Edit);
+        assert_eq!(classify_call("bash"), CallClass::Bash);
+        for tool_id in [
+            "fs.read",
+            "fs.grep",
+            "fs.glob",
+            "recall.search",
+            "recall.read",
+            "workspace.snapshot",
+            "skill.read",
+            "some.future.tool",
+        ] {
+            assert_eq!(classify_call(tool_id), CallClass::Query, "{tool_id}");
+        }
+    }
+
+    #[test]
+    fn aggregate_receipt_folds_mixed_classes_into_prose_counts() {
+        let items = vec![
+            tool_requested("q1", "fs.grep", json!({"base_path": ".", "pattern": "x"})),
+            tool_finished("q1", json!({"returned_count": 1})),
+            tool_requested(
+                "q2",
+                "fs.glob",
+                json!({"base_path": ".", "pattern": "*.rs"}),
+            ),
+            tool_finished("q2", json!({"returned_count": 2})),
+            tool_requested("r1", "fs.read", json!({"path": "a.rs"})),
+            tool_finished("r1", json!({"total_lines": 10})),
+            tool_requested(
+                "e1",
+                "fs.edit",
+                json!({"path": "b.rs", "old_string": "x", "new_string": "y"}),
+            ),
+            tool_finished("e1", json!({"path": "b.rs", "replaced": true})),
+            tool_requested("b1", "bash", json!({"command": "cargo test"})),
+            tool_finished("b1", json!({"exit_code": 0, "output": ""})),
+        ];
+        let tool_calls = build_tool_call_views(&items);
+        let aggregate = aggregate_receipt(&tool_calls);
+        assert_eq!(aggregate.query_count, 2); // fs.grep + fs.glob
+        assert_eq!(aggregate.read_file_count, 1);
+        assert_eq!(aggregate.edited_file_count, 1);
+        assert_eq!(aggregate.bash_calls.len(), 1);
+        assert!(aggregate.individual_calls.is_empty());
+        assert_eq!(
+            receipt_prose(&aggregate).as_deref(),
+            Some("2 tool calls · read 1 file · edited 1 file")
+        );
+    }
+
+    #[test]
+    fn aggregate_receipt_counts_distinct_paths_not_call_counts() {
+        let items = vec![
+            tool_requested("r1", "fs.read", json!({"path": "a.rs"})),
+            tool_finished("r1", json!({"total_lines": 10})),
+            tool_requested("r2", "fs.read", json!({"path": "a.rs"})),
+            tool_finished("r2", json!({"total_lines": 10})),
+            tool_requested("r3", "fs.read", json!({"path": "b.rs"})),
+            tool_finished("r3", json!({"total_lines": 5})),
+            tool_requested(
+                "e1",
+                "fs.edit",
+                json!({"path": "c.rs", "old_string": "x", "new_string": "y"}),
+            ),
+            tool_finished("e1", json!({"path": "c.rs", "replaced": true})),
+            tool_requested("e2", "fs.write", json!({"path": "c.rs", "content": "z"})),
+            tool_finished("e2", json!({"path": "c.rs", "created": false})),
+        ];
+        let tool_calls = build_tool_call_views(&items);
+        let aggregate = aggregate_receipt(&tool_calls);
+        // Two reads of a.rs collapse to one distinct path; b.rs adds a
+        // second. An edit and a write to the same c.rs collapse to one
+        // distinct edited path.
+        assert_eq!(aggregate.read_file_count, 2);
+        assert_eq!(aggregate.edited_file_count, 1);
+        assert_eq!(
+            receipt_prose(&aggregate).as_deref(),
+            Some("read 2 files · edited 1 file")
+        );
+    }
+
+    #[test]
+    fn aggregate_receipt_breaks_out_a_failed_call_of_any_class_individually() {
+        let items = vec![
+            tool_requested("q1", "fs.grep", json!({"base_path": ".", "pattern": "x"})),
+            tool_finished("q1", json!({"returned_count": 1})),
+            tool_requested("bad_read", "fs.read", json!({"path": "missing.rs"})),
+            tool_finished(
+                "bad_read",
+                json!({"is_error": true, "message": "not found"}),
+            ),
+            tool_requested(
+                "bad_edit",
+                "fs.edit",
+                json!({"path": "d.rs", "old_string": "x", "new_string": "y"}),
+            ),
+            tool_finished(
+                "bad_edit",
+                json!({"is_error": true, "message": "old_string not found"}),
+            ),
+            tool_requested("bad_bash", "bash", json!({"command": "false"})),
+            tool_finished(
+                "bad_bash",
+                json!({"is_error": true, "message": "boom", "exit_code": 1}),
+            ),
+        ];
+        let tool_calls = build_tool_call_views(&items);
+        let aggregate = aggregate_receipt(&tool_calls);
+        // The failed read and failed edit never reach the counts...
+        assert_eq!(aggregate.read_file_count, 0);
+        assert_eq!(aggregate.edited_file_count, 0);
+        assert_eq!(aggregate.query_count, 1); // only the successful grep
+                                              // ...and stay individually chip-able instead: the failed bash goes
+                                              // through `bash_calls` (bash always stays individual, per its own
+                                              // rule), the failed read/edit through `individual_calls`.
+        assert_eq!(aggregate.bash_calls.len(), 1);
+        assert_eq!(aggregate.individual_calls.len(), 2);
+        let individual_ids: Vec<&str> = aggregate
+            .individual_calls
+            .iter()
+            .map(|call| call.call_id.0.as_str())
+            .collect();
+        assert!(individual_ids.contains(&"bad_read"));
+        assert!(individual_ids.contains(&"bad_edit"));
+    }
+
+    #[test]
+    fn receipt_prose_uses_singular_wording_for_a_count_of_one() {
+        let aggregate = ReceiptAggregate {
+            query_count: 1,
+            read_file_count: 1,
+            edited_file_count: 1,
+            ..Default::default()
+        };
+        assert_eq!(
+            receipt_prose(&aggregate).as_deref(),
+            Some("1 tool call · read 1 file · edited 1 file")
+        );
+    }
+
+    #[test]
+    fn receipt_prose_uses_plural_wording_above_one() {
+        let aggregate = ReceiptAggregate {
+            query_count: 3,
+            read_file_count: 2,
+            edited_file_count: 5,
+            ..Default::default()
+        };
+        assert_eq!(
+            receipt_prose(&aggregate).as_deref(),
+            Some("3 tool calls · read 2 files · edited 5 files")
+        );
+    }
+
+    #[test]
+    fn receipt_prose_is_none_when_every_count_is_zero() {
+        // An all-bash or all-individual-chip turn: the collapsed line
+        // still shows its bash/failed chips plus status/elapsed (view
+        // concern), but the prose prefix itself is simply absent.
+        assert_eq!(receipt_prose(&ReceiptAggregate::default()), None);
+    }
+
+    #[test]
+    fn aggregate_receipt_of_an_all_bash_turn_has_no_prose_but_keeps_bash_chips() {
+        let items = vec![
+            tool_requested("b1", "bash", json!({"command": "cargo build"})),
+            tool_finished("b1", json!({"exit_code": 0, "output": ""})),
+        ];
+        let tool_calls = build_tool_call_views(&items);
+        let aggregate = aggregate_receipt(&tool_calls);
+        assert_eq!(aggregate.bash_calls.len(), 1);
+        assert_eq!(receipt_prose(&aggregate), None);
     }
 }

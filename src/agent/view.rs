@@ -399,16 +399,19 @@ impl AgentView {
             .into_any_element()
     }
 
-    /// The completed turn's one-line receipt (decision 1): the `▸`/`▾`
-    /// expansion affordance (stage D: clickable, pointer cursor), one
-    /// chip per tool call, the end-reason status text, and the model id
-    /// (muted, at the row's end). A uniform text size and muted `·`
-    /// separators between the chip group, the status, and the model id
-    /// keep it reading as one quiet line rather than loose fragments.
-    /// Clicking anywhere on the row toggles `receipt_key`'s expansion
-    /// (mock 6a): the per-call row list (decision 3) renders beneath,
-    /// each row individually expandable in turn
-    /// (`render_expandable_tool_call_row`).
+    /// The completed turn's one-line receipt (decision 1, aggregated per
+    /// owner feedback 2026-07-13 -- see
+    /// `docs/agent-output-ui-amendment.md`'s post-review note): the
+    /// `▸`/`▾` expansion affordance (accent-tinted, plus a subtle hover
+    /// background on the whole row -- "hard to tell it's clickable"),
+    /// prose counts for the low-signal query/edit calls
+    /// (`turns::receipt_prose`), individual chips only for bash calls
+    /// and any failed call, the end-reason status text, and the model id
+    /// (muted, at the row's end). Clicking anywhere on the row toggles
+    /// `receipt_key`'s expansion (mock 6a): the per-call row list
+    /// (decision 3) renders beneath, each row individually expandable in
+    /// turn (`render_expandable_tool_call_row`) -- unaggregated, exactly
+    /// as built for stage D.
     fn render_receipt(
         &self,
         receipt_key: usize,
@@ -417,6 +420,8 @@ impl AgentView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let tool_calls = turns::build_tool_call_views(items);
+        let aggregate = turns::aggregate_receipt(&tool_calls);
+        let prose = turns::receipt_prose(&aggregate);
         let status = turns::receipt_status(end);
         let status_color = if status.is_error {
             theme::danger()
@@ -437,16 +442,28 @@ impl AgentView {
             .flex_wrap()
             .items_center()
             .gap_2()
+            .px_1()
             .py_0p5()
+            .rounded_sm()
             .cursor_pointer()
+            .hover(|this| this.bg(theme::text_subtle().alpha(0.12)))
             .on_click(cx.listener(move |view, _, _, cx| {
                 view.toggle_receipt(receipt_key, cx);
             }))
-            .child(receipt_text(theme::text_subtle(), arrow.to_string()));
-        for call in &tool_calls {
+            .child(receipt_text(theme::accent(), arrow.to_string()));
+        if let Some(prose) = &prose {
+            row = row.child(receipt_text(theme::text_muted(), prose.clone()));
+        }
+        for call in &aggregate.bash_calls {
             row = row.child(self.render_receipt_chip(call));
         }
-        if !tool_calls.is_empty() {
+        for call in &aggregate.individual_calls {
+            row = row.child(self.render_receipt_chip(call));
+        }
+        let has_leading_content = prose.is_some()
+            || !aggregate.bash_calls.is_empty()
+            || !aggregate.individual_calls.is_empty();
+        if has_leading_content {
             row = row.child(separator());
         }
         row = row.child(receipt_text(status_color, status.text));
@@ -687,9 +704,14 @@ impl AgentView {
         }
     }
 
-    /// One receipt chip: a plain verb + check/error mark for most tools,
-    /// a file chip (name + diffstat, when derivable) for fs.edit/
-    /// fs.write, and a bash chip (command head + mark) for bash.
+    /// One receipt chip -- post-aggregation (owner feedback 2026-07-13),
+    /// only rendered for `aggregate_receipt`'s `bash_calls` (always
+    /// individual: command info is meaningful) and `individual_calls`
+    /// (any failed call, of any class, plus the defensive
+    /// never-finished case): a bash chip (command head + mark), a file
+    /// chip (name + mark -- no diffstat once failed, see below) for a
+    /// failed fs.edit/fs.write, and a plain verb + mark for everything
+    /// else.
     fn render_receipt_chip(&self, call: &turns::ToolCallView) -> AnyElement {
         let (mark, mark_color) = if !call.finished {
             ("…", theme::text_subtle())
@@ -714,7 +736,16 @@ impl AgentView {
                         .text_color(theme::text_muted())
                         .child(file_name.clone()),
                 );
-                if let Some((added, removed)) = diffstat.filter(|_| call.finished) {
+                if call.is_error {
+                    // A failed edit/write never actually applied (the
+                    // tool aborts before writing) -- showing the
+                    // would-be diffstat here would misleadingly imply it
+                    // did. Owner feedback 2026-07-13: a failed call keeps
+                    // its own error-marked chip regardless of class, so
+                    // just the mark, not the attempted diffstat.
+                    label =
+                        label.child(div().text_size(px(11.0)).text_color(mark_color).child(mark));
+                } else if let Some((added, removed)) = diffstat.filter(|_| call.finished) {
                     label = label
                         .child(
                             div()
