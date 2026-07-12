@@ -3,10 +3,17 @@ name = "horizon-agent"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+# Compile DuckDB from source instead of dynamically linking a prebuilt
+# libduckdb. Slow (DuckDB is the single largest compile unit in this
+# workspace) but needs no system library — use on machines without a
+# prebuilt/distro libduckdb. See AGENTS.md "Build setup".
+bundled-duckdb = ["duckdb/bundled"]
+
 [dependencies]
 anyhow = "1.0"
 crossbeam-channel = "0.5"
-duckdb = { version = "1", features = ["bundled"] }
+duckdb = { version = "1" }
 futures-util = "0.3"
 globset = "0.4"
 horizon-session-protocol = { path = "../horizon-session-protocol" }
