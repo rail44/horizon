@@ -415,3 +415,25 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     termy/pathfinder note), pin explicit `rev =` values in Cargo.toml so
     the pin survives lockfile regeneration and is visible in review diffs.
     Small mechanical task. Recorded 2026-07-12.
+30. **Possible double-Enter after confirming an IME composition in the
+    terminal** — found while implementing IME for the winit backend spike
+    (leg 2, `docs/research/winit-backend-spike.md` §16 Q2), but the code
+    shape it points at is gpui_linux's wayland backend, which Horizon's
+    production terminal already runs on today, so it's plausibly live now.
+    Wayland's text-input-v3 protocol (unlike X11's XIM) never lets the
+    compositor consume keys on the client's behalf: a physical Enter that
+    confirms an IME conversion still arrives as an independent
+    `KeyboardInput` event, *after* the `CommitString`/`replace_text_in_range`
+    call already cleared `ime_marked_text`. `TerminalView::on_key_down`'s
+    IME guard (`self.ime_marked_text.is_some()`) checks state at the time
+    each event arrives, so it can't see that the commit and this keydown
+    belong to the same user action — the physical Enter falls through to
+    normal key handling and sends an extra `\r` to the PTY. Confirmed by
+    direct log evidence in the spike's own `EntityInputHandler` (same call
+    shape as `TerminalView`'s), not yet reproduced against the real
+    terminal. Needs: reproduce with a real Japanese IME against
+    `TerminalView`, then likely fix via a one-frame "just committed"
+    suppression flag (set in `replace_text_in_range` when
+    `was_composing`, cleared at the next `on_key_down` regardless of
+    outcome) rather than relying solely on `ime_marked_text.is_some()`.
+    Recorded 2026-07-12.

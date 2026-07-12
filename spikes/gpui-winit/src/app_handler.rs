@@ -165,6 +165,9 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
                     inner.window.request_redraw();
                 }
             }
+            WindowEvent::Ime(ime) => {
+                inner.handle_ime(ime);
+            }
             WindowEvent::RedrawRequested => {
                 let callback = inner.callbacks.borrow_mut().request_frame.take();
                 if let Some(mut callback) = callback {

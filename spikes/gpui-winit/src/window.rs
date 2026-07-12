@@ -3,9 +3,14 @@
 //! rendering pipeline is reimplemented here, only the glue that feeds it a
 //! winit-owned surface and drains winit events into gpui's callbacks.
 //!
-//! IME, multi-window, and window decoration/state control (minimize, zoom,
-//! move-by-drag, ...) are unimplemented no-ops per the leg-1 scope; see
-//! docs/research/winit-backend-spike.md for which stubs actually got hit.
+//! Multi-window and window decoration/state control (minimize, zoom,
+//! move-by-drag, ...) are unimplemented no-ops per the leg-1 scope. IME
+//! (leg 2) is implemented: `handle_ime` mirrors the
+//! `zwp_text_input_v3::Event` -> `PlatformInputHandler` dispatch gpui_linux's
+//! wayland backend does (`WaylandClientStatePtr`'s `Dispatch` impl in the
+//! pinned gpui checkout), just driven by winit's `Ime` enum instead of raw
+//! Wayland protocol events. See docs/research/winit-backend-spike.md for
+//! which stubs actually got hit.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -49,6 +54,96 @@ pub(crate) struct WinitWindowInner {
     pub(crate) callbacks: RefCell<WinitWindowCallbacks>,
 }
 
+impl WinitWindowInner {
+    /// Drives a winit `Ime` event into gpui's `EntityInputHandler` pipeline
+    /// through the same three calls gpui_linux's wayland backend makes from
+    /// `zwp_text_input_v3::Event` (`replace_and_mark_text_in_range` for
+    /// preedit, `replace_text_in_range` for commit, `unmark_text` for
+    /// clearing) — see module docs.
+    ///
+    /// Candidate-window positioning (`set_ime_cursor_area`, leg-2 criterion
+    /// e) only fires for a *non-empty* `Preedit` — i.e. only while a
+    /// composition is genuinely in progress. An earlier version called it
+    /// unconditionally (including from empty `Preedit("", None)` acks) and
+    /// hit a feedback loop: GNOME's text-input-v3 implementation answers
+    /// `set_cursor_rectangle` + `commit()` with another `Done` (surfaced by
+    /// winit as another empty `Preedit`), which triggered another
+    /// `set_ime_cursor_area`, forever — tens of thousands of events/sec,
+    /// observed directly in this spike. gpui_linux avoids the same trap
+    /// with a `serial_tracker` check before its own `commit()`
+    /// (`WaylandClientState::text_input` handling in the pinned gpui
+    /// checkout); winit doesn't expose wayland serials through its `Ime`
+    /// enum, so "only reposition on real composition content" is the
+    /// available equivalent guard here.
+    pub(crate) fn handle_ime(&self, ime: winit::event::Ime) {
+        log::info!("winit Ime event: {ime:?}");
+
+        let mut state = self.state.borrow_mut();
+        let Some(mut input_handler) = state.input_handler.take() else {
+            log::warn!("Ime event with no active input handler: {ime:?}");
+            return;
+        };
+        drop(state);
+
+        let mut reposition_candidate_window = false;
+        match ime {
+            winit::event::Ime::Enabled => {}
+            winit::event::Ime::Preedit(text, _cursor_range) => {
+                // winit's `Preedit` cursor_range (byte offsets into `text`)
+                // is richer than what gpui_linux actually reads off
+                // `zwp_text_input_v3::Event::PreeditString` — that handler
+                // destructures `{ text, .. }` and drops the protocol's own
+                // cursor_begin/cursor_end fields. We match that omission
+                // here (`replace_and_mark_text_in_range`'s
+                // `new_selected_range` goes to `None`, same as gpui_linux)
+                // rather than inventing a richer contract gpui's Linux
+                // backend doesn't itself provide.
+                if text.is_empty() {
+                    input_handler.unmark_text();
+                } else {
+                    input_handler.replace_and_mark_text_in_range(None, &text, None);
+                    reposition_candidate_window = true;
+                }
+            }
+            winit::event::Ime::Commit(text) => {
+                input_handler.replace_text_in_range(None, &text);
+            }
+            winit::event::Ime::Disabled => {
+                if let Some(marked) = input_handler.marked_text_range() {
+                    input_handler.replace_text_in_range(Some(marked), "");
+                }
+                input_handler.unmark_text();
+            }
+        }
+
+        if reposition_candidate_window {
+            if let Some(bounds) = input_handler.ime_candidate_bounds() {
+                log::info!("ime candidate bounds: {bounds:?}");
+                self.set_ime_cursor_area(bounds);
+            }
+        }
+
+        self.state.borrow_mut().input_handler = Some(input_handler);
+        self.window.request_redraw();
+    }
+
+    /// Shared by `handle_ime` (while composing) and
+    /// `WinitPlatformWindow::update_ime_position` (the out-of-composition
+    /// caret-moved hook gpui calls via `Window::invalidate_character_coordinates`).
+    pub(crate) fn set_ime_cursor_area(&self, bounds: Bounds<Pixels>) {
+        self.window.set_ime_cursor_area(
+            winit::dpi::LogicalPosition::new(
+                f32::from(bounds.origin.x),
+                f32::from(bounds.origin.y),
+            ),
+            winit::dpi::LogicalSize::new(
+                f32::from(bounds.size.width),
+                f32::from(bounds.size.height),
+            ),
+        );
+    }
+}
+
 pub(crate) struct WinitPlatformWindow {
     pub(crate) inner: Rc<WinitWindowInner>,
     display: Rc<dyn PlatformDisplay>,
@@ -79,6 +174,13 @@ impl WinitPlatformWindow {
             window.inner_size(),
             window.outer_size(),
         );
+
+        // Leg 2 criterion a: opt the window into IME. Without this winit
+        // never asks the platform's text-input mechanism (zwp_text_input_v3
+        // on Wayland, XIM on X11) to attach to this surface, so no
+        // `WindowEvent::Ime` ever arrives regardless of whether a Japanese
+        // input method is running.
+        window.set_ime_allowed(true);
 
         let renderer_config = WgpuSurfaceConfig {
             size: Size {
@@ -313,8 +415,15 @@ impl gpui::PlatformWindow for WinitPlatformWindow {
         Some(self.inner.state.borrow().renderer.gpu_specs())
     }
 
-    fn update_ime_position(&self, _bounds: Bounds<Pixels>) {
-        // Leg 2 scope (docs/roadmap.md): IME preedit is not implemented.
+    fn update_ime_position(&self, bounds: Bounds<Pixels>) {
+        // Called by gpui's `Window::invalidate_character_coordinates` when
+        // the app thinks the caret moved outside of an IME composition
+        // (e.g. after a plain keystroke) — mirrors gpui_linux's
+        // `WaylandClient::update_ime_position`, which likewise just
+        // re-issues `set_cursor_rectangle` so the *next* composition starts
+        // at the right spot.
+        log::info!("update_ime_position: {bounds:?}");
+        self.inner.set_ime_cursor_area(bounds);
     }
 
     fn request_decorations(&self, _decorations: WindowDecorations) {}
