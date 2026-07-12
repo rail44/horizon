@@ -173,6 +173,12 @@ term = "xterm-kitty"
 # size.
 # ---------------------------------------------------------------------------
 [ui]
+# Comma-separated font stack: the first entry is the primary family, the
+# rest are fallbacks tried in glyph order (e.g. CJK falling through to the
+# primary monospace font). Entries are matched by exact family name, the
+# same way `fc-list` reports them -- fontconfig generic aliases like
+# "monospace" are not resolved the way `fc-match` resolves them and will
+# simply be skipped if no installed font is literally named that.
 font_family = "Iosevka Nerd Font Mono, Symbols Nerd Font Mono, Noto Sans Mono CJK JP, monospace, Noto Sans CJK JP"
 window_width = 1100.0
 window_height = 720.0
