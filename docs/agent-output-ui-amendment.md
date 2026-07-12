@@ -148,8 +148,10 @@ F failure display + stop button (each visually confirmed).
 
 - Session-management entry points (8a/8b/8c were explored, none
   chosen).
-- Receipt rendering for very long turns, empty states, dark-theme
-  tuning, notifications.
+- Receipt rendering for very long turns, empty states, notifications.
+  (A "dark theme" concern was listed here originally; dropped by owner
+  decision 2026-07-13 — Horizon's theme is one config-driven scheme,
+  and a light/dark duality is not part of this design at all.)
 - Rewind/checkpoints (7c — explored, not adopted; if ever built, the
   recorded direction is reverse-applying fs.edit plus mtime
   verification).
