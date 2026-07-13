@@ -25,10 +25,12 @@ use gpui_component::text::TextView;
 use gpui_component::Sizable as _;
 use horizon_agent::contract::{MessageRole, SessionState, ToolCallId};
 use horizon_agent::frame::{state_indicates_turn_in_flight, AgentFrameItem};
+use horizon_workspace::commands::CommandId;
 
 use super::session::AgentSession;
 use super::turns;
 use crate::theme;
+use crate::workspace::RunCommand;
 
 /// View-local tracking of the currently running turn's start, so the
 /// running card's elapsed-seconds header keeps ticking across renders
@@ -910,7 +912,9 @@ impl AgentView {
     /// a faint accent-tinted fill scoped to the header strip only, and a
     /// header (status dot + bold state label — the card's one
     /// full-strength accent element, plus `n / m` progress + ticking
-    /// elapsed seconds — room left for the stage-F stop button) and one
+    /// elapsed seconds + the stop button, decision 6/mock 7a --
+    /// `render_stop_button`, dispatching `CancelAgentTurn` through the
+    /// same `RunCommand` action path as the palette) and one
     /// row per tool call in `items` (the burst's own range, not
     /// necessarily every tool call the turn has made). The row area
     /// itself carries no distinct panel fill, matching the mock's card
@@ -966,8 +970,8 @@ impl AgentView {
                     .text_color(theme::accent())
                     .child(state_label),
             )
-            // Spacer: also reserves the stage-F stop button's layout room,
-            // between the state label and the progress/elapsed text.
+            // Spacer: pushes the progress/elapsed text and the stop button
+            // (stage F, mock 7a) to the header's right edge.
             .child(div().flex_1())
             .child(
                 div()
@@ -978,7 +982,8 @@ impl AgentView {
                         "{finished} / {total} · {}",
                         turns::humanize_duration(elapsed)
                     )),
-            );
+            )
+            .child(render_stop_button("running-card-stop"));
 
         let mut card = div()
             .flex()
@@ -991,7 +996,8 @@ impl AgentView {
 
         let row_count = tool_calls.len();
         for (row_index, call) in tool_calls.iter().enumerate() {
-            card = card.child(self.render_tool_call_row(call, row_index + 1 < row_count, cx));
+            card =
+                card.child(self.render_tool_call_row(items, call, row_index + 1 < row_count, cx));
         }
 
         card.into_any_element()
@@ -1007,9 +1013,19 @@ impl AgentView {
     /// `whitespace_nowrap` so a long unbroken string (a deep file path,
     /// a long bash command head) truncates instead of pushing past the
     /// card's bounds — the glyph stays `flex_none` so it never shrinks.
-    /// Running-card rows stay non-expandable (stage D scopes expansion
-    /// to receipts only); [`tool_call_glyph`]/[`tool_call_line_text`]
-    /// factor out the content this shares with
+    /// A finished, failed call is the one running-card row that *is*
+    /// click-expandable (stage F, decision 5/mock 5a: "a failed tool call
+    /// stays a single row inside the running card -- error-colored mark +
+    /// failure summary + expandable log"), reusing the same
+    /// [`turns::tool_call_body`]/[`Self::render_tool_call_body`] machinery
+    /// as the completed-turn receipt's own expandable rows
+    /// (`render_expandable_tool_call_row`) -- `turns::running_row_expandable`
+    /// is the shared pure predicate. Every other running-card row (still
+    /// running, or finished successfully) stays non-interactive: a
+    /// success is already covered by the receipt's own expansion once the
+    /// burst folds (decision 3), and an unfinished call has no result to
+    /// show a log for yet. [`tool_call_glyph`]/[`tool_call_line_text`]
+    /// factor out the verb/target/summary content this shares with
     /// [`render_expandable_tool_call_row`]'s expandable version.
     ///
     /// A `Waiting` approval renders inline at the row's right: small
@@ -1020,13 +1036,17 @@ impl AgentView {
     /// on the whole row so the eye finds it among a dozen other rows. A
     /// resolved approval (`Approved`/`Denied`) shows a short one-word
     /// phrase in that same area instead (`approval_phrase`) -- muted for
-    /// approved, danger-colored for denied. The keyboard/palette
-    /// approve-tool-call/deny-tool-call commands and the control-plane
-    /// path are untouched by any of this: they still dispatch by
-    /// pending-queue order (`AgentSession::approve`/`deny`), independent
-    /// of which row's buttons a pointer happens to click.
+    /// approved, danger-colored for denied. `waiting` and a finished
+    /// failure never coincide on the same call (a `Waiting` call has no
+    /// result yet, so it can't be `is_error` yet either), so the two
+    /// right-side affordances never compete for the same row. The
+    /// keyboard/palette approve-tool-call/deny-tool-call commands and the
+    /// control-plane path are untouched by any of this: they still
+    /// dispatch by pending-queue order (`AgentSession::approve`/`deny`),
+    /// independent of which row's buttons a pointer happens to click.
     fn render_tool_call_row(
         &self,
+        items: &[AgentFrameItem],
         call: &turns::ToolCallView,
         divider: bool,
         cx: &mut Context<Self>,
@@ -1034,6 +1054,8 @@ impl AgentView {
         let (glyph, glyph_color) = tool_call_glyph(call);
         let text = tool_call_line_text(call);
         let waiting = call.approval == turns::ApprovalState::Waiting;
+        let expandable = turns::running_row_expandable(call);
+        let expanded = expandable && self.expanded_rows.contains(&call.call_id);
 
         // Gives the row itself a stable, call_id-scoped identity -- the
         // same convention `render_expandable_tool_call_row`'s header
@@ -1047,7 +1069,7 @@ impl AgentView {
         // candidate found; this makes the row's identity as explicit and
         // stable as its buttons' own.
         let row_id = ElementId::from(format!("running-row-{}", call.call_id.0));
-        let mut row = div()
+        let mut header = div()
             .id(row_id)
             .flex()
             .flex_row()
@@ -1056,10 +1078,7 @@ impl AgentView {
             .px_3()
             .py_1()
             .when(waiting, |this| this.bg(theme::warning().alpha(0.12)))
-            .when(divider, |this| {
-                this.border_b_1()
-                    .border_color(theme::text_subtle().alpha(0.3))
-            })
+            .when(call.is_error, |this| this.bg(theme::danger().alpha(0.1)))
             .child(
                 div()
                     .flex_none()
@@ -1082,7 +1101,7 @@ impl AgentView {
         if waiting {
             let approve_id = call.call_id.clone();
             let deny_id = call.call_id.clone();
-            row = row.child(
+            header = header.child(
                 div()
                     .flex_none()
                     .flex()
@@ -1108,7 +1127,7 @@ impl AgentView {
                     ),
             );
         } else if let Some((phrase, color)) = approval_phrase(call.approval) {
-            row = row.child(
+            header = header.child(
                 div()
                     .flex_none()
                     .text_size(px(11.0))
@@ -1117,7 +1136,45 @@ impl AgentView {
             );
         }
 
-        row.into_any_element()
+        if expandable {
+            // Mock 5a's trailing "ログ" (log) link -- a danger-tinted
+            // affordance naming what expanding the row reveals, rather
+            // than the receipt row's generic leading `▸`/`▾` (this row
+            // has exactly one thing to expand, so naming it beats an
+            // arrow). The whole row is still the click target, matching
+            // `render_expandable_tool_call_row`'s convention.
+            let call_id = call.call_id.clone();
+            header = header
+                .cursor_pointer()
+                .on_click(cx.listener(move |view, _, _, cx| {
+                    view.toggle_row(call_id.clone(), cx);
+                }))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(11.0))
+                        .text_color(theme::danger())
+                        .child(if expanded { "hide log" } else { "log" }),
+                );
+        }
+
+        let mut wrapper = div().flex().flex_col().child(header);
+        if expanded {
+            if let Some(body) = turns::tool_call_body(items, &call.call_id) {
+                wrapper = wrapper.child(
+                    div()
+                        .px_3()
+                        .pb_2()
+                        .child(self.render_tool_call_body(&call.call_id, &body)),
+                );
+            }
+        }
+        if divider {
+            wrapper = wrapper
+                .border_b_1()
+                .border_color(theme::text_subtle().alpha(0.3));
+        }
+        wrapper.into_any_element()
     }
 
     fn status_line(&self, cx: &App) -> String {
@@ -1164,6 +1221,44 @@ fn tool_call_line_text(call: &turns::ToolCallView) -> String {
         }
     }
     text
+}
+
+/// The stop affordance (decision 6, mock 7a): a small, quiet button --
+/// outlined rather than filled, "danger-leaning but not alarming" per the
+/// mock's neutral-gray chrome, distinct from the emphatic filled
+/// `.danger()` styling the row-level Deny button uses -- that dispatches
+/// `CommandId::CancelAgentTurn` through the same [`RunCommand`] gpui
+/// action the palette and `[keybindings]` chords use
+/// (`WorkspaceShell::execute`), rather than calling `AgentSession::cancel`
+/// directly: AGENTS.md's "operations go through the command model"
+/// convention, and the one path every cancel source -- keyboard, palette,
+/// control plane, now the pointer too -- funnels through. `id` is a plain
+/// string rather than a `call_id`: unlike the tool-call rows, there is at
+/// most one stop affordance of each kind on screen at a time (one running
+/// card, one status line), so no per-call disambiguation is needed. A
+/// free function (no `&self`/`Context` needed) since the click handler is
+/// entirely stateless -- it only dispatches an action, it never touches
+/// `AgentView`'s own fields -- so it works identically from the running
+/// card's header and the status line (the latter needs its own copy since
+/// the running card's *last burst* can close, folding into a receipt,
+/// before `TurnEnded` arrives to end the turn -- round 5's "burst-fold
+/// gap": final-text streaming can leave no card on screen at all while a
+/// turn is still technically in flight).
+fn render_stop_button(id: &'static str) -> AnyElement {
+    Button::new(id)
+        .outline()
+        .danger()
+        .xsmall()
+        .label("Stop")
+        .on_click(|_, window, cx| {
+            window.dispatch_action(
+                Box::new(RunCommand {
+                    id: CommandId::CancelAgentTurn,
+                }),
+                cx,
+            );
+        })
+        .into_any_element()
 }
 
 /// A resolved approval's one-word phrase (owner feedback 2026-07-13,
@@ -1311,9 +1406,20 @@ impl Focusable for AgentView {
 }
 
 impl Render for AgentView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let frame_items = self.session.read(cx).frame.items.clone();
         let turn_in_flight = state_indicates_turn_in_flight(self.session.read(cx).frame.state);
+        // Decision 6's placeholder note: sending from the composer is
+        // always next-turn delivery, so the placeholder says so
+        // explicitly while a turn is in flight (mock 7a). A tiny,
+        // self-contained sync -- `turns::composer_placeholder` is the
+        // pure text decision, this just applies it to the live
+        // `InputState` -- kept minimal since stage E owns the composer's
+        // own approval-mode behavior.
+        let placeholder = turns::composer_placeholder(turn_in_flight);
+        self.composer.update(cx, |composer, cx| {
+            composer.set_placeholder(placeholder, window, cx);
+        });
         let turn_spans = turns::group_into_turns(&frame_items);
 
         let mut blocks: Vec<AnyElement> = Vec::new();
@@ -1377,14 +1483,33 @@ impl Render for AgentView {
                     .gap_2()
                     .children(blocks),
             )
-            .when(!status.is_empty(), |this| {
+            .when(!status.is_empty() || turn_in_flight, |this| {
                 this.child(
                     div()
                         .px_2()
                         .py_0p5()
-                        .text_size(px(11.0))
-                        .text_color(theme::text_muted())
-                        .child(status),
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(theme::text_muted())
+                                .child(status),
+                        )
+                        // The status-line stop affordance (decision 6):
+                        // round 5's burst-fold gap means the running
+                        // card can be gone (its last burst already
+                        // closed into a receipt) while the turn is still
+                        // technically in flight -- final-text streaming
+                        // between the last tool call and `TurnEnded` has
+                        // no card on screen at all. This row is always
+                        // present whenever a turn is in flight, so stop
+                        // stays reachable through that gap too.
+                        .when(turn_in_flight, |row| {
+                            row.child(render_stop_button("status-line-stop"))
+                        }),
                 )
             })
             .child(div().p_2().child(Input::new(&self.composer)))

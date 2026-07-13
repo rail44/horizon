@@ -220,6 +220,7 @@ window_height = 720.0
 # "ctrl+shift+t" = "new-tab"
 # "ctrl+shift+p" = "open-palette"
 # "ctrl+'" = "workspace-mode"
+# "ctrl+." = "cancel-agent-turn"
 
 # ---------------------------------------------------------------------------
 # [theme] — the app's one color scheme: named role overrides for the chrome

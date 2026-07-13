@@ -196,10 +196,17 @@ actions!(
 /// `no_json`: never built from a JSON keymap (only ever constructed
 /// directly in [`init`]), so it skips gpui's `Deserialize`/`JsonSchema`
 /// requirements for action fields.
+///
+/// `pub(crate)` (stage F, `docs/agent-output-ui-amendment.md`): the agent
+/// pane's stop button/status-line stop affordance dispatch this same
+/// action from `src/agent/view.rs`, rather than reaching into
+/// `AgentSession::cancel` directly, so a pointer-driven cancel goes
+/// through the same command-model path as the palette and `[keybindings]`
+/// chords (AGENTS.md's "operations go through the command model").
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = workspace, no_json)]
-struct RunCommand {
-    id: CommandId,
+pub(crate) struct RunCommand {
+    pub(crate) id: CommandId,
 }
 
 const MODE_CONTEXT: &str = "WorkspaceMode";

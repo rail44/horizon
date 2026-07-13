@@ -470,6 +470,33 @@ pub(crate) fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallVie
         .collect()
 }
 
+/// Whether a running-card row (stage F, decision 5's "failed call stays a
+/// single row, expandable to its failure log") should be click-expandable.
+/// Only a finished, failed call qualifies -- a still-running call has no
+/// result yet to show a log for, and a finished success stays a plain,
+/// non-interactive row (history already covers it via the receipt's own
+/// expansion, decision 3). `call.is_error` alone would already be
+/// equivalent (`build_tool_call_views` only ever sets it from a `result`,
+/// so it implies `finished`), but the explicit `&&` keeps the invariant
+/// visible at the call site rather than relying on that implication
+/// silently.
+pub(crate) fn running_row_expandable(call: &ToolCallView) -> bool {
+    call.finished && call.is_error
+}
+
+/// The composer's placeholder text (decision 6): sending from the composer
+/// is always next-turn delivery, even while a turn is running (interjecting
+/// into the live turn is 7b's unbuilt "steering" idea, not today's
+/// behavior) -- the placeholder says so explicitly while a turn is in
+/// flight, mirroring mock 7a's "続けて指示する…（送信は次のターン）".
+pub(crate) fn composer_placeholder(turn_in_flight: bool) -> &'static str {
+    if turn_in_flight {
+        "Message the agent (sends as the next turn)…"
+    } else {
+        "Message the agent…"
+    }
+}
+
 /// Whether `call_id`'s approval request is still unresolved within
 /// `turn_items` -- a single turn's own item slice is enough to answer
 /// this without consulting the whole frame: every tool call this crate
@@ -1408,6 +1435,33 @@ mod tests {
         let views = build_tool_call_views(&items);
         assert!(views[0].is_error);
         assert_eq!(views[0].result_summary.as_deref(), Some("exit 1"));
+    }
+
+    #[test]
+    fn running_row_expandable_only_for_a_finished_failed_call() {
+        let still_running =
+            build_tool_call_views(&[tool_requested("a", "bash", json!({"command": "x"}))]);
+        assert!(!running_row_expandable(&still_running[0]));
+
+        let succeeded = build_tool_call_views(&[
+            tool_requested("a", "bash", json!({"command": "x"})),
+            tool_finished("a", json!({"exit_code": 0})),
+        ]);
+        assert!(!running_row_expandable(&succeeded[0]));
+
+        let failed = build_tool_call_views(&[
+            tool_requested("a", "bash", json!({"command": "x"})),
+            tool_finished("a", json!({"is_error": true, "message": "boom"})),
+        ]);
+        assert!(running_row_expandable(&failed[0]));
+    }
+
+    #[test]
+    fn composer_placeholder_names_next_turn_delivery_while_a_turn_is_in_flight() {
+        assert_eq!(composer_placeholder(false), "Message the agent…");
+        let in_flight = composer_placeholder(true);
+        assert!(in_flight.starts_with("Message the agent"));
+        assert!(in_flight.contains("next turn"));
     }
 
     #[test]

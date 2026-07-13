@@ -453,3 +453,58 @@ deviation rather than asking for a mock update):
   X11 `Xvfb` launch with `WAYLAND_DISPLAY` explicitly unset (not just
   `DISPLAY` set), or a `gpui::TestAppContext`-based click-simulation
   test (no precedent for one exists yet in this codebase).
+- **Stage F shipped: failure display + stop button (decisions 5–6).**
+  Ran in parallel with stage E's approval-mode composer branch, scoped
+  away from the composer's `Input` widget and approval-mode logic (its
+  seam: the running card, tool rows, receipts, and the status-line row).
+  - **Failure rows (decision 5).** A running-card row is click-expandable
+    exactly when `turns::running_row_expandable` (`call.finished &&
+    call.is_error`) holds — every other row (still running, or finished
+    successfully) stays non-interactive, matching stage D's "receipts
+    already cover history" scoping. An expandable row reuses the same
+    `turns::tool_call_body`/`render_tool_call_body` machinery
+    `render_expandable_tool_call_row` already built for the receipt, so
+    the same per-tool bodies (bash's command+output, fs.edit's diff, ...)
+    now also work as a running-card failure log — the doc comment that
+    scoped that machinery to be reusable this way (stage D) was written
+    for exactly this. The `retry ×N` chip stays deferred (no retry
+    concept in the runtime, per the current-state note above); a turn
+    that ends `Failed`/`Halted` was already covered by
+    `receipt_status_covers_every_end_reason`'s existing test, unchanged
+    here.
+  - **Stop button (decision 6).** `render_stop_button` (a stateless free
+    function, `src/agent/view.rs`) renders a small `.outline().danger()`
+    gpui-component `Button` — bordered and danger-tinted rather than the
+    row-level Deny button's filled danger, matching mock 7a's quiet
+    chrome over an alarming one — that dispatches `CommandId::
+    CancelAgentTurn` via the existing `RunCommand` gpui action (now
+    `pub(crate)`, previously module-private) rather than calling
+    `AgentSession::cancel` directly: the same `WorkspaceShell::execute`
+    path the palette and `[keybindings]` chords already use, per AGENTS.md's
+    "operations go through the command model" convention. It appears in
+    two places: the running card's header (the existing spacer already
+    reserved this room) and a new stop affordance on the status-line row
+    whenever `state_indicates_turn_in_flight` holds. The second spot
+    resolves round 5's own noted gap: a burst closes into a receipt as
+    soon as its trailing text appears, so during final-text streaming —
+    after the last burst closed, before `TurnEnded` — there is no card on
+    screen at all; the status line is the one surface still guaranteed
+    present whenever a turn is in flight, so it carries its own copy of
+    the same button.
+  - **Cancelled rendering.** Already covered — `receipt_status_covers_
+    every_end_reason`'s `Cancelled` case asserts the `stopped · {elapsed}`
+    text stage C built; no gap found.
+  - **Keybinding.** `cancel-agent-turn` was already resolvable via
+    `keymap::command_for` (no code change needed); `config.example.toml`
+    gained a commented-out `"ctrl+." = "cancel-agent-turn"` example. Not
+    `esc esc` — stage E claims plain `esc` for approval-mode deny, so the
+    decision text's original suggestion is intentionally not followed;
+    the button is this stage's primary affordance, per the task scope.
+  - **Composer placeholder (decision 6, small).** `turns::
+    composer_placeholder(turn_in_flight)` is a pure function returning
+    "Message the agent…" or, while a turn is in flight, "Message the
+    agent (sends as the next turn)…" (mirroring mock 7a's own wording).
+    Wired into `Render::render` via `InputState::set_placeholder` — two
+    lines, deliberately minimal to stay out of stage E's way on the same
+    widget; a same-file merge conflict here is expected and fine to
+    resolve by keeping both sides' changes.
