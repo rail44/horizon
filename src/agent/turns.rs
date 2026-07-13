@@ -379,17 +379,31 @@ pub(crate) struct ToolCallView {
 
 /// A tool call's approval lifecycle, derived in [`build_tool_call_views`]
 /// from whether the call ever had an `ApprovalRequested` item and, if so,
-/// how its eventual `ToolCallFinished` reads (see
+/// how its `ToolCallStarted`/`ToolCallFinished` acks read (see
 /// [`is_denied_output`] for the denial convention).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ApprovalState {
     /// No `ApprovalRequested` item for this call at all -- an
     /// auto-approved (or never-requiring-approval) tool.
     None,
-    /// An `ApprovalRequested` item exists and no `ToolCallFinished` has
-    /// resolved it yet.
+    /// An `ApprovalRequested` item exists and neither a `ToolCallStarted`
+    /// nor a `ToolCallFinished` has resolved it yet -- the row still shows
+    /// Approve/Deny.
     Waiting,
+    /// The user approved: a `ToolCallStarted` (immediate for `bash`,
+    /// alongside `ToolCallFinished` for the synchronous fs/config tools --
+    /// see `crate::tools::approval::resolve_approval`'s doc comment in
+    /// `crates/horizon-agent`) has folded, whether or not the call has
+    /// gone on to finish yet. The daemon acks the decision one IPC hop
+    /// after the click, well before a `bash` call's result -- root-caused
+    /// 2026-07-13 (owner report: buttons and the proposal body lingered
+    /// for the whole tool run after the click). Buttons/proposal body
+    /// disappear here; the row's glyph stays ● running until
+    /// `ToolCallFinished` also folds.
     Approved,
+    /// The user denied: `ToolCallFinished` folded with the "denied by
+    /// user" convention, with no `ToolCallStarted` at all (a deny never
+    /// starts the tool).
     Denied,
 }
 
@@ -408,18 +422,25 @@ fn is_denied_output(output: &Value) -> bool {
 }
 
 /// Derives a call's [`ApprovalState`] from whether it ever had an
-/// `ApprovalRequested` item and, if resolved, its result's output.
+/// `ApprovalRequested` item and, if resolved, its `ToolCallStarted`/
+/// `ToolCallFinished` acks. `started` takes priority over an absent
+/// `result`: a `bash` approve folds `ToolCallStarted` immediately and its
+/// `ToolCallFinished` only once the child actually exits, so a call can
+/// read `Approved` here well before it reads `finished` in the same
+/// [`ToolCallView`].
 fn derive_approval_state(
     had_approval_request: bool,
+    started: bool,
     result: Option<&ToolCallResult>,
 ) -> ApprovalState {
     if !had_approval_request {
         return ApprovalState::None;
     }
     match result {
-        None => ApprovalState::Waiting,
         Some(result) if is_denied_output(&result.output) => ApprovalState::Denied,
         Some(_) => ApprovalState::Approved,
+        None if started => ApprovalState::Approved,
+        None => ApprovalState::Waiting,
     }
 }
 
@@ -501,6 +522,7 @@ pub(crate) fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallVie
         input: &'a Value,
         result: Option<&'a ToolCallResult>,
         had_approval_request: bool,
+        started: bool,
     }
 
     let mut building: Vec<Building> = Vec::new();
@@ -513,6 +535,7 @@ pub(crate) fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallVie
                     input: &request.input,
                     result: None,
                     had_approval_request: false,
+                    started: false,
                 });
             }
             AgentFrameItem::ApprovalRequested(request) => {
@@ -521,6 +544,11 @@ pub(crate) fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallVie
                     .find(|entry| entry.call_id == request.call_id)
                 {
                     entry.had_approval_request = true;
+                }
+            }
+            AgentFrameItem::ToolCallStarted(call_id) => {
+                if let Some(entry) = building.iter_mut().find(|entry| &entry.call_id == call_id) {
+                    entry.started = true;
                 }
             }
             AgentFrameItem::ToolCallFinished(result) => {
@@ -553,7 +581,11 @@ pub(crate) fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallVie
                 kind,
                 finished: entry.result.is_some(),
                 is_error: entry.result.map(|result| result.is_error).unwrap_or(false),
-                approval: derive_approval_state(entry.had_approval_request, entry.result),
+                approval: derive_approval_state(
+                    entry.had_approval_request,
+                    entry.started,
+                    entry.result,
+                ),
             }
         })
         .collect()
@@ -590,9 +622,11 @@ pub(crate) fn composer_placeholder(turn_in_flight: bool) -> &'static str {
 /// `turn_items` -- a single turn's own item slice is enough to answer
 /// this without consulting the whole frame: every tool call this crate
 /// emits, Horizon-executed or provider-forwarded, resolves via a
-/// `ToolCallFinished` with the same `call_id` (see
-/// `crates/horizon-agent/src/tools/approval.rs`'s `synchronous_result`,
-/// the one path every approve/deny decision funnels through) before its
+/// `ToolCallStarted` or `ToolCallFinished` with the same `call_id` (see
+/// `crates/horizon-agent/src/tools/approval.rs`'s `resolve_approval`, the
+/// one path every approve/deny decision funnels through -- an approve
+/// folds `ToolCallStarted` immediately, `ToolCallFinished` too if the tool
+/// runs synchronously; a deny folds `ToolCallFinished` alone) before its
 /// turn can end in the normal case, so the resolving item -- if any --
 /// already lives in the same span as the request. A turn that ends with
 /// a still-pending approval (e.g. `Halted`) is the shouldn't-happen case
@@ -1303,6 +1337,10 @@ mod tests {
         ))
     }
 
+    fn tool_started(call_id: &str) -> AgentFrameItem {
+        AgentFrameItem::ToolCallStarted(ToolCallId(call_id.to_string()))
+    }
+
     fn turn_ended(reason: TurnEndReason, model: Option<&str>, elapsed_secs: u64) -> AgentFrameItem {
         AgentFrameItem::TurnEnded {
             reason,
@@ -1677,6 +1715,25 @@ mod tests {
     }
 
     #[test]
+    fn a_call_whose_tool_call_started_folded_is_approved_even_while_still_running() {
+        // Root-caused 2026-07-13: `bash`'s approve ack folds
+        // `ToolCallStarted` synchronously, one IPC hop after the click,
+        // with the eventual `ToolCallFinished` arriving later and
+        // asynchronously. The row must read `Approved` (buttons/proposal
+        // body gone, muted "approved" phrase shown) the moment the ack
+        // folds -- not stay `Waiting` for the whole tool run.
+        let items = vec![
+            tool_requested("a", "bash", json!({"command": "cargo test"})),
+            approval_requested("a"),
+            tool_started("a"),
+            // no tool_finished yet: the command is still running.
+        ];
+        let views = build_tool_call_views(&items);
+        assert_eq!(views[0].approval, ApprovalState::Approved);
+        assert!(!views[0].finished);
+    }
+
+    #[test]
     fn a_call_resolved_with_the_denied_by_user_convention_is_denied() {
         let items = vec![
             tool_requested("a", "bash", json!({"command": "rm -rf /tmp/x"})),
@@ -1845,6 +1902,45 @@ mod tests {
             next_composer_mode(&[], Some(&ToolCallId("a".to_string()))),
             ComposerMode::Normal
         );
+    }
+
+    #[test]
+    fn approving_a_bash_call_advances_composer_mode_the_instant_started_folds() {
+        // End-to-end through the real seam `AgentView::sync_composer_mode`
+        // uses (`horizon_agent::frame::actionable_pending_approval_call_ids_in`
+        // feeding `next_composer_mode`): approving targets the oldest
+        // actionable call; the daemon's synchronous ack for that click
+        // folds `ToolCallStarted` immediately, well before `bash`'s
+        // eventual `ToolCallFinished` -- the composer must advance to the
+        // next actionable call right there, not wait for the result.
+        let before = vec![approval_requested("a"), approval_requested("b")];
+        let queue_before = horizon_agent::frame::actionable_pending_approval_call_ids_in(&before);
+        assert_eq!(
+            next_composer_mode(&queue_before, None),
+            ComposerMode::Approval {
+                call_id: ToolCallId("a".to_string())
+            }
+        );
+
+        let after = vec![
+            approval_requested("a"),
+            approval_requested("b"),
+            tool_started("a"),
+        ];
+        let queue_after = horizon_agent::frame::actionable_pending_approval_call_ids_in(&after);
+        assert_eq!(
+            next_composer_mode(&queue_after, None),
+            ComposerMode::Approval {
+                call_id: ToolCallId("b".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn approving_the_only_pending_call_clears_composer_mode_once_started_folds() {
+        let items = vec![approval_requested("a"), tool_started("a")];
+        let queue = horizon_agent::frame::actionable_pending_approval_call_ids_in(&items);
+        assert_eq!(next_composer_mode(&queue, None), ComposerMode::Normal);
     }
 
     #[test]

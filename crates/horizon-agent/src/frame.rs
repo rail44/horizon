@@ -138,7 +138,9 @@ impl AgentFrame {
 
     /// All currently-pending tool-call approvals, oldest request first (an
     /// `ApprovalRequested` counts as pending until a matching
-    /// `ToolCallFinished` resolves it). Backs both `pending_approval_call_id`
+    /// `ToolCallStarted` or `ToolCallFinished` resolves it -- see
+    /// [`pending_approval_call_ids_in`]'s doc comment for the ack
+    /// semantics). Backs both `pending_approval_call_id`
     /// below and the approval banner's queue depth
     /// (`workspace::view::agent_controls::agent_approval_banner`), which
     /// answers the oldest pending call first and shows a "+N more" hint for
@@ -238,12 +240,29 @@ impl AgentFrame {
 /// migration) is exactly this kind of caller: reading only `items` there
 /// means a pane's pending-approval indicator doesn't also subscribe to
 /// `state` changes it has no use for.
+///
+/// Ack semantics (root-caused 2026-07-13 -- the daemon's approve/deny round
+/// trip does not wait for the tool to finish): `crate::tools::approval::
+/// resolve_approval` folds a decision's *first* synchronous ack one IPC hop
+/// after the click -- `ToolCallStarted` for an approve (execution has begun;
+/// for `bash` that's the *only* immediate ack, since the result arrives
+/// later and asynchronously -- see `AgentFrame::has_tool_call_started`'s doc
+/// comment), or `ToolCallFinished` directly for a deny (short-circuited,
+/// nothing ever starts) or for a synchronous tool whose approve folds
+/// `ToolCallStarted` and `ToolCallFinished` together in the same round trip.
+/// Either ack resolves the pending entry here: the user's decision has
+/// already been acted on, so there is nothing left pending a UI reaction to
+/// -- only the tool's eventual *result* (irrelevant to this queue) is still
+/// outstanding for `bash`.
 pub fn pending_approval_call_ids_in(items: &[AgentFrameItem]) -> Vec<ToolCallId> {
     let mut pending = Vec::<ToolCallId>::new();
     for item in items {
         match item {
             AgentFrameItem::ApprovalRequested(request) if !pending.contains(&request.call_id) => {
                 pending.push(request.call_id.clone());
+            }
+            AgentFrameItem::ToolCallStarted(call_id) => {
+                pending.retain(|pending_id| pending_id != call_id);
             }
             AgentFrameItem::ToolCallFinished(result) => {
                 pending.retain(|call_id| call_id != &result.call_id);
@@ -287,6 +306,9 @@ pub fn actionable_pending_approval_call_ids_in(items: &[AgentFrameItem]) -> Vec<
         match item {
             AgentFrameItem::ApprovalRequested(request) if !pending.contains(&request.call_id) => {
                 pending.push(request.call_id.clone());
+            }
+            AgentFrameItem::ToolCallStarted(call_id) => {
+                pending.retain(|pending_id| pending_id != call_id);
             }
             AgentFrameItem::ToolCallFinished(result) => {
                 pending.retain(|call_id| call_id != &result.call_id);
@@ -691,6 +713,17 @@ mod field_scoped_reads_tests {
         ))
     }
 
+    fn tool_call_finished_denied(call_id: &str) -> AgentFrameItem {
+        AgentFrameItem::ToolCallFinished(ToolCallResult::new(
+            ToolCallId(call_id.to_string()),
+            serde_json::json!({ "is_error": true, "message": "denied by user" }),
+        ))
+    }
+
+    fn tool_call_started(call_id: &str) -> AgentFrameItem {
+        AgentFrameItem::ToolCallStarted(ToolCallId(call_id.to_string()))
+    }
+
     fn turn_ended() -> AgentFrameItem {
         AgentFrameItem::TurnEnded {
             reason: TurnEndReason::Completed,
@@ -783,6 +816,86 @@ mod field_scoped_reads_tests {
         assert_eq!(
             pending_approval_call_ids_in(&items),
             vec![ToolCallId("b".to_string())]
+        );
+    }
+
+    #[test]
+    fn pending_approval_call_ids_in_resolves_on_tool_call_started() {
+        // The daemon's approve ack for `bash` folds `ToolCallStarted`
+        // synchronously, one IPC hop after the click, with the eventual
+        // `ToolCallFinished` arriving later and asynchronously -- see
+        // `resolve_bash`/`ApprovalOutcome::Started`
+        // (`crates/horizon-agent/src/tools/approval.rs`). The pending queue
+        // must resolve right there, not wait for the result.
+        let items = vec![
+            approval_requested("a"),
+            approval_requested("b"),
+            tool_call_started("a"),
+        ];
+        assert_eq!(
+            pending_approval_call_ids_in(&items),
+            vec![ToolCallId("b".to_string())]
+        );
+
+        // A later `ToolCallFinished` for the same call is a no-op on this
+        // queue -- it already left the moment `ToolCallStarted` folded.
+        let items = vec![
+            approval_requested("a"),
+            tool_call_started("a"),
+            tool_call_finished("a"),
+        ];
+        assert_eq!(pending_approval_call_ids_in(&items), Vec::new());
+    }
+
+    #[test]
+    fn pending_approval_call_ids_in_resolves_a_denied_finish() {
+        // A deny never folds `ToolCallStarted` (nothing ever executes) --
+        // its own `ToolCallFinished`, carrying the "denied by user"
+        // convention, is the ack that resolves it.
+        let items = vec![approval_requested("a"), tool_call_finished_denied("a")];
+        assert_eq!(pending_approval_call_ids_in(&items), Vec::new());
+    }
+
+    #[test]
+    fn actionable_pending_approval_call_ids_in_resolves_on_tool_call_started() {
+        let items = vec![
+            approval_requested("a"),
+            approval_requested("b"),
+            tool_call_started("a"),
+        ];
+        assert_eq!(
+            actionable_pending_approval_call_ids_in(&items),
+            vec![ToolCallId("b".to_string())]
+        );
+    }
+
+    #[test]
+    fn actionable_pending_approval_call_ids_in_resolves_a_denied_finish() {
+        let items = vec![approval_requested("a"), tool_call_finished_denied("a")];
+        assert_eq!(actionable_pending_approval_call_ids_in(&items), Vec::new());
+    }
+
+    #[test]
+    fn actionable_pending_approval_call_ids_in_still_excludes_a_ghost_once_a_later_request_has_started(
+    ) {
+        // The realistic post-fix shape of the ghost repro: an earlier
+        // approval never got decided before its own turn ended (a ghost),
+        // and a later turn's request was since approved -- its
+        // `ToolCallStarted` ack folded, but the tool hasn't finished yet.
+        // Nothing is left actionable: the ghost can never resolve and the
+        // live one already has its decision.
+        let items = vec![
+            approval_requested("ghost"),
+            turn_ended(),
+            approval_requested("live"),
+            tool_call_started("live"),
+        ];
+        assert_eq!(actionable_pending_approval_call_ids_in(&items), Vec::new());
+        // The unscoped reading still reports the ghost -- unaffected by
+        // the `ToolCallStarted` ack rule, same as before this change.
+        assert_eq!(
+            pending_approval_call_ids_in(&items),
+            vec![ToolCallId("ghost".to_string())]
         );
     }
 
