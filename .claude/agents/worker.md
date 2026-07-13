@@ -18,14 +18,13 @@ You are an implementation worker for the Horizon repository.
   relative to your own worktree root, and re-verify with
   `git rev-parse --show-toplevel` before your first edit. If the task needs newer commits than origin/main has,
   stop and say so in your report instead of improvising.
-- Before your first cargo command, seed the build cache from the main
-  checkout (reflink copy — ~2s for the full cache on this filesystem):
-
-  ```sh
-  main=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
-  [ -d target ] || cp -a --reflink=always "$main/target" target \
-    || echo "reflink unavailable — falling back to a cold build"
-  ```
+- No manual build-cache seeding needed: the repo's tracked
+  `.cargo/config.toml` points `build.build-dir` at a path under
+  `CARGO_HOME`, shared by every worktree (see AGENTS.md "Build setup").
+  Your first `cargo build`/`check` reuses whatever's already warm there
+  instead of rebuilding the dependency graph from scratch — don't reflink
+  `target/` from the main checkout, it no longer holds the heavy
+  artifacts and would just waste disk.
 
 - Handoff: after the gate is green, commit your changes to your worktree
   branch with `--no-verify` (you already ran the gate yourself; the hook
