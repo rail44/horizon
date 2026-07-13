@@ -401,6 +401,51 @@ fn derive_approval_state(
     }
 }
 
+/// The composer's swappable mode (`docs/agent-output-ui-amendment.md`
+/// decision 4, stage E): a plain instruction box, or approval mode for
+/// one specific pending call. Kept as an explicit enum -- rather than
+/// folding "is approval showing" into a bool alongside a separately
+/// tracked call_id -- so the amendment's own recorded future direction
+/// (prompt-intent auto-approval, "auto mode") has a clean third arm to
+/// add later: skip or auto-resolve this state without touching the
+/// composer's other paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ComposerMode {
+    Normal,
+    Approval { call_id: ToolCallId },
+}
+
+/// Recomputes [`ComposerMode`] from the session's actionable pending
+/// queue (oldest-first -- the same ordering
+/// `horizon_agent::frame::actionable_pending_approval_call_ids_in`
+/// returns, ghost-excluded per the round-4 post-review fix) and
+/// `dismissed`: the call_id, if any, the composer most recently reverted
+/// to `Normal` for because the user started typing instead of deciding.
+///
+/// No-flap rule (stage E): typing past a shown approval dismisses
+/// *that exact call_id*, not "approval mode" in general. The composer
+/// only shows `Approval` again once the queue's head actually changes --
+/// either this call resolves via any of the other three paths (row
+/// button, palette, CLI) and a different one takes its place, or the
+/// queue was empty and gains its first entry. A queue whose head is
+/// still the dismissed call_id keeps returning `Normal` here on every
+/// call, however many times it's asked (e.g. once per keystroke) --
+/// nothing about typing further, or deleting back to an empty composer,
+/// flips it back. An empty queue always clears any dismissal along with
+/// it, since there's nothing left to have dismissed.
+pub(crate) fn next_composer_mode(
+    actionable_queue: &[ToolCallId],
+    dismissed: Option<&ToolCallId>,
+) -> ComposerMode {
+    match actionable_queue.first() {
+        None => ComposerMode::Normal,
+        Some(call_id) if Some(call_id) == dismissed => ComposerMode::Normal,
+        Some(call_id) => ComposerMode::Approval {
+            call_id: call_id.clone(),
+        },
+    }
+}
+
 /// Builds one [`ToolCallView`] per distinct tool call requested within
 /// `items` (a single turn span's slice), in first-request order. A call
 /// with no matching `ToolCallFinished` yet (the running turn's
@@ -468,6 +513,42 @@ pub(crate) fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallVie
             }
         })
         .collect()
+}
+
+/// The approval-mode composer's header content (`docs/agent-output-ui-
+/// amendment.md` decision 4, mock 4b): derived from the pending call's
+/// own [`ToolCallView`] the same way a running-card/receipt row is, so
+/// the composer's wording always agrees with what that call's row
+/// already shows underneath it. `operation` is the same display verb the
+/// rows use, lowercased for the "Allow {operation} on {target}?"
+/// sentence. `target` is the file's short name for a file call (matching
+/// the mock's `signup_form.rs`, not the full path) or the bash chip's
+/// own truncated command head -- never the raw `call.target` for those
+/// two kinds, so a long path/command doesn't blow out the composer's one
+/// line. `diffstat` is `Some` only for a `fs.edit` call with a derivable
+/// diff ([`ToolCallKind::File`]'s own field); `fs.write`/`bash`/anything
+/// else never show one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ApprovalHeader {
+    pub operation: String,
+    pub target: Option<String>,
+    pub diffstat: Option<(u32, u32)>,
+}
+
+pub(crate) fn approval_header(call: &ToolCallView) -> ApprovalHeader {
+    let (target, diffstat) = match &call.kind {
+        ToolCallKind::File {
+            file_name,
+            diffstat,
+        } => (Some(file_name.clone()), *diffstat),
+        ToolCallKind::Bash { command_head } => (Some(command_head.clone()), None),
+        ToolCallKind::Generic => (call.target.clone(), None),
+    };
+    ApprovalHeader {
+        operation: call.verb.to_lowercase(),
+        target,
+        diffstat,
+    }
 }
 
 /// Whether `call_id`'s approval request is still unresolved within
@@ -1543,6 +1624,121 @@ mod tests {
             }
             other => panic!("expected a Bash chip, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn approval_header_derives_operation_target_and_diffstat_for_fs_edit() {
+        let items = vec![
+            tool_requested(
+                "a",
+                "fs.edit",
+                json!({
+                    "path": "src/ui/signup_form.rs",
+                    "old_string": "self.error = err;",
+                    "new_string": "self.error = err;\ncx.notify();",
+                }),
+            ),
+            approval_requested("a"),
+        ];
+        let views = build_tool_call_views(&items);
+        let header = approval_header(&views[0]);
+        assert_eq!(header.operation, "edit");
+        assert_eq!(header.target.as_deref(), Some("signup_form.rs"));
+        assert_eq!(header.diffstat, Some((1, 0)));
+    }
+
+    #[test]
+    fn approval_header_has_no_diffstat_for_fs_write() {
+        let items = vec![tool_requested(
+            "a",
+            "fs.write",
+            json!({"path": "new.rs", "content": "fn main() {}"}),
+        )];
+        let views = build_tool_call_views(&items);
+        let header = approval_header(&views[0]);
+        assert_eq!(header.operation, "write");
+        assert_eq!(header.target.as_deref(), Some("new.rs"));
+        assert_eq!(header.diffstat, None);
+    }
+
+    #[test]
+    fn approval_header_uses_the_bash_chips_own_command_head_as_target() {
+        let items = vec![tool_requested(
+            "a",
+            "bash",
+            json!({"command": "cargo test --workspace"}),
+        )];
+        let views = build_tool_call_views(&items);
+        let header = approval_header(&views[0]);
+        assert_eq!(header.operation, "bash");
+        assert_eq!(header.target.as_deref(), Some("cargo test --workspace"));
+        assert_eq!(header.diffstat, None);
+    }
+
+    #[test]
+    fn approval_header_falls_back_to_the_plain_target_for_a_generic_call() {
+        let items = vec![tool_requested("a", "fs.grep", json!({"pattern": "notify"}))];
+        let views = build_tool_call_views(&items);
+        let header = approval_header(&views[0]);
+        assert_eq!(header.operation, "grep");
+        assert_eq!(header.target.as_deref(), Some("notify"));
+        assert_eq!(header.diffstat, None);
+    }
+
+    #[test]
+    fn next_composer_mode_is_normal_for_an_empty_queue() {
+        assert_eq!(next_composer_mode(&[], None), ComposerMode::Normal);
+    }
+
+    #[test]
+    fn next_composer_mode_shows_the_oldest_actionable_call() {
+        let queue = vec![ToolCallId("a".to_string()), ToolCallId("b".to_string())];
+        assert_eq!(
+            next_composer_mode(&queue, None),
+            ComposerMode::Approval {
+                call_id: ToolCallId("a".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn next_composer_mode_stays_normal_while_the_dismissed_call_is_still_the_head() {
+        // The no-flap rule: typing past the shown approval dismisses that
+        // exact call_id, and it keeps reporting `Normal` for that same
+        // head on every subsequent call (e.g. once per keystroke) --
+        // never re-showing the banner underneath what the user is typing.
+        let queue = vec![ToolCallId("a".to_string())];
+        assert_eq!(
+            next_composer_mode(&queue, Some(&ToolCallId("a".to_string()))),
+            ComposerMode::Normal
+        );
+    }
+
+    #[test]
+    fn next_composer_mode_advances_once_the_dismissed_call_resolves() {
+        // Decision 4's "smoothly advance": once the previously-dismissed
+        // head resolves (row button/palette/CLI) and a different call
+        // becomes the head, approval mode reappears for the new one --
+        // the dismissal doesn't carry over to a call it was never shown
+        // for.
+        let queue = vec![ToolCallId("b".to_string())];
+        assert_eq!(
+            next_composer_mode(&queue, Some(&ToolCallId("a".to_string()))),
+            ComposerMode::Approval {
+                call_id: ToolCallId("b".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn next_composer_mode_clears_once_the_queue_empties() {
+        // A stale dismissal for a call that has since left the queue
+        // entirely (every pending approval resolved) doesn't matter --
+        // an empty queue is always `Normal`.
+        assert_eq!(
+            next_composer_mode(&[], Some(&ToolCallId("a".to_string()))),
+            ComposerMode::Normal
+        );
     }
 
     #[test]
