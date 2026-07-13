@@ -756,3 +756,36 @@ deviation rather than asking for a mock update):
   in `src/agent/turns.rs` with colocated tests, including a regression
   pin for the burst-absorbed case staying unaffected
   (`segment_bursts_never_lets_a_stray_reasoning_delta_split_a_burst`).
+- **Composer aligned to the mock (2026-07-13, owner-identified deviation:
+  "入力欄のデザインとか既に違う").** `render_composer` (`src/agent/view.rs`)
+  now matches the mock's composer chrome
+  (`docs/assets/agent-ui-options/agent-ui-options.html`, the block around
+  its "続けて指示する…（送信は次のターン）" placeholder, shared by every
+  adopted option): an outer breathing wrapper (`px(20.0)`/`pb(18.0)`,
+  echoing the mock's `padding:0 20px 18px`), a bordered/rounded container
+  (`rounded(px(10.0))`, `composer_border()` — a step stronger than the
+  receipt rows' subtle border, mirroring the mock's `#d4d4d8` vs.
+  `#e4e4e7` relationship), holding a chromeless `Input`
+  (`Input::appearance(false)` — gpui-component's own no-border/
+  no-background switch, so the container supplies all the chrome rather
+  than double-bordering) and an accessory row: a read-only model-id pill
+  on the left ([`turns::latest_turn_model`], scanning frame items for the
+  most recent completed turn's `TurnEnded.model`; omitted before any turn
+  completes; no `▾` glyph since no switcher is wired — a model switcher
+  is deferred, unbuilt future work) and a circular accent send button on
+  the right (`render_send_button`, muted when the composer is empty).
+  The send button dispatches the exact same `send_composer_message`
+  method the `PressEnter` handler now also calls — one send
+  implementation, not two. Keyboard behavior (Enter approves-oldest in
+  approval mode, esc denies, typing dismisses, empty-Enter never sends)
+  and the placeholder/status-line stop affordance are unchanged. Data-
+  availability gap found while wiring the model chip: nothing tells the
+  GPUI shell a session's model before its first turn completes today —
+  the `Hello` handshake and `SessionNew`/`SessionSummary` carry only
+  `role_id`, never a model string, and `RoleDefinition.model`
+  (`crates/horizon-agent/src/roles.rs`) — a real, synchronously
+  resolvable role→model mapping — is never serialized onto the wire and
+  isn't retained anywhere in the GUI's per-session state even though
+  `horizon-agent` is linked directly into the binary; a session-info
+  payload (or retaining `role_id` per session and resolving it in-
+  process) would close this gap for a pre-first-turn chip.

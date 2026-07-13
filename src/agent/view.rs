@@ -113,15 +113,7 @@ impl AgentView {
                         view.session.read(cx).approve(call_id);
                         return;
                     }
-                    let text = composer.read(cx).value().to_string();
-                    if text.trim().is_empty() {
-                        return;
-                    }
-                    view.session.read(cx).send_user_message(text);
-                    composer.update(cx, |composer, cx| composer.set_value("", window, cx));
-                    // Sending always re-pins to the bottom, wherever the
-                    // user had scrolled to.
-                    view.transcript_scroll.scroll_to_bottom();
+                    view.send_composer_message(window, cx);
                 }
                 InputEvent::Change => {
                     // "Starting to type reverts the composer to normal
@@ -228,6 +220,25 @@ impl AgentView {
         } else {
             cx.propagate();
         }
+    }
+
+    /// The composer's one send implementation: trims/empty-guards, sends
+    /// through `AgentSession::send_user_message`, clears the composer, and
+    /// re-pins the transcript to the bottom (sending always re-pins,
+    /// wherever the user had scrolled to). Shared by the `PressEnter`
+    /// subscription above and the composer's send button
+    /// (`render_send_button`, the mock's circular `↑`) -- exactly one send
+    /// path, so an empty-composer Enter and an empty-composer button click
+    /// both no-op identically rather than each carrying its own guard.
+    fn send_composer_message(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.composer.read(cx).value().to_string();
+        if text.trim().is_empty() {
+            return;
+        }
+        self.session.read(cx).send_user_message(text);
+        self.composer
+            .update(cx, |composer, cx| composer.set_value("", window, cx));
+        self.transcript_scroll.scroll_to_bottom();
     }
 
     /// Toggles a completed turn's receipt expansion (decision 3's `▸`/`▾`).
@@ -1461,21 +1472,86 @@ impl AgentView {
             .into_any_element()
     }
 
-    /// The composer area: just the plain `Input` (row-centric approval
-    /// v2, owner decision 2026-07-13, supersedes stage E's approval-mode
-    /// banner -- see [`turns::ComposerMode`]'s doc comment). Still
-    /// wrapped in its own container so [`Self::on_escape`] has somewhere
-    /// to catch the `Escape` action `Input`'s own handler propagates
-    /// (see that method's doc comment) -- `composer_mode`'s Enter/Esc
-    /// keyboard capture is unchanged, only its rendering is gone.
+    /// The composer area (owner feedback 2026-07-13: aligned to the mock's
+    /// composer chrome, `docs/assets/agent-ui-options/agent-ui-options.html`
+    /// -- every adopted option shares the same composer block, e.g. the
+    /// one around its "続けて指示する…（送信は次のターン）" placeholder):
+    /// Horizon's own bordered, rounded container (outer breathing room +
+    /// `composer_border`'s stronger-than-subtle border, see that
+    /// function's doc comment) holding a chromeless `Input`
+    /// (`Input::appearance(false)` -- gpui-component's own no-border/
+    /// no-background switch, investigated so the container supplies all
+    /// the chrome the mock nests the text inside rather than double-
+    /// bordering) and an accessory row: a read-only model-id pill on the
+    /// left ([`Self::render_send_button`]'s sibling,
+    /// [`turns::latest_turn_model`] -- omitted before any turn completes,
+    /// no `▾` since no switcher is wired), a flex spacer, then the
+    /// circular accent send button on the right. Still wrapped so
+    /// [`Self::on_escape`] catches the `Escape` action `Input`'s own
+    /// handler propagates (see that method's doc comment) --
+    /// `composer_mode`'s Enter/Esc keyboard capture is unchanged, only the
+    /// rendering around it.
     fn render_composer(&self, cx: &mut Context<Self>) -> AnyElement {
+        let model =
+            turns::latest_turn_model(&self.session.read(cx).frame.items).map(str::to_string);
+        let has_text = !self.composer.read(cx).value().trim().is_empty();
+
+        let mut accessory = div().flex().flex_row().items_center().gap_2();
+        if let Some(model) = model {
+            accessory = accessory.child(render_model_chip(model));
+        }
+        accessory = accessory
+            .child(div().flex_1())
+            .child(self.render_send_button(has_text, cx));
+
         div()
+            .px(px(20.0))
+            .pb(px(18.0))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .pt(px(10.0))
+                    .px(px(12.0))
+                    .pb(px(8.0))
+                    .rounded(px(10.0))
+                    .border_1()
+                    .border_color(composer_border())
+                    .on_action(cx.listener(Self::on_escape))
+                    .child(Input::new(&self.composer).appearance(false))
+                    .child(accessory),
+            )
+            .into_any_element()
+    }
+
+    /// The composer's send button (mock: a circular accent `↑` at the
+    /// accessory row's right): dispatches
+    /// [`Self::send_composer_message`], the exact same path `PressEnter`
+    /// uses. `has_text` only mutes the button's color when the composer is
+    /// empty -- `send_composer_message` already no-ops on an empty/
+    /// whitespace value, so the click handler itself needs no separate
+    /// guard (one send implementation, not two).
+    fn render_send_button(&self, has_text: bool, cx: &mut Context<Self>) -> AnyElement {
+        let (bg, fg) = if has_text {
+            (theme::accent(), white())
+        } else {
+            (theme::text_subtle().alpha(0.3), theme::text_subtle())
+        };
+        div()
+            .id("composer-send")
             .flex()
-            .flex_col()
-            .gap_1()
-            .p_2()
-            .on_action(cx.listener(Self::on_escape))
-            .child(Input::new(&self.composer))
+            .items_center()
+            .justify_center()
+            .w(px(26.0))
+            .h(px(26.0))
+            .rounded_full()
+            .bg(bg)
+            .when(has_text, |this| this.cursor_pointer())
+            .child(div().text_size(px(13.0)).text_color(fg).child("↑"))
+            .on_click(cx.listener(|view, _, window, cx| {
+                view.send_composer_message(window, cx);
+            }))
             .into_any_element()
     }
 
@@ -1698,6 +1774,37 @@ fn truncation_note(omitted: usize) -> AnyElement {
 /// could drift from the accent hue it's meant to echo.
 fn accent_tint(alpha: f32) -> Hsla {
     theme::accent().alpha(alpha)
+}
+
+/// The composer's own border (`render_composer`): a step stronger than
+/// the receipt rows' subtle border (`theme::text_subtle().alpha(0.25)`,
+/// matching the mock's `#e4e4e7`), mirroring the mock's own composer
+/// chrome, which borders with the visibly darker `#d4d4d8` on the same
+/// white canvas its rows use `#e4e4e7` on -- the composer reads as the
+/// pane's one persistent, more-present surface, not just another muted
+/// row.
+fn composer_border() -> Hsla {
+    theme::text_subtle().alpha(0.4)
+}
+
+/// The composer's read-only model-id pill (mock: `claude-sonnet-4`, no
+/// `▾` -- no switcher is wired, see `render_composer`'s doc comment):
+/// reuses the same subtle border role the receipt rows use, matching the
+/// mock's own chip, which borders with the same `#e4e4e7` its rows do.
+fn render_model_chip(model: String) -> AnyElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .rounded(px(5.0))
+        .border_1()
+        .border_color(theme::text_subtle().alpha(0.25))
+        .px(px(8.0))
+        .py(px(3.0))
+        .text_size(px(11.0))
+        .text_color(theme::text_muted())
+        .child(model)
+        .into_any_element()
 }
 
 /// The running card's header label for the three in-flight
