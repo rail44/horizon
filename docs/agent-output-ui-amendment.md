@@ -789,3 +789,47 @@ deviation rather than asking for a mock update):
   `horizon-agent` is linked directly into the binary; a session-info
   payload (or retaining `role_id` per session and resolving it in-
   process) would close this gap for a pre-first-turn chip.
+- **Changes overview shipped (2026-07-13, base decision 9 / old slice
+  5 — never ported from the Floem shell).** `turns::aggregate_changes`
+  walks the *whole session's* `build_tool_call_views` output (every
+  turn, not one receipt/burst's slice) into one `turns::FileChange` per
+  distinct path touched by a successful `fs.edit`/`fs.write`, ordered by
+  first touch; multiple edits to one file have their diffstats *summed*,
+  documented on the function itself as an honest limitation (summed hunk
+  stats, not a net diff across a file's whole session history — see the
+  doc comment for the two-edits-that-cancel-out example). `fs.write`
+  contributes a `created` flag (from the same `output.get("created")`
+  convention `classify`'s `fs.write` arm already reads) instead of a
+  diffstat, since a write has none. `turns::changes_summary_text` is
+  `None` when no file was ever touched, gating the bar's own "hidden
+  entirely" requirement. Colocated tests in `src/agent/turns.rs` cover
+  diffstat summing, first-touch ordering, the created/overwritten
+  distinction, failed-call exclusion, non-edit exclusion, and the summary
+  text's singular/plural wording.
+  `AgentView::render_changes_bar` renders it as a slim row placed between
+  the transcript and the composer (a new `.when_some` child in
+  `Render::render`, ahead of the status-line row) — not nested inside
+  either, since a session-wide aggregate reads oddly living inside the
+  scrolling transcript, and the composer container is reserved for the
+  message input's own chrome. No adopted option in
+  `docs/assets/agent-ui-options/agent-ui-options.html` draws an overview
+  bar of this shape (only 8a's unrelated, unadopted session-manager
+  option mentions a diffstat, and that idea itself was never chosen — see
+  "Out of scope" above), so the bar reuses the receipt row's own idiom
+  instead: a faint persistent border, rounded corners, modest padding,
+  and a stronger hover background (`render_receipt`'s round-2 "quiet
+  pill/button row" language), with an accent-tinted `▸`/`▾` toggle.
+  Clicking it expands a bordered, rounded, height-capped
+  (`max_h(px(220.0))`) and internally scrollable list — the same idiom
+  `render_line_body`'s output bodies use — one row per file: filename,
+  muted full path, that file's own `+n −m` (`theme::success`/
+  `theme::danger`, the same roles the receipt chip's file diffstat
+  already uses), and a `Tag` "created" marker where applicable.
+  Expansion state (`AgentView::changes_expanded`) is view-local, same as
+  `expanded_receipts`/`expanded_rows`. Per-file rows have no further
+  drill-down in this pass — the receipts already offer a per-call diff/
+  preview; a click-through from a Changes row to its originating call's
+  receipt is noted as a possible future hook, not built here. The
+  Todo/plan-panel half of decision 9 remains deferred, unbuilt, and
+  tracked as a roadmap item (agent-foundation, pending a Todo tool) —
+  untouched by this change.
