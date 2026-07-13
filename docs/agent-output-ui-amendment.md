@@ -453,3 +453,91 @@ deviation rather than asking for a mock update):
   X11 `Xvfb` launch with `WAYLAND_DISPLAY` explicitly unset (not just
   `DISPLAY` set), or a `gpui::TestAppContext`-based click-simulation
   test (no precedent for one exists yet in this codebase).
+- **Stage E: the approval-mode composer.** Ships the keyboard path
+  (decision 4) on top of round 3's row buttons, which stay the pointer
+  path exactly as that round left them -- neither replaces the other.
+  `src/agent/turns.rs` gained `ComposerMode` (`Normal` /
+  `Approval { call_id }`, an explicit enum rather than a bool + separate
+  call_id so the amendment's own recorded future direction -- auto-mode
+  skipping or auto-resolving this state -- has a clean third arm to add
+  later) and the pure `next_composer_mode(actionable_queue, dismissed)`
+  that decides it, plus `ApprovalHeader`/`approval_header` for the
+  banner's operation/target/diffstat text -- all colocated-tested.
+  `src/agent/view.rs` wires it: `AgentView` tracks `composer_mode` plus a
+  `dismissed_approval: Option<ToolCallId>` marker, both kept in sync by
+  `sync_composer_mode` from the session's
+  `actionable_pending_approval_call_ids_in` queue (already ghost-excluded
+  by round 4) -- called from the session-change observer (covers all
+  three non-composer resolution paths: row button, palette, CLI) and
+  from the composer's own `InputEvent::Change` handler.
+  - **No-flap rule.** Typing dismisses *the exact call_id currently
+    shown*, not "approval mode" in general: `dismissed_approval` is set
+    to that call_id on the first `Change` event with non-empty composer
+    text, and `next_composer_mode` keeps returning `Normal` for as long
+    as the queue's head stays that same call_id -- however many more
+    keystrokes or re-renders follow, including deleting back to an empty
+    composer. It only shows `Approval` again once the head actually
+    changes: the dismissed call resolves (any path) and a different one
+    becomes the head, or the queue was empty and gains its first entry.
+    This was chosen over alternatives like "re-show whenever the
+    composer is empty" (would flap on every backspace to empty while
+    composing a reply) or "dismiss approval mode globally until the next
+    session-level event" (would miss a second, distinct approval that
+    arrives while the user is still typing about the first).
+  - **Key-capture findings.** `InputState`'s `InputEvent` is
+    `{ Change, PressEnter { secondary, shift }, Focus, Blur }` -- no
+    `Escape`/`Enter` variant carries a keybinding-specific payload, and
+    there is no `AgentPaneFocus`-style context to layer approval-mode
+    key capture onto (confirmed absent per this doc's own Current-state
+    note). Enter routes cleanly: the existing `PressEnter { shift: false
+    }` subscription now checks `composer_mode` first and calls
+    `approve`/returns before ever reaching the send-message branch, so
+    an empty composer's Enter can never send an empty message while
+    approval mode is showing. Esc does not have an `InputEvent` variant
+    at all -- checked the vendored gpui-component source at the pinned
+    rev (`crates/ui/src/input/state.rs`'s `InputState::escape`): it
+    consumes `Escape` only for its own concerns (inline-completion
+    dismissal, IME-mark clearing, or `clean_on_escape`, which Horizon's
+    composer never opts into) and otherwise calls `cx.propagate()`, so
+    the action keeps bubbling up the element tree. `render_composer`
+    wraps the `Input` in its own container div with
+    `.on_action(cx.listener(Self::on_escape))` to catch it there --
+    exactly the pattern gpui-component's own `SearchPanel` uses for the
+    same action (`crates/ui/src/input/search.rs`), and exactly the
+    fallback this doc's Current-state note anticipated ("put the deny
+    binding on the pane/composer container"). No new `KeyBinding`
+    registration was needed -- the "escape" keystroke already resolves
+    to the `Escape` action within `InputState`'s own "Input" context,
+    registered once at gpui-component init.
+  - **Mock → role mapping.** The banner is a monochrome amber panel
+    (mock 4b keeps its header dot/title/diffstat all in the same amber
+    family -- `#f59e0b` border, `#fffbeb`/`#fde68a` fills, `#92400e`/
+    `#d97706`/`#b45309` text -- unlike the running card's diff panel
+    elsewhere, which does use green/red for +/-): `theme::warning()` for
+    the border/dot/title/diffstat text, a new `warning_tint(alpha)`
+    helper (mirroring `accent_tint`) for the header fill and the
+    button-row divider, `theme::text_subtle()` for the reason line and
+    the "typing switches to instructions" hint. Allow reuses `.primary()`
+    and Deny `.danger()`, the same `Button` variants the row buttons
+    already use for the identical semantic pairing.
+  - **Deviations from mock 4b.** (1) The reason line: the mock's header
+    has no room for one, but decision 4 doesn't rule it out and the
+    keyboard path otherwise drops the `ApprovalRequested` reason on the
+    floor entirely, so it's surfaced as a secondary muted line beneath
+    the title. (2) The reserved "always allow" slot renders as a bare
+    fixed-width spacer, not the mock's muted-but-button-shaped
+    placeholder -- decision 4 says "no always-allow button now" and a
+    button-shaped placeholder risks reading as a disabled real control
+    rather than reserved space. (3) The mock's per-button hint
+    (`⏎`/`esc`) is a separately dimmed sub-span; `Button::label` takes
+    one string, so the hint is folded into the label text itself
+    ("Allow (⏎)" / "Deny (esc)"). (4) "+N more" (decision 4's
+    oldest-first queue indicator) has no mock 4b equivalent (its scene
+    only has one pending call) -- added to the header's trailing edge,
+    same amber text as the diffstat.
+  - Not yet reconciled: the stop button's future esc-esc binding
+    (decision 6, stage F) will land on an ancestor of this same composer
+    container; `on_escape` already propagates a bare Escape when
+    `composer_mode` is `Normal`, so a later esc-esc chord handler higher
+    in the tree is not blocked by this stage's own handler -- worth
+    re-checking once stage F actually adds it.
