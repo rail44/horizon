@@ -3,13 +3,15 @@
 //! its IME handling replaces the Floem composer's hand-rolled one), and
 //! inline approval buttons. Frame items are grouped into turn segments
 //! (`turns::group_into_turns`, `docs/agent-output-ui-amendment.md` stage
-//! C): a completed turn renders as a user message, assistant prose, and
-//! one receipt line; the in-progress turn renders as one card with a
-//! muted accent-tinted border and header (mock 2a/3b/7a), one row per
-//! tool call. Assistant text renders through
-//! gpui-component's `TextView` Markdown element (reuse over port), other
-//! items stay plain text. The virtualized-List upgrade is recorded for
-//! the M5 polish pass.
+//! C), and each turn's own tool activity into `turns::Burst`s (round 5,
+//! "monotone burst splitting"): a turn renders as its opening user
+//! message, then one receipt line per closed burst interleaved with the
+//! assistant text that followed each one, chronologically -- and, if the
+//! turn is still running and its last burst hasn't closed yet, one
+//! accent-bordered card (mock 2a/3b/7a) for that burst in place of a
+//! receipt. Assistant text renders through gpui-component's `TextView`
+//! Markdown element (reuse over port), other items stay plain text. The
+//! virtualized-List upgrade is recorded for the M5 polish pass.
 
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
@@ -352,12 +354,27 @@ impl AgentView {
         }
     }
 
-    /// Renders one turn segment: the opening user message, then either
-    /// the completed turn's receipt line or the in-progress turn's
-    /// running card, then any remaining assistant prose / `Error`/
-    /// `Exited` items in their original order (decision 1-2's layout;
-    /// tool-call and reasoning items fold into the receipt/card instead
-    /// of rendering individually).
+    /// Renders one turn segment as a chronological walk over its items
+    /// (round 5, owner decision 2026-07-13, "monotone burst splitting" --
+    /// see `docs/agent-output-ui-amendment.md`'s post-review note):
+    /// `turns::segment_bursts` splits the turn's tool activity into
+    /// [`turns::Burst`]s, and this walk renders each burst's own
+    /// receipt/card in place of its item range, with every other item
+    /// (the opening user message, any text between bursts, an
+    /// interjected message, `Error`/`Exited`) rendered individually via
+    /// the existing per-item dispatch -- so the visible order is exactly
+    /// chronological: user message, burst 1's receipt, the text that
+    /// followed it, burst 2's receipt (if any), and so on. A burst
+    /// renders as the running card only while it's the turn's *last* one
+    /// and still open (unfinished tools, or no closing text yet) --
+    /// every other burst, including a since-closed last one on a
+    /// still-running turn, renders as a receipt: once closed, a burst
+    /// never reopens into a card again, eliminating round 2's
+    /// provisional-receipt flip-back entirely. Only the turn's actual
+    /// final burst (the last one, once `TurnEnded` folds) carries the
+    /// end status/elapsed/model; every other receipt is `Intermediate`
+    /// (prose + failed-call chips only -- the contract has no per-burst
+    /// timing).
     fn render_turn(
         &self,
         base_index: usize,
@@ -365,60 +382,50 @@ impl AgentView {
         ended: Option<&turns::TurnEnd>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let bursts = turns::segment_bursts(items);
+        let last_burst_index = bursts.len().checked_sub(1);
+
         let mut blocks: Vec<AnyElement> = Vec::new();
-        if let Some(user_item) = items.first() {
-            if let Some(el) = self.render_item(base_index, user_item, cx) {
-                blocks.push(el);
+        let mut burst_cursor = 0usize;
+        let mut index = 0usize;
+        while index < items.len() {
+            if let Some(burst) = bursts.get(burst_cursor) {
+                if burst.start == index {
+                    let burst_items = &items[burst.start..burst.end];
+                    // Extends the existing `span.start` keying
+                    // convention (`group_into_turns`): a burst's own
+                    // start index is stable across re-renders the same
+                    // way a turn's is, so keying off it here carries
+                    // expansion state the same way.
+                    let receipt_key = base_index + burst.start;
+                    let is_final_burst = Some(burst_cursor) == last_burst_index;
+                    match (ended, is_final_burst) {
+                        (Some(end), true) => blocks.push(self.render_receipt(
+                            receipt_key,
+                            burst_items,
+                            turns::ReceiptTail::Final(end),
+                            cx,
+                        )),
+                        _ if burst.closed => blocks.push(self.render_receipt(
+                            receipt_key,
+                            burst_items,
+                            turns::ReceiptTail::Intermediate,
+                            cx,
+                        )),
+                        _ => blocks.push(self.render_running_card(burst_items, cx)),
+                    }
+                    index = burst.end;
+                    burst_cursor += 1;
+                    continue;
+                }
             }
-        }
-        // The receipt's expansion key is the turn's own start index
-        // (`base_index`, i.e. `span.start`) -- not the closing
-        // `TurnEnded` item's index, which doesn't exist yet for a
-        // provisional receipt below. Keying off the stable start index
-        // means the same key carries expansion state across the
-        // provisional -> final transition (owner feedback 2026-07-13).
-        match ended {
-            Some(end) => blocks.push(self.render_receipt(
-                base_index,
-                items,
-                turns::ReceiptTail::Final(end),
-                cx,
-            )),
-            None if turns::running_turn_folds(items) => {
-                // Provisional receipt (owner feedback 2026-07-13): once
-                // every tool call in this turn has finished and the
-                // model has started producing its final response, fold
-                // early rather than waiting for `TurnEnded` -- the same
-                // aggregated-chip receipt line, just with a live ticking
-                // elapsed instead of a final status/model
-                // (`ReceiptTail::Provisional`). If a *new* tool call
-                // arrives after that trailing text (the model keeps
-                // working after starting to answer), `running_turn_folds`
-                // flips back to `false` on the very next render and the
-                // running card returns beneath it instead -- this is
-                // intended behavior, not a glitch: the turn genuinely
-                // isn't "just wrapping up" anymore.
-                let elapsed = self
-                    .running_turn_clock
-                    .map(|clock| clock.started_at.elapsed())
-                    .unwrap_or_default();
-                blocks.push(self.render_receipt(
-                    base_index,
-                    items,
-                    turns::ReceiptTail::Provisional { elapsed },
-                    cx,
-                ));
-            }
-            None => blocks.push(self.render_running_card(items, cx)),
-        }
-        for (offset, item) in items.iter().enumerate().skip(1) {
-            let index = base_index + offset;
+            let item = &items[index];
             match item {
                 AgentFrameItem::Message(_)
                 | AgentFrameItem::AssistantTextDelta(_)
                 | AgentFrameItem::Error(_)
                 | AgentFrameItem::Exited(_) => {
-                    if let Some(el) = self.render_item(index, item, cx) {
+                    if let Some(el) = self.render_item(base_index + index, item, cx) {
                         blocks.push(el);
                     }
                 }
@@ -432,16 +439,22 @@ impl AgentView {
                 // shouldn't-happen case -- a turn that ended (`Halted`/
                 // `Cancelled`) with a request still genuinely unresolved --
                 // still renders it (`turns::is_approval_still_pending`).
+                // In practice every `ApprovalRequested` item is
+                // tool-related, so it's always inside some burst's own
+                // range above -- this arm is kept as the same defensive
+                // fallback it always was, not something the burst walk
+                // is expected to reach.
                 AgentFrameItem::ApprovalRequested(request)
                     if ended.is_some()
                         && turns::is_approval_still_pending(items, &request.call_id) =>
                 {
-                    if let Some(el) = self.render_item(index, item, cx) {
+                    if let Some(el) = self.render_item(base_index + index, item, cx) {
                         blocks.push(el);
                     }
                 }
                 _ => {}
             }
+            index += 1;
         }
         div()
             .flex()
@@ -451,23 +464,24 @@ impl AgentView {
             .into_any_element()
     }
 
-    /// The turn's one-line receipt (decision 1, aggregated per owner
+    /// One burst's one-line receipt (decision 1, aggregated per owner
     /// feedback 2026-07-13 -- see `docs/agent-output-ui-amendment.md`'s
     /// post-review note): the `▸`/`▾` expansion affordance
     /// (accent-tinted), prose counts for the low-signal query/edit calls
     /// (`turns::receipt_prose`), individual chips only for bash calls and
-    /// any failed call, then a `tail` -- either the final end-reason
-    /// status + model id, or (a provisional receipt, `render_turn`'s
-    /// early-fold branch) a live ticking elapsed with no status/model
-    /// yet. The row carries a persistent-but-quiet resting-state look
-    /// (a faint border + rounded corners + modest padding -- the same
-    /// muted-border language as the expanded row list below) plus a
-    /// stronger hover background, both round 2 of the "hard to notice
-    /// it's clickable" feedback. Clicking anywhere on the row toggles
-    /// `receipt_key`'s expansion (mock 6a): the per-call row list
-    /// (decision 3) renders beneath, each row individually expandable in
-    /// turn (`render_expandable_tool_call_row`) -- unaggregated, exactly
-    /// as built for stage D.
+    /// any failed call, then a `tail` -- the turn's actual final burst
+    /// (round 5) carries the end-reason status + model id
+    /// (`ReceiptTail::Final`); every other burst's receipt carries
+    /// neither (`ReceiptTail::Intermediate` -- the contract has no
+    /// per-burst timing to show). The row carries a persistent-but-quiet
+    /// resting-state look (a faint border + rounded corners + modest
+    /// padding -- the same muted-border language as the expanded row
+    /// list below) plus a stronger hover background, both round 2 of the
+    /// "hard to notice it's clickable" feedback. Clicking anywhere on
+    /// the row toggles `receipt_key`'s expansion (mock 6a): the per-call
+    /// row list (decision 3) renders beneath, each row individually
+    /// expandable in turn (`render_expandable_tool_call_row`) --
+    /// unaggregated, exactly as built for stage D.
     fn render_receipt(
         &self,
         receipt_key: usize,
@@ -478,7 +492,7 @@ impl AgentView {
         let tool_calls = turns::build_tool_call_views(items);
         let aggregate = turns::aggregate_receipt(&tool_calls);
         let prose = turns::receipt_prose(&aggregate);
-        let (status_text, status_color, model) = match tail {
+        let (status, model) = match tail {
             turns::ReceiptTail::Final(end) => {
                 let status = turns::receipt_status(end);
                 let color = if status.is_error {
@@ -486,11 +500,9 @@ impl AgentView {
                 } else {
                     theme::text_muted()
                 };
-                (status.text, color, end.model.clone())
+                (Some((status.text, color)), end.model.clone())
             }
-            turns::ReceiptTail::Provisional { elapsed } => {
-                (turns::humanize_duration(elapsed), theme::text_muted(), None)
-            }
+            turns::ReceiptTail::Intermediate => (None, None),
         };
         let receipt_text =
             |color: Hsla, text: String| div().text_size(px(11.0)).text_color(color).child(text);
@@ -524,22 +536,24 @@ impl AgentView {
             row = row.child(self.render_receipt_chip(call));
         }
         let has_leading_content = prose.is_some() || !aggregate.individual_calls.is_empty();
-        if has_leading_content {
-            row = row.child(separator());
-        }
-        row = row.child(receipt_text(status_color, status_text));
-        if let Some(model) = &model {
-            row = row.child(separator());
-            row = row.child(
-                div()
-                    .max_w(px(220.0))
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .whitespace_nowrap()
-                    .text_size(px(11.0))
-                    .text_color(theme::text_subtle())
-                    .child(model.clone()),
-            );
+        if let Some((status_text, status_color)) = status {
+            if has_leading_content {
+                row = row.child(separator());
+            }
+            row = row.child(receipt_text(status_color, status_text));
+            if let Some(model) = &model {
+                row = row.child(separator());
+                row = row.child(
+                    div()
+                        .max_w(px(220.0))
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .text_size(px(11.0))
+                        .text_color(theme::text_subtle())
+                        .child(model.clone()),
+                );
+            }
         }
 
         let mut wrapper = div()
@@ -887,19 +901,23 @@ impl AgentView {
         .into_any_element()
     }
 
-    /// The in-progress turn's card (decision 2; mock 2a/3b/7a's "live
-    /// card"): a thin accent-tinted border around the whole card (the
-    /// mock's border is a muted echo of the accent hue, not a
-    /// full-saturation perimeter — see `accent_tint`), a faint
-    /// accent-tinted fill scoped to the header strip only, and a header
-    /// (status dot + bold state label — the card's one full-strength
-    /// accent element, plus `n / m` progress + ticking elapsed seconds —
-    /// room left for the stage-F stop button) and one row per tool call.
-    /// The row area itself carries no distinct panel fill, matching the
-    /// mock's card having no background of its own beyond the header
-    /// tint. `overflow_hidden` keeps row/chip content that would
-    /// otherwise overflow (long paths, command heads) from painting past
-    /// the card's rounded corners.
+    /// The in-progress *burst*'s card (decision 2; mock 2a/3b/7a's "live
+    /// card"; round 5 owner decision 2026-07-13 scopes this to one
+    /// `turns::Burst`'s own item range rather than the whole turn's --
+    /// see `render_turn`'s doc comment): a thin accent-tinted border
+    /// around the whole card (the mock's border is a muted echo of the
+    /// accent hue, not a full-saturation perimeter — see `accent_tint`),
+    /// a faint accent-tinted fill scoped to the header strip only, and a
+    /// header (status dot + bold state label — the card's one
+    /// full-strength accent element, plus `n / m` progress + ticking
+    /// elapsed seconds — room left for the stage-F stop button) and one
+    /// row per tool call in `items` (the burst's own range, not
+    /// necessarily every tool call the turn has made). The row area
+    /// itself carries no distinct panel fill, matching the mock's card
+    /// having no background of its own beyond the header tint.
+    /// `overflow_hidden` keeps row/chip content that would otherwise
+    /// overflow (long paths, command heads) from painting past the
+    /// card's rounded corners.
     ///
     /// A pending approval renders *inline in its own row*
     /// (`render_tool_call_row`'s `Waiting` branch), not as a standalone

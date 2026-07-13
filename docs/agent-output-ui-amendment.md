@@ -263,27 +263,55 @@ deviation rather than asking for a mock update):
   are unaggregated and otherwise unchanged from stage D). Pure
   aggregation logic (`classify_call`, `aggregate_receipt`,
   `receipt_prose`) lives in `src/agent/turns.rs` with colocated tests.
-- **Early fold (round 2): the provisional receipt.** "The fold into a
-  receipt happens after the final response finishes rendering — can it
-  happen when the final response STARTS rendering?" Since "final
-  response" is only knowable retroactively, this is a pure predicate,
+- **Early fold (round 2): the provisional receipt — superseded by round
+  5 below.** "The fold into a receipt happens after the final response
+  finishes rendering — can it happen when the final response STARTS
+  rendering?" The original mechanism was a pure predicate,
   `turns::running_turn_folds(items)`: true once a running turn's tool
-  calls are all finished (at least one exists) *and* assistant text (a
-  streaming delta or a committed assistant message) appears after the
-  last tool-related item. While true, the transcript renders a
-  **provisional receipt** — the same aggregated prose/chips a finished
-  turn's receipt would show, but with a live ticking elapsed and no end
-  status/model yet (`turns::ReceiptTail::Provisional`) — in place of
-  the running card; the streaming text keeps rendering beneath it
-  exactly as before. `TurnEnded` then finalizes that same receipt row
-  in place (`ReceiptTail::Final`). If the model makes another tool call
-  after the trailing text starts, the predicate flips back to `false`
-  on the next render and the running card reappears — documented on
-  `running_turn_folds` itself as intended, not a glitch: the turn
-  genuinely isn't wrapping up anymore. The receipt's expansion key
-  moved from the closing `TurnEnded` item's frame index to the turn's
-  own start index (`TurnSpan::start`) so expansion state survives the
-  provisional → final transition.
+  calls are all finished (at least one exists) *and* assistant text
+  appeared after the last tool-related item, rendering a **provisional
+  receipt** in place of the running card while true, but flipping back
+  to the card if the model made *another* tool call after that trailing
+  text (documented on the function itself as intended, not a glitch).
+  Kept here as history only — the predicate, the `Provisional` tail
+  variant, and their tests are gone; round 5's burst splitting replaces
+  the whole mechanism with something that doesn't need a flip-back at
+  all.
+- **Early fold v2 (round 5): monotone burst splitting.** Owner
+  observation, watching the flip-back live: "if we split the card and
+  receipt once a response has appeared, it gets a bit simpler and the
+  bouncing behavior disappears." Confirmed direction, replacing round
+  2's whole-turn predicate entirely. A turn's tool activity is now
+  segmented into `turns::Burst`s (`segment_bursts`): a burst is a
+  maximal run of tool activity that **closes permanently** once every
+  tool call in it has finished and assistant text follows the last one
+  (or the turn's own `TurnEnded` arrives, closing the trailing burst
+  even with no closing text — tools that ran right up to the end). A
+  closed burst never reopens into a card, however much more the turn
+  goes on to do; a tool call arriving after the closing text starts a
+  brand new burst instead. Rendering walks a turn's items
+  chronologically: user message, then per burst — its receipt line,
+  then the text that followed it — then the next burst's receipt/card,
+  and so on; the turn's *last* burst renders as the running card only
+  while it's still open (unfinished tools, or no closing text yet).
+  "One receipt per turn" is now **one receipt per burst**, and only the
+  turn's actual final burst (the last one, once `TurnEnded` folds)
+  carries the end status/total elapsed/model
+  (`turns::ReceiptTail::Final`) — every other burst's receipt
+  (`ReceiptTail::Intermediate`) shows only the aggregated prose/failed-
+  call chips, since the contract has no per-burst timing to show.
+  Aggregation itself stays exactly as built (round 1/3/4): each
+  receipt aggregates only its own burst's calls, reusing
+  `aggregate_receipt`/`receipt_prose` unchanged. Most turns make one
+  burst, so the common case (tools run, finish, the model answers, the
+  turn ends) looks identical to before, minus the flip-back it no
+  longer has to do. Receipt expansion keys off a burst's own start
+  index (`base_index + burst.start`), extending the existing
+  `TurnSpan::start` convention the same way round 2's turn-level keying
+  did. Note for context, not acted on here: the stop button's home
+  during final-text streaming (after the last burst has closed but
+  before `TurnEnded`) is a stage-F concern, solved composer-adjacent —
+  not by keeping a card alive artificially.
 - **Approval integrated into the tool-call row (round 3).** From a live
   screenshot of a real session: "can't tell which tool call corresponds
   to which approval" (a running card with ~15 stacked yellow

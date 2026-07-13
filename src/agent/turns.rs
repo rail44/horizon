@@ -116,7 +116,7 @@ fn is_user_message(item: &AgentFrameItem) -> bool {
 }
 
 /// Whether `item` is part of a tool call's lifecycle -- used by
-/// [`running_turn_folds`] to find the last such item in a running turn.
+/// [`segment_bursts`] to find burst boundaries.
 fn is_tool_related(item: &AgentFrameItem) -> bool {
     matches!(
         item,
@@ -129,7 +129,7 @@ fn is_tool_related(item: &AgentFrameItem) -> bool {
 }
 
 /// Whether `item` is assistant-authored text -- a streaming delta or a
-/// committed assistant `Message` -- used by [`running_turn_folds`].
+/// committed assistant `Message` -- used by [`segment_bursts`].
 fn is_assistant_text(item: &AgentFrameItem) -> bool {
     matches!(
         item,
@@ -141,72 +141,127 @@ fn is_assistant_text(item: &AgentFrameItem) -> bool {
     )
 }
 
-/// The frame-relative index (within `items`) of the last tool-related
-/// item, if any.
-fn last_tool_related_index(items: &[AgentFrameItem]) -> Option<usize> {
-    items
-        .iter()
-        .enumerate()
-        .filter(|(_, item)| is_tool_related(item))
-        .map(|(index, _)| index)
-        .max()
+/// One tool burst within a turn: a maximal run of tool activity. Indices
+/// are relative to the turn's own item slice (the same convention
+/// [`build_tool_call_views`] uses), `[start, end)`.
+///
+/// Round 5 (owner decision 2026-07-13, "monotone burst splitting" --
+/// superseding round 2's whole-turn provisional-receipt flip-back, see
+/// `docs/agent-output-ui-amendment.md`'s post-review note): a turn can
+/// fold into *more than one* receipt as it progresses -- tools run,
+/// finish, the model answers, then decides to run more tools, answers
+/// again, and so on. Each such run is its own burst, and a burst that
+/// has closed (see [`segment_bursts`]) never reopens into a card again,
+/// however much more the turn goes on to do -- eliminating the round-2
+/// mechanism's "flips back to a card" bounce entirely.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Burst {
+    pub start: usize,
+    pub end: usize,
+    /// Whether this burst has permanently folded into a receipt.
+    /// `false` only for the trailing burst of a still-running turn whose
+    /// tool calls aren't all finished yet, or that has no closing
+    /// assistant text after them yet -- the one burst still eligible to
+    /// render as the running card. Every other burst -- including the
+    /// turn's very last one, once `TurnEnded` folds -- is always `true`.
+    pub closed: bool,
 }
 
-/// Whether a running turn's tool activity is done and its final response
-/// has started rendering -- owner feedback 2026-07-13 ("can the fold
-/// into a receipt happen when the final response STARTS rendering,
-/// rather than after it finishes?"). `items` is the turn's own slice
-/// (from `group_into_turns`, `ended: None`). True when:
+/// Segments `items` (a turn's own slice, `ended: None` or `Some` --
+/// either way, from `group_into_turns`) into [`Burst`]s.
 ///
-/// 1. the turn has made at least one tool call (an all-prose turn has
-///    nothing worth a receipt for -- it keeps rendering as plain text,
-///    same as today);
-/// 2. every tool call has finished (this alone also covers "no pending
-///    approval": an unresolved approval means its call has no
-///    `ToolCallFinished` yet, so `build_tool_call_views` reports it
-///    unfinished -- the approval box, and the running card behind it,
-///    keep showing exactly as before);
-/// 3. assistant text (a streaming delta or a committed assistant
-///    message) appears *after* the last tool-related item.
+/// A burst opens at the first tool-related item found while none is
+/// currently open, and keeps absorbing every further tool-related item
+/// (however far apart, and whatever non-tool items -- an interjected
+/// user message, a stray reasoning delta -- happen to fall between them)
+/// until it **closes**: assistant text (a streaming delta or a committed
+/// assistant `Message`) appears while every tool call opened so far in
+/// the burst has finished, or the turn's own `TurnEnded` item is
+/// reached. Closing is permanent -- `end` stops exactly at the last
+/// absorbed tool-related item (the closing text itself is *not* part of
+/// the burst; `AgentView::render_turn` renders it separately, right
+/// after the burst's receipt) -- and a tool call arriving *after* that
+/// closing text starts a brand new burst rather than reopening the
+/// closed one. A user-message interjection never closes a burst (it
+/// isn't assistant text); the burst just keeps growing through it, per
+/// the same "next-turn delivery is deliberate mid-flight" reasoning
+/// `group_into_turns` already documents.
 ///
-/// While true, the view (`AgentView::render_turn`) renders a
-/// provisional receipt line -- the same aggregated prose/chips as a
-/// final receipt, just with a live ticking elapsed and no end status/
-/// model yet -- in place of the running card; the streaming text itself
-/// keeps rendering the same way it always has, right below.
-///
-/// This is deliberately re-evaluated on every render rather than latched
-/// once true: if the model starts answering and then makes *another*
-/// tool call, condition 3 stops holding (the last tool-related item is
-/// now after the trailing text that used to satisfy it) and this flips
-/// back to `false` on the very next render -- the running card
-/// reappears beneath whatever text had already streamed. That reversal
-/// is intended, not a glitch: the turn genuinely isn't "just wrapping
-/// up" anymore, so the affordances a still-working turn needs (the stop
-/// button, per-row progress) belong back on screen.
-pub(crate) fn running_turn_folds(items: &[AgentFrameItem]) -> bool {
-    let tool_calls = build_tool_call_views(items);
-    if tool_calls.is_empty() {
-        return false;
+/// A turn with no tool activity at all segments to an empty `Vec` --
+/// nothing worth a receipt for; the text keeps rendering as plain
+/// prose, exactly as it always has.
+pub(crate) fn segment_bursts(items: &[AgentFrameItem]) -> Vec<Burst> {
+    let mut bursts = Vec::new();
+    let mut open: Option<(usize, usize)> = None; // (start, last_tool_index)
+
+    for (index, item) in items.iter().enumerate() {
+        if is_tool_related(item) {
+            match &mut open {
+                Some((_, last)) => *last = index,
+                None => open = Some((index, index)),
+            }
+            continue;
+        }
+        if is_assistant_text(item) {
+            if let Some((start, last)) = open {
+                let all_finished = build_tool_call_views(&items[start..=last])
+                    .iter()
+                    .all(|call| call.finished);
+                if all_finished {
+                    bursts.push(Burst {
+                        start,
+                        end: last + 1,
+                        closed: true,
+                    });
+                    open = None;
+                }
+                // Else: not closeable yet (a call opened in this burst
+                // is still unfinished) -- this text isn't the closing
+                // one, keep the burst open and scanning.
+            }
+            continue;
+        }
+        if matches!(item, AgentFrameItem::TurnEnded { .. }) {
+            if let Some((start, last)) = open.take() {
+                bursts.push(Burst {
+                    start,
+                    end: last + 1,
+                    closed: true,
+                });
+            }
+            // `TurnEnded` is always the turn's own last item
+            // (`group_into_turns`'s invariant), so there's nothing left
+            // to scan either way.
+        }
+        // Anything else (an interjected user `Message`, a
+        // `ReasoningDelta`, `Error`, `Exited`, ...) never affects burst
+        // boundaries.
     }
-    if !tool_calls.iter().all(|call| call.finished) {
-        return false;
+
+    if let Some((start, last)) = open {
+        bursts.push(Burst {
+            start,
+            end: last + 1,
+            closed: false,
+        });
     }
-    match last_tool_related_index(items) {
-        Some(last_tool_index) => items[last_tool_index + 1..].iter().any(is_assistant_text),
-        None => false,
-    }
+
+    bursts
 }
 
 /// The receipt row's trailing content (`render_receipt`'s `tail`
-/// parameter): a finished turn's end-reason status + model id, or -- the
-/// early-fold provisional receipt ([`running_turn_folds`], owner
-/// feedback 2026-07-13) -- a live ticking elapsed with neither yet.
-/// Carries a `&TurnEnd` rather than duplicating its fields so `Final`
-/// can never drift from [`receipt_status`]'s own reading of it.
+/// parameter). Round 5 (monotone burst splitting): only the turn's
+/// *final* burst -- the one closed by `TurnEnded` -- carries the turn's
+/// end-reason status, total elapsed, and model, exactly as a completed
+/// turn's one receipt always has; every other burst's receipt
+/// (including the last one while the turn is still running) carries
+/// none of that -- the contract has no per-burst timing, only a
+/// whole-turn one. `Final` carries a `&TurnEnd` rather than duplicating
+/// its fields so it can never drift from [`receipt_status`]'s own
+/// reading of it.
 pub(crate) enum ReceiptTail<'a> {
     Final(&'a TurnEnd),
-    Provisional { elapsed: Duration },
+    Intermediate,
 }
 
 /// A turn's end-reason rendered as receipt status text -- the
@@ -2017,53 +2072,68 @@ mod tests {
     }
 
     #[test]
-    fn running_turn_folds_is_false_with_no_tool_calls() {
-        // An all-prose turn: nothing worth a receipt for -- the text
-        // keeps rendering as it does today, no early fold.
+    fn segment_bursts_is_empty_for_an_all_prose_turn() {
+        // Nothing worth a receipt for -- the text keeps rendering as
+        // plain prose, exactly as it always has.
         let items = vec![user_message("hi"), assistant_delta("hello there")];
-        assert!(!running_turn_folds(&items));
+        assert_eq!(segment_bursts(&items), Vec::new());
     }
 
     #[test]
-    fn running_turn_folds_is_false_while_a_tool_call_is_unfinished() {
+    fn segment_bursts_finds_a_single_open_burst_while_tools_are_unfinished() {
         let items = vec![
             user_message("fix the bug"),
             tool_requested("a", "bash", json!({"command": "cargo test"})),
             // no matching tool_finished("a", ..) yet
         ];
-        assert!(!running_turn_folds(&items));
+        assert_eq!(
+            segment_bursts(&items),
+            vec![Burst {
+                start: 1,
+                end: 2,
+                closed: false,
+            }]
+        );
     }
 
     #[test]
-    fn running_turn_folds_is_false_while_an_approval_is_pending() {
+    fn segment_bursts_stays_open_while_an_approval_is_pending() {
         // A pending approval means its call has no `ToolCallFinished`
-        // yet, so it's covered by the same "every call finished" check
-        // -- no separate approval-specific branch needed.
+        // yet -- covered by the same "every call finished" check, no
+        // separate approval-specific branch needed.
         let items = vec![
             user_message("delete the file"),
             approval_requested("a"),
             // no matching tool_finished("a", ..) yet: still pending.
         ];
-        assert!(!running_turn_folds(&items));
+        let bursts = segment_bursts(&items);
+        assert_eq!(bursts.len(), 1);
+        assert!(!bursts[0].closed);
     }
 
     #[test]
-    fn running_turn_folds_is_true_once_tools_are_done_and_text_follows() {
+    fn segment_bursts_closes_once_tools_are_done_and_text_follows() {
         let items = vec![
             user_message("fix the bug"),
             tool_requested("a", "fs.read", json!({"path": "a.rs"})),
             tool_finished("a", json!({"total_lines": 10})),
             assistant_delta("Looking at the code, I"),
         ];
-        assert!(running_turn_folds(&items));
+        assert_eq!(
+            segment_bursts(&items),
+            vec![Burst {
+                start: 1,
+                end: 3,
+                closed: true,
+            }]
+        );
     }
 
     #[test]
-    fn running_turn_folds_flips_back_to_false_when_another_tool_call_follows_text() {
-        // The model started answering, then decided to run one more
-        // tool call -- the turn isn't "just wrapping up" anymore, so the
-        // predicate must flip back (documented as intended, not a
-        // glitch, on `running_turn_folds` itself).
+    fn segment_bursts_starts_a_new_burst_for_a_tool_call_after_closing_text() {
+        // The model answered, then decided to run one more tool call --
+        // round 5 (monotone splitting): the first burst stays closed
+        // forever, and this is a brand new *second* burst, not a reopen.
         let items = vec![
             user_message("fix the bug"),
             tool_requested("a", "fs.read", json!({"path": "a.rs"})),
@@ -2075,28 +2145,157 @@ mod tests {
                 json!({"path": "a.rs", "old_string": "x", "new_string": "y"}),
             ),
         ];
-        assert!(!running_turn_folds(&items));
+        assert_eq!(
+            segment_bursts(&items),
+            vec![
+                Burst {
+                    start: 1,
+                    end: 3,
+                    closed: true,
+                },
+                Burst {
+                    start: 4,
+                    end: 5,
+                    closed: false,
+                },
+            ]
+        );
     }
 
     #[test]
-    fn running_turn_folds_is_true_with_a_committed_assistant_message_too() {
-        // The predicate accepts either a streaming delta or an already-
-        // committed assistant `Message` as "the final response started".
+    fn segment_bursts_closes_on_a_committed_assistant_message_too() {
+        // Accepts either a streaming delta or an already-committed
+        // assistant `Message` as the closing text.
         let items = vec![
             user_message("fix the bug"),
             tool_requested("a", "bash", json!({"command": "cargo test"})),
             tool_finished("a", json!({"exit_code": 0, "output": "ok"})),
             assistant_message("Fixed it, tests pass."),
         ];
-        assert!(running_turn_folds(&items));
+        let bursts = segment_bursts(&items);
+        assert_eq!(bursts.len(), 1);
+        assert!(bursts[0].closed);
     }
 
     #[test]
-    fn provisional_receipt_content_matches_the_final_receipts_own_aggregation() {
-        // The provisional line reuses `aggregate_receipt`/`receipt_prose`
-        // verbatim on the running turn's own items -- proving that reuse
-        // produces the same content a final receipt would, once the
-        // turn actually ends the same way.
+    fn segment_bursts_an_interjected_user_message_never_closes_a_burst() {
+        // The user typing again mid-burst doesn't count as assistant
+        // text and doesn't split anything -- a later tool call still
+        // just extends the same still-open burst, which then closes
+        // normally once real (assistant) text follows it.
+        let items = vec![
+            user_message("fix the bug"),
+            tool_requested("a", "bash", json!({"command": "cargo build"})),
+            tool_finished("a", json!({"exit_code": 0, "output": ""})),
+            user_message("still there?"),
+            tool_requested("b", "bash", json!({"command": "cargo test"})),
+            tool_finished("b", json!({"exit_code": 0, "output": ""})),
+        ];
+        // No assistant text anywhere yet: one still-open burst spanning
+        // straight through the interjection to both bash calls.
+        assert_eq!(
+            segment_bursts(&items),
+            vec![Burst {
+                start: 1,
+                end: 6,
+                closed: false,
+            }]
+        );
+
+        let mut closed_items = items;
+        closed_items.push(assistant_message("Both ran fine."));
+        assert_eq!(
+            segment_bursts(&closed_items),
+            vec![Burst {
+                start: 1,
+                end: 6,
+                closed: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn segment_bursts_two_tool_text_tool_runs_are_two_bursts() {
+        let items = vec![
+            user_message("fix the bug"),
+            tool_requested("a", "fs.read", json!({"path": "a.rs"})),
+            tool_finished("a", json!({"total_lines": 10})),
+            assistant_delta("Found it, fixing now."),
+            tool_requested(
+                "b",
+                "fs.edit",
+                json!({"path": "a.rs", "old_string": "x", "new_string": "y"}),
+            ),
+            tool_finished("b", json!({"path": "a.rs", "replaced": true})),
+            assistant_message("Fixed."),
+        ];
+        assert_eq!(
+            segment_bursts(&items),
+            vec![
+                Burst {
+                    start: 1,
+                    end: 3,
+                    closed: true,
+                },
+                Burst {
+                    start: 4,
+                    end: 6,
+                    closed: true,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn segment_bursts_turn_ended_closes_the_trailing_burst_even_with_no_closing_text() {
+        // Tools ran right up to the end -- no assistant text ever
+        // followed them, but `TurnEnded` still closes the burst (it
+        // folds directly into the final receipt, `AgentView::
+        // render_turn`'s job, not this function's).
+        let items = vec![
+            user_message("fix the bug"),
+            tool_requested("a", "bash", json!({"command": "cargo test"})),
+            tool_finished("a", json!({"exit_code": 0, "output": ""})),
+            turn_ended(TurnEndReason::Completed, Some("gpt-5"), 12),
+        ];
+        assert_eq!(
+            segment_bursts(&items),
+            vec![Burst {
+                start: 1,
+                end: 3,
+                closed: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn segment_bursts_turn_ended_closes_an_already_text_closed_burst_the_same_way() {
+        // The common case: tools finish, text follows (closes the
+        // burst already), then `TurnEnded` arrives -- still exactly one
+        // closed burst, unaffected by the extra close signal.
+        let items = vec![
+            user_message("fix the bug"),
+            tool_requested("a", "bash", json!({"command": "cargo test"})),
+            tool_finished("a", json!({"exit_code": 0, "output": ""})),
+            assistant_message("Done, tests pass."),
+            turn_ended(TurnEndReason::Completed, Some("gpt-5"), 12),
+        ];
+        assert_eq!(
+            segment_bursts(&items),
+            vec![Burst {
+                start: 1,
+                end: 3,
+                closed: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_burst_reconstructs_the_same_receipt_content_a_completed_turns_own_aggregation_would() {
+        // A closed burst's own item range feeds `aggregate_receipt`/
+        // `receipt_prose` exactly the way a whole completed turn's items
+        // used to -- proving per-burst aggregation reuses the existing
+        // machinery verbatim, just scoped to the burst's own range.
         let items = vec![
             user_message("fix the bug"),
             tool_requested("a", "fs.grep", json!({"base_path": ".", "pattern": "x"})),
@@ -2105,8 +2304,11 @@ mod tests {
             tool_finished("b", json!({"total_lines": 10})),
             assistant_delta("Looking at the code, I"),
         ];
-        assert!(running_turn_folds(&items));
-        let tool_calls = build_tool_call_views(&items);
+        let bursts = segment_bursts(&items);
+        assert_eq!(bursts.len(), 1);
+        let burst = &bursts[0];
+        assert!(burst.closed);
+        let tool_calls = build_tool_call_views(&items[burst.start..burst.end]);
         let aggregate = aggregate_receipt(&tool_calls);
         assert_eq!(
             receipt_prose(&aggregate).as_deref(),
@@ -2114,5 +2316,59 @@ mod tests {
         );
         assert_eq!(aggregate.bash_count, 0);
         assert!(aggregate.individual_calls.is_empty());
+    }
+
+    #[test]
+    fn a_bursts_start_index_stays_stable_as_more_items_stream_in() {
+        // Proves the rendering-side receipt key (`base_index +
+        // burst.start`) stays stable across re-renders: appending more
+        // items to the tail (new deltas/tool calls arriving) never
+        // changes the `start` a burst already claimed in an earlier,
+        // shorter snapshot of the same items.
+        let short = vec![
+            user_message("fix the bug"),
+            tool_requested("a", "fs.read", json!({"path": "a.rs"})),
+            tool_finished("a", json!({"total_lines": 10})),
+            assistant_delta("Looking at the code, I"),
+        ];
+        let first_start = segment_bursts(&short)[0].start;
+
+        let mut grown = short.clone();
+        grown.push(assistant_delta(" think the bug is here."));
+        grown.push(tool_requested(
+            "b",
+            "fs.edit",
+            json!({"path": "a.rs", "old_string": "x", "new_string": "y"}),
+        ));
+        let grown_bursts = segment_bursts(&grown);
+        assert_eq!(grown_bursts.len(), 2);
+        assert_eq!(grown_bursts[0].start, first_start);
+    }
+
+    #[test]
+    fn receipt_tail_final_carries_the_turn_end_while_intermediate_carries_nothing() {
+        // Pins the two `ReceiptTail` variants' own shapes: `Final` wraps
+        // a `&TurnEnd` (status/elapsed/model all recoverable from it via
+        // `receipt_status`/its own fields), `Intermediate` is a unit
+        // variant with nothing to recover at all -- the render side is
+        // the one place status/elapsed/model ever get read from `tail`,
+        // but this pins that `Intermediate` truly carries none of them
+        // before that render-side code ever runs.
+        let end = TurnEnd {
+            reason: TurnEndReason::Completed,
+            model: Some("gpt-5".to_string()),
+            elapsed: Duration::from_secs(38),
+        };
+        match ReceiptTail::Final(&end) {
+            ReceiptTail::Final(end) => {
+                assert_eq!(receipt_status(end).text, "38s");
+                assert_eq!(end.model.as_deref(), Some("gpt-5"));
+            }
+            ReceiptTail::Intermediate => panic!("expected Final"),
+        }
+        assert!(matches!(
+            ReceiptTail::Intermediate,
+            ReceiptTail::Intermediate
+        ));
     }
 }
