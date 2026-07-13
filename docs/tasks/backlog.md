@@ -690,3 +690,19 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     checked. Next step if picked up: reproduce with
     `HORIZON_INPUT_TRACE` plus a deliberate `horizon-sessiond` kill/respawn
     against a fish session, and diff `keys_as_escape_codes` before/after.
+
+34. **`SessionState` reports `WaitingForUser` while a tool-call approval
+    is still pending.** Found root-causing the 2026-07-13 flat-render
+    regression (session `3fe93cdb…`, "Agent #30"): with two bash
+    approvals outstanding, approving the first moved the daemon's
+    state to `WaitingForUser` for a real 36 seconds while the second
+    request sat unresolved — `WaitingForApproval` should arguably hold
+    until the actionable queue is empty. The UI no longer breaks on
+    this (dangling spans always render as turns since `e7ba824`), but
+    two visible symptoms remain rooted here: the status line goes
+    blank and the status-row stop button disappears mid-turn (both key
+    off `state_indicates_turn_in_flight`). Fix belongs in the
+    provider/session loop's state transitions
+    (`crates/horizon-sessiond` / `crates/horizon-agent` providers), not
+    the view; re-check the status-line/stop-button gating once the
+    state is honest.
