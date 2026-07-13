@@ -19,6 +19,8 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::list::{List, ListEvent, ListState};
 use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable, ResizablePanelGroup};
+use gpui_component::tab::{Tab, TabBar};
+use gpui_component::Sizable as _;
 use horizon_workspace::commands::{command_entries, CommandId, CommandState};
 use horizon_workspace::types::{LayoutNode, TabId};
 use horizon_workspace::{
@@ -1667,27 +1669,43 @@ impl WorkspaceShell {
 
     fn render_tab_strip(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tabs = self.workspace.tab_summaries();
-        div()
-            .flex()
-            .flex_row()
-            .gap_1()
+        // gpui-component's global `Theme` stays at its stock light default
+        // (see `src/theme.rs`'s doc comment) and `Tab`/`TabBar` read several
+        // colors straight from `cx.theme()` with no override hook that
+        // survives past their own `RenderOnce::render` (the label text color
+        // and the selected-tab fill/border are set unconditionally at the
+        // end of `Tab::render`, clobbering anything set earlier via
+        // `Styled`). The `Underline` variant is the only one whose selected
+        // state paints no filled background block (just a bottom accent
+        // stripe), so it degrades best against Horizon's dark chrome; the
+        // label text itself is pushed as a plain child (bypassing
+        // `Tab::label`, whose color the component controls) so it can use
+        // `theme::text_primary`/`text_muted` instead of the illegible
+        // near-black `foreground` role the stock light theme resolves to.
+        let selected_index = tabs
+            .iter()
+            .find(|tab| tab.active)
+            .map_or(0, |tab| tab.index);
+        TabBar::new("workspace-tabs")
+            .underline()
+            .xsmall()
             .px_2()
-            .py_1()
             .bg(rgb(0x101216))
+            .selected_index(selected_index)
+            .on_click(cx.listener(|shell, index: &usize, window, cx| {
+                shell.activate_tab(*index, window, cx);
+            }))
             .children(tabs.into_iter().map(|tab| {
-                let index = tab.index;
-                div()
-                    .id(("tab", index))
-                    .px_2()
-                    .py_0p5()
-                    .rounded_sm()
-                    .text_size(px(12.0))
-                    .text_color(rgb(if tab.active { 0xe9ecf2 } else { 0x8a90a0 }))
-                    .when(tab.active, |this| this.bg(rgb(0x2a2e3a)))
-                    .child(format!("{} {}", index + 1, tab.title))
-                    .on_click(cx.listener(move |shell, _, window, cx| {
-                        shell.activate_tab(index, window, cx);
-                    }))
+                let label_color = if tab.active {
+                    theme::text_primary()
+                } else {
+                    theme::text_muted()
+                };
+                Tab::new().child(div().text_color(label_color).child(format!(
+                    "{} {}",
+                    tab.index + 1,
+                    tab.title
+                )))
             }))
     }
 

@@ -152,6 +152,10 @@ Concrete mappings:
 - **Transcript (M4)**: native Markdown + virtualized List, as already
   decided.
 - **Splits (M2)**: `resizable` primitives, as already decided.
+- **Tab strip (M2)**: gpui-component's standalone `TabBar`/`Tab`
+  (Underline variant) replace the hand-rolled `render_tab_strip` div
+  strip; the tab model, click dispatch, and display numbers are
+  unchanged. Landed 2026-07-13.
 - **Scrollbar**: gpui-component's Scrollbar when a scrollback
   indicator lands.
 
