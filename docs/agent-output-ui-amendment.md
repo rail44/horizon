@@ -789,3 +789,15 @@ deviation rather than asking for a mock update):
   `horizon-agent` is linked directly into the binary; a session-info
   payload (or retaining `role_id` per session and resolving it in-
   process) would close this gap for a pre-first-turn chip.
+- **Running-card success rows made click-expandable too (2026-07-13).**
+  Closed a small deviation from decision 2 ("click expands the body ...
+  for every tool state including errors"): stage F's
+  `turns::running_row_expandable` had narrowed the running card's
+  click-to-expand affordance to finished, *failed* calls only. Any
+  finished call now qualifies, success or failure, expanding to the same
+  per-tool body the receipt's own row expansion shows. The trailing
+  affordance text generalized from "log"/"hide log" (failure-specific
+  wording) to "show"/"hide", danger-tinted on a failed row and neutrally
+  tinted (`theme::text_subtle()`) on a success row; still-running rows
+  stay non-expandable, and `Waiting` rows are unaffected (they already
+  auto-show their proposal body).
