@@ -691,7 +691,7 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     `HORIZON_INPUT_TRACE` plus a deliberate `horizon-sessiond` kill/respawn
     against a fish session, and diff `keys_as_escape_codes` before/after.
 
-34. **[RESOLVED] `SessionState` reports `WaitingForUser` while a
+34. **[RESOLVED da7128d] `SessionState` reports `WaitingForUser` while a
     tool-call approval is still pending.** Found root-causing the
     2026-07-13 flat-render regression (session `3fe93cdb…`, "Agent
     #30"): with two bash approvals outstanding, approving the first
