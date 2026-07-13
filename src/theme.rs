@@ -18,12 +18,11 @@
 //! `ThemeColor` vocabulary where a matching role exists there (`accent`,
 //! `danger`, `warning`, `success`, `info`) — but the values are Horizon's
 //! own, resolved independently of gpui-component's global `Theme`
-//! (`cx.theme()`), which the shell initializes at its stock default and
-//! does not otherwise customize (see `gpui_component::init` in
-//! `src/main.rs`). Wiring config into that global as well is a larger,
-//! separate change (it would also restyle every gpui-component widget —
-//! `Button`, `Input`, `List` — across the app, not just this pane) and is
-//! not attempted here.
+//! (`cx.theme()`), which the shell initializes at its stock light-mode
+//! default (see `gpui_component::init` in `src/main.rs`). Wiring config
+//! into that global in full is a larger, separate change (it would
+//! restyle every gpui-component widget — `Button`, `Input`, `List` —
+//! across the app, not just this pane) and is not attempted here.
 //!
 //! This `Scheme`/`scheme_from` pair is deliberately kept as the *one* seam
 //! between `[theme]`/`[theme.ansi]` config and every resolved color in the
@@ -32,12 +31,34 @@
 //! gpui-component's `ThemeColor` (its ~140 role fields — accent, danger,
 //! list/selection surfaces, etc.) from this same Horizon palette, so
 //! gpui-component-rendered chrome (modals, `List`, `Button`, `TitleBar`)
-//! follows the user's scheme too. That projection is out of scope here,
-//! but keeping every role resolved through this one struct/function
+//! follows the user's scheme too. That full projection is out of scope
+//! here, but keeping every role resolved through this one struct/function
 //! (rather than, say, agent/view.rs reading `cx.theme()` fields directly
 //! for roles that happen to already exist there) means that future pass
 //! is an extension of `scheme_from` into a `ThemeColor`, not a rework of
 //! call sites across the app.
+//!
+//! 2026-07-13: [`apply_gpui_component_theme`] takes a first, narrow slice
+//! of that future pass now, ahead of schedule — not the full ~140-field
+//! derivation described above, just `foreground`/`background`/
+//! `muted_foreground`. Root cause: the command palette's (and
+//! session-manager's/view-chooser's) gpui-component `List` renders its
+//! search `Input`'s typed and placeholder text through `cx.theme()`
+//! colors (`window.text_style()`, cascaded from `Root`'s own
+//! `.text_color(cx.theme().foreground)` — see `gpui_component`'s
+//! `root.rs`), not through any role in this module; every `List` row's
+//! own text is fine because `palette.rs`/`session_manager.rs`/
+//! `view_chooser.rs` already hardcode an explicit `text_color` per row,
+//! but nothing sets one for the `List`'s own built-in search box, so it
+//! rendered in gpui-component's stock light-theme near-black —
+//! illegible against Horizon's dark chrome (owner report, 2026-07-13).
+//! `Input::appearance(false)` (as the agent composer already uses, see
+//! `src/agent/view.rs`'s `render_composer`) only turns off the input's
+//! own background/border chrome; it does not touch text color, and
+//! that div is gpui-component's own (`ListState::render`, not ours), so
+//! there's no call site of ours to hang a `.text_color()` off. Projecting
+//! these three fields is the most contained fix that still routes
+//! through this module's one seam.
 
 use std::sync::{OnceLock, RwLock};
 
@@ -195,9 +216,27 @@ fn scheme() -> Scheme {
 }
 
 /// Applies a re-read config's `[theme]` live — the GPUI half of the
-/// `Reload Config` command (the caller refreshes the window after).
+/// `Reload Config` command (the caller refreshes the window after, and
+/// separately re-applies [`apply_gpui_component_theme`]).
 pub fn reload_from(raw: &RawConfig) {
     *scheme_store().write().unwrap() = scheme_from(raw);
+}
+
+/// Projects `foreground`/`background`/`muted_foreground` onto
+/// gpui-component's global `Theme` (see this module's 2026-07-13 doc
+/// note for why: it's what the command palette's/session-manager's/view
+/// chooser's shared `List` search input actually reads for its typed and
+/// placeholder text, and neither `Input::appearance(false)` nor any role
+/// in this module reaches it). Call once at startup, right after
+/// `gpui_component::init` (`src/main.rs`), and again after
+/// [`reload_from`] on `Reload Config` so an overridden `[theme]` scheme
+/// keeps applying live.
+pub fn apply_gpui_component_theme(cx: &mut gpui::App) {
+    let scheme = scheme();
+    let theme = gpui_component::Theme::global_mut(cx);
+    theme.foreground = packed_hsla(scheme.foreground);
+    theme.background = packed_hsla(scheme.background);
+    theme.muted_foreground = packed_hsla(scheme.text_muted);
 }
 
 pub fn background() -> u32 {

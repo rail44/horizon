@@ -17,9 +17,10 @@ use std::collections::{HashMap, HashSet};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::list::{List, ListEvent, ListState};
+use gpui_component::list::{List, ListDelegate, ListEvent, ListState};
 use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable, ResizablePanelGroup};
 use gpui_component::tab::{Tab, TabBar};
+use gpui_component::IndexPath;
 use gpui_component::Sizable as _;
 use horizon_workspace::commands::{command_entries, CommandId, CommandState};
 use horizon_workspace::types::{LayoutNode, TabId};
@@ -75,6 +76,31 @@ fn ensure_workspace_has_pane(workspace: &mut Workspace) -> Option<SessionId> {
 
 fn command_blocked_by_restore(restoring: bool, failed: bool, id: CommandId) -> bool {
     restoring && !(failed && id == CommandId::ReloadSessionRuntime)
+}
+
+/// The first row is selectable exactly when the list isn't empty — the
+/// pure predicate behind [`select_first_row_on_open`], kept free of
+/// `ListState`/`App` so it's unit-testable without a GPUI window.
+fn first_row_to_select(items_count: usize) -> Option<IndexPath> {
+    (items_count > 0).then(IndexPath::default)
+}
+
+/// Selects the first row right after a searchable `List` is constructed,
+/// so a bare Enter on open runs it without arrowing down first
+/// (owner report, 2026-07-13). gpui-component's `ListState` starts with
+/// no selection and only re-selects a candidate in response to a query
+/// change (its own `on_query_input_event`), never on construction — so
+/// every palette/session-manager/view-chooser open required an arrow key
+/// before Enter did anything. A no-op when the delegate starts empty:
+/// `ListState::on_action_confirm` already guards Enter on an empty list.
+fn select_first_row_on_open<D: ListDelegate>(
+    list: &mut ListState<D>,
+    window: &mut Window,
+    cx: &mut Context<ListState<D>>,
+) {
+    if let Some(ix) = first_row_to_select(list.delegate().items_count(0, cx)) {
+        list.set_selected_index(Some(ix), window, cx);
+    }
 }
 
 fn workspace_mode_blocked_by_restore(restoring: bool, failed: bool) -> bool {
@@ -1199,8 +1225,11 @@ impl WorkspaceShell {
     ) {
         self.workspace.exit_workspace_mode();
         self.pending_placement = Some(placement);
-        let list =
-            cx.new(|cx| ListState::new(ViewChooserDelegate::new(), window, cx).searchable(true));
+        let list = cx.new(|cx| {
+            let mut list = ListState::new(ViewChooserDelegate::new(), window, cx).searchable(true);
+            select_first_row_on_open(&mut list, window, cx);
+            list
+        });
         let subscription = cx.subscribe_in(
             &list,
             window,
@@ -1304,6 +1333,7 @@ impl WorkspaceShell {
             CommandId::ReloadConfig => match horizon_config::reload() {
                 Ok(raw) => {
                     theme::reload_from(&raw);
+                    theme::apply_gpui_component_theme(cx);
                     window.refresh();
                 }
                 Err(error) => eprintln!("reload-config failed: {error}"),
@@ -1350,7 +1380,10 @@ impl WorkspaceShell {
         self.workspace.exit_workspace_mode();
         let summaries = self.workspace.session_summaries();
         let list = cx.new(|cx| {
-            ListState::new(SessionManagerDelegate::new(summaries), window, cx).searchable(true)
+            let mut list =
+                ListState::new(SessionManagerDelegate::new(summaries), window, cx).searchable(true);
+            select_first_row_on_open(&mut list, window, cx);
+            list
         });
         let subscription = cx.subscribe_in(
             &list,
@@ -1591,8 +1624,12 @@ impl WorkspaceShell {
     fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.workspace.exit_workspace_mode();
         let entries = command_entries(self.command_state_with(cx));
-        let list =
-            cx.new(|cx| ListState::new(PaletteDelegate::new(entries), window, cx).searchable(true));
+        let list = cx.new(|cx| {
+            let mut list =
+                ListState::new(PaletteDelegate::new(entries), window, cx).searchable(true);
+            select_first_row_on_open(&mut list, window, cx);
+            list
+        });
         let subscription = cx.subscribe_in(
             &list,
             window,
@@ -1990,10 +2027,11 @@ impl Render for WorkspaceShell {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_blocked_by_restore, ensure_workspace_has_pane, load_workspace_state,
-        prepare_workspace_for_runtime_reload, terminal_fallback_cwd, terminal_resume_candidates,
-        terminal_spawn_source, workspace_mode_blocked_by_restore,
+        command_blocked_by_restore, ensure_workspace_has_pane, first_row_to_select,
+        load_workspace_state, prepare_workspace_for_runtime_reload, terminal_fallback_cwd,
+        terminal_resume_candidates, terminal_spawn_source, workspace_mode_blocked_by_restore,
     };
+    use gpui_component::IndexPath;
     use horizon_terminal_core::TerminalSummary;
     use horizon_workspace::commands::CommandId;
     use horizon_workspace::{PaneKind, SessionId, SessionKind, Workspace};
@@ -2005,6 +2043,17 @@ mod tests {
             "horizon-workspace-shell-{label}-{}.json",
             uuid::Uuid::new_v4()
         ))
+    }
+
+    #[test]
+    fn first_row_to_select_is_the_default_index_when_the_list_is_nonempty() {
+        assert_eq!(first_row_to_select(1), Some(IndexPath::default()));
+        assert_eq!(first_row_to_select(5), Some(IndexPath::default()));
+    }
+
+    #[test]
+    fn first_row_to_select_is_none_when_the_list_is_empty() {
+        assert_eq!(first_row_to_select(0), None);
     }
 
     #[test]
