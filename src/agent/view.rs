@@ -1240,19 +1240,19 @@ impl AgentView {
     /// `whitespace_nowrap` so a long unbroken string (a deep file path,
     /// a long bash command head) truncates instead of pushing past the
     /// card's bounds — the glyph stays `flex_none` so it never shrinks.
-    /// A finished, failed call is the one running-card row that *is*
-    /// click-expandable (stage F, decision 5/mock 5a: "a failed tool call
-    /// stays a single row inside the running card -- error-colored mark +
-    /// failure summary + expandable log"), reusing the same
+    /// Every *finished* running-card row is click-expandable, success or
+    /// failure (`docs/agent-output-ui-design.md` decision 2: "click
+    /// expands the body ... collapsed is the default for every tool state
+    /// including errors" -- stage F had narrowed this to failed calls
+    /// only, closed 2026-07-13 as a deviation from decision 2, which never
+    /// scoped the affordance to errors), reusing the same
     /// [`turns::tool_call_body`]/[`Self::render_tool_call_body`] machinery
     /// as the completed-turn receipt's own expandable rows
     /// (`render_expandable_tool_call_row`) -- `turns::running_row_expandable`
-    /// is the shared pure predicate. Every other running-card row (still
-    /// running, or finished successfully) stays non-interactive: a
-    /// success is already covered by the receipt's own expansion once the
-    /// burst folds (decision 3), and an unfinished call has no result to
-    /// show a log for yet. [`tool_call_glyph`]/[`tool_call_line_text`]
-    /// factor out the verb/target/summary content this shares with
+    /// is the shared pure predicate. A still-running row stays
+    /// non-interactive: it has no result yet to show a body for.
+    /// [`tool_call_glyph`]/[`tool_call_line_text`] factor out the
+    /// verb/target/summary content this shares with
     /// [`render_expandable_tool_call_row`]'s expandable version.
     ///
     /// A `Waiting` approval renders inline at the row's right: small
@@ -1392,13 +1392,23 @@ impl AgentView {
         }
 
         if expandable {
-            // Mock 5a's trailing "ログ" (log) link -- a danger-tinted
-            // affordance naming what expanding the row reveals, rather
-            // than the receipt row's generic leading `▸`/`▾` (this row
-            // has exactly one thing to expand, so naming it beats an
-            // arrow). The whole row is still the click target, matching
+            // A trailing "show"/"hide" affordance -- stage F's original
+            // "log" wording named a failure's output specifically, but
+            // this row now expands to whatever per-tool body the call
+            // has (a diff, a content preview, a command+output block, or
+            // a summary, same as the receipt's own expansion), so a
+            // generic show/hide reads correctly for every finished call,
+            // not just a failed one. Danger-tinted for a failure (matching
+            // the row's own error tint above); a neutral, muted tint
+            // otherwise -- there's nothing wrong to flag on a success row.
+            // The whole row is still the click target, matching
             // `render_expandable_tool_call_row`'s convention.
             let call_id = call.call_id.clone();
+            let label_color = if call.is_error {
+                theme::danger()
+            } else {
+                theme::text_subtle()
+            };
             header = header
                 .cursor_pointer()
                 .on_click(cx.listener(move |view, _, _, cx| {
@@ -1408,8 +1418,8 @@ impl AgentView {
                     div()
                         .flex_none()
                         .text_size(px(11.0))
-                        .text_color(theme::danger())
-                        .child(if expanded { "hide log" } else { "log" }),
+                        .text_color(label_color)
+                        .child(if expanded { "hide" } else { "show" }),
                 );
         }
 

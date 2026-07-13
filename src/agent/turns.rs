@@ -611,18 +611,22 @@ pub(crate) fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallVie
         .collect()
 }
 
-/// Whether a running-card row (stage F, decision 5's "failed call stays a
-/// single row, expandable to its failure log") should be click-expandable.
-/// Only a finished, failed call qualifies -- a still-running call has no
-/// result yet to show a log for, and a finished success stays a plain,
-/// non-interactive row (history already covers it via the receipt's own
-/// expansion, decision 3). `call.is_error` alone would already be
-/// equivalent (`build_tool_call_views` only ever sets it from a `result`,
-/// so it implies `finished`), but the explicit `&&` keeps the invariant
-/// visible at the call site rather than relying on that implication
-/// silently.
+/// Whether a running-card row should be click-expandable to its body
+/// (`docs/agent-output-ui-design.md` decision 2: "click expands the body
+/// ... collapsed is the default for every tool state including errors" --
+/// stage F initially narrowed this to failed calls only for the running
+/// card specifically; closed 2026-07-13 as a deviation from decision 2,
+/// which never scoped the click-to-expand affordance to errors). Any
+/// *finished* call qualifies, success or failure -- it expands to the same
+/// per-tool body ([`tool_call_body`]) the completed-turn receipt's own
+/// expansion already shows. A still-running call stays non-expandable: it
+/// has no result yet to show a body for. A `Waiting` call (has an
+/// unresolved approval) is also unfinished by this same rule, so it's
+/// covered without a separate check -- it already auto-shows its proposal
+/// body unconditionally (`AgentView::render_waiting_proposal`), untouched
+/// by this predicate.
 pub(crate) fn running_row_expandable(call: &ToolCallView) -> bool {
-    call.finished && call.is_error
+    call.finished
 }
 
 /// The composer's placeholder text (decision 6): sending from the composer
@@ -1740,7 +1744,7 @@ mod tests {
     }
 
     #[test]
-    fn running_row_expandable_only_for_a_finished_failed_call() {
+    fn running_row_expandable_for_any_finished_call_but_not_a_still_running_one() {
         let still_running =
             build_tool_call_views(&[tool_requested("a", "bash", json!({"command": "x"}))]);
         assert!(!running_row_expandable(&still_running[0]));
@@ -1749,7 +1753,7 @@ mod tests {
             tool_requested("a", "bash", json!({"command": "x"})),
             tool_finished("a", json!({"exit_code": 0})),
         ]);
-        assert!(!running_row_expandable(&succeeded[0]));
+        assert!(running_row_expandable(&succeeded[0]));
 
         let failed = build_tool_call_views(&[
             tool_requested("a", "bash", json!({"command": "x"})),
