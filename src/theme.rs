@@ -16,54 +16,58 @@
 //! `src/agent/view.rs` is the only consumer today. Names follow
 //! gpui-component's own
 //! `ThemeColor` vocabulary where a matching role exists there (`accent`,
-//! `danger`, `warning`, `success`, `info`) — but the values are Horizon's
+//! `danger`, `warning`, `success`, `info`) -- but the values are Horizon's
 //! own, resolved independently of gpui-component's global `Theme`
-//! (`cx.theme()`), which the shell initializes at its stock light-mode
-//! default (see `gpui_component::init` in `src/main.rs`). Wiring config
-//! into that global in full is a larger, separate change (it would
-//! restyle every gpui-component widget — `Button`, `Input`, `List` —
-//! across the app, not just this pane) and is not attempted here.
+//! (`cx.theme()`).
 //!
 //! This `Scheme`/`scheme_from` pair is deliberately kept as the *one* seam
 //! between `[theme]`/`[theme.ansi]` config and every resolved color in the
-//! app (terminal ANSI, chrome, and now the agent-pane roles above). The
-//! owner's stated direction is for a future pass to derive
-//! gpui-component's `ThemeColor` (its ~140 role fields — accent, danger,
-//! list/selection surfaces, etc.) from this same Horizon palette, so
-//! gpui-component-rendered chrome (modals, `List`, `Button`, `TitleBar`)
-//! follows the user's scheme too. That full projection is out of scope
-//! here, but keeping every role resolved through this one struct/function
-//! (rather than, say, agent/view.rs reading `cx.theme()` fields directly
-//! for roles that happen to already exist there) means that future pass
-//! is an extension of `scheme_from` into a `ThemeColor`, not a rework of
-//! call sites across the app.
+//! app (terminal ANSI, chrome, and the agent-pane roles above).
 //!
-//! 2026-07-13: [`apply_gpui_component_theme`] takes a first, narrow slice
-//! of that future pass now, ahead of schedule — not the full ~140-field
-//! derivation described above, just `foreground`/`background`/
-//! `muted_foreground`. Root cause: the command palette's (and
-//! session-manager's/view-chooser's) gpui-component `List` renders its
-//! search `Input`'s typed and placeholder text through `cx.theme()`
-//! colors (`window.text_style()`, cascaded from `Root`'s own
-//! `.text_color(cx.theme().foreground)` — see `gpui_component`'s
-//! `root.rs`), not through any role in this module; every `List` row's
-//! own text is fine because `palette.rs`/`session_manager.rs`/
-//! `view_chooser.rs` already hardcode an explicit `text_color` per row,
-//! but nothing sets one for the `List`'s own built-in search box, so it
-//! rendered in gpui-component's stock light-theme near-black —
-//! illegible against Horizon's dark chrome (owner report, 2026-07-13).
-//! `Input::appearance(false)` (as the agent composer already uses, see
-//! `src/agent/view.rs`'s `render_composer`) only turns off the input's
-//! own background/border chrome; it does not touch text color, and
-//! that div is gpui-component's own (`ListState::render`, not ours), so
-//! there's no call site of ours to hang a `.text_color()` off. Projecting
-//! these three fields is the most contained fix that still routes
-//! through this module's one seam.
+//! 2026-07-14: [`apply_gpui_component_theme`] implements the full
+//! projection this module's doc previously reserved as future work:
+//! gpui-component's `ThemeColor` (its ~140 role fields -- `primary`,
+//! `danger`, `border`, the `list`/`tab`/`popover`/`scrollbar` families,
+//! ...) now derives from this same Horizon `Scheme`, so every
+//! gpui-component-rendered widget (`TabBar`/`Tab`, `Button`, `Input`,
+//! `List`, the palette/session-manager/view-chooser search boxes) follows
+//! the user's `[theme]` scheme instead of gpui-component's stock light
+//! default. The mechanism is [`gpui_component_theme_config`]: it builds a
+//! `gpui_component::ThemeConfig` naming only a *base* set of roles (the
+//! ones with no reasonable derivation from anything else -- background,
+//! foreground, border, the semantic four, the brand accent, the tab/list/
+//! popover anchors) as hex strings, and lets gpui-component's own
+//! `ThemeColor::apply_config` (`ui::theme::schema` in the vendored
+//! `gpui-component` source) cascade every other field's fallback chain
+//! from those -- e.g. `accent_foreground`/`button_secondary`/
+//! `list_active`/`selection` all derive from `secondary`/`primary`/
+//! `background` without Horizon ever naming them directly. See that
+//! function's doc for the full table and every rule's rationale.
+//!
+//! Every derivation rule here is *polarity-aware*: it's written in terms
+//! of blending toward another already-resolved scheme role (`foreground`,
+//! `text_subtle`, the matching semantic color) rather than a fixed
+//! lighten/darken direction, so the same rule produces a correctly-lifted
+//! surface or correctly-legible border on both a dark scheme (the
+//! built-in default) and a light one (an owner may configure `[theme]`
+//! with a light `surface_base`/`terminal_background` -- verified against
+//! both in this module's tests). [`contrast_safe_default`] additionally
+//! guards the handful of *built-in default* semantic colors
+//! (`warning`/`success`/`info`, and by extension the diff surfaces that
+//! derive from them) that were originally hand-picked to read against the
+//! dark built-in background only: it inverts a candidate's HSL lightness
+//! whenever the candidate and the resolved background land on the same
+//! side of the midpoint, so an unset role stays legible instead of
+//! rendering, e.g., pale yellow warning text on a pale background. It
+//! never touches an explicit `[theme]` value -- only the constant a
+//! `chrome()` lookup falls back to when the corresponding key (and any
+//! fallback key) is absent.
 
 use std::sync::{OnceLock, RwLock};
 
 use alacritty_terminal::vte::ansi::{NamedColor, Rgb};
-use gpui::{rgb, Hsla};
+use gpui::{rgb, Hsla, Rgba};
+use gpui_component::Colorize as _;
 use horizon_config::RawConfig;
 use horizon_terminal_core::TerminalColor;
 
@@ -71,29 +75,60 @@ const BACKGROUND_DEFAULT: u32 = 0x16181d; // SURFACE_BASE_DEFAULT
 const FOREGROUND_DEFAULT: u32 = 0xe9ecf2; // TEXT_PRIMARY_DEFAULT
 const CURSOR_DEFAULT: u32 = 0x84dcc6; // ACCENT_DEFAULT
 
-// Agent-pane role defaults — chosen to match `src/agent/view.rs`'s
+// Agent-pane role defaults -- chosen to match `src/agent/view.rs`'s
 // pre-existing hardcoded hex values exactly, so this layer is a pure
 // plumbing change (see the amendment doc's "changes plumbing, not
 // design"). `danger`/`warning`/`success`/`info` happen to equal the
 // built-in ANSI red/yellow/green/blue defaults (config.example.toml's
 // `[theme.ansi]` comment already anticipated an agent-transcript renderer
 // reusing that palette) but are resolved as independent, dedicated `[theme]`
-// keys so overriding one doesn't silently move the other.
+// keys so overriding one doesn't silently move the other. Each is only
+// ever used as the *candidate* input to [`contrast_safe_default`] below --
+// never assigned to a `Scheme` field directly -- since a scheme with a
+// light background needs the inverted twin instead (see that function).
 const DANGER_DEFAULT: u32 = 0xe06c75;
 const WARNING_DEFAULT: u32 = 0xe5c07b;
 const SUCCESS_DEFAULT: u32 = 0x98c379;
 const INFO_DEFAULT: u32 = 0x61afef; // the assistant message label
 const TEXT_MUTED_DEFAULT: u32 = 0x8a90a0; // status line / exited state
 const TEXT_SUBTLE_DEFAULT: u32 = 0x5f6370; // thinking deltas / tool-preparing text
-const DIFF_ADDED_SURFACE_DEFAULT: u32 = 0x1e2b22;
-const DIFF_ADDED_TEXT_DEFAULT: u32 = 0x98c379;
-const DIFF_REMOVED_SURFACE_DEFAULT: u32 = 0x2b1e20;
-const DIFF_REMOVED_TEXT_DEFAULT: u32 = 0xe06c75;
-// A subtle lift above `BACKGROUND_DEFAULT` (0x16181d) -- the running-turn
-// card's panel surface (`docs/agent-output-ui-amendment.md` stage C's
-// styling follow-up), so the card reads as its own panel rather than a
-// bare border floating on the transcript background.
-const SURFACE_PANEL_DEFAULT: u32 = 0x1c1f26;
+
+// Text-on-`primary` picks (`gpui_component_theme_config`'s
+// `primary_foreground`): plain near-black/near-white, not a Horizon role,
+// since the pick is purely about contrast against the (possibly
+// brand-colored) accent, unrelated to the app's own background polarity.
+const PRIMARY_FOREGROUND_DARK_TEXT: u32 = 0x0a0a0a;
+const PRIMARY_FOREGROUND_LIGHT_TEXT: u32 = 0xfafafa;
+
+/// How far a border sits from `background` toward `text_subtle`. Blending
+/// toward the scheme's own subtle-text role -- rather than a fixed
+/// lighten/darken direction -- keeps a border correctly a bit *more*
+/// prominent than the background on both a dark and a light scheme,
+/// since `text_subtle` is itself already resolved on the legible side of
+/// `background`.
+const BORDER_BLEND_RATIO: f32 = 0.35;
+
+/// How far a lifted panel surface (`surface_panel`'s built-in default)
+/// sits from `background` toward `foreground`. Small, so it stays a
+/// subtle lift rather than a visible block; blending toward `foreground`
+/// (rather than a fixed lighten/darken) is what keeps the lift direction
+/// correct on both polarities, since `foreground` is by construction the
+/// higher-contrast color against `background`.
+const SURFACE_LIFT_RATIO: f32 = 0.035;
+
+/// How much further a hovered surface sits than its resting state, ADDED
+/// on top of that surface's own value (not `background` directly) --
+/// toward `foreground`. See `SURFACE_LIFT_RATIO`'s doc for why blending
+/// toward `foreground` is polarity-safe; blending relative to the resting
+/// surface (rather than `background`) is what keeps hover strictly *more*
+/// pronounced than rest even when the resting surface is itself
+/// configured far from `background` (e.g. a `surface_panel` override).
+const SECONDARY_HOVER_BLEND_RATIO: f32 = 0.12;
+
+/// How far a diff surface's built-in default sits from `background`
+/// toward the matching semantic color (`success` for additions, `danger`
+/// for removals) -- low, so it stays a tint rather than a solid fill.
+const DIFF_SURFACE_BLEND_RATIO: f32 = 0.12;
 
 const ANSI16_DEFAULT: [u32; 16] = [
     0x23262e, // black
@@ -132,6 +167,28 @@ struct Scheme {
     diff_removed_surface: u32,
     diff_removed_text: u32,
     surface_panel: u32,
+    /// New in the gpui-component projection: a subtle separator line,
+    /// resolved from the `border_default` config key (already documented
+    /// in `config.example.toml` but unread until now) or, if unset,
+    /// derived (`BORDER_BLEND_RATIO`).
+    border: u32,
+    /// New in the gpui-component projection: an elevated surface (popover/
+    /// dropdown-menu chrome), resolved from the `surface_raised` config
+    /// key (also already documented, also unread until now) or, if unset,
+    /// falls back to `background` itself (i.e. no distinct raise unless
+    /// configured -- a deliberately inert default so existing schemes that
+    /// don't set it see no change).
+    surface_raised: u32,
+}
+
+impl Scheme {
+    /// The scheme's own polarity, purely from `background`'s perceived
+    /// brightness. Drives gpui-component's `ThemeMode` pick (so unset
+    /// `ThemeColor` fields fall back to its matching dark/light baseline,
+    /// not always dark) in [`gpui_component_theme_config`].
+    fn is_dark(&self) -> bool {
+        !is_light(self.background)
+    }
 }
 
 fn scheme_from(raw: &RawConfig) -> Scheme {
@@ -147,17 +204,49 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
         value.as_deref().and_then(parse_hex).unwrap_or(default)
     };
     let ansi_raw = &raw.theme.ansi;
+
+    // Resolved ahead of the struct literal below: later roles' *default*
+    // (never their explicit-override path) derives from these.
+    let background = chrome(
+        "terminal_background",
+        Some("surface_base"),
+        BACKGROUND_DEFAULT,
+    );
+    let foreground = chrome(
+        "terminal_foreground",
+        Some("text_primary"),
+        FOREGROUND_DEFAULT,
+    );
+    let text_subtle = chrome("text_subtle", None, TEXT_SUBTLE_DEFAULT);
+    let danger = chrome(
+        "danger",
+        None,
+        contrast_safe_default(DANGER_DEFAULT, background),
+    );
+    let warning = chrome(
+        "warning",
+        None,
+        contrast_safe_default(WARNING_DEFAULT, background),
+    );
+    let success = chrome(
+        "success",
+        None,
+        contrast_safe_default(SUCCESS_DEFAULT, background),
+    );
+    let info = chrome(
+        "info",
+        None,
+        contrast_safe_default(INFO_DEFAULT, background),
+    );
+    let surface_panel = chrome(
+        "surface_panel",
+        None,
+        blend(background, foreground, SURFACE_LIFT_RATIO),
+    );
+
     Scheme {
-        background: chrome(
-            "terminal_background",
-            Some("surface_base"),
-            BACKGROUND_DEFAULT,
-        ),
-        foreground: chrome(
-            "terminal_foreground",
-            Some("text_primary"),
-            FOREGROUND_DEFAULT,
-        ),
+        background,
+        foreground,
         cursor: chrome("terminal_cursor", Some("accent"), CURSOR_DEFAULT),
         ansi: [
             ansi_slot(&ansi_raw.black, ANSI16_DEFAULT[0]),
@@ -178,17 +267,31 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
             ansi_slot(&ansi_raw.bright_white, ANSI16_DEFAULT[15]),
         ],
         accent: chrome("accent", None, CURSOR_DEFAULT),
-        danger: chrome("danger", None, DANGER_DEFAULT),
-        warning: chrome("warning", None, WARNING_DEFAULT),
-        success: chrome("success", None, SUCCESS_DEFAULT),
-        info: chrome("info", None, INFO_DEFAULT),
+        danger,
+        warning,
+        success,
+        info,
         text_muted: chrome("text_muted", None, TEXT_MUTED_DEFAULT),
-        text_subtle: chrome("text_subtle", None, TEXT_SUBTLE_DEFAULT),
-        diff_added_surface: chrome("diff_added_surface", None, DIFF_ADDED_SURFACE_DEFAULT),
-        diff_added_text: chrome("diff_added_text", None, DIFF_ADDED_TEXT_DEFAULT),
-        diff_removed_surface: chrome("diff_removed_surface", None, DIFF_REMOVED_SURFACE_DEFAULT),
-        diff_removed_text: chrome("diff_removed_text", None, DIFF_REMOVED_TEXT_DEFAULT),
-        surface_panel: chrome("surface_panel", None, SURFACE_PANEL_DEFAULT),
+        text_subtle,
+        diff_added_surface: chrome(
+            "diff_added_surface",
+            None,
+            blend(background, success, DIFF_SURFACE_BLEND_RATIO),
+        ),
+        diff_added_text: chrome("diff_added_text", None, success),
+        diff_removed_surface: chrome(
+            "diff_removed_surface",
+            None,
+            blend(background, danger, DIFF_SURFACE_BLEND_RATIO),
+        ),
+        diff_removed_text: chrome("diff_removed_text", None, danger),
+        surface_panel,
+        border: chrome(
+            "border_default",
+            None,
+            blend(background, text_subtle, BORDER_BLEND_RATIO),
+        ),
+        surface_raised: chrome("surface_raised", None, background),
     }
 }
 
@@ -206,6 +309,59 @@ fn parse_hex(value: &str) -> Option<u32> {
     }
 }
 
+/// Per-channel linear blend between two packed `0xRRGGBB` colors. `ratio`
+/// is the weight given to `toward` (`0.0` keeps `base` unchanged, `1.0`
+/// fully replaces it with `toward`).
+fn blend(base: u32, toward: u32, ratio: f32) -> u32 {
+    let ratio = ratio.clamp(0.0, 1.0);
+    let channel = |shift: u32| {
+        let base = ((base >> shift) & 0xff) as f32;
+        let toward = ((toward >> shift) & 0xff) as f32;
+        (base + (toward - base) * ratio).round() as u32
+    };
+    (channel(16) << 16) | (channel(8) << 8) | channel(0)
+}
+
+/// Perceived-brightness luminance (ITU-R BT.601 luma weights) of a packed
+/// `0xRRGGBB` color, in `0.0..=1.0`. Used only to pick a legible pairing
+/// (e.g. text-on-primary) or to decide whether a built-in default needs a
+/// contrast correction -- never to assume the scheme itself is dark or
+/// light beyond that one immediate, local decision.
+fn luminance(value: u32) -> f32 {
+    let r = ((value >> 16) & 0xff) as f32;
+    let g = ((value >> 8) & 0xff) as f32;
+    let b = (value & 0xff) as f32;
+    (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
+}
+
+fn is_light(value: u32) -> bool {
+    luminance(value) >= 0.5
+}
+
+/// Flips a packed color's HSL lightness (hue/saturation unchanged) --
+/// used only by [`contrast_safe_default`].
+fn invert_lightness(value: u32) -> u32 {
+    let hsla: Hsla = rgb(value).into();
+    let rgba: Rgba = hsla.invert_l().to_rgb();
+    u32::from(rgba) >> 8 // drop the low alpha byte `From<Rgba> for u32` packs in
+}
+
+/// A built-in default is only tuned to read against the built-in dark
+/// background; if the resolved background turns out to be light instead
+/// (i.e. the candidate and the background land on the *same* side of the
+/// midpoint), flip the candidate's lightness so it still reads legibly,
+/// keeping its hue and saturation. Never touches an explicit `[theme]`
+/// value -- this is only ever passed as the `default` argument to
+/// `chrome`, which only evaluates it when the key (and any fallback key)
+/// is absent from the user's config.
+fn contrast_safe_default(candidate: u32, background: u32) -> u32 {
+    if is_light(candidate) == is_light(background) {
+        invert_lightness(candidate)
+    } else {
+        candidate
+    }
+}
+
 fn scheme_store() -> &'static RwLock<Scheme> {
     static STORE: OnceLock<RwLock<Scheme>> = OnceLock::new();
     STORE.get_or_init(|| RwLock::new(scheme_from(horizon_config::load())))
@@ -215,28 +371,131 @@ fn scheme() -> Scheme {
     *scheme_store().read().unwrap()
 }
 
-/// Applies a re-read config's `[theme]` live — the GPUI half of the
+/// Applies a re-read config's `[theme]` live -- the GPUI half of the
 /// `Reload Config` command (the caller refreshes the window after, and
 /// separately re-applies [`apply_gpui_component_theme`]).
 pub fn reload_from(raw: &RawConfig) {
     *scheme_store().write().unwrap() = scheme_from(raw);
 }
 
-/// Projects `foreground`/`background`/`muted_foreground` onto
-/// gpui-component's global `Theme` (see this module's 2026-07-13 doc
-/// note for why: it's what the command palette's/session-manager's/view
-/// chooser's shared `List` search input actually reads for its typed and
-/// placeholder text, and neither `Input::appearance(false)` nor any role
-/// in this module reaches it). Call once at startup, right after
-/// `gpui_component::init` (`src/main.rs`), and again after
+/// Picks legible text for `primary`-colored surfaces (e.g. the `Approve`
+/// button's fill) purely by `primary`'s own lightness -- not the app's
+/// background -- since that's what the text actually sits on: a light
+/// accent (`#84dcc6`, the built-in default) wants dark text, a dark
+/// accent (e.g. a configured `#0048b3`) wants light text.
+fn primary_foreground_for(primary: u32) -> u32 {
+    if is_light(primary) {
+        PRIMARY_FOREGROUND_DARK_TEXT
+    } else {
+        PRIMARY_FOREGROUND_LIGHT_TEXT
+    }
+}
+
+fn hex(value: u32) -> String {
+    format!("#{value:06x}")
+}
+
+/// Builds the gpui-component `ThemeConfig` for the given scheme.
+///
+/// Only names a small *base* set of `ThemeColor` roles as hex strings;
+/// every other one of gpui-component's ~140 fields is left `None` and
+/// cascades from these through gpui-component's own fallback chain
+/// (`ui::theme::schema::ThemeColor::apply_config` in the vendored
+/// `gpui-component` source -- its `apply_color!`/`apply_background_color!`
+/// macro invocations are the authoritative list of which field falls back
+/// to which). The table below is this function's derivation, one row per
+/// field it *does* set:
+///
+/// | `ThemeColor` field                     | rule                                              |
+/// |-----------------------------------------|---------------------------------------------------|
+/// | `background`                            | `scheme.background`                                |
+/// | `foreground`                            | `scheme.foreground`                                |
+/// | `border`                                 | `scheme.border`                                    |
+/// | `muted`                                  | `scheme.surface_panel` (a lifted, neutral surface) |
+/// | `muted_foreground`                       | `scheme.text_muted`                                |
+/// | `primary`                                | `scheme.accent`                                    |
+/// | `primary_foreground`                     | [`primary_foreground_for`]`(scheme.accent)`         |
+/// | `ring` (focus ring)                      | `scheme.accent` (unifies focus with the brand accent, rather than gpui-component's generic blue fallback) |
+/// | `secondary`                              | `scheme.surface_panel` (reused, not a second lift)  |
+/// | `secondary_hover`                        | `secondary` blended toward `foreground` (`SECONDARY_HOVER_BLEND_RATIO`) |
+/// | `danger`/`warning`/`success`/`info`      | the matching stage-B `scheme` role                 |
+/// | `tab_bar`                                 | `scheme.background` (the strip's own background)   |
+/// | `tab_active`                              | `scheme.surface_panel`                             |
+/// | `tab_active_foreground`                   | `scheme.foreground`                                |
+/// | `tab_foreground`                          | `scheme.text_muted`                                |
+/// | `scrollbar_thumb`                         | `scheme.text_subtle` (already a visible-but-quiet gray in both polarities) |
+/// | `popover`/`popover_foreground`            | `scheme.surface_raised` / `scheme.foreground`      |
+///
+/// Deliberately *not* set (left to gpui-component's own fallback, per the
+/// table's header comment): gpui-component's own `accent`/
+/// `accent_foreground` fields -- a *different* concept from Horizon's
+/// brand accent (it's a hover-highlight surface for MenuItem/ListItem,
+/// documented as falling back to `secondary`, which we do set) -- `link`/
+/// `caret`/`selection` (all fall back to `primary`, already correct),
+/// `list`/`list_active`/`list_hover` (fall back to `background`/a
+/// `primary`-tinted blend/`accent`, already a good selection highlight
+/// for the command palette's `List`), and every `button_*`/table/sidebar
+/// field (cascades from the roles above).
+///
+/// `mode` is picked from [`Scheme::is_dark`] so gpui-component's own
+/// unset-field baseline (`ThemeColor::dark()`/`::light()`) matches the
+/// scheme's polarity too, not always dark -- see this module's doc for
+/// why that matters beyond just the handful of fields listed here (the
+/// active-state darken amount, the default button-background formula).
+///
+/// Built via `serde_json`/`ThemeConfig`'s own `Deserialize` impl (the same
+/// dotted-key JSON shape as gpui-component's `themes/*.json`, e.g.
+/// `"primary.background"`, `"tab.active.background"`) rather than a Rust
+/// struct literal: `ThemeConfigColors`'s base-color fields (`red`/`green`/
+/// ..., used only by its own `apply_config` fallback chain, never read by
+/// us) are private outside gpui-component's crate, so a literal with
+/// `..Default::default()` doesn't compile from here.
+fn gpui_component_theme_config(scheme: &Scheme) -> gpui_component::ThemeConfig {
+    let mode = if scheme.is_dark() { "dark" } else { "light" };
+    let secondary_hover = blend(
+        scheme.surface_panel,
+        scheme.foreground,
+        SECONDARY_HOVER_BLEND_RATIO,
+    );
+    let value = serde_json::json!({
+        "mode": mode,
+        "colors": {
+            "background": hex(scheme.background),
+            "foreground": hex(scheme.foreground),
+            "border": hex(scheme.border),
+            "muted.background": hex(scheme.surface_panel),
+            "muted.foreground": hex(scheme.text_muted),
+            "primary.background": hex(scheme.accent),
+            "primary.foreground": hex(primary_foreground_for(scheme.accent)),
+            "ring": hex(scheme.accent),
+            "secondary.background": hex(scheme.surface_panel),
+            "secondary.hover.background": hex(secondary_hover),
+            "danger.background": hex(scheme.danger),
+            "warning.background": hex(scheme.warning),
+            "success.background": hex(scheme.success),
+            "info.background": hex(scheme.info),
+            "tab_bar.background": hex(scheme.background),
+            "tab.active.background": hex(scheme.surface_panel),
+            "tab.active.foreground": hex(scheme.foreground),
+            "tab.foreground": hex(scheme.text_muted),
+            "scrollbar.thumb.background": hex(scheme.text_subtle),
+            "popover.background": hex(scheme.surface_raised),
+            "popover.foreground": hex(scheme.foreground),
+        },
+    });
+    serde_json::from_value(value)
+        .expect("gpui_component_theme_config builds a well-formed ThemeConfig JSON shape")
+}
+
+/// Projects the resolved `[theme]` scheme onto gpui-component's global
+/// `Theme`, via [`gpui_component_theme_config`] and gpui-component's own
+/// `ThemeColor::apply_config` fallback chain. Call once at startup, right
+/// after `gpui_component::init` (`src/main.rs`), and again after
 /// [`reload_from`] on `Reload Config` so an overridden `[theme]` scheme
 /// keeps applying live.
 pub fn apply_gpui_component_theme(cx: &mut gpui::App) {
-    let scheme = scheme();
-    let theme = gpui_component::Theme::global_mut(cx);
-    theme.foreground = packed_hsla(scheme.foreground);
-    theme.background = packed_hsla(scheme.background);
-    theme.muted_foreground = packed_hsla(scheme.text_muted);
+    let config = gpui_component_theme_config(&scheme());
+    gpui_component::Theme::global_mut(cx).apply_config(&std::rc::Rc::new(config));
 }
 
 pub fn background() -> u32 {
@@ -253,23 +512,23 @@ pub fn text_primary() -> Hsla {
     packed_hsla(scheme().foreground)
 }
 
-/// The brand accent — today's "you" message label, shared with the
+/// The brand accent -- today's "you" message label, shared with the
 /// terminal cursor's fallback color.
 pub fn accent() -> Hsla {
     packed_hsla(scheme().accent)
 }
 
-/// Danger/error — failed turns and tool errors.
+/// Danger/error -- failed turns and tool errors.
 pub fn danger() -> Hsla {
     packed_hsla(scheme().danger)
 }
 
-/// Warning — tool-call requests and pending-approval blocks.
+/// Warning -- tool-call requests and pending-approval blocks.
 pub fn warning() -> Hsla {
     packed_hsla(scheme().warning)
 }
 
-/// Success — finished tool-call results.
+/// Success -- finished tool-call results.
 pub fn success() -> Hsla {
     packed_hsla(scheme().success)
 }
@@ -279,13 +538,13 @@ pub fn info() -> Hsla {
     packed_hsla(scheme().info)
 }
 
-/// Readable secondary text — the pane's status line and exited-session
+/// Readable secondary text -- the pane's status line and exited-session
 /// text. Less prominent than `text_primary`, more than `text_subtle`.
 pub fn text_muted() -> Hsla {
     packed_hsla(scheme().text_muted)
 }
 
-/// The most de-emphasized text — thinking deltas and in-flight tool
+/// The most de-emphasized text -- thinking deltas and in-flight tool
 /// progress (deliberately quiet, unlike `text_muted`'s readable status
 /// text).
 pub fn text_subtle() -> Hsla {
@@ -453,6 +712,25 @@ mod tests {
         }
     }
 
+    /// A fixture matching the owner's actual `~/.config/horizon/config.toml`
+    /// `[theme]` (2026-07-14): a *light* scheme, with `warning`/`success`/
+    /// `info` left unset (so they exercise [`contrast_safe_default`]).
+    fn owner_light_scheme() -> Scheme {
+        scheme_from(&config_with(&[
+            ("text_primary", "#666666"),
+            ("text_muted", "#767676"),
+            ("text_subtle", "#a6a6a6"),
+            ("accent", "#0048b3"),
+            ("danger", "#b03b4c"),
+            ("surface_base", "#f6f6f6"),
+            ("surface_panel", "#c6c6c6"),
+            ("surface_raised", "#ffffff"),
+            ("border_default", "#a6a6a6"),
+            ("terminal_foreground", "#666666"),
+            ("terminal_background", "#f6f6f6"),
+        ]))
+    }
+
     #[test]
     fn default_scheme_matches_agent_views_pre_existing_hex_values() {
         let scheme = scheme_from(&RawConfig::default());
@@ -484,9 +762,15 @@ mod tests {
         ]));
         assert_eq!(scheme.diff_added_surface, 0x111111);
         assert_eq!(scheme.diff_added_text, 0x22ff22);
-        // The removed side is untouched.
-        assert_eq!(scheme.diff_removed_surface, DIFF_REMOVED_SURFACE_DEFAULT);
-        assert_eq!(scheme.diff_removed_text, DIFF_REMOVED_TEXT_DEFAULT);
+        // The removed side is untouched: it still derives from the
+        // (default, dark-scheme so contrast_safe_default is a no-op)
+        // `danger` role via `DIFF_SURFACE_BLEND_RATIO`, not a flat
+        // constant of its own.
+        assert_eq!(
+            scheme.diff_removed_surface,
+            blend(BACKGROUND_DEFAULT, DANGER_DEFAULT, DIFF_SURFACE_BLEND_RATIO)
+        );
+        assert_eq!(scheme.diff_removed_text, DANGER_DEFAULT);
     }
 
     #[test]
@@ -500,12 +784,181 @@ mod tests {
     #[test]
     fn surface_panel_defaults_to_a_lift_above_the_base_background_and_is_overridable() {
         let default_scheme = scheme_from(&RawConfig::default());
-        assert_eq!(default_scheme.surface_panel, SURFACE_PANEL_DEFAULT);
+        assert_eq!(
+            default_scheme.surface_panel,
+            blend(BACKGROUND_DEFAULT, FOREGROUND_DEFAULT, SURFACE_LIFT_RATIO)
+        );
         assert_ne!(default_scheme.surface_panel, default_scheme.background);
 
         let overridden = scheme_from(&config_with(&[("surface_panel", "#202020")]));
         assert_eq!(overridden.surface_panel, 0x202020);
         // Untouched roles keep their built-in defaults.
         assert_eq!(overridden.background, BACKGROUND_DEFAULT);
+    }
+
+    #[test]
+    fn blend_ratio_zero_and_one_are_the_endpoints() {
+        assert_eq!(blend(0x000000, 0xffffff, 0.0), 0x000000);
+        assert_eq!(blend(0x000000, 0xffffff, 1.0), 0xffffff);
+        assert_eq!(blend(0x000000, 0xffffff, 0.5), 0x808080);
+    }
+
+    #[test]
+    fn luminance_endpoints() {
+        assert_eq!(luminance(0x000000), 0.0);
+        assert_eq!(luminance(0xffffff), 1.0);
+        assert!(is_light(0xffffff));
+        assert!(!is_light(0x000000));
+    }
+
+    #[test]
+    fn contrast_safe_default_is_a_noop_when_candidate_and_background_differ_in_polarity() {
+        // The built-in dark background: every stage-B default is already
+        // on the opposite (light) side, so nothing should move.
+        assert_eq!(
+            contrast_safe_default(WARNING_DEFAULT, BACKGROUND_DEFAULT),
+            WARNING_DEFAULT
+        );
+    }
+
+    #[test]
+    fn contrast_safe_default_inverts_when_candidate_and_background_share_polarity() {
+        let light_background = 0xf6f6f6;
+        let corrected = contrast_safe_default(WARNING_DEFAULT, light_background);
+        assert_ne!(corrected, WARNING_DEFAULT);
+        // Still the same hue family, just darker -- legible against the
+        // light background instead of nearly disappearing into it.
+        assert!(luminance(corrected) < luminance(WARNING_DEFAULT));
+        assert!(!is_light(corrected));
+    }
+
+    #[test]
+    fn primary_foreground_picks_dark_text_for_a_light_accent() {
+        // The built-in accent (#84dcc6, light mint).
+        assert_eq!(
+            primary_foreground_for(0x84dcc6),
+            PRIMARY_FOREGROUND_DARK_TEXT
+        );
+    }
+
+    #[test]
+    fn primary_foreground_picks_light_text_for_a_dark_accent() {
+        // The owner's configured accent (#0048b3, dark blue).
+        assert_eq!(
+            primary_foreground_for(0x0048b3),
+            PRIMARY_FOREGROUND_LIGHT_TEXT
+        );
+    }
+
+    #[test]
+    fn owner_light_scheme_explicit_overrides_pass_through_unchanged() {
+        let scheme = owner_light_scheme();
+        assert!(!scheme.is_dark());
+        assert_eq!(scheme.background, 0xf6f6f6);
+        assert_eq!(scheme.foreground, 0x666666);
+        assert_eq!(scheme.danger, 0xb03b4c);
+        assert_eq!(scheme.surface_panel, 0xc6c6c6);
+        assert_eq!(scheme.surface_raised, 0xffffff);
+        // `border_default` (already documented in config.example.toml,
+        // unread before this projection) now resolves `border`.
+        assert_eq!(scheme.border, 0xa6a6a6);
+    }
+
+    #[test]
+    fn owner_light_scheme_contrast_corrects_unset_semantic_defaults() {
+        let scheme = owner_light_scheme();
+        // warning/success/info are NOT set in the owner's config -- their
+        // built-in defaults are light, same side as the (light)
+        // background, so they must have been inverted, not passed through
+        // verbatim.
+        assert_eq!(
+            scheme.warning,
+            contrast_safe_default(WARNING_DEFAULT, scheme.background)
+        );
+        assert_ne!(scheme.warning, WARNING_DEFAULT);
+        assert!(!is_light(scheme.warning));
+        assert_eq!(
+            scheme.success,
+            contrast_safe_default(SUCCESS_DEFAULT, scheme.background)
+        );
+        assert_ne!(scheme.success, SUCCESS_DEFAULT);
+        assert_eq!(
+            scheme.info,
+            contrast_safe_default(INFO_DEFAULT, scheme.background)
+        );
+        assert_ne!(scheme.info, INFO_DEFAULT);
+    }
+
+    #[test]
+    fn border_default_derives_when_unset_on_a_light_scheme() {
+        // A light scheme that, unlike the owner's, does NOT set
+        // `border_default`: the derived default must still land on the
+        // legible (darker-than-background) side, not the dark scheme's
+        // side.
+        let scheme = scheme_from(&config_with(&[
+            ("surface_base", "#f6f6f6"),
+            ("text_subtle", "#a6a6a6"),
+        ]));
+        assert_eq!(scheme.border, blend(0xf6f6f6, 0xa6a6a6, BORDER_BLEND_RATIO));
+        assert!(luminance(scheme.border) < luminance(scheme.background));
+    }
+
+    fn theme_color_for(scheme: &Scheme) -> gpui_component::ThemeColor {
+        let config = gpui_component_theme_config(scheme);
+        let mut theme = gpui_component::Theme::from(&gpui_component::ThemeColor::default());
+        theme.apply_config(&std::rc::Rc::new(config));
+        theme.colors
+    }
+
+    #[test]
+    fn gpui_projection_default_dark_scheme() {
+        let scheme = scheme_from(&RawConfig::default());
+        let colors = theme_color_for(&scheme);
+        assert_eq!(colors.background, packed_hsla(scheme.background));
+        assert_eq!(colors.foreground, packed_hsla(scheme.foreground));
+        assert_eq!(colors.primary, packed_hsla(scheme.accent));
+        assert_eq!(
+            colors.primary_foreground,
+            packed_hsla(PRIMARY_FOREGROUND_DARK_TEXT)
+        );
+        assert_eq!(colors.tab_foreground, packed_hsla(scheme.text_muted));
+        assert_eq!(colors.tab_active_foreground, packed_hsla(scheme.foreground));
+        assert_eq!(colors.danger, packed_hsla(scheme.danger));
+        // Fallback-chain field we never set directly: `accent_foreground`
+        // falls back to `foreground` (schema.rs), still legible.
+        assert_eq!(colors.accent_foreground, packed_hsla(scheme.foreground));
+    }
+
+    #[test]
+    fn gpui_projection_owner_light_scheme() {
+        let scheme = owner_light_scheme();
+        let colors = theme_color_for(&scheme);
+        assert_eq!(colors.background, packed_hsla(scheme.background));
+        assert_eq!(colors.primary, packed_hsla(scheme.accent));
+        // The owner's accent is dark blue -> light text.
+        assert_eq!(
+            colors.primary_foreground,
+            packed_hsla(PRIMARY_FOREGROUND_LIGHT_TEXT)
+        );
+        assert_eq!(colors.border, packed_hsla(scheme.border));
+        assert_eq!(colors.popover, packed_hsla(scheme.surface_raised));
+    }
+
+    #[test]
+    fn gpui_projection_reacts_to_a_reloaded_scheme() {
+        reload_from(&RawConfig::default());
+        let before = gpui_component_theme_config(&scheme()).mode;
+        reload_from(&config_with(&[
+            ("surface_base", "#f6f6f6"),
+            ("text_primary", "#666666"),
+        ]));
+        let after = gpui_component_theme_config(&scheme()).mode;
+        assert_eq!(before, gpui_component::ThemeMode::Dark);
+        assert_eq!(after, gpui_component::ThemeMode::Light);
+        // Restore the shared global scheme store for any other test that
+        // reads it (tests in this module run in the same process unless
+        // nextest isolates per-test, which it does -- but keep this
+        // tidy regardless).
+        reload_from(&RawConfig::default());
     }
 }

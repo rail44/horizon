@@ -142,15 +142,24 @@ Concrete mappings:
   built-in dark mode) replaces `ui/theme`'s hand-rolled chrome
   resolution; Horizon keeps only the config-file mapping (`[theme]`,
   `[theme.ansi]`) projected onto it plus the terminal ANSI resolver.
-  2026-07-13: a first, narrow slice of that projection landed ahead of
-  the full pass — `src/theme.rs`'s `apply_gpui_component_theme` sets
-  gpui-component's global `foreground`/`background`/`muted_foreground`
-  from the same `[theme]` scheme, fixing the command palette's (and
-  session-manager's/view-chooser's) `List` search input, which otherwise
-  rendered its typed/placeholder text in gpui-component's stock
-  light-mode near-black — illegible against Horizon's dark chrome (owner
-  report). See that module's doc comment for the full root-cause trace;
-  the ~140-field `ThemeColor` derivation remains future work.
+  2026-07-13 landed a first, narrow slice of that projection
+  (`foreground`/`background`/`muted_foreground` only, fixing the command
+  palette's illegible search input); 2026-07-14 completed it —
+  `src/theme.rs`'s `apply_gpui_component_theme` now builds a full
+  `gpui_component::ThemeConfig` (`gpui_component_theme_config`) naming a
+  base set of `ThemeColor` roles (background/foreground/border/primary/
+  the semantic four/the tab and popover anchors/...) and lets
+  gpui-component's own `ThemeColor::apply_config` fallback chain cascade
+  the rest, so every gpui-component-rendered widget (`TabBar`/`Tab`,
+  `Button`, `Input`, `List`, the palette/session-manager/view-chooser
+  search boxes) follows the user's `[theme]` scheme instead of
+  gpui-component's stock light default. `ThemeMode` (Dark/Light) is
+  picked from the scheme's own background luminance rather than always
+  Dark, and every blend rule is written relative to another resolved
+  scheme role (e.g. toward `foreground`/`text_subtle`) rather than a
+  fixed lighten/darken direction, so it stays correct on a light `[theme]`
+  scheme too. See that module's doc comment for the full derivation
+  table and rationale.
 - **Control-surface UI (M3)**: gpui-component Modal/Input/List replace
   the hand-rolled palette and session-manager view primitives
   (`ui/selectable_list`, `ui/list_row`, `ui/hint_chip`); the command

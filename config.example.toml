@@ -246,6 +246,16 @@ window_height = 720.0
 # terminal_foreground (defaults to text_primary), terminal_background
 # (defaults to surface_base), terminal_cursor (defaults to accent).
 #
+# 2026-07-14: border_default and surface_raised are now live -- they feed
+# the gpui-component chrome projection (`src/theme.rs`'s
+# `apply_gpui_component_theme`/`gpui_component_theme_config`) as the
+# separator-line ("border") and elevated-surface ("popover"/dropdown-menu)
+# colors respectively, each with a scheme-derived default if unset. The
+# remaining names in the list above that aren't otherwise documented
+# earlier in this comment (surface_chrome, surface_selected, border_subtle,
+# cursor_accent, user_message_*, approval_*) are not yet read by any code
+# -- see `src/theme.rs` for what's live today.
+#
 # An unrecognized name or an unparsable hex value is warned about on stderr
 # and skipped, leaving that color at its built-in default.
 # ---------------------------------------------------------------------------

@@ -1706,19 +1706,18 @@ impl WorkspaceShell {
 
     fn render_tab_strip(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tabs = self.workspace.tab_summaries();
-        // gpui-component's global `Theme` stays at its stock light default
-        // (see `src/theme.rs`'s doc comment) and `Tab`/`TabBar` read several
-        // colors straight from `cx.theme()` with no override hook that
-        // survives past their own `RenderOnce::render` (the label text color
-        // and the selected-tab fill/border are set unconditionally at the
-        // end of `Tab::render`, clobbering anything set earlier via
-        // `Styled`). The `Underline` variant is the only one whose selected
-        // state paints no filled background block (just a bottom accent
-        // stripe), so it degrades best against Horizon's dark chrome; the
-        // label text itself is pushed as a plain child (bypassing
-        // `Tab::label`, whose color the component controls) so it can use
-        // `theme::text_primary`/`text_muted` instead of the illegible
-        // near-black `foreground` role the stock light theme resolves to.
+        // `Tab`/`TabBar` colors now come from `cx.theme()`, which
+        // `theme::apply_gpui_component_theme` projects from Horizon's own
+        // `[theme]` scheme (see `src/theme.rs`) -- so the label text and
+        // the selected tab's underline stripe already resolve to
+        // `tab_foreground`/`tab_active_foreground`/`primary` (the brand
+        // accent) without any per-tab override here. The `Underline`
+        // variant is the only one whose selected state paints no filled
+        // background block (just a bottom accent stripe), so it degrades
+        // best against Horizon's chrome regardless of the scheme's
+        // polarity. The `TabBar` itself paints transparent for this
+        // variant, so its background is simply whatever sits behind it
+        // (the workspace root's own `theme::background()`).
         let selected_index = tabs
             .iter()
             .find(|tab| tab.active)
@@ -1727,23 +1726,14 @@ impl WorkspaceShell {
             .underline()
             .xsmall()
             .px_2()
-            .bg(rgb(0x101216))
             .selected_index(selected_index)
             .on_click(cx.listener(|shell, index: &usize, window, cx| {
                 shell.activate_tab(*index, window, cx);
             }))
-            .children(tabs.into_iter().map(|tab| {
-                let label_color = if tab.active {
-                    theme::text_primary()
-                } else {
-                    theme::text_muted()
-                };
-                Tab::new().child(div().text_color(label_color).child(format!(
-                    "{} {}",
-                    tab.index + 1,
-                    tab.title
-                )))
-            }))
+            .children(
+                tabs.into_iter()
+                    .map(|tab| Tab::new().label(format!("{} {}", tab.index + 1, tab.title))),
+            )
     }
 
     fn render_node(
