@@ -253,6 +253,49 @@ const WORKSPACE_MODE_DIM_ALPHA: f32 = 0.55;
 /// `keymap::WORKSPACE_MODE_PSEUDO_COMMAND` (see [`init`]).
 const DEFAULT_WORKSPACE_MODE_KEYSTROKE: &str = "ctrl-'";
 
+/// Equal-width distribution for the segmented tab strip: `true` gives
+/// every tab an identical share of the track (each `Tab` gets an explicit
+/// pixel width from [`equal_tab_width`]); `false` sizes each tab to its
+/// own label instead, as before. The owner is comparing both in-session
+/// (2026-07-14 GO on trying `Segmented`) -- flip this one constant to
+/// switch, no other code changes needed.
+const EQUAL_WIDTH_TABS: bool = true;
+
+/// Fixed allowance for the segmented track's own non-tab chrome:
+/// `TabBar`'s outer `px_2()` padding (8px each side) plus the `Segmented`
+/// variant's inner `padding_x` for `XSmall` (2px each side -- see the
+/// vendored `tab_bar.rs`'s `Segmented` branch of `RenderOnce::render`).
+/// That's 20px; rounded up to 24px for slack. Deliberately a slight
+/// overestimate of the real chrome, so computed tab widths lean a few
+/// pixels narrow rather than push the track past `tabs-inner`'s
+/// `overflow_x_scroll()` edge.
+const EQUAL_WIDTH_CHROME_ALLOWANCE_PX: f32 = 24.0;
+
+/// The `Segmented` variant's own inter-tab `gap` (2px at `XSmall`/`Small`),
+/// counted once per boundary between tabs.
+const EQUAL_WIDTH_GAP_PX: f32 = 2.0;
+
+/// Never size a tab below this, however many are open or however narrow
+/// the window gets -- `tabs-inner`'s `overflow_x_scroll()` (already
+/// gpui-component's own default) takes over once tabs stop fitting, the
+/// same fallback content-sized tabs already rely on today.
+const EQUAL_WIDTH_MIN_TAB_PX: f32 = 40.0;
+
+/// One equal-width tab's share of `strip_width` (the tab strip's measured
+/// viewport width -- it spans the window edge to edge, see
+/// [`WorkspaceShell::render_tab_strip`]'s `.w_full()`), after subtracting
+/// the track's own fixed chrome and the gaps between tabs. Pure so it's
+/// unit-testable without a window; kept in lockstep with the constants
+/// above rather than reading gpui-component's private layout directly.
+fn equal_tab_width(strip_width: Pixels, tab_count: usize) -> Pixels {
+    if tab_count == 0 {
+        return px(0.0);
+    }
+    let gaps = EQUAL_WIDTH_GAP_PX * tab_count.saturating_sub(1) as f32;
+    let usable = (f32::from(strip_width) - EQUAL_WIDTH_CHROME_ALLOWANCE_PX - gaps).max(0.0);
+    px((usable / tab_count as f32).max(EQUAL_WIDTH_MIN_TAB_PX))
+}
+
 /// gpui-component's `List` (shared by the command palette, the view
 /// chooser, and the session manager modal) binds arrow-key selection
 /// movement to its own `ui::SelectUp`/`ui::SelectDown` actions in key
@@ -1704,36 +1747,75 @@ impl WorkspaceShell {
         cx.notify();
     }
 
-    fn render_tab_strip(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_tab_strip(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tabs = self.workspace.tab_summaries();
-        // `Tab`/`TabBar` colors now come from `cx.theme()`, which
+        let tab_count = tabs.len();
+        // `Tab`/`TabBar` colors come from `cx.theme()`, which
         // `theme::apply_gpui_component_theme` projects from Horizon's own
         // `[theme]` scheme (see `src/theme.rs`) -- so the label text and
-        // the selected tab's underline stripe already resolve to
-        // `tab_foreground`/`tab_active_foreground`/`primary` (the brand
-        // accent) without any per-tab override here. The `Underline`
-        // variant is the only one whose selected state paints no filled
-        // background block (just a bottom accent stripe), so it degrades
-        // best against Horizon's chrome regardless of the scheme's
-        // polarity. The `TabBar` itself paints transparent for this
-        // variant, so its background is simply whatever sits behind it
-        // (the workspace root's own `theme::background()`).
+        // the selected tab's pill already resolve to `tab_foreground`/
+        // `tab_active_foreground`/`background` without any per-tab
+        // override here. `Segmented` (replacing `Underline`, 2026-07-14
+        // owner GO) is one of gpui-component's variants with an animated
+        // sliding selection indicator; its track color is
+        // `tab_bar_segmented`, which Horizon's projection leaves unset --
+        // falling back to gpui-component's own `secondary` token, i.e.
+        // `scheme.surface_panel` (see `gpui_component_theme_config`'s doc
+        // table). The selected tab's own pill is `tokens.background`
+        // (`scheme.background`), fixed inside gpui-component and not
+        // separately overridable without changing every other
+        // `background`-rooted surface in the app.
         let selected_index = tabs
             .iter()
             .find(|tab| tab.active)
             .map_or(0, |tab| tab.index);
+        let strip_width = window.viewport_size().width;
         TabBar::new("workspace-tabs")
-            .underline()
+            .segmented()
+            .w_full()
             .xsmall()
             .px_2()
             .selected_index(selected_index)
             .on_click(cx.listener(|shell, index: &usize, window, cx| {
                 shell.activate_tab(*index, window, cx);
             }))
-            .children(
-                tabs.into_iter()
-                    .map(|tab| Tab::new().label(format!("{} {}", tab.index + 1, tab.title))),
-            )
+            .children(tabs.into_iter().map(|tab| {
+                let label = Tab::new()
+                    .label(format!("{} {}", tab.index + 1, tab.title))
+                    // gpui-component's `Tab` already clips overflowing
+                    // content (`overflow_hidden()`/`whitespace_nowrap()`
+                    // on its inner label row, verified in the vendored
+                    // `tab.rs`) but never marks the clip with an ellipsis;
+                    // add that so a long title reads as truncated rather
+                    // than cut off mid-character. `Tab: Styled` proxies
+                    // straight into the same inner `div` its own render
+                    // keeps building on, and nothing later in that render
+                    // touches `text_overflow`, so this survives.
+                    .text_ellipsis();
+                if EQUAL_WIDTH_TABS {
+                    // `Tab`'s own `Styled` impl mutates the same `div`
+                    // its `RenderOnce::render` finishes building, so a
+                    // `.flex_1()` set here *would* survive that render's
+                    // later `.flex_shrink_0()` call (which only clobbers
+                    // the shrink field, not grow/basis) -- except
+                    // `TabBar` wraps every child in its own untouchable
+                    // bounds-tracking `div` whenever the variant animates
+                    // a selection indicator (`Segmented`, `Pill`, and
+                    // `Underline` all qualify -- `tab_bar.rs`'s
+                    // `has_indicator`), and *that* wrapper, not our
+                    // `Tab`, is the actual flex item laid out in the tab
+                    // row. Its own style is fixed (`flex_shrink_0()`, no
+                    // grow, no exposed hook to inject one), so
+                    // `Tab::flex_1()` never reaches the row's layout.
+                    // `Tab::render` never sets its own width, though, so
+                    // an explicit pixel width set here *does* survive --
+                    // hence sizing from the strip's own measured
+                    // viewport width instead of a flex trick.
+                    label.w(equal_tab_width(strip_width, tab_count))
+                } else {
+                    label
+                }
+            }))
     }
 
     fn render_node(
@@ -1749,12 +1831,12 @@ impl WorkspaceShell {
                 let mode_active = self.workspace.is_workspace_mode_active();
                 let is_cursor = mode_active && self.workspace.cursor_pane_id() == Some(pane_id);
                 let is_active = self.workspace.is_active_pane(pane_id);
-                let border = if is_cursor {
-                    rgb(0x84dcc6) // accent: the mode cursor
+                let border: Hsla = if is_cursor {
+                    theme::accent()
                 } else if is_active {
-                    rgb(0x3a3f4e)
+                    theme::border()
                 } else {
-                    rgb(theme::background())
+                    rgb(theme::background()).into()
                 };
                 let view = self.panes.get(&pane_id).cloned();
                 let restoring = self.restoring_workspace && view.is_none();
@@ -1779,7 +1861,7 @@ impl WorkspaceShell {
                             .items_center()
                             .justify_center()
                             .text_size(px(12.0))
-                            .text_color(rgb(0x8a90a0))
+                            .text_color(theme::text_muted())
                             .child(restore_label)
                     })
                     .when(mode_active, |this| {
@@ -1848,7 +1930,7 @@ impl WorkspaceShell {
 }
 
 impl Render for WorkspaceShell {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mode_active = self.workspace.is_workspace_mode_active();
         let content = self
             .workspace
@@ -1909,7 +1991,7 @@ impl Render for WorkspaceShell {
             .on_action(cx.listener(|shell, action: &RunCommand, window, cx| {
                 shell.execute(action.id, window, cx);
             }))
-            .child(self.render_tab_strip(cx))
+            .child(self.render_tab_strip(window, cx))
             .child(
                 div()
                     .flex_1()
@@ -1938,9 +2020,9 @@ impl Render for WorkspaceShell {
                                     div()
                                         .w(px(560.0))
                                         .h(px(400.0))
-                                        .bg(rgb(0x1b1e26))
+                                        .bg(theme::surface_raised())
                                         .border_1()
-                                        .border_color(rgb(0x2a2e3a))
+                                        .border_color(theme::border())
                                         .rounded_md()
                                         .overflow_hidden()
                                         .child(List::new(&palette)),
@@ -1970,9 +2052,9 @@ impl Render for WorkspaceShell {
                                     div()
                                         .w(px(420.0))
                                         .h(px(220.0))
-                                        .bg(rgb(0x1b1e26))
+                                        .bg(theme::surface_raised())
                                         .border_1()
-                                        .border_color(rgb(0x2a2e3a))
+                                        .border_color(theme::border())
                                         .rounded_md()
                                         .overflow_hidden()
                                         .child(List::new(&chooser)),
@@ -2001,9 +2083,9 @@ impl Render for WorkspaceShell {
                                     div()
                                         .w(px(560.0))
                                         .h(px(400.0))
-                                        .bg(rgb(0x1b1e26))
+                                        .bg(theme::surface_raised())
                                         .border_1()
-                                        .border_color(rgb(0x2a2e3a))
+                                        .border_color(theme::border())
                                         .rounded_md()
                                         .overflow_hidden()
                                         .child(List::new(&manager)),
@@ -2017,10 +2099,12 @@ impl Render for WorkspaceShell {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_blocked_by_restore, ensure_workspace_has_pane, first_row_to_select,
-        load_workspace_state, prepare_workspace_for_runtime_reload, terminal_fallback_cwd,
-        terminal_resume_candidates, terminal_spawn_source, workspace_mode_blocked_by_restore,
+        command_blocked_by_restore, ensure_workspace_has_pane, equal_tab_width,
+        first_row_to_select, load_workspace_state, prepare_workspace_for_runtime_reload,
+        terminal_fallback_cwd, terminal_resume_candidates, terminal_spawn_source,
+        workspace_mode_blocked_by_restore,
     };
+    use gpui::px;
     use gpui_component::IndexPath;
     use horizon_terminal_core::TerminalSummary;
     use horizon_workspace::commands::CommandId;
@@ -2033,6 +2117,27 @@ mod tests {
             "horizon-workspace-shell-{label}-{}.json",
             uuid::Uuid::new_v4()
         ))
+    }
+
+    #[test]
+    fn equal_tab_width_divides_the_strip_evenly_after_chrome_and_gaps() {
+        // 824px strip, 4 tabs: 24px chrome allowance + 3 gaps * 2px = 30px
+        // reserved, leaving 794px split four ways.
+        assert_eq!(equal_tab_width(px(824.0), 4), px(198.5));
+    }
+
+    #[test]
+    fn equal_tab_width_is_zero_for_no_tabs() {
+        assert_eq!(equal_tab_width(px(800.0), 0), px(0.0));
+    }
+
+    #[test]
+    fn equal_tab_width_never_drops_below_the_floor() {
+        // A narrow window with many tabs: the even split (5.8px) would be
+        // unreadable, so the floor wins -- the strip overflows into
+        // `tabs-inner`'s existing `overflow_x_scroll()` instead, same as
+        // content-sized tabs already do when they don't fit.
+        assert_eq!(equal_tab_width(px(100.0), 10), px(40.0));
     }
 
     #[test]

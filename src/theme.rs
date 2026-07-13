@@ -130,6 +130,23 @@ const SECONDARY_HOVER_BLEND_RATIO: f32 = 0.12;
 /// for removals) -- low, so it stays a tint rather than a solid fill.
 const DIFF_SURFACE_BLEND_RATIO: f32 = 0.12;
 
+/// How far the `Segmented` tab strip's track sits from `background`
+/// toward `surface_panel`. Left at `surface_panel` outright (a `1.0`
+/// ratio, gpui-component's own unset-key fallback), a scheme that sets
+/// `surface_panel` to a strongly lifted value tuned for occasional chrome
+/// (popovers, secondary buttons) reads as a much bigger jump than
+/// `tab_foreground` (`text_muted`, tuned for legibility against
+/// `background` specifically) was ever validated against -- verified
+/// against the owner's own light `[theme]` (`surface_panel = #c6c6c6`,
+/// `text_muted = #767676` against `background = #f6f6f6`): raw
+/// `surface_panel` puts the unselected label's contrast at roughly
+/// 2.7:1, under both the WCAG AA body-text (4.5:1) and UI-component
+/// (3:1) thresholds. Halfway back toward `background` recovers most of
+/// that contrast (~3.4:1) while keeping the track visibly distinct from
+/// the selected pill (which is fixed to `background` inside
+/// gpui-component, see [`gpui_component_theme_config`]'s doc table).
+const SEGMENTED_TRACK_BLEND_RATIO: f32 = 0.5;
+
 const ANSI16_DEFAULT: [u32; 16] = [
     0x23262e, // black
     0xe06c75, // red
@@ -420,6 +437,7 @@ fn hex(value: u32) -> String {
 /// | `secondary_hover`                        | `secondary` blended toward `foreground` (`SECONDARY_HOVER_BLEND_RATIO`) |
 /// | `danger`/`warning`/`success`/`info`      | the matching stage-B `scheme` role                 |
 /// | `tab_bar`                                 | `scheme.background` (the strip's own background)   |
+/// | `tab_bar_segmented`                       | `background` blended toward `surface_panel` (`SEGMENTED_TRACK_BLEND_RATIO`) -- see that constant's doc for why not `surface_panel` outright |
 /// | `tab_active`                              | `scheme.surface_panel`                             |
 /// | `tab_active_foreground`                   | `scheme.foreground`                                |
 /// | `tab_foreground`                          | `scheme.text_muted`                                |
@@ -457,6 +475,11 @@ fn gpui_component_theme_config(scheme: &Scheme) -> gpui_component::ThemeConfig {
         scheme.foreground,
         SECONDARY_HOVER_BLEND_RATIO,
     );
+    let tab_bar_segmented = blend(
+        scheme.background,
+        scheme.surface_panel,
+        SEGMENTED_TRACK_BLEND_RATIO,
+    );
     let value = serde_json::json!({
         "mode": mode,
         "colors": {
@@ -475,6 +498,7 @@ fn gpui_component_theme_config(scheme: &Scheme) -> gpui_component::ThemeConfig {
             "success.background": hex(scheme.success),
             "info.background": hex(scheme.info),
             "tab_bar.background": hex(scheme.background),
+            "tab_bar.segmented.background": hex(tab_bar_segmented),
             "tab.active.background": hex(scheme.surface_panel),
             "tab.active.foreground": hex(scheme.foreground),
             "tab.foreground": hex(scheme.text_muted),
@@ -560,6 +584,22 @@ pub fn text_subtle() -> Hsla {
 /// `#fafafa` panel tint on the expanded call's row).
 pub fn surface_panel() -> Hsla {
     packed_hsla(scheme().surface_panel)
+}
+
+/// An elevated surface for floating chrome (modal backdrops, popover/
+/// dropdown-menu panels) -- resolved from the `surface_raised` config key,
+/// defaulting to `background` itself if unset. Also what gpui-component's
+/// own `popover`/`popover_foreground` roles resolve to in
+/// [`gpui_component_theme_config`].
+pub fn surface_raised() -> Hsla {
+    packed_hsla(scheme().surface_raised)
+}
+
+/// A subtle separator line -- resolved from the `border_default` config
+/// key, or derived from `text_subtle` if unset. Also gpui-component's own
+/// `border` role in [`gpui_component_theme_config`].
+pub fn border() -> Hsla {
+    packed_hsla(scheme().border)
 }
 
 /// Diff-added line background (fs.edit's reconstructed-diff body, stage
@@ -942,6 +982,29 @@ mod tests {
         );
         assert_eq!(colors.border, packed_hsla(scheme.border));
         assert_eq!(colors.popover, packed_hsla(scheme.surface_raised));
+    }
+
+    #[test]
+    fn gpui_projection_segmented_track_blends_toward_background_from_surface_panel() {
+        // Regression fixture for the Segmented tab-strip track (2026-07-14):
+        // left unset, gpui-component's own fallback would put
+        // `tab_bar_segmented` at raw `surface_panel` (`#c6c6c6` here),
+        // putting `tab_foreground` (`text_muted`, `#767676`) at roughly a
+        // 2.7:1 contrast ratio against it -- under both the WCAG AA
+        // body-text (4.5:1) and UI-component (3:1) thresholds. Blending
+        // halfway back toward `background` (`#f6f6f6`) recovers most of
+        // that (~3.4:1) without erasing the track's distinctness from the
+        // selected pill (fixed to `background` inside gpui-component).
+        let scheme = owner_light_scheme();
+        let colors = theme_color_for(&scheme);
+        let expected = blend(
+            scheme.background,
+            scheme.surface_panel,
+            SEGMENTED_TRACK_BLEND_RATIO,
+        );
+        assert_eq!(colors.tab_bar_segmented, packed_hsla(expected));
+        assert_ne!(colors.tab_bar_segmented, packed_hsla(scheme.background));
+        assert_ne!(colors.tab_bar_segmented, packed_hsla(scheme.surface_panel));
     }
 
     #[test]

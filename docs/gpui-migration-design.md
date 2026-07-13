@@ -170,10 +170,17 @@ Concrete mappings:
 - **Transcript (M4)**: native Markdown + virtualized List, as already
   decided.
 - **Splits (M2)**: `resizable` primitives, as already decided.
-- **Tab strip (M2)**: gpui-component's standalone `TabBar`/`Tab`
-  (Underline variant) replace the hand-rolled `render_tab_strip` div
-  strip; the tab model, click dispatch, and display numbers are
-  unchanged. Landed 2026-07-13.
+- **Tab strip (M2)**: gpui-component's standalone `TabBar`/`Tab` replace
+  the hand-rolled `render_tab_strip` div strip; the tab model, click
+  dispatch, and display numbers are unchanged. Landed 2026-07-13
+  (Underline variant); switched to Segmented with a full-width
+  (`.w_full()`) track 2026-07-14 (owner GO), alongside an equal-width
+  tab-distribution experiment (`EQUAL_WIDTH_TABS` in
+  `render_tab_strip`, defaulted on) sizing each tab from the strip's
+  measured viewport width rather than gpui-component's own flex
+  machinery, which a wrapping `div` internal to `TabBar` blocks for
+  any indicator-animated variant (Segmented included) -- see that
+  function's doc comments for the full trace.
 - **Scrollbar**: gpui-component's Scrollbar when a scrollback
   indicator lands.
 
