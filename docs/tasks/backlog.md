@@ -724,3 +724,19 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     in that pane becomes a silent no-op, with nothing surfaced to the
     user. Noticed auditing that file's command dispatch while fixing
     backlog #34; filing only, not fixing.
+
+36. **Shared build-dir flake: `CARGO_BIN_EXE_horizon-sessiond` spawn
+    fails with NotFound while sibling worktrees build concurrently.**
+    Observed 2026-07-13 in the integration worktree with three worker
+    worktrees building in parallel: `horizon-sessiond::e2e`'s
+    `a_hello_with_the_wrong_contract_version_is_rejected_with_a_reason`
+    panicked at spawn ("No such file or directory") although
+    `target/debug/horizon-sessiond` existed; the same test passed on
+    an isolated rerun immediately after. Suspected interaction between
+    `.cargo/config.toml`'s shared `build-dir` (advisory-locked across
+    worktrees) and the final-artifact link step the baked-in
+    `CARGO_BIN_EXE_*` path depends on. Repro direction: run the
+    sessiond e2e suite in one worktree while another worktree's
+    `cargo build --workspace` loops. If confirmed, candidates: make
+    the e2e spawn resolve the binary at runtime relative to its own
+    target dir, or serialize gate runs against sibling builds.
