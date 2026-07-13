@@ -789,3 +789,62 @@ deviation rather than asking for a mock update):
   `horizon-agent` is linked directly into the binary; a session-info
   payload (or retaining `role_id` per session and resolving it in-
   process) would close this gap for a pre-first-turn chip.
+- **Follow-scroll rebuilt as an explicit state machine in GPUI (2026-07-13,
+  base decision 7, "never ported to GPUI").** `docs/agent-output-ui-
+  design.md` decision 7 predates the GPUI migration and was never
+  rebuilt after it; the pre-existing GPUI transcript only had an implicit
+  geometry check (`if at_transcript_bottom() { scroll_to_bottom() }` on
+  every session-driven update, no explicit state at all). Replaced with a
+  new `src/agent/follow.rs` module: a two-variant `FollowState` (`Sticky`
+  default / `Detached`) and one pure transition, `on_wheel_scroll(state,
+  scrolled_toward_top, at_bottom)`, colocated-tested. **Detection signal
+  investigated and chosen**: GPUI's `ScrollHandle` exposes no scroll
+  *event*, only offset/bounds snapshots, but `div()` separately exposes
+  `.on_scroll_wheel(...)`, a genuine platform wheel/trackpad event
+  distinct from any programmatic offset write (confirmed against the
+  vendored gpui source that `scroll_to_bottom`/`set_offset` never
+  dispatch one) — the most robust signal actually available, and the
+  only user-driven scroll input that exists today (no scrollbar widget
+  is wired into the transcript). Also confirmed by reading gpui's
+  dispatch loop: the transcript's own `.on_scroll_wheel` handler and the
+  div's built-in overflow-scroll listener are both Bubble-phase
+  listeners on the same element, dispatched in *reverse* registration
+  order, so the built-in one (registered second, via `paint_scroll_
+  listener`) fires first — the wheel handler always reads this exact
+  gesture's already-applied offset, not a stale pre-scroll one. Both
+  edges (`Sticky` -> `Detached` on a deliberate upward scroll away from
+  the bottom, `Detached` -> `Sticky` on landing back at the bottom) are
+  decided together from that one observation, not from geometry alone on
+  every render — content growth alone must never silently re-enter
+  `Sticky` while `Detached` (a reader who looked away should stay put
+  through arbitrary further streaming until they scroll back down
+  themselves), which the old geometry-only check would have gotten wrong.
+  Programmatic snaps (`send_composer_message`, the return pill's "↓
+  latest", the jump pill's own `Detached` re-assertion) set `FollowState`
+  directly and never call the transition function, so "programmatic
+  snaps never flip state by themselves" holds by construction. A small
+  floating pill (`AgentView::render_follow_pill`, quiet border/hover
+  language matching the receipt row's own click affordance, theme roles
+  only) overlays the transcript's bottom-right corner while `Detached`
+  (shown unconditionally while detached, not gated on "new content since
+  detaching" — the simpler, non-flickering choice, matching how Slack/
+  Discord/ChatGPT do their own "jump to latest" pills): a "↓ latest"
+  segment always present, and a "↑ latest you" segment scrolling the
+  transcript block containing the latest user message into view via
+  `ScrollHandle::scroll_to_top_of_item`, leaving state `Detached`.
+  **Item-anchored scrolling investigated**: GPUI's `scroll_to_top_of_item`
+  (and `scroll_to_item`) only anchor to a *direct child* of the tracked
+  scroll container — here, a whole turn's rendered block
+  (`Render::render`'s `blocks`, one element per `turns::TurnSpan`), not a
+  single message element — there is no finer-grained equivalent to the
+  Floem shell's `scroll_to_view(ViewId)` (the base doc's "Known
+  limitation" note). `turns::contains_user_message` is tracked in
+  lockstep with `blocks` as `Render::render` walks turn spans, so the
+  pill targets the block containing the *latest* user message; this
+  lands at that turn's own opening item in the common case, one
+  turn-block short of the exact line only for a mid-turn interjection
+  (`group_into_turns`'s invariant 1) — an accepted approximation, noted
+  on `AgentView::jump_to_latest_user_message`'s own doc comment. The base
+  doc's "Known limitation: window-trim scroll drift" is moot in GPUI, as
+  expected — there is no 200-block trailing window here at all (the
+  GPUI shell renders every item; see this doc's own current-state note).

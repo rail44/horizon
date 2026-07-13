@@ -137,6 +137,28 @@ pub(crate) fn group_into_turns(items: &[AgentFrameItem]) -> Vec<TurnSpan> {
     spans
 }
 
+/// Whether `items` contains at least one user message -- used to resolve
+/// which rendered transcript block (`AgentView::render`'s `blocks`, one
+/// element per turn span, plus the rare orphan-item fallback) the
+/// "jump to latest user message" pill (`docs/agent-output-ui-design.md`
+/// decision 7) should target. `ScrollHandle::scroll_to_top_of_item` only
+/// anchors to a *direct child* of the tracked scroll container -- a whole
+/// turn's rendered block, not a single message -- so `AgentView` tracks
+/// the latest block containing a user message as it walks `items`,
+/// calling this once per span (see `view.rs`'s `jump_to_latest_user_
+/// message` doc comment for the full trade-off this approximates).
+pub(crate) fn contains_user_message(items: &[AgentFrameItem]) -> bool {
+    items.iter().any(|item| {
+        matches!(
+            item,
+            AgentFrameItem::Message(Message {
+                role: MessageRole::User,
+                ..
+            })
+        )
+    })
+}
+
 /// Whether `item` is part of a tool call's lifecycle -- used by
 /// [`segment_bursts`] to find burst boundaries.
 fn is_tool_related(item: &AgentFrameItem) -> bool {
@@ -3005,5 +3027,24 @@ mod tests {
             ReceiptTail::Intermediate,
             ReceiptTail::Intermediate
         ));
+    }
+
+    #[test]
+    fn contains_user_message_finds_a_user_message_among_other_items() {
+        let items = vec![
+            assistant_message("hi"),
+            tool_requested("a", "fs.read", json!({"path": "a.rs"})),
+            user_message("fix the bug"),
+        ];
+        assert!(contains_user_message(&items));
+    }
+
+    #[test]
+    fn contains_user_message_false_without_one() {
+        let items = vec![
+            assistant_message("hi"),
+            tool_requested("a", "fs.read", json!({"path": "a.rs"})),
+        ];
+        assert!(!contains_user_message(&items));
     }
 }

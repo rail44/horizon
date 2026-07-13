@@ -27,6 +27,7 @@ use horizon_agent::contract::{MessageRole, SessionState, ToolCallId};
 use horizon_agent::frame::{state_indicates_turn_in_flight, AgentFrameItem};
 use horizon_workspace::commands::CommandId;
 
+use super::follow::{self, FollowState};
 use super::session::AgentSession;
 use super::turns;
 use crate::theme;
@@ -49,6 +50,14 @@ pub struct AgentView {
     composer: Entity<InputState>,
     focus_handle: FocusHandle,
     transcript_scroll: ScrollHandle,
+    /// Follow-scroll state machine (`docs/agent-output-ui-design.md`
+    /// decision 7; see `follow`'s module doc for the detection signal
+    /// and why the two edges are decided together). Synced from the
+    /// transcript's own `on_scroll_wheel` handler
+    /// (`Self::on_transcript_wheel_scroll`); read by the session-change
+    /// observer to decide whether to auto-snap, and by `Render::render`
+    /// to decide whether the return pill shows at all.
+    follow: FollowState,
     running_turn_clock: Option<RunningTurnClock>,
     /// Stage D: which turns' receipts are expanded, keyed by the turn's
     /// own start index (`TurnSpan::start`, stable for the turn's whole
@@ -82,11 +91,16 @@ pub struct AgentView {
 impl AgentView {
     pub fn new(session: Entity<AgentSession>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let composer = cx.new(|cx| InputState::new(window, cx).placeholder("Message the agent…"));
-        // Follow-scroll (the Floem shell's `follow_scroll` parity): while
-        // the user sits at the bottom, new content keeps the view pinned
-        // there; once they scroll up, updates leave them alone. The
-        // stickiness check runs *before* the re-render, on the pre-update
-        // geometry.
+        // Follow-scroll (`docs/agent-output-ui-design.md` decision 7, the
+        // Floem shell's `follow_scroll` parity, rebuilt as an explicit
+        // `FollowState` machine -- see `follow`'s module doc): while
+        // `Sticky`, new content keeps the view pinned to the bottom; once
+        // `Detached` (via `on_transcript_wheel_scroll`), updates leave the
+        // user alone. This check runs *before* the re-render, on the
+        // pre-update geometry -- `scroll_to_bottom` only needs to fire
+        // once per content growth while `Sticky`, not be recomputed from
+        // post-growth geometry (which would need the *old* max-offset to
+        // judge "was this already at the bottom", not the new one).
         let mut subscriptions = vec![cx.observe(&session, |view: &mut AgentView, _, cx| {
             view.sync_running_turn_clock(cx);
             // Stage E, decision 4's "smoothly advance": any approval
@@ -94,7 +108,7 @@ impl AgentView {
             // requested is a frame change, so re-syncing here covers all
             // three non-composer paths alongside the composer's own.
             view.sync_composer_mode(cx);
-            if view.at_transcript_bottom() {
+            if view.follow == FollowState::Sticky {
                 view.transcript_scroll.scroll_to_bottom();
             }
             cx.notify();
@@ -173,6 +187,7 @@ impl AgentView {
             composer,
             focus_handle,
             transcript_scroll: ScrollHandle::new(),
+            follow: FollowState::default(),
             running_turn_clock: None,
             expanded_receipts: HashSet::new(),
             expanded_rows: HashSet::new(),
@@ -225,8 +240,10 @@ impl AgentView {
     /// The composer's one send implementation: trims/empty-guards, sends
     /// through `AgentSession::send_user_message`, clears the composer, and
     /// re-pins the transcript to the bottom (sending always re-pins,
-    /// wherever the user had scrolled to). Shared by the `PressEnter`
-    /// subscription above and the composer's send button
+    /// wherever the user had scrolled to -- requirement 4 of decision 7's
+    /// GPUI port: composer send always re-enters `Sticky`, explicitly,
+    /// not by way of `follow::on_wheel_scroll`). Shared by the
+    /// `PressEnter` subscription above and the composer's send button
     /// (`render_send_button`, the mock's circular `↑`) -- exactly one send
     /// path, so an empty-composer Enter and an empty-composer button click
     /// both no-op identically rather than each carrying its own guard.
@@ -238,6 +255,7 @@ impl AgentView {
         self.session.read(cx).send_user_message(text);
         self.composer
             .update(cx, |composer, cx| composer.set_value("", window, cx));
+        self.follow = FollowState::Sticky;
         self.transcript_scroll.scroll_to_bottom();
     }
 
@@ -263,6 +281,74 @@ impl AgentView {
     fn at_transcript_bottom(&self) -> bool {
         let max = self.transcript_scroll.max_offset().y;
         max <= px(0.0) || self.transcript_scroll.offset().y <= -(max - px(8.0))
+    }
+
+    /// The transcript's one genuine user-scroll signal (`follow`'s module
+    /// doc explains why a wheel event is the chosen detection signal):
+    /// feeds this gesture's direction, plus the current near-bottom
+    /// reading, to `follow::on_wheel_scroll`.
+    ///
+    /// Ordering note (confirmed against the vendored gpui source,
+    /// `crates/gpui/src/elements/div.rs`): this handler and the div's
+    /// own built-in overflow-scroll listener are both registered as
+    /// Bubble-phase `window.on_mouse_event` closures on the same
+    /// element — ours via `Interactivity::paint_mouse_listeners`, the
+    /// built-in one right after via `paint_scroll_listener` — and
+    /// `Window::dispatch_mouse_event` runs Bubble-phase listeners in
+    /// *reverse* registration order, so the built-in one (registered
+    /// second) actually fires *first* for a live event. By the time this
+    /// closure runs, `at_transcript_bottom()` already reflects this
+    /// exact gesture's own applied offset delta, not a stale pre-scroll
+    /// reading.
+    fn on_transcript_wheel_scroll(
+        &mut self,
+        event: &ScrollWheelEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let delta_y = event.delta.pixel_delta(window.line_height()).y;
+        let scrolled_toward_top = delta_y > px(0.0);
+        let at_bottom = self.at_transcript_bottom();
+        let next = follow::on_wheel_scroll(self.follow, scrolled_toward_top, at_bottom);
+        if next != self.follow {
+            self.follow = next;
+            cx.notify();
+        }
+    }
+
+    /// The return pill's "↓ latest" segment (decision 7): re-enters
+    /// `Sticky` explicitly and snaps to the bottom, the same explicit
+    /// re-pin `send_composer_message` performs.
+    fn return_to_sticky(&mut self, cx: &mut Context<Self>) {
+        self.follow = FollowState::Sticky;
+        self.transcript_scroll.scroll_to_bottom();
+        cx.notify();
+    }
+
+    /// The return pill's "jump to latest user message" segment (decision
+    /// 7, requirement 3): scrolls `block_index` — the rendered transcript
+    /// block (`Render::render`'s `blocks`, one element per turn span)
+    /// containing the latest user message — to the top of the viewport,
+    /// and leaves `follow` `Detached` (the pill's own affordance, not a
+    /// snap-to-bottom, so re-entering `Sticky` here would immediately
+    /// undo the jump the moment any content changes).
+    ///
+    /// Approximation note: GPUI's `ScrollHandle::scroll_to_top_of_item`
+    /// only anchors to a *direct child* of the tracked scroll container —
+    /// here, a whole turn's rendered block, not a single message element
+    /// — so there is no finer-grained item-anchored scrolling available
+    /// (the Floem shell's `scroll_to_view(ViewId)`, keyed per-block in
+    /// `docs/agent-output-ui-design.md`'s "Known limitation" note, has no
+    /// GPUI equivalent below block granularity). This lands at the top of
+    /// the turn *containing* the latest user message, which is that
+    /// turn's own opening item in the common case — the exception is a
+    /// mid-turn interjection (`turns::group_into_turns`'s invariant 1),
+    /// where this lands one turn-block short of the exact line but still
+    /// at the right turn.
+    fn jump_to_latest_user_message(&mut self, block_index: usize, cx: &mut Context<Self>) {
+        self.transcript_scroll.scroll_to_top_of_item(block_index);
+        self.follow = FollowState::Detached;
+        cx.notify();
     }
 
     /// Resets [`RunningTurnClock`] whenever the running turn's opening
@@ -1555,6 +1641,82 @@ impl AgentView {
             .into_any_element()
     }
 
+    /// The follow-scroll return affordance (decision 7, requirements 2-3):
+    /// floats over the transcript's bottom-right corner, only while
+    /// `Detached` (`Render::render`'s own `.when` gate) -- shown
+    /// unconditionally while `Detached`, not gated on "new content has
+    /// arrived since detaching": the transcript is append-only, so a
+    /// reader who scrolled away almost always has *something* new below
+    /// by the time they'd look for this anyway, and a presence that
+    /// doesn't flicker in and out as messages stream is the simpler,
+    /// more predictable affordance (the same choice Slack/Discord/ChatGPT
+    /// make for their own "jump to latest" pills).
+    ///
+    /// Two segments in the same quiet pill/button language
+    /// `render_receipt`'s row uses (subtle border + hover fill, built on
+    /// `theme::text_subtle()`) so it reads as an unobtrusive affordance,
+    /// not an alert: "↓ latest" always shows (`Self::return_to_sticky`);
+    /// "↑ latest you" only shows when `latest_user_message_block` is
+    /// `Some` (`Self::jump_to_latest_user_message`) -- there may be no
+    /// user message at all yet in a freshly resumed or very short
+    /// session.
+    fn render_follow_pill(
+        &self,
+        latest_user_message_block: Option<usize>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let segment = |id: &'static str, label: &'static str| {
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .px_2()
+                .py_1()
+                .text_size(px(11.0))
+                .text_color(theme::text_muted())
+                .cursor_pointer()
+                .hover(|this| this.bg(theme::text_subtle().alpha(0.15)))
+                .child(label)
+        };
+        let mut pill = div()
+            .id("follow-return-pill")
+            .absolute()
+            .bottom(px(12.0))
+            .right(px(12.0))
+            .flex()
+            .flex_row()
+            .items_center()
+            .rounded_full()
+            .overflow_hidden()
+            .border_1()
+            .border_color(theme::text_subtle().alpha(0.3))
+            .bg(theme::surface_panel())
+            .child(
+                segment("follow-pill-return", "↓ latest").on_click(cx.listener(
+                    |view, _, _, cx| {
+                        view.return_to_sticky(cx);
+                    },
+                )),
+            );
+        if let Some(block_index) = latest_user_message_block {
+            pill = pill
+                .child(
+                    div()
+                        .w(px(1.0))
+                        .h(px(14.0))
+                        .bg(theme::text_subtle().alpha(0.3)),
+                )
+                .child(
+                    segment("follow-pill-jump", "↑ latest you").on_click(cx.listener(
+                        move |view, _, _, cx| {
+                            view.jump_to_latest_user_message(block_index, cx);
+                        },
+                    )),
+                );
+        }
+        pill.into_any_element()
+    }
+
     fn status_line(&self, cx: &App) -> String {
         match self.session.read(cx).frame.state {
             Some(SessionState::Running) => "running…".to_string(),
@@ -1846,12 +2008,23 @@ impl Render for AgentView {
         let turn_spans = turns::group_into_turns(&frame_items);
 
         let mut blocks: Vec<AnyElement> = Vec::new();
+        // Decision 7, requirement 3: the rendered block (index into
+        // `blocks`, one element per turn span -- see
+        // `jump_to_latest_user_message`'s doc comment) containing the
+        // latest user message so far, updated in lockstep with `blocks`
+        // itself rather than resolved after the fact, so it stays correct
+        // even across the rare orphan-item fallback path below (which can
+        // desync a turn-span index from a `blocks` index).
+        let mut latest_user_message_block: Option<usize> = None;
         let mut turn_cursor = 0usize;
         let mut index = 0usize;
         while index < frame_items.len() {
             if let Some(span) = turn_spans.get(turn_cursor) {
                 if span.start == index {
                     let items = &frame_items[span.start..span.end];
+                    if turns::contains_user_message(items) {
+                        latest_user_message_block = Some(blocks.len());
+                    }
                     // A dangling span (`ended: None`) always renders
                     // through `render_turn`, the same as a closed one --
                     // never gated on the live `turn_in_flight` reading.
@@ -1877,6 +2050,9 @@ impl Render for AgentView {
             // invariants: every item opens or extends a span), kept as a
             // last-resort defensive walk for a genuinely unknown future
             // shape. Render individually, unchanged.
+            if turns::contains_user_message(std::slice::from_ref(&frame_items[index])) {
+                latest_user_message_block = Some(blocks.len());
+            }
             if let Some(el) = self.render_item(&frame_items, index, &frame_items[index], cx) {
                 blocks.push(el);
             }
@@ -1884,6 +2060,7 @@ impl Render for AgentView {
         }
 
         let status = self.status_line(cx);
+        let follow = self.follow;
 
         div()
             .size_full()
@@ -1893,16 +2070,29 @@ impl Render for AgentView {
             .track_focus(&self.focus_handle)
             .child(
                 div()
-                    .id("agent-transcript")
-                    .track_scroll(&self.transcript_scroll)
+                    .relative()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .p_2()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .children(blocks),
+                    .child(
+                        div()
+                            .id("agent-transcript")
+                            .track_scroll(&self.transcript_scroll)
+                            .on_scroll_wheel(cx.listener(
+                                |view, event: &ScrollWheelEvent, window, cx| {
+                                    view.on_transcript_wheel_scroll(event, window, cx);
+                                },
+                            ))
+                            .size_full()
+                            .overflow_y_scroll()
+                            .p_2()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .children(blocks),
+                    )
+                    .when(follow == FollowState::Detached, |this| {
+                        this.child(self.render_follow_pill(latest_user_message_block, cx))
+                    }),
             )
             .when(!status.is_empty() || turn_in_flight, |this| {
                 this.child(
