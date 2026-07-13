@@ -79,6 +79,7 @@ fn run_gui() {
         .with_assets(gpui_component_assets::Assets)
         .run(move |cx| {
             gpui_component::init(cx);
+            theme::apply_gpui_component_theme(cx);
             workspace::init(cx);
             // macOS treats a process with no main menu as owning no menu bar,
             // so the previous app's menu (and name) would linger even with
