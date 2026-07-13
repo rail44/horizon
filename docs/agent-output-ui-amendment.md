@@ -704,3 +704,16 @@ deviation rather than asking for a mock update):
   the dispatch fix, this fallback should be structurally unreachable for
   any legitimate sequence now; it stays only as a last-resort renderer
   for a genuinely unknown future item shape.
+- **Immediate approval feedback (2026-07-13, owner decision).** The
+  daemon's approve/deny round trip synchronously folds `ToolCallStarted`
+  (approve) or `ToolCallFinished` (deny, or a synchronous tool's approve)
+  one IPC hop after the click — not the tool's eventual result, which for
+  `bash` can lag seconds behind. `pending_approval_call_ids_in`/
+  `actionable_pending_approval_call_ids_in` (`crates/horizon-agent/src/
+  frame.rs`) and `turns::build_tool_call_views`'s `ApprovalState`
+  derivation now resolve on `ToolCallStarted` too, not just
+  `ToolCallFinished`: a row flips to `Approved` (buttons/proposal body
+  gone, muted "approved" phrase, glyph still ● running) and the
+  actionable dispatch queue/keyboard `ComposerMode` both advance the
+  instant the click's ack folds — via honest folding of the daemon's
+  synchronous ack, no optimistic UI state.
