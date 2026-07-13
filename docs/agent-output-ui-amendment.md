@@ -717,3 +717,42 @@ deviation rather than asking for a mock update):
   actionable dispatch queue/keyboard `ComposerMode` both advance the
   instant the click's ack folds — via honest folding of the daemon's
   synchronous ack, no optimistic UI state.
+- **Streaming thinking visibility restored (2026-07-13).** Closed an
+  un-instructed deviation from base decision 5 ("thinking auto-expands
+  only while streaming and collapses ... when done"): `AgentView::
+  render_turn`'s per-item walk never had a match arm for
+  `AgentFrameItem::ReasoningDelta` at all, so it was silently dropped by
+  the walk's own `_ => {}` fallback -- thinking was completely invisible
+  while a turn ran, making the pane look idle during long thinking
+  phases. Fixed by adding a guarded arm, `AgentFrameItem::ReasoningDelta(_)
+  if turns::thinking_visible_outside_burst(ended)`, rendering it via the
+  existing quiet `theme::text_subtle()` "thinking" block (now labeled
+  "thinking…", matching `AssistantTextDelta`'s own "agent…" streaming-label
+  convention) in its actual chronological position -- exactly where the
+  per-item walk encounters it, so it naturally lands before/after a
+  neighboring burst's receipt the same way `Message`/`AssistantTextDelta`
+  already do. A reasoning item that instead falls *inside* a burst's own
+  `[start, end)` range (a "stray reasoning delta" between two tool-related
+  items, per `segment_bursts`'s own doc comment) never reaches this arm --
+  it stays structurally absorbed into that burst's `render_running_card`/
+  `render_receipt` call and invisible, unchanged (round 5's burst-fold
+  design fork is left as-is; only the *outside-every-burst* case, the
+  dominant real-world shape -- a long thinking phase before the first tool
+  call, or a turn with no tool activity at all -- was actually broken).
+  `turns::thinking_visible_outside_burst(ended)` is `ended.is_none()`: once
+  `TurnEnded` folds, this arm stops firing and every reasoning item goes
+  back to invisible, matching decision 1's "thinking folds into the receipt
+  on completion" and requirement 3 ("completed turns: unchanged"). Height
+  bound: `ReasoningDelta`'s `.text` is the reducer's own coalesced field
+  (`frame.rs`'s `Event::ReasoningDelta` fold appends every delta into one
+  growing string), so `turns::cap_thinking_text` re-caps it to its trailing
+  `THINKING_TAIL_LINES` (6, deliberately smaller than the tool-call bodies'
+  own caps -- thinking is meant to read as a quiet side-channel, not a
+  panel competing with assistant prose) on every render, reusing the
+  existing `cap_lines_tail` "tail matters most" shape bash output already
+  gets rather than a new nested scrollable region -- avoids a second
+  scroll surface fighting the transcript's own sticky-bottom follow-scroll.
+  Pure logic (`cap_thinking_text`, `thinking_visible_outside_burst`) lives
+  in `src/agent/turns.rs` with colocated tests, including a regression
+  pin for the burst-absorbed case staying unaffected
+  (`segment_bursts_never_lets_a_stray_reasoning_delta_split_a_burst`).
