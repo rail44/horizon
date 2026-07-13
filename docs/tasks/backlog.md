@@ -691,18 +691,36 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     `HORIZON_INPUT_TRACE` plus a deliberate `horizon-sessiond` kill/respawn
     against a fish session, and diff `keys_as_escape_codes` before/after.
 
-34. **`SessionState` reports `WaitingForUser` while a tool-call approval
-    is still pending.** Found root-causing the 2026-07-13 flat-render
-    regression (session `3fe93cdb…`, "Agent #30"): with two bash
-    approvals outstanding, approving the first moved the daemon's
-    state to `WaitingForUser` for a real 36 seconds while the second
-    request sat unresolved — `WaitingForApproval` should arguably hold
-    until the actionable queue is empty. The UI no longer breaks on
-    this (dangling spans always render as turns since `e7ba824`), but
-    two visible symptoms remain rooted here: the status line goes
-    blank and the status-row stop button disappears mid-turn (both key
-    off `state_indicates_turn_in_flight`). Fix belongs in the
-    provider/session loop's state transitions
-    (`crates/horizon-sessiond` / `crates/horizon-agent` providers), not
-    the view; re-check the status-line/stop-button gating once the
-    state is honest.
+34. **[RESOLVED] `SessionState` reports `WaitingForUser` while a
+    tool-call approval is still pending.** Found root-causing the
+    2026-07-13 flat-render regression (session `3fe93cdb…`, "Agent
+    #30"): with two bash approvals outstanding, approving the first
+    moved the daemon's state to `WaitingForUser` for a real 36 seconds
+    while the second request sat unresolved — `WaitingForApproval`
+    should arguably hold until the actionable queue is empty. The UI
+    no longer breaks on this (dangling spans always render as turns
+    since `e7ba824`), but two visible symptoms remain rooted here: the
+    status line goes blank and the status-row stop button disappears
+    mid-turn (both key off `state_indicates_turn_in_flight`).
+    Fixed: `crates/horizon-sessiond/src/session.rs::fold_bash_completion`
+    (the only async-tool completion path — `fs.write`/`fs.edit`/
+    `config.write` all resolve synchronously and already avoided this,
+    see `agent::tools::approval::synchronous_result`'s own
+    no-trailing-`WaitingForUser` comment) now checks the session's live
+    frame (`AgentFrame::actionable_pending_approval_call_ids`, excluding
+    the call just finishing) before choosing its trailing
+    `StateChanged`: `WaitingForApproval` if another approval-gated call
+    from the same turn is still outstanding, `WaitingForUser` only once
+    none is. Covered by a new unit test in that file exercising two
+    approval-gated bash calls. The status-line/stop-button gating itself
+    was left unchanged (already correct once the state stopped lying) —
+    re-check it separately if either still misbehaves.
+
+35. **UI-side agent-session commands silently swallow a dead-sessiond
+    channel error.** `src/agent/session.rs`'s approve/deny/
+    send_user_message/cancel/shutdown paths all do `let _ =
+    self.commands.send(...)` — if `horizon-sessiond` has died (crashed,
+    killed, socket closed) the send fails and every click or keystroke
+    in that pane becomes a silent no-op, with nothing surfaced to the
+    user. Noticed auditing that file's command dispatch while fixing
+    backlog #34; filing only, not fixing.

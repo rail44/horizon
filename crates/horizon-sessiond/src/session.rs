@@ -885,9 +885,18 @@ fn handle_provider_event(
 
 /// The async-execution analogue of [`handle_provider_event`]'s fold, for a
 /// `bash` call approved earlier (`ApprovalOutcome::Started` below) whose
-/// result has now arrived on its own channel -- mirrors `app/runtime/
-/// agent.rs::fold_bash_completion` exactly, forwarding the same events over
-/// the wire instead of updating a local `Frames` signal.
+/// result has now arrived on its own channel -- the same shape the retired
+/// in-process `app/runtime/agent.rs::fold_bash_completion` used to have,
+/// forwarding the same events over the wire instead of updating a local
+/// `Frames` signal, except the trailing `StateChanged` is no longer
+/// unconditional (see below).
+///
+/// `bash` is the only tool whose completion arrives asynchronously like
+/// this -- `fs.write`/`fs.edit`/`config.write` all resolve synchronously
+/// inside `agent::tools::approval::resolve_synchronous_tool` (folded
+/// straight into `dispatch_inbound_command`'s `resolve_and_forward`) -- so
+/// this is the one place a completion can land after *other* tool-call
+/// approvals from the same turn are still outstanding.
 fn fold_bash_completion(
     state: &Arc<SessiondState>,
     live_state: &LiveState,
@@ -896,13 +905,48 @@ fn fold_bash_completion(
     completion: BashCompletion,
 ) {
     let result = completion.result;
-    if !should_fold_completion(&live_state.frame(), &result.call_id) {
+    let frame = live_state.frame();
+    if !should_fold_completion(&frame, &result.call_id) {
         return;
     }
 
+    // Honest trailing state: a second approval-gated call from the same
+    // turn (another `bash` approved earlier, or a sibling fs/config
+    // request still awaiting a decision) can still be outstanding when
+    // this one finishes -- reporting `WaitingForUser` then is exactly the
+    // backlog #34 bug (status line blanks, stop button vanishes, while a
+    // decision is still actionable). `actionable_pending_approval_call_ids`
+    // (not the plain `pending_approval_call_ids`) is the right reader here
+    // for the same reason it's the required one on every dispatch path
+    // (see its doc comment): it excludes a *ghost* request whose own turn
+    // already ended, which no live daemon-side gate can ever answer, so a
+    // ghost alone must never hold the reported state at `WaitingForApproval`
+    // forever. `result.call_id` itself is still in that list at this point
+    // -- only a *folded* `ToolCallFinished` clears an id, and this call's
+    // hasn't been folded yet -- so it's excluded explicitly rather than
+    // re-reading the frame after folding.
+    //
+    // If nothing else is outstanding, `WaitingForUser` is still not
+    // necessarily the last word: `commands_tx.send` below hands the result
+    // to the provider, which may still be mid-turn (more model output
+    // pending) and will emit its own `StateChanged` once it resumes --
+    // exactly as it already could race this state before this fix. That's
+    // the session loop's own turn-level state to own; this function only
+    // has to stop lying about the one thing it *does* know here: whether an
+    // approval is still actionable.
+    let approval_still_pending = frame
+        .actionable_pending_approval_call_ids()
+        .into_iter()
+        .any(|id| id != result.call_id);
+    let trailing_state = if approval_still_pending {
+        SessionState::WaitingForApproval
+    } else {
+        SessionState::WaitingForUser
+    };
+
     let events = vec![
         Event::ToolCallFinished(result.clone()),
-        Event::StateChanged(SessionState::WaitingForUser),
+        Event::StateChanged(trailing_state),
     ];
     let _ = live_state.extend_provider_events(events.clone().into_iter().map(Into::into));
     for event in events {
@@ -1087,5 +1131,122 @@ mod tests {
         let state =
             tool_session_state_for(None, AgentToolsConfig::default(), RecallContext::default());
         assert_eq!(state.workspace_root(), Some(expected_root.as_path()));
+    }
+
+    fn drain_events(rx: &mut tokio::sync::mpsc::UnboundedReceiver<Envelope>) -> Vec<Event> {
+        let mut events = Vec::new();
+        while let Ok(envelope) = rx.try_recv() {
+            if let EnvelopeBody::Event(event) = envelope.body {
+                events.push(event);
+            }
+        }
+        events
+    }
+
+    /// Regression test for backlog #34: `SessionState::WaitingForUser`
+    /// reported while a tool-call approval is still pending. Two `bash`
+    /// calls are approval-gated in the same turn; only the first has been
+    /// approved (its `ToolRunning`/`ToolCallStarted` pair already folded,
+    /// mirroring `agent::tools::approval::resolve_bash`'s `Started` outcome)
+    /// when its async completion reaches `fold_bash_completion`. The second
+    /// call's `ApprovalRequested` is still unresolved at that point, so the
+    /// trailing state this emits must be `WaitingForApproval`, not
+    /// `WaitingForUser` -- exactly the dishonest-state bug the backlog item
+    /// describes (status line blanks, stop button vanishes, while a
+    /// decision is still actionable). Once the second call is also approved
+    /// and finishes, the state must finally settle on `WaitingForUser`.
+    #[test]
+    fn fold_bash_completion_reports_waiting_for_approval_while_a_sibling_approval_is_pending() {
+        use horizon_agent::config::AgentFileConfig;
+        use horizon_agent::contract::{ApprovalRequest, ToolCallResult};
+
+        let agent_config = AgentConfig::from_env_and_file(&AgentFileConfig::default());
+        let state = Arc::new(SessiondState::new(
+            ProviderRegistry::builtin_with_config(
+                agent_config.clone(),
+                SharedDuckdbStore::unavailable(),
+            ),
+            agent_config,
+            None,
+            SharedDuckdbStore::unavailable(),
+        ));
+        let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Envelope>();
+        *state.outgoing.lock().unwrap() = Some(outgoing_tx);
+
+        let live_state = LiveState::with_disabled_persistence();
+        let session_id = SessionId::new();
+        let call_a = ToolCallId("bash-a".to_string());
+        let call_b = ToolCallId("bash-b".to_string());
+
+        live_state.extend_provider_events(
+            vec![
+                Event::StateChanged(SessionState::WaitingForApproval),
+                Event::ApprovalRequested(ApprovalRequest {
+                    call_id: call_a.clone(),
+                    reason: "bash".to_string(),
+                }),
+                Event::ApprovalRequested(ApprovalRequest {
+                    call_id: call_b.clone(),
+                    reason: "bash".to_string(),
+                }),
+                Event::StateChanged(SessionState::ToolRunning),
+                Event::ToolCallStarted(call_a.clone()),
+            ]
+            .into_iter()
+            .map(Into::into),
+        );
+
+        let (commands_tx, commands_rx) = unbounded::<Command>();
+
+        fold_bash_completion(
+            &state,
+            &live_state,
+            &commands_tx,
+            session_id,
+            BashCompletion {
+                result: ToolCallResult::new(call_a.clone(), serde_json::json!({ "exit_code": 0 })),
+            },
+        );
+
+        let forwarded = drain_events(&mut outgoing_rx);
+        assert_eq!(
+            forwarded.last(),
+            Some(&Event::StateChanged(SessionState::WaitingForApproval)),
+            "call_b's approval is still outstanding, so the reported state must \
+             stay WaitingForApproval, got: {forwarded:?}"
+        );
+        assert!(matches!(
+            commands_rx.try_recv(),
+            Ok(Command::ToolCallResult(result)) if result.call_id == call_a
+        ));
+
+        // Approving `call_b` folds its own running pair the same way
+        // `call_a`'s did, then its completion arrives too.
+        live_state.extend_provider_events(
+            vec![
+                Event::StateChanged(SessionState::ToolRunning),
+                Event::ToolCallStarted(call_b.clone()),
+            ]
+            .into_iter()
+            .map(Into::into),
+        );
+
+        fold_bash_completion(
+            &state,
+            &live_state,
+            &commands_tx,
+            session_id,
+            BashCompletion {
+                result: ToolCallResult::new(call_b.clone(), serde_json::json!({ "exit_code": 0 })),
+            },
+        );
+
+        let forwarded = drain_events(&mut outgoing_rx);
+        assert_eq!(
+            forwarded.last(),
+            Some(&Event::StateChanged(SessionState::WaitingForUser)),
+            "every approval is resolved now, so the reported state must finally \
+             be WaitingForUser, got: {forwarded:?}"
+        );
     }
 }
