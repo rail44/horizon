@@ -287,8 +287,21 @@ impl AgentView {
         }
     }
 
+    /// Renders one item outside its normal turn/burst/receipt grouping --
+    /// either as part of `render_turn`'s per-item walk (`Message`/
+    /// `AssistantTextDelta`/`Error`/`Exited`, plus the defensive
+    /// already-ended-turn-with-a-dangling-approval case), or, defensively,
+    /// an item that has genuinely ended up outside every turn span at all
+    /// (`Render::render`'s own item walk -- see `turns::group_into_turns`'s
+    /// invariant notes for why that should be unreachable for any
+    /// legitimate sequence now). `all_items` is whatever superset of
+    /// `item` the caller has in scope (a turn's own slice, or the whole
+    /// frame) -- used only by the tool-related arms below to correlate a
+    /// possibly-orphaned `ToolCallRequested`/`ToolCallFinished` back to
+    /// its call's other items for humane rendering.
     fn render_item(
         &self,
+        all_items: &[AgentFrameItem],
         index: usize,
         item: &AgentFrameItem,
         cx: &mut Context<Self>,
@@ -353,19 +366,21 @@ impl AgentView {
             AgentFrameItem::ReasoningDelta(delta) => {
                 Some(block("thinking", theme::text_subtle(), delta.text.clone()))
             }
-            AgentFrameItem::ToolCallRequested(request) => Some(block(
-                "tool",
-                theme::warning(),
-                format!("{} {}", request.tool_id, request.input),
-            )),
+            // Retired the raw-JSON `tool`/`tool result` dumps this arm and
+            // the one below used to fall back to (owner feedback
+            // 2026-07-13: leaking `{tool_id} {input}`/output JSON straight
+            // to the transcript was part of the "incomprehensible screen
+            // state" report -- see `turns::group_into_turns`'s invariant
+            // notes for the actual root cause; both items should be
+            // unreachable here for any legitimate sequence now, but a
+            // genuinely unknown future shape must still degrade to the
+            // same humane verb/target/summary vocabulary the running
+            // card/receipt rows use, not `Display`-dumped JSON).
+            AgentFrameItem::ToolCallRequested(request) => {
+                self.render_orphan_tool_row(all_items, index, &request.call_id, cx)
+            }
             AgentFrameItem::ToolCallFinished(result) => {
-                let output = result.output.to_string();
-                let clipped = if output.len() > 400 {
-                    format!("{}…", &output[..output.floor_char_boundary(400)])
-                } else {
-                    output
-                };
-                Some(block("tool result", theme::success(), clipped))
+                self.render_orphan_tool_row(all_items, index, &result.call_id, cx)
             }
             AgentFrameItem::ApprovalRequested(request) => {
                 // The actionable (ghost-excluding) reading: this arm only
@@ -456,6 +471,56 @@ impl AgentView {
         }
     }
 
+    /// [`Self::render_item`]'s defensive fallback for a tool call whose
+    /// `ToolCallRequested`/`ToolCallFinished` item has genuinely ended up
+    /// outside every turn span: renders it with the same glyph +
+    /// verb/target/summary vocabulary as a running-card row
+    /// ([`tool_call_glyph`]/[`tool_call_line_text`]), correlating across
+    /// `all_items` (rather than just the one orphaned item) so the result
+    /// still reflects the call's actual tool id/input/output wherever its
+    /// other items happen to live. Skips re-rendering a call whose row
+    /// already appeared at an earlier index within `all_items` -- a
+    /// call's `ToolCallRequested`/`ApprovalRequested`/`ToolCallFinished`
+    /// items can each independently land in this fallback if they're all
+    /// orphaned, and would otherwise each mint their own duplicate row.
+    /// Falls back to a minimal call-id-only line (never a raw-JSON dump)
+    /// in the genuinely-shouldn't-happen case where `all_items` doesn't
+    /// even contain the call's own `ToolCallRequested` to classify from.
+    fn render_orphan_tool_row(
+        &self,
+        all_items: &[AgentFrameItem],
+        index: usize,
+        call_id: &ToolCallId,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let already_rendered = all_items[..index]
+            .iter()
+            .filter_map(item_call_id)
+            .any(|seen| seen == call_id);
+        if already_rendered {
+            return None;
+        }
+        match turns::build_tool_call_views(all_items)
+            .into_iter()
+            .find(|call| &call.call_id == call_id)
+        {
+            Some(call) => Some(self.render_tool_call_row(all_items, &call, false, cx)),
+            None => Some(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .py_1()
+                    .text_size(px(12.0))
+                    .text_color(theme::text_muted())
+                    .child(format!("tool call {}", call_id.0))
+                    .into_any_element(),
+            ),
+        }
+    }
+
     /// Renders one turn segment as a chronological walk over its items
     /// (round 5, owner decision 2026-07-13, "monotone burst splitting" --
     /// see `docs/agent-output-ui-amendment.md`'s post-review note):
@@ -527,7 +592,7 @@ impl AgentView {
                 | AgentFrameItem::AssistantTextDelta(_)
                 | AgentFrameItem::Error(_)
                 | AgentFrameItem::Exited(_) => {
-                    if let Some(el) = self.render_item(base_index + index, item, cx) {
+                    if let Some(el) = self.render_item(items, base_index + index, item, cx) {
                         blocks.push(el);
                     }
                 }
@@ -550,7 +615,7 @@ impl AgentView {
                     if ended.is_some()
                         && turns::is_approval_still_pending(items, &request.call_id) =>
                 {
-                    if let Some(el) = self.render_item(base_index + index, item, cx) {
+                    if let Some(el) = self.render_item(items, base_index + index, item, cx) {
                         blocks.push(el);
                     }
                 }
@@ -1385,6 +1450,20 @@ impl AgentView {
     }
 }
 
+/// The `ToolCallId` `item` references, if any -- used by
+/// [`AgentView::render_orphan_tool_row`] to correlate a possibly-orphaned
+/// item back to its call's other items anywhere in a wider item slice,
+/// and to de-duplicate against an earlier item for the same call.
+fn item_call_id(item: &AgentFrameItem) -> Option<&ToolCallId> {
+    match item {
+        AgentFrameItem::ToolCallRequested(request) => Some(&request.call_id),
+        AgentFrameItem::ToolCallStarted(call_id) => Some(call_id),
+        AgentFrameItem::ToolCallFinished(result) => Some(&result.call_id),
+        AgentFrameItem::ApprovalRequested(request) => Some(&request.call_id),
+        _ => None,
+    }
+}
+
 /// The status glyph (running/finished/error) shared by the running
 /// card's row (`render_tool_call_row`) and the expanded receipt's
 /// expandable row (`render_expandable_tool_call_row`).
@@ -1621,34 +1700,32 @@ impl Render for AgentView {
             if let Some(span) = turn_spans.get(turn_cursor) {
                 if span.start == index {
                     let items = &frame_items[span.start..span.end];
-                    match &span.ended {
-                        Some(end) => {
-                            blocks.push(self.render_turn(span.start, items, Some(end), cx))
-                        }
-                        None if turn_in_flight => {
-                            blocks.push(self.render_turn(span.start, items, None, cx))
-                        }
-                        // Defensive: a dangling turn span with no
-                        // `TurnEnded` while no turn is in flight
-                        // (shouldn't happen by contract) — fall back to
-                        // rendering its items individually rather than
-                        // silently dropping them.
-                        None => {
-                            for (offset, item) in items.iter().enumerate() {
-                                if let Some(el) = self.render_item(span.start + offset, item, cx) {
-                                    blocks.push(el);
-                                }
-                            }
-                        }
-                    }
+                    // A dangling span (`ended: None`) always renders
+                    // through `render_turn`, the same as a closed one --
+                    // never gated on the live `turn_in_flight` reading.
+                    // Root-caused 2026-07-13 (see `turns::group_into_turns`'s
+                    // invariant 2 note): the daemon-reported session
+                    // state can genuinely read a non-in-flight value
+                    // (`WaitingForUser`) for an extended real span of
+                    // time while a batch of concurrent tool calls is
+                    // still resolving and a sibling approval is still
+                    // pending -- well before the span's own `TurnEnded`
+                    // arrives. By `group_into_turns`'s invariants, a
+                    // dangling span is always the turn genuinely still
+                    // in progress, so its rendering vocabulary must
+                    // never depend on that live, driftable signal.
+                    blocks.push(self.render_turn(span.start, items, span.ended.as_ref(), cx));
                     index = span.end;
                     turn_cursor += 1;
                     continue;
                 }
             }
-            // Items outside any turn span (before the first user message,
-            // or between spans) render individually, unchanged.
-            if let Some(el) = self.render_item(index, &frame_items[index], cx) {
+            // Items outside any turn span -- shouldn't happen for any
+            // legitimate sequence now (`turns::group_into_turns`'s
+            // invariants: every item opens or extends a span), kept as a
+            // last-resort defensive walk for a genuinely unknown future
+            // shape. Render individually, unchanged.
+            if let Some(el) = self.render_item(&frame_items, index, &frame_items[index], cx) {
                 blocks.push(el);
             }
             index += 1;

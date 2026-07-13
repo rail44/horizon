@@ -659,3 +659,48 @@ deviation rather than asking for a mock update):
     yet (i.e. still `Waiting`) carries the full, un-truncated bash
     command. `next_composer_mode`'s own no-flap tests are untouched --
     the keyboard semantics didn't change, only their renderer.
+- **A second turn-grouping regression: two overlapping approvals,
+  approving the former, breaks the layout as attached (owner report
+  2026-07-13, with screenshot).** Reconstructed from the real persisted
+  log (`~/.local/share/horizon/agent-events.jsonl`, session
+  `3fe93cdb-3119-409d-8da7-b4c53c0883bf`, pane "Agent #30",
+  `hf:moonshotai/Kimi-K2.7-Code`): the model issued a batch of tool calls
+  within one turn -- a workspace snapshot and several `fs.read`s that
+  never need approval, interleaved with three `bash` calls that do. The
+  last two (`bash:7`/`bash:8`) were requested back-to-back before either
+  resolved -- the "two approvals showing" moment. The owner approved the
+  former (`bash:7`); the daemon's own `SessionState` then read
+  `WaitingForUser` for a real 36-second span (`state_indicates_turn_in_
+  flight` is false for `WaitingForUser`) before `bash:8` -- still
+  pending the whole time -- finally started. Unlike round 3's regression,
+  grouping itself was never at fault here: `group_into_turns` already
+  produced one continuous open span across the whole exchange (no
+  `TurnEnded` arrives until everything settles), reproduced verbatim in
+  `a_batch_of_concurrent_tool_calls_with_two_overlapping_approvals_
+  stays_one_open_span`. The actual bug was `AgentView::render`'s
+  per-span dispatch: a dangling span (`ended: None`) additionally
+  required `state_indicates_turn_in_flight` to hold before rendering
+  through `render_turn`, falling back to the same raw flat per-item path
+  round 3 targeted whenever it didn't -- exactly what the screenshot
+  showed (raw `tool`/`tool result` JSON blocks, a disconnected
+  already-resolved approval box next to a still-actionable one, an empty
+  status line since `status_line()` also reads `WaitingForUser` as
+  empty). Fixed by dropping that gate entirely -- a dangling span always
+  renders through `render_turn` now, regardless of the live session
+  state, documented as `group_into_turns`'s invariant note. Two more
+  changes closed the remaining gaps as defense in depth: (1)
+  `group_into_turns` now opens a segment at the first item of *any* type,
+  not just a user `Message` (invariant 2), so a structural gap -- e.g. a
+  provider continuation after a daemon-synthesized `TurnEnded` on a
+  `horizon-sessiond` respawn, round 4's own finding -- can no longer
+  leave items permanently outside every span either; and (2)
+  `render_item`'s `ToolCallRequested`/`ToolCallFinished` arms no longer
+  fall back to raw JSON at all -- `AgentView::render_orphan_tool_row`
+  correlates the item back to its call across whatever item slice is in
+  scope and renders it with the same glyph + verb/target/summary
+  vocabulary (and, for a still-actionable approval, the same integrated
+  Approve/Deny row) as a running-card row, de-duplicating so a call whose
+  several items all land here doesn't mint several rows. Between (1) and
+  the dispatch fix, this fallback should be structurally unreachable for
+  any legitimate sequence now; it stays only as a last-resort renderer
+  for a genuinely unknown future item shape.
