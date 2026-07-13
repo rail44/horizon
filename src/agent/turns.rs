@@ -401,14 +401,23 @@ fn derive_approval_state(
     }
 }
 
-/// The composer's swappable mode (`docs/agent-output-ui-amendment.md`
-/// decision 4, stage E): a plain instruction box, or approval mode for
-/// one specific pending call. Kept as an explicit enum -- rather than
-/// folding "is approval showing" into a bool alongside a separately
-/// tracked call_id -- so the amendment's own recorded future direction
+/// The approval keyboard-capture state (`docs/agent-output-ui-
+/// amendment.md` decision 4, stage E; re-scoped to row-centric v2 by
+/// owner decision 2026-07-13): `Normal`, or targeting one specific
+/// pending call for the keyboard path. Its *rendering* surface is no
+/// longer a composer transformation -- stage E's banner is gone -- it's
+/// now a compact "⏎ approve · esc deny" annotation on that call's own
+/// row (`view::render_tool_call_row`, gated by
+/// [`is_keyboard_approval_target`]). The keyboard semantics themselves
+/// are unchanged: while this holds `Approval { call_id }` and the
+/// composer is empty/not typing, Enter approves and Esc denies that
+/// exact call; typing past it reverts to `Normal` (`next_composer_mode`'s
+/// no-flap rule, below). Kept as an explicit enum -- rather than folding
+/// "is approval showing" into a bool alongside a separately tracked
+/// call_id -- so the amendment's own recorded future direction
 /// (prompt-intent auto-approval, "auto mode") has a clean third arm to
-/// add later: skip or auto-resolve this state without touching the
-/// composer's other paths.
+/// add later: skip or auto-resolve this state without touching the row's
+/// other paths.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ComposerMode {
     Normal,
@@ -444,6 +453,19 @@ pub(crate) fn next_composer_mode(
             call_id: call_id.clone(),
         },
     }
+}
+
+/// Whether `call_id` is the exact call [`ComposerMode`] currently targets
+/// for the keyboard path (row-centric v2, owner decision 2026-07-13):
+/// decides which single `Waiting` row, if any, shows the "⏎ approve · esc
+/// deny" annotation next to its Approve/Deny buttons. Derived purely from
+/// the mode -- never from queue position -- so the hint can never lie:
+/// once typing dismisses the mode back to `Normal`
+/// (`next_composer_mode`'s no-flap rule), this returns `false` for every
+/// call_id, including the one just shown, so the annotation disappears
+/// exactly when the keys it describes stop doing anything.
+pub(crate) fn is_keyboard_approval_target(mode: &ComposerMode, call_id: &ToolCallId) -> bool {
+    matches!(mode, ComposerMode::Approval { call_id: target } if target == call_id)
 }
 
 /// Builds one [`ToolCallView`] per distinct tool call requested within
@@ -513,42 +535,6 @@ pub(crate) fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallVie
             }
         })
         .collect()
-}
-
-/// The approval-mode composer's header content (`docs/agent-output-ui-
-/// amendment.md` decision 4, mock 4b): derived from the pending call's
-/// own [`ToolCallView`] the same way a running-card/receipt row is, so
-/// the composer's wording always agrees with what that call's row
-/// already shows underneath it. `operation` is the same display verb the
-/// rows use, lowercased for the "Allow {operation} on {target}?"
-/// sentence. `target` is the file's short name for a file call (matching
-/// the mock's `signup_form.rs`, not the full path) or the bash chip's
-/// own truncated command head -- never the raw `call.target` for those
-/// two kinds, so a long path/command doesn't blow out the composer's one
-/// line. `diffstat` is `Some` only for a `fs.edit` call with a derivable
-/// diff ([`ToolCallKind::File`]'s own field); `fs.write`/`bash`/anything
-/// else never show one.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ApprovalHeader {
-    pub operation: String,
-    pub target: Option<String>,
-    pub diffstat: Option<(u32, u32)>,
-}
-
-pub(crate) fn approval_header(call: &ToolCallView) -> ApprovalHeader {
-    let (target, diffstat) = match &call.kind {
-        ToolCallKind::File {
-            file_name,
-            diffstat,
-        } => (Some(file_name.clone()), *diffstat),
-        ToolCallKind::Bash { command_head } => (Some(command_head.clone()), None),
-        ToolCallKind::Generic => (call.target.clone(), None),
-    };
-    ApprovalHeader {
-        operation: call.verb.to_lowercase(),
-        target,
-        diffstat,
-    }
 }
 
 /// Whether a running-card row (stage F, decision 5's "failed call stays a
@@ -1681,65 +1667,6 @@ mod tests {
     }
 
     #[test]
-    fn approval_header_derives_operation_target_and_diffstat_for_fs_edit() {
-        let items = vec![
-            tool_requested(
-                "a",
-                "fs.edit",
-                json!({
-                    "path": "src/ui/signup_form.rs",
-                    "old_string": "self.error = err;",
-                    "new_string": "self.error = err;\ncx.notify();",
-                }),
-            ),
-            approval_requested("a"),
-        ];
-        let views = build_tool_call_views(&items);
-        let header = approval_header(&views[0]);
-        assert_eq!(header.operation, "edit");
-        assert_eq!(header.target.as_deref(), Some("signup_form.rs"));
-        assert_eq!(header.diffstat, Some((1, 0)));
-    }
-
-    #[test]
-    fn approval_header_has_no_diffstat_for_fs_write() {
-        let items = vec![tool_requested(
-            "a",
-            "fs.write",
-            json!({"path": "new.rs", "content": "fn main() {}"}),
-        )];
-        let views = build_tool_call_views(&items);
-        let header = approval_header(&views[0]);
-        assert_eq!(header.operation, "write");
-        assert_eq!(header.target.as_deref(), Some("new.rs"));
-        assert_eq!(header.diffstat, None);
-    }
-
-    #[test]
-    fn approval_header_uses_the_bash_chips_own_command_head_as_target() {
-        let items = vec![tool_requested(
-            "a",
-            "bash",
-            json!({"command": "cargo test --workspace"}),
-        )];
-        let views = build_tool_call_views(&items);
-        let header = approval_header(&views[0]);
-        assert_eq!(header.operation, "bash");
-        assert_eq!(header.target.as_deref(), Some("cargo test --workspace"));
-        assert_eq!(header.diffstat, None);
-    }
-
-    #[test]
-    fn approval_header_falls_back_to_the_plain_target_for_a_generic_call() {
-        let items = vec![tool_requested("a", "fs.grep", json!({"pattern": "notify"}))];
-        let views = build_tool_call_views(&items);
-        let header = approval_header(&views[0]);
-        assert_eq!(header.operation, "grep");
-        assert_eq!(header.target.as_deref(), Some("notify"));
-        assert_eq!(header.diffstat, None);
-    }
-
-    #[test]
     fn next_composer_mode_is_normal_for_an_empty_queue() {
         assert_eq!(next_composer_mode(&[], None), ComposerMode::Normal);
     }
@@ -1760,7 +1687,8 @@ mod tests {
         // The no-flap rule: typing past the shown approval dismisses that
         // exact call_id, and it keeps reporting `Normal` for that same
         // head on every subsequent call (e.g. once per keystroke) --
-        // never re-showing the banner underneath what the user is typing.
+        // never re-showing the approval state underneath what the user is
+        // typing.
         let queue = vec![ToolCallId("a".to_string())];
         assert_eq!(
             next_composer_mode(&queue, Some(&ToolCallId("a".to_string()))),
@@ -1793,6 +1721,24 @@ mod tests {
             next_composer_mode(&[], Some(&ToolCallId("a".to_string()))),
             ComposerMode::Normal
         );
+    }
+
+    #[test]
+    fn is_keyboard_approval_target_true_only_for_the_modes_own_call() {
+        let a = ToolCallId("a".to_string());
+        let b = ToolCallId("b".to_string());
+        let mode = ComposerMode::Approval { call_id: a.clone() };
+        assert!(is_keyboard_approval_target(&mode, &a));
+        assert!(!is_keyboard_approval_target(&mode, &b));
+    }
+
+    #[test]
+    fn is_keyboard_approval_target_is_false_while_normal() {
+        // Dismissed-by-typing (or never-pending) both collapse to
+        // `Normal`, which targets no call at all -- the annotation must
+        // vanish from whatever row last showed it.
+        let a = ToolCallId("a".to_string());
+        assert!(!is_keyboard_approval_target(&ComposerMode::Normal, &a));
     }
 
     #[test]
@@ -2131,6 +2077,31 @@ mod tests {
         let items = vec![tool_requested("a", "fs.read", json!({"path": "a.rs"}))];
         let call_id = ToolCallId("missing".to_string());
         assert!(tool_call_body(&items, &call_id).is_none());
+    }
+
+    #[test]
+    fn tool_call_body_for_a_waiting_bash_call_carries_the_full_command_not_the_row_head() {
+        // Row-centric approval v2: a `Waiting` row auto-displays this body
+        // as its proposal (decision 4's "proposal — not applied") before
+        // any `ToolCallFinished` exists -- unlike `ToolCallKind::Bash`'s
+        // `command_head` (the row's own collapsed line and the receipt
+        // chip), which truncates to the first line's first 32 characters
+        // (see `bash_chip_carries_a_truncated_command_head`).
+        let long_command = format!("echo {}", "x".repeat(50));
+        let items = vec![
+            tool_requested("a", "bash", json!({"command": long_command})),
+            approval_requested("a"),
+        ];
+        match tool_call_body(&items, &ToolCallId("a".to_string())) {
+            Some(ToolCallBody::Command {
+                command, exit_code, ..
+            }) => {
+                assert_eq!(command, format!("echo {}", "x".repeat(50)));
+                assert!(command.chars().count() > 32);
+                assert_eq!(exit_code, None);
+            }
+            other => panic!("expected a Command body, got {other:?}"),
+        }
     }
 
     #[test]

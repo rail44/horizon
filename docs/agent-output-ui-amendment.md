@@ -453,16 +453,23 @@ deviation rather than asking for a mock update):
   X11 `Xvfb` launch with `WAYLAND_DISPLAY` explicitly unset (not just
   `DISPLAY` set), or a `gpui::TestAppContext`-based click-simulation
   test (no precedent for one exists yet in this codebase).
-- **Stage E: the approval-mode composer.** Ships the keyboard path
-  (decision 4) on top of round 3's row buttons, which stay the pointer
-  path exactly as that round left them -- neither replaces the other.
+- **Stage E: the approval-mode composer -- superseded by row-centric
+  approval v2 below.** Shipped the keyboard path (decision 4) on top of
+  round 3's row buttons, which stayed the pointer path exactly as that
+  round left them -- neither replaced the other.
   `src/agent/turns.rs` gained `ComposerMode` (`Normal` /
   `Approval { call_id }`, an explicit enum rather than a bool + separate
   call_id so the amendment's own recorded future direction -- auto-mode
   skipping or auto-resolving this state -- has a clean third arm to add
   later) and the pure `next_composer_mode(actionable_queue, dismissed)`
   that decides it, plus `ApprovalHeader`/`approval_header` for the
-  banner's operation/target/diffstat text -- all colocated-tested.
+  banner's operation/target/diffstat text -- all colocated-tested. Kept
+  here as history only -- the banner itself, and `ApprovalHeader`/
+  `approval_header` with it, are gone; row-centric v2 below retargets
+  `ComposerMode`'s same keyboard semantics onto the row instead. The
+  no-flap rule, key-capture findings, and mock-deviation notes below are
+  still accurate background for how Enter/Esc reach the composer at all
+  -- only the "renders as a banner" half is superseded.
   `src/agent/view.rs` wires it: `AgentView` tracks `composer_mode` plus a
   `dismissed_approval: Option<ToolCallId>` marker, both kept in sync by
   `sync_composer_mode` from the session's
@@ -596,3 +603,59 @@ deviation rather than asking for a mock update):
     lines, deliberately minimal to stay out of stage E's way on the same
     widget; a same-file merge conflict here is expected and fine to
     resolve by keeping both sides' changes.
+- **Row-centric approval v2 (owner decision 2026-07-13, after reviewing
+  stages E+F on main) -- supersedes stage E's composer banner.** With
+  approve/deny already living on each `Waiting` row since round 3, the
+  composer's own approval-mode banner was reported as no longer earning
+  its place -- removed entirely, along with the UI it rendered (the
+  warning-tinted header/diffstat, the Allow/Deny button row, the "+N
+  more" indicator, the reserved always-allow slot). `ComposerMode` and
+  `next_composer_mode` (decision 4, stage E) are unchanged -- the enum's
+  own doc comment now says so explicitly: it remains the keyboard-capture
+  state (Enter approves / Esc denies the targeted call while the composer
+  is empty/not typing; typing reverts to `Normal` via the same no-flap
+  rule), just with its rendering surface moved from a composer
+  transformation onto the row. `src/agent/view.rs`'s `render_composer` is
+  back to just the plain `Input` in its own `on_escape`-catching
+  container; `AgentView`'s now-dead `pending_approval_more` field (the
+  "+N more" cache) and the banner-only `pending_approval_context`/
+  `render_approval_banner`/`warning_tint` helpers are deleted, as is
+  `turns::ApprovalHeader`/`approval_header` (the banner's own
+  operation/target/diffstat text, unused by anything else).
+  - **Oldest-only keyboard annotation.** New pure predicate
+    `turns::is_keyboard_approval_target(mode, call_id)`: true only when
+    `mode` is `ComposerMode::Approval { call_id }` for that exact
+    call_id. `render_tool_call_row` calls it to decide whether a
+    `Waiting` row's Approve/Deny buttons get a trailing muted "⏎ approve
+    · esc deny" annotation -- derived from the mode itself rather than
+    queue position, so it can never point at the wrong row and vanishes
+    the instant typing dismisses the mode (the same no-flap rule now
+    governs the annotation, not just the old banner). Every other
+    `Waiting` row shows plain buttons, unchanged from round 3.
+  - **Waiting rows auto-display their proposal.** A `Waiting` row now
+    renders its `turns::tool_call_body` (the same fs.edit diff/fs.write
+    preview/bash command+output/terse-summary/raw-JSON machinery the
+    receipt expansion and stage F's failure log already share)
+    underneath itself automatically -- no click needed, since there's
+    exactly one thing to look at before deciding -- labeled with a small
+    muted "proposal — not applied" tag (`render_waiting_proposal`,
+    decision 4's own wording). `waiting` and stage F's `expandable`
+    (finished + failed) never coincide on one call, so this and the
+    failure-log toggle stay mutually exclusive branches of the same
+    wrapper. The body already carried the tool's full data -- notably
+    bash's complete `command`, distinct from `ToolCallKind::Bash`'s
+    `command_head` the row's own collapsed line and the receipt chip
+    truncate to 32 characters -- so no `turns.rs` logic changed to get
+    the full command into the proposal; only `render_tool_call_body`'s
+    `Command` variant's header changed, from single-line
+    `whitespace_nowrap`+`text_ellipsis` to wrapped (`whitespace_normal`),
+    so a long or embedded-newline command is fully legible rather than
+    ellipsized a second time -- this also improves the pre-existing
+    failure-log and receipt-expansion views of a bash call, not just the
+    new proposal path.
+  - Colocated tests (`src/agent/turns.rs`): `is_keyboard_approval_target`
+    true only for the mode's own call_id and false while `Normal`;
+    `tool_call_body` on a call with an `ApprovalRequested` but no result
+    yet (i.e. still `Waiting`) carries the full, un-truncated bash
+    command. `next_composer_mode`'s own no-flap tests are untouched --
+    the keyboard semantics didn't change, only their renderer.

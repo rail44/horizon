@@ -63,21 +63,19 @@ pub struct AgentView {
     /// keyed by `call_id` -- unique across the whole session, so one flat
     /// set suffices across every receipt.
     expanded_rows: HashSet<ToolCallId>,
-    /// Stage E: the composer's current mode (decision 4), kept in sync
-    /// with the session's actionable pending-approval queue by
-    /// `sync_composer_mode` -- see that method's own doc comment for
-    /// when it's called.
+    /// The approval keyboard-capture state (decision 4; row-centric v2,
+    /// owner decision 2026-07-13 -- see [`turns::ComposerMode`]'s doc
+    /// comment), kept in sync with the session's actionable
+    /// pending-approval queue by `sync_composer_mode` -- see that
+    /// method's own doc comment for when it's called. Consumed by
+    /// [`Self::render_tool_call_row`] to annotate exactly the row it
+    /// targets, and by the composer's own Enter/Escape handling below.
     composer_mode: turns::ComposerMode,
-    /// Stage E: the call_id, if any, the user has typed past (decision
-    /// 4's "starting to type reverts the composer to normal input") --
-    /// fed into `turns::next_composer_mode`'s no-flap rule. `None` until
-    /// the first dismissal.
+    /// The call_id, if any, the user has typed past (decision 4's
+    /// "starting to type reverts the composer to normal input") -- fed
+    /// into `turns::next_composer_mode`'s no-flap rule. `None` until the
+    /// first dismissal.
     dismissed_approval: Option<ToolCallId>,
-    /// Stage E: how many more actionable approvals sit behind the one
-    /// currently shown, for the "+N more" indicator (decision 4) --
-    /// computed alongside `composer_mode` in `sync_composer_mode` so
-    /// `Render::render` doesn't re-scan the queue itself.
-    pending_approval_more: usize,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -169,15 +167,14 @@ impl AgentView {
         })
         .detach();
 
-        // Stage E: a session resumed with an approval already pending
-        // (workspace restore, or a persisted history reopened) should
-        // open the pane straight into approval mode rather than waiting
-        // for the next frame change to notice.
+        // A session resumed with an approval already pending (workspace
+        // restore, or a persisted history reopened) should open the pane
+        // straight into approval mode rather than waiting for the next
+        // frame change to notice.
         let initial_queue = horizon_agent::frame::actionable_pending_approval_call_ids_in(
             &session.read(cx).frame.items,
         );
         let composer_mode = turns::next_composer_mode(&initial_queue, None);
-        let pending_approval_more = initial_queue.len().saturating_sub(1);
 
         Self {
             session,
@@ -189,19 +186,18 @@ impl AgentView {
             expanded_rows: HashSet::new(),
             composer_mode,
             dismissed_approval: None,
-            pending_approval_more,
             _subscriptions: subscriptions,
         }
     }
 
-    /// Recomputes [`turns::ComposerMode`] (decision 4) from the
-    /// session's live actionable pending-approval queue and this view's
-    /// own `dismissed_approval` marker, delegating the actual no-flap
+    /// Recomputes [`turns::ComposerMode`] from the session's live
+    /// actionable pending-approval queue and this view's own
+    /// `dismissed_approval` marker, delegating the actual no-flap
     /// decision to the pure `turns::next_composer_mode` (colocated tests
     /// there) -- this method's only job is wiring the queue and marker
-    /// into it and caching the "+N more" count alongside. Called from
-    /// the session-change observer (covers a new/resolved approval from
-    /// any of the four paths -- composer, row buttons, palette, CLI) and
+    /// into it. Called from the session-change observer (covers a
+    /// new/resolved approval from any of the four paths -- row buttons,
+    /// palette, CLI, or a keyboard decision through this same mode) and
     /// from the composer's own `InputEvent::Change` handler (typing past
     /// a shown approval).
     fn sync_composer_mode(&mut self, cx: &mut Context<Self>) {
@@ -209,7 +205,6 @@ impl AgentView {
             &self.session.read(cx).frame.items,
         );
         self.composer_mode = turns::next_composer_mode(&queue, self.dismissed_approval.as_ref());
-        self.pending_approval_more = queue.len().saturating_sub(1);
     }
 
     /// The approval-mode composer's Deny binding (decision 4: "Deny
@@ -804,14 +799,16 @@ impl AgentView {
     /// Renders one [`turns::ToolCallBody`] -- the reusable per-tool body
     /// machinery decision 3 asks for (fs.edit diff, fs.write preview,
     /// bash command+output, terse summaries, raw-JSON fallback), kept
-    /// independent of the expansion-toggle wiring above so a future
-    /// running-card row (stage F's failed-call log) can call it directly.
-    /// Every line-list body wraps in a height-bounded, internally
-    /// scrollable container so one body can't swallow the transcript.
-    /// `call_id` seeds the scrollable containers' element ids, stable
-    /// across re-renders (GPUI's `overflow_y_scroll` needs a `Stateful`
-    /// element -- i.e. one that's been given an id -- to track scroll
-    /// offset at all).
+    /// independent of the expansion-toggle wiring above so any other
+    /// caller can call it directly: the failure-row log (stage F), the
+    /// receipt's own expansion, and the `Waiting` row's auto-shown
+    /// proposal body (row-centric v2, [`Self::render_waiting_proposal`])
+    /// all reuse this one function. Every line-list body wraps in a
+    /// height-bounded, internally scrollable container so one body can't
+    /// swallow the transcript. `call_id` seeds the scrollable containers'
+    /// element ids, stable across re-renders (GPUI's `overflow_y_scroll`
+    /// needs a `Stateful` element -- i.e. one that's been given an id --
+    /// to track scroll offset at all).
     fn render_tool_call_body(
         &self,
         call_id: &ToolCallId,
@@ -870,14 +867,18 @@ impl AgentView {
                     .gap_1()
                     .py_1()
                     .child(
+                        // The full command, wrapped rather than
+                        // single-line-ellipsized (unlike the row's own
+                        // `command_head`-based summary line): a proposal
+                        // or failure log is exactly where a long or
+                        // multi-line command needs to stay legible in
+                        // full, not truncated a second time.
                         div()
                             .font_family("monospace")
                             .text_size(px(11.5))
                             .text_color(theme::text_primary())
                             .min_w_0()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
+                            .whitespace_normal()
                             .child(header_text),
                     )
                     .child(render_line_body(
@@ -1149,6 +1150,18 @@ impl AgentView {
     /// control-plane path are untouched by any of this: they still
     /// dispatch by pending-queue order (`AgentSession::approve`/`deny`),
     /// independent of which row's buttons a pointer happens to click.
+    ///
+    /// Row-centric approval v2 (owner decision 2026-07-13, superseding
+    /// stage E's composer banner): a `Waiting` row additionally shows
+    /// exactly one of two things below its header. If it's the exact
+    /// call `self.composer_mode` targets, its buttons carry a trailing
+    /// "⏎ approve · esc deny" hint (`turns::is_keyboard_approval_target`)
+    /// -- the composer's Enter/Esc still resolve *this* call, only its
+    /// rendering moved from a banner onto the row. Every `Waiting` row,
+    /// annotated or not, also auto-displays its proposal body
+    /// (`Self::render_waiting_proposal`) -- unlike the failure log below,
+    /// this isn't click-toggled, since a pending decision has exactly one
+    /// thing to look at.
     fn render_tool_call_row(
         &self,
         items: &[AgentFrameItem],
@@ -1206,31 +1219,47 @@ impl AgentView {
         if waiting {
             let approve_id = call.call_id.clone();
             let deny_id = call.call_id.clone();
-            header = header.child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .flex_row()
-                    .gap_1()
-                    .child(
-                        Button::new(format!("row-approve-{}", call.call_id.0))
-                            .primary()
-                            .xsmall()
-                            .label("Approve")
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                view.session.read(cx).approve(approve_id.clone());
-                            })),
-                    )
-                    .child(
-                        Button::new(format!("row-deny-{}", call.call_id.0))
-                            .danger()
-                            .xsmall()
-                            .label("Deny")
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                view.session.read(cx).deny(deny_id.clone());
-                            })),
-                    ),
-            );
+            let mut buttons = div()
+                .flex_none()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .child(
+                    Button::new(format!("row-approve-{}", call.call_id.0))
+                        .primary()
+                        .xsmall()
+                        .label("Approve")
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            view.session.read(cx).approve(approve_id.clone());
+                        })),
+                )
+                .child(
+                    Button::new(format!("row-deny-{}", call.call_id.0))
+                        .danger()
+                        .xsmall()
+                        .label("Deny")
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            view.session.read(cx).deny(deny_id.clone());
+                        })),
+                );
+            // Row-centric approval v2 (owner decision 2026-07-13): only
+            // the exact row `self.composer_mode` currently targets is
+            // keyboard-operable, so only that row gets the hint --
+            // derived from the mode itself (`is_keyboard_approval_target`),
+            // never from queue position, so it can't lie about which
+            // row Enter/Esc actually reach right now (see
+            // `turns::ComposerMode`'s doc comment).
+            if turns::is_keyboard_approval_target(&self.composer_mode, &call.call_id) {
+                buttons = buttons.child(
+                    div()
+                        .flex_none()
+                        .text_size(px(10.5))
+                        .text_color(theme::text_subtle())
+                        .child("⏎ approve · esc deny"),
+                );
+            }
+            header = header.child(buttons);
         } else if let Some((phrase, color)) = approval_phrase(call.approval) {
             header = header.child(
                 div()
@@ -1264,7 +1293,19 @@ impl AgentView {
         }
 
         let mut wrapper = div().flex().flex_col().child(header);
-        if expanded {
+        if waiting {
+            // Decision 4: "the pending diff/command renders neutrally
+            // ... labeled 'proposal — not applied'" -- shown
+            // automatically for every `Waiting` row, not click-toggled
+            // like the failure log below, since there is exactly one
+            // thing to look at before deciding. `waiting` and `expanded`
+            // never coincide (a `Waiting` call has no result yet, so it
+            // can't be a finished failure either), so this and the
+            // `expanded` branch below are mutually exclusive.
+            if let Some(body) = turns::tool_call_body(items, &call.call_id) {
+                wrapper = wrapper.child(self.render_waiting_proposal(&call.call_id, &body));
+            }
+        } else if expanded {
             if let Some(body) = turns::tool_call_body(items, &call.call_id) {
                 wrapper = wrapper.child(
                     div()
@@ -1282,193 +1323,49 @@ impl AgentView {
         wrapper.into_any_element()
     }
 
-    /// The composer area: the plain `Input` in `Normal` mode, or the
-    /// approval-mode banner (mock 4b) stacked above it once
-    /// `self.composer_mode` holds a pending call. Wrapped in its own
-    /// container so [`Self::on_escape`] has somewhere to catch the
-    /// `Escape` action `Input`'s own handler propagates (see that
-    /// method's doc comment).
+    /// A `Waiting` row's proposal body (decision 4, row-centric v2): the
+    /// same [`turns::ToolCallBody`] the failure-row log and receipt
+    /// expansion already reuse (fs.edit's diff, fs.write's content
+    /// preview, bash's full command -- never the row's own 32-char
+    /// `command_head` -- and the terse/raw fallbacks for everything
+    /// else), labeled with a small muted tag so it reads as informational
+    /// rather than a fact about what already happened.
+    fn render_waiting_proposal(
+        &self,
+        call_id: &ToolCallId,
+        body: &turns::ToolCallBody,
+    ) -> AnyElement {
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .px_3()
+            .pb_2()
+            .child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(theme::text_subtle())
+                    .child("proposal — not applied"),
+            )
+            .child(self.render_tool_call_body(call_id, body))
+            .into_any_element()
+    }
+
+    /// The composer area: just the plain `Input` (row-centric approval
+    /// v2, owner decision 2026-07-13, supersedes stage E's approval-mode
+    /// banner -- see [`turns::ComposerMode`]'s doc comment). Still
+    /// wrapped in its own container so [`Self::on_escape`] has somewhere
+    /// to catch the `Escape` action `Input`'s own handler propagates
+    /// (see that method's doc comment) -- `composer_mode`'s Enter/Esc
+    /// keyboard capture is unchanged, only its rendering is gone.
     fn render_composer(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut wrapper = div()
+        div()
             .flex()
             .flex_col()
             .gap_1()
             .p_2()
-            .on_action(cx.listener(Self::on_escape));
-        if let turns::ComposerMode::Approval { call_id } = self.composer_mode.clone() {
-            if let Some((call, reason)) = self.pending_approval_context(&call_id, cx) {
-                wrapper = wrapper.child(self.render_approval_banner(&call, &reason, cx));
-            }
-        }
-        wrapper.child(Input::new(&self.composer)).into_any_element()
-    }
-
-    /// Looks up `call_id`'s own [`turns::ToolCallView`] and its
-    /// `ApprovalRequested` reason, scoped to the current in-flight turn's
-    /// own item slice -- every actionable pending call belongs to it by
-    /// construction (`actionable_pending_approval_call_ids_in` clears the
-    /// queue at `TurnEnded`, so nothing actionable can outlive its own
-    /// turn), which keeps this a bounded scan rather than one over the
-    /// whole session history.
-    fn pending_approval_context(
-        &self,
-        call_id: &ToolCallId,
-        cx: &Context<Self>,
-    ) -> Option<(turns::ToolCallView, String)> {
-        let frame = &self.session.read(cx).frame;
-        if !state_indicates_turn_in_flight(frame.state) {
-            return None;
-        }
-        let span = turns::group_into_turns(&frame.items)
-            .into_iter()
-            .last()
-            .filter(|span| span.ended.is_none())?;
-        let items = &frame.items[span.start..span.end];
-        let reason = items.iter().find_map(|item| match item {
-            AgentFrameItem::ApprovalRequested(request) if &request.call_id == call_id => {
-                Some(request.reason.clone())
-            }
-            _ => None,
-        })?;
-        let call = turns::build_tool_call_views(items)
-            .into_iter()
-            .find(|call| &call.call_id == call_id)?;
-        Some((call, reason))
-    }
-
-    /// The approval-mode composer's banner (`docs/agent-output-ui-
-    /// amendment.md` decision 4, mock 4b): a warning-tinted panel above
-    /// the plain `Input`. Two rows, mirroring the mock's own card: a
-    /// header (dot + bold "Allow {operation} on {target}?" + diffstat,
-    /// tinted `warning_tint`/`theme::warning()` the same relationship
-    /// `render_running_card`'s header expresses with `accent_tint`/
-    /// `theme::accent()`) with the request's own `reason` as a secondary
-    /// muted line beneath the title -- the mock's single-line header had
-    /// no room for it, but decision 4 doesn't rule it out and the
-    /// keyboard path otherwise drops it on the floor entirely -- then a
-    /// button row: Allow, a reserved empty slot the width of a button
-    /// (decision 4's explicit "leave one button-slot of layout room" for
-    /// the deferred always-allow grant), Deny, and a right-aligned hint
-    /// that typing switches back to plain instructions.
-    fn render_approval_banner(
-        &self,
-        call: &turns::ToolCallView,
-        reason: &str,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let header_info = turns::approval_header(call);
-        let mut title = format!("Allow {}", header_info.operation);
-        if let Some(target) = &header_info.target {
-            title.push_str(" on ");
-            title.push_str(target);
-        }
-        title.push('?');
-
-        let mut header = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_2()
-            .px_3()
-            .py_1p5()
-            .bg(warning_tint(0.14))
-            .child(
-                div()
-                    .flex_none()
-                    .size(px(6.0))
-                    .rounded_full()
-                    .bg(theme::warning()),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_size(px(12.0))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::warning())
-                    .child(title),
-            )
-            .child(div().flex_1());
-        if let Some((added, removed)) = header_info.diffstat {
-            header = header.child(
-                div()
-                    .flex_none()
-                    .font_family("monospace")
-                    .text_size(px(11.0))
-                    .text_color(theme::warning())
-                    .child(format!("+{added} −{removed}")),
-            );
-        }
-        if self.pending_approval_more > 0 {
-            header = header.child(
-                div()
-                    .flex_none()
-                    .text_size(px(11.0))
-                    .text_color(theme::warning())
-                    .child(format!("+{} more", self.pending_approval_more)),
-            );
-        }
-
-        let mut panel = div().flex().flex_col().child(header);
-        if !reason.is_empty() {
-            panel = panel.child(
-                div()
-                    .px_3()
-                    .pb_1()
-                    .text_size(px(11.0))
-                    .text_color(theme::text_subtle())
-                    .child(reason.to_string()),
-            );
-        }
-
-        let approve_id = call.call_id.clone();
-        let deny_id = call.call_id.clone();
-        let buttons = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_2()
-            .px_3()
-            .py_1p5()
-            .border_t_1()
-            .border_color(warning_tint(0.3))
-            .child(
-                Button::new(format!("composer-approve-{}", call.call_id.0))
-                    .primary()
-                    .xsmall()
-                    .label("Allow (⏎)")
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        view.session.read(cx).approve(approve_id.clone());
-                    })),
-            )
-            // Reserved layout slot for the deferred "always allow" grant
-            // (decision 4: no per-pattern persistent grants yet -- no
-            // button rendered here, just its width held open).
-            .child(div().flex_none().w(px(96.0)))
-            .child(
-                Button::new(format!("composer-deny-{}", call.call_id.0))
-                    .danger()
-                    .xsmall()
-                    .label("Deny (esc)")
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        view.session.read(cx).deny(deny_id.clone());
-                    })),
-            )
-            .child(div().flex_1())
-            .child(
-                div()
-                    .flex_none()
-                    .text_size(px(10.5))
-                    .text_color(theme::text_subtle())
-                    .child("typing switches to instructions"),
-            );
-        panel = panel.child(buttons);
-
-        div()
-            .rounded_sm()
-            .border_1()
-            .border_color(warning_tint(0.35))
-            .overflow_hidden()
-            .child(panel)
+            .on_action(cx.listener(Self::on_escape))
+            .child(Input::new(&self.composer))
             .into_any_element()
     }
 
@@ -1677,14 +1574,6 @@ fn truncation_note(omitted: usize) -> AnyElement {
 /// could drift from the accent hue it's meant to echo.
 fn accent_tint(alpha: f32) -> Hsla {
     theme::accent().alpha(alpha)
-}
-
-/// The same muted-echo relationship as [`accent_tint`], for the
-/// approval-mode composer's banner (mock 4b's `#fffbeb`/`#fde68a`
-/// header fill/divider, both lightened echoes of the same amber hue as
-/// its `#f59e0b` border and `#92400e`/`#d97706` full-strength text/dot).
-fn warning_tint(alpha: f32) -> Hsla {
-    theme::warning().alpha(alpha)
 }
 
 /// The running card's header label for the three in-flight
