@@ -271,6 +271,26 @@ pub(crate) fn segment_bursts(items: &[AgentFrameItem]) -> Vec<Burst> {
     bursts
 }
 
+/// Whether a `ReasoningDelta` item outside every burst's own absorbed range
+/// should render at all (owner requirement 2026-07-13: closing an
+/// un-instructed deviation from base decision 5 -- thinking was completely
+/// invisible while a turn ran, since `AgentView::render_turn`'s per-item
+/// walk never had a match arm for it). A reasoning item that falls *inside*
+/// a burst's `[start, end)` range (between two of its tool-related items,
+/// "a stray reasoning delta" per [`segment_bursts`]'s own doc comment)
+/// never reaches this decision at all -- it's structurally absorbed into
+/// `burst_items` and dropped by `build_tool_call_views`, unaffected by this
+/// fix, exactly as it always has been. For everything else (before the
+/// first burst, between two bursts, after the last one, or a turn with no
+/// bursts at all), visibility is simply "the turn hasn't ended yet":
+/// decision 1's "thinking folds into the receipt on completion" applies
+/// uniformly regardless of which of those positions a given item happened
+/// to land in, so once `TurnEnded` folds, this goes back to invisible too --
+/// no different from the burst-absorbed case's own fold.
+pub(crate) fn thinking_visible_outside_burst(ended: Option<&TurnEnd>) -> bool {
+    ended.is_none()
+}
+
 /// The receipt row's trailing content (`render_receipt`'s `tail`
 /// parameter). Round 5 (monotone burst splitting): only the turn's
 /// *final* burst -- the one closed by `TurnEnded` -- carries the turn's
@@ -1111,6 +1131,31 @@ fn cap_lines_tail(mut lines: Vec<String>, max_lines: usize) -> (Vec<String>, usi
     }
 }
 
+/// A streaming reasoning ("thinking") block's line cap -- kept small,
+/// deliberately quieter and more compact than a tool-call body's own caps
+/// (`BASH_OUTPUT_TAIL_LINES` etc.): thinking is meant to read as a quiet
+/// side-channel while it streams, not a large panel competing with
+/// assistant prose for the transcript's vertical space.
+pub(crate) const THINKING_TAIL_LINES: usize = 6;
+
+/// Caps a streaming `ReasoningDelta`'s accumulated text to its trailing
+/// [`THINKING_TAIL_LINES`]-shaped view (owner requirement 2026-07-13:
+/// height-bounded, newest content visible, so a long thinking stream can't
+/// flood the transcript while it's the only thing on screen during an
+/// otherwise-idle wait). `text` is the item's own coalesced field --
+/// `frame.rs`'s `Event::ReasoningDelta` fold appends every delta of one
+/// reasoning span into a single growing `.text`, so this runs fresh on
+/// every render of a still-streaming block, not once per delta -- splits on
+/// `\n` and reuses [`cap_lines_tail`] (the same "tail matters most" shape
+/// bash output already gets), the simplest bound consistent with the rest
+/// of this module's line-based caps. Returns the kept text rejoined with
+/// `\n`, and the count of leading lines dropped (0 when it already fits).
+pub(crate) fn cap_thinking_text(text: &str, max_lines: usize) -> (String, usize) {
+    let lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let (kept, omitted) = cap_lines_tail(lines, max_lines);
+    (kept.join("\n"), omitted)
+}
+
 /// The tool ids [`classify`] gives a dedicated verb/target/summary to --
 /// shared with [`build_tool_call_body`] so a genuinely unrecognized tool
 /// id (a future tool this crate hasn't been taught about yet) still falls
@@ -1317,6 +1362,13 @@ mod tests {
 
     fn assistant_delta(text: &str) -> AgentFrameItem {
         AgentFrameItem::AssistantTextDelta(MessageDelta {
+            role: MessageRole::Assistant,
+            text: text.to_string(),
+        })
+    }
+
+    fn reasoning_delta(text: &str) -> AgentFrameItem {
+        AgentFrameItem::ReasoningDelta(MessageDelta {
             role: MessageRole::Assistant,
             text: text.to_string(),
         })
@@ -2103,6 +2155,79 @@ mod tests {
         let (kept, omitted) = cap_lines_tail(lines, 2);
         assert_eq!(kept, vec!["b".to_string(), "c".to_string()]);
         assert_eq!(omitted, 1);
+    }
+
+    #[test]
+    fn cap_thinking_text_keeps_everything_when_it_already_fits() {
+        let (kept, omitted) = cap_thinking_text("one\ntwo\nthree", 6);
+        assert_eq!(kept, "one\ntwo\nthree");
+        assert_eq!(omitted, 0);
+    }
+
+    #[test]
+    fn cap_thinking_text_keeps_only_the_trailing_lines_once_it_overflows() {
+        let text = "one\ntwo\nthree\nfour\nfive";
+        let (kept, omitted) = cap_thinking_text(text, 2);
+        // The newest lines survive -- the earlier ones are the ones
+        // dropped, matching "newest content visible" (owner requirement).
+        assert_eq!(kept, "four\nfive");
+        assert_eq!(omitted, 3);
+    }
+
+    #[test]
+    fn cap_thinking_text_bounds_a_streaming_block_growing_delta_by_delta() {
+        // The reducer coalesces every `ReasoningDelta` into one item's
+        // growing `.text` (`frame.rs`'s `Event::ReasoningDelta` fold) --
+        // this pins that re-running the cap on each successive render
+        // never lets the *rendered* line count grow past the cap, even
+        // though the underlying accumulated text keeps growing.
+        let mut accumulated = String::new();
+        let mut last_kept_lines = 0;
+        for line in 0..20 {
+            if !accumulated.is_empty() {
+                accumulated.push('\n');
+            }
+            accumulated.push_str(&format!("thought {line}"));
+            let (kept, _omitted) = cap_thinking_text(&accumulated, THINKING_TAIL_LINES);
+            last_kept_lines = kept.lines().count();
+            assert!(last_kept_lines <= THINKING_TAIL_LINES);
+        }
+        assert_eq!(last_kept_lines, THINKING_TAIL_LINES);
+    }
+
+    #[test]
+    fn thinking_visible_outside_burst_only_while_the_turn_is_running() {
+        assert!(thinking_visible_outside_burst(None));
+        let end = TurnEnd {
+            reason: TurnEndReason::Completed,
+            model: None,
+            elapsed: Duration::ZERO,
+        };
+        assert!(!thinking_visible_outside_burst(Some(&end)));
+    }
+
+    #[test]
+    fn segment_bursts_never_lets_a_stray_reasoning_delta_split_a_burst() {
+        // `segment_bursts`'s own doc comment calls out "a stray reasoning
+        // delta" between two tool-related items of the same burst as
+        // absorbed, not boundary-affecting -- pin it directly so the
+        // burst-absorption half of this fix's design fork (thinking
+        // structurally inside a burst's range stays invisible, unchanged)
+        // has its own regression coverage.
+        let items = vec![
+            user_message("fix the bug"),
+            tool_requested("a", "fs.read", json!({"path": "a.rs"})),
+            reasoning_delta("considering the second call…"),
+            tool_requested("b", "fs.read", json!({"path": "b.rs"})),
+            tool_finished("a", json!({"total_lines": 10})),
+            tool_finished("b", json!({"total_lines": 5})),
+            assistant_delta("Looking at both files, I"),
+        ];
+        let bursts = segment_bursts(&items);
+        assert_eq!(bursts.len(), 1);
+        assert_eq!(bursts[0].start, 1);
+        assert_eq!(bursts[0].end, 6);
+        assert!(bursts[0].closed);
     }
 
     #[test]

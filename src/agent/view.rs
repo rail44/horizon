@@ -364,7 +364,24 @@ impl AgentView {
                 delta.text.clone(),
             )),
             AgentFrameItem::ReasoningDelta(delta) => {
-                Some(block("thinking", theme::text_subtle(), delta.text.clone()))
+                // Height-bounded tail view (owner requirement 2026-07-13,
+                // closing an un-instructed deviation from base decision
+                // 5): `delta.text` is the item's own coalesced field, so
+                // this re-caps the whole accumulated block on every
+                // render rather than growing unboundedly while it
+                // streams (`turns::cap_thinking_text`'s own doc comment).
+                // The "…" label suffix mirrors `AssistantTextDelta`'s own
+                // "agent…" -- thinking only ever exists as this streaming
+                // delta shape, never a committed message, so it always
+                // reads as in-progress.
+                let (tail_text, omitted) =
+                    turns::cap_thinking_text(&delta.text, turns::THINKING_TAIL_LINES);
+                let text = if omitted > 0 {
+                    format!("… {omitted} earlier line(s) …\n{tail_text}")
+                } else {
+                    tail_text
+                };
+                Some(block("thinking…", theme::text_subtle(), text))
             }
             // Retired the raw-JSON `tool`/`tool result` dumps this arm and
             // the one below used to fall back to (owner feedback
@@ -592,6 +609,34 @@ impl AgentView {
                 | AgentFrameItem::AssistantTextDelta(_)
                 | AgentFrameItem::Error(_)
                 | AgentFrameItem::Exited(_) => {
+                    if let Some(el) = self.render_item(items, base_index + index, item, cx) {
+                        blocks.push(el);
+                    }
+                }
+                // Closes the un-instructed deviation from base decision 5
+                // (owner requirement 2026-07-13): a `ReasoningDelta` that
+                // falls outside every burst's own absorbed range (before
+                // the first burst, between two of them, after the last
+                // one, or in an all-prose turn with no bursts at all)
+                // renders in its actual chronological position -- exactly
+                // where this per-item walk encounters it, so it naturally
+                // lands before/after the neighboring burst's receipt the
+                // same way `Message`/`AssistantTextDelta` already do --
+                // for as long as the turn is still running
+                // (`turns::thinking_visible_outside_burst`). A reasoning
+                // item that instead falls *inside* a burst's range (a
+                // "stray reasoning delta" between two tool-related items,
+                // per `segment_bursts`'s own doc comment) never reaches
+                // this arm at all -- it's structurally absorbed into that
+                // burst's `render_running_card`/`render_receipt` call and
+                // stays invisible, unchanged. Once the turn ends, this
+                // arm stops firing and the item goes back to invisible
+                // too -- decision 1's "thinking folds into the receipt on
+                // completion", the same fold the burst-absorbed case
+                // already has.
+                AgentFrameItem::ReasoningDelta(_)
+                    if turns::thinking_visible_outside_burst(ended) =>
+                {
                     if let Some(el) = self.render_item(items, base_index + index, item, cx) {
                         blocks.push(el);
                     }
