@@ -725,21 +725,48 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     user. Noticed auditing that file's command dispatch while fixing
     backlog #34; filing only, not fixing.
 
-36. **Shared build-dir flake: `CARGO_BIN_EXE_horizon-sessiond` spawn
-    fails with NotFound while sibling worktrees build concurrently.**
+36. *(resolved 2026-07-14)* **Shared build-dir flake: `CARGO_BIN_EXE_horizon-sessiond`
+    spawn fails with NotFound while sibling worktrees build concurrently.**
     Observed 2026-07-13 in the integration worktree with three worker
     worktrees building in parallel: `horizon-sessiond::e2e`'s
     `a_hello_with_the_wrong_contract_version_is_rejected_with_a_reason`
     panicked at spawn ("No such file or directory") although
     `target/debug/horizon-sessiond` existed; the same test passed on
-    an isolated rerun immediately after. Suspected interaction between
-    `.cargo/config.toml`'s shared `build-dir` (advisory-locked across
-    worktrees) and the final-artifact link step the baked-in
-    `CARGO_BIN_EXE_*` path depends on. Repro direction: run the
-    sessiond e2e suite in one worktree while another worktree's
-    `cargo build --workspace` loops. If confirmed, candidates: make
-    the e2e spawn resolve the binary at runtime relative to its own
-    target dir, or serialize gate runs against sibling builds.
+    an isolated rerun immediately after.
+    Root cause **established** (not just hypothesis): cargo's own
+    artifact-uplift step is non-atomic. `cargo-util` 0.2.28's
+    `paths::link_or_copy` (the function cargo's `link_targets` compiler
+    step calls to copy/hardlink every unit's output from its build-dir
+    location into the final `target/<profile>/` path) unconditionally
+    `remove_file`s the destination before re-linking it, and per
+    `link_targets`'s own doc comment this runs on *every* cargo
+    invocation for *every* unit -- including a "fresh" one where nothing
+    recompiled -- not only on an actual rebuild. `target/debug/
+    horizon-sessiond` (what `CARGO_BIN_EXE_horizon-sessiond` bakes into
+    the test binary at compile time) is therefore never guaranteed
+    stable across a cargo invocation's lifetime, full stop -- this isn't
+    specific to the shared `build-dir`. Locally reproduced without any
+    other worktree involved: a tight existence-poller on that exact path
+    (62M checks over 241s) caught exactly one transient absence, landing
+    during a `cargo nextest run --workspace -p horizon-sessiond` that
+    forced a rebuild, while a real sibling `cargo nextest run -p
+    horizon-agent` was compiling concurrently on the same machine (this
+    machine's own worktrees do share the build-dir's advisory lock for
+    real -- a later `cargo clippy` in the same session independently hit
+    "Blocking waiting for file lock on build directory"). What stays
+    **hypothesis** (plausible, not independently isolated): that
+    cross-worktree lock contention *specifically* is what widens this
+    window enough to matter in practice, versus the window already being
+    wide enough on a busy single-worktree machine. Either way the fix is
+    the same. Fixed in `crates/horizon-sessiond/tests/e2e.rs`: all four
+    `Command::new(env!("CARGO_BIN_EXE_horizon-sessiond"))` call sites now
+    go through `resolve_sessiond_binary()` (verifies the baked-in path
+    exists, one bounded wait and re-check on miss, then an independent
+    fallback derived from the test binary's own `current_exe()`) and
+    `spawn_sessiond()` (retries the actual `spawn()` once more on a
+    `NotFound` at the syscall level). Both panic with every path probed
+    (not a bare ENOENT) if they're still missing after that. No
+    sleep-loops -- one bounded wait per layer.
 
 37. **Upstream the gpui_wgpu Metal backends fix to zed.**
     `WgpuContext::instance` hardcodes `Backends::VULKAN | GL` (gpui_wgpu
