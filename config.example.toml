@@ -231,30 +231,34 @@ window_height = 720.0
 # terminal consistently. The 16 base ANSI colors terminal output uses live
 # in the nested [theme.ansi] table below, part of this same scheme.
 #
-# Names (see `src/ui/theme/mod.rs`): text_primary, text_muted, text_subtle,
-# accent, danger, surface_base, surface_panel, surface_raised,
-# surface_chrome, surface_selected, border_default, border_subtle,
-# cursor_accent (workspace mode's cursor-frame border, distinct from
-# accent's focus border -- see `docs/workspace-mode-design.md`),
-# diff_added_surface, diff_added_text, diff_removed_surface,
-# diff_removed_text (the agent transcript's fs.edit diff rendering --
-# see `docs/agent-output-ui-design.md`), user_message_surface,
-# user_message_border (the user message bubble), approval_surface,
-# approval_border (the pending-approval transcript block),
-# approval_confirm_surface, approval_deny_surface (the approval banner's
-# Approve/Deny button fills -- their borders stay accent/danger),
-# terminal_foreground (defaults to text_primary), terminal_background
-# (defaults to surface_base), terminal_cursor (defaults to accent).
+# Names (see `src/theme.rs`'s `scheme_from` -- the one place every key
+# below is read, chrome and agent-pane roles alike):
+#   text_primary, text_muted, text_subtle -- text colors, most to least
+#     prominent.
+#   accent -- the app's one focus/selection accent.
+#   danger, warning, success, info -- semantic colors (errors, tool-call
+#     requests/pending approval, finished tool-call results, the assistant
+#     message label).
+#   surface_base, surface_panel, surface_raised, surface_chrome,
+#     surface_selected -- background layers: the app base, a lifted panel
+#     (agent transcript's expanded-receipt row header), an elevated
+#     surface (popover/dropdown-menu chrome), the tab strip's own chrome
+#     background, and the command palette / session manager / view
+#     chooser row highlight.
+#   border_default, border_subtle -- the chrome separator-line color;
+#     `border_subtle` is only ever read as a fallback when
+#     `border_default` is unset, before falling back further to a
+#     derived tint.
+#   diff_added_surface, diff_added_text, diff_removed_surface,
+#     diff_removed_text -- the agent transcript's fs.edit diff rendering
+#     (see `docs/agent-output-ui-design.md`).
+#   terminal_foreground (defaults to text_primary), terminal_background
+#     (defaults to surface_base), terminal_cursor (defaults to accent).
 #
-# 2026-07-14: border_default and surface_raised are now live -- they feed
-# the gpui-component chrome projection (`src/theme.rs`'s
-# `apply_gpui_component_theme`/`gpui_component_theme_config`) as the
-# separator-line ("border") and elevated-surface ("popover"/dropdown-menu)
-# colors respectively, each with a scheme-derived default if unset. The
-# remaining names in the list above that aren't otherwise documented
-# earlier in this comment (surface_chrome, surface_selected, border_subtle,
-# cursor_accent, user_message_*, approval_*) are not yet read by any code
-# -- see `src/theme.rs` for what's live today.
+# Also valid but not yet read by any code: `cursor_accent`, planned as
+# workspace mode's cursor-frame border, distinct from `accent`'s focus
+# border (see `docs/workspace-mode-design.md`) -- today the cursor frame
+# reuses `accent` outright.
 #
 # An unrecognized name or an unparsable hex value is warned about on stderr
 # and skipped, leaving that color at its built-in default.
@@ -262,23 +266,19 @@ window_height = 720.0
 [theme]
 # accent = "#84dcc6"
 # terminal_cursor = "#84dcc6"
-# cursor_accent = "#e5c07b"
 
 # ---------------------------------------------------------------------------
 # Agent-pane roles (src/theme.rs; docs/agent-output-ui-amendment.md's
 # theme-role layer). `accent`/`text_primary` above are reused as-is; the
-# rest are new, dedicated `[theme]` keys: danger (errors), warning
-# (tool-call requests, pending approval), success (finished tool-call
-# results), info (the assistant message label), text_muted (readable
-# secondary text -- status line, exited state), text_subtle (the most
-# de-emphasized text -- thinking deltas, in-flight tool progress),
-# surface_panel (a lifted panel surface -- not painted by any view
-# today; the running-turn card turned out to have no distinct fill of
-# its own once checked against the mock, see src/theme.rs), and
+# rest are dedicated `[theme]` keys: danger (errors), warning (tool-call
+# requests, pending approval), success (finished tool-call results), info
+# (the assistant message label), text_muted (readable secondary text --
+# status line, exited state), text_subtle (the most de-emphasized text --
+# thinking deltas, in-flight tool progress), surface_panel (a lifted panel
+# surface -- the expanded receipt row header's highlight, stage D), and
 # diff_added_surface/diff_added_text, diff_removed_surface/
-# diff_removed_text (fs.edit diff rendering -- not painted by any view
-# yet, added ahead of that slice per the amendment doc). Defaults shown
-# below match `src/agent/view.rs`'s look prior to this layer.
+# diff_removed_text (fs.edit's reconstructed-diff rendering). Defaults
+# shown below match `src/agent/view.rs`'s look prior to this layer.
 # ---------------------------------------------------------------------------
 # danger = "#e06c75"
 # warning = "#e5c07b"
@@ -295,8 +295,8 @@ window_height = 720.0
 # ---------------------------------------------------------------------------
 # [theme.ansi] — the app-wide 16-slot ANSI palette (black…white,
 # bright_black…bright_white), as `#rrggbb`/`#rgb` hex strings. Used by the
-# terminal today (see `src/ui/theme/ansi.rs`); a future agent-transcript
-# renderer is expected to reuse this same palette.
+# terminal today (see `src/theme.rs`); a future agent-transcript renderer
+# is expected to reuse this same palette.
 #
 # Active (uncommented) below because these are the current production
 # defaults, shown here as a live, editable reference — not because you need

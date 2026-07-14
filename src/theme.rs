@@ -130,7 +130,7 @@ const SECONDARY_HOVER_BLEND_RATIO: f32 = 0.12;
 /// for removals) -- low, so it stays a tint rather than a solid fill.
 const DIFF_SURFACE_BLEND_RATIO: f32 = 0.12;
 
-/// How far the `Segmented` tab strip's track sits from `background`
+/// How far the `Segmented` tab strip's track sits from `surface_chrome`
 /// toward `surface_panel`. Left at `surface_panel` outright (a `1.0`
 /// ratio, gpui-component's own unset-key fallback), a scheme that sets
 /// `surface_panel` to a strongly lifted value tuned for occasional chrome
@@ -141,11 +141,23 @@ const DIFF_SURFACE_BLEND_RATIO: f32 = 0.12;
 /// `text_muted = #767676` against `background = #f6f6f6`): raw
 /// `surface_panel` puts the unselected label's contrast at roughly
 /// 2.7:1, under both the WCAG AA body-text (4.5:1) and UI-component
-/// (3:1) thresholds. Halfway back toward `background` recovers most of
-/// that contrast (~3.4:1) while keeping the track visibly distinct from
-/// the selected pill (which is fixed to `background` inside
-/// gpui-component, see [`gpui_component_theme_config`]'s doc table).
+/// (3:1) thresholds. Halfway back toward `surface_chrome` (which itself
+/// defaults to `background` when unset) recovers most of that contrast
+/// (~3.4:1) while keeping the track visibly distinct from the selected
+/// pill (which is fixed to `background` inside gpui-component, see
+/// [`gpui_component_theme_config`]'s doc table).
 const SEGMENTED_TRACK_BLEND_RATIO: f32 = 0.5;
+
+/// How far the command-palette/session-manager/view-chooser `List`'s
+/// selected-row highlight (`surface_selected`'s built-in default) sits
+/// from `background` toward `accent`. Matches gpui-component's own
+/// `list_active` fallback formula exactly (`self.background.blend(
+/// self.primary.opacity(0.1))` in the vendored `ui::theme::schema`,
+/// where `primary` is itself `scheme.accent`, see
+/// [`gpui_component_theme_config`]) -- so an unset `surface_selected`
+/// reproduces today's look bit-for-bit rather than just approximating
+/// it.
+const LIST_ACTIVE_BLEND_RATIO: f32 = 0.1;
 
 const ANSI16_DEFAULT: [u32; 16] = [
     0x23262e, // black
@@ -184,9 +196,26 @@ struct Scheme {
     diff_removed_surface: u32,
     diff_removed_text: u32,
     surface_panel: u32,
+    /// New in the gpui-component projection: the tab strip's own chrome
+    /// background (`tab_bar`/`tab_bar.segmented` in
+    /// [`gpui_component_theme_config`]), resolved from the
+    /// `surface_chrome` config key or, if unset, `background` itself --
+    /// the segmented track's existing contrast-blend toward
+    /// `surface_panel` (`SEGMENTED_TRACK_BLEND_RATIO`) is computed from
+    /// *this* role, so leaving it unset reproduces today's look exactly.
+    surface_chrome: u32,
+    /// New in the gpui-component projection: the selected-row highlight
+    /// for gpui-component's `List` (the command palette / session
+    /// manager / view chooser rows -- see `list.active.background` in
+    /// [`gpui_component_theme_config`]), resolved from the
+    /// `surface_selected` config key or, if unset, a blend of
+    /// `background` toward `accent` (`LIST_ACTIVE_BLEND_RATIO`,
+    /// mirroring gpui-component's own `list_active` fallback formula).
+    surface_selected: u32,
     /// New in the gpui-component projection: a subtle separator line,
     /// resolved from the `border_default` config key (already documented
-    /// in `config.example.toml` but unread until now) or, if unset,
+    /// in `config.example.toml` but unread until now); if unset, falls
+    /// back to the `border_subtle` config key; if that too is unset,
     /// derived (`BORDER_BLEND_RATIO`).
     border: u32,
     /// New in the gpui-component projection: an elevated surface (popover/
@@ -235,6 +264,7 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
         FOREGROUND_DEFAULT,
     );
     let text_subtle = chrome("text_subtle", None, TEXT_SUBTLE_DEFAULT);
+    let accent = chrome("accent", None, CURSOR_DEFAULT);
     let danger = chrome(
         "danger",
         None,
@@ -260,6 +290,12 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
         None,
         blend(background, foreground, SURFACE_LIFT_RATIO),
     );
+    let surface_chrome = chrome("surface_chrome", None, background);
+    let surface_selected = chrome(
+        "surface_selected",
+        None,
+        blend(background, accent, LIST_ACTIVE_BLEND_RATIO),
+    );
 
     Scheme {
         background,
@@ -283,7 +319,7 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
             ansi_slot(&ansi_raw.bright_cyan, ANSI16_DEFAULT[14]),
             ansi_slot(&ansi_raw.bright_white, ANSI16_DEFAULT[15]),
         ],
-        accent: chrome("accent", None, CURSOR_DEFAULT),
+        accent,
         danger,
         warning,
         success,
@@ -303,9 +339,11 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
         ),
         diff_removed_text: chrome("diff_removed_text", None, danger),
         surface_panel,
+        surface_chrome,
+        surface_selected,
         border: chrome(
             "border_default",
-            None,
+            Some("border_subtle"),
             blend(background, text_subtle, BORDER_BLEND_RATIO),
         ),
         surface_raised: chrome("surface_raised", None, background),
@@ -436,11 +474,12 @@ fn hex(value: u32) -> String {
 /// | `secondary`                              | `scheme.surface_panel` (reused, not a second lift)  |
 /// | `secondary_hover`                        | `secondary` blended toward `foreground` (`SECONDARY_HOVER_BLEND_RATIO`) |
 /// | `danger`/`warning`/`success`/`info`      | the matching stage-B `scheme` role                 |
-/// | `tab_bar`                                 | `scheme.background` (the strip's own background)   |
-/// | `tab_bar_segmented`                       | `background` blended toward `surface_panel` (`SEGMENTED_TRACK_BLEND_RATIO`) -- see that constant's doc for why not `surface_panel` outright |
+/// | `tab_bar`                                 | `scheme.surface_chrome` (the strip's own background; defaults to `scheme.background` if unset) |
+/// | `tab_bar_segmented`                       | `surface_chrome` blended toward `surface_panel` (`SEGMENTED_TRACK_BLEND_RATIO`) -- see that constant's doc for why not `surface_panel` outright |
 /// | `tab_active`                              | `scheme.surface_panel`                             |
 /// | `tab_active_foreground`                   | `scheme.foreground`                                |
 /// | `tab_foreground`                          | `scheme.text_muted`                                |
+/// | `list_active`                             | `scheme.surface_selected` (the command palette / session manager / view chooser row highlight; defaults to a `background`-toward-`accent` blend, `LIST_ACTIVE_BLEND_RATIO`, matching gpui-component's own fallback exactly) |
 /// | `scrollbar_thumb`                         | `scheme.text_subtle` (already a visible-but-quiet gray in both polarities) |
 /// | `popover`/`popover_foreground`            | `scheme.surface_raised` / `scheme.foreground`      |
 ///
@@ -450,10 +489,9 @@ fn hex(value: u32) -> String {
 /// brand accent (it's a hover-highlight surface for MenuItem/ListItem,
 /// documented as falling back to `secondary`, which we do set) -- `link`/
 /// `caret`/`selection` (all fall back to `primary`, already correct),
-/// `list`/`list_active`/`list_hover` (fall back to `background`/a
-/// `primary`-tinted blend/`accent`, already a good selection highlight
-/// for the command palette's `List`), and every `button_*`/table/sidebar
-/// field (cascades from the roles above).
+/// `list`/`list_hover` (fall back to `background`/`accent`, already a
+/// good look for the command palette's `List`), and every
+/// `button_*`/table/sidebar field (cascades from the roles above).
 ///
 /// `mode` is picked from [`Scheme::is_dark`] so gpui-component's own
 /// unset-field baseline (`ThemeColor::dark()`/`::light()`) matches the
@@ -476,7 +514,7 @@ fn gpui_component_theme_config(scheme: &Scheme) -> gpui_component::ThemeConfig {
         SECONDARY_HOVER_BLEND_RATIO,
     );
     let tab_bar_segmented = blend(
-        scheme.background,
+        scheme.surface_chrome,
         scheme.surface_panel,
         SEGMENTED_TRACK_BLEND_RATIO,
     );
@@ -491,13 +529,14 @@ fn gpui_component_theme_config(scheme: &Scheme) -> gpui_component::ThemeConfig {
             "primary.background": hex(scheme.accent),
             "primary.foreground": hex(primary_foreground_for(scheme.accent)),
             "ring": hex(scheme.accent),
+            "list.active.background": hex(scheme.surface_selected),
             "secondary.background": hex(scheme.surface_panel),
             "secondary.hover.background": hex(secondary_hover),
             "danger.background": hex(scheme.danger),
             "warning.background": hex(scheme.warning),
             "success.background": hex(scheme.success),
             "info.background": hex(scheme.info),
-            "tab_bar.background": hex(scheme.background),
+            "tab_bar.background": hex(scheme.surface_chrome),
             "tab_bar.segmented.background": hex(tab_bar_segmented),
             "tab.active.background": hex(scheme.surface_panel),
             "tab.active.foreground": hex(scheme.foreground),
@@ -752,11 +791,14 @@ mod tests {
         }
     }
 
-    /// A fixture matching the owner's actual `~/.config/horizon/config.toml`
-    /// `[theme]` (2026-07-14): a *light* scheme, with `warning`/`success`/
-    /// `info` left unset (so they exercise [`contrast_safe_default`]).
-    fn owner_light_scheme() -> Scheme {
-        scheme_from(&config_with(&[
+    /// The owner's actual `~/.config/horizon/config.toml` `[theme]`
+    /// entries (2026-07-14), minus `border_default` -- factored out so
+    /// tests can layer additional keys (e.g. `border_subtle`) onto the
+    /// same light-polarity fixture without `border_default` masking
+    /// them. [`owner_light_scheme`] adds `border_default` back for the
+    /// tests that want the fixture exactly as the owner runs it.
+    fn owner_light_colors() -> Vec<(&'static str, &'static str)> {
+        vec![
             ("text_primary", "#666666"),
             ("text_muted", "#767676"),
             ("text_subtle", "#a6a6a6"),
@@ -765,10 +807,25 @@ mod tests {
             ("surface_base", "#f6f6f6"),
             ("surface_panel", "#c6c6c6"),
             ("surface_raised", "#ffffff"),
-            ("border_default", "#a6a6a6"),
             ("terminal_foreground", "#666666"),
             ("terminal_background", "#f6f6f6"),
-        ]))
+        ]
+    }
+
+    /// A fixture matching the owner's actual `~/.config/horizon/config.toml`
+    /// `[theme]` (2026-07-14): a *light* scheme, with `warning`/`success`/
+    /// `info` left unset (so they exercise [`contrast_safe_default`]).
+    fn owner_light_scheme() -> Scheme {
+        owner_light_scheme_with(&[("border_default", "#a6a6a6")])
+    }
+
+    /// [`owner_light_scheme`]'s color set plus `extra` -- the light-polarity
+    /// counterpart to plain [`config_with`], used to check a role override
+    /// on both polarities without duplicating the owner's whole fixture.
+    fn owner_light_scheme_with(extra: &[(&'static str, &'static str)]) -> Scheme {
+        let mut colors = owner_light_colors();
+        colors.extend_from_slice(extra);
+        scheme_from(&config_with(&colors))
     }
 
     #[test]
@@ -943,6 +1000,88 @@ mod tests {
         assert!(luminance(scheme.border) < luminance(scheme.background));
     }
 
+    #[test]
+    fn surface_chrome_defaults_to_background_and_is_overridable_on_a_dark_scheme() {
+        let default_scheme = scheme_from(&RawConfig::default());
+        assert_eq!(default_scheme.surface_chrome, default_scheme.background);
+
+        let overridden = scheme_from(&config_with(&[("surface_chrome", "#202124")]));
+        assert_eq!(overridden.surface_chrome, 0x202124);
+        // Untouched roles keep their built-in defaults.
+        assert_eq!(overridden.background, BACKGROUND_DEFAULT);
+    }
+
+    #[test]
+    fn surface_chrome_defaults_to_background_and_is_overridable_on_a_light_scheme() {
+        let default_scheme = owner_light_scheme();
+        assert_eq!(default_scheme.surface_chrome, default_scheme.background);
+
+        let overridden = owner_light_scheme_with(&[("surface_chrome", "#eaeaea")]);
+        assert_eq!(overridden.surface_chrome, 0xeaeaea);
+        assert_eq!(overridden.background, 0xf6f6f6);
+    }
+
+    #[test]
+    fn surface_selected_defaults_to_a_background_accent_blend_and_is_overridable_on_a_dark_scheme()
+    {
+        let default_scheme = scheme_from(&RawConfig::default());
+        assert_eq!(
+            default_scheme.surface_selected,
+            blend(BACKGROUND_DEFAULT, CURSOR_DEFAULT, LIST_ACTIVE_BLEND_RATIO)
+        );
+
+        let overridden = scheme_from(&config_with(&[("surface_selected", "#334455")]));
+        assert_eq!(overridden.surface_selected, 0x334455);
+        // Untouched roles keep their built-in defaults.
+        assert_eq!(overridden.accent, CURSOR_DEFAULT);
+    }
+
+    #[test]
+    fn surface_selected_defaults_to_a_background_accent_blend_and_is_overridable_on_a_light_scheme()
+    {
+        let default_scheme = owner_light_scheme();
+        // The owner's accent (`#0048b3`) and background (`#f6f6f6`) are
+        // both set explicitly -- the default should blend exactly those,
+        // not the built-in dark-scheme constants.
+        assert_eq!(
+            default_scheme.surface_selected,
+            blend(0xf6f6f6, 0x0048b3, LIST_ACTIVE_BLEND_RATIO)
+        );
+
+        let overridden = owner_light_scheme_with(&[("surface_selected", "#112233")]);
+        assert_eq!(overridden.surface_selected, 0x112233);
+    }
+
+    #[test]
+    fn border_subtle_overrides_the_derived_fallback_but_not_an_explicit_border_default_on_a_dark_scheme(
+    ) {
+        // Neither key set: the existing blend derivation still applies.
+        let default_scheme = scheme_from(&RawConfig::default());
+        assert_eq!(
+            default_scheme.border,
+            blend(BACKGROUND_DEFAULT, TEXT_SUBTLE_DEFAULT, BORDER_BLEND_RATIO)
+        );
+
+        // `border_subtle` set, `border_default` unset: `border_subtle` wins
+        // over the derived blend.
+        let subtle_only = scheme_from(&config_with(&[("border_subtle", "#445566")]));
+        assert_eq!(subtle_only.border, 0x445566);
+
+        // Both set: the primary `border_default` key still wins.
+        let both_set = scheme_from(&config_with(&[
+            ("border_default", "#111111"),
+            ("border_subtle", "#222222"),
+        ]));
+        assert_eq!(both_set.border, 0x111111);
+    }
+
+    #[test]
+    fn border_subtle_overrides_the_derived_fallback_on_a_light_scheme() {
+        let overridden = owner_light_scheme_with(&[("border_subtle", "#998877")]);
+        assert_eq!(overridden.border, 0x998877);
+        assert!(luminance(overridden.border) < luminance(overridden.background));
+    }
+
     fn theme_color_for(scheme: &Scheme) -> gpui_component::ThemeColor {
         let config = gpui_component_theme_config(scheme);
         let mut theme = gpui_component::Theme::from(&gpui_component::ThemeColor::default());
@@ -982,6 +1121,58 @@ mod tests {
         );
         assert_eq!(colors.border, packed_hsla(scheme.border));
         assert_eq!(colors.popover, packed_hsla(scheme.surface_raised));
+    }
+
+    #[test]
+    fn gpui_projection_surface_chrome_feeds_tab_bar_on_a_dark_scheme() {
+        let scheme = scheme_from(&config_with(&[("surface_chrome", "#202124")]));
+        let colors = theme_color_for(&scheme);
+        assert_eq!(colors.tab_bar, packed_hsla(scheme.surface_chrome));
+        assert_ne!(colors.tab_bar, packed_hsla(scheme.background));
+        // The segmented track keeps its own contrast-blend, now computed
+        // from `surface_chrome` rather than raw `background`.
+        assert_eq!(
+            colors.tab_bar_segmented,
+            packed_hsla(blend(
+                scheme.surface_chrome,
+                scheme.surface_panel,
+                SEGMENTED_TRACK_BLEND_RATIO
+            ))
+        );
+    }
+
+    #[test]
+    fn gpui_projection_surface_chrome_feeds_tab_bar_on_a_light_scheme() {
+        let scheme = owner_light_scheme_with(&[("surface_chrome", "#eaeaea")]);
+        let colors = theme_color_for(&scheme);
+        assert_eq!(colors.tab_bar, packed_hsla(scheme.surface_chrome));
+        assert_ne!(colors.tab_bar, packed_hsla(scheme.background));
+    }
+
+    #[test]
+    fn gpui_projection_surface_selected_feeds_list_active_on_a_dark_scheme() {
+        let scheme = scheme_from(&config_with(&[("surface_selected", "#334455")]));
+        let colors = theme_color_for(&scheme);
+        // gpui-component always clamps `list.active.background`'s alpha to
+        // at most 0.2 (it's a translucent highlight drawn over the row's
+        // own background, not a standalone opaque fill) -- see the
+        // `apply_config`/`clamp_alpha` step in the vendored
+        // `ui::theme::schema`. Our own opaque `surface_selected` hue/
+        // lightness still comes through; only alpha is capped.
+        assert_eq!(
+            colors.list_active,
+            packed_hsla(scheme.surface_selected).alpha(0.2)
+        );
+    }
+
+    #[test]
+    fn gpui_projection_surface_selected_feeds_list_active_on_a_light_scheme() {
+        let scheme = owner_light_scheme_with(&[("surface_selected", "#112233")]);
+        let colors = theme_color_for(&scheme);
+        assert_eq!(
+            colors.list_active,
+            packed_hsla(scheme.surface_selected).alpha(0.2)
+        );
     }
 
     #[test]

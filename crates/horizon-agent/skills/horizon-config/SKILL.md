@@ -68,15 +68,27 @@ Valid names:
 - `text_primary`, `text_muted`, `text_subtle` -- text colors, most to
   least prominent.
 - `accent` -- the app's one focus/selection accent.
-- `danger` -- destructive-action color (e.g. a "Deny" button).
+- `danger`, `warning`, `success`, `info` -- semantic colors (errors,
+  tool-call requests/pending approval, finished tool-call results, the
+  assistant message label).
 - `surface_base`, `surface_panel`, `surface_raised`, `surface_chrome`,
-  `surface_selected` -- background layers, back to front.
-- `border_default`, `border_subtle` -- border colors.
-- `cursor_accent` -- workspace mode's cursor-frame border (distinct from
-  `accent`, which is the focus border, so both stay visible at once).
+  `surface_selected` -- background layers: the app base, a lifted panel,
+  an elevated surface (popover/dropdown-menu chrome), the tab strip's
+  own chrome background, and the command palette / session manager /
+  view chooser row highlight.
+- `border_default`, `border_subtle` -- the chrome separator-line color;
+  `border_subtle` is only ever read as a fallback when `border_default`
+  is unset.
+- `diff_added_surface`, `diff_added_text`, `diff_removed_surface`,
+  `diff_removed_text` -- the agent transcript's fs.edit diff rendering.
 - `terminal_foreground` (defaults to `text_primary`), `terminal_background`
   (defaults to `surface_base`), `terminal_cursor` (defaults to `accent`) --
   set one of these only when the terminal should diverge from chrome.
+
+Also a valid name but not yet read by any code: `cursor_accent`, planned
+as workspace mode's cursor-frame border, distinct from `accent`'s focus
+border -- today the cursor frame reuses `accent` outright, so setting
+`cursor_accent` alone has no visible effect.
 
 Example:
 
@@ -84,7 +96,6 @@ Example:
 [theme]
 accent = "#84dcc6"
 terminal_cursor = "#84dcc6"
-cursor_accent = "#e5c07b"
 ```
 
 ## `[theme.ansi]` -- the 16-slot terminal ANSI palette
