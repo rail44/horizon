@@ -157,6 +157,29 @@ pub(crate) struct WinitWindowInner {
     /// `resumed` — see docs/winit-backend-design.md's "idle CPU" section
     /// for why `RedrawRequested` no longer re-arms itself unconditionally.
     pub(crate) needs_redraw: Cell<bool>,
+    /// Set by `WinitPlatformWindow::draw` whenever gpui actually draws a
+    /// frame during the `request_frame` callback `app_handler.rs`'s
+    /// `RedrawRequested` handler just invoked; reset to `false` right
+    /// before that invocation. This is the animation-frame re-arm signal —
+    /// see docs/winit-backend-design.md's "Animation frame continuity"
+    /// section for the full derivation, summarized here: a `with_animation`
+    /// element still in progress calls `Window::request_animation_frame`
+    /// during `Window::draw`, which queues a `next_frame` callback gpui
+    /// only drains on the *next* invocation of this same `request_frame`
+    /// callback — nothing else tells this platform crate that invocation
+    /// is needed. `PlatformWindow::draw` only runs when gpui's own
+    /// `invalidator.is_dirty()` was true for this cycle (now that
+    /// `RequestFrameOptions::require_presentation` is no longer forced to
+    /// `true` unconditionally — see `app_handler.rs`), so "a draw happened
+    /// this cycle" is a truthful, always-available proxy for "more
+    /// next-frame work might have just been queued," with no gpui fork
+    /// needed. Self-terminating: the cycle after an animation's last frame
+    /// still re-arms once (nothing has set this back to `false` yet), but
+    /// that follow-up cycle draws nothing (no new dirty state), so the
+    /// chain stops there — mirrors gpui_linux's own `wl_surface.frame`
+    /// arm-before-draw pattern, which has the same harmless one-frame
+    /// overrun.
+    pub(crate) drew_this_cycle: Cell<bool>,
 }
 
 impl WinitWindowInner {
@@ -470,6 +493,7 @@ impl WinitPlatformWindow {
             state: RefCell::new(state),
             callbacks: RefCell::new(WinitWindowCallbacks::default()),
             needs_redraw: Cell::new(false),
+            drew_this_cycle: Cell::new(false),
         });
 
         Ok(Self {
@@ -651,6 +675,11 @@ impl gpui::PlatformWindow for WinitPlatformWindow {
 
     fn draw(&self, scene: &Scene) {
         self.inner.state.borrow_mut().renderer.draw(scene);
+        // See `WinitWindowInner::drew_this_cycle`'s doc — this is the
+        // animation-frame re-arm signal `app_handler.rs`'s
+        // `RedrawRequested` handler consults right after the callback that
+        // led here returns.
+        self.inner.drew_this_cycle.set(true);
     }
 
     /// Deliberately does *not* forward to `winit::Window::pre_present_notify`
