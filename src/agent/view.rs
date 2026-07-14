@@ -77,11 +77,6 @@ pub struct AgentView {
     /// `expanded_receipts`/`expanded_rows` -- never persisted, never part
     /// of the frame model.
     changes_expanded: bool,
-    /// Whether the Plan panel (`docs/agent-todo-tool-design.md` decision
-    /// 5) is expanded into its per-item checklist. View-local, same as
-    /// `changes_expanded` -- never persisted, never part of the frame
-    /// model.
-    todo_expanded: bool,
     /// The approval keyboard-capture state (decision 4; row-centric v2,
     /// owner decision 2026-07-13 -- see [`turns::ComposerMode`]'s doc
     /// comment), kept in sync with the session's actionable
@@ -202,7 +197,6 @@ impl AgentView {
             expanded_receipts: HashSet::new(),
             expanded_rows: HashSet::new(),
             changes_expanded: false,
-            todo_expanded: false,
             composer_mode,
             dismissed_approval: None,
             _subscriptions: subscriptions,
@@ -290,13 +284,6 @@ impl AgentView {
     /// Toggles the Changes overview bar's expansion (decision 9).
     fn toggle_changes(&mut self, cx: &mut Context<Self>) {
         self.changes_expanded = !self.changes_expanded;
-        cx.notify();
-    }
-
-    /// Toggles the Plan panel's expansion (`docs/agent-todo-tool-design.md`
-    /// decision 5).
-    fn toggle_todo(&mut self, cx: &mut Context<Self>) {
-        self.todo_expanded = !self.todo_expanded;
         cx.notify();
     }
 
@@ -1740,112 +1727,6 @@ impl AgentView {
         list.into_any_element()
     }
 
-    /// The Plan panel (`docs/agent-todo-tool-design.md` decision 5): a
-    /// collapsible aggregation of the session's current `todo.write` list,
-    /// between the transcript and the Changes bar. `None` when no
-    /// successful `todo.write` call has ever landed
-    /// (`turns::todo_summary_text`'s own gating), hiding the panel
-    /// entirely -- reusing the Changes bar's exact idiom (same quiet
-    /// bordered pill, hover background, `▸`/`▾` toggle,
-    /// click-anywhere-on-row expansion) rather than a second style.
-    fn render_todo_bar(
-        &self,
-        frame_items: &[AgentFrameItem],
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let todos = turns::latest_todo_list(frame_items)?;
-        let summary = turns::todo_summary_text(&todos)?;
-
-        let expanded = self.todo_expanded;
-        let arrow = if expanded { "▾" } else { "▸" };
-        let bar_text =
-            |color: Hsla, text: String| div().text_size(px(11.0)).text_color(color).child(text);
-
-        let row = div()
-            .id("todo-bar")
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_2()
-            .px_2()
-            .py_0p5()
-            .rounded_sm()
-            .border_1()
-            .border_color(theme::text_subtle().alpha(0.25))
-            .cursor_pointer()
-            .hover(|this| this.bg(theme::text_subtle().alpha(0.12)))
-            .on_click(cx.listener(|view, _, _, cx| view.toggle_todo(cx)))
-            .child(bar_text(theme::accent(), arrow.to_string()))
-            .child(bar_text(theme::text_muted(), "Plan".to_string()))
-            .child(bar_text(theme::text_subtle(), "·".to_string()))
-            .child(bar_text(theme::text_muted(), summary));
-
-        let mut wrapper = div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .px_2()
-            .child(row.into_any_element());
-        if expanded {
-            wrapper = wrapper.child(self.render_todo_list(&todos));
-        }
-        Some(wrapper.into_any_element())
-    }
-
-    /// The Plan panel's expanded checklist: a bordered, rounded,
-    /// height-capped-and-scrollable container -- the same idiom
-    /// `render_changes_list` uses -- holding one row per
-    /// [`turns::TodoItem`], in list order: a status glyph (colored via
-    /// theme roles: done -> success, in_progress -> accent, pending ->
-    /// subtle) plus the item text.
-    fn render_todo_list(&self, todos: &[turns::TodoItem]) -> AnyElement {
-        let mut list = div()
-            .id("todo-list")
-            .flex()
-            .flex_col()
-            .max_h(px(220.0))
-            .overflow_y_scroll()
-            .rounded_sm()
-            .border_1()
-            .border_color(theme::text_subtle().alpha(0.25));
-        let row_count = todos.len();
-        for (row_index, todo) in todos.iter().enumerate() {
-            let (glyph, glyph_color) = match todo.status {
-                turns::TodoStatus::Done => ("✓", theme::success()),
-                turns::TodoStatus::InProgress => ("→", theme::accent()),
-                turns::TodoStatus::Pending => ("○", theme::text_subtle()),
-            };
-            let row = div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_2()
-                .px_3()
-                .py_1()
-                .when(row_index + 1 < row_count, |this| {
-                    this.border_b_1()
-                        .border_color(theme::text_subtle().alpha(0.2))
-                })
-                .child(
-                    div()
-                        .flex_none()
-                        .text_size(px(12.0))
-                        .text_color(glyph_color)
-                        .child(glyph),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_size(px(12.0))
-                        .text_color(theme::text_primary())
-                        .child(todo.text.clone()),
-                );
-            list = list.child(row);
-        }
-        list.into_any_element()
-    }
-
     /// The composer area (owner feedback 2026-07-13: aligned to the mock's
     /// composer chrome, `docs/assets/agent-ui-options/agent-ui-options.html`
     /// -- every adopted option shares the same composer block, e.g. the
@@ -2378,11 +2259,6 @@ impl Render for AgentView {
         // comment). Computed before the status line's `turn_in_flight`
         // row so both slot between the transcript and the composer in
         // top-to-bottom reading order.
-        //
-        // The Plan panel (`docs/agent-todo-tool-design.md` decision 5)
-        // sits just above it, in the same top-to-bottom slot: transcript,
-        // then Plan, then Changes, then the status line/composer.
-        let todo_bar = self.render_todo_bar(&frame_items, cx);
         let changes_bar = self.render_changes_bar(&frame_items, cx);
 
         div()
@@ -2417,7 +2293,6 @@ impl Render for AgentView {
                         this.child(self.render_follow_pill(latest_user_message_block, cx))
                     }),
             )
-            .when_some(todo_bar, |this, bar| this.child(bar))
             .when_some(changes_bar, |this, bar| this.child(bar))
             .when(!status.is_empty() || turn_in_flight, |this| {
                 this.child(

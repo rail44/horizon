@@ -338,46 +338,6 @@ pub fn definitions() -> Vec<Definition> {
             permission: ToolPermission::AutoAllowRead,
         },
         Definition {
-            id: "todo.write".to_string(),
-            title: "Write Plan".to_string(),
-            description: "Replace this session's whole todo/plan list with the given items -- \
-                a self-notetaking checklist for multi-step work, not a task queue for anyone \
-                else. Each call replaces the entire list; there is no separate add/update/ \
-                remove -- send the complete list you want to be current, including items \
-                already done. Keep `text` short (one line); use `status: \"in_progress\"` for \
-                the step you're actively on."
-                .to_string(),
-            input_schema: json!({
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["items"],
-                "properties": {
-                    "items": {
-                        "type": "array",
-                        "maxItems": 50,
-                        "description": "The complete list, replacing whatever list existed \
-                            before. Array order is display order.",
-                        "items": {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "required": ["text", "status"],
-                            "properties": {
-                                "text": {
-                                    "type": "string",
-                                    "description": "Short description of this step.",
-                                },
-                                "status": {
-                                    "type": "string",
-                                    "enum": ["pending", "in_progress", "done"],
-                                },
-                            },
-                        },
-                    },
-                }
-            }),
-            permission: ToolPermission::AutoAllowUi,
-        },
-        Definition {
             id: "skill.read".to_string(),
             title: "Read Skill".to_string(),
             description: "Read one of this session's available skills by id (see the skills \

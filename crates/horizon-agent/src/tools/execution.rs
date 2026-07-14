@@ -9,7 +9,6 @@ use crate::tools::fs;
 use crate::tools::permission_for_tool;
 use crate::tools::recall;
 use crate::tools::state::ToolSessionState;
-use crate::tools::todo;
 
 /// Seam for tools this crate doesn't implement itself because they need
 /// Horizon-side state this crate can't depend on — currently just
@@ -64,8 +63,7 @@ fn execute_auto_tool(
         .execute_auto(&request.tool_id, &request.input)
         .or_else(|| fs::execute_auto(tool_state, &request.tool_id, &request.input))
         .or_else(|| config::execute_auto(tool_state, &request.tool_id, &request.input))
-        .or_else(|| recall::execute_auto(tool_state, &request.tool_id, &request.input))
-        .or_else(|| todo::execute_auto(tool_state, &request.tool_id, &request.input));
+        .or_else(|| recall::execute_auto(tool_state, &request.tool_id, &request.input));
     let output = match output {
         Some(output) => output,
         None => {

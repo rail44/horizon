@@ -115,14 +115,6 @@ fn fs_read_glob_grep_are_auto_allow_read_and_write_edit_require_approval() {
 }
 
 #[test]
-fn todo_write_is_auto_allow_ui() {
-    assert_eq!(
-        permission_for_tool("todo.write"),
-        Some(ToolPermission::AutoAllowUi)
-    );
-}
-
-#[test]
 fn processing_preserves_provider_payload_on_original_event_only() {
     let tool_state = dummy_tool_state();
     let call_id = ToolCallId("call-1".to_string());
