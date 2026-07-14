@@ -877,7 +877,59 @@ fn resolve_approval_denies_fs_edit_without_running_it() {
     };
     assert_eq!(result.output["is_error"], true);
     assert_eq!(result.output["message"], "denied by user");
+    assert!(
+        result.denied,
+        "the contract-explicit denial marker must be set"
+    );
     // Never ran: the file is untouched.
+    assert_eq!(fs::read_to_string(&target).unwrap(), "hello world");
+}
+
+#[test]
+fn resolve_approval_approve_that_fails_on_its_own_does_not_set_the_denied_marker() {
+    // Distinguishes a genuine denial from an *approved* call that fails for
+    // its own reasons (fs.edit's "old_string not found" here): both are
+    // `is_error: true`, but only a denial sets `ToolCallResult::denied`.
+    let root = temp_workspace("approval-approve-then-fail");
+    let target = root.join("file.txt");
+    fs::write(&target, "hello world").unwrap();
+    let tool_state = ToolSessionState::new(root);
+    let session_id = SessionId::new();
+    register_session_runtime(
+        session_id,
+        tool_state,
+        LiveState::new(),
+        dummy_bash_results(),
+    );
+
+    let call_id = ToolCallId("call-1".to_string());
+    // No prior `fs.read` for this path -- `fs.edit` requires one, so this
+    // approve runs the tool (it's not a denial) but the tool itself fails.
+    let frame = requested_frame(
+        &call_id,
+        "fs.edit",
+        json!({ "path": target.display().to_string(), "old_string": "world", "new_string": "there" }),
+    );
+
+    let outcome = resolve_approval(
+        &frame,
+        session_id,
+        call_id.clone(),
+        ApprovalDecision::Approve,
+    );
+
+    let ApprovalOutcome::Executed { command, .. } = outcome else {
+        panic!("expected fs.edit approve to resolve synchronously");
+    };
+    let Command::ToolCallResult(result) = command else {
+        panic!("expected a ToolCallResult command");
+    };
+    assert_eq!(result.output["is_error"], true);
+    assert!(
+        !result.denied,
+        "an approve that fails on its own is not a denial"
+    );
+    // Never mutated: the edit itself failed.
     assert_eq!(fs::read_to_string(&target).unwrap(), "hello world");
 }
 
@@ -1061,6 +1113,10 @@ fn resolve_approval_denies_bash_without_running_it() {
     };
     assert_eq!(result.output["is_error"], true);
     assert_eq!(result.output["message"], "denied by user");
+    assert!(
+        result.denied,
+        "the contract-explicit denial marker must be set"
+    );
 
     // Never spawned: nothing ever arrives on the results channel.
     assert!(bash_results_rx

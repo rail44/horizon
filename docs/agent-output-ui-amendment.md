@@ -904,3 +904,13 @@ deviation rather than asking for a mock update):
   Todo/plan-panel half of decision 9 remains deferred, unbuilt, and
   tracked as a roadmap item (agent-foundation, pending a Todo tool) —
   untouched by this change.
+- **Denial detection made contract-explicit (2026-07-14).** Round 3's
+  "checked by message text, not just `is_error`" convention (above) is
+  replaced by an explicit `ToolCallResult.denied: bool` marker
+  (`#[serde(default)]`, no protocol bump — same additive shape as
+  `is_error`), set at the source by `tools::approval::synchronous_result`'s
+  `ran = false` path. `src/agent/turns.rs`'s `is_denied` reads the marker
+  first and falls back to the old message-text check
+  (`is_denied_output`) only for a `ToolCallResult` persisted before the
+  marker existed, so replaying an old JSONL log still classifies its
+  denials correctly.

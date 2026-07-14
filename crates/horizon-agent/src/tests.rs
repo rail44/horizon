@@ -558,6 +558,38 @@ fn tool_call_result_new_derives_is_error_from_the_output_convention() {
     }
 }
 
+/// `ToolCallResult::denied` (the explicit denial marker replacing the old
+/// message-text convention -- see `src/agent/turns.rs`'s `is_denied`) is
+/// additive with `#[serde(default)]`, exactly like `is_error` was when it
+/// was added: a JSON record persisted before the `denied` field existed
+/// (no `"denied"` key at all) must still deserialize, reading `false`
+/// regardless of the record's real outcome -- that's precisely the gap
+/// `is_denied`'s message-text fallback exists to cover on replay.
+#[test]
+fn tool_call_result_denied_field_defaults_to_false_for_a_pre_marker_record() {
+    let pre_marker_json = serde_json::json!({
+        "call_id": "call-1",
+        "output": { "is_error": true, "message": "denied by user" },
+        "is_error": true
+        // no "denied" key: this is what a record persisted before the
+        // marker field existed looks like on disk.
+    });
+
+    let result: agent::ToolCallResult = serde_json::from_value(pre_marker_json).unwrap();
+    assert!(!result.denied);
+    assert!(result.is_error);
+
+    // A fresh record built via the marker-setting constructor round-trips
+    // with `denied: true` intact.
+    let denied = agent::ToolCallResult::denied(
+        agent::ToolCallId("call-2".to_string()),
+        serde_json::json!({ "is_error": true, "message": "denied by user" }),
+    );
+    let round_tripped: agent::ToolCallResult =
+        serde_json::from_str(&serde_json::to_string(&denied).unwrap()).unwrap();
+    assert!(round_tripped.denied);
+}
+
 /// Compatibility: a `ToolCallResult` persisted before `is_error` existed as
 /// a field has no such key in its JSON at all -- `#[serde(default)]` must
 /// still deserialize it (as `false`, i.e. success), not treat the record as

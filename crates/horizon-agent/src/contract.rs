@@ -293,6 +293,21 @@ pub struct ToolCallResult {
     /// matching the same convention's "absence means success" reading.
     #[serde(default)]
     pub is_error: bool,
+    /// Explicit marker for a user's tool-call denial, set only by
+    /// [`Self::denied`] (used by `tools::approval::synchronous_result`'s
+    /// `ran = false` path -- the deny arms of `resolve_synchronous_tool`/
+    /// `resolve_bash` in `crates/horizon-agent/src/tools/approval.rs`).
+    /// Replaces the old convention of a consumer sniffing `output` for
+    /// `denied_output`'s exact `{"is_error": true, "message": "denied by
+    /// user"}` shape -- documented as brittle when that convention shipped
+    /// (`docs/agent-output-ui-amendment.md`'s round 3 note) since it
+    /// couldn't distinguish "the field happens to read that way" from "this
+    /// is contractually a denial". `#[serde(default)]` (false) so a
+    /// `Record` persisted before this field existed still deserializes --
+    /// `src/agent/turns.rs`'s `is_denied` falls back to the old message-text
+    /// check specifically to keep classifying those old records correctly.
+    #[serde(default)]
+    pub denied: bool,
 }
 
 impl ToolCallResult {
@@ -310,6 +325,18 @@ impl ToolCallResult {
             call_id,
             output,
             is_error,
+            denied: false,
+        }
+    }
+
+    /// Builds a result for a user's tool-call denial -- see the `denied`
+    /// field's own doc comment. Always `is_error: true` (a denial is
+    /// definitionally a failure), regardless of what `output` itself
+    /// carries.
+    pub fn denied(call_id: ToolCallId, output: serde_json::Value) -> Self {
+        Self {
+            denied: true,
+            ..Self::new(call_id, output)
         }
     }
 }
