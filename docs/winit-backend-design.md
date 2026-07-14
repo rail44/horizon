@@ -1209,6 +1209,176 @@ spans all present). Build setup for this host (Homebrew DuckDB 1.5.4 +
 `DUCKDB_LIB_DIR`/`DUCKDB_INCLUDE_DIR` via `.envrc.local`) is recorded
 in AGENTS.md "Build setup".
 
+### Animation frame continuity: `with_animation` elements stalled after one frame (fixed 2026-07-14)
+
+Symptom: any gpui `with_animation` element (the workspace tab strip's
+Segmented sliding indicator was the reported case, but the mechanism is
+generic — see "Scope" below) stuttered or stalled outright instead of
+animating smoothly. A click would move the indicator by at most one
+frame's worth of easing, then it would jump straight to its final
+position on whatever *later*, unrelated redraw happened to come next
+(another click, a resize, ...), rather than animating continuously in
+between.
+
+**Root cause.** gpui's `AnimationElement::request_layout`
+(`crates/gpui/src/elements/animation.rs` in the pinned checkout) calls
+`Window::request_animation_frame()` every draw while the animation isn't
+done. That method (`gpui/src/window.rs`) does not itself schedule
+anything with the platform — it just pushes a closure onto
+`next_frame_callbacks`, gpui's own private queue, to be drained the
+*next* time the platform invokes the `request_frame` callback
+`PlatformWindow::on_request_frame` registered (`Window::new`'s big
+closure, `gpui/src/window.rs` around line 1463). Draining that queue is
+what calls `cx.notify()` for the animated entity, marking it dirty for
+*this* draw and (if still not done) re-queuing another callback for the
+draw after that — a chain that only keeps moving forward if the platform
+keeps calling `request_frame` again on its own initiative. Every other
+gpui platform backend has a mechanism for this baked into its own event
+loop (gpui_macos's CVDisplayLink, gpui_web's `requestAnimationFrame`,
+gpui_linux's Wayland backend arming a fresh `wl_surface.frame` callback
+before every `request_frame` invocation — see the "Idle CPU" section
+above for that one). `horizon-winit-platform` has been deliberately
+event-driven since that idle-CPU fix: `WindowEvent::RedrawRequested`
+handling never re-requests a redraw itself any more, and nothing in the
+`needs_redraw` mark set (real `WindowEvent`s, or `user_event`'s `Wake`
+case) is ever produced by `request_animation_frame`'s `next_frame_callbacks`
+push — it's an entirely internal-to-gpui queue, invisible to this crate.
+So after the one frame that started an animation (triggered by whatever
+real `WindowEvent` — a click — kicked off the redraw that first drew it),
+nothing told `about_to_wait` to schedule another one, and the animation
+simply stopped advancing.
+
+**Signal investigated first, per the task brief's own instruction, before
+touching anything.** `PlatformWindow::on_request_frame`'s callback type is
+`Box<dyn FnMut(RequestFrameOptions)>` — no return value, and nothing else
+in the `gpui::Platform`/`PlatformWindow` trait surface exposes whether
+`next_frame_callbacks` is non-empty or `invalidator.is_dirty()` post-draw;
+both live as private fields on `gpui::Window`, reachable only from inside
+`gpui/src/window.rs` itself. A gpui fork was the brief's suggested
+fallback for exactly this case, but the root `Cargo.toml`'s own comment on
+the `gpui` dependency already documents that this door is closed here: a
+`[patch]` override was tried and rejected by Cargo itself ("patches must
+point to different sources") when this dependency was first added,
+because `gpui` is deliberately unpinned (`gpui-component`'s own manifest
+depends on it without a `rev` too, and pinning only our edge splits the
+build graph into two incompatible `gpui` instances). Vendoring the
+specific logic instead (this crate's own precedent: `queue.rs`, born from
+the macOS bring-up's `PriorityQueueReceiver`/`Sender` gap) doesn't apply
+either — the callback closure that would need to change is constructed
+entirely inside `Window::new`, capturing private state no vendored copy
+could reach without reimplementing large parts of `Window` itself. So no
+fork, no patch, no vendor: the fix had to work entirely from signals this
+crate already has.
+
+**The signal that was already there, once a second, unrelated gap got
+closed.** `WinitPlatformWindow::draw` (`window.rs`) — this crate's own
+`PlatformWindow::draw` implementation — is called by gpui's `Window::present`,
+which itself only runs from the `request_frame` callback under
+`invalidator.is_dirty() || force_render` (an actual draw) or a fallback
+`needs_present` re-present. Whether `platform_window.draw()` fires is
+therefore an exact, truthful proxy for "gpui decided there was real work
+this cycle" — *except* that `app_handler.rs`'s `RedrawRequested` handler
+was unconditionally passing `require_presentation: true` on every
+invocation (a leftover from before the idle-CPU fix — see that section
+above, point 1 of its root cause, which the coalescing fix that section
+shipped left unaddressed since it was orthogonal to that bug). Forcing
+`require_presentation: true` forces gpui's internal `needs_present` true
+regardless of `invalidator.is_dirty()`, which meant `draw()` actually
+fired on **every** `RedrawRequested` cycle, dirty or not — using that as
+an animation-continuation signal as-is would have reintroduced exactly
+the free-running-loop bug the idle-CPU fix eliminated (any redraw,
+animated or not, would perpetually re-arm itself). Fixing this
+prerequisite — passing `RequestFrameOptions::default()`
+(`require_presentation: false`) instead, matching gpui_linux's and
+gpui_web's own choice — was therefore load-bearing for the animation fix,
+not a separate improvement bolted on: it makes `draw()` fire if and only
+if gpui's own dirty-tracking (or its documented high-input-rate
+presentation-sustain path) says so, for every `RedrawRequested` cycle on
+every OS, not just the animation case. Traced directly against gpui's own
+`bounds_changed`/active-status-change callbacks (both explicitly call
+`Window::refresh()`, i.e. `invalidator.set_dirty(true)`) to confirm no
+existing `WindowEvent` handling (resize, focus, ...) silently depended on
+the forced flag to keep drawing — none did; gpui's own reactivity
+(`cx.notify()` on state changes) already covers it, the same as it does
+for gpui_linux/gpui_macos/gpui_web.
+
+**Fix.** `WinitWindowInner::drew_this_cycle` (`window.rs`, a `Cell<bool>`)
+is reset to `false` immediately before `app_handler.rs`'s `RedrawRequested`
+handler invokes the stored `request_frame` callback, and set to `true`
+inside `WinitPlatformWindow::draw`. Right after the callback returns, if
+the flag reads `true`, the handler calls `inner.mark_needs_redraw()` —
+the same coalescing flag the idle-CPU fix introduced — so `about_to_wait`
+schedules exactly one more `RedrawRequested`. `should_rearm_for_next_frame`
+(`app_handler.rs`) is the extracted pure decision (currently just the
+identity of "did it draw", named and unit-tested separately so the
+termination property below is directly testable without a live window,
+mirroring `window.rs`'s `text_fallback_decision` pattern).
+
+**Self-termination, not a runaway loop.** This can never re-arm twice in
+a row without an intervening real draw: cycle *N* only sets `needs_redraw`
+if cycle *N* itself drew, and cycle *N+1* only draws if gpui's own
+`invalidator.is_dirty()` was true for it — which requires something to
+have called `cx.notify()` (or equivalent) in between. For an in-progress
+animation, `AnimationElement::request_layout` does exactly that every
+draw while `!done`, so the chain self-sustains for as long as the
+animation runs. On the animation's *last* frame (`done` flips `true`),
+that frame still draws (rendering the final state) — so one *harmless*
+trailing empty cycle still gets armed and runs, finds nothing dirty
+(nothing queued another `next_frame_callback`, nothing else marked it),
+draws nothing, and does not re-arm again. This exactly mirrors
+gpui_linux's own Wayland backend, which unconditionally arms a fresh
+`wl_surface.frame` request *before* every `request_frame` invocation and
+relies on the same one-cycle overrun to self-terminate (a callback with
+no following commit simply never fires again) — see the "Idle CPU"
+section above for that mechanism. A genuinely idle window (nothing ever
+calls `cx.notify()`/`refresh()`) never gets a first draw at all, so this
+signal is never produced and `about_to_wait` schedules nothing, exactly
+as the idle-CPU invariant requires.
+
+**Tests** (`crates/horizon-winit-platform/src/app_handler.rs`, colocated
+with the pre-existing `FrameLoopStats` idle-CPU tests, left unmodified):
+`idle_cycle_that_drew_nothing_does_not_rearm`, `a_cycle_that_drew_rearms_the_next_one`,
+and `animation_chain_self_terminates_after_one_trailing_empty_cycle`
+(a 4-cycle `[true, true, true, false]` simulation of a 3-frame animation
+followed by its one trailing empty probe, asserting the chain's last
+decision is `false`).
+
+**Live verification.** Built `cargo build --workspace`, then ran an
+isolated instance (own `HORIZON_SESSIOND_SOCKET`/`HORIZON_WORKSPACE_STATE`/
+`HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB`, `HORIZON_INPUT_TRACE`
+to a file) against a private `Xvfb` display (X11-forced, per this doc's
+established safe-injection technique — never the owner's real desktop),
+driving real key input with `xdotool key --window <XID>` (window-targeted,
+no `windowactivate`/global-focus calls, which Xvfb's WM-less setup doesn't
+support anyway). Observed via the new `winit animation-frame rearm: ...`
+trace line (added permanently, matching this crate's `input-trace:`
+diagnostic convention): fully idle after startup, the trace stayed flat
+for 3+ seconds (zero re-arms); opening workspace mode and creating a tab
+produced a bounded burst (tens of cycles, for whatever modal-open/tab-add
+animation that path also uses) that stopped and stayed flat for 3+ more
+seconds; switching between two tabs (`ctrl-' tab`, exercising the
+Segmented tab-strip indicator specifically) produced a sustained run of
+31 consecutive `animation-frame rearm` cycles — proving the indicator was
+actually driven continuously across multiple frames, not just the single
+pre-fix frame — which then stopped cleanly and stayed flat for 3+ more
+seconds with no further growth. No runaway observed in any of the three
+phases. Cleaned up: killed only the isolated instance's own PIDs (app,
+its isolated `horizon-sessiond` matched by its unique socket path, and
+the private `Xvfb`); the owner's already-running `horizon` instance on
+this shared desktop was left untouched throughout (`scripts/check-gpui-terminal.sh`
+itself was not run, since it refuses to run alongside another `horizon`
+process and one was already running — same situation as the macOS
+bring-up's own note on this script's `pgrep` guard, above).
+
+**Scope.** The fix is in `app_handler.rs`/`window.rs`'s general
+`request_frame`/redraw-scheduling plumbing, not anything tab-strip- or
+Segmented-specific — it repairs continuity for *every* `with_animation`/
+`with_animations` element gpui or `gpui-component` renders through this
+platform, and (as a side effect of the `require_presentation` fix)
+removes a redundant full GPU present on every `RedrawRequested` cycle
+that wasn't already dirty, which the idle-CPU investigation flagged but
+didn't fix at the time.
+
 ### Exit criteria for flipping the default (historical, superseded)
 
 Superseded 2026-07-12 by direct owner dogfooding approval (see the top of

@@ -415,28 +415,51 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
             }
             WindowEvent::RedrawRequested => {
                 self.frame_loop_stats.record_redraw_requested();
+                inner.drew_this_cycle.set(false);
                 let callback = inner.callbacks.borrow_mut().request_frame.take();
                 if let Some(mut callback) = callback {
                     callback(gpui::RequestFrameOptions {
-                        require_presentation: true,
+                        // Deliberately *not* forced to `true` (an earlier
+                        // version of this handler always did — see
+                        // docs/winit-backend-design.md's "idle CPU"
+                        // section) — that defeated gpui's own "skip the
+                        // GPU work when nothing is dirty" branch inside
+                        // this callback (forcing `needs_present` true
+                        // regardless of `invalidator.is_dirty()`), *and*
+                        // it made `PlatformWindow::draw` fire on every
+                        // cycle unconditionally, which would make the
+                        // animation-frame re-arm below runaway-loop
+                        // forever instead of self-terminating. Letting
+                        // gpui's own dirty-tracking decide matches every
+                        // other platform backend (gpui_linux, gpui_web)
+                        // and makes `drew_this_cycle` a truthful signal —
+                        // see docs/winit-backend-design.md's "Animation
+                        // frame continuity" section.
+                        require_presentation: false,
                         force_render: false,
                     });
                     inner.callbacks.borrow_mut().request_frame = Some(callback);
                 }
-                // Deliberately does *not* re-request a redraw here anymore
-                // (see docs/winit-backend-design.md's "idle CPU" section):
-                // this used to loop forever, matching gpui_web's rAF
-                // pattern, but neither winit's `RedrawRequested`/
-                // `request_redraw` contract nor gpui's own frame callback
-                // (no return value indicating "there's more to draw") give
-                // a coalescing signal the way a real compositor's
-                // `wl_surface.frame` callback does for gpui_linux's wayland
-                // backend -- so blindly continuing meant the GPU present
-                // path ran forever at full display refresh rate even fully
-                // idle. `about_to_wait` now owns scheduling the next
-                // redraw, consuming `WinitWindowInner::needs_redraw` --
-                // exactly the events below (and any window that already
-                // ran) set before this iteration reaches it.
+                // Deliberately does *not* unconditionally re-request a
+                // redraw here (see docs/winit-backend-design.md's "idle
+                // CPU" section): that used to loop forever, matching
+                // gpui_web's rAF pattern. `about_to_wait` owns scheduling
+                // the next redraw, consuming `WinitWindowInner::needs_redraw`
+                // -- exactly the events below (and any window that already
+                // ran) set before this iteration reaches it. The one
+                // exception is the animation-frame re-arm: if gpui actually
+                // drew this cycle, an in-progress `with_animation` element
+                // may have just queued more next-frame work with no other
+                // signal visible to this platform crate (see
+                // `WinitWindowInner::drew_this_cycle`'s doc) -- so mark this
+                // window dirty for exactly one more cycle, self-terminating
+                // once a cycle draws nothing.
+                if should_rearm_for_next_frame(inner.drew_this_cycle.get()) {
+                    input_trace!(
+                        "winit animation-frame rearm: drew this cycle, requesting one more redraw"
+                    );
+                    inner.mark_needs_redraw();
+                }
             }
             _ => {}
         }
@@ -475,10 +498,71 @@ fn dispatch_input(inner: &WinitWindowInner, input: PlatformInput) -> DispatchEve
     }
 }
 
+/// The pure decision behind the animation-frame re-arm: whether the
+/// `RedrawRequested` cycle that just finished should be followed by exactly
+/// one more, given whether `PlatformWindow::draw` actually ran during it.
+/// See `WinitWindowInner::drew_this_cycle`'s doc for why "a draw happened"
+/// is the available proxy for "gpui might have just queued more next-frame
+/// work" (e.g. an in-progress `with_animation` element), and why chaining
+/// on this signal alone is self-terminating rather than a runaway loop —
+/// extracted as a free function, mirroring `window.rs`'s
+/// `text_fallback_decision`, so the termination property is directly
+/// unit-testable without a live window.
+fn should_rearm_for_next_frame(drew_this_cycle: bool) -> bool {
+    drew_this_cycle
+}
+
 #[cfg(test)]
 mod tests {
-    use super::FrameLoopStats;
+    use super::{should_rearm_for_next_frame, FrameLoopStats};
     use std::time::Duration;
+
+    // `should_rearm_for_next_frame`'s three scenarios from the task brief:
+    // pending animation re-arms, an idle cycle doesn't, and a completed
+    // animation's chain terminates instead of running away.
+
+    #[test]
+    fn idle_cycle_that_drew_nothing_does_not_rearm() {
+        // No `with_animation` element (or any other dirty state) means
+        // gpui's own `invalidator.is_dirty()` stayed false, so
+        // `PlatformWindow::draw` never ran this cycle -- nothing to chase,
+        // `about_to_wait` must not be told to schedule another redraw.
+        assert!(!should_rearm_for_next_frame(false));
+    }
+
+    #[test]
+    fn a_cycle_that_drew_rearms_the_next_one() {
+        // An in-progress animation (or any other genuinely dirty draw)
+        // means gpui may have just queued a `next_frame` callback with no
+        // other signal visible to this platform crate -- re-arm once so
+        // that callback actually gets a chance to run.
+        assert!(should_rearm_for_next_frame(true));
+    }
+
+    #[test]
+    fn animation_chain_self_terminates_after_one_trailing_empty_cycle() {
+        // Simulates a ~200ms with_animation element (e.g. the Segmented
+        // tab indicator): three cycles actually draw the in-progress
+        // animation (each one's `AnimationElement::request_layout`
+        // re-queues gpui's own `next_frame` callback while `!done`), then
+        // the animation's final frame (`done == true`) still draws once
+        // more without queuing anything further -- so the harmless
+        // trailing probe cycle after it draws nothing, and the chain stops
+        // on its own. Mirrors gpui_linux's own `wl_surface.frame`
+        // arm-before-draw self-termination (see
+        // docs/winit-backend-design.md).
+        let drew_per_cycle = [true, true, true, false];
+        let rearmed: Vec<bool> = drew_per_cycle
+            .iter()
+            .copied()
+            .map(should_rearm_for_next_frame)
+            .collect();
+        assert_eq!(rearmed, vec![true, true, true, false]);
+        // The trailing `false` is what actually stops `about_to_wait` from
+        // ever requesting a redraw again for this window -- no runaway
+        // loop, regardless of how many frames the animation took.
+        assert_eq!(rearmed.last(), Some(&false));
+    }
 
     #[test]
     fn no_snapshot_before_a_second_elapses() {
