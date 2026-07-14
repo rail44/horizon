@@ -17,7 +17,7 @@ use crate::{
     config::RigAgentConfig,
     contract::{Provider as AgentProvider, ProviderId, SessionHandle, StartSession},
     persistence::projection::duckdb::SharedDuckdbStore,
-    roles::RoleDefinition,
+    roles::{RoleDefinition, RoleId},
 };
 
 pub(crate) struct Provider {
@@ -56,6 +56,22 @@ impl AgentProvider for Provider {
         let role = request.role_id.as_ref().and_then(crate::roles::resolve);
         let config = role_adjusted_config(&self.config, role);
         spawn_rig_session(request, config, role, self.duckdb_cell.clone())
+    }
+
+    /// The same role-adjusted `config.model` [`Self::start_session`] would
+    /// run with, without spawning anything -- reuses [`role_adjusted_config`]
+    /// so the two never drift. `None` in deterministic fallback mode
+    /// (`!self.config.openai_enabled`, i.e. no `OPENAI_API_KEY`): a fallback
+    /// turn never calls a provider at all (`completion::complete_rig_turn`
+    /// skips `Event::ProviderRequestSent` entirely in that branch), so
+    /// reporting a model here would claim a model is in play when none
+    /// actually is.
+    fn resolved_model(&self, role_id: Option<&RoleId>) -> Option<String> {
+        if !self.config.openai_enabled {
+            return None;
+        }
+        let role = role_id.and_then(crate::roles::resolve);
+        Some(role_adjusted_config(&self.config, role).model)
     }
 }
 

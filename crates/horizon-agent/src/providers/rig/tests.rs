@@ -1383,6 +1383,64 @@ fn role_adjusted_config_is_unchanged_for_a_role_less_session() {
     assert_eq!(config, base);
 }
 
+// --- Provider::resolved_model: session-start model, ahead of any turn -----
+
+#[test]
+fn resolved_model_reports_the_base_model_for_a_role_less_session() {
+    let provider = Provider::new(
+        RigAgentConfig {
+            openai_enabled: true,
+            model: "test-model".to_string(),
+            ..Default::default()
+        },
+        crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
+    );
+
+    assert_eq!(
+        AgentProvider::resolved_model(&provider, None),
+        Some("test-model".to_string())
+    );
+}
+
+#[test]
+fn resolved_model_reports_the_base_model_for_the_config_role_since_it_has_no_override() {
+    // `roles::CONFIG_ROLE::model` is `None` (`config_role_uses_the_provider_
+    // default_model` in `roles.rs`'s own tests) -- resolving a role that
+    // doesn't override the model must fall back to the base config, not
+    // report no model at all.
+    let provider = Provider::new(
+        RigAgentConfig {
+            openai_enabled: true,
+            model: "test-model".to_string(),
+            ..Default::default()
+        },
+        crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
+    );
+
+    assert_eq!(
+        AgentProvider::resolved_model(&provider, Some(&RoleId("config".to_string()))),
+        Some("test-model".to_string())
+    );
+}
+
+#[test]
+fn resolved_model_is_none_in_deterministic_fallback_mode() {
+    // No `OPENAI_API_KEY` (`openai_enabled: false`): every turn runs the
+    // deterministic fallback responder and never emits
+    // `Event::ProviderRequestSent` at all (`completion::complete_rig_turn`),
+    // so reporting a model here would claim one is in play when none is.
+    let provider = Provider::new(
+        RigAgentConfig {
+            openai_enabled: false,
+            model: "test-model".to_string(),
+            ..Default::default()
+        },
+        crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
+    );
+
+    assert_eq!(AgentProvider::resolved_model(&provider, None), None);
+}
+
 // --- session_extra_sections: role/skills/repository-instructions ordering -
 
 fn git_repo_with_agents_md(label: &str) -> std::path::PathBuf {

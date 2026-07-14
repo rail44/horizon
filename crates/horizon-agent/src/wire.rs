@@ -123,6 +123,19 @@ pub enum Control {
     /// (receiver, which folds it through the exact same
     /// `apply_tool_call_progress_to_frame` path a persisted event would).
     ToolCallProgress(ToolCallProgress),
+    /// A session's resolved model id, session-scoped via the envelope's own
+    /// `session_id` -- same shape of exception as [`Control::ToolCallProgress`]
+    /// just above: `contract::ProviderEvent::session_model` is ephemeral
+    /// (never part of conversation history, never persisted), so it travels
+    /// as its own `Control` rather than a new `contract::Event` variant. Sent
+    /// once by `horizon-sessiond`, either right after a fresh
+    /// `Control::SessionNew` resolves its session's model, or alongside a
+    /// `Control::SessionLoad`'s replayed events (so a (re)attaching client
+    /// gets it too, not just the client present at session start) -- see
+    /// `docs/agent-output-ui-amendment.md`'s dated model-chip addendum.
+    /// Omitted entirely when the provider has no resolvable model (mirrors
+    /// [`Control::SkippedLines`]'s "just don't send it" convention below).
+    SessionModel(String),
     /// This process's own startup event-log corruption diagnostics
     /// (`persistence::event_log::ReadReport::skipped_summary`), sent once
     /// per connection -- after `horizon-sessiond`'s startup resume finishes,
@@ -306,6 +319,7 @@ mod tests {
                 tool_id: Some("fs.read".to_string()),
                 bytes: 64,
             }),
+            Control::SessionModel("gpt-4o".to_string()),
             Control::SkippedLines("skipped 1 corrupt line".to_string()),
         ]
     }

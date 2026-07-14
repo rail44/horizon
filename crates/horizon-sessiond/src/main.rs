@@ -555,6 +555,20 @@ async fn run_session_hosting_loop(
                 for event in events {
                     let _ = agent_outgoing_tx.send(Envelope::event(load.session_id, event));
                 }
+                // Re-announces the session's resolved model to this
+                // (re)attaching client -- it was already sent once, live, at
+                // spawn time (`spawn_session_thread`), which this client
+                // likely missed (it wasn't connected yet, e.g. a resumed
+                // session at daemon startup, or a later reconnect). See
+                // `docs/agent-output-ui-amendment.md`'s dated model-chip
+                // addendum.
+                if let Some(model) = connection.session_model(load.session_id) {
+                    let _ = agent_outgoing_tx.send(Envelope {
+                        v: CONTRACT_VERSION,
+                        session_id: Some(load.session_id),
+                        body: EnvelopeBody::Control(Control::SessionModel(model)),
+                    });
+                }
             }
             EnvelopeBody::Control(Control::HostToolResponse(response)) => {
                 connection.handle_host_tool_response(response);

@@ -228,12 +228,56 @@ struct SessionEntry {
     /// Mirrors `provider_id` -- surfaced in `session_list` summaries
     /// ([`Connection::session_list`]) the same way.
     role_id: Option<RoleId>,
+    /// This session's resolved model id, computed once at spawn time (see
+    /// [`spawn_session_thread`]) via [`ProviderRegistry::resolved_model`] --
+    /// the same role-adjusted resolution `run_session`'s own
+    /// `providers.start_session` call performs, just without waiting on it.
+    /// Retained for the whole session lifetime so a later `session_load`
+    /// (`Connection::session_model`) can re-announce it to a (re)attaching
+    /// client -- see `docs/agent-output-ui-amendment.md`'s dated model-chip
+    /// addendum.
+    model: Option<String>,
     inbound: Sender<Command>,
     /// Answers a `session_load` for this session: the session's own thread
     /// receives a one-shot reply channel here and sends back everything its
     /// `LiveState::events()` has accumulated — see
     /// [`Connection::replay_events`].
     replay: Sender<Sender<Vec<Event>>>,
+}
+
+/// Resolves this session's model (pure and synchronous -- see
+/// `Provider::resolved_model`'s doc comment) and, if resolvable, announces
+/// it live to whichever client is connected right now, if any. Pulled out
+/// of [`spawn_session_thread`] as its own function purely so this
+/// resolve-then-maybe-send step is unit-testable without spinning up a
+/// whole session thread -- same reason [`tool_session_state_for`] was.
+///
+/// A fresh `Control::SessionNew` caller is already listening
+/// (`SessiondHandle::start_session` registers the session's route before
+/// sending `SessionNew`), so it sees this immediately; a resumed session
+/// spawned at daemon startup usually has no connection yet
+/// ([`send_envelope`] silently drops it then) -- [`Connection::session_model`]
+/// re-announces the same value for that case, from `Control::SessionLoad`'s
+/// handler. See `docs/agent-output-ui-amendment.md`'s dated model-chip
+/// addendum.
+fn resolve_and_announce_session_model(
+    state: &Arc<SessiondState>,
+    session_id: SessionId,
+    provider_id: &ProviderId,
+    role_id: Option<&RoleId>,
+) -> Option<String> {
+    let model = state.providers.resolved_model(provider_id, role_id);
+    if let Some(model) = &model {
+        send_envelope(
+            &state.outgoing,
+            Envelope {
+                v: horizon_agent::wire::CONTRACT_VERSION,
+                session_id: Some(session_id),
+                body: EnvelopeBody::Control(Control::SessionModel(model.clone())),
+            },
+        );
+    }
+    model
 }
 
 /// Spawns the dedicated thread for one session — the shared spawn path for
@@ -255,11 +299,14 @@ fn spawn_session_thread(
 ) {
     let (inbound_tx, inbound_rx) = unbounded::<Command>();
     let (replay_tx, replay_rx) = unbounded::<Sender<Vec<Event>>>();
+    let model =
+        resolve_and_announce_session_model(&state, session_id, &provider_id, role_id.as_ref());
     state.sessions.lock().unwrap().insert(
         session_id,
         SessionEntry {
             provider_id: provider_id.clone(),
             role_id: role_id.clone(),
+            model,
             inbound: inbound_tx,
             replay: replay_tx,
         },
@@ -547,6 +594,19 @@ impl Connection {
                 role_id: entry.role_id.clone(),
             })
             .collect()
+    }
+
+    /// This session's resolved model id, if any -- see [`SessionEntry::model`]'s
+    /// doc comment. `None` for an unknown `session_id` too (a stale/racing
+    /// `session_load`), same "nothing to report" shape [`Self::session_list`]
+    /// uses for a missing entry.
+    pub(crate) fn session_model(&self, session_id: SessionId) -> Option<String> {
+        self.state
+            .sessions
+            .lock()
+            .unwrap()
+            .get(&session_id)
+            .and_then(|entry| entry.model.clone())
     }
 
     /// Delegates to [`SessiondState::writer`] -- `main`'s `Control::Drain`
@@ -1248,5 +1308,114 @@ mod tests {
             "every approval is resolved now, so the reported state must finally \
              be WaitingForUser, got: {forwarded:?}"
         );
+    }
+
+    /// Builds a hermetic [`SessiondState`] with an explicit, env-independent
+    /// `RigAgentConfig` (never `AgentConfig::from_env_and_file`'s real env
+    /// vars -- a developer's own `OPENAI_API_KEY` must never leak into this
+    /// test's expectations) and an installed `outgoing` channel to observe
+    /// what gets sent.
+    fn state_with_rig_config(
+        openai_enabled: bool,
+        model: &str,
+    ) -> (
+        Arc<SessiondState>,
+        tokio::sync::mpsc::UnboundedReceiver<Envelope>,
+    ) {
+        use horizon_agent::config::AgentFileConfig;
+
+        let mut agent_config = AgentConfig::from_env_and_file(&AgentFileConfig::default());
+        agent_config.rig.openai_enabled = openai_enabled;
+        agent_config.rig.model = model.to_string();
+        let state = Arc::new(SessiondState::new(
+            ProviderRegistry::builtin_with_config(
+                agent_config.clone(),
+                SharedDuckdbStore::unavailable(),
+            ),
+            agent_config,
+            None,
+            SharedDuckdbStore::unavailable(),
+        ));
+        let (outgoing_tx, outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Envelope>();
+        *state.outgoing.lock().unwrap() = Some(outgoing_tx);
+        (state, outgoing_rx)
+    }
+
+    /// A resolvable model (rig provider, `openai_enabled: true`) is both
+    /// returned (for `SessionEntry::model`) and announced live as a
+    /// session-scoped `Control::SessionModel`, matching how `role_id`
+    /// already travels -- see `docs/agent-output-ui-amendment.md`'s dated
+    /// model-chip addendum.
+    #[test]
+    fn resolve_and_announce_session_model_sends_and_returns_the_resolved_model() {
+        let (state, mut outgoing_rx) = state_with_rig_config(true, "test-model");
+        let session_id = SessionId::new();
+        let provider_id = ProviderId("builtin.agent.rig".to_string());
+
+        let model = resolve_and_announce_session_model(&state, session_id, &provider_id, None);
+
+        assert_eq!(model.as_deref(), Some("test-model"));
+        let sent = outgoing_rx
+            .try_recv()
+            .expect("a SessionModel control should have been sent");
+        assert_eq!(sent.session_id, Some(session_id));
+        assert!(
+            matches!(
+                &sent.body,
+                EnvelopeBody::Control(Control::SessionModel(model)) if model == "test-model"
+            ),
+            "expected a session-scoped SessionModel control, got: {:?}",
+            sent.body
+        );
+    }
+
+    /// Deterministic fallback mode (no `OPENAI_API_KEY`, mirrored here via
+    /// `openai_enabled: false`) never calls a real provider, so there is no
+    /// honest model to report -- nothing must be sent, mirroring
+    /// `Control::SkippedLines`'s "omitted entirely" convention.
+    #[test]
+    fn resolve_and_announce_session_model_sends_nothing_in_deterministic_fallback_mode() {
+        let (state, mut outgoing_rx) = state_with_rig_config(false, "test-model");
+        let session_id = SessionId::new();
+        let provider_id = ProviderId("builtin.agent.rig".to_string());
+
+        let model = resolve_and_announce_session_model(&state, session_id, &provider_id, None);
+
+        assert_eq!(model, None);
+        assert!(
+            outgoing_rx.try_recv().is_err(),
+            "nothing should be sent when there is no resolvable model"
+        );
+    }
+
+    /// [`Connection::session_model`] answers from whatever
+    /// [`resolve_and_announce_session_model`] stored on the session's
+    /// `SessionEntry` -- the read side of the same "attach re-announces it"
+    /// path `Control::SessionLoad`'s handler uses.
+    #[test]
+    fn connection_session_model_reads_the_stored_value_for_a_known_session_only() {
+        let (state, _outgoing_rx) = state_with_rig_config(true, "test-model");
+        let session_id = SessionId::new();
+        let (inbound_tx, _inbound_rx) = unbounded::<Command>();
+        let (replay_tx, _replay_rx) = unbounded::<Sender<Vec<Event>>>();
+        state.sessions.lock().unwrap().insert(
+            session_id,
+            SessionEntry {
+                provider_id: ProviderId("builtin.agent.rig".to_string()),
+                role_id: None,
+                model: Some("stored-model".to_string()),
+                inbound: inbound_tx,
+                replay: replay_tx,
+            },
+        );
+
+        let connection = Connection {
+            state: state.clone(),
+        };
+        assert_eq!(
+            connection.session_model(session_id).as_deref(),
+            Some("stored-model")
+        );
+        assert_eq!(connection.session_model(SessionId::new()), None);
     }
 }

@@ -904,3 +904,62 @@ deviation rather than asking for a mock update):
   Todo/plan-panel half of decision 9 remains deferred, unbuilt, and
   tracked as a roadmap item (agent-foundation, pending a Todo tool) —
   untouched by this change.
+- **Session model known from session start, closing the composer's
+  model-chip gap (2026-07-14).** The composer amendment above ("Data-
+  availability gap found while wiring the model chip") left the chip
+  `None` until a session's first turn completed, since neither `Hello`
+  nor `SessionNew`/`SessionSummary` carried a model string and
+  `RoleDefinition.model` was never serialized. Closed with a session-
+  scoped, ephemeral wire signal rather than the `SessionSummary` field
+  route originally sketched: `horizon-sessiond` resolves a session's
+  model synchronously at spawn time (`contract::Provider::resolved_model`,
+  a new trait method mirroring `start_session`'s own `role_adjusted_config`
+  resolution — role override if the role has one, else the provider's
+  configured default; `None` in the rig provider's deterministic fallback
+  mode, since no real provider call ever happens then, and always for the
+  mock provider) and announces it as `wire::Control::SessionModel(String)`,
+  a session-scoped control mirroring `Control::ToolCallProgress`'s own
+  precedent: ephemeral (never part of conversation history, never
+  persisted — `contract::ProviderEvent::session_model` piggy-backs the
+  same "unused `event` placeholder" shape `tool_call_progress` uses, and
+  `live::State`/`LiveState` fold it into a `session_model` sidecar field,
+  not `AgentFrame`, for the same reason `TurnClock` is a sidecar and not a
+  frame field), omitted entirely when unresolvable (mirroring
+  `Control::SkippedLines`'s "just don't send it" convention). Sent once,
+  live, right after a fresh `Control::SessionNew` resolves
+  (`spawn_session_thread` → `resolve_and_announce_session_model`, pulled
+  out as its own function purely so the resolve-then-maybe-send step is
+  unit-testable without spinning up a whole session thread, the same
+  reason `tool_session_state_for` was), and re-sent alongside a
+  `Control::SessionLoad`'s replayed events for a (re)attaching client that
+  missed the live announcement (`Connection::session_model`, reading back
+  the value `SessionEntry` retained at spawn time). No `SessionSummary`
+  field was added after all — every UI path that needs the model already
+  goes through a `SessionNew` (fresh) or `SessionLoad` (attach) round
+  trip, so one delivery mechanism covers both without also growing the
+  session-manager list's wire shape for a chip only the composer reads
+  today. `agent::session::AgentSession` retains it as a plain
+  `pub model: Option<String>`, updated every fold from
+  `LiveState::session_model()`. **Precedence** (`turns::composer_model_chip`,
+  the new `turns::latest_turn_model` caller replacing the old direct
+  call): the session-start model is the steady-state source of truth, but
+  the latest completed turn's own model (`turns::latest_turn_model`)
+  overrides it when the two actively disagree — a future model switcher
+  changing what a session runs mid-session should show "the latest
+  reality," decided now even though no switcher exists yet to trigger the
+  divergence. Falls back to whichever is `Some` if the other is `None`;
+  hidden only when neither is known. No wire version bump (`CONTRACT_VERSION`
+  stays 4) — a new `Control` variant is additive the same way prior
+  `Control` growth (`ToolCallProgress`, `SkippedLines`) was: an old peer
+  that doesn't recognize `session_model` just logs and drops that one
+  envelope (`horizon-sessiond`'s `main`/`horizon`'s `routing::dispatch`
+  both treat a single malformed/unrecognized envelope as non-fatal), never
+  a connection-ending error.
+
+  **Observation**: this closes the "model known from session start" half
+  of the model-switcher groundwork the task set out to lay, but a
+  switcher itself — a command to actually change a running session's
+  model mid-session — remains entirely unbuilt. The precedence rule above
+  (turn model overrides session model on divergence) is decided and
+  tested ahead of that command existing, but nothing today can produce
+  the divergence it handles.

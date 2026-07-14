@@ -21,6 +21,15 @@ pub struct State {
     /// continuously-running session would have been, rather than
     /// forgetting the in-flight turn's start/model.
     turn: TurnClock,
+    /// The session's resolved model id, set once via a
+    /// [`ProviderEvent::session_model`]-carrying event -- see that field's
+    /// doc comment. A sidecar rather than an `AgentFrame` field, for the
+    /// same reason `turn` above is: it's session metadata, not a turn/
+    /// conversation item, and never replayed from persisted history (there
+    /// is nothing to seed it from in [`Self::from_history`] -- a resumed
+    /// session's model is re-sent fresh at attach time instead, see
+    /// `docs/agent-output-ui-amendment.md`'s dated model-chip addendum).
+    session_model: Option<String>,
 }
 
 impl State {
@@ -40,6 +49,7 @@ impl State {
             events,
             frame,
             turn,
+            session_model: None,
         }
     }
 
@@ -49,9 +59,11 @@ impl State {
     /// `frame.items` via `apply_tool_call_progress_to_frame` and — unlike
     /// every other event — is never pushed to `self.events`, since it isn't
     /// part of the conversation history replayed from that log (e.g.
-    /// `rig::mapping::rig_messages_from_horizon_events`). Every other event
-    /// goes through the normal `apply_agent_event_to_frame` reducer,
-    /// unchanged.
+    /// `rig::mapping::rig_messages_from_horizon_events`). One carrying
+    /// `session_model` is handled the same way, but sets `self.session_model`
+    /// instead of touching the frame at all -- see that field's doc comment.
+    /// Every other event goes through the normal `apply_agent_event_to_frame`
+    /// reducer, unchanged.
     pub fn extend_provider_events(
         &mut self,
         events: impl IntoIterator<Item = ProviderEvent>,
@@ -59,6 +71,10 @@ impl State {
         for event in events {
             if let Some(progress) = event.tool_call_progress {
                 apply_tool_call_progress_to_frame(&mut self.frame, progress);
+                continue;
+            }
+            if let Some(model) = event.session_model {
+                self.session_model = Some(model);
                 continue;
             }
             apply_agent_event_to_frame(&mut self.frame, &event.event, &mut self.turn);
@@ -69,6 +85,10 @@ impl State {
 
     pub fn frame(&self) -> &AgentFrame {
         &self.frame
+    }
+
+    pub fn session_model(&self) -> Option<&str> {
+        self.session_model.as_deref()
     }
 }
 
@@ -102,12 +122,14 @@ impl LiveState {
         let events = events.into_iter().collect::<Vec<_>>();
         if let Some(persistence) = &self.persistence {
             // Ephemeral tool-call progress (`tool_call_progress.is_some()`)
-            // never reaches the event log — this is the exclusion point:
-            // everything else about it (folding into the frame, skipping
-            // conversation history) happens in `State::extend_provider_events`.
+            // and a session-model announcement (`session_model.is_some()`)
+            // never reach the event log — this is the exclusion point:
+            // everything else about either (folding into the frame/sidecar
+            // state, skipping conversation history) happens in
+            // `State::extend_provider_events`.
             let persistable = events
                 .iter()
-                .filter(|event| event.tool_call_progress.is_none())
+                .filter(|event| event.tool_call_progress.is_none() && event.session_model.is_none())
                 .cloned()
                 .collect::<Vec<_>>();
             if !persistable.is_empty() {
@@ -165,6 +187,13 @@ impl LiveState {
         self.inner.borrow().frame().clone()
     }
 
+    /// The session's resolved model id, if a
+    /// [`ProviderEvent::session_model`]-carrying event has folded in yet --
+    /// see [`State::session_model`]'s doc comment.
+    pub fn session_model(&self) -> Option<String> {
+        self.inner.borrow().session_model().map(str::to_string)
+    }
+
     /// Every fold-relevant event this session has accumulated so far
     /// (already-committed history plus everything folded in since) — the
     /// source `horizon-sessiond`'s `session_load` handling re-emits to a
@@ -189,5 +218,70 @@ impl Persistence {
             Self::EventLog(appender) => appender.borrow_mut().append_provider_events(events),
             Self::Disabled => Ok(()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contract::SessionState;
+
+    #[test]
+    fn session_model_is_none_before_any_session_model_event_folds() {
+        let mut state = State::new();
+        state.extend_provider_events(std::iter::once(ProviderEvent::from(Event::StateChanged(
+            SessionState::Created,
+        ))));
+        assert_eq!(state.session_model(), None);
+    }
+
+    #[test]
+    fn session_model_folds_as_sidecar_state_not_a_frame_item_or_history() {
+        let mut state = State::new();
+        let frame = state.extend_provider_events(std::iter::once(ProviderEvent::session_model(
+            "gpt-5".to_string(),
+        )));
+
+        assert_eq!(state.session_model(), Some("gpt-5"));
+        assert!(
+            frame.items.is_empty(),
+            "a session-model announcement must not become a frame item"
+        );
+        assert!(
+            state.events.is_empty(),
+            "a session-model announcement must not join conversation history, \
+             the same exclusion tool_call_progress gets"
+        );
+    }
+
+    #[test]
+    fn a_later_session_model_event_overwrites_the_earlier_one() {
+        // Support for a future model switcher (unbuilt): whichever
+        // announcement folded most recently wins.
+        let mut state = State::new();
+        state.extend_provider_events(std::iter::once(ProviderEvent::session_model(
+            "gpt-5".to_string(),
+        )));
+        state.extend_provider_events(std::iter::once(ProviderEvent::session_model(
+            "claude-sonnet-4".to_string(),
+        )));
+
+        assert_eq!(state.session_model(), Some("claude-sonnet-4"));
+    }
+
+    #[test]
+    fn live_state_session_model_reads_through_the_shared_inner_state() {
+        let live = LiveState::with_disabled_persistence();
+        assert_eq!(live.session_model(), None);
+
+        live.extend_provider_events(std::iter::once(ProviderEvent::session_model(
+            "gpt-5".to_string(),
+        )));
+
+        assert_eq!(live.session_model(), Some("gpt-5".to_string()));
+        assert!(
+            live.events().is_empty(),
+            "a session-model announcement must not join the replayed conversation history"
+        );
     }
 }

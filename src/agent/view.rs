@@ -1739,16 +1739,25 @@ impl AgentView {
     /// the chrome the mock nests the text inside rather than double-
     /// bordering) and an accessory row: a read-only model-id pill on the
     /// left ([`Self::render_send_button`]'s sibling,
-    /// [`turns::latest_turn_model`] -- omitted before any turn completes,
-    /// no `▾` since no switcher is wired), a flex spacer, then the
-    /// circular accent send button on the right. Still wrapped so
-    /// [`Self::on_escape`] catches the `Escape` action `Input`'s own
-    /// handler propagates (see that method's doc comment) --
-    /// `composer_mode`'s Enter/Esc keyboard capture is unchanged, only the
-    /// rendering around it.
+    /// [`turns::composer_model_chip`] -- known from session start via
+    /// `AgentSession::model`, so it's no longer omitted before the first
+    /// turn completes; see that function's doc comment for the precedence
+    /// against [`turns::latest_turn_model`] and
+    /// `docs/agent-output-ui-amendment.md`'s dated addendum -- no `▾` since
+    /// no switcher is wired), a flex spacer, then the circular accent send
+    /// button on the right. Still wrapped so [`Self::on_escape`] catches
+    /// the `Escape` action `Input`'s own handler propagates (see that
+    /// method's doc comment) -- `composer_mode`'s Enter/Esc keyboard
+    /// capture is unchanged, only the rendering around it.
     fn render_composer(&self, cx: &mut Context<Self>) -> AnyElement {
-        let model =
-            turns::latest_turn_model(&self.session.read(cx).frame.items).map(str::to_string);
+        let model = {
+            let session = self.session.read(cx);
+            turns::composer_model_chip(
+                session.model.as_deref(),
+                turns::latest_turn_model(&session.frame.items),
+            )
+            .map(str::to_string)
+        };
         let has_text = !self.composer.read(cx).value().trim().is_empty();
 
         let mut accessory = div().flex().flex_row().items_center().gap_2();

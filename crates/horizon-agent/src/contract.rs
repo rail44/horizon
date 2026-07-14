@@ -180,6 +180,16 @@ pub struct ProviderEvent {
     /// the event log's exhaustive `Event` matches in
     /// `persistence::projection::duckdb`.
     pub tool_call_progress: Option<ToolCallProgress>,
+    /// The session's resolved model id, set only via
+    /// [`ProviderEvent::session_model`] -- the session-start counterpart to
+    /// `tool_call_progress` above: `event` is an unused placeholder whenever
+    /// this is `Some`, it's folded as sidecar state rather than a frame item
+    /// (`live::State::session_model`), and it's excluded from the persisted
+    /// event log the same way (see `LiveState::extend_provider_events`).
+    /// Sent once, session-scoped, by `horizon-sessiond` at session start or
+    /// (re)attach (`wire::Control::SessionModel`) -- see
+    /// `docs/agent-output-ui-amendment.md`'s dated model-chip addendum.
+    pub session_model: Option<String>,
 }
 
 /// Tool-call-argument-streaming progress observed mid-turn, before the
@@ -208,6 +218,7 @@ impl ProviderEvent {
             event,
             provider_payload: None,
             tool_call_progress: None,
+            session_model: None,
         }
     }
 
@@ -216,6 +227,7 @@ impl ProviderEvent {
             event,
             provider_payload: Some(provider_payload),
             tool_call_progress: None,
+            session_model: None,
         }
     }
 
@@ -228,6 +240,19 @@ impl ProviderEvent {
             event: Event::StateChanged(SessionState::Running),
             provider_payload: None,
             tool_call_progress: Some(progress),
+            session_model: None,
+        }
+    }
+
+    /// Wraps a session's resolved model id for delivery over the same
+    /// channel -- see [`Self::session_model`]'s field doc comment. `event`
+    /// is the same unused placeholder [`Self::tool_call_progress`] uses.
+    pub fn session_model(model: String) -> Self {
+        Self {
+            event: Event::StateChanged(SessionState::Running),
+            provider_payload: None,
+            tool_call_progress: None,
+            session_model: Some(model),
         }
     }
 }
@@ -370,6 +395,19 @@ impl SessionHandle {
 pub trait Provider: Send + Sync {
     fn provider_id(&self) -> ProviderId;
     fn start_session(&self, request: StartSession) -> SessionHandle;
+    /// The model id a session with this `role_id` would run with, resolved
+    /// the same way [`Self::start_session`] resolves it (role override, else
+    /// the provider's own configured default) but without spinning up a
+    /// session -- pure and synchronous, so a caller can learn a session's
+    /// model before (or without) starting one. `None` when this provider has
+    /// no meaningful single model (e.g. the mock provider) or isn't actually
+    /// going to call one (the rig provider's deterministic fallback mode,
+    /// used when no API key is configured -- see
+    /// `providers::rig::Provider::resolved_model`'s doc comment). Used by
+    /// `horizon-sessiond` to surface a session's model to the UI from
+    /// session start, ahead of any turn's `Event::ProviderRequestSent` --
+    /// see `docs/agent-output-ui-amendment.md`'s dated model-chip addendum.
+    fn resolved_model(&self, role_id: Option<&RoleId>) -> Option<String>;
 }
 
 #[derive(Clone, Default)]
@@ -449,5 +487,19 @@ impl ProviderRegistry {
                 role_id,
             })
         })
+    }
+
+    /// Delegates to the named provider's [`Provider::resolved_model`].
+    /// `None` for an unknown `provider_id` too -- same "nothing to report"
+    /// shape as an unresolvable model, since the caller
+    /// (`horizon-sessiond`'s session spawn) already handles an unknown
+    /// provider as a hard session-start failure separately (see
+    /// [`Self::start_session`]).
+    pub fn resolved_model(
+        &self,
+        provider_id: &ProviderId,
+        role_id: Option<&RoleId>,
+    ) -> Option<String> {
+        self.providers.get(provider_id)?.resolved_model(role_id)
     }
 }
