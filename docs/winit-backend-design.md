@@ -38,6 +38,12 @@ below) that covers exactly what Horizon sets today (one "Horizon" menu, one
 "Quit Horizon" item) and nothing more — no accelerator labels, no dynamic
 enable/disable, no Services menu, no dock menu.
 
+**Update 2026-07-14: that verification gate has now run.** The first
+macOS build surfaced three real gaps (all fixed same-session) and then
+passed the full quality gate plus the headless GUI check on the owner's
+Apple Silicon machine — see "macOS bring-up" under "Resolved incidents"
+for what broke and the decisions made fixing it.
+
 Earlier history, kept for context: **2026-07-12, flipped to the only Linux
 path.** The owner dogfooded the `"winit"` backend (decorations, IME,
 mouse, and clipboard all confirmed working) and approved making it the
@@ -312,10 +318,11 @@ wakes the loop for background-thread work — see `dispatcher.rs`).
 
 ## What differs behaviorally from `gpui_macos`/`gpui_windows`
 
-**Unbuilt on this host — see "Verification limits" below.** This section
-records what the code is *intended* to do, reviewed by symmetry with the
-Linux implementation and gpui's own `Platform` contract, not what's been
-observed running.
+**macOS verified 2026-07-14** (build + gate + headless GUI check on the
+owner's machine — see "macOS bring-up" under "Resolved incidents");
+Windows remains unbuilt, recorded here as *intended* behavior reviewed by
+symmetry with the Linux implementation and gpui's own `Platform`
+contract, not as observed behavior.
 
 - **Decorations.** Native macOS/Windows chrome via winit's own
   `WindowAttributes::with_decorations(true)` (unconditional, same call as
@@ -388,6 +395,14 @@ build is the actual verification gate for all of it** — menu
 construction, the click -> `Action` dispatch path, and activation. Windows
 is in the same unbuilt position but carries less new code (menus/
 activation stay no-ops there, same as before).
+
+**Update 2026-07-14**: the macOS half of this debt is paid — the crate
+now compiles and runs on the owner's Apple Silicon machine, the full
+quality gate passes, and `scripts/check-gpui-terminal.sh` passes all
+assertions (marker, 256-color, truecolor). The section above is kept as
+the honest record of what "reviewed but never compiled" bought: three
+real gaps slipped through (see "macOS bring-up" under "Resolved
+incidents"). Windows remains in the never-compiled position.
 
 ## Verification
 
@@ -1122,6 +1137,67 @@ still shows doubling in either pane, the `HORIZON_INPUT_TRACE`
 `winit Ime ...` lines around the `Commit` — specifically whether an
 `empty Preedit: not unmarking` line appears immediately before it — are
 the first thing to check.
+
+### macOS bring-up: first build and runtime verification (2026-07-14)
+
+The verification gate the 2026-07-12 unification deliberately deferred
+("the owner's next macOS build") ran on the owner's Apple Silicon
+machine. Three real gaps surfaced, all in code paths a Linux build can
+never exercise, all fixed same-session:
+
+1. **gpui's platform-gated API surface.** `gpui::PriorityQueueReceiver`/
+   `PriorityQueueSender` are only compiled and re-exported on
+   Windows/Linux/wasm (gpui's macOS platform dispatches through Grand
+   Central Dispatch and never needs them), so `dispatcher.rs` could not
+   import them. Fixed by vendoring the queue into this crate
+   (`queue.rs`, verbatim algorithm from zed @ 5f8a741 including the
+   loaded-die weighted pop, minus the `spin_*`/`try_iter` variants we
+   never call), used on **every** OS — one code path rather than a
+   cfg-forked import. Note the Linux-gated dispatcher regression test
+   could not run on the macOS machine that made this change; the first
+   Linux gate run after the merge is its validation (backlog 39).
+   Similarly, the `Platform` trait's clipboard surface is cfg-split
+   upstream: `read/write_from_primary` exist only on Linux/FreeBSD,
+   while macOS instead *requires* `read/write_from_find_pasteboard` —
+   `platform.rs` now mirrors the trait's gates exactly, with the find
+   pasteboard deliberately stubbed (backlog 38).
+2. **`gpui_wgpu` hardcodes VULKAN|GL.** `WgpuContext::instance` (the
+   lazy first-window path inside `WgpuRenderer::new`) creates its
+   instance with `Backends::VULKAN | Backends::GL` — an empty backend
+   set on macOS, so the very first surface creation failed
+   ("Failed to create surface for any enabled backend: {}"). Upstream
+   main is unchanged as of this writing, and won't feel the gap:
+   gpui_wgpu is zed's *Linux* renderer (zed PR #46758); zed itself
+   renders macOS through gpui_macos's native Metal path. Fixed at our
+   seam: `window.rs` seeds the shared `GpuContext` cell from a
+   `Backends::METAL` instance (macOS-gated, so Linux/Windows keep the
+   upstream first-window path bit-for-bit) using a temporary surface
+   for adapter selection, dropped before the renderer creates its own —
+   sequential, never simultaneous, which is the WebGPU-sanctioned shape
+   (two live surfaces on one window are UB). Upstreaming a one-line
+   backends fix to zed would let us delete the seed (backlog 37).
+3. **macOS-only test-harness physics.** The sessiond cwd-inheritance
+   e2e test hung 120s on macOS for two stacked reasons: `temp_dir()`
+   lives under `/var` (a symlink to `/private/var`) so the shell's
+   `$PWD`/sysinfo's sampled cwd (both physical paths) never equal the
+   expected string, and the canonicalized path is long enough to wrap
+   an 80-column PTY, splitting the needle across a `'\n'` in
+   `frame.text`. Fixed in the test: canonicalize the expected path and
+   widen the spec to 200 columns.
+
+Also caught: two clippy `unnecessary_to_owned` lints in
+`macos_menu.rs` — the first time that file was ever compiled — and one
+operational gotcha now recorded in the `gui-verify` skill: the check
+script's window takes focus, so owner keystrokes during the ~10s run
+land in the checked terminal ahead of `HORIZON_GPUI_DRIVE` and corrupt
+the driven command.
+
+Verified green after the fixes: `cargo build --workspace`, the full
+gate (fmt / clippy `-D warnings` / nextest, 803 passed 4 skipped), and
+`scripts/check-gpui-terminal.sh` (marker + `Indexed(208)` + `Spec(Rgb`
+spans all present). Build setup for this host (Homebrew DuckDB 1.5.4 +
+`DUCKDB_LIB_DIR`/`DUCKDB_INCLUDE_DIR` via `.envrc.local`) is recorded
+in AGENTS.md "Build setup".
 
 ### Exit criteria for flipping the default (historical, superseded)
 

@@ -3101,6 +3101,8 @@ dependencies = [
  "gpui_wgpu",
  "log",
  "muda",
+ "parking_lot",
+ "rand 0.9.4",
  "raw-window-handle",
  "uuid",
  "winit",

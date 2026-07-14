@@ -87,7 +87,7 @@ impl MacosMenuState {
     }
 
     fn build_submenu(&self, menu: Menu) -> Submenu {
-        let submenu = Submenu::new(menu.name.to_string(), !menu.disabled);
+        let submenu = Submenu::new(&menu.name, !menu.disabled);
         for item in menu.items {
             self.append_item(&submenu, item);
         }
@@ -110,8 +110,7 @@ impl MacosMenuState {
                 ..
             } => {
                 let id = self.fresh_id();
-                let muda_item =
-                    MudaMenuItem::with_id(id.clone(), name.to_string(), !disabled, None);
+                let muda_item = MudaMenuItem::with_id(id.clone(), &name, !disabled, None);
                 let result = parent.append(&muda_item);
                 self.actions.borrow_mut().insert(id, action);
                 result

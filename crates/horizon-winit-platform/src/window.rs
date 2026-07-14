@@ -24,6 +24,8 @@ use gpui::{
     Size, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea,
     WindowControls, WindowDecorations, WindowParams,
 };
+#[cfg(target_os = "macos")]
+use gpui_wgpu::{wgpu, WgpuContext};
 use gpui_wgpu::{GpuContext, WgpuRenderer, WgpuSurfaceConfig};
 
 use crate::input::ClickTracker;
@@ -415,6 +417,29 @@ impl WinitPlatformWindow {
             preferred_present_mode: None,
         };
 
+        // gpui_wgpu's own lazy first-window path (`WgpuRenderer::new` with
+        // an empty `GpuContext` cell) builds its instance via
+        // `WgpuContext::instance`, which hardcodes VULKAN|GL — fine on the
+        // OSes zed itself exercises that crate on, but an empty backend set
+        // on macOS, so surface creation fails before adapter selection even
+        // runs. Seed the shared cell from a Metal instance here (using a
+        // temporary surface for adapter selection); the renderer then
+        // reuses it (and its instance) and never reaches the hardcoded
+        // fallback. macOS-gated so Linux/Windows keep the upstream
+        // first-window path untouched.
+        #[cfg(target_os = "macos")]
+        if gpu_context.borrow().is_none() {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends: wgpu::Backends::METAL,
+                flags: wgpu::InstanceFlags::default(),
+                backend_options: wgpu::BackendOptions::default(),
+                memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
+                display: Some(Box::new(Arc::clone(&window))),
+            });
+            let surface = instance.create_surface(Arc::clone(&window))?;
+            let context = WgpuContext::new(instance, &surface, None)?;
+            gpu_context.borrow_mut().replace(context);
+        }
         let renderer = WgpuRenderer::new(gpu_context, &window, renderer_config, None)?;
 
         let logical_size = physical_size.to_logical::<f32>(scale_factor as f64);

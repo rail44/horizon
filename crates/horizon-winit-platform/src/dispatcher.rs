@@ -19,15 +19,14 @@
 //! (animation frame pacing, debounced UI callbacks), not a general-purpose
 //! scheduler.
 
-use gpui::{
-    PlatformDispatcher, Priority, PriorityQueueReceiver, PriorityQueueSender, RunnableVariant,
-};
+use gpui::{PlatformDispatcher, Priority, RunnableVariant};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use winit::event_loop::EventLoopProxy;
 
 use crate::app_handler::WinitUserEvent;
+use crate::queue::{PriorityQueueReceiver, PriorityQueueSender};
 
 const BACKGROUND_THREADS: usize = 2;
 

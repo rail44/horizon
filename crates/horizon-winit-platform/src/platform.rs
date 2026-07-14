@@ -394,13 +394,30 @@ impl Platform for WinitPlatform {
         self.clipboard.write(item);
     }
 
+    // The cfg on these four must mirror `gpui::Platform`'s own gates
+    // exactly: the trait only declares primary-selection methods on
+    // Linux/FreeBSD and find-pasteboard methods on macOS.
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn read_from_primary(&self) -> Option<ClipboardItem> {
         self.clipboard.read_primary()
     }
 
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn write_to_primary(&self, item: ClipboardItem) {
         self.clipboard.write_primary(item);
     }
+
+    // The find pasteboard backs macOS's system-wide "Use Selection for
+    // Find" state; arboard exposes no NSFindPboard API and no Horizon
+    // surface feeds it, so stub it the same way clipboard.rs stubs
+    // primary selection off-Linux.
+    #[cfg(target_os = "macos")]
+    fn read_from_find_pasteboard(&self) -> Option<ClipboardItem> {
+        None
+    }
+
+    #[cfg(target_os = "macos")]
+    fn write_to_find_pasteboard(&self, _item: ClipboardItem) {}
 
     fn write_credentials(&self, _url: &str, _username: &str, _password: &[u8]) -> Task<Result<()>> {
         Task::ready(Err(anyhow::anyhow!(

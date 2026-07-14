@@ -740,3 +740,31 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     `cargo build --workspace` loops. If confirmed, candidates: make
     the e2e spawn resolve the binary at runtime relative to its own
     target dir, or serialize gate runs against sibling builds.
+
+37. **Upstream the gpui_wgpu Metal backends fix to zed.**
+    `WgpuContext::instance` hardcodes `Backends::VULKAN | GL` (gpui_wgpu
+    is zed's Linux renderer; upstream main unchanged as of 2026-07-14),
+    which is why `horizon-winit-platform/src/window.rs` carries a
+    macOS-gated `GpuContext` seed. A one-line upstream PR (add METAL
+    under `cfg(target_os = "macos")`, or switch to
+    `Backends::from_env_or_default()`) would let us delete the seed
+    entirely on the next gpui bump. See
+    `docs/winit-backend-design.md` "macOS bring-up".
+
+38. **macOS find pasteboard is stubbed.** `Platform::
+    read/write_from_find_pasteboard` in `horizon-winit-platform` return
+    `None`/no-op; gpui_macos implements them against the real
+    `NSPasteboard` find pasteboard (system-wide "Use Selection for
+    Find", cmd-E). No Horizon surface feeds it today, so no user-visible
+    gap yet — implement via a small objc2-app-kit call when a find/search
+    field lands in the shell.
+
+39. **Vendored dispatcher queue not yet test-run on Linux.**
+    `horizon-winit-platform/src/queue.rs` (vendored from gpui because
+    the queue isn't compiled on macOS) now backs the dispatcher on every
+    OS, but its regression test
+    (`dispatcher.rs::concurrent_main_thread_posts_all_get_processed`) is
+    Linux-gated and the change was made on macOS. Compile-checked
+    everywhere; the first Linux `cargo nextest run --workspace` after
+    the 2026-07-14 merge is the actual validation — run it and close
+    this item.

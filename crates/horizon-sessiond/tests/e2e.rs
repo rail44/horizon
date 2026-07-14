@@ -759,14 +759,25 @@ async fn terminal_spawn_uses_fallback_and_source_session_cwds() {
     let fallback_cwd = root.join("fallback");
     std::fs::create_dir_all(&source_cwd).unwrap();
     std::fs::create_dir_all(&fallback_cwd).unwrap();
+    // The needles below compare against the shell's `$PWD` (getcwd, a
+    // physical path) and the sampled source cwd (also physical), but on
+    // macOS `temp_dir()` is under `/var`, a symlink to `/private/var` —
+    // canonicalize so the expected path is physical too.
+    let source_cwd = source_cwd.canonicalize().unwrap();
+    // That macOS temp path also pushes the needle past 80 columns, and a
+    // wrapped row inserts '\n' into `frame.text` where the substring
+    // match would look — widen the PTY so the needle never wraps.
+    let wide = TerminalSize::new(200, 24);
 
     let source_id = uuid::Uuid::new_v4();
     let target_id = uuid::Uuid::new_v4();
     let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
+    let mut source_spec = terminal_spec(source_cwd.clone(), None);
+    source_spec.initial_size = wide;
     write_terminal_control(
         &mut writer,
         source_id,
-        TerminalControl::Create(Box::new(terminal_spec(source_cwd.clone(), None))),
+        TerminalControl::Create(Box::new(source_spec)),
     )
     .await;
     let TerminalUpdate::Snapshot(source_initial) =
@@ -784,13 +795,12 @@ async fn terminal_spawn_uses_fallback_and_source_session_cwds() {
     let _ =
         collect_terminal_frame_until(&mut reader, source_id, source_initial, &source_needle).await;
 
+    let mut target_spec = terminal_spec(fallback_cwd.clone(), Some(source_id));
+    target_spec.initial_size = wide;
     write_terminal_control(
         &mut writer,
         target_id,
-        TerminalControl::Create(Box::new(terminal_spec(
-            fallback_cwd.clone(),
-            Some(source_id),
-        ))),
+        TerminalControl::Create(Box::new(target_spec)),
     )
     .await;
     let TerminalUpdate::Snapshot(target_initial) =

@@ -22,6 +22,7 @@ mod input_trace;
 #[cfg(target_os = "macos")]
 mod macos_menu;
 mod platform;
+mod queue;
 mod window;
 
 /// Builds a fresh winit-backed `gpui::Platform`, ready to hand to

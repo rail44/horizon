@@ -52,4 +52,10 @@ Caveats:
   Both one-shot scripts isolate sessiond, agent persistence, and workspace
   state under their output directory (mind macOS's ~104-byte `SUN_LEN`
   socket-path limit).
+- The launched window takes focus, so keys the owner types during the
+  ~10s run land in the checked terminal ahead of `HORIZON_GPUI_DRIVE`
+  and corrupt the driven command (seen on macOS: a romaji fragment glued
+  onto `printf` → `command not found` → every span assertion fails). If
+  the dump shows the drive line mangled, re-run while the keyboard is
+  idle.
 - Kill only processes your test started.

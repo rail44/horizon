@@ -37,6 +37,11 @@ futures = "0.3"
 gpui = { git = "https://github.com/zed-industries/zed" }
 gpui_wgpu = { git = "https://github.com/zed-industries/zed" }
 log = "0.4"
+# Used only by queue.rs, the priority queue vendored from gpui (which
+# doesn't compile it on macOS — see that module's docs). Both crates are
+# already in the dependency tree via gpui itself.
+parking_lot = "0.12"
+rand = "0.9"
 # wayland-data-control is needed for primary-selection support under native
 # Wayland (X11 always gets it via x11rb, an unconditional arboard
 # dependency on that target regardless of this feature); image-data is

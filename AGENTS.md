@@ -58,11 +58,17 @@ git config core.hooksPath hooks
 `crates/horizon-agent` links DuckDB dynamically by default (non-bundled):
 install a system libduckdb before building. On Void Linux:
 `sudo xbps-install duckdb-devel`; elsewhere, install your distro's DuckDB
-dev package or the equivalent (macOS: `brew install duckdb`). No env vars
-are needed once the lib/headers are on the default system paths (Linux:
-`/usr/lib` + `/usr/include`, auto-discovered — verify with `ldd` on a
-built binary if unsure). For a manually-placed prebuilt lib elsewhere, set
-`DUCKDB_LIB_DIR`/`DUCKDB_INCLUDE_DIR` (libduckdb-sys's standard discovery).
+dev package or the equivalent (macOS: `brew install duckdb`). On Linux no
+env vars are needed once the lib/headers are on the default system paths
+(`/usr/lib` + `/usr/include`, auto-discovered — verify with `ldd` on a
+built binary if unsure). On macOS the Homebrew prefix (`/opt/homebrew` on
+Apple Silicon) is *not* on the linker's default search path, so set
+`DUCKDB_LIB_DIR=/opt/homebrew/lib` and
+`DUCKDB_INCLUDE_DIR=/opt/homebrew/include` (e.g. in the repo's untracked
+`.envrc.local`, sourced by `.envrc` under direnv); runtime loading needs
+no extra setup — Homebrew dylibs carry absolute install names. The same
+two vars also cover a manually-placed prebuilt lib on any OS
+(libduckdb-sys's standard discovery).
 Version skew note: libduckdb-sys 1.10504.0 (the pin as of this writing)
 encodes an expected DuckDB 1.5.4; Void's `duckdb-devel` currently ships
 1.5.0 — confirmed ABI-compatible (full `horizon-agent` suite green against

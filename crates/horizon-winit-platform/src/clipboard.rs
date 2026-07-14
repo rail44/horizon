@@ -93,14 +93,4 @@ impl WinitClipboard {
             }
         });
     }
-
-    /// X11/Wayland-only concept (see module docs); no-op elsewhere.
-    #[cfg(not(target_os = "linux"))]
-    pub(crate) fn read_primary(&self) -> Option<ClipboardItem> {
-        None
-    }
-
-    /// X11/Wayland-only concept (see module docs); no-op elsewhere.
-    #[cfg(not(target_os = "linux"))]
-    pub(crate) fn write_primary(&self, _item: ClipboardItem) {}
 }
