@@ -136,6 +136,12 @@ the glyphs and the caret from it:
   `draft.text` and `preedit` are empty, with `theme::text_subtle()`
   instead of `theme::text_primary()` — it renders through the exact same
   `TextLayout`/caret path, so `active()` still draws a caret at its start.
+  [Current state: the composer this section describes was this custom
+  hand-rolled `floem::View`; the post-GPUI-migration composer is built on
+  gpui-component's `InputState`/`TextInput` (`.placeholder("Message the
+  agent…")`, `src/agent/view.rs`), which colors its own placeholder
+  internally rather than through this `theme::text_subtle()` call. The
+  function itself still exists (`src/theme.rs`), just not on this path.]
 
 `ViewId::new_taffy_node()`/`set_taffy_style()`/`taffy_layout()` (all public
 on `floem::ViewId`) are what make this kind of custom `View`, with its own
