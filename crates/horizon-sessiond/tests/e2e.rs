@@ -3,8 +3,8 @@
 //! the same package as the `[[bin]]` target) -- see
 //! `docs/agent-runtime-split-design.md`'s step 2 deliverables.
 
-use std::io::{BufRead, Read};
-use std::path::PathBuf;
+use std::io::{BufRead, ErrorKind, Read};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -42,6 +42,97 @@ const TEST_RESUME_DELAY_MS_VAR: &str = "HORIZON_SESSIOND_TEST_RESUME_DELAY_MS";
 /// stay reachable while a slow rebuild is still running. Test-only; never
 /// set outside this file.
 const TEST_DUCKDB_REBUILD_DELAY_MS_VAR: &str = "HORIZON_SESSIOND_TEST_DUCKDB_REBUILD_DELAY_MS";
+
+/// How long to wait once before re-probing/re-spawning after finding the
+/// `horizon-sessiond` binary transiently missing -- see
+/// [`resolve_sessiond_binary`] and [`spawn_sessiond`]. A single bounded
+/// wait, not a polling loop: the race this covers is cargo's own
+/// artifact-uplift `remove_file`-then-relink (a link syscall's worth of
+/// time), confirmed locally (backlog #36) to close well under this.
+const TRANSIENT_LINK_RETRY_DELAY: Duration = Duration::from_millis(200);
+
+/// Resolves the `horizon-sessiond` binary to spawn, tolerating the brief
+/// window in which cargo's own artifact-uplift step can leave
+/// `target/<profile>/horizon-sessiond` transiently missing.
+///
+/// Root cause (confirmed against `cargo-util` 0.2.28's `paths::link_or_copy`,
+/// the function cargo's own `link_targets` compiler step calls to uplift
+/// every unit's output from its build-dir location into the final
+/// `target/<profile>/` path): that function unconditionally
+/// `remove_file`s the destination before re-linking it, and per that
+/// step's own doc comment this runs for *every* unit on *every* cargo
+/// invocation -- including a "fresh" (already-built, nothing changed) one
+/// -- not just an actual recompile. `target/<profile>/horizon-sessiond`
+/// (what `CARGO_BIN_EXE_horizon-sessiond` bakes into this test binary at
+/// compile time) is therefore never guaranteed stable across the lifetime
+/// of a test process; a concurrent sibling build serializing on the shared
+/// `build.build-dir` lock (see `AGENTS.md` "Build setup") only widens the
+/// window. Locally reproduced without any other worktree involved: a tight
+/// existence-poller on this exact path caught one transient absence during
+/// a single `cargo nextest run --workspace -p horizon-sessiond` while a
+/// real sibling `cargo nextest run -p horizon-agent` was compiling
+/// concurrently on the same machine. See `docs/tasks/backlog.md` #36.
+fn resolve_sessiond_binary() -> PathBuf {
+    let baked_in = PathBuf::from(env!("CARGO_BIN_EXE_horizon-sessiond"));
+    if baked_in.is_file() {
+        return baked_in;
+    }
+
+    thread::sleep(TRANSIENT_LINK_RETRY_DELAY);
+    if baked_in.is_file() {
+        return baked_in;
+    }
+
+    // Independent cross-check: derive the sibling binary's path from this
+    // test executable's own on-disk location
+    // (`.../target/<profile>/deps/e2e-<hash>` -> `.../target/<profile>/horizon-sessiond`)
+    // rather than trusting the baked-in env var a second time.
+    let fallback = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.parent()?.join("horizon-sessiond")));
+    if let Some(path) = &fallback {
+        if path.is_file() {
+            return path.clone();
+        }
+    }
+
+    panic!(
+        "could not locate the horizon-sessiond binary to spawn for this e2e test -- probed \
+         CARGO_BIN_EXE_horizon-sessiond = {} (exists = {}) and current_exe-relative fallback = \
+         {} -- see docs/tasks/backlog.md #36",
+        baked_in.display(),
+        baked_in.is_file(),
+        fallback
+            .map(|path| format!("{} (exists = {})", path.display(), path.is_file()))
+            .unwrap_or_else(|| "<current_exe unresolvable>".to_string()),
+    );
+}
+
+/// Spawns `command`, retrying once (see [`TRANSIENT_LINK_RETRY_DELAY`]) if
+/// the first attempt fails with [`ErrorKind::NotFound`] -- the residual
+/// race between [`resolve_sessiond_binary`]'s own existence check and the
+/// actual `execve` this performs. Panics with a diagnostic (both errors,
+/// the resolved program path, and whether it exists at panic time) if the
+/// retry also fails, rather than a bare "No such file or directory".
+fn spawn_sessiond(command: &mut Command) -> Child {
+    match command.spawn() {
+        Ok(child) => child,
+        Err(first_error) if first_error.kind() == ErrorKind::NotFound => {
+            thread::sleep(TRANSIENT_LINK_RETRY_DELAY);
+            command.spawn().unwrap_or_else(|retry_error| {
+                let program = command.get_program().to_owned();
+                panic!(
+                    "failed to spawn horizon-sessiond even after a retry for a transient link \
+                     window: first error = {first_error}, retry error = {retry_error}, program \
+                     = {} (exists = {}) -- see docs/tasks/backlog.md #36",
+                    program.to_string_lossy(),
+                    Path::new(&program).is_file(),
+                )
+            })
+        }
+        Err(error) => panic!("failed to spawn horizon-sessiond: {error}"),
+    }
+}
 
 /// Owns the spawned `horizon-sessiond` child and its socket path; kills the
 /// child and removes the socket file on drop so a failing assertion doesn't
@@ -127,7 +218,7 @@ impl SessiondProcess {
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
-        let mut command = Command::new(env!("CARGO_BIN_EXE_horizon-sessiond"));
+        let mut command = Command::new(resolve_sessiond_binary());
         command
             .arg("--socket")
             .arg(&socket_path)
@@ -142,7 +233,7 @@ impl SessiondProcess {
                 command.env_remove(TEST_RESUME_DELAY_MS_VAR);
             }
         }
-        let child = command.spawn().expect("failed to spawn horizon-sessiond");
+        let child = spawn_sessiond(&mut command);
         Self {
             child,
             socket_path,
@@ -171,7 +262,8 @@ impl SessiondProcess {
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
-        let child = Command::new(env!("CARGO_BIN_EXE_horizon-sessiond"))
+        let mut command = Command::new(resolve_sessiond_binary());
+        command
             .arg("--socket")
             .arg(&socket_path)
             .env("HORIZON_CONFIG", &missing_config_path)
@@ -181,9 +273,8 @@ impl SessiondProcess {
             .env(
                 TEST_DUCKDB_REBUILD_DELAY_MS_VAR,
                 rebuild_delay_ms.to_string(),
-            )
-            .spawn()
-            .expect("failed to spawn horizon-sessiond");
+            );
+        let child = spawn_sessiond(&mut command);
         Self {
             child,
             socket_path,
@@ -210,7 +301,8 @@ impl SessiondProcess {
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
-        let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-sessiond"))
+        let mut command = Command::new(resolve_sessiond_binary());
+        command
             .arg("--socket")
             .arg(&socket_path)
             .env("HORIZON_CONFIG", &missing_config_path)
@@ -218,9 +310,8 @@ impl SessiondProcess {
             .env("HORIZON_AGENT_STATE_DB", &state_db_path)
             .env_remove(TEST_RESUME_DELAY_MS_VAR)
             .env_remove(TEST_DUCKDB_REBUILD_DELAY_MS_VAR)
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("failed to spawn horizon-sessiond");
+            .stderr(Stdio::piped());
+        let mut child = spawn_sessiond(&mut command);
 
         let stderr_lines = Arc::new(Mutex::new(Vec::new()));
         let reader_lines = stderr_lines.clone();
@@ -2120,16 +2211,16 @@ async fn second_sessiond_against_a_live_socket_exits_before_reading_its_own_log(
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
-    let mut second = Command::new(env!("CARGO_BIN_EXE_horizon-sessiond"))
+    let mut second_command = Command::new(resolve_sessiond_binary());
+    second_command
         .arg("--socket")
         .arg(&socket_path)
         .env("HORIZON_CONFIG", &missing_config_path)
         .env("HORIZON_AGENT_EVENT_LOG", &event_log_path)
         .env("HORIZON_AGENT_STATE_DB", &state_db_path)
         .env_remove(TEST_RESUME_DELAY_MS_VAR)
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("failed to spawn second horizon-sessiond");
+        .stderr(Stdio::piped());
+    let mut second = spawn_sessiond(&mut second_command);
 
     let status = wait_for_exit(&mut second).await;
     assert!(

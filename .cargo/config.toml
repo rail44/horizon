@@ -27,5 +27,14 @@
 # advisory lock on the build-dir, so overlapping builds serialize rather
 # than corrupt anything (a warm shared cache makes the wait short in
 # practice). See AGENTS.md "Build setup".
+#
+# One caveat this sharing does NOT change: cargo's own final-artifact
+# uplift (`cargo-util`'s `paths::link_or_copy`, called by every unit's
+# `link_targets` step, even a "fresh" one) unlinks a unit's destination
+# path before relinking it -- non-atomic, and not specific to this
+# build-dir split. A baked-in `CARGO_BIN_EXE_*` path can therefore be
+# transiently missing at the exact instant a consumer spawns it; see
+# `docs/tasks/backlog.md` #36 for the confirmed mechanism, a local
+# repro, and the mitigation in `crates/horizon-sessiond/tests/e2e.rs`.
 [build]
 build-dir = "{cargo-cache-home}/horizon-build-dir"
