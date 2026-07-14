@@ -1153,9 +1153,19 @@ never exercise, all fixed same-session:
    (`queue.rs`, verbatim algorithm from zed @ 5f8a741 including the
    loaded-die weighted pop, minus the `spin_*`/`try_iter` variants we
    never call), used on **every** OS — one code path rather than a
-   cfg-forked import. Note the Linux-gated dispatcher regression test
-   could not run on the macOS machine that made this change; the first
-   Linux gate run after the merge is its validation (backlog 39).
+   cfg-forked import. Routing Linux through the vendored copy (rather
+   than keeping it on gpui's own, which works there) was challenged and
+   then ratified by the owner 2026-07-14, on two grounds: a mac-only
+   cfg-split would make every future gpui bump that touches the queue
+   API cost double (absorb the upstream change on the Linux side while
+   keeping the vendored side call-site compatible on mac), and would
+   let an upstream semantic change (weights, fairness) quietly split
+   dispatcher scheduling behavior between OSes. The accepted trade is
+   that upstream queue fixes no longer flow in automatically — both
+   OSes are frozen on the vendored copy, identical by construction.
+   Note the Linux-gated dispatcher regression test could not run on
+   the macOS machine that made this change; the first Linux gate run
+   after the merge is its validation (backlog 39).
    Similarly, the `Platform` trait's clipboard surface is cfg-split
    upstream: `read/write_from_primary` exist only on Linux/FreeBSD,
    while macOS instead *requires* `read/write_from_find_pasteboard` —
