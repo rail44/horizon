@@ -248,8 +248,6 @@ to your request. After writing a request, don't go idle blind: arm a
 background watcher on your own `<slug>.result` (e.g. an `until
 [ -e ... ]; do sleep 15; done` background task) so the verdict wakes
 you — the owner should never need to prod a session back to life.
-The pre-commit hook refuses commits on `main` unless
-`HORIZON_INTEGRATION=1` is set; only the project session sets it.
 
 ## Open Work
 
