@@ -7,6 +7,7 @@ mod fs;
 mod processing;
 mod recall;
 mod state;
+mod todo;
 
 pub use approval::{resolve_approval, ApprovalDecision, ApprovalOutcome};
 pub use bash::{should_fold_completion, BashCompletion};
