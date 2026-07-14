@@ -21,7 +21,6 @@ use gpui_component::list::{List, ListDelegate, ListEvent, ListState};
 use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable, ResizablePanelGroup};
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::IndexPath;
-use gpui_component::Sizable as _;
 use horizon_workspace::commands::{command_entries, CommandId, CommandState};
 use horizon_workspace::types::{LayoutNode, TabId};
 use horizon_workspace::{
@@ -1773,7 +1772,6 @@ impl WorkspaceShell {
         TabBar::new("workspace-tabs")
             .segmented()
             .w_full()
-            .xsmall()
             .px_2()
             .selected_index(selected_index)
             .on_click(cx.listener(|shell, index: &usize, window, cx| {
