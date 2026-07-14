@@ -194,14 +194,23 @@ fn denied_output() -> Value {
 /// `ToolRunning`/`ToolCallStarted` pair too if `ran` (an approve that
 /// actually executed the tool, as opposed to a deny that short-circuited it
 /// without ever starting it) — and pairs it with the `Command::
-/// ToolCallResult` to forward to the provider.
+/// ToolCallResult` to forward to the provider. `ran` doubles as the source
+/// of `ToolCallResult::denied`'s contract marker: the only reason a
+/// Horizon-executed tool's approval resolves synchronously without ever
+/// running is a deny (both call sites above pass `ran = false` alongside
+/// `denied_output()`) — an approve always passes `ran = true`, even when
+/// the tool goes on to fail for its own reasons.
 fn synchronous_result(
     runtime: &SessionRuntime,
     call_id: &ToolCallId,
     output: Value,
     ran: bool,
 ) -> ApprovalOutcome {
-    let result = ToolCallResult::new(call_id.clone(), output);
+    let result = if ran {
+        ToolCallResult::new(call_id.clone(), output)
+    } else {
+        ToolCallResult::denied(call_id.clone(), output)
+    };
 
     let mut events = Vec::new();
     if ran {

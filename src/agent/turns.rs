@@ -421,8 +421,8 @@ pub(crate) struct ToolCallView {
 
 /// A tool call's approval lifecycle, derived in [`build_tool_call_views`]
 /// from whether the call ever had an `ApprovalRequested` item and, if so,
-/// how its `ToolCallStarted`/`ToolCallFinished` acks read (see
-/// [`is_denied_output`] for the denial convention).
+/// how its `ToolCallStarted`/`ToolCallFinished` acks read (see [`is_denied`]
+/// for the denial detection).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ApprovalState {
     /// No `ApprovalRequested` item for this call at all -- an
@@ -449,15 +449,31 @@ pub(crate) enum ApprovalState {
     Denied,
 }
 
-/// The exact denial convention `tools::approval::denied_output` writes
-/// for a Horizon-executed tool's deny path:
-/// `json!({ "is_error": true, "message": "denied by user" })`
-/// (`crates/horizon-agent/src/tools/approval.rs`). Checked by the
-/// message text specifically, not just `is_error`, because an
-/// *approved* call that goes on to fail for its own reasons (e.g.
-/// fs.edit's "old_string not found") is also `is_error: true` but
-/// carries a different message -- `is_error` alone can't tell a denial
-/// from an execution failure.
+/// Whether `result` represents the user's tool-call denial. Reads the
+/// contract-explicit [`ToolCallResult::denied`] marker first -- set at the
+/// source by `tools::approval::synchronous_result`'s `ran = false` path
+/// (`crates/horizon-agent/src/tools/approval.rs`) -- and falls back to
+/// [`is_denied_output`]'s old message-text convention only when the marker
+/// reads `false`. That fallback exists for exactly one case: a
+/// `ToolCallResult` persisted (as JSONL) before the marker field existed
+/// deserializes with `denied: false` regardless of its real outcome
+/// (`#[serde(default)]`), so replaying an old log still needs the message
+/// text to classify those rows correctly. A freshly folded denial always
+/// carries the marker and never needs the fallback.
+fn is_denied(result: &ToolCallResult) -> bool {
+    result.denied || is_denied_output(&result.output)
+}
+
+/// The old denial convention `tools::approval::denied_output` wrote for a
+/// Horizon-executed tool's deny path, before [`ToolCallResult::denied`]
+/// existed: `json!({ "is_error": true, "message": "denied by user" })`.
+/// Checked by the message text specifically, not just `is_error`, because
+/// an *approved* call that goes on to fail for its own reasons (e.g.
+/// fs.edit's "old_string not found") is also `is_error: true` but carries a
+/// different message -- `is_error` alone can't tell a denial from an
+/// execution failure. Kept only as [`is_denied`]'s fallback for pre-marker
+/// persisted logs; every current production write path sets the marker
+/// instead.
 fn is_denied_output(output: &Value) -> bool {
     output.get("is_error").and_then(Value::as_bool) == Some(true)
         && output.get("message").and_then(Value::as_str) == Some("denied by user")
@@ -479,7 +495,7 @@ fn derive_approval_state(
         return ApprovalState::None;
     }
     match result {
-        Some(result) if is_denied_output(&result.output) => ApprovalState::Denied,
+        Some(result) if is_denied(result) => ApprovalState::Denied,
         Some(_) => ApprovalState::Approved,
         None if started => ApprovalState::Approved,
         None => ApprovalState::Waiting,
@@ -1977,7 +1993,29 @@ mod tests {
     }
 
     #[test]
+    fn a_call_resolved_with_the_denied_marker_is_denied() {
+        // The current production path: `ToolCallResult::denied` sets the
+        // contract-explicit marker, read directly with no message-text
+        // sniffing at all.
+        let items = vec![
+            tool_requested("a", "bash", json!({"command": "rm -rf /tmp/x"})),
+            approval_requested("a"),
+            AgentFrameItem::ToolCallFinished(ToolCallResult::denied(
+                ToolCallId("a".to_string()),
+                json!({"is_error": true, "message": "denied by user"}),
+            )),
+        ];
+        let views = build_tool_call_views(&items);
+        assert_eq!(views[0].approval, ApprovalState::Denied);
+    }
+
+    #[test]
     fn a_call_resolved_with_the_denied_by_user_convention_is_denied() {
+        // The fallback path: `tool_finished` builds its `ToolCallResult`
+        // via `ToolCallResult::new`, which never sets `denied` -- exactly
+        // what a pre-marker persisted JSONL log deserializes as
+        // (`#[serde(default)]`). Classification must still land on
+        // `Denied` by recognizing the old message-text convention.
         let items = vec![
             tool_requested("a", "bash", json!({"command": "rm -rf /tmp/x"})),
             approval_requested("a"),
