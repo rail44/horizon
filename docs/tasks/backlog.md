@@ -716,14 +716,40 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     was left unchanged (already correct once the state stopped lying) —
     re-check it separately if either still misbehaves.
 
-35. **UI-side agent-session commands silently swallow a dead-sessiond
-    channel error.** `src/agent/session.rs`'s approve/deny/
-    send_user_message/cancel/shutdown paths all do `let _ =
-    self.commands.send(...)` — if `horizon-sessiond` has died (crashed,
-    killed, socket closed) the send fails and every click or keystroke
-    in that pane becomes a silent no-op, with nothing surfaced to the
+35. *(resolved 2026-07-14)* **UI-side agent-session commands silently
+    swallow a dead-sessiond channel error.** `src/agent/session.rs`'s
+    approve/deny/send_user_message/cancel/shutdown paths all did `let _ =
+    self.commands.send(...)` — if `horizon-sessiond` had died (crashed,
+    killed, socket closed) the send failed and every click or keystroke
+    in that pane became a silent no-op, with nothing surfaced to the
     user. Noticed auditing that file's command dispatch while fixing
-    backlog #34; filing only, not fixing.
+    backlog #34.
+    Fixed: all five now funnel through one `AgentSession::dispatch`,
+    backed by a small pure `RuntimeReachability` state machine
+    (`after_send`/`after_event_received`) wrapped in a `Cell` for
+    interior mutability, since every call site only ever holds `&self`
+    (`Entity::read`, never `update`) — kept that seam untouched rather
+    than widening the public API across `workspace.rs` and the
+    rows/receipts/composer call sites. The first failed send flags
+    `runtime_unreachable` and wakes a tiny dedicated notify-pump task
+    (`futures::channel::mpsc` + a `cx.spawn` loop, symmetrical with the
+    existing event-pump task) that calls `cx.notify()` on the entity,
+    which the view's already-existing `cx.observe(&session, ...)` turns
+    into a re-render; every subsequent send short-circuits without
+    touching the channel again. The agent view's status line
+    (`AgentView::status_line`) shows "session runtime unreachable — try
+    Reload Session Runtime" in `theme::danger()` while the flag is set,
+    overriding the normal state-derived text. Recovery is automatic: the
+    existing per-event pump clears the flag on the next event that
+    actually arrives (stale-death recovery), so a respawned/reconnected
+    runtime silently un-flags itself. Covered by 6 colocated unit tests
+    on `RuntimeReachability`'s pure transitions (`src/agent/session.rs`).
+    Aside: `session.rs`'s `use gpui::*` glob-imports `gpui::test` (the
+    GPUI-aware async-test attribute), which shadows the standard
+    `#[test]` in any descendant module that does `use super::*` — hit
+    this as a genuine stack overflow inside `gpui_macros` before tracing
+    it down; the new `tests` module imports only the specific items it
+    needs instead.
 
 36. *(resolved 2026-07-14)* **Shared build-dir flake: `CARGO_BIN_EXE_horizon-sessiond`
     spawn fails with NotFound while sibling worktrees build concurrently.**
