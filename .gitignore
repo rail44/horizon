@@ -3,3 +3,5 @@
 /.claude/worktrees/
 /.claude/review-queue/
 /.horizon
+/.envrc
+/.envrc.local
