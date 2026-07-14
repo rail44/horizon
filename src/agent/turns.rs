@@ -680,18 +680,15 @@ pub(crate) fn composer_placeholder(turn_in_flight: bool) -> &'static str {
     }
 }
 
-/// The model id for the composer's read-only model chip (mock's
-/// `claude-sonnet-4` pill): the most recent `AgentFrameItem::TurnEnded`
+/// One of two inputs to the composer's model chip (see
+/// [`composer_model_chip`]): the most recent `AgentFrameItem::TurnEnded`
 /// that actually carries a model id, scanning `items` from the end. A
 /// still-running turn's own `TurnEnded` hasn't folded yet, so it never
 /// masks the previous turn's model; a completed turn that ended before any
 /// provider request (`TurnEnded`'s own doc comment -- e.g. an immediate
 /// cancel) is skipped in favor of an earlier turn's model, the "best
 /// available value" rather than flickering the chip away. `None` until the
-/// very first turn with a provider request completes -- there is no
-/// session-start signal for the model today (see
-/// `docs/agent-output-ui-amendment.md`'s composer amendment note); the
-/// chip is simply omitted until then.
+/// very first turn with a provider request completes.
 pub(crate) fn latest_turn_model(items: &[AgentFrameItem]) -> Option<&str> {
     items.iter().rev().find_map(|item| match item {
         AgentFrameItem::TurnEnded {
@@ -699,6 +696,36 @@ pub(crate) fn latest_turn_model(items: &[AgentFrameItem]) -> Option<&str> {
         } => Some(model.as_str()),
         _ => None,
     })
+}
+
+/// The composer's read-only model chip (mock's `claude-sonnet-4` pill),
+/// combining the session's resolved model
+/// (`agent::session::AgentSession::model`, known from session start/attach
+/// -- see `docs/agent-output-ui-amendment.md`'s dated model-chip addendum,
+/// which closed the "no session-start signal" gap [`latest_turn_model`]'s
+/// own doc comment used to describe) with the latest completed turn's own
+/// model ([`latest_turn_model`]).
+///
+/// **Precedence**: `session_model` is the steady-state source of truth --
+/// resolved once, synchronously, before any turn ever runs. `turn_model`
+/// overrides it only when the two actively disagree, since that can only
+/// mean the session's *actual* provider has moved on from what was resolved
+/// at session start (there is no model switcher yet -- deferred, unbuilt
+/// future work -- so this can't happen today, but the precedence is decided
+/// now rather than left implicit for whenever one lands): the latest
+/// completed turn is always closer to "what would happen if you sent a
+/// message right now" than a possibly-stale session-start value. Falls back
+/// to whichever one is `Some` if the other is `None`; `None` (chip hidden)
+/// only when neither is known.
+pub(crate) fn composer_model_chip<'a>(
+    session_model: Option<&'a str>,
+    turn_model: Option<&'a str>,
+) -> Option<&'a str> {
+    match (session_model, turn_model) {
+        (Some(session), Some(turn)) if session != turn => Some(turn),
+        (Some(session), _) => Some(session),
+        (None, turn) => turn,
+    }
 }
 
 /// Whether `call_id`'s approval request is still unresolved within
@@ -2066,6 +2093,47 @@ mod tests {
         // immediate cancel) and so carries no model -- the chip falls back
         // to the earlier turn's model rather than disappearing.
         assert_eq!(latest_turn_model(&items), Some("gpt-5"));
+    }
+
+    #[test]
+    fn composer_model_chip_shows_the_session_model_before_any_turn_completes() {
+        // The gap `latest_turn_model_is_none_before_any_turn_completes`
+        // exercises above: with a session-start model now known, the chip
+        // no longer has to wait for the first turn to complete.
+        assert_eq!(composer_model_chip(Some("gpt-5"), None), Some("gpt-5"));
+    }
+
+    #[test]
+    fn composer_model_chip_prefers_the_session_model_when_the_turn_model_agrees() {
+        assert_eq!(
+            composer_model_chip(Some("gpt-5"), Some("gpt-5")),
+            Some("gpt-5")
+        );
+    }
+
+    #[test]
+    fn composer_model_chip_lets_a_diverging_turn_model_override_the_session_model() {
+        // A future model switcher (unbuilt) could change what a session
+        // actually runs mid-session -- the latest completed turn is closer
+        // to "what would happen if you sent a message right now" than the
+        // value resolved once at session start.
+        assert_eq!(
+            composer_model_chip(Some("gpt-5"), Some("claude-sonnet-4")),
+            Some("claude-sonnet-4")
+        );
+    }
+
+    #[test]
+    fn composer_model_chip_falls_back_to_the_turn_model_when_the_session_model_is_unknown() {
+        // e.g. a role-less session, or a provider with no resolvable model
+        // (`contract::Provider::resolved_model`'s doc comment) -- the latest
+        // completed turn is still the best available value.
+        assert_eq!(composer_model_chip(None, Some("gpt-5")), Some("gpt-5"));
+    }
+
+    #[test]
+    fn composer_model_chip_is_none_when_neither_is_known() {
+        assert_eq!(composer_model_chip(None, None), None);
     }
 
     #[test]

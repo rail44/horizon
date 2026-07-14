@@ -3,6 +3,7 @@ use std::{collections::HashSet, thread, time::Duration};
 use crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender};
 
 use crate::contract::*;
+use crate::roles::RoleId;
 use crate::tools::{cancelled_tool_call_result, tool_result_message};
 
 pub(crate) struct MockProvider;
@@ -16,6 +17,14 @@ impl MockProvider {
 impl Provider for MockProvider {
     fn provider_id(&self) -> ProviderId {
         ProviderId("builtin.agent.mock".to_string())
+    }
+
+    /// The mock provider has no real model concept -- most of its turns
+    /// never emit `Event::ProviderRequestSent` at all (only the "slow" test
+    /// path does, with a hardcoded `"mock"` string not representative of a
+    /// session's actual model), so there is nothing honest to report here.
+    fn resolved_model(&self, _role_id: Option<&RoleId>) -> Option<String> {
+        None
     }
 
     fn start_session(&self, request: StartSession) -> SessionHandle {
@@ -370,4 +379,19 @@ fn run_cancellable_mock_turn(
         .into(),
     );
     MockTurnOutcome::Completed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolved_model_is_none_regardless_of_role() {
+        let provider = MockProvider::new();
+        assert_eq!(Provider::resolved_model(&provider, None), None);
+        assert_eq!(
+            Provider::resolved_model(&provider, Some(&RoleId("config".to_string()))),
+            None
+        );
+    }
 }

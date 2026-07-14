@@ -215,6 +215,11 @@ impl Routes {
                     self.send_agent(session_id, ProviderEvent::tool_call_progress(progress));
                 }
             }
+            EnvelopeBody::Control(Control::SessionModel(model)) => {
+                if let Some(session_id) = envelope.session_id {
+                    self.send_agent(session_id, ProviderEvent::session_model(model));
+                }
+            }
             EnvelopeBody::Control(Control::HostToolRequest(request)) => {
                 let _ = self.host_tools.send(request);
             }

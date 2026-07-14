@@ -53,6 +53,7 @@ pub fn process_agent_provider_event(
                     event,
                     provider_payload: provider_event.provider_payload.clone(),
                     tool_call_progress: None,
+                    session_model: None,
                 }
             } else {
                 event.into()

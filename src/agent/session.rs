@@ -17,6 +17,16 @@ use crate::sessiond::AgentSessionHandle;
 pub struct AgentSession {
     commands: Sender<Command>,
     pub frame: AgentFrame,
+    /// The session's resolved model id, if known -- set once a
+    /// `horizon_agent::wire::Control::SessionModel` announcement (folded via
+    /// `LiveState::session_model`) arrives, either right after a fresh
+    /// session starts or alongside a resumed session's replay. `None` until
+    /// then (e.g. a role-less session, or a provider with no resolvable
+    /// model -- see `contract::Provider::resolved_model`'s doc comment).
+    /// Read by the composer's model chip alongside `turns::latest_turn_model`
+    /// -- see `docs/agent-output-ui-amendment.md`'s dated model-chip
+    /// addendum for the precedence between the two.
+    pub model: Option<String>,
     _wire: AgentSessionHandle,
 }
 
@@ -41,6 +51,7 @@ impl AgentSession {
             while let Some(event) = async_rx.next().await {
                 let apply = this.update(cx, |session: &mut AgentSession, cx| {
                     session.frame = live.extend_provider_events(std::iter::once(event));
+                    session.model = live.session_model();
                     cx.notify();
                 });
                 if apply.is_err() {
@@ -53,6 +64,7 @@ impl AgentSession {
         Self {
             commands,
             frame: AgentFrame::empty(),
+            model: None,
             _wire: handle,
         }
     }
