@@ -1886,19 +1886,30 @@ impl AgentView {
         pill.into_any_element()
     }
 
-    fn status_line(&self, cx: &App) -> String {
-        match self.session.read(cx).frame.state {
-            Some(SessionState::Running) => "running…".to_string(),
-            Some(SessionState::ToolRunning) => "tool running…".to_string(),
-            Some(SessionState::WaitingForApproval) => "waiting for approval".to_string(),
-            Some(SessionState::WaitingForUser) | Some(SessionState::Created) | None => {
-                String::new()
-            }
-            Some(SessionState::Cancelled) => "cancelled".to_string(),
-            Some(SessionState::Completed) => "completed".to_string(),
-            Some(SessionState::Failed) => "failed".to_string(),
-            Some(SessionState::Terminated) => "terminated".to_string(),
+    /// The status text plus its color. Backlog #35: a dead sessiond
+    /// channel (`AgentSession::runtime_unreachable`) always wins over
+    /// the frame's own state and renders in `theme::danger()` rather
+    /// than the usual muted tone, since it means every click/keystroke
+    /// in this pane is currently going nowhere.
+    fn status_line(&self, cx: &App) -> (String, Hsla) {
+        let session = self.session.read(cx);
+        if session.runtime_unreachable() {
+            return (
+                "session runtime unreachable — try Reload Session Runtime".to_string(),
+                theme::danger(),
+            );
         }
+        let text = match session.frame.state {
+            Some(SessionState::Running) => "running…",
+            Some(SessionState::ToolRunning) => "tool running…",
+            Some(SessionState::WaitingForApproval) => "waiting for approval",
+            Some(SessionState::WaitingForUser) | Some(SessionState::Created) | None => "",
+            Some(SessionState::Cancelled) => "cancelled",
+            Some(SessionState::Completed) => "completed",
+            Some(SessionState::Failed) => "failed",
+            Some(SessionState::Terminated) => "terminated",
+        };
+        (text.to_string(), theme::text_muted())
     }
 }
 
@@ -2228,7 +2239,7 @@ impl Render for AgentView {
             index += 1;
         }
 
-        let status = self.status_line(cx);
+        let (status, status_color) = self.status_line(cx);
         let follow = self.follow;
         // Decision 9's Changes overview: between the transcript and the
         // composer, not nested inside either -- a session-wide aggregate
@@ -2286,7 +2297,7 @@ impl Render for AgentView {
                         .child(
                             div()
                                 .text_size(px(11.0))
-                                .text_color(theme::text_muted())
+                                .text_color(status_color)
                                 .child(status),
                         )
                         // The status-line stop affordance (decision 6):
