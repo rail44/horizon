@@ -961,6 +961,122 @@ pub(crate) fn changes_summary_text(changes: &[FileChange]) -> Option<String> {
     ))
 }
 
+/// One `todo.write` item's view-model (`docs/agent-todo-tool-design.md`
+/// decision 2), mirroring the tool's own validated shape
+/// (`crates/horizon-agent/src/tools/todo.rs`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TodoItem {
+    pub text: String,
+    pub status: TodoStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TodoStatus {
+    Pending,
+    InProgress,
+    Done,
+}
+
+/// Derives the session's current plan/todo list (`docs/agent-todo-tool-
+/// design.md` decision 3): walks every `todo.write` call across the
+/// *whole session's* `items` (not one turn's slice), in event order, and
+/// keeps the last one that finished without error -- `todo.write`
+/// replaces the whole list every call, so "latest wins" is the entire
+/// fold; there is nothing to merge across calls. A call still in flight,
+/// or one that failed validation, contributes nothing, the same
+/// "failures never aggregate" rule [`aggregate_changes`] follows. `None`
+/// when no successful `todo.write` call has ever landed -- the panel is
+/// hidden entirely in that case. An explicit empty list (`items: []`,
+/// e.g. the agent clearing a finished plan) also folds to zero items and
+/// therefore hides the panel too via [`todo_summary_text`]'s own
+/// emptiness check -- deliberately not distinguished from "never
+/// called", the same simplification [`aggregate_changes`]/
+/// [`changes_summary_text`] make for a session that never touched a
+/// file.
+///
+/// Implemented as its own direct walk over [`AgentFrameItem`] rather than
+/// layered on [`ToolCallView`]/`classify` the way [`aggregate_changes`]
+/// is: adding a `todo.write` arm to `classify` would need a new
+/// `ToolCallKind` variant, which `view.rs`'s `render_receipt_chip` (an
+/// exhaustive match over `ToolCallKind`) would then need a new arm for
+/// too -- reaching into the transcript's shared row/receipt rendering,
+/// which this feature deliberately leaves untouched. This derivation
+/// stays fully self-contained in this module instead, pairing
+/// `ToolCallRequested`/`ToolCallFinished` by call id itself.
+pub(crate) fn latest_todo_list(items: &[AgentFrameItem]) -> Option<Vec<TodoItem>> {
+    struct Requested<'a> {
+        call_id: &'a ToolCallId,
+        input: &'a Value,
+    }
+
+    let mut requested: Vec<Requested> = Vec::new();
+    let mut latest: Option<Vec<TodoItem>> = None;
+    for item in items {
+        match item {
+            AgentFrameItem::ToolCallRequested(request) if request.tool_id == "todo.write" => {
+                requested.push(Requested {
+                    call_id: &request.call_id,
+                    input: &request.input,
+                });
+            }
+            AgentFrameItem::ToolCallFinished(result) => {
+                if let Some(position) = requested
+                    .iter()
+                    .position(|entry| entry.call_id == &result.call_id)
+                {
+                    let entry = requested.remove(position);
+                    if !result.is_error {
+                        latest = Some(todo_items_from_input(entry.input));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    latest
+}
+
+/// Parses a `todo.write` request's `items` array into view-model items,
+/// silently dropping any entry that doesn't match the tool's own
+/// validated shape (defensive -- a successful call already passed
+/// `tools::todo::execute`'s validation, so this should never actually
+/// drop anything in practice).
+fn todo_items_from_input(input: &Value) -> Vec<TodoItem> {
+    input
+        .get("items")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            let text = item.get("text").and_then(Value::as_str)?.to_string();
+            let status = match item.get("status").and_then(Value::as_str)? {
+                "pending" => TodoStatus::Pending,
+                "in_progress" => TodoStatus::InProgress,
+                "done" => TodoStatus::Done,
+                _ => return None,
+            };
+            Some(TodoItem { text, status })
+        })
+        .collect()
+}
+
+/// The Plan panel's collapsed-row summary (`docs/agent-todo-tool-
+/// design.md` decision 5): `None` when the list is empty, hiding the
+/// panel entirely -- gating callers use this, not a separate emptiness
+/// check on [`latest_todo_list`]'s own output, so the two can never
+/// drift (the same discipline [`changes_summary_text`]'s own doc comment
+/// follows).
+pub(crate) fn todo_summary_text(items: &[TodoItem]) -> Option<String> {
+    if items.is_empty() {
+        return None;
+    }
+    let done = items
+        .iter()
+        .filter(|item| item.status == TodoStatus::Done)
+        .count();
+    Some(format!("{done}/{} done", items.len()))
+}
+
 /// Maps a tool id to its display verb, target, (would-be) result
 /// summary, and any tool-specific structured data -- the one place that
 /// knows the exact input/output JSON shape each tool in
@@ -3017,6 +3133,89 @@ mod tests {
             changes_summary_text(&changes).as_deref(),
             Some("1 file · +2 −1")
         );
+    }
+
+    fn todo_write_requested(call_id: &str, items: Value) -> AgentFrameItem {
+        tool_requested(call_id, "todo.write", json!({ "items": items }))
+    }
+
+    #[test]
+    fn latest_todo_list_is_none_when_no_write_ever_landed() {
+        let items = vec![
+            tool_requested("r1", "fs.read", json!({"path": "a.rs"})),
+            tool_finished("r1", json!({"total_lines": 10})),
+        ];
+        assert!(latest_todo_list(&items).is_none());
+        assert_eq!(todo_summary_text(&[]), None);
+    }
+
+    #[test]
+    fn latest_todo_list_reads_the_most_recent_successful_write() {
+        let items = vec![
+            todo_write_requested("t1", json!([{"text": "step one", "status": "pending"}])),
+            tool_finished("t1", json!({"total": 1, "pending": 1})),
+            todo_write_requested(
+                "t2",
+                json!([
+                    {"text": "step one", "status": "done"},
+                    {"text": "step two", "status": "in_progress"},
+                ]),
+            ),
+            tool_finished("t2", json!({"total": 2, "done": 1, "in_progress": 1})),
+        ];
+        let list = latest_todo_list(&items).expect("a successful write landed");
+        assert_eq!(
+            list,
+            vec![
+                TodoItem {
+                    text: "step one".to_string(),
+                    status: TodoStatus::Done,
+                },
+                TodoItem {
+                    text: "step two".to_string(),
+                    status: TodoStatus::InProgress,
+                },
+            ]
+        );
+        assert_eq!(todo_summary_text(&list).as_deref(), Some("1/2 done"));
+    }
+
+    #[test]
+    fn latest_todo_list_ignores_a_failed_write() {
+        let items = vec![
+            todo_write_requested("t1", json!([{"text": "step one", "status": "done"}])),
+            tool_finished("t1", json!({"total": 1, "done": 1})),
+            todo_write_requested("t2", json!([{"text": "bad", "status": "blocked"}])),
+            tool_finished(
+                "t2",
+                json!({"is_error": true, "message": "item 0 has an invalid `status`"}),
+            ),
+        ];
+        let list = latest_todo_list(&items).expect("t1's write is still the latest success");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].status, TodoStatus::Done);
+    }
+
+    #[test]
+    fn latest_todo_list_ignores_a_still_in_flight_write() {
+        let items = vec![todo_write_requested(
+            "t1",
+            json!([{"text": "step one", "status": "pending"}]),
+        )];
+        assert!(latest_todo_list(&items).is_none());
+    }
+
+    #[test]
+    fn latest_todo_list_folds_an_explicit_clear_to_an_empty_list_and_hides_the_panel() {
+        let items = vec![
+            todo_write_requested("t1", json!([{"text": "step one", "status": "done"}])),
+            tool_finished("t1", json!({"total": 1, "done": 1})),
+            todo_write_requested("t2", json!([])),
+            tool_finished("t2", json!({"total": 0})),
+        ];
+        let list = latest_todo_list(&items).expect("t2's write is a successful, empty list");
+        assert!(list.is_empty());
+        assert_eq!(todo_summary_text(&list), None);
     }
 
     #[test]

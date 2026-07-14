@@ -193,8 +193,9 @@ wave items where possible; design docs on first use.
   2026-07-07: stage 2 shipped as slices 1-5 per
   `docs/agent-output-ui-design.md` (tool blocks, density/turn
   boundaries, follow-scroll, inline approval, Changes overview).
-  Owner visual pass pending; remaining improvements wait on the two
-  small contract extensions (Todo tool below, backlog 16). Composer
+  Owner visual pass pending; remaining improvements wait on backlog 16
+  (turn metadata) -- the Todo tool contract extension shipped
+  2026-07-14 (see the dedicated bullet below). Composer
   fixes shipped 2026-07-09 (`44f2dd7`): multi-line word/glyph wrap +
   Shift+Enter-for-newline, a custom one-`TextLayout` view mirroring
   floem's `Label` two-pass wrap (`docs/agent-composer-cursor-design.md`);
@@ -210,7 +211,18 @@ wave items where possible; design docs on first use.
   chip). The amendment doc's Post-review section records every
   adjustment and the honest sessiond state fix (backlog 34). Still
   open from the base design: follow-scroll state machine and the
-  Changes overview (in flight 2026-07-13), Todo tool (Next, below).
+  Changes overview (in flight 2026-07-13).
+- **Todo tool + overview panel** — shipped 2026-07-14: a single
+  `todo.write` tool (whole-list-replace, `AutoAllowUi`) feeding a
+  collapsible Plan panel between the transcript and the Changes bar,
+  same collapsed-pill idiom, hidden until a list exists. The panel
+  derives the current list itself from the event log (last successful
+  `todo.write` wins, implemented as its own direct `AgentFrameItem`
+  walk rather than layered on the shared `ToolCallView`/receipt-rendering
+  path, to leave that code untouched) — see
+  `docs/agent-todo-tool-design.md` for the full decision record
+  (tool vocabulary, item shape, persistence, and what's deferred:
+  UI editing, cross-session todo).
 - **Placement-first session creation** — shipped 2026-07-07: `Split
   Pane…` / `New Tab…` + registry-driven view chooser over the CLI's
   `CreateSession` vocabulary; the four direct creation commands
@@ -288,11 +300,6 @@ wave items where possible; design docs on first use.
   co-located as an independent crate — no horizon dependencies
   (extractable later), SSE streaming required (horizon-agent assumes
   it).
-- **Todo tool + overview panel hookup**: a plan/todo tool in the agent
-  contract (agent-foundation) feeding the transcript's overview bar the
-  same way as the Changes aggregation — proposed by application-ui
-  slice 5; pairs with backlog 16 (turn metadata) as the two small
-  contract extensions unblocking the UI's remaining improvements.
 - **ACP client — external agents in agent panes**: host ACP-speaking
   agents (Claude Code via `claude-agent-acp`, Codex/Gemini adapters) as
   agent sessions. Motivation: auth stays agent-side (org-account OAuth,
