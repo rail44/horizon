@@ -238,59 +238,109 @@ pub(crate) struct RunCommand {
 
 const MODE_CONTEXT: &str = "WorkspaceMode";
 
-/// Alpha applied to `theme::scrim_base()` for every pane covered by
-/// workspace mode's dim pattern *except* the cursor pane itself -- ported
-/// from the retired Floem shell's `WORKSPACE_MODE_DIM_ALPHA`
-/// (`docs/workspace-mode-design.md`'s "pane dimming" visualization signal,
-/// the accident-killer: a stray keystroke should read as "nothing here
-/// types normally right now" at a glance). A numeric opacity factor, not a
-/// color, so the color itself stays theme-driven. See [`pane_scrim_alpha`]
-/// for exactly which panes this applies to, including while a
-/// control-surface modal is open.
+/// Alpha applied to `theme::scrim_base()` for every pane while workspace
+/// mode's dim pattern is active -- ported from the retired Floem shell's
+/// `WORKSPACE_MODE_DIM_ALPHA` (`docs/workspace-mode-design.md`'s "pane
+/// dimming" visualization signal, the accident-killer: a stray keystroke
+/// should read as "nothing here types normally right now" at a glance). A
+/// numeric opacity factor, not a color, so the color itself stays
+/// theme-driven.
 ///
-/// Lowered from the original 0.55 on 2026-07-15 dogfooding feedback: 0.55
-/// was carried over unchanged from the old bg-colored veil, but the
-/// black/white polarity-flipped scrim (`theme::scrim_base()`) reads
-/// noticeably heavier than that veil did at the same alpha. Explicitly
-/// feel-tunable, not derived.
+/// Lowered from the original 0.55 on 2026-07-15 dogfooding feedback
+/// (round 1): 0.55 was carried over unchanged from the old bg-colored
+/// veil, but the black/white polarity-flipped scrim (`theme::scrim_base()`)
+/// reads noticeably heavier than that veil did at the same alpha.
 ///
-/// A second round of feedback (also 2026-07-15) dropped the cursor
-/// pane's own separate, lighter alpha (`SCRIM_CURSOR_DIM_ALPHA = 0.12`)
-/// entirely: experimentally, the cursor pane now gets *no* scrim at all
-/// rather than a lighter one -- see [`pane_scrim_alpha`].
-const SCRIM_DIM_ALPHA: f32 = 0.30;
+/// Round 2 (also 2026-07-15) gave the cursor pane its own lighter alpha
+/// (`SCRIM_CURSOR_DIM_ALPHA = 0.12`) instead of the base dim. Round 3
+/// (same day) dropped that distinction entirely: the cursor signal now
+/// lives solely in the pane border (see `render_node`'s now-more-prominent
+/// `border_2()` and [`pane_border_role`]), so every pane -- cursor
+/// included -- gets the *same* alpha whenever the dim pattern is active.
+/// Lowered again, 0.30 -> 0.10, since the scrim no longer needs to carry
+/// any cursor/non-cursor contrast on its own. Explicitly feel-tunable,
+/// not derived.
+const SCRIM_DIM_ALPHA: f32 = 0.10;
 
-/// Which alpha (if any) a single pane's dimming scrim gets, given
-/// workspace mode's dim pattern: whether it's in effect at all
-/// (`mode_active`), and whether `pane_id` is the pattern's cursor pane
-/// (`is_cursor_pane`). `None` means no scrim -- either the pattern isn't
-/// in effect, or this pane is its cursor pane, left fully clear rather
-/// than dimmed at all (2026-07-15 round-2 feedback: experimentally no
-/// scrim, not a lighter one). Pure and unit-tested for every input
-/// combination so this is covered without a GPUI render.
+/// Whether workspace mode's dim pattern applies a scrim, given whether the
+/// pattern is active. Trivial since round 3 (2026-07-15): every pane dims
+/// uniformly at [`SCRIM_DIM_ALPHA`] when the pattern is active, cursor
+/// pane included -- see [`SCRIM_DIM_ALPHA`]'s doc comment. Kept as a
+/// small named, tested seam rather than inlined at the one call site, so
+/// "is a scrim applied at all" stays independently documented and
+/// testable if the composition ever grows again.
 ///
-/// `mode_active`/`is_cursor_pane` describe the dim *pattern*, not
-/// necessarily workspace mode's own live state at render time: while a
-/// control-surface modal (palette / view chooser / session manager) is
-/// open, the caller passes the pattern frozen at the moment the modal
-/// opened (`WorkspaceShell::scrim_freeze`) instead of the live
-/// `is_workspace_mode_active`/`cursor_pane_id`. That's necessary because
-/// every modal-opening handler (`open_palette` et al.) calls
+/// `mode_active` describes the dim *pattern*, not necessarily workspace
+/// mode's own live state at render time: while a control-surface modal
+/// (palette / view chooser / session manager) is open, the caller passes
+/// the pattern frozen at modal-open time (see [`effective_scrim_pattern`])
+/// instead of the live `is_workspace_mode_active()`.
+fn pane_scrim_alpha(mode_active: bool) -> Option<f32> {
+    mode_active.then_some(SCRIM_DIM_ALPHA)
+}
+
+/// The workspace-mode dim/cursor pattern currently in effect, for both the
+/// scrim and the cursor-pane border: the live pattern normally, or --
+/// while a control-surface modal is open -- the pattern frozen at the
+/// moment the modal opened (`scrim_freeze`) instead. Pure and
+/// unit-tested so the freeze substitution itself is covered without a
+/// GPUI render.
+///
+/// Freezing is necessary because every modal-opening handler
+/// (`open_palette`/`open_view_chooser`/`open_session_manager`) calls
 /// `Workspace::exit_workspace_mode` immediately -- so the mode's own
 /// hjkl/Enter/Escape key bindings don't hijack the modal's typed
-/// search/confirm keys -- which would otherwise erase the pattern the
-/// instant the modal opens. Freezing it keeps this function itself
-/// unaware that a modal is even open: opening one is scrim-*neutral*, the
-/// dim pattern on screen right before it opened simply persists
-/// unchanged while it's open (2026-07-15 round-2 feedback,
-/// `docs/theme-design.md`'s scrim section) -- direct `ctrl+p` from
-/// outside workspace mode freezes "inactive", so it stays fully
-/// undimmed.
-fn pane_scrim_alpha(mode_active: bool, is_cursor_pane: bool) -> Option<f32> {
-    if mode_active && !is_cursor_pane {
-        Some(SCRIM_DIM_ALPHA)
+/// search/confirm keys -- which would otherwise erase
+/// `is_workspace_mode_active()`/`cursor_pane_id()`'s live values the
+/// instant the modal renders. Substituting the frozen pattern instead
+/// keeps opening a modal fully chrome-neutral: neither the scrim nor the
+/// cursor-pane accent border changes when it opens (2026-07-15 round-3
+/// feedback, `docs/theme-design.md`'s scrim section) -- direct `ctrl+p`
+/// from outside workspace mode freezes "inactive", so nothing dims and no
+/// pane gets the cursor border.
+fn effective_scrim_pattern(
+    modal_open: bool,
+    scrim_freeze: Option<PaneId>,
+    live_mode_active: bool,
+    live_cursor_pane: Option<PaneId>,
+) -> (bool, Option<PaneId>) {
+    if modal_open {
+        (scrim_freeze.is_some(), scrim_freeze)
     } else {
-        None
+        (live_mode_active, live_cursor_pane)
+    }
+}
+
+/// Which color role a pane's border resolves to. Pure and unit-tested so
+/// the state selection is covered without a GPUI render; `render_node`
+/// maps the resolved role onto the actual `theme::` color and paints it
+/// at a uniform 2px (`border_2()`) for every role -- widened from 1px
+/// (2026-07-15 round-3 feedback: the 1px accent border was nearly
+/// invisible against the panes). Width stays identical across roles
+/// deliberately, so a pane's layout never shifts as the cursor moves;
+/// only the color changes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PaneBorderRole {
+    /// The workspace-mode cursor pane (or its frozen equivalent while a
+    /// modal is open, see [`effective_scrim_pattern`]) -- full-strength
+    /// `theme::accent()`, deliberately left at full saturation (not
+    /// subdued/blended) so it stays the clearly most prominent of the
+    /// three roles even at the same 2px width.
+    Cursor,
+    /// The tab's focused pane, when it isn't also the cursor pane --
+    /// `theme::border()`, an intentionally subdued separator color.
+    Active,
+    /// Neither -- `theme::background()`, i.e. no visible border at all.
+    Inactive,
+}
+
+fn pane_border_role(is_cursor: bool, is_active: bool) -> PaneBorderRole {
+    if is_cursor {
+        PaneBorderRole::Cursor
+    } else if is_active {
+        PaneBorderRole::Active
+    } else {
+        PaneBorderRole::Inactive
     }
 }
 
@@ -516,13 +566,15 @@ pub struct WorkspaceShell {
     _view_chooser_subscription: Option<Subscription>,
     // The placement the open view chooser will apply on confirm.
     pending_placement: Option<Placement>,
-    // Snapshot of workspace mode's dim pattern (the cursor pane, if the
-    // mode was active), taken by `freeze_scrim_before_modal_exit` right
-    // before a modal-opening handler calls `Workspace::exit_workspace_mode`.
-    // `render_node` substitutes this for the (now-inactive) live mode
-    // state while any control-surface modal is open, so the scrim stays
-    // frozen at whatever was on screen right before the modal opened --
-    // see `pane_scrim_alpha`'s doc comment and `docs/theme-design.md`'s
+    // Snapshot of workspace mode's dim/cursor pattern (the cursor pane, if
+    // the mode was active), taken by `freeze_scrim_before_modal_exit`
+    // right before a modal-opening handler calls
+    // `Workspace::exit_workspace_mode`. `render_node`
+    // (`effective_scrim_pattern`) substitutes this for the (now-inactive)
+    // live mode state while any control-surface modal is open, for both
+    // the scrim and the cursor-pane border (2026-07-15 round 3: modal-open
+    // is fully chrome-neutral, not just scrim-neutral) -- see
+    // `effective_scrim_pattern`'s doc comment and `docs/theme-design.md`'s
     // scrim section. `None` means the mode wasn't active when the modal
     // opened (or no modal is open).
     scrim_freeze: Option<PaneId>,
@@ -1318,12 +1370,14 @@ impl WorkspaceShell {
         self.focus_active(window, cx);
     }
 
-    /// Snapshots workspace mode's dim pattern into `scrim_freeze` right
-    /// before a modal-opening handler exits the mode -- see
-    /// `pane_scrim_alpha`'s doc comment for why this is necessary (the
-    /// mode's own key bindings must detach before the modal's `List`
-    /// takes focus, which erases `cursor_pane_id`'s target). Must be
-    /// called before `Workspace::exit_workspace_mode`, not after.
+    /// Snapshots workspace mode's dim/cursor pattern into `scrim_freeze`
+    /// right before a modal-opening handler exits the mode -- see
+    /// `effective_scrim_pattern`'s doc comment for why this is necessary
+    /// (the mode's own key bindings must detach before the modal's `List`
+    /// takes focus, which erases `cursor_pane_id`'s target).
+    /// `render_node` consumes this for both the scrim and the cursor-pane
+    /// border while a modal is open. Must be called before
+    /// `Workspace::exit_workspace_mode`, not after.
     fn freeze_scrim_before_modal_exit(&mut self) {
         self.scrim_freeze = if self.workspace.is_workspace_mode_active() {
             self.workspace.cursor_pane_id()
@@ -1905,35 +1959,32 @@ impl WorkspaceShell {
         match node {
             LayoutNode::Pane(pane_id) => {
                 let pane_id = *pane_id;
-                let mode_active = self.workspace.is_workspace_mode_active();
-                let is_cursor = mode_active && self.workspace.cursor_pane_id() == Some(pane_id);
-                let is_active = self.workspace.is_active_pane(pane_id);
-                // The scrim's own dim pattern: the live workspace-mode
-                // state normally, but while a control-surface modal is
-                // open that state has already gone inactive (every
+                // The workspace-mode dim/cursor pattern: the live state
+                // normally, but while a control-surface modal is open
+                // that state has already gone inactive (every
                 // modal-opening handler exits the mode first -- see
-                // `pane_scrim_alpha`'s doc comment) -- substitute the
-                // pattern frozen at modal-open time instead, so the scrim
-                // stays exactly what it was right before the modal
-                // opened. Deliberately independent of `is_cursor`/`border`
-                // above: only the scrim freezes, not the cursor-pane
-                // border highlight.
+                // `effective_scrim_pattern`'s doc comment) -- substitute
+                // the pattern frozen at modal-open time instead, so both
+                // the scrim and the cursor-pane border stay exactly what
+                // they were right before the modal opened (2026-07-15
+                // round 3: modal-open is fully chrome-neutral, not just
+                // scrim-neutral).
                 let modal_open = self.palette.is_some()
                     || self.view_chooser.is_some()
                     || self.session_manager.is_some();
-                let (scrim_mode_active, scrim_cursor_pane) = if modal_open {
-                    (self.scrim_freeze.is_some(), self.scrim_freeze)
-                } else {
-                    (mode_active, self.workspace.cursor_pane_id())
-                };
-                let scrim_alpha =
-                    pane_scrim_alpha(scrim_mode_active, scrim_cursor_pane == Some(pane_id));
-                let border: Hsla = if is_cursor {
-                    theme::accent()
-                } else if is_active {
-                    theme::border()
-                } else {
-                    rgb(theme::background()).into()
+                let (mode_active, cursor_pane) = effective_scrim_pattern(
+                    modal_open,
+                    self.scrim_freeze,
+                    self.workspace.is_workspace_mode_active(),
+                    self.workspace.cursor_pane_id(),
+                );
+                let is_cursor = mode_active && cursor_pane == Some(pane_id);
+                let is_active = self.workspace.is_active_pane(pane_id);
+                let scrim_alpha = pane_scrim_alpha(mode_active);
+                let border: Hsla = match pane_border_role(is_cursor, is_active) {
+                    PaneBorderRole::Cursor => theme::accent(),
+                    PaneBorderRole::Active => theme::border(),
+                    PaneBorderRole::Inactive => rgb(theme::background()).into(),
                 };
                 let view = self.panes.get(&pane_id).cloned();
                 let restoring = self.restoring_workspace && view.is_none();
@@ -1944,7 +1995,13 @@ impl WorkspaceShell {
                 };
                 div()
                     .size_full()
-                    .border_1()
+                    // 2px, uniformly across every border role -- widened
+                    // from 1px (2026-07-15 round 3: the 1px accent border
+                    // was nearly invisible). Kept identical across roles
+                    // deliberately, so a pane's box never resizes as the
+                    // cursor moves; only `border` (`pane_border_role`,
+                    // above) changes.
+                    .border_2()
                     .border_color(border)
                     .on_mouse_down(
                         MouseButton::Left,
@@ -1965,17 +2022,18 @@ impl WorkspaceShell {
                         // Pane-dimming scrim
                         // (`docs/workspace-mode-design.md`,
                         // `docs/theme-design.md`'s scrim section): drawn
-                        // whenever `pane_scrim_alpha` selects an alpha for
-                        // workspace mode's dim pattern -- every pane
-                        // except the cursor pane, which is left fully
-                        // clear (its own accent border above is the
-                        // separate cursor signal). Opening a
-                        // control-surface modal is scrim-*neutral*: the
-                        // pattern visible right before the modal opened
-                        // persists unchanged while it's open (see
-                        // `scrim_mode_active`/`scrim_cursor_pane` above).
-                        // A plain non-interactive overlay — no
-                        // `.occlude()` — so it stays purely visual: the
+                        // whenever `pane_scrim_alpha` says workspace
+                        // mode's dim pattern is active -- every pane
+                        // uniformly, cursor pane included (2026-07-15
+                        // round 3: the cursor/non-cursor distinction moved
+                        // entirely to the border above, via
+                        // `pane_border_role`). Opening a control-surface
+                        // modal is chrome-*neutral*: the pattern visible
+                        // right before the modal opened persists unchanged
+                        // while it's open (see `mode_active`/`cursor_pane`
+                        // above, from `effective_scrim_pattern`). A plain
+                        // non-interactive overlay — no `.occlude()` — so
+                        // it stays purely visual: the
                         // pane-activation `on_mouse_down` above keeps
                         // firing through it, and so does a modal
                         // backdrop's own click-to-close, since that
@@ -2217,16 +2275,17 @@ impl Render for WorkspaceShell {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_blocked_by_restore, ensure_workspace_has_pane, equal_tab_width,
-        first_row_to_select, load_workspace_state, pane_scrim_alpha,
-        prepare_workspace_for_runtime_reload, terminal_fallback_cwd, terminal_resume_candidates,
-        terminal_spawn_source, workspace_mode_blocked_by_restore, SCRIM_DIM_ALPHA,
+        command_blocked_by_restore, effective_scrim_pattern, ensure_workspace_has_pane,
+        equal_tab_width, first_row_to_select, load_workspace_state, pane_border_role,
+        pane_scrim_alpha, prepare_workspace_for_runtime_reload, terminal_fallback_cwd,
+        terminal_resume_candidates, terminal_spawn_source, workspace_mode_blocked_by_restore,
+        PaneBorderRole, SCRIM_DIM_ALPHA,
     };
     use gpui::px;
     use gpui_component::IndexPath;
     use horizon_terminal_core::TerminalSummary;
     use horizon_workspace::commands::CommandId;
-    use horizon_workspace::{PaneKind, SessionId, SessionKind, Workspace};
+    use horizon_workspace::{PaneId, PaneKind, SessionId, SessionKind, Workspace};
 
     use crate::workspace_state::WorkspaceStateStore;
 
@@ -2260,25 +2319,70 @@ mod tests {
 
     #[test]
     fn pane_scrim_alpha_is_none_when_the_dim_pattern_is_inactive() {
-        assert_eq!(pane_scrim_alpha(false, false), None);
-        // A pane can never be the cursor pane while the pattern is
-        // inactive (callers always compute `is_cursor_pane` as
-        // `mode_active && ...`), but the pure function itself doesn't
-        // assume that -- cover it explicitly too.
-        assert_eq!(pane_scrim_alpha(false, true), None);
+        assert_eq!(pane_scrim_alpha(false), None);
     }
 
     #[test]
-    fn pane_scrim_alpha_dims_every_pane_except_the_cursor_pane() {
-        assert_eq!(pane_scrim_alpha(true, false), Some(SCRIM_DIM_ALPHA));
+    fn pane_scrim_alpha_dims_uniformly_when_the_dim_pattern_is_active() {
+        // 2026-07-15 round-3 feedback: no more cursor/non-cursor
+        // distinction in the scrim itself -- every pane, cursor pane
+        // included, gets the same alpha. The cursor signal moved entirely
+        // to `pane_border_role`.
+        assert_eq!(pane_scrim_alpha(true), Some(SCRIM_DIM_ALPHA));
     }
 
     #[test]
-    fn pane_scrim_alpha_leaves_the_cursor_pane_fully_clear() {
-        // 2026-07-15 round-2 feedback: the cursor pane gets no scrim at
-        // all, not a lighter one -- dropped `SCRIM_CURSOR_DIM_ALPHA`
-        // entirely.
-        assert_eq!(pane_scrim_alpha(true, true), None);
+    fn effective_scrim_pattern_uses_the_live_state_when_no_modal_is_open() {
+        let cursor = PaneId::new();
+        assert_eq!(
+            effective_scrim_pattern(false, None, true, Some(cursor)),
+            (true, Some(cursor))
+        );
+        // A stale freeze left over from an already-closed modal must be
+        // ignored once no modal is open.
+        assert_eq!(
+            effective_scrim_pattern(false, Some(PaneId::new()), false, None),
+            (false, None)
+        );
+    }
+
+    #[test]
+    fn effective_scrim_pattern_substitutes_the_freeze_while_a_modal_is_open() {
+        let frozen_cursor = PaneId::new();
+        // The live state has already gone inactive by the time this
+        // renders (every modal-opening handler exits workspace mode
+        // first), so it must be ignored in favor of the freeze.
+        assert_eq!(
+            effective_scrim_pattern(true, Some(frozen_cursor), false, None),
+            (true, Some(frozen_cursor))
+        );
+    }
+
+    #[test]
+    fn effective_scrim_pattern_is_inactive_when_the_modal_opened_outside_workspace_mode() {
+        // Direct `ctrl+p` from outside workspace mode: the freeze is
+        // `None` (nothing was active when the modal opened), so the
+        // pattern stays inactive regardless of what the live state
+        // happens to read.
+        assert_eq!(
+            effective_scrim_pattern(true, None, true, Some(PaneId::new())),
+            (false, None)
+        );
+    }
+
+    #[test]
+    fn pane_border_role_prioritizes_the_cursor_pane_over_active() {
+        assert_eq!(pane_border_role(true, true), PaneBorderRole::Cursor);
+        // The workspace-mode cursor can sit on a pane that isn't the
+        // tab's own focused pane (moved without committing) -- the cursor
+        // role still wins.
+        assert_eq!(pane_border_role(true, false), PaneBorderRole::Cursor);
+    }
+
+    #[test]
+    fn pane_border_role_falls_back_to_active_then_inactive() {
+        assert_eq!(pane_border_role(false, true), PaneBorderRole::Active);
+        assert_eq!(pane_border_role(false, false), PaneBorderRole::Inactive);
     }
 
     #[test]
