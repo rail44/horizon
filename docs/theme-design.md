@@ -237,17 +237,33 @@ default rather than discussed, and are explicitly open:
   contrast-snapped against the background exactly as the pre-existing
   `contrast_safe_default` already did, generalized to read the resolved
   (possibly user-overridden) hue instead of a fixed constant.
-- **Accent-as-hex** — **Settled 2026-07-15 as "unchanged, not extended."**
-  Slice B1 doesn't add any new hover/active derivation keyed off accent:
+- **Accent-as-hex** — **Settled 2026-07-15 as "unchanged, not extended,"
+  revised 2026-07-15 (later the same day, a follow-up dogfooding pass).**
+  Slice B1 didn't add any new hover/active derivation keyed off accent:
   `surface_selected` (previously a `background`-toward-`accent` blend
   when unset) moved to the neutral ladder (background-toward-foreground,
   alongside `surface_panel`/`surface_raised`/`surface_chrome`/borders)
-  instead, so no seed-derived role reads `accent` at all anymore —
-  whether it's a hex value or a slot name makes no difference to any
-  *other* role's derivation. `accent` itself, and gpui-component's
-  `primary`/`ring`/`primary_foreground` projections that read it
-  directly (`gpui_component_theme_config`, untouched by this slice), are
-  the only consumers.
+  instead — which, in dogfooding, made list selection read as flat gray
+  on the seeded path, losing the accent-tinted character the
+  zero-config formula (`LIST_ACTIVE_BLEND_RATIO`) always had. Reverted
+  for `surface_selected` specifically, seeded path only:
+  `src/theme.rs`'s `scheme_from` now blends `seed_background` toward the
+  resolved `accent` again (`SURFACE_SELECTED_ACCENT_BLEND_RATIO`, a new
+  constant distinct from `LIST_ACTIVE_BLEND_RATIO` so the zero-config
+  default stays byte-identical) whenever the key itself is unset and the
+  seed is configured. Every *other* neutral-ladder role
+  (`surface_panel`/`surface_raised`/`surface_chrome`/`border`) is
+  unaffected and still steps toward `foreground`, not `accent` — this is
+  a `surface_selected`-only exception, not a reopening of the general
+  "hue is preference, lightness geometry is theory" principle. The
+  chosen ratio clears a minimum OKLab-lightness separation from
+  `background` (a "clearly visible" check) while keeping `text_primary`
+  painted on the result above the WCAG 4.5:1 floor against the owner's
+  real (dark-blue-accent, light-background) fixture — both asserted in
+  `src/theme.rs`'s tests, not assumed. `accent` itself, and
+  gpui-component's `primary`/`ring`/`primary_foreground`/`caret`/
+  `selection` projections that read it directly
+  (`gpui_component_theme_config`), remain the only other consumers.
 
 ## Evidence (2026-07-15, measured on the owner's real scheme)
 
@@ -282,8 +298,28 @@ work:
   foreground pick. Now `theme::on_accent()`, a public accessor over the
   same `primary_foreground_for` pick `gpui_component_theme_config`
   already used internally.
-- Docs claim unknown `[theme]` keys and unparsable hex values warn on
-  stderr; `src/theme.rs` silently ignores both.
+- **Fixed 2026-07-15.** Docs claimed unknown `[theme]` keys and
+  unparsable hex values warn on stderr; `src/theme.rs` silently ignored
+  both. Now `scheme_from` calls `warn_invalid_theme_colors` once per
+  resolution pass (startup + each `Reload Config`): an unrecognized
+  `[theme]` key, or a recognized key whose value fails hex parsing (and
+  a non-slot-name, non-hex `accent`), prints one `eprintln!` warning
+  naming the key/value and still resolves that one role to its built-in
+  default, exactly as before — only the missing stderr half of the
+  documented behavior was added. The loader itself
+  (`crates/horizon-config`'s flattened `colors: HashMap<String, String>`)
+  stays untouched and still accepts arbitrary keys; the known-name list
+  (`src/theme.rs`'s `KNOWN_THEME_COLOR_KEYS`) lives in `ui::theme`
+  instead.
+- **Fixed 2026-07-15.** `gpui_component_theme_config` left gpui-component's
+  `caret`/`selection` fields to cascade from `primary` (== `scheme.accent`)
+  rather than naming them explicitly — the cascade already produced the
+  right color today, but left it dependent on gpui-component's own
+  internal fallback chain rather than Horizon's own scheme. Now named
+  explicitly: `caret` ← `scheme.accent`; `selection.background` ← the
+  accent at a fixed low alpha (`SELECTION_ACCENT_ALPHA`, `#RRGGBBAA` hex,
+  set to match gpui-component's own 0.3 alpha ceiling for `selection` so
+  the look is unchanged).
 - `docs/tasks/backlog.md` item 25: `Reload Config` does not repaint
   already-drawn terminal rows.
 
