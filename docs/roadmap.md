@@ -138,6 +138,20 @@ wave items where possible; design docs on first use.
 
 ## In flight
 
+- **Theme seed + derivation** (`docs/theme-design.md`, designed
+  2026-07-15 with the owner): replace hand-tuning ~20 role keys with a
+  small seed — background + six ANSI-shaped hues + accent + one
+  contrast knob — from which the neutral ladder, text roles
+  (contrast-floored), state variants, and ANSI slots derive in OKLCH.
+  Existing role keys become the override layer (full back-compat);
+  terminal output stays faithful while UI borrowings contrast-snap.
+  **Slice B1 (seed schema + headless derivation core) shipped
+  2026-07-15** (`1dea5eb`): `text_contrast` knob, slot-name accents,
+  `src/theme/oklab.rs`, role-based ANSI derivation; the design doc's
+  five provisional details are settled there. Remaining: slice B2 (the
+  UI-snap seam — wiring contrast-snapped hue borrowings through the
+  views). The doc's "Related, independent fixes" section (hardcoded
+  modal colors etc.) is worker-sized and not blocked on this item.
 - **winit windowing backend (spike)** — direction set 2026-07-12:
   native-feeling window decorations on every desktop (Wayland via
   sctk-adwaita, native macOS) without per-DE styling effort, by
@@ -283,17 +297,6 @@ wave items where possible; design docs on first use.
   proceeds in parallel.
 
 ## Next (unclaimed — pick freely)
-
-- **Theme seed + derivation** (`docs/theme-design.md`, designed
-  2026-07-15 with the owner): replace hand-tuning ~20 role keys with a
-  small seed — background + six ANSI-shaped hues + accent + one
-  contrast knob — from which the neutral ladder, text roles
-  (contrast-floored), state variants, and ANSI slots derive in OKLCH.
-  Existing role keys become the override layer (full back-compat);
-  terminal output stays faithful while UI borrowings contrast-snap.
-  Provisional details are listed in the doc. The doc's "Related,
-  independent fixes" section (hardcoded modal colors etc.) is
-  worker-sized and not blocked on this item.
 - **Model-routing OpenAI-compatible API**: router over synthetic.new,
   co-located as an independent crate — no horizon dependencies
   (extractable later), SSE streaming required (horizon-agent assumes
