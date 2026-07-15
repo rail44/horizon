@@ -67,16 +67,47 @@ unaffected and stays.
 **Workspace-mode dim scrim -- DECIDED (2026-07-15, owner):** the "fade vs
 shadow" question this section originally left open is resolved as neither
 metaphor outright, but a third: a **polarity-flipped pole scrim**. The
-scrim (`src/workspace.rs`'s `WORKSPACE_MODE_DIM_ALPHA` over
-`theme::scrim_base()`) no longer fades toward the scheme's own
-`background` -- it shifts the unfocused area toward the *opposite* pole:
-lighten (a white scrim) on a dark scheme, darken (a black scrim) on a
-light scheme, via `Scheme::is_dark()`. The alpha constant itself
-(`WORKSPACE_MODE_DIM_ALPHA = 0.55`) is unchanged and remains explicitly
-provisional/dogfooding-tunable: a black scrim at 0.55 over a light
-scheme's panes reads noticeably heavier than the old bg-colored veil did
-at the same alpha, which is an expected consequence of the polarity flip
-and is left to be judged by feel through dogfooding, not tuned here.
+scrim (`src/workspace.rs`'s `pane_scrim_alpha` over `theme::scrim_base()`)
+no longer fades toward the scheme's own `background` -- it shifts the
+unfocused area toward the *opposite* pole: lighten (a white scrim) on a
+dark scheme, darken (a black scrim) on a light scheme, via
+`Scheme::is_dark()`.
+
+**Scrim alpha and composition -- REVISED (2026-07-15, owner dogfooding
+feedback):** the original single alpha (`WORKSPACE_MODE_DIM_ALPHA = 0.55`)
+was carried straight over from the old bg-colored veil and read too heavy
+once the scrim flipped to black/white polarity above -- a black scrim at
+0.55 over a light scheme's panes was noticeably heavier than the veil
+ever was at the same alpha. Replaced with two named, still explicitly
+feel-tunable constants (`src/workspace.rs`):
+- `SCRIM_DIM_ALPHA = 0.30` -- the base dim: every non-cursor pane in
+  workspace mode, and every pane uniformly while a control-surface modal
+  is open.
+- `SCRIM_CURSOR_DIM_ALPHA = 0.12` -- workspace mode's cursor pane
+  specifically. Still dimmed, but visibly lighter than the rest: the
+  cursor pane already carries a separate accent-border signal, so it
+  doesn't need the full weight of dimming to read as "not where the
+  cursor is".
+
+Which alpha (if any) a pane gets is decided by a small pure function,
+`pane_scrim_alpha(mode_active, is_cursor_pane, modal_open) -> Option<f32>`
+(`src/workspace.rs`, unit-tested for every input combination):
+- a control-surface modal open (palette / view chooser / session manager)
+  wins outright -- every pane dims uniformly at `SCRIM_DIM_ALPHA`, no
+  cursor distinction (attention is on the modal, not the workspace), and
+  workspace mode's own alpha never stacks with the modal's.
+- otherwise, workspace mode alone applies the cursor/non-cursor split
+  above.
+- neither active: no scrim.
+
+The modal-open case closes a gap the owner reported: the command palette
+(and the view chooser / session manager) can be opened directly (`ctrl+p`
+/ `open-palette`) without workspace mode ever being active, and
+previously left the background completely undimmed while open. The scrim
+element itself now renders for any pane `pane_scrim_alpha` returns
+`Some` for, not only under workspace mode, and stays a plain
+non-interactive overlay (no `.occlude()`) so it never intercepts the
+modal backdrop's own click-to-close.
 
 ## Problem
 

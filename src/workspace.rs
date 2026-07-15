@@ -238,16 +238,61 @@ pub(crate) struct RunCommand {
 
 const MODE_CONTEXT: &str = "WorkspaceMode";
 
-/// Alpha applied to `theme::scrim_base()` for workspace mode's pane-dimming
-/// scrim — ported from the retired Floem shell's `WORKSPACE_MODE_DIM_ALPHA`
+/// Alpha applied to `theme::scrim_base()` for a pane's dimming scrim in
+/// the *uniform* cases: every non-cursor pane in workspace mode, and every
+/// pane (cursor pane included) while a control-surface modal is open --
+/// ported from the retired Floem shell's `WORKSPACE_MODE_DIM_ALPHA`
 /// (`docs/workspace-mode-design.md`'s "pane dimming" visualization signal,
 /// the accident-killer: a stray keystroke should read as "nothing here
 /// types normally right now" at a glance). A numeric opacity factor, not a
-/// color, so the color itself stays theme-driven. Unchanged by the
-/// 2026-07-15 scrim-polarity decision (`docs/theme-design.md`) -- only the
-/// base color it's applied to flipped; the alpha itself is left as-is for
-/// now and explicitly dogfooding-tunable.
-const WORKSPACE_MODE_DIM_ALPHA: f32 = 0.55;
+/// color, so the color itself stays theme-driven.
+///
+/// Lowered from the original 0.55 on 2026-07-15 dogfooding feedback: 0.55
+/// was carried over unchanged from the old bg-colored veil, but the
+/// black/white polarity-flipped scrim (`theme::scrim_base()`) reads
+/// noticeably heavier than that veil did at the same alpha. Both this and
+/// [`SCRIM_CURSOR_DIM_ALPHA`] are explicitly feel-tunable dogfooding
+/// constants, not derived values -- see [`pane_scrim_alpha`] for how
+/// they're selected.
+const SCRIM_DIM_ALPHA: f32 = 0.30;
+
+/// Alpha applied to the cursor pane's scrim specifically, when workspace
+/// mode is active and no modal is open. Lighter than [`SCRIM_DIM_ALPHA`]
+/// so the pane the cursor is already on -- which also gets the accent
+/// border, see `render_node` -- reads as "still dimmed, but noticeably
+/// closer to normal" rather than dimmed identically to every other pane.
+/// Explicitly feel-tunable, same as `SCRIM_DIM_ALPHA`.
+const SCRIM_CURSOR_DIM_ALPHA: f32 = 0.12;
+
+/// Which alpha (if any) a single pane's dimming scrim gets, given the
+/// three states that can request dimming. `None` means no scrim is drawn
+/// for that pane. Pure and unit-tested for every input combination so the
+/// composition rules below are covered without a GPUI render.
+///
+/// Composition rules (2026-07-15 dogfooding decision,
+/// `docs/theme-design.md`'s scrim section):
+/// - a control-surface modal open (palette / view chooser / session
+///   manager) wins outright: every pane dims uniformly at
+///   [`SCRIM_DIM_ALPHA`] -- no cursor-pane distinction, since attention is
+///   on the modal rather than the workspace -- and workspace mode's own
+///   alpha never stacks with it.
+/// - otherwise, workspace mode dims the cursor pane less
+///   ([`SCRIM_CURSOR_DIM_ALPHA`]) than every other pane
+///   ([`SCRIM_DIM_ALPHA`]).
+/// - neither active: no scrim.
+fn pane_scrim_alpha(mode_active: bool, is_cursor_pane: bool, modal_open: bool) -> Option<f32> {
+    if modal_open {
+        Some(SCRIM_DIM_ALPHA)
+    } else if mode_active {
+        Some(if is_cursor_pane {
+            SCRIM_CURSOR_DIM_ALPHA
+        } else {
+            SCRIM_DIM_ALPHA
+        })
+    } else {
+        None
+    }
+}
 
 /// Built-in default chord for [`ToggleWorkspaceMode`] — mirrors the Floem
 /// shell's `DEFAULT_WORKSPACE_MODE_CHORD`. Not bound when a
@@ -1832,6 +1877,10 @@ impl WorkspaceShell {
                 let mode_active = self.workspace.is_workspace_mode_active();
                 let is_cursor = mode_active && self.workspace.cursor_pane_id() == Some(pane_id);
                 let is_active = self.workspace.is_active_pane(pane_id);
+                let modal_open = self.palette.is_some()
+                    || self.view_chooser.is_some()
+                    || self.session_manager.is_some();
+                let scrim_alpha = pane_scrim_alpha(mode_active, is_cursor, modal_open);
                 let border: Hsla = if is_cursor {
                     theme::accent()
                 } else if is_active {
@@ -1865,15 +1914,24 @@ impl WorkspaceShell {
                             .text_color(theme::text_muted())
                             .child(restore_label)
                     })
-                    .when(mode_active, |this| {
-                        // Workspace mode's pane-dimming scrim
-                        // (`docs/workspace-mode-design.md`): drawn over
-                        // every pane uniformly, cursor pane included (its
-                        // own bright border, set above, is the separate
-                        // cursor signal). A plain non-interactive overlay
-                        // — no `.occlude()` — so it stays purely visual
-                        // and the pane-activation `on_mouse_down` above
-                        // keeps firing through it. The scrim's color is
+                    .when_some(scrim_alpha, |this, alpha| {
+                        // Pane-dimming scrim
+                        // (`docs/workspace-mode-design.md`,
+                        // `docs/theme-design.md`'s scrim section): drawn
+                        // whenever `pane_scrim_alpha` selects an alpha --
+                        // workspace mode (lighter on the cursor pane,
+                        // whose own accent border above is the separate
+                        // cursor signal) and/or a control-surface modal
+                        // being open (uniform, no cursor distinction). A
+                        // plain non-interactive overlay — no `.occlude()`
+                        // — so it stays purely visual: the
+                        // pane-activation `on_mouse_down` above keeps
+                        // firing through it, and so does a modal
+                        // backdrop's own click-to-close, since that
+                        // backdrop renders as a later sibling of the
+                        // whole pane tree (see the `when_some(self.palette
+                        // ...)` etc. below) and so paints and hit-tests
+                        // above every pane's scrim. The scrim's color is
                         // `theme::scrim_base()` -- the scheme's opposite
                         // pole, not its own `background` -- so dimming
                         // reads as a lighten on a dark scheme and a
@@ -1883,7 +1941,7 @@ impl WorkspaceShell {
                             div()
                                 .absolute()
                                 .inset_0()
-                                .bg(theme::scrim_base().opacity(WORKSPACE_MODE_DIM_ALPHA)),
+                                .bg(theme::scrim_base().opacity(alpha)),
                         )
                     })
                     .into_any_element()
@@ -2109,9 +2167,10 @@ impl Render for WorkspaceShell {
 mod tests {
     use super::{
         command_blocked_by_restore, ensure_workspace_has_pane, equal_tab_width,
-        first_row_to_select, load_workspace_state, prepare_workspace_for_runtime_reload,
-        terminal_fallback_cwd, terminal_resume_candidates, terminal_spawn_source,
-        workspace_mode_blocked_by_restore,
+        first_row_to_select, load_workspace_state, pane_scrim_alpha,
+        prepare_workspace_for_runtime_reload, terminal_fallback_cwd, terminal_resume_candidates,
+        terminal_spawn_source, workspace_mode_blocked_by_restore, SCRIM_CURSOR_DIM_ALPHA,
+        SCRIM_DIM_ALPHA,
     };
     use gpui::px;
     use gpui_component::IndexPath;
@@ -2147,6 +2206,41 @@ mod tests {
         // `tabs-inner`'s existing `overflow_x_scroll()` instead, same as
         // content-sized tabs already do when they don't fit.
         assert_eq!(equal_tab_width(px(100.0), 10), px(40.0));
+    }
+
+    #[test]
+    fn pane_scrim_alpha_is_none_when_nothing_requests_dimming() {
+        assert_eq!(pane_scrim_alpha(false, false, false), None);
+        // A pane can never be the cursor pane while workspace mode is
+        // inactive (the caller always computes `is_cursor_pane` as
+        // `mode_active && ...`), but the pure function itself doesn't
+        // assume that -- cover it explicitly too.
+        assert_eq!(pane_scrim_alpha(false, true, false), None);
+    }
+
+    #[test]
+    fn pane_scrim_alpha_dims_the_cursor_pane_less_in_workspace_mode() {
+        assert_eq!(
+            pane_scrim_alpha(true, true, false),
+            Some(SCRIM_CURSOR_DIM_ALPHA)
+        );
+        assert_eq!(pane_scrim_alpha(true, false, false), Some(SCRIM_DIM_ALPHA));
+    }
+
+    #[test]
+    fn pane_scrim_alpha_is_uniform_while_a_modal_is_open() {
+        // No cursor-pane distinction while a modal is open, workspace mode
+        // active or not.
+        assert_eq!(pane_scrim_alpha(false, false, true), Some(SCRIM_DIM_ALPHA));
+        assert_eq!(pane_scrim_alpha(true, false, true), Some(SCRIM_DIM_ALPHA));
+    }
+
+    #[test]
+    fn pane_scrim_alpha_never_stacks_workspace_mode_and_modal_dimming() {
+        // Both active at once (workspace mode's cursor pane, with a modal
+        // also open): the modal's uniform alpha wins outright, not a
+        // combination of the two.
+        assert_eq!(pane_scrim_alpha(true, true, true), Some(SCRIM_DIM_ALPHA));
     }
 
     #[test]

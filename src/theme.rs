@@ -1546,8 +1546,8 @@ pub(crate) fn overlay_shadow() -> Vec<BoxShadow> {
 
 /// The workspace-mode dim scrim's base color (`docs/theme-design.md`'s
 /// "fade vs shadow" scrim question, decided 2026-07-15: polarity-flipped
-/// pole scrim -- opaque here, `WORKSPACE_MODE_DIM_ALPHA` in
-/// `src/workspace.rs` applies the alpha at the call site, same as before).
+/// pole scrim -- opaque here, `pane_scrim_alpha` in `src/workspace.rs`
+/// selects the alpha at the call site, same as before).
 /// Dimming now shifts the unfocused area toward the scheme's *opposite*
 /// pole instead of fading toward its own background: pure white on a dark
 /// scheme (lightening), pure black on a light scheme (darkening). Like
@@ -2017,9 +2017,9 @@ mod tests {
         // the workspace-mode dim scrim shifts the unfocused area toward
         // the scheme's *opposite* pole, not its own `background` -- pure
         // white on a dark scheme (lighten), pure black on a light scheme
-        // (darken). `WORKSPACE_MODE_DIM_ALPHA` applies the alpha
-        // separately at the call site (`src/workspace.rs`); this helper
-        // itself is always fully opaque.
+        // (darken). `pane_scrim_alpha` selects the alpha separately at
+        // the call site (`src/workspace.rs`); this helper itself is
+        // always fully opaque.
         reload_from(&RawConfig::default());
         assert!(scheme().is_dark());
         let dark = scrim_base();
