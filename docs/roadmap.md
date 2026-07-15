@@ -186,8 +186,9 @@ wave items where possible; design docs on first use.
   whole scheme themselves there, not judge brights in isolation; when
   that view gets scheduled, reconcile with the in-flight
   `color-picker` worktree branch, which predates the seed design);
-  scrim darkness (the 0.55 opacity carried over from the old
-  bg-colored veil) is plain dogfooding. Colorful expression on the
+  the scrim feedback round landed
+  2026-07-15 (0.30 base / 0.12 cursor-pane split, modal-open dimming —
+  further tuning is one constant). Colorful expression on the
   projected hue set stays a separately-scheduled future theme;
   base16/24 import stays deferred.
 - **winit windowing backend (spike)** — direction set 2026-07-12:
