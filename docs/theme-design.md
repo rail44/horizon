@@ -352,6 +352,111 @@ work:
 - `docs/tasks/backlog.md` item 25: `Reload Config` does not repaint
   already-drawn terminal rows.
 
+## 2026-07-15 contrast audit (mechanical follow-up)
+
+A dedicated audit, measured on the owner's real (seeded) light scheme —
+`surface_base = "#f6f6f6"`, `accent = "blue"`, `text_contrast = 5.3`,
+`[theme.ansi]` overrides (`red`/`green`/`yellow`/`blue` = `#b03b4c`/
+`#00b312`/`#87b03b`/`#0048b3`) — found seven remaining mechanical
+contrast gaps the B1/B2/C slices above didn't cover, all fixed the same
+day:
+
+1. **Semantic-color floor.** `danger`/`warning`/`success`/`info`'s unset
+   default went through `contrast_safe_default` (a BT.601-luma polarity
+   check — "legible side of the midpoint," not a ratio target), which let
+   `success` (`#00b312`, 2.61:1) and `warning` (`#87b03b`, 2.34:1 raw,
+   ~1.87:1 once HSL-inverted) both fail WCAG outright. Replaced with
+   `contrast_snap` (the same OKLCH-solve primitive the UI-snap seam
+   already used elsewhere) at every one of those four call sites, still
+   unconditional (not gated behind the seed) so a `[theme.ansi]` override
+   keeps reaching the matching semantic default. `contrast_safe_default`/
+   `invert_lightness` had no remaining callers and were deleted. Post-fix:
+   `success` 4.58:1, `warning` 4.53:1 against `background` (both >= 4.5,
+   see item 8 for why this is now an exact, not approximate, guarantee).
+2. **Selected-row text floor.** The command-palette/session-manager/
+   view-chooser `List`'s selected-row surface is `surface_selected`
+   (`#dde5ef` on the owner fixture); `text_muted`/`success` measured
+   ~4.0:1/~2.3:1 against it (both under floor — text_primary already
+   cleared it). Each delegate now tracks its own `set_selected_index`
+   (gpui-component's `ListState` doesn't expose selection back to the
+   delegate any other way) and routes the selected row's non-decorative
+   text through `readable_on(color, theme::surface_selected())`;
+   `text_subtle` (the palette's disabled-command case) stays unsnapped,
+   matching the "decorative, exempt from the floor" rule everywhere else.
+   Post-fix: `text_muted` 4.50:1, `success` 4.54:1 against
+   `surface_selected`.
+3. **Tab label floor.** The unselected tab strip's `tab.foreground`
+   projected `text_muted` verbatim onto the segmented track color, ~3.05
+   -3.47:1 depending on how raw/blended the track was — a chronic gap
+   `SEGMENTED_TRACK_BLEND_RATIO`'s own doc had only partially addressed.
+   Now `contrast_snap`s `text_muted` against the actual track color
+   (4.62:1 post-floor); that constant's doc comment was refreshed with
+   current numbers.
+4. **Deny button text.** gpui-component's `button_danger_foreground`
+   fallback is raw `danger`, painted over a `.danger()` button's own
+   translucent fill (`danger@0.2`) on a warning-tinted approval row
+   (`warning@0.12`) — ~3.5-3.8:1 composite. `button.danger.foreground` is
+   now projected explicitly: `danger` solved against that exact two-layer
+   composite (`deny_button_fill_composite`), landing at 4.57:1.
+5. **`render_tool_call_row` snap.** The live (row-centric) approval row
+   painted `text_muted`/glyph/approval-phrase colors on its own warning-
+   or danger-tinted background with no floor, unlike its sibling
+   `render_expandable_tool_call_row`, which already had a `snap()`
+   closure for exactly this. Given the same treatment, via a new
+   `theme::tint_over_background` helper (the alpha-composite a
+   `.bg(color.alpha(a))` layer actually produces).
+6. **List empty-state.** The three modals' zero-results state fell
+   through to gpui-component's own default `render_empty`
+   (`muted_foreground.opacity(0.6)`, ~2.25:1 against `background`).
+   Each delegate now overrides `render_empty` with the same icon, colored
+   through `readable_on(text_muted, background)` at full opacity instead.
+7. **Housekeeping.** (a) `SEGMENTED_TRACK_BLEND_RATIO`'s doc comment and
+   `gpui_projection_segmented_track_blends_toward_background_from_surface_
+   panel` cited the pre-seed flat-hex fixture's numbers (`surface_panel =
+   #c6c6c6`, `text_muted = #767676`), stale against the owner's real,
+   current (seeded) config; refreshed against a new
+   `owner_seeded_light_scheme` test fixture that mirrors that real config
+   exactly (kept alongside the older `owner_light_scheme`, which still
+   covers explicit-override passthrough on a light scheme — a distinct,
+   still-valid concern). (b) `[theme.ansi]`'s own "unparsable hex value is
+   warned about on stderr" promise (`config.example.toml`) was
+   unimplemented; `theme_ansi_warnings`/`warn_invalid_theme_ansi` now
+   follow `theme_color_warnings`'s own pattern over the typed 16-slot
+   `RawThemeAnsiConfig` struct.
+8. **Solver hardening (review follow-up, same day).** Items 1-4's first
+   pass measured several post-fix ratios landing a hair *below* 4.5
+   (e.g. 4.46:1, 4.48:1, 4.49:1) — `TEXT_CONTRAST_FLOOR`'s own "floored
+   at 4.5:1 — readable, always" promise violated by construction, not
+   just in a rare edge case. Root cause: `oklab::solve_lightness_for_
+   ratio`'s bisection converges in continuous OKLab-lightness space, but
+   its final `(low + high) / 2.0` return value is a brand-new point the
+   loop itself never actually re-checked against the QUANTIZED (`u8`
+   sRGB) ratio every real consumer paints — a step function of `l`, not
+   the smooth continuous-space ratio the bisection's own arithmetic
+   assumes, so that last untested midpoint could round to a `u8` triplet
+   a hair under target even though the loop's own tested bounds
+   bracketed the true answer tightly. The pre-hardening test suite's
+   `- 0.05` tolerance was papering over exactly this gap instead of
+   catching it. Fixed with a post-bisection refinement loop (still in
+   `solve_lightness_for_ratio`, so every consumer — `contrast_snap`,
+   `tint_for_contrast`, `readable_on`, including B1's own `text_muted`/
+   `foreground` solves — benefits automatically): nudge `l` further in
+   the already-established search direction, in minimal (`1/255`-scale)
+   increments, re-checking the QUANTIZED ratio each time, until it
+   actually clears the target; a genuinely unreachable target still
+   converges to the `0.0`/`1.0` extreme and stops there, unchanged from
+   before. Every floor-check test tolerance (`TEXT_CONTRAST_FLOOR -
+   0.05`) was tightened to an exact `>= TEXT_CONTRAST_FLOOR` — the
+   -0.05 was only ever needed to survive the bug above, not a real
+   precision limit — plus a new `oklab` test
+   (`solve_lightness_for_ratio_quantized_result_always_clears_an_
+   achievable_target`) sweeping backgrounds/hues/targets asserting the
+   exact, tolerance-free guarantee directly. All four ratios above now
+   read: `success`/`warning` vs `background` 4.58:1/4.53:1; selected-row
+   `text_muted`/`success` vs `surface_selected` 4.50:1/4.54:1; tab label
+   vs the segmented track 4.62:1; Deny button text vs its fill composite
+   4.57:1.
+
 ## External references
 
 - base16/base24 styling and the common scheme format:

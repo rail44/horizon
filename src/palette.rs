@@ -8,7 +8,7 @@
 
 use gpui::*;
 use gpui_component::list::{ListDelegate, ListItem, ListState};
-use gpui_component::IndexPath;
+use gpui_component::{h_flex, Icon, IconName, IndexPath};
 use horizon_workspace::commands::{filter_command_entries, CommandEntry};
 
 use crate::theme;
@@ -16,6 +16,13 @@ use crate::theme;
 pub struct PaletteDelegate {
     all: Vec<CommandEntry>,
     filtered: Vec<CommandEntry>,
+    // The currently-selected row, mirrored from `set_selected_index` --
+    // the delegate-side accessor `render_item` needs to know whether the
+    // row it's rendering is the one sitting on `theme::surface_selected()`
+    // (`docs/theme-design.md`'s 2026-07-15 contrast audit, item 2), since
+    // `ListState` doesn't expose its own selection to the delegate any
+    // other way.
+    selected: Option<IndexPath>,
 }
 
 impl PaletteDelegate {
@@ -23,6 +30,7 @@ impl PaletteDelegate {
         Self {
             filtered: entries.clone(),
             all: entries,
+            selected: None,
         }
     }
 
@@ -56,13 +64,32 @@ impl ListDelegate for PaletteDelegate {
         _cx: &mut Context<ListState<Self>>,
     ) -> Option<Self::Item> {
         let entry = self.filtered.get(index.row)?;
+        let selected = self.selected == Some(index);
+        // The selected row's on-screen surface is `theme::surface_
+        // selected()`, not the plain background every other row sits on
+        // -- floor a role's text color against it when this row is the
+        // selected one (item 2 of the 2026-07-15 contrast audit), the
+        // same `readable_on` treatment `src/agent/view.rs` already gives
+        // text painted on a non-background surface. `text_subtle` (the
+        // disabled-command case) stays unsnapped even when selected --
+        // decorative by definition, exempt from the text floor
+        // (`docs/theme-design.md`), same rule every other snap call site
+        // in this codebase follows.
+        let snap = |color: Hsla| {
+            if selected {
+                theme::readable_on(color, theme::surface_selected())
+            } else {
+                color
+            }
+        };
         let title_color = if !entry.enabled {
             theme::text_subtle()
         } else if entry.spec.destructive {
-            theme::danger()
+            snap(theme::danger())
         } else {
-            theme::text_primary()
+            snap(theme::text_primary())
         };
+        let description_color = snap(theme::text_muted());
         Some(
             ListItem::new(index).child(
                 div()
@@ -78,7 +105,7 @@ impl ListDelegate for PaletteDelegate {
                     .child(
                         div()
                             .text_size(px(11.0))
-                            .text_color(theme::text_muted())
+                            .text_color(description_color)
                             .child(entry.spec.description),
                     ),
             ),
@@ -87,9 +114,30 @@ impl ListDelegate for PaletteDelegate {
 
     fn set_selected_index(
         &mut self,
-        _index: Option<IndexPath>,
+        index: Option<IndexPath>,
         _window: &mut Window,
         _cx: &mut Context<ListState<Self>>,
     ) {
+        self.selected = index;
+    }
+
+    // Same visual as gpui-component's own default (an `Inbox` icon,
+    // centered), but colored at full opacity through a theme role instead
+    // of `muted_foreground.opacity(0.6)` -- item 6 of the 2026-07-15
+    // contrast audit (that default landed the icon at ~2.25:1 against
+    // `background`).
+    fn render_empty(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<ListState<Self>>,
+    ) -> impl IntoElement {
+        h_flex()
+            .size_full()
+            .justify_center()
+            .text_color(theme::readable_on(
+                theme::text_muted(),
+                rgb(theme::background()).into(),
+            ))
+            .child(Icon::new(IconName::Inbox).size_12())
     }
 }

@@ -122,6 +122,56 @@ fn solve_lightness_for_ratio_hits_the_target_within_a_few_hundredths_on_a_light_
 }
 
 #[test]
+fn solve_lightness_for_ratio_quantized_result_always_clears_an_achievable_target() {
+    // Regression for the 2026-07-15 contrast-audit hardening: the raw
+    // bisection's final `(low + high) / 2.0` is a brand-new value never
+    // itself checked against the QUANTIZED (`u8` sRGB) ratio, and could
+    // round a hair under `target_ratio` even though the bisection's own
+    // tested bounds bracketed the true answer tightly -- exactly the
+    // undershoot a `-0.05` test tolerance used to paper over (the
+    // callers this fed, `contrast_snap`/`tint_for_contrast` in
+    // `theme.rs`, promise a real floor -- "readable, always"
+    // `docs/theme-design.md` -- not an approximation). Sweep a range of
+    // backgrounds/hues/chromas/targets and assert the EXACT
+    // (tolerance-free) floor on the quantized re-encoding every real
+    // consumer actually paints: either the achieved ratio clears
+    // `target`, or the search landed at a lightness extreme (`0.0`/`1.0`)
+    // -- the only case an unreachable target is allowed to fall short.
+    let backgrounds = [
+        0x16181d, 0xf6f6f6, 0x202124, 0xe4e4e4, 0x0a0a0a, 0xffffff, 0x808080,
+    ];
+    // A mix of real seeded/built-in hues at their own native chroma,
+    // including the owner's actual (2026-07-15 audit) green/yellow.
+    let hue_sources = [
+        0x87b03b, 0x00b312, 0xb03b4c, 0x0048b3, 0xe5c07b, 0x98c379, 0x643bb0,
+    ];
+    let targets = [4.5, 4.6, 5.0, 5.3, 7.0, 10.0, 15.0, 21.0];
+    for background in backgrounds {
+        for hue_source in hue_sources {
+            let lch = oklch_from_packed(hue_source);
+            for target in targets {
+                let l = solve_lightness_for_ratio(background, lch.h, lch.c, target);
+                let candidate = packed_from_oklch(Oklch {
+                    l,
+                    c: lch.c,
+                    h: lch.h,
+                });
+                let ratio = contrast_ratio(
+                    relative_luminance(candidate),
+                    relative_luminance(background),
+                );
+                let at_boundary = !(1e-9..=1.0 - 1e-9).contains(&l);
+                assert!(
+                    ratio >= target || at_boundary,
+                    "background {background:#08x}, hue/chroma from {hue_source:#08x}, \
+                     target {target}: achieved {ratio} (l={l}), not at a lightness boundary"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn solve_lightness_for_ratio_converges_to_an_extreme_instead_of_oscillating_when_unreachable() {
     // A near-black background asked for the WCAG maximum (21:1) -- only
     // reachable, if at all, at l == 1.0 exactly. The search must still
