@@ -652,6 +652,20 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
         },
     );
 
+    // Resolved ahead of the struct literal (rather than inline, like the
+    // roles above) so `diff_added_text`/`diff_removed_text`'s own default
+    // below can read the *resolved* surface, not just the semantic color.
+    let diff_added_surface = chrome(
+        "diff_added_surface",
+        None,
+        blend(background, success, DIFF_SURFACE_BLEND_RATIO),
+    );
+    let diff_removed_surface = chrome(
+        "diff_removed_surface",
+        None,
+        blend(background, danger, DIFF_SURFACE_BLEND_RATIO),
+    );
+
     Scheme {
         background,
         foreground,
@@ -691,18 +705,29 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
         info,
         text_muted,
         text_subtle,
-        diff_added_surface: chrome(
-            "diff_added_surface",
+        diff_added_surface,
+        // The default reads `success` snapped against `diff_added_surface`
+        // itself (slice B2's UI-snap seam, `contrast_snap`) rather than
+        // `success` verbatim: `success` was only ever floored against
+        // `background`, and `diff_added_surface` (a `success`-tinted blend
+        // of it, `DIFF_SURFACE_BLEND_RATIO`) is a different, if usually
+        // close, surface. A no-op on the built-in scheme and on any
+        // scheme with `diff_added_text`/`diff_added_surface` set
+        // explicitly (`chrome` never evaluates this default then) --
+        // verified in this module's tests, not assumed.
+        diff_added_text: chrome(
+            "diff_added_text",
             None,
-            blend(background, success, DIFF_SURFACE_BLEND_RATIO),
+            contrast_snap(success, diff_added_surface),
         ),
-        diff_added_text: chrome("diff_added_text", None, success),
-        diff_removed_surface: chrome(
-            "diff_removed_surface",
+        diff_removed_surface,
+        // Same seam as `diff_added_text` above, against `danger`/
+        // `diff_removed_surface`.
+        diff_removed_text: chrome(
+            "diff_removed_text",
             None,
-            blend(background, danger, DIFF_SURFACE_BLEND_RATIO),
+            contrast_snap(danger, diff_removed_surface),
         ),
-        diff_removed_text: chrome("diff_removed_text", None, danger),
         surface_panel,
         surface_chrome,
         surface_selected,
@@ -778,6 +803,60 @@ fn contrast_safe_default(candidate: u32, background: u32) -> u32 {
     }
 }
 
+/// The UI-snap seam's own contrast-snapping primitive (slice B2,
+/// `docs/theme-design.md`'s "terminal-faithful / UI-snap seam"):
+/// generalizes [`contrast_safe_default`] (background-only, HSL-invert)
+/// to an arbitrary surface and a continuous OKLCH solve. Hue and chroma
+/// are held fixed; only OKLCH lightness moves, via
+/// [`oklab::solve_lightness_for_ratio`], toward whichever side of
+/// `surface` clears [`TEXT_CONTRAST_FLOOR`]. A no-op whenever `candidate`
+/// already clears the floor against `surface` -- most call sites on the
+/// built-in scheme, and on any scheme with every role key set explicitly,
+/// never actually move (asserted, not assumed, in this module's tests).
+/// Never touches an explicit `[theme]` value on its own -- callers decide
+/// whether to apply it to a `chrome()` default (as
+/// [`scheme_from`]'s `diff_added_text`/`diff_removed_text` do) or to an
+/// already-resolved value at a render call site (as
+/// [`readable_on`]/`src/agent/view.rs` do).
+fn contrast_snap(candidate: u32, surface: u32) -> u32 {
+    let ratio = oklab::contrast_ratio(
+        oklab::relative_luminance(candidate),
+        oklab::relative_luminance(surface),
+    );
+    if ratio >= TEXT_CONTRAST_FLOOR {
+        return candidate;
+    }
+    let lch = oklab::oklch_from_packed(candidate);
+    let l = oklab::solve_lightness_for_ratio(surface, lch.h, lch.c, TEXT_CONTRAST_FLOOR);
+    oklab::packed_from_oklch(oklab::Oklch { l, ..lch })
+}
+
+/// Public face of [`contrast_snap`] for render-time call sites
+/// (`src/agent/view.rs`): contrast-snaps a UI-side hue borrowing --
+/// e.g. `theme::danger()` painted as text on `theme::surface_panel()` --
+/// against the non-background surface it's actually painted on, per the
+/// UI-snap seam. Terminal output never goes through this: the terminal
+/// palette stays verbatim (`resolve`/`named_rgb`/`indexed_rgb` above
+/// read `scheme()` directly, untouched by this function), and
+/// `readable_on` itself is never called from any per-cell terminal
+/// painting path -- only from `src/agent/view.rs`'s render methods,
+/// called at most once per visible text element per frame.
+pub(crate) fn readable_on(color: Hsla, surface: Hsla) -> Hsla {
+    packed_hsla(contrast_snap(
+        packed_from_hsla(color),
+        packed_from_hsla(surface),
+    ))
+}
+
+/// `Hsla` -> packed `0xRRGGBB`, the inverse of [`packed_hsla`]. Every
+/// caller passes an opaque scheme-role color (alpha always `1.0`), so the
+/// dropped alpha byte is never meaningful -- same assumption
+/// [`invert_lightness`] already makes.
+fn packed_from_hsla(value: Hsla) -> u32 {
+    let rgba: Rgba = value.to_rgb();
+    u32::from(rgba) >> 8
+}
+
 fn scheme_store() -> &'static RwLock<Scheme> {
     static STORE: OnceLock<RwLock<Scheme>> = OnceLock::new();
     STORE.get_or_init(|| RwLock::new(scheme_from(horizon_config::load())))
@@ -843,6 +922,31 @@ fn hex(value: u32) -> String {
 /// | `list_active`                             | `scheme.surface_selected` (the command palette / session manager / view chooser row highlight; defaults to a `background`-toward-`accent` blend, `LIST_ACTIVE_BLEND_RATIO`, matching gpui-component's own fallback exactly) |
 /// | `scrollbar_thumb`                         | `scheme.text_subtle` (already a visible-but-quiet gray in both polarities) |
 /// | `popover`/`popover_foreground`            | `scheme.surface_raised` / `scheme.foreground`      |
+/// | `base.<hue>` / `base.<hue>.light` (`<hue>` = `red`/`green`/`yellow`/`blue`/`magenta`/`cyan`) | the matching resolved ANSI slot (`scheme.ansi[1..7]`) / its resolved `bright_*` sibling (`scheme.ansi[9..15]`) -- **faithful**, not contrast-snapped (see the paragraph below) |
+/// | `chart.1`..`chart.5`                      | a five-hue spread off the scheme's six ANSI hues (red, yellow, green, cyan, blue -- magenta dropped, see below), also faithful |
+///
+/// Slice B2 (`docs/theme-design.md`'s "terminal-faithful / UI-snap seam")
+/// added the `base.*`/`chart.*` rows above: the scheme's six ANSI-shaped
+/// hues, projected as gpui-component's own base-color swatch set so
+/// future colorful UI (`Tag`, `Badge`'s default fill, `ColorPicker`'s
+/// featured-colors row, any `chart_1..5` consumer) shares the terminal's
+/// hues instead of gpui-component's own stock reds/greens
+/// (`crates/ui/src/theme/default-theme.json`'s `red-600`/`red-400`
+/// etc.). Both are projected **faithful** (the raw resolved ANSI value),
+/// not through [`readable_on`]'s contrast-snap: every consumer of
+/// `base.*`/`chart.*` in the vendored gpui-component source paints them
+/// as fills or marks, never as text (`Badge::render`'s `.bg()`,
+/// `ColorPicker::render_palette_panel`'s swatches, gpui-component's own
+/// `chart_1..5` fallback formula, a lightened/darkened spread off
+/// `blue`) -- the seam's own ambiguous-field rule ("prefer the faithful
+/// hue and note it") resolves to leaving them alone here. `chart_1..
+/// chart_5` pick five of the scheme's six hues in roughly rainbow order
+/// (red, yellow, green, cyan, blue); magenta is the one dropped, an
+/// arbitrary-but-documented choice made only to fit six hues into five
+/// chart slots -- nothing in Horizon renders a chart yet to validate a
+/// better spread against, so this is about coherence with the scheme's
+/// hue set, not a considered chart-design pick (`docs/theme-design.md`'s
+/// framing for this exact scope).
 ///
 /// Deliberately *not* set (left to gpui-component's own fallback, per the
 /// table's header comment): gpui-component's own `accent`/
@@ -905,6 +1009,30 @@ fn gpui_component_theme_config(scheme: &Scheme) -> gpui_component::ThemeConfig {
             "scrollbar.thumb.background": hex(scheme.text_subtle),
             "popover.background": hex(scheme.surface_raised),
             "popover.foreground": hex(scheme.foreground),
+            // The six ANSI-shaped hues as gpui-component's own `base.*`
+            // swatch set (faithful, not contrast-snapped -- see this
+            // function's doc). `scheme.ansi` indices: 1=red, 2=green,
+            // 3=yellow, 4=blue, 5=magenta, 6=cyan; the matching bright
+            // slot is index+8.
+            "base.red": hex(scheme.ansi[1]),
+            "base.red.light": hex(scheme.ansi[9]),
+            "base.green": hex(scheme.ansi[2]),
+            "base.green.light": hex(scheme.ansi[10]),
+            "base.yellow": hex(scheme.ansi[3]),
+            "base.yellow.light": hex(scheme.ansi[11]),
+            "base.blue": hex(scheme.ansi[4]),
+            "base.blue.light": hex(scheme.ansi[12]),
+            "base.magenta": hex(scheme.ansi[5]),
+            "base.magenta.light": hex(scheme.ansi[13]),
+            "base.cyan": hex(scheme.ansi[6]),
+            "base.cyan.light": hex(scheme.ansi[14]),
+            // Rainbow-order spread over five of the six hues (magenta
+            // dropped, see this function's doc) -- also faithful.
+            "chart.1": hex(scheme.ansi[1]),
+            "chart.2": hex(scheme.ansi[3]),
+            "chart.3": hex(scheme.ansi[2]),
+            "chart.4": hex(scheme.ansi[6]),
+            "chart.5": hex(scheme.ansi[4]),
         },
     });
     serde_json::from_value(value)
@@ -1982,5 +2110,182 @@ mod tests {
         let scheme = scheme_from(&config_with(&[("accent", "blue")]));
         assert_eq!(scheme.cursor, scheme.accent);
         assert_eq!(scheme.cursor, ANSI16_DEFAULT[4]);
+    }
+
+    // --- Slice B2: UI-snap seam (hue projection + surface-aware snapping)
+
+    #[test]
+    fn gpui_projection_base_hues_follow_the_scheme_and_are_faithful() {
+        let scheme = scheme_from(&RawConfig::default());
+        let colors = theme_color_for(&scheme);
+        assert_eq!(colors.red, packed_hsla(scheme.ansi[1]));
+        assert_eq!(colors.red_light, packed_hsla(scheme.ansi[9]));
+        assert_eq!(colors.green, packed_hsla(scheme.ansi[2]));
+        assert_eq!(colors.green_light, packed_hsla(scheme.ansi[10]));
+        assert_eq!(colors.yellow, packed_hsla(scheme.ansi[3]));
+        assert_eq!(colors.yellow_light, packed_hsla(scheme.ansi[11]));
+        assert_eq!(colors.blue, packed_hsla(scheme.ansi[4]));
+        assert_eq!(colors.blue_light, packed_hsla(scheme.ansi[12]));
+        assert_eq!(colors.magenta, packed_hsla(scheme.ansi[5]));
+        assert_eq!(colors.magenta_light, packed_hsla(scheme.ansi[13]));
+        assert_eq!(colors.cyan, packed_hsla(scheme.ansi[6]));
+        assert_eq!(colors.cyan_light, packed_hsla(scheme.ansi[14]));
+    }
+
+    #[test]
+    fn gpui_projection_chart_colors_spread_over_five_of_the_six_hues() {
+        // Magenta (`ansi[5]`) is the deliberately dropped sixth hue.
+        let scheme = scheme_from(&RawConfig::default());
+        let colors = theme_color_for(&scheme);
+        assert_eq!(colors.chart_1, packed_hsla(scheme.ansi[1])); // red
+        assert_eq!(colors.chart_2, packed_hsla(scheme.ansi[3])); // yellow
+        assert_eq!(colors.chart_3, packed_hsla(scheme.ansi[2])); // green
+        assert_eq!(colors.chart_4, packed_hsla(scheme.ansi[6])); // cyan
+        assert_eq!(colors.chart_5, packed_hsla(scheme.ansi[4])); // blue
+    }
+
+    #[test]
+    fn gpui_projection_base_hues_follow_an_overridden_ansi_slot() {
+        let scheme = scheme_from(&config_with_ansi(&[], &[("red", "#123456")]));
+        let colors = theme_color_for(&scheme);
+        assert_eq!(colors.red, packed_hsla(0x123456));
+    }
+
+    /// Back-compat guard (mirrors B1's own pattern): the built-in scheme's
+    /// existing semantic-role colors were already tuned to clear the text
+    /// floor against `background` (`contrast_safe_default`); this asserts
+    /// -- rather than assumes -- that they *also* already clear it against
+    /// `surface_panel`/`surface_raised`, the two non-background surfaces
+    /// slice B2 wires `readable_on` into. If this test ever fails, some
+    /// call site's `readable_on` wrapping would visibly change the
+    /// built-in scheme's own appearance, which the design's back-compat
+    /// guard forbids.
+    #[test]
+    fn readable_on_is_a_noop_for_the_built_in_scheme_against_surface_panel_and_surface_raised() {
+        let scheme = scheme_from(&RawConfig::default());
+        let panel = packed_hsla(scheme.surface_panel);
+        let raised = packed_hsla(scheme.surface_raised);
+        for role in [
+            scheme.danger,
+            scheme.warning,
+            scheme.success,
+            scheme.info,
+            scheme.text_muted,
+            scheme.accent,
+        ] {
+            let color = packed_hsla(role);
+            assert_eq!(readable_on(color, panel), color);
+            assert_eq!(readable_on(color, raised), color);
+        }
+    }
+
+    #[test]
+    fn readable_on_snaps_a_color_that_fails_the_floor_against_a_surface() {
+        // The owner's real light scheme (`owner_light_scheme`): `danger`
+        // is an explicit override that was only ever floored against
+        // `background`, not `surface_panel` -- confirmed here to actually
+        // violate the floor, the real-world motivation for this API.
+        let scheme = owner_light_scheme();
+        let danger = packed_hsla(scheme.danger);
+        let panel = packed_hsla(scheme.surface_panel);
+        let ratio_before = oklab::contrast_ratio(
+            oklab::relative_luminance(scheme.danger),
+            oklab::relative_luminance(scheme.surface_panel),
+        );
+        assert!(
+            ratio_before < TEXT_CONTRAST_FLOOR,
+            "fixture assumption: danger vs surface_panel should already be under-floor \
+             (ratio {ratio_before}), otherwise this test doesn't exercise the snap"
+        );
+
+        let snapped = readable_on(danger, panel);
+        assert_ne!(snapped, danger);
+        let snapped_packed = packed_from_hsla(snapped);
+        let ratio_after = oklab::contrast_ratio(
+            oklab::relative_luminance(snapped_packed),
+            oklab::relative_luminance(scheme.surface_panel),
+        );
+        // `- 0.05`: the same u8-quantization tolerance
+        // `text_muted_never_drops_below_the_wcag_floor_across_a_range_of_
+        // knobs` already uses -- `solve_lightness_for_ratio` targets the
+        // ratio in continuous OKLab space, and the final sRGB roundtrip
+        // can shave a few thousandths off after rounding to `u8` channels.
+        assert!(
+            ratio_after >= TEXT_CONTRAST_FLOOR - 0.05,
+            "ratio = {ratio_after}"
+        );
+        // Hue is preserved (only lightness moves). Compared through the
+        // same `Hsla` roundtrip `readable_on` itself uses on both ends
+        // (rather than against `scheme.danger` directly) so the
+        // comparison isolates `contrast_snap`'s own hue fidelity from the
+        // `u32`<->`Hsla` conversion's own independent `f32` rounding.
+        // `0.05` rad (~3 degrees): loose enough to absorb this large a
+        // lightness swing's own sRGB-gamut-clipping skew (this fixture's
+        // saturated pink-red pushed to a much darker lightness against a
+        // light surface is an extreme case) while still catching a
+        // genuinely wrong hue.
+        let before_hue = oklab::oklch_from_packed(packed_from_hsla(danger)).h;
+        let after_hue = oklab::oklch_from_packed(snapped_packed).h;
+        assert!(
+            (before_hue - after_hue).abs() < 0.05,
+            "before {before_hue}, after {after_hue}"
+        );
+    }
+
+    #[test]
+    fn diff_text_defaults_are_noops_against_their_own_surface_on_the_built_in_scheme() {
+        // Back-compat guard for the `diff_added_text`/`diff_removed_text`
+        // derivation-path change: the built-in scheme's diff defaults
+        // already clear the floor against their own diff surface, so
+        // routing the default through `contrast_snap` doesn't move
+        // them -- matches `diff_surface_and_text_roles_are_independently_
+        // overridable`'s existing byte-value expectations, made explicit
+        // here as a floor check rather than an equality assumption.
+        let scheme = scheme_from(&RawConfig::default());
+        assert_eq!(scheme.diff_added_text, SUCCESS_DEFAULT);
+        assert_eq!(scheme.diff_removed_text, DANGER_DEFAULT);
+        assert!(
+            oklab::contrast_ratio(
+                oklab::relative_luminance(scheme.diff_added_text),
+                oklab::relative_luminance(scheme.diff_added_surface),
+            ) >= TEXT_CONTRAST_FLOOR - 0.05
+        );
+        assert!(
+            oklab::contrast_ratio(
+                oklab::relative_luminance(scheme.diff_removed_text),
+                oklab::relative_luminance(scheme.diff_removed_surface),
+            ) >= TEXT_CONTRAST_FLOOR - 0.05
+        );
+    }
+
+    #[test]
+    fn diff_added_text_default_snaps_when_the_configured_surface_clashes_with_success() {
+        // `diff_added_surface` explicitly set to (nearly) `success` itself
+        // -- an extreme but legal config -- with `diff_added_text` left
+        // unset: the old plain-`success` default would be unreadable
+        // (contrast ~1:1) against that surface. The new default must
+        // still clear the floor.
+        let scheme = scheme_from(&config_with(&[("diff_added_surface", "#98c379")]));
+        assert_eq!(scheme.diff_added_surface, 0x98c379);
+        assert_ne!(scheme.diff_added_text, SUCCESS_DEFAULT);
+        assert!(
+            oklab::contrast_ratio(
+                oklab::relative_luminance(scheme.diff_added_text),
+                oklab::relative_luminance(scheme.diff_added_surface),
+            ) >= TEXT_CONTRAST_FLOOR - 0.05
+        );
+    }
+
+    #[test]
+    fn diff_text_explicit_overrides_are_never_snapped() {
+        // An explicit `diff_added_text` wins outright, even one that
+        // would fail the floor against its surface -- `contrast_snap` is
+        // only ever the `chrome()` default, exactly like
+        // `contrast_safe_default` before it.
+        let scheme = scheme_from(&config_with(&[
+            ("diff_added_surface", "#98c379"),
+            ("diff_added_text", "#99c37a"),
+        ]));
+        assert_eq!(scheme.diff_added_text, 0x99c37a);
     }
 }
