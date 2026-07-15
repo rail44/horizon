@@ -171,11 +171,45 @@ pub struct RawTerminalConfig {
 #[serde(default)]
 pub struct RawThemeConfig {
     pub ansi: RawThemeAnsiConfig,
+    /// The WCAG contrast-ratio target for `text_primary` against
+    /// `surface_base`, feeding `ui::theme`'s seed derivation
+    /// (`docs/theme-design.md`). Clamped to `[4.5, 21.0]` and defaulted
+    /// (both by `ui::theme`, not here) when absent or unparsable.
+    /// Deserialized leniently via [`deserialize_lenient_f64`] rather than
+    /// as a plain `Option<f64>`: a plain typed field would fail *the whole
+    /// config file's* parse on a type mismatch (e.g. a quoted string),
+    /// whereas every other `[theme]` value (the hex-string roles below,
+    /// `ansi`'s slots) only ever drops that *one* entry to its built-in
+    /// default -- see that function's doc for the mechanism.
+    #[serde(deserialize_with = "deserialize_lenient_f64")]
+    pub text_contrast: Option<f64>,
     /// Palette name (matching a `ui::theme` accessor, e.g. `"accent"`) to a
     /// `#rrggbb`/`#rgb` hex string. Flattened so this and `ansi` above share
     /// the same `[theme]` table in TOML.
     #[serde(flatten)]
     pub colors: HashMap<String, String>,
+}
+
+/// Deserializes an optional TOML value into `Option<f64>`, accepting both
+/// TOML integers and floats and silently discarding (`None`, not a parse
+/// error) any other type -- unlike `#[serde(default)]` on a plain
+/// `Option<f64>` field, which errors the *entire file's* parse on a type
+/// mismatch. Mirrors the "warn and skip, never fail startup" policy
+/// `ui::theme` already applies per-entry to hex-string `[theme]` values
+/// (an unparsable one falls back to that role's built-in default, not a
+/// startup failure) -- this is the same policy applied at the TOML-type
+/// level instead of the hex-string level, since `text_contrast` is a bare
+/// number rather than a string `ui::theme` parses itself.
+fn deserialize_lenient_f64<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<toml::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| {
+        value
+            .as_float()
+            .or_else(|| value.as_integer().map(|value| value as f64))
+    }))
 }
 
 /// `[theme.ansi]`: the 16 base ANSI color slots, each an optional

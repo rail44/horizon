@@ -273,3 +273,49 @@ fn a_file_with_only_some_knobs_set_leaves_the_rest_none() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+// --- [theme] text_contrast: lenient number parsing ----------------------
+
+#[test]
+fn text_contrast_parses_an_integer_or_float_toml_literal() {
+    assert_eq!(
+        parse("[theme]\ntext_contrast = 15\n")
+            .unwrap()
+            .theme
+            .text_contrast,
+        Some(15.0)
+    );
+    assert_eq!(
+        parse("[theme]\ntext_contrast = 12.5\n")
+            .unwrap()
+            .theme
+            .text_contrast,
+        Some(12.5)
+    );
+}
+
+#[test]
+fn text_contrast_absent_is_none_not_an_error() {
+    assert_eq!(
+        parse("[theme]\naccent = \"#ff00ff\"\n")
+            .unwrap()
+            .theme
+            .text_contrast,
+        None
+    );
+}
+
+#[test]
+fn text_contrast_wrong_type_falls_back_to_none_without_failing_the_whole_file() {
+    // A quoted string (wrong TOML type for this key) must not fail the
+    // entire config parse -- only this one entry drops to `None`, matching
+    // `[theme]`'s existing per-key "warn and skip" policy for hex-string
+    // roles rather than the whole-file failure a plain typed `Option<f64>`
+    // field would produce on a type mismatch.
+    let parsed = parse("[theme]\ntext_contrast = \"bogus\"\naccent = \"#ff00ff\"\n").unwrap();
+    assert_eq!(parsed.theme.text_contrast, None);
+    assert_eq!(
+        parsed.theme.colors.get("accent").map(String::as_str),
+        Some("#ff00ff")
+    );
+}

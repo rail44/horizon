@@ -4,7 +4,10 @@ Status: initial design, decided in-session with the owner on 2026-07-15.
 Several defaults are explicitly provisional and expected to be tuned through
 dogfooding; they are marked as such below. This document is the
 self-contained record of the decisions; `docs/roadmap.md` should only index
-it.
+it. Slice B1 (the seed schema + headless OKLCH derivation core — `src/theme.rs`'s
+`scheme_from`, `src/theme/oklab.rs`) landed 2026-07-15, settling the five
+"Provisional details" below; full UI wiring beyond the existing
+`Scheme`/`apply_gpui_component_theme` seam is slice B2, not yet started.
 
 ## Problem
 
@@ -127,18 +130,75 @@ The owner approved the decisions above while noting they may be revisited
 as operational feel accumulates. In addition, the following were chosen by
 default rather than discussed, and are explicitly open:
 
-- **TOML shape of the seed** — leading candidate: the six `[theme.ansi]`
-  hue slots double as the seed ("promote the existing setting"), with
-  `background`, `accent`, and the contrast knob as `[theme]` keys.
-- **Knob name and default** — the owner's measured 5.3 is the reference
-  point for the default.
-- **Brights derivation** — formula TBD (tinted8 uses ΔL ≈ 0.12 in HSL as
-  prior art). Note the owner's config deliberately sets bright = normal
-  for the six hues; explicit `[theme.ansi]` overrides win regardless, so
-  the derivation default must merely be sane, not match that choice.
-- **Semantic-color ↔ hue default mapping** (e.g. info: blue vs. cyan).
-- **Accent-as-hex** — hover/active derivation for accents that are not one
-  of the six slots.
+- **TOML shape of the seed** — **Settled 2026-07-15 (slice B1
+  implementation).** The leading candidate was adopted as-is: the six
+  `[theme.ansi]` hue slots double as the seed's hue set (no new keys),
+  and `surface_base` (the *existing* key — explicitly not a new
+  `background` key) is the anchor. `accent` (existing `[theme]` key) was
+  extended to accept a slot name (`"red"`/`"green"`/`"yellow"`/`"blue"`/
+  `"magenta"`/`"cyan"`) in addition to a hex value; a slot name resolves
+  to that `[theme.ansi]` slot's already-resolved value, then every
+  downstream accent derivation is identical regardless of spelling (no
+  special casing). See `crates/horizon-config/src/lib.rs`'s
+  `RawThemeConfig`, `src/theme.rs`'s `SeedHues`/`resolve_accent`.
+- **Knob name and default** — **Settled 2026-07-15.** The new `[theme]`
+  key is `text_contrast`: a number, clamped to `[4.5, 21.0]`, default
+  `15` (the built-in dark scheme's measured fg/bg ratio, 15.01 — chosen
+  so the default appearance is unchanged; the owner's own measured 5.3
+  was the *reference point* considered, but it's their deliberate override
+  on the *light* scheme, not the built-in dark scheme's own ratio the
+  zero-config default needs to reproduce). Deserialized leniently
+  (`crates/horizon-config`'s `deserialize_lenient_f64`) so an unparsable
+  value drops to the default silently, matching `[theme]`'s existing
+  per-key policy for hex-string roles, rather than failing the whole
+  config file's parse the way a plain typed field would.
+- **Brights derivation** — **Settled 2026-07-15, explicitly still
+  dogfooding-tunable** (this was the most feel-sensitive call in the
+  slice; expect it to move), plus the closely-related `black`/`white`
+  rule it builds on. `black`/`white` are role-based, not lightness-picked:
+  `black` ← the resolved background, `white` ← the resolved foreground,
+  on both polarities — base16's own ANSI-0 convention (ANSI 0 = base00 =
+  the default background regardless of polarity), and what both reference
+  fixtures show (the built-in dark scheme's `black`/`white` sit in the
+  `background`/`foreground` *family* respectively; the owner's light
+  scheme sets `black` to their light background color and `white` to their
+  dark foreground color — the opposite pairing a lightness pick would
+  produce). "Light polarity inverts black/white" describes what happens
+  to these two *values* once background/foreground themselves flip
+  polarity, not a swap of which role gets which endpoint. `bright_black`
+  is `text_subtle` — both reference fixtures agree on this exactly (the
+  built-in's `bright_black` equals `TEXT_SUBTLE_DEFAULT`; the owner's own
+  `bright_black` equals their `text_subtle`) — it's the terminal's
+  de-emphasis gray (dimmed `ls` entries, shell autosuggestions), not a
+  further push off `black`, which would risk landing back on the
+  background it needs to stand out from. `bright_white` and the six
+  colored `bright_*` hues *do* share one mechanism: an OKLCH lightness
+  delta (`src/theme.rs`'s `BRIGHT_HUE_EMPHASIS_DELTA`, `0.1`) applied to
+  the resolved *normal* color (`foreground` for `bright_white`, the
+  matching hue for the rest), in the foreground's own direction (dark
+  background: lighter; light background: darker), chroma and hue held
+  fixed. As before, an explicit `[theme.ansi]` override (bright or
+  normal, including `black`/`white` themselves) always wins regardless —
+  the owner's own "bright = normal" config keeps working unchanged.
+- **Semantic-color ↔ hue default mapping** — **Settled 2026-07-15,
+  unsurprising:** `danger` ← `red`, `warning` ← `yellow`, `success` ←
+  `green`, `info` ← `blue` (the same pairing the built-in constants
+  already implied numerically — this design doc's own Evidence table
+  measured them off the same hex values). Each candidate is
+  contrast-snapped against the background exactly as the pre-existing
+  `contrast_safe_default` already did, generalized to read the resolved
+  (possibly user-overridden) hue instead of a fixed constant.
+- **Accent-as-hex** — **Settled 2026-07-15 as "unchanged, not extended."**
+  Slice B1 doesn't add any new hover/active derivation keyed off accent:
+  `surface_selected` (previously a `background`-toward-`accent` blend
+  when unset) moved to the neutral ladder (background-toward-foreground,
+  alongside `surface_panel`/`surface_raised`/`surface_chrome`/borders)
+  instead, so no seed-derived role reads `accent` at all anymore —
+  whether it's a hex value or a slot name makes no difference to any
+  *other* role's derivation. `accent` itself, and gpui-component's
+  `primary`/`ring`/`primary_foreground` projections that read it
+  directly (`gpui_component_theme_config`, untouched by this slice), are
+  the only consumers.
 
 ## Evidence (2026-07-15, measured on the owner's real scheme)
 

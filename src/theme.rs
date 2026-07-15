@@ -68,27 +68,38 @@ use std::sync::{OnceLock, RwLock};
 use alacritty_terminal::vte::ansi::{NamedColor, Rgb};
 use gpui::{rgb, Hsla, Rgba};
 use gpui_component::Colorize as _;
-use horizon_config::RawConfig;
+use horizon_config::{RawConfig, RawThemeConfig};
 use horizon_terminal_core::TerminalColor;
+
+mod oklab;
 
 const BACKGROUND_DEFAULT: u32 = 0x16181d; // SURFACE_BASE_DEFAULT
 const FOREGROUND_DEFAULT: u32 = 0xe9ecf2; // TEXT_PRIMARY_DEFAULT
 const CURSOR_DEFAULT: u32 = 0x84dcc6; // ACCENT_DEFAULT
 
-// Agent-pane role defaults -- chosen to match `src/agent/view.rs`'s
-// pre-existing hardcoded hex values exactly, so this layer is a pure
-// plumbing change (see the amendment doc's "changes plumbing, not
-// design"). `danger`/`warning`/`success`/`info` happen to equal the
-// built-in ANSI red/yellow/green/blue defaults (config.example.toml's
-// `[theme.ansi]` comment already anticipated an agent-transcript renderer
-// reusing that palette) but are resolved as independent, dedicated `[theme]`
-// keys so overriding one doesn't silently move the other. Each is only
-// ever used as the *candidate* input to [`contrast_safe_default`] below --
-// never assigned to a `Scheme` field directly -- since a scheme with a
-// light background needs the inverted twin instead (see that function).
+// Agent-pane role defaults -- historically chosen to match
+// `src/agent/view.rs`'s pre-existing hardcoded hex values exactly (see the
+// agent-output-ui-amendment doc's "changes plumbing, not design").
+// `danger`/`warning`/`success`/`info` happen to equal the built-in ANSI
+// red/yellow/green/blue defaults (config.example.toml's `[theme.ansi]`
+// comment already anticipated an agent-transcript renderer reusing that
+// palette) -- not a coincidence `scheme_from` relies on: since the seed
+// derivation (`docs/theme-design.md`), the *candidate* fed to
+// [`contrast_safe_default`] for each of these roles is the resolved ANSI
+// hue itself (`SeedHues`), not these constants, so a `[theme.ansi]`
+// override now reaches the matching unset semantic color too. These four
+// constants are kept only as `#[cfg(test)]` fixtures (their numeric
+// equality with `ANSI16_DEFAULT`'s red/yellow/green/blue is exactly what
+// keeps the zero-config scheme byte-identical to its historical values --
+// see this module's tests) -- production code no longer reads them
+// directly.
+#[cfg(test)]
 const DANGER_DEFAULT: u32 = 0xe06c75;
+#[cfg(test)]
 const WARNING_DEFAULT: u32 = 0xe5c07b;
+#[cfg(test)]
 const SUCCESS_DEFAULT: u32 = 0x98c379;
+#[cfg(test)]
 const INFO_DEFAULT: u32 = 0x61afef; // the assistant message label
 const TEXT_MUTED_DEFAULT: u32 = 0x8a90a0; // status line / exited state
 const TEXT_SUBTLE_DEFAULT: u32 = 0x5f6370; // thinking deltas / tool-preparing text
@@ -158,6 +169,89 @@ const SEGMENTED_TRACK_BLEND_RATIO: f32 = 0.5;
 /// reproduces today's look bit-for-bit rather than just approximating
 /// it.
 const LIST_ACTIVE_BLEND_RATIO: f32 = 0.1;
+
+// --- Seed derivation (`docs/theme-design.md`) ---------------------------
+//
+// Every constant below feeds a role's *derived* default -- the value used
+// only when both the role key itself AND the seed (`surface_base`, the six
+// `[theme.ansi]` hues, `text_contrast`) are unset. The moment any seed key
+// is set (`seed_configured` below), these formulas replace the legacy
+// constants/blend-ratios above for every role this design doc names;
+// `RawConfig::default()` (nothing set at all) keeps resolving through the
+// untouched legacy path instead, so today's built-in scheme stays the
+// literal zero-config answer -- see `scheme_from`'s `seed_configured` gate
+// and this module's `derivation_reproduces_the_builtin_scheme_within_tolerance`
+// test (the reproduction is checked with tolerance, not exact equality,
+// since OKLCH contrast-solving and RGB-linear `blend()` are different
+// color spaces that were never going to land on identical bytes).
+
+/// `text_contrast`'s floor -- WCAG 2.x AA's normal-text contrast
+/// threshold. No knob value may go below it.
+const TEXT_CONTRAST_FLOOR: f64 = 4.5;
+/// `text_contrast`'s ceiling -- WCAG's own maximum possible ratio (pure
+/// black on pure white).
+const TEXT_CONTRAST_CEIL: f64 = 21.0;
+/// `text_contrast`'s built-in default -- the built-in dark scheme's own
+/// measured `foreground`/`background` ratio (`docs/theme-design.md`'s
+/// Evidence table: 15.01), so a config that leaves the knob unset keeps
+/// deriving today's default appearance (`foreground` solves back to
+/// within a couple of `u8` units of `FOREGROUND_DEFAULT` at this setting
+/// -- verified in this module's tests, not assumed).
+const TEXT_CONTRAST_DEFAULT: f64 = 15.0;
+
+/// How far of the way from the WCAG floor (`TEXT_CONTRAST_FLOOR`) to the
+/// `text_contrast` knob `text_muted`'s own target ratio sits, when
+/// `text_muted` is unset. Tuned so the built-in dark scheme's default knob
+/// (`TEXT_CONTRAST_DEFAULT`, 15) reproduces its historical `text_muted`
+/// ratio (`docs/theme-design.md`'s Evidence table: 5.56) within a couple
+/// hundredths: `4.5 + (15 - 4.5) * 0.1012 = 5.5626`. Guarantees the floor
+/// by construction (the fraction is `>= 0`) and never exceeds the primary
+/// target (the fraction is `<= 1`).
+const TEXT_MUTED_CONTRAST_FRACTION: f64 = 0.1012;
+
+/// How far of the way from `background`'s OKLab lightness to
+/// `foreground`'s `text_subtle` sits, when unset. `text_subtle` is
+/// decorative by definition (`docs/theme-design.md`) -- no WCAG floor, no
+/// ratio target -- so this fraction is tuned only to (a) reproduce the
+/// built-in dark scheme's historical `text_subtle` contrast ratio (2.96)
+/// within a few hundredths at the default seed and (b) stay distinct from
+/// every neutral-ladder step below (`SURFACE_CHROME_STEP` through
+/// `BORDER_STEP`) so it never coincides with a surface color exactly.
+const TEXT_SUBTLE_LADDER_FRACTION: f64 = 0.4;
+
+/// Neutral-ladder step fractions (OKLab-lightness distance from
+/// `background` toward `foreground`, `0.0..=1.0`) -- the seed-derivation
+/// replacement for the old per-role `blend()`-in-sRGB-space ratios
+/// (`SURFACE_LIFT_RATIO`, `LIST_ACTIVE_BLEND_RATIO`, `BORDER_BLEND_RATIO`
+/// above, all still used for their *legacy* defaults) now that both
+/// ladder endpoints are resolved through the same seed. Ordered
+/// `SURFACE_CHROME_STEP < SURFACE_PANEL_STEP < SURFACE_RAISED_STEP <
+/// SURFACE_SELECTED_STEP == BORDER_STEP`, loosely shaped after the
+/// owner's own light scheme (`docs/theme-design.md`'s Evidence table:
+/// panel closest to background, selected/border a shared further step) --
+/// explicitly NOT tuned to reproduce their exact values (per the owner:
+/// "the steps were set by feel; don't trust them"), only their relative
+/// ordering and separation from both ends.
+const SURFACE_CHROME_STEP: f64 = 0.12;
+const SURFACE_PANEL_STEP: f64 = 0.28;
+const SURFACE_RAISED_STEP: f64 = 0.34;
+const SURFACE_SELECTED_STEP: f64 = 0.5;
+const BORDER_STEP: f64 = 0.5;
+
+/// OKLCH lightness delta applied, toward the foreground's own direction
+/// (dark background: lighter; light background: darker -- "emphasis
+/// toward the foreground direction" in `docs/theme-design.md`), to a
+/// resolved normal ANSI hue when deriving its unset `bright_*` sibling.
+/// Chroma and hue are held fixed -- only lightness moves. The single most
+/// feel-sensitive constant in this module (per the design doc, which
+/// leaves the exact formula "TBD, tune through dogfooding"); tinted8
+/// prior art uses a comparable ΔL ≈ 0.12 in HSL. Also reused for
+/// `bright_white` (pushing `foreground` itself further in the same
+/// direction, see `scheme_from`) -- `bright_black` does NOT use this
+/// constant, it derives from `text_subtle` instead (both reference
+/// fixtures -- built-in and the owner's -- agree `bright_black` IS
+/// `text_subtle`, not a further push off `black`).
+const BRIGHT_HUE_EMPHASIS_DELTA: f64 = 0.1;
 
 const ANSI16_DEFAULT: [u32; 16] = [
     0x23262e, // black
@@ -237,6 +331,79 @@ impl Scheme {
     }
 }
 
+/// The six ANSI-shaped hues that double as the seed's hue set
+/// (`docs/theme-design.md`: "promote the existing [`theme.ansi`]
+/// setting"), resolved once at the top of [`scheme_from`] -- both
+/// [`resolve_accent`]'s slot-name lookup and the semantic-color/
+/// bright-hue derivations below read from here rather than re-resolving
+/// `[theme.ansi]` themselves.
+struct SeedHues {
+    red: u32,
+    green: u32,
+    yellow: u32,
+    blue: u32,
+    magenta: u32,
+    cyan: u32,
+}
+
+/// `accent`'s value, resolved from either a `[theme.ansi]` slot name
+/// (`"red"`/`"green"`/`"yellow"`/`"blue"`/`"magenta"`/`"cyan"`) or a plain
+/// hex string (`docs/theme-design.md`: "a slot reference ... or a direct
+/// hex"). A slot name resolves to that slot's already-resolved value
+/// (`hues`, post `[theme.ansi]` overrides), so every downstream accent
+/// derivation is identical regardless of which spelling was used.
+fn resolve_accent(colors_accent: Option<&String>, hues: &SeedHues, default: u32) -> u32 {
+    let Some(value) = colors_accent else {
+        return default;
+    };
+    match value.trim() {
+        "red" => hues.red,
+        "green" => hues.green,
+        "yellow" => hues.yellow,
+        "blue" => hues.blue,
+        "magenta" => hues.magenta,
+        "cyan" => hues.cyan,
+        hex => parse_hex(hex).unwrap_or(default),
+    }
+}
+
+/// True once the user has customized any part of the seed (the
+/// `surface_base`/`terminal_background` anchor, any of the six hue
+/// slots, or the `text_contrast` knob) -- gates every seed-derived
+/// default in [`scheme_from`] below. Deliberately a *presence* check on
+/// the raw config, not a check of whether the resolved values happen to
+/// differ from Horizon's built-ins: a config that spells out the built-in
+/// seed explicitly (e.g. to tweak just `text_contrast`) must still route
+/// through the new derivation, while `RawConfig::default()` (nothing set
+/// at all) must still resolve through the untouched legacy path -- see
+/// this module's `derivation_reproduces_the_builtin_scheme_within_tolerance`
+/// test for the former and
+/// `default_scheme_matches_agent_views_pre_existing_hex_values` for the
+/// latter.
+fn seed_is_configured(theme: &RawThemeConfig) -> bool {
+    theme.colors.contains_key("surface_base")
+        || theme.colors.contains_key("terminal_background")
+        || theme.ansi.red.is_some()
+        || theme.ansi.green.is_some()
+        || theme.ansi.yellow.is_some()
+        || theme.ansi.blue.is_some()
+        || theme.ansi.magenta.is_some()
+        || theme.ansi.cyan.is_some()
+        || theme.text_contrast.is_some()
+}
+
+/// Clamps a raw `text_contrast` value to `[TEXT_CONTRAST_FLOOR,
+/// TEXT_CONTRAST_CEIL]`, falling back to `TEXT_CONTRAST_DEFAULT` when
+/// unset or non-finite (`nan`/`inf` are valid TOML float literals, so
+/// this still needs a check even though `RawThemeConfig::text_contrast`'s
+/// own lenient deserializer already screens out the wrong TOML *type*).
+fn resolve_text_contrast(raw: Option<f64>) -> f64 {
+    match raw {
+        Some(value) if value.is_finite() => value.clamp(TEXT_CONTRAST_FLOOR, TEXT_CONTRAST_CEIL),
+        _ => TEXT_CONTRAST_DEFAULT,
+    }
+}
+
 fn scheme_from(raw: &RawConfig) -> Scheme {
     let chrome = |key: &str, fallback_key: Option<&str>, default: u32| {
         raw.theme
@@ -251,6 +418,32 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
     };
     let ansi_raw = &raw.theme.ansi;
 
+    // The seed: the six hue slots (doubling as `[theme.ansi]`'s normal
+    // colors), the `surface_base` anchor, `text_contrast`, and whether
+    // any of that was actually configured. Resolved ahead of everything
+    // else -- every derived default below reads from these.
+    let hues = SeedHues {
+        red: ansi_slot(&ansi_raw.red, ANSI16_DEFAULT[1]),
+        green: ansi_slot(&ansi_raw.green, ANSI16_DEFAULT[2]),
+        yellow: ansi_slot(&ansi_raw.yellow, ANSI16_DEFAULT[3]),
+        blue: ansi_slot(&ansi_raw.blue, ANSI16_DEFAULT[4]),
+        magenta: ansi_slot(&ansi_raw.magenta, ANSI16_DEFAULT[5]),
+        cyan: ansi_slot(&ansi_raw.cyan, ANSI16_DEFAULT[6]),
+    };
+    // The seed's own anchor -- `surface_base` specifically, never
+    // `terminal_background` (which may deliberately diverge the
+    // terminal's look from the UI's, see `background` below): every
+    // UI-side derivation in this function reads from `seed_background`,
+    // not `background`.
+    let seed_background = chrome("surface_base", None, BACKGROUND_DEFAULT);
+    let text_contrast = resolve_text_contrast(raw.theme.text_contrast);
+    let seed_configured = seed_is_configured(&raw.theme);
+    // Polarity, from the seed anchor's own OKLab lightness -- generalizes
+    // `is_light`/`contrast_safe_default`'s BT.601-luma polarity check to
+    // the perceptually-uniform space the rest of this derivation solves
+    // in.
+    let dark = oklab::lightness(seed_background) < 0.5;
+
     // Resolved ahead of the struct literal below: later roles' *default*
     // (never their explicit-override path) derives from these.
     let background = chrome(
@@ -261,70 +454,242 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
     let foreground = chrome(
         "terminal_foreground",
         Some("text_primary"),
-        FOREGROUND_DEFAULT,
+        if seed_configured {
+            oklab::tint_for_contrast(seed_background, text_contrast)
+        } else {
+            FOREGROUND_DEFAULT
+        },
     );
-    let text_subtle = chrome("text_subtle", None, TEXT_SUBTLE_DEFAULT);
-    let accent = chrome("accent", None, CURSOR_DEFAULT);
-    let danger = chrome(
-        "danger",
+    let text_subtle = chrome(
+        "text_subtle",
         None,
-        contrast_safe_default(DANGER_DEFAULT, background),
+        if seed_configured {
+            oklab::step_lightness_toward(seed_background, foreground, TEXT_SUBTLE_LADDER_FRACTION)
+        } else {
+            TEXT_SUBTLE_DEFAULT
+        },
     );
+    let accent = resolve_accent(raw.theme.colors.get("accent"), &hues, CURSOR_DEFAULT);
+    let danger = chrome("danger", None, contrast_safe_default(hues.red, background));
     let warning = chrome(
         "warning",
         None,
-        contrast_safe_default(WARNING_DEFAULT, background),
+        contrast_safe_default(hues.yellow, background),
     );
     let success = chrome(
         "success",
         None,
-        contrast_safe_default(SUCCESS_DEFAULT, background),
+        contrast_safe_default(hues.green, background),
     );
-    let info = chrome(
-        "info",
-        None,
-        contrast_safe_default(INFO_DEFAULT, background),
-    );
+    let info = chrome("info", None, contrast_safe_default(hues.blue, background));
     let surface_panel = chrome(
         "surface_panel",
         None,
-        blend(background, foreground, SURFACE_LIFT_RATIO),
+        if seed_configured {
+            oklab::step_lightness_toward(seed_background, foreground, SURFACE_PANEL_STEP)
+        } else {
+            blend(background, foreground, SURFACE_LIFT_RATIO)
+        },
     );
-    let surface_chrome = chrome("surface_chrome", None, background);
+    let surface_chrome = chrome(
+        "surface_chrome",
+        None,
+        if seed_configured {
+            oklab::step_lightness_toward(seed_background, foreground, SURFACE_CHROME_STEP)
+        } else {
+            background
+        },
+    );
     let surface_selected = chrome(
         "surface_selected",
         None,
-        blend(background, accent, LIST_ACTIVE_BLEND_RATIO),
+        if seed_configured {
+            oklab::step_lightness_toward(seed_background, foreground, SURFACE_SELECTED_STEP)
+        } else {
+            blend(background, accent, LIST_ACTIVE_BLEND_RATIO)
+        },
+    );
+    let surface_raised = chrome(
+        "surface_raised",
+        None,
+        if seed_configured {
+            oklab::step_lightness_toward(seed_background, foreground, SURFACE_RAISED_STEP)
+        } else {
+            background
+        },
+    );
+    let text_muted = chrome(
+        "text_muted",
+        None,
+        if seed_configured {
+            let target = TEXT_CONTRAST_FLOOR
+                + (text_contrast - TEXT_CONTRAST_FLOOR) * TEXT_MUTED_CONTRAST_FRACTION;
+            oklab::tint_for_contrast(seed_background, target)
+        } else {
+            TEXT_MUTED_DEFAULT
+        },
+    );
+    let border = chrome(
+        "border_default",
+        Some("border_subtle"),
+        if seed_configured {
+            oklab::step_lightness_toward(seed_background, foreground, BORDER_STEP)
+        } else {
+            blend(background, text_subtle, BORDER_BLEND_RATIO)
+        },
+    );
+
+    // `black`/`white`: role-based, tied to `seed_background`/`foreground`
+    // directly -- NOT picked by lightness. This is base16's own ANSI-0
+    // convention too (ANSI 0 = base00 = the default background,
+    // regardless of polarity) and matches both reference fixtures: the
+    // built-in dark scheme's `black`/`white` sit in the `background`/
+    // `foreground` *family* respectively (`0x23262e`≈`background`
+    // `0x16181d`; `0xdee2ea`≈`foreground` `0xe9ecf2`), and the owner's
+    // light scheme sets `black` to their light background color and
+    // `white` to their dark foreground color -- the opposite pairing a
+    // lightness-based pick would produce. "Light polarity inverts
+    // black/white" (`docs/theme-design.md`) describes what happens to
+    // these two *values* once background/foreground themselves flip
+    // polarity (black becomes a light color on a light scheme), not a
+    // swap of which role gets which endpoint.
+    let ansi_black = ansi_slot(
+        &ansi_raw.black,
+        if seed_configured {
+            seed_background
+        } else {
+            ANSI16_DEFAULT[0]
+        },
+    );
+    let ansi_white = ansi_slot(
+        &ansi_raw.white,
+        if seed_configured {
+            foreground
+        } else {
+            ANSI16_DEFAULT[7]
+        },
+    );
+    // `bright_black`: the terminal's de-emphasis gray (dimmed `ls`
+    // entries, shell autosuggestions) -- both reference fixtures agree
+    // this is `text_subtle` exactly (built-in `0x5f6370` ==
+    // `TEXT_SUBTLE_DEFAULT`; the owner's own `bright_black` equals their
+    // `text_subtle`), not a further push off `black`/`background` (which
+    // would risk landing back on `black` itself, making dimmed text
+    // invisible).
+    let ansi_bright_black = ansi_slot(
+        &ansi_raw.bright_black,
+        if seed_configured {
+            text_subtle
+        } else {
+            ANSI16_DEFAULT[8]
+        },
+    );
+    // `bright_white`: the "lightest foreground" slot -- `foreground`
+    // itself pushed further in the polarity direction
+    // (`BRIGHT_HUE_EMPHASIS_DELTA`, the same mechanism the six colored
+    // `bright_*` hues below use). Lands within a few `u8` units of the
+    // built-in scheme's `bright_white` (`0xffffff`, `foreground`'s
+    // `0xe9ecf2` clamped to the `l=1.0` bound -- not bit-exact, since
+    // `foreground`'s own small residual chroma keeps the clamped
+    // projection from landing precisely on `(1,1,1)`); the owner's own
+    // `bright_white` pushes further still, in the same direction, off
+    // their (much darker) foreground -- plausibility only, this derivation
+    // doesn't chase their exact magnitude.
+    let ansi_bright_white = ansi_slot(
+        &ansi_raw.bright_white,
+        if seed_configured {
+            oklab::emphasize_lightness(foreground, BRIGHT_HUE_EMPHASIS_DELTA, dark)
+        } else {
+            ANSI16_DEFAULT[15]
+        },
+    );
+    let ansi_bright_red = ansi_slot(
+        &ansi_raw.bright_red,
+        if seed_configured {
+            oklab::emphasize_lightness(hues.red, BRIGHT_HUE_EMPHASIS_DELTA, dark)
+        } else {
+            ANSI16_DEFAULT[9]
+        },
+    );
+    let ansi_bright_green = ansi_slot(
+        &ansi_raw.bright_green,
+        if seed_configured {
+            oklab::emphasize_lightness(hues.green, BRIGHT_HUE_EMPHASIS_DELTA, dark)
+        } else {
+            ANSI16_DEFAULT[10]
+        },
+    );
+    let ansi_bright_yellow = ansi_slot(
+        &ansi_raw.bright_yellow,
+        if seed_configured {
+            oklab::emphasize_lightness(hues.yellow, BRIGHT_HUE_EMPHASIS_DELTA, dark)
+        } else {
+            ANSI16_DEFAULT[11]
+        },
+    );
+    let ansi_bright_blue = ansi_slot(
+        &ansi_raw.bright_blue,
+        if seed_configured {
+            oklab::emphasize_lightness(hues.blue, BRIGHT_HUE_EMPHASIS_DELTA, dark)
+        } else {
+            ANSI16_DEFAULT[12]
+        },
+    );
+    let ansi_bright_magenta = ansi_slot(
+        &ansi_raw.bright_magenta,
+        if seed_configured {
+            oklab::emphasize_lightness(hues.magenta, BRIGHT_HUE_EMPHASIS_DELTA, dark)
+        } else {
+            ANSI16_DEFAULT[13]
+        },
+    );
+    let ansi_bright_cyan = ansi_slot(
+        &ansi_raw.bright_cyan,
+        if seed_configured {
+            oklab::emphasize_lightness(hues.cyan, BRIGHT_HUE_EMPHASIS_DELTA, dark)
+        } else {
+            ANSI16_DEFAULT[14]
+        },
     );
 
     Scheme {
         background,
         foreground,
-        cursor: chrome("terminal_cursor", Some("accent"), CURSOR_DEFAULT),
+        // Falls back to the fully-resolved `accent` (not a second raw
+        // `parse_hex` of the `"accent"` config entry) so a slot-name
+        // accent (`resolve_accent` above) still reaches an unset
+        // `terminal_cursor` -- re-parsing the raw string would only ever
+        // understand a hex spelling.
+        cursor: raw
+            .theme
+            .colors
+            .get("terminal_cursor")
+            .and_then(|value| parse_hex(value))
+            .unwrap_or(accent),
         ansi: [
-            ansi_slot(&ansi_raw.black, ANSI16_DEFAULT[0]),
-            ansi_slot(&ansi_raw.red, ANSI16_DEFAULT[1]),
-            ansi_slot(&ansi_raw.green, ANSI16_DEFAULT[2]),
-            ansi_slot(&ansi_raw.yellow, ANSI16_DEFAULT[3]),
-            ansi_slot(&ansi_raw.blue, ANSI16_DEFAULT[4]),
-            ansi_slot(&ansi_raw.magenta, ANSI16_DEFAULT[5]),
-            ansi_slot(&ansi_raw.cyan, ANSI16_DEFAULT[6]),
-            ansi_slot(&ansi_raw.white, ANSI16_DEFAULT[7]),
-            ansi_slot(&ansi_raw.bright_black, ANSI16_DEFAULT[8]),
-            ansi_slot(&ansi_raw.bright_red, ANSI16_DEFAULT[9]),
-            ansi_slot(&ansi_raw.bright_green, ANSI16_DEFAULT[10]),
-            ansi_slot(&ansi_raw.bright_yellow, ANSI16_DEFAULT[11]),
-            ansi_slot(&ansi_raw.bright_blue, ANSI16_DEFAULT[12]),
-            ansi_slot(&ansi_raw.bright_magenta, ANSI16_DEFAULT[13]),
-            ansi_slot(&ansi_raw.bright_cyan, ANSI16_DEFAULT[14]),
-            ansi_slot(&ansi_raw.bright_white, ANSI16_DEFAULT[15]),
+            ansi_black,
+            hues.red,
+            hues.green,
+            hues.yellow,
+            hues.blue,
+            hues.magenta,
+            hues.cyan,
+            ansi_white,
+            ansi_bright_black,
+            ansi_bright_red,
+            ansi_bright_green,
+            ansi_bright_yellow,
+            ansi_bright_blue,
+            ansi_bright_magenta,
+            ansi_bright_cyan,
+            ansi_bright_white,
         ],
         accent,
         danger,
         warning,
         success,
         info,
-        text_muted: chrome("text_muted", None, TEXT_MUTED_DEFAULT),
+        text_muted,
         text_subtle,
         diff_added_surface: chrome(
             "diff_added_surface",
@@ -341,12 +706,8 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
         surface_panel,
         surface_chrome,
         surface_selected,
-        border: chrome(
-            "border_default",
-            Some("border_subtle"),
-            blend(background, text_subtle, BORDER_BLEND_RATIO),
-        ),
-        surface_raised: chrome("surface_raised", None, background),
+        border,
+        surface_raised,
     }
 }
 
@@ -791,6 +1152,34 @@ mod tests {
         }
     }
 
+    /// [`config_with`] plus an explicit `text_contrast` (the seed knob,
+    /// not part of `colors` -- it's `RawThemeConfig`'s own typed field).
+    fn config_with_and_contrast(colors: &[(&str, &str)], text_contrast: Option<f64>) -> RawConfig {
+        let mut config = config_with(colors);
+        config.theme.text_contrast = text_contrast;
+        config
+    }
+
+    /// [`config_with`] plus `[theme.ansi]` hue overrides -- `ansi` is a
+    /// nested typed struct, not part of the flattened `colors` map, so it
+    /// needs its own setter rather than a `("ansi.red", ...)` entry.
+    fn config_with_ansi(colors: &[(&str, &str)], ansi: &[(&str, &str)]) -> RawConfig {
+        let mut config = config_with(colors);
+        for (slot, value) in ansi {
+            let value = Some((*value).to_string());
+            match *slot {
+                "red" => config.theme.ansi.red = value,
+                "green" => config.theme.ansi.green = value,
+                "yellow" => config.theme.ansi.yellow = value,
+                "blue" => config.theme.ansi.blue = value,
+                "magenta" => config.theme.ansi.magenta = value,
+                "cyan" => config.theme.ansi.cyan = value,
+                other => panic!("config_with_ansi: unsupported test slot {other}"),
+            }
+        }
+        config
+    }
+
     /// The owner's actual `~/.config/horizon/config.toml` `[theme]`
     /// entries (2026-07-14), minus `border_default` -- factored out so
     /// tests can layer additional keys (e.g. `border_subtle`) onto the
@@ -987,16 +1376,28 @@ mod tests {
     }
 
     #[test]
-    fn border_default_derives_when_unset_on_a_light_scheme() {
-        // A light scheme that, unlike the owner's, does NOT set
-        // `border_default`: the derived default must still land on the
-        // legible (darker-than-background) side, not the dark scheme's
-        // side.
-        let scheme = scheme_from(&config_with(&[
-            ("surface_base", "#f6f6f6"),
-            ("text_subtle", "#a6a6a6"),
-        ]));
-        assert_eq!(scheme.border, blend(0xf6f6f6, 0xa6a6a6, BORDER_BLEND_RATIO));
+    fn border_default_derives_when_unset_on_a_dark_scheme_with_no_seed() {
+        // Nothing seed-related set at all: the legacy blend-toward-
+        // text_subtle formula still applies (back-compat invariant (b)).
+        let scheme = scheme_from(&RawConfig::default());
+        assert_eq!(
+            scheme.border,
+            blend(BACKGROUND_DEFAULT, TEXT_SUBTLE_DEFAULT, BORDER_BLEND_RATIO)
+        );
+    }
+
+    #[test]
+    fn border_steps_along_the_neutral_ladder_when_unset_on_a_seeded_light_scheme() {
+        // A seeded light scheme (unlike the owner's fixture) that does NOT
+        // set `border_default`/`border_subtle`: the derived default must
+        // still land on the legible (darker-than-background) side, now
+        // stepped from the seed toward the (also derived) foreground
+        // rather than blended toward `text_subtle`.
+        let scheme = scheme_from(&config_with(&[("surface_base", "#f6f6f6")]));
+        assert_eq!(
+            scheme.border,
+            oklab::step_lightness_toward(0xf6f6f6, scheme.foreground, BORDER_STEP)
+        );
         assert!(luminance(scheme.border) < luminance(scheme.background));
     }
 
@@ -1012,9 +1413,18 @@ mod tests {
     }
 
     #[test]
-    fn surface_chrome_defaults_to_background_and_is_overridable_on_a_light_scheme() {
-        let default_scheme = owner_light_scheme();
-        assert_eq!(default_scheme.surface_chrome, default_scheme.background);
+    fn surface_chrome_steps_along_the_neutral_ladder_when_unset_on_a_seeded_light_scheme() {
+        // `owner_light_scheme()` sets `surface_base` (among other keys),
+        // which now activates the seed derivation for every UNSET role --
+        // `surface_chrome` is unset in that fixture, so it no longer
+        // stays inert at plain `background` (the legacy, seed-unconfigured
+        // default); it steps toward the derived foreground instead.
+        let scheme = owner_light_scheme();
+        assert_eq!(
+            scheme.surface_chrome,
+            oklab::step_lightness_toward(scheme.background, scheme.foreground, SURFACE_CHROME_STEP)
+        );
+        assert_ne!(scheme.surface_chrome, scheme.background);
 
         let overridden = owner_light_scheme_with(&[("surface_chrome", "#eaeaea")]);
         assert_eq!(overridden.surface_chrome, 0xeaeaea);
@@ -1037,15 +1447,20 @@ mod tests {
     }
 
     #[test]
-    fn surface_selected_defaults_to_a_background_accent_blend_and_is_overridable_on_a_light_scheme()
-    {
-        let default_scheme = owner_light_scheme();
-        // The owner's accent (`#0048b3`) and background (`#f6f6f6`) are
-        // both set explicitly -- the default should blend exactly those,
-        // not the built-in dark-scheme constants.
+    fn surface_selected_steps_along_the_neutral_ladder_when_unset_on_a_seeded_light_scheme() {
+        // Same story as `surface_chrome` above: `surface_selected` is
+        // part of the neutral ladder now (`docs/theme-design.md` groups
+        // "panel/raised/selected/chrome" together), so its unset default
+        // on a seeded scheme steps toward the derived foreground instead
+        // of blending toward `accent`.
+        let scheme = owner_light_scheme();
         assert_eq!(
-            default_scheme.surface_selected,
-            blend(0xf6f6f6, 0x0048b3, LIST_ACTIVE_BLEND_RATIO)
+            scheme.surface_selected,
+            oklab::step_lightness_toward(
+                scheme.background,
+                scheme.foreground,
+                SURFACE_SELECTED_STEP
+            )
         );
 
         let overridden = owner_light_scheme_with(&[("surface_selected", "#112233")]);
@@ -1183,13 +1598,18 @@ mod tests {
         // putting `tab_foreground` (`text_muted`, `#767676`) at roughly a
         // 2.7:1 contrast ratio against it -- under both the WCAG AA
         // body-text (4.5:1) and UI-component (3:1) thresholds. Blending
-        // halfway back toward `background` (`#f6f6f6`) recovers most of
-        // that (~3.4:1) without erasing the track's distinctness from the
+        // halfway back toward `surface_chrome` recovers most of that
+        // (~3.4:1) without erasing the track's distinctness from the
         // selected pill (fixed to `background` inside gpui-component).
+        // `surface_chrome` itself is now seed-derived on this fixture
+        // (`owner_light_scheme` sets `surface_base`, which is unrelated to
+        // this regression but does mean `surface_chrome` is no longer
+        // simply `background` -- see `surface_chrome_steps_along_the_
+        // neutral_ladder_when_unset_on_a_seeded_light_scheme`).
         let scheme = owner_light_scheme();
         let colors = theme_color_for(&scheme);
         let expected = blend(
-            scheme.background,
+            scheme.surface_chrome,
             scheme.surface_panel,
             SEGMENTED_TRACK_BLEND_RATIO,
         );
@@ -1214,5 +1634,353 @@ mod tests {
         // nextest isolates per-test, which it does -- but keep this
         // tidy regardless).
         reload_from(&RawConfig::default());
+    }
+
+    // --- Seed derivation (docs/theme-design.md, slice B1) ------------------
+
+    #[test]
+    fn a_config_that_sets_every_role_key_resolves_byte_identical_regardless_of_the_seed() {
+        // Invariant (a): every existing role key set explicitly (a
+        // superset of the owner's fixture, adding surface_chrome/
+        // surface_selected/terminal_cursor so nothing this task touched
+        // falls through to a derived default) must resolve exactly to the
+        // literal values set -- the seed only fills gaps.
+        let scheme = scheme_from(&config_with(&[
+            ("text_primary", "#666666"),
+            ("text_muted", "#767676"),
+            ("text_subtle", "#a6a6a6"),
+            ("accent", "#0048b3"),
+            ("danger", "#b03b4c"),
+            ("warning", "#887700"),
+            ("success", "#116622"),
+            ("info", "#224488"),
+            ("surface_base", "#f6f6f6"),
+            ("surface_panel", "#c6c6c6"),
+            ("surface_raised", "#ffffff"),
+            ("surface_chrome", "#eaeaea"),
+            ("surface_selected", "#dcdcdc"),
+            ("border_default", "#a6a6a6"),
+            ("terminal_foreground", "#666666"),
+            ("terminal_background", "#f6f6f6"),
+            ("terminal_cursor", "#0048b3"),
+            ("diff_added_surface", "#ddffdd"),
+            ("diff_added_text", "#116622"),
+            ("diff_removed_surface", "#ffdddd"),
+            ("diff_removed_text", "#b03b4c"),
+        ]));
+
+        assert_eq!(scheme.foreground, 0x666666);
+        assert_eq!(scheme.text_muted, 0x767676);
+        assert_eq!(scheme.text_subtle, 0xa6a6a6);
+        assert_eq!(scheme.accent, 0x0048b3);
+        assert_eq!(scheme.danger, 0xb03b4c);
+        assert_eq!(scheme.warning, 0x887700);
+        assert_eq!(scheme.success, 0x116622);
+        assert_eq!(scheme.info, 0x224488);
+        assert_eq!(scheme.background, 0xf6f6f6);
+        assert_eq!(scheme.surface_panel, 0xc6c6c6);
+        assert_eq!(scheme.surface_raised, 0xffffff);
+        assert_eq!(scheme.surface_chrome, 0xeaeaea);
+        assert_eq!(scheme.surface_selected, 0xdcdcdc);
+        assert_eq!(scheme.border, 0xa6a6a6);
+        assert_eq!(scheme.cursor, 0x0048b3);
+        assert_eq!(scheme.diff_added_surface, 0xddffdd);
+        assert_eq!(scheme.diff_added_text, 0x116622);
+        assert_eq!(scheme.diff_removed_surface, 0xffdddd);
+        assert_eq!(scheme.diff_removed_text, 0xb03b4c);
+    }
+
+    #[test]
+    fn an_empty_config_resolves_to_the_literal_built_in_scheme() {
+        // Invariant (b), first half: nothing seed-related set at all
+        // keeps resolving through the pre-derivation code path, byte-
+        // identical to the historical defaults -- `seed_is_configured`
+        // gates the new formulas off entirely for `RawConfig::default()`.
+        // Covers the roles this task actually changed (foreground, the
+        // neutral ladder, ansi black/white/brights) that
+        // `default_scheme_matches_agent_views_pre_existing_hex_values`
+        // doesn't.
+        let scheme = scheme_from(&RawConfig::default());
+        assert_eq!(scheme.foreground, FOREGROUND_DEFAULT);
+        assert_eq!(scheme.text_muted, TEXT_MUTED_DEFAULT);
+        assert_eq!(scheme.text_subtle, TEXT_SUBTLE_DEFAULT);
+        assert_eq!(
+            scheme.surface_panel,
+            blend(BACKGROUND_DEFAULT, FOREGROUND_DEFAULT, SURFACE_LIFT_RATIO)
+        );
+        assert_eq!(scheme.surface_chrome, BACKGROUND_DEFAULT);
+        assert_eq!(scheme.surface_raised, BACKGROUND_DEFAULT);
+        assert_eq!(
+            scheme.surface_selected,
+            blend(BACKGROUND_DEFAULT, CURSOR_DEFAULT, LIST_ACTIVE_BLEND_RATIO)
+        );
+        assert_eq!(
+            scheme.border,
+            blend(BACKGROUND_DEFAULT, TEXT_SUBTLE_DEFAULT, BORDER_BLEND_RATIO)
+        );
+        assert_eq!(scheme.ansi, ANSI16_DEFAULT);
+    }
+
+    #[test]
+    fn derivation_reproduces_the_builtin_scheme_within_tolerance() {
+        // Invariant (b), second half (the "derivation-quality check"): a
+        // config that spells out the built-in seed *explicitly*
+        // (`surface_base` -- the six hue slots and the contrast knob stay
+        // unset, which resolves to those exact same built-in values
+        // anyway) activates the real OKLCH derivation (unlike
+        // `RawConfig::default()` above, which never touches it) and must
+        // land *close to*, though not bit-identical to, the historical
+        // WCAG-contrast-based roles -- OKLCH contrast-solving and the old
+        // RGB-linear `blend()`/fixed-constant formulas are different
+        // color-math approaches that were never going to land on
+        // identical bytes (`docs/theme-design.md`).
+        let scheme = scheme_from(&config_with(&[("surface_base", "#16181d")]));
+
+        let close = |actual: u32, expected: u32, tolerance: i64, label: &str| {
+            let channel = |value: u32, shift: u32| ((value >> shift) & 0xff) as i64;
+            for shift in [16, 8, 0] {
+                let diff = (channel(actual, shift) - channel(expected, shift)).abs();
+                assert!(
+                    diff <= tolerance,
+                    "{label}: channel at shift {shift} differs by {diff} \
+                     (tolerance {tolerance}): derived {actual:#08x}, historical {expected:#08x}"
+                );
+            }
+        };
+
+        close(scheme.foreground, FOREGROUND_DEFAULT, 6, "foreground");
+        close(scheme.text_muted, TEXT_MUTED_DEFAULT, 12, "text_muted");
+        close(scheme.text_subtle, TEXT_SUBTLE_DEFAULT, 10, "text_subtle");
+        // `bright_black` == `text_subtle` by construction (see
+        // `scheme_from`), so it inherits that same closeness for free.
+        close(scheme.ansi[8], ANSI16_DEFAULT[8], 10, "bright_black");
+        // `bright_white` = `foreground` pushed +0.1 OKLCH lightness,
+        // clamped at 1.0 -- lands near, not bit-exact on, the built-in's
+        // pure white (`foreground`'s own small residual chroma keeps the
+        // clamped `l=1.0` projection from landing exactly on `(1,1,1)`).
+        close(scheme.ansi[15], ANSI16_DEFAULT[15], 4, "bright_white");
+    }
+
+    #[test]
+    fn text_contrast_clamps_to_the_wcag_floor_and_ceiling() {
+        assert_eq!(resolve_text_contrast(Some(1.0)), TEXT_CONTRAST_FLOOR);
+        assert_eq!(resolve_text_contrast(Some(100.0)), TEXT_CONTRAST_CEIL);
+        // TOML permits `nan`/`inf` float literals; both must fall back to
+        // the default rather than poison every downstream OKLCH solve.
+        assert_eq!(resolve_text_contrast(Some(f64::NAN)), TEXT_CONTRAST_DEFAULT);
+        assert_eq!(
+            resolve_text_contrast(Some(f64::INFINITY)),
+            TEXT_CONTRAST_DEFAULT
+        );
+    }
+
+    #[test]
+    fn text_contrast_defaults_when_unset() {
+        assert_eq!(resolve_text_contrast(None), TEXT_CONTRAST_DEFAULT);
+    }
+
+    #[test]
+    fn foreground_targets_the_configured_contrast_ratio() {
+        let scheme = scheme_from(&config_with_and_contrast(
+            &[("surface_base", "#16181d")],
+            Some(7.0),
+        ));
+        let ratio = oklab::contrast_ratio(
+            oklab::relative_luminance(scheme.foreground),
+            oklab::relative_luminance(scheme.background),
+        );
+        assert!((ratio - 7.0).abs() < 0.3, "ratio = {ratio}");
+    }
+
+    #[test]
+    fn text_muted_never_drops_below_the_wcag_floor_across_a_range_of_knobs() {
+        for knob in [4.5, 6.0, 10.0, 15.0, 21.0] {
+            let scheme = scheme_from(&config_with_and_contrast(
+                &[("surface_base", "#16181d")],
+                Some(knob),
+            ));
+            let ratio = oklab::contrast_ratio(
+                oklab::relative_luminance(scheme.text_muted),
+                oklab::relative_luminance(scheme.background),
+            );
+            assert!(
+                ratio >= TEXT_CONTRAST_FLOOR - 0.05,
+                "knob {knob}: muted ratio {ratio} fell below the floor"
+            );
+        }
+    }
+
+    #[test]
+    fn text_subtle_has_no_wcag_floor_but_stays_separated_from_the_ladder() {
+        let scheme = scheme_from(&config_with(&[("surface_base", "#f6f6f6")]));
+        // Decorative by definition: allowed to fall under the 4.5 floor
+        // (and does, on this light seed).
+        let ratio = oklab::contrast_ratio(
+            oklab::relative_luminance(scheme.text_subtle),
+            oklab::relative_luminance(scheme.background),
+        );
+        assert!(ratio < TEXT_CONTRAST_FLOOR);
+        // But still visually distinct from every neutral-ladder surface.
+        for surface in [
+            scheme.surface_chrome,
+            scheme.surface_panel,
+            scheme.surface_raised,
+            scheme.surface_selected,
+            scheme.border,
+        ] {
+            assert_ne!(scheme.text_subtle, surface);
+        }
+    }
+
+    #[test]
+    fn neutral_ladder_orders_monotonically_on_a_seeded_light_scheme() {
+        // Shaped after `docs/theme-design.md`'s Evidence table (bg ->
+        // panel -> selected/border -> muted -> fg, monotonically) --
+        // checked as an ordering, not exact values (the owner's own
+        // steps are explicitly "not golden values").
+        let scheme = scheme_from(&config_with(&[("surface_base", "#f6f6f6")]));
+        let l = oklab::lightness;
+        assert!(l(scheme.background) > l(scheme.surface_chrome));
+        assert!(l(scheme.surface_chrome) > l(scheme.surface_panel));
+        assert!(l(scheme.surface_panel) > l(scheme.surface_raised));
+        assert!(l(scheme.surface_raised) > l(scheme.surface_selected));
+        // selected/border share a step by design.
+        assert_eq!(scheme.surface_selected, scheme.border);
+        assert!(l(scheme.surface_selected) > l(scheme.text_muted));
+        assert!(l(scheme.text_muted) > l(scheme.foreground));
+    }
+
+    #[test]
+    fn ansi_black_and_white_follow_background_and_foreground_by_role() {
+        // Role-based, NOT lightness-picked: `black` is always the
+        // background-family color and `white` is always the foreground-
+        // family color, on both polarities -- base16's own ANSI-0
+        // convention, and what the owner's real config does by hand (their
+        // light scheme's `black` is their light background color, `white`
+        // is their dark foreground color -- the opposite pairing a
+        // lightness pick would produce).
+        let dark = scheme_from(&config_with_and_contrast(
+            &[("surface_base", "#16181d")],
+            Some(10.0),
+        ));
+        assert_eq!(dark.ansi[0], dark.background);
+        assert_eq!(dark.ansi[7], dark.foreground);
+
+        let light = scheme_from(&config_with(&[("surface_base", "#f6f6f6")]));
+        // "Light polarity inverts black/white": black is now a LIGHT
+        // color (it still tracks `background`, which is itself light),
+        // not a swap to the foreground.
+        assert_eq!(light.ansi[0], light.background);
+        assert_eq!(light.ansi[7], light.foreground);
+        assert!(oklab::lightness(light.ansi[0]) > oklab::lightness(light.ansi[7]));
+    }
+
+    #[test]
+    fn ansi_bright_black_is_text_subtle_and_stays_distinct_from_the_background() {
+        // Both reference fixtures (built-in and the owner's) agree
+        // `bright_black` IS `text_subtle` exactly -- the terminal's
+        // de-emphasis gray (dimmed `ls` entries, shell autosuggestions).
+        for config in [
+            config_with_and_contrast(&[("surface_base", "#16181d")], Some(10.0)),
+            config_with(&[("surface_base", "#f6f6f6")]),
+        ] {
+            let scheme = scheme_from(&config);
+            assert_eq!(scheme.ansi[8], scheme.text_subtle);
+            // Never collapses onto the background it's meant to stand
+            // out from -- the bug a `black`-relative derivation risked.
+            assert_ne!(scheme.ansi[8], scheme.background);
+        }
+    }
+
+    #[test]
+    fn ansi_bright_white_pushes_foreground_further_in_the_polarity_direction() {
+        let dark = scheme_from(&config_with_and_contrast(
+            &[("surface_base", "#16181d")],
+            Some(10.0),
+        ));
+        assert_eq!(
+            dark.ansi[15],
+            oklab::emphasize_lightness(dark.foreground, BRIGHT_HUE_EMPHASIS_DELTA, true)
+        );
+        assert!(oklab::lightness(dark.ansi[15]) > oklab::lightness(dark.foreground));
+
+        let light = scheme_from(&config_with(&[("surface_base", "#f6f6f6")]));
+        assert_eq!(
+            light.ansi[15],
+            oklab::emphasize_lightness(light.foreground, BRIGHT_HUE_EMPHASIS_DELTA, false)
+        );
+        assert!(oklab::lightness(light.ansi[15]) < oklab::lightness(light.foreground));
+    }
+
+    #[test]
+    fn ansi_bright_hues_emphasize_toward_the_foreground_direction() {
+        let dark = scheme_from(&config_with_and_contrast(
+            &[("surface_base", "#16181d")],
+            Some(10.0),
+        ));
+        // Dark background: brights lighten (toward the foreground).
+        assert!(oklab::lightness(dark.ansi[9]) > oklab::lightness(dark.ansi[1])); // bright_red > red
+
+        let light = scheme_from(&config_with(&[("surface_base", "#f6f6f6")]));
+        // Light background: brights darken (toward the foreground).
+        assert!(oklab::lightness(light.ansi[9]) < oklab::lightness(light.ansi[1]));
+    }
+
+    #[test]
+    fn explicit_ansi_hues_are_emitted_verbatim_even_when_the_seed_is_configured() {
+        // The terminal-faithful seam (`docs/theme-design.md`): a
+        // `[theme.ansi]` value the user DID set is never auto-adjusted,
+        // even though the UI-side semantic color derived FROM that same
+        // hue (`danger`, here) IS contrast-snapped.
+        let scheme = scheme_from(&config_with_ansi(
+            &[("surface_base", "#f6f6f6")],
+            // A pale red -- unreadable as UI text on this light
+            // background, exactly the case contrast-snapping exists for.
+            &[("red", "#ffb3b3")],
+        ));
+        assert_eq!(scheme.ansi[1], 0xffb3b3);
+        assert_ne!(scheme.danger, 0xffb3b3);
+        assert_eq!(
+            scheme.danger,
+            contrast_safe_default(0xffb3b3, scheme.background)
+        );
+    }
+
+    #[test]
+    fn accent_slot_name_resolves_to_the_matching_ansi_hue() {
+        let scheme = scheme_from(&config_with(&[("accent", "blue")]));
+        assert_eq!(scheme.accent, ANSI16_DEFAULT[4]);
+    }
+
+    #[test]
+    fn accent_slot_name_follows_an_overridden_ansi_hue() {
+        let scheme = scheme_from(&config_with_ansi(
+            &[("accent", "blue")],
+            &[("blue", "#123456")],
+        ));
+        assert_eq!(scheme.accent, 0x123456);
+    }
+
+    #[test]
+    fn accent_hex_spelling_still_works_alongside_slot_names() {
+        let scheme = scheme_from(&config_with(&[("accent", "#ff00ff")]));
+        assert_eq!(scheme.accent, 0xff00ff);
+    }
+
+    #[test]
+    fn accent_unrecognized_string_falls_back_to_the_default() {
+        let scheme = scheme_from(&config_with(&[("accent", "not-a-color")]));
+        assert_eq!(scheme.accent, CURSOR_DEFAULT);
+    }
+
+    #[test]
+    fn unset_terminal_cursor_follows_a_slot_name_accent() {
+        // Regression: `terminal_cursor`'s own fallback used to re-parse
+        // the raw `"accent"` config string as hex directly, which
+        // silently dropped to `CURSOR_DEFAULT` for a slot-name accent
+        // instead of following the resolved color.
+        let scheme = scheme_from(&config_with(&[("accent", "blue")]));
+        assert_eq!(scheme.cursor, scheme.accent);
+        assert_eq!(scheme.cursor, ANSI16_DEFAULT[4]);
     }
 }
