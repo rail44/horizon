@@ -101,15 +101,54 @@ every pane uniformly, including the cursor pane. The owner reverted both:
   `open-palette`) from outside the mode keeps everything undimmed, same
   as before opening it.
 
-Which alpha (if any) a pane gets is decided by a small pure function,
-`pane_scrim_alpha(mode_active, is_cursor_pane) -> Option<f32>`
-(`src/workspace.rs`, unit-tested for every input combination):
-`mode_active && !is_cursor_pane` dims at `SCRIM_DIM_ALPHA`; anything else
-(pattern inactive, or this pane is the cursor pane) is `None`. The
-function itself has no notion of "a modal is open" -- it only ever sees a
-dim pattern (active or not, cursor pane or not) and applies it.
+**Cursor signal moves to the border; scrim goes fully uniform -- REVISED
+(2026-07-15, owner dogfooding feedback, round 3):** two pieces of
+feedback. First, the cursor pane's 1px accent border (`render_node`,
+unchanged since workspace mode's original v1) was nearly invisible
+against the rest of the chrome. Second, given that fix, the owner moved
+the cursor signal to the border entirely: since round 2 already leaves
+the cursor pane completely unscrimmed, the scrim no longer needs to
+distinguish it at all -- so it doesn't: every pane, cursor included, now
+dims uniformly whenever the pattern is active. Two changes:
+- **Border: uniform 2px, color-only state change.** Every pane's border
+  width is now `border_2()` (was `border_1()`) *regardless* of role, so a
+  pane's box never resizes as the cursor moves -- only the color
+  (`pane_border_role`, `src/workspace.rs`) does: `theme::accent()` at
+  full strength for the cursor pane, the already-subdued `theme::border()`
+  for the tab's plain active pane, `theme::background()` (invisible) for
+  neither. The existing accent-vs-subdued color split was left as is --
+  it already gives the cursor role the strongest contrast of the three,
+  so width was the only prominence lever pulled here. No glow/shadow
+  added, per the task's own constraint and consistent with `docs/roadmap.md`'s
+  standing rule from the tab-strip-design-C revert (also 2026-07-15):
+  stock components/styling as-is, never coaxed beyond that.
+- **Scrim: uniform alpha, no cursor exception.** `SCRIM_DIM_ALPHA`
+  dropped again, 0.30 -> 0.10 -- since the scrim no longer needs to carry
+  cursor/non-cursor contrast on its own (the border does that now), it
+  can sit much lighter. `pane_scrim_alpha` simplified to a single-`bool`
+  function (`pane_scrim_alpha(mode_active: bool) -> Option<f32>`)
+  accordingly, kept as a named, tested seam rather than inlined.
+- **Modal-open freeze now covers the border too**, not just the scrim:
+  opening a modal is fully **chrome-neutral**, not merely scrim-neutral --
+  neither the dim pattern nor the cursor-pane border changes when a modal
+  opens. See below for the mechanism.
 
-Making modal-open scrim-neutral needed one lifecycle finding: every
+If this still feels off after living with it, the owner's noted fallback
+is reconsidering a heavier scrim specifically on light schemes (rather
+than retuning `SCRIM_DIM_ALPHA` globally again) -- not implemented here,
+just recorded as the next lever to reach for.
+
+Which alpha (if any) a pane gets is decided by a small pure function,
+`pane_scrim_alpha(mode_active: bool) -> Option<f32>` (`src/workspace.rs`,
+unit-tested): `Some(SCRIM_DIM_ALPHA)` when the dim pattern is active,
+`None` otherwise -- trivial since round 3 dropped the cursor exception,
+kept as a named seam so "is a scrim applied at all" stays independently
+documented and testable. Which border color role a pane gets is a
+separate pure function, `pane_border_role(is_cursor: bool, is_active:
+bool) -> PaneBorderRole` (also unit-tested): cursor wins outright if set,
+else active-vs-neither.
+
+Making modal-open chrome-neutral needed one lifecycle finding: every
 modal-opening handler (`open_palette`/`open_view_chooser`/
 `open_session_manager`) calls `Workspace::exit_workspace_mode` as its
 first step -- necessary so the mode's own single-letter key bindings
@@ -117,19 +156,21 @@ first step -- necessary so the mode's own single-letter key bindings
 takes focus (else they'd hijack the modal's own typed search / Enter-to-
 confirm keys instead of typing/selecting). That immediately clears
 `is_workspace_mode_active()`/`cursor_pane_id()` -- which is exactly the
-"no dim behind the palette" bug the owner originally reported, now also
-why round 1's "uniform 0.30 on modal open" couldn't tell the cursor pane
-apart from the rest (the mode was already inactive by the time it
+"no dim behind the palette" bug the owner originally reported, and (round
+1) why "uniform 0.30 on modal open" couldn't tell the cursor pane apart
+from the rest either (the mode was already inactive by the time it
 rendered). The fix is a shell-side freeze, not new workspace-model state:
 `WorkspaceShell::scrim_freeze: Option<PaneId>` snapshots
 `cursor_pane_id()` (only if the mode was active) the instant before each
 handler exits the mode, and every modal-closing handler clears it back to
-`None`. `render_node` substitutes this frozen pattern for the live one
-whenever a modal is open, so `pane_scrim_alpha` keeps seeing the same
-dim pattern that was on screen right before the modal opened. Only the
-scrim freezes this way -- the cursor pane's accent border (a separate
-signal, computed from the live `is_workspace_mode_active()`/
-`cursor_pane_id()`) is unaffected and reverts with the mode as before.
+`None`. A third pure function, `effective_scrim_pattern(modal_open,
+scrim_freeze, live_mode_active, live_cursor_pane) -> (bool,
+Option<PaneId>)` (unit-tested), resolves which pattern -- live or frozen
+-- is in effect for a given render; `render_node` feeds its result into
+*both* `pane_scrim_alpha` and `pane_border_role`'s `is_cursor` input, so
+the scrim and the cursor border freeze together -- round 2 only froze the
+scrim; round 3 extends the same snapshot to the border too, so opening a
+modal is chrome-neutral in full, not merely scrim-neutral.
 
 The scrim element itself renders for any pane `pane_scrim_alpha` returns
 `Some` for, not only under workspace mode, and stays a plain
