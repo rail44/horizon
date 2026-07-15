@@ -11,6 +11,8 @@ use gpui_component::list::{ListDelegate, ListItem, ListState};
 use gpui_component::IndexPath;
 use horizon_workspace::commands::{filter_command_entries, CommandEntry};
 
+use crate::theme;
+
 pub struct PaletteDelegate {
     all: Vec<CommandEntry>,
     filtered: Vec<CommandEntry>,
@@ -55,11 +57,11 @@ impl ListDelegate for PaletteDelegate {
     ) -> Option<Self::Item> {
         let entry = self.filtered.get(index.row)?;
         let title_color = if !entry.enabled {
-            rgb(0x5f6370)
+            theme::text_subtle()
         } else if entry.spec.destructive {
-            rgb(0xe06c75)
+            theme::danger()
         } else {
-            rgb(0xe9ecf2)
+            theme::text_primary()
         };
         Some(
             ListItem::new(index).child(
@@ -76,7 +78,7 @@ impl ListDelegate for PaletteDelegate {
                     .child(
                         div()
                             .text_size(px(11.0))
-                            .text_color(rgb(0x8a90a0))
+                            .text_color(theme::text_muted())
                             .child(entry.spec.description),
                     ),
             ),

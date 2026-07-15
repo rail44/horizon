@@ -66,7 +66,7 @@
 use std::sync::{OnceLock, RwLock};
 
 use alacritty_terminal::vte::ansi::{NamedColor, Rgb};
-use gpui::{rgb, Hsla, Rgba};
+use gpui::{hsla, point, px, rgb, BoxShadow, Hsla, Rgba};
 use gpui_component::Colorize as _;
 use horizon_config::{RawConfig, RawThemeConfig};
 use horizon_terminal_core::TerminalColor;
@@ -158,6 +158,29 @@ const DIFF_SURFACE_BLEND_RATIO: f32 = 0.12;
 /// pill (which is fixed to `background` inside gpui-component, see
 /// [`gpui_component_theme_config`]'s doc table).
 const SEGMENTED_TRACK_BLEND_RATIO: f32 = 0.5;
+
+/// [`overlay_shadow`]'s two-layer drop shadow, in CSS `box-shadow`
+/// shorthand terms: a soft wide "far" layer plus a tighter "near" layer,
+/// stacked (far painted first, near on top). Offsets/blur/spread are
+/// polarity-independent; only the alpha pair below moves. Design "C"
+/// (`docs/theme-design.md`): the modal surface is `background` itself,
+/// separated from the dimmed workspace by a border plus this shadow --
+/// not by a darker panel color.
+const OVERLAY_SHADOW_FAR_OFFSET_Y: f32 = 12.0;
+const OVERLAY_SHADOW_FAR_BLUR: f32 = 32.0;
+const OVERLAY_SHADOW_NEAR_OFFSET_Y: f32 = 2.0;
+const OVERLAY_SHADOW_NEAR_BLUR: f32 = 8.0;
+
+/// [`overlay_shadow`]'s alpha pair on a light-polarity scheme: CSS
+/// `0 12px 32px rgba(0,0,0,0.18)` (far) + `0 2px 8px rgba(0,0,0,0.10)`
+/// (near) -- the owner's chosen values comparing mockup variants.
+const OVERLAY_SHADOW_FAR_ALPHA_LIGHT: f32 = 0.18;
+const OVERLAY_SHADOW_NEAR_ALPHA_LIGHT: f32 = 0.10;
+/// [`overlay_shadow`]'s alpha pair on a dark-polarity scheme -- stronger
+/// than the light pair above, since the same shadow visually washes out
+/// against an already-dark ground.
+const OVERLAY_SHADOW_FAR_ALPHA_DARK: f32 = 0.5;
+const OVERLAY_SHADOW_NEAR_ALPHA_DARK: f32 = 0.35;
 
 /// How far the command-palette/session-manager/view-chooser `List`'s
 /// selected-row highlight (`surface_selected`'s built-in default) sits
@@ -921,7 +944,7 @@ fn hex(value: u32) -> String {
 /// | `tab_foreground`                          | `scheme.text_muted`                                |
 /// | `list_active`                             | `scheme.surface_selected` (the command palette / session manager / view chooser row highlight; defaults to a `background`-toward-`accent` blend, `LIST_ACTIVE_BLEND_RATIO`, matching gpui-component's own fallback exactly) |
 /// | `scrollbar_thumb`                         | `scheme.text_subtle` (already a visible-but-quiet gray in both polarities) |
-/// | `popover`/`popover_foreground`            | `scheme.surface_raised` / `scheme.foreground`      |
+/// | `popover`/`popover_foreground`            | `scheme.background` / `scheme.foreground` (design "C", see below) |
 /// | `base.<hue>` / `base.<hue>.light` (`<hue>` = `red`/`green`/`yellow`/`blue`/`magenta`/`cyan`) | the matching resolved ANSI slot (`scheme.ansi[1..7]`) / its resolved `bright_*` sibling (`scheme.ansi[9..15]`) -- **faithful**, not contrast-snapped (see the paragraph below) |
 /// | `chart.1`..`chart.5`                      | a five-hue spread off the scheme's six ANSI hues (red, yellow, green, cyan, blue -- magenta dropped, see below), also faithful |
 ///
@@ -1007,7 +1030,13 @@ fn gpui_component_theme_config(scheme: &Scheme) -> gpui_component::ThemeConfig {
             "tab.active.foreground": hex(scheme.foreground),
             "tab.foreground": hex(scheme.text_muted),
             "scrollbar.thumb.background": hex(scheme.text_subtle),
-            "popover.background": hex(scheme.surface_raised),
+            // Design "C" (`docs/theme-design.md`): the modal surface is
+            // `background` itself, separated from the dimmed workspace by
+            // a border and a shadow (`overlay_shadow`) rather than a
+            // darker panel color -- gpui-component's own popovers/
+            // dropdown menus (context menus, `ColorPicker`, ...) follow
+            // the same philosophy here.
+            "popover.background": hex(scheme.background),
             "popover.foreground": hex(scheme.foreground),
             // The six ANSI-shaped hues as gpui-component's own `base.*`
             // swatch set (faithful, not contrast-snapped -- see this
@@ -1070,6 +1099,18 @@ pub fn accent() -> Hsla {
     packed_hsla(scheme().accent)
 }
 
+/// Legible text/icon color for content painted on an accent-colored
+/// surface (the composer send button's `↑`) -- the same
+/// [`primary_foreground_for`] pick `gpui_component_theme_config` already
+/// uses for gpui-component's own `primary_foreground` role, exposed here
+/// so render call sites don't duplicate the dark/light text constants.
+/// Purely a function of `accent`'s own lightness, not the app background
+/// -- a light accent wants dark text, a dark accent wants light text,
+/// regardless of scheme polarity.
+pub fn on_accent() -> Hsla {
+    packed_hsla(primary_foreground_for(scheme().accent))
+}
+
 /// Danger/error -- failed turns and tool errors.
 pub fn danger() -> Hsla {
     packed_hsla(scheme().danger)
@@ -1114,11 +1155,18 @@ pub fn surface_panel() -> Hsla {
     packed_hsla(scheme().surface_panel)
 }
 
-/// An elevated surface for floating chrome (modal backdrops, popover/
-/// dropdown-menu panels) -- resolved from the `surface_raised` config key,
-/// defaulting to `background` itself if unset. Also what gpui-component's
-/// own `popover`/`popover_foreground` roles resolve to in
-/// [`gpui_component_theme_config`].
+/// An elevated surface for floating chrome -- resolved from the
+/// `surface_raised` config key, defaulting to `background` itself if
+/// unset. Kept for other consumers and back-compat; design "C"
+/// (`docs/theme-design.md`) moved the modal surfaces (palette/
+/// view-chooser/session-manager) and gpui-component's own `popover` role
+/// in [`gpui_component_theme_config`] onto plain `background` instead, so
+/// this role no longer backs either of those. Currently unread within
+/// this crate (`#[allow(dead_code)]`, matching this codebase's existing
+/// pattern for deliberately-kept API surface, e.g.
+/// `horizon-terminal-core`'s `Verdict::Bypassed`) -- a genuine role/config
+/// key any future floating-chrome consumer can still reach for.
+#[allow(dead_code)]
 pub fn surface_raised() -> Hsla {
     packed_hsla(scheme().surface_raised)
 }
@@ -1128,6 +1176,45 @@ pub fn surface_raised() -> Hsla {
 /// `border` role in [`gpui_component_theme_config`].
 pub fn border() -> Hsla {
     packed_hsla(scheme().border)
+}
+
+/// The modal-surface drop shadow (design "C", `docs/theme-design.md`):
+/// two stacked `BoxShadow` layers -- a soft wide "far" layer plus a
+/// tighter "near" layer -- painted behind the command palette/
+/// view-chooser/session-manager container so it reads as a focused layer
+/// over the dimmed workspace via border + shadow, not a darker panel
+/// color. Alpha is polarity-aware (stronger on dark schemes, where the
+/// same shadow would otherwise wash out against an already-dark ground);
+/// offsets/blur are fixed. Pure black (`hsla(0,0,0,alpha)`), like a CSS
+/// shadow, rather than a scheme role -- shadows aren't hue-bearing UI.
+pub(crate) fn overlay_shadow() -> Vec<BoxShadow> {
+    let (far_alpha, near_alpha) = if scheme().is_dark() {
+        (
+            OVERLAY_SHADOW_FAR_ALPHA_DARK,
+            OVERLAY_SHADOW_NEAR_ALPHA_DARK,
+        )
+    } else {
+        (
+            OVERLAY_SHADOW_FAR_ALPHA_LIGHT,
+            OVERLAY_SHADOW_NEAR_ALPHA_LIGHT,
+        )
+    };
+    vec![
+        BoxShadow {
+            color: hsla(0.0, 0.0, 0.0, far_alpha),
+            offset: point(px(0.0), px(OVERLAY_SHADOW_FAR_OFFSET_Y)),
+            blur_radius: px(OVERLAY_SHADOW_FAR_BLUR),
+            spread_radius: px(0.0),
+            inset: false,
+        },
+        BoxShadow {
+            color: hsla(0.0, 0.0, 0.0, near_alpha),
+            offset: point(px(0.0), px(OVERLAY_SHADOW_NEAR_OFFSET_Y)),
+            blur_radius: px(OVERLAY_SHADOW_NEAR_BLUR),
+            spread_radius: px(0.0),
+            inset: false,
+        },
+    ]
 }
 
 /// Diff-added line background (fs.edit's reconstructed-diff body, stage
@@ -1465,6 +1552,48 @@ mod tests {
     }
 
     #[test]
+    fn on_accent_matches_primary_foreground_for_the_resolved_accent() {
+        // The built-in accent (#84dcc6, light mint) -> dark text.
+        reload_from(&RawConfig::default());
+        assert_eq!(on_accent(), packed_hsla(PRIMARY_FOREGROUND_DARK_TEXT));
+
+        // A dark accent (the owner's #0048b3) -> light text.
+        reload_from(&config_with(&[("accent", "#0048b3")]));
+        assert_eq!(on_accent(), packed_hsla(PRIMARY_FOREGROUND_LIGHT_TEXT));
+    }
+
+    #[test]
+    fn overlay_shadow_has_two_layers_and_a_stronger_alpha_on_dark_than_light() {
+        // The built-in scheme is dark-polarity.
+        reload_from(&RawConfig::default());
+        let dark = overlay_shadow();
+        assert_eq!(dark.len(), 2);
+        assert_eq!(dark[0].color.a, OVERLAY_SHADOW_FAR_ALPHA_DARK);
+        assert_eq!(dark[1].color.a, OVERLAY_SHADOW_NEAR_ALPHA_DARK);
+        // A pure-black shadow -- not scheme-hued.
+        assert_eq!(dark[0].color.h, 0.0);
+        assert_eq!(dark[0].color.s, 0.0);
+        assert_eq!(dark[0].color.l, 0.0);
+
+        // The owner's light-polarity scheme.
+        reload_from(&config_with(&owner_light_colors()));
+        let light = overlay_shadow();
+        assert_eq!(light[0].color.a, OVERLAY_SHADOW_FAR_ALPHA_LIGHT);
+        assert_eq!(light[1].color.a, OVERLAY_SHADOW_NEAR_ALPHA_LIGHT);
+
+        // Dark polarity uses the stronger alpha pair -- the same nominal
+        // shadow would otherwise wash out against an already-dark ground.
+        assert!(dark[0].color.a > light[0].color.a);
+        assert!(dark[1].color.a > light[1].color.a);
+
+        // Offsets/blur are polarity-independent -- only alpha moves.
+        assert_eq!(dark[0].offset, light[0].offset);
+        assert_eq!(dark[0].blur_radius, light[0].blur_radius);
+        assert_eq!(dark[1].offset, light[1].offset);
+        assert_eq!(dark[1].blur_radius, light[1].blur_radius);
+    }
+
+    #[test]
     fn owner_light_scheme_explicit_overrides_pass_through_unchanged() {
         let scheme = owner_light_scheme();
         assert!(!scheme.is_dark());
@@ -1663,7 +1792,10 @@ mod tests {
             packed_hsla(PRIMARY_FOREGROUND_LIGHT_TEXT)
         );
         assert_eq!(colors.border, packed_hsla(scheme.border));
-        assert_eq!(colors.popover, packed_hsla(scheme.surface_raised));
+        // Design "C" (`docs/theme-design.md`): gpui-component's own
+        // popovers/dropdowns follow the modal-surface philosophy too --
+        // plain `background`, not the (usually unset, inert) `surface_raised`.
+        assert_eq!(colors.popover, packed_hsla(scheme.background));
     }
 
     #[test]

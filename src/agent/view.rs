@@ -1812,7 +1812,7 @@ impl AgentView {
     /// guard (one send implementation, not two).
     fn render_send_button(&self, has_text: bool, cx: &mut Context<Self>) -> AnyElement {
         let (bg, fg) = if has_text {
-            (theme::accent(), white())
+            (theme::accent(), theme::on_accent())
         } else {
             (theme::text_subtle().alpha(0.3), theme::text_subtle())
         };
