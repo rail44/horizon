@@ -231,14 +231,51 @@ window_height = 720.0
 # terminal consistently. The 16 base ANSI colors terminal output uses live
 # in the nested [theme.ansi] table below, part of this same scheme.
 #
+# Seed + derivation (docs/theme-design.md): every role below can still be
+# set directly, but any role left UNSET is now derived from a small seed
+# instead of a flat built-in constant:
+#   - surface_base is the seed's anchor (its own lightness decides the
+#     scheme's polarity -- dark vs. light -- automatically; no separate
+#     switch).
+#   - The six normal [theme.ansi] hues (red/green/yellow/blue/magenta/cyan)
+#     double as the seed's hue set.
+#   - accent accepts either a hex value OR one of those six hue names
+#     ("red"/"green"/"yellow"/"blue"/"magenta"/"cyan") as a slot reference
+#     -- e.g. `accent = "blue"` resolves to [theme.ansi]'s blue (after any
+#     override), and every downstream accent derivation is identical
+#     either way.
+#   - text_contrast (below) is the one continuous knob: the WCAG contrast
+#     ratio text_primary targets against surface_base when text_primary
+#     itself is unset.
+# The seed only fills gaps -- any role key you DO set (text_primary,
+# surface_panel, danger, ...) still wins outright, unchanged. Leaving
+# every role unset and setting only the seed (surface_base + the six
+# hues + accent, optionally text_contrast) derives the whole scheme:
+# foreground and text_muted solve for readable contrast against the
+# background; text_subtle and the surface/border "neutral ladder"
+# (surface_panel/surface_raised/surface_chrome/surface_selected/borders)
+# step between background and foreground; danger/warning/success/info
+# snap the matching hue (red/yellow/green/blue) to a readable lightness;
+# ANSI black/white and the bright_* slots derive too, unless you set that
+# specific [theme.ansi] slot yourself -- an explicit [theme.ansi] value is
+# always emitted to the terminal verbatim, never auto-adjusted.
+#
 # Names (see `src/theme.rs`'s `scheme_from` -- the one place every key
 # below is read, chrome and agent-pane roles alike):
 #   text_primary, text_muted, text_subtle -- text colors, most to least
 #     prominent.
-#   accent -- the app's one focus/selection accent.
+#   accent -- the app's one focus/selection accent (hex or a hue slot
+#     name, see above).
+#   text_contrast -- the WCAG contrast-ratio target for text_primary
+#     against surface_base, when text_primary itself is unset. A number,
+#     clamped to [4.5, 21.0]; defaults to 15 (the built-in dark scheme's
+#     own measured ratio, so leaving this unset keeps today's look).
+#     Unparsable values (including a non-numeric TOML type) fall back to
+#     the default silently.
 #   danger, warning, success, info -- semantic colors (errors, tool-call
 #     requests/pending approval, finished tool-call results, the assistant
-#     message label).
+#     message label). Unset, each derives from the matching seed hue
+#     (red/yellow/green/blue respectively).
 #   surface_base, surface_panel, surface_raised, surface_chrome,
 #     surface_selected -- background layers: the app base, a lifted panel
 #     (agent transcript's expanded-receipt row header), an elevated
@@ -265,7 +302,9 @@ window_height = 720.0
 # ---------------------------------------------------------------------------
 [theme]
 # accent = "#84dcc6"
+# accent = "blue"        # equivalent to [theme.ansi]'s blue, see above
 # terminal_cursor = "#84dcc6"
+# text_contrast = 15
 
 # ---------------------------------------------------------------------------
 # Agent-pane roles (src/theme.rs; docs/agent-output-ui-amendment.md's

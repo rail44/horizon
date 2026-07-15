@@ -63,19 +63,50 @@ background, and cursor colors project from `text_primary`, `surface_base`,
 and `accent` respectively unless overridden with their own names below, so
 changing those three once recolors chrome and the terminal together.
 
+### Seed + derivation
+
+Any role below left unset is no longer a flat built-in constant -- it
+derives from a small seed: `surface_base` (the anchor -- its own lightness
+decides dark-vs-light polarity automatically), the six normal
+`[theme.ansi]` hues (`red`/`green`/`yellow`/`blue`/`magenta`/`cyan`, which
+double as the seed's hue set), `accent`, and `text_contrast` (below). Set
+just those and every other role -- `text_primary`, `text_muted`,
+`surface_panel`/`surface_raised`/`surface_chrome`/`surface_selected`,
+`border_default`, `danger`/`warning`/`success`/`info`, even the ANSI
+`black`/`white`/`bright_*` slots -- derives a readable, coherent scheme.
+Any role key still set explicitly wins outright, unchanged; the seed only
+fills gaps. `[theme.ansi]` itself is never auto-adjusted for the
+terminal -- an explicit ANSI slot is always emitted verbatim, even when
+the UI-side color derived from that same hue (e.g. `danger` from `red`) is
+contrast-snapped for readability.
+
 Valid names:
 
 - `text_primary`, `text_muted`, `text_subtle` -- text colors, most to
-  least prominent.
-- `accent` -- the app's one focus/selection accent.
+  least prominent. Unset, `text_primary` solves for `text_contrast`'s
+  ratio against `surface_base`; `text_muted` solves for a ratio between
+  the WCAG 4.5 floor and that target; `text_subtle` is decorative (no
+  floor, just visual separation).
+- `accent` -- the app's one focus/selection accent. Either a hex value or
+  one of the six hue names above (e.g. `accent = "blue"`) as a slot
+  reference to that resolved `[theme.ansi]` color -- every downstream
+  accent derivation is identical either way.
+- `text_contrast` -- a number (not a hex string): the WCAG contrast-ratio
+  target for `text_primary` against `surface_base`, clamped to
+  `[4.5, 21.0]`. Defaults to `15` (the built-in dark scheme's own measured
+  ratio, so leaving it unset keeps today's appearance). An unparsable
+  value (including the wrong TOML type) falls back to the default
+  silently, without failing the rest of the file.
 - `danger`, `warning`, `success`, `info` -- semantic colors (errors,
   tool-call requests/pending approval, finished tool-call results, the
-  assistant message label).
+  assistant message label). Unset, each derives from the matching seed
+  hue (red/yellow/green/blue) snapped to a readable lightness.
 - `surface_base`, `surface_panel`, `surface_raised`, `surface_chrome`,
-  `surface_selected` -- background layers: the app base, a lifted panel,
-  an elevated surface (popover/dropdown-menu chrome), the tab strip's
-  own chrome background, and the command palette / session manager /
-  view chooser row highlight.
+  `surface_selected` -- background layers: the app base (the seed
+  anchor), a lifted panel, an elevated surface (popover/dropdown-menu
+  chrome), the tab strip's own chrome background, and the command palette
+  / session manager / view chooser row highlight. Unset, the last four
+  step between `surface_base` and the resolved foreground.
 - `border_default`, `border_subtle` -- the chrome separator-line color;
   `border_subtle` is only ever read as a fallback when `border_default`
   is unset.
@@ -90,12 +121,22 @@ as workspace mode's cursor-frame border, distinct from `accent`'s focus
 border -- today the cursor frame reuses `accent` outright, so setting
 `cursor_accent` alone has no visible effect.
 
-Example:
+Example -- override just two roles directly:
 
 ```toml
 [theme]
 accent = "#84dcc6"
 terminal_cursor = "#84dcc6"
+```
+
+Example -- seed-only, derive the rest (relies on `[theme.ansi]`'s six
+hues below for its hue set):
+
+```toml
+[theme]
+surface_base = "#f6f6f6"
+accent = "blue"
+text_contrast = 12
 ```
 
 ## `[theme.ansi]` -- the 16-slot terminal ANSI palette
