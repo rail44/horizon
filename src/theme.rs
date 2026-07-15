@@ -166,10 +166,14 @@ const DIFF_SURFACE_BLEND_RATIO: f32 = 0.12;
 /// audit's item 3 closes: [`gpui_component_theme_config`]'s
 /// `tab.foreground` projection [`contrast_snap`]s `text_muted` against
 /// this exact track color rather than emitting it verbatim, landing at
-/// ~4.49:1 on the same fixture -- this ratio (this constant's own choice
-/// of how far to blend) is deliberately left as the "keep the track
-/// visually distinct" knob, with `tab.foreground`'s own floor now
-/// guaranteeing readability independently of wherever this ratio lands.
+/// 4.62:1 on the same fixture -- exactly, not approximately: `contrast_
+/// snap` (via `oklab::solve_lightness_for_ratio`'s post-bisection
+/// quantization-safety refinement) guarantees the *quantized* re-encoded
+/// color clears [`TEXT_CONTRAST_FLOOR`], not just the continuous-space
+/// solution. This ratio (this constant's own choice of how far to blend)
+/// is deliberately left as the "keep the track visually distinct" knob,
+/// with `tab.foreground`'s own floor now guaranteeing readability
+/// independently of wherever this ratio lands.
 const SEGMENTED_TRACK_BLEND_RATIO: f32 = 0.5;
 
 /// [`overlay_shadow`]'s two-layer drop shadow, in CSS `box-shadow`
@@ -1926,7 +1930,7 @@ mod tests {
             oklab::relative_luminance(snapped),
             oklab::relative_luminance(light_background),
         );
-        assert!(ratio >= TEXT_CONTRAST_FLOOR - 0.05, "ratio = {ratio}");
+        assert!(ratio >= TEXT_CONTRAST_FLOOR, "ratio = {ratio}");
     }
 
     #[test]
@@ -2027,7 +2031,7 @@ mod tests {
                 oklab::relative_luminance(role),
                 oklab::relative_luminance(scheme.background),
             );
-            assert!(ratio >= TEXT_CONTRAST_FLOOR - 0.05, "ratio = {ratio}");
+            assert!(ratio >= TEXT_CONTRAST_FLOOR, "ratio = {ratio}");
         }
     }
 
@@ -2277,7 +2281,7 @@ mod tests {
             oklab::relative_luminance(composite),
         );
         assert!(
-            ratio >= TEXT_CONTRAST_FLOOR - 0.05,
+            ratio >= TEXT_CONTRAST_FLOOR,
             "ratio = {ratio}, composite = {composite:#08x}"
         );
     }
@@ -2645,7 +2649,7 @@ mod tests {
                 oklab::relative_luminance(scheme.background),
             );
             assert!(
-                ratio >= TEXT_CONTRAST_FLOOR - 0.05,
+                ratio >= TEXT_CONTRAST_FLOOR,
                 "knob {knob}: muted ratio {ratio} fell below the floor"
             );
         }
@@ -2917,15 +2921,11 @@ mod tests {
             oklab::relative_luminance(snapped_packed),
             oklab::relative_luminance(scheme.surface_panel),
         );
-        // `- 0.05`: the same u8-quantization tolerance
-        // `text_muted_never_drops_below_the_wcag_floor_across_a_range_of_
-        // knobs` already uses -- `solve_lightness_for_ratio` targets the
-        // ratio in continuous OKLab space, and the final sRGB roundtrip
-        // can shave a few thousandths off after rounding to `u8` channels.
-        assert!(
-            ratio_after >= TEXT_CONTRAST_FLOOR - 0.05,
-            "ratio = {ratio_after}"
-        );
+        // No tolerance: `solve_lightness_for_ratio`'s own quantization-
+        // safety refinement (`theme/oklab.rs`) guarantees the returned
+        // `l`'s quantized `u8` re-encoding clears `target_ratio` exactly,
+        // not just in continuous OKLab-lightness space.
+        assert!(ratio_after >= TEXT_CONTRAST_FLOOR, "ratio = {ratio_after}");
         // Hue is preserved (only lightness moves). Compared through the
         // same `Hsla` roundtrip `readable_on` itself uses on both ends
         // (rather than against `scheme.danger` directly) so the
@@ -2960,13 +2960,13 @@ mod tests {
             oklab::contrast_ratio(
                 oklab::relative_luminance(scheme.diff_added_text),
                 oklab::relative_luminance(scheme.diff_added_surface),
-            ) >= TEXT_CONTRAST_FLOOR - 0.05
+            ) >= TEXT_CONTRAST_FLOOR
         );
         assert!(
             oklab::contrast_ratio(
                 oklab::relative_luminance(scheme.diff_removed_text),
                 oklab::relative_luminance(scheme.diff_removed_surface),
-            ) >= TEXT_CONTRAST_FLOOR - 0.05
+            ) >= TEXT_CONTRAST_FLOOR
         );
     }
 
@@ -2984,7 +2984,7 @@ mod tests {
             oklab::contrast_ratio(
                 oklab::relative_luminance(scheme.diff_added_text),
                 oklab::relative_luminance(scheme.diff_added_surface),
-            ) >= TEXT_CONTRAST_FLOOR - 0.05
+            ) >= TEXT_CONTRAST_FLOOR
         );
     }
 
@@ -3149,11 +3149,11 @@ mod tests {
         let success_ratio = ratio(scheme.success, scheme.background);
         let warning_ratio = ratio(scheme.warning, scheme.background);
         assert!(
-            success_ratio >= TEXT_CONTRAST_FLOOR - 0.05,
+            success_ratio >= TEXT_CONTRAST_FLOOR,
             "ratio = {success_ratio}"
         );
         assert!(
-            warning_ratio >= TEXT_CONTRAST_FLOOR - 0.05,
+            warning_ratio >= TEXT_CONTRAST_FLOOR,
             "ratio = {warning_ratio}"
         );
     }
@@ -3179,7 +3179,7 @@ mod tests {
             let snapped = contrast_snap(role, scheme.surface_selected);
             assert_ne!(snapped, role);
             let after = ratio(snapped, scheme.surface_selected);
-            assert!(after >= TEXT_CONTRAST_FLOOR - 0.05, "ratio = {after}");
+            assert!(after >= TEXT_CONTRAST_FLOOR, "ratio = {after}");
         }
         // `text_subtle` also fails against `surface_selected` (~1.53:1 on
         // this fixture) but is deliberately NOT snapped anywhere in this
@@ -3208,7 +3208,7 @@ mod tests {
         let tab_foreground = contrast_snap(scheme.text_muted, tab_bar_segmented);
         assert_ne!(tab_foreground, scheme.text_muted);
         let after = ratio(tab_foreground, tab_bar_segmented);
-        assert!(after >= TEXT_CONTRAST_FLOOR - 0.05, "ratio = {after}");
+        assert!(after >= TEXT_CONTRAST_FLOOR, "ratio = {after}");
 
         // Wired all the way through the gpui-component projection too.
         let colors = theme_color_for(&scheme);
@@ -3230,7 +3230,7 @@ mod tests {
         let button_danger_foreground = contrast_snap(scheme.danger, fill);
         assert_ne!(button_danger_foreground, scheme.danger);
         let after = ratio(button_danger_foreground, fill);
-        assert!(after >= TEXT_CONTRAST_FLOOR - 0.05, "ratio = {after}");
+        assert!(after >= TEXT_CONTRAST_FLOOR, "ratio = {after}");
 
         // Wired all the way through the gpui-component projection too.
         let colors = theme_color_for(&scheme);

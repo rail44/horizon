@@ -184,12 +184,41 @@ pub(crate) fn contrast_ratio(l1: f64, l2: f64) -> f64 {
 /// Bisection-search iteration count for [`solve_lightness_for_ratio`].
 /// `2.0_f64.powi(-40)` is far below `u8` channel precision (`1/255`) once
 /// the result is re-encoded to sRGB, so 40 halvings of the initial
-/// `0.0..=1.0` OKLab-lightness range leaves no meaningful residual error.
+/// `0.0..=1.0` OKLab-lightness range leaves no meaningful residual error
+/// in *continuous* OKLab-lightness space.
 const CONTRAST_SEARCH_ITERATIONS: u32 = 40;
+
+/// [`solve_lightness_for_ratio`]'s post-bisection quantization-safety
+/// refinement step, in OKLab-lightness units -- roughly one `u8`
+/// sRGB-channel step, matching the granularity the final
+/// `packed_from_oklch` re-encoding actually quantizes to.
+const CONTRAST_QUANTIZATION_STEP: f64 = 1.0 / 255.0;
+
+/// Bound on how many [`CONTRAST_QUANTIZATION_STEP`] nudges
+/// [`solve_lightness_for_ratio`]'s refinement loop takes before stopping.
+/// Generous relative to the single- or few-step undershoot `u8`
+/// quantization actually introduces (the bisection above already lands
+/// within `2.0_f64.powi(-40)` of the continuous answer), while still
+/// finite so a target that's unreachable at this hue/chroma -- normally
+/// caught by the early "far bound" check below, but re-guarded here too
+/// since the refinement loop clamps at the `0.0`/`1.0` boundary and stops
+/// -- can't loop forever.
+const CONTRAST_QUANTIZATION_MAX_STEPS: u32 = 32;
 
 /// Finds the OKLab lightness `l` (with `hue`/`chroma` held fixed -- the
 /// "inherit background's tint" rule in `docs/theme-design.md`) whose sRGB
-/// re-encoding hits `target_ratio` WCAG contrast against `background`.
+/// re-encoding hits `target_ratio` WCAG contrast against `background` --
+/// GUARANTEED (not just approximated), by construction, for any target
+/// actually achievable at this hue/chroma: the returned `l`'s own
+/// `packed_from_oklch` re-encoding (the exact `u8`-quantized color every
+/// consumer of this function actually paints) always measures
+/// `>= target_ratio`, checked with [`contrast_ratio`]/[`relative_
+/// luminance`] on the quantized bytes, not the continuous-space solution
+/// bisection alone would produce (see the refinement step below for why
+/// that distinction matters). `contrast_snap`/`tint_for_contrast`/
+/// `readable_on` (`theme.rs`) all resolve through this one function, so
+/// the guarantee reaches every text-floor consumer in the seed
+/// derivation, including B1's own `text_muted`/`foreground` solves.
 ///
 /// The search direction is fixed once, from `background`'s own OKLab
 /// lightness (`< 0.5` = dark -> search lighter, i.e. toward `1.0`; else
@@ -246,7 +275,40 @@ pub(crate) fn solve_lightness_for_ratio(
             low = mid;
         }
     }
-    (low + high) / 2.0
+    let mut l = (low + high) / 2.0;
+
+    // Quantization-safety refinement. The bisection above converges to
+    // within `2.0_f64.powi(-40)` of the continuous-space answer, but
+    // `ratio_at` -- and every real consumer -- measures the WCAG ratio of
+    // the *quantized* `u8` sRGB re-encoding, a step function of `l`, not
+    // the smooth continuous-space ratio the bisection's own midpoint
+    // arithmetic assumes. The final `(low + high) / 2.0` above is a brand
+    // new value the loop itself never actually tested with `ratio_at` --
+    // it can round to a `u8` triplet a hair under `target_ratio` even
+    // though `low`/`high` themselves bracket the true answer tightly. Fix
+    // that by nudging `l` further in the established search direction, in
+    // minimal [`CONTRAST_QUANTIZATION_STEP`] increments, re-checking the
+    // QUANTIZED ratio each time, until it actually clears `target_ratio`.
+    // A genuinely unreachable target (distinct from this quantization
+    // gap, already handled by the early "far bound" return above) simply
+    // runs out of room at the `0.0`/`1.0` boundary and the loop stops
+    // there -- same "converge to the extreme" behavior as before, just
+    // reached by small steps instead of a single jump.
+    for _ in 0..CONTRAST_QUANTIZATION_MAX_STEPS {
+        if ratio_at(l) >= target_ratio {
+            break;
+        }
+        let next = if dark {
+            (l + CONTRAST_QUANTIZATION_STEP).min(1.0)
+        } else {
+            (l - CONTRAST_QUANTIZATION_STEP).max(0.0)
+        };
+        if next == l {
+            break;
+        }
+        l = next;
+    }
+    l
 }
 
 // --- convenience wrappers for `theme.rs`'s seed derivation --------------
