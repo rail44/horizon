@@ -148,10 +148,16 @@ wave items where possible; design docs on first use.
   **Slice B1 (seed schema + headless derivation core) shipped
   2026-07-15** (`1dea5eb`): `text_contrast` knob, slot-name accents,
   `src/theme/oklab.rs`, role-based ANSI derivation; the design doc's
-  five provisional details are settled there. Remaining: slice B2 (the
-  UI-snap seam — wiring contrast-snapped hue borrowings through the
-  views). The doc's "Related, independent fixes" section (hardcoded
-  modal colors etc.) is worker-sized and not blocked on this item.
+  five provisional details are settled there. **Slice B2 (UI-snap seam)
+  shipped 2026-07-15** (`72c19d4`): hue projection into gpui-component
+  (12 base-hue fields + `chart.1-5`, faithful), surface-aware
+  `readable_on` snapping in the agent pane, diff text defaults snapped
+  against their own surfaces. Implementation is complete; remaining is
+  owner dogfooding of the derived scheme (the owner's config now runs
+  the seed-only form; brights/neutral-ladder/raised feel are the open
+  tuning questions) and the deferred base16/24 import. The doc's
+  "Related, independent fixes" section (hardcoded modal colors etc.)
+  is worker-sized and not blocked on this item.
 - **winit windowing backend (spike)** — direction set 2026-07-12:
   native-feeling window decorations on every desktop (Wayland via
   sctk-adwaita, native macOS) without per-DE styling effort, by
