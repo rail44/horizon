@@ -173,9 +173,11 @@ wave items where possible; design docs on first use.
   in the same merge and **reverted** (`fdd7211`): the stock Tab
   variant is square and Horizon's pane borders defeat the
   connected-tab look; the owner declined custom tab/pane-chrome
-  coordination, and going forward visual/variant choices are grounded
-  in what the owner sees in gpui-component's official gallery — no
-  beyond-stock visual work (2026-07-15). The owner's seed hues
+  coordination. Standing rule from this (owner, 2026-07-15): stock
+  components are used as the official gallery shows them — never
+  coaxed beyond that; needing more means building Horizon's own
+  component, decided per-view by whether the view's value justifies
+  the effort (the tab strip didn't). The owner's seed hues
   green/yellow/cyan were contrast-adjusted in their config so brights
   derive from readable normals. Implementation is complete; remaining
   is owner dogfooding (brights feel, scrim alpha) and, as a
