@@ -834,3 +834,19 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     everywhere; the first Linux `cargo nextest run --workspace` after
     the 2026-07-14 merge is the actual validation — run it and close
     this item.
+
+40. **Shared build-dir: stale e2e test binary bakes a CARGO_BIN_EXE path
+    into a deleted worktree.** Observed 2026-07-15 by a worker (theme
+    trio branch): `horizon-sessiond::e2e`'s `CARGO_BIN_EXE_horizon-sessiond`
+    pointed at a sibling worktree that had already been merged and
+    removed — a *permanent* miss, unlike item 36's transient
+    non-atomic-uplift window (36's retry-on-miss thinking doesn't apply
+    when the baked path can never exist again). Mechanism: the compiled
+    e2e test artifact itself is reused across worktrees via the shared
+    `build.build-dir`, carrying the env-baked absolute path from
+    whichever worktree compiled it last. Workaround used: `touch
+    crates/horizon-sessiond/tests/e2e.rs` to force a real recompile in
+    the current worktree. Candidate fixes: resolve the sessiond binary
+    at test *runtime* relative to `current_exe()` instead of the
+    compile-time env; or exclude the e2e test unit from the shared
+    build-dir. Needs a decision by the project session (build infra).
