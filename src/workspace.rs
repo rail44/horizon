@@ -238,7 +238,7 @@ pub(crate) struct RunCommand {
 
 const MODE_CONTEXT: &str = "WorkspaceMode";
 
-/// Alpha applied to `theme::scrim_base()` for every pane while workspace
+/// Alpha applied to `theme::scrim_color()` for every pane while workspace
 /// mode's dim pattern is active -- ported from the retired Floem shell's
 /// `WORKSPACE_MODE_DIM_ALPHA` (`docs/workspace-mode-design.md`'s "pane
 /// dimming" visualization signal, the accident-killer: a stray keystroke
@@ -248,19 +248,31 @@ const MODE_CONTEXT: &str = "WorkspaceMode";
 ///
 /// Lowered from the original 0.55 on 2026-07-15 dogfooding feedback
 /// (round 1): 0.55 was carried over unchanged from the old bg-colored
-/// veil, but the black/white polarity-flipped scrim (`theme::scrim_base()`)
-/// reads noticeably heavier than that veil did at the same alpha.
+/// veil, but a *polarity-flipped pole* scrim color (tried this round,
+/// see below) reads noticeably heavier than the veil did at the same
+/// alpha.
 ///
 /// Round 2 (also 2026-07-15) gave the cursor pane its own lighter alpha
 /// (`SCRIM_CURSOR_DIM_ALPHA = 0.12`) instead of the base dim. Round 3
 /// (same day) dropped that distinction entirely: the cursor signal now
 /// lives solely in the pane border (see `render_node`'s now-more-prominent
 /// `border_2()` and [`pane_border_role`]), so every pane -- cursor
-/// included -- gets the *same* alpha whenever the dim pattern is active.
-/// Lowered again, 0.30 -> 0.10, since the scrim no longer needs to carry
-/// any cursor/non-cursor contrast on its own. Explicitly feel-tunable,
-/// not derived.
-const SCRIM_DIM_ALPHA: f32 = 0.10;
+/// included -- gets the *same* alpha whenever the dim pattern is active,
+/// and the alpha itself dropped to 0.10 (light, since the scrim no
+/// longer needed to carry any cursor/non-cursor contrast on its own).
+///
+/// Round 4 (2026-07-16) reset the alpha's *meaning*: the owner tried the
+/// polarity-flipped pole color from rounds 1-3 in real use and withdrew
+/// it (see `theme::scrim_color`'s doc comment) in favor of the original
+/// pre-2026-07-15 approach -- compositing the *background* color over a
+/// pane, which reduces its contrast rather than shifting its lightness.
+/// 0.10 was calibrated for the (much higher-contrast) black/white pole
+/// color and would be nearly invisible against a same-hued background
+/// veil, so the alpha jumped back up to 0.5 -- the historical veil lived
+/// at 0.55, kept as the reference starting point. Still every pane
+/// uniformly, cursor included; still explicitly feel-tunable, not
+/// derived.
+const SCRIM_DIM_ALPHA: f32 = 0.5;
 
 /// Whether workspace mode's dim pattern applies a scrim, given whether the
 /// pattern is active. Trivial since round 3 (2026-07-15): every pane dims
@@ -2041,16 +2053,20 @@ impl WorkspaceShell {
                         // whole pane tree (see the `when_some(self.palette
                         // ...)` etc. below) and so paints and hit-tests
                         // above every pane's scrim. The scrim's color is
-                        // `theme::scrim_base()` -- the scheme's opposite
-                        // pole, not its own `background` -- so dimming
-                        // reads as a lighten on a dark scheme and a
-                        // darken on a light one (`docs/theme-design.md`'s
-                        // "fade vs shadow" question, decided 2026-07-15).
+                        // `theme::scrim_color()` -- the resolved
+                        // `background`, composited at `alpha` over the
+                        // pane -- so de-emphasis reduces the pane's
+                        // *contrast* (every pixel compresses proportionally
+                        // toward `background`) rather than shifting its
+                        // lightness the way a black/white pole-color veil
+                        // would (`docs/theme-design.md`'s scrim section:
+                        // tried as a pole scrim 2026-07-15, withdrawn
+                        // 2026-07-16 back to this).
                         this.child(
                             div()
                                 .absolute()
                                 .inset_0()
-                                .bg(theme::scrim_base().opacity(alpha)),
+                                .bg(theme::scrim_color().opacity(alpha)),
                         )
                     })
                     .into_any_element()

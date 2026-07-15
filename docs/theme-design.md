@@ -61,17 +61,28 @@ coordination the owner isn't taking on right now. The tab strip is back
 to `Segmented` (`src/workspace.rs::render_tab_strip`); `src/theme.rs`'s
 tab token projections (`tab_bar`, `tab_bar_segmented`, `tab_active`,
 `tab_foreground`) are back to their pre-`2e0739e` values. The
-polarity-flipped scrim decision below, from the same commit, is
-unaffected and stays.
+polarity-flipped scrim decision below, from the same commit, was
+unaffected by *this* revert (it was itself withdrawn later, for
+unrelated reasons -- see round 4 below).
 
-**Workspace-mode dim scrim -- DECIDED (2026-07-15, owner):** the "fade vs
-shadow" question this section originally left open is resolved as neither
-metaphor outright, but a third: a **polarity-flipped pole scrim**. The
-scrim (`src/workspace.rs`'s `pane_scrim_alpha` over `theme::scrim_base()`)
-no longer fades toward the scheme's own `background` -- it shifts the
+**Workspace-mode dim scrim: pole color -- DECIDED (2026-07-15), WITHDRAWN
+(2026-07-16, owner):** the "fade vs shadow" question this section
+originally left open was resolved as neither metaphor outright, but a
+third: a **polarity-flipped pole scrim**. The scrim (`src/workspace.rs`'s
+`pane_scrim_alpha` over what was then called `theme::scrim_base()`) no
+longer faded toward the scheme's own `background` -- it shifted the
 unfocused area toward the *opposite* pole: lighten (a white scrim) on a
 dark scheme, darken (a black scrim) on a light scheme, via
 `Scheme::is_dark()`.
+
+The owner tried this in real use across rounds 1-3 below (tuning its
+alpha and composition) and ultimately withdrew the pole-color idea
+itself on 2026-07-16: overlaying a translucent black/white layer reads as
+a color shift, not a focus cue. See "Scrim color: pole approach
+withdrawn" (round 4) below for the replacement, which is now what's
+actually in effect -- this paragraph and the alpha/composition history
+in rounds 1-3 are kept as the record of what was tried and why it didn't
+stick.
 
 **Scrim alpha -- REVISED (2026-07-15, owner dogfooding feedback, round
 1):** the original single alpha (`WORKSPACE_MODE_DIM_ALPHA = 0.55`) was
@@ -133,10 +144,43 @@ dims uniformly whenever the pattern is active. Two changes:
   neither the dim pattern nor the cursor-pane border changes when a modal
   opens. See below for the mechanism.
 
-If this still feels off after living with it, the owner's noted fallback
-is reconsidering a heavier scrim specifically on light schemes (rather
-than retuning `SCRIM_DIM_ALPHA` globally again) -- not implemented here,
-just recorded as the next lever to reach for.
+*Correction (round 4):* this paragraph previously recorded the fallback
+as "reconsidering a heavier scrim specifically on light schemes." That
+was a mis-relay -- the owner's actual fallback, exercised the very next
+round, was withdrawing the pole-color approach itself (see round 4
+below), not retuning it further.
+
+**Scrim color: pole approach withdrawn, back to a background veil --
+REVISED (2026-07-16, owner dogfooding feedback, round 4):** having lived
+with the polarity-flipped pole scrim through rounds 1-3, the owner
+withdrew it: overlaying a translucent black/white layer reads as a color
+shift on the dimmed pane, not as a focus cue. The replacement policy --
+**de-emphasis should reduce the unfocused content's *contrast*, not shift
+its lightness** -- is implemented by compositing the resolved
+`background` color at `SCRIM_DIM_ALPHA` over the pane: every underlying
+pixel compresses proportionally toward `background`, so contrast falls
+while the surface's own lightness doesn't move the way a black/white
+overlay would. This is a deliberate return to the *color* the original
+pre-2026-07-15 veil used, while keeping every structural improvement made
+across rounds 1-3 on top of it:
+- Uniform application to every pane, cursor pane included (round 3).
+- The 2px cursor-pane accent border as the sole cursor signal (round 3).
+- The modal-open freeze, covering both the scrim and the border (rounds
+  2 and 3).
+- `pane_scrim_alpha`/`effective_scrim_pattern` and their existing tests,
+  unchanged -- both are already agnostic to *which* color the scrim
+  paints, so nothing about the freeze/composition logic needed to move.
+
+Two concrete changes:
+- **Color:** `theme::scrim_base()` -- the pole-color helper -- is renamed
+  to `theme::scrim_color()` and simply returns the resolved `background`,
+  opaque (`src/theme.rs`). It no longer varies by `Scheme::is_dark()` at
+  all; the polarity-dependent branch is gone.
+- **Alpha:** `SCRIM_DIM_ALPHA` was calibrated at 0.10 for the
+  high-contrast black/white pole color (round 3) -- against a same-hued
+  background veil that would be nearly invisible, so it moves back up to
+  **0.5** as the starting point, with the historical pre-2026-07-15 veil's
+  0.55 kept as the reference. Still explicitly feel-tunable, not derived.
 
 Which alpha (if any) a pane gets is decided by a small pure function,
 `pane_scrim_alpha(mode_active: bool) -> Option<f32>` (`src/workspace.rs`,
