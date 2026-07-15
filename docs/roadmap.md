@@ -284,6 +284,16 @@ wave items where possible; design docs on first use.
 
 ## Next (unclaimed — pick freely)
 
+- **Theme seed + derivation** (`docs/theme-design.md`, designed
+  2026-07-15 with the owner): replace hand-tuning ~20 role keys with a
+  small seed — background + six ANSI-shaped hues + accent + one
+  contrast knob — from which the neutral ladder, text roles
+  (contrast-floored), state variants, and ANSI slots derive in OKLCH.
+  Existing role keys become the override layer (full back-compat);
+  terminal output stays faithful while UI borrowings contrast-snap.
+  Provisional details are listed in the doc. The doc's "Related,
+  independent fixes" section (hardcoded modal colors etc.) is
+  worker-sized and not blocked on this item.
 - **Model-routing OpenAI-compatible API**: router over synthetic.new,
   co-located as an independent crate — no horizon dependencies
   (extractable later), SSE streaming required (horizon-agent assumes
