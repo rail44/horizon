@@ -876,5 +876,8 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     variant's inner padding + gap; the default `Tab` variant has zero
     inner padding/gap (adjacent tabs touch, 1px side borders), so
     computed widths are now a knowable amount too narrow — cosmetic,
-    not broken. Retune wants the owner's visual read on the new strip;
-    one-constant fix once judged.
+    not broken. **Moot again (2026-07-15):** the owner reverted the
+    design-C switch after seeing the result (`docs/theme-design.md`'s
+    "design C for chrome — REVERTED" note); the tab strip is back to
+    `Segmented`, whose allowances were never stale. Only relevant again
+    if the strip switches variant a second time.

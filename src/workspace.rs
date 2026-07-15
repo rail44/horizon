@@ -1755,26 +1755,25 @@ impl WorkspaceShell {
         // `Tab`/`TabBar` colors come from `cx.theme()`, which
         // `theme::apply_gpui_component_theme` projects from Horizon's own
         // `[theme]` scheme (see `src/theme.rs`) -- so the label text and
-        // the selected tab's fill already resolve to `tab_foreground`/
-        // `tab_active_foreground`/`tab_active` without any per-tab
-        // override here. The default `TabVariant::Tab` (replacing
-        // `Segmented`, "design C for chrome", 2026-07-15 owner GO) is the
-        // classic connected-tab look: the bar paints a full-width bottom
-        // hairline (`border` token) beneath the tab row, and the selected
-        // tab is an opaque fill (`tab_active`, side borders only, no
-        // bottom border) that visually interrupts the hairline and
-        // connects to the content surface below it -- see the vendored
-        // `crates/ui/src/tab/{tab.rs,tab_bar.rs}` (rev 0775df3). No
-        // `.segmented()`/`.with_variant()` call is needed here: `TabBar`
-        // defaults to `TabVariant::Tab` and propagates it to every child
-        // `Tab` itself (`tab_bar.rs`'s `with_variant(self.variant)`), so
-        // there's no per-tab override to align.
+        // the selected tab's pill already resolve to `tab_foreground`/
+        // `tab_active_foreground`/`background` without any per-tab
+        // override here. `Segmented` (replacing `Underline`, 2026-07-14
+        // owner GO) is one of gpui-component's variants with an animated
+        // sliding selection indicator; its track color is
+        // `tab_bar_segmented`, which Horizon's projection leaves unset --
+        // falling back to gpui-component's own `secondary` token, i.e.
+        // `scheme.surface_panel` (see `gpui_component_theme_config`'s doc
+        // table). The selected tab's own pill is `tokens.background`
+        // (`scheme.background`), fixed inside gpui-component and not
+        // separately overridable without changing every other
+        // `background`-rooted surface in the app.
         let selected_index = tabs
             .iter()
             .find(|tab| tab.active)
             .map_or(0, |tab| tab.index);
         let strip_width = window.viewport_size().width;
         TabBar::new("workspace-tabs")
+            .segmented()
             .w_full()
             .px_2()
             .selected_index(selected_index)
