@@ -238,29 +238,58 @@ default rather than discussed, and are explicitly open:
   `contrast_safe_default` already did, generalized to read the resolved
   (possibly user-overridden) hue instead of a fixed constant.
 - **Accent-as-hex** — **Settled 2026-07-15 as "unchanged, not extended,"
-  revised 2026-07-15 (later the same day, a follow-up dogfooding pass).**
+  revised 2026-07-15 twice (two follow-up dogfooding passes, same day).**
   Slice B1 didn't add any new hover/active derivation keyed off accent:
   `surface_selected` (previously a `background`-toward-`accent` blend
   when unset) moved to the neutral ladder (background-toward-foreground,
   alongside `surface_panel`/`surface_raised`/`surface_chrome`/borders)
   instead — which, in dogfooding, made list selection read as flat gray
   on the seeded path, losing the accent-tinted character the
-  zero-config formula (`LIST_ACTIVE_BLEND_RATIO`) always had. Reverted
-  for `surface_selected` specifically, seeded path only:
-  `src/theme.rs`'s `scheme_from` now blends `seed_background` toward the
-  resolved `accent` again (`SURFACE_SELECTED_ACCENT_BLEND_RATIO`, a new
-  constant distinct from `LIST_ACTIVE_BLEND_RATIO` so the zero-config
-  default stays byte-identical) whenever the key itself is unset and the
-  seed is configured. Every *other* neutral-ladder role
+  zero-config formula (`LIST_ACTIVE_BLEND_RATIO`) always had. First
+  revision: reverted for `surface_selected` specifically, seeded path
+  only, blending `seed_background` toward `accent` again — but at a
+  *different*, larger ratio than `LIST_ACTIVE_BLEND_RATIO`, reasoning
+  (wrongly) from the pre-clamp role value alone. Second revision, a
+  parallel audit of the vendored gpui-component (rev
+  `0775df394083c1ed74f36f846b78868d1267398f`,
+  `crates/ui/src/theme/schema.rs`'s `clamp_alpha`) found the real bug:
+  `Theme::apply_config` unconditionally clamps `list.active.background`'s
+  alpha to 0.2, even for a fully opaque hex, so whatever hex Horizon
+  projects there was *always* composited on screen at only 20% of its own
+  distance from the row's base background — a pre-existing rendering gap
+  affecting every scheme, including the built-in zero-config one, not
+  something either B1 or the first revision introduced. `surface_selected`
+  now keeps its ORIGINAL meaning (the pre-B1, pre-clamp-bug-discovery
+  role): the *intended, on-screen* selected-row color, a `background`-
+  toward-`accent` blend at `LIST_ACTIVE_BLEND_RATIO` on BOTH the
+  zero-config and seeded paths (one constant, only the background anchor
+  differs) — restoring `LIST_ACTIVE_BLEND_RATIO` as the single source of
+  truth for "how strong should this tint be," per the coordinator's
+  review. The fix instead lives in the *projection*:
+  `gpui_component_theme_config` no longer projects `scheme.surface_selected`
+  to `list.active.background` verbatim; `invert_list_active_clamp`
+  (`src/theme.rs`) pre-compensates by exaggerating the deviation from
+  `background` by gpui-component's own clamp factor inverted (`1 / 0.2`,
+  clamped per channel to `0..=255`), so that after gpui-component's own
+  clamp composites it back down, the on-screen result equals
+  `surface_selected` again whenever that's reachable (roughly `background`
+  scaled by up to 5x toward `0`/`255` per channel — a `surface_selected`
+  far outside that, e.g. the owner's old explicit `#a6a6a6` override
+  against their `#f6f6f6` background, lands at the nearest reachable
+  composite instead, ≈`#c5c5c5` on their scheme, not the literal
+  configured hex). Every *other* neutral-ladder role
   (`surface_panel`/`surface_raised`/`surface_chrome`/`border`) is
   unaffected and still steps toward `foreground`, not `accent` — this is
   a `surface_selected`-only exception, not a reopening of the general
-  "hue is preference, lightness geometry is theory" principle. The
-  chosen ratio clears a minimum OKLab-lightness separation from
-  `background` (a "clearly visible" check) while keeping `text_primary`
-  painted on the result above the WCAG 4.5:1 floor against the owner's
-  real (dark-blue-accent, light-background) fixture — both asserted in
-  `src/theme.rs`'s tests, not assumed. `accent` itself, and
+  "hue is preference, lightness geometry is theory" principle, and it
+  doesn't touch any other gpui-component field's own clamp (`selection`'s
+  0.3 ceiling, wired in the very next item below, is left alone — its
+  configured alpha byte already sits at that ceiling by design, nothing
+  to invert). The composite (not the pre-clamp role value) is what's
+  checked against the "clearly visible" OKLab-lightness-separation floor
+  and the WCAG 4.5:1 text floor on the owner's real (dark-blue-accent,
+  light-background) fixture, plus a dedicated round-trip test — all
+  asserted, not assumed, in `src/theme.rs`'s tests. `accent` itself, and
   gpui-component's `primary`/`ring`/`primary_foreground`/`caret`/
   `selection` projections that read it directly
   (`gpui_component_theme_config`), remain the only other consumers.

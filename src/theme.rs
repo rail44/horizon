@@ -39,10 +39,9 @@
 //! popover anchors) as hex strings, and lets gpui-component's own
 //! `ThemeColor::apply_config` (`ui::theme::schema` in the vendored
 //! `gpui-component` source) cascade every other field's fallback chain
-//! from those -- e.g. `accent_foreground`/`button_secondary`/
-//! `list_active`/`selection` all derive from `secondary`/`primary`/
-//! `background` without Horizon ever naming them directly. See that
-//! function's doc for the full table and every rule's rationale.
+//! from those -- e.g. `accent_foreground`/`button_secondary` derive from
+//! `foreground`/`secondary` without Horizon ever naming them directly.
+//! See that function's doc for the full table and every rule's rationale.
 //!
 //! Every derivation rule here is *polarity-aware*: it's written in terms
 //! of blending toward another already-resolved scheme role (`foreground`,
@@ -183,14 +182,21 @@ const OVERLAY_SHADOW_FAR_ALPHA_DARK: f32 = 0.5;
 const OVERLAY_SHADOW_NEAR_ALPHA_DARK: f32 = 0.35;
 
 /// How far the command-palette/session-manager/view-chooser `List`'s
-/// selected-row highlight (`surface_selected`'s built-in default) sits
-/// from `background` toward `accent`. Matches gpui-component's own
-/// `list_active` fallback formula exactly (`self.background.blend(
-/// self.primary.opacity(0.1))` in the vendored `ui::theme::schema`,
-/// where `primary` is itself `scheme.accent`, see
-/// [`gpui_component_theme_config`]) -- so an unset `surface_selected`
-/// reproduces today's look bit-for-bit rather than just approximating
-/// it.
+/// selected-row highlight (`surface_selected`'s default, on both the
+/// zero-config and seeded derivation paths -- see `scheme_from`) sits
+/// from its background anchor toward `accent`. Originally chosen to match
+/// gpui-component's own `list_active` fallback formula (`self.background
+/// .blend(self.primary.opacity(0.1))` in the vendored `ui::theme::schema`,
+/// where `primary` is itself `scheme.accent`) so an unset `surface_selected`
+/// reproduced that look bit-for-bit; kept as the single intensity target
+/// for `surface_selected` itself -- the *role* value represents the
+/// intended, on-screen selected-row color, full stop.
+/// [`gpui_component_theme_config`] no longer projects it to
+/// `list.active.background` verbatim, though: gpui-component's own
+/// `apply_config` unconditionally clamps that field's alpha
+/// ([`LIST_ACTIVE_ALPHA_CLAMP`]), which would otherwise wash this blend
+/// out to a barely-visible highlight on screen -- see that constant's
+/// doc and [`invert_list_active_clamp`] for the compensation.
 const LIST_ACTIVE_BLEND_RATIO: f32 = 0.1;
 
 // --- Seed derivation (`docs/theme-design.md`) ---------------------------
@@ -255,30 +261,12 @@ const TEXT_SUBTLE_LADDER_FRACTION: f64 = 0.4;
 /// reproduce their exact values (per the owner: "the steps were set by
 /// feel; don't trust them"), only their relative ordering and separation
 /// from both ends. `surface_selected` briefly joined this ladder too
-/// (`SURFACE_SELECTED_STEP == BORDER_STEP`) but moved back to an
-/// accent-anchored tint -- see [`SURFACE_SELECTED_ACCENT_BLEND_RATIO`].
+/// (`SURFACE_SELECTED_STEP == BORDER_STEP`) but moved back to being
+/// accent-anchored on both derivation paths -- see `LIST_ACTIVE_BLEND_RATIO`.
 const SURFACE_CHROME_STEP: f64 = 0.12;
 const SURFACE_PANEL_STEP: f64 = 0.28;
 const SURFACE_RAISED_STEP: f64 = 0.34;
 const BORDER_STEP: f64 = 0.5;
-
-/// How far a SEEDED `surface_selected` default sits from `seed_background`
-/// toward the resolved `accent` -- restoring the accent-tinted
-/// list-selection character the seeded derivation path lost when it first
-/// moved `surface_selected` onto the neutral ladder above (that slice's
-/// own "Accent-as-hex" note in `docs/theme-design.md` left this open for a
-/// later dogfooding pass; this constant is that pass). Deliberately a
-/// *separate* constant from [`LIST_ACTIVE_BLEND_RATIO`] (which keeps
-/// governing the *zero-config* default, byte-for-byte, per this module's
-/// back-compat invariant) rather than reusing it: `LIST_ACTIVE_BLEND_RATIO`
-/// (0.1) was tuned to match gpui-component's own fallback formula exactly,
-/// not to guarantee a visible tint against an arbitrary seeded scheme.
-/// Picked so the tint clears a perceptible OKLab-lightness separation from
-/// `background` while `text_primary` painted on the result still clears
-/// the WCAG 4.5:1 floor against the owner's real (dark-blue-accent, light-
-/// background) fixture -- both checked, not assumed, in this module's
-/// tests (`surface_selected_tints_toward_accent_...`).
-const SURFACE_SELECTED_ACCENT_BLEND_RATIO: f32 = 0.08;
 
 /// OKLCH lightness delta applied, toward the foreground's own direction
 /// (dark background: lighter; light background: darker -- "emphasis
@@ -340,18 +328,19 @@ struct Scheme {
     /// `surface_panel` (`SEGMENTED_TRACK_BLEND_RATIO`) is computed from
     /// *this* role, so leaving it unset reproduces today's look exactly.
     surface_chrome: u32,
-    /// New in the gpui-component projection: the selected-row highlight
-    /// for gpui-component's `List` (the command palette / session
-    /// manager / view chooser rows -- see `list.active.background` in
-    /// [`gpui_component_theme_config`]), resolved from the
-    /// `surface_selected` config key or, if unset, a blend of
-    /// `background` toward the resolved `accent` -- `LIST_ACTIVE_BLEND_RATIO`
-    /// (mirroring gpui-component's own `list_active` fallback formula
-    /// bit-for-bit) on the zero-config/legacy path,
-    /// `SURFACE_SELECTED_ACCENT_BLEND_RATIO` (larger, tuned for visibility)
-    /// on the seeded derivation path -- unlike every other role in the
-    /// neutral-ladder group above, `surface_selected` stays accent-anchored
-    /// on both paths rather than stepping toward `foreground`.
+    /// The *intended, on-screen* selected-row highlight for
+    /// gpui-component's `List` (the command palette / session manager /
+    /// view chooser rows), resolved from the `surface_selected` config
+    /// key or, if unset, a blend of its background anchor (`background`
+    /// on the zero-config path, `seed_background` on the seeded path --
+    /// see `scheme_from`) toward the resolved `accent`
+    /// (`LIST_ACTIVE_BLEND_RATIO`, the same ratio on both paths) --
+    /// unlike every other role in the neutral-ladder group above,
+    /// `surface_selected` stays accent-anchored rather than stepping
+    /// toward `foreground`. This value is what a person should actually
+    /// see; [`gpui_component_theme_config`] does NOT project it to
+    /// `list.active.background` verbatim -- see
+    /// [`invert_list_active_clamp`] for why and how it compensates.
     surface_selected: u32,
     /// New in the gpui-component projection: a subtle separator line,
     /// resolved from the `border_default` config key (already documented
@@ -643,14 +632,23 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
             background
         },
     );
+    // Unlike every other neutral-ladder role above, both derivation paths
+    // share one formula and one ratio (`LIST_ACTIVE_BLEND_RATIO`) --
+    // `surface_selected` stays accent-anchored either way, only the
+    // background anchor itself differs (`seed_background` when seeded,
+    // `background` otherwise, matching every other role's own split).
     let surface_selected = chrome(
         "surface_selected",
         None,
-        if seed_configured {
-            blend(seed_background, accent, SURFACE_SELECTED_ACCENT_BLEND_RATIO)
-        } else {
-            blend(background, accent, LIST_ACTIVE_BLEND_RATIO)
-        },
+        blend(
+            if seed_configured {
+                seed_background
+            } else {
+                background
+            },
+            accent,
+            LIST_ACTIVE_BLEND_RATIO,
+        ),
     );
     let surface_raised = chrome(
         "surface_raised",
@@ -1051,6 +1049,55 @@ fn hex_alpha(value: u32, alpha: u8) -> String {
 /// exactly, just decoupled from gpui-component's own fallback chain.
 const SELECTION_ACCENT_ALPHA: u8 = 0x4d;
 
+/// gpui-component's own alpha *ceiling* for `list.active`/`table.active`
+/// (`ui::theme::schema`'s `clamp_alpha`, vendored at the pinned rev
+/// `0775df394083c1ed74f36f846b78868d1267398f`,
+/// `crates/ui/src/theme/schema.rs` around L857-889): `Theme::apply_config`
+/// unconditionally clamps the resulting fill to this alpha -- even for a
+/// fully opaque hex input -- because it's meant as a translucent
+/// highlight painted over the row's own background, not a standalone
+/// fill. Concretely: whatever hex Horizon names for
+/// `list.active.background` only ever reaches the screen composited at
+/// this fraction of its own distance from the row's base background
+/// (`background`, since `list` itself is unset and falls back to it) --
+/// never at face value. [`invert_list_active_clamp`] exists to
+/// compensate for exactly this. Re-verify this number against the
+/// vendored source on any `cargo update -p gpui-component` bump.
+const LIST_ACTIVE_ALPHA_CLAMP: f32 = 0.2;
+
+/// Projects `surface_selected` -- Horizon's own *intended, on-screen*
+/// selected-row color, see that field's doc on [`Scheme`] -- through the
+/// inverse of gpui-component's `list.active.background` alpha ceiling
+/// ([`LIST_ACTIVE_ALPHA_CLAMP`]). gpui-component's own compositing
+/// amounts to `background.blend(projected, LIST_ACTIVE_ALPHA_CLAMP)` (the
+/// exact shape of this module's own [`blend`]) once painted over the
+/// row's base fill, so exaggerating the deviation from `background` by
+/// the inverse factor before handing it to gpui-component cancels that
+/// clamp out: `background + (surface_selected - background) /
+/// LIST_ACTIVE_ALPHA_CLAMP`, per channel, clamped to `0..=255`. For a
+/// `surface_selected` within the reachable range (roughly `background`
+/// scaled by up to `1 / LIST_ACTIVE_ALPHA_CLAMP` toward `0`/`255` on each
+/// channel -- true for every default this module derives, see this
+/// module's tests) the round trip is exact up to `u8` rounding: composing
+/// this function's own output back through gpui-component's clamp
+/// formula reproduces `surface_selected`. A channel whose target falls
+/// outside that range (e.g. an explicit `surface_selected` override far
+/// from `background`, like the owner's old `#a6a6a6` on their `#f6f6f6`
+/// background) clamps to the nearest reachable extreme instead -- the
+/// on-screen composite then falls short of the configured intent on that
+/// channel, an unavoidable consequence of gpui-component's own ceiling,
+/// not a bug in this function.
+fn invert_list_active_clamp(background: u32, surface_selected: u32) -> u32 {
+    let channel = |shift: u32| {
+        let background = ((background >> shift) & 0xff) as f32;
+        let target = ((surface_selected >> shift) & 0xff) as f32;
+        (background + (target - background) / LIST_ACTIVE_ALPHA_CLAMP)
+            .round()
+            .clamp(0.0, 255.0) as u32
+    };
+    (channel(16) << 16) | (channel(8) << 8) | channel(0)
+}
+
 /// Builds the gpui-component `ThemeConfig` for the given scheme.
 ///
 /// Only names a small *base* set of `ThemeColor` roles as hex strings;
@@ -1080,7 +1127,7 @@ const SELECTION_ACCENT_ALPHA: u8 = 0x4d;
 /// | `tab_active`                              | `scheme.surface_panel`                             |
 /// | `tab_active_foreground`                   | `scheme.foreground`                                |
 /// | `tab_foreground`                          | `scheme.text_muted`                                |
-/// | `list_active`                             | `scheme.surface_selected` (the command palette / session manager / view chooser row highlight -- an accent-anchored blend either way, `LIST_ACTIVE_BLEND_RATIO`/`SURFACE_SELECTED_ACCENT_BLEND_RATIO` depending on the zero-config/seeded path, see `Scheme::surface_selected`'s field doc) |
+/// | `list_active`                             | [`invert_list_active_clamp`]`(scheme.background, scheme.surface_selected)` (the command palette / session manager / view chooser row highlight -- NOT `scheme.surface_selected` verbatim: gpui-component's own `apply_config` unconditionally clamps this field's alpha to `LIST_ACTIVE_ALPHA_CLAMP`, so the projected hex is pre-compensated so the on-screen composite matches `surface_selected`'s own intent, see that function's doc) |
 /// | `scrollbar_thumb`                         | `scheme.text_subtle` (already a visible-but-quiet gray in both polarities) |
 /// | `popover`/`popover_foreground`            | `scheme.background` / `scheme.foreground` (design "C", see below) |
 /// | `caret`                                   | `scheme.accent` (a text-input's blinking cursor; already gpui-component's own `primary` fallback since we set `primary.background` -- named explicitly here so it stays correct independent of that internal fallback chain, e.g. across a `cargo update -p gpui-component`) |
@@ -1158,7 +1205,10 @@ fn gpui_component_theme_config(scheme: &Scheme) -> gpui_component::ThemeConfig {
             "primary.background": hex(scheme.accent),
             "primary.foreground": hex(primary_foreground_for(scheme.accent)),
             "ring": hex(scheme.accent),
-            "list.active.background": hex(scheme.surface_selected),
+            "list.active.background": hex(invert_list_active_clamp(
+                scheme.background,
+                scheme.surface_selected
+            )),
             "secondary.background": hex(scheme.surface_panel),
             "secondary.hover.background": hex(secondary_hover),
             "danger.background": hex(scheme.danger),
@@ -1856,17 +1906,14 @@ mod tests {
         // Unlike `surface_chrome`/`surface_panel`/`surface_raised`/`border`
         // (the neutral ladder), `surface_selected`'s seeded default stays
         // accent-anchored: a blend of the seed background toward the
-        // resolved accent, `SURFACE_SELECTED_ACCENT_BLEND_RATIO` --
-        // restoring the pre-B1 accent-tinted list-selection character for
-        // the seeded path (`docs/theme-design.md`'s "Accent-as-hex" note).
+        // resolved accent, `LIST_ACTIVE_BLEND_RATIO` -- the same ratio the
+        // zero-config path always used, restoring the accent-tinted
+        // list-selection character for the seeded path too
+        // (`docs/theme-design.md`'s "Accent-as-hex" note).
         let scheme = owner_light_scheme();
         assert_eq!(
             scheme.surface_selected,
-            blend(
-                scheme.background,
-                scheme.accent,
-                SURFACE_SELECTED_ACCENT_BLEND_RATIO
-            )
+            blend(scheme.background, scheme.accent, LIST_ACTIVE_BLEND_RATIO)
         );
         // Not on the neutral ladder: doesn't coincide with the
         // (differently-anchored) border/surface_chrome steps.
@@ -1876,29 +1923,137 @@ mod tests {
         assert_eq!(overridden.surface_selected, 0x112233);
     }
 
+    /// [`Scheme::surface_selected`]'s intended on-screen value, as it
+    /// actually reaches the screen: `invert_list_active_clamp` pre-
+    /// compensates the projected `list.active.background` hex, then
+    /// gpui-component's own `apply_config` composites that hex at
+    /// `LIST_ACTIVE_ALPHA_CLAMP` over the row's base fill (`background`)
+    /// -- simulated here with this module's own `blend`, the same shape
+    /// gpui-component's alpha compositing takes. Every
+    /// perceptual/floor/round-trip assertion about `surface_selected`
+    /// belongs on this composite, not the pre-clamp role value, since
+    /// that's what a person actually sees.
+    fn list_active_composite(scheme: &Scheme) -> u32 {
+        let projected = invert_list_active_clamp(scheme.background, scheme.surface_selected);
+        blend(scheme.background, projected, LIST_ACTIVE_ALPHA_CLAMP)
+    }
+
     #[test]
-    fn surface_selected_accent_tint_clears_a_minimum_perceptual_separation_from_background() {
-        // "Clearly visible" against `background`, checked as an OKLab
-        // lightness separation (the perceptually-uniform signal this
-        // module already uses for polarity/ordering decisions) rather
-        // than raw byte inequality, on both a dark and the owner's real
-        // light seeded scheme.
+    fn zero_config_list_active_composite_now_matches_the_historical_role_value() {
+        // The role value itself (`surface_selected`) stays byte-identical
+        // for zero-config, as always -- but what actually reaches the
+        // screen changes, deliberately: before `invert_list_active_clamp`
+        // existed, the built-in dark scheme's selected-row highlight was
+        // ALWAYS washed out by gpui-component's own alpha ceiling
+        // (`LIST_ACTIVE_ALPHA_CLAMP`), on every scheme including this one
+        // -- `#16181d` (background) to a barely-different `#181c20`
+        // (measured: what `blend(background, surface_selected,
+        // LIST_ACTIVE_ALPHA_CLAMP)` -- i.e. projecting `surface_selected`
+        // verbatim, as this module did before this fix -- produces).
+        // `invert_list_active_clamp` corrects that: the composite now
+        // equals `surface_selected` (`#212c2e`) exactly, matching what the
+        // role's own blend ratio (`LIST_ACTIVE_BLEND_RATIO`) always
+        // intended to put on screen.
+        let scheme = scheme_from(&RawConfig::default());
+        assert_eq!(
+            scheme.surface_selected,
+            blend(BACKGROUND_DEFAULT, CURSOR_DEFAULT, LIST_ACTIVE_BLEND_RATIO)
+        );
+        assert_eq!(scheme.surface_selected, 0x212c2e);
+
+        let old_composite = blend(
+            scheme.background,
+            scheme.surface_selected,
+            LIST_ACTIVE_ALPHA_CLAMP,
+        );
+        assert_eq!(
+            old_composite, 0x181c20,
+            "old composite = {old_composite:#08x}"
+        );
+
+        let new_composite = list_active_composite(&scheme);
+        assert_eq!(new_composite, scheme.surface_selected);
+        assert_eq!(new_composite, 0x212c2e);
+    }
+
+    #[test]
+    fn list_active_composite_round_trips_surface_selected_when_reachable() {
+        // For every seeded default this module derives, `surface_selected`
+        // sits well within the reachable range (see
+        // `invert_list_active_clamp`'s doc) -- the round trip through
+        // `invert_list_active_clamp` and back through gpui-component's own
+        // clamp formula must reproduce it, up to `u8` double-rounding.
+        for scheme in [
+            scheme_from(&config_with_and_contrast(
+                &[("surface_base", "#16181d")],
+                Some(10.0),
+            )),
+            owner_light_scheme(),
+        ] {
+            let composite = list_active_composite(&scheme);
+            let close = |actual: u32, expected: u32| {
+                for shift in [16, 8, 0] {
+                    let a = ((actual >> shift) & 0xff) as i32;
+                    let e = ((expected >> shift) & 0xff) as i32;
+                    assert!(
+                        (a - e).abs() <= 1,
+                        "composite {actual:#08x} vs role {expected:#08x} \
+                         (channel at shift {shift})"
+                    );
+                }
+            };
+            close(composite, scheme.surface_selected);
+        }
+    }
+
+    #[test]
+    fn list_active_composite_falls_short_of_an_unreachable_override_instead_of_panicking() {
+        // An explicit `surface_selected` override can legally sit outside
+        // the reachable range (e.g. the owner's real, pre-this-fix config
+        // once set `surface_selected = "#a6a6a6"` against a `#f6f6f6`
+        // background) -- the composite must land at the nearest reachable
+        // value instead of over/underflowing or panicking.
+        let scheme = owner_light_scheme_with(&[("surface_selected", "#a6a6a6")]);
+        let composite = list_active_composite(&scheme);
+        // Falls short of the configured intent (0xa6 per channel) --
+        // strictly between the background and the intent, on the
+        // background's own (lighter) side.
+        for shift in [16, 8, 0] {
+            let bg = (scheme.background >> shift) & 0xff;
+            let intent = (scheme.surface_selected >> shift) & 0xff;
+            let got = (composite >> shift) & 0xff;
+            assert!(
+                got > intent && got < bg,
+                "channel at shift {shift}: bg={bg:#04x} intent={intent:#04x} got={got:#04x}"
+            );
+        }
+    }
+
+    #[test]
+    fn surface_selected_composite_clears_a_minimum_perceptual_separation_from_background() {
+        // "Clearly visible" against `background`, checked on the POST-
+        // CLAMP on-screen composite (not the pre-clamp role value) as an
+        // OKLab lightness separation (the perceptually-uniform signal
+        // this module already uses for polarity/ordering decisions), on
+        // both a dark and the owner's real light seeded scheme.
         const MIN_LIGHTNESS_SEPARATION: f64 = 0.03;
 
         let dark = scheme_from(&config_with_and_contrast(
             &[("surface_base", "#16181d")],
             Some(10.0),
         ));
+        let dark_composite = list_active_composite(&dark);
         let dark_delta =
-            (oklab::lightness(dark.surface_selected) - oklab::lightness(dark.background)).abs();
+            (oklab::lightness(dark_composite) - oklab::lightness(dark.background)).abs();
         assert!(
             dark_delta >= MIN_LIGHTNESS_SEPARATION,
             "dark scheme: delta = {dark_delta}"
         );
 
         let light = owner_light_scheme();
+        let light_composite = list_active_composite(&light);
         let light_delta =
-            (oklab::lightness(light.surface_selected) - oklab::lightness(light.background)).abs();
+            (oklab::lightness(light_composite) - oklab::lightness(light.background)).abs();
         assert!(
             light_delta >= MIN_LIGHTNESS_SEPARATION,
             "owner light scheme: delta = {light_delta}"
@@ -1906,22 +2061,23 @@ mod tests {
     }
 
     #[test]
-    fn surface_selected_accent_tint_keeps_text_primary_above_the_wcag_floor_on_the_owner_fixture() {
+    fn surface_selected_composite_keeps_text_primary_above_the_wcag_floor_on_the_owner_fixture() {
         // The command palette (`src/palette.rs`'s `render_item`) paints a
-        // selected row's title in `text_primary` directly on top of
-        // `surface_selected` -- this must stay readable on the owner's
-        // real (dark-blue-accent, light-background) fixture, the case
-        // most likely to get close to the floor since the accent is much
-        // darker than the background.
+        // selected row's title in `text_primary` directly on top of the
+        // rendered selected-row surface -- this must stay readable on the
+        // owner's real (dark-blue-accent, light-background) fixture, the
+        // case most likely to get close to the floor since the accent is
+        // much darker than the background. Checked against the POST-CLAMP
+        // composite -- what's actually painted on screen.
         let scheme = owner_light_scheme();
+        let composite = list_active_composite(&scheme);
         let ratio = oklab::contrast_ratio(
             oklab::relative_luminance(scheme.foreground),
-            oklab::relative_luminance(scheme.surface_selected),
+            oklab::relative_luminance(composite),
         );
         assert!(
             ratio >= TEXT_CONTRAST_FLOOR - 0.05,
-            "ratio = {ratio}, surface_selected = {:#08x}",
-            scheme.surface_selected
+            "ratio = {ratio}, composite = {composite:#08x}"
         );
     }
 
@@ -2051,14 +2207,18 @@ mod tests {
         let scheme = scheme_from(&config_with(&[("surface_selected", "#334455")]));
         let colors = theme_color_for(&scheme);
         // gpui-component always clamps `list.active.background`'s alpha to
-        // at most 0.2 (it's a translucent highlight drawn over the row's
-        // own background, not a standalone opaque fill) -- see the
-        // `apply_config`/`clamp_alpha` step in the vendored
-        // `ui::theme::schema`. Our own opaque `surface_selected` hue/
-        // lightness still comes through; only alpha is capped.
+        // `LIST_ACTIVE_ALPHA_CLAMP` (0.2) -- it's a translucent highlight
+        // drawn over the row's own background, not a standalone opaque
+        // fill -- see that constant's doc. Horizon pre-compensates by
+        // projecting `invert_list_active_clamp`'s output rather than
+        // `scheme.surface_selected` verbatim (see `Scheme::surface_selected`'s
+        // and `invert_list_active_clamp`'s docs), so this is a wiring
+        // check: gpui-component's own post-clamp field carries our
+        // projected hue at that alpha, not the raw role value's hue.
+        let projected = invert_list_active_clamp(scheme.background, scheme.surface_selected);
         assert_eq!(
             colors.list_active,
-            packed_hsla(scheme.surface_selected).alpha(0.2)
+            packed_hsla(projected).alpha(LIST_ACTIVE_ALPHA_CLAMP)
         );
     }
 
@@ -2066,9 +2226,10 @@ mod tests {
     fn gpui_projection_surface_selected_feeds_list_active_on_a_light_scheme() {
         let scheme = owner_light_scheme_with(&[("surface_selected", "#112233")]);
         let colors = theme_color_for(&scheme);
+        let projected = invert_list_active_clamp(scheme.background, scheme.surface_selected);
         assert_eq!(
             colors.list_active,
-            packed_hsla(scheme.surface_selected).alpha(0.2)
+            packed_hsla(projected).alpha(LIST_ACTIVE_ALPHA_CLAMP)
         );
     }
 
