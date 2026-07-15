@@ -166,18 +166,21 @@ wave items where possible; design docs on first use.
   highlight had been ~80% washed on every scheme since the GPUI
   migration), documented `[theme]`/`[theme.ansi]` warnings
   implemented, and the solver hardened to guarantee the floor on the
-  quantized color. **Chrome design C + scrim decision shipped
-  2026-07-15** (`19728d7`): the tab bar moved to gpui-component's
-  default Tab variant (selected tab = the content background,
-  connected; bar = surface_panel), and the workspace-mode scrim now
-  shifts unfocused areas toward the opposite pole (owner decision —
-  dark lightens, light darkens; alpha dogfooding-tunable). The owner's
-  seed hues green/yellow/cyan were contrast-adjusted in their config
-  so brights derive from readable normals. Implementation is complete;
-  remaining is owner dogfooding (brights feel, scrim alpha, tab widths
-  — backlog 41) and, as a separately-scheduled future theme, colorful
-  expression on the projected hue set; base16/24 import stays
-  deferred.
+  quantized color. **Scrim decision shipped 2026-07-15** (`19728d7`):
+  the workspace-mode scrim shifts unfocused areas toward the opposite
+  pole (owner decision — dark lightens, light darkens; alpha
+  dogfooding-tunable). The chrome "design C" tab strip was attempted
+  in the same merge and **reverted** (`fdd7211`): the stock Tab
+  variant is square and Horizon's pane borders defeat the
+  connected-tab look; the owner declined custom tab/pane-chrome
+  coordination, and going forward visual/variant choices are grounded
+  in what the owner sees in gpui-component's official gallery — no
+  beyond-stock visual work (2026-07-15). The owner's seed hues
+  green/yellow/cyan were contrast-adjusted in their config so brights
+  derive from readable normals. Implementation is complete; remaining
+  is owner dogfooding (brights feel, scrim alpha) and, as a
+  separately-scheduled future theme, colorful expression on the
+  projected hue set; base16/24 import stays deferred.
 - **winit windowing backend (spike)** — direction set 2026-07-12:
   native-feeling window decorations on every desktop (Wayland via
   sctk-adwaita, native macOS) without per-DE styling effort, by
