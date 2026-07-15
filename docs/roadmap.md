@@ -152,12 +152,16 @@ wave items where possible; design docs on first use.
   shipped 2026-07-15** (`72c19d4`): hue projection into gpui-component
   (12 base-hue fields + `chart.1-5`, faithful), surface-aware
   `readable_on` snapping in the agent pane, diff text defaults snapped
-  against their own surfaces. Implementation is complete; remaining is
-  owner dogfooding of the derived scheme (the owner's config now runs
-  the seed-only form; brights/neutral-ladder/raised feel are the open
-  tuning questions) and the deferred base16/24 import. The doc's
-  "Related, independent fixes" section (hardcoded modal colors etc.)
-  is worker-sized and not blocked on this item.
+  against their own surfaces. **Modal design C + text-role fixes
+  shipped 2026-07-15** (merge of `a346932`, owner-picked from a 4-way
+  mockup comparison): modal surfaces sit on the common background with
+  a polarity-aware overlay shadow (popover projection follows;
+  `surface_raised` currently unread), and the palette/session-manager/
+  view-chooser/send-button hardcoded colors are gone. Implementation is
+  complete; remaining is owner dogfooding of the derived scheme
+  (brights/neutral-ladder feel, the scrim's fade-vs-shadow metaphor,
+  muted≈primary compression at low `text_contrast`) and the deferred
+  base16/24 import.
 - **winit windowing backend (spike)** — direction set 2026-07-12:
   native-feeling window decorations on every desktop (Wayland via
   sctk-adwaita, native macOS) without per-DE styling effort, by
