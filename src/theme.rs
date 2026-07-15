@@ -144,23 +144,36 @@ const SECONDARY_HOVER_BLEND_RATIO: f32 = 0.12;
 const DIFF_SURFACE_BLEND_RATIO: f32 = 0.12;
 
 /// How far the `Segmented` tab strip's track sits from `surface_chrome`
-/// toward `surface_panel`. **Segmented-only, and currently unused**: the
-/// 2026-07-15 "design C for chrome" owner GO moved the tab strip's default
-/// variant to the classic connected-tab look (`TabVariant::Tab`, see
-/// `src/workspace.rs::render_tab_strip`), which doesn't use this track at
-/// all -- `tab.foreground`'s own floor (see [`gpui_component_theme_config`]'s
-/// doc table) now snaps against the new `tab_bar` background
-/// (`surface_panel`) directly instead of this blended track. Left in place,
-/// with `gpui_component_theme_config` still emitting the
-/// `tab_bar.segmented.background` field it feeds, only so a future revert to
-/// `Segmented` doesn't have to re-derive this ratio from scratch; harmless
-/// while unused since nothing reads `tab_bar_segmented` when `TabVariant::Tab`
-/// is active. The historical rationale (verified against the owner's real
-/// `[theme]` fixture at the time): raw `surface_panel` put the unselected
-/// label's contrast against the track under both the WCAG AA body-text
-/// (4.5:1) and UI-component (3:1) thresholds; blending halfway back toward
-/// `surface_chrome` recovered most of that contrast while keeping the track
-/// visibly distinct from the selected pill.
+/// toward `surface_panel`. Left at `surface_panel` outright (a `1.0`
+/// ratio, gpui-component's own unset-key fallback), a scheme that sets
+/// `surface_panel` to a strongly lifted value tuned for occasional chrome
+/// (popovers, secondary buttons) reads as a much bigger jump than
+/// `tab_foreground` (`text_muted`, tuned for legibility against
+/// `background` specifically) was ever validated against -- verified
+/// against the owner's own real, current `[theme]` (the seed-only form,
+/// `docs/theme-design.md`: `surface_base = "#f6f6f6"`, `accent = "blue"`,
+/// `text_contrast = 5.3`, `[theme.ansi]` overrides -- see this module's
+/// `owner_seeded_light_scheme` test fixture): raw `surface_panel`
+/// (derived, `0xcbcbcb` on that fixture) puts the unselected label's
+/// contrast against it at roughly 3.05:1, under both the WCAG AA
+/// body-text (4.5:1) and UI-component (3:1) thresholds. Halfway back
+/// toward `surface_chrome` (which itself derives toward `background`,
+/// `0xe4e4e4` on that fixture) recovers most of that contrast (~3.47:1)
+/// while keeping the track visibly distinct from the selected pill (which
+/// is fixed to `background` inside gpui-component, see
+/// [`gpui_component_theme_config`]'s doc table) -- but still short of the
+/// WCAG floor on its own. That gap is what the 2026-07-15 contrast
+/// audit's item 3 closes: [`gpui_component_theme_config`]'s
+/// `tab.foreground` projection [`contrast_snap`]s `text_muted` against
+/// this exact track color rather than emitting it verbatim, landing at
+/// 4.62:1 on the same fixture -- exactly, not approximately: `contrast_
+/// snap` (via `oklab::solve_lightness_for_ratio`'s post-bisection
+/// quantization-safety refinement) guarantees the *quantized* re-encoded
+/// color clears [`TEXT_CONTRAST_FLOOR`], not just the continuous-space
+/// solution. This ratio (this constant's own choice of how far to blend)
+/// is deliberately left as the "keep the track visually distinct" knob,
+/// with `tab.foreground`'s own floor now guaranteeing readability
+/// independently of wherever this ratio lands.
 const SEGMENTED_TRACK_BLEND_RATIO: f32 = 0.5;
 
 /// [`overlay_shadow`]'s two-layer drop shadow, in CSS `box-shadow`
@@ -325,15 +338,13 @@ struct Scheme {
     diff_removed_surface: u32,
     diff_removed_text: u32,
     surface_panel: u32,
-    /// New in the gpui-component projection: resolved from the
-    /// `surface_chrome` config key or, if unset, `background` itself. Fed
-    /// the tab strip's own chrome background (`tab_bar` in
-    /// [`gpui_component_theme_config`]) until the 2026-07-15 "design C for
-    /// chrome" owner GO moved that role to `surface_panel` instead; today
-    /// only the retired-but-still-emitted `tab_bar.segmented` field is
-    /// computed from *this* role (a contrast-blend toward `surface_panel`,
-    /// `SEGMENTED_TRACK_BLEND_RATIO`), so leaving it unset still reproduces
-    /// that field's historical look exactly.
+    /// New in the gpui-component projection: the tab strip's own chrome
+    /// background (`tab_bar`/`tab_bar.segmented` in
+    /// [`gpui_component_theme_config`]), resolved from the
+    /// `surface_chrome` config key or, if unset, `background` itself --
+    /// the segmented track's existing contrast-blend toward
+    /// `surface_panel` (`SEGMENTED_TRACK_BLEND_RATIO`) is computed from
+    /// *this* role, so leaving it unset reproduces today's look exactly.
     surface_chrome: u32,
     /// The *intended, on-screen* selected-row highlight for
     /// gpui-component's `List` (the command palette / session manager /
@@ -1212,11 +1223,11 @@ fn deny_button_fill_composite(scheme: &Scheme) -> u32 {
 /// | `secondary_hover`                        | `secondary` blended toward `foreground` (`SECONDARY_HOVER_BLEND_RATIO`) |
 /// | `danger`/`warning`/`success`/`info`      | the matching stage-B `scheme` role                 |
 /// | `button.danger.foreground`                | [`contrast_snap`]`(scheme.danger, `[`deny_button_fill_composite`]`(scheme))` -- floors the row-centric Deny button's text against its own two-layer translucent fill, not gpui-component's own `button_danger_foreground` fallback (raw `danger`, see that function's doc; item 4 of the 2026-07-15 contrast audit) |
-/// | `tab_bar`                                 | `scheme.surface_panel` (the classic connected-tab bar, design "C for chrome"; recedes only slightly from the content surface below it, rather than the heavier `surface_chrome` chrome gray -- 2026-07-15 owner GO, see `src/workspace.rs::render_tab_strip`) |
-/// | `tab_bar_segmented`                       | `surface_chrome` blended toward `surface_panel` (`SEGMENTED_TRACK_BLEND_RATIO`) -- unused by the `TabVariant::Tab` Horizon now renders (see that constant's doc); kept only for a future revert to `Segmented` |
-/// | `tab_active`                              | `scheme.background` -- the selected tab becomes the content surface itself, visually connecting to the pane below it (design "C for chrome") |
+/// | `tab_bar`                                 | `scheme.surface_chrome` (the strip's own background; defaults to `scheme.background` if unset) |
+/// | `tab_bar_segmented`                       | `surface_chrome` blended toward `surface_panel` (`SEGMENTED_TRACK_BLEND_RATIO`) -- see that constant's doc for why not `surface_panel` outright |
+/// | `tab_active`                              | `scheme.surface_panel`                             |
 /// | `tab_active_foreground`                   | `scheme.foreground`                                |
-/// | `tab_foreground`                          | [`contrast_snap`]`(scheme.text_muted, scheme.surface_panel)` -- floors the unselected tab label against the bar background it actually sits on (an unselected `TabVariant::Tab` tab paints no fill of its own), not `scheme.text_muted` verbatim (item 3 of the 2026-07-15 contrast audit, retargeted the same day for the "design C for chrome" bar-color change) |
+/// | `tab_foreground`                          | [`contrast_snap`]`(scheme.text_muted, tab_bar_segmented)` -- floors the unselected tab label against the segmented track it actually sits on, not `scheme.text_muted` verbatim (item 3 of the 2026-07-15 contrast audit; see `SEGMENTED_TRACK_BLEND_RATIO`'s doc for the measured before/after) |
 /// | `list_active`                             | [`invert_list_active_clamp`]`(scheme.background, scheme.surface_selected)` (the command palette / session manager / view chooser row highlight -- NOT `scheme.surface_selected` verbatim: gpui-component's own `apply_config` unconditionally clamps this field's alpha to `LIST_ACTIVE_ALPHA_CLAMP`, so the projected hex is pre-compensated so the on-screen composite matches `surface_selected`'s own intent, see that function's doc) |
 /// | `scrollbar_thumb`                         | `scheme.text_subtle` (already a visible-but-quiet gray in both polarities) |
 /// | `popover`/`popover_foreground`            | `scheme.background` / `scheme.foreground` (design "C", see below) |
@@ -1286,11 +1297,10 @@ fn gpui_component_theme_config(scheme: &Scheme) -> gpui_component::ThemeConfig {
         scheme.surface_panel,
         SEGMENTED_TRACK_BLEND_RATIO,
     );
-    // Item 3 of the 2026-07-15 contrast audit, retargeted the same day for
-    // "design C for chrome": the unselected tab label sits on the bar's own
-    // background (`tab_bar`, now `surface_panel`), not `background` -- floor
-    // it against that surface rather than projecting `text_muted` verbatim.
-    let tab_foreground = contrast_snap(scheme.text_muted, scheme.surface_panel);
+    // Item 3 of the 2026-07-15 contrast audit: the unselected tab label
+    // sits on `tab_bar_segmented`, not `background` -- floor it against
+    // that surface rather than projecting `text_muted` verbatim.
+    let tab_foreground = contrast_snap(scheme.text_muted, tab_bar_segmented);
     // Item 4: the row-centric Deny button's text sits on its own
     // translucent danger fill over a warning-tinted row, not a plain
     // surface -- see `deny_button_fill_composite`'s doc.
@@ -1323,9 +1333,9 @@ fn gpui_component_theme_config(scheme: &Scheme) -> gpui_component::ThemeConfig {
             // fill on a warning-tinted row) -- see `button_danger_
             // foreground`'s own computation above.
             "button.danger.foreground": hex(button_danger_foreground),
-            "tab_bar.background": hex(scheme.surface_panel),
+            "tab_bar.background": hex(scheme.surface_chrome),
             "tab_bar.segmented.background": hex(tab_bar_segmented),
-            "tab.active.background": hex(scheme.background),
+            "tab.active.background": hex(scheme.surface_panel),
             "tab.active.foreground": hex(scheme.foreground),
             "tab.foreground": hex(tab_foreground),
             "scrollbar.thumb.background": hex(scheme.text_subtle),
@@ -2362,14 +2372,7 @@ mod tests {
             colors.primary_foreground,
             packed_hsla(PRIMARY_FOREGROUND_DARK_TEXT)
         );
-        // `tab.foreground` is `text_muted` floored against `tab_bar`'s own
-        // background (`surface_panel`, see `gpui_component_theme_config`'s
-        // doc table); on this fixture the raw value already clears the
-        // floor, so `contrast_snap` is a no-op here.
-        assert_eq!(
-            colors.tab_foreground,
-            packed_hsla(contrast_snap(scheme.text_muted, scheme.surface_panel))
-        );
+        assert_eq!(colors.tab_foreground, packed_hsla(scheme.text_muted));
         assert_eq!(colors.tab_active_foreground, packed_hsla(scheme.foreground));
         assert_eq!(colors.danger, packed_hsla(scheme.danger));
         // Fallback-chain field we never set directly: `accent_foreground`
@@ -2417,24 +2420,13 @@ mod tests {
     }
 
     #[test]
-    fn gpui_projection_surface_panel_feeds_tab_bar_on_a_dark_scheme() {
-        // 2026-07-15 "design C for chrome": the connected-tab bar now
-        // recedes off `surface_panel`, not `surface_chrome` -- set both to
-        // distinct values to prove which one actually feeds `tab_bar`.
-        let scheme = scheme_from(&config_with(&[
-            ("surface_panel", "#2a2d34"),
-            ("surface_chrome", "#202124"),
-        ]));
+    fn gpui_projection_surface_chrome_feeds_tab_bar_on_a_dark_scheme() {
+        let scheme = scheme_from(&config_with(&[("surface_chrome", "#202124")]));
         let colors = theme_color_for(&scheme);
-        assert_eq!(colors.tab_bar, packed_hsla(scheme.surface_panel));
-        assert_ne!(colors.tab_bar, packed_hsla(scheme.surface_chrome));
+        assert_eq!(colors.tab_bar, packed_hsla(scheme.surface_chrome));
         assert_ne!(colors.tab_bar, packed_hsla(scheme.background));
-        // `tab_bar_segmented` is unused by the default `TabVariant::Tab`
-        // Horizon now renders (see `SEGMENTED_TRACK_BLEND_RATIO`'s doc) but
-        // the projection line is kept, harmlessly, for a future revert --
-        // still its own contrast-blend computed from `surface_chrome`
-        // toward `surface_panel`, unaffected by this slice's `tab_bar`
-        // change.
+        // The segmented track keeps its own contrast-blend, now computed
+        // from `surface_chrome` rather than raw `background`.
         assert_eq!(
             colors.tab_bar_segmented,
             packed_hsla(blend(
@@ -2446,23 +2438,11 @@ mod tests {
     }
 
     #[test]
-    fn gpui_projection_surface_panel_feeds_tab_bar_on_a_light_scheme() {
-        let scheme = owner_light_scheme_with(&[("surface_panel", "#eaeaea")]);
+    fn gpui_projection_surface_chrome_feeds_tab_bar_on_a_light_scheme() {
+        let scheme = owner_light_scheme_with(&[("surface_chrome", "#eaeaea")]);
         let colors = theme_color_for(&scheme);
-        assert_eq!(colors.tab_bar, packed_hsla(scheme.surface_panel));
+        assert_eq!(colors.tab_bar, packed_hsla(scheme.surface_chrome));
         assert_ne!(colors.tab_bar, packed_hsla(scheme.background));
-    }
-
-    #[test]
-    fn gpui_projection_background_feeds_tab_active_design_c_for_chrome() {
-        // 2026-07-15 "design C for chrome": the selected tab becomes the
-        // content surface itself (`background`), not the previous
-        // `surface_panel` pill -- set them to distinct values to prove
-        // which one actually feeds `tab.active.background`.
-        let scheme = owner_light_scheme_with(&[("surface_panel", "#eaeaea")]);
-        let colors = theme_color_for(&scheme);
-        assert_eq!(colors.tab_active, packed_hsla(scheme.background));
-        assert_ne!(colors.tab_active, packed_hsla(scheme.surface_panel));
     }
 
     #[test]
@@ -2505,11 +2485,10 @@ mod tests {
         // `SEGMENTED_TRACK_BLEND_RATIO`'s own doc for the measured
         // before/after contrast story (`owner_seeded_light_scheme`, the
         // owner's real current fixture) and `tab_foreground_floors_
-        // against_the_tab_bar_background_on_the_owner_seeded_fixture` for
-        // the 2026-07-15 contrast audit's item 3 fix, now retargeted at
-        // `tab_bar`'s own background rather than this (unused) track.
-        // This test only covers `tab_bar_segmented` itself (the track's
-        // fill, kept for a future revert), unaffected by that retarget.
+        // against_the_segmented_track_on_the_owner_seeded_fixture` for the
+        // 2026-07-15 contrast audit's item 3 fix on top of this track
+        // color. This test only covers `tab_bar_segmented` itself (the
+        // track's fill), unaffected by that fix.
         let scheme = owner_seeded_light_scheme();
         let colors = theme_color_for(&scheme);
         let expected = blend(
@@ -3249,22 +3228,24 @@ mod tests {
     }
 
     #[test]
-    fn tab_foreground_floors_against_the_tab_bar_background_on_the_owner_seeded_fixture() {
-        // Item 3, retargeted 2026-07-15 for "design C for chrome": the
-        // unselected tab label now sits directly on `tab_bar`'s own
-        // background (`surface_panel`) rather than the retired `Segmented`
-        // track -- see `SEGMENTED_TRACK_BLEND_RATIO`'s doc for the
-        // raw-`surface_panel` contrast measurement this reuses.
+    fn tab_foreground_floors_against_the_segmented_track_on_the_owner_seeded_fixture() {
+        // Item 3: see `SEGMENTED_TRACK_BLEND_RATIO`'s doc for the full
+        // before/after story and hex values on this fixture.
         let scheme = owner_seeded_light_scheme();
-        let before = ratio(scheme.text_muted, scheme.surface_panel);
+        let tab_bar_segmented = blend(
+            scheme.surface_chrome,
+            scheme.surface_panel,
+            SEGMENTED_TRACK_BLEND_RATIO,
+        );
+        let before = ratio(scheme.text_muted, tab_bar_segmented);
         assert!(
             before < TEXT_CONTRAST_FLOOR,
-            "fixture assumption: raw text_muted vs surface_panel should already be \
+            "fixture assumption: raw text_muted vs tab_bar_segmented should already be \
              under-floor (ratio {before})"
         );
-        let tab_foreground = contrast_snap(scheme.text_muted, scheme.surface_panel);
+        let tab_foreground = contrast_snap(scheme.text_muted, tab_bar_segmented);
         assert_ne!(tab_foreground, scheme.text_muted);
-        let after = ratio(tab_foreground, scheme.surface_panel);
+        let after = ratio(tab_foreground, tab_bar_segmented);
         assert!(after >= TEXT_CONTRAST_FLOOR, "ratio = {after}");
 
         // Wired all the way through the gpui-component projection too.

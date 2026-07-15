@@ -49,6 +49,21 @@ same philosophy; `surface_raised` itself is kept (role, config key, and
 `theme::surface_raised()` accessor) for other/future consumers, just
 unread by anything today.
 
+**Tab strip "design C for chrome" -- REVERTED (2026-07-15, owner):** the
+`2e0739e` slice switched the tab strip's `TabBar` from `Segmented` to the
+default `TabVariant::Tab` (a classic connected-tab look, selected tab
+becoming the content surface itself) and reprojected the tab tokens to
+match. The owner reviewed the on-screen result and declined it: the stock
+`Tab` variant is square (`radius: 0`), and Horizon's own pane borders
+already draw a continuous line under the strip, so the "connected tab"
+look this variant is meant to produce would need custom tab/pane-chrome
+coordination the owner isn't taking on right now. The tab strip is back
+to `Segmented` (`src/workspace.rs::render_tab_strip`); `src/theme.rs`'s
+tab token projections (`tab_bar`, `tab_bar_segmented`, `tab_active`,
+`tab_foreground`) are back to their pre-`2e0739e` values. The
+polarity-flipped scrim decision below, from the same commit, is
+unaffected and stays.
+
 **Workspace-mode dim scrim -- DECIDED (2026-07-15, owner):** the "fade vs
 shadow" question this section originally left open is resolved as neither
 metaphor outright, but a third: a **polarity-flipped pole scrim**. The
