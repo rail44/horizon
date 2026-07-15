@@ -9,6 +9,8 @@ use gpui_component::list::{ListDelegate, ListItem, ListState};
 use gpui_component::IndexPath;
 use horizon_workspace::PaneKind;
 
+use crate::theme;
+
 /// Where the chosen view goes — staged by the command that opened the
 /// chooser.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -102,7 +104,7 @@ impl ListDelegate for ViewChooserDelegate {
                 div()
                     .py_0p5()
                     .text_size(px(13.0))
-                    .text_color(rgb(0xe9ecf2))
+                    .text_color(theme::text_primary())
                     .child(choice.title),
             ),
         )

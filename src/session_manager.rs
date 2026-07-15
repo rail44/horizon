@@ -8,6 +8,8 @@ use gpui_component::list::{ListDelegate, ListItem, ListState};
 use gpui_component::IndexPath;
 use horizon_workspace::types::SessionSummary;
 
+use crate::theme;
+
 pub struct SessionManagerDelegate {
     all: Vec<SessionSummary>,
     filtered: Vec<SessionSummary>,
@@ -77,9 +79,9 @@ impl ListDelegate for SessionManagerDelegate {
     ) -> Option<Self::Item> {
         let summary = self.filtered.get(index.row)?;
         let (status, status_color) = if summary.attached {
-            ("attached", rgb(0x98c379))
+            ("attached", theme::success())
         } else {
-            ("detached", rgb(0x8a90a0))
+            ("detached", theme::text_muted())
         };
         Some(
             ListItem::new(index).child(
@@ -92,7 +94,7 @@ impl ListDelegate for SessionManagerDelegate {
                     .child(
                         div()
                             .text_size(px(13.0))
-                            .text_color(rgb(0xe9ecf2))
+                            .text_color(theme::text_primary())
                             .child(summary.title.clone()),
                     )
                     .child(

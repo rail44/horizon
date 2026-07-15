@@ -33,6 +33,31 @@ anywhere (decorative by definition, exempt from the text floor).
 `src/agent/view.rs` render methods -- never from any per-cell terminal
 painting path, so `scheme()`'s own hot-path cost is unchanged.
 
+The command-palette/view-chooser/session-manager modal surfaces and the
+"Related, independent fixes" hardcoded-color bugs below landed 2026-07-15
+too. The owner compared four mockup variants for the modal surface and
+chose **design "C"**: the modal reads as background-colored itself
+(`theme::background()`), separated from the dimmed workspace behind it by
+the existing 1px `theme::border()` plus a real two-layer drop shadow
+(`src/theme.rs`'s `overlay_shadow()`, polarity-aware -- stronger alpha on
+dark schemes, where the same shadow washes out against an already-dark
+ground) -- not by a darker panel color (`surface_raised`, the previous
+look). `gpui_component_theme_config`'s `popover` role (gpui-component's
+own context menus/dropdowns) was switched from `surface_raised` to
+`background` too, so every floating-chrome surface in the app follows the
+same philosophy; `surface_raised` itself is kept (role, config key, and
+`theme::surface_raised()` accessor) for other/future consumers, just
+unread by anything today. Left explicitly open, for dogfooding: the
+workspace-mode dim scrim (`src/workspace.rs`'s `WORKSPACE_MODE_DIM_ALPHA`,
+a `background`-colored veil over unfocused panes) was deliberately left
+alone by this slice, and its own metaphor wasn't reconsidered against "C"
+-- it's a *fade* (a bg-colored veil, whose direction already flips
+correctly with polarity since the veil is bg-colored) rather than a
+*shadow* (which would darken the dimmed area in both polarities, unlike a
+veil). Whether the scrim should eventually switch to the shadow metaphor
+too, for visual consistency with the modal surfaces, is an open question
+for a later dogfooding pass -- not decided here.
+
 ## Problem
 
 `[theme]` today is ~20 flat role keys plus 16 `[theme.ansi]` slots, every
@@ -246,12 +271,17 @@ colors go through theme roles" invariant (`docs/agent-output-ui-design.md`)
 or documented behavior, and can be fixed without waiting for the seed
 work:
 
-- `src/palette.rs`, `src/session_manager.rs`, `src/view_chooser.rs`
-  hardcode dark-scheme default literals (`0xe9ecf2` titles etc.) instead
-  of theme roles — the direct cause of near-invisible palette text on
-  light schemes.
-- `src/agent/view.rs` send button hardcodes `white()` on the accent
-  background instead of the accent-lightness-aware foreground pick.
+- **Fixed 2026-07-15.** `src/palette.rs`, `src/session_manager.rs`,
+  `src/view_chooser.rs` hardcoded dark-scheme default literals
+  (`0xe9ecf2` titles etc.) instead of theme roles — the direct cause of
+  near-invisible palette text on light schemes. Now `theme::text_primary()`/
+  `theme::danger()`/`theme::text_subtle()`/`theme::text_muted()`/
+  `theme::success()` at each site (see those files' `render_item`).
+- **Fixed 2026-07-15.** `src/agent/view.rs` send button hardcoded
+  `white()` on the accent background instead of the accent-lightness-aware
+  foreground pick. Now `theme::on_accent()`, a public accessor over the
+  same `primary_foreground_for` pick `gpui_component_theme_config`
+  already used internally.
 - Docs claim unknown `[theme]` keys and unparsable hex values warn on
   stderr; `src/theme.rs` silently ignores both.
 - `docs/tasks/backlog.md` item 25: `Reload Config` does not repaint
