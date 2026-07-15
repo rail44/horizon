@@ -238,12 +238,15 @@ pub(crate) struct RunCommand {
 
 const MODE_CONTEXT: &str = "WorkspaceMode";
 
-/// Alpha applied to `theme::background()` for workspace mode's pane-dimming
+/// Alpha applied to `theme::scrim_base()` for workspace mode's pane-dimming
 /// scrim — ported from the retired Floem shell's `WORKSPACE_MODE_DIM_ALPHA`
 /// (`docs/workspace-mode-design.md`'s "pane dimming" visualization signal,
 /// the accident-killer: a stray keystroke should read as "nothing here
 /// types normally right now" at a glance). A numeric opacity factor, not a
-/// color, so the color itself stays theme-driven.
+/// color, so the color itself stays theme-driven. Unchanged by the
+/// 2026-07-15 scrim-polarity decision (`docs/theme-design.md`) -- only the
+/// base color it's applied to flipped; the alpha itself is left as-is for
+/// now and explicitly dogfooding-tunable.
 const WORKSPACE_MODE_DIM_ALPHA: f32 = 0.55;
 
 /// Built-in default chord for [`ToggleWorkspaceMode`] — mirrors the Floem
@@ -1752,25 +1755,26 @@ impl WorkspaceShell {
         // `Tab`/`TabBar` colors come from `cx.theme()`, which
         // `theme::apply_gpui_component_theme` projects from Horizon's own
         // `[theme]` scheme (see `src/theme.rs`) -- so the label text and
-        // the selected tab's pill already resolve to `tab_foreground`/
-        // `tab_active_foreground`/`background` without any per-tab
-        // override here. `Segmented` (replacing `Underline`, 2026-07-14
-        // owner GO) is one of gpui-component's variants with an animated
-        // sliding selection indicator; its track color is
-        // `tab_bar_segmented`, which Horizon's projection leaves unset --
-        // falling back to gpui-component's own `secondary` token, i.e.
-        // `scheme.surface_panel` (see `gpui_component_theme_config`'s doc
-        // table). The selected tab's own pill is `tokens.background`
-        // (`scheme.background`), fixed inside gpui-component and not
-        // separately overridable without changing every other
-        // `background`-rooted surface in the app.
+        // the selected tab's fill already resolve to `tab_foreground`/
+        // `tab_active_foreground`/`tab_active` without any per-tab
+        // override here. The default `TabVariant::Tab` (replacing
+        // `Segmented`, "design C for chrome", 2026-07-15 owner GO) is the
+        // classic connected-tab look: the bar paints a full-width bottom
+        // hairline (`border` token) beneath the tab row, and the selected
+        // tab is an opaque fill (`tab_active`, side borders only, no
+        // bottom border) that visually interrupts the hairline and
+        // connects to the content surface below it -- see the vendored
+        // `crates/ui/src/tab/{tab.rs,tab_bar.rs}` (rev 0775df3). No
+        // `.segmented()`/`.with_variant()` call is needed here: `TabBar`
+        // defaults to `TabVariant::Tab` and propagates it to every child
+        // `Tab` itself (`tab_bar.rs`'s `with_variant(self.variant)`), so
+        // there's no per-tab override to align.
         let selected_index = tabs
             .iter()
             .find(|tab| tab.active)
             .map_or(0, |tab| tab.index);
         let strip_width = window.viewport_size().width;
         TabBar::new("workspace-tabs")
-            .segmented()
             .w_full()
             .px_2()
             .selected_index(selected_index)
@@ -1870,12 +1874,17 @@ impl WorkspaceShell {
                         // cursor signal). A plain non-interactive overlay
                         // — no `.occlude()` — so it stays purely visual
                         // and the pane-activation `on_mouse_down` above
-                        // keeps firing through it.
+                        // keeps firing through it. The scrim's color is
+                        // `theme::scrim_base()` -- the scheme's opposite
+                        // pole, not its own `background` -- so dimming
+                        // reads as a lighten on a dark scheme and a
+                        // darken on a light one (`docs/theme-design.md`'s
+                        // "fade vs shadow" question, decided 2026-07-15).
                         this.child(
                             div()
                                 .absolute()
                                 .inset_0()
-                                .bg(rgb(theme::background()).opacity(WORKSPACE_MODE_DIM_ALPHA)),
+                                .bg(theme::scrim_base().opacity(WORKSPACE_MODE_DIM_ALPHA)),
                         )
                     })
                     .into_any_element()

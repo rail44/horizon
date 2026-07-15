@@ -47,16 +47,21 @@ own context menus/dropdowns) was switched from `surface_raised` to
 `background` too, so every floating-chrome surface in the app follows the
 same philosophy; `surface_raised` itself is kept (role, config key, and
 `theme::surface_raised()` accessor) for other/future consumers, just
-unread by anything today. Left explicitly open, for dogfooding: the
-workspace-mode dim scrim (`src/workspace.rs`'s `WORKSPACE_MODE_DIM_ALPHA`,
-a `background`-colored veil over unfocused panes) was deliberately left
-alone by this slice, and its own metaphor wasn't reconsidered against "C"
--- it's a *fade* (a bg-colored veil, whose direction already flips
-correctly with polarity since the veil is bg-colored) rather than a
-*shadow* (which would darken the dimmed area in both polarities, unlike a
-veil). Whether the scrim should eventually switch to the shadow metaphor
-too, for visual consistency with the modal surfaces, is an open question
-for a later dogfooding pass -- not decided here.
+unread by anything today.
+
+**Workspace-mode dim scrim -- DECIDED (2026-07-15, owner):** the "fade vs
+shadow" question this section originally left open is resolved as neither
+metaphor outright, but a third: a **polarity-flipped pole scrim**. The
+scrim (`src/workspace.rs`'s `WORKSPACE_MODE_DIM_ALPHA` over
+`theme::scrim_base()`) no longer fades toward the scheme's own
+`background` -- it shifts the unfocused area toward the *opposite* pole:
+lighten (a white scrim) on a dark scheme, darken (a black scrim) on a
+light scheme, via `Scheme::is_dark()`. The alpha constant itself
+(`WORKSPACE_MODE_DIM_ALPHA = 0.55`) is unchanged and remains explicitly
+provisional/dogfooding-tunable: a black scrim at 0.55 over a light
+scheme's panes reads noticeably heavier than the old bg-colored veil did
+at the same alpha, which is an expected consequence of the polarity flip
+and is left to be judged by feel through dogfooding, not tuned here.
 
 ## Problem
 
