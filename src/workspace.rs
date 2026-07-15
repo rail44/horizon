@@ -238,57 +238,57 @@ pub(crate) struct RunCommand {
 
 const MODE_CONTEXT: &str = "WorkspaceMode";
 
-/// Alpha applied to `theme::scrim_base()` for a pane's dimming scrim in
-/// the *uniform* cases: every non-cursor pane in workspace mode, and every
-/// pane (cursor pane included) while a control-surface modal is open --
-/// ported from the retired Floem shell's `WORKSPACE_MODE_DIM_ALPHA`
+/// Alpha applied to `theme::scrim_base()` for every pane covered by
+/// workspace mode's dim pattern *except* the cursor pane itself -- ported
+/// from the retired Floem shell's `WORKSPACE_MODE_DIM_ALPHA`
 /// (`docs/workspace-mode-design.md`'s "pane dimming" visualization signal,
 /// the accident-killer: a stray keystroke should read as "nothing here
 /// types normally right now" at a glance). A numeric opacity factor, not a
-/// color, so the color itself stays theme-driven.
+/// color, so the color itself stays theme-driven. See [`pane_scrim_alpha`]
+/// for exactly which panes this applies to, including while a
+/// control-surface modal is open.
 ///
 /// Lowered from the original 0.55 on 2026-07-15 dogfooding feedback: 0.55
 /// was carried over unchanged from the old bg-colored veil, but the
 /// black/white polarity-flipped scrim (`theme::scrim_base()`) reads
-/// noticeably heavier than that veil did at the same alpha. Both this and
-/// [`SCRIM_CURSOR_DIM_ALPHA`] are explicitly feel-tunable dogfooding
-/// constants, not derived values -- see [`pane_scrim_alpha`] for how
-/// they're selected.
+/// noticeably heavier than that veil did at the same alpha. Explicitly
+/// feel-tunable, not derived.
+///
+/// A second round of feedback (also 2026-07-15) dropped the cursor
+/// pane's own separate, lighter alpha (`SCRIM_CURSOR_DIM_ALPHA = 0.12`)
+/// entirely: experimentally, the cursor pane now gets *no* scrim at all
+/// rather than a lighter one -- see [`pane_scrim_alpha`].
 const SCRIM_DIM_ALPHA: f32 = 0.30;
 
-/// Alpha applied to the cursor pane's scrim specifically, when workspace
-/// mode is active and no modal is open. Lighter than [`SCRIM_DIM_ALPHA`]
-/// so the pane the cursor is already on -- which also gets the accent
-/// border, see `render_node` -- reads as "still dimmed, but noticeably
-/// closer to normal" rather than dimmed identically to every other pane.
-/// Explicitly feel-tunable, same as `SCRIM_DIM_ALPHA`.
-const SCRIM_CURSOR_DIM_ALPHA: f32 = 0.12;
-
-/// Which alpha (if any) a single pane's dimming scrim gets, given the
-/// three states that can request dimming. `None` means no scrim is drawn
-/// for that pane. Pure and unit-tested for every input combination so the
-/// composition rules below are covered without a GPUI render.
+/// Which alpha (if any) a single pane's dimming scrim gets, given
+/// workspace mode's dim pattern: whether it's in effect at all
+/// (`mode_active`), and whether `pane_id` is the pattern's cursor pane
+/// (`is_cursor_pane`). `None` means no scrim -- either the pattern isn't
+/// in effect, or this pane is its cursor pane, left fully clear rather
+/// than dimmed at all (2026-07-15 round-2 feedback: experimentally no
+/// scrim, not a lighter one). Pure and unit-tested for every input
+/// combination so this is covered without a GPUI render.
 ///
-/// Composition rules (2026-07-15 dogfooding decision,
-/// `docs/theme-design.md`'s scrim section):
-/// - a control-surface modal open (palette / view chooser / session
-///   manager) wins outright: every pane dims uniformly at
-///   [`SCRIM_DIM_ALPHA`] -- no cursor-pane distinction, since attention is
-///   on the modal rather than the workspace -- and workspace mode's own
-///   alpha never stacks with it.
-/// - otherwise, workspace mode dims the cursor pane less
-///   ([`SCRIM_CURSOR_DIM_ALPHA`]) than every other pane
-///   ([`SCRIM_DIM_ALPHA`]).
-/// - neither active: no scrim.
-fn pane_scrim_alpha(mode_active: bool, is_cursor_pane: bool, modal_open: bool) -> Option<f32> {
-    if modal_open {
+/// `mode_active`/`is_cursor_pane` describe the dim *pattern*, not
+/// necessarily workspace mode's own live state at render time: while a
+/// control-surface modal (palette / view chooser / session manager) is
+/// open, the caller passes the pattern frozen at the moment the modal
+/// opened (`WorkspaceShell::scrim_freeze`) instead of the live
+/// `is_workspace_mode_active`/`cursor_pane_id`. That's necessary because
+/// every modal-opening handler (`open_palette` et al.) calls
+/// `Workspace::exit_workspace_mode` immediately -- so the mode's own
+/// hjkl/Enter/Escape key bindings don't hijack the modal's typed
+/// search/confirm keys -- which would otherwise erase the pattern the
+/// instant the modal opens. Freezing it keeps this function itself
+/// unaware that a modal is even open: opening one is scrim-*neutral*, the
+/// dim pattern on screen right before it opened simply persists
+/// unchanged while it's open (2026-07-15 round-2 feedback,
+/// `docs/theme-design.md`'s scrim section) -- direct `ctrl+p` from
+/// outside workspace mode freezes "inactive", so it stays fully
+/// undimmed.
+fn pane_scrim_alpha(mode_active: bool, is_cursor_pane: bool) -> Option<f32> {
+    if mode_active && !is_cursor_pane {
         Some(SCRIM_DIM_ALPHA)
-    } else if mode_active {
-        Some(if is_cursor_pane {
-            SCRIM_CURSOR_DIM_ALPHA
-        } else {
-            SCRIM_DIM_ALPHA
-        })
     } else {
         None
     }
@@ -516,6 +516,16 @@ pub struct WorkspaceShell {
     _view_chooser_subscription: Option<Subscription>,
     // The placement the open view chooser will apply on confirm.
     pending_placement: Option<Placement>,
+    // Snapshot of workspace mode's dim pattern (the cursor pane, if the
+    // mode was active), taken by `freeze_scrim_before_modal_exit` right
+    // before a modal-opening handler calls `Workspace::exit_workspace_mode`.
+    // `render_node` substitutes this for the (now-inactive) live mode
+    // state while any control-surface modal is open, so the scrim stays
+    // frozen at whatever was on screen right before the modal opened --
+    // see `pane_scrim_alpha`'s doc comment and `docs/theme-design.md`'s
+    // scrim section. `None` means the mode wasn't active when the modal
+    // opened (or no modal is open).
+    scrim_freeze: Option<PaneId>,
     // The terminal session `sync_terminal_focus` last sent `Focus(true)`
     // to, so a transition can send `Focus(false)` to the one it's about
     // to stop being true for. See `focus_transition`.
@@ -556,6 +566,7 @@ impl WorkspaceShell {
             view_chooser: None,
             _view_chooser_subscription: None,
             pending_placement: None,
+            scrim_freeze: None,
             last_focused_terminal: None,
         };
         // Window activation/deactivation doesn't otherwise touch the
@@ -1307,12 +1318,27 @@ impl WorkspaceShell {
         self.focus_active(window, cx);
     }
 
+    /// Snapshots workspace mode's dim pattern into `scrim_freeze` right
+    /// before a modal-opening handler exits the mode -- see
+    /// `pane_scrim_alpha`'s doc comment for why this is necessary (the
+    /// mode's own key bindings must detach before the modal's `List`
+    /// takes focus, which erases `cursor_pane_id`'s target). Must be
+    /// called before `Workspace::exit_workspace_mode`, not after.
+    fn freeze_scrim_before_modal_exit(&mut self) {
+        self.scrim_freeze = if self.workspace.is_workspace_mode_active() {
+            self.workspace.cursor_pane_id()
+        } else {
+            None
+        };
+    }
+
     fn open_view_chooser(
         &mut self,
         placement: Placement,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.freeze_scrim_before_modal_exit();
         self.workspace.exit_workspace_mode();
         self.pending_placement = Some(placement);
         let list = cx.new(|cx| {
@@ -1348,6 +1374,7 @@ impl WorkspaceShell {
     fn close_view_chooser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.view_chooser = None;
         self._view_chooser_subscription = None;
+        self.scrim_freeze = None;
         self.focus_active(window, cx);
         cx.notify();
     }
@@ -1467,6 +1494,7 @@ impl WorkspaceShell {
     }
 
     fn open_session_manager(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.freeze_scrim_before_modal_exit();
         self.workspace.exit_workspace_mode();
         let summaries = self.workspace.session_summaries();
         let list = cx.new(|cx| {
@@ -1531,6 +1559,7 @@ impl WorkspaceShell {
     fn close_session_manager(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.session_manager = None;
         self._session_manager_subscription = None;
+        self.scrim_freeze = None;
         self.focus_active(window, cx);
         cx.notify();
     }
@@ -1712,6 +1741,7 @@ impl WorkspaceShell {
     }
 
     fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.freeze_scrim_before_modal_exit();
         self.workspace.exit_workspace_mode();
         let entries = command_entries(self.command_state_with(cx));
         let list = cx.new(|cx| {
@@ -1744,6 +1774,7 @@ impl WorkspaceShell {
     fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette = None;
         self._palette_subscription = None;
+        self.scrim_freeze = None;
         self.focus_active(window, cx);
         cx.notify();
     }
@@ -1877,10 +1908,26 @@ impl WorkspaceShell {
                 let mode_active = self.workspace.is_workspace_mode_active();
                 let is_cursor = mode_active && self.workspace.cursor_pane_id() == Some(pane_id);
                 let is_active = self.workspace.is_active_pane(pane_id);
+                // The scrim's own dim pattern: the live workspace-mode
+                // state normally, but while a control-surface modal is
+                // open that state has already gone inactive (every
+                // modal-opening handler exits the mode first -- see
+                // `pane_scrim_alpha`'s doc comment) -- substitute the
+                // pattern frozen at modal-open time instead, so the scrim
+                // stays exactly what it was right before the modal
+                // opened. Deliberately independent of `is_cursor`/`border`
+                // above: only the scrim freezes, not the cursor-pane
+                // border highlight.
                 let modal_open = self.palette.is_some()
                     || self.view_chooser.is_some()
                     || self.session_manager.is_some();
-                let scrim_alpha = pane_scrim_alpha(mode_active, is_cursor, modal_open);
+                let (scrim_mode_active, scrim_cursor_pane) = if modal_open {
+                    (self.scrim_freeze.is_some(), self.scrim_freeze)
+                } else {
+                    (mode_active, self.workspace.cursor_pane_id())
+                };
+                let scrim_alpha =
+                    pane_scrim_alpha(scrim_mode_active, scrim_cursor_pane == Some(pane_id));
                 let border: Hsla = if is_cursor {
                     theme::accent()
                 } else if is_active {
@@ -1918,13 +1965,17 @@ impl WorkspaceShell {
                         // Pane-dimming scrim
                         // (`docs/workspace-mode-design.md`,
                         // `docs/theme-design.md`'s scrim section): drawn
-                        // whenever `pane_scrim_alpha` selects an alpha --
-                        // workspace mode (lighter on the cursor pane,
-                        // whose own accent border above is the separate
-                        // cursor signal) and/or a control-surface modal
-                        // being open (uniform, no cursor distinction). A
-                        // plain non-interactive overlay — no `.occlude()`
-                        // — so it stays purely visual: the
+                        // whenever `pane_scrim_alpha` selects an alpha for
+                        // workspace mode's dim pattern -- every pane
+                        // except the cursor pane, which is left fully
+                        // clear (its own accent border above is the
+                        // separate cursor signal). Opening a
+                        // control-surface modal is scrim-*neutral*: the
+                        // pattern visible right before the modal opened
+                        // persists unchanged while it's open (see
+                        // `scrim_mode_active`/`scrim_cursor_pane` above).
+                        // A plain non-interactive overlay — no
+                        // `.occlude()` — so it stays purely visual: the
                         // pane-activation `on_mouse_down` above keeps
                         // firing through it, and so does a modal
                         // backdrop's own click-to-close, since that
@@ -2169,8 +2220,7 @@ mod tests {
         command_blocked_by_restore, ensure_workspace_has_pane, equal_tab_width,
         first_row_to_select, load_workspace_state, pane_scrim_alpha,
         prepare_workspace_for_runtime_reload, terminal_fallback_cwd, terminal_resume_candidates,
-        terminal_spawn_source, workspace_mode_blocked_by_restore, SCRIM_CURSOR_DIM_ALPHA,
-        SCRIM_DIM_ALPHA,
+        terminal_spawn_source, workspace_mode_blocked_by_restore, SCRIM_DIM_ALPHA,
     };
     use gpui::px;
     use gpui_component::IndexPath;
@@ -2209,38 +2259,26 @@ mod tests {
     }
 
     #[test]
-    fn pane_scrim_alpha_is_none_when_nothing_requests_dimming() {
-        assert_eq!(pane_scrim_alpha(false, false, false), None);
-        // A pane can never be the cursor pane while workspace mode is
-        // inactive (the caller always computes `is_cursor_pane` as
+    fn pane_scrim_alpha_is_none_when_the_dim_pattern_is_inactive() {
+        assert_eq!(pane_scrim_alpha(false, false), None);
+        // A pane can never be the cursor pane while the pattern is
+        // inactive (callers always compute `is_cursor_pane` as
         // `mode_active && ...`), but the pure function itself doesn't
         // assume that -- cover it explicitly too.
-        assert_eq!(pane_scrim_alpha(false, true, false), None);
+        assert_eq!(pane_scrim_alpha(false, true), None);
     }
 
     #[test]
-    fn pane_scrim_alpha_dims_the_cursor_pane_less_in_workspace_mode() {
-        assert_eq!(
-            pane_scrim_alpha(true, true, false),
-            Some(SCRIM_CURSOR_DIM_ALPHA)
-        );
-        assert_eq!(pane_scrim_alpha(true, false, false), Some(SCRIM_DIM_ALPHA));
+    fn pane_scrim_alpha_dims_every_pane_except_the_cursor_pane() {
+        assert_eq!(pane_scrim_alpha(true, false), Some(SCRIM_DIM_ALPHA));
     }
 
     #[test]
-    fn pane_scrim_alpha_is_uniform_while_a_modal_is_open() {
-        // No cursor-pane distinction while a modal is open, workspace mode
-        // active or not.
-        assert_eq!(pane_scrim_alpha(false, false, true), Some(SCRIM_DIM_ALPHA));
-        assert_eq!(pane_scrim_alpha(true, false, true), Some(SCRIM_DIM_ALPHA));
-    }
-
-    #[test]
-    fn pane_scrim_alpha_never_stacks_workspace_mode_and_modal_dimming() {
-        // Both active at once (workspace mode's cursor pane, with a modal
-        // also open): the modal's uniform alpha wins outright, not a
-        // combination of the two.
-        assert_eq!(pane_scrim_alpha(true, true, true), Some(SCRIM_DIM_ALPHA));
+    fn pane_scrim_alpha_leaves_the_cursor_pane_fully_clear() {
+        // 2026-07-15 round-2 feedback: the cursor pane gets no scrim at
+        // all, not a lighter one -- dropped `SCRIM_CURSOR_DIM_ALPHA`
+        // entirely.
+        assert_eq!(pane_scrim_alpha(true, true), None);
     }
 
     #[test]

@@ -73,38 +73,65 @@ unfocused area toward the *opposite* pole: lighten (a white scrim) on a
 dark scheme, darken (a black scrim) on a light scheme, via
 `Scheme::is_dark()`.
 
-**Scrim alpha and composition -- REVISED (2026-07-15, owner dogfooding
-feedback):** the original single alpha (`WORKSPACE_MODE_DIM_ALPHA = 0.55`)
-was carried straight over from the old bg-colored veil and read too heavy
+**Scrim alpha -- REVISED (2026-07-15, owner dogfooding feedback, round
+1):** the original single alpha (`WORKSPACE_MODE_DIM_ALPHA = 0.55`) was
+carried straight over from the old bg-colored veil and read too heavy
 once the scrim flipped to black/white polarity above -- a black scrim at
 0.55 over a light scheme's panes was noticeably heavier than the veil
-ever was at the same alpha. Replaced with two named, still explicitly
-feel-tunable constants (`src/workspace.rs`):
-- `SCRIM_DIM_ALPHA = 0.30` -- the base dim: every non-cursor pane in
-  workspace mode, and every pane uniformly while a control-surface modal
-  is open.
-- `SCRIM_CURSOR_DIM_ALPHA = 0.12` -- workspace mode's cursor pane
-  specifically. Still dimmed, but visibly lighter than the rest: the
-  cursor pane already carries a separate accent-border signal, so it
-  doesn't need the full weight of dimming to read as "not where the
-  cursor is".
+ever was at the same alpha. Replaced with one named, still explicitly
+feel-tunable constant (`src/workspace.rs`): `SCRIM_DIM_ALPHA = 0.30`, the
+dim applied to every pane covered by workspace mode's dim pattern except
+its cursor pane (see below).
+
+**Cursor pane and modal-open behavior -- REVISED (2026-07-15, owner
+dogfooding feedback, round 2):** round 1 gave the cursor pane its own
+lighter alpha (`SCRIM_CURSOR_DIM_ALPHA = 0.12`) and made any open
+control-surface modal (palette / view chooser / session manager) dim
+every pane uniformly, including the cursor pane. The owner reverted both:
+- **Cursor pane: no scrim at all**, experimentally, rather than a
+  lighter one. `SCRIM_CURSOR_DIM_ALPHA` is gone.
+- **Opening a modal must be scrim-neutral**, not its own dimming rule:
+  whatever dim pattern was on screen right before the modal opened
+  persists unchanged while it's open. Rationale: palette commands operate
+  on the workspace-mode cursor target, so that pane must stay visually
+  identifiable (clear) with the others dimmed while the palette is open
+  -- uniformly dimming it away defeats that. Opening the palette from
+  workspace mode (`:`) keeps the mode's pattern (non-cursor panes at
+  `SCRIM_DIM_ALPHA`, cursor pane clear); opening directly (`ctrl+p` /
+  `open-palette`) from outside the mode keeps everything undimmed, same
+  as before opening it.
 
 Which alpha (if any) a pane gets is decided by a small pure function,
-`pane_scrim_alpha(mode_active, is_cursor_pane, modal_open) -> Option<f32>`
+`pane_scrim_alpha(mode_active, is_cursor_pane) -> Option<f32>`
 (`src/workspace.rs`, unit-tested for every input combination):
-- a control-surface modal open (palette / view chooser / session manager)
-  wins outright -- every pane dims uniformly at `SCRIM_DIM_ALPHA`, no
-  cursor distinction (attention is on the modal, not the workspace), and
-  workspace mode's own alpha never stacks with the modal's.
-- otherwise, workspace mode alone applies the cursor/non-cursor split
-  above.
-- neither active: no scrim.
+`mode_active && !is_cursor_pane` dims at `SCRIM_DIM_ALPHA`; anything else
+(pattern inactive, or this pane is the cursor pane) is `None`. The
+function itself has no notion of "a modal is open" -- it only ever sees a
+dim pattern (active or not, cursor pane or not) and applies it.
 
-The modal-open case closes a gap the owner reported: the command palette
-(and the view chooser / session manager) can be opened directly (`ctrl+p`
-/ `open-palette`) without workspace mode ever being active, and
-previously left the background completely undimmed while open. The scrim
-element itself now renders for any pane `pane_scrim_alpha` returns
+Making modal-open scrim-neutral needed one lifecycle finding: every
+modal-opening handler (`open_palette`/`open_view_chooser`/
+`open_session_manager`) calls `Workspace::exit_workspace_mode` as its
+first step -- necessary so the mode's own single-letter key bindings
+(`hjkl`/Enter/Escape/`:`) stop being reachable once the modal's `List`
+takes focus (else they'd hijack the modal's own typed search / Enter-to-
+confirm keys instead of typing/selecting). That immediately clears
+`is_workspace_mode_active()`/`cursor_pane_id()` -- which is exactly the
+"no dim behind the palette" bug the owner originally reported, now also
+why round 1's "uniform 0.30 on modal open" couldn't tell the cursor pane
+apart from the rest (the mode was already inactive by the time it
+rendered). The fix is a shell-side freeze, not new workspace-model state:
+`WorkspaceShell::scrim_freeze: Option<PaneId>` snapshots
+`cursor_pane_id()` (only if the mode was active) the instant before each
+handler exits the mode, and every modal-closing handler clears it back to
+`None`. `render_node` substitutes this frozen pattern for the live one
+whenever a modal is open, so `pane_scrim_alpha` keeps seeing the same
+dim pattern that was on screen right before the modal opened. Only the
+scrim freezes this way -- the cursor pane's accent border (a separate
+signal, computed from the live `is_workspace_mode_active()`/
+`cursor_pane_id()`) is unaffected and reverts with the mode as before.
+
+The scrim element itself renders for any pane `pane_scrim_alpha` returns
 `Some` for, not only under workspace mode, and stays a plain
 non-interactive overlay (no `.occlude()`) so it never intercepts the
 modal backdrop's own click-to-close.
