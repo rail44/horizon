@@ -147,13 +147,13 @@ fn resolve_sessiond_binary_finds_an_existing_binary_via_the_runtime_env_var() {
         "resolve_sessiond_binary must prefer the runtime env var over the compile-time bake"
     );
 
-    let baked_in = PathBuf::from(env!("CARGO_BIN_EXE_horizon-sessiond"));
-    assert_eq!(
-        resolved, baked_in,
-        "for this (freshly built, non-stale-cache) test run, the runtime-resolved and \
-         compile-time-baked paths must agree -- they only diverge once a stale cached test \
-         binary from a deleted worktree is involved, which this cheap unit test can't simulate"
-    );
+    // Deliberately NOT asserted: `resolved == env!("CARGO_BIN_EXE_...")`.
+    // Divergence between the runtime var and the compile-time bake is this
+    // fix's NORMAL operating mode under the shared build-dir -- it happens
+    // whenever the cached test binary was compiled in a sibling worktree
+    // (possibly since deleted). An equality assertion here failed the
+    // integration gate the very first time that scenario occurred; see
+    // `docs/tasks/backlog.md` #40.
 }
 
 /// Spawns `command`, retrying once (see [`TRANSIENT_LINK_RETRY_DELAY`]) if

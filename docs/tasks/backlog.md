@@ -868,3 +868,13 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     binary itself was recompiled or reused stale from the shared
     build-dir. The `env!()` bake is kept only as a defensive fallback for
     direct (non-cargo/nextest) invocation of the test binary.
+
+41. **`equal_tab_width` chrome allowances are stale for `TabVariant::Tab`.**
+    Observed 2026-07-15 during the design-C tab-strip switch: `src/
+    workspace.rs`'s `EQUAL_WIDTH_CHROME_ALLOWANCE_PX` (24px) and
+    `EQUAL_WIDTH_GAP_PX` (2px) were tuned for the retired `Segmented`
+    variant's inner padding + gap; the default `Tab` variant has zero
+    inner padding/gap (adjacent tabs touch, 1px side borders), so
+    computed widths are now a knowable amount too narrow — cosmetic,
+    not broken. Retune wants the owner's visual read on the new strip;
+    one-constant fix once judged.
