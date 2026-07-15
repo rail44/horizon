@@ -166,11 +166,18 @@ wave items where possible; design docs on first use.
   highlight had been ~80% washed on every scheme since the GPUI
   migration), documented `[theme]`/`[theme.ansi]` warnings
   implemented, and the solver hardened to guarantee the floor on the
-  quantized color. Implementation is complete; remaining is owner
-  dogfooding of the derived scheme (brights/neutral-ladder feel, the
-  scrim's fade-vs-shadow metaphor, muted≈primary compression at low
-  `text_contrast` — the audit adds: muted-on-bg margin is only 0.08)
-  and the deferred base16/24 import.
+  quantized color. **Chrome design C + scrim decision shipped
+  2026-07-15** (`19728d7`): the tab bar moved to gpui-component's
+  default Tab variant (selected tab = the content background,
+  connected; bar = surface_panel), and the workspace-mode scrim now
+  shifts unfocused areas toward the opposite pole (owner decision —
+  dark lightens, light darkens; alpha dogfooding-tunable). The owner's
+  seed hues green/yellow/cyan were contrast-adjusted in their config
+  so brights derive from readable normals. Implementation is complete;
+  remaining is owner dogfooding (brights feel, scrim alpha, tab widths
+  — backlog 41) and, as a separately-scheduled future theme, colorful
+  expression on the projected hue set; base16/24 import stays
+  deferred.
 - **winit windowing backend (spike)** — direction set 2026-07-12:
   native-feeling window decorations on every desktop (Wayland via
   sctk-adwaita, native macOS) without per-DE styling effort, by
