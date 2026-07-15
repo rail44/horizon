@@ -332,21 +332,34 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     hit the caret rect already uses) and feed it to the IME position. Small,
     self-contained; deferred from the composer fix to keep that scope to the
     two reported bugs. Recorded 2026-07-09.
-25. **`Reload Config` live re-theme doesn't recolor already-drawn terminal
-    rows** — the twin of the OSC-override repaint gap fixed in `45acf81`
-    (backlog 23). Terminal cells carry logical colors (decision 8);
-    `terminal::view::layout::build_span_cells` resolves them against
-    `resolved_colors()` only when a row is (re)built, and the incremental
-    `update_line_layouts` skips rows whose `TerminalLine` is unchanged. A
-    palette *override* change now forces a full rebuild via `set_state`, but
-    a *theme* change (`Reload Config`) arrives on a different path (a config
-    event, not a frame diff) and nothing invalidates the view's row cache, so
-    a static screen keeps its old RGB until content changes. Already noted in
-    session-daemon-design.md ("Reload Config does not push a live theme update
-    into already-spawned sessions"). Fix: on theme reload, invalidate the
-    terminal view's cached rows (clear + full rebuild, the same move
-    `set_state` makes for palette_overrides) so the live re-resolve decision 8
-    promised actually happens. Small, self-contained. Recorded 2026-07-09.
+25. *(resolved 2026-07-15, no code fix needed)* **`Reload Config` live
+    re-theme doesn't recolor already-drawn terminal rows** — this item's
+    original analysis (recorded 2026-07-09, the same day as backlog 23's
+    `45acf81`) described the Floem shell's row cache
+    (`terminal::view::layout::build_span_cells`/`update_line_layouts`/
+    `set_state`). That shell was retired two days later (`04d9f0e`,
+    2026-07-11); re-verified against today's GPUI-only paint path
+    (`src/terminal/mod.rs::paint_terminal`) and the bug no longer exists
+    there. `paint_terminal` is a fully immediate-mode repaint: it calls
+    `theme::resolve`/`theme::to_hsla` fresh for every visible span on
+    every invocation, straight off `scheme()` (a plain `RwLock` read) —
+    no row/span cache sits between them. Its `canvas()` element has no
+    `ElementId` (`gpui::elements::canvas::Canvas::id` returns `None`), so
+    it can never be reuse-painted, and `TerminalView` itself (a `Render`
+    impl) has its own prepaint-cache bypassed whenever `window.refreshing`
+    is set (`gpui::view::AnyView::prepaint`'s cache-key check), which is
+    exactly what `Window::refresh()` sets — already called by
+    `CommandId::ReloadConfig` (`src/workspace.rs`) right after
+    `theme::reload_from`. So `Reload Config`'s existing `window.refresh()`
+    call is already sufficient; there is nothing left to invalidate.
+    Regression guard added: `theme.rs`'s
+    `resolve_reflects_a_reload_immediately_with_no_separate_cache_to_invalidate`
+    asserts `resolve()` (the exact function `paint_terminal` calls) picks
+    up a `reload_from` change on the very next call, with no intervening
+    step. The `session-daemon-design.md` note this item cited is about a
+    different, still-real gap (`TerminalCoreOptions`'s OSC 4/10/11/12
+    query-reply defaults, sessiond-core-side) — left as is, out of this
+    item's scope.
 26. **[RESOLVED 22a4f47] "Terminate detached session" tore down the ACTIVE
     agent pane** — the owner ran Terminate on a detached session in the
     session-manager modal and it also terminated the live/active agent.

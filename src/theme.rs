@@ -1482,6 +1482,34 @@ mod tests {
         assert_eq!(scheme().accent, 0x84dcc6);
     }
 
+    /// docs/tasks/backlog.md item 25: `resolve`/`to_hsla` (the exact pair
+    /// `src/terminal/mod.rs::paint_terminal` calls fresh for every visible
+    /// span on every repaint) read `scheme()` -- a plain `RwLock` read --
+    /// with no intermediate cache of resolved RGB anywhere. So a `Reload
+    /// Config` (`reload_from` + `window.refresh()`, `src/workspace.rs`)
+    /// recolors a static terminal screen with no extra invalidation step:
+    /// `window.refresh()` alone is already sufficient, because there is
+    /// nothing here to go stale. (The row-cache item 25's original
+    /// analysis described belonged to the Floem shell, retired -- `04d9f0e`
+    /// -- two days after that analysis was recorded; the GPUI-only paint
+    /// path replacing it never grew an equivalent cache.)
+    #[test]
+    fn resolve_reflects_a_reload_immediately_with_no_separate_cache_to_invalidate() {
+        reload_from(&config_with(&[("terminal_background", "#010203")]));
+        assert_eq!(
+            resolve(TerminalColor::Named(NamedColor::Background), &[]),
+            [0x01, 0x02, 0x03]
+        );
+        // A second reload -- simulating a static screen that never got a
+        // new PTY-driven frame between the two `Reload Config` runs --
+        // still picks up the new value on the very next call.
+        reload_from(&config_with(&[("terminal_background", "#0a0b0c")]));
+        assert_eq!(
+            resolve(TerminalColor::Named(NamedColor::Background), &[]),
+            [0x0a, 0x0b, 0x0c]
+        );
+    }
+
     #[test]
     fn surface_panel_defaults_to_a_lift_above_the_base_background_and_is_overridable() {
         let default_scheme = scheme_from(&RawConfig::default());
