@@ -6,7 +6,7 @@
 
 use gpui::*;
 use gpui_component::list::{ListDelegate, ListItem, ListState};
-use gpui_component::IndexPath;
+use gpui_component::{h_flex, Icon, IconName, IndexPath};
 use horizon_workspace::PaneKind;
 
 use crate::theme;
@@ -52,6 +52,10 @@ pub fn view_choices() -> Vec<ViewChoice> {
 pub struct ViewChooserDelegate {
     all: Vec<ViewChoice>,
     filtered: Vec<ViewChoice>,
+    // The currently-selected row, mirrored from `set_selected_index` --
+    // see `PaletteDelegate`'s own field doc (`src/palette.rs`) for why
+    // this is the delegate's own responsibility to track.
+    selected: Option<IndexPath>,
 }
 
 impl ViewChooserDelegate {
@@ -60,6 +64,7 @@ impl ViewChooserDelegate {
         Self {
             filtered: all.clone(),
             all,
+            selected: None,
         }
     }
 
@@ -99,12 +104,19 @@ impl ListDelegate for ViewChooserDelegate {
         _cx: &mut Context<ListState<Self>>,
     ) -> Option<Self::Item> {
         let choice = self.filtered.get(index.row)?;
+        let mut title_color = theme::text_primary();
+        // Floor against the selected-row surface rather than plain
+        // `background` -- item 2 of the 2026-07-15 contrast audit; see
+        // `PaletteDelegate::render_item`'s own comment.
+        if self.selected == Some(index) {
+            title_color = theme::readable_on(title_color, theme::surface_selected());
+        }
         Some(
             ListItem::new(index).child(
                 div()
                     .py_0p5()
                     .text_size(px(13.0))
-                    .text_color(theme::text_primary())
+                    .text_color(title_color)
                     .child(choice.title),
             ),
         )
@@ -112,9 +124,25 @@ impl ListDelegate for ViewChooserDelegate {
 
     fn set_selected_index(
         &mut self,
-        _index: Option<IndexPath>,
+        index: Option<IndexPath>,
         _window: &mut Window,
         _cx: &mut Context<ListState<Self>>,
     ) {
+        self.selected = index;
+    }
+
+    fn render_empty(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<ListState<Self>>,
+    ) -> impl IntoElement {
+        h_flex()
+            .size_full()
+            .justify_center()
+            .text_color(theme::readable_on(
+                theme::text_muted(),
+                rgb(theme::background()).into(),
+            ))
+            .child(Icon::new(IconName::Inbox).size_12())
     }
 }

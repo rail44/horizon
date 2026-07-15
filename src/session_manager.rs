@@ -5,7 +5,7 @@
 
 use gpui::*;
 use gpui_component::list::{ListDelegate, ListItem, ListState};
-use gpui_component::IndexPath;
+use gpui_component::{h_flex, Icon, IconName, IndexPath};
 use horizon_workspace::types::SessionSummary;
 
 use crate::theme;
@@ -18,6 +18,10 @@ pub struct SessionManagerDelegate {
     // `ListEvent::Confirm`, so the shell's event handler reads this to
     // pick attach-or-jump (primary) vs terminate (secondary).
     last_confirm_secondary: bool,
+    // The currently-selected row, mirrored from `set_selected_index` --
+    // see `PaletteDelegate`'s own field doc (`src/palette.rs`) for why
+    // this is the delegate's own responsibility to track.
+    selected: Option<IndexPath>,
 }
 
 impl SessionManagerDelegate {
@@ -26,6 +30,7 @@ impl SessionManagerDelegate {
             filtered: sessions.clone(),
             all: sessions,
             last_confirm_secondary: false,
+            selected: None,
         }
     }
 
@@ -78,11 +83,20 @@ impl ListDelegate for SessionManagerDelegate {
         _cx: &mut Context<ListState<Self>>,
     ) -> Option<Self::Item> {
         let summary = self.filtered.get(index.row)?;
-        let (status, status_color) = if summary.attached {
+        let (status, mut status_color) = if summary.attached {
             ("attached", theme::success())
         } else {
             ("detached", theme::text_muted())
         };
+        let mut title_color = theme::text_primary();
+        // Floor both text colors against the selected-row surface rather
+        // than plain `background` -- item 2 of the 2026-07-15 contrast
+        // audit; see `PaletteDelegate::render_item`'s own comment.
+        if self.selected == Some(index) {
+            let surface = theme::surface_selected();
+            title_color = theme::readable_on(title_color, surface);
+            status_color = theme::readable_on(status_color, surface);
+        }
         Some(
             ListItem::new(index).child(
                 div()
@@ -94,7 +108,7 @@ impl ListDelegate for SessionManagerDelegate {
                     .child(
                         div()
                             .text_size(px(13.0))
-                            .text_color(theme::text_primary())
+                            .text_color(title_color)
                             .child(summary.title.clone()),
                     )
                     .child(
@@ -109,10 +123,26 @@ impl ListDelegate for SessionManagerDelegate {
 
     fn set_selected_index(
         &mut self,
-        _index: Option<IndexPath>,
+        index: Option<IndexPath>,
         _window: &mut Window,
         _cx: &mut Context<ListState<Self>>,
     ) {
+        self.selected = index;
+    }
+
+    fn render_empty(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<ListState<Self>>,
+    ) -> impl IntoElement {
+        h_flex()
+            .size_full()
+            .justify_center()
+            .text_color(theme::readable_on(
+                theme::text_muted(),
+                rgb(theme::background()).into(),
+            ))
+            .child(Icon::new(IconName::Inbox).size_12())
     }
 
     fn confirm(

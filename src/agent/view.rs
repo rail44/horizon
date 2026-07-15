@@ -1408,6 +1408,25 @@ impl AgentView {
         let expandable = turns::running_row_expandable(call);
         let expanded = expandable && self.expanded_rows.contains(&call.call_id);
 
+        // The row's own background tint (warning while waiting on
+        // approval, danger once resolved as an error -- see the `.bg(...)`
+        // calls below) is the actual surface every text color in this row
+        // sits on; contrast-snap against it rather than plain
+        // `background`, the same treatment `render_expandable_tool_call_
+        // row`'s own `snap` closure already gives its sibling row
+        // (`docs/theme-design.md`'s 2026-07-15 contrast audit, item 5).
+        // `text_subtle`-colored elements stay unsnapped throughout
+        // (decorative by definition, exempt from the text floor -- the
+        // sibling's arrow follows the same rule).
+        let row_surface = if waiting {
+            theme::tint_over_background(theme::warning(), 0.12)
+        } else if call.is_error {
+            theme::tint_over_background(theme::danger(), 0.1)
+        } else {
+            rgb(theme::background()).into()
+        };
+        let snap = |color: Hsla| theme::readable_on(color, row_surface);
+
         // Gives the row itself a stable, call_id-scoped identity -- the
         // same convention `render_expandable_tool_call_row`'s header
         // already uses (`.id(row_id)`), which this row lacked: only its
@@ -1434,7 +1453,7 @@ impl AgentView {
                 div()
                     .flex_none()
                     .text_size(px(12.0))
-                    .text_color(glyph_color)
+                    .text_color(snap(glyph_color))
                     .child(glyph),
             )
             .child(
@@ -1445,7 +1464,7 @@ impl AgentView {
                     .text_ellipsis()
                     .whitespace_nowrap()
                     .text_size(px(12.0))
-                    .text_color(theme::text_muted())
+                    .text_color(snap(theme::text_muted()))
                     .child(text),
             );
 
@@ -1498,7 +1517,7 @@ impl AgentView {
                 div()
                     .flex_none()
                     .text_size(px(11.0))
-                    .text_color(color)
+                    .text_color(snap(color))
                     .child(phrase),
             );
         }
@@ -1517,7 +1536,7 @@ impl AgentView {
             // `render_expandable_tool_call_row`'s convention.
             let call_id = call.call_id.clone();
             let label_color = if call.is_error {
-                theme::danger()
+                snap(theme::danger())
             } else {
                 theme::text_subtle()
             };

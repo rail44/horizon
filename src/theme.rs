@@ -50,24 +50,27 @@
 //! surface or correctly-legible border on both a dark scheme (the
 //! built-in default) and a light one (an owner may configure `[theme]`
 //! with a light `surface_base`/`terminal_background` -- verified against
-//! both in this module's tests). [`contrast_safe_default`] additionally
-//! guards the handful of *built-in default* semantic colors
-//! (`warning`/`success`/`info`, and by extension the diff surfaces that
-//! derive from them) that were originally hand-picked to read against the
-//! dark built-in background only: it inverts a candidate's HSL lightness
-//! whenever the candidate and the resolved background land on the same
-//! side of the midpoint, so an unset role stays legible instead of
-//! rendering, e.g., pale yellow warning text on a pale background. It
-//! never touches an explicit `[theme]` value -- only the constant a
-//! `chrome()` lookup falls back to when the corresponding key (and any
-//! fallback key) is absent.
+//! both in this module's tests). [`contrast_snap`] (the UI-snap seam's own
+//! primitive, `docs/theme-design.md`) floors every semantic default
+//! (`danger`/`warning`/`success`/`info`, and by extension the diff
+//! surfaces/text that derive from them) against the resolved `background`:
+//! a continuous OKLCH lightness solve (hue/chroma held fixed) targeting the
+//! WCAG 4.5:1 text floor exactly, rather than the coarser BT.601-luma
+//! polarity check (`contrast_safe_default`, HSL-lightness invert) this
+//! module used before the 2026-07-15 contrast audit -- that older check
+//! only guaranteed a candidate landed on the "legible side of the
+//! midpoint," which measurement showed several built-in/seeded hues could
+//! still clear while failing WCAG outright (e.g. a mid-luminance saturated
+//! green measured at ~2.6:1 against a light background). It never touches
+//! an explicit `[theme]` value -- only the constant a `chrome()` lookup
+//! falls back to when the corresponding key (and any fallback key) is
+//! absent.
 
 use std::sync::{OnceLock, RwLock};
 
 use alacritty_terminal::vte::ansi::{NamedColor, Rgb};
 use gpui::{hsla, point, px, rgb, BoxShadow, Hsla, Rgba};
-use gpui_component::Colorize as _;
-use horizon_config::{RawConfig, RawThemeConfig};
+use horizon_config::{RawConfig, RawThemeAnsiConfig, RawThemeConfig};
 use horizon_terminal_core::TerminalColor;
 
 mod oklab;
@@ -84,7 +87,7 @@ const CURSOR_DEFAULT: u32 = 0x84dcc6; // ACCENT_DEFAULT
 // comment already anticipated an agent-transcript renderer reusing that
 // palette) -- not a coincidence `scheme_from` relies on: since the seed
 // derivation (`docs/theme-design.md`), the *candidate* fed to
-// [`contrast_safe_default`] for each of these roles is the resolved ANSI
+// [`contrast_snap`] for each of these roles is the resolved ANSI
 // hue itself (`SeedHues`), not these constants, so a `[theme.ansi]`
 // override now reaches the matching unset semantic color too. These four
 // constants are kept only as `#[cfg(test)]` fixtures (their numeric
@@ -147,15 +150,26 @@ const DIFF_SURFACE_BLEND_RATIO: f32 = 0.12;
 /// (popovers, secondary buttons) reads as a much bigger jump than
 /// `tab_foreground` (`text_muted`, tuned for legibility against
 /// `background` specifically) was ever validated against -- verified
-/// against the owner's own light `[theme]` (`surface_panel = #c6c6c6`,
-/// `text_muted = #767676` against `background = #f6f6f6`): raw
-/// `surface_panel` puts the unselected label's contrast at roughly
-/// 2.7:1, under both the WCAG AA body-text (4.5:1) and UI-component
-/// (3:1) thresholds. Halfway back toward `surface_chrome` (which itself
-/// defaults to `background` when unset) recovers most of that contrast
-/// (~3.4:1) while keeping the track visibly distinct from the selected
-/// pill (which is fixed to `background` inside gpui-component, see
-/// [`gpui_component_theme_config`]'s doc table).
+/// against the owner's own real, current `[theme]` (the seed-only form,
+/// `docs/theme-design.md`: `surface_base = "#f6f6f6"`, `accent = "blue"`,
+/// `text_contrast = 5.3`, `[theme.ansi]` overrides -- see this module's
+/// `owner_seeded_light_scheme` test fixture): raw `surface_panel`
+/// (derived, `0xcbcbcb` on that fixture) puts the unselected label's
+/// contrast against it at roughly 3.05:1, under both the WCAG AA
+/// body-text (4.5:1) and UI-component (3:1) thresholds. Halfway back
+/// toward `surface_chrome` (which itself derives toward `background`,
+/// `0xe4e4e4` on that fixture) recovers most of that contrast (~3.47:1)
+/// while keeping the track visibly distinct from the selected pill (which
+/// is fixed to `background` inside gpui-component, see
+/// [`gpui_component_theme_config`]'s doc table) -- but still short of the
+/// WCAG floor on its own. That gap is what the 2026-07-15 contrast
+/// audit's item 3 closes: [`gpui_component_theme_config`]'s
+/// `tab.foreground` projection [`contrast_snap`]s `text_muted` against
+/// this exact track color rather than emitting it verbatim, landing at
+/// ~4.49:1 on the same fixture -- this ratio (this constant's own choice
+/// of how far to blend) is deliberately left as the "keep the track
+/// visually distinct" knob, with `tab.foreground`'s own floor now
+/// guaranteeing readability independently of wherever this ratio lands.
 const SEGMENTED_TRACK_BLEND_RATIO: f32 = 0.5;
 
 /// [`overlay_shadow`]'s two-layer drop shadow, in CSS `box-shadow`
@@ -535,8 +549,63 @@ fn warn_invalid_theme_colors(colors: &std::collections::HashMap<String, String>)
     }
 }
 
+/// [`theme_color_warnings`]'s counterpart for `[theme.ansi]`: unlike
+/// `[theme]`'s flattened `colors` map, `RawThemeAnsiConfig` is a typed
+/// 16-field struct (one `Option<String>` per ANSI slot) deserialized
+/// without `deny_unknown_fields`, so there's no "unrecognized key" case
+/// scoped here -- only what `config.example.toml`'s own `[theme.ansi]`
+/// doc actually promises: hex-parsability ([`parse_hex`]) for every slot
+/// that's set. Was previously silently unimplemented (the missing stderr
+/// half of that promise), following [`theme_color_warnings`]'s own
+/// pattern now.
+fn theme_ansi_warnings(ansi: &RawThemeAnsiConfig) -> Vec<String> {
+    let slots: [(&str, &Option<String>); 16] = [
+        ("black", &ansi.black),
+        ("red", &ansi.red),
+        ("green", &ansi.green),
+        ("yellow", &ansi.yellow),
+        ("blue", &ansi.blue),
+        ("magenta", &ansi.magenta),
+        ("cyan", &ansi.cyan),
+        ("white", &ansi.white),
+        ("bright_black", &ansi.bright_black),
+        ("bright_red", &ansi.bright_red),
+        ("bright_green", &ansi.bright_green),
+        ("bright_yellow", &ansi.bright_yellow),
+        ("bright_blue", &ansi.bright_blue),
+        ("bright_magenta", &ansi.bright_magenta),
+        ("bright_cyan", &ansi.bright_cyan),
+        ("bright_white", &ansi.bright_white),
+    ];
+    let mut warnings: Vec<String> = slots
+        .into_iter()
+        .filter_map(|(name, value)| {
+            let value = value.as_deref()?;
+            if parse_hex(value).is_some() {
+                None
+            } else {
+                Some(format!(
+                    "[theme.ansi]: unparsable value {value:?} for key {name:?}, using the built-in default"
+                ))
+            }
+        })
+        .collect();
+    warnings.sort();
+    warnings
+}
+
+/// [`theme_ansi_warnings`]'s stderr half, the `[theme.ansi]` counterpart
+/// to [`warn_invalid_theme_colors`] -- same single call site, same
+/// once-per-resolution-pass cadence.
+fn warn_invalid_theme_ansi(ansi: &RawThemeAnsiConfig) {
+    for warning in theme_ansi_warnings(ansi) {
+        eprintln!("{warning}");
+    }
+}
+
 fn scheme_from(raw: &RawConfig) -> Scheme {
     warn_invalid_theme_colors(&raw.theme.colors);
+    warn_invalid_theme_ansi(&raw.theme.ansi);
     let chrome = |key: &str, fallback_key: Option<&str>, default: u32| {
         raw.theme
             .colors
@@ -571,9 +640,8 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
     let text_contrast = resolve_text_contrast(raw.theme.text_contrast);
     let seed_configured = seed_is_configured(&raw.theme);
     // Polarity, from the seed anchor's own OKLab lightness -- generalizes
-    // `is_light`/`contrast_safe_default`'s BT.601-luma polarity check to
-    // the perceptually-uniform space the rest of this derivation solves
-    // in.
+    // `is_light`'s BT.601-luma polarity check to the perceptually-uniform
+    // space the rest of this derivation solves in.
     let dark = oklab::lightness(seed_background) < 0.5;
 
     // Resolved ahead of the struct literal below: later roles' *default*
@@ -602,18 +670,10 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
         },
     );
     let accent = resolve_accent(raw.theme.colors.get("accent"), &hues, CURSOR_DEFAULT);
-    let danger = chrome("danger", None, contrast_safe_default(hues.red, background));
-    let warning = chrome(
-        "warning",
-        None,
-        contrast_safe_default(hues.yellow, background),
-    );
-    let success = chrome(
-        "success",
-        None,
-        contrast_safe_default(hues.green, background),
-    );
-    let info = chrome("info", None, contrast_safe_default(hues.blue, background));
+    let danger = chrome("danger", None, contrast_snap(hues.red, background));
+    let warning = chrome("warning", None, contrast_snap(hues.yellow, background));
+    let success = chrome("success", None, contrast_snap(hues.green, background));
+    let info = chrome("info", None, contrast_snap(hues.blue, background));
     let surface_panel = chrome(
         "surface_panel",
         None,
@@ -906,8 +966,7 @@ fn blend(base: u32, toward: u32, ratio: f32) -> u32 {
 
 /// Perceived-brightness luminance (ITU-R BT.601 luma weights) of a packed
 /// `0xRRGGBB` color, in `0.0..=1.0`. Used only to pick a legible pairing
-/// (e.g. text-on-primary) or to decide whether a built-in default needs a
-/// contrast correction -- never to assume the scheme itself is dark or
+/// (e.g. text-on-primary) -- never to assume the scheme itself is dark or
 /// light beyond that one immediate, local decision.
 fn luminance(value: u32) -> f32 {
     let r = ((value >> 16) & 0xff) as f32;
@@ -920,34 +979,15 @@ fn is_light(value: u32) -> bool {
     luminance(value) >= 0.5
 }
 
-/// Flips a packed color's HSL lightness (hue/saturation unchanged) --
-/// used only by [`contrast_safe_default`].
-fn invert_lightness(value: u32) -> u32 {
-    let hsla: Hsla = rgb(value).into();
-    let rgba: Rgba = hsla.invert_l().to_rgb();
-    u32::from(rgba) >> 8 // drop the low alpha byte `From<Rgba> for u32` packs in
-}
-
-/// A built-in default is only tuned to read against the built-in dark
-/// background; if the resolved background turns out to be light instead
-/// (i.e. the candidate and the background land on the *same* side of the
-/// midpoint), flip the candidate's lightness so it still reads legibly,
-/// keeping its hue and saturation. Never touches an explicit `[theme]`
-/// value -- this is only ever passed as the `default` argument to
-/// `chrome`, which only evaluates it when the key (and any fallback key)
-/// is absent from the user's config.
-fn contrast_safe_default(candidate: u32, background: u32) -> u32 {
-    if is_light(candidate) == is_light(background) {
-        invert_lightness(candidate)
-    } else {
-        candidate
-    }
-}
-
 /// The UI-snap seam's own contrast-snapping primitive (slice B2,
 /// `docs/theme-design.md`'s "terminal-faithful / UI-snap seam"):
-/// generalizes [`contrast_safe_default`] (background-only, HSL-invert)
-/// to an arbitrary surface and a continuous OKLCH solve. Hue and chroma
+/// a continuous OKLCH solve against an arbitrary surface, replacing the
+/// older `contrast_safe_default` (background-only, BT.601-luma polarity
+/// check, HSL-lightness invert) everywhere in this module, including the
+/// semantic-color defaults (`danger`/`warning`/`success`/`info` in
+/// [`scheme_from`]) since the 2026-07-15 contrast audit -- see this
+/// module's own doc comment for why the coarser polarity check wasn't
+/// enough. Hue and chroma
 /// are held fixed; only OKLCH lightness moves, via
 /// [`oklab::solve_lightness_for_ratio`], toward whichever side of
 /// `surface` clears [`TEXT_CONTRAST_FLOOR`]. A no-op whenever `candidate`
@@ -973,15 +1013,17 @@ fn contrast_snap(candidate: u32, surface: u32) -> u32 {
 }
 
 /// Public face of [`contrast_snap`] for render-time call sites
-/// (`src/agent/view.rs`): contrast-snaps a UI-side hue borrowing --
-/// e.g. `theme::danger()` painted as text on `theme::surface_panel()` --
-/// against the non-background surface it's actually painted on, per the
-/// UI-snap seam. Terminal output never goes through this: the terminal
-/// palette stays verbatim (`resolve`/`named_rgb`/`indexed_rgb` above
-/// read `scheme()` directly, untouched by this function), and
-/// `readable_on` itself is never called from any per-cell terminal
-/// painting path -- only from `src/agent/view.rs`'s render methods,
-/// called at most once per visible text element per frame.
+/// (`src/agent/view.rs`, and since the 2026-07-15 contrast audit's item 2
+/// also `src/palette.rs`/`src/session_manager.rs`/`src/view_chooser.rs`'s
+/// `render_item`): contrast-snaps a UI-side hue borrowing -- e.g.
+/// `theme::danger()` painted as text on `theme::surface_panel()` -- against
+/// the non-background surface it's actually painted on, per the UI-snap
+/// seam. Terminal output never goes through this: the terminal palette
+/// stays verbatim (`resolve`/`named_rgb`/`indexed_rgb` above read
+/// `scheme()` directly, untouched by this function), and `readable_on`
+/// itself is never called from any per-cell terminal painting path -- only
+/// from render methods, called at most once per visible text element per
+/// frame.
 pub(crate) fn readable_on(color: Hsla, surface: Hsla) -> Hsla {
     packed_hsla(contrast_snap(
         packed_from_hsla(color),
@@ -989,10 +1031,23 @@ pub(crate) fn readable_on(color: Hsla, surface: Hsla) -> Hsla {
     ))
 }
 
+/// Alpha-composites `tint` at `alpha` over the current `background` --
+/// the on-screen surface a `.bg(tint.alpha(alpha))` layer (e.g.
+/// `src/agent/view.rs`'s `render_tool_call_row`, which paints its
+/// pending-approval row this way) actually produces, for a render call
+/// site that needs to [`readable_on`]-floor text against that surface
+/// rather than against plain `background` (item 5 of the 2026-07-15
+/// contrast audit). Uses this module's own [`blend`] -- the same alpha-
+/// over model `list_active_composite` (this module's tests) and
+/// [`deny_button_fill_composite`] already use for an analogous
+/// gpui-component composite.
+pub(crate) fn tint_over_background(tint: Hsla, alpha: f32) -> Hsla {
+    packed_hsla(blend(scheme().background, packed_from_hsla(tint), alpha))
+}
+
 /// `Hsla` -> packed `0xRRGGBB`, the inverse of [`packed_hsla`]. Every
 /// caller passes an opaque scheme-role color (alpha always `1.0`), so the
-/// dropped alpha byte is never meaningful -- same assumption
-/// [`invert_lightness`] already makes.
+/// dropped alpha byte is never meaningful.
 fn packed_from_hsla(value: Hsla) -> u32 {
     let rgba: Rgba = value.to_rgb();
     u32::from(rgba) >> 8
@@ -1098,6 +1153,47 @@ fn invert_list_active_clamp(background: u32, surface_selected: u32) -> u32 {
     (channel(16) << 16) | (channel(8) << 8) | channel(0)
 }
 
+/// Alpha `src/agent/view.rs`'s `render_tool_call_row` paints its
+/// waiting-row tint at (`.bg(theme::warning().alpha(0.12))`) -- the first
+/// of the two stacked translucent layers [`deny_button_fill_composite`]
+/// models to solve the row-centric Deny button's text color against (item
+/// 4 of the 2026-07-15 contrast audit). Keep in sync with that call site.
+const DENY_BUTTON_ROW_WARNING_ALPHA: f32 = 0.12;
+
+/// Alpha gpui-component's own `button_danger` fallback paints a
+/// `.danger()` button's fill at (`ui::theme::schema`, vendored at the
+/// pinned rev `0775df394083c1ed74f36f846b78868d1267398f`:
+/// `apply_background_color!(button_danger, fallback = self.danger.mix_oklab(transparent, 0.2))`)
+/// -- the second of [`deny_button_fill_composite`]'s two stacked layers.
+/// Re-verify against the vendored source on any `cargo update -p
+/// gpui-component` bump.
+const DENY_BUTTON_FILL_DANGER_ALPHA: f32 = 0.2;
+
+/// The canonical on-screen fill a row-centric Deny button (`.danger()`,
+/// `src/agent/view.rs`'s `render_tool_call_row`) actually sits on: its own
+/// translucent danger fill (gpui-component's `button_danger` fallback,
+/// [`DENY_BUTTON_FILL_DANGER_ALPHA`]) painted over the waiting row's own
+/// warning tint ([`DENY_BUTTON_ROW_WARNING_ALPHA`]) painted over
+/// `background` -- two stacked alpha-over composites, modeled with this
+/// module's own [`blend`] (the same shape [`invert_list_active_clamp`]'s
+/// own round-trip already uses for an analogous gpui-component alpha
+/// composite). Named and tested explicitly (`docs/theme-design.md`'s
+/// 2026-07-15 contrast audit, item 4) rather than assumed, since
+/// [`gpui_component_theme_config`]'s own `button.danger.foreground`
+/// projection needs a concrete *surface* to solve against -- this specific
+/// case (a pending-approval row's Deny button) is both the audit's own
+/// measured worst case and the only surface a row-centric Deny button ever
+/// actually appears on (the row-centric approval flow only offers Deny on
+/// a `waiting`, i.e. warning-tinted, row).
+fn deny_button_fill_composite(scheme: &Scheme) -> u32 {
+    let row = blend(
+        scheme.background,
+        scheme.warning,
+        DENY_BUTTON_ROW_WARNING_ALPHA,
+    );
+    blend(row, scheme.danger, DENY_BUTTON_FILL_DANGER_ALPHA)
+}
+
 /// Builds the gpui-component `ThemeConfig` for the given scheme.
 ///
 /// Only names a small *base* set of `ThemeColor` roles as hex strings;
@@ -1122,11 +1218,12 @@ fn invert_list_active_clamp(background: u32, surface_selected: u32) -> u32 {
 /// | `secondary`                              | `scheme.surface_panel` (reused, not a second lift)  |
 /// | `secondary_hover`                        | `secondary` blended toward `foreground` (`SECONDARY_HOVER_BLEND_RATIO`) |
 /// | `danger`/`warning`/`success`/`info`      | the matching stage-B `scheme` role                 |
+/// | `button.danger.foreground`                | [`contrast_snap`]`(scheme.danger, `[`deny_button_fill_composite`]`(scheme))` -- floors the row-centric Deny button's text against its own two-layer translucent fill, not gpui-component's own `button_danger_foreground` fallback (raw `danger`, see that function's doc; item 4 of the 2026-07-15 contrast audit) |
 /// | `tab_bar`                                 | `scheme.surface_chrome` (the strip's own background; defaults to `scheme.background` if unset) |
 /// | `tab_bar_segmented`                       | `surface_chrome` blended toward `surface_panel` (`SEGMENTED_TRACK_BLEND_RATIO`) -- see that constant's doc for why not `surface_panel` outright |
 /// | `tab_active`                              | `scheme.surface_panel`                             |
 /// | `tab_active_foreground`                   | `scheme.foreground`                                |
-/// | `tab_foreground`                          | `scheme.text_muted`                                |
+/// | `tab_foreground`                          | [`contrast_snap`]`(scheme.text_muted, tab_bar_segmented)` -- floors the unselected tab label against the segmented track it actually sits on, not `scheme.text_muted` verbatim (item 3 of the 2026-07-15 contrast audit; see `SEGMENTED_TRACK_BLEND_RATIO`'s doc for the measured before/after) |
 /// | `list_active`                             | [`invert_list_active_clamp`]`(scheme.background, scheme.surface_selected)` (the command palette / session manager / view chooser row highlight -- NOT `scheme.surface_selected` verbatim: gpui-component's own `apply_config` unconditionally clamps this field's alpha to `LIST_ACTIVE_ALPHA_CLAMP`, so the projected hex is pre-compensated so the on-screen composite matches `surface_selected`'s own intent, see that function's doc) |
 /// | `scrollbar_thumb`                         | `scheme.text_subtle` (already a visible-but-quiet gray in both polarities) |
 /// | `popover`/`popover_foreground`            | `scheme.background` / `scheme.foreground` (design "C", see below) |
@@ -1165,9 +1262,11 @@ fn invert_list_active_clamp(background: u32, surface_selected: u32) -> u32 {
 /// documented as falling back to `secondary`, which we do set) -- `link`
 /// (falls back to `primary`, already correct), `list`/`list_hover` (fall
 /// back to `background`/`accent`, already a good look for the command
-/// palette's `List`), and every `button_*`/table/sidebar field (cascades
-/// from the roles above). `caret`/`selection` *used* to be in this list --
-/// see the table above for why they're named explicitly now.
+/// palette's `List`), and every other `button_*`/table/sidebar field
+/// (cascades from the roles above). `caret`/`selection` *used* to be in
+/// this list -- see the table above for why they're named explicitly now;
+/// `button.danger.foreground` joined them in the same way (item 4 of the
+/// 2026-07-15 contrast audit).
 ///
 /// `mode` is picked from [`Scheme::is_dark`] so gpui-component's own
 /// unset-field baseline (`ThemeColor::dark()`/`::light()`) matches the
@@ -1194,6 +1293,14 @@ fn gpui_component_theme_config(scheme: &Scheme) -> gpui_component::ThemeConfig {
         scheme.surface_panel,
         SEGMENTED_TRACK_BLEND_RATIO,
     );
+    // Item 3 of the 2026-07-15 contrast audit: the unselected tab label
+    // sits on `tab_bar_segmented`, not `background` -- floor it against
+    // that surface rather than projecting `text_muted` verbatim.
+    let tab_foreground = contrast_snap(scheme.text_muted, tab_bar_segmented);
+    // Item 4: the row-centric Deny button's text sits on its own
+    // translucent danger fill over a warning-tinted row, not a plain
+    // surface -- see `deny_button_fill_composite`'s doc.
+    let button_danger_foreground = contrast_snap(scheme.danger, deny_button_fill_composite(scheme));
     let value = serde_json::json!({
         "mode": mode,
         "colors": {
@@ -1215,11 +1322,18 @@ fn gpui_component_theme_config(scheme: &Scheme) -> gpui_component::ThemeConfig {
             "warning.background": hex(scheme.warning),
             "success.background": hex(scheme.success),
             "info.background": hex(scheme.info),
+            // Item 4 of the 2026-07-15 contrast audit: named explicitly so
+            // the row-centric Deny button's text no longer cascades to
+            // gpui-component's own `button_danger_foreground` fallback
+            // (raw `danger`, unreadable over the button's own translucent
+            // fill on a warning-tinted row) -- see `button_danger_
+            // foreground`'s own computation above.
+            "button.danger.foreground": hex(button_danger_foreground),
             "tab_bar.background": hex(scheme.surface_chrome),
             "tab_bar.segmented.background": hex(tab_bar_segmented),
             "tab.active.background": hex(scheme.surface_panel),
             "tab.active.foreground": hex(scheme.foreground),
-            "tab.foreground": hex(scheme.text_muted),
+            "tab.foreground": hex(tab_foreground),
             "scrollbar.thumb.background": hex(scheme.text_subtle),
             // Text-input caret/selection: named explicitly rather than left
             // to gpui-component's own `primary` cascade (see this
@@ -1351,6 +1465,17 @@ pub fn text_subtle() -> Hsla {
 /// `#fafafa` panel tint on the expanded call's row).
 pub fn surface_panel() -> Hsla {
     packed_hsla(scheme().surface_panel)
+}
+
+/// The command-palette/session-manager/view-chooser `List`'s selected-row
+/// highlight -- the *intended, on-screen* color (`Scheme`'s own
+/// `surface_selected` field doc has the full derivation story), used by
+/// those three delegates' `render_item` to contrast-snap a selected row's
+/// text roles against the surface it's actually painted on
+/// (`docs/theme-design.md`'s 2026-07-15 contrast audit, item 2), the same
+/// way `src/agent/view.rs` already does against `surface_panel`.
+pub fn surface_selected() -> Hsla {
+    packed_hsla(scheme().surface_selected)
 }
 
 /// An elevated surface for floating chrome -- resolved from the
@@ -1615,8 +1740,10 @@ mod tests {
     }
 
     /// A fixture matching the owner's actual `~/.config/horizon/config.toml`
-    /// `[theme]` (2026-07-14): a *light* scheme, with `warning`/`success`/
-    /// `info` left unset (so they exercise [`contrast_safe_default`]).
+    /// `[theme]` (2026-07-14, superseded 2026-07-15 by the seed-only form
+    /// -- see [`owner_seeded_light_scheme`] for the *current* fixture):
+    /// a *light* scheme, with `warning`/`success`/`info` left unset (so
+    /// they exercise [`contrast_snap`]).
     fn owner_light_scheme() -> Scheme {
         owner_light_scheme_with(&[("border_default", "#a6a6a6")])
     }
@@ -1628,6 +1755,43 @@ mod tests {
         let mut colors = owner_light_colors();
         colors.extend_from_slice(extra);
         scheme_from(&config_with(&colors))
+    }
+
+    /// The owner's actual, CURRENT `~/.config/horizon/config.toml`
+    /// `[theme]` (2026-07-15): the seed-only form (`docs/theme-design.md`'s
+    /// slice B1), which superseded the flat-hex fixture above
+    /// ([`owner_light_colors`], preserved on disk at
+    /// `config.toml.pre-seed`) the same day slice B1 landed.
+    /// [`owner_light_colors`]/[`owner_light_scheme`] stay in this test
+    /// module for their own still-valid concern (explicit-override
+    /// passthrough on a light scheme); this fixture is the one the
+    /// 2026-07-15 contrast audit actually measured against, and the one
+    /// every test added for that audit's fixes uses. Every non-seed role
+    /// (`foreground`, `text_muted`, `text_subtle`, `surface_panel`,
+    /// `surface_selected`, `border`, `danger`/`warning`/`success`/`info`,
+    /// ...) is DERIVED here, not set explicitly.
+    fn owner_seeded_light_colors() -> Vec<(&'static str, &'static str)> {
+        vec![("surface_base", "#f6f6f6"), ("accent", "blue")]
+    }
+
+    /// [`owner_seeded_light_colors`] resolved, with `text_contrast = 5.3`
+    /// and the owner's actual `[theme.ansi]` overrides (`red`/`green`/
+    /// `yellow`/`blue`/`magenta`/`cyan` -- `config_with_ansi` doesn't cover
+    /// `black`/`white`/`bright_*`, left unset like the real config).
+    fn owner_seeded_light_scheme() -> Scheme {
+        let mut config = config_with_ansi(
+            &owner_seeded_light_colors(),
+            &[
+                ("red", "#b03b4c"),
+                ("green", "#00b312"),
+                ("yellow", "#87b03b"),
+                ("blue", "#0048b3"),
+                ("magenta", "#643bb0"),
+                ("cyan", "#3bb09e"),
+            ],
+        );
+        config.theme.text_contrast = Some(5.3);
+        scheme_from(&config)
     }
 
     #[test]
@@ -1662,9 +1826,9 @@ mod tests {
         assert_eq!(scheme.diff_added_surface, 0x111111);
         assert_eq!(scheme.diff_added_text, 0x22ff22);
         // The removed side is untouched: it still derives from the
-        // (default, dark-scheme so contrast_safe_default is a no-op)
-        // `danger` role via `DIFF_SURFACE_BLEND_RATIO`, not a flat
-        // constant of its own.
+        // (default, dark-scheme so contrast_snap is a no-op) `danger`
+        // role via `DIFF_SURFACE_BLEND_RATIO`, not a flat constant of its
+        // own.
         assert_eq!(
             scheme.diff_removed_surface,
             blend(BACKGROUND_DEFAULT, DANGER_DEFAULT, DIFF_SURFACE_BLEND_RATIO)
@@ -1739,24 +1903,30 @@ mod tests {
     }
 
     #[test]
-    fn contrast_safe_default_is_a_noop_when_candidate_and_background_differ_in_polarity() {
-        // The built-in dark background: every stage-B default is already
-        // on the opposite (light) side, so nothing should move.
+    fn contrast_snap_is_a_noop_when_the_candidate_already_clears_the_floor() {
+        // The built-in dark background: every stage-B default already
+        // clears the WCAG floor against it (`docs/theme-design.md`'s
+        // Evidence table), so nothing should move.
         assert_eq!(
-            contrast_safe_default(WARNING_DEFAULT, BACKGROUND_DEFAULT),
+            contrast_snap(WARNING_DEFAULT, BACKGROUND_DEFAULT),
             WARNING_DEFAULT
         );
     }
 
     #[test]
-    fn contrast_safe_default_inverts_when_candidate_and_background_share_polarity() {
+    fn contrast_snap_moves_a_candidate_that_fails_the_floor() {
         let light_background = 0xf6f6f6;
-        let corrected = contrast_safe_default(WARNING_DEFAULT, light_background);
-        assert_ne!(corrected, WARNING_DEFAULT);
+        let snapped = contrast_snap(WARNING_DEFAULT, light_background);
+        assert_ne!(snapped, WARNING_DEFAULT);
         // Still the same hue family, just darker -- legible against the
         // light background instead of nearly disappearing into it.
-        assert!(luminance(corrected) < luminance(WARNING_DEFAULT));
-        assert!(!is_light(corrected));
+        assert!(luminance(snapped) < luminance(WARNING_DEFAULT));
+        assert!(!is_light(snapped));
+        let ratio = oklab::contrast_ratio(
+            oklab::relative_luminance(snapped),
+            oklab::relative_luminance(light_background),
+        );
+        assert!(ratio >= TEXT_CONTRAST_FLOOR - 0.05, "ratio = {ratio}");
     }
 
     #[test]
@@ -1834,28 +2004,31 @@ mod tests {
     }
 
     #[test]
-    fn owner_light_scheme_contrast_corrects_unset_semantic_defaults() {
+    fn owner_light_scheme_contrast_snaps_unset_semantic_defaults() {
         let scheme = owner_light_scheme();
         // warning/success/info are NOT set in the owner's config -- their
-        // built-in defaults are light, same side as the (light)
-        // background, so they must have been inverted, not passed through
-        // verbatim.
+        // built-in defaults fail the WCAG floor against this (light)
+        // background, so they must have been contrast-snapped, not passed
+        // through verbatim.
         assert_eq!(
             scheme.warning,
-            contrast_safe_default(WARNING_DEFAULT, scheme.background)
+            contrast_snap(WARNING_DEFAULT, scheme.background)
         );
         assert_ne!(scheme.warning, WARNING_DEFAULT);
-        assert!(!is_light(scheme.warning));
         assert_eq!(
             scheme.success,
-            contrast_safe_default(SUCCESS_DEFAULT, scheme.background)
+            contrast_snap(SUCCESS_DEFAULT, scheme.background)
         );
         assert_ne!(scheme.success, SUCCESS_DEFAULT);
-        assert_eq!(
-            scheme.info,
-            contrast_safe_default(INFO_DEFAULT, scheme.background)
-        );
+        assert_eq!(scheme.info, contrast_snap(INFO_DEFAULT, scheme.background));
         assert_ne!(scheme.info, INFO_DEFAULT);
+        for role in [scheme.warning, scheme.success, scheme.info] {
+            let ratio = oklab::contrast_ratio(
+                oklab::relative_luminance(role),
+                oklab::relative_luminance(scheme.background),
+            );
+            assert!(ratio >= TEXT_CONTRAST_FLOOR - 0.05, "ratio = {ratio}");
+        }
     }
 
     #[test]
@@ -2263,21 +2436,18 @@ mod tests {
 
     #[test]
     fn gpui_projection_segmented_track_blends_toward_background_from_surface_panel() {
-        // Regression fixture for the Segmented tab-strip track (2026-07-14):
-        // left unset, gpui-component's own fallback would put
-        // `tab_bar_segmented` at raw `surface_panel` (`#c6c6c6` here),
-        // putting `tab_foreground` (`text_muted`, `#767676`) at roughly a
-        // 2.7:1 contrast ratio against it -- under both the WCAG AA
-        // body-text (4.5:1) and UI-component (3:1) thresholds. Blending
-        // halfway back toward `surface_chrome` recovers most of that
-        // (~3.4:1) without erasing the track's distinctness from the
-        // selected pill (fixed to `background` inside gpui-component).
-        // `surface_chrome` itself is now seed-derived on this fixture
-        // (`owner_light_scheme` sets `surface_base`, which is unrelated to
-        // this regression but does mean `surface_chrome` is no longer
-        // simply `background` -- see `surface_chrome_steps_along_the_
-        // neutral_ladder_when_unset_on_a_seeded_light_scheme`).
-        let scheme = owner_light_scheme();
+        // Regression fixture for the Segmented tab-strip track
+        // (2026-07-14): left unset, gpui-component's own fallback would
+        // put `tab_bar_segmented` at raw `surface_panel` outright, a much
+        // bigger jump from `surface_chrome` than intended -- see
+        // `SEGMENTED_TRACK_BLEND_RATIO`'s own doc for the measured
+        // before/after contrast story (`owner_seeded_light_scheme`, the
+        // owner's real current fixture) and `tab_foreground_floors_
+        // against_the_segmented_track_on_the_owner_seeded_fixture` for the
+        // 2026-07-15 contrast audit's item 3 fix on top of this track
+        // color. This test only covers `tab_bar_segmented` itself (the
+        // track's fill), unaffected by that fix.
+        let scheme = owner_seeded_light_scheme();
         let colors = theme_color_for(&scheme);
         let expected = blend(
             scheme.surface_chrome,
@@ -2613,10 +2783,7 @@ mod tests {
         ));
         assert_eq!(scheme.ansi[1], 0xffb3b3);
         assert_ne!(scheme.danger, 0xffb3b3);
-        assert_eq!(
-            scheme.danger,
-            contrast_safe_default(0xffb3b3, scheme.background)
-        );
+        assert_eq!(scheme.danger, contrast_snap(0xffb3b3, scheme.background));
     }
 
     #[test]
@@ -2698,7 +2865,7 @@ mod tests {
 
     /// Back-compat guard (mirrors B1's own pattern): the built-in scheme's
     /// existing semantic-role colors were already tuned to clear the text
-    /// floor against `background` (`contrast_safe_default`); this asserts
+    /// floor against `background` (`contrast_snap`); this asserts
     /// -- rather than assumes -- that they *also* already clear it against
     /// `surface_panel`/`surface_raised`, the two non-background surfaces
     /// slice B2 wires `readable_on` into. If this test ever fails, some
@@ -2917,8 +3084,220 @@ mod tests {
         ]));
         assert_eq!(
             scheme.danger,
-            contrast_safe_default(DANGER_DEFAULT, scheme.background)
+            contrast_snap(DANGER_DEFAULT, scheme.background)
         );
         assert_eq!(scheme.warning, 0x887700);
+    }
+
+    // --- 2026-07-15 contrast audit -----------------------------------------
+    //
+    // `owner_seeded_light_scheme` (the owner's actual, current config) is
+    // the fixture every test below measures against, matching the audit
+    // itself.
+
+    fn ratio(a: u32, b: u32) -> f64 {
+        oklab::contrast_ratio(oklab::relative_luminance(a), oklab::relative_luminance(b))
+    }
+
+    #[test]
+    fn built_in_semantic_defaults_already_clear_the_wcag_floor_so_contrast_snap_is_a_noop() {
+        // Item 1: `danger`/`warning`/`success`/`info`'s derivation swapped
+        // `contrast_safe_default` (a BT.601-luma polarity check) for
+        // `contrast_snap` (a WCAG-ratio floor). Assert -- rather than
+        // assume -- that the built-in constants already clear the floor
+        // against the built-in background, so the zero-config scheme
+        // stays byte-identical (`default_scheme_matches_agent_views_pre_
+        // existing_hex_values` is the byte-identity half of this
+        // guarantee; this is the "why" half).
+        for candidate in [
+            DANGER_DEFAULT,
+            WARNING_DEFAULT,
+            SUCCESS_DEFAULT,
+            INFO_DEFAULT,
+        ] {
+            let ratio = ratio(candidate, BACKGROUND_DEFAULT);
+            assert!(
+                ratio >= TEXT_CONTRAST_FLOOR,
+                "candidate {candidate:#08x}: ratio = {ratio}"
+            );
+            assert_eq!(contrast_snap(candidate, BACKGROUND_DEFAULT), candidate);
+        }
+    }
+
+    #[test]
+    fn owner_seeded_scheme_floors_success_and_warning_against_their_raw_hue() {
+        // The owner's real config leaves `success`/`warning` unset; their
+        // raw ANSI hues (`ansi.green = "#00b312"`, `ansi.yellow =
+        // "#87b03b"`, emitted to the terminal verbatim) measure ~2.61:1 /
+        // ~2.34:1 against `background` -- both fail the WCAG floor, the
+        // audit's own measured `success` figure exactly (`docs/theme-
+        // design.md`). `contrast_snap` (unlike the old `contrast_safe_
+        // default`, which only checked polarity) must move both.
+        let scheme = owner_seeded_light_scheme();
+        assert_eq!(scheme.ansi[2], 0x00b312); // green
+        assert_eq!(scheme.ansi[3], 0x87b03b); // yellow
+        assert!(
+            ratio(scheme.ansi[2], scheme.background) < TEXT_CONTRAST_FLOOR,
+            "fixture assumption: raw green should already fail the floor"
+        );
+        assert!(
+            ratio(scheme.ansi[3], scheme.background) < TEXT_CONTRAST_FLOOR,
+            "fixture assumption: raw yellow should already fail the floor"
+        );
+        assert_ne!(scheme.success, scheme.ansi[2]);
+        assert_ne!(scheme.warning, scheme.ansi[3]);
+        let success_ratio = ratio(scheme.success, scheme.background);
+        let warning_ratio = ratio(scheme.warning, scheme.background);
+        assert!(
+            success_ratio >= TEXT_CONTRAST_FLOOR - 0.05,
+            "ratio = {success_ratio}"
+        );
+        assert!(
+            warning_ratio >= TEXT_CONTRAST_FLOOR - 0.05,
+            "ratio = {warning_ratio}"
+        );
+    }
+
+    #[test]
+    fn selected_row_text_floors_against_surface_selected_on_the_owner_seeded_fixture() {
+        // Item 2: `src/palette.rs`/`src/session_manager.rs`/`src/view_
+        // chooser.rs`'s `render_item` route a selected row's text colors
+        // through `readable_on` against `surface_selected` -- confirm the
+        // mechanism actually clears the floor for the two roles the audit
+        // measured failing there (`text_muted` ~4.0:1, `success` ~3.8:1
+        // post-item-1 -- both still under 4.5 against this *different*
+        // surface, which is exactly why item 2 is needed even after
+        // item 1's background-only floor).
+        let scheme = owner_seeded_light_scheme();
+        for role in [scheme.text_muted, scheme.success] {
+            let before = ratio(role, scheme.surface_selected);
+            assert!(
+                before < TEXT_CONTRAST_FLOOR,
+                "fixture assumption: role {role:#08x} vs surface_selected should already be \
+                 under-floor (ratio {before}), otherwise this test doesn't exercise the snap"
+            );
+            let snapped = contrast_snap(role, scheme.surface_selected);
+            assert_ne!(snapped, role);
+            let after = ratio(snapped, scheme.surface_selected);
+            assert!(after >= TEXT_CONTRAST_FLOOR - 0.05, "ratio = {after}");
+        }
+        // `text_subtle` also fails against `surface_selected` (~1.53:1 on
+        // this fixture) but is deliberately NOT snapped anywhere in this
+        // codebase (decorative by definition, exempt from the text floor,
+        // `docs/theme-design.md`) -- `src/palette.rs`'s disabled-command
+        // row keeps it unsnapped even when selected.
+        assert!(ratio(scheme.text_subtle, scheme.surface_selected) < TEXT_CONTRAST_FLOOR);
+    }
+
+    #[test]
+    fn tab_foreground_floors_against_the_segmented_track_on_the_owner_seeded_fixture() {
+        // Item 3: see `SEGMENTED_TRACK_BLEND_RATIO`'s doc for the full
+        // before/after story and hex values on this fixture.
+        let scheme = owner_seeded_light_scheme();
+        let tab_bar_segmented = blend(
+            scheme.surface_chrome,
+            scheme.surface_panel,
+            SEGMENTED_TRACK_BLEND_RATIO,
+        );
+        let before = ratio(scheme.text_muted, tab_bar_segmented);
+        assert!(
+            before < TEXT_CONTRAST_FLOOR,
+            "fixture assumption: raw text_muted vs tab_bar_segmented should already be \
+             under-floor (ratio {before})"
+        );
+        let tab_foreground = contrast_snap(scheme.text_muted, tab_bar_segmented);
+        assert_ne!(tab_foreground, scheme.text_muted);
+        let after = ratio(tab_foreground, tab_bar_segmented);
+        assert!(after >= TEXT_CONTRAST_FLOOR - 0.05, "ratio = {after}");
+
+        // Wired all the way through the gpui-component projection too.
+        let colors = theme_color_for(&scheme);
+        assert_eq!(colors.tab_foreground, packed_hsla(tab_foreground));
+    }
+
+    #[test]
+    fn deny_button_foreground_floors_against_its_own_fill_composite_on_the_owner_seeded_fixture() {
+        // Item 4: see `deny_button_fill_composite`'s doc for the composite
+        // formula (danger@0.2 over warning@0.12 over background).
+        let scheme = owner_seeded_light_scheme();
+        let fill = deny_button_fill_composite(&scheme);
+        let before = ratio(scheme.danger, fill);
+        assert!(
+            before < TEXT_CONTRAST_FLOOR,
+            "fixture assumption: raw danger vs its own button fill should already be \
+             under-floor (ratio {before})"
+        );
+        let button_danger_foreground = contrast_snap(scheme.danger, fill);
+        assert_ne!(button_danger_foreground, scheme.danger);
+        let after = ratio(button_danger_foreground, fill);
+        assert!(after >= TEXT_CONTRAST_FLOOR - 0.05, "ratio = {after}");
+
+        // Wired all the way through the gpui-component projection too.
+        let colors = theme_color_for(&scheme);
+        assert_eq!(
+            colors.button_danger_foreground,
+            packed_hsla(button_danger_foreground)
+        );
+    }
+
+    // --- `[theme.ansi]` warnings (item 7b) ----------------------------------
+
+    fn ansi_warnings_for(ansi: RawThemeAnsiConfig) -> Vec<String> {
+        theme_ansi_warnings(&ansi)
+    }
+
+    #[test]
+    fn a_recognized_ansi_slot_with_an_unparsable_hex_value_warns() {
+        let warnings = ansi_warnings_for(RawThemeAnsiConfig {
+            red: Some("not-a-hex-color".to_string()),
+            ..Default::default()
+        });
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("red"), "warnings = {warnings:?}");
+        assert!(
+            warnings[0].contains("not-a-hex-color"),
+            "warnings = {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn every_documented_ansi_slot_resolves_without_warning() {
+        let ansi = RawThemeAnsiConfig {
+            black: Some("#a1b2c3".to_string()),
+            red: Some("#a1b2c3".to_string()),
+            green: Some("#a1b2c3".to_string()),
+            yellow: Some("#a1b2c3".to_string()),
+            blue: Some("#a1b2c3".to_string()),
+            magenta: Some("#a1b2c3".to_string()),
+            cyan: Some("#a1b2c3".to_string()),
+            white: Some("#a1b2c3".to_string()),
+            bright_black: Some("#a1b2c3".to_string()),
+            bright_red: Some("#a1b2c3".to_string()),
+            bright_green: Some("#a1b2c3".to_string()),
+            bright_yellow: Some("#a1b2c3".to_string()),
+            bright_blue: Some("#a1b2c3".to_string()),
+            bright_magenta: Some("#a1b2c3".to_string()),
+            bright_cyan: Some("#a1b2c3".to_string()),
+            bright_white: Some("#a1b2c3".to_string()),
+        };
+        assert!(
+            ansi_warnings_for(ansi.clone()).is_empty(),
+            "warnings = {:?}",
+            ansi_warnings_for(ansi)
+        );
+    }
+
+    #[test]
+    fn an_empty_ansi_config_warns_about_nothing() {
+        assert!(theme_ansi_warnings(&RawThemeAnsiConfig::default()).is_empty());
+    }
+
+    #[test]
+    fn scheme_from_still_resolves_every_ansi_slot_when_one_is_unparsable() {
+        // Same lenient-fallback guarantee as `[theme]`'s own colors: an
+        // unparsable `[theme.ansi]` value only ever produces a stderr
+        // warning, never breaks resolution of the rest of the palette.
+        let scheme = scheme_from(&config_with_ansi(&[], &[("red", "not-a-hex-color")]));
+        assert_eq!(scheme.ansi[1], ANSI16_DEFAULT[1]);
     }
 }
