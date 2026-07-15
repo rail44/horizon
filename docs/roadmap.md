@@ -179,10 +179,17 @@ wave items where possible; design docs on first use.
   component, decided per-view by whether the view's value justifies
   the effort (the tab strip didn't). The owner's seed hues
   green/yellow/cyan were contrast-adjusted in their config so brights
-  derive from readable normals. Implementation is complete; remaining
-  is owner dogfooding (brights feel, scrim alpha) and, as a
-  separately-scheduled future theme, colorful expression on the
-  projected hue set; base16/24 import stays deferred.
+  derive from readable normals. Implementation is complete. Remaining,
+  with their actual gates (owner clarification 2026-07-15): the
+  brights verdict waits for an **interactive color-scheme settings
+  view** (sliders over the seed — the owner wants to re-examine the
+  whole scheme themselves there, not judge brights in isolation; when
+  that view gets scheduled, reconcile with the in-flight
+  `color-picker` worktree branch, which predates the seed design);
+  scrim darkness (the 0.55 opacity carried over from the old
+  bg-colored veil) is plain dogfooding. Colorful expression on the
+  projected hue set stays a separately-scheduled future theme;
+  base16/24 import stays deferred.
 - **winit windowing backend (spike)** — direction set 2026-07-12:
   native-feeling window decorations on every desktop (Wayland via
   sctk-adwaita, native macOS) without per-DE styling effort, by
