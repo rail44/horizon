@@ -245,10 +245,12 @@ const BORDER_STEP: f64 = 0.5;
 /// Chroma and hue are held fixed -- only lightness moves. The single most
 /// feel-sensitive constant in this module (per the design doc, which
 /// leaves the exact formula "TBD, tune through dogfooding"); tinted8
-/// prior art uses a comparable ΔL ≈ 0.12 in HSL. `bright_black`/
-/// `bright_white` don't use this constant -- they reuse `black`/`white`
-/// outright (see `scheme_from`), since those two already sit at the
-/// neutral ladder's own extremes (`background`/`foreground` themselves).
+/// prior art uses a comparable ΔL ≈ 0.12 in HSL. Also reused for
+/// `bright_white` (pushing `foreground` itself further in the same
+/// direction, see `scheme_from`) -- `bright_black` does NOT use this
+/// constant, it derives from `text_subtle` instead (both reference
+/// fixtures -- built-in and the owner's -- agree `bright_black` IS
+/// `text_subtle`, not a further push off `black`).
 const BRIGHT_HUE_EMPHASIS_DELTA: f64 = 0.1;
 
 const ANSI16_DEFAULT: [u32; 16] = [
@@ -537,17 +539,24 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
         },
     );
 
-    // `black`/`white`: whichever of `seed_background`/`foreground` is
-    // darker/lighter -- "background/foreground with light-polarity
-    // inversion" (`docs/theme-design.md`). On a dark scheme this picks
-    // `black = seed_background`, `white = foreground` (the intuitive
-    // pairing); on a light scheme the SAME rule automatically inverts the
-    // assignment (`black = foreground`, `white = seed_background`), since
-    // it picks by lightness, not by role name.
+    // `black`/`white`: role-based, tied to `seed_background`/`foreground`
+    // directly -- NOT picked by lightness. This is base16's own ANSI-0
+    // convention too (ANSI 0 = base00 = the default background,
+    // regardless of polarity) and matches both reference fixtures: the
+    // built-in dark scheme's `black`/`white` sit in the `background`/
+    // `foreground` *family* respectively (`0x23262e`≈`background`
+    // `0x16181d`; `0xdee2ea`≈`foreground` `0xe9ecf2`), and the owner's
+    // light scheme sets `black` to her light background color and
+    // `white` to her dark foreground color -- the opposite pairing a
+    // lightness-based pick would produce. "Light polarity inverts
+    // black/white" (`docs/theme-design.md`) describes what happens to
+    // these two *values* once background/foreground themselves flip
+    // polarity (black becomes a light color on a light scheme), not a
+    // swap of which role gets which endpoint.
     let ansi_black = ansi_slot(
         &ansi_raw.black,
         if seed_configured {
-            oklab::darker(seed_background, foreground)
+            seed_background
         } else {
             ANSI16_DEFAULT[0]
         },
@@ -555,28 +564,41 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
     let ansi_white = ansi_slot(
         &ansi_raw.white,
         if seed_configured {
-            oklab::lighter(seed_background, foreground)
+            foreground
         } else {
             ANSI16_DEFAULT[7]
         },
     );
-    // `bright_black`/`bright_white`: the neutral ladder's own extremes --
-    // `black`/`white` (above) already sit at `seed_background`/
-    // `foreground` themselves, so their bright siblings default to the
-    // same resolved value (which may itself be an explicit `black`/
-    // `white` override) rather than a further push past them.
+    // `bright_black`: the terminal's de-emphasis gray (dimmed `ls`
+    // entries, shell autosuggestions) -- both reference fixtures agree
+    // this is `text_subtle` exactly (built-in `0x5f6370` ==
+    // `TEXT_SUBTLE_DEFAULT`; the owner's own `bright_black` equals her
+    // `text_subtle`), not a further push off `black`/`background` (which
+    // would risk landing back on `black` itself, making dimmed text
+    // invisible).
     let ansi_bright_black = ansi_slot(
         &ansi_raw.bright_black,
         if seed_configured {
-            ansi_black
+            text_subtle
         } else {
             ANSI16_DEFAULT[8]
         },
     );
+    // `bright_white`: the "lightest foreground" slot -- `foreground`
+    // itself pushed further in the polarity direction
+    // (`BRIGHT_HUE_EMPHASIS_DELTA`, the same mechanism the six colored
+    // `bright_*` hues below use). Lands within a few `u8` units of the
+    // built-in scheme's `bright_white` (`0xffffff`, `foreground`'s
+    // `0xe9ecf2` clamped to the `l=1.0` bound -- not bit-exact, since
+    // `foreground`'s own small residual chroma keeps the clamped
+    // projection from landing precisely on `(1,1,1)`); the owner's own
+    // `bright_white` pushes further still, in the same direction, off
+    // her (much darker) foreground -- plausibility only, this derivation
+    // doesn't chase her exact magnitude.
     let ansi_bright_white = ansi_slot(
         &ansi_raw.bright_white,
         if seed_configured {
-            ansi_white
+            oklab::emphasize_lightness(foreground, BRIGHT_HUE_EMPHASIS_DELTA, dark)
         } else {
             ANSI16_DEFAULT[15]
         },
@@ -1729,6 +1751,14 @@ mod tests {
         close(scheme.foreground, FOREGROUND_DEFAULT, 6, "foreground");
         close(scheme.text_muted, TEXT_MUTED_DEFAULT, 12, "text_muted");
         close(scheme.text_subtle, TEXT_SUBTLE_DEFAULT, 10, "text_subtle");
+        // `bright_black` == `text_subtle` by construction (see
+        // `scheme_from`), so it inherits that same closeness for free.
+        close(scheme.ansi[8], ANSI16_DEFAULT[8], 10, "bright_black");
+        // `bright_white` = `foreground` pushed +0.1 OKLCH lightness,
+        // clamped at 1.0 -- lands near, not bit-exact on, the built-in's
+        // pure white (`foreground`'s own small residual chroma keeps the
+        // clamped `l=1.0` projection from landing exactly on `(1,1,1)`).
+        close(scheme.ansi[15], ANSI16_DEFAULT[15], 4, "bright_white");
     }
 
     #[test]
@@ -1821,24 +1851,65 @@ mod tests {
     }
 
     #[test]
-    fn ansi_black_and_white_invert_with_polarity() {
+    fn ansi_black_and_white_follow_background_and_foreground_by_role() {
+        // Role-based, NOT lightness-picked: `black` is always the
+        // background-family color and `white` is always the foreground-
+        // family color, on both polarities -- base16's own ANSI-0
+        // convention, and what the owner's real config does by hand (her
+        // light scheme's `black` is her light background color, `white`
+        // is her dark foreground color -- the opposite pairing a
+        // lightness pick would produce).
         let dark = scheme_from(&config_with_and_contrast(
             &[("surface_base", "#16181d")],
             Some(10.0),
         ));
-        assert_eq!(dark.ansi[0], dark.background); // black = the darker of the two
-        assert_eq!(dark.ansi[7], dark.foreground); // white = the lighter of the two
+        assert_eq!(dark.ansi[0], dark.background);
+        assert_eq!(dark.ansi[7], dark.foreground);
 
         let light = scheme_from(&config_with(&[("surface_base", "#f6f6f6")]));
-        assert_eq!(light.ansi[0], light.foreground); // inverted: still the darker...
-        assert_eq!(light.ansi[7], light.background); // ...and the lighter, of the two
+        // "Light polarity inverts black/white": black is now a LIGHT
+        // color (it still tracks `background`, which is itself light),
+        // not a swap to the foreground.
+        assert_eq!(light.ansi[0], light.background);
+        assert_eq!(light.ansi[7], light.foreground);
+        assert!(oklab::lightness(light.ansi[0]) > oklab::lightness(light.ansi[7]));
+    }
 
-        // bright_black/bright_white reuse black/white outright (the
-        // "neutral ladder's own extremes" -- see BRIGHT_HUE_EMPHASIS_DELTA's doc).
-        assert_eq!(dark.ansi[8], dark.ansi[0]);
-        assert_eq!(dark.ansi[15], dark.ansi[7]);
-        assert_eq!(light.ansi[8], light.ansi[0]);
-        assert_eq!(light.ansi[15], light.ansi[7]);
+    #[test]
+    fn ansi_bright_black_is_text_subtle_and_stays_distinct_from_the_background() {
+        // Both reference fixtures (built-in and the owner's) agree
+        // `bright_black` IS `text_subtle` exactly -- the terminal's
+        // de-emphasis gray (dimmed `ls` entries, shell autosuggestions).
+        for config in [
+            config_with_and_contrast(&[("surface_base", "#16181d")], Some(10.0)),
+            config_with(&[("surface_base", "#f6f6f6")]),
+        ] {
+            let scheme = scheme_from(&config);
+            assert_eq!(scheme.ansi[8], scheme.text_subtle);
+            // Never collapses onto the background it's meant to stand
+            // out from -- the bug a `black`-relative derivation risked.
+            assert_ne!(scheme.ansi[8], scheme.background);
+        }
+    }
+
+    #[test]
+    fn ansi_bright_white_pushes_foreground_further_in_the_polarity_direction() {
+        let dark = scheme_from(&config_with_and_contrast(
+            &[("surface_base", "#16181d")],
+            Some(10.0),
+        ));
+        assert_eq!(
+            dark.ansi[15],
+            oklab::emphasize_lightness(dark.foreground, BRIGHT_HUE_EMPHASIS_DELTA, true)
+        );
+        assert!(oklab::lightness(dark.ansi[15]) > oklab::lightness(dark.foreground));
+
+        let light = scheme_from(&config_with(&[("surface_base", "#f6f6f6")]));
+        assert_eq!(
+            light.ansi[15],
+            oklab::emphasize_lightness(light.foreground, BRIGHT_HUE_EMPHASIS_DELTA, false)
+        );
+        assert!(oklab::lightness(light.ansi[15]) < oklab::lightness(light.foreground));
     }
 
     #[test]

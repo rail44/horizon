@@ -297,23 +297,5 @@ pub(crate) fn emphasize_lightness(color: u32, delta: f64, toward_light: bool) ->
     packed_from_oklch(Oklch { l, ..lch })
 }
 
-/// The darker of two packed colors, by OKLab lightness.
-pub(crate) fn darker(a: u32, b: u32) -> u32 {
-    if lightness(a) <= lightness(b) {
-        a
-    } else {
-        b
-    }
-}
-
-/// The lighter of two packed colors, by OKLab lightness.
-pub(crate) fn lighter(a: u32, b: u32) -> u32 {
-    if lightness(a) >= lightness(b) {
-        a
-    } else {
-        b
-    }
-}
-
 #[cfg(test)]
 mod tests;

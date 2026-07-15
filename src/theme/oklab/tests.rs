@@ -186,13 +186,3 @@ fn emphasize_lightness_clamps_at_the_lightness_bounds() {
     assert!((lightness(emphasize_lightness(0xffffff, 0.1, true)) - 1.0).abs() < 1e-6);
     assert!(lightness(emphasize_lightness(0x000000, 0.1, false)).abs() < 1e-6);
 }
-
-#[test]
-fn darker_and_lighter_pick_the_correct_endpoint() {
-    let dark = 0x16181d;
-    let light = 0xe9ecf2;
-    assert_eq!(darker(dark, light), dark);
-    assert_eq!(darker(light, dark), dark);
-    assert_eq!(lighter(dark, light), light);
-    assert_eq!(lighter(light, dark), light);
-}

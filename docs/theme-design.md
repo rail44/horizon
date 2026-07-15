@@ -154,17 +154,32 @@ default rather than discussed, and are explicitly open:
   config file's parse the way a plain typed field would.
 - **Brights derivation** — **Settled 2026-07-15, explicitly still
   dogfooding-tunable** (this was the most feel-sensitive call in the
-  slice; expect it to move). The six colored `bright_*` ANSI slots: an
-  OKLCH lightness delta (`src/theme.rs`'s `BRIGHT_HUE_EMPHASIS_DELTA`,
-  `0.1`) applied to the resolved *normal* hue, in the foreground's own
-  direction (dark background: lighter; light background: darker), chroma
-  and hue held fixed. `bright_black`/`bright_white` don't use that delta
-  — they reuse the resolved `black`/`white` outright, since those two
-  already sit at the neutral ladder's own extremes (`background`/
-  `foreground` themselves, after polarity inversion) with nowhere
-  further useful to push. As before, an explicit `[theme.ansi]` override
-  (bright or normal) always wins regardless — the owner's own
-  "bright = normal" config keeps working unchanged.
+  slice; expect it to move), plus the closely-related `black`/`white`
+  rule it builds on. `black`/`white` are role-based, not lightness-picked:
+  `black` ← the resolved background, `white` ← the resolved foreground,
+  on both polarities — base16's own ANSI-0 convention (ANSI 0 = base00 =
+  the default background regardless of polarity), and what both reference
+  fixtures show (the built-in dark scheme's `black`/`white` sit in the
+  `background`/`foreground` *family* respectively; the owner's light
+  scheme sets `black` to her light background color and `white` to her
+  dark foreground color — the opposite pairing a lightness pick would
+  produce). "Light polarity inverts black/white" describes what happens
+  to these two *values* once background/foreground themselves flip
+  polarity, not a swap of which role gets which endpoint. `bright_black`
+  is `text_subtle` — both reference fixtures agree on this exactly (the
+  built-in's `bright_black` equals `TEXT_SUBTLE_DEFAULT`; the owner's own
+  `bright_black` equals her `text_subtle`) — it's the terminal's
+  de-emphasis gray (dimmed `ls` entries, shell autosuggestions), not a
+  further push off `black`, which would risk landing back on the
+  background it needs to stand out from. `bright_white` and the six
+  colored `bright_*` hues *do* share one mechanism: an OKLCH lightness
+  delta (`src/theme.rs`'s `BRIGHT_HUE_EMPHASIS_DELTA`, `0.1`) applied to
+  the resolved *normal* color (`foreground` for `bright_white`, the
+  matching hue for the rest), in the foreground's own direction (dark
+  background: lighter; light background: darker), chroma and hue held
+  fixed. As before, an explicit `[theme.ansi]` override (bright or
+  normal, including `black`/`white` themselves) always wins regardless —
+  the owner's own "bright = normal" config keeps working unchanged.
 - **Semantic-color ↔ hue default mapping** — **Settled 2026-07-15,
   unsurprising:** `danger` ← `red`, `warning` ← `yellow`, `success` ←
   `green`, `info` ← `blue` (the same pairing the built-in constants
