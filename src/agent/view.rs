@@ -943,6 +943,20 @@ impl AgentView {
         let call_id = call.call_id.clone();
         let row_id = ElementId::from(format!("receipt-row-{}", call.call_id.0));
 
+        // The header's own background is `surface_panel` only while
+        // expanded. Every text color
+        // painted on it needs the UI-snap seam's contrast floor against
+        // that surface, not just the app background
+        // (`docs/theme-design.md`), so route through `readable_on` exactly
+        // when the row will actually sit on it -- a no-op while collapsed.
+        let snap = |color: Hsla| {
+            if expanded {
+                theme::readable_on(color, theme::surface_panel())
+            } else {
+                color
+            }
+        };
+
         let mut header = div()
             .id(row_id)
             .flex()
@@ -967,7 +981,7 @@ impl AgentView {
                 div()
                     .flex_none()
                     .text_size(px(12.0))
-                    .text_color(glyph_color)
+                    .text_color(snap(glyph_color))
                     .child(glyph),
             )
             .child(
@@ -978,7 +992,7 @@ impl AgentView {
                     .text_ellipsis()
                     .whitespace_nowrap()
                     .text_size(px(12.0))
-                    .text_color(theme::text_muted())
+                    .text_color(snap(theme::text_muted()))
                     .child(text),
             );
         // Surface the approval fact in a completed turn's expansion row
@@ -990,7 +1004,7 @@ impl AgentView {
                 div()
                     .flex_none()
                     .text_size(px(11.0))
-                    .text_color(color)
+                    .text_color(snap(color))
                     .child(phrase),
             );
         }
@@ -1843,6 +1857,10 @@ impl AgentView {
         latest_user_message_block: Option<usize>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        // The whole pill sits on `surface_panel` (below), so its label
+        // text is snapped against that surface rather than just
+        // `background` -- the UI-snap seam (`docs/theme-design.md`).
+        let label_color = theme::readable_on(theme::text_muted(), theme::surface_panel());
         let segment = |id: &'static str, label: &'static str| {
             div()
                 .id(id)
@@ -1851,7 +1869,7 @@ impl AgentView {
                 .px_2()
                 .py_1()
                 .text_size(px(11.0))
-                .text_color(theme::text_muted())
+                .text_color(label_color)
                 .cursor_pointer()
                 .hover(|this| this.bg(theme::text_subtle().alpha(0.15)))
                 .child(label)

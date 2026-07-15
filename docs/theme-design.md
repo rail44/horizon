@@ -6,8 +6,32 @@ dogfooding; they are marked as such below. This document is the
 self-contained record of the decisions; `docs/roadmap.md` should only index
 it. Slice B1 (the seed schema + headless OKLCH derivation core — `src/theme.rs`'s
 `scheme_from`, `src/theme/oklab.rs`) landed 2026-07-15, settling the five
-"Provisional details" below; full UI wiring beyond the existing
-`Scheme`/`apply_gpui_component_theme` seam is slice B2, not yet started.
+"Provisional details" below. Slice B2 (the UI-snap seam wiring) landed
+2026-07-15: `gpui_component_theme_config` now projects the scheme's six
+resolved hues onto gpui-component's `base.*`/`chart.*` fields (faithful,
+unsnapped -- every consumer found in the vendored source paints them as
+fills/marks, not text), and a new `readable_on(color, surface) -> Hsla`
+(`src/theme.rs`) generalizes the pre-existing `contrast_safe_default`
+(background-only) to an arbitrary surface via
+`oklab::solve_lightness_for_ratio`. `readable_on` is wired into
+`src/agent/view.rs` at the two spots where role text sits on
+`surface_panel` (the expandable receipt row's header, snapped only while
+actually expanded, and the follow-pill's labels); every other
+`danger()`/`success()`/`warning()`/`info()`/`text_muted()` call site in
+that file paints on the plain background and stays untouched, still
+covered by B1's own background-only snapping. `diff_added_text`/
+`diff_removed_text`'s *default* (unset-key case only, `scheme_from`) now
+snaps against their own `diff_added_surface`/`diff_removed_surface`
+rather than the raw semantic color, for the same reason. Left explicitly
+faithful (unsnapped), per the seam's own "prefer the faithful hue" rule
+for ambiguous fields: the `base.*`/`chart.*` fill projection above, and
+every `.alpha()`-tinted fill/border call site in `src/agent/view.rs`
+(`text_subtle().alpha(...)`, `warning().alpha(...)`, etc.) -- the seam
+only ever applies to *text*. `text_subtle()` itself is never snapped
+anywhere (decorative by definition, exempt from the text floor).
+`readable_on` is call-time (not precomputed into `Scheme`), used only from
+`src/agent/view.rs` render methods -- never from any per-cell terminal
+painting path, so `scheme()`'s own hot-path cost is unchanged.
 
 ## Problem
 
