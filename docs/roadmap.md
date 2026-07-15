@@ -157,11 +157,20 @@ wave items where possible; design docs on first use.
   mockup comparison): modal surfaces sit on the common background with
   a polarity-aware overlay shadow (popover projection follows;
   `surface_raised` currently unread), and the palette/session-manager/
-  view-chooser/send-button hardcoded colors are gone. Implementation is
-  complete; remaining is owner dogfooding of the derived scheme
-  (brights/neutral-ladder feel, the scrim's fade-vs-shadow metaphor,
-  muted≈primary compression at low `text_contrast`) and the deferred
-  base16/24 import.
+  view-chooser/send-button hardcoded colors are gone. **Contrast-audit
+  wave shipped 2026-07-15** (merges up to `dab0f59`): a full audit of
+  the gpui-component cascade on the owner's scheme, then fixes —
+  semantic colors on a true contrast solve, floors on selected-row/
+  tab-label/deny-button/tool-call-row/empty-state text, the
+  list.active alpha-clamp compensated in projection (selection
+  highlight had been ~80% washed on every scheme since the GPUI
+  migration), documented `[theme]`/`[theme.ansi]` warnings
+  implemented, and the solver hardened to guarantee the floor on the
+  quantized color. Implementation is complete; remaining is owner
+  dogfooding of the derived scheme (brights/neutral-ladder feel, the
+  scrim's fade-vs-shadow metaphor, muted≈primary compression at low
+  `text_contrast` — the audit adds: muted-on-bg margin is only 0.08)
+  and the deferred base16/24 import.
 - **winit windowing backend (spike)** — direction set 2026-07-12:
   native-feeling window decorations on every desktop (Wayland via
   sctk-adwaita, native macOS) without per-DE styling effort, by
