@@ -1,7 +1,9 @@
 //! End-to-end test against the real `horizon-sessiond` binary (spawned via
-//! `CARGO_BIN_EXE_horizon-sessiond`, only available because this test lives in
-//! the same package as the `[[bin]]` target) -- see
-//! `docs/agent-runtime-split-design.md`'s step 2 deliverables.
+//! [`resolve_sessiond_binary`], which reads `CARGO_BIN_EXE_horizon-sessiond`
+//! as a runtime environment variable rather than the same-named compile-time
+//! `env!()` bake -- only available because this test lives in the same
+//! package as the `[[bin]]` target -- see `docs/tasks/backlog.md` #40) --
+//! see `docs/agent-runtime-split-design.md`'s step 2 deliverables.
 
 use std::io::{BufRead, ErrorKind, Read};
 use std::path::{Path, PathBuf};
@@ -51,60 +53,106 @@ const TEST_DUCKDB_REBUILD_DELAY_MS_VAR: &str = "HORIZON_SESSIOND_TEST_DUCKDB_REB
 /// time), confirmed locally (backlog #36) to close well under this.
 const TRANSIENT_LINK_RETRY_DELAY: Duration = Duration::from_millis(200);
 
-/// Resolves the `horizon-sessiond` binary to spawn, tolerating the brief
-/// window in which cargo's own artifact-uplift step can leave
-/// `target/<profile>/horizon-sessiond` transiently missing.
+/// Name of the runtime-set env var this resolver reads first -- same name
+/// as the compile-time `env!()` bake [`resolve_sessiond_binary`] falls back
+/// to, but a *different* mechanism: see that function's doc comment.
+const CARGO_BIN_EXE_VAR: &str = "CARGO_BIN_EXE_horizon-sessiond";
+
+/// Resolves the `horizon-sessiond` binary to spawn, preferring
+/// `std::env::var(CARGO_BIN_EXE_VAR)` -- a genuine OS environment variable
+/// of *this test process*, re-injected fresh by cargo/cargo-nextest on
+/// every invocation -- over the same-named `env!("CARGO_BIN_EXE_
+/// horizon-sessiond")` compile-time bake, which is a constant frozen into
+/// this test binary's own compiled code at the moment it was built.
 ///
-/// Root cause (confirmed against `cargo-util` 0.2.28's `paths::link_or_copy`,
-/// the function cargo's own `link_targets` compiler step calls to uplift
-/// every unit's output from its build-dir location into the final
-/// `target/<profile>/` path): that function unconditionally
-/// `remove_file`s the destination before re-linking it, and per that
-/// step's own doc comment this runs for *every* unit on *every* cargo
-/// invocation -- including a "fresh" (already-built, nothing changed) one
-/// -- not just an actual recompile. `target/<profile>/horizon-sessiond`
-/// (what `CARGO_BIN_EXE_horizon-sessiond` bakes into this test binary at
-/// compile time) is therefore never guaranteed stable across the lifetime
-/// of a test process; a concurrent sibling build serializing on the shared
-/// `build.build-dir` lock (see `AGENTS.md` "Build setup") only widens the
-/// window. Locally reproduced without any other worktree involved: a tight
-/// existence-poller on this exact path caught one transient absence during
-/// a single `cargo nextest run --workspace -p horizon-sessiond` while a
-/// real sibling `cargo nextest run -p horizon-agent` was compiling
-/// concurrently on the same machine. See `docs/tasks/backlog.md` #36.
+/// Cargo documents setting `CARGO_BIN_EXE_<name>` twice, for two different
+/// consumers: once as a `rustc` build-time env var (readable only via
+/// `env!()`/`option_env!()`, baked into the compiled artifact), and again
+/// as the literal runtime environment of the spawned test *process* itself
+/// every time `cargo test`/`cargo nextest run` executes it -- see
+/// <https://doc.rust-lang.org/cargo/reference/environment-variables.html>
+/// ("Cargo sets several environment variables when tests are run. You can
+/// retrieve the values when the tests are run"). Confirmed empirically
+/// against this repo's actual toolchain (both `cargo test` and `cargo
+/// nextest run`) while diagnosing backlog #40.
+///
+/// That distinction is load-bearing here because this repo's
+/// `build.build-dir` split (`AGENTS.md` "Build setup") makes test binaries
+/// themselves shared, reusable *intermediate* build artifacts: unlike
+/// `horizon-sessiond` (a real `[[bin]]` target, uplifted fresh into every
+/// worktree's own `target/`), a compiled `e2e` test binary can be reused
+/// unchanged (relinked, not recompiled) into a fresh worktree without ever
+/// re-running `rustc` -- confirmed by inspecting the shared build-dir
+/// directly: `deps/e2e-*` binaries live only under `{cargo-cache-home}/
+/// horizon-build-dir/`, never uplifted into any worktree's `target/`, so
+/// `std::env::current_exe()` for this test binary always resolves *inside
+/// the shared build-dir*, not this worktree -- it cannot anchor a
+/// per-worktree path at all. A stale, reused test binary's `env!()` bake
+/// therefore still holds the absolute path from whichever worktree
+/// compiled it *first*, and once that worktree is deleted (the normal
+/// worker lifecycle), that path is permanently dead. The runtime env var
+/// has no such problem: cargo/nextest compute and inject it fresh for
+/// *this* invocation, from *this* worktree's own `cargo metadata`,
+/// regardless of how stale the test binary's compiled code is.
+///
+/// The `env!()` bake is kept only as a defensive fallback, for the (today
+/// unobserved) case of this test binary being invoked directly, bypassing
+/// `cargo test`/`cargo nextest run`'s own env injection. Either path can
+/// still be transiently missing due to cargo's own non-atomic
+/// artifact-uplift step (`docs/tasks/backlog.md` #36); that race is
+/// handled at the `spawn()` call site by [`spawn_sessiond`], not here.
 fn resolve_sessiond_binary() -> PathBuf {
+    if let Ok(runtime_var) = std::env::var(CARGO_BIN_EXE_VAR) {
+        let path = PathBuf::from(runtime_var);
+        if path.is_file() {
+            return path;
+        }
+    }
+
     let baked_in = PathBuf::from(env!("CARGO_BIN_EXE_horizon-sessiond"));
     if baked_in.is_file() {
         return baked_in;
     }
 
-    thread::sleep(TRANSIENT_LINK_RETRY_DELAY);
-    if baked_in.is_file() {
-        return baked_in;
-    }
-
-    // Independent cross-check: derive the sibling binary's path from this
-    // test executable's own on-disk location
-    // (`.../target/<profile>/deps/e2e-<hash>` -> `.../target/<profile>/horizon-sessiond`)
-    // rather than trusting the baked-in env var a second time.
-    let fallback = std::env::current_exe()
-        .ok()
-        .and_then(|exe| Some(exe.parent()?.parent()?.join("horizon-sessiond")));
-    if let Some(path) = &fallback {
-        if path.is_file() {
-            return path.clone();
-        }
-    }
-
     panic!(
         "could not locate the horizon-sessiond binary to spawn for this e2e test -- probed \
-         CARGO_BIN_EXE_horizon-sessiond = {} (exists = {}) and current_exe-relative fallback = \
-         {} -- see docs/tasks/backlog.md #36",
+         runtime env var {CARGO_BIN_EXE_VAR} = {:?} and compile-time \
+         CARGO_BIN_EXE_horizon-sessiond bake = {} (exists = {}) -- see docs/tasks/backlog.md #40",
+        std::env::var(CARGO_BIN_EXE_VAR),
         baked_in.display(),
         baked_in.is_file(),
-        fallback
-            .map(|path| format!("{} (exists = {})", path.display(), path.is_file()))
-            .unwrap_or_else(|| "<current_exe unresolvable>".to_string()),
+    );
+}
+
+/// Proves the runtime resolution [`resolve_sessiond_binary`] prefers
+/// actually finds an existing binary, and that it's the same binary the
+/// compile-time `env!()` bake would have named -- the mechanism backlog
+/// #40's fix relies on: both are cargo's own idea of "the `horizon-sessiond`
+/// binary for this test run", differing only in *when* the value is
+/// computed (build time vs. this exact invocation), not *what* it points
+/// at, for a normal (non-stale-cache) run like this one.
+#[test]
+fn resolve_sessiond_binary_finds_an_existing_binary_via_the_runtime_env_var() {
+    let runtime_var = std::env::var(CARGO_BIN_EXE_VAR)
+        .expect("cargo/cargo-nextest must set CARGO_BIN_EXE_horizon-sessiond at test runtime");
+    let runtime_path = PathBuf::from(&runtime_var);
+    assert!(
+        runtime_path.is_file(),
+        "runtime env var {CARGO_BIN_EXE_VAR} = {runtime_var} does not point at an existing file"
+    );
+
+    let resolved = resolve_sessiond_binary();
+    assert_eq!(
+        resolved, runtime_path,
+        "resolve_sessiond_binary must prefer the runtime env var over the compile-time bake"
+    );
+
+    let baked_in = PathBuf::from(env!("CARGO_BIN_EXE_horizon-sessiond"));
+    assert_eq!(
+        resolved, baked_in,
+        "for this (freshly built, non-stale-cache) test run, the runtime-resolved and \
+         compile-time-baked paths must agree -- they only diverge once a stale cached test \
+         binary from a deleted worktree is involved, which this cheap unit test can't simulate"
     );
 }
 

@@ -835,18 +835,36 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     the 2026-07-14 merge is the actual validation — run it and close
     this item.
 
-40. **Shared build-dir: stale e2e test binary bakes a CARGO_BIN_EXE path
-    into a deleted worktree.** Observed 2026-07-15 by a worker (theme
-    trio branch): `horizon-sessiond::e2e`'s `CARGO_BIN_EXE_horizon-sessiond`
-    pointed at a sibling worktree that had already been merged and
-    removed — a *permanent* miss, unlike item 36's transient
-    non-atomic-uplift window (36's retry-on-miss thinking doesn't apply
-    when the baked path can never exist again). Mechanism: the compiled
-    e2e test artifact itself is reused across worktrees via the shared
-    `build.build-dir`, carrying the env-baked absolute path from
-    whichever worktree compiled it last. Workaround used: `touch
-    crates/horizon-sessiond/tests/e2e.rs` to force a real recompile in
-    the current worktree. Candidate fixes: resolve the sessiond binary
-    at test *runtime* relative to `current_exe()` instead of the
+40. *(resolved 2026-07-15)* **Shared build-dir: stale e2e test binary bakes
+    a CARGO_BIN_EXE path into a deleted worktree.** Observed 2026-07-15 by
+    a worker (theme trio branch): `horizon-sessiond::e2e`'s
+    `CARGO_BIN_EXE_horizon-sessiond` pointed at a sibling worktree that had
+    already been merged and removed — a *permanent* miss, unlike item 36's
+    transient non-atomic-uplift window (36's retry-on-miss thinking
+    doesn't apply when the baked path can never exist again). Mechanism:
+    the compiled e2e test artifact itself is reused across worktrees via
+    the shared `build.build-dir`, carrying the env-baked absolute path
+    from whichever worktree compiled it last. Workaround used: `touch
+    crates/horizon-sessiond/tests/e2e.rs` to force a real recompile in the
+    current worktree. Candidate fixes considered: resolve the sessiond
+    binary at test *runtime* relative to `current_exe()` instead of the
     compile-time env; or exclude the e2e test unit from the shared
-    build-dir. Needs a decision by the project session (build infra).
+    build-dir. **Chosen fix, and a correction to the first candidate
+    above:** `current_exe()` turned out not to work at all under this
+    repo's `build.build-dir` split — test/bench binaries (unlike `[[bin]]`
+    targets) are never uplifted out of the shared build-dir into a
+    worktree's own `target/`, so `current_exe()` for the e2e test binary
+    always resolves *inside the shared build-dir*, common to every
+    worktree, and can't anchor a per-worktree path at all (confirmed
+    empirically: `target/debug/deps/e2e-*` does not exist in any
+    worktree's own `target/`). The actual fix (`crates/horizon-sessiond/
+    tests/e2e.rs`, `resolve_sessiond_binary`): read `CARGO_BIN_EXE_
+    horizon-sessiond` as a *runtime* environment variable
+    (`std::env::var`) instead of the same-named compile-time `env!()`
+    bake — cargo and cargo-nextest both document (and this was confirmed
+    against this repo's toolchain) re-injecting that var fresh into the
+    test process's own environment on every invocation, computed from the
+    *current* worktree's `cargo metadata`, regardless of whether the test
+    binary itself was recompiled or reused stale from the shared
+    build-dir. The `env!()` bake is kept only as a defensive fallback for
+    direct (non-cargo/nextest) invocation of the test binary.
