@@ -1544,22 +1544,26 @@ pub(crate) fn overlay_shadow() -> Vec<BoxShadow> {
     ]
 }
 
-/// The workspace-mode dim scrim's base color (`docs/theme-design.md`'s
-/// "fade vs shadow" scrim question, decided 2026-07-15: polarity-flipped
-/// pole scrim -- opaque here, `pane_scrim_alpha` in `src/workspace.rs`
-/// selects the alpha at the call site, same as before).
-/// Dimming now shifts the unfocused area toward the scheme's *opposite*
-/// pole instead of fading toward its own background: pure white on a dark
-/// scheme (lightening), pure black on a light scheme (darkening). Like
-/// `overlay_shadow`'s shadow color, this is a fixed black/white pick keyed
-/// on polarity via [`Scheme::is_dark`], not a scheme role -- the scrim's
-/// whole point is contrast against the pane beneath it, not hue-matching it.
-pub(crate) fn scrim_base() -> Hsla {
-    if scheme().is_dark() {
-        hsla(0.0, 0.0, 1.0, 1.0)
-    } else {
-        hsla(0.0, 0.0, 0.0, 1.0)
-    }
+/// The workspace-mode dim scrim's color (`docs/theme-design.md`'s scrim
+/// section). Simply the resolved `background` color, opaque here --
+/// `SCRIM_DIM_ALPHA` in `src/workspace.rs` composites it over a pane at
+/// that alpha, which compresses every underlying pixel proportionally
+/// toward `background` (de-emphasis by *reducing contrast*, not by
+/// shifting lightness).
+///
+/// A 2026-07-15 revision briefly replaced this with a polarity-flipped
+/// *pole* color instead (pure white on a dark scheme, pure black on a
+/// light one, via [`Scheme::is_dark`]) reasoning that a fixed veil color
+/// gives more contrast than the scheme's own background. The owner tried
+/// it and withdrew it 2026-07-16: overlaying a translucent black/white
+/// layer reads as a color shift, not a focus cue, and the veil color is
+/// back to `background` -- see `docs/theme-design.md` for the full
+/// record. Every structural improvement made while the pole color was in
+/// place (uniform application to all panes, the 2px cursor-pane border,
+/// modal-open freezing) is unaffected by this revert -- only the color
+/// this function returns changed.
+pub(crate) fn scrim_color() -> Hsla {
+    packed_hsla(background())
 }
 
 /// Diff-added line background (fs.edit's reconstructed-diff body, stage
@@ -2012,23 +2016,23 @@ mod tests {
     }
 
     #[test]
-    fn scrim_base_flips_polarity() {
-        // 2026-07-15 "fade vs shadow" decision (`docs/theme-design.md`):
-        // the workspace-mode dim scrim shifts the unfocused area toward
-        // the scheme's *opposite* pole, not its own `background` -- pure
-        // white on a dark scheme (lighten), pure black on a light scheme
-        // (darken). `pane_scrim_alpha` selects the alpha separately at
-        // the call site (`src/workspace.rs`); this helper itself is
-        // always fully opaque.
+    fn scrim_color_tracks_the_resolved_background_regardless_of_polarity() {
+        // 2026-07-16 (`docs/theme-design.md`'s scrim section): the
+        // 2026-07-15 polarity-flipped pole scrim (pure white on a dark
+        // scheme, pure black on a light one) was tried and withdrawn --
+        // the scrim color is simply `background` again, opaque here
+        // (`SCRIM_DIM_ALPHA` in `src/workspace.rs` applies the alpha
+        // separately at the call site). Unlike the withdrawn pole color,
+        // it does *not* flip to a fixed black/white pick by polarity --
+        // it tracks whatever `background` actually resolves to on each
+        // scheme.
         reload_from(&RawConfig::default());
         assert!(scheme().is_dark());
-        let dark = scrim_base();
-        assert_eq!((dark.h, dark.s, dark.l, dark.a), (0.0, 0.0, 1.0, 1.0));
+        assert_eq!(scrim_color(), packed_hsla(background()));
 
         reload_from(&config_with(&owner_light_colors()));
         assert!(!scheme().is_dark());
-        let light = scrim_base();
-        assert_eq!((light.h, light.s, light.l, light.a), (0.0, 0.0, 0.0, 1.0));
+        assert_eq!(scrim_color(), packed_hsla(background()));
     }
 
     #[test]
