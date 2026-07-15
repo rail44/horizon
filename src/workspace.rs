@@ -356,6 +356,91 @@ fn pane_border_role(is_cursor: bool, is_active: bool) -> PaneBorderRole {
     }
 }
 
+/// Blur radius for the cursor pane's inner-glow inset shadow (round 5,
+/// 2026-07-16 owner ask: "can a blur-like effect be applied inside the
+/// border"). Layered with, not a replacement for, the existing 2px accent
+/// border (`PaneBorderRole::Cursor`) -- a soft accent-colored wash just
+/// inside the border, reinforcing the same cursor signal. `inset: true`
+/// `BoxShadow`s are genuinely honored by gpui's renderer (verified against
+/// the pinned rev, not assumed -- see `render_node`'s call site comment
+/// for the trace), and shadows never participate in layout (`box_shadow`
+/// is read only from `Style::paint`, never from any layout/taffy
+/// conversion -- crates/gpui/src/style.rs in the pinned checkout), so this
+/// cannot shift a pane's size the way widening the border itself would
+/// have. Feel-tunable, not derived.
+const CURSOR_GLOW_BLUR_PX: f32 = 8.0;
+
+/// Alpha for the cursor pane's inner-glow inset shadow, applied to
+/// `theme::accent()`. Feel-tunable, same as [`CURSOR_GLOW_BLUR_PX`].
+const CURSOR_GLOW_ALPHA: f32 = 0.35;
+
+/// How far `render_node`'s `LayoutNode::Split` branch pulls each pane's
+/// border back from a split boundary it's adjacent to (round 5,
+/// 2026-07-16 owner report: pane borders relate to the split boundary
+/// asymmetrically -- one side's border reads as overlapping the
+/// boundary, the other as sitting cleanly inside it).
+///
+/// Root cause, traced into gpui-component's vendored `resizable` module
+/// (pinned rev, `crates/ui/src/resizable/{panel,resize_handle}.rs`): the
+/// draggable divider between two adjacent panes is *not* a shared,
+/// neutral element both panes contribute to. `ResizablePanel::render`
+/// (`panel.rs`) attaches a `resize_handle` only as a child of "each panel
+/// after the first" (the file's own doc comment) -- i.e. solely owned by
+/// the *trailing* pane of a pair. That handle is absolutely positioned at
+/// `left`/`top: -HANDLE_PADDING` (`resize_handle.rs`, `HANDLE_PADDING =
+/// 4px`) relative to the trailing pane's own origin, reaching *backward*
+/// into the leading pane -- and deliberately left unclipped
+/// (`ResizablePanel`'s own doc comment forbids `.overflow_hidden()` on
+/// the panel specifically because it would clip this handle). Since
+/// flex siblings paint in child order, the trailing pane's whole subtree
+/// (its own content *and* this handle) paints *after* the leading pane's,
+/// so the handle -- reaching back into the leading pane's screen region
+/// -- paints over part of the leading pane's border from *outside* the
+/// leading pane's own render tree, while it paints over part of the
+/// trailing pane's border from *inside* the trailing pane's own render
+/// tree (it's the trailing pane's own child). Same visual effect
+/// (something else drawn over the border near the boundary), opposite
+/// compositional relationship -- which is exactly the reported "overlaps
+/// vs. sits inside" asymmetry once phrased pane-by-pane.
+///
+/// Horizon's own pane content (`render_node`'s `LayoutNode::Pane` arm) is
+/// `.size_full()` inside its `resizable_panel()`, so nothing in
+/// Horizon's *own* code currently keeps either border clear of that
+/// reach. Rather than fighting the stock resizable component (reserved
+/// styles, see `panel.rs`'s own warning), the fix lives entirely on
+/// Horizon's side: `LayoutNode::Split` wraps each child in a thin
+/// padding div before handing it to `resizable_panel()`, pulling the
+/// child's own rendered content back by this exact amount on every edge
+/// that faces a split boundary (every edge except a group's own outer
+/// edges) -- see `split_child_insets`. `HANDLE_PADDING` is
+/// `pub(crate)` inside gpui-component's own crate (not part of its public
+/// API), so it can't be imported; this mirrors its value directly,
+/// matching the handle's own documented reach depth exactly rather than
+/// guessing a smaller number tuned to its 1px visible line specifically
+/// (`HANDLE_SIZE`) -- deliberately the more conservative of the two, so
+/// the fix holds regardless of exactly how gpui/Taffy's border-box
+/// sizing resolves that inner line's precise sub-pixel position (verified
+/// Taffy's box-sizing default is `BorderBox`,
+/// `taffy-0.10.1/src/style/mod.rs`, but did not attempt to re-derive the
+/// handle's own padding-vs-explicit-width resolution from that alone).
+const SPLIT_BOUNDARY_INSET_PX: f32 = 4.0;
+
+/// Which of a split child's own edges (leading = left/top, trailing =
+/// right/bottom, along the split's axis) face another pane across a
+/// boundary and so need `SPLIT_BOUNDARY_INSET_PX`'s pullback -- see its
+/// doc comment for why. `index` is this child's position among
+/// `sibling_count` total children of the same split; every child except
+/// the first is reached into on its own leading edge by its *own*
+/// resize handle (owned because it isn't the first), and every child
+/// except the last is reached into on its trailing edge by the *next*
+/// child's handle. Pure and unit-tested so the edge selection is covered
+/// without a GPUI render.
+fn split_child_insets(index: usize, sibling_count: usize) -> (bool, bool) {
+    let leading = index > 0;
+    let trailing = index + 1 < sibling_count;
+    (leading, trailing)
+}
+
 /// Built-in default chord for [`ToggleWorkspaceMode`] — mirrors the Floem
 /// shell's `DEFAULT_WORKSPACE_MODE_CHORD`. Not bound when a
 /// `[keybindings]` entry overrides it via the reserved
@@ -1993,7 +2078,8 @@ impl WorkspaceShell {
                 let is_cursor = mode_active && cursor_pane == Some(pane_id);
                 let is_active = self.workspace.is_active_pane(pane_id);
                 let scrim_alpha = pane_scrim_alpha(mode_active);
-                let border: Hsla = match pane_border_role(is_cursor, is_active) {
+                let border_role = pane_border_role(is_cursor, is_active);
+                let border: Hsla = match border_role {
                     PaneBorderRole::Cursor => theme::accent(),
                     PaneBorderRole::Active => theme::border(),
                     PaneBorderRole::Inactive => rgb(theme::background()).into(),
@@ -2069,6 +2155,34 @@ impl WorkspaceShell {
                                 .bg(theme::scrim_color().opacity(alpha)),
                         )
                     })
+                    .when(border_role == PaneBorderRole::Cursor, |this| {
+                        // Cursor-pane inner glow (round 5, 2026-07-16):
+                        // a soft accent-colored inset shadow, layered
+                        // with (not replacing) the 2px accent border
+                        // above. A separate later child, not a
+                        // `box_shadow` on this outer div directly, so it
+                        // paints *after* the scrim overlay above (gpui
+                        // paints `inset: true` shadows before an
+                        // element's own children, so a shadow set on
+                        // this outer div would land *underneath* the
+                        // scrim child and get washed out by it -- the
+                        // cursor role only ever applies while workspace
+                        // mode's dim pattern is active, so that's not a
+                        // corner case, it's the only case). The pane's
+                        // own border, painted last regardless (after
+                        // every child), still ends up crisply on top of
+                        // both. Non-interactive like the scrim overlay --
+                        // no `.occlude()`, so pane-activation clicks keep
+                        // passing through. See `CURSOR_GLOW_BLUR_PX`'s
+                        // doc comment for the `inset: true` verification.
+                        this.child(div().absolute().inset_0().shadow(vec![BoxShadow {
+                            color: theme::accent().opacity(CURSOR_GLOW_ALPHA),
+                            offset: point(px(0.0), px(0.0)),
+                            blur_radius: px(CURSOR_GLOW_BLUR_PX),
+                            spread_radius: px(0.0),
+                            inset: true,
+                        }]))
+                    })
                     .into_any_element()
             }
             LayoutNode::Split { axis, children } => {
@@ -2106,11 +2220,35 @@ impl WorkspaceShell {
                     });
                 });
                 let total_weight = children.iter().map(|child| child.weight).sum::<f32>();
+                let sibling_count = children.len();
                 for (index, child) in children.iter().enumerate() {
                     let child_element =
                         self.render_node(tab_id, &child.node, format!("{path}-{index}"), cx);
                     let basis = px(child.weight / total_weight * 1_000.0);
-                    group = group.child(resizable_panel().flex_basis(basis).child(child_element));
+                    // Pull this child's own rendered content back from
+                    // every edge that faces a split boundary, so its
+                    // pane border(s) never fall under gpui-component's
+                    // resize-handle divider -- see
+                    // `SPLIT_BOUNDARY_INSET_PX`'s doc comment for the
+                    // root cause. Applies to the whole `child_element`
+                    // subtree, not a specific leaf pane: for a nested
+                    // split, that subtree's own outer edge is exactly
+                    // its own first/last leaf pane's edge, so the inset
+                    // still lands on the right pane recursively.
+                    let (leading_inset, trailing_inset) = split_child_insets(index, sibling_count);
+                    let inset_px = px(SPLIT_BOUNDARY_INSET_PX);
+                    let inset_child = div()
+                        .size_full()
+                        .when(leading_inset, |this| match axis {
+                            SplitAxis::Horizontal => this.pl(inset_px),
+                            SplitAxis::Vertical => this.pt(inset_px),
+                        })
+                        .when(trailing_inset, |this| match axis {
+                            SplitAxis::Horizontal => this.pr(inset_px),
+                            SplitAxis::Vertical => this.pb(inset_px),
+                        })
+                        .child(child_element);
+                    group = group.child(resizable_panel().flex_basis(basis).child(inset_child));
                 }
                 group.into_any_element()
             }
@@ -2293,9 +2431,9 @@ mod tests {
     use super::{
         command_blocked_by_restore, effective_scrim_pattern, ensure_workspace_has_pane,
         equal_tab_width, first_row_to_select, load_workspace_state, pane_border_role,
-        pane_scrim_alpha, prepare_workspace_for_runtime_reload, terminal_fallback_cwd,
-        terminal_resume_candidates, terminal_spawn_source, workspace_mode_blocked_by_restore,
-        PaneBorderRole, SCRIM_DIM_ALPHA,
+        pane_scrim_alpha, prepare_workspace_for_runtime_reload, split_child_insets,
+        terminal_fallback_cwd, terminal_resume_candidates, terminal_spawn_source,
+        workspace_mode_blocked_by_restore, PaneBorderRole, SCRIM_DIM_ALPHA,
     };
     use gpui::px;
     use gpui_component::IndexPath;
@@ -2331,6 +2469,36 @@ mod tests {
         // `tabs-inner`'s existing `overflow_x_scroll()` instead, same as
         // content-sized tabs already do when they don't fit.
         assert_eq!(equal_tab_width(px(100.0), 10), px(40.0));
+    }
+
+    #[test]
+    fn split_child_insets_the_first_child_only_on_its_trailing_edge() {
+        // The first child of a split has no neighbor to its left/top, so
+        // nothing reaches into its leading edge -- only its trailing edge
+        // (touched by its own resize handle reaching backward from the
+        // next child) needs the pullback.
+        assert_eq!(split_child_insets(0, 3), (false, true));
+    }
+
+    #[test]
+    fn split_child_insets_the_last_child_only_on_its_leading_edge() {
+        // The last child owns a resize handle (every child but the first
+        // does) reaching backward into its own leading edge, but has no
+        // neighbor after it to be reached into on its trailing edge.
+        assert_eq!(split_child_insets(2, 3), (true, false));
+    }
+
+    #[test]
+    fn split_child_insets_a_middle_child_on_both_edges() {
+        assert_eq!(split_child_insets(1, 3), (true, true));
+    }
+
+    #[test]
+    fn split_child_insets_the_sole_child_of_a_single_pane_split_on_neither_edge() {
+        // Degenerate case: a "split" with exactly one child (shouldn't
+        // occur in practice, but the pure function should still answer
+        // sanely) has no boundary at all.
+        assert_eq!(split_child_insets(0, 1), (false, false));
     }
 
     #[test]
