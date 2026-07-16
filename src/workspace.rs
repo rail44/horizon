@@ -367,8 +367,9 @@ fn pane_border_role(is_cursor: bool, is_active: bool) -> PaneBorderRole {
 /// is read only from `Style::paint`, never from any layout/taffy
 /// conversion -- crates/gpui/src/style.rs in the pinned checkout), so this
 /// cannot shift a pane's size the way widening the border itself would
-/// have. Feel-tunable, not derived.
-const CURSOR_GLOW_BLUR_PX: f32 = 8.0;
+/// have. Feel-tunable, not derived. Lowered from 8.0 on round-6
+/// (2026-07-16) owner feedback -- the glow felt too soft/wide at 8.
+const CURSOR_GLOW_BLUR_PX: f32 = 4.0;
 
 /// Alpha for the cursor pane's inner-glow inset shadow, applied to
 /// `theme::accent()`. Feel-tunable, same as [`CURSOR_GLOW_BLUR_PX`].
@@ -423,6 +424,30 @@ const CURSOR_GLOW_ALPHA: f32 = 0.35;
 /// Taffy's box-sizing default is `BorderBox`,
 /// `taffy-0.10.1/src/style/mod.rs`, but did not attempt to re-derive the
 /// handle's own padding-vs-explicit-width resolution from that alone).
+///
+/// Round 6 (2026-07-16) asked for the handle's own resting divider LINE
+/// to be removed too, keeping this 4px gutter. Investigated but left
+/// unimplemented: the 1px line is `resize_handle.rs`'s inner
+/// `div().bg(bg_color)...w(HANDLE_SIZE)` child, where `bg_color =
+/// cx.theme().border` at rest (`cx.theme().drag_border` while actively
+/// dragging -- a real, distinct, and still-working highlight; hover
+/// itself reapplies the identical resting color via `group_hover`, a
+/// no-op in the vendored source, not something this investigation
+/// touched). Neither `ResizablePanelGroup`/`ResizablePanel` nor
+/// `resize_handle` (itself `pub(crate)` inside gpui-component, not
+/// public API) expose any builder to recolor or hide it. `cx.theme()`
+/// resolves through a single gpui `Global` (`ActiveTheme for App`,
+/// `theme/mod.rs`) with no subtree-scoped override mechanism, and the
+/// `border` token it reads is the same one `gpui_component_theme_config`
+/// (`src/theme.rs`) already projects Horizon's own `theme::border()`
+/// onto for every other stock surface -- 43 files across the vendored
+/// `ui` crate read `cx.theme().border` (buttons, inputs, tabs, dialogs,
+/// tables, scrollbars, ...), so blanking that token to transparent to
+/// silence this one line would blank borders everywhere else in the
+/// app. No narrower token exists to isolate just this line. Per the
+/// task's own instruction, left unimplemented rather than papering over
+/// it with a Horizon-side overlay -- see the round-6 report for the
+/// full trail.
 const SPLIT_BOUNDARY_INSET_PX: f32 = 4.0;
 
 /// Which of a split child's own edges (leading = left/top, trailing =
