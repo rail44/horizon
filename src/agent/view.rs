@@ -33,6 +33,13 @@ use super::turns;
 use crate::theme;
 use crate::workspace::RunCommand;
 
+/// Row cap for the composer's auto-grow input (`InputState::auto_grow`):
+/// one text row when empty (owner feedback 2026-07-16 -- see
+/// [`AgentView::render_composer`]'s doc comment), growing with typed
+/// content up to this many rows before the input scrolls internally.
+/// Feel-tunable.
+const COMPOSER_MAX_ROWS: usize = 8;
+
 /// View-local tracking of the currently running turn's start, so the
 /// running card's elapsed-seconds header keeps ticking across renders
 /// without depending on any wall-clock data from the contract (frame
@@ -95,7 +102,21 @@ pub struct AgentView {
 
 impl AgentView {
     pub fn new(session: Entity<AgentSession>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let composer = cx.new(|cx| InputState::new(window, cx).placeholder("Message the agent…"));
+        // Auto-grow keeps the empty composer one text row tall (owner
+        // feedback 2026-07-16: the old fixed single-line `Input` plus a
+        // stacked accessory row reserved several rows of height even when
+        // empty) and grows with typed content up to the cap below.
+        // `submit_on_enter` keeps plain Enter emitting `PressEnter`
+        // (the send path's subscription below matches `shift: false`)
+        // while Shift+Enter now inserts a newline -- restoring the Floem
+        // composer's Shift+Enter-for-newline behavior the GPUI reuse had
+        // dropped with the single-line mode.
+        let composer = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Message the agent…")
+                .auto_grow(1, COMPOSER_MAX_ROWS)
+                .submit_on_enter(true)
+        });
         // Follow-scroll (`docs/agent-output-ui-design.md` decision 7, the
         // Floem shell's `follow_scroll` parity, rebuilt as an explicit
         // `FollowState` machine -- see `follow`'s module doc): while
@@ -1760,28 +1781,29 @@ impl AgentView {
         list.into_any_element()
     }
 
-    /// The composer area (owner feedback 2026-07-13: aligned to the mock's
-    /// composer chrome, `docs/assets/agent-ui-options/agent-ui-options.html`
-    /// -- every adopted option shares the same composer block, e.g. the
-    /// one around its "続けて指示する…（送信は次のターン）" placeholder):
-    /// Horizon's own bordered, rounded container (outer breathing room +
-    /// `composer_border`'s stronger-than-subtle border, see that
-    /// function's doc comment) holding a chromeless `Input`
+    /// The composer area: Horizon's own bordered, rounded container
+    /// (`composer_border`'s stronger-than-subtle border, see that
+    /// function's doc comment) holding a chromeless auto-grow `Input`
     /// (`Input::appearance(false)` -- gpui-component's own no-border/
-    /// no-background switch, investigated so the container supplies all
-    /// the chrome the mock nests the text inside rather than double-
-    /// bordering) and an accessory row: a read-only model-id pill on the
-    /// left ([`Self::render_send_button`]'s sibling,
-    /// [`turns::composer_model_chip`] -- known from session start via
-    /// `AgentSession::model`, so it's no longer omitted before the first
-    /// turn completes; see that function's doc comment for the precedence
-    /// against [`turns::latest_turn_model`] and
-    /// `docs/agent-output-ui-amendment.md`'s dated addendum -- no `▾` since
-    /// no switcher is wired), a flex spacer, then the circular accent send
-    /// button on the right. Still wrapped so [`Self::on_escape`] catches
-    /// the `Escape` action `Input`'s own handler propagates (see that
-    /// method's doc comment) -- `composer_mode`'s Enter/Esc keyboard
-    /// capture is unchanged, only the rendering around it.
+    /// no-background switch, so the container supplies all the chrome)
+    /// with the read-only model-id pill ([`turns::composer_model_chip`]
+    /// -- known from session start via `AgentSession::model`; see that
+    /// function's doc comment for the precedence against
+    /// [`turns::latest_turn_model`] -- no `▾` since no switcher is
+    /// wired) and the circular accent send button inline on the right,
+    /// bottom-anchored so they stay put while the input grows.
+    ///
+    /// Layout revised 2026-07-16 (owner feedback): the 2026-07-13 mock's
+    /// stacked arrangement -- input row above a separate accessory row --
+    /// reserved several text rows of height even when the composer was
+    /// empty, and its 20px/18px outer margins read too wide against the
+    /// transcript's 8px padding. The accessory row is folded inline
+    /// (single row when empty, one text row tall) and the outer margins
+    /// now match the transcript's rhythm. Still wrapped so
+    /// [`Self::on_escape`] catches the `Escape` action `Input`'s own
+    /// handler propagates (see that method's doc comment) --
+    /// `composer_mode`'s Enter/Esc keyboard capture is unchanged, only
+    /// the rendering around it.
     fn render_composer(&self, cx: &mut Context<Self>) -> AnyElement {
         let model = {
             let session = self.session.read(cx);
@@ -1793,33 +1815,34 @@ impl AgentView {
         };
         let has_text = !self.composer.read(cx).value().trim().is_empty();
 
-        let mut accessory = div().flex().flex_row().items_center().gap_2();
-        if let Some(model) = model {
-            accessory = accessory.child(render_model_chip(model));
-        }
-        accessory = accessory
-            .child(div().flex_1())
-            .child(self.render_send_button(has_text, cx));
-
-        div()
-            .px(px(20.0))
-            .pb(px(18.0))
+        let mut row = div()
+            .flex()
+            .flex_row()
+            .items_end()
+            .gap_2()
+            .px(px(6.0))
+            .py(px(4.0))
+            .rounded(px(10.0))
+            .border_1()
+            .border_color(composer_border())
+            .on_action(cx.listener(Self::on_escape))
             .child(
                 div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .pt(px(10.0))
-                    .px(px(12.0))
-                    .pb(px(8.0))
-                    .rounded(px(10.0))
-                    .border_1()
-                    .border_color(composer_border())
-                    .on_action(cx.listener(Self::on_escape))
-                    .child(Input::new(&self.composer).appearance(false))
-                    .child(accessory),
-            )
-            .into_any_element()
+                    .flex_1()
+                    .child(Input::new(&self.composer).appearance(false)),
+            );
+        if let Some(model) = model {
+            // The pill rides the send button's baseline; pb centers it
+            // against the button's 26px height on the shared bottom edge.
+            row = row.child(div().pb(px(4.0)).child(render_model_chip(model)));
+        }
+        row = row.child(
+            div()
+                .pb(px(2.0))
+                .child(self.render_send_button(has_text, cx)),
+        );
+
+        div().px(px(8.0)).pb(px(8.0)).child(row).into_any_element()
     }
 
     /// The composer's send button (mock: a circular accent `↑` at the
