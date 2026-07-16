@@ -336,6 +336,14 @@ working unchanged; a seed-only config gets everything derived.
   remains unused; Horizon keeps projecting its own scheme into a synthetic
   `ThemeConfig`.
 
+**Split-divider line kept as-is (owner, 2026-07-16).** The resting 1px
+divider inside the split gutter is painted by gpui-component's private
+`ResizeHandle` from the shared `border` token; no builder API or
+dedicated token exists (verified at the pinned rev and upstream main),
+so removing it would need an overlay hack, a local fork, or an owned
+resizable component. The owner chose to keep the line. Full trace:
+`SPLIT_BOUNDARY_INSET_PX`'s doc comment in `src/workspace.rs`.
+
 ## Provisional details (settle at implementation or through dogfooding)
 
 The owner approved the decisions above while noting they may be revisited
