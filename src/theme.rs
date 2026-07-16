@@ -49,9 +49,9 @@
 //! lighten/darken direction, so the same rule produces a correctly-lifted
 //! surface or correctly-legible border on both a dark scheme (the
 //! built-in default) and a light one (an owner may configure `[theme]`
-//! with a light `surface_base`/`terminal_background` -- verified against
-//! both in this module's tests). [`contrast_snap`] (the UI-snap seam's own
-//! primitive, `docs/theme-design.md`) floors every semantic default
+//! with a light `surface_base` -- verified against both in this module's
+//! tests). [`contrast_snap`] (the UI-snap seam's own primitive,
+//! `docs/theme-design.md`) floors every semantic default
 //! (`danger`/`warning`/`success`/`info`, and by extension the diff
 //! surfaces/text that derive from them) against the resolved `background`:
 //! a continuous OKLCH lightness solve (hue/chroma held fixed) targeting the
@@ -61,10 +61,12 @@
 //! only guaranteed a candidate landed on the "legible side of the
 //! midpoint," which measurement showed several built-in/seeded hues could
 //! still clear while failing WCAG outright (e.g. a mid-luminance saturated
-//! green measured at ~2.6:1 against a light background). It never touches
-//! an explicit `[theme]` value -- only the constant a `chrome()` lookup
-//! falls back to when the corresponding key (and any fallback key) is
-//! absent.
+//! green measured at ~2.6:1 against a light background). Since the
+//! 2026-07-16 "config narrowed to the seed" decision
+//! (`docs/theme-design.md`) it's the only path to every role but the seed
+//! itself (`surface_base`, `accent`, `text_contrast`, the six
+//! `[theme.ansi]` hues) -- there is no longer an explicit `[theme]`
+//! override to take precedence over it for these roles.
 
 use std::sync::{OnceLock, RwLock};
 
@@ -338,40 +340,43 @@ struct Scheme {
     diff_removed_surface: u32,
     diff_removed_text: u32,
     surface_panel: u32,
-    /// New in the gpui-component projection: the tab strip's own chrome
-    /// background (`tab_bar`/`tab_bar.segmented` in
-    /// [`gpui_component_theme_config`]), resolved from the
-    /// `surface_chrome` config key or, if unset, `background` itself --
-    /// the segmented track's existing contrast-blend toward
-    /// `surface_panel` (`SEGMENTED_TRACK_BLEND_RATIO`) is computed from
-    /// *this* role, so leaving it unset reproduces today's look exactly.
+    /// The tab strip's own chrome background (`tab_bar`/
+    /// `tab_bar.segmented` in [`gpui_component_theme_config`]) -- a
+    /// neutral-ladder step from `background` toward `foreground`
+    /// (`SURFACE_CHROME_STEP`) on a seeded scheme, or plain `background`
+    /// on the zero-config path; the segmented track's existing
+    /// contrast-blend toward `surface_panel`
+    /// (`SEGMENTED_TRACK_BLEND_RATIO`) is computed from *this* role.
+    /// Purely derived since the 2026-07-16 "config narrowed to the seed"
+    /// decision (`docs/theme-design.md`) -- no longer independently
+    /// overridable via a `surface_chrome` key.
     surface_chrome: u32,
     /// The *intended, on-screen* selected-row highlight for
     /// gpui-component's `List` (the command palette / session manager /
-    /// view chooser rows), resolved from the `surface_selected` config
-    /// key or, if unset, a blend of its background anchor (`background`
-    /// on the zero-config path, `seed_background` on the seeded path --
-    /// see `scheme_from`) toward the resolved `accent`
-    /// (`LIST_ACTIVE_BLEND_RATIO`, the same ratio on both paths) --
-    /// unlike every other role in the neutral-ladder group above,
-    /// `surface_selected` stays accent-anchored rather than stepping
-    /// toward `foreground`. This value is what a person should actually
-    /// see; [`gpui_component_theme_config`] does NOT project it to
-    /// `list.active.background` verbatim -- see
-    /// [`invert_list_active_clamp`] for why and how it compensates.
+    /// view chooser rows): a blend of `background` toward the resolved
+    /// `accent` (`LIST_ACTIVE_BLEND_RATIO`) -- unlike every other role in
+    /// the neutral-ladder group above, `surface_selected` stays
+    /// accent-anchored rather than stepping toward `foreground`. This
+    /// value is what a person should actually see; [`gpui_component_theme_config`]
+    /// does NOT project it to `list.active.background` verbatim -- see
+    /// [`invert_list_active_clamp`] for why and how it compensates. Purely
+    /// derived since 2026-07-16 -- no longer independently overridable via
+    /// a `surface_selected` key.
     surface_selected: u32,
-    /// New in the gpui-component projection: a subtle separator line,
-    /// resolved from the `border_default` config key (already documented
-    /// in `config.example.toml` but unread until now); if unset, falls
-    /// back to the `border_subtle` config key; if that too is unset,
-    /// derived (`BORDER_BLEND_RATIO`).
+    /// A subtle separator line: a neutral-ladder step from `background`
+    /// toward `foreground` (`BORDER_STEP`) on a seeded scheme, or a blend
+    /// of `background` toward `text_subtle` (`BORDER_BLEND_RATIO`) on the
+    /// zero-config path. Purely derived since 2026-07-16 -- no longer
+    /// independently overridable via a `border_default`/`border_subtle`
+    /// key.
     border: u32,
-    /// New in the gpui-component projection: an elevated surface (popover/
-    /// dropdown-menu chrome), resolved from the `surface_raised` config
-    /// key (also already documented, also unread until now) or, if unset,
-    /// falls back to `background` itself (i.e. no distinct raise unless
-    /// configured -- a deliberately inert default so existing schemes that
-    /// don't set it see no change).
+    /// An elevated surface for floating chrome (popover/dropdown-menu
+    /// chrome), stepped from `background` toward `foreground`
+    /// (`SURFACE_RAISED_STEP`) on a seeded scheme, or plain `background`
+    /// on the zero-config path (i.e. no distinct raise by default -- see
+    /// [`surface_raised`]'s own doc for why it's currently unread within
+    /// this crate regardless). Purely derived since 2026-07-16 -- no
+    /// longer independently overridable via a `surface_raised` key.
     surface_raised: u32,
 }
 
@@ -422,21 +427,22 @@ fn resolve_accent(colors_accent: Option<&String>, hues: &SeedHues, default: u32)
 }
 
 /// True once the user has customized any part of the seed (the
-/// `surface_base`/`terminal_background` anchor, any of the six hue
-/// slots, or the `text_contrast` knob) -- gates every seed-derived
-/// default in [`scheme_from`] below. Deliberately a *presence* check on
-/// the raw config, not a check of whether the resolved values happen to
-/// differ from Horizon's built-ins: a config that spells out the built-in
-/// seed explicitly (e.g. to tweak just `text_contrast`) must still route
-/// through the new derivation, while `RawConfig::default()` (nothing set
-/// at all) must still resolve through the untouched legacy path -- see
-/// this module's `derivation_reproduces_the_builtin_scheme_within_tolerance`
-/// test for the former and
-/// `default_scheme_matches_agent_views_pre_existing_hex_values` for the
-/// latter.
+/// `surface_base` anchor, any of the six hue slots, or the `text_contrast`
+/// knob) -- gates every seed-derived default in [`scheme_from`] below.
+/// Deliberately a *presence* check on the raw config, not a check of
+/// whether the resolved values happen to differ from Horizon's built-ins:
+/// a config that spells out the built-in seed explicitly (e.g. to tweak
+/// just `text_contrast`) must still route through the new derivation,
+/// while `RawConfig::default()` (nothing set at all) must still resolve
+/// through the untouched legacy path -- see this module's
+/// `derivation_reproduces_the_builtin_scheme_within_tolerance` test for the
+/// former and `default_scheme_matches_agent_views_pre_existing_hex_values`
+/// for the latter. `terminal_background` no longer feeds this check (or
+/// anything else) since the 2026-07-16 config-narrowing decision retired
+/// it as a key -- `surface_base` is the seed anchor for both the UI and
+/// the terminal now.
 fn seed_is_configured(theme: &RawThemeConfig) -> bool {
     theme.colors.contains_key("surface_base")
-        || theme.colors.contains_key("terminal_background")
         || theme.ansi.red.is_some()
         || theme.ansi.green.is_some()
         || theme.ansi.yellow.is_some()
@@ -458,29 +464,37 @@ fn resolve_text_contrast(raw: Option<f64>) -> f64 {
     }
 }
 
-/// Every `[theme]` flat-key name [`scheme_from`] actually reads (directly
-/// or as a fallback), plus `cursor_accent`. `config.example.toml`/
+/// Every `[theme]` flat-key name [`scheme_from`] still reads: the seed
+/// surface only (`docs/theme-design.md`'s 2026-07-16 "config surface
+/// narrowed to the seed" decision). `config.example.toml`/
 /// `crates/horizon-config/src/lib.rs`/
 /// `crates/horizon-agent/skills/horizon-config/SKILL.md` all promise "an
 /// unrecognized name ... is warned about on stderr and skipped" -- this
 /// list is what "recognized" means, read by [`theme_color_warnings`]. Keep
-/// in sync with every `raw.theme.colors.get(...)`/`chrome(...)` key
-/// literal in [`scheme_from`] below. `cursor_accent` is the one deliberate
-/// exception: `config.example.toml` documents it as "valid but not yet
-/// read by any code" (planned for workspace mode's cursor-frame border,
-/// `docs/workspace-mode-design.md`), so it's listed here to avoid a false
-/// "unrecognized key" warning even though no `chrome()`/`.get()` call
-/// reads it today.
-const KNOWN_THEME_COLOR_KEYS: &[&str] = &[
+/// in sync with every `raw.theme.colors.get(...)` key literal in
+/// [`scheme_from`] below. `text_contrast` is the seed's third member but
+/// isn't part of this list -- it's `RawThemeConfig`'s own typed field, not
+/// part of the flattened `colors` map.
+const KNOWN_THEME_COLOR_KEYS: &[&str] = &["surface_base", "accent"];
+
+/// Every `[theme]` flat-key name that USED to be a recognized role-override
+/// key (the pre-2026-07-16 "role layer", `docs/theme-design.md`) but is now
+/// derived-only. Setting one of these gets a distinct, louder warning than
+/// a plain unrecognized key (which might be a typo) -- this is deliberate
+/// removal the owner should notice, not something to silently fold into
+/// "unrecognized". `cursor_accent` joins this list even though it was never
+/// wired to begin with (`config.example.toml` used to document it as
+/// "valid but not yet read by any code") -- it's gone from the docs now
+/// too, so it gets the same "no longer configurable" message rather than a
+/// bare "unrecognized" one.
+const REMOVED_THEME_COLOR_KEYS: &[&str] = &[
     "text_primary",
     "text_muted",
     "text_subtle",
-    "accent",
     "danger",
     "warning",
     "success",
     "info",
-    "surface_base",
     "surface_panel",
     "surface_raised",
     "surface_chrome",
@@ -494,11 +508,11 @@ const KNOWN_THEME_COLOR_KEYS: &[&str] = &[
     "terminal_foreground",
     "terminal_background",
     "terminal_cursor",
-    "cursor_accent", // documented, not yet wired -- see this list's own doc
+    "cursor_accent",
 ];
 
-/// Checks every `[theme]` flat-key entry against
-/// [`KNOWN_THEME_COLOR_KEYS`] and, for a recognized key, whether its value
+/// Checks every `[theme]` flat-key entry against [`KNOWN_THEME_COLOR_KEYS`]/
+/// [`REMOVED_THEME_COLOR_KEYS`] and, for a recognized key, whether its value
 /// parses: hex ([`parse_hex`]) for every role except `accent`, which also
 /// accepts one of the six `[theme.ansi]` slot names
 /// ([`resolve_accent`]'s own accepted spellings). Returns one warning
@@ -507,8 +521,8 @@ const KNOWN_THEME_COLOR_KEYS: &[&str] = &[
 /// can assert on the returned strings instead of capturing stderr.
 /// Never touches `raw.theme.colors` itself -- purely advisory, the same
 /// "warn and skip, leave that entry at its built-in default" policy
-/// `chrome()`'s own `parse_hex(...).unwrap_or(default)` already applies
-/// silently; this is only the missing stderr half of that promise.
+/// `scheme_from`'s own resolution already applies silently; this is only
+/// the missing stderr half of that promise.
 fn theme_color_warnings(colors: &std::collections::HashMap<String, String>) -> Vec<String> {
     let is_valid_value = |key: &str, value: &str| {
         if key == "accent" {
@@ -523,7 +537,11 @@ fn theme_color_warnings(colors: &std::collections::HashMap<String, String>) -> V
     let mut warnings: Vec<String> = colors
         .iter()
         .filter_map(|(key, value)| {
-            if !KNOWN_THEME_COLOR_KEYS.contains(&key.as_str()) {
+            if REMOVED_THEME_COLOR_KEYS.contains(&key.as_str()) {
+                Some(format!(
+                    "[theme]: {key:?} is no longer configurable; derived from the seed since 2026-07-16, ignoring"
+                ))
+            } else if !KNOWN_THEME_COLOR_KEYS.contains(&key.as_str()) {
                 Some(format!(
                     "[theme]: unrecognized key {key:?}, ignoring (see config.example.toml for the recognized names)"
                 ))
@@ -553,15 +571,35 @@ fn warn_invalid_theme_colors(colors: &std::collections::HashMap<String, String>)
     }
 }
 
+/// The ten `[theme.ansi]` slots that used to be independently overridable
+/// but are now derived-only (`docs/theme-design.md`'s 2026-07-16 "config
+/// surface narrowed to the seed" decision): only the six normal hue slots
+/// (`red`/`green`/`yellow`/`blue`/`magenta`/`cyan`, the seed's own hue set)
+/// stay configurable. [`RawThemeAnsiConfig`]'s ten fields for these slots
+/// are kept parsed (never `#[serde(skip)]`'d) purely so
+/// [`theme_ansi_warnings`] can still name the offending slot in a config
+/// that sets one -- `scheme_from` no longer reads any of them.
+const REMOVED_ANSI_SLOTS: &[&str] = &[
+    "black",
+    "white",
+    "bright_black",
+    "bright_red",
+    "bright_green",
+    "bright_yellow",
+    "bright_blue",
+    "bright_magenta",
+    "bright_cyan",
+    "bright_white",
+];
+
 /// [`theme_color_warnings`]'s counterpart for `[theme.ansi]`: unlike
 /// `[theme]`'s flattened `colors` map, `RawThemeAnsiConfig` is a typed
 /// 16-field struct (one `Option<String>` per ANSI slot) deserialized
 /// without `deny_unknown_fields`, so there's no "unrecognized key" case
-/// scoped here -- only what `config.example.toml`'s own `[theme.ansi]`
-/// doc actually promises: hex-parsability ([`parse_hex`]) for every slot
-/// that's set. Was previously silently unimplemented (the missing stderr
-/// half of that promise), following [`theme_color_warnings`]'s own
-/// pattern now.
+/// scoped here -- but there IS now a "no longer configurable" case
+/// ([`REMOVED_ANSI_SLOTS`]) alongside what `config.example.toml`'s own
+/// `[theme.ansi]` doc promises for the six slots that remain: hex-
+/// parsability ([`parse_hex`]).
 fn theme_ansi_warnings(ansi: &RawThemeAnsiConfig) -> Vec<String> {
     let slots: [(&str, &Option<String>); 16] = [
         ("black", &ansi.black),
@@ -585,7 +623,11 @@ fn theme_ansi_warnings(ansi: &RawThemeAnsiConfig) -> Vec<String> {
         .into_iter()
         .filter_map(|(name, value)| {
             let value = value.as_deref()?;
-            if parse_hex(value).is_some() {
+            if REMOVED_ANSI_SLOTS.contains(&name) {
+                Some(format!(
+                    "[theme.ansi]: {name:?} is no longer configurable; derived from the seed since 2026-07-16, ignoring"
+                ))
+            } else if parse_hex(value).is_some() {
                 None
             } else {
                 Some(format!(
@@ -610,14 +652,6 @@ fn warn_invalid_theme_ansi(ansi: &RawThemeAnsiConfig) {
 fn scheme_from(raw: &RawConfig) -> Scheme {
     warn_invalid_theme_colors(&raw.theme.colors);
     warn_invalid_theme_ansi(&raw.theme.ansi);
-    let chrome = |key: &str, fallback_key: Option<&str>, default: u32| {
-        raw.theme
-            .colors
-            .get(key)
-            .or_else(|| fallback_key.and_then(|key| raw.theme.colors.get(key)))
-            .and_then(|value| parse_hex(value))
-            .unwrap_or(default)
-    };
     let ansi_slot = |value: &Option<String>, default: u32| {
         value.as_deref().and_then(parse_hex).unwrap_or(default)
     };
@@ -626,7 +660,11 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
     // The seed: the six hue slots (doubling as `[theme.ansi]`'s normal
     // colors), the `surface_base` anchor, `text_contrast`, and whether
     // any of that was actually configured. Resolved ahead of everything
-    // else -- every derived default below reads from these.
+    // else -- every derived default below reads from these. These, plus
+    // `accent` below, are the ENTIRE recognized `[theme]`/`[theme.ansi]`
+    // surface since the 2026-07-16 "config narrowed to the seed" decision
+    // (`docs/theme-design.md`) -- every role past this point is derived
+    // only, never independently overridable.
     let hues = SeedHues {
         red: ansi_slot(&ansi_raw.red, ANSI16_DEFAULT[1]),
         green: ansi_slot(&ansi_raw.green, ANSI16_DEFAULT[2]),
@@ -635,116 +673,73 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
         magenta: ansi_slot(&ansi_raw.magenta, ANSI16_DEFAULT[5]),
         cyan: ansi_slot(&ansi_raw.cyan, ANSI16_DEFAULT[6]),
     };
-    // The seed's own anchor -- `surface_base` specifically, never
-    // `terminal_background` (which may deliberately diverge the
-    // terminal's look from the UI's, see `background` below): every
-    // UI-side derivation in this function reads from `seed_background`,
-    // not `background`.
-    let seed_background = chrome("surface_base", None, BACKGROUND_DEFAULT);
+    // The seed's own anchor -- `surface_base`, now the ONLY source for
+    // both the UI's and the terminal's background (`terminal_background`
+    // was retired as a key alongside every other role override, so there
+    // is no longer a separate "terminal diverges from chrome" case).
+    let background = raw
+        .theme
+        .colors
+        .get("surface_base")
+        .and_then(|value| parse_hex(value))
+        .unwrap_or(BACKGROUND_DEFAULT);
     let text_contrast = resolve_text_contrast(raw.theme.text_contrast);
     let seed_configured = seed_is_configured(&raw.theme);
     // Polarity, from the seed anchor's own OKLab lightness -- generalizes
     // `is_light`'s BT.601-luma polarity check to the perceptually-uniform
     // space the rest of this derivation solves in.
-    let dark = oklab::lightness(seed_background) < 0.5;
+    let dark = oklab::lightness(background) < 0.5;
 
-    // Resolved ahead of the struct literal below: later roles' *default*
-    // (never their explicit-override path) derives from these.
-    let background = chrome(
-        "terminal_background",
-        Some("surface_base"),
-        BACKGROUND_DEFAULT,
-    );
-    let foreground = chrome(
-        "terminal_foreground",
-        Some("text_primary"),
-        if seed_configured {
-            oklab::tint_for_contrast(seed_background, text_contrast)
-        } else {
-            FOREGROUND_DEFAULT
-        },
-    );
-    let text_subtle = chrome(
-        "text_subtle",
-        None,
-        if seed_configured {
-            oklab::step_lightness_toward(seed_background, foreground, TEXT_SUBTLE_LADDER_FRACTION)
-        } else {
-            TEXT_SUBTLE_DEFAULT
-        },
-    );
+    let foreground = if seed_configured {
+        oklab::tint_for_contrast(background, text_contrast)
+    } else {
+        FOREGROUND_DEFAULT
+    };
+    let text_subtle = if seed_configured {
+        oklab::step_lightness_toward(background, foreground, TEXT_SUBTLE_LADDER_FRACTION)
+    } else {
+        TEXT_SUBTLE_DEFAULT
+    };
     let accent = resolve_accent(raw.theme.colors.get("accent"), &hues, CURSOR_DEFAULT);
-    let danger = chrome("danger", None, contrast_snap(hues.red, background));
-    let warning = chrome("warning", None, contrast_snap(hues.yellow, background));
-    let success = chrome("success", None, contrast_snap(hues.green, background));
-    let info = chrome("info", None, contrast_snap(hues.blue, background));
-    let surface_panel = chrome(
-        "surface_panel",
-        None,
-        if seed_configured {
-            oklab::step_lightness_toward(seed_background, foreground, SURFACE_PANEL_STEP)
-        } else {
-            blend(background, foreground, SURFACE_LIFT_RATIO)
-        },
-    );
-    let surface_chrome = chrome(
-        "surface_chrome",
-        None,
-        if seed_configured {
-            oklab::step_lightness_toward(seed_background, foreground, SURFACE_CHROME_STEP)
-        } else {
-            background
-        },
-    );
-    // Unlike every other neutral-ladder role above, both derivation paths
-    // share one formula and one ratio (`LIST_ACTIVE_BLEND_RATIO`) --
-    // `surface_selected` stays accent-anchored either way, only the
-    // background anchor itself differs (`seed_background` when seeded,
-    // `background` otherwise, matching every other role's own split).
-    let surface_selected = chrome(
-        "surface_selected",
-        None,
-        blend(
-            if seed_configured {
-                seed_background
-            } else {
-                background
-            },
-            accent,
-            LIST_ACTIVE_BLEND_RATIO,
-        ),
-    );
-    let surface_raised = chrome(
-        "surface_raised",
-        None,
-        if seed_configured {
-            oklab::step_lightness_toward(seed_background, foreground, SURFACE_RAISED_STEP)
-        } else {
-            background
-        },
-    );
-    let text_muted = chrome(
-        "text_muted",
-        None,
-        if seed_configured {
-            let target = TEXT_CONTRAST_FLOOR
-                + (text_contrast - TEXT_CONTRAST_FLOOR) * TEXT_MUTED_CONTRAST_FRACTION;
-            oklab::tint_for_contrast(seed_background, target)
-        } else {
-            TEXT_MUTED_DEFAULT
-        },
-    );
-    let border = chrome(
-        "border_default",
-        Some("border_subtle"),
-        if seed_configured {
-            oklab::step_lightness_toward(seed_background, foreground, BORDER_STEP)
-        } else {
-            blend(background, text_subtle, BORDER_BLEND_RATIO)
-        },
-    );
+    let danger = contrast_snap(hues.red, background);
+    let warning = contrast_snap(hues.yellow, background);
+    let success = contrast_snap(hues.green, background);
+    let info = contrast_snap(hues.blue, background);
+    let surface_panel = if seed_configured {
+        oklab::step_lightness_toward(background, foreground, SURFACE_PANEL_STEP)
+    } else {
+        blend(background, foreground, SURFACE_LIFT_RATIO)
+    };
+    let surface_chrome = if seed_configured {
+        oklab::step_lightness_toward(background, foreground, SURFACE_CHROME_STEP)
+    } else {
+        background
+    };
+    // Unlike every other neutral-ladder role above, `surface_selected`
+    // stays accent-anchored rather than stepping toward `foreground` --
+    // a blend of `background` toward the resolved `accent`
+    // (`LIST_ACTIVE_BLEND_RATIO`), the same ratio on both derivation
+    // paths.
+    let surface_selected = blend(background, accent, LIST_ACTIVE_BLEND_RATIO);
+    let surface_raised = if seed_configured {
+        oklab::step_lightness_toward(background, foreground, SURFACE_RAISED_STEP)
+    } else {
+        background
+    };
+    let text_muted = if seed_configured {
+        let target = TEXT_CONTRAST_FLOOR
+            + (text_contrast - TEXT_CONTRAST_FLOOR) * TEXT_MUTED_CONTRAST_FRACTION;
+        oklab::tint_for_contrast(background, target)
+    } else {
+        TEXT_MUTED_DEFAULT
+    };
+    let border = if seed_configured {
+        oklab::step_lightness_toward(background, foreground, BORDER_STEP)
+    } else {
+        blend(background, text_subtle, BORDER_BLEND_RATIO)
+    };
 
-    // `black`/`white`: role-based, tied to `seed_background`/`foreground`
+    // `black`/`white`: role-based, tied to `background`/`foreground`
     // directly -- NOT picked by lightness. This is base16's own ANSI-0
     // convention too (ANSI 0 = base00 = the default background,
     // regardless of polarity) and matches both reference fixtures: the
@@ -757,23 +752,21 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
     // black/white" (`docs/theme-design.md`) describes what happens to
     // these two *values* once background/foreground themselves flip
     // polarity (black becomes a light color on a light scheme), not a
-    // swap of which role gets which endpoint.
-    let ansi_black = ansi_slot(
-        &ansi_raw.black,
-        if seed_configured {
-            seed_background
-        } else {
-            ANSI16_DEFAULT[0]
-        },
-    );
-    let ansi_white = ansi_slot(
-        &ansi_raw.white,
-        if seed_configured {
-            foreground
-        } else {
-            ANSI16_DEFAULT[7]
-        },
-    );
+    // swap of which role gets which endpoint. Neither slot (nor any other
+    // slot below) reads a `[theme.ansi]` override any more -- `black`/
+    // `white`/`bright_*` are derived-only since 2026-07-16
+    // (`REMOVED_ANSI_SLOTS`); only the six hue slots above stay
+    // configurable.
+    let ansi_black = if seed_configured {
+        background
+    } else {
+        ANSI16_DEFAULT[0]
+    };
+    let ansi_white = if seed_configured {
+        foreground
+    } else {
+        ANSI16_DEFAULT[7]
+    };
     // `bright_black`: the terminal's de-emphasis gray (dimmed `ls`
     // entries, shell autosuggestions) -- both reference fixtures agree
     // this is `text_subtle` exactly (built-in `0x5f6370` ==
@@ -781,14 +774,11 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
     // `text_subtle`), not a further push off `black`/`background` (which
     // would risk landing back on `black` itself, making dimmed text
     // invisible).
-    let ansi_bright_black = ansi_slot(
-        &ansi_raw.bright_black,
-        if seed_configured {
-            text_subtle
-        } else {
-            ANSI16_DEFAULT[8]
-        },
-    );
+    let ansi_bright_black = if seed_configured {
+        text_subtle
+    } else {
+        ANSI16_DEFAULT[8]
+    };
     // `bright_white`: the "lightest foreground" slot -- `foreground`
     // itself pushed further in the polarity direction
     // (`BRIGHT_HUE_EMPHASIS_DELTA`, the same mechanism the six colored
@@ -800,91 +790,55 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
     // `bright_white` pushes further still, in the same direction, off
     // their (much darker) foreground -- plausibility only, this derivation
     // doesn't chase their exact magnitude.
-    let ansi_bright_white = ansi_slot(
-        &ansi_raw.bright_white,
-        if seed_configured {
-            oklab::emphasize_lightness(foreground, BRIGHT_HUE_EMPHASIS_DELTA, dark)
-        } else {
-            ANSI16_DEFAULT[15]
-        },
-    );
-    let ansi_bright_red = ansi_slot(
-        &ansi_raw.bright_red,
-        if seed_configured {
-            oklab::emphasize_lightness(hues.red, BRIGHT_HUE_EMPHASIS_DELTA, dark)
-        } else {
-            ANSI16_DEFAULT[9]
-        },
-    );
-    let ansi_bright_green = ansi_slot(
-        &ansi_raw.bright_green,
-        if seed_configured {
-            oklab::emphasize_lightness(hues.green, BRIGHT_HUE_EMPHASIS_DELTA, dark)
-        } else {
-            ANSI16_DEFAULT[10]
-        },
-    );
-    let ansi_bright_yellow = ansi_slot(
-        &ansi_raw.bright_yellow,
-        if seed_configured {
-            oklab::emphasize_lightness(hues.yellow, BRIGHT_HUE_EMPHASIS_DELTA, dark)
-        } else {
-            ANSI16_DEFAULT[11]
-        },
-    );
-    let ansi_bright_blue = ansi_slot(
-        &ansi_raw.bright_blue,
-        if seed_configured {
-            oklab::emphasize_lightness(hues.blue, BRIGHT_HUE_EMPHASIS_DELTA, dark)
-        } else {
-            ANSI16_DEFAULT[12]
-        },
-    );
-    let ansi_bright_magenta = ansi_slot(
-        &ansi_raw.bright_magenta,
-        if seed_configured {
-            oklab::emphasize_lightness(hues.magenta, BRIGHT_HUE_EMPHASIS_DELTA, dark)
-        } else {
-            ANSI16_DEFAULT[13]
-        },
-    );
-    let ansi_bright_cyan = ansi_slot(
-        &ansi_raw.bright_cyan,
-        if seed_configured {
-            oklab::emphasize_lightness(hues.cyan, BRIGHT_HUE_EMPHASIS_DELTA, dark)
-        } else {
-            ANSI16_DEFAULT[14]
-        },
-    );
+    let ansi_bright_white = if seed_configured {
+        oklab::emphasize_lightness(foreground, BRIGHT_HUE_EMPHASIS_DELTA, dark)
+    } else {
+        ANSI16_DEFAULT[15]
+    };
+    let ansi_bright_red = if seed_configured {
+        oklab::emphasize_lightness(hues.red, BRIGHT_HUE_EMPHASIS_DELTA, dark)
+    } else {
+        ANSI16_DEFAULT[9]
+    };
+    let ansi_bright_green = if seed_configured {
+        oklab::emphasize_lightness(hues.green, BRIGHT_HUE_EMPHASIS_DELTA, dark)
+    } else {
+        ANSI16_DEFAULT[10]
+    };
+    let ansi_bright_yellow = if seed_configured {
+        oklab::emphasize_lightness(hues.yellow, BRIGHT_HUE_EMPHASIS_DELTA, dark)
+    } else {
+        ANSI16_DEFAULT[11]
+    };
+    let ansi_bright_blue = if seed_configured {
+        oklab::emphasize_lightness(hues.blue, BRIGHT_HUE_EMPHASIS_DELTA, dark)
+    } else {
+        ANSI16_DEFAULT[12]
+    };
+    let ansi_bright_magenta = if seed_configured {
+        oklab::emphasize_lightness(hues.magenta, BRIGHT_HUE_EMPHASIS_DELTA, dark)
+    } else {
+        ANSI16_DEFAULT[13]
+    };
+    let ansi_bright_cyan = if seed_configured {
+        oklab::emphasize_lightness(hues.cyan, BRIGHT_HUE_EMPHASIS_DELTA, dark)
+    } else {
+        ANSI16_DEFAULT[14]
+    };
 
     // Resolved ahead of the struct literal (rather than inline, like the
     // roles above) so `diff_added_text`/`diff_removed_text`'s own default
     // below can read the *resolved* surface, not just the semantic color.
-    let diff_added_surface = chrome(
-        "diff_added_surface",
-        None,
-        blend(background, success, DIFF_SURFACE_BLEND_RATIO),
-    );
-    let diff_removed_surface = chrome(
-        "diff_removed_surface",
-        None,
-        blend(background, danger, DIFF_SURFACE_BLEND_RATIO),
-    );
+    let diff_added_surface = blend(background, success, DIFF_SURFACE_BLEND_RATIO);
+    let diff_removed_surface = blend(background, danger, DIFF_SURFACE_BLEND_RATIO);
 
     Scheme {
         background,
         foreground,
-        // Falls back to the fully-resolved `accent` (not a second raw
-        // `parse_hex` of the `"accent"` config entry) so a slot-name
-        // accent (`resolve_accent` above) still reaches an unset
-        // `terminal_cursor` -- re-parsing the raw string would only ever
-        // understand a hex spelling.
-        cursor: raw
-            .theme
-            .colors
-            .get("terminal_cursor")
-            .and_then(|value| parse_hex(value))
-            .unwrap_or(accent),
+        // `terminal_cursor` was retired as a key alongside every other
+        // role override -- the terminal cursor is simply the resolved
+        // accent now, always.
+        cursor: accent,
         ansi: [
             ansi_black,
             hues.red,
@@ -911,28 +865,18 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
         text_muted,
         text_subtle,
         diff_added_surface,
-        // The default reads `success` snapped against `diff_added_surface`
-        // itself (slice B2's UI-snap seam, `contrast_snap`) rather than
-        // `success` verbatim: `success` was only ever floored against
-        // `background`, and `diff_added_surface` (a `success`-tinted blend
-        // of it, `DIFF_SURFACE_BLEND_RATIO`) is a different, if usually
-        // close, surface. A no-op on the built-in scheme and on any
-        // scheme with `diff_added_text`/`diff_added_surface` set
-        // explicitly (`chrome` never evaluates this default then) --
-        // verified in this module's tests, not assumed.
-        diff_added_text: chrome(
-            "diff_added_text",
-            None,
-            contrast_snap(success, diff_added_surface),
-        ),
+        // `success` snapped against `diff_added_surface` itself (slice
+        // B2's UI-snap seam, `contrast_snap`) rather than `success`
+        // verbatim: `success` was only ever floored against `background`,
+        // and `diff_added_surface` (a `success`-tinted blend of it,
+        // `DIFF_SURFACE_BLEND_RATIO`) is a different, if usually close,
+        // surface. A no-op on the built-in scheme -- verified in this
+        // module's tests, not assumed.
+        diff_added_text: contrast_snap(success, diff_added_surface),
         diff_removed_surface,
         // Same seam as `diff_added_text` above, against `danger`/
         // `diff_removed_surface`.
-        diff_removed_text: chrome(
-            "diff_removed_text",
-            None,
-            contrast_snap(danger, diff_removed_surface),
-        ),
+        diff_removed_text: contrast_snap(danger, diff_removed_surface),
         surface_panel,
         surface_chrome,
         surface_selected,
@@ -996,13 +940,11 @@ fn is_light(value: u32) -> bool {
 /// [`oklab::solve_lightness_for_ratio`], toward whichever side of
 /// `surface` clears [`TEXT_CONTRAST_FLOOR`]. A no-op whenever `candidate`
 /// already clears the floor against `surface` -- most call sites on the
-/// built-in scheme, and on any scheme with every role key set explicitly,
-/// never actually move (asserted, not assumed, in this module's tests).
-/// Never touches an explicit `[theme]` value on its own -- callers decide
-/// whether to apply it to a `chrome()` default (as
-/// [`scheme_from`]'s `diff_added_text`/`diff_removed_text` do) or to an
-/// already-resolved value at a render call site (as
-/// [`readable_on`]/`src/agent/view.rs` do).
+/// built-in scheme never actually move (asserted, not assumed, in this
+/// module's tests). Callers decide whether to apply it to a role's
+/// derived default (as [`scheme_from`]'s `diff_added_text`/
+/// `diff_removed_text` do) or to an already-resolved value at a render
+/// call site (as [`readable_on`]/`src/agent/view.rs` do).
 fn contrast_snap(candidate: u32, surface: u32) -> u32 {
     let ratio = oklab::contrast_ratio(
         oklab::relative_luminance(candidate),
@@ -1482,25 +1424,30 @@ pub fn surface_selected() -> Hsla {
     packed_hsla(scheme().surface_selected)
 }
 
-/// An elevated surface for floating chrome -- resolved from the
-/// `surface_raised` config key, defaulting to `background` itself if
-/// unset. Kept for other consumers and back-compat; design "C"
-/// (`docs/theme-design.md`) moved the modal surfaces (palette/
-/// view-chooser/session-manager) and gpui-component's own `popover` role
-/// in [`gpui_component_theme_config`] onto plain `background` instead, so
-/// this role no longer backs either of those. Currently unread within
-/// this crate (`#[allow(dead_code)]`, matching this codebase's existing
-/// pattern for deliberately-kept API surface, e.g.
-/// `horizon-terminal-core`'s `Verdict::Bypassed`) -- a genuine role/config
-/// key any future floating-chrome consumer can still reach for.
+/// An elevated surface for floating chrome -- a derived neutral-ladder
+/// step (see `Scheme`'s own `surface_raised` field doc). Kept for other
+/// consumers
+/// and back-compat; design "C" (`docs/theme-design.md`) moved the modal
+/// surfaces (palette/view-chooser/session-manager) and gpui-component's
+/// own `popover` role in [`gpui_component_theme_config`] onto plain
+/// `background` instead, so this role no longer backs either of those.
+/// Currently unread within this crate (`#[allow(dead_code)]`, matching
+/// this codebase's existing pattern for deliberately-kept API surface,
+/// e.g. `horizon-terminal-core`'s `Verdict::Bypassed`) -- a genuine role
+/// any future floating-chrome consumer can still reach for. No longer
+/// independently configurable (2026-07-16, `docs/theme-design.md`) --
+/// tune [`SURFACE_RAISED_STEP`] instead of a `surface_raised` key.
 #[allow(dead_code)]
 pub fn surface_raised() -> Hsla {
     packed_hsla(scheme().surface_raised)
 }
 
-/// A subtle separator line -- resolved from the `border_default` config
-/// key, or derived from `text_subtle` if unset. Also gpui-component's own
-/// `border` role in [`gpui_component_theme_config`].
+/// A subtle separator line -- a derived neutral-ladder step (see
+/// `Scheme`'s own `border` field doc). Also gpui-component's own `border`
+/// role in [`gpui_component_theme_config`]. No longer independently
+/// configurable (2026-07-16, `docs/theme-design.md`) -- tune
+/// [`BORDER_STEP`]/[`BORDER_BLEND_RATIO`] instead of a
+/// `border_default`/`border_subtle` key.
 pub fn border() -> Hsla {
     packed_hsla(scheme().border)
 }
@@ -1744,58 +1691,19 @@ mod tests {
         config
     }
 
-    /// The owner's actual `~/.config/horizon/config.toml` `[theme]`
-    /// entries (2026-07-14), minus `border_default` -- factored out so
-    /// tests can layer additional keys (e.g. `border_subtle`) onto the
-    /// same light-polarity fixture without `border_default` masking
-    /// them. [`owner_light_scheme`] adds `border_default` back for the
-    /// tests that want the fixture exactly as the owner runs it.
-    fn owner_light_colors() -> Vec<(&'static str, &'static str)> {
-        vec![
-            ("text_primary", "#666666"),
-            ("text_muted", "#767676"),
-            ("text_subtle", "#a6a6a6"),
-            ("accent", "#0048b3"),
-            ("danger", "#b03b4c"),
-            ("surface_base", "#f6f6f6"),
-            ("surface_panel", "#c6c6c6"),
-            ("surface_raised", "#ffffff"),
-            ("terminal_foreground", "#666666"),
-            ("terminal_background", "#f6f6f6"),
-        ]
-    }
-
-    /// A fixture matching the owner's actual `~/.config/horizon/config.toml`
-    /// `[theme]` (2026-07-14, superseded 2026-07-15 by the seed-only form
-    /// -- see [`owner_seeded_light_scheme`] for the *current* fixture):
-    /// a *light* scheme, with `warning`/`success`/`info` left unset (so
-    /// they exercise [`contrast_snap`]).
-    fn owner_light_scheme() -> Scheme {
-        owner_light_scheme_with(&[("border_default", "#a6a6a6")])
-    }
-
-    /// [`owner_light_scheme`]'s color set plus `extra` -- the light-polarity
-    /// counterpart to plain [`config_with`], used to check a role override
-    /// on both polarities without duplicating the owner's whole fixture.
-    fn owner_light_scheme_with(extra: &[(&'static str, &'static str)]) -> Scheme {
-        let mut colors = owner_light_colors();
-        colors.extend_from_slice(extra);
-        scheme_from(&config_with(&colors))
-    }
-
     /// The owner's actual, CURRENT `~/.config/horizon/config.toml`
-    /// `[theme]` (2026-07-15): the seed-only form (`docs/theme-design.md`'s
-    /// slice B1), which superseded the flat-hex fixture above
-    /// ([`owner_light_colors`], preserved on disk at
-    /// `config.toml.pre-seed`) the same day slice B1 landed.
-    /// [`owner_light_colors`]/[`owner_light_scheme`] stay in this test
-    /// module for their own still-valid concern (explicit-override
-    /// passthrough on a light scheme); this fixture is the one the
-    /// 2026-07-15 contrast audit actually measured against, and the one
-    /// every test added for that audit's fixes uses. Every non-seed role
+    /// `[theme]` (2026-07-16): the seed-only form (`docs/theme-design.md`'s
+    /// slice B1, made the ONLY form by that doc's 2026-07-16 "config
+    /// narrowed to the seed" decision). This is the primary owner fixture
+    /// for this whole test module -- the pre-seed flat-hex fixture that
+    /// used to sit here (`owner_light_colors`/`owner_light_scheme`,
+    /// testing role-key override passthrough) was retired alongside the
+    /// override layer itself; every test that used it now either uses
+    /// this fixture instead or was retired with it. Every non-seed role
     /// (`foreground`, `text_muted`, `text_subtle`, `surface_panel`,
     /// `surface_selected`, `border`, `danger`/`warning`/`success`/`info`,
-    /// ...) is DERIVED here, not set explicitly.
+    /// ...) is DERIVED here, not set explicitly -- there's no other way
+    /// to set them any more.
     fn owner_seeded_light_colors() -> Vec<(&'static str, &'static str)> {
         vec![("surface_base", "#f6f6f6"), ("accent", "blue")]
     }
@@ -1834,40 +1742,11 @@ mod tests {
     }
 
     #[test]
-    fn a_role_override_does_not_leak_into_sibling_roles() {
-        let scheme = scheme_from(&config_with(&[("warning", "#ff00ff")]));
-        assert_eq!(scheme.warning, 0xff00ff);
-        // Untouched roles keep their built-in defaults.
-        assert_eq!(scheme.danger, 0xe06c75);
-        assert_eq!(scheme.success, 0x98c379);
-        assert_eq!(scheme.accent, 0x84dcc6);
-    }
-
-    #[test]
-    fn diff_surface_and_text_roles_are_independently_overridable() {
-        let scheme = scheme_from(&config_with(&[
-            ("diff_added_surface", "#111111"),
-            ("diff_added_text", "#22ff22"),
-        ]));
-        assert_eq!(scheme.diff_added_surface, 0x111111);
-        assert_eq!(scheme.diff_added_text, 0x22ff22);
-        // The removed side is untouched: it still derives from the
-        // (default, dark-scheme so contrast_snap is a no-op) `danger`
-        // role via `DIFF_SURFACE_BLEND_RATIO`, not a flat constant of its
-        // own.
-        assert_eq!(
-            scheme.diff_removed_surface,
-            blend(BACKGROUND_DEFAULT, DANGER_DEFAULT, DIFF_SURFACE_BLEND_RATIO)
-        );
-        assert_eq!(scheme.diff_removed_text, DANGER_DEFAULT);
-    }
-
-    #[test]
     fn reload_from_swaps_the_live_scheme_role_accessors_read_from() {
-        reload_from(&config_with(&[("danger", "#123456")]));
-        assert_eq!(scheme().danger, 0x123456);
+        reload_from(&config_with(&[("accent", "#123456")]));
+        assert_eq!(scheme().accent, 0x123456);
         // An unrelated role still resolves to its built-in default.
-        assert_eq!(scheme().accent, 0x84dcc6);
+        assert_eq!(scheme().background, BACKGROUND_DEFAULT);
     }
 
     /// docs/tasks/backlog.md item 25: `resolve`/`to_hsla` (the exact pair
@@ -1883,7 +1762,10 @@ mod tests {
     /// path replacing it never grew an equivalent cache.)
     #[test]
     fn resolve_reflects_a_reload_immediately_with_no_separate_cache_to_invalidate() {
-        reload_from(&config_with(&[("terminal_background", "#010203")]));
+        // `terminal_background` was retired as a key (2026-07-16,
+        // `docs/theme-design.md`) -- `surface_base` is the only anchor for
+        // both chrome and the terminal now.
+        reload_from(&config_with(&[("surface_base", "#010203")]));
         assert_eq!(
             resolve(TerminalColor::Named(NamedColor::Background), &[]),
             [0x01, 0x02, 0x03]
@@ -1891,7 +1773,7 @@ mod tests {
         // A second reload -- simulating a static screen that never got a
         // new PTY-driven frame between the two `Reload Config` runs --
         // still picks up the new value on the very next call.
-        reload_from(&config_with(&[("terminal_background", "#0a0b0c")]));
+        reload_from(&config_with(&[("surface_base", "#0a0b0c")]));
         assert_eq!(
             resolve(TerminalColor::Named(NamedColor::Background), &[]),
             [0x0a, 0x0b, 0x0c]
@@ -1899,18 +1781,16 @@ mod tests {
     }
 
     #[test]
-    fn surface_panel_defaults_to_a_lift_above_the_base_background_and_is_overridable() {
+    fn surface_panel_defaults_to_a_lift_above_the_base_background_on_a_dark_scheme_with_no_seed() {
+        // `surface_panel` was retired as an override key (2026-07-16,
+        // `docs/theme-design.md`) -- only the zero-config derived default
+        // is checkable here now.
         let default_scheme = scheme_from(&RawConfig::default());
         assert_eq!(
             default_scheme.surface_panel,
             blend(BACKGROUND_DEFAULT, FOREGROUND_DEFAULT, SURFACE_LIFT_RATIO)
         );
         assert_ne!(default_scheme.surface_panel, default_scheme.background);
-
-        let overridden = scheme_from(&config_with(&[("surface_panel", "#202020")]));
-        assert_eq!(overridden.surface_panel, 0x202020);
-        // Untouched roles keep their built-in defaults.
-        assert_eq!(overridden.background, BACKGROUND_DEFAULT);
     }
 
     #[test]
@@ -1997,8 +1877,8 @@ mod tests {
         assert_eq!(dark[0].color.s, 0.0);
         assert_eq!(dark[0].color.l, 0.0);
 
-        // The owner's light-polarity scheme.
-        reload_from(&config_with(&owner_light_colors()));
+        // A seeded light-polarity scheme.
+        reload_from(&config_with(&[("surface_base", "#f6f6f6")]));
         let light = overlay_shadow();
         assert_eq!(light[0].color.a, OVERLAY_SHADOW_FAR_ALPHA_LIGHT);
         assert_eq!(light[1].color.a, OVERLAY_SHADOW_NEAR_ALPHA_LIGHT);
@@ -2030,52 +1910,20 @@ mod tests {
         assert!(scheme().is_dark());
         assert_eq!(scrim_color(), packed_hsla(background()));
 
-        reload_from(&config_with(&owner_light_colors()));
+        reload_from(&config_with(&[("surface_base", "#f6f6f6")]));
         assert!(!scheme().is_dark());
         assert_eq!(scrim_color(), packed_hsla(background()));
     }
 
-    #[test]
-    fn owner_light_scheme_explicit_overrides_pass_through_unchanged() {
-        let scheme = owner_light_scheme();
-        assert!(!scheme.is_dark());
-        assert_eq!(scheme.background, 0xf6f6f6);
-        assert_eq!(scheme.foreground, 0x666666);
-        assert_eq!(scheme.danger, 0xb03b4c);
-        assert_eq!(scheme.surface_panel, 0xc6c6c6);
-        assert_eq!(scheme.surface_raised, 0xffffff);
-        // `border_default` (already documented in config.example.toml,
-        // unread before this projection) now resolves `border`.
-        assert_eq!(scheme.border, 0xa6a6a6);
-    }
-
-    #[test]
-    fn owner_light_scheme_contrast_snaps_unset_semantic_defaults() {
-        let scheme = owner_light_scheme();
-        // warning/success/info are NOT set in the owner's config -- their
-        // built-in defaults fail the WCAG floor against this (light)
-        // background, so they must have been contrast-snapped, not passed
-        // through verbatim.
-        assert_eq!(
-            scheme.warning,
-            contrast_snap(WARNING_DEFAULT, scheme.background)
-        );
-        assert_ne!(scheme.warning, WARNING_DEFAULT);
-        assert_eq!(
-            scheme.success,
-            contrast_snap(SUCCESS_DEFAULT, scheme.background)
-        );
-        assert_ne!(scheme.success, SUCCESS_DEFAULT);
-        assert_eq!(scheme.info, contrast_snap(INFO_DEFAULT, scheme.background));
-        assert_ne!(scheme.info, INFO_DEFAULT);
-        for role in [scheme.warning, scheme.success, scheme.info] {
-            let ratio = oklab::contrast_ratio(
-                oklab::relative_luminance(role),
-                oklab::relative_luminance(scheme.background),
-            );
-            assert!(ratio >= TEXT_CONTRAST_FLOOR, "ratio = {ratio}");
-        }
-    }
+    // `owner_light_scheme_explicit_overrides_pass_through_unchanged` and
+    // `owner_light_scheme_contrast_snaps_unset_semantic_defaults` (the
+    // pre-seed flat-hex fixture's role-key-override tests) were retired
+    // 2026-07-16 alongside the override layer itself
+    // (`docs/theme-design.md`): role keys no longer pass through at all,
+    // so there's nothing left to assert there. The semantic-default
+    // contrast-snap coverage lives on via `owner_seeded_scheme_floors_
+    // success_and_warning_against_their_raw_hue` below, against the
+    // owner's real, current (seed-only) fixture.
 
     #[test]
     fn border_default_derives_when_unset_on_a_dark_scheme_with_no_seed() {
@@ -2090,11 +1938,11 @@ mod tests {
 
     #[test]
     fn border_steps_along_the_neutral_ladder_when_unset_on_a_seeded_light_scheme() {
-        // A seeded light scheme (unlike the owner's fixture) that does NOT
-        // set `border_default`/`border_subtle`: the derived default must
-        // still land on the legible (darker-than-background) side, now
-        // stepped from the seed toward the (also derived) foreground
-        // rather than blended toward `text_subtle`.
+        // A seeded light scheme: `border` can no longer be set directly
+        // (2026-07-16, `docs/theme-design.md`), so its derived default
+        // must land on the legible (darker-than-background) side, stepped
+        // from the seed toward the (also derived) foreground rather than
+        // blended toward `text_subtle`.
         let scheme = scheme_from(&config_with(&[("surface_base", "#f6f6f6")]));
         assert_eq!(
             scheme.border,
@@ -2104,48 +1952,38 @@ mod tests {
     }
 
     #[test]
-    fn surface_chrome_defaults_to_background_and_is_overridable_on_a_dark_scheme() {
+    fn surface_chrome_defaults_to_background_on_a_dark_scheme_with_no_seed() {
+        // `surface_chrome` was retired as an override key (2026-07-16,
+        // `docs/theme-design.md`) -- only the zero-config derived default
+        // is checkable here now.
         let default_scheme = scheme_from(&RawConfig::default());
         assert_eq!(default_scheme.surface_chrome, default_scheme.background);
-
-        let overridden = scheme_from(&config_with(&[("surface_chrome", "#202124")]));
-        assert_eq!(overridden.surface_chrome, 0x202124);
-        // Untouched roles keep their built-in defaults.
-        assert_eq!(overridden.background, BACKGROUND_DEFAULT);
     }
 
     #[test]
     fn surface_chrome_steps_along_the_neutral_ladder_when_unset_on_a_seeded_light_scheme() {
-        // `owner_light_scheme()` sets `surface_base` (among other keys),
-        // which now activates the seed derivation for every UNSET role --
-        // `surface_chrome` is unset in that fixture, so it no longer
-        // stays inert at plain `background` (the legacy, seed-unconfigured
-        // default); it steps toward the derived foreground instead.
-        let scheme = owner_light_scheme();
+        // Activating the seed derivation (`surface_base` set) means
+        // `surface_chrome` no longer stays inert at plain `background`
+        // (the legacy, seed-unconfigured default); it steps toward the
+        // derived foreground instead.
+        let scheme = owner_seeded_light_scheme();
         assert_eq!(
             scheme.surface_chrome,
             oklab::step_lightness_toward(scheme.background, scheme.foreground, SURFACE_CHROME_STEP)
         );
         assert_ne!(scheme.surface_chrome, scheme.background);
-
-        let overridden = owner_light_scheme_with(&[("surface_chrome", "#eaeaea")]);
-        assert_eq!(overridden.surface_chrome, 0xeaeaea);
-        assert_eq!(overridden.background, 0xf6f6f6);
     }
 
     #[test]
-    fn surface_selected_defaults_to_a_background_accent_blend_and_is_overridable_on_a_dark_scheme()
-    {
+    fn surface_selected_defaults_to_a_background_accent_blend_on_a_dark_scheme_with_no_seed() {
+        // `surface_selected` was retired as an override key (2026-07-16,
+        // `docs/theme-design.md`) -- only the zero-config derived default
+        // is checkable here now.
         let default_scheme = scheme_from(&RawConfig::default());
         assert_eq!(
             default_scheme.surface_selected,
             blend(BACKGROUND_DEFAULT, CURSOR_DEFAULT, LIST_ACTIVE_BLEND_RATIO)
         );
-
-        let overridden = scheme_from(&config_with(&[("surface_selected", "#334455")]));
-        assert_eq!(overridden.surface_selected, 0x334455);
-        // Untouched roles keep their built-in defaults.
-        assert_eq!(overridden.accent, CURSOR_DEFAULT);
     }
 
     #[test]
@@ -2157,7 +1995,7 @@ mod tests {
         // zero-config path always used, restoring the accent-tinted
         // list-selection character for the seeded path too
         // (`docs/theme-design.md`'s "Accent-as-hex" note).
-        let scheme = owner_light_scheme();
+        let scheme = owner_seeded_light_scheme();
         assert_eq!(
             scheme.surface_selected,
             blend(scheme.background, scheme.accent, LIST_ACTIVE_BLEND_RATIO)
@@ -2165,9 +2003,6 @@ mod tests {
         // Not on the neutral ladder: doesn't coincide with the
         // (differently-anchored) border/surface_chrome steps.
         assert_ne!(scheme.surface_selected, scheme.border);
-
-        let overridden = owner_light_scheme_with(&[("surface_selected", "#112233")]);
-        assert_eq!(overridden.surface_selected, 0x112233);
     }
 
     /// [`Scheme::surface_selected`]'s intended on-screen value, as it
@@ -2235,7 +2070,7 @@ mod tests {
                 &[("surface_base", "#16181d")],
                 Some(10.0),
             )),
-            owner_light_scheme(),
+            owner_seeded_light_scheme(),
         ] {
             let composite = list_active_composite(&scheme);
             let close = |actual: u32, expected: u32| {
@@ -2254,24 +2089,29 @@ mod tests {
     }
 
     #[test]
-    fn list_active_composite_falls_short_of_an_unreachable_override_instead_of_panicking() {
-        // An explicit `surface_selected` override can legally sit outside
-        // the reachable range (e.g. the owner's real, pre-this-fix config
-        // once set `surface_selected = "#a6a6a6"` against a `#f6f6f6`
-        // background) -- the composite must land at the nearest reachable
-        // value instead of over/underflowing or panicking.
-        let scheme = owner_light_scheme_with(&[("surface_selected", "#a6a6a6")]);
-        let composite = list_active_composite(&scheme);
-        // Falls short of the configured intent (0xa6 per channel) --
-        // strictly between the background and the intent, on the
-        // background's own (lighter) side.
+    fn invert_list_active_clamp_falls_short_of_an_unreachable_target_instead_of_panicking() {
+        // `surface_selected` can no longer be set directly (2026-07-16,
+        // `docs/theme-design.md`), so this now exercises
+        // `invert_list_active_clamp`/its composite as pure functions
+        // rather than through a config override -- the property under
+        // test (a target far from `background`, e.g. the owner's old
+        // `surface_selected = "#a6a6a6"` override against a `#f6f6f6`
+        // background back when that key existed, falls outside the
+        // reachable range) is about the math, not about config.
+        let background = 0xf6f6f6;
+        let far_target = 0xa6a6a6;
+        let projected = invert_list_active_clamp(background, far_target);
+        let composite = blend(background, projected, LIST_ACTIVE_ALPHA_CLAMP);
+        // Falls short of the target (0xa6 per channel) -- strictly
+        // between the background and the target, on the background's own
+        // (lighter) side, instead of over/underflowing or panicking.
         for shift in [16, 8, 0] {
-            let bg = (scheme.background >> shift) & 0xff;
-            let intent = (scheme.surface_selected >> shift) & 0xff;
+            let bg = (background >> shift) & 0xff;
+            let target = (far_target >> shift) & 0xff;
             let got = (composite >> shift) & 0xff;
             assert!(
-                got > intent && got < bg,
-                "channel at shift {shift}: bg={bg:#04x} intent={intent:#04x} got={got:#04x}"
+                got > target && got < bg,
+                "channel at shift {shift}: bg={bg:#04x} target={target:#04x} got={got:#04x}"
             );
         }
     }
@@ -2297,13 +2137,13 @@ mod tests {
             "dark scheme: delta = {dark_delta}"
         );
 
-        let light = owner_light_scheme();
+        let light = owner_seeded_light_scheme();
         let light_composite = list_active_composite(&light);
         let light_delta =
             (oklab::lightness(light_composite) - oklab::lightness(light.background)).abs();
         assert!(
             light_delta >= MIN_LIGHTNESS_SEPARATION,
-            "owner light scheme: delta = {light_delta}"
+            "owner seeded light scheme: delta = {light_delta}"
         );
     }
 
@@ -2316,7 +2156,7 @@ mod tests {
         // case most likely to get close to the floor since the accent is
         // much darker than the background. Checked against the POST-CLAMP
         // composite -- what's actually painted on screen.
-        let scheme = owner_light_scheme();
+        let scheme = owner_seeded_light_scheme();
         let composite = list_active_composite(&scheme);
         let ratio = oklab::contrast_ratio(
             oklab::relative_luminance(scheme.foreground),
@@ -2328,35 +2168,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn border_subtle_overrides_the_derived_fallback_but_not_an_explicit_border_default_on_a_dark_scheme(
-    ) {
-        // Neither key set: the existing blend derivation still applies.
-        let default_scheme = scheme_from(&RawConfig::default());
-        assert_eq!(
-            default_scheme.border,
-            blend(BACKGROUND_DEFAULT, TEXT_SUBTLE_DEFAULT, BORDER_BLEND_RATIO)
-        );
-
-        // `border_subtle` set, `border_default` unset: `border_subtle` wins
-        // over the derived blend.
-        let subtle_only = scheme_from(&config_with(&[("border_subtle", "#445566")]));
-        assert_eq!(subtle_only.border, 0x445566);
-
-        // Both set: the primary `border_default` key still wins.
-        let both_set = scheme_from(&config_with(&[
-            ("border_default", "#111111"),
-            ("border_subtle", "#222222"),
-        ]));
-        assert_eq!(both_set.border, 0x111111);
-    }
-
-    #[test]
-    fn border_subtle_overrides_the_derived_fallback_on_a_light_scheme() {
-        let overridden = owner_light_scheme_with(&[("border_subtle", "#998877")]);
-        assert_eq!(overridden.border, 0x998877);
-        assert!(luminance(overridden.border) < luminance(overridden.background));
-    }
+    // `border_subtle_overrides_the_derived_fallback_but_not_an_explicit_
+    // border_default_on_a_dark_scheme` and `border_subtle_overrides_the_
+    // derived_fallback_on_a_light_scheme` (the `border_default`/
+    // `border_subtle` override-precedence tests) were retired 2026-07-16
+    // alongside the override layer itself (`docs/theme-design.md`):
+    // neither key exists any more, so there's no precedence left to
+    // assert. `border_default_derives_when_unset_on_a_dark_scheme_with_
+    // no_seed`/`border_steps_along_the_neutral_ladder_when_unset_on_a_
+    // seeded_light_scheme` above already cover the derived-default half.
 
     fn theme_color_for(scheme: &Scheme) -> gpui_component::ThemeColor {
         let config = gpui_component_theme_config(scheme);
@@ -2385,8 +2205,8 @@ mod tests {
     }
 
     #[test]
-    fn gpui_projection_owner_light_scheme() {
-        let scheme = owner_light_scheme();
+    fn gpui_projection_owner_seeded_light_scheme() {
+        let scheme = owner_seeded_light_scheme();
         let colors = theme_color_for(&scheme);
         assert_eq!(colors.background, packed_hsla(scheme.background));
         assert_eq!(colors.primary, packed_hsla(scheme.accent));
@@ -2411,7 +2231,10 @@ mod tests {
         // -p gpui-component`. Checked on both a dark and the owner's real
         // light scheme, since `caret`/`selection` don't otherwise appear
         // in this function's other projection tests.
-        for scheme in [scheme_from(&RawConfig::default()), owner_light_scheme()] {
+        for scheme in [
+            scheme_from(&RawConfig::default()),
+            owner_seeded_light_scheme(),
+        ] {
             let colors = theme_color_for(&scheme);
             assert_eq!(colors.caret, packed_hsla(scheme.accent));
             assert_eq!(
@@ -2425,7 +2248,11 @@ mod tests {
 
     #[test]
     fn gpui_projection_surface_chrome_feeds_tab_bar_on_a_dark_scheme() {
-        let scheme = scheme_from(&config_with(&[("surface_chrome", "#202124")]));
+        // `surface_chrome` can no longer be set directly (2026-07-16,
+        // `docs/theme-design.md`) -- a seeded dark scheme still exercises
+        // the wiring, since seeding makes `surface_chrome` genuinely
+        // diverge from `background` (unlike the zero-config default).
+        let scheme = scheme_from(&config_with(&[("surface_base", "#16181d")]));
         let colors = theme_color_for(&scheme);
         assert_eq!(colors.tab_bar, packed_hsla(scheme.surface_chrome));
         assert_ne!(colors.tab_bar, packed_hsla(scheme.background));
@@ -2443,7 +2270,7 @@ mod tests {
 
     #[test]
     fn gpui_projection_surface_chrome_feeds_tab_bar_on_a_light_scheme() {
-        let scheme = owner_light_scheme_with(&[("surface_chrome", "#eaeaea")]);
+        let scheme = owner_seeded_light_scheme();
         let colors = theme_color_for(&scheme);
         assert_eq!(colors.tab_bar, packed_hsla(scheme.surface_chrome));
         assert_ne!(colors.tab_bar, packed_hsla(scheme.background));
@@ -2451,7 +2278,13 @@ mod tests {
 
     #[test]
     fn gpui_projection_surface_selected_feeds_list_active_on_a_dark_scheme() {
-        let scheme = scheme_from(&config_with(&[("surface_selected", "#334455")]));
+        // `surface_selected` can no longer be set directly (2026-07-16,
+        // `docs/theme-design.md`) -- a seeded dark scheme with a distinct
+        // accent still exercises the wiring below.
+        let scheme = scheme_from(&config_with(&[
+            ("surface_base", "#16181d"),
+            ("accent", "#334455"),
+        ]));
         let colors = theme_color_for(&scheme);
         // gpui-component always clamps `list.active.background`'s alpha to
         // `LIST_ACTIVE_ALPHA_CLAMP` (0.2) -- it's a translucent highlight
@@ -2471,7 +2304,7 @@ mod tests {
 
     #[test]
     fn gpui_projection_surface_selected_feeds_list_active_on_a_light_scheme() {
-        let scheme = owner_light_scheme_with(&[("surface_selected", "#112233")]);
+        let scheme = owner_seeded_light_scheme();
         let colors = theme_color_for(&scheme);
         let projected = invert_list_active_clamp(scheme.background, scheme.surface_selected);
         assert_eq!(
@@ -2509,10 +2342,7 @@ mod tests {
     fn gpui_projection_reacts_to_a_reloaded_scheme() {
         reload_from(&RawConfig::default());
         let before = gpui_component_theme_config(&scheme()).mode;
-        reload_from(&config_with(&[
-            ("surface_base", "#f6f6f6"),
-            ("text_primary", "#666666"),
-        ]));
+        reload_from(&config_with(&[("surface_base", "#f6f6f6")]));
         let after = gpui_component_theme_config(&scheme()).mode;
         assert_eq!(before, gpui_component::ThemeMode::Dark);
         assert_eq!(after, gpui_component::ThemeMode::Light);
@@ -2525,57 +2355,15 @@ mod tests {
 
     // --- Seed derivation (docs/theme-design.md, slice B1) ------------------
 
-    #[test]
-    fn a_config_that_sets_every_role_key_resolves_byte_identical_regardless_of_the_seed() {
-        // Invariant (a): every existing role key set explicitly (a
-        // superset of the owner's fixture, adding surface_chrome/
-        // surface_selected/terminal_cursor so nothing this task touched
-        // falls through to a derived default) must resolve exactly to the
-        // literal values set -- the seed only fills gaps.
-        let scheme = scheme_from(&config_with(&[
-            ("text_primary", "#666666"),
-            ("text_muted", "#767676"),
-            ("text_subtle", "#a6a6a6"),
-            ("accent", "#0048b3"),
-            ("danger", "#b03b4c"),
-            ("warning", "#887700"),
-            ("success", "#116622"),
-            ("info", "#224488"),
-            ("surface_base", "#f6f6f6"),
-            ("surface_panel", "#c6c6c6"),
-            ("surface_raised", "#ffffff"),
-            ("surface_chrome", "#eaeaea"),
-            ("surface_selected", "#dcdcdc"),
-            ("border_default", "#a6a6a6"),
-            ("terminal_foreground", "#666666"),
-            ("terminal_background", "#f6f6f6"),
-            ("terminal_cursor", "#0048b3"),
-            ("diff_added_surface", "#ddffdd"),
-            ("diff_added_text", "#116622"),
-            ("diff_removed_surface", "#ffdddd"),
-            ("diff_removed_text", "#b03b4c"),
-        ]));
-
-        assert_eq!(scheme.foreground, 0x666666);
-        assert_eq!(scheme.text_muted, 0x767676);
-        assert_eq!(scheme.text_subtle, 0xa6a6a6);
-        assert_eq!(scheme.accent, 0x0048b3);
-        assert_eq!(scheme.danger, 0xb03b4c);
-        assert_eq!(scheme.warning, 0x887700);
-        assert_eq!(scheme.success, 0x116622);
-        assert_eq!(scheme.info, 0x224488);
-        assert_eq!(scheme.background, 0xf6f6f6);
-        assert_eq!(scheme.surface_panel, 0xc6c6c6);
-        assert_eq!(scheme.surface_raised, 0xffffff);
-        assert_eq!(scheme.surface_chrome, 0xeaeaea);
-        assert_eq!(scheme.surface_selected, 0xdcdcdc);
-        assert_eq!(scheme.border, 0xa6a6a6);
-        assert_eq!(scheme.cursor, 0x0048b3);
-        assert_eq!(scheme.diff_added_surface, 0xddffdd);
-        assert_eq!(scheme.diff_added_text, 0x116622);
-        assert_eq!(scheme.diff_removed_surface, 0xffdddd);
-        assert_eq!(scheme.diff_removed_text, 0xb03b4c);
-    }
+    // `a_config_that_sets_every_role_key_resolves_byte_identical_
+    // regardless_of_the_seed` -- the "every role key set explicitly
+    // resolves exactly to the literal values set" invariant -- was
+    // retired 2026-07-16: that WAS the override layer's own contract, and
+    // the override layer no longer exists (`docs/theme-design.md`'s
+    // "config narrowed to the seed" decision). Setting any of those keys
+    // now warns and is ignored; see `removed_theme_keys_are_ignored_for_
+    // resolution_even_though_they_warn` below for the replacement
+    // property.
 
     #[test]
     fn an_empty_config_resolves_to_the_literal_built_in_scheme() {
@@ -2939,20 +2727,23 @@ mod tests {
 
     #[test]
     fn readable_on_snaps_a_color_that_fails_the_floor_against_a_surface() {
-        // The owner's real light scheme (`owner_light_scheme`): `danger`
-        // is an explicit override that was only ever floored against
-        // `background`, not `surface_panel` -- confirmed here to actually
+        // A saturated pink-red text color against a mid-gray panel surface
+        // it was never floored against -- confirmed here to actually
         // violate the floor, the real-world motivation for this API.
-        let scheme = owner_light_scheme();
-        let danger = packed_hsla(scheme.danger);
-        let panel = packed_hsla(scheme.surface_panel);
+        // Hardcoded rather than read off a `Scheme` fixture: `readable_on`
+        // is a general-purpose primitive, independent of any particular
+        // scheme's derivation.
+        let danger_hex = 0xb03b4c;
+        let panel_hex = 0xc6c6c6;
+        let danger = packed_hsla(danger_hex);
+        let panel = packed_hsla(panel_hex);
         let ratio_before = oklab::contrast_ratio(
-            oklab::relative_luminance(scheme.danger),
-            oklab::relative_luminance(scheme.surface_panel),
+            oklab::relative_luminance(danger_hex),
+            oklab::relative_luminance(panel_hex),
         );
         assert!(
             ratio_before < TEXT_CONTRAST_FLOOR,
-            "fixture assumption: danger vs surface_panel should already be under-floor \
+            "fixture assumption: danger vs panel should already be under-floor \
              (ratio {ratio_before}), otherwise this test doesn't exercise the snap"
         );
 
@@ -2961,7 +2752,7 @@ mod tests {
         let snapped_packed = packed_from_hsla(snapped);
         let ratio_after = oklab::contrast_ratio(
             oklab::relative_luminance(snapped_packed),
-            oklab::relative_luminance(scheme.surface_panel),
+            oklab::relative_luminance(panel_hex),
         );
         // No tolerance: `solve_lightness_for_ratio`'s own quantization-
         // safety refinement (`theme/oklab.rs`) guarantees the returned
@@ -3012,36 +2803,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn diff_added_text_default_snaps_when_the_configured_surface_clashes_with_success() {
-        // `diff_added_surface` explicitly set to (nearly) `success` itself
-        // -- an extreme but legal config -- with `diff_added_text` left
-        // unset: the old plain-`success` default would be unreadable
-        // (contrast ~1:1) against that surface. The new default must
-        // still clear the floor.
-        let scheme = scheme_from(&config_with(&[("diff_added_surface", "#98c379")]));
-        assert_eq!(scheme.diff_added_surface, 0x98c379);
-        assert_ne!(scheme.diff_added_text, SUCCESS_DEFAULT);
-        assert!(
-            oklab::contrast_ratio(
-                oklab::relative_luminance(scheme.diff_added_text),
-                oklab::relative_luminance(scheme.diff_added_surface),
-            ) >= TEXT_CONTRAST_FLOOR
-        );
-    }
-
-    #[test]
-    fn diff_text_explicit_overrides_are_never_snapped() {
-        // An explicit `diff_added_text` wins outright, even one that
-        // would fail the floor against its surface -- `contrast_snap` is
-        // only ever the `chrome()` default, exactly like
-        // `contrast_safe_default` before it.
-        let scheme = scheme_from(&config_with(&[
-            ("diff_added_surface", "#98c379"),
-            ("diff_added_text", "#99c37a"),
-        ]));
-        assert_eq!(scheme.diff_added_text, 0x99c37a);
-    }
+    // `diff_added_text_default_snaps_when_the_configured_surface_clashes_
+    // with_success` and `diff_text_explicit_overrides_are_never_snapped`
+    // (both exercising explicit `diff_added_surface`/`diff_added_text`
+    // overrides) were retired 2026-07-16 alongside the override layer
+    // itself: neither key is settable any more, so the extreme-collision
+    // scenario they built can no longer arise from config. `contrast_snap`'s
+    // own general behavior (it moves a candidate that fails the floor, and
+    // is a no-op otherwise) stays covered by `contrast_snap_moves_a_
+    // candidate_that_fails_the_floor`/`contrast_snap_is_a_noop_when_the_
+    // candidate_already_clears_the_floor` above.
 
     // --- `[theme]` warnings (docs' promised-but-missing "unrecognized name
     // or unparsable hex value is warned about on stderr and skipped") -----
@@ -3066,13 +2837,46 @@ mod tests {
 
     #[test]
     fn a_recognized_key_with_an_unparsable_hex_value_warns() {
-        let warnings = warnings_for(&[("danger", "not-a-hex-color")]);
+        let warnings = warnings_for(&[("surface_base", "not-a-hex-color")]);
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("danger"), "warnings = {warnings:?}");
+        assert!(
+            warnings[0].contains("surface_base"),
+            "warnings = {warnings:?}"
+        );
         assert!(
             warnings[0].contains("not-a-hex-color"),
             "warnings = {warnings:?}"
         );
+    }
+
+    #[test]
+    fn every_removed_theme_key_warns_that_it_is_no_longer_configurable() {
+        for &key in REMOVED_THEME_COLOR_KEYS {
+            let warnings = warnings_for(&[(key, "#a1b2c3")]);
+            assert_eq!(warnings.len(), 1, "key {key:?}: warnings = {warnings:?}");
+            assert!(
+                warnings[0].contains(key),
+                "key {key:?}: warnings = {warnings:?}"
+            );
+            assert!(
+                warnings[0].contains("no longer configurable"),
+                "key {key:?}: warnings = {warnings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn removed_theme_keys_are_ignored_for_resolution_even_though_they_warn() {
+        // A removed key still resolves through the derived default --
+        // warning is not the same as failing the write/parse, and it must
+        // not leak into `scheme_from`'s output.
+        let scheme = scheme_from(&config_with(&[
+            ("danger", "#ff00ff"),
+            ("surface_panel", "#123456"),
+        ]));
+        assert_eq!(scheme.danger, DANGER_DEFAULT);
+        assert_ne!(scheme.danger, 0xff00ff);
+        assert_ne!(scheme.surface_panel, 0x123456);
     }
 
     #[test]
@@ -3121,14 +2925,11 @@ mod tests {
         // built-in default exactly as before this fix.
         let scheme = scheme_from(&config_with(&[
             ("not_a_real_role", "#ffffff"),
-            ("danger", "not-a-hex-color"),
-            ("warning", "#887700"),
+            ("surface_base", "not-a-hex-color"),
+            ("accent", "#887700"),
         ]));
-        assert_eq!(
-            scheme.danger,
-            contrast_snap(DANGER_DEFAULT, scheme.background)
-        );
-        assert_eq!(scheme.warning, 0x887700);
+        assert_eq!(scheme.background, BACKGROUND_DEFAULT);
+        assert_eq!(scheme.accent, 0x887700);
     }
 
     // --- 2026-07-15 contrast audit -----------------------------------------
@@ -3304,29 +3105,56 @@ mod tests {
 
     #[test]
     fn every_documented_ansi_slot_resolves_without_warning() {
+        // Only the six hue slots are still configurable since 2026-07-16
+        // (`docs/theme-design.md`'s "config narrowed to the seed"
+        // decision) -- `black`/`white`/`bright_*` moved to
+        // `every_removed_ansi_slot_warns_that_it_is_no_longer_configurable`
+        // below.
         let ansi = RawThemeAnsiConfig {
-            black: Some("#a1b2c3".to_string()),
             red: Some("#a1b2c3".to_string()),
             green: Some("#a1b2c3".to_string()),
             yellow: Some("#a1b2c3".to_string()),
             blue: Some("#a1b2c3".to_string()),
             magenta: Some("#a1b2c3".to_string()),
             cyan: Some("#a1b2c3".to_string()),
-            white: Some("#a1b2c3".to_string()),
-            bright_black: Some("#a1b2c3".to_string()),
-            bright_red: Some("#a1b2c3".to_string()),
-            bright_green: Some("#a1b2c3".to_string()),
-            bright_yellow: Some("#a1b2c3".to_string()),
-            bright_blue: Some("#a1b2c3".to_string()),
-            bright_magenta: Some("#a1b2c3".to_string()),
-            bright_cyan: Some("#a1b2c3".to_string()),
-            bright_white: Some("#a1b2c3".to_string()),
+            ..Default::default()
         };
         assert!(
             ansi_warnings_for(ansi.clone()).is_empty(),
             "warnings = {:?}",
             ansi_warnings_for(ansi)
         );
+    }
+
+    #[test]
+    fn every_removed_ansi_slot_warns_that_it_is_no_longer_configurable() {
+        for &slot in REMOVED_ANSI_SLOTS {
+            let mut ansi = RawThemeAnsiConfig::default();
+            let value = Some("#a1b2c3".to_string());
+            match slot {
+                "black" => ansi.black = value,
+                "white" => ansi.white = value,
+                "bright_black" => ansi.bright_black = value,
+                "bright_red" => ansi.bright_red = value,
+                "bright_green" => ansi.bright_green = value,
+                "bright_yellow" => ansi.bright_yellow = value,
+                "bright_blue" => ansi.bright_blue = value,
+                "bright_magenta" => ansi.bright_magenta = value,
+                "bright_cyan" => ansi.bright_cyan = value,
+                "bright_white" => ansi.bright_white = value,
+                other => panic!("unexpected removed ansi slot in test data: {other}"),
+            }
+            let warnings = ansi_warnings_for(ansi);
+            assert_eq!(warnings.len(), 1, "slot {slot:?}: warnings = {warnings:?}");
+            assert!(
+                warnings[0].contains(slot),
+                "slot {slot:?}: warnings = {warnings:?}"
+            );
+            assert!(
+                warnings[0].contains("no longer configurable"),
+                "slot {slot:?}: warnings = {warnings:?}"
+            );
+        }
     }
 
     #[test]
@@ -3341,5 +3169,20 @@ mod tests {
         // warning, never breaks resolution of the rest of the palette.
         let scheme = scheme_from(&config_with_ansi(&[], &[("red", "not-a-hex-color")]));
         assert_eq!(scheme.ansi[1], ANSI16_DEFAULT[1]);
+    }
+
+    #[test]
+    fn removed_ansi_slots_are_ignored_for_resolution_even_though_they_warn() {
+        // A removed slot still resolves through the derived default --
+        // it must not leak into `scheme_from`'s output even though it
+        // also warns (`every_removed_ansi_slot_warns_that_it_is_no_
+        // longer_configurable` above).
+        let mut config = config_with(&[("surface_base", "#16181d")]);
+        config.theme.ansi.black = Some("#ff00ff".to_string());
+        config.theme.ansi.bright_red = Some("#ff00ff".to_string());
+        let scheme = scheme_from(&config);
+        assert_eq!(scheme.ansi[0], scheme.background);
+        assert_ne!(scheme.ansi[0], 0xff00ff);
+        assert_ne!(scheme.ansi[9], 0xff00ff);
     }
 }

@@ -55,82 +55,44 @@ section (`[agent]`, `[provider]`, `[terminal]`, `[ui]`) only takes effect
 the next time Horizon starts, so tell the user a restart is needed if you
 change one of those.
 
-## `[theme]` -- named color roles
+## `[theme]` -- the seed
 
-Values are `#rrggbb` or `#rgb` hex strings (case-insensitive, leading `#`
-optional). The terminal is not a separate palette: its foreground,
-background, and cursor colors project from `text_primary`, `surface_base`,
-and `accent` respectively unless overridden with their own names below, so
-changing those three once recolors chrome and the terminal together.
-
-### Seed + derivation
-
-Any role below left unset is no longer a flat built-in constant -- it
-derives from a small seed: `surface_base` (the anchor -- its own lightness
-decides dark-vs-light polarity automatically), the six normal
-`[theme.ansi]` hues (`red`/`green`/`yellow`/`blue`/`magenta`/`cyan`, which
-double as the seed's hue set), `accent`, and `text_contrast` (below). Set
-just those and every other role -- `text_primary`, `text_muted`,
-`surface_panel`/`surface_raised`/`surface_chrome`/`surface_selected`,
-`border_default`, `danger`/`warning`/`success`/`info`, even the ANSI
-`black`/`white`/`bright_*` slots -- derives a readable, coherent scheme.
-Any role key still set explicitly wins outright, unchanged; the seed only
-fills gaps. `[theme.ansi]` itself is never auto-adjusted for the
-terminal -- an explicit ANSI slot is always emitted verbatim, even when
-the UI-side color derived from that same hue (e.g. `danger` from `red`) is
-contrast-snapped for readability.
+Since 2026-07-16 (`docs/theme-design.md`'s "config surface narrowed to the
+seed" decision) this section is EXACTLY the seed: three keys here, plus
+the six normal `[theme.ansi]` hue slots below. Every other role -- text
+colors, semantic colors, surfaces, borders, diff colors, the terminal's
+own foreground/background/cursor, the ANSI `black`/`white`/`bright_*`
+slots -- derives from the seed; none of them are independently settable
+any more. If the user wants a derived value to look different, that means
+tuning the seed (`surface_base`/`accent`/`text_contrast`/the six hues), not
+looking for a per-role override -- that escape hatch is gone by design.
+Setting one of the retired role keys (`text_primary`, `text_muted`,
+`text_subtle`, `danger`, `warning`, `success`, `info`, `surface_panel`,
+`surface_raised`, `surface_chrome`, `surface_selected`, `border_default`,
+`border_subtle`, `diff_added_surface`, `diff_added_text`,
+`diff_removed_surface`, `diff_removed_text`, `terminal_foreground`,
+`terminal_background`, `terminal_cursor`, `cursor_accent`) is warned about
+on stderr as no longer configurable and ignored -- it does not fail the
+write or crash Horizon, but double-check before writing one of these; the
+user's intent almost certainly needs the seed adjusted instead.
 
 Valid names:
 
-- `text_primary`, `text_muted`, `text_subtle` -- text colors, most to
-  least prominent. Unset, `text_primary` solves for `text_contrast`'s
-  ratio against `surface_base`; `text_muted` solves for a ratio between
-  the WCAG 4.5 floor and that target; `text_subtle` is decorative (no
-  floor, just visual separation).
+- `surface_base` -- a hex color, the seed's anchor. Its own lightness
+  decides the scheme's polarity (dark vs. light) automatically; no
+  separate switch.
 - `accent` -- the app's one focus/selection accent. Either a hex value or
-  one of the six hue names above (e.g. `accent = "blue"`) as a slot
-  reference to that resolved `[theme.ansi]` color -- every downstream
-  accent derivation is identical either way.
+  one of the six `[theme.ansi]` hue names below (e.g. `accent = "blue"`)
+  as a slot reference to that resolved color -- every downstream accent
+  derivation is identical either way.
 - `text_contrast` -- a number (not a hex string): the WCAG contrast-ratio
-  target for `text_primary` against `surface_base`, clamped to
-  `[4.5, 21.0]`. Defaults to `15` (the built-in dark scheme's own measured
-  ratio, so leaving it unset keeps today's appearance). An unparsable
-  value (including the wrong TOML type) falls back to the default
-  silently, without failing the rest of the file.
-- `danger`, `warning`, `success`, `info` -- semantic colors (errors,
-  tool-call requests/pending approval, finished tool-call results, the
-  assistant message label). Unset, each derives from the matching seed
-  hue (red/yellow/green/blue) snapped to a readable lightness.
-- `surface_base`, `surface_panel`, `surface_raised`, `surface_chrome`,
-  `surface_selected` -- background layers: the app base (the seed
-  anchor), a lifted panel, an elevated surface (popover/dropdown-menu
-  chrome), the tab strip's own chrome background, and the command palette
-  / session manager / view chooser row highlight. Unset, the last four
-  step between `surface_base` and the resolved foreground.
-- `border_default`, `border_subtle` -- the chrome separator-line color;
-  `border_subtle` is only ever read as a fallback when `border_default`
-  is unset.
-- `diff_added_surface`, `diff_added_text`, `diff_removed_surface`,
-  `diff_removed_text` -- the agent transcript's fs.edit diff rendering.
-- `terminal_foreground` (defaults to `text_primary`), `terminal_background`
-  (defaults to `surface_base`), `terminal_cursor` (defaults to `accent`) --
-  set one of these only when the terminal should diverge from chrome.
+  target the derived foreground text meets against `surface_base`,
+  clamped to `[4.5, 21.0]`. Defaults to `15` (the built-in dark scheme's
+  own measured ratio, so leaving it unset keeps today's appearance). An
+  unparsable value (including the wrong TOML type) falls back to the
+  default silently, without failing the rest of the file.
 
-Also a valid name but not yet read by any code: `cursor_accent`, planned
-as workspace mode's cursor-frame border, distinct from `accent`'s focus
-border -- today the cursor frame reuses `accent` outright, so setting
-`cursor_accent` alone has no visible effect.
-
-Example -- override just two roles directly:
-
-```toml
-[theme]
-accent = "#84dcc6"
-terminal_cursor = "#84dcc6"
-```
-
-Example -- seed-only, derive the rest (relies on `[theme.ansi]`'s six
-hues below for its hue set):
+Example -- seed-only:
 
 ```toml
 [theme]
@@ -139,17 +101,21 @@ accent = "blue"
 text_contrast = 12
 ```
 
-## `[theme.ansi]` -- the 16-slot terminal ANSI palette
+## `[theme.ansi]` -- the seed's hue set (six slots)
 
-A nested table, same hex format, one entry per slot. All 16 must use
-these exact names if you set any of them (unset slots keep their built-in
-default):
+A nested table, same hex format. Only the six normal hue slots are still
+independently configurable -- they double as the seed's own hue set:
 
 ```
-black, red, green, yellow, blue, magenta, cyan, white,
-bright_black, bright_red, bright_green, bright_yellow,
-bright_blue, bright_magenta, bright_cyan, bright_white
+red, green, yellow, blue, magenta, cyan
 ```
+
+`black`, `white`, and the eight `bright_*` slots are derived-only since
+2026-07-16 (`black`/`white` track the resolved background/foreground;
+`bright_black` tracks `text_subtle`; the six colored `bright_*` hues and
+`bright_white` are a fixed lightness push off their normal counterpart).
+Setting any of them is warned about on stderr as no longer configurable
+and ignored, same as a retired `[theme]` role key above.
 
 ## `[keybindings]` -- chord string to command id
 

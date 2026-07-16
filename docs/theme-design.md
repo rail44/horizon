@@ -304,6 +304,12 @@ sits on. One hue set, two projections.
 
 ## Layering and compatibility
 
+**Superseded 2026-07-16** — see "Config surface narrowed to the seed"
+below: the role layer this diagram describes as "all kept, now an
+override layer" no longer exists. Kept here as the historical record of
+the original design; the diagram and the paragraph after it describe the
+2026-07-15 shape, not the current one.
+
 ```
 seed        background + 6 hues + accent (+ contrast knob)   ~8 lines
   ↓ derivation (this design)
@@ -343,6 +349,78 @@ dedicated token exists (verified at the pinned rev and upstream main),
 so removing it would need an overlay hack, a local fork, or an owned
 resizable component. The owner chose to keep the line. Full trace:
 `SPLIT_BOUNDARY_INSET_PX`'s doc comment in `src/workspace.rs`.
+
+**Config surface narrowed to the seed -- DECIDED (owner, 2026-07-16),
+retiring the role-key override layer.** The "Layering and compatibility"
+section above described the role layer (the ~20 flat `[theme]` keys) as
+kept "now an override layer" on top of the seed, with backward
+compatibility as the explicit reason: "every existing role key remains
+authoritative when set, so the owner's current 31-line config keeps
+working unchanged." The owner's real config had already moved off that
+31-line form the same day the seed shipped (2026-07-15) and never looked
+back, making the override layer's back-compat case moot in practice
+before this decision even landed -- see `owner_seeded_light_scheme` in
+`src/theme.rs`'s tests, which mirrors the owner's actual, current config
+exactly (seed-only) and was already the primary fixture for every test
+added after 2026-07-15. This decision makes that the ONLY form: the
+official `[theme]` surface is now exactly the seed --
+`surface_base`/`accent`/`text_contrast` plus the six `[theme.ansi]` hue
+slots, nothing else. Every one of the ~20 role keys this doc's "Layering
+and compatibility" section listed as the override layer
+(`text_primary`/`text_muted`/`text_subtle`, `danger`/`warning`/`success`/
+`info`, `surface_panel`/`surface_raised`/`surface_chrome`/
+`surface_selected`, `border_default`/`border_subtle`,
+`diff_added_surface`/`diff_added_text`/`diff_removed_surface`/
+`diff_removed_text`, `terminal_foreground`/`terminal_background`/
+`terminal_cursor`) stops being recognized -- `scheme_from` no longer reads
+any of them, full stop, seeded or not. `[theme.ansi]`'s ten non-hue slots
+(`black`/`white`/`bright_black`...`bright_white`) are likewise
+derived-only now; only the six normal hue slots (the seed's own hue set)
+stay configurable. `cursor_accent` -- documented but never wired to begin
+with -- disappears from the docs entirely rather than sticking around as
+a no-op key.
+
+The back-compat contract this retires is explicit: setting one of these
+keys used to pass its value straight through, unconditionally (the
+"the seed only fills gaps" rule, and the now-deleted
+`a_config_that_sets_every_role_key_resolves_byte_identical_regardless_
+of_the_seed` test that pinned it byte-for-byte). It no longer does.
+Concretely, this closes the "just override `text_muted`" escape hatch the
+owner had used in the pre-seed 31-line config and could in principle have
+kept reaching for on the seed path too: dissatisfaction with a derived
+value from here on is addressed by tuning the *derivation* (the seed
+inputs, or the constants/formulas in `src/theme.rs` -- `SURFACE_PANEL_STEP`,
+`BORDER_STEP`, `TEXT_MUTED_CONTRAST_FRACTION`, and so on) or by revisiting
+this decision itself, never by reaching for a per-role key again. The
+owner made this call knowingly, trading the override layer's flexibility
+for a config surface small enough to eventually expose as a handful of
+sliders in the interactive settings view floated in "Deferred / out of
+scope" below -- a ~20-key override layer sitting alongside the seed would
+have complicated that surface for comparatively little ongoing benefit,
+since the owner's own usage had already converged on seed-only.
+
+A config that still sets one of the retired keys does not fail or crash:
+`theme_color_warnings`/`theme_ansi_warnings` (`src/theme.rs`) now
+classify a retired key as a distinct case from a genuinely-unrecognized
+one -- "no longer configurable; derived from the seed since 2026-07-16" on
+stderr, rather than the generic "unrecognized key" message a typo would
+get -- and the entry is still ignored, resolving that one role through the
+derivation exactly as if the key had never been set. `RawThemeConfig`'s
+flattened `colors: HashMap<String, String>` and `RawThemeAnsiConfig`'s
+ten now-derived-only fields are both left exactly as they were in
+`crates/horizon-config` -- the loader still accepts arbitrary keys (so it
+can name the offending one for the warning above), only recognition and
+derivation in `src/theme.rs` changed.
+
+The ten derived `[theme.ansi]` slots deserve one more note: the owner's
+own historical preference of setting every `bright_*` slot equal to its
+normal counterpart (rather than a distinctly brighter tint) is, as of this
+decision, no longer expressible as a per-slot equality override --
+`bright_*` now always applies `BRIGHT_HUE_EMPHASIS_DELTA`'s fixed lightness
+push. Reconciling that preference (if it still holds) is explicitly
+deferred to the same future interactive settings view mentioned above and
+in "Deferred / out of scope" below, alongside the still-open brights
+verdict from the 2026-07-15 contrast audit -- not reopened piecemeal here.
 
 ## Provisional details (settle at implementation or through dogfooding)
 

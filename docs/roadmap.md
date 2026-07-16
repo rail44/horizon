@@ -190,7 +190,14 @@ wave items where possible; design docs on first use.
   2026-07-15 (0.30 base / 0.12 cursor-pane split, modal-open dimming —
   further tuning is one constant). Colorful expression on the
   projected hue set stays a separately-scheduled future theme;
-  base16/24 import stays deferred.
+  base16/24 import stays deferred. **Config surface narrowed to the
+  seed, 2026-07-16** (owner): the ~20 role keys' override layer (the
+  quoted back-compat contract above) is retired — `[theme]` is now
+  exactly the seed (`surface_base`/`accent`/`text_contrast` + the six
+  `[theme.ansi]` hues); every other role, including the ten non-hue
+  ANSI slots, is derived-only, with a distinct stderr warning for a
+  config still setting a retired key. See `docs/theme-design.md`'s own
+  dated section for the full rationale.
 - **winit windowing backend (spike)** — direction set 2026-07-12:
   native-feeling window decorations on every desktop (Wayland via
   sctk-adwaita, native macOS) without per-DE styling effort, by
