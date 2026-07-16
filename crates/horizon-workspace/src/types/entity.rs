@@ -74,6 +74,7 @@ fn pane_kind_title(kind: PaneKind) -> &'static str {
     match kind {
         PaneKind::Terminal => "Terminal",
         PaneKind::Agent => "AI Agent",
+        PaneKind::View(view_kind) => view_kind.title(),
     }
 }
 

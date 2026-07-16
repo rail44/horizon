@@ -38,6 +38,57 @@ fn pane_id_accessors_resolve_kind_session_and_title_for_a_specific_pane() {
 }
 
 #[test]
+fn a_view_pane_has_no_session_and_registers_none() {
+    let mut workspace = Workspace::mvp();
+    let session_count_before = workspace.session_count();
+    let pane_id = workspace.open_tab(PaneKind::View(ViewKind::ThemeSettings), None);
+
+    assert_eq!(
+        workspace.pane_kind(pane_id),
+        Some(PaneKind::View(ViewKind::ThemeSettings))
+    );
+    assert_eq!(workspace.active_session_id(), None);
+    // No session is created for a view pane -- `ensure_session` no-ops on
+    // `None`, so the session count is untouched.
+    assert_eq!(workspace.session_count(), session_count_before);
+    assert_eq!(
+        workspace.pane_title_for(pane_id),
+        Some("Theme Settings".to_string())
+    );
+}
+
+#[test]
+fn split_active_tab_with_view_adds_a_session_less_pane_beside_the_focus() {
+    let mut workspace = Workspace::mvp();
+    let terminal_pane = workspace.visible_pane_id(0).expect("terminal pane");
+    let session_count_before = workspace.session_count();
+
+    let view_pane =
+        workspace.split_active_tab_with_view(ViewKind::ThemeSettings, SplitAxis::Horizontal);
+
+    assert_eq!(workspace.visible_pane_ids(), vec![terminal_pane, view_pane]);
+    assert_eq!(
+        workspace.pane_kind(view_pane),
+        Some(PaneKind::View(ViewKind::ThemeSettings))
+    );
+    assert_eq!(workspace.session_count(), session_count_before);
+    // Splitting dives into the new pane, same as every other split.
+    assert!(workspace.is_active_pane(view_pane));
+}
+
+#[test]
+fn closing_a_view_pane_detaches_no_session() {
+    let mut workspace = Workspace::mvp();
+    let terminal_pane = workspace.visible_pane_id(0).expect("terminal pane");
+    let view_pane =
+        workspace.split_active_tab_with_view(ViewKind::ThemeSettings, SplitAxis::Horizontal);
+
+    // Trivially destructive: nothing to detach, since there is no session.
+    assert_eq!(workspace.close_pane(view_pane), None);
+    assert_eq!(workspace.visible_pane_ids(), vec![terminal_pane]);
+}
+
+#[test]
 fn is_active_pane_reflects_the_tabs_own_active_pane_by_id() {
     let mut workspace = Workspace::mvp();
     let first_pane_id = workspace.visible_pane_id(0).expect("first pane");
