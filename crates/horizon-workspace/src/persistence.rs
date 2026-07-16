@@ -5,8 +5,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::types::{
-    LayoutChild, LayoutNode, Pane, PaneId, PaneKind, SessionKind, SplitAxis, Tab, TabId, Workspace,
-    WorkspaceSession,
+    LayoutChild, LayoutNode, Pane, PaneId, PaneKind, SessionKind, SplitAxis, Tab, TabId, ViewKind,
+    Workspace, WorkspaceSession,
 };
 use crate::SessionId;
 
@@ -108,7 +108,7 @@ struct LayoutChildState {
 #[serde(deny_unknown_fields)]
 struct PaneState {
     id: PaneId,
-    kind: KindState,
+    kind: PaneKindState,
     session_id: Option<SessionId>,
 }
 
@@ -116,16 +116,57 @@ struct PaneState {
 #[serde(deny_unknown_fields)]
 struct SessionState {
     id: SessionId,
-    kind: KindState,
+    kind: SessionKindState,
     display_number: usize,
     title: String,
 }
 
+/// A session's persisted kind -- always session-backed
+/// (`Terminal`/`Agent`), unlike [`PaneKindState`], since a `PaneKind::View`
+/// pane never has a session at all (see `WorkspaceState::validate`'s pane
+/// loop, which checks a view pane has no `session_id` rather than looking
+/// one up here).
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum KindState {
+enum SessionKindState {
     Terminal,
     Agent,
+}
+
+/// A pane's persisted kind. Serializes as a bare string for the
+/// session-backed variants (`"terminal"`/`"agent"`, unchanged from before
+/// `PaneKind::View` existed) and as `{"view": "theme_settings"}` for a
+/// first-party view pane (serde's default externally-tagged
+/// representation for a newtype variant) -- distinct from
+/// [`SessionKindState`] because a view pane's kind space
+/// ([`ViewKindState`]) has no session-kind counterpart.
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum PaneKindState {
+    Terminal,
+    Agent,
+    View(ViewKindState),
+}
+
+/// Persisted counterpart of [`ViewKind`]; add a variant here alongside a
+/// new `ViewKind` for every future first-party view.
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ViewKindState {
+    ThemeSettings,
+}
+
+impl PaneKindState {
+    /// The session kind a pane of this persisted kind must attach --
+    /// `None` for `View`, which must instead have no `session_id` at all
+    /// (see the pane loop in `WorkspaceState::validate`).
+    fn expected_session_kind(self) -> Option<SessionKind> {
+        match self {
+            Self::Terminal => Some(SessionKind::Terminal),
+            Self::Agent => Some(SessionKind::Agent),
+            Self::View(_) => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
@@ -309,7 +350,7 @@ impl WorkspaceState {
                 .iter()
                 .map(|session| SessionState {
                     id: session.id,
-                    kind: KindState::from(session.kind),
+                    kind: SessionKindState::from(session.kind),
                     display_number: session.display_number,
                     title: session.title.clone(),
                 })
@@ -390,28 +431,40 @@ impl WorkspaceState {
                 if !pane_ids.insert(pane.id) {
                     return Err(state_error(format!("duplicate pane id {:?}", pane.id)));
                 }
-                let Some(session_id) = pane.session_id else {
-                    return Err(state_error(format!(
-                        "pane {:?} has no session attachment",
-                        pane.id
-                    )));
-                };
-                let Some(session_kind) = sessions.get(&session_id) else {
-                    return Err(state_error(format!(
-                        "pane {:?} references unknown session {session_id:?}",
-                        pane.id
-                    )));
-                };
-                if *session_kind != SessionKind::from(pane.kind) {
-                    return Err(state_error(format!(
-                        "pane {:?} and session {session_id:?} have different kinds",
-                        pane.id
-                    )));
-                }
-                if !attached_sessions.insert(session_id) {
-                    return Err(state_error(format!(
-                        "session {session_id:?} is attached to multiple panes"
-                    )));
+                match pane.kind.expected_session_kind() {
+                    None => {
+                        if pane.session_id.is_some() {
+                            return Err(state_error(format!(
+                                "view pane {:?} must not have a session attachment",
+                                pane.id
+                            )));
+                        }
+                    }
+                    Some(expected_kind) => {
+                        let Some(session_id) = pane.session_id else {
+                            return Err(state_error(format!(
+                                "pane {:?} has no session attachment",
+                                pane.id
+                            )));
+                        };
+                        let Some(session_kind) = sessions.get(&session_id) else {
+                            return Err(state_error(format!(
+                                "pane {:?} references unknown session {session_id:?}",
+                                pane.id
+                            )));
+                        };
+                        if *session_kind != expected_kind {
+                            return Err(state_error(format!(
+                                "pane {:?} and session {session_id:?} have different kinds",
+                                pane.id
+                            )));
+                        }
+                        if !attached_sessions.insert(session_id) {
+                            return Err(state_error(format!(
+                                "session {session_id:?} is attached to multiple panes"
+                            )));
+                        }
+                    }
                 }
             }
         }
@@ -467,7 +520,7 @@ impl LayoutState {
                 Self::Pane {
                     pane: PaneState {
                         id: pane.id,
-                        kind: KindState::from(pane.kind),
+                        kind: PaneKindState::from(pane.kind),
                         session_id: pane.session_id,
                     },
                 }
@@ -539,13 +592,7 @@ impl LayoutState {
     }
 }
 
-impl From<PaneKind> for KindState {
-    fn from(kind: PaneKind) -> Self {
-        Self::from(SessionKind::from(kind))
-    }
-}
-
-impl From<SessionKind> for KindState {
+impl From<SessionKind> for SessionKindState {
     fn from(kind: SessionKind) -> Self {
         match kind {
             SessionKind::Terminal => Self::Terminal,
@@ -554,18 +601,48 @@ impl From<SessionKind> for KindState {
     }
 }
 
-impl From<KindState> for SessionKind {
-    fn from(kind: KindState) -> Self {
+impl From<SessionKindState> for SessionKind {
+    fn from(kind: SessionKindState) -> Self {
         match kind {
-            KindState::Terminal => Self::Terminal,
-            KindState::Agent => Self::Agent,
+            SessionKindState::Terminal => Self::Terminal,
+            SessionKindState::Agent => Self::Agent,
         }
     }
 }
 
-impl From<KindState> for PaneKind {
-    fn from(kind: KindState) -> Self {
-        Self::from(SessionKind::from(kind))
+impl From<PaneKind> for PaneKindState {
+    fn from(kind: PaneKind) -> Self {
+        match kind {
+            PaneKind::Terminal => Self::Terminal,
+            PaneKind::Agent => Self::Agent,
+            PaneKind::View(view_kind) => Self::View(ViewKindState::from(view_kind)),
+        }
+    }
+}
+
+impl From<PaneKindState> for PaneKind {
+    fn from(kind: PaneKindState) -> Self {
+        match kind {
+            PaneKindState::Terminal => Self::Terminal,
+            PaneKindState::Agent => Self::Agent,
+            PaneKindState::View(view_kind) => Self::View(ViewKind::from(view_kind)),
+        }
+    }
+}
+
+impl From<ViewKind> for ViewKindState {
+    fn from(kind: ViewKind) -> Self {
+        match kind {
+            ViewKind::ThemeSettings => Self::ThemeSettings,
+        }
+    }
+}
+
+impl From<ViewKindState> for ViewKind {
+    fn from(kind: ViewKindState) -> Self {
+        match kind {
+            ViewKindState::ThemeSettings => Self::ThemeSettings,
+        }
     }
 }
 
@@ -649,6 +726,46 @@ mod tests {
     }
 
     #[test]
+    fn state_round_trip_preserves_a_view_pane_without_a_session() {
+        let mut workspace = Workspace::mvp();
+        let terminal_pane = workspace.visible_pane_id(0).expect("terminal pane");
+        let view_pane =
+            workspace.split_active_tab_with_view(ViewKind::ThemeSettings, SplitAxis::Horizontal);
+
+        let json = workspace.to_persisted_json().expect("serialize");
+        // The persisted shape for a view pane's kind (no session-backed
+        // counterpart to reuse): serde's default externally-tagged
+        // representation for a newtype variant.
+        let value: Value = serde_json::from_str(&json).expect("json");
+        assert_eq!(
+            value["tabs"][0]["root"]["children"][1]["node"]["pane"]["kind"],
+            json!({"view": "theme_settings"})
+        );
+        assert!(value["tabs"][0]["root"]["children"][1]["node"]["pane"]["session_id"].is_null());
+
+        let restored = Workspace::from_persisted_json(&json).expect("restore");
+
+        assert_eq!(
+            restored.pane_kind(view_pane),
+            Some(PaneKind::View(ViewKind::ThemeSettings))
+        );
+        assert_eq!(
+            restored
+                .panes
+                .iter()
+                .find(|pane| pane.id == view_pane)
+                .expect("view pane")
+                .session_id,
+            None
+        );
+        // No session was ever created for the view pane -- only the mvp
+        // terminal's session survives the round trip.
+        assert_eq!(restored.session_count(), workspace.session_count());
+        assert!(restored.all_pane_ids().contains(&terminal_pane));
+        assert_eq!(restored.to_persisted_json().expect("serialize again"), json);
+    }
+
+    #[test]
     fn state_embeds_panes_in_layout_leaves() {
         let value: Value =
             serde_json::from_str(&Workspace::mvp().to_persisted_json().expect("serialize"))
@@ -722,6 +839,18 @@ mod tests {
         let mut value = state_value();
         value["tabs"][0]["root"]["pane"]["session_id"] = Value::Null;
         assert_invalid(value, "no session attachment");
+    }
+
+    #[test]
+    fn validation_rejects_a_view_pane_with_a_session_attachment() {
+        let mut workspace = Workspace::mvp();
+        workspace.split_active_tab_with_view(ViewKind::ThemeSettings, SplitAxis::Horizontal);
+        let mut value = json_value(&workspace);
+        // Any session id is rejected here regardless of whether it's
+        // known -- a view pane must have none at all.
+        let borrowed_session_id = value["sessions"][0]["id"].clone();
+        value["tabs"][0]["root"]["children"][1]["node"]["pane"]["session_id"] = borrowed_session_id;
+        assert_invalid(value, "must not have a session attachment");
     }
 
     #[test]

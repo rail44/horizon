@@ -1,5 +1,5 @@
 use super::types::{
-    LayoutNode, Pane, PaneId, PaneKind, SessionKind, SplitAxis, Tab, TabId, Workspace,
+    LayoutNode, Pane, PaneId, PaneKind, SessionKind, SplitAxis, Tab, TabId, ViewKind, Workspace,
     WorkspaceSession,
 };
 use crate::SessionId;
@@ -200,6 +200,19 @@ impl Workspace {
             axis,
         );
         Some(session_id)
+    }
+
+    /// Splits the active tab at its currently-focused pane with a new
+    /// session-less view pane (`docs/theme-settings-view-design.md`'s
+    /// "first session-less first-party view") -- the view chooser's split
+    /// placements for a first-party view. Unlike
+    /// [`Self::split_session_with_new_session`], there is no session id to
+    /// anchor the split via `active_session_id`, so this always targets the
+    /// active tab's own focus directly; that's equivalent in practice since
+    /// the shell calls this immediately after the chooser closes, with
+    /// nothing else able to move focus meanwhile.
+    pub fn split_active_tab_with_view(&mut self, kind: ViewKind, axis: SplitAxis) -> PaneId {
+        self.split_tab(self.active_tab, PaneKind::View(kind), None, true, axis)
     }
 
     /// Attaches a detached `session_id` as a split in the active tab,

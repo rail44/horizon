@@ -1,13 +1,14 @@
 //! The view chooser: the modal `New Tab…`/`Split Right…`/`Split Down…`
-//! open to pick what the new pane hosts (Terminal, Agent, or a
-//! role-tagged agent flavor like Configuration Agent) — same searchable
-//! List pattern as the palette; the shell stages the placement and
-//! executes the choice on confirm.
+//! open to pick what the new pane hosts (Terminal, Agent, a role-tagged
+//! agent flavor like Configuration Agent, or a session-less first-party
+//! view like Theme Settings) — same searchable List pattern as the
+//! palette; the shell stages the placement and executes the choice on
+//! confirm.
 
 use gpui::*;
 use gpui_component::list::{ListDelegate, ListItem, ListState};
 use gpui_component::{h_flex, Icon, IconName, IndexPath};
-use horizon_workspace::PaneKind;
+use horizon_workspace::{PaneKind, ViewKind};
 
 use crate::theme;
 
@@ -45,6 +46,11 @@ pub fn view_choices() -> Vec<ViewChoice> {
             role_id: Some(horizon_agent::roles::RoleId(
                 horizon_agent::roles::CONFIG_ROLE.id.to_string(),
             )),
+        },
+        ViewChoice {
+            title: "Theme Settings",
+            kind: PaneKind::View(ViewKind::ThemeSettings),
+            role_id: None,
         },
     ]
 }

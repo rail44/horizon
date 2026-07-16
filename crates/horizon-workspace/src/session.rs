@@ -50,11 +50,13 @@ impl Workspace {
         let Some(session_id) = session_id else {
             return;
         };
+        let Some(session_kind) = kind.session_kind() else {
+            return;
+        };
         if self.sessions.iter().any(|session| session.id == session_id) {
             return;
         }
 
-        let session_kind = SessionKind::from(kind);
         let display_number = self.allocate_session_display_number(session_kind);
         self.sessions.push(WorkspaceSession::new(
             session_id,

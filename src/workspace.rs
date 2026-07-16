@@ -24,7 +24,8 @@ use gpui_component::IndexPath;
 use horizon_workspace::commands::{command_entries, CommandId, CommandState};
 use horizon_workspace::types::{LayoutNode, TabId};
 use horizon_workspace::{
-    Direction, PaneId, PaneKind, SessionInventory, SplitAxis, Workspace, WORKSPACE_STATE_VERSION,
+    Direction, PaneId, PaneKind, SessionInventory, SplitAxis, ViewKind, Workspace,
+    WORKSPACE_STATE_VERSION,
 };
 
 use crate::agent::{AgentSession, AgentView};
@@ -35,6 +36,7 @@ use crate::sessiond::{wait_for_drain, SessiondHandle, SessiondResponder};
 use crate::terminal::{TerminalSession, TerminalView};
 use crate::terminal_focus::focus_transition;
 use crate::theme;
+use crate::theme_settings::ThemeSettingsView;
 use crate::view_chooser::{Placement, ViewChooserDelegate};
 use crate::workspace_state::{InvalidState, LoadResult, WorkspaceStateStore};
 use horizon_terminal_core::{
@@ -172,11 +174,14 @@ fn load_workspace_state(store: &mut WorkspaceStateStore) -> (Workspace, bool, bo
     }
 }
 
-/// One pane's view, by session kind.
+/// One pane's view, by session kind -- plus one variant per first-party
+/// [`ViewKind`] (`docs/theme-settings-view-design.md`), which has no
+/// session at all.
 #[derive(Clone)]
 enum PaneView {
     Terminal(Entity<TerminalView>),
     Agent(Entity<AgentView>),
+    ThemeSettings(Entity<ThemeSettingsView>),
 }
 
 impl PaneView {
@@ -184,6 +189,7 @@ impl PaneView {
         match self {
             PaneView::Terminal(view) => view.focus_handle(cx),
             PaneView::Agent(view) => view.focus_handle(cx),
+            PaneView::ThemeSettings(view) => view.focus_handle(cx),
         }
     }
 
@@ -191,6 +197,7 @@ impl PaneView {
         match self {
             PaneView::Terminal(view) => view.clone().into_any_element(),
             PaneView::Agent(view) => view.clone().into_any_element(),
+            PaneView::ThemeSettings(view) => view.clone().into_any_element(),
         }
     }
 }
@@ -879,6 +886,14 @@ impl WorkspaceShell {
                     pane_id,
                     PaneView::Agent(cx.new(|cx| AgentView::new(session.clone(), window, cx))),
                 );
+            } else if matches!(
+                self.workspace.pane_kind(pane_id),
+                Some(PaneKind::View(ViewKind::ThemeSettings))
+            ) {
+                self.panes.insert(
+                    pane_id,
+                    PaneView::ThemeSettings(cx.new(ThemeSettingsView::new)),
+                );
             }
         }
         self.persist_workspace();
@@ -1461,6 +1476,28 @@ impl WorkspaceShell {
             return;
         }
         self.workspace.exit_workspace_mode();
+        if let PaneKind::View(view_kind) = kind {
+            // A session-less first-party view: no session id to create,
+            // no sessiond spawn, and no `pending_terminal_spawns`/
+            // `pending_roles` bookkeeping -- those exist only for the
+            // session-backed kinds handled below.
+            match placement {
+                Placement::NewTab => {
+                    self.workspace.open_tab(kind, None);
+                }
+                Placement::SplitRight | Placement::SplitDown => {
+                    let axis = if placement == Placement::SplitRight {
+                        SplitAxis::Horizontal
+                    } else {
+                        SplitAxis::Vertical
+                    };
+                    self.workspace.split_active_tab_with_view(view_kind, axis);
+                }
+            }
+            self.reconcile(window, cx);
+            self.focus_active(window, cx);
+            return;
+        }
         let terminal_spawn =
             matches!(kind, PaneKind::Terminal).then(|| self.pending_terminal_spawn(None));
         let session_id = match placement {

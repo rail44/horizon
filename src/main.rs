@@ -22,6 +22,7 @@ mod sessiond;
 mod terminal;
 mod terminal_focus;
 mod theme;
+mod theme_settings;
 mod view_chooser;
 mod workspace;
 mod workspace_state;
