@@ -279,6 +279,30 @@ fn resolve_config_path() -> Option<PathBuf> {
     )
 }
 
+/// The config file path [`load`]/[`reload`] themselves resolve to
+/// (`HORIZON_CONFIG` > `XDG_CONFIG_HOME` > `HOME`), exposed for a caller
+/// that needs to *write* to the same file those read from -- the theme
+/// settings view's explicit Save action (`docs/theme-settings-view-design.md`)
+/// is the one caller today. `None` means the same thing it means for
+/// [`load`]: no `HOME`/`XDG_CONFIG_HOME` to fall back to.
+///
+/// `#[cfg(test)]` resolves to `None` unconditionally, mirroring [`load`]/
+/// [`reload`]'s own gate for the same reason: a test process must never
+/// observe the developer's real environment or resolve to their real
+/// `~/.config/horizon/config.toml`. Tests that need to exercise real path
+/// resolution use [`resolve_config_path_from`] directly (see this module's
+/// own tests), same as `load`/`reload`'s existing test seams.
+pub fn resolved_path() -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        None
+    }
+    #[cfg(not(test))]
+    {
+        resolve_config_path()
+    }
+}
+
 /// Pure path-resolution logic, factored out of [`resolve_config_path`] so it
 /// can be unit-tested without mutating process environment variables —
 /// `cargo test` runs tests in parallel within one process, so real env

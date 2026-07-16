@@ -235,18 +235,21 @@ const LIST_ACTIVE_BLEND_RATIO: f32 = 0.1;
 // color spaces that were never going to land on identical bytes).
 
 /// `text_contrast`'s floor -- WCAG 2.x AA's normal-text contrast
-/// threshold. No knob value may go below it.
-const TEXT_CONTRAST_FLOOR: f64 = 4.5;
+/// threshold. No knob value may go below it. `pub(crate)`: the theme
+/// settings view's contrast slider (`theme_settings::seed`) reads this as
+/// its own clamp/range floor rather than duplicating the number.
+pub(crate) const TEXT_CONTRAST_FLOOR: f64 = 4.5;
 /// `text_contrast`'s ceiling -- WCAG's own maximum possible ratio (pure
-/// black on pure white).
-const TEXT_CONTRAST_CEIL: f64 = 21.0;
+/// black on pure white). `pub(crate)`, see [`TEXT_CONTRAST_FLOOR`].
+pub(crate) const TEXT_CONTRAST_CEIL: f64 = 21.0;
 /// `text_contrast`'s built-in default -- the built-in dark scheme's own
 /// measured `foreground`/`background` ratio (`docs/theme-design.md`'s
 /// Evidence table: 15.01), so a config that leaves the knob unset keeps
 /// deriving today's default appearance (`foreground` solves back to
 /// within a couple of `u8` units of `FOREGROUND_DEFAULT` at this setting
-/// -- verified in this module's tests, not assumed).
-const TEXT_CONTRAST_DEFAULT: f64 = 15.0;
+/// -- verified in this module's tests, not assumed). `pub(crate)`, see
+/// [`TEXT_CONTRAST_FLOOR`].
+pub(crate) const TEXT_CONTRAST_DEFAULT: f64 = 15.0;
 
 /// How far of the way from the WCAG floor (`TEXT_CONTRAST_FLOOR`) to the
 /// `text_contrast` knob `text_muted`'s own target ratio sits, when
@@ -885,8 +888,10 @@ fn scheme_from(raw: &RawConfig) -> Scheme {
     }
 }
 
-/// `#rgb` / `#rrggbb` → packed 0xRRGGBB.
-fn parse_hex(value: &str) -> Option<u32> {
+/// `#rgb` / `#rrggbb` → packed 0xRRGGBB. `pub(crate)`: the theme settings
+/// view (`theme_settings::seed`) reuses this exact parser rather than
+/// forking a second copy for its own seed-editing controls.
+pub(crate) fn parse_hex(value: &str) -> Option<u32> {
     let hex = value.trim().strip_prefix('#')?;
     match hex.len() {
         3 => {
@@ -993,8 +998,12 @@ pub(crate) fn tint_over_background(tint: Hsla, alpha: f32) -> Hsla {
 
 /// `Hsla` -> packed `0xRRGGBB`, the inverse of [`packed_hsla`]. Every
 /// caller passes an opaque scheme-role color (alpha always `1.0`), so the
-/// dropped alpha byte is never meaningful.
-fn packed_from_hsla(value: Hsla) -> u32 {
+/// dropped alpha byte is never meaningful. `pub(crate)`: the theme
+/// settings view (`theme_settings::seed`) uses this to seed its
+/// `surface_base`/custom-accent color pickers from the already-public
+/// `background()`/`accent()` accessors, rather than adding a second,
+/// u32-returning accessor per role.
+pub(crate) fn packed_from_hsla(value: Hsla) -> u32 {
     let rgba: Rgba = value.to_rgb();
     u32::from(rgba) >> 8
 }
@@ -1028,7 +1037,10 @@ fn primary_foreground_for(primary: u32) -> u32 {
     }
 }
 
-fn hex(value: u32) -> String {
+/// `pub(crate)`: the theme settings view's `toml_edit` save path
+/// (`theme_settings::save`) reuses this exact formatter for the seed's
+/// hex-string config values, rather than forking a second copy.
+pub(crate) fn hex(value: u32) -> String {
     format!("#{value:06x}")
 }
 
@@ -1440,6 +1452,17 @@ pub fn surface_selected() -> Hsla {
 #[allow(dead_code)]
 pub fn surface_raised() -> Hsla {
     packed_hsla(scheme().surface_raised)
+}
+
+/// The tab strip's own chrome background -- a derived neutral-ladder step
+/// (see `Scheme`'s own `surface_chrome` field doc). `pub(crate)`: not
+/// previously read outside this module, but the theme settings view's
+/// swatch chips (`docs/theme-settings-view-design.md`) group it with
+/// `surface_panel`/`surface_selected`/`surface_raised`/`border` as one of
+/// the "surfaces + borders" chip row, so it needs a read-only accessor
+/// like its siblings.
+pub(crate) fn surface_chrome() -> Hsla {
+    packed_hsla(scheme().surface_chrome)
 }
 
 /// A subtle separator line -- a derived neutral-ladder step (see
