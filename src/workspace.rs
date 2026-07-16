@@ -892,7 +892,7 @@ impl WorkspaceShell {
             ) {
                 self.panes.insert(
                     pane_id,
-                    PaneView::ThemeSettings(cx.new(ThemeSettingsView::new)),
+                    PaneView::ThemeSettings(cx.new(|cx| ThemeSettingsView::new(window, cx))),
                 );
             }
         }

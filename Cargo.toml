@@ -67,6 +67,14 @@ horizon-winit-platform = { path = "crates/horizon-winit-platform" }
 serde_json = "1.0"
 termwiz = "0.23.3"
 tokio = { version = "1.52", features = ["rt", "net", "io-util", "time", "macros"] }
+# The theme settings view's explicit-Save writer (`src/theme_settings/save.rs`):
+# edits only the `[theme]`/`[theme.ansi]` seed keys in the user's config
+# file, preserving every other section, comment, and ordering byte-for-byte
+# -- a plain `toml`-crate round trip (parse to a Rust struct, reserialize)
+# would lose exactly that. Default features (`display`+`parse`) are enough;
+# no `serde` feature needed since the writer edits the `DocumentMut` tree
+# directly rather than (de)serializing a typed struct through it.
+toml_edit = "0.25"
 unicode-width = "0.2"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 
