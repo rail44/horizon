@@ -182,13 +182,17 @@ wave items where possible; design docs on first use.
   derive from readable normals. Implementation is complete. Remaining,
   with their actual gates (owner clarification 2026-07-15): the
   brights verdict waits for an **interactive color-scheme settings
-  view** (sliders over the seed — the owner wants to re-examine the
-  whole scheme themselves there, not judge brights in isolation; when
-  that view gets scheduled, reconcile with the in-flight
-  `color-picker` worktree branch, which predates the seed design);
-  the scrim feedback round landed
-  2026-07-15 (0.30 base / 0.12 cursor-pane split, modal-open dimming —
-  further tuning is one constant). Colorful expression on the
+  view** — **which shipped 2026-07-17**
+  (`docs/theme-settings-view-design.md`, slices 1+2, merges `fcbfb85` +
+  `1f7fee3`): Horizon's first session-less first-party pane
+  (`PaneKind::View(ViewKind)`), opened from the view chooser, editing
+  exactly the seed with live apply, explicit `toml_edit` Save, and
+  derived-color swatch chips. The verdict is now plain owner
+  dogfooding in that view. (The pre-seed `color-picker` branch was set
+  aside by the owner, 2026-07-16.) The scrim/pane-chrome feedback
+  rounds all landed 2026-07-15/16 (final: bg-veil contrast fade 0.5,
+  uniform; 2px borders + cursor inner glow blur 4; modal-open
+  chrome-neutral freeze; split insets, divider line kept as-is). Colorful expression on the
   projected hue set stays a separately-scheduled future theme;
   base16/24 import stays deferred. **Config surface narrowed to the
   seed, 2026-07-16** (owner): the ~20 role keys' override layer (the
