@@ -1,5 +1,10 @@
 # Agent Framework Research
 
+> **Historical (annotated 2026-07-18):** early framework survey
+> (2026-06-29). Horizon settled on rig for the provider layer; the
+> current contract and layering are `docs/agent-provider-contract.md`
+> and `docs/agent-runtime-split-design.md`.
+
 This document records the initial Rust agent/LLM framework research for the
 Horizon Agent pane and plugin capability model.
 

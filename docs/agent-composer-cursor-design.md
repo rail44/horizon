@@ -1,5 +1,12 @@
 # Agent Composer Cursor Design
 
+> **Historical (annotated 2026-07-18):** this design covered the
+> Floem-era composer, retired with the GPUI migration completed
+> 2026-07-11; the current composer is gpui-component's `Input`
+> (`src/agent/view.rs`). Kept as the record of the hand-rolled draft
+> model and its floem `TextLayout` findings (see also issue 001's
+> resolution).
+
 Records why the agent pane's message-box composer (`workspace::view::
 agent_controls::agent_composer`) got a real cursor through a hand-rolled
 `AgentDraft { text, cursor }` model instead of floem's built-in

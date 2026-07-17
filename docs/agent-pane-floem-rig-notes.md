@@ -1,5 +1,11 @@
 # Agent pane Floem/Rig API notes
 
+> **Historical (annotated 2026-07-18):** these notes constrained the
+> Floem-era agent pane; that shell was retired with the GPUI migration
+> completed 2026-07-11 (`docs/gpui-migration-design.md`). The Rig facts
+> may also be stale against the pinned version — check
+> `crates/horizon-agent` instead of trusting this note.
+
 This note records the API facts that should constrain the next Agent pane UI
 implementation. It is intentionally a research note before another spike.
 
