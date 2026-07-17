@@ -187,8 +187,9 @@ wave items where possible; design docs on first use.
   `1f7fee3`): Horizon's first session-less first-party pane
   (`PaneKind::View(ViewKind)`), opened from the view chooser, editing
   exactly the seed with live apply, explicit `toml_edit` Save, and
-  derived-color swatch chips. The verdict is now plain owner
-  dogfooding in that view. (The pre-seed `color-picker` branch was set
+  derived-color swatch chips. The owner re-tuned their scheme in
+  that view and saved it on 2026-07-17 — **the item is closed**; further
+  refinements ride ordinary dogfooding feedback. (The pre-seed `color-picker` branch was set
   aside by the owner, 2026-07-16.) The scrim/pane-chrome feedback
   rounds all landed 2026-07-15/16 (final: bg-veil contrast fade 0.5,
   uniform; 2px borders + cursor inner glow blur 4; modal-open
