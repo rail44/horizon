@@ -597,21 +597,40 @@ pub(crate) fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallVie
                 });
             }
             AgentFrameItem::ApprovalRequested(request) => {
+                // `.rev()`: attribute to the *most recently requested*
+                // entry with this call_id, matching `AgentFrame::
+                // tool_call_request`'s convention (`frame.rs`). A provider
+                // can legitimately reuse a call_id for a second, distinct
+                // call after the first one's full request/approve/finish
+                // cycle already closed (observed 2026-07-18: a rig/
+                // Kimi-K2.7-Code turn re-requested `fs.edit` with the same
+                // id an already-finished call had used). Forward `.find()`
+                // would keep re-attributing every follow-up event to that
+                // stale first entry, leaving the real, currently-pending
+                // occurrence permanently unresolved (`ApprovalState::None`,
+                // no Approve/Deny row ever rendered -- the "session wedged
+                // on an empty edit call" report).
                 if let Some(entry) = building
                     .iter_mut()
+                    .rev()
                     .find(|entry| entry.call_id == request.call_id)
                 {
                     entry.had_approval_request = true;
                 }
             }
             AgentFrameItem::ToolCallStarted(call_id) => {
-                if let Some(entry) = building.iter_mut().find(|entry| &entry.call_id == call_id) {
+                if let Some(entry) = building
+                    .iter_mut()
+                    .rev()
+                    .find(|entry| &entry.call_id == call_id)
+                {
                     entry.started = true;
                 }
             }
             AgentFrameItem::ToolCallFinished(result) => {
                 if let Some(entry) = building
                     .iter_mut()
+                    .rev()
                     .find(|entry| entry.call_id == result.call_id)
                 {
                     entry.result = Some(result);
@@ -1504,15 +1523,21 @@ pub(crate) fn build_tool_call_body(
 /// [`ToolCallBody`]. `None` if `call_id` has no matching request in
 /// `items` at all (shouldn't happen for a row the caller already built a
 /// [`ToolCallView`] from).
+///
+/// `.rev()` on both lookups: same reused-call_id reasoning as
+/// [`build_tool_call_views`] -- picks the *most recently requested*
+/// occurrence's request/result, not a stale earlier one that happened to
+/// share the id, so a `Waiting` row's proposal body always reflects the
+/// call actually pending approval.
 pub(crate) fn tool_call_body(
     items: &[AgentFrameItem],
     call_id: &ToolCallId,
 ) -> Option<ToolCallBody> {
-    let request = items.iter().find_map(|item| match item {
+    let request = items.iter().rev().find_map(|item| match item {
         AgentFrameItem::ToolCallRequested(request) if &request.call_id == call_id => Some(request),
         _ => None,
     })?;
-    let result = items.iter().find_map(|item| match item {
+    let result = items.iter().rev().find_map(|item| match item {
         AgentFrameItem::ToolCallFinished(result) if &result.call_id == call_id => Some(result),
         _ => None,
     });
@@ -2039,6 +2064,72 @@ mod tests {
         ];
         let views = build_tool_call_views(&items);
         assert_eq!(views[0].approval, ApprovalState::Waiting);
+    }
+
+    #[test]
+    fn a_reused_call_id_still_shows_the_second_occurrence_as_waiting() {
+        // Root-caused 2026-07-18: the owner's real agent session (a
+        // rig/Kimi-K2.7-Code provider) reused the exact call_id
+        // "functions.fs.edit:66" for two structurally different `fs.edit`
+        // calls -- the first fully resolved (approved and finished
+        // successfully) before the second was ever requested. Forward
+        // `.find()` in `build_tool_call_views` kept attributing every
+        // subsequent event for that call_id to the first (already
+        // resolved) entry, so the second occurrence's own
+        // `ApprovalRequested` never reached it: it stayed
+        // `ApprovalState::None` (misread as "never needed approval")
+        // forever, with no Approve/Deny row -- the session the owner had
+        // to interrupt because no approval UI ever appeared, though the
+        // daemon really was sitting in `WaitingForApproval`.
+        let items = vec![
+            tool_requested(
+                "dup",
+                "fs.edit",
+                json!({"path": "a.rs", "old_string": "first old", "new_string": "first new"}),
+            ),
+            approval_requested("dup"),
+            tool_started("dup"),
+            tool_finished("dup", json!({"path": "a.rs", "replaced": true})),
+            // A second, distinct call reuses the same call_id after the
+            // first one's cycle is fully closed.
+            tool_requested(
+                "dup",
+                "fs.edit",
+                json!({"path": "b.rs", "old_string": "second old", "new_string": "second new"}),
+            ),
+            approval_requested("dup"),
+            // No `ToolCallStarted`/`ToolCallFinished` yet for this second
+            // occurrence: it's the one currently pending approval.
+        ];
+        let views = build_tool_call_views(&items);
+        assert_eq!(views.len(), 2);
+
+        // The first occurrence keeps its own, correct resolution.
+        assert_eq!(views[0].approval, ApprovalState::Approved);
+        assert!(views[0].finished);
+        assert_eq!(views[0].target.as_deref(), Some("a.rs"));
+
+        // The second occurrence -- the actionable one -- must render as
+        // `Waiting`, not `None`, so the UI shows Approve/Deny for it.
+        assert_eq!(views[1].approval, ApprovalState::Waiting);
+        assert!(!views[1].finished);
+        assert_eq!(views[1].target.as_deref(), Some("b.rs"));
+
+        // Its proposal body must reflect the *second* call's own content,
+        // not the already-finished first one that happens to share the
+        // id (`tool_call_body`'s matching `.rev()` fix).
+        match tool_call_body(&items, &views[1].call_id) {
+            Some(ToolCallBody::Diff { lines, .. }) => {
+                assert_eq!(
+                    diff_texts(&lines),
+                    vec![
+                        (DiffLineKind::Removed, "second old"),
+                        (DiffLineKind::Added, "second new")
+                    ]
+                );
+            }
+            other => panic!("expected the second occurrence's own diff, got {other:?}"),
+        }
     }
 
     #[test]

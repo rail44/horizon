@@ -198,22 +198,38 @@ impl AgentFrame {
         state_indicates_turn_in_flight(self.state)
     }
 
-    /// Whether `call_id` already has a terminal `ToolCallFinished` in the
-    /// frame — from an earlier approve/deny short-circuit, a genuine result,
-    /// or a cancellation that finished the call. Used to guard against
+    /// Whether `call_id`'s *most recent* `ToolCallRequested` occurrence
+    /// already has a terminal `ToolCallFinished` in the frame — from an
+    /// earlier approve/deny short-circuit, a genuine result, or a
+    /// cancellation that finished the call. Used to guard against
     /// double-folding a late result that arrives after the call already
     /// resolved: `agent::tools::approval`'s `ApprovalOutcome::AlreadyResolved`
     /// check, and the bash tool's async completion delivery
     /// (`app/runtime/agent.rs`), both key off this.
+    ///
+    /// Scoped to items at-or-after the latest `ToolCallRequested` for
+    /// `call_id` (same "most recent occurrence" reading
+    /// [`Self::tool_call_request`] already uses), not the whole session —
+    /// root-caused 2026-07-18: a provider can reuse the exact same
+    /// call_id string for a second, distinct call after an earlier
+    /// occurrence's full request/approve/finish cycle already closed (a
+    /// real rig/OpenAI-compatible-backend quirk, not just theoretical).
+    /// Scanning the whole session here mistook that stale earlier finish
+    /// for the current occurrence's, permanently short-circuiting every
+    /// approve/deny for the new call as `AlreadyResolved` and wedging the
+    /// turn — the daemon-side half of the "session stuck on an edit call
+    /// with no working Approve" report; [`Self::tool_call_request`]'s own
+    /// `.rev()` scoping was already immune to this.
     pub fn has_tool_call_finished(&self, call_id: &ToolCallId) -> bool {
-        self.items.iter().any(|item| {
+        self.items_since_latest_request(call_id).any(|item| {
             matches!(item, AgentFrameItem::ToolCallFinished(result) if &result.call_id == call_id)
         })
     }
 
-    /// Whether `call_id` already has a `ToolCallStarted` in the frame —
-    /// true from the instant Horizon began executing it, not just once it
-    /// finished. For `fs.write`/`fs.edit` this is equivalent to
+    /// Whether `call_id`'s *most recent* `ToolCallRequested` occurrence
+    /// already has a `ToolCallStarted` in the frame — true from the
+    /// instant Horizon began executing it, not just once it finished. For
+    /// `fs.write`/`fs.edit` this is equivalent to
     /// [`Self::has_tool_call_finished`] (both events are folded together,
     /// synchronously, by `agent::tools::approval::synchronous_result`), but
     /// `bash`'s approve path folds `ToolCallStarted` immediately and only
@@ -224,11 +240,31 @@ impl AgentFrame {
     /// second time by a duplicate Approve arriving in that window (the
     /// 2026-07 repeated-approval OOM incident: a banner that didn't
     /// visibly react to a held-down `y` key each re-sent `Approve` for the
-    /// same still-running bash call).
+    /// same still-running bash call). Same reused-call_id scoping as
+    /// [`Self::has_tool_call_finished`] — see its doc comment.
     pub fn has_tool_call_started(&self, call_id: &ToolCallId) -> bool {
-        self.items
-            .iter()
+        self.items_since_latest_request(call_id)
             .any(|item| matches!(item, AgentFrameItem::ToolCallStarted(id) if id == call_id))
+    }
+
+    /// The frame's items from (and including) `call_id`'s most recent
+    /// `ToolCallRequested` onward, or the whole slice if `call_id` was
+    /// never requested at all (harmless: every caller only matches items
+    /// that reference `call_id`, so an unrelated call_id still yields
+    /// `false`/`None` either way). Shared scoping helper for
+    /// [`Self::has_tool_call_finished`]/[`Self::has_tool_call_started`].
+    fn items_since_latest_request(
+        &self,
+        call_id: &ToolCallId,
+    ) -> impl Iterator<Item = &AgentFrameItem> {
+        let start = self
+            .items
+            .iter()
+            .rposition(|item| {
+                matches!(item, AgentFrameItem::ToolCallRequested(request) if &request.call_id == call_id)
+            })
+            .unwrap_or(0);
+        self.items[start..].iter()
     }
 }
 

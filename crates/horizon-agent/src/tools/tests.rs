@@ -1032,6 +1032,78 @@ fn resolve_approval_deny_then_approve_is_noop() {
     assert!(!target.exists());
 }
 
+#[test]
+fn resolve_approval_executes_a_new_occurrence_of_a_reused_call_id() {
+    // Root-caused 2026-07-18 (a real owner session, rig/OpenAI-compatible
+    // provider): the provider reused the exact same call_id string for two
+    // structurally different `fs.write`/`fs.edit` calls in one session --
+    // the first fully resolved (approved and finished) well before the
+    // model ever requested the second. The old `has_tool_call_finished`/
+    // `has_tool_call_started` whole-session scan mistook the *first*
+    // occurrence's finish for the *second* occurrence's, so `try_execute`
+    // permanently returned `AlreadyResolved` for a call nobody had ever
+    // acted on -- no tool ran, no result reached the provider, the turn
+    // wedged forever with no way to recover (the daemon-side half of the
+    // "session stuck, no working Approve" report; the UI-side half is
+    // `src/agent/turns.rs`'s `build_tool_call_views`/`tool_call_body`).
+    let root = temp_workspace("approval-reused-call-id");
+    let target_a = root.join("a.txt");
+    let target_b = root.join("b.txt");
+    let tool_state = ToolSessionState::new(root);
+    let session_id = SessionId::new();
+    let live_state = LiveState::new();
+    register_session_runtime(
+        session_id,
+        tool_state,
+        live_state.clone(),
+        dummy_bash_results(),
+    );
+
+    let call_id = ToolCallId("dup".to_string());
+
+    // First occurrence: requested, approved, finished -- a complete,
+    // unrelated cycle that closes before the id is ever reused.
+    let frame = live_state.extend_events([Event::ToolCallRequested(ToolCallRequest {
+        call_id: call_id.clone(),
+        tool_id: "fs.write".to_string(),
+        input: json!({ "path": target_a.display().to_string(), "content": "first" }),
+    })]);
+    let first = resolve_approval(
+        &frame,
+        session_id,
+        call_id.clone(),
+        ApprovalDecision::Approve,
+    );
+    assert!(
+        matches!(first, ApprovalOutcome::Executed { .. }),
+        "first occurrence's approve should execute fs.write"
+    );
+    assert_eq!(fs::read_to_string(&target_a).unwrap(), "first");
+
+    // Second occurrence: the provider reuses `call_id` for a genuinely
+    // different, later call.
+    let after_second_request =
+        live_state.extend_events([Event::ToolCallRequested(ToolCallRequest {
+            call_id: call_id.clone(),
+            tool_id: "fs.write".to_string(),
+            input: json!({ "path": target_b.display().to_string(), "content": "second" }),
+        })]);
+
+    let second = resolve_approval(
+        &after_second_request,
+        session_id,
+        call_id,
+        ApprovalDecision::Approve,
+    );
+    assert!(
+        matches!(second, ApprovalOutcome::Executed { .. }),
+        "second occurrence's approve must execute, not be swallowed as \
+         AlreadyResolved just because an earlier occurrence of the same \
+         call_id already finished: {second:?}"
+    );
+    assert_eq!(fs::read_to_string(&target_b).unwrap(), "second");
+}
+
 // --- approval wiring: bash -------------------------------------------------
 
 #[test]
