@@ -39,9 +39,7 @@ use crate::theme;
 use crate::theme_settings::ThemeSettingsView;
 use crate::view_chooser::{Placement, ViewChooserDelegate};
 use crate::workspace_state::{InvalidState, LoadResult, WorkspaceStateStore};
-use horizon_terminal_core::{
-    TerminalCommand, TerminalCoreOptions, TerminalSize, TerminalSpawnSpec,
-};
+use horizon_terminal_core::{TerminalCoreOptions, TerminalSize, TerminalSpawnSpec};
 use horizon_workspace::types::SessionKind;
 use horizon_workspace::SessionId;
 use uuid::Uuid;
@@ -711,6 +709,10 @@ pub struct WorkspaceShell {
     // to, so a transition can send `Focus(false)` to the one it's about
     // to stop being true for. See `focus_transition`.
     last_focused_terminal: Option<SessionId>,
+    // Handed to every `TerminalSession::spawn` (cloned per session) so a
+    // PTY-side shell exit can notify the shell to terminate that workspace
+    // session -- see the `terminal_exit_rx` pump spawned in `new`.
+    terminal_exit_tx: futures::channel::mpsc::UnboundedSender<SessionId>,
 }
 
 impl WorkspaceShell {
@@ -724,6 +726,7 @@ impl WorkspaceShell {
             load_workspace_state(&mut workspace_state);
         let (sessiond, host_tool_rx) =
             SessiondHandle::start(&horizon_agent::socket::default_socket_path(), &socket_path);
+        let (terminal_exit_tx, terminal_exit_rx) = futures::channel::mpsc::unbounded();
         let mut shell = Self {
             workspace,
             workspace_state,
@@ -749,6 +752,7 @@ impl WorkspaceShell {
             pending_placement: None,
             scrim_freeze: None,
             last_focused_terminal: None,
+            terminal_exit_tx,
         };
         // Window activation/deactivation doesn't otherwise touch the
         // model, so it needs its own observer alongside `focus_active`'s
@@ -759,6 +763,7 @@ impl WorkspaceShell {
         })
         .detach();
         shell.wire_host_tools(sessiond.responder(), host_tool_rx, cx);
+        shell.wire_terminal_exit(terminal_exit_rx, cx);
         if shell.restoring_workspace {
             shell.spawn_workspace_restore(sessiond, cx);
         } else {
@@ -838,8 +843,11 @@ impl WorkspaceShell {
                         };
                         let wire = sessiond
                             .start_terminal(id.as_uuid(), self.terminal_spawn_spec(pending));
-                        self.sessions
-                            .insert(id, cx.new(|cx| TerminalSession::spawn(wire, cx)));
+                        let exit_tx = self.terminal_exit_tx.clone();
+                        self.sessions.insert(
+                            id,
+                            cx.new(|cx| TerminalSession::spawn(wire, id, exit_tx, cx)),
+                        );
                     }
                 }
                 SessionKind::Agent => {
@@ -940,6 +948,57 @@ impl WorkspaceShell {
             }
         })
         .detach();
+    }
+
+    /// Wires the receiving end of every `TerminalSession`'s `exit_tx`: a PTY
+    /// child exiting (e.g. the user typing `exit`) notifies the shell with
+    /// its session id, and the shell terminates that workspace session --
+    /// "shell exit terminates the session" (decision 1). Already async
+    /// (`TerminalSession::spawn` hands out a `futures` unbounded sender), so
+    /// unlike `wire_host_tools` this needs no blocking-to-async bridge
+    /// thread, just the pump.
+    fn wire_terminal_exit(
+        &self,
+        mut exit_rx: futures::channel::mpsc::UnboundedReceiver<SessionId>,
+        cx: &mut Context<Self>,
+    ) {
+        let window_handle = self.window;
+        cx.spawn(async move |this, cx| {
+            use futures::StreamExt as _;
+            while let Some(session_id) = exit_rx.next().await {
+                let _ = window_handle.update(cx, |_, window, cx| {
+                    let _ = this.update(cx, |shell, cx| {
+                        shell.handle_terminal_exited(session_id, window, cx);
+                    });
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Terminates the workspace session whose shell just exited -- whether
+    /// it was attached to a pane or sitting detached (session-manager
+    /// entry), `terminate_session` handles both uniformly. Reseeds a fresh
+    /// terminal pane if this emptied the workspace (decision 2: see
+    /// `ensure_workspace_has_pane`'s doc for why a zero-tab workspace must
+    /// never be reached). Ignored while a restore is in progress: the
+    /// session store isn't reconciled with the model yet, so there is
+    /// nothing meaningful to terminate.
+    fn handle_terminal_exited(
+        &mut self,
+        session_id: SessionId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.restoring_workspace {
+            return;
+        }
+        if !self.workspace.terminate_session(session_id) {
+            return;
+        }
+        ensure_workspace_has_pane(&mut self.workspace);
+        self.reconcile(window, cx);
+        self.focus_active(window, cx);
     }
 
     /// Lists the agent sessions hosted by the already-adopted runtime on a
@@ -1169,9 +1228,10 @@ impl WorkspaceShell {
                         if shell.workspace.session_pane_kind(session_id)
                             == Some(PaneKind::Terminal)
                         {
+                            let exit_tx = shell.terminal_exit_tx.clone();
                             shell.sessions.insert(
                                 session_id,
-                                cx.new(|cx| TerminalSession::spawn(wire, cx)),
+                                cx.new(|cx| TerminalSession::spawn(wire, session_id, exit_tx, cx)),
                             );
                         }
                     }
@@ -1264,9 +1324,11 @@ impl WorkspaceShell {
                         shell
                             .workspace
                             .register_detached_session(PaneKind::Terminal, session_id);
-                        shell
-                            .sessions
-                            .insert(session_id, cx.new(|cx| TerminalSession::spawn(wire, cx)));
+                        let exit_tx = shell.terminal_exit_tx.clone();
+                        shell.sessions.insert(
+                            session_id,
+                            cx.new(|cx| TerminalSession::spawn(wire, session_id, exit_tx, cx)),
+                        );
                     }
                     shell.reconcile(window, cx);
                     shell.focus_active(window, cx);
@@ -1361,10 +1423,7 @@ impl WorkspaceShell {
 
     fn send_terminal_focus(&self, session_id: SessionId, focused: bool, cx: &mut Context<Self>) {
         if let Some(session) = self.sessions.get(&session_id) {
-            let _ = session
-                .read(cx)
-                .sender()
-                .send(TerminalCommand::Focus(focused));
+            session.read(cx).send_focus(focused);
         }
     }
 
@@ -1625,6 +1684,7 @@ impl WorkspaceShell {
             CommandId::TerminateActiveSession => {
                 self.workspace.exit_workspace_mode();
                 self.workspace.terminate_active_session();
+                ensure_workspace_has_pane(&mut self.workspace);
                 self.reconcile(window, cx);
                 self.focus_active(window, cx);
             }
@@ -1736,6 +1796,7 @@ impl WorkspaceShell {
                         // terminates the session; the modal stays open
                         // on refreshed data.
                         shell.workspace.terminate_session(summary.id);
+                        ensure_workspace_has_pane(&mut shell.workspace);
                         shell.reconcile(window, cx);
                         let sessions = shell.workspace.session_summaries();
                         list.update(cx, |list, cx| {
@@ -1863,6 +1924,7 @@ impl WorkspaceShell {
         if !self.workspace.terminate_session(session_id) {
             return Err("unknown session".to_string());
         }
+        ensure_workspace_has_pane(&mut self.workspace);
         self.reconcile(window, cx);
         Ok(())
     }
@@ -2764,6 +2826,57 @@ mod tests {
             workspace.session_pane_kind(session_id),
             Some(PaneKind::Terminal)
         );
+    }
+
+    // `WorkspaceShell::handle_terminal_exited` (the receiving end of every
+    // `TerminalSession`'s `exit_tx`) is itself GPUI-entity-shaped and not
+    // unit-testable without a window, but its model-level steps --
+    // `Workspace::terminate_session` then `ensure_workspace_has_pane` -- are
+    // the same pure building blocks this module already tests elsewhere
+    // (e.g. `runtime_reload_reseeds_a_terminal_when_no_pane_survives`
+    // above). The two tests below exercise exactly that sequence, standing
+    // in for an end-to-end exit-notification test.
+
+    #[test]
+    fn terminate_session_removes_it_whether_attached_or_detached() {
+        // Decision 1: a PTY exit terminates its workspace session --
+        // `handle_terminal_exited` calls `terminate_session` for whatever
+        // session id the exit notification names, whether that session is
+        // still attached to a pane or already sitting detached (a
+        // session-manager entry that outlived its pane). Both must be
+        // removed from the model.
+        let mut workspace = Workspace::mvp();
+        let attached = workspace.active_terminal_session_id().expect("session");
+        let detached = SessionId::new();
+        workspace.register_detached_session(PaneKind::Terminal, detached);
+        assert!(!workspace.session_is_referenced(detached));
+
+        assert!(workspace.terminate_session(attached));
+        assert!(workspace.terminate_session(detached));
+
+        assert!(workspace.session_summaries().is_empty());
+    }
+
+    #[test]
+    fn ensure_workspace_has_pane_recovers_persistability_after_terminating_the_last_session() {
+        // Owner item 2's root cause: `WorkspaceState::validate` rejects a
+        // workspace with zero tabs, so `to_persisted_json` -- called by
+        // `persist_workspace` after every mutation -- started failing the
+        // moment the workspace's last pane vanished (e.g. every session
+        // terminated, or the last shell exiting once decision 1 wires exit
+        // to terminate). `ensure_workspace_has_pane`, called right after
+        // `terminate_session` on every termination path, is the guard that
+        // keeps a live workspace from ever reaching that state.
+        let mut workspace = Workspace::mvp();
+        workspace.terminate_active_session();
+        assert_eq!(workspace.tab_count(), 0);
+        assert!(workspace.to_persisted_json().is_err());
+
+        let reseeded = ensure_workspace_has_pane(&mut workspace).expect("fresh terminal");
+
+        assert_eq!(workspace.tab_count(), 1);
+        assert_eq!(workspace.active_session_id(), Some(reseeded));
+        assert!(workspace.to_persisted_json().is_ok());
     }
 
     #[test]
