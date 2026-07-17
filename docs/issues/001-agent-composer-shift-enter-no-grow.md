@@ -1,10 +1,22 @@
 ---
 id: 001
 title: Agent composer ignores a trailing Shift+Enter — box does not grow and the caret stays on line 1
-status: triaged
+status: resolved
 severity: high
 area: agent
 ---
+
+## Resolution (2026-07-18)
+
+Superseded by the GPUI migration (completed 2026-07-11, the day after
+filing): the entire surface this analysis targets — `ComposerTextView`,
+`src/workspace/view/composer_text.rs`, and floem's `TextLayout`
+primitives — was retired with the Floem shell. The current composer is
+gpui-component's `Input` with `auto_grow` and an explicit
+Shift+Enter-inserts-newline binding (`src/agent/view.rs`, `dd8603f`),
+none of which shares the defective layout path. No code change made
+against this issue; re-file with a fresh repro if the symptom is ever
+observed in the GPUI composer.
 
 ## Repro
 1. Open an agent pane and focus the composer.

@@ -122,14 +122,19 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
    matching roles (`accent`, `border_default`, `text_subtle`,
    `text_primary`, `surface_base`) in the same pass — no hardcoded colors
    remain in `agent::view`/`workspace::view::agent_controls`.
-8. **ghostty multi-attach corruption** — deliberately deprioritized;
+8. *(closed 2026-07-18 — long-deprioritized and the captured evidence is
+   gone from /tmp; re-file via docs/issues/ if it recurs)*
+   **ghostty multi-attach corruption** — deliberately deprioritized;
    captured evidence lives in the session transcripts (PTY traces under
    /tmp/horizon-pty-*.jsonl as of 2026-07-05).
-9. **floem startup input gap (~0.5s)** — accepted regression of the git
+9. *(closed 2026-07-18 — moot: the Floem shell and its startup gap
+   retired with the GPUI migration)*
+   **floem startup input gap (~0.5s)** — accepted regression of the git
    pin, compensated by `HORIZON_INPUT_SETTLE` in the verification
    scripts. Whether to report it upstream is the owner's own call and
    act, not something this repo's sessions do.
-10. **Test knob for sync-update pump** — the 150ms failsafe constant is
+10. *(closed 2026-07-18 — speculative knob; never needed in 12 days of
+    dogfooding)* **Test knob for sync-update pump** — the 150ms failsafe constant is
     vte's; if TUIs ever need tuning here it should join `[terminal]`.
 11. *(resolved 2026-07-06)* **bash tool truncation hides the head of long
     outputs** — ground truth turned out to be a 50/50 head+tail split whose
@@ -232,7 +237,9 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     frame. Full gate green (`cargo fmt`, `cargo clippy --workspace
     --all-targets -- -D warnings`, `cargo nextest run --workspace`: 672
     passed including all 19 `horizon-agentd` e2e tests).
-15. **reload_agent_runtime's responder/status effects when invoked over
+15. *(closed 2026-07-18 — moot: the hazard was floem_reactive scope
+    lifetime; the GPUI shell's reload path shares none of it)*
+    **reload_agent_runtime's responder/status effects when invoked over
     the CLI** — a latent reactive-lifetime hazard sibling to the three
     fixed in the plan-03 E2E (detached-scope creation): documented in
     docs/agent-roles-and-skills-design.md but deliberately not fixed
@@ -249,7 +256,9 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     amendment.md`'s Contract addendum for the trade-off). No UI change;
     the receiving end (turn receipts, running-card footer) is the next
     stage.
-17. **color-grid smoke fails on xdotool quoting/spacing** — pre-existing
+17. *(closed 2026-07-18 — moot: the color-grid smoke script retired with
+    the Floem-era verification scripts; scripts/ now holds only the GPUI
+    checks)* **color-grid smoke fails on xdotool quoting/spacing** — pre-existing
     environment quirk, unrelated to the placement-first change (fails
     identically standalone); distinct from the backlog-14 Xvfb family.
     Reported by application-ui (2026-07-07).
@@ -294,7 +303,10 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     with (`shows_label` is a boolean expression over `User`/`Assistant`
     only; `block_label` matches on `BlockKind`, not `tone`) — no change
     needed there.
-22. **Airtight in-place mutation tracking (reducer reports the mutated
+22. *(closed 2026-07-18 — moot: the floem bridge consumer is gone with
+    the GPUI migration; `in_place_mutable_item_indices` survives only as
+    dead code plus its own tests — removal queued as refactoring)*
+    **Airtight in-place mutation tracking (reducer reports the mutated
     index)** — leg 1's `in_place_mutable_item_indices`
     (`crates/horizon-agent/src/frame.rs`) is a stopgap: it re-derives the
     small set of indices a next fold *could* mutate, correct for every
@@ -322,7 +334,10 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     rebuild when the override table changes, so an app repainting its palette
     onto an already-drawn screen actually recolors. Forward-compatible with
     sessiond: the table rides the frame and will cross the wire unchanged.
-24. **Composer IME candidate-window placement** — the multi-line wrapping
+24. *(closed 2026-07-18 — moot: the Floem composer and `agent_controls.rs`
+    retired with the GPUI migration; IME placement is gpui-component
+    `Input`'s own concern now)*
+    **Composer IME candidate-window placement** — the multi-line wrapping
     composer (`44f2dd7`) still positions the IME preedit/candidate window
     at a fixed `Point::new(10.0, 6.0)` in `agent_controls.rs`, inherited
     from the single-line composer. With wrapping and multi-line drafts the
@@ -825,7 +840,10 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     gap yet — implement via a small objc2-app-kit call when a find/search
     field lands in the shell.
 
-39. **Vendored dispatcher queue not yet test-run on Linux.**
+39. *(closed 2026-07-18 — validated: `cargo nextest run -p
+    horizon-winit-platform` on this Linux host, 33/33 green including
+    `dispatcher::tests::concurrent_main_thread_posts_all_get_processed`)*
+    **Vendored dispatcher queue not yet test-run on Linux.**
     `horizon-winit-platform/src/queue.rs` (vendored from gpui because
     the queue isn't compiled on macOS) now backs the dispatcher on every
     OS, but its regression test
@@ -869,7 +887,9 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     build-dir. The `env!()` bake is kept only as a defensive fallback for
     direct (non-cargo/nextest) invocation of the test binary.
 
-41. **`equal_tab_width` chrome allowances are stale for `TabVariant::Tab`.**
+41. *(closed 2026-07-18 — moot per the 2026-07-15 note below; nothing to
+    do unless the tab strip switches variant again)*
+    **`equal_tab_width` chrome allowances are stale for `TabVariant::Tab`.**
     Observed 2026-07-15 during the design-C tab-strip switch: `src/
     workspace.rs`'s `EQUAL_WIDTH_CHROME_ALLOWANCE_PX` (24px) and
     `EQUAL_WIDTH_GAP_PX` (2px) were tuned for the retired `Segmented`
