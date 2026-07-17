@@ -75,6 +75,18 @@ entries live in `backlog-resolved.md` keeping their original numbers
     follow-up: see the `portable-pty` backlog entry for options (upgrade,
     vendor patch, or accept the retry mitigation as the practical ceiling
     given how rare it now is).
+42. **Tool-call rows have no per-occurrence identity when a provider
+    reuses a call_id.** The 2026-07-18 reused-call_id fix (`1d86521`)
+    made approval attribution and proposal bodies follow the most
+    recent occurrence, but `ToolCallView`/`tool_call_body` still key
+    purely on `call_id`: with a duplicate id, manually expanding the
+    *older*, already-finished row shows the latest occurrence's body
+    instead of its own, and GPUI element ids (`running-row-{call_id}`)
+    collide across the two rows. Both need the rare duplicate-id
+    condition plus interaction with the stale row specifically; a
+    proper fix is a per-occurrence identity model — design judgment,
+    not mechanical. Recorded 2026-07-18 from the fix's review.
+
 31. **Suspected upstream fork-safety hazard in `portable-pty` 0.9.0's PTY
     spawn — can wedge a terminal spawn under extreme concurrent load, at a
     rate a bounded retry only partially masks** — found while validating

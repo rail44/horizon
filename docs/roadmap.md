@@ -35,9 +35,18 @@ projection, and a receipt-based transcript UI.
 ## Open
 
 Ordering is being shaped with the owner (2026-07-18): a **refactoring
-wave comes first** (scope being drafted in-session); the owner's
-near-term feature interest is worktree and terminal territory.
-Unordered until that lands:
+wave comes first**; the owner's near-term feature interest is worktree
+and terminal territory. Wave 1 shipped 2026-07-18 (merges up to
+`08ef516`): terminal shell-exit-terminates-session + dead-channel
+reachability (backlog-35 parity) + empty-workspace reseed, the
+reused-call_id approval-wedge fix (UI and daemon halves), crates-wide
+stale-doc retargeting with dead-API/dep removal, and the
+`theme.rs`/`turns.rs` responsibility splits. Remaining in the wave,
+unordered: the `pub`→`pub(crate)` sweep, `workspace.rs`/`agent/view.rs`
+splits, the command-model payload design (needs an owner consult), the
+profile vertical's delete-or-rebuild decision, and the session-creation
+groundwork (deferred to the worktree feature work). Feature items,
+unordered until the wave lands:
 
 - **Session relationship model — implementation.** The decided design
   (`docs/session-relationship-design.md`): lineage tree,
