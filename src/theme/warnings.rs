@@ -397,7 +397,8 @@ mod tests {
         // Same lenient-fallback guarantee as `[theme]`'s own colors: an
         // unparsable `[theme.ansi]` value only ever produces a stderr
         // warning, never breaks resolution of the rest of the palette.
-        let config = crate::theme::test_support::config_with_ansi(&[], &[("red", "not-a-hex-color")]);
+        let config =
+            crate::theme::test_support::config_with_ansi(&[], &[("red", "not-a-hex-color")]);
         let scheme = super::super::scheme::scheme_from(&config);
         assert_eq!(scheme.ansi[1], super::super::scheme::ANSI16_DEFAULT[1]);
     }

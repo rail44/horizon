@@ -362,7 +362,9 @@ mod tests {
     use crate::theme::scheme::{
         scheme_from, BACKGROUND_DEFAULT, CURSOR_DEFAULT, LIST_ACTIVE_BLEND_RATIO,
     };
-    use crate::theme::test_support::{config_with, config_with_and_contrast, owner_seeded_light_scheme};
+    use crate::theme::test_support::{
+        config_with, config_with_and_contrast, owner_seeded_light_scheme,
+    };
 
     fn theme_color_for(scheme: &Scheme) -> gpui_component::ThemeColor {
         let config = gpui_component_theme_config(scheme);
@@ -375,19 +377,34 @@ mod tests {
     fn gpui_projection_default_dark_scheme() {
         let scheme = scheme_from(&RawConfig::default());
         let colors = theme_color_for(&scheme);
-        assert_eq!(colors.background, super::super::palette::packed_hsla(scheme.background));
-        assert_eq!(colors.foreground, super::super::palette::packed_hsla(scheme.foreground));
-        assert_eq!(colors.primary, super::super::palette::packed_hsla(scheme.accent));
+        assert_eq!(
+            colors.background,
+            super::super::palette::packed_hsla(scheme.background)
+        );
+        assert_eq!(
+            colors.foreground,
+            super::super::palette::packed_hsla(scheme.foreground)
+        );
+        assert_eq!(
+            colors.primary,
+            super::super::palette::packed_hsla(scheme.accent)
+        );
         assert_eq!(
             colors.primary_foreground,
             super::super::palette::packed_hsla(super::super::palette::PRIMARY_FOREGROUND_DARK_TEXT)
         );
-        assert_eq!(colors.tab_foreground, super::super::palette::packed_hsla(scheme.text_muted));
+        assert_eq!(
+            colors.tab_foreground,
+            super::super::palette::packed_hsla(scheme.text_muted)
+        );
         assert_eq!(
             colors.tab_active_foreground,
             super::super::palette::packed_hsla(scheme.foreground)
         );
-        assert_eq!(colors.danger, super::super::palette::packed_hsla(scheme.danger));
+        assert_eq!(
+            colors.danger,
+            super::super::palette::packed_hsla(scheme.danger)
+        );
         // Fallback-chain field we never set directly: `accent_foreground`
         // falls back to `foreground` (schema.rs), still legible.
         assert_eq!(
@@ -400,18 +417,32 @@ mod tests {
     fn gpui_projection_owner_seeded_light_scheme() {
         let scheme = owner_seeded_light_scheme();
         let colors = theme_color_for(&scheme);
-        assert_eq!(colors.background, super::super::palette::packed_hsla(scheme.background));
-        assert_eq!(colors.primary, super::super::palette::packed_hsla(scheme.accent));
+        assert_eq!(
+            colors.background,
+            super::super::palette::packed_hsla(scheme.background)
+        );
+        assert_eq!(
+            colors.primary,
+            super::super::palette::packed_hsla(scheme.accent)
+        );
         // The owner's accent is dark blue -> light text.
         assert_eq!(
             colors.primary_foreground,
-            super::super::palette::packed_hsla(super::super::palette::PRIMARY_FOREGROUND_LIGHT_TEXT)
+            super::super::palette::packed_hsla(
+                super::super::palette::PRIMARY_FOREGROUND_LIGHT_TEXT
+            )
         );
-        assert_eq!(colors.border, super::super::palette::packed_hsla(scheme.border));
+        assert_eq!(
+            colors.border,
+            super::super::palette::packed_hsla(scheme.border)
+        );
         // Design "C" (`docs/theme-design.md`): gpui-component's own
         // popovers/dropdowns follow the modal-surface philosophy too --
         // plain `background`, not the (usually unset, inert) `surface_raised`.
-        assert_eq!(colors.popover, super::super::palette::packed_hsla(scheme.background));
+        assert_eq!(
+            colors.popover,
+            super::super::palette::packed_hsla(scheme.background)
+        );
     }
 
     #[test]
@@ -423,9 +454,15 @@ mod tests {
         // -p gpui-component`. Checked on both a dark and the owner's real
         // light scheme, since `caret`/`selection` don't otherwise appear
         // in this function's other projection tests.
-        for scheme in [scheme_from(&RawConfig::default()), owner_seeded_light_scheme()] {
+        for scheme in [
+            scheme_from(&RawConfig::default()),
+            owner_seeded_light_scheme(),
+        ] {
             let colors = theme_color_for(&scheme);
-            assert_eq!(colors.caret, super::super::palette::packed_hsla(scheme.accent));
+            assert_eq!(
+                colors.caret,
+                super::super::palette::packed_hsla(scheme.accent)
+            );
             assert_eq!(
                 colors.selection,
                 super::super::palette::packed_hsla(scheme.accent).alpha(0.3),
@@ -443,8 +480,14 @@ mod tests {
         // diverge from `background` (unlike the zero-config default).
         let scheme = scheme_from(&config_with(&[("surface_base", "#16181d")]));
         let colors = theme_color_for(&scheme);
-        assert_eq!(colors.tab_bar, super::super::palette::packed_hsla(scheme.surface_chrome));
-        assert_ne!(colors.tab_bar, super::super::palette::packed_hsla(scheme.background));
+        assert_eq!(
+            colors.tab_bar,
+            super::super::palette::packed_hsla(scheme.surface_chrome)
+        );
+        assert_ne!(
+            colors.tab_bar,
+            super::super::palette::packed_hsla(scheme.background)
+        );
         // The segmented track keeps its own contrast-blend, now computed
         // from `surface_chrome` rather than raw `background`.
         assert_eq!(
@@ -461,8 +504,14 @@ mod tests {
     fn gpui_projection_surface_chrome_feeds_tab_bar_on_a_light_scheme() {
         let scheme = owner_seeded_light_scheme();
         let colors = theme_color_for(&scheme);
-        assert_eq!(colors.tab_bar, super::super::palette::packed_hsla(scheme.surface_chrome));
-        assert_ne!(colors.tab_bar, super::super::palette::packed_hsla(scheme.background));
+        assert_eq!(
+            colors.tab_bar,
+            super::super::palette::packed_hsla(scheme.surface_chrome)
+        );
+        assert_ne!(
+            colors.tab_bar,
+            super::super::palette::packed_hsla(scheme.background)
+        );
     }
 
     #[test]
@@ -522,8 +571,14 @@ mod tests {
             scheme.surface_panel,
             SEGMENTED_TRACK_BLEND_RATIO,
         );
-        assert_eq!(colors.tab_bar_segmented, super::super::palette::packed_hsla(expected));
-        assert_ne!(colors.tab_bar_segmented, super::super::palette::packed_hsla(scheme.background));
+        assert_eq!(
+            colors.tab_bar_segmented,
+            super::super::palette::packed_hsla(expected)
+        );
+        assert_ne!(
+            colors.tab_bar_segmented,
+            super::super::palette::packed_hsla(scheme.background)
+        );
         assert_ne!(
             colors.tab_bar_segmented,
             super::super::palette::packed_hsla(scheme.surface_panel)
@@ -549,18 +604,54 @@ mod tests {
     fn gpui_projection_base_hues_follow_the_scheme_and_are_faithful() {
         let scheme = scheme_from(&RawConfig::default());
         let colors = theme_color_for(&scheme);
-        assert_eq!(colors.red, super::super::palette::packed_hsla(scheme.ansi[1]));
-        assert_eq!(colors.red_light, super::super::palette::packed_hsla(scheme.ansi[9]));
-        assert_eq!(colors.green, super::super::palette::packed_hsla(scheme.ansi[2]));
-        assert_eq!(colors.green_light, super::super::palette::packed_hsla(scheme.ansi[10]));
-        assert_eq!(colors.yellow, super::super::palette::packed_hsla(scheme.ansi[3]));
-        assert_eq!(colors.yellow_light, super::super::palette::packed_hsla(scheme.ansi[11]));
-        assert_eq!(colors.blue, super::super::palette::packed_hsla(scheme.ansi[4]));
-        assert_eq!(colors.blue_light, super::super::palette::packed_hsla(scheme.ansi[12]));
-        assert_eq!(colors.magenta, super::super::palette::packed_hsla(scheme.ansi[5]));
-        assert_eq!(colors.magenta_light, super::super::palette::packed_hsla(scheme.ansi[13]));
-        assert_eq!(colors.cyan, super::super::palette::packed_hsla(scheme.ansi[6]));
-        assert_eq!(colors.cyan_light, super::super::palette::packed_hsla(scheme.ansi[14]));
+        assert_eq!(
+            colors.red,
+            super::super::palette::packed_hsla(scheme.ansi[1])
+        );
+        assert_eq!(
+            colors.red_light,
+            super::super::palette::packed_hsla(scheme.ansi[9])
+        );
+        assert_eq!(
+            colors.green,
+            super::super::palette::packed_hsla(scheme.ansi[2])
+        );
+        assert_eq!(
+            colors.green_light,
+            super::super::palette::packed_hsla(scheme.ansi[10])
+        );
+        assert_eq!(
+            colors.yellow,
+            super::super::palette::packed_hsla(scheme.ansi[3])
+        );
+        assert_eq!(
+            colors.yellow_light,
+            super::super::palette::packed_hsla(scheme.ansi[11])
+        );
+        assert_eq!(
+            colors.blue,
+            super::super::palette::packed_hsla(scheme.ansi[4])
+        );
+        assert_eq!(
+            colors.blue_light,
+            super::super::palette::packed_hsla(scheme.ansi[12])
+        );
+        assert_eq!(
+            colors.magenta,
+            super::super::palette::packed_hsla(scheme.ansi[5])
+        );
+        assert_eq!(
+            colors.magenta_light,
+            super::super::palette::packed_hsla(scheme.ansi[13])
+        );
+        assert_eq!(
+            colors.cyan,
+            super::super::palette::packed_hsla(scheme.ansi[6])
+        );
+        assert_eq!(
+            colors.cyan_light,
+            super::super::palette::packed_hsla(scheme.ansi[14])
+        );
     }
 
     #[test]
@@ -568,11 +659,26 @@ mod tests {
         // Magenta (`ansi[5]`) is the deliberately dropped sixth hue.
         let scheme = scheme_from(&RawConfig::default());
         let colors = theme_color_for(&scheme);
-        assert_eq!(colors.chart_1, super::super::palette::packed_hsla(scheme.ansi[1])); // red
-        assert_eq!(colors.chart_2, super::super::palette::packed_hsla(scheme.ansi[3])); // yellow
-        assert_eq!(colors.chart_3, super::super::palette::packed_hsla(scheme.ansi[2])); // green
-        assert_eq!(colors.chart_4, super::super::palette::packed_hsla(scheme.ansi[6])); // cyan
-        assert_eq!(colors.chart_5, super::super::palette::packed_hsla(scheme.ansi[4])); // blue
+        assert_eq!(
+            colors.chart_1,
+            super::super::palette::packed_hsla(scheme.ansi[1])
+        ); // red
+        assert_eq!(
+            colors.chart_2,
+            super::super::palette::packed_hsla(scheme.ansi[3])
+        ); // yellow
+        assert_eq!(
+            colors.chart_3,
+            super::super::palette::packed_hsla(scheme.ansi[2])
+        ); // green
+        assert_eq!(
+            colors.chart_4,
+            super::super::palette::packed_hsla(scheme.ansi[6])
+        ); // cyan
+        assert_eq!(
+            colors.chart_5,
+            super::super::palette::packed_hsla(scheme.ansi[4])
+        ); // blue
     }
 
     #[test]
@@ -610,11 +716,17 @@ mod tests {
         let tab_foreground = contrast_snap(scheme.text_muted, tab_bar_segmented);
         assert_ne!(tab_foreground, scheme.text_muted);
         let after = ratio(tab_foreground, tab_bar_segmented);
-        assert!(after >= super::super::scheme::TEXT_CONTRAST_FLOOR, "ratio = {after}");
+        assert!(
+            after >= super::super::scheme::TEXT_CONTRAST_FLOOR,
+            "ratio = {after}"
+        );
 
         // Wired all the way through the gpui-component projection too.
         let colors = theme_color_for(&scheme);
-        assert_eq!(colors.tab_foreground, super::super::palette::packed_hsla(tab_foreground));
+        assert_eq!(
+            colors.tab_foreground,
+            super::super::palette::packed_hsla(tab_foreground)
+        );
     }
 
     #[test]
@@ -638,7 +750,10 @@ mod tests {
         let button_danger_foreground = contrast_snap(scheme.danger, fill);
         assert_ne!(button_danger_foreground, scheme.danger);
         let after = ratio(button_danger_foreground, fill);
-        assert!(after >= super::super::scheme::TEXT_CONTRAST_FLOOR, "ratio = {after}");
+        assert!(
+            after >= super::super::scheme::TEXT_CONTRAST_FLOOR,
+            "ratio = {after}"
+        );
 
         // Wired all the way through the gpui-component projection too.
         let colors = theme_color_for(&scheme);

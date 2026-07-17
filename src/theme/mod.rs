@@ -90,14 +90,14 @@ mod test_support;
 mod warnings;
 
 pub use accessors::{
-    accent, background, border, danger, diff_added_surface, diff_added_text,
-    diff_removed_surface, diff_removed_text, info, on_accent, success, surface_panel,
-    surface_raised, surface_selected, text_muted, text_primary, text_subtle, warning,
+    accent, background, border, danger, diff_added_surface, diff_added_text, diff_removed_surface,
+    diff_removed_text, info, on_accent, success, surface_panel, surface_raised, surface_selected,
+    text_muted, text_primary, text_subtle, warning,
 };
 pub(crate) use accessors::{overlay_shadow, scrim_color, surface_chrome};
 pub use ansi::{resolve, terminal_color_scheme, to_hsla};
 pub use gpui_component::apply_gpui_component_theme;
-pub(crate) use palette::{hex, parse_hex, packed_from_hsla, readable_on, tint_over_background};
+pub(crate) use palette::{hex, packed_from_hsla, parse_hex, readable_on, tint_over_background};
 pub use scheme::reload_from;
 // `TEXT_CONTRAST_DEFAULT` has no current crate-external reader (only a doc
 // comment in `theme_settings::seed` names it, deliberately not importing
