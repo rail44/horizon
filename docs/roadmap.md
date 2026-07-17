@@ -352,11 +352,10 @@ wave items where possible; design docs on first use.
   co-located as an independent crate — no horizon dependencies
   (extractable later), SSE streaming required (horizon-agent assumes
   it).
-- **Todo tool + overview panel hookup**: a plan/todo tool in the agent
-  contract (agent-foundation) feeding the transcript's overview bar the
-  same way as the Changes aggregation — proposed by application-ui
-  slice 5; pairs with backlog 16 (turn metadata) as the two small
-  contract extensions unblocking the UI's remaining improvements.
+- **Todo tool + overview panel hookup** — closed 2026-07-18 (owner
+  decision): implemented once and reverted the same day (2026-07-14,
+  `441791f`) as an unintended landing; not currently wanted. Re-propose
+  only on explicit owner intent.
 - **ACP client — external agents in agent panes**: host ACP-speaking
   agents (Claude Code via `claude-agent-acp`, Codex/Gemini adapters) as
   agent sessions. Motivation: auth stays agent-side (org-account OAuth,

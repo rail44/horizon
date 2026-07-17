@@ -279,7 +279,10 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     search — LSP integration is a larger commitment (language-server
     lifecycle) and overlaps with future viewer/plugin work. Recorded
     2026-07-07.
-20. **Live PTY hand-off across a sessiond binary update** — keeping a
+20. *(closed 2026-07-18 — owner decision: heavy independent capability;
+    the motivating need, UI-crash survival, is already met by the
+    sessiond process split)*
+    **Live PTY hand-off across a sessiond binary update** — keeping a
     terminal session's PTY master fd and child processes alive while
     the session daemon's binary is replaced (execve re-exec or
     systemd-style socket-activation fd passing). Deliberately split out
@@ -689,7 +692,9 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     bulk-insert pass could speed up the first-ever-boot/post-migration
     case further if it becomes a practical problem.
 
-33. **Unconfirmed: does a resumed/respawned terminal session's kitty
+33. *(closed 2026-07-18 — owner decision: unconfirmed hypothesis; re-file
+    with an input trace if the desync is ever observed)*
+    **Unconfirmed: does a resumed/respawned terminal session's kitty
     keyboard mode (`TermMode::REPORT_ALL_KEYS_AS_ESC`,
     `TerminalFrame::keys_as_escape_codes`) survive correctly, or can a
     live shell end up with the flag desynced from what the shell itself
@@ -822,7 +827,10 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     (not a bare ENOENT) if they're still missing after that. No
     sleep-loops -- one bounded wait per layer.
 
-37. **Upstream the gpui_wgpu Metal backends fix to zed.**
+37. *(closed 2026-07-18 — owner decision: upstreaming is the owner's own
+    act if ever; the macOS-gated seed in horizon-winit-platform already
+    documents the workaround)*
+    **Upstream the gpui_wgpu Metal backends fix to zed.**
     `WgpuContext::instance` hardcodes `Backends::VULKAN | GL` (gpui_wgpu
     is zed's Linux renderer; upstream main unchanged as of 2026-07-14),
     which is why `horizon-winit-platform/src/window.rs` carries a
@@ -832,7 +840,9 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     entirely on the next gpui bump. See
     `docs/winit-backend-design.md` "macOS bring-up".
 
-38. **macOS find pasteboard is stubbed.** `Platform::
+38. *(closed 2026-07-18 — owner decision: no Horizon surface feeds it;
+    revisit only when a find/search field lands in the shell)*
+    **macOS find pasteboard is stubbed.** `Platform::
     read/write_from_find_pasteboard` in `horizon-winit-platform` return
     `None`/no-op; gpui_macos implements them against the real
     `NSPasteboard` find pasteboard (system-wide "Use Selection for
