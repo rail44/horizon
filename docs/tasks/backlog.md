@@ -141,7 +141,10 @@ Discovered during dogfooding; promote to a numbered mission when picked up.
     head budget was eaten by compile spew, plus a spill path hidden in a
     JSON field. Fixed by skewing the split to tail 2/3 and inlining the
     spill path into the truncation notice.
-12. **agentd leaks its `cargo run` environment into tool processes** —
+12. *(closed 2026-07-18 — owner decision: accepted as a known quirk of
+    `cargo run`-launched dev instances; launching the built binary avoids
+    it. Verified still unsanitized in sessiond as of today)*
+    **agentd leaks its `cargo run` environment into tool processes** —
     when Horizon is launched via `cargo run`, agentd (and thus every
     bash tool call an agent makes) inherits `CARGO_*`, `RUSTUP_*`, and
     an `LD_LIBRARY_PATH` pointing into `target/debug/build/...`
