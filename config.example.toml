@@ -103,9 +103,6 @@ stream_flush_interval_ms = 100
 # Character count that forces an early flush of a streamed delta, ahead of
 # the time-based flush above.
 stream_flush_chars = 320
-# How often, in seconds, the workspace pane header's agent turn-in-flight
-# elapsed-time display ("running · 12s") re-renders.
-pane_status_tick_secs = 1
 
 # Overrides the append-only agent event log (JSONL) path. Commented out:
 # the real default is $XDG_DATA_HOME/horizon/agent-events.jsonl, falling

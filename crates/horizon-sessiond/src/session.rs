@@ -107,9 +107,9 @@ pub(crate) struct SessiondState {
     pub(crate) providers: ProviderRegistry,
     pub(crate) agent_config: AgentConfig,
     /// `None` until [`Self::set_writer`] runs (or forever, if the event log
-    /// couldn't be opened -- mirrors Horizon's own graceful degrade in
-    /// `app::runtime::agent::open_agent_runtime_state_store`: sessions still
-    /// run, just without persistence). A `Mutex` rather than a plain field
+    /// couldn't be opened -- sessions still run, just without persistence,
+    /// the same graceful degrade the deleted in-process agent runtime had).
+    /// A `Mutex` rather than a plain field
     /// because `main` now binds the socket and starts accepting connections
     /// *before* the event log is opened (see the bind-first fix in `main`'s
     /// doc comment) -- this is filled in once that finishes, on whatever
@@ -519,8 +519,8 @@ impl Connection {
 
     /// Spawns the session thread for a `Control::SessionNew`. Reuses the
     /// crate's existing spawn shape (`ProviderRegistry::start_session`) --
-    /// the same call `app::runtime::agent::spawn_agent_session` makes
-    /// in-process.
+    /// the same call the deleted in-process agent runtime used to make
+    /// before every agent session moved here.
     pub(crate) fn handle_session_new(&self, new: SessionNew) {
         spawn_session_thread(
             self.state.clone(),
@@ -752,9 +752,9 @@ fn tool_session_state_for(
 
 /// The session's whole lifetime, from `Initialize` through to the
 /// provider's channel closing. Runs entirely synchronously on its own
-/// dedicated thread -- see the module doc for why. Faithfully mirrors
-/// `app::runtime::agent::spawn_agent_session`'s in-process shape, minus the
-/// floem signals/effects: register the tool/live state (seeded with
+/// dedicated thread -- see the module doc for why. Faithfully mirrors the
+/// deleted in-process agent runtime's shape, minus the floem signals/
+/// effects it used to fold through: register the tool/live state (seeded with
 /// `history`, see [`resume_persisted_sessions`]), send `Initialize`, then
 /// fold every provider event / bash completion / inbound command / replay
 /// request as it arrives, forwarding the resulting (non-ephemeral) events to
@@ -889,8 +889,8 @@ fn run_session(
     unregister_session_runtime(session_id);
 }
 
-/// One provider event through the same processing pipeline
-/// `app/runtime/agent.rs`'s effect used to run in-process
+/// One provider event through the same processing pipeline the deleted
+/// in-process agent runtime's effect used to run
 /// (`process_agent_provider_event` for tool execution/policy mapping, then
 /// `LiveState::extend_provider_events` for the fold/persist) -- except the
 /// resulting frame isn't published to a local `Frames` signal, it's
@@ -945,8 +945,8 @@ fn handle_provider_event(
 
 /// The async-execution analogue of [`handle_provider_event`]'s fold, for a
 /// `bash` call approved earlier (`ApprovalOutcome::Started` below) whose
-/// result has now arrived on its own channel -- the same shape the retired
-/// in-process `app/runtime/agent.rs::fold_bash_completion` used to have,
+/// result has now arrived on its own channel -- the same shape the deleted
+/// in-process agent runtime's `fold_bash_completion` used to have,
 /// forwarding the same events over the wire instead of updating a local
 /// `Frames` signal, except the trailing `StateChanged` is no longer
 /// unconditional (see below).

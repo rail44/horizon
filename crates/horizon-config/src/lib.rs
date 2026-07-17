@@ -101,10 +101,6 @@ pub struct RawAgentConfig {
     /// Character count that forces an early flush of a streamed
     /// assistant-text/reasoning delta, ahead of the time-based flush above.
     pub stream_flush_chars: Option<usize>,
-    /// How often, in seconds, the workspace pane header's agent
-    /// turn-in-flight elapsed-time display ("running · 12s") re-renders.
-    /// See `workspace::view::pane`'s `schedule_tick`.
-    pub pane_status_tick_secs: Option<u64>,
     /// Overrides the append-only agent event log (JSONL) path. The
     /// `HORIZON_AGENT_EVENT_LOG` env var, if set, wins over this.
     pub event_log_path: Option<String>,

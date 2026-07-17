@@ -6,9 +6,9 @@
 //! cap), so it can never run synchronously on the UI thread the way those
 //! do. See `agent::tools::approval::ApprovalOutcome::Started` for the split
 //! this forces: approval folds a "running" frame immediately and kicks off
-//! this module's `spawn`, whose eventual result is delivered back to the UI
-//! thread over a channel (`app/runtime/agent.rs` wires it up) rather than
-//! being returned synchronously.
+//! this module's `spawn`, whose eventual result is delivered back to the
+//! session loop over a channel (`crates/horizon-sessiond/src/session.rs`
+//! wires it up) rather than being returned synchronously.
 //!
 //! Panic safety: a job's work function running to completion without
 //! panicking is not something the rest of this module can assume. If it
@@ -37,11 +37,11 @@ use crate::contract::{SessionId, ToolCallId, ToolCallResult};
 use crate::frame::AgentFrame;
 
 /// A bash call's outcome, delivered from the background thread that ran it
-/// back to the UI thread. `app/runtime/agent.rs` bridges this over a
-/// `crossbeam_channel` with `floem::ext_event::create_signal_from_channel` —
-/// the same cross-thread-to-UI seam it already uses for provider events
-/// (`agent::contract::SessionHandle::events`) — and folds it into the
-/// session's `LiveState`/`Frames` from a `create_effect`.
+/// back to the session loop. `crates/horizon-sessiond/src/session.rs`
+/// registers an unbounded `crossbeam_channel` per session (see
+/// `register_session_runtime`) and selects on it alongside provider events,
+/// folding a received completion into the session's `LiveState`/`Frames`
+/// via `fold_bash_completion`.
 #[derive(Clone, Debug)]
 pub struct BashCompletion {
     pub result: ToolCallResult,
@@ -157,8 +157,8 @@ pub fn kill_if_running(call_id: &ToolCallId) {
 /// late, genuine result is accepted and discarded — the same idempotence
 /// pattern `agent::tools::approval`'s `ApprovalOutcome::AlreadyResolved`
 /// uses for a duplicate approve/deny. Called from
-/// `app/runtime/agent.rs::fold_bash_completion`, on the UI thread, right
-/// before folding.
+/// `horizon_sessiond::session::fold_bash_completion`, on the session loop,
+/// right before folding.
 pub fn should_fold_completion(frame: &AgentFrame, call_id: &ToolCallId) -> bool {
     !frame.has_tool_call_finished(call_id)
 }

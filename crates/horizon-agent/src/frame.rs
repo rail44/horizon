@@ -170,14 +170,6 @@ impl AgentFrame {
         actionable_pending_approval_call_ids_in(&self.items)
     }
 
-    /// The next *actionable* tool-call approval to act on. See
-    /// [`Self::actionable_pending_approval_call_ids`].
-    pub fn actionable_pending_approval_call_id(&self) -> Option<ToolCallId> {
-        self.actionable_pending_approval_call_ids()
-            .into_iter()
-            .next()
-    }
-
     /// The most recent `ToolCallRequested` item for `call_id`, if any. Used
     /// to recover a pending tool call's `tool_id`/`input` at approval time,
     /// since the approve/deny UI only carries the `call_id` forward.
@@ -203,8 +195,8 @@ impl AgentFrame {
     /// or a cancellation that finished the call. Used to guard against
     /// double-folding a late result that arrives after the call already
     /// resolved: `agent::tools::approval`'s `ApprovalOutcome::AlreadyResolved`
-    /// check, and the bash tool's async completion delivery
-    /// (`app/runtime/agent.rs`), both key off this.
+    /// check, and the bash tool's `should_fold_completion` (called from
+    /// `horizon-sessiond`'s `fold_bash_completion`), both key off this.
     pub fn has_tool_call_finished(&self, call_id: &ToolCallId) -> bool {
         self.items.iter().any(|item| {
             matches!(item, AgentFrameItem::ToolCallFinished(result) if &result.call_id == call_id)
@@ -561,80 +553,6 @@ pub fn apply_tool_call_progress_to_frame(frame: &mut AgentFrame, progress: ToolC
     frame
         .items
         .push(AgentFrameItem::ToolCallPreparing(progress));
-}
-
-/// The complete set of item indices a *next* in-place fold
-/// (no push, `frame.items.len()` unchanged) could target -- the single
-/// source of truth `diff_block_content`
-/// (`src/agent/view/transcript.rs`) uses to know which blocks might have
-/// changed on a frame update that didn't append a new item, instead of
-/// assuming the literal last item.
-///
-/// Must stay in lockstep with [`apply_agent_event_to_frame`]'s in-place
-/// arms, and [`apply_tool_call_progress_to_frame`]:
-/// - `Event::ReasoningDelta` coalesces into the last `ReasoningDelta`.
-/// - `Event::AssistantTextDelta` coalesces into the last
-///   `AssistantTextDelta`.
-/// - `Event::MessageCommitted` replaces the last `AssistantTextDelta`
-///   (role match) or otherwise the last `Message` (role match).
-/// - `Event::ToolCallRequested` supersedes the last `ToolCallPreparing`.
-/// - `apply_tool_call_progress_to_frame`'s progress ticks update the last
-///   matching `ToolCallPreparing` in place.
-///
-/// The first four of those are scoped to the current turn segment (from the
-/// last [`is_turn_boundary_item`] to the end of `frame.items`) via
-/// [`last_current_turn_item_index`] -- the same reverse scan the reducer
-/// itself uses, reused rather than duplicated. That segment scoping is why
-/// this can reach further back than the literal last item: within one turn,
-/// a `ReasoningDelta` and an `AssistantTextDelta` can each hold their own
-/// coalescing target at different indices (interleaved-thinking providers
-/// alternate reasoning and text within a turn).
-///
-/// The literal last item is *also* always included, unconditionally: a
-/// `ToolCallRequested` superseding a `ToolCallPreparing` changes that slot's
-/// item *variant*, and `ToolCallRequested` is itself a turn boundary
-/// (`is_turn_boundary_item`) -- so once superseded, a segment-scoped search
-/// for `ToolCallPreparing` on the post-mutation frame always excludes that
-/// very slot (it now starts, rather than sits inside, the next segment). No
-/// type-scoped backward scan over the post-mutation frame can recover that
-/// index; only "the literal last item" reliably can, since supersession
-/// only ever happens at the current turn's most recent slot.
-///
-/// Adding a new in-place-mutation arm to the reducer means adding its
-/// target kind here too.
-///
-/// Known limitation: the `ToolCallPreparing` target is the *last* one per
-/// turn segment only, same as the reducer's own
-/// `apply_tool_call_progress_to_frame` (keyed by matching `key`, but still
-/// only ever searching for "the last matching item"). Genuinely concurrent
-/// multi-key tool-argument streaming (two different in-flight preparing
-/// items in the same turn segment, each ticking independently) would leave
-/// a non-last preparing item's byte count stale here. Not reachable today:
-/// the rig provider streams one tool's arguments at a time into a single
-/// shared progress buffer, and the reducer's `ToolCallRequested`
-/// supersession arm is itself unkeyed (matches "the last `ToolCallPreparing`",
-/// not "the one with this call's key"), so concurrent preparing isn't
-/// cleanly supported by the reducer either -- fully-keyed handling on both
-/// sides is deferred to the airtight "reducer reports the mutated index"
-/// follow-up this function is a stopgap for.
-pub fn in_place_mutable_item_indices(frame: &AgentFrame) -> Vec<usize> {
-    let mut indices = Vec::new();
-    let mut push_index = |index: Option<usize>| {
-        if let Some(index) = index {
-            if !indices.contains(&index) {
-                indices.push(index);
-            }
-        }
-    };
-    push_index(frame.items.len().checked_sub(1));
-    let mut push_target = |predicate: fn(&AgentFrameItem) -> bool| {
-        push_index(last_current_turn_item_index(frame, predicate));
-    };
-    push_target(|item| matches!(item, AgentFrameItem::ReasoningDelta(_)));
-    push_target(|item| matches!(item, AgentFrameItem::AssistantTextDelta(_)));
-    push_target(|item| matches!(item, AgentFrameItem::Message(_)));
-    push_target(|item| matches!(item, AgentFrameItem::ToolCallPreparing(_)));
-    indices
 }
 
 fn last_current_turn_item_mut(

@@ -278,12 +278,12 @@ impl LayoutNode {
     /// Test-only invariant checks (`docs/recursive-layout-design.md`'s
     /// shallow-nesting invariant): no `Split` has a single child, and no
     /// `Split` child shares its parent's axis.
-    #[cfg(any(test, feature = "test-fixtures"))]
+    #[cfg(test)]
     pub fn is_canonical(&self) -> bool {
         self.is_canonical_under(None)
     }
 
-    #[cfg(any(test, feature = "test-fixtures"))]
+    #[cfg(test)]
     fn is_canonical_under(&self, parent_axis: Option<SplitAxis>) -> bool {
         match self {
             Self::Pane(_) => true,

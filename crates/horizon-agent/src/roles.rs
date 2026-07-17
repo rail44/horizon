@@ -131,15 +131,6 @@ pub fn resolve(role_id: &RoleId) -> Option<&'static RoleDefinition> {
     ROLES.iter().copied().find(|role| role.id == role_id.0)
 }
 
-/// Every role this build knows about, for a registry-driven listing (e.g.
-/// Horizon's palette view chooser, `docs/roadmap.md`'s "Placement-first
-/// session creation") -- callers that need a stable order (a UI list) sort
-/// this themselves (by `id`, for determinism) rather than relying on
-/// declaration order here.
-pub fn all() -> &'static [&'static RoleDefinition] {
-    ROLES
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,13 +173,5 @@ mod tests {
     #[test]
     fn config_role_uses_the_provider_default_model() {
         assert_eq!(CONFIG_ROLE.model, None);
-    }
-
-    #[test]
-    fn all_lists_the_config_role_with_its_display_title() {
-        let roles = all();
-        assert_eq!(roles.len(), 1);
-        assert_eq!(roles[0].id, "config");
-        assert_eq!(roles[0].title, "Configuration Agent");
     }
 }

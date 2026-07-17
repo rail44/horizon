@@ -253,11 +253,12 @@ pub struct SessionRuntime {
 }
 
 thread_local! {
-    // Horizon's UI/reactive state (RwSignal, and LiveState's inner
-    // Rc<RefCell<..>>) is confined to a single thread, so this registry is
-    // too. It bridges `app/runtime/agent.rs` (where a session's runtime is
-    // created) and `workspace/view/pane.rs` (where the user's approve/deny
-    // click needs it back), which don't otherwise share scope.
+    // LiveState's inner Rc<RefCell<..>> is confined to a single thread, so
+    // this registry is too. It bridges `horizon-sessiond`'s session loop
+    // (`crates/horizon-sessiond/src/session.rs`, where a session's runtime
+    // is created via `register_session_runtime`) and the approve/deny
+    // command handling on that same thread, which don't otherwise share
+    // scope.
     static SESSION_RUNTIMES: RefCell<HashMap<SessionId, SessionRuntime>> =
         RefCell::new(HashMap::new());
 }

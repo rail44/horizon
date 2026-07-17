@@ -30,11 +30,9 @@ use super::{
 const RECALL_TEXT_BOUND_CHARS: usize = 4_000;
 
 impl Store {
-    /// Not test-only: `app/runtime/agent.rs`'s DuckDB-replay regression
-    /// tests (a different crate, `horizon`) need this to assert what
-    /// actually landed in the projection — a downstream crate's tests can't
-    /// trigger this crate's own `cfg(test)`, so this and
-    /// [`parse_session_id_column`] stay real API rather than test scaffolding.
+    /// Not test-only: `projection.rs`'s `rebuild_projection` walks every row
+    /// through this in production, and this crate's own tests assert what
+    /// actually landed in the projection after a rebuild or a live append.
     pub fn sessions(&self) -> Result<Vec<AgentStoredSession>> {
         let mut stmt = self.conn.prepare(
             "SELECT session_id, provider_id, role_id, last_sequence, updated_at::TEXT

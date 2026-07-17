@@ -50,11 +50,12 @@ impl Rect {
 }
 
 /// Every pane's rectangle in `node`, recursively subdividing `Rect::UNIT`
-/// by each `Split`'s axis and child weights (mirroring `workspace::view::
-/// layout_tree`'s `flex_row`/`flex_col` -- `Horizontal` divides width,
-/// `Vertical` divides height). Order matches `LayoutNode::pane_ids`'s
-/// pre-order, which `nearest_in_direction` relies on as its final,
-/// deterministic tie-break.
+/// by each `Split`'s axis and child weights (mirroring `render_node`'s
+/// `LayoutNode::Split` branch in `src/workspace.rs`, which lays children
+/// out on gpui-component's `h_resizable`/`v_resizable` panel groups --
+/// `Horizontal` divides width, `Vertical` divides height). Order matches
+/// `LayoutNode::pane_ids`'s pre-order, which `nearest_in_direction` relies
+/// on as its final, deterministic tie-break.
 pub fn pane_rects(node: &LayoutNode) -> Vec<(PaneId, Rect)> {
     let mut out = Vec::new();
     collect_rects(node, Rect::UNIT, &mut out);

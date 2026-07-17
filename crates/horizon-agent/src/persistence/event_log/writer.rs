@@ -27,14 +27,15 @@ use super::{read, ReadReport, Record};
 /// deltas and tool payloads routinely exceed that) landed as two interleaved
 /// halves instead of one atomic line.
 ///
-/// The fix enforced at the call site (`app::runtime::agent`, the only place
-/// that constructs a `WriterHandle` outside of tests) is a process-global
-/// cache: every agent session in this process shares one `WriterHandle`,
-/// i.e. one thread and one open file, and appends are serialized through
-/// that thread's channel. Within a process this makes concurrent appends
-/// impossible by construction rather than by locking. See the doc comment
-/// on `AGENT_EVENT_LOG_WRITER` for the caller-side enforcement and why
-/// per-session log files were rejected as the alternative.
+/// The fix enforced at the call site (`horizon-sessiond`'s `open_persistence`,
+/// the only place that constructs a production `WriterHandle`) is a
+/// process-global cache: every agent session hosted by that sessiond
+/// process shares one `WriterHandle` (held on `SessiondState` and cloned
+/// out per session), i.e. one thread and one open file, and appends are
+/// serialized through that thread's channel. Within a process this makes
+/// concurrent appends impossible by construction rather than by locking.
+/// See `SessiondState::writer`/`set_writer` for the caller-side enforcement
+/// and why per-session log files were rejected as the alternative.
 #[derive(Clone)]
 pub struct WriterHandle {
     tx: Sender<AgentEventLogWriterCommand>,
@@ -52,8 +53,8 @@ pub struct WriterHandle {
 pub enum WriterInit {
     /// The startup read succeeded. Carries the same [`ReadReport`] `read`
     /// produced, so a caller that also needs the log's contents (the
-    /// DuckDB replay in `app::runtime::agent`) doesn't read the file a
-    /// second time.
+    /// DuckDB rebuild-or-open this module's own `open_silently` drives)
+    /// doesn't read the file a second time.
     Ready(ReadReport),
     /// The startup read, or opening the file for appending, failed. The
     /// background thread exits without ever draining its command channel,
@@ -240,8 +241,9 @@ impl WriterHandle {
     /// own page cache — this is not an `fsync`).
     ///
     /// Used by tests to assert durability deterministically, and by
-    /// `app::shutdown` (wired to floem's `AppEvent::WillTerminate`) so a
-    /// normal app exit doesn't lose whatever is still sitting in the
+    /// `horizon-sessiond`'s `flush_event_log_before_exit` (called right
+    /// before `std::process::exit(0)` on a `SessionControl::Drain`) so a
+    /// graceful drain doesn't lose whatever is still sitting in the
     /// writer's buffer. A hard kill bypasses this and can still leave a
     /// torn final line — `event_log::read` tolerates that (see
     /// `ReadReport::ignored_partial_line`).
@@ -254,12 +256,12 @@ impl WriterHandle {
     }
 
     /// Identity check: do these two handles share the same background
-    /// writer thread? Used to assert that the process-global cache in
-    /// `horizon`'s `app::runtime::agent` really does hand out one shared
+    /// writer thread? Intended to assert that the process-global cache
+    /// described on [`WriterHandle`]'s own doc comment (one writer shared by
+    /// every session hosted in a process) really does hand out one shared
     /// writer instead of silently creating a second one. Not `cfg(test)`
-    /// even though it's only ever used by that regression test — the test
-    /// lives in a downstream crate (`horizon`) whose test build can't
-    /// trigger this crate's own `cfg(test)`.
+    /// so a downstream crate's regression test could exercise it without
+    /// tripping this crate's own `cfg(test)`, though nothing currently does.
     pub fn same_channel(&self, other: &Self) -> bool {
         self.tx.same_channel(&other.tx)
     }
