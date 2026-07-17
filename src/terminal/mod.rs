@@ -27,10 +27,11 @@ pub use session::TerminalSession;
 use std::cell::Cell;
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use horizon_terminal_core::{
-    KeyEventKind, TerminalCommand, TerminalFrame, TerminalMouseButton, TerminalMouseKind,
-    TerminalMouseReport, TerminalScroll, TerminalSize,
+    KeyEventKind, TerminalFrame, TerminalMouseButton, TerminalMouseKind, TerminalMouseReport,
+    TerminalSize,
 };
 
 use self::input::{
@@ -115,7 +116,6 @@ pub struct TerminalView {
     // The pane's session — owned by the shell's session store, not this
     // view, so a closed pane detaches rather than terminates.
     session: Entity<TerminalSession>,
-    tx: crossbeam_channel::Sender<TerminalCommand>,
     focus_handle: FocusHandle,
     // Shared with the paint closure (which only gets &mut App, not the
     // entity) so bounds-driven resize can be deduped without an update.
@@ -149,14 +149,12 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let tx = session.read(cx).sender();
         let observation = cx.observe(&session, |_, _, cx| cx.notify());
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
 
         Self {
             session,
-            tx,
             focus_handle,
             last_size: Rc::new(Cell::new(TerminalSize {
                 cols: 80,
@@ -204,15 +202,15 @@ impl TerminalView {
                 return;
             };
             self.reporting_button = Some(button);
-            let _ = self.tx.send(TerminalCommand::Mouse(TerminalMouseReport {
+            self.session.read(cx).send_mouse(TerminalMouseReport {
                 kind: TerminalMouseKind::Press,
                 button,
                 point,
                 modifiers: terminal_mouse_modifiers(&event.modifiers),
-            }));
+            });
         } else if event.button == MouseButton::Left {
             self.selecting = true;
-            let _ = self.tx.send(TerminalCommand::SelectionStart(point));
+            self.session.read(cx).send_selection_start(point);
         }
     }
 
@@ -224,14 +222,14 @@ impl TerminalView {
             let Some(button) = self.reporting_button else {
                 return;
             };
-            let _ = self.tx.send(TerminalCommand::Mouse(TerminalMouseReport {
+            self.session.read(cx).send_mouse(TerminalMouseReport {
                 kind: TerminalMouseKind::Drag,
                 button,
                 point,
                 modifiers: terminal_mouse_modifiers(&event.modifiers),
-            }));
+            });
         } else if self.selecting {
-            let _ = self.tx.send(TerminalCommand::SelectionUpdate(point));
+            self.session.read(cx).send_selection_update(point);
         }
     }
 
@@ -247,26 +245,24 @@ impl TerminalView {
             let Some(button) = button else {
                 return;
             };
-            let _ = self.tx.send(TerminalCommand::Mouse(TerminalMouseReport {
+            self.session.read(cx).send_mouse(TerminalMouseReport {
                 kind: TerminalMouseKind::Release,
                 button,
                 point,
                 modifiers: terminal_mouse_modifiers(&event.modifiers),
-            }));
+            });
         } else if event.button == MouseButton::Left && self.selecting {
             self.selecting = false;
-            let _ = self.tx.send(TerminalCommand::SelectionUpdate(point));
+            self.session.read(cx).send_selection_update(point);
         }
     }
 
-    fn handle_scroll_wheel(&mut self, event: &ScrollWheelEvent) {
+    fn handle_scroll_wheel(&mut self, event: &ScrollWheelEvent, cx: &App) {
         let Some(point) = self.cell_at(event.position) else {
             return;
         };
         if let Some(lines) = scroll_lines_from_wheel(&event.delta) {
-            let _ = self
-                .tx
-                .send(TerminalCommand::Scroll(TerminalScroll { lines, point }));
+            self.session.read(cx).send_scroll(lines, point);
         }
     }
 
@@ -274,18 +270,18 @@ impl TerminalView {
     // REPORT_EVENT_TYPES; the core decides emission, so the view maps
     // every key it can name (passing `true` skips the text-vs-key
     // routing gate — releases never ride the text pipeline).
-    fn handle_key_up(&mut self, event: &KeyUpEvent) {
+    fn handle_key_up(&mut self, event: &KeyUpEvent, cx: &App) {
         if self.ime_marked_text.is_some() {
             return;
         }
         let Some(key) = term_key_code(&event.keystroke, true) else {
             return;
         };
-        let _ = self.tx.send(TerminalCommand::Key {
+        self.session.read(cx).send_key(
             key,
-            modifiers: term_modifiers(&event.keystroke.modifiers),
-            event: KeyEventKind::Release,
-        });
+            term_modifiers(&event.keystroke.modifiers),
+            KeyEventKind::Release,
+        );
     }
 
     fn keys_as_escape_codes(&self, cx: &App) -> bool {
@@ -294,6 +290,24 @@ impl TerminalView {
             .frame
             .as_ref()
             .is_some_and(|frame| frame.keys_as_escape_codes)
+    }
+
+    /// Status text shown at the bottom of the pane when the session is
+    /// unreachable or the shell has exited, parity with `AgentView::status_line`.
+    fn status_line(&self, cx: &App) -> (String, Hsla) {
+        let session = self.session.read(cx);
+        if session.exited() {
+            return ("shell exited — session closed".to_string(), theme::danger());
+        }
+        if session.runtime_unreachable() {
+            return (
+                session
+                    .error()
+                    .unwrap_or_else(|| "session runtime unreachable".to_string()),
+                theme::danger(),
+            );
+        }
+        (String::new(), theme::text_muted())
     }
 
     fn handle_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
@@ -331,7 +345,7 @@ impl TerminalView {
         if keystroke.modifiers.platform && !keystroke.modifiers.control {
             match keystroke.key.as_str() {
                 "c" => {
-                    let _ = self.tx.send(TerminalCommand::CopySelection);
+                    self.session.read(cx).send_copy_selection();
                     input_trace!("handle_key key={:?} sent: CopySelection", keystroke.key);
                     return;
                 }
@@ -345,7 +359,7 @@ impl TerminalView {
                             keystroke.key,
                             crate::input_trace::describe_text(&text)
                         );
-                        let _ = self.tx.send(TerminalCommand::Paste(text));
+                        self.session.read(cx).send_paste(text);
                     } else {
                         input_trace!(
                             "handle_key key={:?} dropped: clipboard empty",
@@ -388,11 +402,9 @@ impl TerminalView {
             keystroke.key,
             kind
         );
-        let _ = self.tx.send(TerminalCommand::Key {
-            key,
-            modifiers: term_modifiers(&keystroke.modifiers),
-            event: kind,
-        });
+        self.session
+            .read(cx)
+            .send_key(key, term_modifiers(&keystroke.modifiers), kind);
     }
 }
 
@@ -589,9 +601,7 @@ impl EntityInputHandler for TerminalView {
             "replace_text_in_range sent: TerminalCommand::Input {}",
             crate::input_trace::describe_text(text)
         );
-        let _ = self
-            .tx
-            .send(TerminalCommand::Input(text.as_bytes().to_vec()));
+        self.session.read(cx).send_input(text.as_bytes().to_vec());
         cx.notify();
     }
 
@@ -655,10 +665,10 @@ impl Focusable for TerminalView {
 impl Render for TerminalView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
-        let tx = self.tx.clone();
         let last_size = self.last_size.clone();
         let metrics = self.metrics.clone();
         let focus_handle = self.focus_handle.clone();
+        let (status, status_color) = self.status_line(cx);
         fn on_down(
             view: &mut TerminalView,
             event: &MouseDownEvent,
@@ -677,13 +687,15 @@ impl Render for TerminalView {
         }
         div()
             .size_full()
+            .flex()
+            .flex_col()
             .bg(rgb(theme::background()))
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(|view, event: &KeyDownEvent, _window, cx| {
                 view.handle_key(event, cx);
             }))
-            .on_key_up(cx.listener(|view, event: &KeyUpEvent, _window, _cx| {
-                view.handle_key_up(event);
+            .on_key_up(cx.listener(|view, event: &KeyUpEvent, _window, cx| {
+                view.handle_key_up(event, cx);
             }))
             .on_mouse_down(MouseButton::Left, cx.listener(on_down))
             .on_mouse_down(MouseButton::Middle, cx.listener(on_down))
@@ -694,30 +706,44 @@ impl Render for TerminalView {
             .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _window, cx| {
                 view.handle_mouse_move(event, cx);
             }))
-            .on_scroll_wheel(cx.listener(|view, event: &ScrollWheelEvent, _window, _cx| {
-                view.handle_scroll_wheel(event);
+            .on_scroll_wheel(cx.listener(|view, event: &ScrollWheelEvent, _window, cx| {
+                view.handle_scroll_wheel(event, cx);
             }))
             .child(
-                canvas(
-                    |_, _, _| {},
-                    move |bounds, _, window, cx| {
-                        window.handle_input(
-                            &focus_handle,
-                            ElementInputHandler::new(bounds, entity.clone()),
-                            cx,
-                        );
-                        paint_terminal(bounds, &entity, &tx, &last_size, &metrics, window, cx);
-                    },
-                )
-                .size_full(),
+                div().flex_1().min_h_0().child(
+                    canvas(
+                        |_, _, _| {},
+                        move |bounds, _, window, cx| {
+                            window.handle_input(
+                                &focus_handle,
+                                ElementInputHandler::new(bounds, entity.clone()),
+                                cx,
+                            );
+                            paint_terminal(bounds, &entity, &last_size, &metrics, window, cx);
+                        },
+                    )
+                    .size_full(),
+                ),
             )
+            // Status row (backlog #35 parity with `AgentView::status_line`):
+            // rendered only when there's something to say, so an ordinary,
+            // reachable pane looks exactly as before.
+            .when(!status.is_empty(), |this| {
+                this.child(
+                    div()
+                        .px_2()
+                        .py_0p5()
+                        .text_size(px(11.0))
+                        .text_color(status_color)
+                        .child(status),
+                )
+            })
     }
 }
 
 fn paint_terminal(
     bounds: Bounds<Pixels>,
     entity: &Entity<TerminalView>,
-    tx: &crossbeam_channel::Sender<TerminalCommand>,
     last_size: &Rc<Cell<TerminalSize>>,
     metrics: &Rc<Cell<Option<PaintMetrics>>>,
     window: &mut Window,
@@ -748,7 +774,8 @@ fn paint_terminal(
     };
     if last_size.get() != size {
         last_size.set(size);
-        let _ = tx.send(TerminalCommand::Resize(size));
+        let view = entity.read(cx);
+        view.session.read(cx).send_resize(size);
     }
 
     let (session, marked_text) = {
