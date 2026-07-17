@@ -48,18 +48,6 @@ impl Workspace {
         self.active_tab().map(|tab| tab.active) == Some(pane_id)
     }
 
-    pub fn is_active_pane_of_kind(&self, pane_id: PaneId, kind: PaneKind) -> bool {
-        self.is_active_pane(pane_id) && self.pane_kind(pane_id) == Some(kind)
-    }
-
-    pub fn active_pane_accepts_text_input_for(&self, pane_id: PaneId) -> bool {
-        self.is_active_pane(pane_id)
-            && matches!(
-                self.pane_kind(pane_id),
-                Some(PaneKind::Terminal | PaneKind::Agent)
-            )
-    }
-
     /// The `PaneId` the workspace-mode cursor currently sits on: the free-
     /// floating cursor while the mode is active, or simply the focused
     /// pane otherwise -- mirroring `Workspace::is_workspace_mode_active`'s
@@ -83,7 +71,7 @@ impl Workspace {
     /// `workspace::view::pane`'s click handler (its last production caller)
     /// now targets `commit_workspace_mode_to`/`activate_pane` by `PaneId`
     /// directly. Kept as a small test fixture helper.
-    #[cfg(any(test, feature = "test-fixtures"))]
+    #[cfg(test)]
     pub fn visible_index_of(&self, pane_id: PaneId) -> Option<usize> {
         self.visible_pane_ids().iter().position(|id| *id == pane_id)
     }
@@ -113,6 +101,11 @@ impl Workspace {
             .and_then(|pane| pane.session_id)
     }
 
+    /// Test-only now: `workspace::view::pane`'s recursive renderer
+    /// (`docs/recursive-layout-design.md`'s slice 2) resolves a terminal
+    /// pane's session by `PaneId` (`terminal_session_id`) rather than a
+    /// visible index, which was this method's last production caller.
+    #[cfg(test)]
     pub fn visible_terminal_session_id(&self, index: usize) -> Option<SessionId> {
         let pane_id = self.visible_pane_id(index)?;
         self.panes
@@ -125,7 +118,7 @@ impl Workspace {
     /// (`docs/recursive-layout-design.md`'s slice 2) resolves an agent
     /// pane's session by `PaneId` (`agent_session_id`) rather than a
     /// visible index, which was this method's last production caller.
-    #[cfg(any(test, feature = "test-fixtures"))]
+    #[cfg(test)]
     pub fn visible_agent_session_id(&self, index: usize) -> Option<SessionId> {
         let pane_id = self.visible_pane_id(index)?;
         self.panes
@@ -140,7 +133,7 @@ impl Workspace {
     /// (`docs/plans/application-ui/01-session-manager.md` -- session
     /// management moved to its own modal, which derives the same count from
     /// `control_surface::session_manager_items` instead).
-    #[cfg(any(test, feature = "test-fixtures"))]
+    #[cfg(test)]
     pub fn session_count(&self) -> usize {
         self.sessions.len()
     }
@@ -246,17 +239,6 @@ impl Workspace {
         self.visible_panes().get(index).map(|pane| pane.kind)
     }
 
-    pub fn active_pane_is(&self, kind: PaneKind) -> bool {
-        self.visible_pane_kind(self.active_visible_index()) == Some(kind)
-    }
-
-    pub fn active_pane_accepts_text_input(&self) -> bool {
-        matches!(
-            self.visible_pane_kind(self.active_visible_index()),
-            Some(PaneKind::Terminal | PaneKind::Agent)
-        )
-    }
-
     pub fn active_visible_index(&self) -> usize {
         let active = self.active_tab().map(|tab| tab.active);
         self.visible_pane_ids()
@@ -285,7 +267,7 @@ impl Workspace {
     /// (`docs/recursive-layout-design.md`'s slice 2) titles a pane by
     /// `PaneId` (`pane_title_for`) rather than a visible index, which was
     /// this method's last production caller.
-    #[cfg(any(test, feature = "test-fixtures"))]
+    #[cfg(test)]
     pub fn visible_pane_title(&self, index: usize) -> Option<String> {
         self.visible_panes()
             .get(index)

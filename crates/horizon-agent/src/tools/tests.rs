@@ -49,7 +49,8 @@ fn dummy_tool_state() -> ToolSessionState {
 
 /// A throwaway sender for tests that register a session runtime but never
 /// exercise the `bash` tool (which is what actually reads from the paired
-/// receiver — see `app/runtime/agent.rs`).
+/// receiver — see `horizon-sessiond`'s session loop,
+/// `crates/horizon-sessiond/src/session.rs`).
 fn dummy_bash_results() -> crossbeam_channel::Sender<BashCompletion> {
     crossbeam_channel::unbounded().0
 }

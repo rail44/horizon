@@ -41,10 +41,10 @@ pub enum ApprovalOutcome {
     /// `frame` are the running-state events (`ToolRunning`/`ToolCallStarted`)
     /// already folded in — see `Executed`'s doc comment for why both are
     /// exposed — but there is no `command` yet. The eventual result arrives
-    /// later on `SessionRuntime::bash_results` and is folded (and forwarded
-    /// to the provider) by the effect `app/runtime/agent.rs::
-    /// spawn_agent_session` (or, in sessiond mode, the equivalent session-loop
-    /// code in `horizon-sessiond`) sets up for it, not by this call.
+    /// later on the per-session `bash_results` channel registered by
+    /// `register_session_runtime` and is folded (and forwarded to the
+    /// provider) by `fold_bash_completion` in `horizon-sessiond`'s session
+    /// loop (`crates/horizon-sessiond/src/session.rs`), not by this call.
     Started {
         events: Vec<Event>,
         frame: AgentFrame,

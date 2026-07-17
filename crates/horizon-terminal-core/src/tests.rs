@@ -1251,7 +1251,7 @@ fn standalone_modifier_keypresses_are_unimplemented() {
 /// no path from any keypad `KeyEvent` to a `TermKeyCode::NumpadN` at all.
 /// Effort estimate: small-medium — a `kitty_override`-style PUA table for
 /// the keypad keys, gated on the disambiguate flag; the app-layer wiring
-/// gap is a separate, larger effort (floem/winit keypad key detection).
+/// gap is a separate, larger effort (winit/gpui keypad key detection).
 #[test]
 #[ignore = "structural: termwiz's keypad encoding ignores the Kitty disambiguate flag entirely, and app::keymap has no keypad wiring; see report"]
 fn keypad_keys_ignore_disambiguate_flag() {

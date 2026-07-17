@@ -139,6 +139,11 @@ impl LiveState {
         self.inner.borrow_mut().extend_provider_events(events)
     }
 
+    /// Test-only: production always seeds `history` explicitly (even if
+    /// empty, from a fresh session) via [`Self::with_event_log_and_history`]
+    /// -- `horizon-sessiond`'s `run_session` is the one real caller. Kept as
+    /// a shorthand for tests that don't care about history.
+    #[cfg(test)]
     pub fn with_event_log(
         session_id: SessionId,
         provider_id: Option<ProviderId>,
@@ -178,8 +183,9 @@ impl LiveState {
         }
     }
 
-    /// The session's current accumulated frame. Used outside tests too: the
-    /// bash-completion effect in `app/runtime/agent.rs` reads this to check
+    /// The session's current accumulated frame. Used outside tests too:
+    /// `horizon-sessiond`'s `fold_bash_completion`
+    /// (`crates/horizon-sessiond/src/session.rs`) reads this to check
     /// whether a call already has a `ToolCallFinished` before folding a late
     /// result — the async-execution analogue of `agent::tools::approval`'s
     /// `ApprovalOutcome::AlreadyResolved` guard.

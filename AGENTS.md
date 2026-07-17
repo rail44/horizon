@@ -193,15 +193,17 @@ The shell is GPUI-based (the Floem shell retired at tag
   files (e.g. `terminal/core/{events,input,render}.rs`) rather than large
   monolith modules; see the "Split ... by responsibility" commits.
 - **Operations go through the command model.** User-visible operations are
-  `CommandId` variants executed via `execute_command`
-  (`src/app/command_actions.rs`). Buttons, keyboard shortcuts, and the palette
+  `CommandId` variants executed via `WorkspaceShell::execute`
+  (`src/workspace.rs`). Buttons, keyboard shortcuts, and the palette
   are bindings to commands — do not add ad-hoc behavior in UI handlers.
 - **Close vs. terminate are distinct.** Closing a pane/tab detaches sessions;
   `Terminate Active Session` is the explicit destructive command. Preserve
   this separation (see `docs/ux-principles.md`).
-- **Tests are colocated** in `tests.rs` modules next to the code
-  (`src/workspace/tests.rs`, `src/terminal/tests.rs`, `src/agent/tests.rs`,
-  ...), declared as `#[cfg(test)] mod tests;`.
+- **Tests are colocated** next to the code, either as an external `tests.rs`
+  declared via `#[cfg(test)] mod tests;` (e.g. `crates/horizon-workspace/src/tests.rs`,
+  `crates/horizon-agent/src/tests.rs`, `src/terminal/tests.rs`) or, more
+  commonly in `src/`, an inline `#[cfg(test)] mod tests { ... }` block at the
+  bottom of the file itself (e.g. `src/workspace.rs`, `src/agent/session.rs`).
 - **Design decisions are recorded under `docs/`** (e.g.
   `agent-pane-design.md`, `agent-provider-contract.md`,
   `agent-duckdb-state-design.md`). Add or update a doc when making a

@@ -15,9 +15,10 @@ pub enum ControlRequest {
 
 /// What a connection thread calls to turn a request into a response body,
 /// without knowing (or needing to know) how that answer actually gets
-/// produced. [`super::bridge::ChannelExecutor`] is the real implementation
-/// (bridges to the UI thread); this module's own tests, and
-/// `connection`'s, use a stub that never touches floem at all.
+/// produced. `ChannelExecutor` in the `horizon` binary's
+/// `src/control_plane.rs` is the real implementation (bridges to the UI
+/// thread); this module's own tests, and `connection`'s, use a stub
+/// instead.
 pub trait ControlExecutor: Send + Sync {
     fn execute(&self, request: ControlRequest) -> EnvelopeBody;
 }

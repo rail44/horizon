@@ -55,7 +55,6 @@ pub struct AgentFileAgentConfig {
     pub doom_loop_window: Option<usize>,
     pub stream_flush_interval_ms: Option<u64>,
     pub stream_flush_chars: Option<usize>,
-    pub pane_status_tick_secs: Option<u64>,
     pub event_log_path: Option<String>,
     pub state_db_path: Option<String>,
     pub history_token_budget: Option<usize>,
@@ -240,13 +239,6 @@ pub const DEFAULT_DOOM_LOOP_WINDOW: usize = 3;
 pub const DEFAULT_STREAM_FLUSH_INTERVAL_MS: u64 = 100;
 /// Was `providers::rig::stream`'s `STREAM_FLUSH_CHARS`.
 pub const DEFAULT_STREAM_FLUSH_CHARS: usize = 320;
-/// Was `workspace::view::pane`'s hardcoded `Duration::from_secs(1)` in
-/// `schedule_tick`. Resolved via the standalone [`pane_status_tick_secs`]
-/// function below rather than through [`AgentConfig`] — the consumer
-/// (`workspace::view::pane`) isn't otherwise wired to any agent config
-/// struct, and this is the one place `[agent]`'s built-in defaults are
-/// named (see the module doc).
-pub const DEFAULT_PANE_STATUS_TICK_SECS: u64 = 1;
 /// Token budget for the conversation history sent to the provider on each
 /// turn (`providers::rig::completion`'s `history_token_window_policy`,
 /// applying `rig_memory::TokenWindowMemory`). 60,000 is conservative rather
@@ -719,16 +711,6 @@ impl AgentToolsConfig {
     }
 }
 
-/// How often, in seconds, the workspace pane header's agent turn-in-flight
-/// elapsed-time display re-renders (`workspace::view::pane`'s
-/// `schedule_tick`). Standalone rather than part of [`AgentConfig`] — see
-/// [`DEFAULT_PANE_STATUS_TICK_SECS`]. Takes the already-resolved config-file
-/// value rather than reading Horizon's config file itself — see the module
-/// doc.
-pub fn pane_status_tick_secs(file_value: Option<u64>) -> u64 {
-    file_value.unwrap_or(DEFAULT_PANE_STATUS_TICK_SECS)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1043,11 +1025,6 @@ mod tests {
             config.duckdb_path,
             Some(PathBuf::from("/file/state.duckdb"))
         );
-    }
-
-    #[test]
-    fn pane_status_tick_secs_defaults_when_file_is_absent() {
-        assert_eq!(pane_status_tick_secs(None), DEFAULT_PANE_STATUS_TICK_SECS);
     }
 
     #[test]

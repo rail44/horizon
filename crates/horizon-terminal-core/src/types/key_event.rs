@@ -5,10 +5,10 @@ use serde::{Deserialize, Serialize};
 /// `REPORT_EVENT_TYPES` progressive-enhancement flag): an initial press, an
 /// OS/winit-synthesized repeat while the key is held, or a release.
 ///
-/// Threaded from `app::keymap`/`workspace::input` (where floem's
-/// `Event::KeyDown`/`Event::KeyUp` and winit's `KeyEvent::repeat` flag are
-/// classified — see `app::keymap::terminal_key_event_kind`) down through
-/// `TerminalCommand::Key` to `terminal::core::TerminalCore::encode_key` and
+/// Threaded from `src/terminal/mod.rs`'s key handling (where gpui's
+/// `KeyDownEvent`/`KeyUpEvent` and its `is_held` repeat flag are classified)
+/// down through `TerminalCommand::Key` to
+/// `terminal::core::TerminalCore::encode_key` and
 /// `terminal::protocol::kitty_keyboard`, which is the only place a
 /// non-`Press` kind changes the bytes actually sent — see that module's doc
 /// for how (and when) it does.

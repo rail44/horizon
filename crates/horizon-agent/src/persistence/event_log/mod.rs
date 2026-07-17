@@ -50,8 +50,9 @@ impl ReadReport {
     /// A short human-readable summary of lines `read` had to skip, or
     /// `None` when the file parsed cleanly. Every consumer of the raw JSONL
     /// (the writer's own startup re-read in `event_log::writer`, the DuckDB
-    /// replay in `app::runtime::agent`) reports this instead of silently
-    /// discarding evidence that the file has corrupt or torn lines.
+    /// rebuild `open_silently` drives, and `horizon-sessiond`'s
+    /// `open_persistence`) reports this instead of silently discarding
+    /// evidence that the file has corrupt or torn lines.
     pub fn skipped_summary(&self) -> Option<String> {
         if self.corrupt_line_count == 0 && !self.ignored_partial_line {
             return None;
@@ -359,10 +360,11 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
-    /// Models the app's normal-exit shutdown path (`app::shutdown`, wired to
-    /// floem's `AppEvent::WillTerminate` in `main.rs`): flush the writer
-    /// before the process tears the background thread down, and confirm
-    /// whatever was enqueued beforehand actually reached disk.
+    /// Models `horizon-sessiond`'s normal-exit shutdown path
+    /// (`flush_event_log_before_exit`, called on `SessionControl::Drain`
+    /// right before `std::process::exit(0)`): flush the writer before the
+    /// process tears the background thread down, and confirm whatever was
+    /// enqueued beforehand actually reached disk.
     #[test]
     fn flush_makes_pending_records_durable_before_shutdown() {
         let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
@@ -399,10 +401,10 @@ mod tests {
     }
 
     /// Proves the chosen design: a single process-global `WriterHandle`
-    /// shared by every session (see the doc comment on `WriterHandle` and on
-    /// `AGENT_EVENT_LOG_WRITER` in `app::runtime::agent`) cannot tear lines
-    /// no matter how many "sessions" hammer it concurrently, because all
-    /// appends funnel through one channel to one thread with one open file.
+    /// shared by every session hosted in a `horizon-sessiond` process (see
+    /// the doc comment on `WriterHandle`) cannot tear lines no matter how
+    /// many "sessions" hammer it concurrently, because all appends funnel
+    /// through one channel to one thread with one open file.
     /// Payloads are sized well past the 4KiB `PIPE_BUF` figure cited in the
     /// real corruption report to exercise the same code path that tore
     /// lines when two independent writers raced on the same file.

@@ -50,9 +50,9 @@ impl Workspace {
     /// [`Self::active_tab`] is restored to whatever it was before this
     /// call, leaving the caller's own focus-follow (`workspace::
     /// request_active_pane_focus`) with nothing to move. See
-    /// `app::command_actions::create_session`, the one caller (`activate:
-    /// true` for a human surface's dive, `false` for the control plane's
-    /// default).
+    /// `WorkspaceShell::create_session`/`external_new_session` in
+    /// `src/workspace.rs`, its callers (`activate: true` for a human
+    /// surface's dive, `false` for the control plane's default).
     pub fn open_tab_with_new_session_activated(
         &mut self,
         kind: PaneKind,
@@ -68,12 +68,12 @@ impl Workspace {
     }
 
     /// Test-only now: its last production caller was
-    /// `split_active_with_new_session` (also `#[cfg(any(test, feature = "test-fixtures"))]` now -- see its
+    /// `split_active_with_new_session` (also `#[cfg(test)]` now -- see its
     /// doc comment), retired by `docs/roadmap.md`'s "Placement-first session
     /// creation". Kept as a test fixture helper: it's the common
     /// "split the active tab with an explicit session id" shape most tests
-    /// across `workspace`/`app`/`control_surface` build their fixtures with.
-    #[cfg(any(test, feature = "test-fixtures"))]
+    /// build their fixtures with.
+    #[cfg(test)]
     pub fn split_active(&mut self, kind: PaneKind, session_id: Option<SessionId>) -> PaneId {
         self.split_tab(
             self.active_tab,
@@ -139,17 +139,16 @@ impl Workspace {
         pane_id
     }
 
-    /// Test-only now: its last production caller was `app::command_actions
-    /// ::split_active_pane`, retired by `docs/roadmap.md`'s "Placement-first
-    /// session creation" -- `CommandInvocation::CreateSession`'s
-    /// `split_session_with_new_session` (an explicit target session, not
-    /// "whatever kind the active pane happens to be") covers the same
-    /// ground for every remaining caller. Kept as a small workspace-level
-    /// test fixture helper (`workspace::tests`, `app::runtime::mod`'s focus-
-    /// reporting test) since re-deriving "split with a new session of the
-    /// active pane's own kind" at each call site would be more code than
-    /// this one method.
-    #[cfg(any(test, feature = "test-fixtures"))]
+    /// Test-only now: its last production caller was the pre-GPUI shell's
+    /// split-active-pane action, retired by `docs/roadmap.md`'s
+    /// "Placement-first session creation" -- `WorkspaceShell::create_session`
+    /// (`src/workspace.rs`) drives `split_session_with_new_session` (an
+    /// explicit target session, not "whatever kind the active pane happens
+    /// to be") for every remaining split caller. Kept as a small
+    /// workspace-level test fixture helper (`workspace::tests`) since
+    /// re-deriving "split with a new session of the active pane's own kind"
+    /// at each call site would be more code than this one method.
+    #[cfg(test)]
     pub fn split_active_with_new_session(&mut self) -> Option<(PaneKind, SessionId)> {
         let kind = self.visible_pane_kind(self.active_visible_index())?;
         let session_id = SessionId::new();
@@ -305,9 +304,8 @@ impl Workspace {
     /// caller) is `PaneId`-keyed since `docs/recursive-layout-design.md`'s
     /// slice 4 and uses [`Self::activate_pane`] instead. Kept as a test
     /// fixture helper -- "activate pane N by its visible index" is a common
-    /// setup shape across `workspace`/`app`/`control_surface` tests
-    /// unrelated to workspace mode.
-    #[cfg(any(test, feature = "test-fixtures"))]
+    /// setup shape across this crate's tests unrelated to workspace mode.
+    #[cfg(test)]
     pub fn activate_visible_pane(&mut self, index: usize) -> bool {
         let Some(pane_id) = self.visible_pane_id(index) else {
             return false;
