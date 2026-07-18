@@ -32,6 +32,7 @@ pub fn external_name(subcommand: &Subcommand) -> &'static str {
         Subcommand::Approve { .. } => "approve",
         Subcommand::Deny { .. } => "deny",
         Subcommand::CancelTurn { .. } => "cancel-turn",
+        Subcommand::ContinueTurn { .. } => "continue-turn",
         Subcommand::ReloadSessionRuntime => "reload-session-runtime",
         Subcommand::ReloadConfig => "reload-config",
         Subcommand::Sessions => "sessions",
@@ -107,6 +108,10 @@ pub fn to_request(subcommand: &Subcommand, resolved_split: Option<&str>) -> Requ
         ),
         Subcommand::CancelTurn { session_id } => invoke(
             "cancel-turn",
+            serde_json::json!({ "session_id": session_id }),
+        ),
+        Subcommand::ContinueTurn { session_id } => invoke(
+            "continue-turn",
             serde_json::json!({ "session_id": session_id }),
         ),
         Subcommand::ReloadSessionRuntime => invoke("reload-session-runtime", serde_json::json!({})),
@@ -205,7 +210,35 @@ mod tests {
         assert!(!is_destructive(&Subcommand::CancelTurn {
             session_id: "s-1".to_string()
         }));
+        assert!(!is_destructive(&Subcommand::ContinueTurn {
+            session_id: "s-1".to_string()
+        }));
         assert!(!is_destructive(&Subcommand::Sessions));
+    }
+
+    #[test]
+    fn cancel_turn_and_continue_turn_carry_the_session_id() {
+        let Request::Invoke(cancel) = to_request(
+            &Subcommand::CancelTurn {
+                session_id: "s-1".to_string(),
+            },
+            None,
+        ) else {
+            panic!("expected an Invoke request");
+        };
+        assert_eq!(cancel.command, "cancel-turn");
+        assert_eq!(cancel.args, serde_json::json!({ "session_id": "s-1" }));
+
+        let Request::Invoke(cont) = to_request(
+            &Subcommand::ContinueTurn {
+                session_id: "s-1".to_string(),
+            },
+            None,
+        ) else {
+            panic!("expected an Invoke request");
+        };
+        assert_eq!(cont.command, "continue-turn");
+        assert_eq!(cont.args, serde_json::json!({ "session_id": "s-1" }));
     }
 
     #[test]

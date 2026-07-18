@@ -83,6 +83,9 @@ pub enum Subcommand {
     CancelTurn {
         session_id: String,
     },
+    ContinueTurn {
+        session_id: String,
+    },
     ReloadSessionRuntime,
     ReloadConfig,
     Sessions,
@@ -118,6 +121,7 @@ Subcommands:\n  \
   approve <session-id> <call-id>\n  \
   deny <session-id> <call-id>\n  \
   cancel-turn <session-id>\n  \
+  continue-turn <session-id>\n  \
   reload-session-runtime\n  \
   reload-config\n  \
   sessions\n  \
@@ -253,6 +257,11 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             let session_id = next_required(&mut positionals, "cancel-turn", "session-id")?;
             reject_extra(&mut positionals, "cancel-turn")?;
             Subcommand::CancelTurn { session_id }
+        }
+        "continue-turn" => {
+            let session_id = next_required(&mut positionals, "continue-turn", "session-id")?;
+            reject_extra(&mut positionals, "continue-turn")?;
+            Subcommand::ContinueTurn { session_id }
         }
         "reload-session-runtime" => {
             reject_extra(&mut positionals, "reload-session-runtime")?;
@@ -606,6 +615,12 @@ mod tests {
         assert_eq!(
             parse(&args(&["cancel-turn", "s-1"])).unwrap().subcommand,
             Subcommand::CancelTurn {
+                session_id: "s-1".to_string()
+            }
+        );
+        assert_eq!(
+            parse(&args(&["continue-turn", "s-1"])).unwrap().subcommand,
+            Subcommand::ContinueTurn {
                 session_id: "s-1".to_string()
             }
         );

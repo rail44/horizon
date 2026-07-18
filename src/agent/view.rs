@@ -23,7 +23,7 @@ use gpui_component::input::{Escape, Input, InputEvent, InputState};
 use gpui_component::tag::Tag;
 use gpui_component::text::TextView;
 use gpui_component::Sizable as _;
-use horizon_agent::contract::{MessageRole, SessionState, ToolCallId};
+use horizon_agent::contract::{MessageRole, SessionState, ToolCallId, TurnEndReason};
 use horizon_agent::frame::{state_indicates_turn_in_flight, AgentFrameItem};
 use horizon_workspace::commands::CommandId;
 
@@ -835,7 +835,7 @@ impl AgentView {
         let tool_calls = turns::build_tool_call_views(items);
         let aggregate = turns::aggregate_receipt(&tool_calls);
         let prose = turns::receipt_prose(&aggregate);
-        let (status, model) = match tail {
+        let (status, model, halted) = match tail {
             turns::ReceiptTail::Final(end) => {
                 let status = turns::receipt_status(end);
                 let color = if status.is_error {
@@ -843,9 +843,15 @@ impl AgentView {
                 } else {
                     theme::text_muted()
                 };
-                (Some((status.text, color)), end.model.clone())
+                let halted = matches!(
+                    end.reason,
+                    TurnEndReason::Halted
+                        | TurnEndReason::HaltedByIterationCap
+                        | TurnEndReason::HaltedByDoomLoop
+                );
+                (Some((status.text, color)), end.model.clone(), halted)
             }
-            turns::ReceiptTail::Intermediate => (None, None),
+            turns::ReceiptTail::Intermediate => (None, None, false),
         };
         let receipt_text =
             |color: Hsla, text: String| div().text_size(px(11.0)).text_color(color).child(text);
@@ -896,6 +902,9 @@ impl AgentView {
                         .text_color(theme::text_subtle())
                         .child(model.clone()),
                 );
+            }
+            if halted {
+                row = row.child(render_continue_button(receipt_key));
             }
         }
 
@@ -2058,6 +2067,38 @@ fn render_stop_button(id: &'static str) -> AnyElement {
             window.dispatch_action(
                 Box::new(RunCommand {
                     id: CommandId::CancelAgentTurn,
+                }),
+                cx,
+            );
+        })
+        .into_any_element()
+}
+
+/// The Continue affordance on a guard-halted turn's receipt row
+/// (`docs/issues/002-agent-iteration-cap-halts-real-work.md`'s resolution,
+/// decision 3): plain outline styling, not `.danger()` -- a halt reads as a
+/// calm pause here, the opposite tone from [`render_stop_button`]'s
+/// deliberately danger-leaning Stop. Dispatches `CommandId::
+/// ContinueAgentTurn` through the same [`RunCommand`] action path as every
+/// other command (palette, `[keybindings]`, control plane), rather than
+/// calling `AgentSession::continue_turn` directly -- AGENTS.md's
+/// "operations go through the command model" convention. Keyed off the
+/// receipt's own `receipt_key` (stable across re-renders, same as the
+/// row's own `ElementId`) since a transcript can show more than one
+/// halted receipt at once (an earlier turn's halt the user never acted
+/// on, plus a later one) and each needs its own click target. `Button`
+/// already calls `cx.stop_propagation()` on click before running this
+/// handler, so clicking it doesn't also toggle the row's own
+/// expand/collapse.
+fn render_continue_button(receipt_key: usize) -> AnyElement {
+    Button::new(ElementId::from(format!("receipt-continue-{receipt_key}")))
+        .outline()
+        .xsmall()
+        .label("Continue")
+        .on_click(|_, window, cx| {
+            window.dispatch_action(
+                Box::new(RunCommand {
+                    id: CommandId::ContinueAgentTurn,
                 }),
                 cx,
             );

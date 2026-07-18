@@ -1,7 +1,7 @@
 ---
 id: 002
 title: Agent halts mid-task at "25 consecutive tool-driven turns" with no way to continue but retyping
-status: in-progress
+status: resolved
 severity: high
 area: agent
 ---
@@ -116,3 +116,49 @@ renders as a neutral "paused" receipt row instead of an error, and a
 parameterless Continue command (+ paused-row button) resumes without a
 new user message. Decisions (a)/(d)/(e) above were resolved by the
 retirement (no runtime knob remains); (b)/(c) are the dispatched work.
+
+## Resolution (2026-07-18)
+
+Owner-approved design implemented directly (items a-d above; e folded into
+a); see `docs/agent-tools-design.md`'s "Error Model and Loop Guards" for
+the durable record.
+
+- **(a) Thresholds.** `iteration_cap` 25 → 100; `doom_loop_window` 3 → 5.
+  Both are now fixed built-in constants
+  (`crates/horizon-agent/src/config.rs`'s `DEFAULT_ITERATION_CAP`/
+  `DEFAULT_DOOM_LOOP_WINDOW`), no longer read from `[agent]
+  iteration_cap`/`doom_loop_window` in the config file — those keys stay in
+  the file schema for now (parse harmlessly, do nothing) since retiring
+  them outright is a separate follow-up wave. This also resolves (d): a
+  fixed constant needs no runtime-respawn story.
+- **(b) Halt reads as a pause.** `TurnEndReason` gained
+  `HaltedByIterationCap`/`HaltedByDoomLoop` (the old bare `Halted` stays,
+  for pre-resolution persisted logs, and still renders calmly). A guard
+  halt no longer emits `Event::Error` at all — only `Event::TurnEnded`
+  with the specific reason. The transcript's receipt row
+  (`src/agent/turns/receipt.rs`) renders it with the same calm, non-error
+  styling as a cancelled turn, with text naming the guard and its
+  threshold (e.g. "paused after 100 consecutive tool-driven turns").
+- **(c) Continue is one action.** New parameterless `CommandId::
+  ContinueAgentTurn` (mirrors `CancelAgentTurn`), a button on the paused
+  receipt row itself, palette entry, and CLI/control-plane parity
+  (`horizon continue-turn <session-id>`, mirroring `cancel-turn`). Wire:
+  `Command::ContinueTurn`, handled by `providers::rig::session::
+  run_session_loop`: a halt stashes the real tool result that tripped it
+  (`pending_halt_result`) instead of folding it into `rig_history`
+  immediately; `ContinueTurn` consumes it, resets the guard, and resumes
+  exactly as if the guard had never tripped (same code path a normal
+  tool-result-driven turn takes); a plain new user message flushes the
+  same stash into history first, so typing past a halt still works.
+  Replay safety: `pending_halt_result` is pure in-memory session-loop
+  state, never persisted, so a resumed/replayed halted session sits at
+  `WaitingForUser` without auto-continuing.
+
+Touched: `crates/horizon-agent` (`config.rs`, `contract.rs`,
+`providers/rig/session.rs`, `providers/mock.rs`, `frame.rs`),
+`crates/horizon-workspace` (`commands.rs`), `src/agent/session.rs`,
+`src/agent/turns/receipt.rs`, `src/agent/view.rs`, `src/workspace.rs`,
+`src/control_plane.rs`, `crates/horizon-cli` (`cli.rs`, `commands.rs`),
+`docs/agent-tools-design.md`, `config.example.toml`.
+
+Merged to main by the project session 2026-07-18.

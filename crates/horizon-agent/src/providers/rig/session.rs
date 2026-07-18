@@ -174,6 +174,14 @@ async fn run_session_loop(
     let mut pending_tool_calls: HashMap<ToolCallId, ToolCallDescriptor> = HashMap::new();
     let mut cancelled_call_ids: HashSet<ToolCallId> = HashSet::new();
     let mut guard = TurnLoopGuard::new(config.iteration_cap, config.doom_loop_window);
+    // The real, already-executed tool result a guard halt stashed instead
+    // of folding into `rig_history` right away -- see `halt_turn_loop`'s
+    // doc comment. `Command::ContinueTurn` consumes it to resume the turn
+    // loop; `Command::UserMessage` flushes it into history first if the
+    // user types past the halt instead of clicking Continue. `None`
+    // whenever the session isn't sitting on a halted turn, including right
+    // after a fresh start (a replayed session must never auto-resume).
+    let mut pending_halt_result: Option<ToolCallResult> = None;
 
     loop {
         let command = match inbox.pop_front() {
@@ -190,6 +198,14 @@ async fn run_session_loop(
                 let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
             }
             Command::UserMessage { text } => {
+                // Typing past a halt instead of clicking Continue: the
+                // real result a guard halt stashed still has to land in
+                // `rig_history` before the next request, or the API
+                // rejects it (an assistant `tool_calls` message with no
+                // matching result). A no-op when there's nothing pending.
+                if let Some(result) = pending_halt_result.take() {
+                    rig_history.push(rig_tool_result_message(&result));
+                }
                 // A fresh user message starts a new interaction: both loop
                 // guards below count/track only *tool-driven* turns since
                 // the last user message.
@@ -259,6 +275,7 @@ async fn run_session_loop(
                         halt,
                         &mut guard,
                         &events_tx,
+                        &mut pending_halt_result,
                         &mut rig_history,
                         &result,
                         &mut pending_tool_calls,
@@ -282,6 +299,7 @@ async fn run_session_loop(
                         halt,
                         &mut guard,
                         &events_tx,
+                        &mut pending_halt_result,
                         &mut rig_history,
                         &result,
                         &mut pending_tool_calls,
@@ -290,6 +308,59 @@ async fn run_session_loop(
                     continue;
                 }
 
+                let _ = events_tx.send(Event::StateChanged(SessionState::Running).into());
+                let outcome = run_cancellable_turn(
+                    &mut commands,
+                    &mut inbox,
+                    &config,
+                    &environment,
+                    &extra_sections,
+                    &mut rig_history,
+                    rig_tool_result_message(&result),
+                    &events_tx,
+                    || deterministic_tool_result_response(&result),
+                )
+                .await;
+                apply_turn_outcome(
+                    outcome,
+                    &events_tx,
+                    &mut rig_history,
+                    &mut pending_tool_calls,
+                    &mut cancelled_call_ids,
+                );
+            }
+            Command::ContinueTurn => {
+                let Some(result) = pending_halt_result.take() else {
+                    // Nothing halted to resume: a safe no-op. Covers a
+                    // stale Continue arriving after a fresh user message
+                    // already flushed the pending result, a Continue sent
+                    // to an idle/never-halted session, and — critically —
+                    // a resumed session right after bootstrap: replay never
+                    // populates `pending_halt_result` on its own, so a
+                    // persisted session that ended halted stays halted
+                    // (waiting-for-user) rather than auto-resuming.
+                    continue;
+                };
+                guard.reset();
+                // Counts as the resumed turn's one tool-driven turn, the
+                // same as the `Command::ToolCallResult` arm above would
+                // have — keeps the guard meaningful even if Continue is
+                // clicked repeatedly on a genuinely runaway loop: it can
+                // re-trip after another full `iteration_cap` turns rather
+                // than being permanently defeated by one reset.
+                if let Some(halt) = guard.record_tool_turn() {
+                    halt_turn_loop(
+                        halt,
+                        &mut guard,
+                        &events_tx,
+                        &mut pending_halt_result,
+                        &mut rig_history,
+                        &result,
+                        &mut pending_tool_calls,
+                        &mut cancelled_call_ids,
+                    );
+                    continue;
+                }
                 let _ = events_tx.send(Event::StateChanged(SessionState::Running).into());
                 let outcome = run_cancellable_turn(
                     &mut commands,
@@ -386,8 +457,8 @@ async fn run_cancellable_turn(
 
 /// Centralizes `Event::TurnEnded` emission for every turn-completion path
 /// that runs a rig turn (`run_cancellable_turn`/`complete_rig_turn`):
-/// completed, cancelled, and failed all funnel through here (the fourth stop
-/// reason, `Halted`, comes from the turn-loop guard's own
+/// completed, cancelled, and failed all funnel through here (the two
+/// guard-halted stop reasons come from the turn-loop guard's own
 /// [`halt_turn_loop`], which never calls this — a halt stops the loop
 /// *instead of* running another turn, so there's no `TurnCompletion` for it
 /// to inspect). `outcome.failed` is checked before the empty-tool-calls
@@ -501,12 +572,15 @@ pub(super) fn append_cancelled_tool_results_to_history(
 //   fingerprints (a model stuck re-issuing the same call to the same
 //   effect).
 //
-// Both halt the same way: an explanatory `Error` event, the same
-// cancellation machinery `Command::Cancel` uses for still-pending calls (so
-// `rig_history` stays API-valid), and a return to `WaitingForUser` so the
-// next user message works normally. `TurnLoopGuard` itself is pure (no
-// I/O), so its counting and fingerprinting logic is unit-tested directly in
-// `tests.rs`.
+// Both halt the same way (`halt_turn_loop`): the same cancellation
+// machinery `Command::Cancel` uses for still-pending calls (so
+// `rig_history` stays API-valid), a `TurnEnded` event carrying which guard
+// fired (rendered as a calm "paused" receipt, not an error -- see
+// `docs/issues/002-agent-iteration-cap-halts-real-work.md`'s resolution),
+// and a return to `WaitingForUser` so either a new user message or
+// `Command::ContinueTurn` works normally. `TurnLoopGuard` itself is pure
+// (no I/O), so its counting and fingerprinting logic is unit-tested
+// directly in `tests.rs`.
 
 /// Why the turn loop halted itself rather than running another turn.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -516,22 +590,14 @@ pub(super) enum GuardHalt {
 }
 
 impl GuardHalt {
-    /// `iteration_cap`/`doom_loop_window` are the same config-sourced
-    /// values (`agent::config::RigAgentConfig`) the guard that tripped was
-    /// constructed with — threaded in explicitly here rather than read off
-    /// `self` so this stays a plain, dependency-free enum method.
-    fn message(self, iteration_cap: u32, doom_loop_window: usize) -> String {
+    /// The specific [`TurnEndReason`] this halt reports, so the UI can
+    /// render the right calm reason text without needing to know the
+    /// guard's internals — see [`TurnEndReason::HaltedByIterationCap`]/
+    /// [`TurnEndReason::HaltedByDoomLoop`]'s own doc comments.
+    fn turn_end_reason(self) -> TurnEndReason {
         match self {
-            GuardHalt::IterationCapExceeded => format!(
-                "Stopped after {iteration_cap} consecutive tool-driven turns without a \
-                 new user message. The agent may be stuck in a loop — send a new message to \
-                 continue."
-            ),
-            GuardHalt::DoomLoopDetected => format!(
-                "Stopped after {doom_loop_window} consecutive identical tool results. The agent \
-                 appears to be repeating the same tool call without making progress — send a new \
-                 message to continue."
-            ),
+            GuardHalt::IterationCapExceeded => TurnEndReason::HaltedByIterationCap,
+            GuardHalt::DoomLoopDetected => TurnEndReason::HaltedByDoomLoop,
         }
     }
 }
@@ -615,38 +681,44 @@ pub(super) fn tool_result_fingerprint(
 
 /// Halts the turn loop in response to a tripped guard.
 ///
+/// `docs/issues/002-agent-iteration-cap-halts-real-work.md`'s resolution
+/// (decision 2): a guard halt now reads as a pause, not an error, so this
+/// no longer emits `Event::Error` at all — only `Event::TurnEnded` with the
+/// specific guard-kind reason (folded by `frame::apply_agent_event_to_frame`
+/// into the turn's receipt, rendered calmly by `src/agent/turns/receipt.rs`
+/// rather than as a danger-styled error block).
+///
 /// The result that tripped the guard (`arrived_result`) is *real*: its tool
 /// already executed (an `fs.write` is already on disk) and the app already
-/// surfaced its genuine `ToolCallFinished`. So it is recorded in
-/// `rig_history` as its actual output — never falsified as cancelled, and
-/// with no second, contradictory `ToolCallFinished` event. Only the turn
-/// that would have consumed it is skipped. Any *other* still-pending calls
-/// are cancelled with the same helpers `Command::Cancel` uses (so
-/// `rig_history` stays API-valid — see
-/// `append_cancelled_tool_results_to_history`). Emits an explanatory
-/// `Error` event, resets the guard, and returns the session to
-/// `WaitingForUser` so the next `Command::UserMessage` works normally.
+/// surfaced its genuine `ToolCallFinished`. It is deliberately *not* folded
+/// into `rig_history` here — `pending_halt_result` stashes it instead, the
+/// same way an ordinary tool-driven turn treats a batch's last-landed
+/// result: as the *next* turn's prompt (see [`fold_batched_tool_result`]'s
+/// doc comment), not a pre-pushed history entry. `Command::ContinueTurn`
+/// consumes it to resume; `Command::UserMessage` flushes it into history
+/// first if the user types past the halt instead. Any *other*
+/// still-pending calls in the batch (only possible on the doom-loop path —
+/// see the module doc) are cancelled immediately with the same helpers
+/// `Command::Cancel` uses, since those never get a second chance to land.
+/// Resets the guard and returns the session to `WaitingForUser` either way
+/// (Continue re-enters the loop with a fresh guard, exactly like a new
+/// `Command::UserMessage` would).
 ///
 /// The caller must have already removed `arrived_result`'s call id from
 /// `pending_tool_calls` (the session loop does this when it looks up the
 /// call's descriptor).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn halt_turn_loop(
     halt: GuardHalt,
     guard: &mut TurnLoopGuard,
     events_tx: &Sender<ProviderEvent>,
+    pending_halt_result: &mut Option<ToolCallResult>,
     rig_history: &mut Vec<Message>,
     arrived_result: &ToolCallResult,
     pending_tool_calls: &mut HashMap<ToolCallId, ToolCallDescriptor>,
     cancelled_call_ids: &mut HashSet<ToolCallId>,
 ) {
-    rig_history.push(rig_tool_result_message(arrived_result));
-
-    let _ = events_tx.send(
-        Event::Error(Error {
-            message: halt.message(guard.iteration_cap, guard.doom_loop_window),
-        })
-        .into(),
-    );
+    *pending_halt_result = Some(arrived_result.clone());
 
     let call_ids: Vec<ToolCallId> = pending_tool_calls.drain().map(|(id, _)| id).collect();
     cancelled_call_ids.extend(call_ids.iter().cloned());
@@ -656,6 +728,6 @@ pub(super) fn halt_turn_loop(
     }
 
     guard.reset();
-    let _ = events_tx.send(Event::TurnEnded(TurnEndReason::Halted).into());
+    let _ = events_tx.send(Event::TurnEnded(halt.turn_end_reason()).into());
     let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
 }

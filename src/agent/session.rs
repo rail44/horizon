@@ -163,6 +163,17 @@ impl AgentSession {
         )
     }
 
+    /// Whether the session is sitting on a turn the turn-loop guard halted
+    /// (`docs/issues/002-agent-iteration-cap-halts-real-work.md`'s
+    /// resolution) -- i.e. `CommandId::ContinueAgentTurn` has something to
+    /// resume. `SessionState` alone can't answer this: a guard halt returns
+    /// the session to `WaitingForUser`, the same state a normally completed
+    /// turn ends in, so this reads the frame's own last item instead (see
+    /// `horizon_agent::frame::halted_awaiting_continue`).
+    pub(crate) fn turn_halted(&self) -> bool {
+        horizon_agent::frame::halted_awaiting_continue(&self.frame.items)
+    }
+
     /// Every command send funnels through here: short-circuits once the
     /// channel is known dead ("subsequent sends short-circuit to the
     /// same state"), and on the first failure flags it and wakes the
@@ -196,6 +207,14 @@ impl AgentSession {
 
     pub(crate) fn cancel(&self) {
         self.dispatch(Command::Cancel { request_id: None });
+    }
+
+    /// Resumes a turn the turn-loop guard halted, without composing a new
+    /// user message -- `CommandId::ContinueAgentTurn`'s session-level
+    /// action. A safe no-op (per `Command::ContinueTurn`'s own doc comment)
+    /// when nothing is actually halted.
+    pub(crate) fn continue_turn(&self) {
+        self.dispatch(Command::ContinueTurn);
     }
 
     /// The explicit destructive half of close-vs-terminate.

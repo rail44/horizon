@@ -356,6 +356,28 @@ pub fn actionable_pending_approval_call_ids_in(items: &[AgentFrameItem]) -> Vec<
     pending
 }
 
+/// Whether the frame's last item is a guard-halted `TurnEnded` -- i.e. the
+/// session is sitting on a paused turn `Command::ContinueTurn` can resume
+/// (`docs/issues/002-agent-iteration-cap-halts-real-work.md`'s resolution,
+/// decision 3). Only the *last* item counts: any later activity (a new user
+/// message, a fresh tool call) means the halt has already been superseded,
+/// even though the old `TurnEnded { reason: Halted*, .. }` item is still
+/// sitting earlier in the frame. `TurnEndReason::Halted` (the legacy,
+/// pre-resolution bare variant -- see its own doc comment) counts too: an
+/// old persisted session that halted before this resolution still reads as
+/// paused and offers Continue, it just can't say which guard fired.
+pub fn halted_awaiting_continue(items: &[AgentFrameItem]) -> bool {
+    matches!(
+        items.last(),
+        Some(AgentFrameItem::TurnEnded {
+            reason: TurnEndReason::Halted
+                | TurnEndReason::HaltedByIterationCap
+                | TurnEndReason::HaltedByDoomLoop,
+            ..
+        })
+    )
+}
+
 /// The pure core of [`AgentFrame::is_turn_in_flight`], operating on just the
 /// `state` field -- see [`pending_approval_call_ids_in`]'s doc comment for
 /// why this split exists: `AgentFrameHandle::state`'s own field signal can
@@ -882,5 +904,63 @@ mod field_scoped_reads_tests {
         assert!(!state_indicates_turn_in_flight(Some(
             SessionState::Completed
         )));
+    }
+
+    fn turn_ended_with_reason(reason: TurnEndReason) -> AgentFrameItem {
+        AgentFrameItem::TurnEnded {
+            reason,
+            model: None,
+            elapsed: Duration::from_secs(1),
+        }
+    }
+
+    #[test]
+    fn halted_awaiting_continue_is_true_for_either_specific_guard_reason() {
+        assert!(halted_awaiting_continue(&[turn_ended_with_reason(
+            TurnEndReason::HaltedByIterationCap
+        )]));
+        assert!(halted_awaiting_continue(&[turn_ended_with_reason(
+            TurnEndReason::HaltedByDoomLoop
+        )]));
+    }
+
+    #[test]
+    fn halted_awaiting_continue_is_true_for_the_legacy_bare_halted_reason() {
+        // A pre-resolution persisted session used the bare `Halted` variant
+        // -- it must still read as a resumable pause, just without a
+        // specific guard-kind sentence available.
+        assert!(halted_awaiting_continue(&[turn_ended_with_reason(
+            TurnEndReason::Halted
+        )]));
+    }
+
+    #[test]
+    fn halted_awaiting_continue_is_false_for_a_normal_end_reason() {
+        assert!(!halted_awaiting_continue(&[turn_ended()]));
+        assert!(!halted_awaiting_continue(&[turn_ended_with_reason(
+            TurnEndReason::Cancelled
+        )]));
+        assert!(!halted_awaiting_continue(&[turn_ended_with_reason(
+            TurnEndReason::Failed
+        )]));
+    }
+
+    #[test]
+    fn halted_awaiting_continue_is_false_once_superseded_by_later_activity() {
+        // A halt sitting earlier in the frame no longer counts once a new
+        // user message (or any other later item) has superseded it.
+        let items = vec![
+            turn_ended_with_reason(TurnEndReason::HaltedByIterationCap),
+            AgentFrameItem::Message(Message {
+                role: MessageRole::User,
+                text: "hello again".to_string(),
+            }),
+        ];
+        assert!(!halted_awaiting_continue(&items));
+    }
+
+    #[test]
+    fn halted_awaiting_continue_is_false_for_an_empty_frame() {
+        assert!(!halted_awaiting_continue(&[]));
     }
 }

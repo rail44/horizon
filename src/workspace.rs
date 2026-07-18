@@ -1761,6 +1761,11 @@ impl WorkspaceShell {
                     session.read(cx).cancel();
                 }
             }
+            CommandId::ContinueAgentTurn => {
+                if let Some(session) = self.active_agent_session() {
+                    session.read(cx).continue_turn();
+                }
+            }
             CommandId::ReloadConfig => match horizon_config::reload() {
                 Ok(raw) => {
                     theme::reload_from(&raw);
@@ -1971,10 +1976,11 @@ impl WorkspaceShell {
         Ok(())
     }
 
-    /// Session-targeted approve/deny/cancel, for a control-plane caller
-    /// that names an explicit `session_id` rather than "whichever pane is
-    /// active" (unlike `CommandId::ApproveToolCall`/`DenyToolCall`/
-    /// `CancelAgentTurn`, which resolve against `active_agent_session`).
+    /// Session-targeted approve/deny/cancel/continue, for a control-plane
+    /// caller that names an explicit `session_id` rather than "whichever
+    /// pane is active" (unlike `CommandId::ApproveToolCall`/`DenyToolCall`/
+    /// `CancelAgentTurn`/`ContinueAgentTurn`, which resolve against
+    /// `active_agent_session`).
     pub(crate) fn external_approve(
         &mut self,
         session_id: SessionId,
@@ -2016,6 +2022,19 @@ impl WorkspaceShell {
         Ok(())
     }
 
+    pub(crate) fn external_continue_turn(
+        &mut self,
+        session_id: SessionId,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let session = self
+            .agent_sessions
+            .get(&session_id)
+            .ok_or_else(|| "unknown session".to_string())?;
+        session.read(cx).continue_turn();
+        Ok(())
+    }
+
     pub(crate) fn external_terminate_all_detached(
         &mut self,
         window: &mut Window,
@@ -2031,15 +2050,16 @@ impl WorkspaceShell {
     }
 
     pub(crate) fn command_state_with(&self, cx: &App) -> CommandState {
-        let (has_pending_approval, has_turn_in_flight) = self
+        let (has_pending_approval, has_turn_in_flight, has_paused_turn) = self
             .active_agent_session()
             .map(|session| {
                 let session = session.read(cx);
                 let pending = !session.pending_approval_call_ids().is_empty();
                 let in_flight = session.turn_in_flight();
-                (pending, in_flight)
+                let paused = session.turn_halted();
+                (pending, in_flight, paused)
             })
-            .unwrap_or((false, false));
+            .unwrap_or((false, false, false));
         CommandState {
             tab_count: self.workspace.tab_count(),
             visible_pane_count: self.workspace.visible_panes().len(),
@@ -2047,6 +2067,7 @@ impl WorkspaceShell {
             detached_session_count: self.workspace.detached_session_count(),
             has_pending_approval,
             has_turn_in_flight,
+            has_paused_turn,
         }
     }
 

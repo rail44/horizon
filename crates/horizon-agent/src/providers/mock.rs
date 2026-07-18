@@ -278,6 +278,12 @@ impl Provider for MockProvider {
                         }
                         let _ = events_tx.send(tool_result_message(&result).into());
                     }
+                    Command::ContinueTurn => {
+                        // The mock provider has no turn-loop guard, so it
+                        // never halts a turn in the first place -- a safe
+                        // no-op, same spirit as `Command::Cancel`'s
+                        // "nothing active" branch above.
+                    }
                     Command::Shutdown => {
                         let _ =
                             events_tx.send(Event::StateChanged(SessionState::Terminated).into());

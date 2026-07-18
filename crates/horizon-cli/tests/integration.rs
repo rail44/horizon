@@ -209,6 +209,43 @@ fn new_agent_with_prompt_reaches_the_server_and_reports_ok() {
 }
 
 #[test]
+fn continue_turn_reaches_the_server_and_reports_ok() {
+    let socket_path = temp_socket_path("continue-turn");
+    let listener = UnixListener::bind(&socket_path).expect("bind stub socket");
+    let received_command: std::sync::Arc<std::sync::Mutex<Option<(String, serde_json::Value)>>> =
+        std::sync::Arc::default();
+    let received_command_clone = received_command.clone();
+    thread::spawn(move || {
+        let (stream, _addr) = listener.accept().unwrap();
+        let mut writer = stream.try_clone().unwrap();
+        let mut reader = BufReader::new(stream);
+
+        let hello = wire::read_envelope(&mut reader).unwrap().unwrap();
+        wire::write_envelope(&mut writer, &Envelope::new(hello.id, our_hello_ack())).unwrap();
+
+        let request = wire::read_envelope(&mut reader).unwrap().unwrap();
+        if let EnvelopeBody::Invoke(invoke) = request.body {
+            *received_command_clone.lock().unwrap() = Some((invoke.command, invoke.args));
+        }
+        wire::write_envelope(&mut writer, &Envelope::new(request.id, EnvelopeBody::Ok)).unwrap();
+    });
+
+    let (code, stdout, stderr) = run_ctl(&["continue-turn", "s-1"], &socket_path, false);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(stdout, "OK\n");
+
+    let received = received_command
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("server saw a request");
+    assert_eq!(received.0, "continue-turn");
+    assert_eq!(received.1, serde_json::json!({ "session_id": "s-1" }));
+
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+#[test]
 fn rejected_handshake_is_reported_and_exits_with_a_server_error_code() {
     let socket_path = temp_socket_path("rejected");
     stub_server(

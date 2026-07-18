@@ -314,7 +314,13 @@ fn turn_end_reason_text(reason: TurnEndReason) -> &'static str {
         TurnEndReason::Completed => "completed",
         TurnEndReason::Cancelled => "cancelled",
         TurnEndReason::Failed => "failed",
-        TurnEndReason::Halted => "halted",
+        // All three guard-halt reasons project to the same coarse label --
+        // nothing queries a finer distinction here today; the specific
+        // guard kind is a UI-rendering concern (`TurnEndReason`'s own doc
+        // comment), not a `agent_turns` query one.
+        TurnEndReason::Halted
+        | TurnEndReason::HaltedByIterationCap
+        | TurnEndReason::HaltedByDoomLoop => "halted",
     }
 }
 

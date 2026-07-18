@@ -76,6 +76,17 @@ pub enum Command {
         reason: Option<String>,
     },
     ToolCallResult(ToolCallResult),
+    /// Resumes a turn the turn-loop guard halted (`TurnEndReason::
+    /// HaltedByIterationCap`/`HaltedByDoomLoop`), without composing a new
+    /// user message -- `docs/issues/002-agent-iteration-cap-halts-real-
+    /// work.md`'s resolution, decision 3 ("Continue is one action"). The
+    /// session loop (`providers::rig::session::run_session_loop`) resets
+    /// the guard and re-enters the turn loop from the halted result it
+    /// already recorded. A safe no-op when there is nothing halted to
+    /// resume (e.g. sent to an idle session, or replayed from a persisted
+    /// log -- replay must never auto-resume a halted turn, so nothing in
+    /// bootstrap ever sends this on a session's behalf).
+    ContinueTurn,
     Shutdown,
 }
 
@@ -136,13 +147,35 @@ pub enum Event {
 
 /// Why a turn ended — see [`Event::TurnEnded`]. Named after the design doc's
 /// four stop reasons verbatim: "completed / cancelled / failed /
-/// halted-by-guard".
+/// halted-by-guard" -- `halted-by-guard` is now the two specific
+/// guard-sourced variants below rather than one bare `Halted`
+/// (`docs/issues/002-agent-iteration-cap-halts-real-work.md`'s resolution,
+/// decision 2): the UI needs to know *which* guard fired to render the
+/// right calm reason text ("paused after 100 consecutive tool-driven
+/// turns" vs. "...5 consecutive identical tool results"), and since the
+/// guard's thresholds are now fixed built-in constants
+/// (`config::DEFAULT_ITERATION_CAP`/`DEFAULT_DOOM_LOOP_WINDOW`) rather than
+/// per-session config, the variant alone is enough for the UI to build
+/// that text without carrying a number on the wire.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub enum TurnEndReason {
     Completed,
     Cancelled,
     Failed,
+    /// Legacy: every guard halt used this bare variant before the above
+    /// resolution. Kept only so a pre-existing persisted event log with
+    /// this reason still deserializes on replay; no current code path
+    /// produces it. Renders the same calm "paused" treatment as the two
+    /// variants below, just without a specific guard-kind sentence.
     Halted,
+    /// The turn-loop guard's consecutive-tool-turn safety net stopped the
+    /// turn (`providers::rig::session`'s `TurnLoopGuard::record_tool_turn`)
+    /// -- see `docs/agent-tools-design.md`'s "Error Model and Loop Guards".
+    HaltedByIterationCap,
+    /// The turn-loop guard's doom-loop (identical-consecutive-tool-result)
+    /// detector stopped the turn (`TurnLoopGuard::record_fingerprint`).
+    /// Same section of the design doc.
+    HaltedByDoomLoop,
 }
 
 pub fn event_kind(event: &Event) -> &'static str {

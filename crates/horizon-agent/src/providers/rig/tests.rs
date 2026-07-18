@@ -24,8 +24,8 @@ use crate::roles::{resolve, RoleId};
 /// `DEFAULT_DOOM_LOOP_WINDOW`) for these guard-logic unit tests, which
 /// exercise `TurnLoopGuard` directly rather than through config precedence
 /// (that precedence is covered in `agent::config`'s own tests).
-const TEST_ITERATION_CAP: u32 = 25;
-const TEST_DOOM_LOOP_WINDOW: usize = 3;
+const TEST_ITERATION_CAP: u32 = 100;
+const TEST_DOOM_LOOP_WINDOW: usize = 5;
 use crate::contract::SessionId;
 use crate::contract::{
     Command, Event, Message as AgentMessage, MessageDelta, MessageRole, Provider as AgentProvider,
@@ -441,12 +441,13 @@ fn turn_loop_guard_iteration_cap_resets_on_reset() {
 }
 
 #[test]
-fn turn_loop_guard_fingerprint_triggers_on_three_identical() {
+fn turn_loop_guard_fingerprint_triggers_at_the_window_boundary() {
     let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
     let fingerprint = 0xABCDu64;
 
-    assert_eq!(guard.record_fingerprint(fingerprint), None);
-    assert_eq!(guard.record_fingerprint(fingerprint), None);
+    for _ in 0..TEST_DOOM_LOOP_WINDOW - 1 {
+        assert_eq!(guard.record_fingerprint(fingerprint), None);
+    }
     assert_eq!(
         guard.record_fingerprint(fingerprint),
         Some(GuardHalt::DoomLoopDetected)
@@ -466,15 +467,17 @@ fn turn_loop_guard_fingerprint_does_not_trigger_on_varying_fingerprints() {
 fn turn_loop_guard_reset_clears_fingerprint_window() {
     let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
     let fingerprint = 42u64;
-    guard.record_fingerprint(fingerprint);
-    guard.record_fingerprint(fingerprint);
+    for _ in 0..TEST_DOOM_LOOP_WINDOW - 1 {
+        guard.record_fingerprint(fingerprint);
+    }
 
     guard.reset();
 
-    // If the window had survived the reset, this third identical
-    // fingerprint would immediately trip the guard; it must not.
-    assert_eq!(guard.record_fingerprint(fingerprint), None);
-    assert_eq!(guard.record_fingerprint(fingerprint), None);
+    // If the window had survived the reset, the next identical fingerprint
+    // at the boundary would immediately trip the guard; it must not.
+    for _ in 0..TEST_DOOM_LOOP_WINDOW - 1 {
+        assert_eq!(guard.record_fingerprint(fingerprint), None);
+    }
     assert_eq!(
         guard.record_fingerprint(fingerprint),
         Some(GuardHalt::DoomLoopDetected)
@@ -482,7 +485,7 @@ fn turn_loop_guard_reset_clears_fingerprint_window() {
 }
 
 #[test]
-fn halt_turn_loop_records_real_result_and_cancels_only_other_pending_calls() {
+fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls() {
     // Assistant turn requested two tool calls: A (whose real result just
     // arrived and tripped the guard) and B (still outstanding).
     let call_a = rig_workspace_snapshot_call();
@@ -513,6 +516,7 @@ fn halt_turn_loop_records_real_result_and_cancels_only_other_pending_calls() {
         },
     )]);
     let mut cancelled: HashSet<ToolCallId> = HashSet::new();
+    let mut pending_halt_result: Option<ToolCallResult> = None;
     let arrived = ToolCallResult::new(id_a.clone(), serde_json::json!({ "tab_count": 2 }));
     let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
     for _ in 0..=TEST_ITERATION_CAP {
@@ -524,23 +528,25 @@ fn halt_turn_loop_records_real_result_and_cancels_only_other_pending_calls() {
         GuardHalt::IterationCapExceeded,
         &mut guard,
         &tx,
+        &mut pending_halt_result,
         &mut history,
         &arrived,
         &mut pending,
         &mut cancelled,
     );
 
-    // History stays API-valid: the assistant tool_calls message is followed
-    // by one result per call. The arrived result keeps its REAL output (the
-    // tool already executed — falsifying it as cancelled would misrepresent
-    // e.g. a write already on disk); only B gets a synthetic cancelled one.
-    assert_eq!(history.len(), 4);
+    // The arrived result is *not* folded into history here -- it's stashed
+    // for `Command::ContinueTurn`/a later `Command::UserMessage` to fold in
+    // exactly like an ordinary tool-driven turn's last-landed result (see
+    // `halt_turn_loop`'s doc comment). Only B's synthesized cancellation is
+    // appended immediately, since it never gets a second chance to land.
+    assert_eq!(
+        pending_halt_result,
+        Some(arrived.clone()),
+        "the real, already-executed result must be stashed for Continue/a new user message"
+    );
+    assert_eq!(history.len(), 3);
     assert!(matches!(&history[2], RigMessage::User { content }
-        if matches!(content.first_ref(), UserContent::ToolResult(result)
-            if result.id == id_a.0
-                && matches!(result.content.first_ref(), ToolResultContent::Text(text)
-                    if text.text.contains("tab_count") && !text.text.contains("cancelled")))));
-    assert!(matches!(&history[3], RigMessage::User { content }
         if matches!(content.first_ref(), UserContent::ToolResult(result)
             if result.id == id_b.0
                 && matches!(result.content.first_ref(), ToolResultContent::Text(text)
@@ -554,10 +560,6 @@ fn halt_turn_loop_records_real_result_and_cancels_only_other_pending_calls() {
     );
 
     match recv(&rx).event {
-        Event::Error(error) => assert!(error.message.contains("consecutive tool-driven turns")),
-        other => panic!("expected an Error event, got {other:?}"),
-    }
-    match recv(&rx).event {
         Event::ToolCallFinished(result) => {
             assert_eq!(
                 result.call_id, id_b,
@@ -567,14 +569,18 @@ fn halt_turn_loop_records_real_result_and_cancels_only_other_pending_calls() {
         }
         other => panic!("expected ToolCallFinished, got {other:?}"),
     }
-    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Halted));
+    assert_eq!(
+        recv(&rx).event,
+        Event::TurnEnded(TurnEndReason::HaltedByIterationCap)
+    );
     assert_eq!(
         recv(&rx).event,
         Event::StateChanged(SessionState::WaitingForUser)
     );
     assert!(
         rx.try_recv().is_err(),
-        "halt must emit exactly Error, one cancelled finish for B, TurnEnded(Halted), and WaitingForUser"
+        "halt must emit exactly one cancelled finish for B, TurnEnded(HaltedByIterationCap), \
+         and WaitingForUser -- no Error event"
     );
 
     // The guard was reset: a fresh allowance of tool turns is available.
@@ -697,24 +703,58 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
     }
 
     // The next tool-driven turn exceeds the cap: the session halts instead
-    // of running it. The arrived result's REAL output goes into rig_history
-    // (asserted directly in the halt_turn_loop unit test — history is not
-    // observable through the session handle) and, since it already finished
-    // for real app-side, no contradictory cancelled ToolCallFinished may be
-    // emitted for it: the halt is exactly Error then WaitingForUser.
+    // of running it, as a pause rather than an error -- no `Event::Error`
+    // at all, just `TurnEnded(HaltedByIterationCap)` then `WaitingForUser`.
+    // The arrived result's REAL output is stashed, not folded into
+    // rig_history yet (asserted directly in the halt_turn_loop unit test —
+    // history is not observable through the session handle) and, since it
+    // already finished for real app-side, no contradictory cancelled
+    // ToolCallFinished may be emitted for it.
     let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
         call_id.clone(),
         serde_json::json!({ "loop_again": true, "n": "final" }),
     )));
-    match recv(&rx).event {
-        Event::Error(error) => assert!(error.message.contains("consecutive tool-driven turns")),
-        other => panic!("expected the iteration-cap error, got {other:?}"),
-    }
-    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Halted));
+    assert_eq!(
+        recv(&rx).event,
+        Event::TurnEnded(TurnEndReason::HaltedByIterationCap)
+    );
     assert_eq!(
         recv(&rx).event,
         Event::StateChanged(SessionState::WaitingForUser),
         "no cancelled ToolCallFinished may be emitted for the real, already-executed result"
+    );
+
+    // `Command::ContinueTurn` resumes without a new user message: the
+    // stashed result becomes the next turn's prompt. It still carries
+    // `loop_again: true`, so the fallback responder legitimately requests
+    // the tool again -- proving Continue actually re-entered the turn loop
+    // rather than just clearing the halt, exactly as if the guard had
+    // never intervened.
+    let _ = tx.send(Command::ContinueTurn);
+    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::ToolCallRequested(request) if request.call_id == call_id
+    ));
+
+    // Resolve that call with a plain (non-looping) result so the turn
+    // completes normally, proving the resumed session is fully healthy.
+    let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
+        call_id.clone(),
+        serde_json::json!({ "done": true }),
+    )));
+    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::Assistant,
+            ..
+        })
+    ));
+    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Completed));
+    assert_eq!(
+        recv(&rx).event,
+        Event::StateChanged(SessionState::WaitingForUser)
     );
 
     // The session is still usable: a fresh user message runs a normal turn.
@@ -728,6 +768,55 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
             role: MessageRole::User,
             text,
         }) if text == "hello again"
+    ));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::Assistant,
+            ..
+        })
+    ));
+    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Completed));
+    assert_eq!(
+        recv(&rx).event,
+        Event::StateChanged(SessionState::WaitingForUser)
+    );
+}
+
+/// `docs/issues/002-agent-iteration-cap-halts-real-work.md`'s resolution,
+/// replay-safety requirement: a session that ended halted must not
+/// auto-resume once restarted/replayed. `pending_halt_result` (the state
+/// `Command::ContinueTurn` consumes) is purely in-memory session-loop
+/// state, never persisted and never reconstructed from `rig_history` --
+/// every freshly spawned session loop starts with it `None`, regardless of
+/// what the loaded history looks like, exactly as if bootstrap had replayed
+/// a persisted halted turn. So a stray `Command::ContinueTurn` reaching a
+/// just-started session (e.g. a UI that still shows a stale Continue
+/// button right after a restart, before any new interaction) is a safe
+/// no-op, not an accidental resume.
+#[test]
+fn continue_turn_on_a_freshly_started_session_is_a_no_op_not_an_auto_resume() {
+    let (tx, rx) = start_fallback_rig_session();
+
+    let _ = tx.send(Command::ContinueTurn);
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(200))
+            .is_err(),
+        "Continue must be a silent no-op when nothing is halted -- in particular, a freshly \
+         started/replayed session must never auto-resume"
+    );
+
+    // The session is unaffected: a normal user turn still works afterward.
+    let _ = tx.send(Command::UserMessage {
+        text: "hello".to_string(),
+    });
+    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            text,
+        }) if text == "hello"
     ));
     assert!(matches!(
         recv(&rx).event,
@@ -805,14 +894,15 @@ fn doom_loop_does_not_trip_on_identical_outputs_with_different_args() {
 }
 
 #[test]
-fn doom_loop_trips_on_three_identical_tool_args_output_fingerprints() {
+fn doom_loop_trips_on_identical_tool_args_output_fingerprints_at_the_window_boundary() {
     let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
     let args = serde_json::json!({ "pattern": "alpha" });
     let output = serde_json::json!({ "matches": [] });
 
     let fingerprint = tool_result_fingerprint("fs.grep", &args, &output);
-    assert_eq!(guard.record_fingerprint(fingerprint), None);
-    assert_eq!(guard.record_fingerprint(fingerprint), None);
+    for _ in 0..TEST_DOOM_LOOP_WINDOW - 1 {
+        assert_eq!(guard.record_fingerprint(fingerprint), None);
+    }
     assert_eq!(
         guard.record_fingerprint(fingerprint),
         Some(GuardHalt::DoomLoopDetected)
@@ -1176,11 +1266,11 @@ fn rig_session_iteration_cap_counts_one_tool_turn_per_batch() {
             );
         }
     }
-    match recv(&rx).event {
-        Event::Error(error) => assert!(error.message.contains("consecutive tool-driven turns")),
-        other => panic!("expected the iteration-cap error, got {other:?}"),
-    }
-    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Halted));
+    assert_eq!(
+        recv(&rx).event,
+        Event::TurnEnded(TurnEndReason::HaltedByIterationCap),
+        "a guard halt is a pause, not an Event::Error"
+    );
     assert_eq!(
         recv(&rx).event,
         Event::StateChanged(SessionState::WaitingForUser)
