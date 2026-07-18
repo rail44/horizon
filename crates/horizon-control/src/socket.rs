@@ -15,14 +15,14 @@
 //! doesn't steal it: it starts without a control listener and logs a
 //! warning, see `host::listener::bind`/`host::listener::spawn`). At the
 //! crate root (rather than `host`-only) so client-side code
-//! (`crates/horizon-ctl`/`horizon-cli`) can reach the formula without going
+//! (`crates/horizon-cli`) can reach the formula without going
 //! through the host module -- `host::socket::default_socket_path` stays a
-//! re-export so existing host-side callers are unaffected. The client side
-//! independently computes the identical formula rather than depending on
-//! this crate (`crates/horizon-control` deliberately stays transport-
-//! agnostic, see that crate's doc comment) -- the same "small pure formula
-//! duplicated across a client/server pair" shape this module already uses
-//! relative to `horizon_agent::socket`. `HORIZON_SOCKET` remains the
+//! re-export so existing host-side callers are unaffected. The client
+//! (`horizon-cli`, which already depends on this crate for contract/wire)
+//! calls this shared function rather than keeping its former byte-identical
+//! copy (deduplicated 2026-07-18); the one deliberate duplication that
+//! remains is the `horizon_agent::socket` relationship described above.
+//! `HORIZON_SOCKET` remains the
 //! override on both sides and is still injected into panes/sessiond, which
 //! is what keeps a nested dev instance addressable (see the design doc).
 use std::path::PathBuf;
