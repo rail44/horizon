@@ -73,11 +73,13 @@
 //! `Scheme` store), [`warnings`] (the `[theme]`/`[theme.ansi]`
 //! config-warning family), [`palette`] (packed-color math primitives),
 //! [`gpui_component`] (the gpui-component `ThemeConfig` projection),
-//! [`accessors`] (the public `theme::role()` accessor run), [`ansi`]
+//! [`accessors`] (the `theme::role()` accessor run), [`ansi`]
 //! (terminal-facing color resolution), and [`oklab`] (already split out
-//! before this pass). This file re-exports the exact same public/
-//! `pub(crate)` surface the pre-split single file did, so no call site
-//! outside `src/theme/` changed.
+//! before this pass). This file re-exports the same surface the
+//! pre-split single file did, so no call site outside `src/theme/`
+//! changed; a later pass (`horizon` is a bin-only crate) narrowed every
+//! re-export here from `pub` to `pub(crate)`, since nothing outside the
+//! crate can ever observe the difference.
 
 mod accessors;
 mod ansi;
@@ -89,19 +91,14 @@ mod scheme;
 mod test_support;
 mod warnings;
 
-pub use accessors::{
+pub(crate) use accessors::{
     accent, background, border, danger, diff_added_surface, diff_added_text, diff_removed_surface,
     diff_removed_text, info, on_accent, success, surface_panel, surface_raised, surface_selected,
     text_muted, text_primary, text_subtle, warning,
 };
 pub(crate) use accessors::{overlay_shadow, scrim_color, surface_chrome};
-pub use ansi::{resolve, terminal_color_scheme, to_hsla};
-pub use gpui_component::apply_gpui_component_theme;
+pub(crate) use ansi::{resolve, terminal_color_scheme, to_hsla};
+pub(crate) use gpui_component::apply_gpui_component_theme;
 pub(crate) use palette::{hex, packed_from_hsla, parse_hex, readable_on, tint_over_background};
-pub use scheme::reload_from;
-// `TEXT_CONTRAST_DEFAULT` has no current crate-external reader (only a doc
-// comment in `theme_settings::seed` names it, deliberately not importing
-// it -- see that doc) but is kept re-exported at `theme::` alongside its
-// floor/ceiling siblings for symmetry and future use.
-#[allow(unused_imports)]
-pub(crate) use scheme::{TEXT_CONTRAST_CEIL, TEXT_CONTRAST_DEFAULT, TEXT_CONTRAST_FLOOR};
+pub(crate) use scheme::reload_from;
+pub(crate) use scheme::{TEXT_CONTRAST_CEIL, TEXT_CONTRAST_FLOOR};

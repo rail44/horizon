@@ -57,7 +57,7 @@ impl ControlExecutor for ChannelExecutor {
 /// `control_plane::start`: a bind failure (including another Horizon
 /// instance already listening) logs and leaves external control
 /// unavailable.
-pub fn start(
+pub(crate) fn start(
     shell: WeakEntity<WorkspaceShell>,
     window: AnyWindowHandle,
     socket_path: std::path::PathBuf,

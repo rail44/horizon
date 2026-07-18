@@ -53,9 +53,9 @@ impl RuntimeReachability {
     }
 }
 
-pub struct AgentSession {
+pub(crate) struct AgentSession {
     commands: Sender<Command>,
-    pub frame: AgentFrame,
+    pub(crate) frame: AgentFrame,
     /// The session's resolved model id, if known -- set once a
     /// `horizon_agent::wire::Control::SessionModel` announcement (folded via
     /// `LiveState::session_model`) arrives, either right after a fresh
@@ -65,7 +65,7 @@ pub struct AgentSession {
     /// Read by the composer's model chip alongside `turns::latest_turn_model`
     /// -- see `docs/agent-output-ui-amendment.md`'s dated model-chip
     /// addendum for the precedence between the two.
-    pub model: Option<String>,
+    pub(crate) model: Option<String>,
     _wire: AgentSessionHandle,
     runtime: Cell<RuntimeReachability>,
     /// Wakes the tiny notify pump spawned in `new` so a `dispatch`
@@ -140,8 +140,27 @@ impl AgentSession {
     /// Whether the sessiond command channel is known dead (backlog #35).
     /// The view's status line consults this to surface the state instead
     /// of leaving a failed send as a silent no-op.
-    pub fn runtime_unreachable(&self) -> bool {
+    pub(crate) fn runtime_unreachable(&self) -> bool {
         self.runtime.get().is_unreachable()
+    }
+
+    /// The frame's actionable pending-approval queue -- call ids still
+    /// waiting on an approve/deny decision. Derived from `self.frame.items`
+    /// on every call (no caching), mirroring the call sites this replaces.
+    pub(crate) fn pending_approval_call_ids(&self) -> Vec<ToolCallId> {
+        horizon_agent::frame::actionable_pending_approval_call_ids_in(&self.frame.items)
+    }
+
+    /// Whether the session's current turn is actively running (as opposed
+    /// to idle or waiting on an approval decision) -- the same narrow
+    /// `Running`/`ToolRunning` reading `command_state_with` used inline
+    /// before this accessor existed.
+    pub(crate) fn turn_in_flight(&self) -> bool {
+        matches!(
+            self.frame.state,
+            Some(horizon_agent::contract::SessionState::Running)
+                | Some(horizon_agent::contract::SessionState::ToolRunning)
+        )
     }
 
     /// Every command send funnels through here: short-circuits once the
@@ -160,27 +179,27 @@ impl AgentSession {
         }
     }
 
-    pub fn send_user_message(&self, text: String) {
+    pub(crate) fn send_user_message(&self, text: String) {
         self.dispatch(Command::UserMessage { text });
     }
 
-    pub fn approve(&self, call_id: ToolCallId) {
+    pub(crate) fn approve(&self, call_id: ToolCallId) {
         self.dispatch(Command::ApproveToolCall { call_id });
     }
 
-    pub fn deny(&self, call_id: ToolCallId) {
+    pub(crate) fn deny(&self, call_id: ToolCallId) {
         self.dispatch(Command::DenyToolCall {
             call_id,
             reason: None,
         });
     }
 
-    pub fn cancel(&self) {
+    pub(crate) fn cancel(&self) {
         self.dispatch(Command::Cancel { request_id: None });
     }
 
     /// The explicit destructive half of close-vs-terminate.
-    pub fn shutdown(&self) {
+    pub(crate) fn shutdown(&self) {
         self.dispatch(Command::Shutdown);
     }
 }

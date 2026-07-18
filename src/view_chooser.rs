@@ -15,20 +15,20 @@ use crate::theme;
 /// Where the chosen view goes — staged by the command that opened the
 /// chooser.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Placement {
+pub(crate) enum Placement {
     NewTab,
     SplitRight,
     SplitDown,
 }
 
 #[derive(Clone)]
-pub struct ViewChoice {
-    pub title: &'static str,
-    pub kind: PaneKind,
-    pub role_id: Option<horizon_agent::roles::RoleId>,
+pub(crate) struct ViewChoice {
+    pub(crate) title: &'static str,
+    pub(crate) kind: PaneKind,
+    pub(crate) role_id: Option<horizon_agent::roles::RoleId>,
 }
 
-pub fn view_choices() -> Vec<ViewChoice> {
+fn view_choices() -> Vec<ViewChoice> {
     vec![
         ViewChoice {
             title: "Terminal",
@@ -55,7 +55,7 @@ pub fn view_choices() -> Vec<ViewChoice> {
     ]
 }
 
-pub struct ViewChooserDelegate {
+pub(crate) struct ViewChooserDelegate {
     all: Vec<ViewChoice>,
     filtered: Vec<ViewChoice>,
     // The currently-selected row, mirrored from `set_selected_index` --
@@ -65,7 +65,7 @@ pub struct ViewChooserDelegate {
 }
 
 impl ViewChooserDelegate {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let all = view_choices();
         Self {
             filtered: all.clone(),
@@ -74,7 +74,7 @@ impl ViewChooserDelegate {
         }
     }
 
-    pub fn choice_at(&self, index: IndexPath) -> Option<&ViewChoice> {
+    pub(crate) fn choice_at(&self, index: IndexPath) -> Option<&ViewChoice> {
         self.filtered.get(index.row)
     }
 }

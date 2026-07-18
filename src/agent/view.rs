@@ -52,7 +52,7 @@ struct RunningTurnClock {
     started_at: Instant,
 }
 
-pub struct AgentView {
+pub(crate) struct AgentView {
     session: Entity<AgentSession>,
     composer: Entity<InputState>,
     focus_handle: FocusHandle,
@@ -101,7 +101,11 @@ pub struct AgentView {
 }
 
 impl AgentView {
-    pub fn new(session: Entity<AgentSession>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(
+        session: Entity<AgentSession>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         // Auto-grow keeps the empty composer one text row tall (owner
         // feedback 2026-07-16: the old fixed single-line `Input` plus a
         // stacked accessory row reserved several rows of height even when
@@ -203,9 +207,7 @@ impl AgentView {
         // restore, or a persisted history reopened) should open the pane
         // straight into approval mode rather than waiting for the next
         // frame change to notice.
-        let initial_queue = horizon_agent::frame::actionable_pending_approval_call_ids_in(
-            &session.read(cx).frame.items,
-        );
+        let initial_queue = session.read(cx).pending_approval_call_ids();
         let composer_mode = turns::next_composer_mode(&initial_queue, None);
 
         Self {
@@ -235,9 +237,7 @@ impl AgentView {
     /// from the composer's own `InputEvent::Change` handler (typing past
     /// a shown approval).
     fn sync_composer_mode(&mut self, cx: &mut Context<Self>) {
-        let queue = horizon_agent::frame::actionable_pending_approval_call_ids_in(
-            &self.session.read(cx).frame.items,
-        );
+        let queue = self.session.read(cx).pending_approval_call_ids();
         self.composer_mode = turns::next_composer_mode(&queue, self.dismissed_approval.as_ref());
     }
 
@@ -540,10 +540,11 @@ impl AgentView {
                 // decision (`docs/agent-output-ui-amendment.md`'s post-review
                 // note) -- so buttons never show here; the box is purely
                 // informational.
-                let pending = horizon_agent::frame::actionable_pending_approval_call_ids_in(
-                    &self.session.read(cx).frame.items,
-                )
-                .contains(&request.call_id);
+                let pending = self
+                    .session
+                    .read(cx)
+                    .pending_approval_call_ids()
+                    .contains(&request.call_id);
                 let call_id = request.call_id.clone();
                 let deny_id = request.call_id.clone();
                 Some(

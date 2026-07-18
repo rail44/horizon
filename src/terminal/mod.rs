@@ -22,7 +22,7 @@ mod session;
 #[cfg(test)]
 mod tests;
 
-pub use session::TerminalSession;
+pub(crate) use session::TerminalSession;
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -112,7 +112,7 @@ struct PaintMetrics {
     line_height: Pixels,
 }
 
-pub struct TerminalView {
+pub(crate) struct TerminalView {
     // The pane's session — owned by the shell's session store, not this
     // view, so a closed pane detaches rather than terminates.
     session: Entity<TerminalSession>,
@@ -144,7 +144,7 @@ pub struct TerminalView {
 }
 
 impl TerminalView {
-    pub fn new(
+    pub(crate) fn new(
         session: Entity<TerminalSession>,
         window: &mut Window,
         cx: &mut Context<Self>,
