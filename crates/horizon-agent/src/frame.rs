@@ -95,9 +95,9 @@ impl TurnClock {
 ///
 /// `AgentFrame` itself doesn't carry this: its two-field shape is relied on
 /// by callers that construct it as a plain struct literal, so timestamping
-/// lives in this sidecar instead — callers that need it per session (see
-/// `session::Frames`) keep one alongside the frame and call [`Self::advance`]
-/// every time they observe a new frame.
+/// would live in this sidecar instead — a caller that needs it per session
+/// would keep one alongside the frame and call [`Self::advance`] every time
+/// it observes a new frame.
 ///
 /// `cfg(test)`: no in-crate caller currently constructs one outside this
 /// crate's own tests (confirmed by grep at the time of the 2026-07-18
@@ -147,15 +147,16 @@ impl AgentFrame {
     /// `ApprovalRequested` counts as pending until a matching
     /// `ToolCallStarted` or `ToolCallFinished` resolves it -- see
     /// [`pending_approval_call_ids_in`]'s doc comment for the ack
-    /// semantics). Backs both `pending_approval_call_id`
-    /// below and the approval banner's queue depth
-    /// (`workspace::view::agent_controls::agent_approval_banner`), which
-    /// answers the oldest pending call first and shows a "+N more" hint for
-    /// the rest -- see the tool-approval interaction rework's "targeting
-    /// discipline" design note. Delegates to [`pending_approval_call_ids_in`]
-    /// so a caller holding only the `items` field (not a whole `AgentFrame`)
-    /// -- e.g. `session::frames::AgentFrameHandle`'s own `items` signal --
-    /// can reuse the exact same logic without a whole-frame clone.
+    /// semantics). Backs [`Self::pending_approval_call_id`] below. The
+    /// current approval UI reads the *actionable* queue instead
+    /// ([`Self::actionable_pending_approval_call_ids`], via
+    /// `AgentSession::pending_approval_call_ids` in `src/agent/session.rs`)
+    /// for its row-centric rendering (owner decision 2026-07-13,
+    /// superseding the old composer banner) -- see the tool-approval
+    /// interaction rework's "targeting discipline" design note. Delegates
+    /// to [`pending_approval_call_ids_in`] so a caller holding only the
+    /// `items` field (not a whole `AgentFrame`) can reuse the exact same
+    /// logic without a whole-frame clone.
     pub fn pending_approval_call_ids(&self) -> Vec<ToolCallId> {
         pending_approval_call_ids_in(&self.items)
     }
@@ -269,12 +270,11 @@ impl AgentFrame {
 
 /// The pure core of [`AgentFrame::pending_approval_call_ids`], operating on
 /// just an `items` slice rather than a whole `AgentFrame` -- lets a caller
-/// holding only the `items` field signal (not `state` too) reuse this logic
-/// without constructing a whole frame first. `session::frames::
-/// AgentFrameHandle` (`docs/reactive-store-design.md`'s foundation-5 Frames
-/// migration) is exactly this kind of caller: reading only `items` there
-/// means a pane's pending-approval indicator doesn't also subscribe to
-/// `state` changes it has no use for.
+/// holding only a slice of items, not a whole frame, reuse this logic
+/// directly. `crate::transcript::tool_call::is_approval_still_pending` is
+/// exactly this kind of caller: it only has a single turn's own item
+/// slice, not the whole session frame, when it asks whether a call is
+/// still pending.
 ///
 /// Ack semantics (root-caused 2026-07-13 -- the daemon's approve/deny round
 /// trip does not wait for the tool to finish): `crate::tools::approval::
@@ -380,8 +380,10 @@ pub fn halted_awaiting_continue(items: &[AgentFrameItem]) -> bool {
 
 /// The pure core of [`AgentFrame::is_turn_in_flight`], operating on just the
 /// `state` field -- see [`pending_approval_call_ids_in`]'s doc comment for
-/// why this split exists: `AgentFrameHandle::state`'s own field signal can
-/// answer "is a turn in flight" without a caller reading `items` too.
+/// why this split exists. `src/agent/view.rs`'s render and
+/// `sync_running_turn_clock` are exactly this kind of caller: each reads
+/// `frame.state` on its own, separately from `frame.items`, without going
+/// through [`AgentFrame::is_turn_in_flight`].
 pub fn state_indicates_turn_in_flight(state: Option<SessionState>) -> bool {
     matches!(
         state,

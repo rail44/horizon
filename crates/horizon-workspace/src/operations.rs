@@ -374,11 +374,14 @@ impl Workspace {
         self.detach_pane(pane_id)
     }
 
-    /// `PaneId`-targeted counterpart to `close_visible_pane` -- the pane
-    /// header's close button (`workspace::view::pane`) already knows the
-    /// exact pane it means, per `docs/recursive-layout-design.md`'s slice 2
-    /// (the recursive renderer builds panes by `PaneId`, not visible
-    /// index). Same last-pane-in-the-tab guard.
+    /// `PaneId`-targeted counterpart to `close_visible_pane` -- for a
+    /// caller that already knows the exact pane rather than a visible
+    /// index, per `docs/recursive-layout-design.md`'s slice 2 (the
+    /// recursive renderer builds panes by `PaneId`, not visible index).
+    /// No production caller uses this path today: the GPUI shell's only
+    /// close entry point is `CommandId::CloseActivePane`, which goes
+    /// through `close_active_pane` instead. Same last-pane-in-the-tab
+    /// guard.
     pub fn close_pane(&mut self, pane_id: PaneId) -> Option<SessionId> {
         if self.visible_pane_ids().len() <= 1 {
             return None;

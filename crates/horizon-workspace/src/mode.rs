@@ -12,9 +12,8 @@
 //! Workspace`, a same-named-but-unrelated concept (the palette's
 //! Tab-switching "workspace overview" panel); that panel and its `ControlMode`
 //! type are gone (`docs/plans/application-ui/01-session-manager.md` --
-//! session management moved to its own modal,
-//! `control_surface::view::session_manager`), so the disambiguation no
-//! longer applies.
+//! session management moved to its own modal, `src/session_manager.rs`),
+//! so the disambiguation no longer applies.
 
 use super::nav::{nearest_in_direction, pane_rects};
 use super::types::{PaneId, Workspace};
@@ -264,9 +263,10 @@ mod tests {
         // The design's click convention: a click always dives into the
         // pane clicked, not wherever the cursor currently sits -- so
         // clicking the first pane here must win even though the cursor
-        // moved to the second (see `workspace::view::pane`'s
-        // `PointerDown` handler, which calls this ahead of its own
-        // `activate_pane`).
+        // moved to the second. Exercises `commit_workspace_mode_to`
+        // directly at the model level; no production caller drives it
+        // from a real click today (the GPUI shell's pane click handler
+        // in `src/workspace.rs` calls `activate_pane` only).
         let mut workspace = Workspace::mvp();
         let first = workspace.visible_pane_id(0).expect("first pane");
         let second = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));

@@ -16,55 +16,28 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[cfg(test)]
 use horizon_session_protocol::{
     self as session_wire, Hello, SessionControl, SESSION_CONTROL_KIND,
     SESSION_PROTOCOL_VERSION as CONTRACT_VERSION,
 };
 #[cfg(test)]
-use tokio::io::AsyncRead;
-use tokio::io::{AsyncBufRead, AsyncWrite, BufReader};
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, BufReader};
 use tokio::net::UnixStream;
 
-/// Total retry-connect budget: `RETRY_ATTEMPTS * RETRY_DELAY` = 2s. Verified
-/// still generous after `horizon-sessiond`'s bind-first startup fix (it binds
-/// the socket as its first action, before reading its event log or
-/// resuming any session -- see that binary's `main` module doc): a freshly
-/// spawned sessiond's `connect` now succeeds within milliseconds of process
-/// start regardless of event-log size, since nothing before `bind_listener`
-/// touches the log. Before that fix, this budget had to cover the *entire*
-/// log-read-plus-resume duration too, which is what let a big log's replay
-/// exceed it and trigger a duplicate spawn.
-const RETRY_ATTEMPTS: u32 = 40;
+/// Starting delay for [`connect_or_spawn_retrying`]'s exponential backoff
+/// (doubling, capped at 1s -- see that function). Verified still generous
+/// after `horizon-sessiond`'s bind-first startup fix (it binds the socket
+/// as its first action, before reading its event log or resuming any
+/// session -- see that binary's `main` module doc): a freshly spawned
+/// sessiond's `connect` now succeeds within milliseconds of process start
+/// regardless of event-log size, since nothing before `bind_listener`
+/// touches the log.
 const RETRY_DELAY: Duration = Duration::from_millis(50);
 
 /// The binary name `horizon-sessiond` is spawned as/looked up as -- see
 /// [`resolve_sessiond_binary`].
 const SESSIOND_BINARY_NAME: &str = "horizon-sessiond";
-
-/// Connects to `horizon-sessiond` at `socket_path` (spawning it if nothing is
-/// listening yet), completes the hello handshake, and hands back the split
-/// halves ready for the session-hosting traffic that follows a successful
-/// handshake. Kept as the bounded typed helper used by this module's tests;
-/// the production shared runtime uses [`connect_or_spawn_retrying`].
-pub async fn connect_and_split(
-    socket_path: &Path,
-    control_socket: &Path,
-) -> Result<(BufReader<OwnedReadHalf>, OwnedWriteHalf, Hello), String> {
-    let stream = connect_or_spawn(socket_path, control_socket).await?;
-    let (read_half, mut write_half) = stream.into_split();
-    let mut reader = BufReader::new(read_half);
-    let hello = handshake_over(&mut reader, &mut write_half).await?;
-    Ok((reader, write_half, hello))
-}
-
-async fn connect_or_spawn(socket_path: &Path, control_socket: &Path) -> Result<UnixStream, String> {
-    if let Ok(stream) = UnixStream::connect(socket_path).await {
-        return Ok(stream);
-    }
-    spawn_sessiond(socket_path, control_socket)?;
-    retry_connect(socket_path).await
-}
 
 /// Connects immediately when sessiond is already listening; otherwise starts
 /// it once and keeps retrying with capped backoff until its socket is ready.
@@ -146,19 +119,6 @@ fn resolve_sessiond_binary() -> PathBuf {
     PathBuf::from(SESSIOND_BINARY_NAME)
 }
 
-async fn retry_connect(socket_path: &Path) -> Result<UnixStream, String> {
-    for _ in 0..RETRY_ATTEMPTS {
-        match UnixStream::connect(socket_path).await {
-            Ok(stream) => return Ok(stream),
-            Err(_) => tokio::time::sleep(RETRY_DELAY).await,
-        }
-    }
-    Err(format!(
-        "timed out waiting for horizon-sessiond to accept connections on {}",
-        socket_path.display()
-    ))
-}
-
 /// The hello exchange itself, generic over `AsyncRead + AsyncWrite` (same
 /// framing-over-any-stream guardrail `horizon_agent::wire` follows) so it's
 /// directly testable over `tokio::io::duplex` without a real socket -- see
@@ -174,13 +134,15 @@ where
 }
 
 /// The hello exchange itself, generic over an already-split `AsyncBufRead`/
-/// `AsyncWrite` pair rather than owning the whole stream -- so a caller that
-/// needs the connection to keep living past a successful handshake (
-/// [`connect_and_split`], which hands the same halves back to its caller)
-/// doesn't lose them the way owning-and-splitting internally would. `handshake`
-/// above is the same exchange over an owned, not-yet-split stream, kept for
-/// this module's tests (which construct a single `tokio::io::duplex` stream
-/// directly) so they don't need to juggle split halves themselves.
+/// `AsyncWrite` pair rather than owning the whole stream. `handshake` above
+/// is the same exchange over an owned, not-yet-split stream, kept for this
+/// module's tests (which construct a single `tokio::io::duplex` stream
+/// directly) so they don't need to juggle split halves themselves; this is
+/// the split-halves version `handshake` itself delegates to. Test-only:
+/// production connects via [`connect_or_spawn_retrying`], and `src/sessiond`
+/// owns its own independent handshake over the resulting stream (see this
+/// module's doc comment).
+#[cfg(test)]
 async fn handshake_over<R, W>(reader: &mut R, writer: &mut W) -> Result<Hello, String>
 where
     R: AsyncBufRead + Unpin,

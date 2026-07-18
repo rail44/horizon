@@ -71,9 +71,9 @@ impl Workspace {
     /// Test-only now: `workspace::mode`'s cursor is `PaneId`-keyed directly
     /// (`docs/recursive-layout-design.md`'s slice 4), so no production call
     /// site needs to resolve a `PaneId` back to a visible index anymore --
-    /// `workspace::view::pane`'s click handler (its last production caller)
-    /// now targets `commit_workspace_mode_to`/`activate_pane` by `PaneId`
-    /// directly. Kept as a small test fixture helper.
+    /// the GPUI shell's pane click handler (`src/workspace.rs`, its last
+    /// production caller) now targets `activate_pane` by `PaneId` directly.
+    /// Kept as a small test fixture helper.
     #[cfg(test)]
     pub fn visible_index_of(&self, pane_id: PaneId) -> Option<usize> {
         self.visible_pane_ids().iter().position(|id| *id == pane_id)
@@ -104,10 +104,11 @@ impl Workspace {
             .and_then(|pane| pane.session_id)
     }
 
-    /// Test-only now: `workspace::view::pane`'s recursive renderer
-    /// (`docs/recursive-layout-design.md`'s slice 2) resolves a terminal
-    /// pane's session by `PaneId` (`terminal_session_id`) rather than a
-    /// visible index, which was this method's last production caller.
+    /// Test-only now: the GPUI shell's recursive renderer
+    /// (`src/workspace.rs`, `docs/recursive-layout-design.md`'s slice 2)
+    /// resolves a terminal pane's session by `PaneId`
+    /// (`terminal_session_id`) rather than a visible index, which was
+    /// this method's last production caller.
     #[cfg(test)]
     pub fn visible_terminal_session_id(&self, index: usize) -> Option<SessionId> {
         let pane_id = self.visible_pane_id(index)?;
@@ -117,10 +118,11 @@ impl Workspace {
             .and_then(|pane| pane.session_id)
     }
 
-    /// Test-only now: `workspace::view::pane`'s recursive renderer
-    /// (`docs/recursive-layout-design.md`'s slice 2) resolves an agent
-    /// pane's session by `PaneId` (`agent_session_id`) rather than a
-    /// visible index, which was this method's last production caller.
+    /// Test-only now: the GPUI shell's recursive renderer
+    /// (`src/workspace.rs`, `docs/recursive-layout-design.md`'s slice 2)
+    /// resolves an agent pane's session by `PaneId` (`agent_session_id`)
+    /// rather than a visible index, which was this method's last
+    /// production caller.
     #[cfg(test)]
     pub fn visible_agent_session_id(&self, index: usize) -> Option<SessionId> {
         let pane_id = self.visible_pane_id(index)?;
@@ -157,9 +159,9 @@ impl Workspace {
 
     /// The `(tab_index, pane_index)` of the visible pane currently hosting
     /// `session_id`, if any -- lets the session manager modal
-    /// (`control_surface::view::session_manager`) resolve an *attached*
-    /// row straight to `CommandInvocation::ActivatePane` without a
-    /// separate lookup table. `None` for a detached session (no pane
+    /// (`WorkspaceShell::open_session_manager` in `src/workspace.rs`)
+    /// resolve an *attached* row straight to `activate_pane_index` without
+    /// a separate lookup table. `None` for a detached session (no pane
     /// references it).
     pub fn pane_location_for_session(&self, session_id: SessionId) -> Option<(usize, usize)> {
         self.tabs.iter().enumerate().find_map(|(tab_index, tab)| {
@@ -269,10 +271,13 @@ impl Workspace {
             .unwrap_or_else(|| "none".to_string())
     }
 
-    /// Test-only now: `workspace::view::pane`'s recursive renderer
-    /// (`docs/recursive-layout-design.md`'s slice 2) titles a pane by
-    /// `PaneId` (`pane_title_for`) rather than a visible index, which was
-    /// this method's last production caller.
+    /// Test-only now: no production caller resolves a pane's title by
+    /// visible index anymore. `pane_title_for` is the `PaneId`-keyed
+    /// counterpart (`docs/recursive-layout-design.md`'s slice 2), though
+    /// it too currently has no production caller of its own -- the
+    /// `workspace.snapshot` payload's pane titles go through
+    /// `pane_summaries`/`pane_title(&Pane)` instead
+    /// (`crates/horizon-workspace/src/snapshot.rs`).
     #[cfg(test)]
     pub fn visible_pane_title(&self, index: usize) -> Option<String> {
         self.visible_panes()
