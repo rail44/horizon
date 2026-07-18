@@ -16,113 +16,32 @@
 # env vars (HORIZON_RIG_MODEL, OPENAI_API_KEY, OPENAI_BASE_URL, ...) keep
 # winning over whatever is set below.
 #
-# Applied at startup only — restart Horizon after editing this file. Nothing
-# here is watched for live changes.
+# The surface below (2026-07-18 config-narrowing wave) is exactly:
+# [provider] model/base_url, [terminal] font_size, [ui] font_family,
+# [keybindings], and [theme]'s seed plus [theme.ansi]'s six hues. Everything
+# this file used to also cover -- the whole former [agent] section (bash/fs
+# tool caps, turn-loop guard thresholds, event/state DB paths, stream-flush
+# cadence, history/instructions budgets), [provider] temperature/max_tokens,
+# [terminal] line_height/term/shell/shell_args/scrollback_lines, [ui]
+# window_width/window_height -- is now a fixed built-in default or constant;
+# there is no file key for any of it any more. A handful of those retired
+# knobs still have an environment-variable-only override (no file key at
+# all) -- see "Environment-only overrides" near the bottom.
+#
+# Applied at startup only, with two exceptions: [theme]/[theme.ansi] and
+# [keybindings] apply live via the "Reload Config" command; [provider]
+# applies via "Reload Session Runtime" (a fresh horizon-sessiond process,
+# no full UI restart). [terminal]/[ui] need a full UI restart.
 #
 # Secrets never go here. OPENAI_API_KEY (and any future provider secret) is
 # environment-only; there is no field for it anywhere in this file.
 #
-# Philosophy: this file exists for values that are still being tuned. A
-# value that proves stable over time is a candidate to graduate into a
-# plain built-in default in a later Horizon version — don't assume every
-# knob below stays configurable forever.
-#
-# An invalid entry in [keybindings] or [theme] is warned about on stderr and
-# skipped — it never crashes startup. The same is true of this whole file:
-# if it fails to parse, Horizon logs a warning and falls back to built-in
-# defaults everywhere.
-
-# ---------------------------------------------------------------------------
-# [agent] — tuning for the agent's bash/fs tools and turn-loop guards.
-#
-# These are active (uncommented) below because they're the current
-# production defaults, shown here as a live, editable reference — not
-# because you need to set them. Delete a line (or the whole section) to
-# fall back to the same built-in default.
-# ---------------------------------------------------------------------------
-[agent]
-# Wall-clock timeout applied to a `bash` call when it doesn't pass its own
-# `timeout_secs`, in seconds.
-bash_timeout_default_secs = 120
-# Hard cap on the `timeout_secs` a `bash` call may request, in seconds.
-bash_timeout_max_secs = 600
-# How much of a `bash` call's combined stdout+stderr is kept in-context
-# (head+tail, with the middle elided); the full output is always spilled to
-# a temp file regardless. In characters, not bytes.
-bash_output_cap_chars = 30000
-# How long, after a `bash` child process exits, Horizon keeps waiting for
-# its output pipes to hit EOF before giving up — covers a command that
-# backgrounds a process holding the pipe open (`some-server &`). In seconds.
-bash_drain_grace_secs = 2
-
-# Default number of lines `fs.read` returns when a call doesn't pass its own
-# `limit`.
-fs_read_line_cap = 2000
-# Maximum total bytes of file content a single `fs.grep` traversal will read
-# before stopping early, independent of match count.
-fs_grep_max_bytes = 67108864
-# Maximum number of files a single `fs.glob`/`fs.grep` traversal will visit
-# before stopping early, independent of match count.
-fs_traversal_max_files = 20000
-# Default number of matches `fs.grep`/`fs.glob` *return* when a call doesn't
-# pass its own `limit` — distinct from the traversal caps above, which
-# bound how much of the tree gets scanned, not how many of the matches
-# found get returned.
-fs_grep_result_limit = 100
-fs_glob_result_limit = 200
-
-# Deprecated, no longer read (docs/issues/002-agent-iteration-cap-halts-
-# real-work.md's 2026-07-18 resolution): the turn-loop guard's iteration
-# cap and doom-loop window are now fixed built-in constants (100 and 5
-# respectively), not config-file knobs. Setting either key here parses but
-# has no effect; the keys remain in the schema only until a follow-up wave
-# removes them outright.
-# iteration_cap = 25
-# doom_loop_window = 3
-
-# Token budget for the conversation history sent to the provider on each
-# turn: once the accumulated history would exceed this many (heuristically
-# counted) tokens, the oldest messages are dropped from the outgoing
-# request while the full history stays intact in the DuckDB projection --
-# this only shapes the view sent to the provider, never what's persisted.
-# 60000 is conservative on purpose: token counts come from a
-# provider-agnostic byte-length heuristic, not the provider's real
-# tokenizer, and can be off by up to ~30% on real content, so the budget
-# leaves headroom for that plus the system prompt and tool responses.
-history_token_budget = 60000
-
-# Character cap on the "Repository instructions" section appended to the
-# system prompt from AGENTS.md/CLAUDE.md files found while walking from the
-# session's working directory up to the repository root (AGENTS.md wins at
-# each directory level; CLAUDE.md is a fallback for a level with only that).
-# 24000 is roughly 4x this repository's own AGENTS.md, generous for a normal
-# repo while still leaving most of history_token_budget's headroom free.
-repository_instructions_cap_chars = 24000
-
-# How often, in milliseconds, streamed assistant-text/reasoning deltas and
-# tool-call-argument progress are coalesced into an emitted event.
-stream_flush_interval_ms = 100
-# Character count that forces an early flush of a streamed delta, ahead of
-# the time-based flush above.
-stream_flush_chars = 320
-
-# Overrides the append-only agent event log (JSONL) path. Commented out:
-# the real default is $XDG_DATA_HOME/horizon/agent-events.jsonl, falling
-# back to ~/.local/share/horizon/agent-events.jsonl if XDG_DATA_HOME is
-# unset -- computed at startup, not a single literal value worth
-# hardcoding here as "live". `HORIZON_AGENT_EVENT_LOG`, if set, wins over
-# this. A leading "~/" (here or in the env var) is expanded against $HOME.
-# event_log_path = "~/.local/share/horizon/agent-events.jsonl"
-# Overrides the DuckDB projection database path used to replay per-session
-# rig history. Commented out: the real default is
-# $XDG_DATA_HOME/horizon/agent-state.duckdb, falling back to
-# ~/.local/share/horizon/agent-state.duckdb if XDG_DATA_HOME is unset --
-# computed at startup, not a single literal value worth hardcoding here as
-# "live". The projection always runs (it's a rebuildable, non-authoritative
-# derived view of the JSONL log, not persisted state of its own); this only
-# relocates the file. `HORIZON_AGENT_STATE_DB`, if set, wins over this. Same
-# "~/" expansion as event_log_path above.
-# state_db_path = "~/.local/share/horizon/agent-state.duckdb"
+# Setting a key this file used to support (a "retired" key) is warned about
+# on stderr, naming the key, and ignored -- it never crashes startup.
+# Likewise, an unrecognized key in a known section is likely a typo and is
+# also warned about and ignored. The same "never fail startup" policy
+# applies to this whole file: if it fails to parse, Horizon logs a warning
+# and falls back to built-in defaults everywhere.
 
 # ---------------------------------------------------------------------------
 # [provider] — the built-in rig/OpenAI provider's model and base URL.
@@ -135,41 +54,26 @@ stream_flush_chars = 320
 [provider]
 # model = "gpt-4o-mini"
 # base_url = "https://api.openai.com/v1"
-# Sampling temperature and max output tokens passed to the completion
-# request. Commented out: unset means "don't send the field at all", letting
-# the provider apply its own default.
-# temperature = 0.7
-# max_tokens = 4096
 
 # ---------------------------------------------------------------------------
-# [terminal] — cell rendering metrics, scrollback, the spawned shell, and
-# the `TERM` identity presented to it.
+# [terminal] — cell rendering metrics for the spawned shell.
 #
-# `shell`/`shell_args` are commented out below: the real default for `shell`
-# is "whatever the `SHELL` env var says" (falling back to `/bin/sh` if even
-# that is unset), not a value worth documenting as "live" — and `SHELL`, if
-# set, keeps winning over `shell` here either way. `shell_args` defaults to
-# no extra arguments.
+# Everything this section used to also cover is fixed now: line height is
+# always font_size * 18/13 (not independently settable), TERM is always
+# "xterm-256color" (paired with a COLORTERM=truecolor injection so truecolor
+# detection works), the spawned shell is always $SHELL (falling back to
+# /bin/sh) with no extra argv, and scrollback is always 10000 lines.
 # ---------------------------------------------------------------------------
 [terminal]
 # Font size (px) used to measure terminal cell width and lay out terminal
-# text.
+# text. Active below because it's the current production default, shown as
+# a live, editable reference — not because you need to set it.
 font_size = 13.0
-# Line height (px) for the same text.
-line_height = 18.0
-# Maximum scrollback lines kept per terminal session.
-scrollback_lines = 10000
-# The `TERM` value presented to the spawned shell.
-term = "xterm-kitty"
-# Overrides the spawned shell program when `SHELL` is unset.
-# shell = "/bin/zsh"
-# Extra argv entries passed to the spawned shell (e.g. a login shell).
-# shell_args = ["-l"]
 
 # ---------------------------------------------------------------------------
-# [ui] — cross-domain UI: the app-wide font family (shared by the terminal,
-# agent transcript, and workspace agent controls) and the window's initial
-# size.
+# [ui] — the app-wide font family, shared by the terminal, agent transcript,
+# and workspace agent controls. The window's initial size is fixed now
+# (1100x720), not configurable.
 # ---------------------------------------------------------------------------
 [ui]
 # Comma-separated font stack: the first entry is the primary family, the
@@ -177,10 +81,10 @@ term = "xterm-kitty"
 # primary monospace font). Entries are matched by exact family name, the
 # same way `fc-list` reports them -- fontconfig generic aliases like
 # "monospace" are not resolved the way `fc-match` resolves them and will
-# simply be skipped if no installed font is literally named that.
-font_family = "Iosevka Nerd Font Mono, Symbols Nerd Font Mono, Noto Sans Mono CJK JP, monospace, Noto Sans CJK JP"
-window_width = 1100.0
-window_height = 720.0
+# simply be skipped if no installed font is literally named that. Commented
+# out: the built-in default is platform-specific ("Menlo" on macOS,
+# "DejaVu Sans Mono" elsewhere), not a single literal worth showing as live.
+# font_family = "Iosevka Nerd Font Mono, Noto Sans Mono CJK JP, monospace"
 
 # ---------------------------------------------------------------------------
 # [keybindings] — key chord string -> command id, layered on top of
@@ -294,3 +198,22 @@ yellow = "#e5c07b"
 blue = "#61afef"
 magenta = "#c678dd"
 cyan = "#56b6c2"
+
+# ---------------------------------------------------------------------------
+# Environment-only overrides — no [agent] file key exists for any of these
+# any more (the whole section retired 2026-07-18), but the event log's and
+# DuckDB projection's paths are still relocatable via env var:
+#
+#   HORIZON_AGENT_EVENT_LOG   overrides the agent event log (JSONL) path
+#                             (default: $XDG_DATA_HOME/horizon/agent-events.jsonl,
+#                             falling back to ~/.local/share/horizon/agent-events.jsonl)
+#   HORIZON_AGENT_STATE_DB    overrides the DuckDB projection database path
+#                             (default: $XDG_DATA_HOME/horizon/agent-state.duckdb,
+#                             same fallback as above)
+#
+# A leading "~/" in either is expanded against $HOME. Every other former
+# [agent] knob (bash/fs tool caps, the turn-loop guard's iteration cap and
+# doom-loop window, stream-flush cadence, history/instructions budgets) has
+# no override path left at all -- fixed built-in constants in
+# `crates/horizon-agent/src/config.rs`.
+# ---------------------------------------------------------------------------

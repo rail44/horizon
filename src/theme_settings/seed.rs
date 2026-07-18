@@ -293,7 +293,6 @@ mod tests {
         assert_eq!(raw.theme.ansi.cyan.as_deref(), Some("#007f6e"));
         // Every other RawConfig section stays at its default -- nothing in
         // the seed's derivation reads them.
-        assert_eq!(raw.agent, Default::default());
         assert_eq!(raw.provider, Default::default());
         assert_eq!(raw.terminal, Default::default());
         assert_eq!(raw.ui, Default::default());

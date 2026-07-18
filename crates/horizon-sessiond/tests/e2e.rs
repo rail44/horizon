@@ -205,8 +205,8 @@ struct SessiondProcess {
 impl SessiondProcess {
     /// Spawns `horizon-sessiond` pointed at a throwaway event log path and a
     /// nonexistent config file -- **hermetic on purpose**: without this,
-    /// the binary's own config loader (`horizon_agent::config::
-    /// load_file_config`) falls back to this machine's real
+    /// the binary's own config loader (`main`'s `horizon_config::load()`
+    /// call) falls back to this machine's real
     /// `~/.config/horizon/config.toml`, and step 3's startup persistence
     /// open (`spawn_resume_task`/`open_persistence` in `main.rs`) would then
     /// read/rebuild-from a real developer's (potentially large, potentially

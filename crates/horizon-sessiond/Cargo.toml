@@ -7,6 +7,7 @@ edition = "2021"
 anyhow = "1.0"
 crossbeam-channel = "0.5"
 horizon-agent = { path = "../horizon-agent" }
+horizon-config = { path = "../horizon-config" }
 horizon-session-protocol = { path = "../horizon-session-protocol" }
 horizon-terminal-core = { path = "../horizon-terminal-core" }
 portable-pty = "0.9.0"

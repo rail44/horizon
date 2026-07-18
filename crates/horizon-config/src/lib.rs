@@ -3,10 +3,24 @@
 //! See `AGENTS.md`'s "Configuration" section for the user-facing summary
 //! and `config.example.toml` at the repo root for every knob with its
 //! default. This module owns locating and parsing the TOML file into a
-//! [`RawConfig`]; `agent::config` and the shell crate's `keymap`/`theme`
-//! modules each read the section relevant to them and apply their own
-//! env-var precedence and built-in defaults on top (env var > this file >
-//! built-in default).
+//! [`RawConfig`]; `horizon-sessiond`'s `config` module and the shell
+//! crate's `keymap`/`theme`/`terminal` modules each read the section
+//! relevant to them and apply their own env-var precedence and built-in
+//! defaults on top (env var > this file > built-in default).
+//!
+//! The 2026-07-18 config-narrowing wave (owner decision) cut the surface
+//! to exactly: `[provider]` `model`/`base_url`; `[terminal]` `font_size`;
+//! `[ui]` `font_family`; `[keybindings]`; `[theme]`'s seed plus
+//! `[theme.ansi]`'s six hues. Everything that used to be tunable beyond
+//! that (the entire former `[agent]` section, `[provider]`
+//! `temperature`/`max_tokens`, `[terminal]` `line_height`/`term`/`shell`/
+//! `shell_args`/`scrollback_lines`, `[ui]` `window_width`/`window_height`)
+//! is now a fixed built-in default or constant in the crate that owns it
+//! (`horizon-agent`'s `config` module for the former `[agent]` knobs; the
+//! shell crate's `terminal`/`main` modules for the rest) — this crate no
+//! longer parses any of them into a field at all. [`warnings::warn`] still
+//! recognizes their *names*, so a config file that still sets one gets a
+//! "no longer configurable" warning instead of silently doing nothing.
 //!
 //! Design choices:
 //! - **One location, no layered merging.** Unlike tools that merge a
@@ -19,19 +33,21 @@
 //! - **Never crash on a bad file.** A missing file is the common case
 //!   (defaults apply, silently); a present-but-unparsable file falls back
 //!   to defaults with a warning on stderr — the same "warn and skip, never
-//!   fail startup" policy the shell crate's `keymap` and `theme` modules
-//!   apply per-entry to an unrecognized keybinding or theme color.
+//!   fail startup" policy [`warnings`] and the shell crate's `theme` module
+//!   apply per-entry to an unrecognized keybinding, theme color, or (as of
+//!   this wave) any other section's key.
 //! - **Applied at startup only, except `[theme]`/`[keybindings]`.** Nothing
 //!   here watches the file for changes. The `Reload Config` command (the
 //!   `CommandId::ReloadConfig` arm in the shell crate's `workspace.rs`,
 //!   fed by [`reload`]) re-reads the file and applies `[theme]`
 //!   (`theme::reload_from`) and `[keybindings]` (`workspace::apply_bindings`)
-//!   live. Every other section needs a restart of some kind:
-//!   `[agent]`/`[provider]` pick up on `Reload Session Runtime` (a fresh
+//!   live. `[provider]` picks up on `Reload Session Runtime` (a fresh
 //!   `horizon-sessiond` process re-reads the file, no full UI restart
 //!   needed); `[terminal]`/`[ui]` need a full UI restart.
 //! - **Secrets stay out.** Nothing under `[provider]` accepts an API key —
 //!   `OPENAI_API_KEY` (and any future provider secret) is environment-only.
+
+mod warnings;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -55,7 +71,6 @@ const HOME_VAR: &str = "HOME";
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct RawConfig {
-    pub agent: RawAgentConfig,
     pub provider: RawProviderConfig,
     pub terminal: RawTerminalConfig,
     pub ui: RawUiConfig,
@@ -69,92 +84,28 @@ pub struct RawConfig {
     pub theme: RawThemeConfig,
 }
 
-/// `[agent]`: tuning values for the bash/fs tools and the turn-loop guards.
-/// See `agent::config::AgentToolsConfig` and `RigAgentConfig` for the
-/// built-in defaults each field falls back to when unset here.
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
-#[serde(default)]
-pub struct RawAgentConfig {
-    pub bash_timeout_default_secs: Option<u64>,
-    pub bash_timeout_max_secs: Option<u64>,
-    pub bash_output_cap_chars: Option<usize>,
-    pub bash_drain_grace_secs: Option<u64>,
-    pub fs_read_line_cap: Option<usize>,
-    pub fs_grep_max_bytes: Option<u64>,
-    pub fs_traversal_max_files: Option<usize>,
-    /// Default number of matches `fs.grep` returns when a call doesn't pass
-    /// its own `limit` — distinct from `fs_grep_max_bytes`/
-    /// `fs_traversal_max_files` above, which cap how much of the tree a
-    /// single traversal *scans*, not how many of the matches found get
-    /// returned.
-    pub fs_grep_result_limit: Option<usize>,
-    /// Same idea as `fs_grep_result_limit`, for `fs.glob`.
-    pub fs_glob_result_limit: Option<usize>,
-    pub iteration_cap: Option<u32>,
-    pub doom_loop_window: Option<usize>,
-    /// Token budget for the conversation history sent to the provider on
-    /// each turn. See `agent::config::RigAgentConfig::history_token_budget`
-    /// for the built-in default and why it's applied unconditionally.
-    pub history_token_budget: Option<usize>,
-    /// How often, in milliseconds, streamed assistant-text/reasoning deltas
-    /// and tool-call-argument progress are coalesced into an emitted event.
-    /// See `providers::rig::stream`'s `StreamDeltaBuffer`/
-    /// `ToolCallProgressBuffer`.
-    pub stream_flush_interval_ms: Option<u64>,
-    /// Character count that forces an early flush of a streamed
-    /// assistant-text/reasoning delta, ahead of the time-based flush above.
-    pub stream_flush_chars: Option<usize>,
-    /// Overrides the append-only agent event log (JSONL) path. The
-    /// `HORIZON_AGENT_EVENT_LOG` env var, if set, wins over this.
-    pub event_log_path: Option<String>,
-    /// Overrides the DuckDB projection database path used to replay
-    /// per-session rig history. The `HORIZON_AGENT_STATE_DB` env var, if
-    /// set, wins over this. Unset (here and via env) means no persisted
-    /// memory.
-    pub state_db_path: Option<String>,
-    /// Character cap on the "Repository instructions" system-prompt section
-    /// built from `AGENTS.md`/`CLAUDE.md` files found while walking from
-    /// the session's working directory up to the repository root. See
-    /// `agent::config::RigAgentConfig::repository_instructions_cap_chars`
-    /// for the built-in default and its rationale.
-    pub repository_instructions_cap_chars: Option<usize>,
-}
-
-/// `[provider]`: model selection, base URL, and request parameters for the
-/// built-in rig/OpenAI provider. Never a place for secrets — see the module
-/// doc.
+/// `[provider]`: model selection and base URL for the built-in rig/OpenAI
+/// provider. Never a place for secrets — see the module doc. `temperature`/
+/// `max_tokens` were retired in the 2026-07-18 config-narrowing wave (see
+/// the module doc) — a file that still sets either now gets a
+/// [`warnings`] warning instead of the field silently doing nothing.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct RawProviderConfig {
     pub model: Option<String>,
     pub base_url: Option<String>,
-    /// Sampling temperature passed to rig's completion request. Unset (the
-    /// default) means "let the provider use its own default" — rig never
-    /// sends the field at all in that case.
-    pub temperature: Option<f64>,
-    /// Max output tokens passed to rig's completion request. Unset (the
-    /// default) means "let the provider use its own default".
-    pub max_tokens: Option<u64>,
 }
 
-/// `[terminal]`: cell rendering metrics, scrollback, the spawned shell, and
-/// the `TERM` identity presented to it. See `terminal::config` for the
-/// built-in defaults each field falls back to when unset here.
+/// `[terminal]`: cell rendering metrics for the spawned shell. See
+/// `terminal::font_size` (the shell crate) for the built-in default
+/// `font_size` falls back to when unset here. `line_height`/`term`/
+/// `shell`/`shell_args`/`scrollback_lines` were retired in the 2026-07-18
+/// config-narrowing wave (see the module doc) — each is now a fixed
+/// built-in default or formula in the shell crate.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct RawTerminalConfig {
     pub font_size: Option<f32>,
-    pub line_height: Option<f64>,
-    pub scrollback_lines: Option<usize>,
-    /// Overrides the spawned shell program. The `SHELL` env var, if set,
-    /// wins over this (matching the existing "existing env vars keep
-    /// winning" precedence rule).
-    pub shell: Option<String>,
-    /// Extra argv entries passed to the spawned shell (e.g. `["-l"]` for a
-    /// login shell). No corresponding env var.
-    pub shell_args: Option<Vec<String>>,
-    /// The `TERM` value presented to the spawned shell.
-    pub term: Option<String>,
 }
 
 /// `[theme]`: the app's one color scheme — named role overrides for the
@@ -235,16 +186,16 @@ pub struct RawThemeAnsiConfig {
     pub bright_white: Option<String>,
 }
 
-/// `[ui]`: cross-domain UI primitives — the app-wide font family (shared by
-/// the terminal, agent transcript, and workspace agent controls) and the
-/// window's initial size. See `ui::fonts` and `app::config` for the
-/// built-in defaults.
+/// `[ui]`: the app-wide font family, shared by the terminal, agent
+/// transcript, and workspace agent controls. See `terminal::resolved_font`
+/// (the shell crate) for the built-in default this falls back to when
+/// unset here. `window_width`/`window_height` were retired in the
+/// 2026-07-18 config-narrowing wave (see the module doc) — the window now
+/// always opens at a fixed built-in size (`main.rs`, the shell crate).
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct RawUiConfig {
     pub font_family: Option<String>,
-    pub window_width: Option<f64>,
-    pub window_height: Option<f64>,
 }
 
 /// Loads and caches the config file for the lifetime of the process. Config
@@ -363,7 +314,15 @@ fn read_config(path: Option<&Path>) -> ConfigRead {
         }
     };
     match parse(&contents) {
-        Ok(config) => ConfigRead::Parsed(Box::new(config)),
+        Ok(config) => {
+            // Retired/unrecognized-key warnings (`[agent]`/`[provider]`/
+            // `[terminal]`/`[ui]` -- see `warnings`' module doc) run here,
+            // once per successful parse, so both `load_from_path` (startup)
+            // and `reload_from_path` (`Reload Config`) get them through this
+            // one shared call site.
+            warnings::warn(&contents);
+            ConfigRead::Parsed(Box::new(config))
+        }
         Err(error) => {
             ConfigRead::ParseError(format!("could not parse {}: {error}", path.display()))
         }

@@ -63,7 +63,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use horizon_agent::config::{self, AgentConfig};
+use horizon_agent::config::AgentConfig;
 use horizon_agent::contract::ProviderRegistry;
 use horizon_agent::persistence::event_log::{Record, WriterHandle, WriterInit};
 use horizon_agent::persistence::projection::duckdb::{DuckdbStoreHandle, SharedDuckdbStore};
@@ -101,8 +101,23 @@ async fn main() -> anyhow::Result<()> {
     let socket_path =
         socket_path_from_args(std::env::args().skip(1)).unwrap_or_else(default_socket_path);
 
-    let file_config = config::load_file_config();
-    let agent_config = AgentConfig::from_env_and_file(&file_config);
+    // `horizon-sessiond` is now the one process that reads Horizon's config
+    // file directly (see `docs/agent-runtime-split-design.md`'s "the child
+    // owns the event log and DuckDB projection", extended by the
+    // 2026-07-18 config-narrowing wave's consolidation onto
+    // `horizon-config`): only `[provider]` `model`/`base_url` still vary
+    // per this crate's config -- everything else former `[agent]` knobs
+    // became fixed built-in constants in `horizon_agent::config` (see that
+    // module's doc).
+    let raw_config = horizon_config::load();
+    let agent_config = AgentConfig::from_env_and_provider(
+        raw_config.provider.model.clone(),
+        raw_config.provider.base_url.clone(),
+    );
+    // Resolved once at startup and handed to every session's
+    // `ToolSessionState` (see `SessiondState::config_path`/`run_session`):
+    // the `config.read`/`config.write` agent tools' one and only target.
+    let config_path = horizon_config::resolved_path();
     eprintln!(
         "horizon-sessiond: starting on {} (model={})",
         socket_path.display(),
@@ -127,6 +142,7 @@ async fn main() -> anyhow::Result<()> {
         agent_config.clone(),
         None,
         duckdb_cell.clone(),
+        config_path,
     ));
 
     spawn_resume_task(state.clone(), agent_config, duckdb_cell);

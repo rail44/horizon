@@ -106,11 +106,11 @@ fn run_gui() {
             cx.activate(true);
 
             cx.spawn(async move |cx| {
-                let ui = &horizon_config::load().ui;
-                let size = size(
-                    px(ui.window_width.unwrap_or(1100.0) as f32),
-                    px(ui.window_height.unwrap_or(720.0) as f32),
-                );
+                // `[ui] window_width`/`window_height` were retired in the
+                // 2026-07-18 config-narrowing wave (see AGENTS.md's
+                // "Configuration" section) -- the window now always opens
+                // at this fixed size, no file override.
+                let size = size(px(1100.0), px(720.0));
                 let options = cx.update(|cx| WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size, cx))),
                     // `horizon-winit-platform` always draws complete native

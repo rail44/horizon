@@ -1544,19 +1544,17 @@ impl WorkspaceShell {
     }
 
     fn terminal_spawn_spec(&self, pending: PendingTerminalSpawn) -> TerminalSpawnSpec {
-        let config = &horizon_config::load().terminal;
-        let shell = std::env::var("SHELL")
-            .ok()
-            .or_else(|| config.shell.clone())
-            .unwrap_or_else(|| "/bin/sh".to_string());
+        // `[terminal] shell_args`/`term`/`scrollback_lines` were retired in
+        // the 2026-07-18 config-narrowing wave (see AGENTS.md's
+        // "Configuration" section): each is now fixed. `shell` keeps its
+        // existing $SHELL-else-/bin/sh logic, minus the former file
+        // override.
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
         TerminalSpawnSpec {
             shell,
-            args: config.shell_args.clone().unwrap_or_default(),
-            term: config
-                .term
-                .clone()
-                .unwrap_or_else(|| "xterm-256color".to_string()),
-            scrollback_lines: config.scrollback_lines.unwrap_or(DEFAULT_SCROLLBACK_LINES),
+            args: Vec::new(),
+            term: "xterm-256color".to_string(),
+            scrollback_lines: DEFAULT_SCROLLBACK_LINES,
             color_scheme: theme::terminal_color_scheme(),
             control_socket: self.socket_path.clone(),
             fallback_cwd: pending.fallback_cwd,

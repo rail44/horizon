@@ -98,18 +98,40 @@ Horizon reads one optional TOML file: `$XDG_CONFIG_HOME/horizon/config.toml`
 (falling back to `~/.config/horizon/config.toml`), overridable via
 `HORIZON_CONFIG`. Precedence is env var > config file > built-in default;
 existing env vars keep winning. Secrets (`OPENAI_API_KEY`) are
-environment-only and never read from the file. Config is applied at startup
-only, with one exception: `Reload Config` (palette / `reload-config`
-keybinding id / CLI `horizon reload-config`) re-reads the file and applies
-`[theme]` (chrome, `[theme.ansi]`, and the derived terminal colors) and
-`[keybindings]` (built-in defaults plus every chord/command override,
-unbinding whatever the previous apply's chords were first — see
-`workspace::apply_bindings`) live. Every other section needs a restart of
-some kind: `[agent]`/`[provider]` pick up on `Reload Session Runtime` (a
-fresh `horizon-sessiond` process re-reads the file, no full UI restart
-needed); `[terminal]`/`[ui]` need a full UI restart. See
-`config.example.toml` at the repo root for every knob, and
-`crates/horizon-config` for the loader.
+environment-only and never read from the file.
+
+As of the 2026-07-18 config-narrowing wave (owner decision), the surface is
+exactly: `[provider]` `model`/`base_url`; `[terminal]` `font_size`; `[ui]`
+`font_family`; `[keybindings]`; `[theme]`'s seed plus `[theme.ansi]`'s six
+hues. Everything the file used to also cover (the whole former `[agent]`
+section — bash/fs tool caps, turn-loop guard thresholds, event/state DB
+paths, stream-flush cadence, history/instructions budgets — plus
+`[provider]` `temperature`/`max_tokens`, `[terminal]`
+`line_height`/`term`/`shell`/`shell_args`/`scrollback_lines`, `[ui]`
+`window_width`/`window_height`) is now a fixed built-in default or
+constant; a config file that still sets one of those retired keys gets a
+"no longer configurable" warning on stderr naming the key (an unrecognized
+key in a *known* section instead gets a "probable typo" warning) — both
+implemented once, in `crates/horizon-config`, so every process that loads
+the file gets them. `crates/horizon-agent`'s event log/DuckDB-projection
+paths keep an environment-only override
+(`HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB`) with no file key at
+all.
+
+Config is applied at startup only, with these exceptions: `Reload Config`
+(palette / `reload-config` keybinding id / CLI `horizon reload-config`)
+re-reads the file and applies `[theme]` (chrome, `[theme.ansi]`, and the
+derived terminal colors) and `[keybindings]` (built-in defaults plus every
+chord/command override, unbinding whatever the previous apply's chords
+were first — see `workspace::apply_bindings`) live; `[provider]` picks up
+on `Reload Session Runtime` (a fresh `horizon-sessiond` process re-reads
+the file, no full UI restart needed). `[terminal]`/`[ui]` are read once at
+UI startup and need a full restart. See `config.example.toml` at the repo
+root for every knob, and `crates/horizon-config` for the loader (the
+single file-schema/parse/path-resolution owner; `horizon-sessiond` depends
+on it directly, and `horizon-agent` takes the resolved `[provider]` values
+as plain arguments rather than parsing the file itself — see that crate's
+`config` module doc).
 
 ## GUI Verification
 

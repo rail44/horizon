@@ -10,11 +10,13 @@
 //! session's workspace root -- the untrusted-repository boundary
 //! (`docs/trust-boundaries.md`). `config.write` deliberately does not go
 //! through it: its one and only target is the single config file
-//! `horizon-sessiond` itself resolves via `config::resolve_config_file_path`
-//! (`$HORIZON_CONFIG` > `$XDG_CONFIG_HOME/horizon/config.toml` >
-//! `~/.config/horizon/config.toml`) -- a host-owned file addressed the same
-//! way the host process itself addresses it, not an arbitrary path the
-//! model supplies. `docs/agent-tools-design.md` already notes `bash` can
+//! `horizon-sessiond` itself resolves (`$HORIZON_CONFIG` >
+//! `$XDG_CONFIG_HOME/horizon/config.toml` > `~/.config/horizon/config.toml`,
+//! via `horizon_config::resolved_path()`) and injects into this session's
+//! `ToolSessionState::config_path` at spawn time -- a host-owned file
+//! addressed the same way the host process itself addresses it, not an
+//! arbitrary path the model supplies. `docs/agent-tools-design.md` already
+//! notes `bash` can
 //! write this same file with no additional tool at all; cataloging
 //! `config.write` globally (`tools::catalog::definitions`) adds no new
 //! *capability* to the system for that reason. What `config.write`
@@ -35,7 +37,6 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
-use crate::config::resolve_config_file_path;
 use crate::tools::state::ToolSessionState;
 
 /// Executes an auto-allowed (`AutoAllowRead`) tool from this module's
@@ -47,7 +48,7 @@ pub(crate) fn execute_auto(
     input: &Value,
 ) -> Option<Value> {
     match tool_id {
-        "config.read" => Some(read_at(tool_state, resolve_config_file_path().as_deref())),
+        "config.read" => Some(read_at(tool_state, tool_state.config_path())),
         "skill.read" => Some(crate::skills::execute_read(
             tool_state.skill_registry(),
             input,
@@ -65,7 +66,11 @@ pub(crate) fn execute_approved(
     input: &Value,
 ) -> Value {
     match tool_id {
-        "config.write" => write::execute(tool_state, resolve_config_file_path(), input),
+        "config.write" => write::execute(
+            tool_state,
+            tool_state.config_path().map(Path::to_path_buf),
+            input,
+        ),
         _ => error_output(format!("tool `{tool_id}` has no Horizon-side execution")),
     }
 }

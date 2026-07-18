@@ -405,6 +405,15 @@ fn spawn_terminal(
     let mut command = CommandBuilder::new(&spec.shell);
     command.args(&spec.args);
     command.env("TERM", &spec.term);
+    // Pairs with the fixed `xterm-256color` TERM (see `workspace.rs`'s
+    // `terminal_spawn_spec`, the shell crate) so truecolor detection works
+    // in tools that gate on COLORTERM rather than TERM alone -- only when
+    // the inherited environment doesn't already set it, so an already
+    // truecolor-aware launch environment (or an explicit override) is
+    // never clobbered.
+    if std::env::var_os("COLORTERM").is_none() {
+        command.env("COLORTERM", "truecolor");
+    }
     command.env("HORIZON_SOCKET", &spec.control_socket);
     command.env("HORIZON_SESSION_ID", session_id.to_string());
     command.cwd(cwd);

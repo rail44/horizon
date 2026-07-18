@@ -485,7 +485,7 @@ impl ProviderRegistry {
     #[cfg(test)]
     pub fn builtin() -> Self {
         Self::builtin_with_config(
-            AgentConfig::from_env_and_file(&crate::config::AgentFileConfig::default()),
+            AgentConfig::from_env_and_provider(None, None),
             crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
         )
     }

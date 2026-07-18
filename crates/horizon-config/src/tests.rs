@@ -99,12 +99,12 @@ fn load_from_path_parses_a_well_formed_file() {
     std::fs::write(
         &path,
         r##"
-            [agent]
-            bash_timeout_default_secs = 30
-
             [provider]
             model = "gpt-test"
             base_url = "https://example.invalid/v1"
+
+            [terminal]
+            font_size = 14.0
 
             [keybindings]
             "ctrl+shift+t" = "new-tab"
@@ -117,7 +117,7 @@ fn load_from_path_parses_a_well_formed_file() {
 
     let loaded = load_from_path(Some(&path));
 
-    assert_eq!(loaded.agent.bash_timeout_default_secs, Some(30));
+    assert_eq!(loaded.terminal.font_size, Some(14.0));
     assert_eq!(loaded.provider.model.as_deref(), Some("gpt-test"));
     assert_eq!(
         loaded.provider.base_url.as_deref(),
@@ -261,13 +261,13 @@ fn a_file_with_only_some_knobs_set_leaves_the_rest_none() {
         "horizon-config-test-partial-{}.toml",
         uuid::Uuid::new_v4()
     ));
-    std::fs::write(&path, "[agent]\niteration_cap = 10\n").unwrap();
+    std::fs::write(&path, "[terminal]\nfont_size = 14.0\n").unwrap();
 
     let loaded = load_from_path(Some(&path));
 
-    assert_eq!(loaded.agent.iteration_cap, Some(10));
-    assert_eq!(loaded.agent.doom_loop_window, None);
+    assert_eq!(loaded.terminal.font_size, Some(14.0));
     assert_eq!(loaded.provider.model, None);
+    assert_eq!(loaded.ui, crate::RawUiConfig::default());
     assert!(loaded.keybindings.is_empty());
     assert_eq!(loaded.theme, crate::RawThemeConfig::default());
 

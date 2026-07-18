@@ -267,9 +267,11 @@ DuckDB is rebuilt from JSONL and is not the primary append path.
 
 The projection runs by default now, at `$XDG_DATA_HOME/horizon/agent-state.duckdb`
 (falling back to `~/.local/share/horizon/agent-state.duckdb`) -- there is no
-"unset = disabled" state any more. `HORIZON_AGENT_STATE_DB` (or the config
-file's `[agent].state_db_path`), if set, relocates the file instead of
-turning the projection on; the runtime rebuilds whatever path resolves. The
+"unset = disabled" state any more. `HORIZON_AGENT_STATE_DB`, if set,
+relocates the file instead of turning the projection on (no config-file key
+for this any more since the 2026-07-18 config-narrowing wave retired the
+whole former `[agent]` section -- env var only); the runtime rebuilds
+whatever path resolves. The
 file should conventionally use a `.duckdb` extension. It is a DuckDB-native
 binary database file containing the Horizon agent tables, not JSONL,
 Parquet, or SQLite.

@@ -50,10 +50,13 @@ this file -- never write one there even if the user asks.
 ## Apply timing
 
 `[theme]` and `[keybindings]` changes take effect automatically as soon as
-the user approves a `config.write` -- no restart needed. Every other
-section (`[agent]`, `[provider]`, `[terminal]`, `[ui]`) only takes effect
-the next time Horizon starts, so tell the user a restart is needed if you
-change one of those.
+the user approves a `config.write` -- no restart needed. `[provider]`
+changes take effect on "Reload Session Runtime" (no full restart needed
+either, just a fresh `horizon-sessiond`). `[terminal]`/`[ui]` only take
+effect the next time Horizon starts, so tell the user a restart is needed
+if you change one of those. There is no `[agent]` section any more -- it
+was retired 2026-07-18; tool caps and turn-loop guards are fixed built-in
+constants now, not configurable via this file at all.
 
 ## `[theme]` -- the seed
 

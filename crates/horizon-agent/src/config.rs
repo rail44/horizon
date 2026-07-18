@@ -2,164 +2,32 @@
 //!
 //! Per `docs/agent-tools-design.md`'s "Config" section and `AGENTS.md`'s
 //! "Configuration" section: values here flow from (in precedence order)
-//! environment variables, then Horizon's single config file, then a
-//! built-in default. Secrets (`OPENAI_API_KEY`) are environment-only and
-//! never read from the config file. This module is the single place that
-//! names the env vars and built-in defaults; keep it authoritative rather
-//! than duplicating them elsewhere.
+//! environment variables, then Horizon's single config file (read by the
+//! caller, never this crate -- see below), then a built-in default.
+//! Secrets (`OPENAI_API_KEY`) are environment-only and never read from the
+//! config file. This module is the single place that names the env vars
+//! and built-in defaults; keep it authoritative rather than duplicating
+//! them elsewhere.
 //!
-//! **Crate boundary**: this crate has no dependency on Horizon and so
-//! cannot call Horizon's config loader (`crate::config::load()` in the
-//! `horizon` binary crate) directly. [`AgentFileConfig`] is this module's
-//! own mirror of the `[agent]`/`[provider]` sections of Horizon's config
-//! file schema; Horizon converts its `RawConfig` into this shape at the
-//! seam (see `horizon`'s `src/agent/config.rs`) before calling
-//! [`AgentConfig::from_env_and_file`]. `horizon-sessiond`'s own config
-//! loading (split step 2) will need an analogous conversion, or may parse
-//! its file directly into this shape.
+//! **Crate boundary.** This crate has no dependency on `horizon-config` (or
+//! on Horizon) and so cannot parse or locate Horizon's config file itself.
+//! As of the 2026-07-18 config-narrowing wave, the only file-sourced
+//! values this crate's config still varies on are `[provider]`
+//! `model`/`base_url` -- [`AgentConfig::from_env_and_provider`] takes
+//! those two as plain `Option<String>` arguments; the caller
+//! (`horizon-sessiond`'s `main`, which owns the real `horizon_config::
+//! load()` call) resolves them from the file first. Every other former
+//! `[agent]`/`[provider]` file knob (tool caps, turn-loop guard
+//! thresholds, stream-flush cadence, history/instructions budgets,
+//! `temperature`/`max_tokens`) is now a fixed built-in constant -- see
+//! each `DEFAULT_*` constant below. `event_log_path`/`state_db_path`
+//! similarly lost their file keys; `HORIZON_AGENT_EVENT_LOG`/
+//! `HORIZON_AGENT_STATE_DB` plus the XDG-based built-in default remain the
+//! only override path.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use rig_core::providers::openai;
-use serde::Deserialize;
-
-/// Mirrors the `[agent]`/`[provider]` sections of Horizon's config-file
-/// schema (`crate::config::RawConfig` in the `horizon` binary crate) — see
-/// the module doc for why this crate can't use that type directly. Derives
-/// `Deserialize` (used by [`load_file_config`], `horizon-sessiond`'s own
-/// loader) with `#[serde(default)]` throughout so a file missing the
-/// `[agent]`/`[provider]` sections entirely, or Horizon's full config file
-/// (with its other sections this crate doesn't model at all -- `[terminal]`,
-/// `[ui]`, `[keybindings]`, `[theme]`), both parse fine.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-#[serde(default)]
-pub struct AgentFileConfig {
-    pub agent: AgentFileAgentConfig,
-    pub provider: AgentFileProviderConfig,
-}
-
-/// Mirrors `RawAgentConfig`'s fields one-to-one — see [`AgentFileConfig`].
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
-#[serde(default)]
-pub struct AgentFileAgentConfig {
-    pub bash_timeout_default_secs: Option<u64>,
-    pub bash_timeout_max_secs: Option<u64>,
-    pub bash_output_cap_chars: Option<usize>,
-    pub bash_drain_grace_secs: Option<u64>,
-    pub fs_read_line_cap: Option<usize>,
-    pub fs_grep_max_bytes: Option<u64>,
-    pub fs_traversal_max_files: Option<usize>,
-    pub fs_grep_result_limit: Option<usize>,
-    pub fs_glob_result_limit: Option<usize>,
-    pub iteration_cap: Option<u32>,
-    pub doom_loop_window: Option<usize>,
-    pub stream_flush_interval_ms: Option<u64>,
-    pub stream_flush_chars: Option<usize>,
-    pub event_log_path: Option<String>,
-    pub state_db_path: Option<String>,
-    pub history_token_budget: Option<usize>,
-    pub repository_instructions_cap_chars: Option<usize>,
-}
-
-/// Mirrors `RawProviderConfig`'s fields one-to-one — see [`AgentFileConfig`].
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-#[serde(default)]
-pub struct AgentFileProviderConfig {
-    pub model: Option<String>,
-    pub base_url: Option<String>,
-    pub temperature: Option<f64>,
-    pub max_tokens: Option<u64>,
-}
-
-// --- loading AgentFileConfig from Horizon's config file (horizon-sessiond) --
-//
-// `horizon-sessiond` can't depend on the `horizon` binary crate's own loader
-// (`crate::config::load()` there, gated behind Horizon's UI/workspace
-// dependencies), so it needs its own copy of the file-location logic. This
-// duplicates Horizon's `HORIZON_CONFIG` > `$XDG_CONFIG_HOME/horizon/
-// config.toml` > `~/.config/horizon/config.toml` > built-in-default
-// resolution verbatim -- see `docs/agent-runtime-split-design.md`'s "Step 2
-// implementation notes" for why a small duplication (rather than a shared
-// third crate just for this) was accepted. Parsing the *same* file Horizon
-// reads is intentional: [`AgentFileConfig`]'s `#[serde(default)]` (no
-// `deny_unknown_fields`) means Horizon's other top-level sections
-// (`[terminal]`, `[ui]`, `[keybindings]`, `[theme]`) parse here too, just
-// silently ignored, so `horizon-sessiond` only ever sees `[agent]`/
-// `[provider]`.
-
-/// Overrides the config file path outright -- the same variable Horizon's
-/// own loader honors (`crate::config::CONFIG_PATH_VAR` there); duplicated as
-/// its own constant here since this crate can't reference that one.
-const CONFIG_PATH_VAR: &str = "HORIZON_CONFIG";
-const XDG_CONFIG_HOME_VAR: &str = "XDG_CONFIG_HOME";
-
-/// Loads `[agent]`/`[provider]` from Horizon's single config file, for
-/// standalone use by `horizon-sessiond`. A missing file (the common case) or
-/// a present-but-unparsable one both fall back to
-/// [`AgentFileConfig::default()`] -- the latter with a warning on stderr --
-/// matching Horizon's own "never crash on a bad config file" policy
-/// (`crate::config`'s module doc, on the `horizon` side).
-pub fn load_file_config() -> AgentFileConfig {
-    load_file_config_from_path(resolve_config_file_path().as_deref())
-}
-
-/// `pub(crate)` (not just `fn`) so `tools::config` can target exactly the
-/// file `horizon-sessiond` itself resolves and reads -- see that module's own
-/// doc comment on why `config.write` deliberately reaches outside the
-/// per-session `workspace_root` confinement to edit this one host-owned
-/// path.
-pub(crate) fn resolve_config_file_path() -> Option<PathBuf> {
-    resolve_config_file_path_from(
-        std::env::var(CONFIG_PATH_VAR).ok(),
-        std::env::var(XDG_CONFIG_HOME_VAR).ok(),
-        std::env::var(HOME_VAR).ok(),
-    )
-}
-
-/// Pure path-resolution logic, factored out for the same unit-testability
-/// reason as [`resolve_model`] below.
-fn resolve_config_file_path_from(
-    horizon_config: Option<String>,
-    xdg_config_home: Option<String>,
-    home: Option<String>,
-) -> Option<PathBuf> {
-    let non_empty = |value: Option<String>| value.filter(|value| !value.is_empty());
-    if let Some(path) = non_empty(horizon_config) {
-        return Some(PathBuf::from(path));
-    }
-    let config_home = match non_empty(xdg_config_home) {
-        Some(dir) => PathBuf::from(dir),
-        None => PathBuf::from(non_empty(home)?).join(".config"),
-    };
-    Some(config_home.join("horizon").join("config.toml"))
-}
-
-fn load_file_config_from_path(path: Option<&Path>) -> AgentFileConfig {
-    let Some(path) = path else {
-        return AgentFileConfig::default();
-    };
-    let contents = match std::fs::read_to_string(path) {
-        Ok(contents) => contents,
-        // No file written yet is the common case, not a warning.
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return AgentFileConfig::default()
-        }
-        Err(error) => {
-            eprintln!(
-                "horizon-agent: could not read {}: {error} -- using built-in defaults",
-                path.display()
-            );
-            return AgentFileConfig::default();
-        }
-    };
-    toml::from_str(&contents).unwrap_or_else(|error| {
-        eprintln!(
-            "horizon-agent: could not parse {}: {error} -- using built-in defaults",
-            path.display()
-        );
-        AgentFileConfig::default()
-    })
-}
 
 /// Presence gates the OpenAI-backed rig completion path (see
 /// [`RigAgentConfig::openai_enabled`]). The **value** of this variable is
@@ -183,7 +51,7 @@ const OPENAI_BASE_URL_VAR: &str = "OPENAI_BASE_URL";
 /// Overrides the path of the append-only agent event log (JSONL). Falls
 /// back to `$XDG_DATA_HOME/horizon/agent-events.jsonl` (see
 /// [`default_event_log_path_from`]). A leading `~/` is expanded against
-/// `$HOME`, same as a `[agent].event_log_path` value from the config file.
+/// `$HOME`.
 const EVENT_LOG_PATH_VAR: &str = "HORIZON_AGENT_EVENT_LOG";
 
 /// Overrides the path of the DuckDB projection database used to replay
@@ -194,9 +62,9 @@ const EVENT_LOG_PATH_VAR: &str = "HORIZON_AGENT_EVENT_LOG";
 const STATE_DB_PATH_VAR: &str = "HORIZON_AGENT_STATE_DB";
 
 /// `$HOME`, read once per resolution call to expand a leading `~/` in a
-/// path-typed config value (`event_log_path`/`state_db_path`) and, absent
-/// `$XDG_DATA_HOME`, to build the event log's and DuckDB projection's
-/// default paths — see [`default_event_log_path_from`] and
+/// path-typed env value (`HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB`)
+/// and, absent `$XDG_DATA_HOME`, to build the event log's and DuckDB
+/// projection's default paths — see [`default_event_log_path_from`] and
 /// [`default_state_db_path_from`].
 const HOME_VAR: &str = "HOME";
 
@@ -205,13 +73,16 @@ const HOME_VAR: &str = "HOME";
 /// [`default_event_log_path_from`] and [`default_state_db_path_from`].
 const XDG_DATA_HOME_VAR: &str = "XDG_DATA_HOME";
 
-// --- built-in defaults for the `[agent]` tuning knobs ----------------------
+// --- built-in defaults for the former `[agent]` tuning knobs ---------------
 //
-// These were previously hardcoded constants scattered across the tool
-// modules (see each field's doc comment for where). They're now the
-// fallback used when the config file doesn't set the corresponding key —
-// see `config.example.toml` at the repo root, which documents every one of
-// them with its default.
+// These used to be file-configurable (a `[agent]` section in Horizon's
+// config file); the 2026-07-18 config-narrowing wave retired that whole
+// section (see the module doc), so every one of them is now a fixed
+// built-in constant with no override path at all except the two explicitly
+// noted otherwise (`event_log_path`/`state_db_path`, still env-overridable
+// via `HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB`) — see
+// `config.example.toml` at the repo root for the user-facing summary of
+// what's still configurable at all.
 //
 // The two traversal caps keep the `cfg(test)` shrink they already had
 // (see the `agent-tools-design.md` traversal cap tests) as a *separate*,
@@ -219,9 +90,7 @@ const XDG_DATA_HOME_VAR: &str = "XDG_DATA_HOME";
 // `default_fs_traversal_max_files` pick the test-shrunk value under
 // `cfg(test)` so the existing cap-tripping tests keep exercising the cap
 // without creating tens of thousands of files, while the *_PRODUCTION_DEFAULT
-// constants stay the real numbers regardless of `cfg(test)` — so Horizon's
-// config-file example test can still assert the example file documents the
-// real production default.
+// constants stay the real numbers regardless of `cfg(test)`.
 pub(crate) const DEFAULT_BASH_TIMEOUT_DEFAULT_SECS: u64 = 120;
 pub(crate) const DEFAULT_BASH_TIMEOUT_MAX_SECS: u64 = 600;
 pub(crate) const DEFAULT_BASH_OUTPUT_CAP_CHARS: usize = 30_000;
@@ -237,18 +106,17 @@ pub(crate) const DEFAULT_FS_GLOB_RESULT_LIMIT: usize = 200;
 /// (`docs/agent-tools-design.md`'s "Error Model and Loop Guards"). Fixed at
 /// 100 (`docs/issues/002-agent-iteration-cap-halts-real-work.md`'s
 /// resolution, 2026-07-18): the previous default of 25 fired on ordinary
-/// agentic work well before anything resembling a real runaway loop. No
-/// longer read from `[agent] iteration_cap` in the config file -- that key
-/// is retired in a follow-up wave; `AgentFileAgentConfig::iteration_cap`
-/// stays in the schema for now so a config file that still sets it parses
-/// without error, but [`RigAgentConfig::from_env_and_file`] no longer
-/// consults it. `pub` so `src/agent/turns/receipt.rs` can render the exact
-/// number in a guard-halted turn's paused receipt text without duplicating
-/// it.
+/// agentic work well before anything resembling a real runaway loop. Not
+/// configurable at all any more -- the `[agent] iteration_cap` key it used
+/// to read (before that same resolution) was removed from the config
+/// schema entirely in the 2026-07-18 config-narrowing wave. `pub` so
+/// `src/agent/turns/receipt.rs` can render the exact number in a
+/// guard-halted turn's paused receipt text without duplicating it.
 pub const DEFAULT_ITERATION_CAP: u32 = 100;
 /// Doom-loop (identical-consecutive-tool-result) window, same section of
-/// the design doc and same resolution as [`DEFAULT_ITERATION_CAP`]: fixed
-/// at 5 (was 3), no longer read from `[agent] doom_loop_window`.
+/// the design doc and same fixed-not-configurable treatment as
+/// [`DEFAULT_ITERATION_CAP`]: fixed at 5 (was 3), no longer configurable
+/// via `[agent] doom_loop_window`.
 pub const DEFAULT_DOOM_LOOP_WINDOW: usize = 5;
 /// Was `providers::rig::stream`'s `STREAM_FLUSH_INTERVAL`.
 pub(crate) const DEFAULT_STREAM_FLUSH_INTERVAL_MS: u64 = 100;
@@ -278,8 +146,7 @@ pub(crate) const DEFAULT_HISTORY_TOKEN_BUDGET: usize = 60_000;
 /// [`DEFAULT_HISTORY_TOKEN_BUDGET`]'s headroom -- at a roughly 4-characters-
 /// per-token rule of thumb this is ~6,000 tokens, a fraction of the 60,000
 /// token history budget, leaving the rest for conversation history and the
-/// turn's own prompt. Same "config tuning knob" treatment as
-/// [`DEFAULT_BASH_OUTPUT_CAP_CHARS`]: file-only, no dedicated env var.
+/// turn's own prompt.
 pub(crate) const DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS: usize = 24_000;
 
 pub const FS_GREP_MAX_BYTES_PRODUCTION_DEFAULT: u64 = 64 * 1024 * 1024;
@@ -315,23 +182,27 @@ pub struct AgentConfig {
 }
 
 impl AgentConfig {
-    pub fn from_env_and_file(file: &AgentFileConfig) -> Self {
+    /// Builds this crate's whole config from environment variables plus the
+    /// two `[provider]` values the caller already resolved from Horizon's
+    /// config file — see the module doc for why this crate can't resolve
+    /// them itself. `None` for either means the file didn't set it, same as
+    /// an absent key.
+    pub fn from_env_and_provider(model: Option<String>, base_url: Option<String>) -> Self {
         Self {
-            rig: RigAgentConfig::from_env_and_file(file),
-            persistence: AgentPersistenceConfig::from_env_and_file(file),
-            tools: AgentToolsConfig::from_file(file),
+            rig: RigAgentConfig::from_env_and_provider(model, base_url),
+            persistence: AgentPersistenceConfig::from_env(),
+            tools: AgentToolsConfig::default(),
         }
     }
 }
 
-/// Rig provider configuration: model/base-URL/request-param selection
-/// (`[provider]`, plus the env vars above), the turn-loop guard's fixed
-/// thresholds (`iteration_cap`/`doom_loop_window`, always
-/// [`DEFAULT_ITERATION_CAP`]/[`DEFAULT_DOOM_LOOP_WINDOW`] -- see
-/// `providers::rig::session`'s `TurnLoopGuard`, which this is threaded into
-/// unchanged) — and the streamed-delta coalescing cadence (`[agent]`
-/// `stream_flush_interval_ms`/`stream_flush_chars`) used by
-/// `providers::rig::stream`.
+/// Rig provider configuration: model/base-URL selection (`[provider]`, plus
+/// the env vars above), the turn-loop guard's fixed thresholds
+/// (`iteration_cap`/`doom_loop_window`, always [`DEFAULT_ITERATION_CAP`]/
+/// [`DEFAULT_DOOM_LOOP_WINDOW`] -- see `providers::rig::session`'s
+/// `TurnLoopGuard`, which this is threaded into unchanged) — and the
+/// streamed-delta coalescing cadence (always [`DEFAULT_STREAM_FLUSH_INTERVAL_MS`]/
+/// [`DEFAULT_STREAM_FLUSH_CHARS`]) used by `providers::rig::stream`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RigAgentConfig {
     /// Whether `OPENAI_API_KEY` is set. When `false`, the rig provider
@@ -345,22 +216,12 @@ pub struct RigAgentConfig {
     /// `providers::rig::completion`'s client construction for how this is
     /// applied via the client builder's `.base_url(..)`.
     pub base_url: Option<String>,
-    /// Sampling temperature for the completion request. `None` means "don't
-    /// send the field at all" — see `providers::rig::completion`'s
-    /// `.temperature_opt(..)` call.
-    pub temperature: Option<f64>,
-    /// Max output tokens for the completion request. `None` means "don't
-    /// send the field at all".
-    pub max_tokens: Option<u64>,
     /// Consecutive-tool-turn iteration cap (`docs/agent-tools-design.md`,
     /// "Error Model and Loop Guards"). Always [`DEFAULT_ITERATION_CAP`] --
-    /// [`Self::from_env_and_file`] no longer reads `[agent] iteration_cap`
-    /// (`docs/issues/002-agent-iteration-cap-halts-real-work.md`'s
-    /// resolution: this is now a built-in safety net, not a per-deployment
-    /// tuning knob). Kept as a field (rather than having
-    /// `providers::rig::session` read the constant directly) so tests can
-    /// still construct a `RigAgentConfig` with a small cap to exercise the
-    /// guard without looping to the real threshold.
+    /// kept as a field (rather than having `providers::rig::session` read
+    /// the constant directly) so tests can still construct a
+    /// `RigAgentConfig` with a small cap to exercise the guard without
+    /// looping to the real threshold.
     pub iteration_cap: u32,
     /// Doom-loop fingerprint window size, same section of the design doc
     /// and same fixed-not-configurable treatment as `iteration_cap` --
@@ -368,34 +229,35 @@ pub struct RigAgentConfig {
     pub doom_loop_window: usize,
     /// How often, in milliseconds, streamed deltas are coalesced into an
     /// emitted event. Was `providers::rig::stream`'s
-    /// `STREAM_FLUSH_INTERVAL`.
+    /// `STREAM_FLUSH_INTERVAL`. Always [`DEFAULT_STREAM_FLUSH_INTERVAL_MS`].
     pub stream_flush_interval_ms: u64,
     /// Character count that forces an early flush ahead of the interval
-    /// above. Was `providers::rig::stream`'s `STREAM_FLUSH_CHARS`.
+    /// above. Was `providers::rig::stream`'s `STREAM_FLUSH_CHARS`. Always
+    /// [`DEFAULT_STREAM_FLUSH_CHARS`].
     pub stream_flush_chars: usize,
     /// Token budget applied to the conversation history sent to the
     /// provider on each turn -- see [`DEFAULT_HISTORY_TOKEN_BUDGET`] for
     /// why 60,000 was chosen. Always active (no "0/unset disables
     /// windowing" escape hatch), matching this struct's other tuning
-    /// knobs (`iteration_cap`, `doom_loop_window`, ...): the config file
-    /// can move the number, but the guard itself is never optional. This
-    /// only shapes the *view* sent to the provider
-    /// (`providers::rig::completion::windowed_history_for_request`) --
-    /// `rig_history` itself, and the DuckDB-persisted event log it's
-    /// rebuilt from, are never truncated.
+    /// knobs (`iteration_cap`, `doom_loop_window`, ...): always
+    /// [`DEFAULT_HISTORY_TOKEN_BUDGET`]. This only shapes the *view* sent
+    /// to the provider (`providers::rig::completion::
+    /// windowed_history_for_request`) -- `rig_history` itself, and the
+    /// DuckDB-persisted event log it's rebuilt from, are never truncated.
     pub history_token_budget: usize,
     /// Character cap applied to the composed "Repository instructions"
     /// system-prompt section -- see
     /// [`DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS`] for why 24,000 was
-    /// chosen. Read by `providers::rig::session::spawn_rig_session` when it
-    /// builds that section via `instructions::extra_sections`.
+    /// chosen. Always that constant. Read by `providers::rig::session::
+    /// spawn_rig_session` when it builds that section via
+    /// `instructions::extra_sections`.
     pub repository_instructions_cap_chars: usize,
     /// Restricts which tool ids `providers::rig::completion::
     /// rig_tool_definitions` advertises to the provider. `None` (the only
-    /// value [`Self::from_env_and_file`] itself ever produces -- this field
-    /// is process-wide config, not per-session) means "no restriction,
-    /// every tool in `tools::definitions()`" -- current behavior,
-    /// unchanged. This back-compatible extension point
+    /// value [`Self::from_env_and_provider`] itself ever produces -- this
+    /// field is process-wide config, not per-session) means "no
+    /// restriction, every tool in `tools::definitions()`" -- current
+    /// behavior, unchanged. This back-compatible extension point
     /// (`docs/research/agent-prompting.md` Part 2.5) now has its first
     /// consumer: `providers::rig::Provider::start_session` derives a
     /// per-session `RigAgentConfig` with `Some(..)` here when the session
@@ -410,8 +272,6 @@ impl Default for RigAgentConfig {
             openai_enabled: false,
             model: openai::GPT_4O_MINI.to_string(),
             base_url: None,
-            temperature: None,
-            max_tokens: None,
             iteration_cap: DEFAULT_ITERATION_CAP,
             doom_loop_window: DEFAULT_DOOM_LOOP_WINDOW,
             stream_flush_interval_ms: DEFAULT_STREAM_FLUSH_INTERVAL_MS,
@@ -424,62 +284,40 @@ impl Default for RigAgentConfig {
 }
 
 impl RigAgentConfig {
-    pub fn from_env_and_file(file: &AgentFileConfig) -> Self {
+    pub fn from_env_and_provider(model: Option<String>, base_url: Option<String>) -> Self {
         Self {
             openai_enabled: std::env::var_os(OPENAI_API_KEY_VAR).is_some(),
-            model: resolve_model(
-                std::env::var(RIG_MODEL_VAR).ok(),
-                file.provider.model.clone(),
-            ),
-            base_url: resolve_base_url(
-                std::env::var(OPENAI_BASE_URL_VAR).ok(),
-                file.provider.base_url.clone(),
-            ),
-            temperature: file.provider.temperature,
-            max_tokens: file.provider.max_tokens,
-            // `file.agent.iteration_cap`/`doom_loop_window` are
-            // deliberately never read here -- see `RigAgentConfig::
-            // iteration_cap`'s doc comment.
+            model: resolve_model(std::env::var(RIG_MODEL_VAR).ok(), model),
+            base_url: resolve_base_url(std::env::var(OPENAI_BASE_URL_VAR).ok(), base_url),
             iteration_cap: DEFAULT_ITERATION_CAP,
             doom_loop_window: DEFAULT_DOOM_LOOP_WINDOW,
-            stream_flush_interval_ms: file
-                .agent
-                .stream_flush_interval_ms
-                .unwrap_or(DEFAULT_STREAM_FLUSH_INTERVAL_MS),
-            stream_flush_chars: file
-                .agent
-                .stream_flush_chars
-                .unwrap_or(DEFAULT_STREAM_FLUSH_CHARS),
-            history_token_budget: file
-                .agent
-                .history_token_budget
-                .unwrap_or(DEFAULT_HISTORY_TOKEN_BUDGET),
-            repository_instructions_cap_chars: file
-                .agent
-                .repository_instructions_cap_chars
-                .unwrap_or(DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS),
+            stream_flush_interval_ms: DEFAULT_STREAM_FLUSH_INTERVAL_MS,
+            stream_flush_chars: DEFAULT_STREAM_FLUSH_CHARS,
+            history_token_budget: DEFAULT_HISTORY_TOKEN_BUDGET,
+            repository_instructions_cap_chars: DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS,
             allowed_tool_ids: None,
         }
     }
 }
 
 /// Pure precedence resolution for the rig model id: env var wins, then the
-/// config file's `[provider].model`, then rig's own default model. Kept
-/// free of I/O (env/file reads happen at the call site) so precedence is
-/// unit-testable without mutating process environment — `cargo test` runs
-/// tests in parallel within one process, so real env mutation in a test
-/// would race every other test reading the same variable.
-fn resolve_model(env_value: Option<String>, file_value: Option<String>) -> String {
+/// config file's `[provider].model` (already resolved by the caller — see
+/// the module doc), then rig's own default model. Kept free of I/O (env
+/// reads happen at the call site) so precedence is unit-testable without
+/// mutating process environment — `cargo test` runs tests in parallel
+/// within one process, so real env mutation in a test would race every
+/// other test reading the same variable.
+fn resolve_model(env_value: Option<String>, provider_value: Option<String>) -> String {
     env_value
-        .or(file_value)
+        .or(provider_value)
         .unwrap_or_else(|| openai::GPT_4O_MINI.to_string())
 }
 
 /// Same precedence as [`resolve_model`], for the OpenAI base URL. `None`
 /// means "let rig use its own default" — there is no Horizon-side default
 /// URL to fall back to.
-fn resolve_base_url(env_value: Option<String>, file_value: Option<String>) -> Option<String> {
-    env_value.or(file_value)
+fn resolve_base_url(env_value: Option<String>, provider_value: Option<String>) -> Option<String> {
+    env_value.or(provider_value)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -489,19 +327,22 @@ pub struct AgentPersistenceConfig {
 }
 
 impl AgentPersistenceConfig {
-    pub fn from_env_and_file(file: &AgentFileConfig) -> Self {
+    /// No file input any more (see the module doc): `event_log_path`/
+    /// `state_db_path` lost their `[agent]` file keys in the 2026-07-18
+    /// config-narrowing wave, leaving `HORIZON_AGENT_EVENT_LOG`/
+    /// `HORIZON_AGENT_STATE_DB` plus the XDG-based built-in default as the
+    /// only override path.
+    pub fn from_env() -> Self {
         let home = std::env::var(HOME_VAR).ok();
         let xdg_data_home = std::env::var(XDG_DATA_HOME_VAR).ok();
         Self {
             event_log_path: resolve_event_log_path(
                 std::env::var(EVENT_LOG_PATH_VAR).ok(),
-                file.agent.event_log_path.clone(),
                 xdg_data_home.clone(),
                 home.clone(),
             ),
             duckdb_path: resolve_state_db_path(
                 std::env::var(STATE_DB_PATH_VAR).ok(),
-                file.agent.state_db_path.clone(),
                 xdg_data_home,
                 home,
             ),
@@ -510,19 +351,16 @@ impl AgentPersistenceConfig {
 }
 
 /// Pure precedence resolution for the event log path: `HORIZON_AGENT_EVENT_LOG`
-/// wins, then the config file's `[agent].event_log_path`, then
-/// [`default_event_log_path_from`]'s XDG-based built-in default. Both an env
-/// and a file value get a leading `~/` expanded against `home` (see
-/// [`expand_tilde`]). Kept free of I/O (env/file reads happen at the call
+/// wins, then [`default_event_log_path_from`]'s XDG-based built-in default.
+/// An env value gets a leading `~/` expanded against `home` (see
+/// [`expand_tilde`]). Kept free of I/O (the env read happens at the call
 /// site) for the same testability reason as [`resolve_model`].
 pub(crate) fn resolve_event_log_path(
     env_value: Option<String>,
-    file_value: Option<String>,
     xdg_data_home: Option<String>,
     home: Option<String>,
 ) -> PathBuf {
     env_value
-        .or(file_value)
         .map(|value| expand_tilde(&value, home.as_deref()))
         .unwrap_or_else(|| default_event_log_path_from(xdg_data_home, home))
 }
@@ -544,18 +382,17 @@ fn agent_data_home_from(xdg_data_home: Option<String>, home: Option<String>) -> 
     }
 }
 
-/// The event log's built-in default when neither the env var nor the
-/// config file sets a path: `$XDG_DATA_HOME/horizon/agent-events.jsonl`,
-/// falling back to `~/.local/share/horizon/agent-events.jsonl` when
-/// `XDG_DATA_HOME` is unset or empty, and further to the OS temp dir
-/// (namespaced under a `horizon` subdirectory, so it doesn't collide with
-/// unrelated temp files) if even `$HOME` is unset. Durable across reboots
-/// in the common case — unlike the OS temp dir this replaced, which
-/// contradicted the event log's role as the source of truth for agent
-/// session history (see `persistence`). The writer
-/// (`persistence::event_log::writer`) already creates the path's parent
-/// directories on first write, so this can name a path that doesn't exist
-/// yet.
+/// The event log's built-in default when `HORIZON_AGENT_EVENT_LOG` doesn't
+/// set a path: `$XDG_DATA_HOME/horizon/agent-events.jsonl`, falling back
+/// to `~/.local/share/horizon/agent-events.jsonl` when `XDG_DATA_HOME` is
+/// unset or empty, and further to the OS temp dir (namespaced under a
+/// `horizon` subdirectory, so it doesn't collide with unrelated temp
+/// files) if even `$HOME` is unset. Durable across reboots in the common
+/// case — unlike the OS temp dir this replaced, which contradicted the
+/// event log's role as the source of truth for agent session history (see
+/// `persistence`). The writer (`persistence::event_log::writer`) already
+/// creates the path's parent directories on first write, so this can name
+/// a path that doesn't exist yet.
 pub(crate) fn default_event_log_path_from(
     xdg_data_home: Option<String>,
     home: Option<String>,
@@ -565,10 +402,9 @@ pub(crate) fn default_event_log_path_from(
         .join("agent-events.jsonl")
 }
 
-/// The DuckDB projection's built-in default when neither
-/// `HORIZON_AGENT_STATE_DB` nor the config file's `[agent].state_db_path`
-/// sets a path: `$XDG_DATA_HOME/horizon/agent-state.duckdb`, mirroring
-/// [`default_event_log_path_from`]'s exact fallback chain (same
+/// The DuckDB projection's built-in default when `HORIZON_AGENT_STATE_DB`
+/// doesn't set a path: `$XDG_DATA_HOME/horizon/agent-state.duckdb`,
+/// mirroring [`default_event_log_path_from`]'s exact fallback chain (same
 /// `$XDG_DATA_HOME` > `~/.local/share` > OS temp dir chain via
 /// [`agent_data_home_from`]), just under a different filename. The
 /// projection has no "unset = disabled" state any more: it is a
@@ -587,8 +423,7 @@ pub(crate) fn default_state_db_path_from(
 }
 
 /// Same precedence as [`resolve_event_log_path`], for the DuckDB state
-/// path: `HORIZON_AGENT_STATE_DB` wins, then the config file's
-/// `[agent].state_db_path`, then [`default_state_db_path_from`]'s
+/// path: `HORIZON_AGENT_STATE_DB` wins, then [`default_state_db_path_from`]'s
 /// XDG-based built-in default. Same tilde-expansion treatment as
 /// `resolve_event_log_path`. Keeps returning `Option<PathBuf>` (it now
 /// always resolves to `Some` in practice) rather than switching to a bare
@@ -598,22 +433,19 @@ pub(crate) fn default_state_db_path_from(
 /// to change shape along with this default.
 pub(crate) fn resolve_state_db_path(
     env_value: Option<String>,
-    file_value: Option<String>,
     xdg_data_home: Option<String>,
     home: Option<String>,
 ) -> Option<PathBuf> {
     Some(
         env_value
-            .or(file_value)
             .map(|value| expand_tilde(&value, home.as_deref()))
             .unwrap_or_else(|| default_state_db_path_from(xdg_data_home, home)),
     )
 }
 
-/// Expands a leading `~/` in a path-typed config value against `home`,
+/// Expands a leading `~/` in a path-typed env value against `home`,
 /// mirroring shell tilde-expansion for the common case
-/// (`event_log_path`/`state_db_path` above, applied uniformly whether the
-/// value came from the config file or its overriding env var). A value
+/// (`HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB` above). A value
 /// without a leading `~/` (including a bare `~`) passes through unchanged,
 /// as does a `~/`-prefixed value when `home` is `None` or empty — there
 /// being nothing to expand it against. Takes `home` as a parameter rather
@@ -632,7 +464,8 @@ fn expand_tilde(value: &str, home: Option<&str>) -> PathBuf {
     }
 }
 
-/// `[agent]` tuning for the bash and fs tools — see each field's doc
+/// Former `[agent]` tuning for the bash and fs tools, now built entirely
+/// from fixed constants (see the module doc) -- see each field's doc
 /// comment for the tool module it replaces a hardcoded constant in.
 /// `Copy` because it's cheap and gets stored on `tools::state::
 /// ToolSessionState` and threaded onto the bash background thread
@@ -688,52 +521,19 @@ pub struct FsToolConfig {
 
 impl Default for AgentToolsConfig {
     fn default() -> Self {
-        Self::from_file(&AgentFileConfig::default())
-    }
-}
-
-impl AgentToolsConfig {
-    pub fn from_file(file: &AgentFileConfig) -> Self {
         Self {
             bash: BashToolConfig {
-                timeout_default_secs: file
-                    .agent
-                    .bash_timeout_default_secs
-                    .unwrap_or(DEFAULT_BASH_TIMEOUT_DEFAULT_SECS),
-                timeout_max_secs: file
-                    .agent
-                    .bash_timeout_max_secs
-                    .unwrap_or(DEFAULT_BASH_TIMEOUT_MAX_SECS),
-                output_cap_chars: file
-                    .agent
-                    .bash_output_cap_chars
-                    .unwrap_or(DEFAULT_BASH_OUTPUT_CAP_CHARS),
-                drain_grace_secs: file
-                    .agent
-                    .bash_drain_grace_secs
-                    .unwrap_or(DEFAULT_BASH_DRAIN_GRACE_SECS),
+                timeout_default_secs: DEFAULT_BASH_TIMEOUT_DEFAULT_SECS,
+                timeout_max_secs: DEFAULT_BASH_TIMEOUT_MAX_SECS,
+                output_cap_chars: DEFAULT_BASH_OUTPUT_CAP_CHARS,
+                drain_grace_secs: DEFAULT_BASH_DRAIN_GRACE_SECS,
             },
             fs: FsToolConfig {
-                read_line_cap: file
-                    .agent
-                    .fs_read_line_cap
-                    .unwrap_or(DEFAULT_FS_READ_LINE_CAP),
-                grep_max_bytes: file
-                    .agent
-                    .fs_grep_max_bytes
-                    .unwrap_or_else(default_fs_grep_max_bytes),
-                traversal_max_files: file
-                    .agent
-                    .fs_traversal_max_files
-                    .unwrap_or_else(default_fs_traversal_max_files),
-                grep_result_limit: file
-                    .agent
-                    .fs_grep_result_limit
-                    .unwrap_or(DEFAULT_FS_GREP_RESULT_LIMIT),
-                glob_result_limit: file
-                    .agent
-                    .fs_glob_result_limit
-                    .unwrap_or(DEFAULT_FS_GLOB_RESULT_LIMIT),
+                read_line_cap: DEFAULT_FS_READ_LINE_CAP,
+                grep_max_bytes: default_fs_grep_max_bytes(),
+                traversal_max_files: default_fs_traversal_max_files(),
+                grep_result_limit: DEFAULT_FS_GREP_RESULT_LIMIT,
+                glob_result_limit: DEFAULT_FS_GLOB_RESULT_LIMIT,
             },
         }
     }
@@ -743,70 +543,48 @@ impl AgentToolsConfig {
 mod tests {
     use super::*;
 
-    // --- precedence: env beats file beats built-in default -----------------
+    // --- precedence: env beats the resolved provider value beats built-in
+    // default -----------------------------------------------------------
 
     #[test]
-    fn model_prefers_env_over_file_over_default() {
+    fn model_prefers_env_over_provider_over_default() {
         assert_eq!(
             resolve_model(
                 Some("env-model".to_string()),
-                Some("file-model".to_string())
+                Some("provider-model".to_string())
             ),
             "env-model"
         );
         assert_eq!(
-            resolve_model(None, Some("file-model".to_string())),
-            "file-model"
+            resolve_model(None, Some("provider-model".to_string())),
+            "provider-model"
         );
         assert_eq!(resolve_model(None, None), openai::GPT_4O_MINI);
     }
 
     #[test]
-    fn base_url_prefers_env_over_file_and_is_none_by_default() {
+    fn base_url_prefers_env_over_provider_and_is_none_by_default() {
         assert_eq!(
             resolve_base_url(
                 Some("https://env.invalid".to_string()),
-                Some("https://file.invalid".to_string())
+                Some("https://provider.invalid".to_string())
             ),
             Some("https://env.invalid".to_string())
         );
         assert_eq!(
-            resolve_base_url(None, Some("https://file.invalid".to_string())),
-            Some("https://file.invalid".to_string())
+            resolve_base_url(None, Some("https://provider.invalid".to_string())),
+            Some("https://provider.invalid".to_string())
         );
         assert_eq!(resolve_base_url(None, None), None);
     }
 
     #[test]
-    fn rig_agent_config_ignores_file_iteration_and_doom_loop_settings() {
-        // docs/issues/002-agent-iteration-cap-halts-real-work.md's
-        // resolution: the guard's thresholds are now a fixed built-in
-        // safety net, not a config-file knob -- even a file that sets
-        // `[agent] iteration_cap`/`doom_loop_window` must not move them.
-        let file = AgentFileConfig {
-            agent: AgentFileAgentConfig {
-                iteration_cap: Some(7),
-                doom_loop_window: Some(2),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let config = RigAgentConfig::from_env_and_file(&file);
-
-        assert_eq!(config.iteration_cap, DEFAULT_ITERATION_CAP);
-        assert_eq!(config.doom_loop_window, DEFAULT_DOOM_LOOP_WINDOW);
-    }
-
-    #[test]
-    fn rig_agent_config_falls_back_to_built_in_defaults_when_file_is_empty() {
-        let config = RigAgentConfig::from_env_and_file(&AgentFileConfig::default());
+    fn rig_agent_config_falls_back_to_built_in_defaults_when_provider_values_are_none() {
+        let config = RigAgentConfig::from_env_and_provider(None, None);
 
         assert_eq!(config.iteration_cap, DEFAULT_ITERATION_CAP);
         assert_eq!(config.doom_loop_window, DEFAULT_DOOM_LOOP_WINDOW);
         assert_eq!(config.base_url, None);
-        assert_eq!(config.temperature, None);
-        assert_eq!(config.max_tokens, None);
         assert_eq!(
             config.stream_flush_interval_ms,
             DEFAULT_STREAM_FLUSH_INTERVAL_MS
@@ -821,86 +599,37 @@ mod tests {
     }
 
     #[test]
-    fn rig_agent_config_reads_history_token_budget_from_file() {
-        let file = AgentFileConfig {
-            agent: AgentFileAgentConfig {
-                history_token_budget: Some(12_345),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+    fn rig_agent_config_reads_model_and_base_url_from_the_resolved_provider_values() {
+        let config = RigAgentConfig::from_env_and_provider(
+            Some("provider-model".to_string()),
+            Some("https://provider.invalid".to_string()),
+        );
 
-        let config = RigAgentConfig::from_env_and_file(&file);
-
-        assert_eq!(config.history_token_budget, 12_345);
+        assert_eq!(config.model, "provider-model");
+        assert_eq!(
+            config.base_url,
+            Some("https://provider.invalid".to_string())
+        );
     }
 
     #[test]
-    fn rig_agent_config_reads_repository_instructions_cap_chars_from_file() {
-        let file = AgentFileConfig {
-            agent: AgentFileAgentConfig {
-                repository_instructions_cap_chars: Some(1_000),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let config = RigAgentConfig::from_env_and_file(&file);
-
-        assert_eq!(config.repository_instructions_cap_chars, 1_000);
-    }
-
-    #[test]
-    fn rig_agent_config_reads_provider_request_params_and_stream_flush_from_file() {
-        let file = AgentFileConfig {
-            provider: AgentFileProviderConfig {
-                temperature: Some(0.5),
-                max_tokens: Some(4096),
-                ..Default::default()
-            },
-            agent: AgentFileAgentConfig {
-                stream_flush_interval_ms: Some(50),
-                stream_flush_chars: Some(80),
-                ..Default::default()
-            },
-        };
-
-        let config = RigAgentConfig::from_env_and_file(&file);
-
-        assert_eq!(config.temperature, Some(0.5));
-        assert_eq!(config.max_tokens, Some(4096));
-        assert_eq!(config.stream_flush_interval_ms, 50);
-        assert_eq!(config.stream_flush_chars, 80);
-    }
-
-    #[test]
-    fn event_log_path_prefers_env_over_file_over_default() {
+    fn event_log_path_prefers_env_over_default() {
         assert_eq!(
             resolve_event_log_path(
                 Some("/env/log.jsonl".to_string()),
-                Some("/file/log.jsonl".to_string()),
                 Some("/xdg/data".to_string()),
                 Some("/home/user".to_string()),
             ),
             PathBuf::from("/env/log.jsonl")
         );
         assert_eq!(
-            resolve_event_log_path(
-                None,
-                Some("/file/log.jsonl".to_string()),
-                Some("/xdg/data".to_string()),
-                Some("/home/user".to_string()),
-            ),
-            PathBuf::from("/file/log.jsonl")
-        );
-        assert_eq!(
-            resolve_event_log_path(None, None, Some("/xdg/data".to_string()), None),
+            resolve_event_log_path(None, Some("/xdg/data".to_string()), None),
             PathBuf::from("/xdg/data/horizon/agent-events.jsonl")
         );
     }
 
     #[test]
-    fn event_log_path_defaults_to_xdg_data_home_when_env_and_file_are_unset() {
+    fn event_log_path_defaults_to_xdg_data_home_when_env_is_unset() {
         assert_eq!(
             default_event_log_path_from(
                 Some("/xdg/data".to_string()),
@@ -934,57 +663,36 @@ mod tests {
     }
 
     #[test]
-    fn event_log_path_expands_leading_tilde_from_file_and_env_sources() {
+    fn event_log_path_expands_leading_tilde_from_env_source() {
         assert_eq!(
             resolve_event_log_path(
-                None,
                 Some("~/logs/agent-events.jsonl".to_string()),
                 None,
                 Some("/home/user".to_string()),
             ),
             PathBuf::from("/home/user/logs/agent-events.jsonl"),
-            "a config-file event_log_path must expand a leading ~/ against HOME"
-        );
-        assert_eq!(
-            resolve_event_log_path(
-                Some("~/logs/agent-events.jsonl".to_string()),
-                None,
-                None,
-                Some("/home/user".to_string()),
-            ),
-            PathBuf::from("/home/user/logs/agent-events.jsonl"),
-            "HORIZON_AGENT_EVENT_LOG must expand a leading ~/ against HOME too"
+            "HORIZON_AGENT_EVENT_LOG must expand a leading ~/ against HOME"
         );
     }
 
     #[test]
-    fn state_db_path_prefers_env_over_file_over_default() {
+    fn state_db_path_prefers_env_over_default() {
         assert_eq!(
             resolve_state_db_path(
                 Some("/env/state.duckdb".to_string()),
-                Some("/file/state.duckdb".to_string()),
                 Some("/xdg/data".to_string()),
                 Some("/home/user".to_string()),
             ),
             Some(PathBuf::from("/env/state.duckdb"))
         );
         assert_eq!(
-            resolve_state_db_path(
-                None,
-                Some("/file/state.duckdb".to_string()),
-                Some("/xdg/data".to_string()),
-                Some("/home/user".to_string()),
-            ),
-            Some(PathBuf::from("/file/state.duckdb"))
-        );
-        assert_eq!(
-            resolve_state_db_path(None, None, Some("/xdg/data".to_string()), None),
+            resolve_state_db_path(None, Some("/xdg/data".to_string()), None),
             Some(PathBuf::from("/xdg/data/horizon/agent-state.duckdb"))
         );
     }
 
     #[test]
-    fn state_db_path_defaults_to_xdg_data_home_when_env_and_file_are_unset() {
+    fn state_db_path_defaults_to_xdg_data_home_when_env_is_unset() {
         assert_eq!(
             default_state_db_path_from(
                 Some("/xdg/data".to_string()),
@@ -1018,20 +726,10 @@ mod tests {
     }
 
     #[test]
-    fn state_db_path_expands_leading_tilde_from_file_and_env_sources() {
-        assert_eq!(
-            resolve_state_db_path(
-                None,
-                Some("~/state/agent.duckdb".to_string()),
-                None,
-                Some("/home/user".to_string()),
-            ),
-            Some(PathBuf::from("/home/user/state/agent.duckdb"))
-        );
+    fn state_db_path_expands_leading_tilde_from_env_source() {
         assert_eq!(
             resolve_state_db_path(
                 Some("~/state/agent.duckdb".to_string()),
-                None,
                 None,
                 Some("/home/user".to_string()),
             ),
@@ -1040,58 +738,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_persistence_config_reads_paths_from_file() {
-        let file = AgentFileConfig {
-            agent: AgentFileAgentConfig {
-                event_log_path: Some("/file/log.jsonl".to_string()),
-                state_db_path: Some("/file/state.duckdb".to_string()),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let config = AgentPersistenceConfig::from_env_and_file(&file);
-
-        assert_eq!(config.event_log_path, PathBuf::from("/file/log.jsonl"));
-        assert_eq!(
-            config.duckdb_path,
-            Some(PathBuf::from("/file/state.duckdb"))
-        );
-    }
-
-    #[test]
-    fn agent_tools_config_reads_every_knob_from_file() {
-        let file = AgentFileConfig {
-            agent: AgentFileAgentConfig {
-                bash_timeout_default_secs: Some(1),
-                bash_timeout_max_secs: Some(2),
-                bash_output_cap_chars: Some(3),
-                bash_drain_grace_secs: Some(4),
-                fs_read_line_cap: Some(5),
-                fs_grep_max_bytes: Some(6),
-                fs_traversal_max_files: Some(7),
-                fs_grep_result_limit: Some(8),
-                fs_glob_result_limit: Some(9),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let config = AgentToolsConfig::from_file(&file);
-
-        assert_eq!(config.bash.timeout_default_secs, 1);
-        assert_eq!(config.bash.timeout_max_secs, 2);
-        assert_eq!(config.bash.output_cap_chars, 3);
-        assert_eq!(config.bash.drain_grace_secs, 4);
-        assert_eq!(config.fs.read_line_cap, 5);
-        assert_eq!(config.fs.grep_max_bytes, 6);
-        assert_eq!(config.fs.traversal_max_files, 7);
-        assert_eq!(config.fs.grep_result_limit, 8);
-        assert_eq!(config.fs.glob_result_limit, 9);
-    }
-
-    #[test]
-    fn agent_tools_config_defaults_when_file_is_absent() {
+    fn agent_tools_config_default_uses_built_in_constants() {
         let config = AgentToolsConfig::default();
 
         assert_eq!(
@@ -1104,100 +751,5 @@ mod tests {
         assert_eq!(config.fs.read_line_cap, DEFAULT_FS_READ_LINE_CAP);
         assert_eq!(config.fs.grep_result_limit, DEFAULT_FS_GREP_RESULT_LIMIT);
         assert_eq!(config.fs.glob_result_limit, DEFAULT_FS_GLOB_RESULT_LIMIT);
-    }
-
-    // --- horizon-sessiond's standalone file-config loader ---------------------
-
-    #[test]
-    fn resolves_config_file_path_env_over_xdg_over_home_fallback() {
-        assert_eq!(
-            resolve_config_file_path_from(
-                Some("/env/config.toml".to_string()),
-                Some("/xdg/config".to_string()),
-                Some("/home/user".to_string()),
-            ),
-            Some(PathBuf::from("/env/config.toml"))
-        );
-        assert_eq!(
-            resolve_config_file_path_from(
-                None,
-                Some("/xdg/config".to_string()),
-                Some("/home/user".to_string())
-            ),
-            Some(PathBuf::from("/xdg/config/horizon/config.toml"))
-        );
-        assert_eq!(
-            resolve_config_file_path_from(None, None, Some("/home/user".to_string())),
-            Some(PathBuf::from("/home/user/.config/horizon/config.toml"))
-        );
-        assert_eq!(resolve_config_file_path_from(None, None, None), None);
-    }
-
-    #[test]
-    fn load_file_config_from_path_defaults_when_path_is_none() {
-        assert_eq!(load_file_config_from_path(None), AgentFileConfig::default());
-    }
-
-    #[test]
-    fn load_file_config_from_path_defaults_when_file_is_missing() {
-        let missing = std::env::temp_dir().join(format!(
-            "horizon-agent-missing-config-{}.toml",
-            uuid::Uuid::new_v4()
-        ));
-        assert_eq!(
-            load_file_config_from_path(Some(&missing)),
-            AgentFileConfig::default()
-        );
-    }
-
-    #[test]
-    fn load_file_config_from_path_parses_agent_and_provider_sections() {
-        let path = std::env::temp_dir().join(format!(
-            "horizon-agent-test-config-{}.toml",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::write(
-            &path,
-            "[agent]\niteration_cap = 9\n\n[provider]\nmodel = \"test-model\"\n",
-        )
-        .unwrap();
-
-        let config = load_file_config_from_path(Some(&path));
-        let _ = std::fs::remove_file(&path);
-
-        assert_eq!(config.agent.iteration_cap, Some(9));
-        assert_eq!(config.provider.model, Some("test-model".to_string()));
-    }
-
-    #[test]
-    fn load_file_config_from_path_ignores_horizons_other_top_level_sections() {
-        let path = std::env::temp_dir().join(format!(
-            "horizon-agent-test-config-other-{}.toml",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::write(
-            &path,
-            "[terminal]\nfont_size = 14.0\n\n[agent]\niteration_cap = 3\n",
-        )
-        .unwrap();
-
-        let config = load_file_config_from_path(Some(&path));
-        let _ = std::fs::remove_file(&path);
-
-        assert_eq!(config.agent.iteration_cap, Some(3));
-    }
-
-    #[test]
-    fn load_file_config_from_path_falls_back_to_default_on_unparsable_toml() {
-        let path = std::env::temp_dir().join(format!(
-            "horizon-agent-test-config-bad-{}.toml",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::write(&path, "not valid toml {{{").unwrap();
-
-        let config = load_file_config_from_path(Some(&path));
-        let _ = std::fs::remove_file(&path);
-
-        assert_eq!(config, AgentFileConfig::default());
     }
 }

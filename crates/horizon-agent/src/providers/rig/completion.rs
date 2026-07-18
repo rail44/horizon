@@ -155,8 +155,6 @@ async fn rig_openai_turn_streaming(
         .messages(history)
         .tools(rig_tool_definitions(config.allowed_tool_ids.as_deref()))
         .preamble(system_prompt(environment, extra_sections))
-        .temperature_opt(config.temperature)
-        .max_tokens_opt(config.max_tokens)
         .stream()
         .await?;
 
@@ -354,8 +352,9 @@ pub(super) fn windowed_history_for_request(
 /// used to: that helper also reads `OPENAI_BASE_URL` itself, which would
 /// silently ignore Horizon's own precedence for the base URL. Instead the
 /// base URL comes from `config.base_url`, already resolved by
-/// `agent::config::RigAgentConfig::from_env` with the right precedence (env
-/// `OPENAI_BASE_URL` > `[provider].base_url` in the config file); `None`
+/// `agent::config::RigAgentConfig::from_env_and_provider` with the right
+/// precedence (env `OPENAI_BASE_URL` > `[provider].base_url` in the config
+/// file); `None`
 /// leaves rig's own default (`https://api.openai.com/v1`) in place by
 /// simply not calling `.base_url(..)` on the builder, mirroring exactly
 /// what `from_env()` did before.
