@@ -66,7 +66,7 @@ impl Envelope {
 /// (server -> client) are [`EnvelopeBody::HelloAck`],
 /// [`EnvelopeBody::Rejected`], [`EnvelopeBody::Ok`],
 /// [`EnvelopeBody::Error`], [`EnvelopeBody::Sessions`],
-/// [`EnvelopeBody::State`], [`EnvelopeBody::Profile`].
+/// [`EnvelopeBody::State`].
 ///
 /// [`EnvelopeBody::Unknown`] is this contract's forward-compatibility
 /// escape hatch: an envelope whose `kind` this build doesn't recognize is
@@ -88,7 +88,6 @@ pub enum EnvelopeBody {
     Error(ErrorMessage),
     Sessions(Sessions),
     State(State),
-    Profile(ProfileSnapshot),
     /// See [`EnvelopeBody`]'s doc comment. Never constructed by
     /// [`Envelope::new`] callers on purpose -- only
     /// [`crate::wire::read_envelope`] produces this, as the fallback for an
@@ -122,9 +121,8 @@ pub struct Invoke {
     pub args: serde_json::Value,
 }
 
-/// Asks for a read-only snapshot. `what` is `"sessions"`, `"state"`, or
-/// `"profile"` (see [`EnvelopeBody::Sessions`]/[`EnvelopeBody::State`]/
-/// [`EnvelopeBody::Profile`]); unrecognized
+/// Asks for a read-only snapshot. `what` is `"sessions"` or `"state"` (see
+/// [`EnvelopeBody::Sessions`]/[`EnvelopeBody::State`]); unrecognized
 /// values are an app-side concern (e.g. an [`EnvelopeBody::Error`] reply),
 /// not something this contract enumerates as a closed type -- new query
 /// names should be addable without a contract version bump.
@@ -188,34 +186,4 @@ pub struct State {
     pub has_pending_approval: bool,
     pub has_turn_in_flight: bool,
     pub destructive_commands: Vec<String>,
-}
-
-/// Reply to `Query { what: "profile" }` -- the tail of Horizon's opt-in
-/// (`HORIZON_UI_PROFILE`) UI-thread event-timing JSONL log (see
-/// `horizon::profiling`'s module doc for what a captured entry means here:
-/// an explicitly-wrapped code path's duration, not floem's internal paint
-/// pass, which Horizon has no public hook to time). Lets an agent read
-/// UI-thread performance from outside the app, the same "durable file +
-/// control-plane command" shape the agent event log's own external
-/// readability already established.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ProfileSnapshot {
-    /// Whether the app has capture enabled right now -- `frames` is always
-    /// empty when this is `false`, distinguishing "disabled" from "enabled
-    /// but nothing captured yet" for the CLI's rendering.
-    pub enabled: bool,
-    /// The JSONL log path this snapshot was read from, so a caller can
-    /// inspect the raw file directly if they want more than the tail.
-    pub log_path: String,
-    pub frames: Vec<ProfileFrameEntry>,
-}
-
-/// One captured event from the UI-profile log: the `EventListener` variant
-/// name that triggered it (e.g. `"KeyDown"`), how long the handler took,
-/// and when.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ProfileFrameEntry {
-    pub trigger: String,
-    pub duration_us: u64,
-    pub created_at_unix_ms: u64,
 }
