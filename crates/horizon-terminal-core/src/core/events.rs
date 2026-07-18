@@ -58,6 +58,19 @@ pub(crate) struct TerminalEvents {
     /// Pending text-area-size-in-pixels queries; same deferred-resolution
     /// shape as `color_requests`.
     pub(super) window_size_requests: Vec<WindowSizeFormatter>,
+    /// Whether the parser call that produced this batch (`write_vt` or
+    /// `flush_sync_update`) actually changed the rendered frame — set by
+    /// those methods themselves after the fact (this field is never
+    /// touched by `EventSink::send_event`, unlike everything else here, so
+    /// it survives `EventSink::drain`'s `Default` reset only because the
+    /// caller overwrites it before returning). `session_loop`'s `pty_rx`
+    /// handler gates its `notify_snapshot` call on this: a PTY chunk that
+    /// lands entirely inside an already-open BSU/ESU synchronized-update
+    /// window (buffered, not yet flushed to the grid) must not steal
+    /// `notify_snapshot`'s immediate slot from the real content that
+    /// flushes later. See `TerminalCore::write_vt`'s doc comment for the
+    /// exact criterion.
+    pub visible_dirty: bool,
 }
 
 impl fmt::Debug for TerminalEvents {
@@ -69,6 +82,7 @@ impl fmt::Debug for TerminalEvents {
             .field("clipboard_writes", &self.clipboard_writes)
             .field("color_requests", &self.color_requests.len())
             .field("window_size_requests", &self.window_size_requests.len())
+            .field("visible_dirty", &self.visible_dirty)
             .finish()
     }
 }
