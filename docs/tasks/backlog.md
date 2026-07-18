@@ -75,6 +75,25 @@ entries live in `backlog-resolved.md` keeping their original numbers
     follow-up: see the `portable-pty` backlog entry for options (upgrade,
     vendor patch, or accept the retry mitigation as the practical ceiling
     given how rare it now is).
+43. **Shared build-dir serves stale lib artifacts across worktrees —
+    phantom E0432 on freshly-added exports.** Observed twice on
+    2026-07-18: a workspace-wide test build resolved
+    `horizon_terminal_core` against a stale cached rlib missing the
+    just-added `DEFAULT_SCROLLBACK_LINES` export (first in a worker
+    worktree mid-task, then in the main checkout right after merging —
+    the second occurrence made a pre-commit gate fail on code that was
+    correct). `cargo clean -p horizon-terminal-core` fixes it
+    immediately both times. Same shared-`build.build-dir` family as
+    items 36/40 but a different shape (lib fingerprint/rmeta staleness,
+    not binary uplift or env-baked paths). Diagnostic signature: E0432
+    on an import that grep confirms exists, while `cargo check -p
+    <crate>` alone passes. Workaround is cheap; root-causing (cargo
+    fingerprint interaction with concurrent worktree builds) is open.
+    Also process-relevant: plain `git merge` commits bypass the
+    pre-commit hook, so a merge integrating such a false-negative (or a
+    real breakage) can reach main ungated — the project session now
+    runs the gate manually between merge and push.
+
 42. **Tool-call rows have no per-occurrence identity when a provider
     reuses a call_id.** The 2026-07-18 reused-call_id fix (`1d86521`)
     made approval attribution and proposal bodies follow the most
