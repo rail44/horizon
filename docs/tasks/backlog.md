@@ -75,6 +75,25 @@ entries live in `backlog-resolved.md` keeping their original numbers
     follow-up: see the `portable-pty` backlog entry for options (upgrade,
     vendor patch, or accept the retry mitigation as the practical ceiling
     given how rare it now is).
+44. **SGR text styles never reach frames — `TerminalSpan` has no style
+    field.** Found during the 2026-07-18 background-fill investigation:
+    alacritty_terminal parses italic, underline (including styled
+    underlines/undercurl), and strikethrough, but `core/render.rs`'s
+    span production threads only fg/bg — the frame vocabulary cannot
+    express text styles at all. Real-world surface: nvim probed
+    undercurl support via DECRQSS (`4:3m` then `DCS $q m`) and got
+    silence. Fixing needs a frame-shape addition (style bits on
+    `TerminalSpan`, protocol-affecting) plus paint support — a designed
+    contract extension, not a patch. Recorded 2026-07-18.
+
+45. **`Flags::HIDDEN` cells are skipped without column accounting in
+    span production.** Same investigation, unconfirmed impact: the
+    cell loop skips concealed cells with no placeholder columns (unlike
+    `WIDE_CHAR_SPACER`, whose partner already accounts for width), so a
+    row containing concealed text can desync the paint path's running
+    column offset for the rest of that row. Repro + fix small once
+    confirmed. Recorded 2026-07-18.
+
 43. **Shared build-dir serves stale lib artifacts across worktrees —
     phantom E0432 on freshly-added exports.** Observed twice on
     2026-07-18: a workspace-wide test build resolved

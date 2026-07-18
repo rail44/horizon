@@ -148,3 +148,24 @@ mode-drift risk). What transplants cleanly is exactly the pure-function
 layer: box/block geometry, click-to-selection-type, pixel-scroll
 accumulation — which happens to cover all four symptoms at S cost.
 No candidate clears the "avoid authoring rather than adapting" bar.
+
+## Appendix: output-side capability conformance (2026-07-18 investigation)
+
+From the background-fill investigation (real PTY captures of claude/nvim
+plus code-level verification). TERM=xterm-256color, COLORTERM=truecolor.
+
+| Capability | Promised | Status |
+|---|---|---|
+| BCE (erase fills with current bg) | terminfo `bce` | **Honored** — was dropped at paint time (empty-text spans skipped background quads), fixed 2026-07-18 |
+| 256 colors / truecolor | terminfo + COLORTERM | Honored; COLORTERM alone steers Claude Code's truecolor choice (verified experimentally) |
+| `rep` (repeat char) | terminfo | Honored |
+| bold/dim/standout | terminfo | Honored |
+| DECRQM mode queries | — | Answered honestly for every mode, incl. 2026 (sync updates: acknowledged AND functionally buffered) |
+| OSC 10/11 color queries, DSR/CPR | — | Answered with real values (steers nvim background autodetect correctly) |
+| italic / underline styles (undercurl) / strikethrough | terminfo (partial) | **Not rendered** — parsed by the emulator but `TerminalSpan` has no style field (backlog 44); nvim's DECRQSS undercurl probe gets silence |
+| XTVERSION (`CSI > q`), XTGETTCAP (`DCS +q`), DECRQSS (`DCS $q`) | — | **Silently dropped** — no reply of any kind; advertising decision pending (roadmap open decisions) |
+
+Negotiation causal chains checked: Claude Code color path steered
+correctly by the injected COLORTERM; nvim background detection steered
+correctly by OSC 11 replies; no capability answer traced to the three
+reported background symptoms (those were the paint-side bug above).

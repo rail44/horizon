@@ -49,10 +49,13 @@ of the dead `profile` control-plane vertical (owner decision: delete
 over rebuild). Remaining in the wave, unordered:
 the command-model payload
 design (owner: on hold, to be shaped in a later consult); small
-boundary decisions still open (TerminalColor vocabulary, roles
-registry, spikes/gpui-terminal, Hello.capabilities, created_terminal
-ownership); and the session-creation groundwork (deferred to the
-worktree feature work). The mechanical remainder — the
+boundary decisions still open (roles registry, spikes/gpui-terminal,
+Hello.capabilities, created_terminal ownership, and — new 2026-07-18 —
+output-capability advertising: XTVERSION/XTGETTCAP/DECRQSS queries are
+currently dropped silently; answering them is a "what do we claim to
+be" decision, see the conformance section of
+`docs/research/gpui-terminal-presentation-2026-07-18.md`); and the
+session-creation groundwork (deferred to the worktree feature work). The mechanical remainder — the
 `workspace.rs` and `agent/view.rs` splits, the dead-code/doc-rot
 sweep — shipped later the same day (merges up to `f32a66a`); the
 wave's remaining items are decision-gated only. Also shipped 2026-07-18, later same day
