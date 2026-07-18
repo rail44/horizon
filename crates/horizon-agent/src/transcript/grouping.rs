@@ -3,23 +3,23 @@
 
 use std::time::Duration;
 
-use horizon_agent::contract::{Message, MessageRole, TurnEndReason};
-use horizon_agent::frame::AgentFrameItem;
+use crate::contract::{Message, MessageRole, TurnEndReason};
+use crate::frame::AgentFrameItem;
 
 /// One turn's items, sliced from `AgentFrame::items` by index range
 /// `[start, end)`. `ended` is `None` for the turn currently in
 /// progress -- the last span produced by [`group_into_turns`], and only
 /// meaningful to render as such while the session state indicates a turn
-/// is in flight (`horizon_agent::frame::state_indicates_turn_in_flight`).
+/// is in flight (`crate::frame::state_indicates_turn_in_flight`).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TurnSpan {
+pub struct TurnSpan {
     pub start: usize,
     pub end: usize,
     pub ended: Option<TurnEnd>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TurnEnd {
+pub struct TurnEnd {
     pub reason: TurnEndReason,
     pub model: Option<String>,
     pub elapsed: Duration,
@@ -94,7 +94,7 @@ pub(crate) struct TurnEnd {
 /// turn genuinely still in progress) always renders through
 /// `AgentView::render_turn`, never the flat per-item fallback, regardless
 /// of what the live session state happens to read at render time.
-pub(crate) fn group_into_turns(items: &[AgentFrameItem]) -> Vec<TurnSpan> {
+pub fn group_into_turns(items: &[AgentFrameItem]) -> Vec<TurnSpan> {
     let mut spans = Vec::new();
     let mut current_start: Option<usize> = None;
     for (index, item) in items.iter().enumerate() {
@@ -139,7 +139,7 @@ pub(crate) fn group_into_turns(items: &[AgentFrameItem]) -> Vec<TurnSpan> {
 /// the latest block containing a user message as it walks `items`,
 /// calling this once per span (see `view.rs`'s `jump_to_latest_user_
 /// message` doc comment for the full trade-off this approximates).
-pub(crate) fn contains_user_message(items: &[AgentFrameItem]) -> bool {
+pub fn contains_user_message(items: &[AgentFrameItem]) -> bool {
     items.iter().any(|item| {
         matches!(
             item,
@@ -148,6 +148,30 @@ pub(crate) fn contains_user_message(items: &[AgentFrameItem]) -> bool {
                 ..
             })
         )
+    })
+}
+
+/// One of two inputs to the composer's model chip
+/// (`turns::composer_model_chip` in the `horizon` binary crate): the most
+/// recent `AgentFrameItem::TurnEnded` that actually carries a model id,
+/// scanning `items` from the end. A still-running turn's own `TurnEnded`
+/// hasn't folded yet, so it never masks the previous turn's model; a
+/// completed turn that ended before any provider request (`TurnEnded`'s
+/// own doc comment -- e.g. an immediate cancel) is skipped in favor of an
+/// earlier turn's model, the "best available value" rather than
+/// flickering the chip away. `None` until the very first turn with a
+/// provider request completes.
+///
+/// Plain model-id extraction, not wording -- moved here alongside
+/// [`group_into_turns`] rather than staying with the composer's own
+/// wording (`docs/agent-output-ui-amendment.md`'s dated model-chip
+/// addendum) it feeds.
+pub fn latest_turn_model(items: &[AgentFrameItem]) -> Option<&str> {
+    items.iter().rev().find_map(|item| match item {
+        AgentFrameItem::TurnEnded {
+            model: Some(model), ..
+        } => Some(model.as_str()),
+        _ => None,
     })
 }
 
@@ -397,5 +421,53 @@ mod tests {
             tool_requested("a", "fs.read", json!({"path": "a.rs"})),
         ];
         assert!(!contains_user_message(&items));
+    }
+
+    #[test]
+    fn latest_turn_model_is_none_before_any_turn_completes() {
+        let items = vec![
+            user_message("fix the bug"),
+            tool_requested("a", "fs.grep", json!({"base_path": ".", "pattern": "x"})),
+        ];
+        assert_eq!(latest_turn_model(&items), None);
+    }
+
+    #[test]
+    fn latest_turn_model_reads_the_most_recently_completed_turn() {
+        let items = vec![
+            user_message("fix the bug"),
+            turn_ended(TurnEndReason::Completed, Some("gpt-5"), 10),
+            user_message("check the other form too"),
+            turn_ended(TurnEndReason::Completed, Some("claude-sonnet-4"), 20),
+        ];
+        assert_eq!(latest_turn_model(&items), Some("claude-sonnet-4"));
+    }
+
+    #[test]
+    fn latest_turn_model_skips_a_running_turns_dangling_span() {
+        let items = vec![
+            user_message("fix the bug"),
+            turn_ended(TurnEndReason::Completed, Some("gpt-5"), 10),
+            user_message("one more thing"),
+            tool_requested("a", "fs.grep", json!({"base_path": ".", "pattern": "x"})),
+        ];
+        // The second turn is still running (no closing `TurnEnded`), so its
+        // model -- if any -- hasn't folded yet; the chip keeps showing the
+        // last completed turn's model rather than going blank mid-turn.
+        assert_eq!(latest_turn_model(&items), Some("gpt-5"));
+    }
+
+    #[test]
+    fn latest_turn_model_falls_back_past_a_completed_turn_with_no_provider_request() {
+        let items = vec![
+            user_message("fix the bug"),
+            turn_ended(TurnEndReason::Completed, Some("gpt-5"), 10),
+            user_message("cancel immediately"),
+            turn_ended(TurnEndReason::Cancelled, None, 0),
+        ];
+        // The most recent turn ended before any provider request (e.g. an
+        // immediate cancel) and so carries no model -- the chip falls back
+        // to the earlier turn's model rather than disappearing.
+        assert_eq!(latest_turn_model(&items), Some("gpt-5"));
     }
 }

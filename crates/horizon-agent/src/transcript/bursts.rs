@@ -1,8 +1,8 @@
 //! Tool-activity bursts within a turn (round 5, monotone burst splitting)
 //! and the reasoning-visibility decision that rides alongside them.
 
-use horizon_agent::contract::{Message, MessageRole};
-use horizon_agent::frame::AgentFrameItem;
+use crate::contract::{Message, MessageRole};
+use crate::frame::AgentFrameItem;
 
 use super::grouping::TurnEnd;
 use super::tool_call::build_tool_call_views;
@@ -47,7 +47,7 @@ fn is_assistant_text(item: &AgentFrameItem) -> bool {
 /// however much more the turn goes on to do -- eliminating the round-2
 /// mechanism's "flips back to a card" bounce entirely.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Burst {
+pub struct Burst {
     pub start: usize,
     pub end: usize,
     /// Whether this burst has permanently folded into a receipt.
@@ -82,7 +82,7 @@ pub(crate) struct Burst {
 /// A turn with no tool activity at all segments to an empty `Vec` --
 /// nothing worth a receipt for; the text keeps rendering as plain
 /// prose, exactly as it always has.
-pub(crate) fn segment_bursts(items: &[AgentFrameItem]) -> Vec<Burst> {
+pub fn segment_bursts(items: &[AgentFrameItem]) -> Vec<Burst> {
     let mut bursts = Vec::new();
     let mut open: Option<(usize, usize)> = None; // (start, last_tool_index)
 
@@ -157,17 +157,17 @@ pub(crate) fn segment_bursts(items: &[AgentFrameItem]) -> Vec<Burst> {
 /// uniformly regardless of which of those positions a given item happened
 /// to land in, so once `TurnEnded` folds, this goes back to invisible too --
 /// no different from the burst-absorbed case's own fold.
-pub(crate) fn thinking_visible_outside_burst(ended: Option<&TurnEnd>) -> bool {
+pub fn thinking_visible_outside_burst(ended: Option<&TurnEnd>) -> bool {
     ended.is_none()
 }
 
 #[cfg(test)]
 mod tests {
-    use horizon_agent::contract::TurnEndReason;
     use serde_json::json;
 
+    use crate::contract::TurnEndReason;
+
     use super::super::test_support::*;
-    use super::super::{aggregate_receipt, receipt_prose};
     use super::*;
 
     #[test]
@@ -422,34 +422,6 @@ mod tests {
                 closed: true,
             }]
         );
-    }
-
-    #[test]
-    fn a_burst_reconstructs_the_same_receipt_content_a_completed_turns_own_aggregation_would() {
-        // A closed burst's own item range feeds `aggregate_receipt`/
-        // `receipt_prose` exactly the way a whole completed turn's items
-        // used to -- proving per-burst aggregation reuses the existing
-        // machinery verbatim, just scoped to the burst's own range.
-        let items = vec![
-            user_message("fix the bug"),
-            tool_requested("a", "fs.grep", json!({"base_path": ".", "pattern": "x"})),
-            tool_finished("a", json!({"returned_count": 2})),
-            tool_requested("b", "fs.read", json!({"path": "a.rs"})),
-            tool_finished("b", json!({"total_lines": 10})),
-            assistant_delta("Looking at the code, I"),
-        ];
-        let bursts = segment_bursts(&items);
-        assert_eq!(bursts.len(), 1);
-        let burst = &bursts[0];
-        assert!(burst.closed);
-        let tool_calls = build_tool_call_views(&items[burst.start..burst.end]);
-        let aggregate = aggregate_receipt(&tool_calls);
-        assert_eq!(
-            receipt_prose(&aggregate).as_deref(),
-            Some("1 tool call · read 1 file")
-        );
-        assert_eq!(aggregate.bash_count, 0);
-        assert!(aggregate.individual_calls.is_empty());
     }
 
     #[test]

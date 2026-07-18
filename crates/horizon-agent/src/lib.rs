@@ -27,6 +27,7 @@ pub mod roles;
 pub mod skills;
 pub mod socket;
 pub mod tools;
+pub mod transcript;
 pub mod wire;
 
 #[cfg(test)]
