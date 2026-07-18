@@ -943,6 +943,55 @@ fn sync_update_next_full_frame_esu_flushes_the_stuck_window_too() {
     );
 }
 
+/// `TerminalEvents::visible_dirty` is the seam `session_loop`'s `pty_rx`
+/// handler gates `notify_snapshot` on (terminal keystroke latency fix,
+/// `docs/roadmap.md`): the investigation found that every `write_vt` call
+/// unconditionally re-armed `notify_snapshot`'s immediate slot, even for a
+/// chunk that landed entirely inside an open BSU/ESU synchronized-update
+/// window and changed nothing -- letting it steal the slot from the real
+/// flush that follows. Table-tests the three shapes one `write_vt` call can
+/// take against a real synchronized-update frame (`REAL_BACKSPACE_FRAME`,
+/// split at the byte offsets its own doc comment names).
+#[test]
+fn write_vt_visible_dirty_tracks_whether_bytes_reached_the_grid_or_only_a_sync_buffer() {
+    let mut core = sized_core();
+
+    let bsu_len = 8; // len(b"\x1b[?2026h")
+    let mid = bsu_len + 6; // through the immediately-following `\x1b[?25l`
+
+    // Ordinary content outside any sync window reaches the grid immediately.
+    let events = core.write_vt(b"hello");
+    assert!(
+        events.visible_dirty,
+        "plain content must mark the frame dirty"
+    );
+
+    // Opens the synchronized-update window -- a mode toggle only, no grid
+    // content in this chunk, but still a real state change.
+    let events = core.write_vt(&REAL_BACKSPACE_FRAME[..bsu_len]);
+    assert!(
+        events.visible_dirty,
+        "opening the window is itself a state change worth a snapshot"
+    );
+
+    // A chunk that lands entirely inside the still-open window, with no ESU
+    // in it: every byte just fed goes straight into the sync buffer and
+    // stays there -- nothing reached the grid yet.
+    let events = core.write_vt(&REAL_BACKSPACE_FRAME[bsu_len..mid]);
+    assert!(
+        !events.visible_dirty,
+        "a chunk fully absorbed by an open sync window must not mark dirty"
+    );
+
+    // The rest of the frame, including the closing ESU: flushes the whole
+    // buffered delta onto the grid.
+    let events = core.write_vt(&REAL_BACKSPACE_FRAME[mid..]);
+    assert!(
+        events.visible_dirty,
+        "the flush that closes the window must mark dirty"
+    );
+}
+
 fn test_scroll(lines: i32) -> TerminalScroll {
     TerminalScroll {
         lines,

@@ -5,3 +5,10 @@
 dev *ARGS:
     cargo build --workspace
     ./target/debug/horizon {{ARGS}}
+
+# Same as `dev`, but release-optimized — halves redraw-processing cost
+# versus a debug build (see the terminal keystroke latency investigation),
+# at the cost of a slower build.
+dev-release *ARGS:
+    cargo build --workspace --release
+    ./target/release/horizon {{ARGS}}

@@ -225,11 +225,15 @@ pub fn run_terminal_core(
                 let Ok((key, modifiers, event)) = key else {
                     return;
                 };
+                // `key_input` only encodes bytes for the PTY -- it never
+                // touches `core`'s visible state, so there is nothing to
+                // notify here. The real echo arrives back through `pty_rx`
+                // (below), which is what actually mutates the grid and
+                // takes `notify_snapshot`'s immediate slot.
                 let input = core.key_input(key, modifiers, event);
                 if !input.is_empty() {
                     let _ = command_tx.send(TerminalCommand::Input(input));
                 }
-                notify_snapshot(&core, &update_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
             }
             recv(selection_rx) -> command => {
                 let Ok(command) = command else {
@@ -285,7 +289,14 @@ pub fn run_terminal_core(
                     });
                 }
                 rearm_sync_flush(&core, &mut sync_flush_rx);
-                notify_snapshot(&core, &update_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
+                // Only a chunk that actually reached the grid deserves
+                // `notify_snapshot`'s immediate slot -- a chunk that landed
+                // entirely inside an already-open BSU/ESU window (buffered,
+                // nothing flushed yet) must not steal it from the real
+                // content that flushes later. See `TerminalCore::write_vt`.
+                if events.visible_dirty {
+                    notify_snapshot(&core, &update_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
+                }
             }
             recv(flush_rx) -> _ => {
                 flush_snapshot(&core, &update_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
@@ -374,6 +385,148 @@ mod tests {
             healed,
             "failsafe timer should flush the stuck sync window without any further PTY data"
         );
+    }
+
+    /// Regression test for the terminal keystroke latency fix
+    /// (`docs/roadmap.md`): `TerminalCore::key_input` only encodes bytes for
+    /// the PTY, it never mutates visible state, so a key press on its own
+    /// must never produce a `TerminalUpdate::Snapshot` -- immediate or
+    /// coalesced. Before the fix, the `key_rx` branch called
+    /// `notify_snapshot` unconditionally after every key, which won the
+    /// immediate slot and pushed the *real* echo (arriving moments later
+    /// over `pty_rx`) into the ~16ms coalescing window on every keystroke.
+    #[test]
+    fn key_input_alone_never_triggers_a_snapshot_notification() {
+        let (_pty_tx, pty_rx) = crossbeam_channel::unbounded();
+        let (command_tx, command_rx) = crossbeam_channel::unbounded();
+        let (update_tx, update_rx) = crossbeam_channel::unbounded();
+        let (key_tx, key_rx) = crossbeam_channel::unbounded();
+        let receivers = CoreReceivers {
+            resize_rx: crossbeam_channel::never(),
+            scroll_rx: crossbeam_channel::never(),
+            mouse_rx: crossbeam_channel::never(),
+            paste_rx: crossbeam_channel::never(),
+            key_rx,
+            selection_rx: crossbeam_channel::never(),
+            focus_rx: crossbeam_channel::never(),
+        };
+
+        std::thread::spawn(move || {
+            run_terminal_core(
+                TerminalSize::new(20, 10),
+                TerminalCoreOptions::default(),
+                pty_rx,
+                receivers,
+                command_tx,
+                update_tx,
+            );
+        });
+
+        // Drain the one snapshot every session always sends right after
+        // construction (unconditional, not gated on `visible_dirty`).
+        update_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("startup snapshot");
+
+        key_tx
+            .send((KeyCode::Char('a'), Modifiers::NONE, KeyEventKind::Press))
+            .unwrap();
+
+        // The key must still be encoded and forwarded to the PTY writer --
+        // only the spurious notification is gone, not the key handling
+        // itself.
+        let encoded = command_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("the key must still be encoded and forwarded to the PTY");
+        assert!(matches!(encoded, TerminalCommand::Input(bytes) if !bytes.is_empty()));
+
+        assert!(
+            update_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            "a key press with no PTY echo must not produce a snapshot notification"
+        );
+    }
+
+    /// Regression test for the other half of the terminal keystroke latency
+    /// fix (`docs/roadmap.md`): a PTY chunk that lands entirely inside an
+    /// already-open BSU/ESU synchronized-update window -- fully absorbed by
+    /// the sync buffer, nothing reaches the grid -- must not trigger a
+    /// `TerminalUpdate::Snapshot` either, immediate or coalesced. Before the
+    /// fix, `write_vt`'s caller notified unconditionally on every `pty_rx`
+    /// chunk regardless of whether anything was actually flushed, which is
+    /// "a compounding risk for redraws split across multiple reads" (the
+    /// investigation's words) on top of the keystroke bug itself.
+    #[test]
+    fn mid_sync_buffering_chunk_does_not_trigger_a_snapshot_notification() {
+        let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
+        let (command_tx, _command_rx) = crossbeam_channel::unbounded();
+        let (update_tx, update_rx) = crossbeam_channel::unbounded();
+        let receivers = CoreReceivers {
+            resize_rx: crossbeam_channel::never(),
+            scroll_rx: crossbeam_channel::never(),
+            mouse_rx: crossbeam_channel::never(),
+            paste_rx: crossbeam_channel::never(),
+            key_rx: crossbeam_channel::never(),
+            selection_rx: crossbeam_channel::never(),
+            focus_rx: crossbeam_channel::never(),
+        };
+
+        std::thread::spawn(move || {
+            run_terminal_core(
+                TerminalSize::new(40, 40),
+                TerminalCoreOptions::default(),
+                pty_rx,
+                receivers,
+                command_tx,
+                update_tx,
+            );
+        });
+
+        // Drain the startup snapshot.
+        update_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("startup snapshot");
+
+        // Seed a marker at the cursor's home position, and drain the
+        // snapshot that follows.
+        pty_tx.send(b"STALE".to_vec()).unwrap();
+        update_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("snapshot after seeding STALE");
+
+        // Open a synchronized-update window (a mode toggle only -- no grid
+        // content in this chunk) and drain the snapshot it produces.
+        pty_tx.send(b"\x1b[?2026h".to_vec()).unwrap();
+        update_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("snapshot after opening the window");
+
+        // The erase that will remove STALE, queued inside the still-open
+        // window with no ESU in this chunk: fully absorbed by the sync
+        // buffer, nothing reaches the grid yet.
+        pty_tx.send(b"\x1b[H\x1b[K".to_vec()).unwrap();
+        assert!(
+            update_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            "a chunk fully buffered inside an open sync window must not notify"
+        );
+
+        // Closing the window flushes the erase onto the grid -- this one
+        // must notify, and STALE must actually be gone.
+        pty_tx.send(b"\x1b[?2026l".to_vec()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut flushed = false;
+        while Instant::now() < deadline {
+            if let Ok(TerminalUpdate::Snapshot(frame)) =
+                update_rx.recv_timeout(Duration::from_millis(50))
+            {
+                assert!(
+                    !frame.text.contains("STALE"),
+                    "the flush must apply the buffered erase"
+                );
+                flushed = true;
+                break;
+            }
+        }
+        assert!(flushed, "closing the window must produce a snapshot");
     }
 
     /// End-to-end regression coverage for OSC 52 clipboard-write plumbing

@@ -142,7 +142,19 @@ impl TerminalCore {
         // terminating ESU leaves behind. See `rewrite_sync_update_decrqm`.
         let sync_output_was_active = self.parser.sync_timeout().pending_timeout();
         self.parser.advance(&mut self.term, bytes);
-        self.finish_advance(sync_output_was_active)
+
+        // Did this call actually touch the grid, or did it just add to an
+        // still-open synchronized-update buffer? Mirrors the criterion
+        // alacritty's own `EventLoop::pty_read` uses to decide whether to
+        // fire `Event::Wakeup`: `sync_bytes_count() < processed`. If every
+        // byte just fed ended up sitting in the (possibly already
+        // nonempty) sync buffer, this call couldn't have applied anything
+        // to the grid; any other outcome — no window was open, or one
+        // opened and closed within this very call — means content reached
+        // the grid.
+        let visible_dirty = self.parser.sync_bytes_count() < bytes.len();
+
+        self.finish_advance(sync_output_was_active, visible_dirty)
     }
 
     /// The real-time deadline `vte::ansi::Processor` would use to abort a
@@ -165,7 +177,11 @@ impl TerminalCore {
     pub fn flush_sync_update(&mut self) -> TerminalEvents {
         let sync_output_was_active = self.parser.sync_timeout().pending_timeout();
         self.parser.stop_sync(&mut self.term);
-        self.finish_advance(sync_output_was_active)
+        // Unlike `write_vt`, there's no partial-buffering outcome here: this
+        // is only ever reached once a window was open (the failsafe timer
+        // is only armed while `sync_flush_deadline` is `Some`), and forcing
+        // it closed always replays whatever was buffered onto the grid.
+        self.finish_advance(sync_output_was_active, true)
     }
 
     /// Shared tail of `write_vt`/`flush_sync_update`: drain events queued by
@@ -173,9 +189,15 @@ impl TerminalCore {
     /// the window state from *before* that call, and resolve any deferred
     /// color/window-size query formatters. `sync_output_was_active` is the
     /// pre-call snapshot the caller took for exactly the reason documented
-    /// on `write_vt`'s own capture.
-    fn finish_advance(&mut self, sync_output_was_active: bool) -> TerminalEvents {
+    /// on `write_vt`'s own capture; `visible_dirty` is likewise computed by
+    /// the caller and just carried onto the returned `TerminalEvents`.
+    fn finish_advance(
+        &mut self,
+        sync_output_was_active: bool,
+        visible_dirty: bool,
+    ) -> TerminalEvents {
         let mut events = self.events.drain();
+        events.visible_dirty = visible_dirty;
 
         if sync_output_was_active {
             rewrite_sync_update_decrqm(&mut events.pty_writes);
