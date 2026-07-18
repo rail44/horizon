@@ -139,7 +139,6 @@ async fn connect_and_handshake(
     let hello = session_wire::Envelope::session_control(&SessionControl::Hello(Hello {
         contract_version: horizon_session_protocol::SESSION_PROTOCOL_VERSION,
         binary_id: "latency-probe".to_string(),
-        capabilities: vec!["terminal".to_string()],
     }))
     .unwrap();
     session_wire::write_envelope(&mut write_half, &hello)
