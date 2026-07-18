@@ -4,14 +4,17 @@
 //! with spatial navigation. The model owns all layout truth; this module
 //! only renders it and translates GPUI actions into model operations.
 //!
-//! The key bindings registered in [`init`] are M2 stand-ins wired
-//! straight to model calls — M3 replaces them with the command model
-//! (`CommandId` + keymap config), at which point every handler here
-//! becomes a binding to a command instead. [`init`]'s `[keybindings]`
-//! layer (parsed via `keymap::gpui_keystroke`/`keymap::command_for`) is
-//! the first piece of that: config-bound chords dispatch through
-//! [`RunCommand`] to [`WorkspaceShell::execute`] instead of a
-//! model-call handler.
+//! The key bindings registered by [`init`] (via [`derive_bindings`]) are
+//! M2 stand-ins wired straight to model calls — M3 replaces them with the
+//! command model (`CommandId` + keymap config), at which point every
+//! handler here becomes a binding to a command instead.
+//! [`derive_bindings`]'s `[keybindings]` layer (`keymap::resolve_keybindings`/
+//! `keymap::workspace_mode_keystroke`) is the first piece of that:
+//! config-bound chords dispatch through [`RunCommand`] to
+//! [`WorkspaceShell::execute`] instead of a model-call handler.
+//! `Reload Config` (`CommandId::ReloadConfig`) re-derives and re-applies
+//! this same binding set live — see [`apply_bindings`]'s doc comment for
+//! how a stale chord gets unbound.
 
 use std::collections::{HashMap, HashSet};
 
@@ -550,15 +553,15 @@ fn list_select_binding(cx: &App, keystroke: &str, action_name: &str) -> KeyBindi
     .unwrap_or_else(|err| panic!("invalid keystroke `{keystroke}`: {err}"))
 }
 
-pub(crate) fn init(cx: &mut App) {
-    let config = horizon_config::load();
-
-    let workspace_mode_override = config
-        .keybindings
-        .iter()
-        .find(|(_, command)| command.as_str() == keymap::WORKSPACE_MODE_PSEUDO_COMMAND)
-        .map(|(chord, _)| chord.as_str());
-
+/// Builds the full key binding set from `config`: the fixed
+/// workspace-mode navigation/action chords (hardcoded, never
+/// configurable), the workspace-mode toggle chord (default or a
+/// `[keybindings]` override), and each `[keybindings]` entry. Returns the
+/// bindings alongside the gpui keystroke strings of the config-driven
+/// subset (`dynamic_keystrokes` — everything but the fixed navigation
+/// chords and the two List-context ones) — [`apply_bindings`] needs that
+/// subset to know what a *later* reload must be able to unbind.
+fn derive_bindings(cx: &App, config: &horizon_config::RawConfig) -> (Vec<KeyBinding>, Vec<String>) {
     let mut bindings = vec![
         KeyBinding::new("h", ModeMoveLeft, Some(MODE_CONTEXT)),
         KeyBinding::new("j", ModeMoveDown, Some(MODE_CONTEXT)),
@@ -578,30 +581,16 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new(":", OpenPalette, Some(MODE_CONTEXT)),
     ];
 
-    match workspace_mode_override {
-        Some(chord) => match keymap::gpui_keystroke(chord) {
-            Some(keystroke) => {
-                bindings.push(KeyBinding::new(&keystroke, ToggleWorkspaceMode, None))
-            }
-            None => {
-                eprintln!(
-                    "horizon config: skipping keybinding `{chord}` = \
-                     `{}`: unrecognized chord",
-                    keymap::WORKSPACE_MODE_PSEUDO_COMMAND
-                );
-                bindings.push(KeyBinding::new(
-                    DEFAULT_WORKSPACE_MODE_KEYSTROKE,
-                    ToggleWorkspaceMode,
-                    None,
-                ));
-            }
-        },
-        None => bindings.push(KeyBinding::new(
-            DEFAULT_WORKSPACE_MODE_KEYSTROKE,
-            ToggleWorkspaceMode,
-            None,
-        )),
-    }
+    let mut dynamic_keystrokes = Vec::new();
+
+    let workspace_mode_keystroke =
+        keymap::workspace_mode_keystroke(config, DEFAULT_WORKSPACE_MODE_KEYSTROKE);
+    bindings.push(KeyBinding::new(
+        &workspace_mode_keystroke,
+        ToggleWorkspaceMode,
+        None,
+    ));
+    dynamic_keystrokes.push(workspace_mode_keystroke);
 
     // `[keybindings]` config entries layer on top of the built-ins above:
     // later-registered bindings take precedence in gpui at the same
@@ -609,27 +598,20 @@ pub(crate) fn init(cx: &mut App) {
     // ones added to the keymap later take precedence"), so pushing these
     // after the built-ins is enough for a config entry to override one
     // bound to the same chord.
-    for (chord, command) in &config.keybindings {
-        if command == keymap::WORKSPACE_MODE_PSEUDO_COMMAND {
-            continue; // handled above
+    for resolved in keymap::resolve_keybindings(config) {
+        match resolved.target {
+            keymap::KeybindingTarget::OpenPalette => {
+                bindings.push(KeyBinding::new(&resolved.keystroke, OpenPalette, None));
+            }
+            keymap::KeybindingTarget::Command(id) => {
+                bindings.push(KeyBinding::new(
+                    &resolved.keystroke,
+                    RunCommand { id },
+                    None,
+                ));
+            }
         }
-        let Some(keystroke) = keymap::gpui_keystroke(chord) else {
-            eprintln!(
-                "horizon config: skipping keybinding `{chord}` = `{command}`: unrecognized chord"
-            );
-            continue;
-        };
-        if command == keymap::OPEN_PALETTE_PSEUDO_COMMAND {
-            bindings.push(KeyBinding::new(&keystroke, OpenPalette, None));
-            continue;
-        }
-        let Some(id) = keymap::command_for(command) else {
-            eprintln!(
-                "horizon config: skipping keybinding `{chord}` = `{command}`: unknown command id"
-            );
-            continue;
-        };
-        bindings.push(KeyBinding::new(&keystroke, RunCommand { id }, None));
+        dynamic_keystrokes.push(resolved.keystroke);
     }
 
     // Tab / Shift+Tab move the selection in every List-backed modal
@@ -644,7 +626,72 @@ pub(crate) fn init(cx: &mut App) {
     bindings.push(list_select_binding(cx, "tab", "ui::SelectDown"));
     bindings.push(list_select_binding(cx, "shift-tab", "ui::SelectUp"));
 
+    (bindings, dynamic_keystrokes)
+}
+
+/// The gpui keystroke strings most recently bound by the config-driven
+/// portion of [`derive_bindings`] (the workspace-mode toggle chord plus
+/// each `[keybindings]` entry) — everything [`apply_bindings`] needs to
+/// unbind before installing a freshly reloaded config's set. Lazily
+/// initialized empty (nothing applied yet); mirrors `theme::scheme_store`'s
+/// shape for the same "live app-wide state `Reload Config` mutates" need.
+fn dynamic_keystroke_store() -> &'static std::sync::RwLock<Vec<String>> {
+    static STORE: std::sync::OnceLock<std::sync::RwLock<Vec<String>>> = std::sync::OnceLock::new();
+    STORE.get_or_init(|| std::sync::RwLock::new(Vec::new()))
+}
+
+/// Applies [`derive_bindings`]'s output for `config`: explicitly unbinds
+/// every keystroke the config-driven subset used on the *previous* apply,
+/// then binds the freshly derived set. Called by both [`init`] (previous
+/// set is empty, so the unbind step is a no-op) and the `ReloadConfig`
+/// command.
+///
+/// gpui's `Keymap` is append-only (`Keymap::add_bindings`/`Keymap::clear`
+/// — see the pinned checkout's `crates/gpui/src/keymap.rs`): binding the
+/// same chord twice doesn't replace the old entry, it just makes the
+/// newer one win precedence (`Keymap::bindings_for_input`'s doc comment:
+/// "the ones added to the keymap later take precedence"). That's enough
+/// when a chord's *target* changes, but not when a chord disappears from
+/// config entirely — nothing "later" exists to out-rank the stale entry,
+/// so it would keep firing after a reload that removed it.
+/// `App::clear_key_bindings` does exist, but it resets gpui's *entire*
+/// process-wide keymap, which would also wipe gpui-component's own
+/// internal bindings (`gpui_component::init`, called once at startup) and
+/// `main.rs`'s `cmd-q` — unacceptable collateral damage for a config
+/// reload, so it's not used here.
+///
+/// The precise tool is a `KeyBinding` bound to gpui's `NoAction`
+/// pseudo-action at the stale keystroke, global (`None`) context — the
+/// same context every dynamic binding here uses, so it competes at the
+/// same precedence tier. Reading `Keymap::bindings_for_input`'s match loop
+/// directly: a `NoAction` binding with no `meta` set (true of every
+/// binding built via `KeyBinding::new`, since nothing here calls
+/// `with_meta`/`set_meta`) is unconditionally treated as a user override
+/// and `break`s resolution for that keystroke — so pushing these unbind
+/// markers *before* the freshly derived bindings guarantees: a keystroke
+/// no longer in the new set resolves to nothing (the marker is the last,
+/// i.e. highest-precedence, entry for it); a keystroke still in the new
+/// set resolves to the new target (the freshly-bound entry, pushed after
+/// the marker, outranks it).
+fn apply_bindings(cx: &mut App, config: &horizon_config::RawConfig) {
+    let (bindings, dynamic_keystrokes) = derive_bindings(cx, config);
+
+    let previous = std::mem::replace(
+        &mut *dynamic_keystroke_store().write().unwrap(),
+        dynamic_keystrokes,
+    );
+    if !previous.is_empty() {
+        let unbinds: Vec<KeyBinding> = previous
+            .into_iter()
+            .map(|keystroke| KeyBinding::new(&keystroke, NoAction, None))
+            .collect();
+        cx.bind_keys(unbinds);
+    }
     cx.bind_keys(bindings);
+}
+
+pub(crate) fn init(cx: &mut App) {
+    apply_bindings(cx, horizon_config::load());
 }
 
 pub(crate) struct WorkspaceShell {
@@ -1718,6 +1765,7 @@ impl WorkspaceShell {
                 Ok(raw) => {
                     theme::reload_from(&raw);
                     theme::apply_gpui_component_theme(cx);
+                    apply_bindings(cx, &raw);
                     window.refresh();
                 }
                 Err(error) => eprintln!("reload-config failed: {error}"),
