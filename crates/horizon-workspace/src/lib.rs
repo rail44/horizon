@@ -6,13 +6,13 @@
 //! attaches to panes, and the rest of each shell re-exports it.
 
 pub mod commands;
-pub mod layout;
-pub mod mode;
-pub mod nav;
-pub mod operations;
+mod layout;
+mod mode;
+mod nav;
+mod operations;
 pub mod persistence;
-pub mod query;
-pub mod session;
+mod query;
+mod session;
 mod session_id;
 pub mod snapshot;
 pub mod types;

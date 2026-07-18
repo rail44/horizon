@@ -1,25 +1,30 @@
 use super::types::{LayoutChild, LayoutNode, PaneId, SplitAxis, TabId, Workspace};
 
 /// One child in a `Split`'s rendering plan (see [`split_render_plan`]):
-/// `anchor` is the stable identity `workspace::view`'s recursive renderer
-/// keys that child's own nested view by across re-renders -- the child's
-/// own pane id for a leaf, or its subtree's leftmost pane id otherwise (see
+/// `anchor` is the stable identity a recursive renderer would key that
+/// child's own nested view by across re-renders -- the child's own pane id
+/// for a leaf, or its subtree's leftmost pane id otherwise (see
 /// `LayoutNode::first_pane`). Two sibling subtrees can never share an
 /// anchor: every `PaneId` in a tree is unique, so a subtree's leftmost leaf
 /// uniquely identifies it among its siblings.
+///
+/// Test-only now: no production caller remains, since the gpui shell renders
+/// splits off `resizable`'s own primitives rather than this plan
+/// (2026-07-18 visibility audit). Kept as a unit-tested description of the
+/// tree's rendering shape, decoupled from any UI framework.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RenderChild {
-    pub anchor: PaneId,
-    pub weight: f32,
+pub(crate) struct RenderChild {
+    pub(crate) anchor: PaneId,
+    pub(crate) weight: f32,
 }
 
 /// The immediate rendering plan for one `Split` level -- its axis and, per
-/// child, the identity/weight pair the view needs to key and size that
-/// child's slot. `None` for a bare leaf (nothing to stack). Kept as a pure,
-/// floem-independent function of the tree (`docs/recursive-layout-
-/// design.md`'s slice 2) so the shape fed to `workspace::view`'s recursive
-/// renderer is unit-testable without mounting floem.
-pub fn split_render_plan(node: &LayoutNode) -> Option<(SplitAxis, Vec<RenderChild>)> {
+/// child, the identity/weight pair a renderer would need to key and size
+/// that child's slot. `None` for a bare leaf (nothing to stack). See
+/// [`RenderChild`]'s doc comment for why this is test-only now.
+#[cfg(test)]
+pub(crate) fn split_render_plan(node: &LayoutNode) -> Option<(SplitAxis, Vec<RenderChild>)> {
     match node {
         LayoutNode::Pane(_) => None,
         LayoutNode::Split { axis, children } => Some((
@@ -97,7 +102,7 @@ impl LayoutNode {
         })
     }
 
-    pub fn pane_ids(&self) -> Vec<PaneId> {
+    pub(crate) fn pane_ids(&self) -> Vec<PaneId> {
         match self {
             Self::Pane(pane_id) => vec![*pane_id],
             Self::Split { children, .. } => children
@@ -125,7 +130,7 @@ impl LayoutNode {
     /// design.md`'s shallow-nesting invariant); a same-axis nesting can
     /// only arise here if the tree already violated the invariant going in,
     /// which none of this module's own mutations do.
-    pub fn without_pane(&self, pane_id: PaneId) -> Option<Self> {
+    pub(crate) fn without_pane(&self, pane_id: PaneId) -> Option<Self> {
         match self {
             Self::Pane(id) if *id == pane_id => None,
             Self::Pane(id) => Some(Self::Pane(*id)),
@@ -162,7 +167,12 @@ impl LayoutNode {
     /// subtree. `target` being this node's own bare root (no parent
     /// `Split` to absorb into or wrap within) is handled here too, since a
     /// leaf can always be wrapped in place via `*self = ...`.
-    pub fn split_pane(&mut self, target: PaneId, new_pane_id: PaneId, axis: SplitAxis) -> bool {
+    pub(crate) fn split_pane(
+        &mut self,
+        target: PaneId,
+        new_pane_id: PaneId,
+        axis: SplitAxis,
+    ) -> bool {
         if matches!(self, Self::Pane(id) if *id == target) {
             *self = Self::Split {
                 axis,

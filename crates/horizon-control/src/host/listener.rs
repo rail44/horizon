@@ -75,7 +75,7 @@ fn accept_loop(listener: UnixListener, executor: &Arc<dyn ControlExecutor>) {
 /// the path out from under it. `spawn`'s caller treats that refusal as a
 /// non-fatal bind failure: this instance simply starts without a control
 /// listener and logs a warning, it never bails Horizon's own startup.
-pub fn bind(path: &Path) -> io::Result<UnixListener> {
+pub(crate) fn bind(path: &Path) -> io::Result<UnixListener> {
     if path.exists() {
         match UnixStream::connect(path) {
             Ok(_stream) => {

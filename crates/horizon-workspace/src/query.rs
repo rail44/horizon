@@ -5,7 +5,7 @@ use super::types::{
 use crate::SessionId;
 
 impl Workspace {
-    pub fn visible_pane_id(&self, index: usize) -> Option<PaneId> {
+    pub(crate) fn visible_pane_id(&self, index: usize) -> Option<PaneId> {
         self.visible_pane_ids().get(index).copied()
     }
 
@@ -37,7 +37,10 @@ impl Workspace {
             .and_then(|pane| pane.session_id)
     }
 
-    pub fn pane_title_for(&self, pane_id: PaneId) -> Option<String> {
+    /// Test-only now: no production caller remains (2026-07-18 visibility
+    /// audit); kept as a small test fixture helper.
+    #[cfg(test)]
+    pub(crate) fn pane_title_for(&self, pane_id: PaneId) -> Option<String> {
         self.panes
             .iter()
             .find(|pane| pane.id == pane_id)
@@ -199,7 +202,7 @@ impl Workspace {
             .collect()
     }
 
-    pub fn pane_summaries(&self) -> Vec<PaneSummary> {
+    pub(crate) fn pane_summaries(&self) -> Vec<PaneSummary> {
         self.tabs
             .iter()
             .enumerate()
@@ -235,11 +238,14 @@ impl Workspace {
             .collect()
     }
 
-    pub fn visible_pane_kind(&self, index: usize) -> Option<PaneKind> {
+    /// Test-only now: its only caller, `Workspace::split_active_with_new_
+    /// session`, is itself `#[cfg(test)]` (2026-07-18 visibility audit).
+    #[cfg(test)]
+    pub(crate) fn visible_pane_kind(&self, index: usize) -> Option<PaneKind> {
         self.visible_panes().get(index).map(|pane| pane.kind)
     }
 
-    pub fn active_visible_index(&self) -> usize {
+    pub(crate) fn active_visible_index(&self) -> usize {
         let active = self.active_tab().map(|tab| tab.active);
         self.visible_pane_ids()
             .iter()
@@ -254,7 +260,7 @@ impl Workspace {
             .unwrap_or(0)
     }
 
-    pub fn active_title(&self) -> String {
+    pub(crate) fn active_title(&self) -> String {
         let active = self.active_tab().map(|tab| tab.active);
         self.panes
             .iter()
@@ -274,7 +280,7 @@ impl Workspace {
             .map(|pane| self.pane_title(pane))
     }
 
-    pub fn visible_pane_ids(&self) -> Vec<PaneId> {
+    pub(crate) fn visible_pane_ids(&self) -> Vec<PaneId> {
         let Some(tab) = self.active_tab() else {
             return Vec::new();
         };
@@ -286,7 +292,7 @@ impl Workspace {
         self.tabs.iter().find(|tab| tab.id == self.active_tab)
     }
 
-    pub fn tab_title(&self, tab: &Tab) -> String {
+    pub(crate) fn tab_title(&self, tab: &Tab) -> String {
         self.panes
             .iter()
             .find(|pane| pane.id == tab.active)
@@ -294,14 +300,14 @@ impl Workspace {
             .unwrap_or_else(|| "Empty".to_string())
     }
 
-    pub fn tab_session_id(&self, tab: &Tab) -> Option<SessionId> {
+    pub(crate) fn tab_session_id(&self, tab: &Tab) -> Option<SessionId> {
         self.panes
             .iter()
             .find(|pane| pane.id == tab.active)
             .and_then(|pane| pane.session_id)
     }
 
-    pub fn pane_title(&self, pane: &Pane) -> String {
+    pub(crate) fn pane_title(&self, pane: &Pane) -> String {
         pane.session_id
             .and_then(|session_id| self.session(session_id))
             .map(|session| session.title.clone())
@@ -317,7 +323,7 @@ impl Workspace {
             .map(|session| PaneKind::from(session.kind))
     }
 
-    pub fn session(&self, session_id: SessionId) -> Option<&WorkspaceSession> {
+    pub(crate) fn session(&self, session_id: SessionId) -> Option<&WorkspaceSession> {
         self.sessions
             .iter()
             .find(|session| session.id == session_id)

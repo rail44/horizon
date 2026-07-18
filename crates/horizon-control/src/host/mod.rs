@@ -6,7 +6,7 @@
 //! (docs/gpui-migration-design.md M3); the shell keeps only its
 //! UI-thread bridge.
 
-pub mod connection;
+mod connection;
 pub mod executor;
 pub mod listener;
 pub mod socket;
