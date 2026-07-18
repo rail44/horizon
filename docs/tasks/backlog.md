@@ -124,6 +124,16 @@ entries live in `backlog-resolved.md` keeping their original numbers
     disagrees between runs is itself the diagnostic, and neither reading
     is trustworthy without a clean rebuild of the crates in flux.
     AGENTS.md's build-dir section now carries the caveat.
+    *Sixth occurrence, worst shape yet (2026-07-19)*: a sibling
+    worktree's WORK-IN-PROGRESS semantics (an unmerged redesign of the
+    zero-tab persistence invariant) leaked through a stale
+    `horizon-workspace` rlib into main-checkout test runs, making a
+    main test fail "deterministically" — and `git stash`-based
+    clean-tree verification does NOT catch this (stash restores source,
+    not the artifact cache). Only `cargo clean -p <crate>` of the
+    leaked crate tells the truth. A "deterministic" cross-crate failure
+    contradicting a recent green run should be treated as this bug
+    until a post-clean rerun says otherwise.
 
 42. **Tool-call rows have no per-occurrence identity when a provider
     reuses a call_id.** The 2026-07-18 reused-call_id fix (`1d86521`)
