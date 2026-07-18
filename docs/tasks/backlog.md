@@ -140,6 +140,31 @@ entries live in `backlog-resolved.md` keeping their original numbers
     that distinction holds or reload should also restore-to-empty is an
     owner call; one small site either way.
 
+51. **Session-protocol version mismatch is treated as transient: the UI
+    retries the hello forever instead of surfacing an actionable state.**
+    First hit live on the v5→v6 bump (2026-07-19): the owner's
+    long-lived `horizon-sessiond` (started before the bump, speaking v5)
+    rejected the new UI's v6 `Hello`, and the UI looped
+    "hello transport failed, retrying" on stderr indefinitely. The
+    daemon *surviving UI restarts is the design*, so every wire-shape
+    bump guarantees each live daemon hits this; the handshake failing is
+    correct, the presentation isn't. The version mismatch is already
+    detected and named on the daemon side ("this build speaks v5,
+    received v6") — the UI should classify it as permanent, stop
+    retrying, and present the remedy ("session runtime is older than
+    this build — Reload Session Runtime; its terminal sessions will
+    end"), ideally as a one-action prompt rather than log spam.
+    **Worse (owner observation, same incident): the app is inoperable
+    during initial load while the hello retry loops, so the palette —
+    and with it Reload Session Runtime, the in-app remedy — is
+    unreachable; the only exit today is killing the daemon process
+    externally.** That contradicts `src/sessiond/`'s stated
+    non-blocking connect/spawn intent: whatever the fix surfaces, the
+    shell must stay operable while runtime connect fails at startup.
+    Start at `src/sessiond/` (connect/hello retry, the startup
+    operability gap) and the hello error surface in
+    `crates/horizon-session-protocol`. Recorded 2026-07-19.
+
 43. **Shared build-dir serves stale lib artifacts across worktrees —
     phantom E0432 on freshly-added exports.** Observed twice on
     2026-07-18: a workspace-wide test build resolved
