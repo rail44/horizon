@@ -47,12 +47,15 @@ src/ (including the `pub`→`pub(crate)` sweep); the `horizon-ctl` →
 `horizon-cli` rename (owner naming decision); and end-to-end removal
 of the dead `profile` control-plane vertical (owner decision: delete
 over rebuild). Remaining in the wave, unordered:
-`workspace.rs`/`agent/view.rs` splits; the command-model payload
+the command-model payload
 design (owner: on hold, to be shaped in a later consult); small
 boundary decisions still open (TerminalColor vocabulary, roles
 registry, spikes/gpui-terminal, Hello.capabilities, created_terminal
 ownership); and the session-creation groundwork (deferred to the
-worktree feature work). Also shipped 2026-07-18, later same day
+worktree feature work). The mechanical remainder — the
+`workspace.rs` and `agent/view.rs` splits, the dead-code/doc-rot
+sweep — shipped later the same day (merges up to `f32a66a`); the
+wave's remaining items are decision-gated only. Also shipped 2026-07-18, later same day
 (merges up to `8336992`): issue 002's guard rework (safety-net
 constants 100/5, paused receipt row, one-action Continue with CLI
 parity); keybindings live reload; the config wave (surface narrowed
