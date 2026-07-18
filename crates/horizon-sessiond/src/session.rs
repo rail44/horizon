@@ -144,6 +144,15 @@ pub(crate) struct SessiondState {
     /// or the readiness gate above) to populate a spawned session's
     /// `RecallContext`.
     duckdb_cell: SharedDuckdbStore,
+    /// Horizon's single config file's host-resolved path (`main`'s
+    /// `horizon_config::resolved_path()` call), injected into every
+    /// spawned session's `ToolSessionState` (see `run_session`) for the
+    /// `config.read`/`config.write` agent tools -- see
+    /// `horizon_agent::tools::state::ToolSessionState::config_path`'s doc
+    /// comment for the full seam. `None` means the same thing it means for
+    /// `horizon_config::resolved_path`: no `HOME`/`XDG_CONFIG_HOME` to fall
+    /// back to.
+    config_path: Option<PathBuf>,
 }
 
 impl SessiondState {
@@ -152,6 +161,7 @@ impl SessiondState {
         agent_config: AgentConfig,
         writer: Option<WriterHandle>,
         duckdb_cell: SharedDuckdbStore,
+        config_path: Option<PathBuf>,
     ) -> Self {
         Self {
             providers,
@@ -164,6 +174,7 @@ impl SessiondState {
             resume_notify: Notify::new(),
             skipped_lines_summary: Mutex::new(None),
             duckdb_cell,
+            config_path,
         }
     }
 
@@ -816,7 +827,8 @@ fn run_session(
     // `workspace_root` -- see the comment just above `cwd`'s definition on
     // why that's an intentionally separate, unthreaded value.
     let tool_state = tool_session_state_for(workspace_root, state.agent_config.tools, recall)
-        .with_skills(SkillRegistry::discover(&cwd));
+        .with_skills(SkillRegistry::discover(&cwd))
+        .with_config_path(state.config_path.clone());
     let live_state = match state.writer() {
         Some(writer) => LiveState::with_event_log_and_history(
             session_id,
@@ -1217,10 +1229,9 @@ mod tests {
     /// and finishes, the state must finally settle on `WaitingForUser`.
     #[test]
     fn fold_bash_completion_reports_waiting_for_approval_while_a_sibling_approval_is_pending() {
-        use horizon_agent::config::AgentFileConfig;
         use horizon_agent::contract::{ApprovalRequest, ToolCallResult};
 
-        let agent_config = AgentConfig::from_env_and_file(&AgentFileConfig::default());
+        let agent_config = AgentConfig::from_env_and_provider(None, None);
         let state = Arc::new(SessiondState::new(
             ProviderRegistry::builtin_with_config(
                 agent_config.clone(),
@@ -1229,6 +1240,7 @@ mod tests {
             agent_config,
             None,
             SharedDuckdbStore::unavailable(),
+            None,
         ));
         let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Envelope>();
         *state.outgoing.lock().unwrap() = Some(outgoing_tx);
@@ -1311,10 +1323,10 @@ mod tests {
     }
 
     /// Builds a hermetic [`SessiondState`] with an explicit, env-independent
-    /// `RigAgentConfig` (never `AgentConfig::from_env_and_file`'s real env
-    /// vars -- a developer's own `OPENAI_API_KEY` must never leak into this
-    /// test's expectations) and an installed `outgoing` channel to observe
-    /// what gets sent.
+    /// `RigAgentConfig` (never `AgentConfig::from_env_and_provider`'s real
+    /// env vars -- a developer's own `OPENAI_API_KEY` must never leak into
+    /// this test's expectations) and an installed `outgoing` channel to
+    /// observe what gets sent.
     fn state_with_rig_config(
         openai_enabled: bool,
         model: &str,
@@ -1322,9 +1334,7 @@ mod tests {
         Arc<SessiondState>,
         tokio::sync::mpsc::UnboundedReceiver<Envelope>,
     ) {
-        use horizon_agent::config::AgentFileConfig;
-
-        let mut agent_config = AgentConfig::from_env_and_file(&AgentFileConfig::default());
+        let mut agent_config = AgentConfig::from_env_and_provider(None, None);
         agent_config.rig.openai_enabled = openai_enabled;
         agent_config.rig.model = model.to_string();
         let state = Arc::new(SessiondState::new(
@@ -1335,6 +1345,7 @@ mod tests {
             agent_config,
             None,
             SharedDuckdbStore::unavailable(),
+            None,
         ));
         let (outgoing_tx, outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Envelope>();
         *state.outgoing.lock().unwrap() = Some(outgoing_tx);

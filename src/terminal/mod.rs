@@ -42,7 +42,9 @@ use crate::input_trace::input_trace;
 use crate::theme;
 
 // Font values come from config.toml ([ui].font_family, [terminal].
-// font_size/line_height) and are startup-only, like the Floem shell.
+// font_size) and are startup-only, like the Floem shell. `line_height` is
+// no longer file-configurable (2026-07-18 config-narrowing wave) -- it's
+// always derived from font_size, see `line_height` below.
 //
 // `font_family` is a CSS-style comma-separated font stack (as used by the
 // retired Floem shell): the first entry is the primary family, the rest
@@ -73,7 +75,7 @@ fn font_from_stack(raw: &str) -> Font {
     resolved
 }
 
-fn resolved_font() -> Font {
+pub(crate) fn resolved_font() -> Font {
     static FONT: std::sync::OnceLock<Font> = std::sync::OnceLock::new();
     FONT.get_or_init(|| {
         let raw = horizon_config::load()
@@ -86,20 +88,27 @@ fn resolved_font() -> Font {
     .clone()
 }
 
+/// Built-in default for `[terminal] font_size`, documented (and drift-tested
+/// against) by `config.example.toml`'s active `font_size = 13.0` line -- see
+/// `src/theme/scheme.rs`'s `config_example_toml_matches_its_documented_defaults`.
+pub(crate) const DEFAULT_FONT_SIZE: f32 = 13.0;
+
 fn font_size() -> f32 {
     static SIZE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
-    *SIZE.get_or_init(|| horizon_config::load().terminal.font_size.unwrap_or(13.0))
+    *SIZE.get_or_init(|| {
+        horizon_config::load()
+            .terminal
+            .font_size
+            .unwrap_or(DEFAULT_FONT_SIZE)
+    })
 }
 
 fn line_height() -> f32 {
+    // `[terminal] line_height` was retired in the 2026-07-18
+    // config-narrowing wave (see AGENTS.md's "Configuration" section):
+    // line height is now always this fixed formula, no file override.
     static HEIGHT: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
-    *HEIGHT.get_or_init(|| {
-        horizon_config::load()
-            .terminal
-            .line_height
-            .map(|value| value as f32)
-            .unwrap_or_else(|| (font_size() * 17.0 / 13.0).round())
-    })
+    *HEIGHT.get_or_init(|| (font_size() * 18.0 / 13.0).round())
 }
 
 /// Paint-time geometry shared with event handlers (which need to convert

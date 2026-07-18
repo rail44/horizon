@@ -3063,6 +3063,7 @@ dependencies = [
  "anyhow",
  "crossbeam-channel",
  "horizon-agent",
+ "horizon-config",
  "horizon-session-protocol",
  "horizon-terminal-core",
  "portable-pty",

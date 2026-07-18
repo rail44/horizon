@@ -87,6 +87,22 @@ struct Inner {
     /// recall`'s tests, Horizon's UI-side dummy-tool-state test helper) --
     /// stays unchanged.
     skills: SkillRegistry,
+    /// Host-resolved path to Horizon's single config file
+    /// (`$HORIZON_CONFIG`, falling back to `$XDG_CONFIG_HOME/horizon/
+    /// config.toml`, falling back to `~/.config/horizon/config.toml`), for
+    /// `tools::config`'s `config.read`/`config.write`.
+    /// This crate can't resolve that path itself (see `config`'s module
+    /// doc -- it has no dependency on `horizon-config`), so it's injected
+    /// post-construction the same way [`Self::with_skills`] injects the
+    /// skill registry: the one production call site
+    /// (`horizon-sessiond`'s `session::run_session`, which resolves it via
+    /// `horizon_config::resolved_path()`) calls
+    /// [`ToolSessionState::with_config_path`] right after construction.
+    /// `None` everywhere else (this crate's own tests, Horizon's UI-side
+    /// dummy-tool-state test helper), same as before this seam existed:
+    /// `config.read`/`config.write` degrade to an actionable error instead
+    /// of guessing a path.
+    config_path: Option<PathBuf>,
 }
 
 impl ToolSessionState {
@@ -128,6 +144,7 @@ impl ToolSessionState {
                 tools,
                 recall,
                 skills: SkillRegistry::default(),
+                config_path: None,
             }),
         }
     }
@@ -144,6 +161,17 @@ impl ToolSessionState {
     pub fn with_skills(mut self, skills: SkillRegistry) -> Self {
         if let Some(inner) = Rc::get_mut(&mut self.inner) {
             inner.skills = skills;
+        }
+        self
+    }
+
+    /// Installs the host-resolved config-file path after construction --
+    /// see [`Inner::config_path`]'s doc comment. Same safety contract as
+    /// [`Self::with_skills`]: call only right after construction, before
+    /// this `ToolSessionState` has been cloned anywhere else.
+    pub fn with_config_path(mut self, config_path: Option<PathBuf>) -> Self {
+        if let Some(inner) = Rc::get_mut(&mut self.inner) {
+            inner.config_path = config_path;
         }
         self
     }
@@ -211,6 +239,13 @@ impl ToolSessionState {
     /// what `tools::config`'s `skill.read` dispatch reads from.
     pub(crate) fn skill_registry(&self) -> &SkillRegistry {
         &self.inner.skills
+    }
+
+    /// The host-resolved config-file path (see [`Inner::config_path`]) --
+    /// what `tools::config`'s `config.read`/`config.write` dispatch reads
+    /// from.
+    pub(crate) fn config_path(&self) -> Option<&Path> {
+        self.inner.config_path.as_deref()
     }
 
     pub(crate) fn record_mtime(&self, path: PathBuf, mtime: SystemTime) {

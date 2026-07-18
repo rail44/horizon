@@ -133,9 +133,8 @@ fn read_instruction_file(dir: &Path) -> Option<(PathBuf, String)> {
 /// A missing file is the overwhelmingly common case (most directory levels
 /// have neither file) and isn't logged; any other read failure (permission
 /// denied, a directory named `AGENTS.md`, ...) is unusual enough to warn
-/// about — mirrors `config::load_file_config_from_path`'s treatment of its
-/// own config file ("no file written yet is the common case, not a
-/// warning").
+/// about — mirrors `horizon_config`'s own config-file loader's treatment of
+/// its file ("no file written yet is the common case, not a warning").
 fn read_to_string_or_warn(path: &Path) -> Option<String> {
     match std::fs::read_to_string(path) {
         Ok(content) => Some(content),

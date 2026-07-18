@@ -105,10 +105,10 @@ in-flight bash call.
   25-turn cap tuned so tightly it fired on ordinary agentic work). Two
   independent guards, both fixed built-in constants in `crates/horizon-
   agent` (`config::DEFAULT_ITERATION_CAP`/`DEFAULT_DOOM_LOOP_WINDOW`), no
-  longer configurable via `[agent] iteration_cap`/`doom_loop_window` in
-  Horizon's config file (those keys are scheduled for removal from the file
-  schema in a follow-up wave; until then they parse but are silently
-  ignored):
+  longer configurable via the file at all — the entire `[agent]` section
+  (including `iteration_cap`/`doom_loop_window`) was removed from Horizon's
+  config schema in the 2026-07-18 config-narrowing wave (see AGENTS.md's
+  "Configuration" section):
   - **Iteration cap (100).** Halts after 100 consecutive tool-driven turns
     since the last user message — `providers::rig::session::TurnLoopGuard::
     record_tool_turn`, incremented once per landed tool *batch*, not once
@@ -191,13 +191,15 @@ official advice) is out of scope regardless of its evidence.
 
 ## Config
 
-Provider/model selection, base URL, and the bash/fs tool tuning on this page
-all flow through Horizon's single TOML config file plus environment
-variables (env wins) — see `AGENTS.md`'s "Configuration" section and
-`config.example.toml` for the full precedence and knob list. The API key
-stays environment-only. No configuration UI. The turn-loop guard values are
-the one exception: as of the "Error Model and Loop Guards" 2026-07-18
-revision above, they are fixed built-in constants, not config-file knobs.
+Provider/model selection and base URL flow through Horizon's single TOML
+config file plus environment variables (env wins) — see `AGENTS.md`'s
+"Configuration" section and `config.example.toml` for the full precedence.
+The API key stays environment-only. No configuration UI. The bash/fs tool
+tuning and turn-loop guard values on this page are *not* config-file knobs:
+as of the 2026-07-18 config-narrowing wave (the "Error Model and Loop
+Guards" revision above, extended to the rest of the former `[agent]`
+section), every one of them is a fixed built-in constant in
+`crates/horizon-agent/src/config.rs`.
 
 ## Where the Industry Diverges — Our Choices
 

@@ -1138,7 +1138,7 @@ impl AgentView {
                         // multi-line command needs to stay legible in
                         // full, not truncated a second time.
                         div()
-                            .font_family("monospace")
+                            .font(crate::terminal::resolved_font())
                             .text_size(px(11.5))
                             .text_color(theme::text_primary())
                             .min_w_0()
@@ -2151,7 +2151,7 @@ fn render_diff_line(line: &turns::DiffLine) -> AnyElement {
         div()
             .flex_none()
             .w(px(14.0))
-            .font_family("monospace")
+            .font(crate::terminal::resolved_font())
             .text_size(px(11.5))
             .text_color(sign_color)
             .child(sign),
@@ -2163,7 +2163,7 @@ fn render_diff_line(line: &turns::DiffLine) -> AnyElement {
             .overflow_hidden()
             .text_ellipsis()
             .whitespace_nowrap()
-            .font_family("monospace")
+            .font(crate::terminal::resolved_font())
             .text_size(px(11.5))
             .text_color(theme::text_muted())
             .child(line.text.clone()),
@@ -2192,7 +2192,7 @@ fn render_line_body(id: impl Into<ElementId>, lines: &[String], omitted: usize) 
                 .overflow_hidden()
                 .text_ellipsis()
                 .whitespace_nowrap()
-                .font_family("monospace")
+                .font(crate::terminal::resolved_font())
                 .text_size(px(11.5))
                 .text_color(theme::text_muted())
                 .child(line.clone()),
