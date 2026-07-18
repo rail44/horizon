@@ -84,6 +84,70 @@ fn timeout_kills_the_process_and_reports_captured_partial_output() {
     );
 }
 
+// --- spawn failure ---------------------------------------------------------
+
+/// Backlog 46 (the 2026-07-19 event-log analysis of session `2f3668b8`):
+/// a single call spawned 134 real bash children in ~30s before finally
+/// failing with "Too many open files (os error 24)" -- but that storm's
+/// root cause was never a retry loop inside `exec::run` (there isn't one:
+/// [`super::exec::run_async`]'s `cmd.spawn()` fails exactly once and
+/// returns immediately, no loop). It was 134 duplicate
+/// `Command::ApproveToolCall`s for the same still-running call reaching
+/// `tools::approval::try_execute` before its `has_tool_call_started` guard
+/// existed, each one spawning its own concurrent, never-reaped child (see
+/// `resolve_approval_second_approve_of_a_still_running_bash_call_is_noop`
+/// and `approved_bash_calls_for_the_same_session_are_serialized`, which
+/// together close both halves of that gap: an already-started call can't
+/// be approved twice, and even multiple enqueued calls for one session
+/// never run concurrently).
+///
+/// This test covers the other half backlog 46 asked about: whether a
+/// *failed* spawn attempt itself leaks anything. A nonexistent `current_dir`
+/// deterministically fails `Command::spawn()` before any child exists (see
+/// `run_async`'s own `cmd.spawn()` match) -- a real, non-flaky spawn-failure
+/// injection point already present in the code, without needing to exhaust
+/// real file descriptors or add a test-only seam. Repeating it many times
+/// and comparing this process's own open-fd count before and after proves
+/// each failed attempt cleans up completely: nothing --  not a runtime, not
+/// a half-created pipe -- survives past the `Err` return.
+#[cfg(target_os = "linux")]
+#[test]
+fn repeated_spawn_failures_do_not_leak_file_descriptors() {
+    fn open_fd_count() -> usize {
+        std::fs::read_dir("/proc/self/fd")
+            .map(|entries| entries.count())
+            .unwrap_or(0)
+    }
+
+    let missing_dir =
+        std::env::temp_dir().join(format!("horizon-bash-missing-{}", uuid::Uuid::new_v4()));
+    let cwd = cwd_handle(missing_dir);
+    let call_id = ToolCallId("spawn-fail-fd-check".to_string());
+
+    let before = open_fd_count();
+    for _ in 0..50 {
+        let output = super::exec::run(&call_id, &json!({ "command": "echo hi" }), &cwd, &config());
+        assert_eq!(output["is_error"], true);
+        assert!(
+            output["message"]
+                .as_str()
+                .expect("message")
+                .contains("failed to start bash"),
+            "expected a spawn-failure message, got: {output}"
+        );
+        assert!(
+            !super::registry::is_registered(&call_id),
+            "a spawn that never produced a child must never register a kill handle"
+        );
+    }
+    let after = open_fd_count();
+
+    assert!(
+        after <= before + 5,
+        "50 failed spawn attempts should not accumulate open fds: before {before}, after {after}"
+    );
+}
+
 // --- post-exit pipe holders -----------------------------------------------
 
 #[test]

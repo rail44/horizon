@@ -838,3 +838,70 @@ full resolution/closing records.
     exclusively about the Kitty *keyboard* protocol (key encoding/CSI u
     progressive enhancement) and has no concealed-text/SGR-8 coverage at
     all — unrelated domain, nothing to update there.
+46. *(resolved 2026-07-19 — already fixed pre-existing on `main`; test
+    coverage strengthened, no production code change needed)* **Agent
+    bash spawn-retry storm: 134 duplicate `ToolCallStarted` for one call,
+    ending in EMFILE.** Filed from the 2026-07-19 event-log analysis of
+    session `2f3668b8`: one `bash` call (`cargo test --workspace
+    terminal_cursor_falls_back_to_accent`) emitted 134 `ToolCallStarted`
+    records over ~30s, then failed with "failed to start bash: Too many
+    open files (os error 24)". Root cause traced from the event log's raw
+    `created_at_unix_ms` timestamps: the session ran on 2026-07-05 (the
+    log's ms-epoch decodes to 2026-07-05 10:42 UTC / 19:42 JST), **before**
+    commit `c54c764` ("Make tool approval idempotent and informed",
+    2026-07-05 22:18 JST — same evening, 461 commits before current HEAD)
+    landed. That commit's own message names this exact incident ("134
+    builds in one real incident"), confirming the filed log *is* that
+    incident, not a still-live bug.
+    - **Why 134, and why that cadence:** not an internal retry/backoff
+      loop — `crates/horizon-agent/src/tools/bash/exec.rs`'s `run_async`
+      calls `Command::spawn()` exactly once per invocation and returns on
+      the first error; there is no loop there at all, then or now. The
+      134 `ToolCallStarted` were 134 separate `Command::ApproveToolCall`
+      envelopes for the *same* call, each re-entering
+      `tools::approval::try_execute`/`resolve_bash` and each spawning its
+      own fresh bash child — because the pre-fix idempotency guard in
+      `try_execute` only checked `frame.has_tool_call_finished`, and
+      `bash`'s approve path folds `ToolCallStarted` immediately but
+      `ToolCallFinished` only once the child actually exits (up to the
+      full timeout — here, a `cargo test --workspace` run). A held-down
+      approve key (banner gave no visible "already running" feedback)
+      kept re-sending `Approve` into that open window at roughly the
+      observed sub-second cadence.
+    - **Was it self-amplifying (fd leak)?** Yes: pre-fix, `bash::spawn`
+      (`tools/bash/mod.rs`) spawned an unthrottled new OS thread and a
+      real child process (2 new pipe fds for stdout/stderr, plus whatever
+      the command's own process tree opened — here a `cargo
+      test`/`rustc` tree) on *every* call, with no per-session
+      serialization and no "already running" check, so every duplicate
+      approval piled another concurrent, never-reaped bash+cargo/rustc
+      process tree on top of the ones still running from earlier
+      duplicates — a real, compounding fd leak, not merely repeated
+      failed attempts. It ran until the 134th spawn attempt hit the
+      process-wide fd ceiling and failed with EMFILE.
+    - **Current state (verified against HEAD, `c54c764` is an ancestor):**
+      already closed two ways — (1) `AgentFrame::has_tool_call_started`
+      plus `try_execute`'s guard now reject a second `Approve`/`Deny` for
+      a call that has started but not finished (`ApprovalOutcome::
+      AlreadyResolved`, dropped and logged, never re-spawns); (2)
+      `tools/bash/registry.rs`'s per-session FIFO
+      (`enqueue`/`run_job`/`advance`) now serializes a session's bash
+      calls so even multiple *distinct* enqueued calls can never run
+      concurrently. Existing regression tests directly cover both:
+      `resolve_approval_second_approve_of_a_still_running_bash_call_is_noop`
+      and `approved_bash_calls_for_the_same_session_are_serialized`
+      (`crates/horizon-agent/src/tools/{tests.rs,bash/tests.rs}`).
+    - **What this pass added:** the backlog's fd-leak question hadn't
+      been checked for the *other* half — a single call's own spawn
+      failure path (`run_async`'s `cmd.spawn()` `Err` arm) — since there
+      was no existing spawn-failure test at all. Added
+      `repeated_spawn_failures_do_not_leak_file_descriptors`
+      (`crates/horizon-agent/src/tools/bash/tests.rs`, Linux-only):
+      injects a deterministic, non-flaky spawn failure via a nonexistent
+      `current_dir` (confirmed empirically to fail `Command::spawn()`
+      before any child exists, no real fd exhaustion needed), repeats it
+      50x, and asserts this test process's own `/proc/self/fd` count
+      doesn't grow and the kill registry never gains an entry for a call
+      that never produced a child. Passes; no production code change was
+      needed since `exec::run`'s single-shot `spawn()` call already
+      cleans up completely on every `Err` path.
