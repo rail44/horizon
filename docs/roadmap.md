@@ -112,6 +112,25 @@ lands:
   patch/upgrade) or a live capture confirming the hypothesis is
   still open.
 
+- **Terminal presentation wave** — in flight 2026-07-18 (owner GO after
+  the concern review below). Five slices: geometric box/block-element
+  rendering (adapting termy's MIT geometry), click-count word/line
+  selection through the contract, primary-selection wiring (the OS
+  integration already existed unused), pixel-accumulator touchpad
+  scrolling plus a scroll round-trip latency measurement, and a
+  Horizon-owned logical color vocabulary replacing the upstream enum
+  re-export (owner decision b). Grounded in
+  `docs/research/gpui-terminal-presentation-2026-07-18.md`.
+  **Architecture ratified in the same consult:** the
+  daemon-owns-the-emulator split point was re-examined against that
+  survey's "nobody else does this split" finding and kept — the split
+  follows from Horizon-unique premises (own emulation core as an asset,
+  own GUI, crash survival); the consciously-accepted tax is that
+  emulator-adjacent interactions (selection semantics, future search,
+  scroll context) are designed tiers of the frame/command contract, not
+  ad-hoc additions, and ecosystem code ports only at the pure-function
+  level.
+
 ## External gates
 
 - **winit on macOS/Windows** — the platform layer shipped
