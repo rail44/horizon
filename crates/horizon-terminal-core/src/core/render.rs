@@ -1,11 +1,16 @@
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Term, TermMode};
-use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Rgb};
+use alacritty_terminal::vte::ansi::{
+    Color as AnsiColor, NamedColor as AnsiNamedColor, Rgb as AnsiRgb,
+};
 use unicode_width::UnicodeWidthChar;
 
 use crate::core::events::EventSink;
 use crate::types::frame_text;
-use crate::types::{TerminalCursor, TerminalFrame, TerminalLine, TerminalSize, TerminalSpan};
+use crate::types::{
+    NamedColor, TerminalColor, TerminalCursor, TerminalFrame, TerminalLine, TerminalSize,
+    TerminalSpan,
+};
 
 pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> TerminalFrame {
     let mut styled_rows = vec![TerminalLine { spans: Vec::new() }; size.rows as usize];
@@ -30,20 +35,16 @@ pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> Term
             continue;
         }
 
-        let fg = cell_fg(cell.fg, cell.flags);
-        let bg = cell_bg(cell.bg, cell.flags);
+        let fg = convert_color(cell_fg(cell.fg, cell.flags));
+        let bg = convert_color(cell_bg(cell.bg, cell.flags));
         let (fg, bg) = if content
             .selection
             .as_ref()
             .is_some_and(|selection| selection.contains(indexed.point))
         {
             (
-                AnsiColor::Named(NamedColor::Background),
-                AnsiColor::Spec(Rgb {
-                    r: 132,
-                    g: 220,
-                    b: 198,
-                }),
+                TerminalColor::Named(NamedColor::Background),
+                TerminalColor::Rgb([132, 220, 198]),
             )
         } else {
             (fg, bg)
@@ -86,8 +87,8 @@ fn push_styled_cell(
     line: &mut TerminalLine,
     ch: char,
     columns: usize,
-    fg: AnsiColor,
-    bg: AnsiColor,
+    fg: TerminalColor,
+    bg: TerminalColor,
 ) {
     if let Some(last) = line.spans.last_mut() {
         if columns == 0 && last.fg == fg && last.bg == bg {
@@ -154,7 +155,7 @@ fn cell_fg(color: AnsiColor, flags: Flags) -> AnsiColor {
 }
 
 fn cell_bg(color: AnsiColor, flags: Flags) -> AnsiColor {
-    let mut fg = cell_fg(AnsiColor::Named(NamedColor::Foreground), flags);
+    let mut fg = cell_fg(AnsiColor::Named(AnsiNamedColor::Foreground), flags);
     let mut bg = color;
     if flags.contains(Flags::INVERSE) {
         std::mem::swap(&mut fg, &mut bg);
@@ -167,4 +168,52 @@ fn cursor_position(row: i32, col: usize) -> Option<TerminalCursor> {
         row: row as usize,
         col,
     })
+}
+
+/// Convert `alacritty_terminal`'s VT-internal color representation into
+/// this crate's own [`TerminalColor`] — the one place a `TerminalFrame` is
+/// built, per `types::color`'s doc comment.
+fn convert_color(color: AnsiColor) -> TerminalColor {
+    match color {
+        AnsiColor::Spec(AnsiRgb { r, g, b }) => TerminalColor::Rgb([r, g, b]),
+        AnsiColor::Indexed(index) => TerminalColor::Indexed(index),
+        AnsiColor::Named(named) => TerminalColor::Named(convert_named(named)),
+    }
+}
+
+/// Convert every reachable `alacritty_terminal::vte::ansi::NamedColor`
+/// variant (see [`NamedColor`]'s doc comment for which ones `cell_fg`/
+/// `cell_bg` can actually produce) into this crate's owned enum.
+fn convert_named(named: AnsiNamedColor) -> NamedColor {
+    match named {
+        AnsiNamedColor::Black => NamedColor::Black,
+        AnsiNamedColor::Red => NamedColor::Red,
+        AnsiNamedColor::Green => NamedColor::Green,
+        AnsiNamedColor::Yellow => NamedColor::Yellow,
+        AnsiNamedColor::Blue => NamedColor::Blue,
+        AnsiNamedColor::Magenta => NamedColor::Magenta,
+        AnsiNamedColor::Cyan => NamedColor::Cyan,
+        AnsiNamedColor::White => NamedColor::White,
+        AnsiNamedColor::BrightBlack => NamedColor::BrightBlack,
+        AnsiNamedColor::BrightRed => NamedColor::BrightRed,
+        AnsiNamedColor::BrightGreen => NamedColor::BrightGreen,
+        AnsiNamedColor::BrightYellow => NamedColor::BrightYellow,
+        AnsiNamedColor::BrightBlue => NamedColor::BrightBlue,
+        AnsiNamedColor::BrightMagenta => NamedColor::BrightMagenta,
+        AnsiNamedColor::BrightCyan => NamedColor::BrightCyan,
+        AnsiNamedColor::BrightWhite => NamedColor::BrightWhite,
+        AnsiNamedColor::DimBlack => NamedColor::DimBlack,
+        AnsiNamedColor::DimRed => NamedColor::DimRed,
+        AnsiNamedColor::DimGreen => NamedColor::DimGreen,
+        AnsiNamedColor::DimYellow => NamedColor::DimYellow,
+        AnsiNamedColor::DimBlue => NamedColor::DimBlue,
+        AnsiNamedColor::DimMagenta => NamedColor::DimMagenta,
+        AnsiNamedColor::DimCyan => NamedColor::DimCyan,
+        AnsiNamedColor::DimWhite => NamedColor::DimWhite,
+        AnsiNamedColor::Foreground => NamedColor::Foreground,
+        AnsiNamedColor::Background => NamedColor::Background,
+        AnsiNamedColor::Cursor => NamedColor::Cursor,
+        AnsiNamedColor::BrightForeground => NamedColor::BrightForeground,
+        AnsiNamedColor::DimForeground => NamedColor::DimForeground,
+    }
 }

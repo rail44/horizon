@@ -2,7 +2,6 @@ use termwiz::input::{KeyCode, Modifiers};
 
 use super::*;
 use crate::core::TerminalCore;
-use alacritty_terminal::vte::ansi::{NamedColor, Rgb};
 use serde::{de::DeserializeOwned, Serialize};
 use std::fmt::Debug;
 
@@ -1639,7 +1638,7 @@ fn terminal_updates_and_external_value_types_round_trip_through_serde() {
     for color in [
         TerminalColor::Named(NamedColor::BrightCyan),
         TerminalColor::Indexed(217),
-        TerminalColor::Spec(Rgb { r: 1, g: 2, b: 3 }),
+        TerminalColor::Rgb([1, 2, 3]),
     ] {
         assert_serde_round_trip(color);
     }
@@ -1784,7 +1783,7 @@ fn frame_diff_apply_reconstructs_snapshot_text_from_styled_rows() {
             text: "value".into(),
             columns: 5,
             fg: TerminalColor::Indexed(12),
-            bg: TerminalColor::Spec(Rgb { r: 4, g: 5, b: 6 }),
+            bg: TerminalColor::Rgb([4, 5, 6]),
         },
     ];
     new.lines[1].spans = vec![TerminalSpan {

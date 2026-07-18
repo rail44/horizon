@@ -4,7 +4,7 @@ mod key_event;
 mod mouse;
 mod size;
 
-pub use color::TerminalColor;
+pub use color::{NamedColor, TerminalColor};
 pub(crate) use frame::frame_text;
 pub use frame::{
     apply_frame_diff, compute_frame_diff, TerminalCursor, TerminalFrame, TerminalFrameDiff,

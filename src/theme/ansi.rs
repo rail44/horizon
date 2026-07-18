@@ -3,9 +3,9 @@
 //! `terminal::view::color::resolve_color`'s semantics against the same
 //! live [`super::scheme::scheme`].
 
-use alacritty_terminal::vte::ansi::{NamedColor, Rgb};
+use alacritty_terminal::vte::ansi::Rgb;
 use gpui::{rgb, Hsla};
-use horizon_terminal_core::TerminalColor;
+use horizon_terminal_core::{NamedColor, TerminalColor};
 
 use super::scheme::scheme;
 
@@ -47,9 +47,9 @@ pub(crate) fn to_hsla(rgb888: [u8; 3]) -> Hsla {
 
 pub(crate) fn resolve(color: TerminalColor, overrides: &[(u16, [u8; 3])]) -> [u8; 3] {
     let override_index = match color {
-        TerminalColor::Spec(_) => None,
+        TerminalColor::Rgb(_) => None,
         TerminalColor::Indexed(index) => Some(index as u16),
-        TerminalColor::Named(named) => Some(named as usize as u16),
+        TerminalColor::Named(named) => named.override_index(),
     };
     if let Some(rgb) = override_index
         .and_then(|index| {
@@ -63,7 +63,7 @@ pub(crate) fn resolve(color: TerminalColor, overrides: &[(u16, [u8; 3])]) -> [u8
     }
 
     match color {
-        TerminalColor::Spec(Rgb { r, g, b }) => [r, g, b],
+        TerminalColor::Rgb(rgb) => rgb,
         TerminalColor::Indexed(index) => indexed_rgb(index),
         TerminalColor::Named(named) => named_rgb(named),
     }
