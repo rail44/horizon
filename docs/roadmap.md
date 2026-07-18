@@ -49,15 +49,20 @@ of the dead `profile` control-plane vertical (owner decision: delete
 over rebuild). Remaining in the wave, unordered:
 `workspace.rs`/`agent/view.rs` splits; the command-model payload
 design (owner: on hold, to be shaped in a later consult); `turns/`
-relocation into the agent asset (owner: relocating is right — the
-a/b/c shape is being decided); config consolidation onto
-horizon-config (owner: direction c — sessiond depends on
-horizon-config and converts) together with the owner's config-surface
-narrowing/restructuring (key inventory in flight); small boundary
-decisions still open (TerminalColor vocabulary, roles registry,
-spikes/gpui-terminal, Hello.capabilities, created_terminal ownership);
-and the session-creation groundwork (deferred to the worktree feature
-work). Feature items, unordered until the wave lands:
+relocation (owner decision: shape c — the structural transcript logic
+moves into horizon-agent as a `transcript` module, wording and
+composer interaction stay UI-side; queued behind the issue-002 merge);
+the config wave (owner decisions 2026-07-18: surface narrowed to
+provider model/base_url + terminal font_size + ui font_family +
+keybindings + theme seed, everything else retired with code defaults —
+term stays xterm-256color with COLORTERM injection, line_height ratio
+becomes 18/13; sessiond consolidates onto horizon-config per direction
+c; keybindings gain live reload; issue 002's guard rework rides the
+same wave — in flight); small boundary decisions still open
+(TerminalColor vocabulary, roles registry, spikes/gpui-terminal,
+Hello.capabilities, created_terminal ownership); and the
+session-creation groundwork (deferred to the worktree feature work).
+Feature items, unordered until the wave lands:
 
 - **Session relationship model — implementation.** The decided design
   (`docs/session-relationship-design.md`): lineage tree,
