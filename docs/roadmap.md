@@ -112,14 +112,18 @@ lands:
   patch/upgrade) or a live capture confirming the hypothesis is
   still open.
 
-- **Terminal presentation wave** — in flight 2026-07-18 (owner GO after
-  the concern review below). Five slices: geometric box/block-element
-  rendering (adapting termy's MIT geometry), click-count word/line
-  selection through the contract, primary-selection wiring (the OS
-  integration already existed unused), pixel-accumulator touchpad
-  scrolling plus a scroll round-trip latency measurement, and a
-  Horizon-owned logical color vocabulary replacing the upstream enum
-  re-export (owner decision b). Grounded in
+- **Terminal presentation wave** — all five slices merged 2026-07-18
+  (up to `bd7f52f`, protocol v5): geometric box/block/sextant/braille
+  rendering (termy MIT geometry, attributed, device-pixel-snapped
+  strokes), click-count word/line selection through the contract,
+  primary-selection wiring (select→primary, middle-click paste;
+  linux/freebsd), pixel-accumulator touchpad scrolling (measured: raw
+  IPC ~1.5ms median, a 16ms coalescing window dominates bursts), and
+  the Horizon-owned color vocabulary (owner decision b). **Owner visual
+  dogfooding is the remaining gate** (glyph seams, selection feel,
+  middle-click, trackpad). A keystroke-latency investigation (owner
+  report: typing lag with Claude Code in a pane) is in flight, prime
+  suspect the mode-2026 sync-update failsafe. Grounded in
   `docs/research/gpui-terminal-presentation-2026-07-18.md`.
   **Architecture ratified in the same consult:** the
   daemon-owns-the-emulator split point was re-examined against that
