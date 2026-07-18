@@ -173,9 +173,14 @@ pub fn core_commands() -> Vec<CommandSpec> {
 
 pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
     match command_id {
-        CommandId::SplitRight
-        | CommandId::SplitDown
-        | CommandId::NewTab
+        // Both split placements target the active tab/session
+        // (`split_active_tab_with_view`/`split_session_with_new_session` in
+        // `horizon-workspace::operations`); with zero tabs there is neither,
+        // so the view chooser used to confirm and silently no-op (backlog
+        // 49). `NewTab` stays unconditionally enabled -- it is the empty
+        // workspace's only way back.
+        CommandId::SplitRight | CommandId::SplitDown => state.tab_count > 0,
+        CommandId::NewTab
         | CommandId::FocusNextPane
         | CommandId::ReloadSessionRuntime
         | CommandId::OpenSessionManager
@@ -357,6 +362,80 @@ mod tests {
         // Nothing to close once the workspace itself has zero tabs.
         assert!(!command_enabled(
             CommandId::CloseActiveTab,
+            CommandState {
+                tab_count: 0,
+                visible_pane_count: 0,
+                has_active_session: false,
+                detached_session_count: 0,
+                has_pending_approval: false,
+                has_turn_in_flight: false,
+                has_paused_turn: false,
+            }
+        ));
+    }
+
+    #[test]
+    fn split_placements_are_disabled_once_the_workspace_is_already_empty() {
+        // Nothing to split from once the workspace itself has zero tabs --
+        // the view chooser used to confirm and silently no-op (backlog 49).
+        assert!(!command_enabled(
+            CommandId::SplitRight,
+            CommandState {
+                tab_count: 0,
+                visible_pane_count: 0,
+                has_active_session: false,
+                detached_session_count: 0,
+                has_pending_approval: false,
+                has_turn_in_flight: false,
+                has_paused_turn: false,
+            }
+        ));
+        assert!(!command_enabled(
+            CommandId::SplitDown,
+            CommandState {
+                tab_count: 0,
+                visible_pane_count: 0,
+                has_active_session: false,
+                detached_session_count: 0,
+                has_pending_approval: false,
+                has_turn_in_flight: false,
+                has_paused_turn: false,
+            }
+        ));
+        assert!(command_enabled(
+            CommandId::SplitRight,
+            CommandState {
+                tab_count: 1,
+                visible_pane_count: 1,
+                has_active_session: true,
+                detached_session_count: 0,
+                has_pending_approval: false,
+                has_turn_in_flight: false,
+                has_paused_turn: false,
+            }
+        ));
+        assert!(command_enabled(
+            CommandId::SplitDown,
+            CommandState {
+                tab_count: 1,
+                visible_pane_count: 1,
+                has_active_session: true,
+                detached_session_count: 0,
+                has_pending_approval: false,
+                has_turn_in_flight: false,
+                has_paused_turn: false,
+            }
+        ));
+    }
+
+    #[test]
+    fn new_tab_stays_enabled_once_the_workspace_is_already_empty() {
+        // Unlike the split placements, `NewTab` must stay reachable at zero
+        // tabs -- it is the empty workspace's only way back (see
+        // `open_session_manager_is_always_enabled` for the same reasoning
+        // applied to the session manager).
+        assert!(command_enabled(
+            CommandId::NewTab,
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
