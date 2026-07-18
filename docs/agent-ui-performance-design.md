@@ -3,6 +3,16 @@
 > reactivity; the GPUI shell (tag `floem-shell-final` marks the switch)
 > renders per-entity and the defenses (per-block signals, untrack, the
 > ast-grep rule) retired with it — see `docs/gpui-migration-design.md`.
+>
+> **2026-07-18 (owner decision):** leg 3's `horizon profile` vertical
+> (this doc's `HORIZON_UI_PROFILE` JSONL substrate and the
+> control-plane `Query { what: "profile" }`/`horizon profile` CLI
+> subcommand) has been deleted from the codebase. Its server-side
+> implementation (`src/profiling/`, a Floem-era UI-thread frame-timing
+> capture) had already died with the GPUI migration above — every
+> `profile` query returned "unknown query" — and the motive for
+> reimplementing it (measuring Floem's reactive over-tracking) is moot
+> now that the Floem shell is gone. Removed rather than rebuilt.
 
 # Agent UI Performance — Design
 

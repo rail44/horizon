@@ -87,10 +87,6 @@ pub enum Subcommand {
     ReloadConfig,
     Sessions,
     State,
-    /// Prints the tail of Horizon's opt-in (`HORIZON_UI_PROFILE`)
-    /// UI-thread event-timing log -- see `horizon::profiling`'s module
-    /// doc. Lets an agent read UI-thread performance from outside the app.
-    Profile,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,8 +121,7 @@ Subcommands:\n  \
   reload-session-runtime\n  \
   reload-config\n  \
   sessions\n  \
-  state\n  \
-  profile";
+  state";
 
 /// Parses `argv` (already stripped of `argv[0]`). Global flags
 /// (`--socket`/`--json`/`--yes`/`--prompt`/`--split`/`--active`) are
@@ -274,10 +269,6 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
         "state" => {
             reject_extra(&mut positionals, "state")?;
             Subcommand::State
-        }
-        "profile" => {
-            reject_extra(&mut positionals, "profile")?;
-            Subcommand::Profile
         }
         other => return Err(UsageError(format!("unknown subcommand: {other}"))),
     };
@@ -628,12 +619,6 @@ mod tests {
             parse(&args(&["reload-config"])).unwrap().subcommand,
             Subcommand::ReloadConfig
         );
-    }
-
-    #[test]
-    fn parses_profile() {
-        let parsed = parse(&args(&["profile"])).unwrap();
-        assert_eq!(parsed.subcommand, Subcommand::Profile);
     }
 
     #[test]
