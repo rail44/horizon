@@ -29,7 +29,7 @@ pub use contract::{
 pub use core::{TerminalColorScheme, DEFAULT_SCROLLBACK_LINES};
 pub use session_loop::{run_terminal_core, CoreReceivers, CoreSenders, TerminalCoreOptions};
 pub use types::{
-    apply_frame_diff, compute_frame_diff, KeyEventKind, TerminalColor, TerminalCursor,
+    apply_frame_diff, compute_frame_diff, KeyEventKind, NamedColor, TerminalColor, TerminalCursor,
     TerminalFrame, TerminalFrameDiff, TerminalLine, TerminalMouseButton, TerminalMouseKind,
     TerminalMouseModifiers, TerminalMouseReport, TerminalRowDiff, TerminalScroll,
     TerminalSelectionPoint, TerminalSize, TerminalSpan,

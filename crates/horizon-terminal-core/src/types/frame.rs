@@ -1,8 +1,7 @@
-use alacritty_terminal::vte::ansi::NamedColor;
 use serde::{Deserialize, Serialize};
 use unicode_width::UnicodeWidthChar;
 
-use super::color::TerminalColor;
+use super::color::{NamedColor, TerminalColor};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TerminalFrame {

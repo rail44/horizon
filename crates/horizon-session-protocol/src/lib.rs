@@ -11,7 +11,14 @@ use uuid::Uuid;
 ///
 /// Version 4 adds correlated terminal discovery and attach controls; attach
 /// changed shape, so older peers cannot safely decode the terminal vocabulary.
-pub const SESSION_PROTOCOL_VERSION: u32 = 4;
+///
+/// Version 5: `TerminalSpan`'s `fg`/`bg` now carry `horizon-terminal-core`'s
+/// own `TerminalColor`/`NamedColor` enums instead of a re-exported
+/// `alacritty_terminal::vte::ansi::Color`/`NamedColor` — same role, different
+/// wire shape (variant names/order changed, `Spec(Rgb)` became `Rgb([u8;
+/// 3])`), so a stale daemon/UI pair must fail the handshake rather than
+/// misdecode a frame's colors.
+pub const SESSION_PROTOCOL_VERSION: u32 = 5;
 
 pub const SESSION_CONTROL_KIND: &str = "session_control";
 

@@ -17,6 +17,7 @@
 //! - `HORIZON_INPUT_TRACE=1` (or a file path) traces every hop of the
 //!   real input pipeline instead — see `crate::input_trace`.
 
+mod glyphs;
 mod input;
 mod session;
 #[cfg(test)]
@@ -796,11 +797,10 @@ fn paint_terminal(
     };
 
     let default_bg = theme::to_hsla(theme::resolve(
-        horizon_terminal_core::TerminalColor::Named(
-            alacritty_terminal::vte::ansi::NamedColor::Background,
-        ),
+        horizon_terminal_core::TerminalColor::Named(horizon_terminal_core::NamedColor::Background),
         &frame.palette_overrides,
     ));
+    let scale_factor = window.scale_factor();
 
     // Grid-positioned painting (the pattern every surveyed GPUI terminal
     // converges on): each span is painted at its computed column offset,
@@ -836,29 +836,68 @@ fn paint_terminal(
                 continue;
             }
             let fg = theme::to_hsla(theme::resolve(span.fg, &frame.palette_overrides));
-            let run = TextRun {
-                len: span.text.len(),
-                font: font.clone(),
-                color: fg,
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            };
-            // Snap glyphs to the cell grid only when every char in the
-            // span occupies the same number of columns; a mixed-width
-            // span keeps natural shaping (positioned correctly at its
-            // start column, with only intra-span drift possible).
-            let chars = span.text.chars().count();
-            let force_width = if span.columns == chars {
-                Some(cell_width)
-            } else if span.columns == chars * 2 {
-                Some(cell_width * 2.0)
-            } else {
-                None
-            };
-            let shaped =
-                text_system.shape_line(span.text.clone().into(), font_size, &[run], force_width);
-            let _ = shaped.paint(origin, line_height, TextAlign::Left, None, window, cx);
+
+            // Box-drawing/block/sextant/Braille characters (see `glyphs`)
+            // paint as geometry sized exactly to their cell instead of
+            // shaped font glyphs, which can't fill a cell taller than the
+            // font's own em box -- the seams reported in ASCII-art
+            // rectangles. A span's characters are walked one at a time so a
+            // run mixing geometric and ordinary text (same fg/bg, so
+            // already merged into one span) still gets both treatments;
+            // consecutive ordinary-text characters are still batched
+            // through one `shape_line` call, matching the old whole-span
+            // behavior when a span has no geometric characters at all.
+            let chars: Vec<char> = span.text.chars().collect();
+            let mut char_index = 0;
+            let mut col_in_span = 0_usize;
+            while char_index < chars.len() {
+                let ch = chars[char_index];
+                if glyphs::is_geometric(ch) {
+                    let width_cols = char_columns(ch).max(1);
+                    let cell_origin = origin + point(cell_width * col_in_span as f32, px(0.0));
+                    let cell_bounds = Bounds::new(
+                        cell_origin,
+                        gpui::size(cell_width * width_cols as f32, line_height),
+                    );
+                    glyphs::paint_glyph(window, cell_bounds, ch, fg, font_size, scale_factor);
+                    col_in_span += width_cols;
+                    char_index += 1;
+                    continue;
+                }
+
+                let run_start_col = col_in_span;
+                let mut run_text = String::new();
+                while char_index < chars.len() && !glyphs::is_geometric(chars[char_index]) {
+                    run_text.push(chars[char_index]);
+                    col_in_span += char_columns(chars[char_index]).max(1);
+                    char_index += 1;
+                }
+                let run_origin = origin + point(cell_width * run_start_col as f32, px(0.0));
+                let run_columns = col_in_span - run_start_col;
+                let run_chars = run_text.chars().count();
+                // Snap glyphs to the cell grid only when every char in the
+                // run occupies the same number of columns; a mixed-width
+                // run keeps natural shaping (positioned correctly at its
+                // start column, with only intra-run drift possible).
+                let force_width = if run_columns == run_chars {
+                    Some(cell_width)
+                } else if run_columns == run_chars * 2 {
+                    Some(cell_width * 2.0)
+                } else {
+                    None
+                };
+                let run = TextRun {
+                    len: run_text.len(),
+                    font: font.clone(),
+                    color: fg,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                };
+                let shaped =
+                    text_system.shape_line(run_text.into(), font_size, &[run], force_width);
+                let _ = shaped.paint(run_origin, line_height, TextAlign::Left, None, window, cx);
+            }
         }
     }
 
@@ -879,7 +918,7 @@ fn paint_terminal(
             ));
             let fg = theme::to_hsla(theme::resolve(
                 horizon_terminal_core::TerminalColor::Named(
-                    alacritty_terminal::vte::ansi::NamedColor::Foreground,
+                    horizon_terminal_core::NamedColor::Foreground,
                 ),
                 &frame.palette_overrides,
             ));
@@ -908,9 +947,7 @@ fn paint_terminal(
                 line_height * cursor.row as f32,
             );
         let mut color = theme::to_hsla(theme::resolve(
-            horizon_terminal_core::TerminalColor::Named(
-                alacritty_terminal::vte::ansi::NamedColor::Cursor,
-            ),
+            horizon_terminal_core::TerminalColor::Named(horizon_terminal_core::NamedColor::Cursor),
             &frame.palette_overrides,
         ));
         color.a = 0.6;
