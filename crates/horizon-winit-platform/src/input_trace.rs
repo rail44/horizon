@@ -18,10 +18,21 @@
 
 use std::io::Write as _;
 use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 pub(crate) enum Sink {
     Stderr,
     File(Mutex<std::fs::File>),
+}
+
+// Added 2026-07-18 for the keystroke-latency investigation; see the
+// identical epoch in `src/input_trace.rs` (the gpui-side half) for why an
+// independent per-crate epoch is accurate enough for cross-crate delta
+// comparison.
+static EPOCH: OnceLock<Instant> = OnceLock::new();
+
+fn epoch() -> Instant {
+    *EPOCH.get_or_init(Instant::now)
 }
 
 static SINK: OnceLock<Option<Sink>> = OnceLock::new();
@@ -54,11 +65,12 @@ pub(crate) fn describe_text(text: &str) -> String {
 /// [`trace`] macro, which checks [`sink`] first so `format_args!` never
 /// runs when tracing is disabled.
 pub(crate) fn write_line(sink: &Sink, args: std::fmt::Arguments) {
+    let t = epoch().elapsed().as_secs_f64() * 1000.0;
     match sink {
-        Sink::Stderr => eprintln!("input-trace: {args}"),
+        Sink::Stderr => eprintln!("input-trace: t={t:.3}ms {args}"),
         Sink::File(file) => {
             if let Ok(mut file) = file.lock() {
-                let _ = writeln!(file, "input-trace: {args}");
+                let _ = writeln!(file, "input-trace: t={t:.3}ms {args}");
             }
         }
     }

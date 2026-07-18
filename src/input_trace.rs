@@ -17,10 +17,25 @@
 
 use std::io::Write as _;
 use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 pub(crate) enum Sink {
     Stderr,
     File(Mutex<std::fs::File>),
+}
+
+// Monotonic origin for per-line timestamps (added 2026-07-18 for the
+// keystroke-latency investigation): lets a trace attribute the input
+// pipeline's own hop latency, not just its event sequence. Anchored at
+// first use (early in process startup, well before any real keystroke),
+// so cross-crate comparison against `horizon-winit-platform::input_trace`'s
+// own independent epoch (same process, same clock source, both anchored
+// within microseconds of each other at startup) stays accurate for
+// events happening later.
+static EPOCH: OnceLock<Instant> = OnceLock::new();
+
+fn epoch() -> Instant {
+    *EPOCH.get_or_init(Instant::now)
 }
 
 static SINK: OnceLock<Option<Sink>> = OnceLock::new();
@@ -54,11 +69,12 @@ pub(crate) fn describe_text(text: &str) -> String {
 /// [`trace`] macro, which checks [`sink`] first so `format_args!` never
 /// runs when tracing is disabled.
 pub(crate) fn write_line(sink: &Sink, args: std::fmt::Arguments) {
+    let t = epoch().elapsed().as_secs_f64() * 1000.0;
     match sink {
-        Sink::Stderr => eprintln!("input-trace: {args}"),
+        Sink::Stderr => eprintln!("input-trace: t={t:.3}ms {args}"),
         Sink::File(file) => {
             if let Ok(mut file) = file.lock() {
-                let _ = writeln!(file, "input-trace: {args}");
+                let _ = writeln!(file, "input-trace: t={t:.3}ms {args}");
             }
         }
     }
