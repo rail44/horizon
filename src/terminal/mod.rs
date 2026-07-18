@@ -845,11 +845,21 @@ fn paint_terminal(
         for span in &line.spans {
             let x = cell_width * col as f32;
             col += span.columns;
-            if span.text.is_empty() {
-                continue;
-            }
             let origin = bounds.origin + point(x, y);
 
+            // Background painting must not be gated on `span.text` being
+            // non-empty: a run of blank cells (`push_styled_cell` in
+            // horizon-terminal-core's `render` module represents a space
+            // run as an empty-text span carrying only `columns`/`bg`) is
+            // exactly how BCE-erased regions (`CSI K`/`CSI J` filling with
+            // the currently active background -- classic `bce` terminfo
+            // semantics) and explicit bg-colored space padding (a status
+            // line's fill, a selection highlight over blank cells) reach
+            // the screen. An earlier `if span.text.is_empty() { continue }`
+            // here skipped this whole block for those spans, silently
+            // dropping their background fill -- the root cause of the
+            // gaps/interruptions in bg-colored regions (owner dogfooding
+            // report, 2026-07-18).
             let bg = theme::to_hsla(theme::resolve(span.bg, &frame.palette_overrides));
             if bg != default_bg {
                 window.paint_quad(fill(
