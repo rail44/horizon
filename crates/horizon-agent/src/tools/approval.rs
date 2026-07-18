@@ -19,15 +19,17 @@ pub enum ApprovalDecision {
 pub enum ApprovalOutcome {
     /// Horizon executed (or, for a deny, short-circuited) the tool
     /// app-side, synchronously. `events` are exactly the events that were
-    /// just folded into the session's `LiveState` (in order) — a caller that
-    /// only needs to publish the whole updated frame locally (e.g. the
-    /// in-process pane, via `Frames::update_agent_frame`) can ignore this
-    /// and use `frame` directly; a caller relaying over a transport that
-    /// expects a discrete event stream (`horizon-sessiond`, forwarding to
-    /// Horizon over the wire — see `docs/agent-runtime-split-design.md`
-    /// step 3) forwards `events` instead, since a whole-frame snapshot isn't
-    /// the wire's event-envelope shape. `frame` is the session's updated
-    /// live frame — already folded through the session's `LiveState` — and
+    /// just folded into the session's `LiveState` (in order) — this is
+    /// what the one production caller uses: `horizon-sessiond` (the only
+    /// place agent sessions run today — see `crate::client`'s module doc,
+    /// there is no in-process fallback) forwards `events` over the wire to
+    /// Horizon, since a whole-frame snapshot isn't the wire's
+    /// event-envelope shape (`resolve_and_forward` in
+    /// `crates/horizon-sessiond/src/session.rs`, which discards `frame`
+    /// via `..`). `frame` — the session's updated live frame, already
+    /// folded through the session's `LiveState` — is kept for a caller
+    /// that wants the whole updated frame directly instead of replaying
+    /// events (this crate's own tests use it to assert fold correctness).
     /// `command` is the `Command::ToolCallResult` to forward to the
     /// provider.
     Executed {

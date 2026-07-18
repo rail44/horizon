@@ -72,13 +72,14 @@ Unix-socket control plane, useful for scripting or driving Horizon from an
 agent. Panes get `HORIZON_SOCKET`/`HORIZON_SESSION_ID` in their environment,
 so a subcommand run from inside a pane targets the enclosing instance and
 `--split` (bare) resolves to "here" by default. Subcommands: `new-terminal`,
-`new-agent [--prompt <text>]`, `attach <session-id>`,
+`new-agent [--prompt <text>]`, `new-config-agent [--prompt <text>]`,
+`attach <session-id>`,
 `terminate-session <session-id>`, `terminate-all-detached`,
 `approve`/`deny <session-id> <call-id>`, `cancel-turn <session-id>`,
 `continue-turn <session-id>`,
-`reload-session-runtime`, `sessions`, `state` (each takes `--split`/`--active`
-where placement/focus applies). See `docs/cli-control-plane-design.md` for
-the full contract.
+`reload-session-runtime`, `reload-config`, `sessions`, `state` (each takes
+`--split`/`--active` where placement/focus applies). See
+`docs/cli-control-plane-design.md` for the full contract.
 
 For an automated headless check of the terminal pane:
 

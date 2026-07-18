@@ -576,9 +576,11 @@ fn state_entry_advance_keeps_timestamp_until_state_changes() {
 
 #[test]
 fn state_entry_elapsed_grows_with_time() {
-    // Mirrors how `workspace::view::pane` computes the pane header's
-    // elapsed-time display: `Instant::now() - entered_at`, driven by a
-    // periodic tick rather than a method on `StateEntry` itself.
+    // Mirrors the shape of `src/agent/view.rs`'s running-card
+    // elapsed-seconds ticker (`RunningTurnClock`): `Instant::now() -
+    // started_at`, driven by a periodic tick rather than a method on the
+    // clock type itself. `StateEntry` is test-only today (see its own
+    // doc comment) -- this pins the timing arithmetic in isolation.
     let entry = StateEntry::initial(Some(agent::SessionState::ToolRunning));
     std::thread::sleep(std::time::Duration::from_millis(15));
 
@@ -608,10 +610,9 @@ fn agent_frame_tracks_pending_approval_until_tool_finishes() {
 
 #[test]
 fn agent_frame_lists_multiple_pending_approvals_oldest_first() {
-    // Two calls request approval before either resolves -- the banner
-    // (`workspace::view::agent_controls::agent_approval_banner`) answers the
-    // oldest first and shows a "+N more" hint for the rest, so both the
-    // queue's order and its length matter here.
+    // Two calls request approval before either resolves -- dispatch acts
+    // on the oldest pending call first (`AgentSession::approve`/`deny`),
+    // so this test pins both the queue's order and its length.
     let first = agent::ToolCallId("call-1".to_string());
     let second = agent::ToolCallId("call-2".to_string());
     let mut frame = AgentFrame::empty();

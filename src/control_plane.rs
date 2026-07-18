@@ -1,11 +1,12 @@
 //! The GPUI shell's control plane: the transport (socket, listener,
-//! per-connection handling) is `horizon_control::host`, shared with the
-//! Floem shell; this module is the GPUI-side UI-thread bridge (the
-//! `ChannelExecutor` counterpart of the Floem shell's
-//! `control_plane::bridge`) plus a dispatcher over the shell's
-//! `execute()`/model. The external vocabulary here mirrors every landed
-//! subsystem, including `reload-session-runtime` (the sessiond
-//! drain/respawn/resume sequence, `WorkspaceShell::reload_session_runtime`).
+//! per-connection handling) is `horizon_control::host`, with the client
+//! side (`horizon <subcommand>`) in `crates/horizon-cli`. This module is
+//! the UI-thread bridge over it -- `ChannelExecutor` hands each
+//! `ControlRequest` to the GPUI event loop via a channel -- plus a
+//! dispatcher over the shell's `execute()`/model. The external vocabulary
+//! here mirrors every landed subsystem, including `reload-session-runtime`
+//! (the sessiond drain/respawn/resume sequence,
+//! `WorkspaceShell::reload_session_runtime`).
 
 use std::time::Duration;
 
