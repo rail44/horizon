@@ -35,8 +35,8 @@ use horizon_terminal_core::{
 };
 
 use self::input::{
-    cell_from_position, scroll_lines_from_wheel, term_key_code, term_modifiers,
-    terminal_mouse_button, terminal_mouse_modifiers,
+    cell_from_position, selection_kind_from_clicks, term_key_code, term_modifiers,
+    terminal_mouse_button, terminal_mouse_modifiers, ScrollAccumulator,
 };
 use crate::input_trace::input_trace;
 use crate::theme;
@@ -149,6 +149,10 @@ pub(crate) struct TerminalView {
     // The button held while the app has mouse reporting on, so drags and
     // the release report the same button the press did.
     reporting_button: Option<TerminalMouseButton>,
+    // Pixel-delta scroll accumulator (see `input::ScrollAccumulator`'s
+    // doc): banks fractional lines across wheel events, per-view state
+    // since each pane scrolls independently.
+    scroll_accum: ScrollAccumulator,
     _session_observation: Subscription,
 }
 
@@ -177,6 +181,7 @@ impl TerminalView {
             key_text_dedup: KeyTextDedup::default(),
             selecting: false,
             reporting_button: None,
+            scroll_accum: ScrollAccumulator::default(),
             _session_observation: observation,
         }
     }
@@ -219,9 +224,30 @@ impl TerminalView {
             });
         } else if event.button == MouseButton::Left {
             self.selecting = true;
-            self.session.read(cx).send_selection_start(point);
+            let kind = selection_kind_from_clicks(event.click_count);
+            self.session.read(cx).send_selection_start(point, kind);
+        } else if event.button == MouseButton::Middle {
+            self.paste_from_primary(cx);
         }
     }
+
+    /// Middle-click paste from the OS primary selection buffer (X11/
+    /// Wayland's middle-click-paste convention, only while mouse reporting
+    /// is off -- see `handle_mouse_down`). No-op off Linux/FreeBSD,
+    /// mirroring `horizon-winit-platform`'s own cfg gate on
+    /// `Platform::read_from_primary`.
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    fn paste_from_primary(&self, cx: &App) {
+        if let Some(text) = cx
+            .read_from_primary()
+            .and_then(|item| item.text().map(|text| text.to_string()))
+        {
+            self.session.read(cx).send_paste(text);
+        }
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+    fn paste_from_primary(&self, _cx: &App) {}
 
     fn handle_mouse_move(&mut self, event: &MouseMoveEvent, cx: &App) {
         let Some(point) = self.cell_at(event.position) else {
@@ -270,7 +296,10 @@ impl TerminalView {
         let Some(point) = self.cell_at(event.position) else {
             return;
         };
-        if let Some(lines) = scroll_lines_from_wheel(&event.delta) {
+        if let Some(lines) =
+            self.scroll_accum
+                .consume(event.delta, event.touch_phase, line_height())
+        {
             self.session.read(cx).send_scroll(lines, point);
         }
     }

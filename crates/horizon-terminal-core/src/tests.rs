@@ -284,10 +284,71 @@ fn selection_to_string_uses_alacritty_selection() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 3));
     core.write_vt(b"hello world");
 
-    core.start_selection(TerminalSelectionPoint { row: 0, col: 0 });
+    core.start_selection(
+        TerminalSelectionPoint { row: 0, col: 0 },
+        TerminalSelectionKind::Simple,
+    );
     core.update_selection(TerminalSelectionPoint { row: 0, col: 4 });
 
     assert_eq!(core.selected_text(), Some("hello".to_string()));
+}
+
+/// `TerminalSelectionKind::Word` maps to alacritty's `SelectionType::
+/// Semantic`, which selects the whole word under the click point as part
+/// of construction -- no drag needed, and no need to port termy's own
+/// char-class module (docs/research/gpui-terminal-presentation-2026-07-18.md,
+/// "Selection").
+#[test]
+fn word_selection_selects_the_whole_word_under_the_click_with_no_drag() {
+    let mut core = TerminalCore::new(TerminalSize::new(30, 3));
+    core.write_vt(b"hello world");
+
+    // Click lands mid-word ("wor|ld"), col 8.
+    core.start_selection(
+        TerminalSelectionPoint { row: 0, col: 8 },
+        TerminalSelectionKind::Word,
+    );
+
+    assert_eq!(core.selected_text(), Some("world".to_string()));
+}
+
+/// `TerminalSelectionKind::Line` maps to `SelectionType::Lines`, selecting
+/// the whole row under the click point immediately.
+#[test]
+fn line_selection_selects_the_whole_line_under_the_click_with_no_drag() {
+    let mut core = TerminalCore::new(TerminalSize::new(30, 3));
+    core.write_vt(b"hello world");
+
+    core.start_selection(
+        TerminalSelectionPoint { row: 0, col: 3 },
+        TerminalSelectionKind::Line,
+    );
+
+    // Alacritty's `Lines` selection includes the row's trailing newline
+    // (unlike `Semantic`/`Simple`, which stop at the last non-empty cell).
+    assert_eq!(core.selected_text(), Some("hello world\n".to_string()));
+}
+
+/// A double-click-then-drag (`Word`) extends the selection by whole words,
+/// not by character -- alacritty's own `Selection::update` honors the
+/// selection's `SelectionType` for extension, not just for the initial
+/// click; this is the "does it hold for drag too" half of the survey's
+/// citation.
+#[test]
+fn word_selection_extends_by_whole_words_when_dragged() {
+    let mut core = TerminalCore::new(TerminalSize::new(30, 3));
+    core.write_vt(b"one two three");
+
+    // Double-click on "two" (cols 4-6), then drag into "three" (starts
+    // col 8) -- expect the selection to extend to cover the whole of
+    // "three", not stop mid-word at the drag's exact column.
+    core.start_selection(
+        TerminalSelectionPoint { row: 0, col: 5 },
+        TerminalSelectionKind::Word,
+    );
+    core.update_selection(TerminalSelectionPoint { row: 0, col: 10 });
+
+    assert_eq!(core.selected_text(), Some("two three".to_string()));
 }
 
 #[test]
@@ -1525,7 +1586,10 @@ fn terminal_commands_and_selection_commands_round_trip_through_serde() {
         }),
         TerminalCommand::Scroll(TerminalScroll { lines: -2, point }),
         TerminalCommand::Mouse(mouse),
-        TerminalCommand::SelectionStart(point),
+        TerminalCommand::SelectionStart {
+            point,
+            kind: TerminalSelectionKind::Word,
+        },
         TerminalCommand::SelectionUpdate(point),
         TerminalCommand::CopySelection,
         TerminalCommand::Focus(true),
@@ -1535,11 +1599,14 @@ fn terminal_commands_and_selection_commands_round_trip_through_serde() {
         assert_serde_round_trip(command);
     }
 
-    for command in [
-        SelectionCommand::Start(point),
-        SelectionCommand::Update(point),
-        SelectionCommand::Copy,
+    for kind in [
+        TerminalSelectionKind::Simple,
+        TerminalSelectionKind::Word,
+        TerminalSelectionKind::Line,
     ] {
+        assert_serde_round_trip(SelectionCommand::Start { point, kind });
+    }
+    for command in [SelectionCommand::Update(point), SelectionCommand::Copy] {
         assert_serde_round_trip(command);
     }
 }
@@ -1554,7 +1621,14 @@ fn terminal_updates_and_external_value_types_round_trip_through_serde() {
         TerminalUpdate::Title(Some("title".into())),
         TerminalUpdate::Title(None),
         TerminalUpdate::Bell,
-        TerminalUpdate::Clipboard("clipboard".into()),
+        TerminalUpdate::Clipboard {
+            text: "clipboard".into(),
+            destination: ClipboardDestination::Clipboard,
+        },
+        TerminalUpdate::Clipboard {
+            text: "primary".into(),
+            destination: ClipboardDestination::Primary,
+        },
         TerminalUpdate::Exited,
         TerminalUpdate::Error("error".into()),
     ];

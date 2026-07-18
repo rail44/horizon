@@ -9,8 +9,8 @@ use std::cell::{Cell, RefCell};
 use futures::StreamExt;
 use gpui::*;
 use horizon_terminal_core::{
-    apply_frame_diff, KeyEventKind, TerminalCommand, TerminalFrame, TerminalMouseReport,
-    TerminalScroll, TerminalSize, TerminalUpdate,
+    apply_frame_diff, ClipboardDestination, KeyEventKind, TerminalCommand, TerminalFrame,
+    TerminalMouseReport, TerminalScroll, TerminalSize, TerminalUpdate,
 };
 use horizon_workspace::SessionId;
 
@@ -135,12 +135,18 @@ impl TerminalSession {
                             session.error.replace(Some(error));
                             session.runtime.set(RuntimeReachability(true));
                         }
-                        // OSC 52 writes and CopySelection results both
-                        // arrive here; the session decides what lands on
-                        // the clipboard, the host just applies it.
-                        TerminalUpdate::Clipboard(text) => {
-                            cx.write_to_clipboard(ClipboardItem::new_string(text));
-                        }
+                        // OSC 52 writes, CopySelection results, and
+                        // automatic selection-to-primary writes all arrive
+                        // here; `destination` says which OS buffer the
+                        // daemon meant, the host just applies it.
+                        TerminalUpdate::Clipboard { text, destination } => match destination {
+                            ClipboardDestination::Clipboard => {
+                                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                            }
+                            ClipboardDestination::Primary => {
+                                write_to_primary(cx, text);
+                            }
+                        },
                         TerminalUpdate::Title(_) | TerminalUpdate::Bell => {}
                     }
                     cx.notify();
@@ -236,8 +242,9 @@ impl TerminalSession {
     pub(crate) fn send_selection_start(
         &self,
         point: horizon_terminal_core::TerminalSelectionPoint,
+        kind: horizon_terminal_core::TerminalSelectionKind,
     ) {
-        self.dispatch(TerminalCommand::SelectionStart(point));
+        self.dispatch(TerminalCommand::SelectionStart { point, kind });
     }
 
     pub(crate) fn send_selection_update(
@@ -280,6 +287,19 @@ impl TerminalSession {
         self.dispatch(TerminalCommand::Shutdown);
     }
 }
+
+/// Writes to the OS primary-selection buffer (X11/Wayland's middle-click-
+/// paste buffer). No-op off Linux/FreeBSD, mirroring
+/// `horizon-winit-platform`'s own cfg gate on `Platform::write_to_primary`
+/// (crates/horizon-winit-platform/src/platform.rs) -- the OS concept simply
+/// doesn't exist elsewhere.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn write_to_primary(cx: &mut Context<TerminalSession>, text: String) {
+    cx.write_to_primary(ClipboardItem::new_string(text));
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+fn write_to_primary(_cx: &mut Context<TerminalSession>, _text: String) {}
 
 fn apply_frame_update(frame: &mut Option<TerminalFrame>, update: &TerminalUpdate) -> bool {
     match update {

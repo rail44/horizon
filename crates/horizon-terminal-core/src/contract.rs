@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::core::TerminalColorScheme;
 use crate::types::{
     KeyEventKind, TerminalFrame, TerminalFrameDiff, TerminalMouseReport, TerminalScroll,
-    TerminalSelectionPoint, TerminalSize,
+    TerminalSelectionKind, TerminalSelectionPoint, TerminalSize,
 };
 
 pub const TERMINAL_CONTROL_KIND: &str = "terminal_control";
@@ -70,7 +70,10 @@ pub enum TerminalCommand {
     Resize(TerminalSize),
     Scroll(TerminalScroll),
     Mouse(TerminalMouseReport),
-    SelectionStart(TerminalSelectionPoint),
+    SelectionStart {
+        point: TerminalSelectionPoint,
+        kind: TerminalSelectionKind,
+    },
     SelectionUpdate(TerminalSelectionPoint),
     CopySelection,
     /// A pane focus transition (`true` = gained focus, `false` = lost it),
@@ -88,9 +91,24 @@ pub enum TerminalUpdate {
     FrameDiff(TerminalFrameDiff),
     Title(Option<String>),
     Bell,
-    Clipboard(String),
+    Clipboard {
+        text: String,
+        destination: ClipboardDestination,
+    },
     Exited,
     Error(String),
+}
+
+/// Which OS clipboard buffer a [`TerminalUpdate::Clipboard`] targets.
+/// `Clipboard` is the explicit-copy path (Cmd/Ctrl+C, OSC 52 writes);
+/// `Primary` is the X11/Wayland middle-click-paste buffer, written
+/// automatically as selection completes/updates (Linux convention -- select
+/// = copy to primary). One update type with a destination discriminator,
+/// rather than a second full clipboard pathway.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum ClipboardDestination {
+    Clipboard,
+    Primary,
 }
 
 pub fn encode_terminal_control(
@@ -131,7 +149,10 @@ pub fn decode_terminal_update(envelope: &ProtocolEnvelope) -> Result<TerminalUpd
 /// host's PTY writer thread — see [`crate::CoreReceivers`].
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SelectionCommand {
-    Start(TerminalSelectionPoint),
+    Start {
+        point: TerminalSelectionPoint,
+        kind: TerminalSelectionKind,
+    },
     Update(TerminalSelectionPoint),
     Copy,
 }

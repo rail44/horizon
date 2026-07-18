@@ -567,8 +567,8 @@ fn run_writer(
             TerminalCommand::Mouse(report) => {
                 let _ = mouse_tx.send(report);
             }
-            TerminalCommand::SelectionStart(point) => {
-                let _ = selection_tx.send(SelectionCommand::Start(point));
+            TerminalCommand::SelectionStart { point, kind } => {
+                let _ = selection_tx.send(SelectionCommand::Start { point, kind });
             }
             TerminalCommand::SelectionUpdate(point) => {
                 let _ = selection_tx.send(SelectionCommand::Update(point));

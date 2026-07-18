@@ -16,7 +16,7 @@ use self::input::{arrow_scroll_input, sgr_mouse_input, sgr_mouse_wheel_input};
 use crate::protocol::kitty_keyboard;
 use crate::types::{
     KeyEventKind, TerminalFrame, TerminalMouseKind, TerminalMouseReport, TerminalScroll,
-    TerminalSelectionPoint, TerminalSize,
+    TerminalSelectionKind, TerminalSelectionPoint, TerminalSize,
 };
 
 mod color;
@@ -368,9 +368,20 @@ impl TerminalCore {
         self.encode_key(key, mods, event).into_bytes()
     }
 
-    pub fn start_selection(&mut self, point: TerminalSelectionPoint) {
+    /// Starts a selection of the given `kind` at `point`. `kind` maps
+    /// directly onto alacritty's own `SelectionType`: `Word`/`Line` become
+    /// `Semantic`/`Lines`, which already select the word/line under `point`
+    /// as part of construction (no extra logic needed here) -- alacritty's
+    /// own char-class-driven word boundaries, "for free" since selection
+    /// executes daemon-side inside `Term`.
+    pub fn start_selection(&mut self, point: TerminalSelectionPoint, kind: TerminalSelectionKind) {
         let point = self.selection_point(point);
-        self.term.selection = Some(Selection::new(SelectionType::Simple, point, Side::Left));
+        let selection_type = match kind {
+            TerminalSelectionKind::Simple => SelectionType::Simple,
+            TerminalSelectionKind::Word => SelectionType::Semantic,
+            TerminalSelectionKind::Line => SelectionType::Lines,
+        };
+        self.term.selection = Some(Selection::new(selection_type, point, Side::Left));
     }
 
     pub fn update_selection(&mut self, point: TerminalSelectionPoint) {

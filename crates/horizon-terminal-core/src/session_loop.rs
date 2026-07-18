@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, Sender};
 use termwiz::input::{KeyCode, Modifiers};
 
-use crate::contract::{SelectionCommand, TerminalCommand, TerminalUpdate};
+use crate::contract::{ClipboardDestination, SelectionCommand, TerminalCommand, TerminalUpdate};
 use crate::core::{TerminalColorScheme, TerminalCore};
 use crate::types::{KeyEventKind, TerminalMouseReport, TerminalScroll, TerminalSize};
 
@@ -118,6 +118,22 @@ fn rearm_sync_flush(core: &TerminalCore, sync_flush_rx: &mut Receiver<Instant>) 
     };
 }
 
+/// Selection completion/update writes the selected text to the OS primary
+/// buffer automatically (Linux convention: select = copy to primary),
+/// distinct from the explicit-copy path (`SelectionCommand::Copy`, which
+/// targets the system clipboard). A no-op while nothing is selected yet
+/// (e.g. right after `Start`, before any drag has covered a range) --
+/// mirrors Zed's terminal calling convention (see
+/// docs/research/gpui-terminal-presentation-2026-07-18.md).
+fn send_selection_to_primary(core: &TerminalCore, update_tx: &Sender<TerminalUpdate>) {
+    if let Some(text) = core.selected_text().filter(|text| !text.is_empty()) {
+        let _ = update_tx.send(TerminalUpdate::Clipboard {
+            text,
+            destination: ClipboardDestination::Primary,
+        });
+    }
+}
+
 /// Flush the latest dirty state once the coalescing timer fires.
 fn flush_snapshot(
     core: &TerminalCore,
@@ -220,17 +236,22 @@ pub fn run_terminal_core(
                     return;
                 };
                 match command {
-                    SelectionCommand::Start(point) => {
-                        core.start_selection(point);
+                    SelectionCommand::Start { point, kind } => {
+                        core.start_selection(point, kind);
+                        send_selection_to_primary(&core, &update_tx);
                         notify_snapshot(&core, &update_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
                     }
                     SelectionCommand::Update(point) => {
                         core.update_selection(point);
+                        send_selection_to_primary(&core, &update_tx);
                         notify_snapshot(&core, &update_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
                     }
                     SelectionCommand::Copy => {
                         if let Some(text) = core.selected_text() {
-                            let _ = update_tx.send(TerminalUpdate::Clipboard(text));
+                            let _ = update_tx.send(TerminalUpdate::Clipboard {
+                                text,
+                                destination: ClipboardDestination::Clipboard,
+                            });
                         }
                     }
                 }
@@ -258,7 +279,10 @@ pub fn run_terminal_core(
                     let _ = update_tx.send(TerminalUpdate::Title(events.title));
                 }
                 for text in events.clipboard_writes {
-                    let _ = update_tx.send(TerminalUpdate::Clipboard(text));
+                    let _ = update_tx.send(TerminalUpdate::Clipboard {
+                        text,
+                        destination: ClipboardDestination::Clipboard,
+                    });
                 }
                 rearm_sync_flush(&core, &mut sync_flush_rx);
                 notify_snapshot(&core, &update_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
@@ -278,7 +302,10 @@ pub fn run_terminal_core(
                     let _ = update_tx.send(TerminalUpdate::Title(events.title));
                 }
                 for text in events.clipboard_writes {
-                    let _ = update_tx.send(TerminalUpdate::Clipboard(text));
+                    let _ = update_tx.send(TerminalUpdate::Clipboard {
+                        text,
+                        destination: ClipboardDestination::Clipboard,
+                    });
                 }
                 rearm_sync_flush(&core, &mut sync_flush_rx);
                 notify_snapshot(&core, &update_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
@@ -390,15 +417,86 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         let mut clipboard_text = None;
         while Instant::now() < deadline {
-            if let Ok(TerminalUpdate::Clipboard(text)) =
+            if let Ok(TerminalUpdate::Clipboard { text, destination }) =
                 update_rx.recv_timeout(Duration::from_millis(50))
             {
+                assert_eq!(destination, ClipboardDestination::Clipboard);
                 clipboard_text = Some(text);
                 break;
             }
         }
 
         assert_eq!(clipboard_text.as_deref(), Some("hello"));
+    }
+
+    /// A word selection (`SelectionCommand::Start { kind: Word, .. }`)
+    /// writes the selected text to the OS primary buffer automatically --
+    /// distinct from the explicit-copy path above, which targets the system
+    /// clipboard instead. Exercised through the real `selection_rx` ->
+    /// `TerminalCore::start_selection` -> `update_tx` path, mirroring the
+    /// OSC 52 test's shape.
+    #[test]
+    fn run_terminal_core_writes_selection_to_primary_on_start() {
+        let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
+        let (command_tx, _command_rx) = crossbeam_channel::unbounded();
+        let (update_tx, update_rx) = crossbeam_channel::unbounded();
+        let (selection_tx, selection_rx) = crossbeam_channel::unbounded();
+        let receivers = CoreReceivers {
+            resize_rx: crossbeam_channel::never(),
+            scroll_rx: crossbeam_channel::never(),
+            mouse_rx: crossbeam_channel::never(),
+            paste_rx: crossbeam_channel::never(),
+            key_rx: crossbeam_channel::never(),
+            selection_rx,
+            focus_rx: crossbeam_channel::never(),
+        };
+
+        std::thread::spawn(move || {
+            run_terminal_core(
+                TerminalSize::new(40, 40),
+                TerminalCoreOptions::default(),
+                pty_rx,
+                receivers,
+                command_tx,
+                update_tx,
+            );
+        });
+
+        pty_tx.send(b"hello world".to_vec()).unwrap();
+        // Synchronize on the snapshot the PTY write produces before
+        // selecting, so the selection lands on rendered text.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            assert!(Instant::now() < deadline, "never saw the PTY text land");
+            if let Ok(TerminalUpdate::Snapshot(frame)) =
+                update_rx.recv_timeout(Duration::from_millis(50))
+            {
+                if frame.text.contains("hello") {
+                    break;
+                }
+            }
+        }
+
+        selection_tx
+            .send(crate::contract::SelectionCommand::Start {
+                point: crate::types::TerminalSelectionPoint { row: 0, col: 0 },
+                kind: crate::types::TerminalSelectionKind::Word,
+            })
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut primary_text = None;
+        while Instant::now() < deadline {
+            if let Ok(TerminalUpdate::Clipboard { text, destination }) =
+                update_rx.recv_timeout(Duration::from_millis(50))
+            {
+                assert_eq!(destination, ClipboardDestination::Primary);
+                primary_text = Some(text);
+                break;
+            }
+        }
+
+        assert_eq!(primary_text.as_deref(), Some("hello"));
     }
 
     /// End-to-end regression coverage for focus-report plumbing
