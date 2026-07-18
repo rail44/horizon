@@ -48,14 +48,22 @@ src/ (including the `pub`→`pub(crate)` sweep); the `horizon-ctl` →
 of the dead `profile` control-plane vertical (owner decision: delete
 over rebuild). Remaining in the wave, unordered:
 the command-model payload
-design (owner: on hold, to be shaped in a later consult); small
-boundary decisions still open (roles registry, spikes/gpui-terminal,
-Hello.capabilities, created_terminal ownership, and — new 2026-07-18 —
-output-capability advertising: XTVERSION/XTGETTCAP/DECRQSS queries are
+design (owner: on hold, to be shaped in a later consult); one
+boundary decision still open (output-capability advertising, new
+2026-07-18: XTVERSION/XTGETTCAP/DECRQSS queries are
 currently dropped silently; answering them is a "what do we claim to
 be" decision, see the conformance section of
 `docs/research/gpui-terminal-presentation-2026-07-18.md`); and the
-session-creation groundwork (deferred to the worktree feature work). The mechanical remainder — the
+session-creation groundwork (deferred to the worktree feature work).
+The other boundary decisions closed 2026-07-19 (merges up to
+`5d62143`): the spike directories deleted (git history is the
+archive), `Hello.capabilities` removed (protocol v6), and the
+`created_terminal` seam dissolved by the empty-workspace correction —
+zero tabs is a valid, persistable state, auto-reseed removed from
+every termination path per the owner's original intent (superseding
+`704657b`; `Reload Session Runtime` deliberately keeps its reseed,
+backlog 50). The roles-registry decision moved into the
+agent-improvement consultation below. The mechanical remainder — the
 `workspace.rs` and `agent/view.rs` splits, the dead-code/doc-rot
 sweep — shipped later the same day (merges up to `f32a66a`); the
 wave's remaining items are decision-gated only. Also shipped 2026-07-18, later same day
@@ -103,11 +111,19 @@ lands:
   project-session consultation informed by the pre-LLM
   implicit-feedback literature decides this
   (`docs/agent-feedback-design.md` decision 5).
-- **Issue 002 — turn-loop iteration cap halts real work**
-  (`docs/issues/`). A short design consult precedes dispatch: cap
-  value/adaptivity, halt surfaced as a pause rather than an error, a
-  first-class Continue command, live config apply, and the
-  doom-loop window.
+- **Agent approval trust model — consultation in flight (2026-07-19).**
+  Owner direction: replace per-action approval with auto-approval by
+  construction — worktree isolation (reversibility, builds on the
+  session relationship model above) + a sessiond-side OS sandbox for
+  bash (containment; `docs/agent-tools-design.md` "Deferred" already
+  records this endgame) + the receipt transcript (visibility); only
+  boundary crossings ask, non-isolated sessions keep the per-action
+  gate. Grounded in 2026-07-19 event-log analysis: bash is ~76% of all
+  approvals, the worst same-file `fs.edit` run cost 22 prompts, and
+  the edit-failure→write-fallback hypothesis was refuted. Pending
+  decisions (boundary shape, sandbox spike vs fs-first staging, the
+  always-ask list) crystallize into `docs/agent-approval-design.md`.
+  Folds in the roles-registry boundary decision and backlog 42/47/48.
 - **Agent web search / public-code search** (backlog 18/19). Needs
   its own consultation: provider, trust-boundary/approval design.
 - **portable-pty fork-safety root fix** (backlog 28/31).

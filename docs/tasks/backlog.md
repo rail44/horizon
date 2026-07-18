@@ -94,6 +94,52 @@ entries live in `backlog-resolved.md` keeping their original numbers
     column offset for the rest of that row. Repro + fix small once
     confirmed. Recorded 2026-07-18.
 
+46. **Agent bash spawn-retry storm: 134 duplicate `ToolCallStarted` for
+    one call, ending in EMFILE.** Found in the 2026-07-19 event-log
+    analysis (session `2f3668b8`): one bash tool call emitted 134
+    `ToolCallStarted` records over 31s and finally failed with "failed
+    to start bash: Too many open files (os error 24)". Two questions:
+    why the retry loop runs unbounded-looking at that cadence, and
+    whether the retries themselves leak the fds that produce the EMFILE.
+    Start at `crates/horizon-agent/src/tools/bash/exec.rs`.
+
+47. **Event-log turn tracker: `turn_id` goes permanently null after a
+    turn's first approval.** `persistence/event_log/turn.rs` opens a
+    turn on a user message and closes it on `WaitingForApproval`/
+    `WaitingForUser`, never reopening until the next user message — so
+    everything after a turn's first approval (198/248 approval-gated
+    calls in the current log) carries `turn_id=null`, making per-turn
+    analytics structurally blind to exactly the approval bursts they
+    should measure. Same identity family as backlog 42. Recorded
+    2026-07-19.
+
+48. **Model resubmits byte-identical `fs.edit` calls it already
+    applied.** In the worst same-file run (22 consecutive edits, session
+    `05254b6a`), 3 calls were exact duplicates of an earlier
+    `old_string`+`new_string` 10–18 minutes later — one even reusing the
+    same provider `call_id` — i.e. the model lost track of an edit that
+    had already landed. Candidate fixes live on the tool-feedback side
+    (e.g. a clearer "already applied / old_string absent because you
+    already changed it" result) rather than the approval side. Related:
+    42/47. Recorded 2026-07-19 from the event-log analysis.
+
+49. **Zero-tab Split placement silently no-ops after the view chooser.**
+    With an empty workspace, `Placement::SplitRight`/`SplitDown` (the
+    `s` chord / palette "Split Right…") lets the view chooser confirm and
+    then does nothing — there is no active session to split from.
+    Command enablement doesn't account for `tab_count == 0`; disable the
+    split placements up front there. Found by the empty-workspace worker
+    2026-07-19.
+
+50. **Decide `Reload Session Runtime`'s residual auto-reseed.** The
+    2026-07-19 empty-workspace correction removed auto-reseed from every
+    termination path but deliberately kept `ensure_workspace_has_pane`
+    in `reload_session_runtime` (killing every terminal session there is
+    an operational side effect of restarting the daemon, not a user
+    emptying the workspace on purpose — see its doc comment). Whether
+    that distinction holds or reload should also restore-to-empty is an
+    owner call; one small site either way.
+
 43. **Shared build-dir serves stale lib artifacts across worktrees —
     phantom E0432 on freshly-added exports.** Observed twice on
     2026-07-18: a workspace-wide test build resolved

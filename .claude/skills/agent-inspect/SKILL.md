@@ -53,6 +53,29 @@ Each line is one `agent::persistence::event_log::Record` (`crates/horizon-agent/
 `approval_requested`, `provider_request_sent`, `provider_request_first_token`,
 `provider_request_finished`, `error`, `exited`.
 
+Hard-won data-quality caveats (2026-07-19 analysis, verified against the
+owner's real ~19-day log):
+
+- **Don't trust `ToolCallFinished`'s top-level `is_error`/`denied`
+  alone** — they were added partway through the log's history
+  (`#[serde(default)]`), so older records (80% of that log) omit them
+  and deserialize as `false`. The reliable signal is
+  `output.is_error`/`output.message` (the `error_output()` convention
+  every tool has always used); OR both together.
+- **`call_id` is not unique** — provider-assigned
+  `functions.<tool_id>:<index>`, freely reused across turns and
+  sessions. Correlating `tool_call_requested` → `approval_requested` →
+  `tool_call_started`/`finished` needs a per-`(session_id, call_id)`
+  FIFO walk in `sequence` order, not a plain key join.
+- **`turn_id` goes null for the rest of an agentic loop after its first
+  approval** (the tracker closes the turn on `WaitingForApproval` and
+  reopens only on the next user message — backlog 47). "Per-turn"
+  aggregations therefore undercount approval bursts; aggregate per
+  session or per same-path run instead.
+- A handful of early records (pre single-writer fix) can be
+  byte-interleaved from concurrent writers; parse tolerantly and drop
+  torn lines rather than aborting.
+
 The last three are turn-request lifecycle markers bracketing a turn's round
 trip to the model provider: `provider_request_sent` (carries `{"model": "..."}`)
 when the request leaves Horizon, `provider_request_first_token` when the first
