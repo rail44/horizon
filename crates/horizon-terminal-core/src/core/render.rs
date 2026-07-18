@@ -15,9 +15,27 @@ use crate::types::{
 pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> TerminalFrame {
     let mut styled_rows = vec![TerminalLine { spans: Vec::new() }; size.rows as usize];
     let content = term.renderable_content();
+    // `indexed.point.line` (below) and `content.cursor.point.line` (at the
+    // bottom of this function) are both in `Term`'s absolute coordinate
+    // system: line 0 is the top of the *live* screen, and negative lines
+    // are scrollback history above it. `Grid::display_iter` already walks
+    // only the window the current `display_offset` makes visible, but it
+    // still yields lines in that same absolute system rather than
+    // viewport-relative ones -- e.g. with `display_offset == 10` on a
+    // 5-row viewport, every visible line is -10..=-6, i.e. entirely
+    // negative. Adding `display_offset` back converts an absolute line
+    // into "row from the top of what's actually on screen right now",
+    // which is what `styled_rows` is indexed by. Skipping that shift (the
+    // pre-fix behavior) silently dropped every cell once scrolled past one
+    // viewport's worth of history -- reported as scrolling up leaving the
+    // top of the pane pinned while lines vanish from the bottom (the
+    // fraction of rows whose shifted line still lands in range, drawn at
+    // the wrong row) or the whole frame going blank (once no row's shifted
+    // line is in range at all).
+    let display_offset = content.display_offset as i32;
 
     for indexed in content.display_iter {
-        let row = indexed.point.line.0;
+        let row = indexed.point.line.0 + display_offset;
         if row < 0 {
             continue;
         }
@@ -63,7 +81,11 @@ pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> Term
     TerminalFrame {
         text,
         lines: styled_rows,
-        cursor: cursor_position(content.cursor.point.line.0, content.cursor.point.column.0),
+        cursor: cursor_position(
+            content.cursor.point.line.0 + display_offset,
+            content.cursor.point.column.0,
+            size.rows as usize,
+        ),
         mouse_reporting: term.mode().intersects(TermMode::MOUSE_MODE)
             && term.mode().contains(TermMode::SGR_MOUSE),
         keys_as_escape_codes: term.mode().contains(TermMode::REPORT_ALL_KEYS_AS_ESC),
@@ -163,8 +185,14 @@ fn cell_bg(color: AnsiColor, flags: Flags) -> AnsiColor {
     bg
 }
 
-fn cursor_position(row: i32, col: usize) -> Option<TerminalCursor> {
-    (row >= 0).then_some(TerminalCursor {
+/// `row` is already viewport-relative (the caller has added `display_offset`
+/// -- see `snapshot_frame`'s comment). Bounded on both ends: negative means
+/// the live cursor is above the current (scrolled-up) viewport, and
+/// `row >= rows` means it's below -- either way the real cursor isn't part
+/// of what's currently on screen, so it must not be reported as visible at
+/// some other, wrong row.
+fn cursor_position(row: i32, col: usize, rows: usize) -> Option<TerminalCursor> {
+    (row >= 0 && (row as usize) < rows).then_some(TerminalCursor {
         row: row as usize,
         col,
     })

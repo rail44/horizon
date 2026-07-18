@@ -164,6 +164,172 @@ fn scroll_display_uses_alacritty_history() {
     assert_eq!(core.display_offset(), 0);
 }
 
+/// Scrolling toward history is clamped at both edges, never wrapping or
+/// going negative -- `alacritty_terminal::grid::Grid::scroll_display`'s own
+/// `min(max(offset + count, 0), history_size)` clamp, exercised through the
+/// core with real content on both sides of the boundary.
+#[test]
+fn scroll_clamps_at_both_history_edges() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 5));
+    let mut script = String::new();
+    for i in 0..20 {
+        if i > 0 {
+            script.push_str("\r\n");
+        }
+        script.push_str(&format!("line{i:02}"));
+    }
+    core.write_vt(script.as_bytes());
+    assert_eq!(core.display_offset(), 0);
+
+    // A single-line viewport with 20 written lines has a small, known
+    // history size -- scroll far past it and confirm the offset clamps
+    // instead of overshooting or wrapping.
+    let history_size = {
+        core.handle_scroll(test_scroll(1_000));
+        core.display_offset()
+    };
+    assert!(
+        history_size > 0 && history_size < 1_000,
+        "offset should clamp to the real history size, got {history_size}"
+    );
+    let clamped_frame = core.snapshot_text();
+
+    // Scrolling further toward history from the clamped top must be a
+    // true no-op: same offset, same content.
+    core.handle_scroll(test_scroll(50));
+    assert_eq!(core.display_offset(), history_size);
+    assert_eq!(core.snapshot_text(), clamped_frame);
+
+    // Scroll back past the live edge (0) the same way -- must clamp at 0,
+    // not go negative.
+    core.handle_scroll(test_scroll(-1_000));
+    assert_eq!(core.display_offset(), 0);
+    let live_frame = core.snapshot_text();
+
+    // And a further downward scroll from the live edge is a no-op too.
+    core.handle_scroll(test_scroll(-50));
+    assert_eq!(core.display_offset(), 0);
+    assert_eq!(core.snapshot_text(), live_frame);
+}
+
+/// End-to-end regression for the diff pipeline `horizon-sessiond` actually
+/// runs in production (`TerminalHost::forward_updates`): every
+/// `TerminalCore::snapshot_frame` after the first is diffed against the
+/// previous frame sent to the client (`compute_frame_diff`), and the
+/// client reconstructs its view by `apply_frame_diff`-ing onto its own
+/// last frame (`terminal::session::apply_frame_update`). This exact
+/// round-trip, under a real scroll, had never been asserted against row
+/// *content* before (2026-07-18 dogfooding report: scrolling up appeared
+/// to leave the top pinned while the bottom rows went blank). Seeds forty
+/// numbered lines through a five-row viewport so a ten-line scroll shifts
+/// every visible row to genuinely different content (ruling out a
+/// coincidental pass where an unchanged row happens to diff to nothing),
+/// and asserts the diff-reconstructed frame is byte-for-byte the same as
+/// the daemon's own post-scroll snapshot, with no row silently left blank.
+#[test]
+fn scroll_frame_diff_reconstructs_history_content_end_to_end() {
+    let rows = 5;
+    let mut core = TerminalCore::new(TerminalSize::new(20, rows));
+    let mut script = String::new();
+    for i in 0..40 {
+        if i > 0 {
+            script.push_str("\r\n");
+        }
+        script.push_str(&format!("line{i:02}"));
+    }
+    core.write_vt(script.as_bytes());
+
+    // Baseline: the live (unscrolled) viewport -- what `TerminalHost::
+    // attach` sends as the client's first frame, and what the daemon's
+    // `baselines` map holds just before the scroll below.
+    let live_frame = core.snapshot_frame();
+    assert_eq!(core.display_offset(), 0);
+    assert!(live_frame.text.contains("line39"));
+
+    // Scroll toward history by two viewports' worth of rows -- the shape a
+    // real multi-tick trackpad gesture produces via `ScrollAccumulator`,
+    // and enough that every visible row's content genuinely changes.
+    assert_eq!(core.handle_scroll(test_scroll(10)), None);
+    let scrolled_frame = core.snapshot_frame();
+    assert_ne!(core.display_offset(), 0, "scroll must move the viewport");
+    assert_ne!(
+        live_frame, scrolled_frame,
+        "the scrolled snapshot must actually differ from the live one"
+    );
+
+    // The daemon-side diff against the previous snapshot it sent...
+    let diff = compute_frame_diff(&live_frame, &scrolled_frame);
+    // ...and the client-side reconstruction starting from the last frame
+    // it had.
+    let reconstructed = apply_frame_diff(&live_frame, &diff);
+
+    assert_eq!(
+        reconstructed, scrolled_frame,
+        "diff-applied client frame must exactly match the daemon's real scrolled snapshot"
+    );
+
+    // Content assertions, not just structural equality: every row must
+    // carry real history text -- no row silently reverted to blank.
+    for (index, line) in reconstructed.lines.iter().enumerate() {
+        let text: String = line.spans.iter().map(|span| span.text.as_str()).collect();
+        assert!(
+            text.starts_with("line"),
+            "row {index} should show scrollback content, got {text:?} (full frame: {:?})",
+            reconstructed.text
+        );
+    }
+    assert!(
+        !reconstructed.text.contains("line39"),
+        "a scroll toward history must leave the live tail behind"
+    );
+}
+
+/// The cursor position reported on `TerminalFrame` must be viewport-relative,
+/// not the raw (scroll-independent) grid coordinate `alacritty_terminal`
+/// tracks internally -- companion regression to the frame-content fix above,
+/// same root cause (`render::snapshot_frame` forgetting to fold
+/// `display_offset` into a grid line before treating it as a row). While
+/// scrolled into history the live cursor sits below the current viewport, so
+/// it must be reported as absent (`None`), not silently drawn at some
+/// unrelated row.
+#[test]
+fn cursor_is_hidden_while_scrolled_and_correct_at_the_live_edge() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 5));
+    let mut script = String::new();
+    for i in 0..40 {
+        if i > 0 {
+            script.push_str("\r\n");
+        }
+        script.push_str(&format!("line{i:02}"));
+    }
+    core.write_vt(script.as_bytes());
+
+    let live_cursor = core.snapshot_frame().cursor;
+    assert!(
+        live_cursor.is_some(),
+        "the cursor must be visible in the live (unscrolled) viewport"
+    );
+
+    core.handle_scroll(test_scroll(10));
+    assert_eq!(
+        core.snapshot_frame().cursor,
+        None,
+        "the cursor must be hidden once scrolled away from the live edge"
+    );
+
+    core.handle_scroll(test_scroll(-10));
+    assert_eq!(
+        core.display_offset(),
+        0,
+        "scrolling back down by the same amount returns to the live edge"
+    );
+    assert_eq!(
+        core.snapshot_frame().cursor,
+        live_cursor,
+        "returning to the live edge must restore the same cursor position"
+    );
+}
+
 #[test]
 fn scroll_in_alternate_screen_sends_application_input() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 3));
