@@ -629,7 +629,6 @@ fn our_hello_envelope() -> Result<RawEnvelope, session_wire::WireError> {
     RawEnvelope::session_control(&SessionControl::Hello(Hello {
         contract_version: CONTRACT_VERSION,
         binary_id: BINARY_ID.to_string(),
-        capabilities: vec!["agent".to_string(), "terminal".to_string()],
     }))
 }
 

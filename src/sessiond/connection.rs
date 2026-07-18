@@ -252,7 +252,6 @@ where
     let hello = RawEnvelope::session_control(&SessionControl::Hello(Hello {
         contract_version: SESSION_PROTOCOL_VERSION,
         binary_id: concat!("horizon/", env!("CARGO_PKG_VERSION")).to_string(),
-        capabilities: vec!["agent".to_string(), "terminal".to_string()],
     }))
     .map_err(|error| HandshakeError::Fatal(format!("failed to encode sessiond hello: {error}")))?;
     session_wire::write_envelope(writer, &hello)

@@ -40,7 +40,6 @@ async fn receive_hello_and_reply<S>(
     let reply = RawEnvelope::session_control(&SessionControl::Hello(Hello {
         contract_version: SESSION_PROTOCOL_VERSION,
         binary_id: "test-sessiond".into(),
-        capabilities: vec!["agent".into(), "terminal".into()],
     }))
     .unwrap();
     session_wire::write_envelope(writer, &reply).await.unwrap();
@@ -72,7 +71,6 @@ async fn start_returns_before_hello_and_queued_create_is_first_after_handshake()
     let reply = RawEnvelope::session_control(&SessionControl::Hello(Hello {
         contract_version: SESSION_PROTOCOL_VERSION,
         binary_id: "delayed-sessiond".into(),
-        capabilities: vec!["agent".into(), "terminal".into()],
     }))
     .unwrap();
     session_wire::write_envelope(&mut writer, &reply)
