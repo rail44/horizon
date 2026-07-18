@@ -48,21 +48,22 @@ src/ (including the `pub`→`pub(crate)` sweep); the `horizon-ctl` →
 of the dead `profile` control-plane vertical (owner decision: delete
 over rebuild). Remaining in the wave, unordered:
 `workspace.rs`/`agent/view.rs` splits; the command-model payload
-design (owner: on hold, to be shaped in a later consult); `turns/`
-relocation (owner decision: shape c — the structural transcript logic
-moves into horizon-agent as a `transcript` module, wording and
-composer interaction stay UI-side; queued behind the issue-002 merge);
-the config wave (owner decisions 2026-07-18: surface narrowed to
-provider model/base_url + terminal font_size + ui font_family +
-keybindings + theme seed, everything else retired with code defaults —
-term stays xterm-256color with COLORTERM injection, line_height ratio
-becomes 18/13; sessiond consolidates onto horizon-config per direction
-c; keybindings gain live reload; issue 002's guard rework rides the
-same wave — in flight); small boundary decisions still open
-(TerminalColor vocabulary, roles registry, spikes/gpui-terminal,
-Hello.capabilities, created_terminal ownership); and the
-session-creation groundwork (deferred to the worktree feature work).
-Feature items, unordered until the wave lands:
+design (owner: on hold, to be shaped in a later consult); small
+boundary decisions still open (TerminalColor vocabulary, roles
+registry, spikes/gpui-terminal, Hello.capabilities, created_terminal
+ownership); and the session-creation groundwork (deferred to the
+worktree feature work). Also shipped 2026-07-18, later same day
+(merges up to `8336992`): issue 002's guard rework (safety-net
+constants 100/5, paused receipt row, one-action Continue with CLI
+parity); keybindings live reload; the config wave (surface narrowed
+to provider model/base_url + terminal font_size + ui font_family +
+keybindings + theme seed; sessiond consolidated onto horizon-config;
+TERM fixed xterm-256color with COLORTERM injection; line_height ratio
+18/13; retired/typo warnings unified; example.toml default-locked by
+test); and the `turns/` structural relocation into
+`horizon_agent::transcript` (shape c — wording and composer
+interaction stay UI-side). Feature items, unordered until the wave
+lands:
 
 - **Session relationship model — implementation.** The decided design
   (`docs/session-relationship-design.md`): lineage tree,

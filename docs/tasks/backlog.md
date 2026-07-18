@@ -93,6 +93,15 @@ entries live in `backlog-resolved.md` keeping their original numbers
     pre-commit hook, so a merge integrating such a false-negative (or a
     real breakage) can reach main ungated — the project session now
     runs the gate manually between merge and push.
+    *Second signature confirmed same day*: while two workers rebuilt
+    `horizon-agent` concurrently, `cargo nextest run --workspace` in one
+    worktree repeatedly linked a stale `horizon_agent` rlib carrying the
+    *other worktree's* API ("Fresh" misdetermination), while `cargo
+    check -p horizon-agent` alone stayed correct; `find -name '*.rs'
+    -exec touch` + rerun fixed it each time. A stale *test binary* can
+    also misreport the workspace test COUNT (a post-merge gate showed
+    1008 where the true count was 998), so a surprising count is itself
+    a diagnostic. AGENTS.md's build-dir section now carries the caveat.
 
 42. **Tool-call rows have no per-occurrence identity when a provider
     reuses a call_id.** The 2026-07-18 reused-call_id fix (`1d86521`)

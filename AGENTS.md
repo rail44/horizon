@@ -86,9 +86,15 @@ for crates.io/git dependencies (the bulk of a from-scratch build) are
 built once and reused by every worktree, while final artifacts (the
 binaries) stay in each worktree's own `target/`. No manual setup needed —
 the config is checked in. Concurrent builds across worktrees are safe
-(cargo's own advisory lock serializes overlapping writers) but will queue
-behind each other on a cold cache; this is an accepted tradeoff for the
-disk/CPU savings. This makes the old worker convention of reflinking the
+from corruption (cargo's own advisory lock serializes overlapping
+writers) but will queue behind each other on a cold cache; this is an
+accepted tradeoff for the disk/CPU savings. Caveat (backlog 43): while
+a sibling worktree rebuilds the same workspace crate, cargo can wrongly
+reuse a stale "Fresh" artifact carrying the *other* worktree's version
+of that crate — symptoms are a phantom E0432 on an export that grep
+confirms exists, cross-crate builds failing while `cargo check -p
+<crate>` passes, or a surprising workspace test count. Fix: `cargo
+clean -p <crate>` (or touch the crate's sources) and rerun. This makes the old worker convention of reflinking the
 main checkout's `target/` into a fresh worktree mostly redundant for the
 heavy artifacts (only the now-small per-worktree `target/` benefits).
 
