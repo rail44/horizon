@@ -39,7 +39,7 @@ use crate::theme;
 use crate::theme_settings::ThemeSettingsView;
 use crate::view_chooser::{Placement, ViewChooserDelegate};
 use crate::workspace_state::{InvalidState, LoadResult, WorkspaceStateStore};
-use horizon_terminal_core::{TerminalCoreOptions, TerminalSize, TerminalSpawnSpec};
+use horizon_terminal_core::{TerminalSize, TerminalSpawnSpec, DEFAULT_SCROLLBACK_LINES};
 use horizon_workspace::types::SessionKind;
 use horizon_workspace::SessionId;
 use uuid::Uuid;
@@ -550,7 +550,7 @@ fn list_select_binding(cx: &App, keystroke: &str, action_name: &str) -> KeyBindi
     .unwrap_or_else(|err| panic!("invalid keystroke `{keystroke}`: {err}"))
 }
 
-pub fn init(cx: &mut App) {
+pub(crate) fn init(cx: &mut App) {
     let config = horizon_config::load();
 
     let workspace_mode_override = config
@@ -647,7 +647,7 @@ pub fn init(cx: &mut App) {
     cx.bind_keys(bindings);
 }
 
-pub struct WorkspaceShell {
+pub(crate) struct WorkspaceShell {
     workspace: Workspace,
     workspace_state: WorkspaceStateStore,
     persistence_ready: bool,
@@ -716,7 +716,7 @@ pub struct WorkspaceShell {
 }
 
 impl WorkspaceShell {
-    pub fn new(
+    pub(crate) fn new(
         socket_path: std::path::PathBuf,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1509,9 +1509,7 @@ impl WorkspaceShell {
                 .term
                 .clone()
                 .unwrap_or_else(|| "xterm-256color".to_string()),
-            scrollback_lines: config
-                .scrollback_lines
-                .unwrap_or(TerminalCoreOptions::default().scrollback_lines),
+            scrollback_lines: config.scrollback_lines.unwrap_or(DEFAULT_SCROLLBACK_LINES),
             color_scheme: theme::terminal_color_scheme(),
             control_socket: self.socket_path.clone(),
             fallback_cwd: pending.fallback_cwd,
@@ -1697,9 +1695,7 @@ impl WorkspaceShell {
             CommandId::OpenSessionManager => self.open_session_manager(window, cx),
             CommandId::ApproveToolCall => {
                 if let Some(session) = self.active_agent_session() {
-                    let pending = horizon_agent::frame::actionable_pending_approval_call_ids_in(
-                        &session.read(cx).frame.items,
-                    );
+                    let pending = session.read(cx).pending_approval_call_ids();
                     if let Some(call_id) = pending.first() {
                         session.read(cx).approve(call_id.clone());
                     }
@@ -1707,9 +1703,7 @@ impl WorkspaceShell {
             }
             CommandId::DenyToolCall => {
                 if let Some(session) = self.active_agent_session() {
-                    let pending = horizon_agent::frame::actionable_pending_approval_call_ids_in(
-                        &session.read(cx).frame.items,
-                    );
+                    let pending = session.read(cx).pending_approval_call_ids();
                     if let Some(call_id) = pending.first() {
                         session.read(cx).deny(call_id.clone());
                     }
@@ -1993,15 +1987,8 @@ impl WorkspaceShell {
             .active_agent_session()
             .map(|session| {
                 let session = session.read(cx);
-                let pending = !horizon_agent::frame::actionable_pending_approval_call_ids_in(
-                    &session.frame.items,
-                )
-                .is_empty();
-                let in_flight = matches!(
-                    session.frame.state,
-                    Some(horizon_agent::contract::SessionState::Running)
-                        | Some(horizon_agent::contract::SessionState::ToolRunning)
-                );
+                let pending = !session.pending_approval_call_ids().is_empty();
+                let in_flight = session.turn_in_flight();
                 (pending, in_flight)
             })
             .unwrap_or((false, false));

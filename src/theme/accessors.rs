@@ -9,19 +9,19 @@ use gpui::{hsla, point, px, BoxShadow, Hsla};
 use super::palette::{packed_hsla, primary_foreground_for};
 use super::scheme::scheme;
 
-pub fn background() -> u32 {
+pub(crate) fn background() -> u32 {
     scheme().background
 }
 
 /// Default readable body/message text (the agent transcript's message
 /// bodies today).
-pub fn text_primary() -> Hsla {
+pub(crate) fn text_primary() -> Hsla {
     packed_hsla(scheme().foreground)
 }
 
 /// The brand accent -- today's "you" message label, shared with the
 /// terminal cursor's fallback color.
-pub fn accent() -> Hsla {
+pub(crate) fn accent() -> Hsla {
     packed_hsla(scheme().accent)
 }
 
@@ -33,40 +33,40 @@ pub fn accent() -> Hsla {
 /// Purely a function of `accent`'s own lightness, not the app background
 /// -- a light accent wants dark text, a dark accent wants light text,
 /// regardless of scheme polarity.
-pub fn on_accent() -> Hsla {
+pub(crate) fn on_accent() -> Hsla {
     packed_hsla(primary_foreground_for(scheme().accent))
 }
 
 /// Danger/error -- failed turns and tool errors.
-pub fn danger() -> Hsla {
+pub(crate) fn danger() -> Hsla {
     packed_hsla(scheme().danger)
 }
 
 /// Warning -- tool-call requests and pending-approval blocks.
-pub fn warning() -> Hsla {
+pub(crate) fn warning() -> Hsla {
     packed_hsla(scheme().warning)
 }
 
 /// Success -- finished tool-call results.
-pub fn success() -> Hsla {
+pub(crate) fn success() -> Hsla {
     packed_hsla(scheme().success)
 }
 
 /// The assistant message label.
-pub fn info() -> Hsla {
+pub(crate) fn info() -> Hsla {
     packed_hsla(scheme().info)
 }
 
 /// Readable secondary text -- the pane's status line and exited-session
 /// text. Less prominent than `text_primary`, more than `text_subtle`.
-pub fn text_muted() -> Hsla {
+pub(crate) fn text_muted() -> Hsla {
     packed_hsla(scheme().text_muted)
 }
 
 /// The most de-emphasized text -- thinking deltas and in-flight tool
 /// progress (deliberately quiet, unlike `text_muted`'s readable status
 /// text).
-pub fn text_subtle() -> Hsla {
+pub(crate) fn text_subtle() -> Hsla {
     packed_hsla(scheme().text_subtle)
 }
 
@@ -77,7 +77,7 @@ pub fn text_subtle() -> Hsla {
 /// (see `src/agent/view.rs`'s `accent_tint`); stage D reuses this role
 /// for the expanded receipt's own highlighted row header (mock 6a's
 /// `#fafafa` panel tint on the expanded call's row).
-pub fn surface_panel() -> Hsla {
+pub(crate) fn surface_panel() -> Hsla {
     packed_hsla(scheme().surface_panel)
 }
 
@@ -88,7 +88,7 @@ pub fn surface_panel() -> Hsla {
 /// text roles against the surface it's actually painted on
 /// (`docs/theme-design.md`'s 2026-07-15 contrast audit, item 2), the same
 /// way `src/agent/view.rs` already does against `surface_panel`.
-pub fn surface_selected() -> Hsla {
+pub(crate) fn surface_selected() -> Hsla {
     packed_hsla(scheme().surface_selected)
 }
 
@@ -106,7 +106,7 @@ pub fn surface_selected() -> Hsla {
 /// independently configurable (2026-07-16, `docs/theme-design.md`) --
 /// tune [`SURFACE_RAISED_STEP`] instead of a `surface_raised` key.
 #[allow(dead_code)]
-pub fn surface_raised() -> Hsla {
+pub(crate) fn surface_raised() -> Hsla {
     packed_hsla(scheme().surface_raised)
 }
 
@@ -127,7 +127,7 @@ pub(crate) fn surface_chrome() -> Hsla {
 /// configurable (2026-07-16, `docs/theme-design.md`) -- tune
 /// [`BORDER_STEP`]/[`BORDER_BLEND_RATIO`] instead of a
 /// `border_default`/`border_subtle` key.
-pub fn border() -> Hsla {
+pub(crate) fn border() -> Hsla {
     packed_hsla(scheme().border)
 }
 
@@ -217,22 +217,22 @@ pub(crate) fn scrim_color() -> Hsla {
 
 /// Diff-added line background (fs.edit's reconstructed-diff body, stage
 /// D; no gpui-component equivalent).
-pub fn diff_added_surface() -> Hsla {
+pub(crate) fn diff_added_surface() -> Hsla {
     packed_hsla(scheme().diff_added_surface)
 }
 
 /// Diff-added sign-column color.
-pub fn diff_added_text() -> Hsla {
+pub(crate) fn diff_added_text() -> Hsla {
     packed_hsla(scheme().diff_added_text)
 }
 
 /// Diff-removed line background.
-pub fn diff_removed_surface() -> Hsla {
+pub(crate) fn diff_removed_surface() -> Hsla {
     packed_hsla(scheme().diff_removed_surface)
 }
 
 /// Diff-removed sign-column color.
-pub fn diff_removed_text() -> Hsla {
+pub(crate) fn diff_removed_text() -> Hsla {
     packed_hsla(scheme().diff_removed_text)
 }
 

@@ -32,7 +32,7 @@ mod render;
 /// the host's own built-in default (`terminal::config::
 /// DEFAULT_SCROLLBACK_LINES`) so a bare `new` — every test in this crate —
 /// still exercises realistic scrollback depth.
-pub(crate) const DEFAULT_SCROLLBACK_LINES: usize = 10_000;
+pub const DEFAULT_SCROLLBACK_LINES: usize = 10_000;
 
 /// `Term::report_private_mode` (alacritty_terminal's DECRQM handler, in
 /// upstream `term/mod.rs`) always answers a query for private mode 2026
@@ -291,6 +291,7 @@ impl TerminalCore {
         self.term.mode().contains(TermMode::ALT_SCREEN)
     }
 
+    #[cfg(test)]
     pub fn snapshot_text(&self) -> String {
         self.snapshot_frame().text
     }

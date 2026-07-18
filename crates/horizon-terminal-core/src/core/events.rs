@@ -27,7 +27,7 @@ type WindowSizeFormatter = Arc<dyn Fn(WindowSize) -> String + Send + Sync>;
 const OSC52_CLIPBOARD_WRITE_CAP: usize = 256 * 1024;
 
 #[derive(Clone, Default)]
-pub struct TerminalEvents {
+pub(crate) struct TerminalEvents {
     pub pty_writes: Vec<Vec<u8>>,
     pub title: Option<String>,
     pub bell_count: usize,

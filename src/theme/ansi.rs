@@ -11,7 +11,7 @@ use super::scheme::scheme;
 
 /// The core-side scheme for OSC 4/10/11/12 query replies, mirrored from
 /// the same values the view paints with.
-pub fn terminal_color_scheme() -> horizon_terminal_core::TerminalColorScheme {
+pub(crate) fn terminal_color_scheme() -> horizon_terminal_core::TerminalColorScheme {
     let scheme = scheme();
     let rgb = |value: u32| Rgb {
         r: (value >> 16) as u8,
@@ -41,11 +41,11 @@ pub fn terminal_color_scheme() -> horizon_terminal_core::TerminalColorScheme {
     }
 }
 
-pub fn to_hsla(rgb888: [u8; 3]) -> Hsla {
+pub(crate) fn to_hsla(rgb888: [u8; 3]) -> Hsla {
     rgb(((rgb888[0] as u32) << 16) | ((rgb888[1] as u32) << 8) | rgb888[2] as u32).into()
 }
 
-pub fn resolve(color: TerminalColor, overrides: &[(u16, [u8; 3])]) -> [u8; 3] {
+pub(crate) fn resolve(color: TerminalColor, overrides: &[(u16, [u8; 3])]) -> [u8; 3] {
     let override_index = match color {
         TerminalColor::Spec(_) => None,
         TerminalColor::Indexed(index) => Some(index as u16),

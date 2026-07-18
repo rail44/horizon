@@ -63,7 +63,7 @@ fn accent_option_index(accent: AccentValue) -> usize {
     }
 }
 
-pub struct ThemeSettingsView {
+pub(crate) struct ThemeSettingsView {
     focus_handle: FocusHandle,
     scroll: ScrollHandle,
 
@@ -94,7 +94,7 @@ pub struct ThemeSettingsView {
 }
 
 impl ThemeSettingsView {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         // The currently-resolved scheme, read once here (not inside
         // `seed::from_current_config` itself -- see `ResolvedFallback`'s
         // doc for why that stays a pure function of its arguments).

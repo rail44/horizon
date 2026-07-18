@@ -6,5 +6,5 @@ mod session;
 mod turns;
 mod view;
 
-pub use session::AgentSession;
-pub use view::AgentView;
+pub(crate) use session::AgentSession;
+pub(crate) use view::AgentView;

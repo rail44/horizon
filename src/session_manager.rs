@@ -10,7 +10,7 @@ use horizon_workspace::types::SessionSummary;
 
 use crate::theme;
 
-pub struct SessionManagerDelegate {
+pub(crate) struct SessionManagerDelegate {
     all: Vec<SessionSummary>,
     filtered: Vec<SessionSummary>,
     // Whether the most recent confirm was the secondary one (cmd-enter /
@@ -25,7 +25,7 @@ pub struct SessionManagerDelegate {
 }
 
 impl SessionManagerDelegate {
-    pub fn new(sessions: Vec<SessionSummary>) -> Self {
+    pub(crate) fn new(sessions: Vec<SessionSummary>) -> Self {
         Self {
             filtered: sessions.clone(),
             all: sessions,
@@ -34,17 +34,17 @@ impl SessionManagerDelegate {
         }
     }
 
-    pub fn summary_at(&self, index: IndexPath) -> Option<&SessionSummary> {
+    pub(crate) fn summary_at(&self, index: IndexPath) -> Option<&SessionSummary> {
         self.filtered.get(index.row)
     }
 
-    pub fn last_confirm_secondary(&self) -> bool {
+    pub(crate) fn last_confirm_secondary(&self) -> bool {
         self.last_confirm_secondary
     }
 
     /// Replaces the listed sessions (after a terminate, keeping the
     /// modal open on fresh data).
-    pub fn reset(&mut self, sessions: Vec<SessionSummary>) {
+    pub(crate) fn reset(&mut self, sessions: Vec<SessionSummary>) {
         self.filtered = sessions.clone();
         self.all = sessions;
     }

@@ -13,7 +13,7 @@ use horizon_workspace::commands::{filter_command_entries, CommandEntry};
 
 use crate::theme;
 
-pub struct PaletteDelegate {
+pub(crate) struct PaletteDelegate {
     all: Vec<CommandEntry>,
     filtered: Vec<CommandEntry>,
     // The currently-selected row, mirrored from `set_selected_index` --
@@ -26,7 +26,7 @@ pub struct PaletteDelegate {
 }
 
 impl PaletteDelegate {
-    pub fn new(entries: Vec<CommandEntry>) -> Self {
+    pub(crate) fn new(entries: Vec<CommandEntry>) -> Self {
         Self {
             filtered: entries.clone(),
             all: entries,
@@ -34,7 +34,7 @@ impl PaletteDelegate {
         }
     }
 
-    pub fn entry_at(&self, index: IndexPath) -> Option<&CommandEntry> {
+    pub(crate) fn entry_at(&self, index: IndexPath) -> Option<&CommandEntry> {
         self.filtered.get(index.row)
     }
 }

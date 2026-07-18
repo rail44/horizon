@@ -44,9 +44,9 @@ impl RuntimeReachability {
     }
 }
 
-pub struct TerminalSession {
+pub(crate) struct TerminalSession {
     tx: crossbeam_channel::Sender<TerminalCommand>,
-    pub frame: Option<TerminalFrame>,
+    pub(crate) frame: Option<TerminalFrame>,
     /// The workspace session id this terminal belongs to. Used to report shell
     /// exit back to the shell so it can remove the session from the model.
     session_id: SessionId,
@@ -189,15 +189,15 @@ impl TerminalSession {
         }
     }
 
-    pub fn exited(&self) -> bool {
+    pub(crate) fn exited(&self) -> bool {
         self.exited.get()
     }
 
-    pub fn error(&self) -> Option<String> {
+    pub(crate) fn error(&self) -> Option<String> {
         self.error.borrow().clone()
     }
 
-    pub fn runtime_unreachable(&self) -> bool {
+    pub(crate) fn runtime_unreachable(&self) -> bool {
         self.runtime.get().is_unreachable()
     }
 
@@ -216,7 +216,7 @@ impl TerminalSession {
         }
     }
 
-    pub fn send_key(
+    pub(crate) fn send_key(
         &self,
         key: termwiz::input::KeyCode,
         modifiers: termwiz::input::Modifiers,
@@ -229,44 +229,54 @@ impl TerminalSession {
         });
     }
 
-    pub fn send_mouse(&self, report: TerminalMouseReport) {
+    pub(crate) fn send_mouse(&self, report: TerminalMouseReport) {
         self.dispatch(TerminalCommand::Mouse(report));
     }
 
-    pub fn send_selection_start(&self, point: horizon_terminal_core::TerminalSelectionPoint) {
+    pub(crate) fn send_selection_start(
+        &self,
+        point: horizon_terminal_core::TerminalSelectionPoint,
+    ) {
         self.dispatch(TerminalCommand::SelectionStart(point));
     }
 
-    pub fn send_selection_update(&self, point: horizon_terminal_core::TerminalSelectionPoint) {
+    pub(crate) fn send_selection_update(
+        &self,
+        point: horizon_terminal_core::TerminalSelectionPoint,
+    ) {
         self.dispatch(TerminalCommand::SelectionUpdate(point));
     }
 
-    pub fn send_scroll(&self, lines: i32, point: horizon_terminal_core::TerminalSelectionPoint) {
+    pub(crate) fn send_scroll(
+        &self,
+        lines: i32,
+        point: horizon_terminal_core::TerminalSelectionPoint,
+    ) {
         self.dispatch(TerminalCommand::Scroll(TerminalScroll { lines, point }));
     }
 
-    pub fn send_input(&self, bytes: Vec<u8>) {
+    pub(crate) fn send_input(&self, bytes: Vec<u8>) {
         self.dispatch(TerminalCommand::Input(bytes));
     }
 
-    pub fn send_paste(&self, text: String) {
+    pub(crate) fn send_paste(&self, text: String) {
         self.dispatch(TerminalCommand::Paste(text));
     }
 
-    pub fn send_copy_selection(&self) {
+    pub(crate) fn send_copy_selection(&self) {
         self.dispatch(TerminalCommand::CopySelection);
     }
 
-    pub fn send_resize(&self, size: TerminalSize) {
+    pub(crate) fn send_resize(&self, size: TerminalSize) {
         self.dispatch(TerminalCommand::Resize(size));
     }
 
-    pub fn send_focus(&self, focused: bool) {
+    pub(crate) fn send_focus(&self, focused: bool) {
         self.dispatch(TerminalCommand::Focus(focused));
     }
 
     /// The explicit destructive half of close-vs-terminate.
-    pub fn shutdown(&self) {
+    pub(crate) fn shutdown(&self) {
         self.dispatch(TerminalCommand::Shutdown);
     }
 }

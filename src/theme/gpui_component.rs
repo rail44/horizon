@@ -349,7 +349,7 @@ fn gpui_component_theme_config(scheme: &Scheme) -> gpui_component::ThemeConfig {
 /// after `gpui_component::init` (`src/main.rs`), and again after
 /// [`super::scheme::reload_from`] on `Reload Config` so an overridden
 /// `[theme]` scheme keeps applying live.
-pub fn apply_gpui_component_theme(cx: &mut gpui::App) {
+pub(crate) fn apply_gpui_component_theme(cx: &mut gpui::App) {
     let config = gpui_component_theme_config(&scheme());
     gpui_component::Theme::global_mut(cx).apply_config(&std::rc::Rc::new(config));
 }

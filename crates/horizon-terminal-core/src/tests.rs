@@ -1,6 +1,7 @@
 use termwiz::input::{KeyCode, Modifiers};
 
 use super::*;
+use crate::core::TerminalCore;
 use alacritty_terminal::vte::ansi::{NamedColor, Rgb};
 use serde::{de::DeserializeOwned, Serialize};
 use std::fmt::Debug;

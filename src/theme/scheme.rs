@@ -576,7 +576,7 @@ pub(super) fn scheme() -> Scheme {
 /// Applies a re-read config's `[theme]` live -- the GPUI half of the
 /// `Reload Config` command (the caller refreshes the window after, and
 /// separately re-applies [`apply_gpui_component_theme`]).
-pub fn reload_from(raw: &RawConfig) {
+pub(crate) fn reload_from(raw: &RawConfig) {
     *scheme_store().write().unwrap() = scheme_from(raw);
 }
 

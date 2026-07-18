@@ -1,7 +1,9 @@
-//! The terminal's UI-agnostic brain: VT emulation (`TerminalCore`,
-//! wrapping `alacritty_terminal`) and the byte-channel-driven session loop
+//! The terminal's UI-agnostic brain: the byte-channel-driven session loop
 //! (`run_terminal_core` — 16ms coalescing, the synchronized-update
-//! failsafe). No `floem`/`ui` dependency — see
+//! failsafe) plus the contract types it speaks. `run_terminal_core` and
+//! this contract are THE public seam; VT emulation itself (`TerminalCore`,
+//! wrapping `alacritty_terminal`) is an internal engine the session loop
+//! drives and is not exported. No `floem`/`ui` dependency — see
 //! `docs/session-daemon-design.md` decisions 8 and 9, and
 //! `docs/agent-runtime-split-design.md` for the sibling split
 //! `crates/horizon-agent` already went through.
@@ -24,7 +26,7 @@ pub use contract::{
     TerminalAttachResult, TerminalCommand, TerminalControl, TerminalSpawnSpec, TerminalSummary,
     TerminalUpdate, TERMINAL_COMMAND_KIND, TERMINAL_CONTROL_KIND, TERMINAL_UPDATE_KIND,
 };
-pub use core::{TerminalColorScheme, TerminalCore};
+pub use core::{TerminalColorScheme, DEFAULT_SCROLLBACK_LINES};
 pub use session_loop::{run_terminal_core, CoreReceivers, CoreSenders, TerminalCoreOptions};
 pub use types::{
     apply_frame_diff, compute_frame_diff, KeyEventKind, TerminalColor, TerminalCursor,

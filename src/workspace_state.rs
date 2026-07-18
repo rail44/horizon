@@ -27,12 +27,6 @@ pub(crate) enum InvalidState {
     Corrupt(String),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SaveResult {
-    Saved,
-    Unchanged,
-}
-
 impl WorkspaceStateStore {
     pub(crate) fn from_environment() -> Self {
         Self::new(resolve_state_path(
@@ -92,15 +86,15 @@ impl WorkspaceStateStore {
         Ok(LoadResult::Valid(json))
     }
 
-    pub(crate) fn save(&mut self, json: &str) -> io::Result<SaveResult> {
+    pub(crate) fn save(&mut self, json: &str) -> io::Result<()> {
         let bytes = json.as_bytes();
         if self.last_saved_bytes.as_deref() == Some(bytes) {
-            return Ok(SaveResult::Unchanged);
+            return Ok(());
         }
 
         atomic_replace(&self.path, bytes)?;
         self.last_saved_bytes = Some(bytes.to_vec());
-        Ok(SaveResult::Saved)
+        Ok(())
     }
 }
 
@@ -226,8 +220,8 @@ mod tests {
         let json = "{\"tabs\":[],\"version\":1}";
         let mut store = WorkspaceStateStore::new(path.clone());
 
-        assert_eq!(store.save(json).unwrap(), SaveResult::Saved);
-        assert_eq!(store.save(json).unwrap(), SaveResult::Unchanged);
+        store.save(json).unwrap();
+        store.save(json).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), json);
         assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
         fs::remove_dir_all(root).unwrap();
@@ -244,7 +238,7 @@ mod tests {
         let LoadResult::Valid(json) = store.load(1).unwrap() else {
             panic!("expected valid state");
         };
-        assert_eq!(store.save(&json).unwrap(), SaveResult::Unchanged);
+        store.save(&json).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 }

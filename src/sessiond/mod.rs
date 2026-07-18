@@ -317,7 +317,7 @@ impl SessiondHandle {
             .map_err(|_| "session runtime stopped before the agent list completed".to_string())?
     }
 
-    pub(crate) fn drain(&self) {
+    fn drain(&self) {
         if let Ok(envelope) = RawEnvelope::session_control(&SessionControl::Drain) {
             let _ = self.outgoing.send(envelope);
         }
