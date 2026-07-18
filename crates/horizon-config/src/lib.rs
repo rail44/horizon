@@ -3,9 +3,10 @@
 //! See `AGENTS.md`'s "Configuration" section for the user-facing summary
 //! and `config.example.toml` at the repo root for every knob with its
 //! default. This module owns locating and parsing the TOML file into a
-//! [`RawConfig`]; `agent::config`, `app::keymap`, and `ui::theme` each read
-//! the section relevant to them and apply their own env-var precedence and
-//! built-in defaults on top (env var > this file > built-in default).
+//! [`RawConfig`]; `agent::config` and the shell crate's `keymap`/`theme`
+//! modules each read the section relevant to them and apply their own
+//! env-var precedence and built-in defaults on top (env var > this file >
+//! built-in default).
 //!
 //! Design choices:
 //! - **One location, no layered merging.** Unlike tools that merge a
@@ -18,15 +19,17 @@
 //! - **Never crash on a bad file.** A missing file is the common case
 //!   (defaults apply, silently); a present-but-unparsable file falls back
 //!   to defaults with a warning on stderr — the same "warn and skip, never
-//!   fail startup" policy `app::keymap` and `ui::theme` apply per-entry to
-//!   an unrecognized keybinding or theme color.
+//!   fail startup" policy the shell crate's `keymap` and `theme` modules
+//!   apply per-entry to an unrecognized keybinding or theme color.
 //! - **Applied at startup only, except `[theme]`/`[keybindings]`.** Nothing
-//!   here watches the file for changes; restart Horizon to pick up edits to
-//!   `[agent]`/`[provider]`/`[terminal]`/`[ui]`. The `Reload Config` command
-//!   (`app::command_actions::reload_config`, [`reload`]) re-reads the file
-//!   and applies `[theme]` (`ui::theme::apply_reload`) and `[keybindings]`
-//!   (`app::keymap::Keymap::reload`) live — see that command's doc comment
-//!   for why those two sections and not the rest.
+//!   here watches the file for changes. The `Reload Config` command (the
+//!   `CommandId::ReloadConfig` arm in the shell crate's `workspace.rs`,
+//!   fed by [`reload`]) re-reads the file and applies `[theme]`
+//!   (`theme::reload_from`) and `[keybindings]` (`workspace::apply_bindings`)
+//!   live. Every other section needs a restart of some kind:
+//!   `[agent]`/`[provider]` pick up on `Reload Session Runtime` (a fresh
+//!   `horizon-sessiond` process re-reads the file, no full UI restart
+//!   needed); `[terminal]`/`[ui]` need a full UI restart.
 //! - **Secrets stay out.** Nothing under `[provider]` accepts an API key —
 //!   `OPENAI_API_KEY` (and any future provider secret) is environment-only.
 
@@ -379,8 +382,9 @@ fn load_from_path(path: Option<&Path>) -> RawConfig {
 }
 
 /// Re-reads and parses the config file fresh from disk, bypassing [`load`]'s
-/// startup-only cache -- `Reload Config`'s entry point
-/// (`app::command_actions::reload_config`). Unlike [`load_from_path`] (used
+/// startup-only cache -- `Reload Config`'s entry point (the
+/// `CommandId::ReloadConfig` arm in the shell crate's `workspace.rs`).
+/// Unlike [`load_from_path`] (used
 /// only at startup, where nothing has been "applied" yet, so falling back to
 /// defaults on any error is always safe), a reload distinguishes a missing
 /// file (`Ok(RawConfig::default())` -- rewriting the process's whole
@@ -409,13 +413,13 @@ pub fn reload_from_path(path: Option<&Path>) -> Result<RawConfig, String> {
 /// Under `#[cfg(test)]` this resolves to built-in defaults unconditionally,
 /// mirroring [`load`]'s own test-mode behavior for the same reason: a test
 /// process must never observe the developer's real
-/// `~/.config/horizon/config.toml`. `app::command_actions::reload_config`
+/// `~/.config/horizon/config.toml`. The `CommandId::ReloadConfig` arm
 /// (this function's one caller) is therefore not unit-tested directly --
 /// like `reload_session_runtime`, which spawns a real process, there is
 /// nothing left to exercise here once `reload_from_path` (this module's
-/// tests) and the theme/keymap apply functions it feeds
-/// (`ui::theme::apply_reload`'s and `app::keymap::Keymap::reload`'s own
-/// tests) are each covered on their own.
+/// tests) and the theme/keymap apply functions it feeds (`theme::reload_from`'s
+/// and the shell crate's `keymap::resolve_keybindings`'s own tests) are
+/// each covered on their own.
 pub fn reload() -> Result<RawConfig, String> {
     #[cfg(test)]
     {

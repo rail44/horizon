@@ -11,6 +11,7 @@
 //! the caller's job to warn about and skip — these functions just return
 //! `None`, never panic.
 
+use horizon_config::RawConfig;
 use horizon_workspace::commands::CommandId;
 
 /// The reserved `[keybindings]` value that binds a chord to the existing
@@ -141,6 +142,82 @@ pub(crate) fn command_for(id: &str) -> Option<CommandId> {
     }
 }
 
+/// What a `[keybindings]` chord dispatches to once bound — either the
+/// reserved "open the command palette" pseudo-command or a real
+/// `CommandId` run through `RunCommand`. The workspace-mode toggle chord
+/// isn't covered here: it replaces a fixed built-in action rather than
+/// adding a new dispatch target, so it's resolved separately by
+/// [`workspace_mode_keystroke`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum KeybindingTarget {
+    OpenPalette,
+    Command(CommandId),
+}
+
+/// One `[keybindings]` entry, successfully parsed into a gpui keystroke
+/// string and its dispatch target — see [`resolve_keybindings`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ResolvedKeybinding {
+    pub(crate) keystroke: String,
+    pub(crate) target: KeybindingTarget,
+}
+
+/// Parses every `[keybindings]` entry other than the workspace-mode
+/// pseudo-command (owned by [`workspace_mode_keystroke`]) into gpui
+/// keystroke strings and dispatch targets. An entry with an unparsable
+/// chord or an unknown command id is skipped with a stderr warning, same
+/// policy as at startup. Pure and config-only (no `gpui::App` needed), so
+/// `workspace::derive_bindings` can share this between startup and
+/// `Reload Config` and this module can unit-test the parsing/warning
+/// behavior directly.
+pub(crate) fn resolve_keybindings(config: &RawConfig) -> Vec<ResolvedKeybinding> {
+    let mut resolved = Vec::new();
+    for (chord, command) in &config.keybindings {
+        if command == WORKSPACE_MODE_PSEUDO_COMMAND {
+            continue;
+        }
+        let Some(keystroke) = gpui_keystroke(chord) else {
+            eprintln!(
+                "horizon config: skipping keybinding `{chord}` = `{command}`: unrecognized chord"
+            );
+            continue;
+        };
+        let target = if command == OPEN_PALETTE_PSEUDO_COMMAND {
+            KeybindingTarget::OpenPalette
+        } else if let Some(id) = command_for(command) {
+            KeybindingTarget::Command(id)
+        } else {
+            eprintln!(
+                "horizon config: skipping keybinding `{chord}` = `{command}`: unknown command id"
+            );
+            continue;
+        };
+        resolved.push(ResolvedKeybinding { keystroke, target });
+    }
+    resolved
+}
+
+/// Resolves the workspace-mode toggle's chord: the `[keybindings]`
+/// override if present and parseable, else `default_keystroke`. A
+/// present-but-unparsable override warns to stderr and falls back to the
+/// default, same policy as [`resolve_keybindings`].
+pub(crate) fn workspace_mode_keystroke(config: &RawConfig, default_keystroke: &str) -> String {
+    let Some((chord, _)) = config
+        .keybindings
+        .iter()
+        .find(|(_, command)| command.as_str() == WORKSPACE_MODE_PSEUDO_COMMAND)
+    else {
+        return default_keystroke.to_string();
+    };
+    gpui_keystroke(chord).unwrap_or_else(|| {
+        eprintln!(
+            "horizon config: skipping keybinding `{chord}` = \
+             `{WORKSPACE_MODE_PSEUDO_COMMAND}`: unrecognized chord"
+        );
+        default_keystroke.to_string()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,5 +292,75 @@ mod tests {
         assert_eq!(command_for("not-a-real-command"), None);
         assert_eq!(command_for(OPEN_PALETTE_PSEUDO_COMMAND), None);
         assert_eq!(command_for(WORKSPACE_MODE_PSEUDO_COMMAND), None);
+    }
+
+    fn config_with_keybindings(entries: &[(&str, &str)]) -> RawConfig {
+        RawConfig {
+            keybindings: entries
+                .iter()
+                .map(|(chord, command)| (chord.to_string(), command.to_string()))
+                .collect(),
+            ..RawConfig::default()
+        }
+    }
+
+    #[test]
+    fn resolve_keybindings_translates_a_command_entry() {
+        let config = config_with_keybindings(&[("ctrl+shift+t", "new-tab")]);
+        assert_eq!(
+            resolve_keybindings(&config),
+            vec![ResolvedKeybinding {
+                keystroke: "ctrl-shift-t".to_string(),
+                target: KeybindingTarget::Command(CommandId::NewTab),
+            }]
+        );
+    }
+
+    #[test]
+    fn resolve_keybindings_translates_the_open_palette_pseudo_command() {
+        let config = config_with_keybindings(&[("ctrl+p", OPEN_PALETTE_PSEUDO_COMMAND)]);
+        assert_eq!(
+            resolve_keybindings(&config),
+            vec![ResolvedKeybinding {
+                keystroke: "ctrl-p".to_string(),
+                target: KeybindingTarget::OpenPalette,
+            }]
+        );
+    }
+
+    #[test]
+    fn resolve_keybindings_skips_the_workspace_mode_pseudo_command() {
+        let config = config_with_keybindings(&[("ctrl+'", WORKSPACE_MODE_PSEUDO_COMMAND)]);
+        assert_eq!(resolve_keybindings(&config), vec![]);
+    }
+
+    #[test]
+    fn resolve_keybindings_skips_an_unparsable_chord() {
+        let config = config_with_keybindings(&[("hyper+t", "new-tab")]);
+        assert_eq!(resolve_keybindings(&config), vec![]);
+    }
+
+    #[test]
+    fn resolve_keybindings_skips_an_unknown_command_id() {
+        let config = config_with_keybindings(&[("ctrl+t", "not-a-real-command")]);
+        assert_eq!(resolve_keybindings(&config), vec![]);
+    }
+
+    #[test]
+    fn workspace_mode_keystroke_falls_back_to_the_default_when_unset() {
+        let config = RawConfig::default();
+        assert_eq!(workspace_mode_keystroke(&config, "ctrl-'"), "ctrl-'");
+    }
+
+    #[test]
+    fn workspace_mode_keystroke_uses_the_override_when_present() {
+        let config = config_with_keybindings(&[("ctrl+space", WORKSPACE_MODE_PSEUDO_COMMAND)]);
+        assert_eq!(workspace_mode_keystroke(&config, "ctrl-'"), "ctrl-space");
+    }
+
+    #[test]
+    fn workspace_mode_keystroke_falls_back_on_an_unparsable_override() {
+        let config = config_with_keybindings(&[("hyper+x", WORKSPACE_MODE_PSEUDO_COMMAND)]);
+        assert_eq!(workspace_mode_keystroke(&config, "ctrl-'"), "ctrl-'");
     }
 }

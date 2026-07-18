@@ -102,7 +102,12 @@ environment-only and never read from the file. Config is applied at startup
 only, with one exception: `Reload Config` (palette / `reload-config`
 keybinding id / CLI `horizon reload-config`) re-reads the file and applies
 `[theme]` (chrome, `[theme.ansi]`, and the derived terminal colors) and
-`[keybindings]` live; every other section still needs a restart. See
+`[keybindings]` (built-in defaults plus every chord/command override,
+unbinding whatever the previous apply's chords were first — see
+`workspace::apply_bindings`) live. Every other section needs a restart of
+some kind: `[agent]`/`[provider]` pick up on `Reload Session Runtime` (a
+fresh `horizon-sessiond` process re-reads the file, no full UI restart
+needed); `[terminal]`/`[ui]` need a full UI restart. See
 `config.example.toml` at the repo root for every knob, and
 `crates/horizon-config` for the loader.
 
