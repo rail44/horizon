@@ -86,14 +86,6 @@ entries live in `backlog-resolved.md` keeping their original numbers
     `TerminalSpan`, protocol-affecting) plus paint support — a designed
     contract extension, not a patch. Recorded 2026-07-18.
 
-45. **`Flags::HIDDEN` cells are skipped without column accounting in
-    span production.** Same investigation, unconfirmed impact: the
-    cell loop skips concealed cells with no placeholder columns (unlike
-    `WIDE_CHAR_SPACER`, whose partner already accounts for width), so a
-    row containing concealed text can desync the paint path's running
-    column offset for the rest of that row. Repro + fix small once
-    confirmed. Recorded 2026-07-18.
-
 46. **Agent bash spawn-retry storm: 134 duplicate `ToolCallStarted` for
     one call, ending in EMFILE.** Found in the 2026-07-19 event-log
     analysis (session `2f3668b8`): one bash tool call emitted 134

@@ -46,10 +46,7 @@ pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> Term
         }
 
         let cell = indexed.cell;
-        if cell
-            .flags
-            .intersects(Flags::WIDE_CHAR_SPACER | Flags::HIDDEN)
-        {
+        if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
             continue;
         }
 
@@ -68,6 +65,19 @@ pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> Term
             (fg, bg)
         };
         let columns = cell_width(cell.c, cell.flags);
+        if cell.flags.contains(Flags::HIDDEN) {
+            // SGR 8 (conceal) hides the glyph but the cell still occupies
+            // its column in the grid -- unlike `WIDE_CHAR_SPACER`, whose
+            // partner cell already counts both columns' width, a
+            // concealed cell has no such partner. Emit it as a blank span
+            // (the same vocabulary `push_styled_cell` already uses for
+            // BCE-erased/space-padding runs) so the row's running column
+            // offset stays correct for whatever comes after it, instead of
+            // silently dropping the column and shifting later spans left
+            // (backlog 45).
+            push_styled_cell(&mut styled_rows[row], ' ', columns, fg, bg);
+            continue;
+        }
         push_styled_cell(&mut styled_rows[row], cell.c, columns, fg, bg);
         if let Some(zerowidth) = cell.zerowidth() {
             for ch in zerowidth {

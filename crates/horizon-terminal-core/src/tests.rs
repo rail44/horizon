@@ -223,6 +223,40 @@ fn vt_stream_tracks_wide_character_columns() {
         .any(|span| span.text == "日" && span.columns == 2));
 }
 
+/// Backlog 45: SGR 8 (conceal) sets `Flags::HIDDEN` on a cell but leaves
+/// its column in `alacritty_terminal`'s grid otherwise ordinary -- unlike
+/// `Flags::WIDE_CHAR_SPACER`, whose partner cell already counts both
+/// columns' width, a concealed cell has no such partner. If
+/// `core::render::snapshot_frame` skips it without emitting a
+/// placeholder span, every span painted after it on that row silently
+/// shifts left by the concealed run's width (`src/terminal/mod.rs`'s
+/// `paint_terminal` walks `line.spans` left to right, advancing its `x`
+/// only by each span's own `columns` -- a cell with no span at all just
+/// vanishes from that accounting instead of leaving a gap).
+#[test]
+fn concealed_text_still_occupies_its_columns() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt(b"\x1b[8msecret\x1b[0mvisible");
+
+    let frame = core.snapshot_frame();
+    // "secret" is 6 columns; "visible" must start at column 6, not slide
+    // left to fill the gap the concealed run would otherwise leave.
+    assert_eq!(frame.text.lines().next(), Some("      visible"));
+
+    let first_line = &frame.lines[0];
+    let mut col = 0;
+    for span in &first_line.spans {
+        if span.text == "v" {
+            break;
+        }
+        col += span.columns;
+    }
+    assert_eq!(
+        col, 6,
+        "visible text must start after the concealed run's columns"
+    );
+}
+
 #[test]
 fn scroll_display_uses_alacritty_history() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 3));

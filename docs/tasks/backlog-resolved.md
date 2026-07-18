@@ -797,3 +797,44 @@ full resolution/closing records.
     `NewTab`, `Manage Sessions`, `Reload Config`, and `Reload Session
     Runtime` stay unconditionally enabled, since at least one of them
     must remain reachable to recover from the empty state.
+
+45. *(resolved 2026-07-19)* **`Flags::HIDDEN` cells were skipped without
+    column accounting in span production.** Confirmed real, not just
+    suspected: `crates/horizon-terminal-core/src/core/render.rs`'s
+    `snapshot_frame` loop `continue`d past any cell whose flags
+    intersected `WIDE_CHAR_SPACER | Flags::HIDDEN` before ever calling
+    `push_styled_cell`, so a concealed (SGR 8) cell contributed nothing
+    to its row's `TerminalLine.spans` at all — no span, no `columns`.
+    Unlike `WIDE_CHAR_SPACER`, whose partner (the wide char's base cell)
+    already counts both columns via `cell_width` returning 2, a
+    concealed cell has no such partner: skipping it silently erased its
+    column from the row's accounting. Both consumers of that
+    accumulated-`columns` accounting break the same way: `src/terminal/
+    mod.rs`'s `paint_terminal` walks `line.spans` left to right,
+    advancing its paint-x only by each span's own `columns` (`let mut
+    col = 0; for span in &line.spans { ...; col += span.columns; }`),
+    and `crate::types::frame_text` pads each span's own `columns` minus
+    its text width into the reconstructed row string — a cell that never
+    produced a span leaves no gap in either, so every span after a
+    concealed run on that row silently shifts left by the concealed
+    run's width. Repro test added first (`crates/horizon-terminal-core/
+    src/tests.rs`, `concealed_text_still_occupies_its_columns`): wrote
+    `\x1b[8msecret\x1b[0mvisible`, confirmed pre-fix `frame.text`'s first
+    line was `"visible"` (no leading blanks) instead of the correct
+    `"      visible"`, i.e. "visible" had slid left to fill the
+    concealed run's gap. **Fix:** `snapshot_frame` now only skips
+    `WIDE_CHAR_SPACER` cells outright; a `Flags::HIDDEN` cell (not also a
+    spacer) is pushed as a blank span (`push_styled_cell(&mut
+    styled_rows[row], ' ', columns, fg, bg)`) — the same blank-span
+    vocabulary already used for BCE-erased regions and background space
+    padding (see the colocated `bce_erased_line_carries_the_active_
+    background_color`/`mid_line_space_run_with_background_is_a_blank_
+    colored_span` tests) — so the row's running column offset stays
+    correct while the glyph itself still renders invisible (empty
+    `text`, only `bg` paints). `cargo nextest run -p horizon-terminal-
+    core --locked`: 79 passed, 0 failed. The Kitty conformance matrix
+    (`KITTY_COMPLIANCE`/`print_compliance_matrix`,
+    `crates/horizon-terminal-core/src/protocol/kitty_keyboard.rs`) is
+    exclusively about the Kitty *keyboard* protocol (key encoding/CSI u
+    progressive enhancement) and has no concealed-text/SGR-8 coverage at
+    all — unrelated domain, nothing to update there.
