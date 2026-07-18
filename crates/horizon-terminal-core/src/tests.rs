@@ -131,6 +131,83 @@ fn osc_104_reset_clears_a_previously_set_slot() {
         .any(|(index, _)| *index == 1));
 }
 
+/// Ground truth for the "gaps in bg-colored regions" dogfooding report
+/// (owner report, 2026-07-18): `CSI K` (erase line) fills the erased
+/// region with whatever background is *currently active* on the cursor's
+/// SGR template -- the classic `bce` terminfo semantics real apps (an
+/// ink/React-based CLI logo, a status line) rely on to paint solid-color
+/// bars without emitting a literal colored space for every cell. That
+/// erased region must still carry the active background into the frame
+/// as a span -- `push_styled_cell` represents a run of blank cells as an
+/// empty-`text` span carrying only `columns`/`bg`, distinct from (but
+/// just as real as) a span with visible glyphs. The paint side's fix
+/// (`src/terminal/mod.rs`'s `paint_terminal`) depends on this contract
+/// holding, so it's locked down here independently of the paint code.
+#[test]
+fn bce_erased_line_carries_the_active_background_color() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt(b"\x1b[48;2;10;20;30mhi\x1b[K");
+
+    let frame = core.snapshot_frame();
+    let first_line = &frame.lines[0];
+    let erased = first_line
+        .spans
+        .iter()
+        .find(|span| span.text.is_empty())
+        .expect("the erased tail of the line should be a blank span");
+    assert_eq!(erased.bg, TerminalColor::Rgb([10, 20, 30]));
+    assert_eq!(erased.columns, 18); // 20 cols - "hi"'s 2.
+}
+
+/// The other route to the same span shape: literal space characters
+/// written mid-line under an active background (a status line's padding
+/// between segments is the real-world case -- see e.g. neovim's own
+/// statusline, which pads with plain spaces under a highlight group's
+/// background rather than erasing). Unlike the BCE case above, this run
+/// is followed by more text, not the end of the line.
+#[test]
+fn mid_line_space_run_with_background_is_a_blank_colored_span() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt(b"\x1b[48;2;9;9;9mA   B\x1b[0m");
+
+    let frame = core.snapshot_frame();
+    let first_line = &frame.lines[0];
+    let padding = first_line
+        .spans
+        .iter()
+        .find(|span| span.text.is_empty())
+        .expect("the space run between 'A' and 'B' should be a blank span");
+    assert_eq!(padding.bg, TerminalColor::Rgb([9, 9, 9]));
+    assert_eq!(padding.columns, 3);
+}
+
+/// Selection highlighting rides the same `push_styled_cell` path
+/// (`core::render::snapshot_frame` overrides `fg`/`bg` to the selection
+/// colors *before* building spans) -- so a selection dragged across
+/// blank/space cells past the end of typed text must produce a blank span
+/// carrying the selection's background, the frame-level half of the
+/// "selected lines' backgrounds are interrupted" symptom.
+#[test]
+fn selection_over_blank_cells_is_a_selection_colored_blank_span() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt(b"hi");
+    core.start_selection(
+        TerminalSelectionPoint { row: 0, col: 0 },
+        TerminalSelectionKind::Simple,
+    );
+    core.update_selection(TerminalSelectionPoint { row: 0, col: 19 });
+
+    let frame = core.snapshot_frame();
+    let first_line = &frame.lines[0];
+    let selected_blank = first_line
+        .spans
+        .iter()
+        .find(|span| span.text.is_empty())
+        .expect("the selected blank tail should be a blank span");
+    assert_eq!(selected_blank.bg, TerminalColor::Rgb([132, 220, 198]));
+    assert_eq!(selected_blank.columns, 18);
+}
+
 #[test]
 fn vt_stream_tracks_wide_character_columns() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 4));
