@@ -68,7 +68,7 @@ is made.
 
 ## Spike plan
 
-Location: `spikes/gpui-terminal/` — a standalone crate (own
+Location: `spikes/gpui-terminal/` (retired; lives in git history) — a standalone crate (own
 `[workspace]` table, outside the root workspace) so gpui's dependency
 tree never mixes into the Floem lockfile. It path-depends on
 `crates/horizon-terminal-core` only.
@@ -95,7 +95,7 @@ concentrated. Everything else Horizon needs is demonstrably shipped
   conflict risk.
 - **S1 — grid rendering. Implemented 2026-07-10; headless-verified,
   visual check pending.** A real PTY drives `horizon-terminal-core`
-  (`spikes/gpui-terminal/src/pty.rs`, a stripped replica of the host
+  (`spikes/gpui-terminal/src/pty.rs`, retired, lives in git history — a stripped replica of the host
   spawn wiring); a `canvas`-based paint path paints each span at its
   grid-computed column offset (`col × cell_width`) with glyph advances
   snapped to the cell grid via `shape_line`'s `force_width`, span
@@ -110,7 +110,7 @@ concentrated. Everything else Horizon needs is demonstrably shipped
   `vim` renders its alternate screen with bounds-driven resize
   confirmed. What a dump cannot verify — actual pixels, column
   alignment, wide-glyph rendering — needs the owner to run it
-  (`cargo run` in `spikes/gpui-terminal/`).
+  (`cargo run` in `spikes/gpui-terminal/`, retired; lives in git history).
   Prior-art survey for S1–S3 design:
   `docs/research/gpui-terminal-implementations.md` (best legal
   reference: `lassejlv/termy`, MIT, same alacritty_terminal 0.26 line;

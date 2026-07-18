@@ -269,8 +269,10 @@ became Horizon's sole frontend:
 The daemon-side hosting slice is implemented. The shared session protocol is
 version 3: lifecycle traffic uses `session_control`, while agent and terminal
 traffic use qualified `agent_*` and `terminal_*` kinds. Before `Hello`,
-`sessiond` accepts only shared controls; its successful handshake advertises
-both `agent` and `terminal` capabilities. Existing agent commands, events,
+`sessiond` accepts only shared controls; its successful handshake advertised
+both `agent` and `terminal` capabilities via a `Hello.capabilities` field
+(removed in protocol v6, 2026-07-18 -- every sender hardcoded the same two
+values and nothing ever read them). Existing agent commands, events,
 persistence, and resume behavior remain on the same connection behind the
 agent-qualified kinds.
 

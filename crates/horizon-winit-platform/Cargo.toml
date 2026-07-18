@@ -3,7 +3,8 @@
 # unify on this crate everywhere rather than keep a per-OS split; see
 # docs/winit-backend-design.md). Started as the Linux adoption step of the
 # winit windowing backend roadmap item, porting `spikes/gpui-winit/`
-# (docs/research/winit-backend-spike.md, legs 1+2) into a real workspace
+# (retired; lives in git history — docs/research/winit-backend-spike.md,
+# legs 1+2) into a real workspace
 # member; the crate itself was always mostly OS-agnostic (winit/gpui_wgpu
 # are cross-platform), so unifying meant removing the few Linux-only
 # gates (see src/lib.rs) rather than a rewrite.

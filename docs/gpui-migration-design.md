@@ -25,7 +25,8 @@ The spike proved the two-workspace pattern: gpui comes from the Zed
 monorepo via git and its dependency tree must not mix into the Floem
 lockfile. The GPUI shell therefore lives as **`shell-gpui/` — its own
 workspace** (empty `[workspace]` table), path-depending on `crates/*`,
-exactly like `spikes/gpui-terminal/` does today. When the Floem shell
+exactly like `spikes/gpui-terminal/` did (retired; lives in git
+history). When the Floem shell
 is retired, `shell-gpui/` folds into the root workspace and `src/` is
 deleted; until then the quality gate grows a second leg (`cargo
 fmt/clippy/nextest` inside `shell-gpui/`), added to `hooks/pre-commit`

@@ -1,5 +1,6 @@
 //! `PlatformDispatcher` backed by winit's `EventLoopProxy`. Ported from the
-//! spike (`spikes/gpui-winit/src/dispatcher.rs`) with no behavioral change —
+//! spike (`spikes/gpui-winit/src/dispatcher.rs`, retired; lives in git
+//! history) with no behavioral change —
 //! see docs/research/winit-backend-spike.md §6.1 for why this mapping was
 //! the "expected" part of the spike (unlike the `ActiveEventLoop`
 //! reachability problem in `active_loop.rs`).

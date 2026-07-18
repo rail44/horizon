@@ -151,7 +151,6 @@ where
     let our_hello = Hello {
         contract_version: CONTRACT_VERSION,
         binary_id: concat!("horizon/", env!("CARGO_PKG_VERSION")).to_string(),
-        capabilities: Vec::new(),
     };
     let hello_envelope = session_wire::Envelope::session_control(&SessionControl::Hello(our_hello))
         .map_err(|err| format!("failed to encode hello for horizon-sessiond: {err}"))?;
@@ -235,7 +234,6 @@ mod tests {
             SessionControl::Hello(Hello {
                 contract_version: CONTRACT_VERSION,
                 binary_id: "test-sessiond".to_string(),
-                capabilities: vec![],
             }),
         ));
 
@@ -255,7 +253,6 @@ mod tests {
             SessionControl::Hello(Hello {
                 contract_version: CONTRACT_VERSION + 1,
                 binary_id: "stale-sessiond".to_string(),
-                capabilities: vec![],
             }),
         ));
 

@@ -1,5 +1,6 @@
 //! A `gpui::Platform` implementation over winit 0.30, rendering through
-//! `gpui_wgpu`. Production port of the `spikes/gpui-winit/` prototype (see
+//! `gpui_wgpu`. Production port of the `spikes/gpui-winit/` prototype
+//! (retired; lives in git history — see
 //! `docs/research/winit-backend-spike.md` for the findings this crate
 //! backs up, and `docs/winit-backend-design.md` for this crate's own
 //! architecture, the 2026-07-12 decision to unify every OS on this single

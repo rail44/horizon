@@ -470,7 +470,6 @@ async fn connect_and_handshake(
         SessionControl::Hello(Hello {
             contract_version: CONTRACT_VERSION,
             binary_id: "test-client".to_string(),
-            capabilities: Vec::new(),
         }),
     )
     .await;
@@ -670,7 +669,6 @@ async fn hello_ping_session_list_and_drain_over_the_real_socket() {
         SessionControl::Hello(Hello {
             contract_version: CONTRACT_VERSION,
             binary_id: "test-client".to_string(),
-            capabilities: Vec::new(),
         }),
     )
     .await;
@@ -684,7 +682,6 @@ async fn hello_ping_session_list_and_drain_over_the_real_socket() {
         hello.binary_id,
         concat!("horizon-sessiond/", env!("CARGO_PKG_VERSION"))
     );
-    assert_eq!(hello.capabilities, ["agent", "terminal"]);
 
     write_shared(&mut write_half, SessionControl::Ping).await;
     assert_eq!(read_shared(&mut reader).await, SessionControl::Pong);
@@ -975,7 +972,6 @@ async fn a_hello_with_the_wrong_contract_version_is_rejected_with_a_reason() {
         SessionControl::Hello(Hello {
             contract_version: wrong_version,
             binary_id: "test-client".to_string(),
-            capabilities: Vec::new(),
         }),
     )
     .await;
