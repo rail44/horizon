@@ -42,6 +42,22 @@ state, workspace mode and its cursor, terminal frames, agent transcripts,
 approval prompts, connection state, and view entities are reconstructed or
 owned elsewhere.
 
+**Amendment (2026-07-18, owner clarification):** a zero-tab workspace is a
+valid, persistable document -- the original design (and `WorkspaceState::
+validate`'s implementation of it) required at least one tab, so the
+document's `active_tab` referenced an existing tab unconditionally. That
+requirement is dropped: `tabs` may be empty, and `active_tab` is then simply
+not checked against anything (any value is equally meaningless with no tabs
+to reference). This is a validation-rule relaxation, not a shape change --
+the DTO's fields are unchanged -- so the schema version was not bumped; an
+older binary reading a newer, empty-workspace document falls back to its
+existing "invalid state" handling (starts fresh and overwrites the file on
+next save) rather than the stronger "unsupported version" preservation a
+version bump would give it. Startup still seeds exactly one fresh terminal
+when no saved document exists at all (see "Startup barrier" below) -- that
+is initial placement, distinct from an *existing* saved document reconciling
+down to empty, which now simply stays empty.
+
 ## Write policy
 
 Every successful persistent workspace-model mutation writes the complete DTO
@@ -87,7 +103,10 @@ both inventories succeed, Horizon reconciles by stable session id:
 - splits left with one child are collapsed and empty tabs are removed;
 - active pane and active tab references are repaired to surviving entries;
 - sessions found only in an inventory are registered as detached sessions; and
-- if reconciliation leaves no pane, Horizon creates exactly one fresh terminal.
+- if reconciliation leaves no pane, the restored workspace is simply empty --
+  a zero-tab workspace is a valid, persistable state (see "Storage contract"'s
+  amendment below), not something reconciliation papers over by creating a
+  terminal the user never asked for.
 
 After that reconciliation succeeds, Horizon installs the restored model,
 re-enables layout mutation, and writes the repaired state. An empty inventory is

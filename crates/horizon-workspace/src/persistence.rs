@@ -28,9 +28,6 @@ impl SessionInventory {
 pub struct InventoryReconcile {
     pub removed: Vec<SessionId>,
     pub added: Vec<SessionId>,
-    /// A fresh terminal created when pruning removed every persisted pane.
-    /// The caller must create this session in the daemon.
-    pub created_terminal: Option<SessionId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -244,19 +241,12 @@ impl Workspace {
             added.push(id);
         }
 
-        let created_terminal = if self.tabs.is_empty() {
-            let id = SessionId::new();
-            self.open_tab(PaneKind::Terminal, Some(id));
-            Some(id)
-        } else {
-            None
-        };
-
-        Ok(InventoryReconcile {
-            removed,
-            added,
-            created_terminal,
-        })
+        // Pruning every persisted pane away used to auto-create a fresh
+        // terminal here so the workspace never reached zero tabs
+        // (`WorkspaceState::validate` used to reject that). A zero-tab
+        // workspace is now a valid, persistable state (2026-07-18 owner
+        // clarification), so reconciliation simply leaves it empty.
+        Ok(InventoryReconcile { removed, added })
     }
 
     fn prune_layout_panes(&mut self, removed: &[PaneId]) {
@@ -286,6 +276,7 @@ impl Workspace {
             }
         }
         self.workspace_mode_cursor = None;
+        self.workspace_mode_active = false;
     }
 }
 
@@ -365,9 +356,14 @@ impl WorkspaceState {
                 supported: WORKSPACE_STATE_VERSION,
             });
         }
-        if self.tabs.is_empty() {
-            return Err(state_error("workspace must contain at least one tab"));
-        }
+        // A zero-tab workspace is a valid, persistable state (2026-07-18
+        // owner clarification: an empty workspace is first-class, not an
+        // error condition) -- so unlike every other structural rule below,
+        // there is no "at least one tab" requirement here. `self.active_tab`
+        // is simply not checked against `tab_ids` in that case (see below):
+        // with no tabs, any value is equally meaningless, exactly mirroring
+        // how the in-memory model tolerates a dangling `active_tab` once
+        // its last tab closes (`Workspace::close_tab_index`/`detach_pane`).
         if self.next_terminal_display_number == 0 || self.next_agent_display_number == 0 {
             return Err(state_error("display counters must be positive"));
         }
@@ -468,7 +464,7 @@ impl WorkspaceState {
                 }
             }
         }
-        if !tab_ids.contains(&self.active_tab) {
+        if !self.tabs.is_empty() && !tab_ids.contains(&self.active_tab) {
             return Err(state_error(format!(
                 "active tab {:?} does not exist",
                 self.active_tab
@@ -505,6 +501,7 @@ impl WorkspaceState {
             next_terminal_display_number: self.next_terminal_display_number,
             next_agent_display_number: self.next_agent_display_number,
             workspace_mode_cursor: None,
+            workspace_mode_active: false,
         }
     }
 }
@@ -726,6 +723,31 @@ mod tests {
     }
 
     #[test]
+    fn a_zero_tab_workspace_round_trips() {
+        // 2026-07-18 owner clarification: an empty workspace is a valid,
+        // first-class state -- closing/terminating everything must not
+        // leave the workspace unpersistable (the root cause `704657b`
+        // originally worked around by auto-reseeding a terminal instead).
+        let mut workspace = Workspace::mvp();
+        workspace.terminate_active_session();
+        assert_eq!(workspace.tab_count(), 0);
+
+        let json = workspace.to_persisted_json().expect("an empty workspace must serialize");
+        let value: Value = serde_json::from_str(&json).expect("json");
+        assert_eq!(value["tabs"], json!([]));
+
+        let restored = Workspace::from_persisted_json(&json).expect("an empty workspace must restore");
+
+        assert_eq!(restored.tab_count(), 0);
+        assert_eq!(restored.panes.len(), 0);
+        assert_eq!(restored.sessions, workspace.sessions);
+        assert_eq!(
+            restored.to_persisted_json().expect("serialize again"),
+            json
+        );
+    }
+
+    #[test]
     fn state_round_trip_preserves_a_view_pane_without_a_session() {
         let mut workspace = Workspace::mvp();
         let terminal_pane = workspace.visible_pane_id(0).expect("terminal pane");
@@ -874,7 +896,6 @@ mod tests {
         assert!(outcome.removed.contains(&missing_agent));
         assert!(outcome.removed.contains(&second_tab));
         assert_eq!(outcome.added, vec![daemon_only]);
-        assert_eq!(outcome.created_terminal, None);
         assert_eq!(workspace.tabs.len(), 1);
         assert!(matches!(workspace.tabs[0].root, LayoutNode::Pane(_)));
         assert_eq!(workspace.active_session_id(), Some(retained));
@@ -882,7 +903,13 @@ mod tests {
     }
 
     #[test]
-    fn inventory_preserves_detached_metadata_and_creates_terminal_when_all_panes_are_gone() {
+    fn inventory_preserves_detached_metadata_and_leaves_the_workspace_empty_when_all_panes_are_gone(
+    ) {
+        // 2026-07-18 owner clarification: pruning every persisted pane away
+        // used to auto-create a fresh terminal (`created_terminal`, now
+        // removed) so the workspace never reached zero tabs. A zero-tab
+        // workspace is now a valid state, so reconciliation simply leaves
+        // it empty instead of reseeding one.
         let mut workspace = Workspace::mvp();
         let attached = workspace.active_session_id().expect("terminal");
         let detached = SessionId::new();
@@ -894,11 +921,12 @@ mod tests {
             .expect("reconcile");
 
         assert_eq!(outcome.removed, vec![attached]);
-        let created = outcome.created_terminal.expect("fresh terminal");
-        assert_eq!(workspace.active_session_id(), Some(created));
+        assert!(outcome.added.is_empty());
+        assert_eq!(workspace.tab_count(), 0);
+        assert_eq!(workspace.active_session_id(), None);
         assert_eq!(workspace.session(detached), Some(&detached_before));
         assert_eq!(workspace.detached_session_count(), 1);
-        assert!(workspace.next_terminal_display_number > 1);
+        assert!(workspace.to_persisted_json().is_ok());
     }
 
     #[test]
