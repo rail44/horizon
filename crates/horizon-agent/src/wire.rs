@@ -36,9 +36,9 @@ pub use horizon_session_protocol::{
     Hello, WireError, SESSION_PROTOCOL_VERSION as CONTRACT_VERSION,
 };
 
-pub const AGENT_CONTROL_KIND: &str = "agent_control";
-pub const AGENT_COMMAND_KIND: &str = "agent_command";
-pub const AGENT_EVENT_KIND: &str = "agent_event";
+pub(crate) const AGENT_CONTROL_KIND: &str = "agent_control";
+pub(crate) const AGENT_COMMAND_KIND: &str = "agent_command";
+pub(crate) const AGENT_EVENT_KIND: &str = "agent_event";
 
 /// One JSONL agent-domain message. `session_id` is `None` for
 /// connection-global agent controls such as `session_list` and `Some`

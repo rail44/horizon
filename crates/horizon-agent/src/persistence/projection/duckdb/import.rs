@@ -11,7 +11,7 @@ use super::{schema::CLEAR_ALL_AGENT_STATE_SQL, Store};
 /// summary line instead of the per-record noise the individual pieces used
 /// to print themselves. See [`super::projection::Store::project_event`]'s
 /// doc comment for what `turn_id_missing` counts.
-pub struct ApplyRecordsReport {
+pub(crate) struct ApplyRecordsReport {
     pub applied: usize,
     pub turn_id_missing: usize,
 }
@@ -23,7 +23,7 @@ impl Store {
     /// log's own tail (a signal something is wrong, not just behind), or a
     /// schema migration just invalidated the existing projection's rows --
     /// see `event_log::writer::rebuild_and_open_duckdb_projection`.
-    pub fn replace_from_event_log_records(
+    pub(crate) fn replace_from_event_log_records(
         &self,
         records: impl IntoIterator<Item = Record>,
     ) -> Result<ApplyRecordsReport> {
@@ -38,7 +38,7 @@ impl Store {
     /// common case on every restart after the first: projecting just the
     /// tail is what makes a restart against a large real corpus cheap
     /// instead of re-doing the whole history every time.
-    pub fn catch_up_from_event_log_records(
+    pub(crate) fn catch_up_from_event_log_records(
         &self,
         records: impl IntoIterator<Item = Record>,
     ) -> Result<ApplyRecordsReport> {

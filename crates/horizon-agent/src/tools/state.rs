@@ -91,7 +91,7 @@ struct Inner {
 
 impl ToolSessionState {
     #[cfg(test)]
-    pub fn new(workspace_root: PathBuf) -> Self {
+    pub(crate) fn new(workspace_root: PathBuf) -> Self {
         Self::with_root(
             Some(workspace_root),
             AgentToolsConfig::default(),
@@ -102,7 +102,7 @@ impl ToolSessionState {
     /// A session with no usable workspace root: every file-tool path
     /// resolution returns an `is_error` result.
     #[cfg(test)]
-    pub fn without_root() -> Self {
+    pub(crate) fn without_root() -> Self {
         Self::with_root(None, AgentToolsConfig::default(), RecallContext::default())
     }
 
@@ -190,34 +190,34 @@ impl ToolSessionState {
 
     /// The resolved `[agent]` tool tuning for this session (bash + fs
     /// knobs).
-    pub fn tools_config(&self) -> AgentToolsConfig {
+    pub(crate) fn tools_config(&self) -> AgentToolsConfig {
         self.inner.tools
     }
 
     /// Convenience accessor for just the bash slice of `tools_config` — the
     /// value threaded onto the bash background thread by
     /// `tools::approval::resolve_bash`.
-    pub fn bash_config(&self) -> BashToolConfig {
+    pub(crate) fn bash_config(&self) -> BashToolConfig {
         self.inner.tools.bash
     }
 
     /// This session's recall context (see [`RecallContext`]) -- cheap to
     /// clone (an `Option<SessionId>` and an `Option<Arc<Mutex<_>>>`).
-    pub fn recall_context(&self) -> RecallContext {
+    pub(crate) fn recall_context(&self) -> RecallContext {
         self.inner.recall.clone()
     }
 
     /// This session's composed skill registry (see [`Inner::skills`]) --
     /// what `tools::config`'s `skill.read` dispatch reads from.
-    pub fn skill_registry(&self) -> &SkillRegistry {
+    pub(crate) fn skill_registry(&self) -> &SkillRegistry {
         &self.inner.skills
     }
 
-    pub fn record_mtime(&self, path: PathBuf, mtime: SystemTime) {
+    pub(crate) fn record_mtime(&self, path: PathBuf, mtime: SystemTime) {
         self.inner.recorded_mtimes.borrow_mut().insert(path, mtime);
     }
 
-    pub fn recorded_mtime(&self, path: &Path) -> Option<SystemTime> {
+    pub(crate) fn recorded_mtime(&self, path: &Path) -> Option<SystemTime> {
         self.inner.recorded_mtimes.borrow().get(path).copied()
     }
 
@@ -225,12 +225,12 @@ impl ToolSessionState {
     /// background thread that actually runs a bash call (`tools::bash::
     /// exec`) can read and update it without touching anything else on this
     /// `Rc`-based, UI-thread-confined struct.
-    pub fn bash_cwd_handle(&self) -> Arc<Mutex<PathBuf>> {
+    pub(crate) fn bash_cwd_handle(&self) -> Arc<Mutex<PathBuf>> {
         Arc::clone(&self.inner.bash_cwd)
     }
 
     #[cfg(test)]
-    pub fn bash_cwd(&self) -> PathBuf {
+    pub(crate) fn bash_cwd(&self) -> PathBuf {
         self.inner
             .bash_cwd
             .lock()

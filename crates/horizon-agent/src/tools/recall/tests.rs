@@ -1,11 +1,9 @@
-use std::sync::{Arc, Mutex};
-
 use super::*;
 use crate::config::AgentToolsConfig;
 use crate::contract::{
     Event, Message, MessageRole, ToolCallId, ToolCallRequest, ToolCallResult, TurnEndReason,
 };
-use crate::persistence::projection::duckdb::{AppendEvent, Store};
+use crate::persistence::projection::duckdb::{AppendEvent, DuckdbStoreHandle, Store};
 use crate::tools::state::RecallContext;
 
 /// Builds a fresh file-backed DuckDB projection at a throwaway path, seeded
@@ -40,7 +38,7 @@ fn tool_state_with_seeded_store(
 
     let recall = RecallContext {
         session_id: Some(own_session_id),
-        store: Some(Arc::new(Mutex::new(store))),
+        store: Some(DuckdbStoreHandle::new(store)),
     };
     let tool_state = ToolSessionState::for_current_dir(AgentToolsConfig::default(), recall);
     (tool_state, path)
@@ -145,7 +143,7 @@ fn search_session_scope_without_a_session_id_errors_instead_of_falling_back_to_a
     // fail loudly rather than silently searching everything).
     let recall = RecallContext {
         session_id: None,
-        store: Some(Arc::new(Mutex::new(store))),
+        store: Some(DuckdbStoreHandle::new(store)),
     };
     let tool_state = ToolSessionState::for_current_dir(AgentToolsConfig::default(), recall);
 
@@ -299,7 +297,7 @@ fn search_filters_by_turn_outcome() {
 
     let recall = RecallContext {
         session_id: Some(session_id),
-        store: Some(Arc::new(Mutex::new(store))),
+        store: Some(DuckdbStoreHandle::new(store)),
     };
     let tool_state = ToolSessionState::for_current_dir(AgentToolsConfig::default(), recall);
 
@@ -369,7 +367,7 @@ fn search_hits_carry_is_error_and_turn_outcome_labels() {
 
     let recall = RecallContext {
         session_id: Some(session_id),
-        store: Some(Arc::new(Mutex::new(store))),
+        store: Some(DuckdbStoreHandle::new(store)),
     };
     let tool_state = ToolSessionState::for_current_dir(AgentToolsConfig::default(), recall);
 
@@ -423,7 +421,7 @@ fn search_without_query_but_with_turn_outcome_lists_matches() {
 
     let recall = RecallContext {
         session_id: Some(session_id),
-        store: Some(Arc::new(Mutex::new(store))),
+        store: Some(DuckdbStoreHandle::new(store)),
     };
     let tool_state = ToolSessionState::for_current_dir(AgentToolsConfig::default(), recall);
 
@@ -510,7 +508,7 @@ fn read_entries_carry_is_error_on_tool_results() {
 
     let recall = RecallContext {
         session_id: Some(session_id),
-        store: Some(Arc::new(Mutex::new(store))),
+        store: Some(DuckdbStoreHandle::new(store)),
     };
     let tool_state = ToolSessionState::for_current_dir(AgentToolsConfig::default(), recall);
 

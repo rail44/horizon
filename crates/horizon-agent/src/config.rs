@@ -168,7 +168,7 @@ fn load_file_config_from_path(path: Option<&Path>) -> AgentFileConfig {
 /// Horizon only checks whether it is set here, so the session can decide up
 /// front whether to attempt the OpenAI path at all or fall back to a
 /// deterministic in-process responder (useful offline and in tests).
-pub const OPENAI_API_KEY_VAR: &str = "OPENAI_API_KEY";
+pub(crate) const OPENAI_API_KEY_VAR: &str = "OPENAI_API_KEY";
 
 /// Overrides the rig completion model id. Falls back to the config file's
 /// `[provider].model`, then [`openai::GPT_4O_MINI`].
@@ -222,23 +222,23 @@ const XDG_DATA_HOME_VAR: &str = "XDG_DATA_HOME";
 // constants stay the real numbers regardless of `cfg(test)` — so Horizon's
 // config-file example test can still assert the example file documents the
 // real production default.
-pub const DEFAULT_BASH_TIMEOUT_DEFAULT_SECS: u64 = 120;
-pub const DEFAULT_BASH_TIMEOUT_MAX_SECS: u64 = 600;
-pub const DEFAULT_BASH_OUTPUT_CAP_CHARS: usize = 30_000;
-pub const DEFAULT_BASH_DRAIN_GRACE_SECS: u64 = 2;
-pub const DEFAULT_FS_READ_LINE_CAP: usize = 2000;
+pub(crate) const DEFAULT_BASH_TIMEOUT_DEFAULT_SECS: u64 = 120;
+pub(crate) const DEFAULT_BASH_TIMEOUT_MAX_SECS: u64 = 600;
+pub(crate) const DEFAULT_BASH_OUTPUT_CAP_CHARS: usize = 30_000;
+pub(crate) const DEFAULT_BASH_DRAIN_GRACE_SECS: u64 = 2;
+pub(crate) const DEFAULT_FS_READ_LINE_CAP: usize = 2000;
 /// Default number of matches `fs.grep` returns when a call doesn't pass its
 /// own `limit`. Was `fs::grep`'s `DEFAULT_LIMIT`.
-pub const DEFAULT_FS_GREP_RESULT_LIMIT: usize = 100;
+pub(crate) const DEFAULT_FS_GREP_RESULT_LIMIT: usize = 100;
 /// Same idea as [`DEFAULT_FS_GREP_RESULT_LIMIT`], for `fs.glob`. Was
 /// `fs::glob`'s `DEFAULT_LIMIT`.
-pub const DEFAULT_FS_GLOB_RESULT_LIMIT: usize = 200;
-pub const DEFAULT_ITERATION_CAP: u32 = 25;
-pub const DEFAULT_DOOM_LOOP_WINDOW: usize = 3;
+pub(crate) const DEFAULT_FS_GLOB_RESULT_LIMIT: usize = 200;
+pub(crate) const DEFAULT_ITERATION_CAP: u32 = 25;
+pub(crate) const DEFAULT_DOOM_LOOP_WINDOW: usize = 3;
 /// Was `providers::rig::stream`'s `STREAM_FLUSH_INTERVAL`.
-pub const DEFAULT_STREAM_FLUSH_INTERVAL_MS: u64 = 100;
+pub(crate) const DEFAULT_STREAM_FLUSH_INTERVAL_MS: u64 = 100;
 /// Was `providers::rig::stream`'s `STREAM_FLUSH_CHARS`.
-pub const DEFAULT_STREAM_FLUSH_CHARS: usize = 320;
+pub(crate) const DEFAULT_STREAM_FLUSH_CHARS: usize = 320;
 /// Token budget for the conversation history sent to the provider on each
 /// turn (`providers::rig::completion`'s `history_token_window_policy`,
 /// applying `rig_memory::TokenWindowMemory`). 60,000 is conservative rather
@@ -251,7 +251,7 @@ pub const DEFAULT_STREAM_FLUSH_CHARS: usize = 320;
 /// after this history is sent. Applies regardless of provider, but was
 /// chosen with Horizon's current provider in mind: an OpenAI-compatible
 /// endpoint fronting Kimi.
-pub const DEFAULT_HISTORY_TOKEN_BUDGET: usize = 60_000;
+pub(crate) const DEFAULT_HISTORY_TOKEN_BUDGET: usize = 60_000;
 /// Character cap on the composed "Repository instructions" system-prompt
 /// section built by `instructions::extra_sections` from `AGENTS.md`/
 /// `CLAUDE.md` files found while walking from the session's working
@@ -265,7 +265,7 @@ pub const DEFAULT_HISTORY_TOKEN_BUDGET: usize = 60_000;
 /// token history budget, leaving the rest for conversation history and the
 /// turn's own prompt. Same "config tuning knob" treatment as
 /// [`DEFAULT_BASH_OUTPUT_CAP_CHARS`]: file-only, no dedicated env var.
-pub const DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS: usize = 24_000;
+pub(crate) const DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS: usize = 24_000;
 
 pub const FS_GREP_MAX_BYTES_PRODUCTION_DEFAULT: u64 = 64 * 1024 * 1024;
 pub const FS_TRAVERSAL_MAX_FILES_PRODUCTION_DEFAULT: usize = 20_000;
@@ -493,7 +493,7 @@ impl AgentPersistenceConfig {
 /// and a file value get a leading `~/` expanded against `home` (see
 /// [`expand_tilde`]). Kept free of I/O (env/file reads happen at the call
 /// site) for the same testability reason as [`resolve_model`].
-pub fn resolve_event_log_path(
+pub(crate) fn resolve_event_log_path(
     env_value: Option<String>,
     file_value: Option<String>,
     xdg_data_home: Option<String>,
@@ -534,7 +534,10 @@ fn agent_data_home_from(xdg_data_home: Option<String>, home: Option<String>) -> 
 /// (`persistence::event_log::writer`) already creates the path's parent
 /// directories on first write, so this can name a path that doesn't exist
 /// yet.
-pub fn default_event_log_path_from(xdg_data_home: Option<String>, home: Option<String>) -> PathBuf {
+pub(crate) fn default_event_log_path_from(
+    xdg_data_home: Option<String>,
+    home: Option<String>,
+) -> PathBuf {
     agent_data_home_from(xdg_data_home, home)
         .join("horizon")
         .join("agent-events.jsonl")
@@ -552,7 +555,10 @@ pub fn default_event_log_path_from(xdg_data_home: Option<String>, home: Option<S
 /// there is no meaningful reason to leave it off by default. `Store::open`
 /// (`persistence::projection::duckdb`) creates the path's parent
 /// directories on first use, same as the event log's writer.
-pub fn default_state_db_path_from(xdg_data_home: Option<String>, home: Option<String>) -> PathBuf {
+pub(crate) fn default_state_db_path_from(
+    xdg_data_home: Option<String>,
+    home: Option<String>,
+) -> PathBuf {
     agent_data_home_from(xdg_data_home, home)
         .join("horizon")
         .join("agent-state.duckdb")
@@ -568,7 +574,7 @@ pub fn default_state_db_path_from(xdg_data_home: Option<String>, home: Option<St
 /// `Option<PathBuf>` shape -- and every `if let Some(duckdb_path) = ...`
 /// built on it (e.g. `horizon-sessiond`'s startup rebuild) -- doesn't need
 /// to change shape along with this default.
-pub fn resolve_state_db_path(
+pub(crate) fn resolve_state_db_path(
     env_value: Option<String>,
     file_value: Option<String>,
     xdg_data_home: Option<String>,

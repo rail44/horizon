@@ -22,7 +22,7 @@ pub(super) struct EventRecordRef<'a> {
 
 impl Store {
     #[cfg(test)]
-    pub fn rebuild_projections(&self) -> Result<()> {
+    pub(crate) fn rebuild_projections(&self) -> Result<()> {
         for session in self.sessions()? {
             self.rebuild_projections_for_session(session.session_id)?;
         }
@@ -30,7 +30,7 @@ impl Store {
     }
 
     #[cfg(test)]
-    pub fn rebuild_projections_for_session(&self, session_id: SessionId) -> Result<()> {
+    pub(crate) fn rebuild_projections_for_session(&self, session_id: SessionId) -> Result<()> {
         let session_id_text = session_id_text(session_id)?;
         let events = self.events_for_session(session_id)?;
         self.clear_projections_for_session(&session_id_text)?;

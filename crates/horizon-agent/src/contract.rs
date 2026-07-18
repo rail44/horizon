@@ -382,7 +382,7 @@ pub struct ProviderRequestSent {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub enum ToolPermission {
+pub(crate) enum ToolPermission {
     AutoAllowRead,
     AutoAllowUi,
     RequireApproval,

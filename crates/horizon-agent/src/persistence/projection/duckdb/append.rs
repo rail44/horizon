@@ -37,7 +37,7 @@ impl Store {
     /// appended a record while a hard `SIGKILL` landed nearby. Wrapping
     /// this one record's several statements in a transaction makes them
     /// atomic: either both tables see it, or neither does.
-    pub fn append_record(&self, record: &Record) -> Result<bool> {
+    pub(crate) fn append_record(&self, record: &Record) -> Result<bool> {
         self.conn.execute_batch("BEGIN TRANSACTION")?;
         match self.append_record_uncommitted(record) {
             Ok(turn_id_missing) => {
@@ -141,7 +141,7 @@ impl Store {
     /// and stamps `event_at = now()`, since there's no
     /// `created_at_unix_ms` to project here.
     #[cfg(test)]
-    pub fn append_event(&self, record: AppendEvent) -> Result<AgentStoredEvent> {
+    pub(crate) fn append_event(&self, record: AppendEvent) -> Result<AgentStoredEvent> {
         let session_id_text = session_id_text(record.session_id)?;
         let sequence = self.next_sequence(&session_id_text)?;
         let event_id = Uuid::new_v4().to_string();
@@ -210,7 +210,7 @@ impl Store {
     }
 
     #[cfg(test)]
-    pub fn append_events(
+    pub(crate) fn append_events(
         &self,
         session_id: SessionId,
         provider_id: Option<ProviderId>,
