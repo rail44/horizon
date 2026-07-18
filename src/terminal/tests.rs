@@ -3,8 +3,8 @@
 // sending plain `#[test]` fns through gpui's async test harness instead
 // (see `src/terminal/session.rs`'s tests module for the same workaround).
 use super::{
-    font_from_stack, ImeCommitGuard, KeyTextDedup, DEFAULT_FONT_FAMILY, IME_COMMIT_PHANTOM_WINDOW,
-    KEY_TEXT_DEDUP_WINDOW,
+    font_from_stack, ime_marked_text_for, ImeCommitGuard, KeyTextDedup, DEFAULT_FONT_FAMILY,
+    IME_COMMIT_PHANTOM_WINDOW, KEY_TEXT_DEDUP_WINDOW,
 };
 
 #[test]
@@ -154,6 +154,41 @@ fn enter_after_the_window_passes_through_a_mouse_click_commit() {
     // candidate -> press Enter to send the line), it must not be eaten.
     let well_after_the_window = before + IME_COMMIT_PHANTOM_WINDOW * 3;
     assert!(!guard.should_suppress_at("enter", well_after_the_window));
+}
+
+// docs/issues/004-ime-preedit-backspace-ghost-head-char.md: the owner's
+// exact dogfooding repro is backspacing a composition down one character
+// at a time -- "あいう" -> "あい" -> "あ" -> "" -- with no Commit in
+// between (composition continues, awaiting more kana). `ime_marked_text_for`
+// is the pure state update behind `TerminalView::replace_and_mark_text_in_range`;
+// the actual bug lived upstream (`crates/horizon-winit-platform`'s
+// `handle_ime` never called it at all for an empty preedit update), but
+// this pins the overlay's own contract -- it always mirrors the current
+// preedit exactly, including the final empty step -- so a future change
+// here can't reintroduce the ghost from this side either.
+
+#[test]
+fn preedit_backspace_to_empty_clears_the_marked_text() {
+    assert_eq!(ime_marked_text_for("あいう"), Some("あいう".to_string()));
+    assert_eq!(ime_marked_text_for("あい"), Some("あい".to_string()));
+    assert_eq!(ime_marked_text_for("あ"), Some("あ".to_string()));
+    // The final backspace shrinks the preedit to nothing -- this must
+    // clear the overlay, not retain the last non-empty value ("あ") as a
+    // ghost.
+    assert_eq!(ime_marked_text_for(""), None);
+}
+
+#[test]
+fn cleared_marked_text_paints_nothing() {
+    // Mirrors the paint site's own guard in `paint_terminal`
+    // (`marked_text.filter(|marked| !marked.is_empty())`): once the
+    // preedit has shrunk to empty, there is nothing left to paint at the
+    // cursor cell.
+    let marked_text = ime_marked_text_for("");
+    assert!(marked_text
+        .as_deref()
+        .filter(|marked| !marked.is_empty())
+        .is_none());
 }
 
 // `KeyTextDedup` drives `TerminalView::replace_text_in_range`'s decision to

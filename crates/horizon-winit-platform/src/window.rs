@@ -96,6 +96,35 @@ fn text_fallback_decision(
     }
 }
 
+/// The pure decision behind the `Ime::Preedit` arm of `handle_ime` — see
+/// that arm's doc for the *why*. Extracted (mirroring
+/// `text_fallback_decision` above) so it's testable without a live winit
+/// window/`PlatformInputHandler`.
+///
+/// `marked_text` is always `text` itself, unconditionally — including
+/// empty. An earlier version special-cased empty `text` by skipping the
+/// forward to the input handler entirely; see
+/// docs/issues/004-ime-preedit-backspace-ghost-head-char.md for the
+/// backspace-to-empty regression that caused (a stale, previously-marked
+/// non-empty string kept painting as a "ghost" because nothing ever told
+/// the input handler the composition had shrunk to nothing).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PreeditForward<'a> {
+    marked_text: &'a str,
+    reposition_candidate_window: bool,
+}
+
+fn preedit_forward(text: &str) -> PreeditForward<'_> {
+    PreeditForward {
+        marked_text: text,
+        // Candidate-window repositioning stays gated on non-empty text —
+        // see the `Ime::Preedit` arm's doc for the GNOME feedback-loop
+        // this guards against. Unrelated to the ghost-overlay fix above:
+        // `marked_text` is forwarded either way.
+        reposition_candidate_window: !text.is_empty(),
+    }
+}
+
 // `PlatformWindow`'s callback setters take these exact closure shapes
 // (mirroring gpui_web/gpui_linux's own window callback structs, which have
 // the same complexity); factoring each into a named `type` would only
@@ -197,9 +226,8 @@ impl WinitWindowInner {
     /// gpui_linux's own `ImeInput::InsertText` handler
     /// (`window.rs::handle_ime` in the pinned checkout) is exactly
     /// `replace_text_in_range(None, &text)`, nothing else — see the
-    /// `Ime::Preedit` arm below for why unmarking there (rather than
-    /// letting `Commit`'s own `replace_text_in_range` consume the marked
-    /// range) causes a double-insert.
+    /// `Ime::Preedit` arm below for why `unmark_text` isn't called from
+    /// there either (even for empty preedit text).
     ///
     /// Candidate-window positioning (`set_ime_cursor_area`) only fires for
     /// a *non-empty* `Preedit` — i.e. only while a composition is genuinely
@@ -242,53 +270,47 @@ impl WinitWindowInner {
                 // rather than inventing a richer contract gpui's Linux
                 // backend doesn't itself provide.
                 self.state.borrow_mut().ime_composing = !text.is_empty();
-                if text.is_empty() {
-                    // Deliberately does *not* call `unmark_text()` here.
-                    // winit consistently emits an empty `Preedit`
-                    // immediately before the `Commit` that finalizes a
-                    // composition (documented and reproduced directly in
-                    // docs/research/winit-backend-spike.md §16 Q2: "the
-                    // order Preedit("", None) -> Commit(text) was
-                    // consistent" across every observed log). Unmarking
-                    // here would clear the active input handler's marked
-                    // range before `Commit`'s own `replace_text_in_range`
-                    // gets a chance to use it as *its* replacement target.
-                    // Both `EntityInputHandler` implementations this
-                    // crate drives (this crate's own terminal, and
-                    // gpui-component's `InputState` behind the agent
-                    // composer — verified directly against the pinned
-                    // checkout's `crates/ui/src/input/state.rs`) resolve a
-                    // `None` range to the *current marked range* if one is
-                    // set, falling back to the plain text-cursor position
-                    // only when nothing is marked. If we unmark first,
-                    // `Commit`'s `replace_text_in_range(None, text)` falls
-                    // through to that plain-cursor fallback instead — which
-                    // sits right *after* the already-inserted preedit
-                    // content (gpui-component's `unmark_text` clears the
-                    // marked-range bookkeeping but never touches the
-                    // buffer text it already inserted during `Preedit`),
-                    // so the same text gets inserted a second time right
-                    // next to the first. `Commit`'s own
-                    // `replace_text_in_range` already clears the marked
-                    // range as part of doing the replacement in both
-                    // implementations, so there's no leak on the normal
-                    // compose -> commit path. `Ime::Disabled` below still
-                    // explicitly unmarks for "IME turned off mid-
-                    // composition"; a composition cancelled with no commit
-                    // and no `Disabled` (e.g. Escape, depending on the
-                    // IME) can leave a stale marked range until the next
-                    // real edit, which naturally overwrites/consumes it
-                    // via the same None-range-targets-marked-range
-                    // convention — narrow, self-healing visual staleness,
-                    // clearly preferable to silently duplicating committed
-                    // text.
-                    input_trace!(
-                        "winit Ime empty Preedit: not unmarking (left for Commit/Disabled to resolve)"
-                    );
-                } else {
-                    input_handler.replace_and_mark_text_in_range(None, &text, None);
-                    reposition_candidate_window = true;
-                }
+                // Forwarded unconditionally, including empty `text` — see
+                // `preedit_forward`'s doc for why. An earlier version
+                // skipped this call entirely for empty `text`, reasoning
+                // that winit always emits an empty `Preedit` immediately
+                // before the `Commit` that finalizes a composition (true —
+                // docs/research/winit-backend-spike.md §16 Q2) and that
+                // clearing the marked range early would make that
+                // `Commit`'s own `replace_text_in_range(None, text)` fall
+                // through to the plain-cursor fallback instead of
+                // replacing the marked range, double-inserting the
+                // already-visible preedit content. That reasoning holds
+                // for `unmark_text()` (still never called from here — it
+                // only clears marked-range bookkeeping, never the buffer
+                // text already inserted during composing), but not for
+                // `replace_and_mark_text_in_range(None, "", None)`: both
+                // `EntityInputHandler` implementations this crate drives
+                // (this crate's own terminal, and gpui-component's
+                // `InputState` behind the agent composer — verified
+                // directly against the pinned checkout's
+                // `crates/ui/src/input/state.rs`) replace the marked
+                // range's buffer content with the empty string *and*
+                // clear the marked range together, leaving the cursor
+                // exactly where the composed text used to start — right
+                // where `Commit`'s subsequent None-range fallback needs to
+                // land. gpui_linux's own wayland `Dispatch` for
+                // `zwp_text_input_v3::Event::PreeditString` -> `Done`
+                // confirms this is the intended contract: it calls
+                // `ImeInput::SetMarkedText(text)` (this same
+                // `replace_and_mark_text_in_range` call) unconditionally,
+                // regardless of whether `text` is empty — verified
+                // directly against the pinned checkout's
+                // `crates/gpui_linux/src/linux/wayland/client.rs`. Its
+                // separate `ImeInput::DeleteText` path (a manual
+                // `replace_text_in_range(marked_text_range(), "")`, still
+                // never `unmark_text()`) only fires when a `Done` arrives
+                // with *no* `PreeditString` at all since the last one —
+                // distinct from an empty-text `PreeditString`, and not a
+                // case winit appears to surface through `Ime::Preedit`.
+                let forward = preedit_forward(&text);
+                input_handler.replace_and_mark_text_in_range(None, forward.marked_text, None);
+                reposition_candidate_window = forward.reposition_candidate_window;
             }
             winit::event::Ime::Commit(text) => {
                 self.state.borrow_mut().ime_composing = false;
@@ -887,5 +909,29 @@ mod tests {
             text_fallback_decision(true, false, plain(), None),
             TextFallbackDecision::SkipNoText
         );
+    }
+
+    // docs/issues/004-ime-preedit-backspace-ghost-head-char.md: the owner's
+    // exact dogfooding repro is a composition shrinking one character at a
+    // time via backspace, with no `Commit` following immediately
+    // (composition continues, awaiting more kana) -- ending at an empty
+    // preedit. `preedit_forward` drives the `Ime::Preedit` arm of
+    // `handle_ime`; these tests pin its two behaviors: `marked_text` is
+    // always forwarded (never dropped for being empty) and candidate-window
+    // repositioning stays gated on non-empty text.
+
+    use super::preedit_forward;
+
+    #[test]
+    fn preedit_forward_never_drops_the_shrink_to_empty_step() {
+        for text in ["あいう", "あい", "あ", ""] {
+            assert_eq!(preedit_forward(text).marked_text, text);
+        }
+    }
+
+    #[test]
+    fn preedit_forward_repositions_only_for_nonempty_text() {
+        assert!(preedit_forward("あ").reposition_candidate_window);
+        assert!(!preedit_forward("").reposition_candidate_window);
     }
 }

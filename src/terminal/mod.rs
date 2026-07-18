@@ -451,6 +451,25 @@ fn utf16_len(text: &str) -> usize {
     text.chars().map(char::len_utf16).sum()
 }
 
+/// The `EntityInputHandler::replace_and_mark_text_in_range` state update:
+/// `ime_marked_text` always mirrors the IME's current preedit text
+/// exactly, including shrinking all the way to empty (which clears the
+/// overlay, same as `unmark_text` would) — see
+/// docs/issues/004-ime-preedit-backspace-ghost-head-char.md. Pulled out
+/// as a pure function so the exact backspace-to-empty repro is testable
+/// without a live gpui `Context`; the actual bug this issue described was
+/// upstream, in `crates/horizon-winit-platform`'s `handle_ime` never
+/// calling `replace_and_mark_text_in_range` at all for an empty preedit
+/// update, leaving whatever this function last returned stranded as a
+/// paint-time "ghost" until the next non-empty update overwrote it.
+fn ime_marked_text_for(new_text: &str) -> Option<String> {
+    if new_text.is_empty() {
+        None
+    } else {
+        Some(new_text.to_string())
+    }
+}
+
 /// A composition confirmed via a physical key (Enter) redelivers that
 /// key as an independent `KeyDownEvent` essentially in the same input
 /// burst as the commit — observed at microseconds-to-low-single-digit
@@ -652,11 +671,7 @@ impl EntityInputHandler for TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.ime_marked_text = if new_text.is_empty() {
-            None
-        } else {
-            Some(new_text.to_string())
-        };
+        self.ime_marked_text = ime_marked_text_for(new_text);
         cx.notify();
     }
 
