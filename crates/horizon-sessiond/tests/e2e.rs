@@ -613,7 +613,7 @@ async fn collect_terminal_frame_until(
                 panic!("terminal error while waiting for {needle:?}: {error}")
             }
             TerminalUpdate::Exited => panic!("terminal exited while waiting for {needle:?}"),
-            TerminalUpdate::Title(_) | TerminalUpdate::Bell | TerminalUpdate::Clipboard(_) => {}
+            TerminalUpdate::Title(_) | TerminalUpdate::Bell | TerminalUpdate::Clipboard { .. } => {}
         }
         if frame.text.contains(needle) {
             return (frame, saw_diff);

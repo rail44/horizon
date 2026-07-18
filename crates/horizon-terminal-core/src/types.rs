@@ -13,6 +13,6 @@ pub use frame::{
 pub use key_event::KeyEventKind;
 pub use mouse::{
     TerminalMouseButton, TerminalMouseKind, TerminalMouseModifiers, TerminalMouseReport,
-    TerminalScroll, TerminalSelectionPoint,
+    TerminalScroll, TerminalSelectionKind, TerminalSelectionPoint,
 };
 pub use size::TerminalSize;

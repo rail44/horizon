@@ -22,9 +22,10 @@ mod types;
 
 pub use contract::{
     decode_terminal_command, decode_terminal_control, decode_terminal_update,
-    encode_terminal_command, encode_terminal_control, encode_terminal_update, SelectionCommand,
-    TerminalAttachResult, TerminalCommand, TerminalControl, TerminalSpawnSpec, TerminalSummary,
-    TerminalUpdate, TERMINAL_COMMAND_KIND, TERMINAL_CONTROL_KIND, TERMINAL_UPDATE_KIND,
+    encode_terminal_command, encode_terminal_control, encode_terminal_update, ClipboardDestination,
+    SelectionCommand, TerminalAttachResult, TerminalCommand, TerminalControl, TerminalSpawnSpec,
+    TerminalSummary, TerminalUpdate, TERMINAL_COMMAND_KIND, TERMINAL_CONTROL_KIND,
+    TERMINAL_UPDATE_KIND,
 };
 pub use core::{TerminalColorScheme, DEFAULT_SCROLLBACK_LINES};
 pub use session_loop::{run_terminal_core, CoreReceivers, CoreSenders, TerminalCoreOptions};
@@ -32,7 +33,7 @@ pub use types::{
     apply_frame_diff, compute_frame_diff, KeyEventKind, TerminalColor, TerminalCursor,
     TerminalFrame, TerminalFrameDiff, TerminalLine, TerminalMouseButton, TerminalMouseKind,
     TerminalMouseModifiers, TerminalMouseReport, TerminalRowDiff, TerminalScroll,
-    TerminalSelectionPoint, TerminalSize, TerminalSpan,
+    TerminalSelectionKind, TerminalSelectionPoint, TerminalSize, TerminalSpan,
 };
 
 #[cfg(test)]
