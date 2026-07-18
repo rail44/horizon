@@ -266,7 +266,7 @@ impl Workspace {
         false
     }
 
-    pub fn close_tab_index(&mut self, index: usize) -> Vec<SessionId> {
+    pub(crate) fn close_tab_index(&mut self, index: usize) -> Vec<SessionId> {
         if self.tabs.len() <= 1 {
             return Vec::new();
         }
@@ -334,7 +334,7 @@ impl Workspace {
         true
     }
 
-    pub fn detach_pane(&mut self, pane_id: PaneId) -> Option<SessionId> {
+    pub(crate) fn detach_pane(&mut self, pane_id: PaneId) -> Option<SessionId> {
         let session_id = self
             .panes
             .iter()
@@ -365,7 +365,7 @@ impl Workspace {
         session_id
     }
 
-    pub fn close_visible_pane(&mut self, index: usize) -> Option<SessionId> {
+    pub(crate) fn close_visible_pane(&mut self, index: usize) -> Option<SessionId> {
         if self.visible_pane_ids().len() <= 1 {
             return None;
         }

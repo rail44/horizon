@@ -46,7 +46,7 @@ impl Workspace {
         self.ensure_session(kind, Some(session_id));
     }
 
-    pub fn ensure_session(&mut self, kind: PaneKind, session_id: Option<SessionId>) {
+    pub(crate) fn ensure_session(&mut self, kind: PaneKind, session_id: Option<SessionId>) {
         let Some(session_id) = session_id else {
             return;
         };

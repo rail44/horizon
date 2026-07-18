@@ -156,7 +156,7 @@ pub fn core_commands() -> Vec<CommandSpec> {
     ]
 }
 
-pub fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
+pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
     match command_id {
         CommandId::SplitRight
         | CommandId::SplitDown
@@ -199,14 +199,6 @@ pub fn filter_command_entries(entries: Vec<CommandEntry>, query: &str) -> Vec<Co
                     .contains(&query)
         })
         .collect()
-}
-
-pub fn clamp_palette_selection(selection: usize, item_count: usize) -> usize {
-    if item_count == 0 {
-        return 0;
-    }
-
-    selection.min(item_count - 1)
 }
 
 fn normalize_query(value: &str) -> String {
@@ -469,12 +461,5 @@ mod tests {
         let new_tab = filter_command_entries(entries, "new tab");
         assert_eq!(new_tab.len(), 1);
         assert_eq!(new_tab[0].spec.id, CommandId::NewTab);
-    }
-
-    #[test]
-    fn clamp_palette_selection_stays_in_bounds() {
-        assert_eq!(clamp_palette_selection(5, 0), 0);
-        assert_eq!(clamp_palette_selection(5, 2), 1);
-        assert_eq!(clamp_palette_selection(1, 2), 1);
     }
 }

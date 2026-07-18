@@ -21,4 +21,5 @@
 
 pub mod contract;
 pub mod host;
+pub mod socket;
 pub mod wire;
