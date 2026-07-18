@@ -6,8 +6,9 @@ wayland/x11 実装ではなく winit が作った `ActiveEventLoop`/`Window` の
 `Application::with_platform` 経由(fork なし)で実測する。狙いは Wayland/GNOME での
 sctk-adwaita クライアントサイド装飾(CSD)── これが本スパイクの戦略上の核心。
 
-**プロトタイプ**: `spikes/gpui-winit/`(root workspace 非メンバー、`spikes/gpui-terminal/` と
-同じ構え)。`gpui`/`gpui_wgpu` は Horizon のピンと同じ rev
+**プロトタイプ**: `spikes/gpui-winit/`(retired; lives in git history 2026-07-18 —
+root workspace 非メンバー、`spikes/gpui-terminal/` と同じ構え)。以下の本文・コマンド例は
+スパイク当時の状態を記録したものであり、ディレクトリは既に削除済み。`gpui`/`gpui_wgpu` は Horizon のピンと同じ rev
 `5f8a7413a31769e0882357f90dc424b3962ac72d` に明示固定(`spikes/gpui-terminal/` と違い
 `rev =` を付けている ── root の未固定 git 依存とは独立に本スパイクの結論が後で
 ずれないようにするため)。winit は `"0.30"`(解決先 `0.30.13`)。

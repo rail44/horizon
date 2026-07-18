@@ -1,7 +1,8 @@
 # winit windowing backend — production crate
 
 Adoption step of the roadmap's "winit windowing backend" item, following
-the spike (`spikes/gpui-winit/`, legs 1+2, `docs/research/winit-backend-spike.md`).
+the spike (`spikes/gpui-winit/`, retired; lives in git history — legs 1+2,
+`docs/research/winit-backend-spike.md`).
 This doc records the production `crates/horizon-winit-platform` crate: its
 architecture, what differs behaviorally from gpui's own per-OS backends,
 and (historically) what was open before the default flipped and before
