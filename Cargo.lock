@@ -2978,9 +2978,9 @@ dependencies = [
  "gpui-component",
  "gpui-component-assets",
  "horizon-agent",
+ "horizon-cli",
  "horizon-config",
  "horizon-control",
- "horizon-ctl",
  "horizon-session-protocol",
  "horizon-terminal-core",
  "horizon-winit-platform",
@@ -3018,6 +3018,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-cli"
+version = "0.1.0"
+dependencies = [
+ "horizon-control",
+ "serde_json",
+]
+
+[[package]]
 name = "horizon-config"
 version = "0.1.0"
 dependencies = [
@@ -3035,15 +3043,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "uuid",
-]
-
-[[package]]
-name = "horizon-ctl"
-version = "0.1.0"
-dependencies = [
- "horizon-control",
- "libc",
- "serde_json",
 ]
 
 [[package]]

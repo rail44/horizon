@@ -110,7 +110,7 @@ Four amendments settled after v1 shipped and was exercised end-to-end:
    an anti-pattern in this design's philosophy, so a second binary name
    earns nothing: `horizon` with no arguments launches the GUI as
    today; `horizon <subcommand> ...` runs the control-plane client and
-   exits (tmux's model). The separate `horizon-ctl` binary is retired;
+   exits (tmux's model). The separate `horizon-cli` binary is retired;
    its client code survives as a library the root binary dispatches to.
 2. **Fixed well-known socket path.** The single-instance norm justifies
    `$XDG_RUNTIME_DIR/horizon/control.sock` (sessiond's discipline,

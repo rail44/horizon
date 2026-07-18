@@ -69,7 +69,7 @@ impl From<WireError> for ClientError {
 }
 
 /// A control-plane connection mid-lifecycle: not yet handshaken, or
-/// handshaken and ready for the single follow-up request `horizon-ctl`
+/// handshaken and ready for the single follow-up request `horizon-cli`
 /// sends per invocation.
 pub struct Connection<R, W> {
     reader: R,
@@ -154,7 +154,7 @@ mod tests {
     /// envelopes and whose writes go into a throwaway `Vec` -- enough to
     /// exercise `Connection`'s own request/reply/id-echo bookkeeping without
     /// a real socket (the stub-server tests in `tests/integration.rs` cover
-    /// the real-transport, real-`horizon-ctl`-binary path).
+    /// the real-transport, real-`horizon-cli`-binary path).
     fn connection_reading(lines: &[Envelope]) -> Connection<Cursor<Vec<u8>>, Vec<u8>> {
         let mut buf = Vec::new();
         for envelope in lines {

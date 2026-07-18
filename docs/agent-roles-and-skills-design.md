@@ -363,7 +363,7 @@ non-interactively from `bash`. Its description frontmatter names the
 trigger explicitly ("operate Horizon itself: open panes/terminals, attach
 sessions, run commands in the workspace this agent lives in") so the
 model can match it against a task without ever reading the body first.
-Content is sourced from `crates/horizon-ctl/src/cli.rs` (the real parser),
+Content is sourced from `crates/horizon-cli/src/cli.rs` (the real parser),
 `docs/cli-control-plane-design.md`, and `AGENTS.md`'s own command list —
 not re-derived from memory, so it can't drift from the actual subcommand
 surface at the point it was written.

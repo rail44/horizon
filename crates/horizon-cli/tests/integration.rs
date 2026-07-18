@@ -1,7 +1,7 @@
 //! Integration tests against a stub control-plane server: a real
 //! `std::os::unix::net::UnixListener` speaking `horizon_control::wire`
 //! directly, standing in for Horizon's control endpoint (per the task's
-//! instruction: "本物の Horizon には繋がない"). Drives `horizon_ctl::run`
+//! instruction: "本物の Horizon には繋がない"). Drives `horizon_cli::run`
 //! (the same entry point `main.rs` calls) end to end -- socket resolution,
 //! handshake, one invoke/query round trip, `Rejected` handling, the id
 //! echo, and the destructive `--yes` path -- exactly as a real invocation
@@ -21,7 +21,7 @@ use horizon_control::wire;
 /// One accepted connection's worth of stub-server behavior: read `hello`,
 /// reply per `hello_reply`, then read/reply pairs from `exchanges` in
 /// order. Runs on its own thread so the test's own call into
-/// `horizon_ctl::run` can block on the connection like a real client would.
+/// `horizon_cli::run` can block on the connection like a real client would.
 fn stub_server(socket_path: PathBuf, hello_reply: EnvelopeBody, exchanges: Vec<EnvelopeBody>) {
     let listener = UnixListener::bind(&socket_path).expect("bind stub socket");
     thread::spawn(move || {
@@ -70,7 +70,7 @@ fn our_hello_ack() -> EnvelopeBody {
     })
 }
 
-/// Runs `horizon_ctl::run` with a fixed, never-asked confirmation callback
+/// Runs `horizon_cli::run` with a fixed, never-asked confirmation callback
 /// (tests that need the interactive path pass their own `ask` inline
 /// instead) and returns `(exit_code, stdout, stderr)`.
 fn run_ctl(args: &[&str], socket_path: &Path, stdin_is_tty: bool) -> (u8, String, String) {
@@ -88,7 +88,7 @@ fn run_ctl_with_ask(
     let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
-    let code = horizon_ctl::run(
+    let code = horizon_cli::run(
         &args,
         Some(socket_path.display().to_string()),
         None,
@@ -351,7 +351,7 @@ fn destructive_subcommand_with_yes_proceeds_without_a_tty() {
 #[test]
 fn destructive_subcommand_not_listed_by_the_server_skips_confirmation() {
     // The server's `destructive_commands` doesn't (yet) list
-    // `terminate-session` -- e.g. an older server build -- so `horizon-ctl`
+    // `terminate-session` -- e.g. an older server build -- so `horizon-cli`
     // should not block a non-tty caller lacking `--yes`.
     let socket_path = temp_socket_path("destructive-not-listed");
     stub_server(
@@ -432,7 +432,7 @@ fn a_socket_with_no_listener_is_a_clear_connection_error_not_a_panic() {
     ];
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
-    let code = horizon_ctl::run(
+    let code = horizon_cli::run(
         &args,
         None,
         None,
@@ -455,7 +455,7 @@ fn usage_error_exits_with_code_two() {
     let args: Vec<String> = vec!["not-a-real-subcommand".to_string()];
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
-    let code = horizon_ctl::run(
+    let code = horizon_cli::run(
         &args,
         Some("/tmp/should-not-be-used.sock".to_string()),
         None,

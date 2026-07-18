@@ -168,7 +168,7 @@ The shell is GPUI-based (the Floem shell retired at tag
   surface modals, all delegates over gpui-component's searchable List.
 - `control_plane.rs` — the GPUI-side bridge and dispatcher for the CLI
   control plane; the transport is shared in `horizon-control::host`, the
-  client is `horizon <subcommand>` itself (`crates/horizon-ctl`). Panes
+  client is `horizon <subcommand>` itself (`crates/horizon-cli`). Panes
   get `HORIZON_SOCKET`/`HORIZON_SESSION_ID` in their environment. See
   `docs/cli-control-plane-design.md`.
 - `keymap.rs` — `[keybindings]` chord/command translation;
