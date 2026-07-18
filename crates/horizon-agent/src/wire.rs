@@ -388,6 +388,7 @@ mod tests {
         let session_id = SessionId::new();
         let mut envelopes = vec![
             Envelope::command(session_id, sample_command()),
+            Envelope::command(session_id, Command::ContinueTurn),
             Envelope::event(session_id, sample_event()),
         ];
         envelopes.extend(sample_controls().into_iter().map(Envelope::control));

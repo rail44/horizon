@@ -71,12 +71,14 @@ fs_traversal_max_files = 20000
 fs_grep_result_limit = 100
 fs_glob_result_limit = 200
 
-# Consecutive tool-driven turns (since the last user message) the agent may
-# run before Horizon halts it as a likely runaway loop.
-iteration_cap = 25
-# Consecutive identical (tool, args, output) fingerprints that trip the
-# doom-loop guard.
-doom_loop_window = 3
+# Deprecated, no longer read (docs/issues/002-agent-iteration-cap-halts-
+# real-work.md's 2026-07-18 resolution): the turn-loop guard's iteration
+# cap and doom-loop window are now fixed built-in constants (100 and 5
+# respectively), not config-file knobs. Setting either key here parses but
+# has no effect; the keys remain in the schema only until a follow-up wave
+# removes them outright.
+# iteration_cap = 25
+# doom_loop_window = 3
 
 # Token budget for the conversation history sent to the provider on each
 # turn: once the accumulated history would exceed this many (heuristically

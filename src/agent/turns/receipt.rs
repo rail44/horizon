@@ -5,6 +5,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
+use horizon_agent::config::{DEFAULT_DOOM_LOOP_WINDOW, DEFAULT_ITERATION_CAP};
 use horizon_agent::contract::TurnEndReason;
 
 use super::grouping::TurnEnd;
@@ -27,8 +28,14 @@ pub(crate) enum ReceiptTail<'a> {
 }
 
 /// A turn's end-reason rendered as receipt status text -- the
-/// `Cancelled` -> `stopped · {elapsed}` / `Failed`/`Halted` ->
-/// error-marked variants from decision 1's end-reason handling.
+/// `Cancelled` -> `stopped · {elapsed}` / `Failed` -> error-marked variant
+/// from decision 1's end-reason handling. A guard halt
+/// (`HaltedByIterationCap`/`HaltedByDoomLoop`, plus the legacy bare
+/// `Halted`) reads as a calm pause rather than an error
+/// (`docs/issues/002-agent-iteration-cap-halts-real-work.md`'s resolution):
+/// `is_error: false`, the same treatment `Cancelled` gets, and text naming
+/// the specific guard that fired (the legacy variant can't, since it never
+/// recorded which one).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ReceiptStatus {
     pub text: String,
@@ -50,9 +57,22 @@ pub(crate) fn receipt_status(end: &TurnEnd) -> ReceiptStatus {
             text: format!("failed · {elapsed}"),
             is_error: true,
         },
+        TurnEndReason::HaltedByIterationCap => ReceiptStatus {
+            text: format!(
+                "paused after {DEFAULT_ITERATION_CAP} consecutive tool-driven turns · {elapsed}"
+            ),
+            is_error: false,
+        },
+        TurnEndReason::HaltedByDoomLoop => ReceiptStatus {
+            text: format!(
+                "paused after {DEFAULT_DOOM_LOOP_WINDOW} consecutive identical tool results · \
+                 {elapsed}"
+            ),
+            is_error: false,
+        },
         TurnEndReason::Halted => ReceiptStatus {
-            text: format!("halted · {elapsed}"),
-            is_error: true,
+            text: format!("paused · {elapsed}"),
+            is_error: false,
         },
     }
 }
@@ -219,11 +239,32 @@ mod tests {
             }
         );
         assert_eq!(
+            receipt_status(&end(TurnEndReason::HaltedByIterationCap)),
+            ReceiptStatus {
+                text: format!(
+                    "paused after {DEFAULT_ITERATION_CAP} consecutive tool-driven turns · 38s"
+                ),
+                is_error: false
+            },
+            "a guard halt reads as a calm pause, not an error"
+        );
+        assert_eq!(
+            receipt_status(&end(TurnEndReason::HaltedByDoomLoop)),
+            ReceiptStatus {
+                text: format!(
+                    "paused after {DEFAULT_DOOM_LOOP_WINDOW} consecutive identical tool \
+                     results · 38s"
+                ),
+                is_error: false
+            }
+        );
+        assert_eq!(
             receipt_status(&end(TurnEndReason::Halted)),
             ReceiptStatus {
-                text: "halted · 38s".to_string(),
-                is_error: true
-            }
+                text: "paused · 38s".to_string(),
+                is_error: false
+            },
+            "the legacy bare Halted reason (pre-resolution persisted logs) reads calmly too"
         );
     }
 

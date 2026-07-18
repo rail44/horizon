@@ -75,6 +75,7 @@ so a subcommand run from inside a pane targets the enclosing instance and
 `new-agent [--prompt <text>]`, `attach <session-id>`,
 `terminate-session <session-id>`, `terminate-all-detached`,
 `approve`/`deny <session-id> <call-id>`, `cancel-turn <session-id>`,
+`continue-turn <session-id>`,
 `reload-session-runtime`, `sessions`, `state` (each takes `--split`/`--active`
 where placement/focus applies). See `docs/cli-control-plane-design.md` for
 the full contract.

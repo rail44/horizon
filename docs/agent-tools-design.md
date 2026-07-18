@@ -97,10 +97,60 @@ in-flight bash call.
 
 - Every tool failure returns an `is_error` tool result; the loop never
   crashes on tool errors. Error text says what went wrong and what to try.
-- Turn iteration cap, plus doom-loop detection: N consecutive identical
-  (tool, args, result) fingerprints halt the turn with an explanatory event.
 - The system prompt carries a one-line retry nudge (models otherwise tend to
   give up after a single tool failure — documented by OpenAI).
+- **Turn-loop guards are a built-in safety net, not a work limiter**
+  (revised 2026-07-18, `docs/issues/002-agent-iteration-cap-halts-real-
+  work.md`'s resolution — the original version of this section described a
+  25-turn cap tuned so tightly it fired on ordinary agentic work). Two
+  independent guards, both fixed built-in constants in `crates/horizon-
+  agent` (`config::DEFAULT_ITERATION_CAP`/`DEFAULT_DOOM_LOOP_WINDOW`), no
+  longer configurable via `[agent] iteration_cap`/`doom_loop_window` in
+  Horizon's config file (those keys are scheduled for removal from the file
+  schema in a follow-up wave; until then they parse but are silently
+  ignored):
+  - **Iteration cap (100).** Halts after 100 consecutive tool-driven turns
+    since the last user message — `providers::rig::session::TurnLoopGuard::
+    record_tool_turn`, incremented once per landed tool *batch*, not once
+    per call within it.
+  - **Doom-loop detection (window 5).** Halts once the last 5 consecutive
+    tool results fingerprint identically as (tool, args, output) —
+    `TurnLoopGuard::record_fingerprint`.
+  - **A halt reads as a pause, not an error.** Neither guard emits
+    `Event::Error` anymore; both emit `Event::TurnEnded` with a specific
+    reason (`TurnEndReason::HaltedByIterationCap`/`HaltedByDoomLoop` —
+    `contract::TurnEndReason`'s doc comment covers the legacy bare
+    `Halted` variant kept only for pre-resolution persisted logs). The
+    transcript renders the turn's receipt calmly (`src/agent/turns/
+    receipt.rs`'s `receipt_status`: `is_error: false`, text naming the
+    guard and its threshold, e.g. "paused after 100 consecutive
+    tool-driven turns"), and the session returns to `WaitingForUser` —
+    reads as waiting-for-user, not failed.
+  - **Continuing is one action.** `CommandId::ContinueAgentTurn`
+    (parameterless, mirrors `CancelAgentTurn`'s shape) resumes the halted
+    turn without composing a new message: a button sits directly on the
+    paused receipt row, and the command is reachable from the palette, a
+    control-plane invoke (`horizon continue-turn <session-id>`), and
+    `WorkspaceShell::execute`. Wire shape: `Command::ContinueTurn`
+    (parameterless), handled by `providers::rig::session::run_session_loop`.
+    A guard halt stashes the real, already-executed tool result that
+    tripped it in an in-memory `pending_halt_result` slot rather than
+    folding it into `rig_history` immediately (mirroring how an ordinary
+    tool-driven turn treats a batch's last-landed result as the *next*
+    turn's prompt, not a pre-pushed history entry). `Command::ContinueTurn`
+    consumes that slot, resets the guard, and resumes exactly as if the
+    guard had never tripped; a plain `Command::UserMessage` sent instead
+    flushes the same slot into history first, so typing past a halt still
+    works. **Replay safety**: `pending_halt_result` is purely in-memory
+    session-loop state, never persisted and never reconstructed from
+    `rig_history` — every freshly spawned session loop starts with it
+    `None` regardless of what history it loaded, so a session that ended
+    halted and is later resumed/replayed sits at `WaitingForUser` without
+    auto-continuing; a stray `Command::ContinueTurn` reaching a
+    fresh/idle session is a safe no-op.
+  - The guard itself is unchanged in kind: 100 consecutive tool turns (or 5
+    identical results) with zero user interaction still stops the loop —
+    only the threshold, presentation, and resumability changed.
 
 ## Turn Loop and Cancellation
 
@@ -141,11 +191,13 @@ official advice) is out of scope regardless of its evidence.
 
 ## Config
 
-Provider/model selection, base URL, and the bash/fs tool tuning and
-turn-loop guard values on this page all flow through Horizon's single TOML
-config file plus environment variables (env wins) — see `AGENTS.md`'s
-"Configuration" section and `config.example.toml` for the full precedence
-and knob list. The API key stays environment-only. No configuration UI.
+Provider/model selection, base URL, and the bash/fs tool tuning on this page
+all flow through Horizon's single TOML config file plus environment
+variables (env wins) — see `AGENTS.md`'s "Configuration" section and
+`config.example.toml` for the full precedence and knob list. The API key
+stays environment-only. No configuration UI. The turn-loop guard values are
+the one exception: as of the "Error Model and Loop Guards" 2026-07-18
+revision above, they are fixed built-in constants, not config-file knobs.
 
 ## Where the Industry Diverges — Our Choices
 

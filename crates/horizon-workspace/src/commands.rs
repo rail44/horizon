@@ -11,6 +11,7 @@ pub enum CommandId {
     ApproveToolCall,
     DenyToolCall,
     CancelAgentTurn,
+    ContinueAgentTurn,
     ReloadSessionRuntime,
     OpenSessionManager,
     ReloadConfig,
@@ -45,6 +46,13 @@ pub struct CommandState {
     pub detached_session_count: usize,
     pub has_pending_approval: bool,
     pub has_turn_in_flight: bool,
+    /// Whether the active agent session is sitting on a turn the turn-loop
+    /// guard halted -- `CommandId::ContinueAgentTurn`'s enablement signal
+    /// (`docs/issues/002-agent-iteration-cap-halts-real-work.md`'s
+    /// resolution, decision 3). Independent of `has_turn_in_flight`: a
+    /// guard halt returns the session to `WaitingForUser`, so the two are
+    /// never both true at once for the same session.
+    pub has_paused_turn: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -133,6 +141,13 @@ pub fn core_commands() -> Vec<CommandSpec> {
             destructive: false,
         },
         CommandSpec {
+            id: CommandId::ContinueAgentTurn,
+            title: "Continue Agent Turn",
+            category: CommandCategory::Agent,
+            description: "Resume a turn the turn-loop guard paused, without a new message.",
+            destructive: false,
+        },
+        CommandSpec {
             id: CommandId::ReloadSessionRuntime,
             title: "Reload Session Runtime",
             category: CommandCategory::Agent,
@@ -171,6 +186,7 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
         CommandId::TerminateAllDetachedSessions => state.detached_session_count > 0,
         CommandId::ApproveToolCall | CommandId::DenyToolCall => state.has_pending_approval,
         CommandId::CancelAgentTurn => state.has_turn_in_flight,
+        CommandId::ContinueAgentTurn => state.has_paused_turn,
     }
 }
 
@@ -213,7 +229,7 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 14);
+        assert_eq!(commands.len(), 15);
         assert_eq!(commands[0].id, CommandId::SplitRight);
         assert_eq!(commands[0].title, "Split Right…");
         assert_eq!(commands[1].id, CommandId::SplitDown);
@@ -224,10 +240,14 @@ mod tests {
         assert_eq!(commands[6].title, "Terminate Active Session");
         assert_eq!(commands[7].id, CommandId::TerminateAllDetachedSessions);
         assert_eq!(commands[7].title, "Terminate All Detached Sessions");
-        assert_eq!(commands[12].id, CommandId::OpenSessionManager);
-        assert_eq!(commands[12].title, "Manage Sessions");
-        assert_eq!(commands[13].id, CommandId::ReloadConfig);
-        assert_eq!(commands[13].title, "Reload Config");
+        assert_eq!(commands[10].id, CommandId::CancelAgentTurn);
+        assert_eq!(commands[10].title, "Cancel Agent Turn");
+        assert_eq!(commands[11].id, CommandId::ContinueAgentTurn);
+        assert_eq!(commands[11].title, "Continue Agent Turn");
+        assert_eq!(commands[13].id, CommandId::OpenSessionManager);
+        assert_eq!(commands[13].title, "Manage Sessions");
+        assert_eq!(commands[14].id, CommandId::ReloadConfig);
+        assert_eq!(commands[14].title, "Reload Config");
     }
 
     #[test]
@@ -241,6 +261,7 @@ mod tests {
                 detached_session_count: 0,
                 has_pending_approval: false,
                 has_turn_in_flight: false,
+                has_paused_turn: false,
             }
         ));
     }
@@ -277,6 +298,7 @@ mod tests {
             detached_session_count: 0,
             has_pending_approval: false,
             has_turn_in_flight: false,
+            has_paused_turn: false,
         });
 
         let close_pane = entries
@@ -302,6 +324,7 @@ mod tests {
                 detached_session_count: 0,
                 has_pending_approval: false,
                 has_turn_in_flight: false,
+                has_paused_turn: false,
             }
         ));
         assert!(command_enabled(
@@ -313,6 +336,7 @@ mod tests {
                 detached_session_count: 0,
                 has_pending_approval: false,
                 has_turn_in_flight: false,
+                has_paused_turn: false,
             }
         ));
     }
@@ -328,6 +352,7 @@ mod tests {
                 detached_session_count: 0,
                 has_pending_approval: false,
                 has_turn_in_flight: false,
+                has_paused_turn: false,
             }
         ));
         assert!(command_enabled(
@@ -339,6 +364,7 @@ mod tests {
                 detached_session_count: 0,
                 has_pending_approval: false,
                 has_turn_in_flight: false,
+                has_paused_turn: false,
             }
         ));
     }
@@ -354,6 +380,7 @@ mod tests {
                 detached_session_count: 0,
                 has_pending_approval: false,
                 has_turn_in_flight: false,
+                has_paused_turn: false,
             }
         ));
         assert!(command_enabled(
@@ -365,6 +392,7 @@ mod tests {
                 detached_session_count: 2,
                 has_pending_approval: false,
                 has_turn_in_flight: false,
+                has_paused_turn: false,
             }
         ));
     }
@@ -380,6 +408,7 @@ mod tests {
                 detached_session_count: 0,
                 has_pending_approval: false,
                 has_turn_in_flight: false,
+                has_paused_turn: false,
             }
         ));
         assert!(command_enabled(
@@ -391,6 +420,7 @@ mod tests {
                 detached_session_count: 0,
                 has_pending_approval: true,
                 has_turn_in_flight: false,
+                has_paused_turn: false,
             }
         ));
         assert!(!command_enabled(
@@ -402,6 +432,7 @@ mod tests {
                 detached_session_count: 0,
                 has_pending_approval: false,
                 has_turn_in_flight: false,
+                has_paused_turn: false,
             }
         ));
         assert!(command_enabled(
@@ -413,6 +444,7 @@ mod tests {
                 detached_session_count: 0,
                 has_pending_approval: true,
                 has_turn_in_flight: false,
+                has_paused_turn: false,
             }
         ));
     }
@@ -428,6 +460,7 @@ mod tests {
                 detached_session_count: 0,
                 has_pending_approval: false,
                 has_turn_in_flight: false,
+                has_paused_turn: false,
             }
         ));
         assert!(command_enabled(
@@ -439,6 +472,35 @@ mod tests {
                 detached_session_count: 0,
                 has_pending_approval: false,
                 has_turn_in_flight: true,
+                has_paused_turn: false,
+            }
+        ));
+    }
+
+    #[test]
+    fn continue_agent_turn_requires_a_paused_turn() {
+        assert!(!command_enabled(
+            CommandId::ContinueAgentTurn,
+            CommandState {
+                tab_count: 1,
+                visible_pane_count: 1,
+                has_active_session: true,
+                detached_session_count: 0,
+                has_pending_approval: false,
+                has_turn_in_flight: false,
+                has_paused_turn: false,
+            }
+        ));
+        assert!(command_enabled(
+            CommandId::ContinueAgentTurn,
+            CommandState {
+                tab_count: 1,
+                visible_pane_count: 1,
+                has_active_session: true,
+                detached_session_count: 0,
+                has_pending_approval: false,
+                has_turn_in_flight: false,
+                has_paused_turn: true,
             }
         ));
     }
@@ -452,6 +514,7 @@ mod tests {
             detached_session_count: 0,
             has_pending_approval: false,
             has_turn_in_flight: false,
+            has_paused_turn: false,
         });
 
         let split = filter_command_entries(entries.clone(), "split right");

@@ -233,8 +233,23 @@ pub(crate) const DEFAULT_FS_GREP_RESULT_LIMIT: usize = 100;
 /// Same idea as [`DEFAULT_FS_GREP_RESULT_LIMIT`], for `fs.glob`. Was
 /// `fs::glob`'s `DEFAULT_LIMIT`.
 pub(crate) const DEFAULT_FS_GLOB_RESULT_LIMIT: usize = 200;
-pub(crate) const DEFAULT_ITERATION_CAP: u32 = 25;
-pub(crate) const DEFAULT_DOOM_LOOP_WINDOW: usize = 3;
+/// Consecutive-tool-driven-turn safety-net cap
+/// (`docs/agent-tools-design.md`'s "Error Model and Loop Guards"). Fixed at
+/// 100 (`docs/issues/002-agent-iteration-cap-halts-real-work.md`'s
+/// resolution, 2026-07-18): the previous default of 25 fired on ordinary
+/// agentic work well before anything resembling a real runaway loop. No
+/// longer read from `[agent] iteration_cap` in the config file -- that key
+/// is retired in a follow-up wave; `AgentFileAgentConfig::iteration_cap`
+/// stays in the schema for now so a config file that still sets it parses
+/// without error, but [`RigAgentConfig::from_env_and_file`] no longer
+/// consults it. `pub` so `src/agent/turns/receipt.rs` can render the exact
+/// number in a guard-halted turn's paused receipt text without duplicating
+/// it.
+pub const DEFAULT_ITERATION_CAP: u32 = 100;
+/// Doom-loop (identical-consecutive-tool-result) window, same section of
+/// the design doc and same resolution as [`DEFAULT_ITERATION_CAP`]: fixed
+/// at 5 (was 3), no longer read from `[agent] doom_loop_window`.
+pub const DEFAULT_DOOM_LOOP_WINDOW: usize = 5;
 /// Was `providers::rig::stream`'s `STREAM_FLUSH_INTERVAL`.
 pub(crate) const DEFAULT_STREAM_FLUSH_INTERVAL_MS: u64 = 100;
 /// Was `providers::rig::stream`'s `STREAM_FLUSH_CHARS`.
@@ -310,10 +325,11 @@ impl AgentConfig {
 }
 
 /// Rig provider configuration: model/base-URL/request-param selection
-/// (`[provider]`, plus the env vars above), the turn-loop guard tuning
-/// (`[agent]` `iteration_cap`/`doom_loop_window`) — see
+/// (`[provider]`, plus the env vars above), the turn-loop guard's fixed
+/// thresholds (`iteration_cap`/`doom_loop_window`, always
+/// [`DEFAULT_ITERATION_CAP`]/[`DEFAULT_DOOM_LOOP_WINDOW`] -- see
 /// `providers::rig::session`'s `TurnLoopGuard`, which this is threaded into
-/// unchanged — and the streamed-delta coalescing cadence (`[agent]`
+/// unchanged) — and the streamed-delta coalescing cadence (`[agent]`
 /// `stream_flush_interval_ms`/`stream_flush_chars`) used by
 /// `providers::rig::stream`.
 #[derive(Clone, Debug, PartialEq)]
@@ -337,12 +353,18 @@ pub struct RigAgentConfig {
     /// send the field at all".
     pub max_tokens: Option<u64>,
     /// Consecutive-tool-turn iteration cap (`docs/agent-tools-design.md`,
-    /// "Error Model and Loop Guards"). Was the hardcoded
-    /// `TOOL_TURN_ITERATION_CAP` constant in `providers::rig::session`.
+    /// "Error Model and Loop Guards"). Always [`DEFAULT_ITERATION_CAP`] --
+    /// [`Self::from_env_and_file`] no longer reads `[agent] iteration_cap`
+    /// (`docs/issues/002-agent-iteration-cap-halts-real-work.md`'s
+    /// resolution: this is now a built-in safety net, not a per-deployment
+    /// tuning knob). Kept as a field (rather than having
+    /// `providers::rig::session` read the constant directly) so tests can
+    /// still construct a `RigAgentConfig` with a small cap to exercise the
+    /// guard without looping to the real threshold.
     pub iteration_cap: u32,
-    /// Doom-loop fingerprint window size, same section of the design doc.
-    /// Was the hardcoded `DOOM_LOOP_WINDOW` constant in
-    /// `providers::rig::session`.
+    /// Doom-loop fingerprint window size, same section of the design doc
+    /// and same fixed-not-configurable treatment as `iteration_cap` --
+    /// always [`DEFAULT_DOOM_LOOP_WINDOW`].
     pub doom_loop_window: usize,
     /// How often, in milliseconds, streamed deltas are coalesced into an
     /// emitted event. Was `providers::rig::stream`'s
@@ -415,11 +437,11 @@ impl RigAgentConfig {
             ),
             temperature: file.provider.temperature,
             max_tokens: file.provider.max_tokens,
-            iteration_cap: file.agent.iteration_cap.unwrap_or(DEFAULT_ITERATION_CAP),
-            doom_loop_window: file
-                .agent
-                .doom_loop_window
-                .unwrap_or(DEFAULT_DOOM_LOOP_WINDOW),
+            // `file.agent.iteration_cap`/`doom_loop_window` are
+            // deliberately never read here -- see `RigAgentConfig::
+            // iteration_cap`'s doc comment.
+            iteration_cap: DEFAULT_ITERATION_CAP,
+            doom_loop_window: DEFAULT_DOOM_LOOP_WINDOW,
             stream_flush_interval_ms: file
                 .agent
                 .stream_flush_interval_ms
@@ -756,7 +778,11 @@ mod tests {
     }
 
     #[test]
-    fn rig_agent_config_reads_iteration_and_doom_loop_settings_from_file() {
+    fn rig_agent_config_ignores_file_iteration_and_doom_loop_settings() {
+        // docs/issues/002-agent-iteration-cap-halts-real-work.md's
+        // resolution: the guard's thresholds are now a fixed built-in
+        // safety net, not a config-file knob -- even a file that sets
+        // `[agent] iteration_cap`/`doom_loop_window` must not move them.
         let file = AgentFileConfig {
             agent: AgentFileAgentConfig {
                 iteration_cap: Some(7),
@@ -768,8 +794,8 @@ mod tests {
 
         let config = RigAgentConfig::from_env_and_file(&file);
 
-        assert_eq!(config.iteration_cap, 7);
-        assert_eq!(config.doom_loop_window, 2);
+        assert_eq!(config.iteration_cap, DEFAULT_ITERATION_CAP);
+        assert_eq!(config.doom_loop_window, DEFAULT_DOOM_LOOP_WINDOW);
     }
 
     #[test]

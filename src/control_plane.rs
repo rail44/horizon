@@ -215,6 +215,16 @@ fn dispatch_invoke(
                 Err(message) => error_body(message),
             }
         }
+        "continue-turn" => {
+            let session_id = match session_id_arg(args, "session_id") {
+                Ok(id) => id,
+                Err(message) => return error_body(message),
+            };
+            match shell.external_continue_turn(session_id, cx) {
+                Ok(()) => EnvelopeBody::Ok,
+                Err(message) => error_body(message),
+            }
+        }
         "reload-session-runtime" => {
             shell.execute_external(CommandId::ReloadSessionRuntime, window, cx);
             EnvelopeBody::Ok
