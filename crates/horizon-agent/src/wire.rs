@@ -324,21 +324,23 @@ mod tests {
         ]
     }
 
-    /// The shared contract has since advanced for the breaking terminal
-    /// discovery/attach vocabulary introduced alongside session recovery.
+    /// The shared contract has since advanced past the breaking terminal
+    /// discovery/attach vocabulary introduced alongside session recovery
+    /// (v4); v5 is the terminal frame's move to the Horizon-owned color
+    /// vocabulary (2026-07-18).
     #[test]
     fn contract_version_includes_correlated_terminal_recovery() {
-        assert_eq!(CONTRACT_VERSION, 4);
+        assert_eq!(CONTRACT_VERSION, 5);
     }
 
     /// Unlike `role_id` above, `SessionNew.workspace_root` is a brand-new,
     /// `#[serde(default)]` field, not a reshape of an existing one -- see
-    /// its own doc comment. Additive changes don't need a version bump, so
-    /// Its addition did not itself require a version bump; the current value
-    /// reflects a later breaking change in the terminal sister vocabulary.
+    /// its own doc comment. Additive changes don't need a version bump;
+    /// the current value reflects later breaking changes in the terminal
+    /// domain's vocabulary (v4 discovery/attach, v5 owned colors).
     #[test]
     fn contract_version_was_not_bumped_for_the_additive_workspace_root_field() {
-        assert_eq!(CONTRACT_VERSION, 4);
+        assert_eq!(CONTRACT_VERSION, 5);
     }
 
     /// A `session_new` control message written by a peer built before
