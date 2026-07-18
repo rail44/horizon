@@ -94,15 +94,6 @@ entries live in `backlog-resolved.md` keeping their original numbers
     column offset for the rest of that row. Repro + fix small once
     confirmed. Recorded 2026-07-18.
 
-46. **Agent bash spawn-retry storm: 134 duplicate `ToolCallStarted` for
-    one call, ending in EMFILE.** Found in the 2026-07-19 event-log
-    analysis (session `2f3668b8`): one bash tool call emitted 134
-    `ToolCallStarted` records over 31s and finally failed with "failed
-    to start bash: Too many open files (os error 24)". Two questions:
-    why the retry loop runs unbounded-looking at that cadence, and
-    whether the retries themselves leak the fds that produce the EMFILE.
-    Start at `crates/horizon-agent/src/tools/bash/exec.rs`.
-
 47. **Event-log turn tracker: `turn_id` goes permanently null after a
     turn's first approval.** `persistence/event_log/turn.rs` opens a
     turn on a user message and closes it on `WaitingForApproval`/
