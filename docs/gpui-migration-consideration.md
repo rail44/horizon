@@ -38,7 +38,7 @@ is made.
   swap.
 - **What survives untouched** (the runtime-split design pays off here):
   `horizon-terminal-core`, `horizon-agent`, `horizon-agentd`,
-  `horizon-control`, `horizon-ctl` — all deliberately floem-free. The
+  `horizon-control`, `horizon-cli` — all deliberately floem-free. The
   daemon/runtime half of the product is unaffected; the rewrite is
   confined to the shell half (`src/`).
 - Conceptual layers that carry over regardless of framework: the command

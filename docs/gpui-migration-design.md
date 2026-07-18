@@ -11,7 +11,7 @@ reaches parity (README.md's manual smoke checklist).
 ## Ground rules
 
 - The daemon/runtime half — `horizon-terminal-core`, `horizon-agent`,
-  `horizon-agentd`, `horizon-control`, `horizon-ctl` — is untouched.
+  `horizon-agentd`, `horizon-control`, `horizon-cli` — is untouched.
 - `app/commands.rs` (CommandId, CommandSpec, command_enabled,
   filter_command_entries) is framework-free today and carries over
   verbatim. The workspace domain model's pure operations/queries carry

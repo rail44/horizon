@@ -3,7 +3,7 @@
 //! `horizon-workspace` model) hosts a terminal per pane; the control
 //! plane listens on the well-known socket. Like the Floem shell's
 //! binary, any subcommand routes to the control-plane client
-//! (`horizon_ctl::run`) instead of launching the GUI.
+//! (`horizon_cli::run`) instead of launching the GUI.
 
 // `theme.rs`'s `gpui_component_theme_config` builds one large
 // `serde_json::json!` object literal (slice B2 grew it past the crate's
@@ -46,19 +46,19 @@ fn main() -> ExitCode {
 
 /// The control-plane client, exactly like the Floem shell's binary:
 /// `HORIZON_SOCKET`/`HORIZON_SESSION_ID` env overrides are read here so
-/// `horizon_ctl::run` stays a pure mapping from arguments to exit code.
+/// `horizon_cli::run` stays a pure mapping from arguments to exit code.
 fn run_client(args: &[String]) -> ExitCode {
     let env_socket = std::env::var("HORIZON_SOCKET").ok();
     let env_session_id = std::env::var("HORIZON_SESSION_ID").ok();
     let stdin_is_tty = io::stdin().is_terminal();
-    let code = horizon_ctl::run(
+    let code = horizon_cli::run(
         args,
         env_socket,
         env_session_id,
         &mut io::stdout(),
         &mut io::stderr(),
         stdin_is_tty,
-        &mut horizon_ctl::confirm::interactive_prompt,
+        &mut horizon_cli::confirm::interactive_prompt,
     );
     ExitCode::from(code)
 }

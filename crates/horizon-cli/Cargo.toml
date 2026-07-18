@@ -1,5 +1,5 @@
 [package]
-name = "horizon-ctl"
+name = "horizon-cli"
 version = "0.1.0"
 edition = "2021"
 
@@ -9,16 +9,10 @@ horizon-control = { path = "../horizon-control" }
 # Query}::args`/`what` are typed as `serde_json::Value`, and Rust's extern
 # prelude only makes a *direct* dependency's items nameable -- so building
 # an `Invoke`/`Query` payload at all requires this crate directly, even
-# though it never appears in horizon-ctl's own public surface. Already a
+# though it never appears in horizon-cli's own public surface. Already a
 # workspace dependency (`horizon-control`, `horizon-agent`, `horizon` all
 # use it), so this pulls in nothing new to the dependency graph.
 serde_json = "1.0"
-# For `cli::default_socket_path`'s `getuid()` call -- the fixed well-known
-# control socket path formula, deliberately duplicated (not shared) from
-# `control_plane::socket`'s identical one on the server side; see that
-# module's doc comment for why. Already a workspace dependency (`horizon`
-# itself uses it), so this pulls in nothing new to the dependency graph.
-libc = "0.2"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

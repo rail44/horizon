@@ -1,4 +1,4 @@
-//! `horizon-ctl`: the CLI client for Horizon's Unix-socket control plane --
+//! `horizon-cli`: the CLI client for Horizon's Unix-socket control plane --
 //! see `docs/cli-control-plane-design.md` and the frozen contract crate,
 //! `crates/horizon-control`. As of the design doc's Second revision
 //! ("Single binary, subcommand client"), this crate has no binary of its
@@ -13,16 +13,16 @@
 //! [`commands`], [`client`], [`confirm`], [`output`]) is independently
 //! unit-testable, colocated with its own module.
 
-pub mod cli;
-pub mod client;
-pub mod commands;
+mod cli;
+mod client;
+mod commands;
 pub mod confirm;
-pub mod output;
+mod output;
 
 use std::io::{BufReader, Write};
 use std::os::unix::net::UnixStream;
 
-/// Runs one `horizon-ctl` invocation end to end and returns the process
+/// Runs one `horizon-cli` invocation end to end and returns the process
 /// exit code:
 ///
 /// - `0`: success.

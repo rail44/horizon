@@ -4,7 +4,7 @@ members = [
     "crates/horizon-agent",
     "crates/horizon-sessiond",
     "crates/horizon-control",
-    "crates/horizon-ctl",
+    "crates/horizon-cli",
     "crates/horizon-session-protocol",
     "crates/horizon-terminal-core",
     "crates/horizon-config",
@@ -47,9 +47,9 @@ gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "
 # control icons) resolve through the asset source registered below.
 gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "0775df394083c1ed74f36f846b78868d1267398f" }
 horizon-agent = { path = "crates/horizon-agent" }
+horizon-cli = { path = "crates/horizon-cli" }
 horizon-config = { path = "crates/horizon-config" }
 horizon-control = { path = "crates/horizon-control" }
-horizon-ctl = { path = "crates/horizon-ctl" }
 horizon-session-protocol = { path = "crates/horizon-session-protocol" }
 horizon-terminal-core = { path = "crates/horizon-terminal-core" }
 horizon-workspace = { path = "crates/horizon-workspace" }

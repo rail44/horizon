@@ -334,7 +334,11 @@ fn reject_extra(
 /// with no environment set up at all, unlike v1's env-var-mandatory scheme.
 /// `env_socket` is passed in rather than read here so the function stays a
 /// pure, directly testable mapping -- [`crate::run`]'s caller does the one
-/// real `std::env::var` read.
+/// real `std::env::var` read. The fixed default itself
+/// (`horizon_control::host::socket::default_socket_path`) is shared with the
+/// server side rather than duplicated here: this crate already depends on
+/// `horizon-control` directly, so both sides calling the one function is
+/// simpler than keeping two copies of the same formula in sync.
 pub fn resolve_socket_path(cli_socket: Option<PathBuf>, env_socket: Option<String>) -> PathBuf {
     if let Some(path) = cli_socket {
         return path;
@@ -342,28 +346,7 @@ pub fn resolve_socket_path(cli_socket: Option<PathBuf>, env_socket: Option<Strin
     if let Some(value) = env_socket.filter(|v| !v.is_empty()) {
         return PathBuf::from(value);
     }
-    default_socket_path()
-}
-
-/// This build's fixed default control socket path when neither `--socket`
-/// nor `HORIZON_SOCKET` is given. Identical formula to (and deliberately
-/// duplicated from, not shared with --
-/// `control_plane::socket::default_socket_path`'s doc comment explains why)
-/// the server side's own default -- both sides independently arrive at the
-/// same path, the same shape `horizon_agent::socket::default_socket_path`
-/// already uses between `horizon-sessiond` and Horizon's own agent client.
-fn default_socket_path() -> PathBuf {
-    let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR").ok();
-    // SAFETY: `getuid()` is a plain syscall wrapper with no preconditions.
-    let uid = unsafe { libc::getuid() };
-    default_socket_path_from(xdg_runtime_dir, uid)
-}
-
-fn default_socket_path_from(xdg_runtime_dir: Option<String>, uid: u32) -> PathBuf {
-    match xdg_runtime_dir.filter(|dir| !dir.is_empty()) {
-        Some(dir) => PathBuf::from(dir).join("horizon").join("control.sock"),
-        None => PathBuf::from(format!("/tmp/horizon-control-{uid}.sock")),
-    }
+    horizon_control::host::socket::default_socket_path()
 }
 
 /// Resolves `subcommand`'s `--split` flag (if it has one) against the
@@ -723,30 +706,13 @@ mod tests {
 
     #[test]
     fn resolve_socket_path_falls_back_to_the_fixed_default_with_neither() {
-        assert_eq!(resolve_socket_path(None, None), default_socket_path());
+        assert_eq!(
+            resolve_socket_path(None, None),
+            horizon_control::host::socket::default_socket_path()
+        );
         assert_eq!(
             resolve_socket_path(None, Some(String::new())),
-            default_socket_path()
-        );
-    }
-
-    #[test]
-    fn default_socket_path_prefers_xdg_runtime_dir_when_set() {
-        assert_eq!(
-            default_socket_path_from(Some("/run/user/1000".to_string()), 1000),
-            PathBuf::from("/run/user/1000/horizon/control.sock")
-        );
-    }
-
-    #[test]
-    fn default_socket_path_falls_back_to_tmp_with_uid_when_xdg_runtime_dir_is_unset_or_empty() {
-        assert_eq!(
-            default_socket_path_from(None, 1000),
-            PathBuf::from("/tmp/horizon-control-1000.sock")
-        );
-        assert_eq!(
-            default_socket_path_from(Some(String::new()), 1000),
-            PathBuf::from("/tmp/horizon-control-1000.sock")
+            horizon_control::host::socket::default_socket_path()
         );
     }
 
