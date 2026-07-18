@@ -8,7 +8,7 @@ use gpui_component::list::{ListDelegate, ListEvent, ListState};
 use gpui_component::IndexPath;
 use horizon_workspace::commands::command_entries;
 
-use super::{ensure_workspace_has_pane, WorkspaceShell};
+use super::WorkspaceShell;
 use crate::palette::PaletteDelegate;
 use crate::session_manager::SessionManagerDelegate;
 use crate::view_chooser::{Placement, ViewChooserDelegate};
@@ -132,7 +132,6 @@ impl WorkspaceShell {
                         // terminates the session; the modal stays open
                         // on refreshed data.
                         shell.workspace.terminate_session(summary.id);
-                        ensure_workspace_has_pane(&mut shell.workspace);
                         shell.reconcile(window, cx);
                         let sessions = shell.workspace.session_summaries();
                         list.update(cx, |list, cx| {

@@ -138,13 +138,20 @@ fn load_workspace_state(store: &mut WorkspaceStateStore) -> (Workspace, bool, bo
     }
 }
 
-/// Bring the workspace back to a state with at least one pane -- called
-/// after any termination path (a shell exit, `Terminate Active Session`,
-/// a session-manager secondary-confirm, or `external_terminate`) that
-/// might have emptied it. A zero-tab workspace can never be persisted
-/// (`WorkspaceState::validate` rejects it) and workspace mode has nothing
-/// to navigate, so every terminate path must reach this before its next
-/// `reconcile`/`persist_workspace`.
+/// Bring the workspace back to a state with at least one pane after
+/// `Reload Session Runtime` (`session_lifecycle::reload_session_runtime`)
+/// terminates every terminal session ahead of restarting the daemon --
+/// its one remaining caller. A zero-tab workspace is now a valid,
+/// persistable state (`WorkspaceState::validate` accepts it), so every
+/// *other* termination path (`TerminateActiveSession`, the session
+/// manager's secondary-confirm terminate, `external_terminate`, a PTY
+/// exit via `handle_terminal_exited`) leaves the workspace empty as-is
+/// rather than calling this -- auto-creating a terminal there would
+/// silently work against a user closing or terminating everything on
+/// purpose (2026-07-18 owner clarification, superseding `704657b`'s
+/// blanket guard). The reload path is different: killing every terminal
+/// session is an operational side effect of restarting the runtime, not
+/// something the user asked to empty, so it still gets a pane back.
 fn ensure_workspace_has_pane(workspace: &mut Workspace) -> Option<SessionId> {
     (workspace.tab_count() == 0)
         .then(|| workspace.open_tab_with_new_session_activated(PaneKind::Terminal, true))
@@ -334,13 +341,25 @@ impl WorkspaceShell {
         cx.notify();
     }
 
+    /// Focuses the cursor pane's view, or -- when there is none, e.g. an
+    /// empty (zero-tab) workspace -- the shell root's own `focus_handle`
+    /// instead of leaving focus wherever it happened to land. Reachability
+    /// depends on this: the root `div` (`render::render`) is the one
+    /// element `track_focus`-ing `focus_handle`, and every workspace-mode
+    /// binding (`ctrl+'` foremost, and once entered, `:` opening the
+    /// palette) is registered on it, so with no pane left to hold focus,
+    /// window focus must still land somewhere that routes those bindings
+    /// (2026-07-18 owner clarification: `ctrl+'`/`:` must stay reachable
+    /// even with every pane closed, since the palette is the only way back
+    /// to `New Tab…`).
     fn focus_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(view) = self
+        match self
             .workspace
             .cursor_pane_id()
             .and_then(|id| self.panes.get(&id))
         {
-            window.focus(&view.focus_handle(cx), cx);
+            Some(view) => window.focus(&view.focus_handle(cx), cx),
+            None => window.focus(&self.focus_handle, cx),
         }
         self.sync_terminal_focus(window, cx);
         self.persist_workspace();

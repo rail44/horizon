@@ -242,12 +242,13 @@ impl WorkspaceShell {
 
     /// Terminates the workspace session whose shell just exited -- whether
     /// it was attached to a pane or sitting detached (session-manager
-    /// entry), `terminate_session` handles both uniformly. Reseeds a fresh
-    /// terminal pane if this emptied the workspace (decision 2: see
-    /// `ensure_workspace_has_pane`'s doc for why a zero-tab workspace must
-    /// never be reached). Ignored while a restore is in progress: the
-    /// session store isn't reconciled with the model yet, so there is
-    /// nothing meaningful to terminate.
+    /// entry), `terminate_session` handles both uniformly. If this emptied
+    /// the workspace, it simply stays empty: an empty workspace is a
+    /// valid, persistable state (2026-07-18 owner clarification), not
+    /// something to paper over by auto-creating a terminal the user didn't
+    /// ask for. Ignored while a restore is in progress: the session store
+    /// isn't reconciled with the model yet, so there is nothing meaningful
+    /// to terminate.
     fn handle_terminal_exited(
         &mut self,
         session_id: SessionId,
@@ -260,7 +261,6 @@ impl WorkspaceShell {
         if !self.workspace.terminate_session(session_id) {
             return;
         }
-        ensure_workspace_has_pane(&mut self.workspace);
         self.reconcile(window, cx);
         self.focus_active(window, cx);
     }
@@ -805,10 +805,7 @@ mod tests {
     use horizon_terminal_core::TerminalSummary;
     use horizon_workspace::{PaneKind, SessionId, Workspace};
 
-    use super::{
-        ensure_workspace_has_pane, terminal_fallback_cwd, terminal_resume_candidates,
-        terminal_spawn_source,
-    };
+    use super::{terminal_fallback_cwd, terminal_resume_candidates, terminal_spawn_source};
 
     #[test]
     fn explicit_split_target_wins_as_terminal_spawn_source() {
@@ -864,11 +861,12 @@ mod tests {
 
     // `WorkspaceShell::handle_terminal_exited` (the receiving end of every
     // `TerminalSession`'s `exit_tx`) is itself GPUI-entity-shaped and not
-    // unit-testable without a window, but its model-level steps --
-    // `Workspace::terminate_session` then `ensure_workspace_has_pane` -- are
-    // the same pure building blocks this module already tests elsewhere.
-    // The two tests below exercise exactly that sequence, standing in for
-    // an end-to-end exit-notification test.
+    // unit-testable without a window, but its model-level step --
+    // `Workspace::terminate_session`, leaving the workspace empty rather
+    // than reseeding a terminal when that was its last session -- is the
+    // same pure building block this module already tests elsewhere. The
+    // tests below exercise exactly that, standing in for an end-to-end
+    // exit-notification test.
 
     #[test]
     fn terminate_session_removes_it_whether_attached_or_detached() {
@@ -891,24 +889,17 @@ mod tests {
     }
 
     #[test]
-    fn ensure_workspace_has_pane_recovers_persistability_after_terminating_the_last_session() {
-        // Owner item 2's root cause: `WorkspaceState::validate` rejects a
-        // workspace with zero tabs, so `to_persisted_json` -- called by
-        // `persist_workspace` after every mutation -- started failing the
-        // moment the workspace's last pane vanished (e.g. every session
-        // terminated, or the last shell exiting once decision 1 wires exit
-        // to terminate). `ensure_workspace_has_pane`, called right after
-        // `terminate_session` on every termination path, is the guard that
-        // keeps a live workspace from ever reaching that state.
+    fn terminating_the_last_session_leaves_an_empty_persistable_workspace_with_no_reseed() {
+        // 2026-07-18 owner clarification, superseding `704657b`'s
+        // auto-reseed guard: `WorkspaceState::validate` now accepts a
+        // zero-tab workspace, so `handle_terminal_exited` (and every other
+        // termination path) leaves it empty instead of auto-creating a
+        // terminal the user didn't ask for.
         let mut workspace = Workspace::mvp();
         workspace.terminate_active_session();
+
         assert_eq!(workspace.tab_count(), 0);
-        assert!(workspace.to_persisted_json().is_err());
-
-        let reseeded = ensure_workspace_has_pane(&mut workspace).expect("fresh terminal");
-
-        assert_eq!(workspace.tab_count(), 1);
-        assert_eq!(workspace.active_session_id(), Some(reseeded));
+        assert!(workspace.session_summaries().is_empty());
         assert!(workspace.to_persisted_json().is_ok());
     }
 }

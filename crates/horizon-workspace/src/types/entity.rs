@@ -14,13 +14,28 @@ pub struct Workspace {
     /// outside the mode, where the cursor is simply defined to be wherever
     /// focus is (see `Workspace::cursor_pane_id`) so the two can never
     /// drift apart by construction. `Some(pane_id)` while the mode is
-    /// active -- a stable `PaneId` rather than a visible-pane index, so it
-    /// survives across a directional move without needing to be re-derived
-    /// from the tree's shape (`docs/recursive-layout-design.md`'s slice 4:
-    /// `hjkl` resolves geometrically via `workspace::nav`, which only
-    /// speaks in `PaneId`s). See `workspace::mode` for the state
-    /// transitions.
+    /// active *and* a pane exists to seed it with -- a stable `PaneId`
+    /// rather than a visible-pane index, so it survives across a
+    /// directional move without needing to be re-derived from the tree's
+    /// shape (`docs/recursive-layout-design.md`'s slice 4: `hjkl` resolves
+    /// geometrically via `workspace::nav`, which only speaks in
+    /// `PaneId`s). An empty (zero-tab) workspace has no pane to seed this
+    /// with, so this can stay `None` even while the mode is active -- see
+    /// `workspace_mode_active` for the independent "is the mode active at
+    /// all" signal. See `workspace::mode` for the state transitions.
     pub workspace_mode_cursor: Option<PaneId>,
+    /// Whether workspace mode is active, independent of whether
+    /// `workspace_mode_cursor` currently holds a pane. Kept as its own
+    /// field (rather than inferring "active" from the cursor being
+    /// `Some`) because a zero-tab workspace must still be able to enter
+    /// the mode -- its `MODE_CONTEXT`-gated bindings (`:` opening the
+    /// palette foremost) are the only reachable path back to `New Tab…`
+    /// once every pane is gone (2026-07-18 owner clarification: an empty
+    /// workspace is a valid, first-class state, not an error condition to
+    /// paper over). `workspace::mode` keeps the two fields in lockstep:
+    /// the cursor is only ever `Some` while this is `true`, but this can
+    /// be `true` while the cursor stays `None`.
+    pub workspace_mode_active: bool,
 }
 
 #[derive(Clone, Debug)]

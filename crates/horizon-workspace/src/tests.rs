@@ -398,12 +398,19 @@ fn activate_tab_index_switches_visible_panes() {
 }
 
 #[test]
-fn close_tab_index_keeps_last_tab() {
+fn close_tab_index_can_empty_the_workspace() {
+    // 2026-07-18 owner clarification: closing the workspace's last tab is
+    // allowed to leave a valid, empty workspace, rather than being
+    // refused to guarantee at least one tab always remains.
     let mut workspace = Workspace::mvp();
+    let session_id = workspace.active_terminal_session_id().expect("session");
 
-    assert!(workspace.close_tab_index(0).is_empty());
-    assert_eq!(workspace.tab_count(), 1);
-    assert_eq!(workspace.visible_panes().len(), 1);
+    assert_eq!(workspace.close_tab_index(0), vec![session_id]);
+
+    assert_eq!(workspace.tab_count(), 0);
+    assert_eq!(workspace.visible_panes().len(), 0);
+    assert!(workspace.active_tab().is_none());
+    assert!(workspace.to_persisted_json().is_ok());
 }
 
 #[test]

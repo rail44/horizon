@@ -9,7 +9,7 @@ use horizon_workspace::commands::{CommandId, CommandState};
 use horizon_workspace::types::SessionKind;
 use horizon_workspace::{SessionId, Workspace};
 
-use super::{ensure_workspace_has_pane, WorkspaceShell};
+use super::WorkspaceShell;
 use crate::agent::AgentSession;
 use crate::theme;
 use crate::view_chooser::Placement;
@@ -64,7 +64,6 @@ impl WorkspaceShell {
             CommandId::TerminateActiveSession => {
                 self.workspace.exit_workspace_mode();
                 self.workspace.terminate_active_session();
-                ensure_workspace_has_pane(&mut self.workspace);
                 self.reconcile(window, cx);
                 self.focus_active(window, cx);
             }
@@ -200,7 +199,6 @@ impl WorkspaceShell {
         if !self.workspace.terminate_session(session_id) {
             return Err("unknown session".to_string());
         }
-        ensure_workspace_has_pane(&mut self.workspace);
         self.reconcile(window, cx);
         Ok(())
     }
@@ -306,9 +304,15 @@ mod tests {
     use horizon_workspace::commands::CommandId;
     use horizon_workspace::{PaneKind, SessionKind, Workspace};
 
-    use super::{
-        command_blocked_by_restore, ensure_workspace_has_pane, prepare_workspace_for_runtime_reload,
-    };
+    use super::{command_blocked_by_restore, prepare_workspace_for_runtime_reload};
+    // `ensure_workspace_has_pane` lives in `super::super` (`workspace::
+    // mod`), not here -- unlike `command_blocked_by_restore`/
+    // `prepare_workspace_for_runtime_reload`, both defined in this file,
+    // it's no longer called by any production code in `commands.rs` (the
+    // 2026-07-18 "empty workspace is valid" change removed its
+    // `TerminateActiveSession`/`external_terminate` call sites); its one
+    // remaining caller is `reload_session_runtime` in `session_lifecycle`.
+    use super::super::ensure_workspace_has_pane;
 
     #[test]
     fn reload_prep_removes_terminals_but_retains_agent_model_and_pane() {

@@ -23,6 +23,7 @@ impl Workspace {
             next_terminal_display_number: 2,
             next_agent_display_number: 1,
             workspace_mode_cursor: None,
+            workspace_mode_active: false,
         }
     }
 
@@ -266,11 +267,14 @@ impl Workspace {
         false
     }
 
+    /// Closing the workspace's last tab is allowed -- it leaves a valid,
+    /// persistable, zero-tab workspace (2026-07-18 owner clarification: an
+    /// empty workspace is a first-class state, not something to guard
+    /// against). `self.active_tab` is left dangling (pointing at the
+    /// removed tab) in that case, the same pattern `detach_pane` already
+    /// uses when a tab-closing operation leaves nothing to activate --
+    /// `active_tab()` resolves a dangling id to `None` safely.
     pub(crate) fn close_tab_index(&mut self, index: usize) -> Vec<SessionId> {
-        if self.tabs.len() <= 1 {
-            return Vec::new();
-        }
-
         let Some(tab) = self.tabs.get(index).cloned() else {
             return Vec::new();
         };
@@ -294,7 +298,9 @@ impl Workspace {
         self.tabs.remove(index);
         if closed_active_tab {
             let next_index = index.min(self.tabs.len().saturating_sub(1));
-            self.active_tab = self.tabs[next_index].id;
+            if let Some(tab) = self.tabs.get(next_index) {
+                self.active_tab = tab.id;
+            }
         }
 
         session_ids

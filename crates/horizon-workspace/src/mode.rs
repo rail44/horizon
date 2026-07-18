@@ -31,21 +31,26 @@ pub enum Direction {
 }
 
 impl Workspace {
-    /// Whether workspace mode is currently active.
+    /// Whether workspace mode is currently active. Independent of whether
+    /// [`Self::workspace_mode_cursor`] holds a pane -- a zero-tab workspace
+    /// can still enter the mode (see the field's doc comment), so "active"
+    /// is tracked on its own rather than inferred from the cursor.
     pub fn is_workspace_mode_active(&self) -> bool {
-        self.workspace_mode_cursor.is_some()
+        self.workspace_mode_active
     }
 
     /// Enters workspace mode, seeding the cursor at the currently focused
-    /// pane. A no-op if already active -- re-pressing the entry chord (or
+    /// pane (or `None`, for a zero-tab workspace with nothing to focus). A
+    /// no-op if already active -- re-pressing the entry chord (or
     /// otherwise re-requesting entry) while already in the mode must not
     /// reset the cursor back to focus, per
     /// `docs/workspace-mode-design.md`'s "re-pressing the entry key while
     /// already in the mode does nothing".
     pub fn enter_workspace_mode(&mut self) {
-        if self.workspace_mode_cursor.is_some() {
+        if self.workspace_mode_active {
             return;
         }
+        self.workspace_mode_active = true;
         self.workspace_mode_cursor = self.active_tab().map(|tab| tab.active);
     }
 
@@ -75,20 +80,22 @@ impl Workspace {
         }
     }
 
-    /// `Enter`: focus follows the cursor, then the mode ends. A no-op when
-    /// the mode isn't active.
+    /// `Enter`: focus follows the cursor, then the mode ends. Exits the
+    /// mode unconditionally (a no-op if it wasn't active); if there was no
+    /// cursor to commit to -- a zero-tab workspace, which entered the mode
+    /// with nothing to focus -- there is simply nothing else to do.
     pub fn commit_workspace_mode(&mut self) {
-        let Some(pane_id) = self.workspace_mode_cursor else {
-            return;
-        };
-        self.activate_pane(pane_id);
-        self.workspace_mode_cursor = None;
+        self.workspace_mode_active = false;
+        if let Some(pane_id) = self.workspace_mode_cursor.take() {
+            self.activate_pane(pane_id);
+        }
     }
 
     /// `Esc`: cancels the mode. Focus never moved while the mode was
     /// active, so simply discarding the cursor is enough to "snap it back"
     /// -- there is nothing else to restore.
     pub fn cancel_workspace_mode(&mut self) {
+        self.workspace_mode_active = false;
         self.workspace_mode_cursor = None;
     }
 
@@ -104,7 +111,7 @@ impl Workspace {
     ///
     /// [`commit_workspace_mode`]: Self::commit_workspace_mode
     pub fn commit_workspace_mode_to(&mut self, pane_id: PaneId) {
-        if self.workspace_mode_cursor.is_none() {
+        if !self.workspace_mode_active {
             return;
         }
         self.workspace_mode_cursor = Some(pane_id);
@@ -126,6 +133,7 @@ impl Workspace {
     /// reusable across both call shapes without an extra active-check at
     /// each call site.
     pub fn exit_workspace_mode(&mut self) {
+        self.workspace_mode_active = false;
         self.workspace_mode_cursor = None;
     }
 }
@@ -332,6 +340,42 @@ mod tests {
         let mut workspace = Workspace::mvp();
 
         workspace.exit_workspace_mode();
+
+        assert!(!workspace.is_workspace_mode_active());
+    }
+
+    #[test]
+    fn workspace_mode_is_enterable_with_zero_tabs() {
+        // 2026-07-18 owner clarification: an empty workspace is a valid,
+        // first-class state, and `:` (opening the command palette, e.g.
+        // to run `New Tab…`) must still be reachable -- which requires
+        // `is_workspace_mode_active()` to actually flip true even though
+        // there is no pane left to seed `workspace_mode_cursor` with (see
+        // that field's doc comment). Before this fix, `enter_workspace_
+        // mode` inferred "already active" from the cursor being `Some`,
+        // so with zero tabs it could never actually report itself active.
+        let mut workspace = Workspace::mvp();
+        workspace.terminate_active_session();
+        assert_eq!(workspace.tab_count(), 0);
+
+        workspace.enter_workspace_mode();
+
+        assert!(workspace.is_workspace_mode_active());
+        assert_eq!(workspace.cursor_pane_id(), None);
+
+        workspace.exit_workspace_mode();
+        assert!(!workspace.is_workspace_mode_active());
+    }
+
+    #[test]
+    fn committing_with_no_cursor_still_exits_the_mode() {
+        // `Enter` with nothing to commit to (zero tabs) must not leave the
+        // workspace stuck in the mode.
+        let mut workspace = Workspace::mvp();
+        workspace.terminate_active_session();
+        workspace.enter_workspace_mode();
+
+        workspace.commit_workspace_mode();
 
         assert!(!workspace.is_workspace_mode_active());
     }

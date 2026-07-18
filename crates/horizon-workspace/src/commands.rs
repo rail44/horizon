@@ -102,7 +102,7 @@ pub fn core_commands() -> Vec<CommandSpec> {
             id: CommandId::CloseActiveTab,
             title: "Close Active Tab",
             category: CommandCategory::Workspace,
-            description: "Close the active tab when another tab remains.",
+            description: "Close the active tab, detaching its sessions.",
             destructive: false,
         },
         CommandSpec {
@@ -181,7 +181,12 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
         | CommandId::OpenSessionManager
         | CommandId::ReloadConfig => true,
         CommandId::CloseActivePane => state.visible_pane_count > 1,
-        CommandId::CloseActiveTab => state.tab_count > 1,
+        // Unlike `CloseActivePane` (closing a tab's last pane must go
+        // through closing the tab itself instead), closing the
+        // workspace's last tab is allowed -- it leaves a valid, empty
+        // workspace (2026-07-18 owner clarification), not something to
+        // guard against.
+        CommandId::CloseActiveTab => state.tab_count > 0,
         CommandId::TerminateActiveSession => state.has_active_session,
         CommandId::TerminateAllDetachedSessions => state.detached_session_count > 0,
         CommandId::ApproveToolCall | CommandId::DenyToolCall => state.has_pending_approval,
@@ -290,7 +295,13 @@ mod tests {
     }
 
     #[test]
-    fn close_commands_are_disabled_for_single_tab_single_pane() {
+    fn close_pane_is_disabled_but_close_tab_is_enabled_for_the_last_tab() {
+        // `CloseActivePane` still requires another pane in the tab to
+        // fall back to -- closing a tab's sole pane must go through
+        // closing the tab itself instead. `CloseActiveTab`, though, is
+        // enabled even for the workspace's last tab: closing it is now
+        // allowed to leave a valid, empty workspace (2026-07-18 owner
+        // clarification), unlike the old "another tab must remain" rule.
         let entries = command_entries(CommandState {
             tab_count: 1,
             visible_pane_count: 1,
@@ -310,7 +321,7 @@ mod tests {
             .find(|entry| entry.spec.id == CommandId::CloseActiveTab)
             .expect("close tab command");
         assert!(!close_pane.enabled);
-        assert!(!close_tab.enabled);
+        assert!(close_tab.enabled);
     }
 
     #[test]
@@ -333,6 +344,23 @@ mod tests {
                 tab_count: 2,
                 visible_pane_count: 1,
                 has_active_session: true,
+                detached_session_count: 0,
+                has_pending_approval: false,
+                has_turn_in_flight: false,
+                has_paused_turn: false,
+            }
+        ));
+    }
+
+    #[test]
+    fn close_active_tab_is_disabled_once_the_workspace_is_already_empty() {
+        // Nothing to close once the workspace itself has zero tabs.
+        assert!(!command_enabled(
+            CommandId::CloseActiveTab,
+            CommandState {
+                tab_count: 0,
+                visible_pane_count: 0,
+                has_active_session: false,
                 detached_session_count: 0,
                 has_pending_approval: false,
                 has_turn_in_flight: false,
