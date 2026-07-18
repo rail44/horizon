@@ -732,19 +732,19 @@ mod tests {
         workspace.terminate_active_session();
         assert_eq!(workspace.tab_count(), 0);
 
-        let json = workspace.to_persisted_json().expect("an empty workspace must serialize");
+        let json = workspace
+            .to_persisted_json()
+            .expect("an empty workspace must serialize");
         let value: Value = serde_json::from_str(&json).expect("json");
         assert_eq!(value["tabs"], json!([]));
 
-        let restored = Workspace::from_persisted_json(&json).expect("an empty workspace must restore");
+        let restored =
+            Workspace::from_persisted_json(&json).expect("an empty workspace must restore");
 
         assert_eq!(restored.tab_count(), 0);
         assert_eq!(restored.panes.len(), 0);
         assert_eq!(restored.sessions, workspace.sessions);
-        assert_eq!(
-            restored.to_persisted_json().expect("serialize again"),
-            json
-        );
+        assert_eq!(restored.to_persisted_json().expect("serialize again"), json);
     }
 
     #[test]
