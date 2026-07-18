@@ -18,25 +18,46 @@ use schema::INITIALIZE_SCHEMA_SQL;
 
 use records::AgentStoredEvent;
 
-pub use import::ApplyRecordsReport;
-
 #[cfg(test)]
-pub use records::{
-    AgentStoredApproval, AgentStoredMessage, AgentStoredSessionSnapshot, AgentStoredToolCall,
-    AgentStoredToolResult, AgentStoredTurn, AppendEvent,
+pub(crate) use records::{
+    AgentStoredApproval, AgentStoredMessage, AgentStoredSession, AgentStoredSessionSnapshot,
+    AgentStoredToolCall, AgentStoredToolResult, AgentStoredTurn, AppendEvent,
 };
-pub use records::{AgentStoredSession, RecallEntry, RecallEntryKind, RecallSearchReport};
+pub(crate) use records::{RecallEntry, RecallEntryKind, RecallSearchReport};
 pub use shared_store::SharedDuckdbStore;
 
 /// A live `Store`, shared (behind a lock) by every in-process consumer that
 /// needs it -- see [`SharedDuckdbStore`]'s doc comment for why a second,
 /// independent `Store::open` of the same path is unsound rather than
-/// merely redundant. A plain type alias, not a newtype: every caller already
-/// needs the full `Arc<Mutex<_>>` API (`lock()`, `clone()`), so wrapping it
-/// would only add ceremony.
-pub type DuckdbStoreHandle = Arc<Mutex<Store>>;
+/// merely redundant.
+///
+/// A newtype around `Arc<Mutex<Store>>`, not a plain alias: `Store` is
+/// crate-internal (its query/append API has no external consumer -- see
+/// the 2026-07-18 interface audit), but this handle itself is real API
+/// `horizon-sessiond` holds, clones, and threads through construction
+/// (`SharedDuckdbStore`, `ToolSessionState`/`RecallContext`) -- a bare
+/// `pub type` alias over a `pub(crate)` `Store` would leak the private type
+/// into a public signature (`private_interfaces`). Only this crate's own
+/// code, which actually queries the store, reaches inside via [`Self::
+/// lock`]; `horizon-sessiond` never does (confirmed by grep at the time of
+/// this narrowing) -- it only clones and passes the handle along.
+#[derive(Clone)]
+pub struct DuckdbStoreHandle(Arc<Mutex<Store>>);
 
-pub struct Store {
+impl DuckdbStoreHandle {
+    pub(crate) fn new(store: Store) -> Self {
+        Self(Arc::new(Mutex::new(store)))
+    }
+
+    /// Forwards to `Mutex::lock` verbatim (same `LockResult` return shape)
+    /// so every existing `store.lock().unwrap_or_else(|poisoned| ...)`
+    /// call site keeps working unchanged.
+    pub(crate) fn lock(&self) -> std::sync::LockResult<std::sync::MutexGuard<'_, Store>> {
+        self.0.lock()
+    }
+}
+
+pub(crate) struct Store {
     conn: Connection,
     /// Whether opening this store had to migrate a pre-`event_at`
     /// `agent_events` table (see [`Self::migrate_legacy_agent_events_schema`]).
@@ -53,13 +74,13 @@ pub struct Store {
 
 impl Store {
     #[cfg(test)]
-    pub fn open_in_memory() -> Result<Self> {
+    pub(crate) fn open_in_memory() -> Result<Self> {
         Self::from_connection(
             Connection::open_in_memory().context("open in-memory DuckDB agent store")?,
         )
     }
 
-    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+    pub(crate) fn open(path: impl AsRef<Path>) -> Result<Self> {
         Self::from_connection(Connection::open(path).context("open DuckDB agent store")?)
     }
 
@@ -73,7 +94,7 @@ impl Store {
     }
 
     /// See the field's doc comment on [`Self::migrated_legacy_schema`].
-    pub fn migrated_legacy_schema(&self) -> bool {
+    pub(crate) fn migrated_legacy_schema(&self) -> bool {
         self.migrated_legacy_schema
     }
 

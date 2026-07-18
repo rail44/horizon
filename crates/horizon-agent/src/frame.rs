@@ -78,13 +78,13 @@ pub enum AgentFrameItem {
 /// derived durations, join through `ended_event_id`" choice, or threading a
 /// timestamp onto `Event` itself.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct TurnClock {
+pub(crate) struct TurnClock {
     started_at: Option<Instant>,
     model: Option<String>,
 }
 
 impl TurnClock {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 }
@@ -98,14 +98,21 @@ impl TurnClock {
 /// lives in this sidecar instead — callers that need it per session (see
 /// `session::Frames`) keep one alongside the frame and call [`Self::advance`]
 /// every time they observe a new frame.
+///
+/// `cfg(test)`: no in-crate caller currently constructs one outside this
+/// crate's own tests (confirmed by grep at the time of the 2026-07-18
+/// interface audit) -- previously exempt from the dead-code lint only
+/// because the type was `pub`.
 #[derive(Clone, Copy, Debug)]
-pub struct StateEntry {
+#[cfg(test)]
+pub(crate) struct StateEntry {
     pub state: Option<SessionState>,
     entered_at: Instant,
 }
 
+#[cfg(test)]
 impl StateEntry {
-    pub fn initial(state: Option<SessionState>) -> Self {
+    pub(crate) fn initial(state: Option<SessionState>) -> Self {
         Self {
             state,
             entered_at: Instant::now(),
@@ -115,7 +122,7 @@ impl StateEntry {
     /// Returns the entry that should be current after observing `state`:
     /// unchanged (same `entered_at`) if `state` matches, otherwise a fresh
     /// entry timestamped now.
-    pub fn advance(self, state: Option<SessionState>) -> Self {
+    pub(crate) fn advance(self, state: Option<SessionState>) -> Self {
         if self.state == state {
             self
         } else {
@@ -123,7 +130,7 @@ impl StateEntry {
         }
     }
 
-    pub fn entered_at(&self) -> Instant {
+    pub(crate) fn entered_at(&self) -> Instant {
         self.entered_at
     }
 }
@@ -435,7 +442,11 @@ pub(crate) fn agent_frame_and_turn_clock_from_events(events: &[Event]) -> (Agent
     (frame, turn)
 }
 
-pub fn apply_agent_event_to_frame(frame: &mut AgentFrame, event: &Event, turn: &mut TurnClock) {
+pub(crate) fn apply_agent_event_to_frame(
+    frame: &mut AgentFrame,
+    event: &Event,
+    turn: &mut TurnClock,
+) {
     match event {
         Event::StateChanged(state) => frame.state = Some(*state),
         Event::ReasoningDelta(delta) => {
@@ -578,7 +589,10 @@ pub fn apply_agent_event_to_frame(frame: &mut AgentFrame, event: &Event, turn: &
 /// boundary (see [`is_turn_boundary_item`]) for the same reason those
 /// aren't: this needs to keep matching the same item across repeated calls
 /// while it is the most recent thing in the turn.
-pub fn apply_tool_call_progress_to_frame(frame: &mut AgentFrame, progress: ToolCallProgress) {
+pub(crate) fn apply_tool_call_progress_to_frame(
+    frame: &mut AgentFrame,
+    progress: ToolCallProgress,
+) {
     if let Some(AgentFrameItem::ToolCallPreparing(existing)) = last_current_turn_item_mut(
         frame,
         |item| matches!(item, AgentFrameItem::ToolCallPreparing(existing) if existing.key == progress.key),

@@ -12,13 +12,12 @@ use crate::frame::{agent_frame_from_events, AgentFrame};
 use crate::roles::RoleId;
 
 use super::{
-    session_id_text, AgentStoredEvent, AgentStoredSession, RecallEntry, RecallEntryKind,
-    RecallSearchReport, Store,
+    session_id_text, AgentStoredEvent, RecallEntry, RecallEntryKind, RecallSearchReport, Store,
 };
 #[cfg(test)]
 use super::{
-    AgentStoredApproval, AgentStoredMessage, AgentStoredSessionSnapshot, AgentStoredToolCall,
-    AgentStoredToolResult, AgentStoredTurn,
+    AgentStoredApproval, AgentStoredMessage, AgentStoredSession, AgentStoredSessionSnapshot,
+    AgentStoredToolCall, AgentStoredToolResult, AgentStoredTurn,
 };
 
 /// How many characters of `text`/`input_json`/`output_json` `search_history`
@@ -30,10 +29,12 @@ use super::{
 const RECALL_TEXT_BOUND_CHARS: usize = 4_000;
 
 impl Store {
-    /// Not test-only: `projection.rs`'s `rebuild_projection` walks every row
-    /// through this in production, and this crate's own tests assert what
-    /// actually landed in the projection after a rebuild or a live append.
-    pub fn sessions(&self) -> Result<Vec<AgentStoredSession>> {
+    /// Test-only: both current callers (`session_snapshots` below and
+    /// `projection.rs`'s `rebuild_projections`) are themselves `cfg(test)`,
+    /// and this crate's own tests assert what actually landed in the
+    /// projection after a rebuild or a live append.
+    #[cfg(test)]
+    pub(crate) fn sessions(&self) -> Result<Vec<AgentStoredSession>> {
         let mut stmt = self.conn.prepare(
             "SELECT session_id, provider_id, role_id, last_sequence, updated_at::TEXT
              FROM agent_sessions
@@ -60,7 +61,7 @@ impl Store {
     /// record sequence to decide whether the projection is already current
     /// -- cheap enough to run before every rebuild decision since it's a
     /// single aggregate over a small table, not a scan of `agent_events`.
-    pub fn max_last_sequence(&self) -> Result<Option<i64>> {
+    pub(crate) fn max_last_sequence(&self) -> Result<Option<i64>> {
         self.conn
             .query_row("SELECT MAX(last_sequence) FROM agent_sessions", [], |row| {
                 row.get(0)
@@ -69,7 +70,7 @@ impl Store {
     }
 
     #[cfg(test)]
-    pub fn session_snapshots(&self) -> Result<Vec<AgentStoredSessionSnapshot>> {
+    pub(crate) fn session_snapshots(&self) -> Result<Vec<AgentStoredSessionSnapshot>> {
         self.sessions()?
             .into_iter()
             .map(|session| {
@@ -85,7 +86,10 @@ impl Store {
             .collect()
     }
 
-    pub fn events_for_session(&self, session_id: SessionId) -> Result<Vec<AgentStoredEvent>> {
+    pub(crate) fn events_for_session(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Vec<AgentStoredEvent>> {
         let session_id_text = session_id_text(session_id)?;
         let mut stmt = self.conn.prepare(
             "SELECT
@@ -138,7 +142,7 @@ impl Store {
     }
 
     #[cfg(test)]
-    pub fn frame_for_session(&self, session_id: SessionId) -> Result<AgentFrame> {
+    pub(crate) fn frame_for_session(&self, session_id: SessionId) -> Result<AgentFrame> {
         let events = self
             .events_for_session(session_id)?
             .into_iter()
@@ -148,7 +152,10 @@ impl Store {
     }
 
     #[cfg(test)]
-    pub fn messages_for_session(&self, session_id: SessionId) -> Result<Vec<AgentStoredMessage>> {
+    pub(crate) fn messages_for_session(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Vec<AgentStoredMessage>> {
         let session_id_text = session_id_text(session_id)?;
         let mut stmt = self.conn.prepare(
             "SELECT event_id, sequence, role, text, is_delta
@@ -172,7 +179,7 @@ impl Store {
     }
 
     #[cfg(test)]
-    pub fn tool_calls_for_session(
+    pub(crate) fn tool_calls_for_session(
         &self,
         session_id: SessionId,
     ) -> Result<Vec<AgentStoredToolCall>> {
@@ -200,7 +207,7 @@ impl Store {
     }
 
     #[cfg(test)]
-    pub fn tool_results_for_session(
+    pub(crate) fn tool_results_for_session(
         &self,
         session_id: SessionId,
     ) -> Result<Vec<AgentStoredToolResult>> {
@@ -261,7 +268,7 @@ impl Store {
     /// `limit`-bounded rows actually returned -- computed via `COUNT(*)
     /// OVER ()` over the unlimited match set, before the `LIMIT` clause
     /// trims it.
-    pub fn search_history(
+    pub(crate) fn search_history(
         &self,
         scope: Option<SessionId>,
         query: Option<&str>,
@@ -387,7 +394,7 @@ impl Store {
     /// sequence and limited to `limit` rows -- the "read the full context
     /// around a hit" counterpart to [`Self::search_history`]. Each entry's
     /// text is bounded the same way (see [`RECALL_TEXT_BOUND_CHARS`]).
-    pub fn read_history_window(
+    pub(crate) fn read_history_window(
         &self,
         session_id: SessionId,
         from_sequence: i64,
@@ -459,7 +466,10 @@ impl Store {
     }
 
     #[cfg(test)]
-    pub fn approvals_for_session(&self, session_id: SessionId) -> Result<Vec<AgentStoredApproval>> {
+    pub(crate) fn approvals_for_session(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Vec<AgentStoredApproval>> {
         let session_id_text = session_id_text(session_id)?;
         let mut stmt = self.conn.prepare(
             "SELECT event_id, sequence, call_id, reason, outcome
@@ -483,7 +493,7 @@ impl Store {
     }
 
     #[cfg(test)]
-    pub fn turns_for_session(&self, session_id: SessionId) -> Result<Vec<AgentStoredTurn>> {
+    pub(crate) fn turns_for_session(&self, session_id: SessionId) -> Result<Vec<AgentStoredTurn>> {
         let session_id_text = session_id_text(session_id)?;
         let mut stmt = self.conn.prepare(
             "SELECT turn_id, end_reason, ended_event_id

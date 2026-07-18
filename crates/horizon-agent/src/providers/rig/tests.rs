@@ -281,7 +281,7 @@ fn rebuilds_rig_memory_messages_from_horizon_transcript_events() {
 /// thread now share one instance in production.
 #[test]
 fn loads_initial_rig_history_from_duckdb_projection() {
-    use std::sync::{Arc, Mutex};
+    use crate::persistence::projection::duckdb::DuckdbStoreHandle;
 
     let path = std::env::temp_dir().join(format!(
         "horizon-rig-memory-{}.duckdb",
@@ -311,7 +311,7 @@ fn loads_initial_rig_history_from_duckdb_projection() {
             events.clone(),
         )
         .expect("append events");
-    let shared_store = Arc::new(Mutex::new(store));
+    let shared_store = DuckdbStoreHandle::new(store);
 
     let history = load_rig_history(Some(&shared_store), session_id);
     assert_eq!(history, rig_messages_from_horizon_events(&events));

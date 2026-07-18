@@ -1,7 +1,6 @@
 use std::{
     io::{BufWriter, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
     thread,
     time::Duration,
 };
@@ -411,7 +410,7 @@ fn rebuild_and_open_duckdb_projection(
         match duckdb_projection_currency(&store, records) {
             Ok(ProjectionCurrency::Current) => {
                 eprintln!("horizon-sessiond: DuckDB projection already current, skipping rebuild");
-                return Some(Arc::new(Mutex::new(store)));
+                return Some(DuckdbStoreHandle::new(store));
             }
             Ok(ProjectionCurrency::Behind(mark)) => {
                 let tail = records
@@ -426,7 +425,7 @@ fn rebuild_and_open_duckdb_projection(
                              ({} record(s))",
                             report.applied
                         );
-                        return Some(Arc::new(Mutex::new(store)));
+                        return Some(DuckdbStoreHandle::new(store));
                     }
                     Err(error) => eprintln!(
                         "horizon-sessiond: DuckDB incremental catch-up failed ({error}), \
@@ -448,7 +447,7 @@ fn rebuild_and_open_duckdb_projection(
                 "horizon-sessiond: DuckDB projection rebuilt ({} record(s))",
                 report.applied
             );
-            Some(Arc::new(Mutex::new(store)))
+            Some(DuckdbStoreHandle::new(store))
         }
         Err(error) => {
             eprintln!(

@@ -67,10 +67,10 @@ pub struct Skill {
     /// `skill.read`'s `id` input -- taken verbatim from the `SKILL.md`
     /// frontmatter's `name:` field (not the containing directory's name,
     /// for a repository skill).
-    pub name: String,
+    pub(crate) name: String,
     /// The one-line summary shown in the always-loaded prompt section --
     /// taken from `description:`.
-    pub description: String,
+    pub(crate) description: String,
     source: SkillBody,
 }
 
@@ -174,7 +174,7 @@ impl SkillRegistry {
     }
 
     /// Looks up a skill by id in this session's composed registry.
-    pub fn get(&self, id: &str) -> Option<&Skill> {
+    pub(crate) fn get(&self, id: &str) -> Option<&Skill> {
         self.skills.iter().find(|skill| skill.name == id)
     }
 
@@ -194,7 +194,7 @@ impl SkillRegistry {
     /// build always embeds at least `horizon-config`/`horizon-cli`, so this
     /// is exercised directly against an empty registry in this module's own
     /// tests rather than through [`Self::discover`]).
-    pub fn prompt_section_for_all(&self) -> Option<String> {
+    pub(crate) fn prompt_section_for_all(&self) -> Option<String> {
         skills_prompt_section(self.skills.iter())
     }
 
@@ -203,7 +203,7 @@ impl SkillRegistry {
     /// silently skipping any id this registry doesn't resolve (e.g. stale
     /// data from a build that no longer ships that skill). `None` for an
     /// empty slice.
-    pub fn prompt_section_for_ids(&self, skill_ids: &[&str]) -> Option<String> {
+    pub(crate) fn prompt_section_for_ids(&self, skill_ids: &[&str]) -> Option<String> {
         if skill_ids.is_empty() {
             return None;
         }

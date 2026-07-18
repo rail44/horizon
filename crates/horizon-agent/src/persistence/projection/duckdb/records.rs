@@ -8,12 +8,13 @@ use crate::contract::{MessageRole, ToolCallId};
 use crate::frame::AgentFrame;
 use crate::roles::RoleId;
 
-// Not `cfg(test)`, unlike its sibling record types below: `Store::sessions`
-// (see `query.rs`) isn't test-only — a downstream crate's tests (`horizon`'s
-// DuckDB-replay regression tests) can't trigger this crate's own
-// `cfg(test)`, so this and `Store::sessions` stay real API.
+// `Store::sessions` (see `query.rs`) is only ever called from this crate's
+// own tests (`session_snapshots`/`rebuild_projections`, both `cfg(test)`,
+// plus this module's own test assertions) -- `cfg(test)`, like its sibling
+// record types below.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AgentStoredSession {
+#[cfg(test)]
+pub(crate) struct AgentStoredSession {
     pub session_id: SessionId,
     pub provider_id: Option<ProviderId>,
     /// Last-seen role for the session -- see `agent_sessions.role_id`'s
@@ -25,7 +26,7 @@ pub struct AgentStoredSession {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg(test)]
-pub struct AgentStoredSessionSnapshot {
+pub(crate) struct AgentStoredSessionSnapshot {
     pub session: AgentStoredSession,
     pub frame: AgentFrame,
     pub message_count: usize,
@@ -35,7 +36,7 @@ pub struct AgentStoredSessionSnapshot {
 
 #[derive(Clone, Debug)]
 #[cfg(test)]
-pub struct AppendEvent {
+pub(crate) struct AppendEvent {
     pub session_id: SessionId,
     pub turn_id: Option<String>,
     pub provider_id: Option<ProviderId>,
@@ -45,7 +46,7 @@ pub struct AppendEvent {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AgentStoredEvent {
+pub(crate) struct AgentStoredEvent {
     pub event_id: String,
     pub session_id: SessionId,
     pub turn_id: Option<String>,
@@ -61,7 +62,7 @@ pub struct AgentStoredEvent {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg(test)]
-pub struct AgentStoredMessage {
+pub(crate) struct AgentStoredMessage {
     pub event_id: String,
     pub session_id: SessionId,
     pub sequence: i64,
@@ -72,7 +73,7 @@ pub struct AgentStoredMessage {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg(test)]
-pub struct AgentStoredToolCall {
+pub(crate) struct AgentStoredToolCall {
     pub event_id: String,
     pub session_id: SessionId,
     pub sequence: i64,
@@ -83,7 +84,7 @@ pub struct AgentStoredToolCall {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg(test)]
-pub struct AgentStoredToolResult {
+pub(crate) struct AgentStoredToolResult {
     pub event_id: String,
     pub session_id: SessionId,
     pub sequence: i64,
@@ -99,7 +100,7 @@ pub struct AgentStoredToolResult {
 /// outside this crate's own tests needs turn rows as structured data yet.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg(test)]
-pub struct AgentStoredTurn {
+pub(crate) struct AgentStoredTurn {
     pub session_id: SessionId,
     pub turn_id: String,
     pub end_reason: String,
@@ -108,7 +109,7 @@ pub struct AgentStoredTurn {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg(test)]
-pub struct AgentStoredApproval {
+pub(crate) struct AgentStoredApproval {
     pub event_id: String,
     pub session_id: SessionId,
     pub sequence: i64,
@@ -126,7 +127,7 @@ pub struct AgentStoredApproval {
 /// siblings above: `tools::recall` (a different module in this same crate,
 /// not a downstream crate) needs it as real API.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RecallEntry {
+pub(crate) struct RecallEntry {
     pub session_id: SessionId,
     pub sequence: i64,
     pub kind: RecallEntryKind,
@@ -156,14 +157,14 @@ pub struct RecallEntry {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RecallEntryKind {
+pub(crate) enum RecallEntryKind {
     Message,
     ToolCall,
     ToolResult,
 }
 
 impl RecallEntryKind {
-    pub fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Message => "message",
             Self::ToolCall => "tool_call",
@@ -177,7 +178,7 @@ impl RecallEntryKind {
 /// caller (`recall.search`) can report "there were N total, here are the
 /// first `limit`" instead of silently truncating.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RecallSearchReport {
+pub(crate) struct RecallSearchReport {
     pub hits: Vec<RecallEntry>,
     pub total: usize,
 }
