@@ -1,7 +1,7 @@
 ---
 id: 002
 title: Agent halts mid-task at "25 consecutive tool-driven turns" with no way to continue but retyping
-status: triaged
+status: in-progress
 severity: high
 area: agent
 ---
@@ -107,3 +107,12 @@ not handing the raw issue to a worker. Touches `crates/horizon-agent`
 views; no conflict with the in-flight terminal-cwd work.
 
 Worker dispatch waits on the owner's timing, and after the design pass.
+
+**Dispatched 2026-07-18** after the owner approved the design in the
+config-narrowing consultation: guard thresholds become built-in
+constants (consecutive tool turns 25→100, doom-loop window 3→5 — the
+`[agent]` config keys are being retired in the same wave), a guard halt
+renders as a neutral "paused" receipt row instead of an error, and a
+parameterless Continue command (+ paused-row button) resumes without a
+new user message. Decisions (a)/(d)/(e) above were resolved by the
+retirement (no runtime knob remains); (b)/(c) are the dispatched work.
