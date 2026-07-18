@@ -99,9 +99,12 @@ entries live in `backlog-resolved.md` keeping their original numbers
     *other worktree's* API ("Fresh" misdetermination), while `cargo
     check -p horizon-agent` alone stayed correct; `find -name '*.rs'
     -exec touch` + rerun fixed it each time. A stale *test binary* can
-    also misreport the workspace test COUNT (a post-merge gate showed
-    1008 where the true count was 998), so a surprising count is itself
-    a diagnostic. AGENTS.md's build-dir section now carries the caveat.
+    also misreport the workspace test COUNT — successive gate runs on
+    the same tree flapped between 998 and 1008 until a `cargo clean -p`
+    of the churned crates settled the true count — so a count that
+    disagrees between runs is itself the diagnostic, and neither reading
+    is trustworthy without a clean rebuild of the crates in flux.
+    AGENTS.md's build-dir section now carries the caveat.
 
 42. **Tool-call rows have no per-occurrence identity when a provider
     reuses a call_id.** The 2026-07-18 reused-call_id fix (`1d86521`)
