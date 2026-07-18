@@ -779,3 +779,21 @@ full resolution/closing records.
     "design C for chrome — REVERTED" note); the tab strip is back to
     `Segmented`, whose allowances were never stale. Only relevant again
     if the strip switches variant a second time.
+
+49. *(resolved 2026-07-19)* **Zero-tab Split placement silently no-ops
+    after the view chooser.** With an empty workspace,
+    `Placement::SplitRight`/`SplitDown` (the `s` chord / palette "Split
+    Right…"/"Split Down…") let the view chooser confirm and then did
+    nothing — worse than a no-op for the view-kind path, whose
+    `split_pane_in_tab` couldn't find the (nonexistent) active tab but
+    still pushed an orphan `Pane` and pointed `active_tab` at a dangling
+    id. Fixed in `crates/horizon-workspace/src/commands.rs`'s
+    `command_enabled`: `SplitRight`/`SplitDown` now require
+    `state.tab_count > 0`, mirroring `CloseActiveTab`'s existing gate.
+    Audited every other command for the same "assumes an active
+    pane/tab" gap: `FocusNextPane` needed no change — its `focus_next`/
+    `focus_active` already no-op safely at zero tabs by design (the
+    2026-07-18 empty-workspace decision's fallback-to-shell-focus path).
+    `NewTab`, `Manage Sessions`, `Reload Config`, and `Reload Session
+    Runtime` stay unconditionally enabled, since at least one of them
+    must remain reachable to recover from the empty state.

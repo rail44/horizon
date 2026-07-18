@@ -123,14 +123,6 @@ entries live in `backlog-resolved.md` keeping their original numbers
     already changed it" result) rather than the approval side. Related:
     42/47. Recorded 2026-07-19 from the event-log analysis.
 
-49. **Zero-tab Split placement silently no-ops after the view chooser.**
-    With an empty workspace, `Placement::SplitRight`/`SplitDown` (the
-    `s` chord / palette "Split Right…") lets the view chooser confirm and
-    then does nothing — there is no active session to split from.
-    Command enablement doesn't account for `tab_count == 0`; disable the
-    split placements up front there. Found by the empty-workspace worker
-    2026-07-19.
-
 50. **Decide `Reload Session Runtime`'s residual auto-reseed.** The
     2026-07-19 empty-workspace correction removed auto-reseed from every
     termination path but deliberately kept `ensure_workspace_has_pane`
