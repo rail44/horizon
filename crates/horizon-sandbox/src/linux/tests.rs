@@ -266,7 +266,7 @@ fn tmpdir_is_provisioned_when_the_caller_hasnt_set_one_and_mktemp_respects_it() 
     let created_path = std::fs::read_to_string(&readback).expect("readback file should exist");
     let created_path = created_path.trim();
     let expected_scratch = workspace
-        .join(".horizon-sandbox-tmp")
+        .join(crate::SCRATCH_DIR_NAME)
         .canonicalize()
         .expect("spawn should have created the scratch dir");
     assert!(

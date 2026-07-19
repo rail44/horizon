@@ -119,7 +119,7 @@ pub(crate) fn spawn(
     // `linux::tests` for the regression coverage.
     if !command_already_sets_tmpdir(&command) {
         if let Some(root) = policy.writable_roots.first() {
-            let scratch = root.join(".horizon-sandbox-tmp");
+            let scratch = root.join(crate::SCRATCH_DIR_NAME);
             std::fs::create_dir_all(&scratch)?;
             wrapped.env("TMPDIR", &scratch);
         }

@@ -57,6 +57,14 @@ pub use linux::NonoReport;
 
 use std::process::{Child, Command};
 
+/// Name of the TMPDIR-parity scratch directory the Linux backend provisions
+/// under a sandboxed command's first writable root (see `linux::spawn`'s
+/// TMPDIR comment) -- e.g. `<root>/.horizon-sandbox-tmp`. Exposed so callers
+/// that manage the writable root's lifecycle themselves (e.g.
+/// `horizon-sessiond`'s isolated-worktree cleanup) can special-case this
+/// specific directory without duplicating the literal.
+pub const SCRATCH_DIR_NAME: &str = ".horizon-sandbox-tmp";
+
 /// A spawned sandboxed process, plus whatever per-backend containment
 /// report is available.
 ///
