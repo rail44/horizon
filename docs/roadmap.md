@@ -145,6 +145,23 @@ lands:
   markers on output JSON (follow-ups: backlog 55 double-row artifact,
   56 niceness gap). Owner tier-1 dogfooding is the current gate;
   remaining legs are the network layer and the judge.
+  **Sandbox backend decided 2026-07-19: migrate `horizon-sandbox`
+  from the self-built bwrap+seccompiler+landlock stack to depend on
+  nono (`nono` 0.68, Apache-2.0) -- full adoption, both OSes
+  (backlog 60, option C).** An integration spike
+  (`experiments/nono-spike/`) de-risked it on this host: apply-to-self
+  needs no `pre_exec` (nono slots into the backend's existing
+  throwaway-thread spawn shape), fs/network/signal containment and the
+  leg-4a UDS-bridge proxy all survive, TMPDIR replaces the private
+  tmpfs. Accepted regression: no PID/mount namespace (host process
+  list visible, same category as the accepted `/proc` environ read).
+  Migration keeps `horizon-sandbox`'s public API
+  (`SandboxPolicy`/`spawn`/`is_available`/denial detection) stable so
+  `horizon-agent` is untouched. Linux backend migrates + is verified
+  on this host first; macOS backend follows (verifiable only on a
+  mac). The paused network-domain approval (leg 4b) resumes on the
+  nono foundation -- its policy layer is backend-agnostic (spike-
+  confirmed), so only the spawn wiring rebases.
 - **Agent web search / public-code search** (backlog 18/19). Needs
   its own consultation: provider, trust-boundary/approval design.
 - **portable-pty fork-safety root fix** (backlog 28/31).

@@ -457,3 +457,32 @@ entries live in `backlog-resolved.md` keeping their original numbers
     already has) instead of `pre_exec` from multi-threaded sessiond.
     Net: option C is more viable than first recorded; A/B/C remains
     owner-deferred.
+    **DECIDED 2026-07-19: option C (full nono adoption, both OSes).**
+    An integration spike (`experiments/nono-spike/`, branch
+    `worktree-agent-afb6d8b9e874320c8`, commit `533554b` — standalone
+    project, root workspace untouched) resolved the two standing
+    obstacles empirically on this host (kernel 7.0.9, Landlock ABI V6):
+    (1) apply-to-self needs NO `pre_exec` — nono's `Sandbox::apply_auto`
+    is a plain blocking call on an ordinary thread, and our CURRENT
+    bwrap backend already spawns from a throwaway `std::thread::spawn`
+    that applies seccomp then spawns+joins the child
+    (`horizon-sandbox/src/linux/mod.rs`), so nono drops into the exact
+    same thread shape — verified thread-scoped, no TSYNC leakage to
+    sibling threads; (2) the 278-crate dependency tax is accepted by
+    the owner (single-process async is the codebase's direction anyway,
+    so tokio/hyper become shared, not a tax). Spike proved fs/network/
+    signal containment, TMPDIR-replaces-tmpfs, and that the leg-4a
+    UDS-bridge proxy survives on nono needing only the baseline `/` Read
+    grant (simpler than bwrap's bind-mount plumbing). The one remaining
+    real regression — no PID/mount/UTS/IPC namespace, so `ps`/`/proc`
+    show the host's full process list — the owner accepts as the same
+    category as the already-accepted `/proc/<pid>/environ` visibility.
+    New capabilities nono ADDS over bwrap+seccompiler: explicit signal
+    scoping (`SignalMode`→`LANDLOCK_SCOPE_SIGNAL`) and works where
+    unprivileged userns is disabled (bwrap can't run there at all).
+    Spike friction to carry into implementation: nono's
+    `allow_unix_socket` is INERT under library-only `apply_auto` (needs
+    the seccomp-notify supervisor) — irrelevant for us since baseline
+    Read covers the bridge socket. Follow-up: macOS backend can only be
+    verified on a mac (spike host is Linux). Migration tracked in the
+    roadmap's approval-trust-model entry.
