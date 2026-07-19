@@ -88,6 +88,21 @@ impl Routes {
         self.state.lock().unwrap().terminal.remove(&session_id);
     }
 
+    /// Every terminal session this client currently has an update route
+    /// for -- i.e. every live, attached terminal session, regardless of
+    /// which pane (if any) is showing it. The broadcast target for a live
+    /// theme apply's color-scheme re-push (`SessiondHandle::
+    /// broadcast_terminal_color_scheme`).
+    pub(super) fn terminal_session_ids(&self) -> Vec<Uuid> {
+        self.state
+            .lock()
+            .unwrap()
+            .terminal
+            .keys()
+            .copied()
+            .collect()
+    }
+
     pub(super) fn set_pending_session_list(
         &self,
         sender: Sender<Result<Vec<wire::SessionSummary>, String>>,

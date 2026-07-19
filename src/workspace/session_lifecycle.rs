@@ -231,9 +231,12 @@ impl WorkspaceShell {
                 self.workspace.pane_kind(pane_id),
                 Some(PaneKind::View(ViewKind::ThemeSettings))
             ) {
+                let sessiond = self.sessiond.clone();
                 self.panes.insert(
                     pane_id,
-                    PaneView::ThemeSettings(cx.new(|cx| ThemeSettingsView::new(window, cx))),
+                    PaneView::ThemeSettings(
+                        cx.new(|cx| ThemeSettingsView::new(sessiond, window, cx)),
+                    ),
                 );
             }
         }

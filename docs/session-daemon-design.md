@@ -181,7 +181,9 @@ foreseen at the design-decision stage:
   (the same "crate-local newtype" pattern the task brief pointed at for
   `SessionId`, applied to config instead since `SessionId` never actually
   crosses into this crate). `TerminalCore::set_color_scheme` pushes the
-  host's live theme in once, at `TerminalSession::spawn` time.
+  host's live theme in at `TerminalSession::spawn` time, and again on every
+  live theme apply (`Reload Config`/the theme settings view) via
+  `TerminalCommand::SetColorScheme` -- see the bullet below.
 - **Per-session live OSC 4/10/11/12 palette overrides ride the frame and
   are honored at paint time.** The initial cut left a narrowing here:
   `core::render::resolve_color` used to check `Term::colors()` (the live
@@ -201,15 +203,15 @@ foreseen at the design-decision stage:
   the app's literal override for that slot). `TerminalCore`'s own OSC
   4/10/11/12 *query replies* are unaffected — a separate, still-crate-local
   read of the same `Term::colors()` state.
-- **`Reload Config` does not push a live theme update into already-spawned
-  sessions' `TerminalCoreOptions`.** `set_color_scheme` is called once, at
-  spawn; nothing currently calls it again on reload (matching the
-  pre-extraction behavior for *cell* colors, which also only picked up a
-  new theme on the next PTY-driven snapshot, not instantly — floem's
-  `TextLayout` bakes a glyph's color in at shape time regardless). Only OSC
-  4/10/11/12 *query-reply* defaults are affected by this gap; wiring a
-  broadcast to live sessions on reload is future work if it matters in
-  practice.
+- **A live theme apply re-pushes the color scheme to already-spawned
+  sessions.** `Reload Config` and the theme settings view's live apply
+  both call `SessiondHandle::broadcast_terminal_color_scheme`, which sends
+  a fresh `TerminalCommand::SetColorScheme` to every attached terminal
+  session; `crates/horizon-sessiond` demuxes it onto the session loop's own
+  channel, which calls `TerminalCore::set_color_scheme` again. Only OSC
+  4/10/11/12 *query-reply* defaults needed this — painted cell colors
+  already pick up a live theme change on the next PTY-driven snapshot via
+  `TerminalFrame`'s logical colors, independent of this push.
 - **`TerminalEvents` widened from `pub(crate)` to `pub`.** `TerminalCore::
   write_vt`/`flush_sync_update` are necessarily part of the crate's public
   API (the host's `initial_terminal_text` calls `write_vt` directly), so

@@ -43,6 +43,10 @@ pub struct CoreReceivers {
     pub key_rx: Receiver<(KeyCode, Modifiers, KeyEventKind)>,
     pub selection_rx: Receiver<SelectionCommand>,
     pub focus_rx: Receiver<bool>,
+    /// Demuxed `TerminalCommand::SetColorScheme` -- a live theme apply's
+    /// re-push of the host's color scheme into this already-running
+    /// session (see that variant's doc comment).
+    pub color_scheme_rx: Receiver<TerminalColorScheme>,
 }
 
 pub struct CoreSenders {
@@ -53,6 +57,7 @@ pub struct CoreSenders {
     pub key_tx: Sender<(KeyCode, Modifiers, KeyEventKind)>,
     pub selection_tx: Sender<SelectionCommand>,
     pub focus_tx: Sender<bool>,
+    pub color_scheme_tx: Sender<TerminalColorScheme>,
 }
 
 /// How long the session runtime waits before flushing a burst of core
@@ -168,6 +173,7 @@ pub fn run_terminal_core(
         key_rx,
         selection_rx,
         focus_rx,
+        color_scheme_rx,
     } = receivers;
     let mut core = TerminalCore::with_scrollback(size, options.scrollback_lines);
     core.set_color_scheme(options.color_scheme);
@@ -268,6 +274,17 @@ pub fn run_terminal_core(
                     let _ = command_tx.send(TerminalCommand::Input(bytes));
                 }
             }
+            recv(color_scheme_rx) -> scheme => {
+                let Ok(scheme) = scheme else {
+                    return;
+                };
+                // Only OSC 4/10/11/12 query-reply resolution reads this
+                // (`core::color::resolve_query_color`) -- painted cell
+                // colors already come from the host's live `theme::scheme`
+                // on every repaint, so there is no visible grid state to
+                // notify a snapshot for here.
+                core.set_color_scheme(scheme);
+            }
             recv(pty_rx) -> bytes => {
                 let Ok(bytes) = bytes else {
                     return;
@@ -351,6 +368,7 @@ mod tests {
             key_rx: crossbeam_channel::never(),
             selection_rx: crossbeam_channel::never(),
             focus_rx: crossbeam_channel::never(),
+            color_scheme_rx: crossbeam_channel::never(),
         };
 
         std::thread::spawn(move || {
@@ -409,6 +427,7 @@ mod tests {
             key_rx,
             selection_rx: crossbeam_channel::never(),
             focus_rx: crossbeam_channel::never(),
+            color_scheme_rx: crossbeam_channel::never(),
         };
 
         std::thread::spawn(move || {
@@ -468,6 +487,7 @@ mod tests {
             key_rx: crossbeam_channel::never(),
             selection_rx: crossbeam_channel::never(),
             focus_rx: crossbeam_channel::never(),
+            color_scheme_rx: crossbeam_channel::never(),
         };
 
         std::thread::spawn(move || {
@@ -551,6 +571,7 @@ mod tests {
             key_rx: crossbeam_channel::never(),
             selection_rx: crossbeam_channel::never(),
             focus_rx: crossbeam_channel::never(),
+            color_scheme_rx: crossbeam_channel::never(),
         };
 
         std::thread::spawn(move || {
@@ -602,6 +623,7 @@ mod tests {
             key_rx: crossbeam_channel::never(),
             selection_rx,
             focus_rx: crossbeam_channel::never(),
+            color_scheme_rx: crossbeam_channel::never(),
         };
 
         std::thread::spawn(move || {
@@ -672,6 +694,7 @@ mod tests {
             key_rx: crossbeam_channel::never(),
             selection_rx: crossbeam_channel::never(),
             focus_rx,
+            color_scheme_rx: crossbeam_channel::never(),
         };
 
         std::thread::spawn(move || {
@@ -714,5 +737,123 @@ mod tests {
             .recv_timeout(Duration::from_millis(500))
             .expect("focus-out should be reported once mode 1004 is enabled");
         assert!(matches!(focus_out, TerminalCommand::Input(bytes) if bytes == b"\x1b[O"));
+    }
+
+    /// End-to-end regression coverage for the live theme-apply re-push
+    /// (see `TerminalCommand::SetColorScheme`'s doc comment): a scheme sent
+    /// on `color_scheme_tx` demuxes onto `color_scheme_rx` and reaches
+    /// `TerminalCore::set_color_scheme` on an already-running session, so a
+    /// subsequent OSC 11 query replies with the newly pushed background
+    /// instead of the spawn-time default. Also covers the precedent this
+    /// re-push must preserve: an app-set OSC 11 override (`Term::colors()`)
+    /// still wins over a *second* re-push, exactly as it already wins over
+    /// the very first (spawn-time) scheme.
+    ///
+    /// There is no update the push itself produces to synchronize on (a
+    /// color-scheme swap alone never touches the visible grid -- see the
+    /// `color_scheme_rx` arm's doc comment), so each assertion below polls
+    /// with a fresh query rather than assuming the push has already landed
+    /// by the time the very first query is sent.
+    #[test]
+    fn run_terminal_core_repushes_the_color_scheme_to_a_running_session() {
+        use alacritty_terminal::vte::ansi::Rgb;
+
+        let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
+        let (command_tx, command_rx) = crossbeam_channel::unbounded();
+        let (update_tx, update_rx) = crossbeam_channel::unbounded();
+        let (color_scheme_tx, color_scheme_rx) = crossbeam_channel::unbounded();
+        let receivers = CoreReceivers {
+            resize_rx: crossbeam_channel::never(),
+            scroll_rx: crossbeam_channel::never(),
+            mouse_rx: crossbeam_channel::never(),
+            paste_rx: crossbeam_channel::never(),
+            key_rx: crossbeam_channel::never(),
+            selection_rx: crossbeam_channel::never(),
+            focus_rx: crossbeam_channel::never(),
+            color_scheme_rx,
+        };
+
+        std::thread::spawn(move || {
+            run_terminal_core(
+                TerminalSize::new(20, 10),
+                TerminalCoreOptions::default(),
+                pty_rx,
+                receivers,
+                command_tx,
+                update_tx,
+            );
+        });
+
+        // Drain the startup snapshot.
+        update_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("startup snapshot");
+
+        // Push a scheme distinct from `TerminalColorScheme::default()` and
+        // poll an OSC 11 query until the reply reflects it.
+        let repushed = Rgb {
+            r: 10,
+            g: 20,
+            b: 30,
+        };
+        color_scheme_tx
+            .send(TerminalColorScheme {
+                background: repushed,
+                ..TerminalColorScheme::default()
+            })
+            .unwrap();
+        let expected_repushed = format!(
+            "\x1b]11;rgb:{0:02x}{0:02x}/{1:02x}{1:02x}/{2:02x}{2:02x}\x07",
+            repushed.r, repushed.g, repushed.b
+        )
+        .into_bytes();
+        assert!(
+            poll_osc11_reply(&pty_tx, &command_rx, &expected_repushed),
+            "OSC 11 query should reply with the re-pushed background"
+        );
+
+        // The attached app now sets its own OSC 11 override.
+        pty_tx.send(b"\x1b]11;#010203\x07".to_vec()).unwrap();
+
+        // A second re-push must not clobber that override.
+        color_scheme_tx
+            .send(TerminalColorScheme {
+                background: Rgb {
+                    r: 90,
+                    g: 90,
+                    b: 90,
+                },
+                ..TerminalColorScheme::default()
+            })
+            .unwrap();
+        let expected_override = b"\x1b]11;rgb:0101/0202/0303\x07".to_vec();
+        assert!(
+            poll_osc11_reply(&pty_tx, &command_rx, &expected_override),
+            "an app-set OSC 11 override must keep winning over a re-pushed scheme"
+        );
+    }
+
+    /// Sends a fresh OSC 11 query and retries (bounded by a 2s deadline)
+    /// until a reply matching `expected` arrives -- the color-scheme
+    /// re-push test's synchronization primitive, since a scheme push alone
+    /// produces no `TerminalUpdate` to wait on instead (see that test's
+    /// doc comment).
+    fn poll_osc11_reply(
+        pty_tx: &Sender<Vec<u8>>,
+        command_rx: &Receiver<TerminalCommand>,
+        expected: &[u8],
+    ) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            let _ = pty_tx.send(b"\x1b]11;?\x07".to_vec());
+            if let Ok(TerminalCommand::Input(bytes)) =
+                command_rx.recv_timeout(Duration::from_millis(50))
+            {
+                if bytes == expected {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }

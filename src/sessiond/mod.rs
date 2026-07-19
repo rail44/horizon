@@ -286,6 +286,29 @@ impl SessiondHandle {
         }
     }
 
+    /// Re-pushes a live theme apply's color scheme
+    /// (`theme::terminal_color_scheme()`) to every terminal session this
+    /// client currently routes updates for, so each one's `TerminalCore`
+    /// re-resolves OSC 10/11/12 query replies against it instead of its
+    /// spawn-time snapshot (`TerminalCommand::SetColorScheme`'s doc
+    /// comment). Fire-and-forget, same as every other per-session command
+    /// send here -- a session that has since exited just has its envelope
+    /// dropped daemon-side.
+    pub(crate) fn broadcast_terminal_color_scheme(
+        &self,
+        scheme: horizon_terminal_core::TerminalColorScheme,
+    ) {
+        for session_id in self.routes.terminal_session_ids() {
+            let command = TerminalCommand::SetColorScheme(scheme);
+            match encode_terminal_command(session_id, &command) {
+                Ok(envelope) => {
+                    let _ = self.outgoing.send(envelope);
+                }
+                Err(error) => eprintln!("failed to encode terminal color-scheme push: {error}"),
+            }
+        }
+    }
+
     pub(crate) fn terminal_list(&self) -> Result<Vec<TerminalSummary>, String> {
         let request_id = Uuid::new_v4();
         let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);

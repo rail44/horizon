@@ -38,6 +38,19 @@ impl WorkspaceShell {
         self.agent_sessions.get(&session_id).cloned()
     }
 
+    /// Re-pushes the live theme's terminal color scheme to every running
+    /// terminal session, so OSC 10/11/12 query replies reflect a live
+    /// theme apply instead of each session's spawn-time snapshot. Called
+    /// right after `Reload Config` swaps the live scheme
+    /// (`theme::reload_from`); the theme settings view's own live-apply
+    /// path (`src/theme_settings/mod.rs`) calls the same
+    /// `SessiondHandle` method directly, since it holds its own clone.
+    fn broadcast_terminal_color_scheme(&self) {
+        if let Some(sessiond) = &self.sessiond {
+            sessiond.broadcast_terminal_color_scheme(theme::terminal_color_scheme());
+        }
+    }
+
     /// The M3 dispatch point: every surface (palette, keybindings, and
     /// later the control plane) funnels through here — the GPUI
     /// counterpart of the Floem shell's `execute_command`.
@@ -106,6 +119,7 @@ impl WorkspaceShell {
                     theme::apply_gpui_component_theme(cx);
                     super::bindings::apply_bindings(cx, &raw);
                     window.refresh();
+                    self.broadcast_terminal_color_scheme();
                 }
                 Err(error) => eprintln!("reload-config failed: {error}"),
             },
