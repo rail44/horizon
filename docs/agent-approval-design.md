@@ -174,8 +174,11 @@ product-owned API. Decisions:
   hostname — no network namespace to resolve through; `curl: (7) ... Could
   not connect to server` for a literal IP), indistinguishable from the
   pre-4a `Disabled` experience. Containment re-proven end-to-end through
-  the actual bash-tool call path (`crates/horizon-agent/src/tools/
-  tests.rs`), not just the raw sandbox layer: an empty allowlist still
+  the actual bash-tool call path (`crates/horizon-agent/tests/
+  tier1_network_containment.rs` — an integration test, not a lib unit
+  test: `env!("CARGO_BIN_EXE_bridge_probe")` is only baked in and
+  guaranteed built for that compilation kind, not a crate's own unit
+  tests), not just the raw sandbox layer: an empty allowlist still
   refuses a real listening decoy host, and direct egress (bypassing the
   bridge) still hits the unconditional seccomp cut. Remaining for
   config/judge legs: a `[network]`/allowlist config surface, dynamic
