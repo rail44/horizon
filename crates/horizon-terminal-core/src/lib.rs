@@ -10,9 +10,9 @@
 //!
 //! Out of scope, deliberately: PTY ownership (`portable-pty`, threads,
 //! environment setup) stays in `horizon-sessiond`, while color *resolution*
-//! against a live theme stays in Horizon's `terminal::view`. This crate only
-//! ever sees bytes in, and hands back logical colors/commands/updates over
-//! plain channels.
+//! against a live theme stays in Horizon's `theme::resolve`
+//! (`src/theme/ansi.rs`). This crate only ever sees bytes in, and hands
+//! back logical colors/commands/updates over plain channels.
 
 mod contract;
 mod core;

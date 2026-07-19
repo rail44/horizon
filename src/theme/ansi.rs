@@ -1,7 +1,7 @@
-//! Terminal-facing color resolution: the `[theme.ansi]`-derived 16-slot
-//! palette, indexed/256-color and OSC 4/10/11/12 lookups, mirroring
-//! `terminal::view::color::resolve_color`'s semantics against the same
-//! live [`super::scheme::scheme`].
+//! Terminal-facing color resolution ([`resolve`], plus the core-side
+//! [`terminal_color_scheme`] mirror): the `[theme.ansi]`-derived 16-slot
+//! palette, indexed/256-color and OSC 4/10/11/12 lookups, all against the
+//! same live [`super::scheme::scheme`].
 
 use alacritty_terminal::vte::ansi::Rgb;
 use gpui::{rgb, Hsla};

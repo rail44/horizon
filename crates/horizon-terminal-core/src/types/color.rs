@@ -16,9 +16,9 @@ use serde::{Deserialize, Serialize};
 /// the `TerminalFrame`/`TerminalSpan` boundary now, instead of a resolved
 /// `[u8; 3]` RGB triple — resolving a logical color against a theme (the app
 /// default, or in the future a per-client one) is the UI's job
-/// (`terminal::view`), not this crate's. A color a terminal app redefined at
-/// runtime via OSC 4/10/11/12 (`Term::colors()`'s live per-session
-/// overrides) still affects cell *rendering*: `TerminalFrame::palette_overrides`
+/// (`theme::resolve`, `src/theme/ansi.rs`), not this crate's. A color a
+/// terminal app redefined at runtime via OSC 4/10/11/12 (`Term::colors()`'s
+/// live per-session overrides) still affects cell *rendering*: `TerminalFrame::palette_overrides`
 /// carries that sparse index→RGB table alongside the logical colors, and the
 /// UI consults it before falling back to the theme. `TerminalCore`'s own
 /// OSC 4/10/11/12 *query replies* (`core::color::resolve_query_color`) use

@@ -12,8 +12,9 @@ pub struct TerminalSize {
     /// Grid width in pixels (`cols * cell_width`), forwarded to the PTY's
     /// `ws_xpixel` field so every process reading `TIOCGWINSZ` — not just
     /// Horizon's own renderer — sees real geometry instead of zeros. Derived
-    /// in `terminal::view` from measured font metrics; `0` means "not yet
-    /// known" (e.g. before the view has laid out once).
+    /// in the host's terminal view (`src/terminal/mod.rs`) from measured
+    /// font metrics; `0` means "not yet known" (e.g. before the view has
+    /// laid out once).
     pub pixel_width: u16,
     /// Grid height in pixels (`rows * line_height`); see `pixel_width`.
     pub pixel_height: u16,
@@ -34,8 +35,9 @@ impl TerminalSize {
     /// Character-cell geometry only, pixel dimensions left at `0`. Used by
     /// tests (both in this crate and in the `horizon` host crate, which
     /// cannot see this crate's own `#[cfg(test)]` items) that only care
-    /// about `cols`/`rows`; production pixel geometry is derived in
-    /// `terminal::view` from measured font metrics.
+    /// about `cols`/`rows`; production pixel geometry is derived in the
+    /// host's terminal view (`src/terminal/mod.rs`) from measured font
+    /// metrics.
     pub fn new(cols: u16, rows: u16) -> Self {
         Self {
             cols,

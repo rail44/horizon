@@ -1,7 +1,10 @@
 # GPUI Migration Design
 
 Status: **decided with the owner 2026-07-10** (including the
-layout-tree question below). Follows the GO decision in
+layout-tree question below); **since completed** — `shell-gpui/` has been
+folded into `src/`, and this document is the historical record (its
+`shell-gpui/` references are left in the present tense of the migration).
+Follows the GO decision in
 `docs/gpui-migration-consideration.md`; prior art in
 `docs/research/gpui-terminal-implementations.md`. This doc decides how
 the Floem shell (`src/`, 112 files) is rewritten onto GPUI +

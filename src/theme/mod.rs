@@ -1,5 +1,4 @@
-//! Logical-color resolution, mirroring the semantics of the Floem
-//! shell's `terminal::view::color::resolve_color` (palette overrides
+//! Logical-color resolution ([`resolve`], from `ansi`: palette overrides
 //! win, then the scheme, with the 256-color cube/grayscale computed).
 //! The scheme is loaded from the shared config crate (`[theme]` +
 //! `[theme.ansi]` in config.toml) over Horizon's built-in defaults,
