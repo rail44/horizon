@@ -10,11 +10,64 @@ use futures::StreamExt;
 use gpui::*;
 use horizon_terminal_core::{
     apply_frame_diff, ClipboardDestination, KeyEventKind, TerminalCommand, TerminalFrame,
-    TerminalMouseReport, TerminalScroll, TerminalSize, TerminalUpdate,
+    TerminalFrameDiff, TerminalMouseReport, TerminalScroll, TerminalSize, TerminalUpdate,
 };
 use horizon_workspace::SessionId;
 
 use crate::sessiond::TerminalSessionHandle;
+
+/// Per-row content generations for the visible grid — the surviving form
+/// of the wire's row-level change information (goal 3 of
+/// `docs/terminal-protocol-goals.md`): `apply_frame_update` used to
+/// flatten every `FrameDiff` into a full frame and drop `changed_rows` on
+/// the floor, leaving downstream consumers no way to know *which* rows
+/// changed. A row's generation moves exactly when its content is replaced
+/// — by a row diff, by rows a resize adds, or by a full snapshot (which
+/// bumps everything, mirroring its repaint-everything semantics) — so a
+/// row-keyed render cache (the goals doc's planned `ShapedLine` cache,
+/// this table's intended consumer) can invalidate per row instead of
+/// re-shaping every visible row every frame. Kept free-standing and
+/// GPUI-free, like [`RuntimeReachability`], so its transitions are
+/// unit-testable without a `Context`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct RowGenerations {
+    /// Monotonic stamp, advanced once per applied frame update.
+    generation: u64,
+    rows: Vec<u64>,
+}
+
+impl RowGenerations {
+    /// A full snapshot replaces every row. Correctness never depends on
+    /// diff information (the snapshot path is goal 1's resync anchor), so
+    /// it must invalidate everything.
+    fn apply_snapshot(&mut self, row_count: usize) {
+        self.generation += 1;
+        self.rows.clear();
+        self.rows.resize(row_count, self.generation);
+    }
+
+    /// A diff replaces exactly its `changed_rows`, plus every row a
+    /// `row_count` growth adds (`apply_frame_diff` materializes those as
+    /// fresh empty lines); rows a shrink removes just disappear. Rows the
+    /// diff never touched keep their generation — that is the entire
+    /// point.
+    fn apply_diff(&mut self, diff: &TerminalFrameDiff) {
+        self.generation += 1;
+        self.rows.resize(diff.row_count, self.generation);
+        for changed in &diff.changed_rows {
+            if let Some(row) = self.rows.get_mut(changed.index) {
+                *row = self.generation;
+            }
+        }
+    }
+
+    /// The generation table, indexed by viewport row: compare a row's
+    /// stamp against the one captured with a cached artifact to decide
+    /// staleness.
+    pub(crate) fn rows(&self) -> &[u64] {
+        &self.rows
+    }
+}
 
 /// Whether the `TerminalCommand` channel to `horizon-sessiond` is known dead.
 /// Mirrors `agent::session::RuntimeReachability` (backlog #35): a failed send
@@ -47,6 +100,10 @@ impl RuntimeReachability {
 pub(crate) struct TerminalSession {
     tx: crossbeam_channel::Sender<TerminalCommand>,
     pub(crate) frame: Option<TerminalFrame>,
+    /// Which rows of `frame` changed, as per-row generations — see
+    /// [`RowGenerations`]. Updated in lockstep with `frame` by
+    /// `apply_frame_update`.
+    row_generations: RowGenerations,
     /// The workspace session id this terminal belongs to. Used to report shell
     /// exit back to the shell so it can remove the session from the model.
     session_id: SessionId,
@@ -118,7 +175,11 @@ impl TerminalSession {
                         .set(session.runtime.get().after_event_received());
                     match update {
                         update @ (TerminalUpdate::Snapshot(_) | TerminalUpdate::FrameDiff(_)) => {
-                            if apply_frame_update(&mut session.frame, &update) {
+                            if apply_frame_update(
+                                &mut session.frame,
+                                &mut session.row_generations,
+                                &update,
+                            ) {
                                 let frame = session.frame.as_ref().unwrap();
                                 if let Some(path) = &dump_path {
                                     let _ = std::fs::write(path, super::dump_frame(frame));
@@ -185,6 +246,7 @@ impl TerminalSession {
         Self {
             tx: handle.sender(),
             frame: None,
+            row_generations: RowGenerations::default(),
             session_id,
             exited: Cell::new(false),
             error: RefCell::new(None),
@@ -193,6 +255,18 @@ impl TerminalSession {
             exit_tx,
             _wire: handle,
         }
+    }
+
+    /// Read access to the per-row generation table (see
+    /// [`RowGenerations`]). No consumer yet by design: this is goal 3's
+    /// plumbing, published for the planned row-keyed `ShapedLine` cache
+    /// (`docs/terminal-protocol-goals.md`, "Derived near-term work") to
+    /// key invalidation on. `#[allow(dead_code)]` follows this codebase's
+    /// pattern for deliberately-kept API surface (e.g.
+    /// `theme::surface_raised`).
+    #[allow(dead_code)]
+    pub(crate) fn row_generations(&self) -> &[u64] {
+        self.row_generations.rows()
     }
 
     pub(crate) fn exited(&self) -> bool {
@@ -301,10 +375,15 @@ fn write_to_primary(cx: &mut Context<TerminalSession>, text: String) {
 #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 fn write_to_primary(_cx: &mut Context<TerminalSession>, _text: String) {}
 
-fn apply_frame_update(frame: &mut Option<TerminalFrame>, update: &TerminalUpdate) -> bool {
+fn apply_frame_update(
+    frame: &mut Option<TerminalFrame>,
+    generations: &mut RowGenerations,
+    update: &TerminalUpdate,
+) -> bool {
     match update {
         TerminalUpdate::Snapshot(snapshot) => {
             *frame = Some(snapshot.clone());
+            generations.apply_snapshot(snapshot.lines.len());
             true
         }
         TerminalUpdate::FrameDiff(diff) => {
@@ -312,6 +391,7 @@ fn apply_frame_update(frame: &mut Option<TerminalFrame>, update: &TerminalUpdate
                 return false;
             };
             *frame = Some(apply_frame_diff(baseline, diff));
+            generations.apply_diff(diff);
             true
         }
         _ => false,
@@ -323,8 +403,11 @@ fn apply_frame_update(frame: &mut Option<TerminalFrame>, update: &TerminalUpdate
 // otherwise shadow the standard `#[test]` attribute in this module.
 #[cfg(test)]
 mod tests {
-    use super::{apply_frame_update, RuntimeReachability};
-    use horizon_terminal_core::{compute_frame_diff, TerminalFrame, TerminalUpdate};
+    use super::{apply_frame_update, RowGenerations, RuntimeReachability};
+    use horizon_terminal_core::{
+        compute_frame_diff, TerminalFrame, TerminalSelection, TerminalSelectionPoint,
+        TerminalUpdate,
+    };
 
     #[test]
     fn starts_reachable() {
@@ -373,12 +456,15 @@ mod tests {
         let first = TerminalFrame::from_text("first".to_string());
         let second = TerminalFrame::from_text("second".to_string());
         let mut frame = None;
+        let mut generations = RowGenerations::default();
         assert!(apply_frame_update(
             &mut frame,
+            &mut generations,
             &TerminalUpdate::Snapshot(first.clone())
         ));
         assert!(apply_frame_update(
             &mut frame,
+            &mut generations,
             &TerminalUpdate::FrameDiff(compute_frame_diff(&first, &second))
         ));
         assert_eq!(frame, Some(second));
@@ -389,10 +475,143 @@ mod tests {
         let first = TerminalFrame::from_text("first".to_string());
         let second = TerminalFrame::from_text("second".to_string());
         let mut frame = None;
+        let mut generations = RowGenerations::default();
         assert!(!apply_frame_update(
             &mut frame,
+            &mut generations,
             &TerminalUpdate::FrameDiff(compute_frame_diff(&first, &second))
         ));
         assert_eq!(frame, None);
+        assert!(generations.rows().is_empty());
+    }
+
+    /// Drives `apply_frame_update` the same way the pump does and reads
+    /// the surviving change information back out of [`RowGenerations`].
+    fn apply(
+        frame: &mut Option<TerminalFrame>,
+        generations: &mut RowGenerations,
+        update: TerminalUpdate,
+    ) {
+        assert!(apply_frame_update(frame, generations, &update));
+    }
+
+    #[test]
+    fn a_snapshot_bumps_every_row_generation() {
+        let mut frame = None;
+        let mut generations = RowGenerations::default();
+        apply(
+            &mut frame,
+            &mut generations,
+            TerminalUpdate::Snapshot(TerminalFrame::from_text("one\ntwo".to_string())),
+        );
+        let first = generations.rows().to_vec();
+        assert_eq!(first.len(), 2);
+        assert!(first.windows(2).all(|pair| pair[0] == pair[1]));
+
+        // A second snapshot — even with identical content — bumps every
+        // row again: the snapshot path is the resync anchor and must
+        // invalidate everything.
+        apply(
+            &mut frame,
+            &mut generations,
+            TerminalUpdate::Snapshot(TerminalFrame::from_text("one\ntwo".to_string())),
+        );
+        let second = generations.rows().to_vec();
+        assert!(second
+            .iter()
+            .zip(&first)
+            .all(|(after, before)| after > before));
+    }
+
+    #[test]
+    fn a_row_diff_bumps_only_the_changed_rows() {
+        let old = TerminalFrame::from_text("aaa\nbbb\nccc".to_string());
+        let new = TerminalFrame::from_text("aaa\nBBB\nccc".to_string());
+        let mut frame = None;
+        let mut generations = RowGenerations::default();
+        apply(
+            &mut frame,
+            &mut generations,
+            TerminalUpdate::Snapshot(old.clone()),
+        );
+        let before = generations.rows().to_vec();
+
+        apply(
+            &mut frame,
+            &mut generations,
+            TerminalUpdate::FrameDiff(compute_frame_diff(&old, &new)),
+        );
+        let after = generations.rows();
+        assert_eq!(after[0], before[0]);
+        assert!(after[1] > before[1]);
+        assert_eq!(after[2], before[2]);
+    }
+
+    /// The v7 semantic selection makes drags row-free on the wire; the
+    /// generation table must reflect that — a selection-only diff leaves
+    /// every row's generation untouched, which is exactly what lets a
+    /// future row cache skip re-shaping during selection drags.
+    #[test]
+    fn a_selection_only_diff_bumps_no_rows() {
+        let unselected = TerminalFrame::from_text("one\ntwo".to_string());
+        let mut selected = unselected.clone();
+        selected.selection = Some(TerminalSelection {
+            start: TerminalSelectionPoint { row: 0, col: 0 },
+            end: TerminalSelectionPoint { row: 1, col: 2 },
+        });
+
+        let diff = compute_frame_diff(&unselected, &selected);
+        assert!(diff.changed_rows.is_empty());
+
+        let mut frame = None;
+        let mut generations = RowGenerations::default();
+        apply(
+            &mut frame,
+            &mut generations,
+            TerminalUpdate::Snapshot(unselected),
+        );
+        let before = generations.rows().to_vec();
+
+        apply(
+            &mut frame,
+            &mut generations,
+            TerminalUpdate::FrameDiff(diff),
+        );
+        assert_eq!(generations.rows(), before.as_slice());
+        assert_eq!(frame.as_ref().unwrap().selection, selected.selection);
+    }
+
+    #[test]
+    fn a_resize_diff_stamps_added_rows_and_truncates_removed_ones() {
+        let short = TerminalFrame::from_text("one".to_string());
+        let long = TerminalFrame::from_text("one\ntwo\nthree".to_string());
+        let mut frame = None;
+        let mut generations = RowGenerations::default();
+        apply(
+            &mut frame,
+            &mut generations,
+            TerminalUpdate::Snapshot(short.clone()),
+        );
+        let before = generations.rows().to_vec();
+
+        apply(
+            &mut frame,
+            &mut generations,
+            TerminalUpdate::FrameDiff(compute_frame_diff(&short, &long)),
+        );
+        let grown = generations.rows().to_vec();
+        assert_eq!(grown.len(), 3);
+        assert_eq!(grown[0], before[0]);
+        assert!(grown[1] > before[0]);
+        assert!(grown[2] > before[0]);
+
+        apply(
+            &mut frame,
+            &mut generations,
+            TerminalUpdate::FrameDiff(compute_frame_diff(&long, &short)),
+        );
+        let shrunk = generations.rows();
+        assert_eq!(shrunk.len(), 1);
+        assert_eq!(shrunk[0], grown[0]);
     }
 }
