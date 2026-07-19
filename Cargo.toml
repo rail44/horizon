@@ -10,6 +10,7 @@ members = [
     "crates/horizon-config",
     "crates/horizon-workspace",
     "crates/horizon-winit-platform",
+    "crates/horizon-sandbox",
 ]
 
 [package]
