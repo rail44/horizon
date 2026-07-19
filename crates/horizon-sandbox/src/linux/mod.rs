@@ -82,10 +82,15 @@ pub(crate) fn spawn(
         .stdout(stdio.stdout)
         .stderr(stdio.stderr);
 
-    let network_filter = if policy.network == NetworkPolicy::Disabled {
-        Some(seccomp::build_network_cut_filter().map_err(SandboxError::Seccomp)?)
-    } else {
-        None
+    // `Proxied` gets the exact same seccomp cut as `Disabled` -- the whole
+    // point of the network-proxy leg is that AF_INET/AF_INET6/AF_PACKET
+    // stay denied even when a UNIX-socket bridge to a proxy is bind-mounted
+    // in (see `bwrap::build_args`'s `Proxied` arm); only `Enabled` skips it.
+    let network_filter = match &policy.network {
+        NetworkPolicy::Enabled => None,
+        NetworkPolicy::Disabled | NetworkPolicy::Proxied { .. } => {
+            Some(seccomp::build_network_cut_filter().map_err(SandboxError::Seccomp)?)
+        }
     };
 
     // Diagnostic only -- see module doc and `landlock.rs` for why this

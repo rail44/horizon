@@ -47,6 +47,20 @@ pub(crate) fn compose(policy: &SandboxPolicy) -> String {
         profile.push('\n');
     }
 
+    // Network-proxy leg (`docs/agent-approval-design.md`): the *only*
+    // egress rule for `Proxied` is outbound access to the specific
+    // bind-mounted bridge socket path -- everything else in `BASE_POLICY`'s
+    // deny-by-default stays in force, mirroring the Linux backend's
+    // seccomp-stays-cut-plus-one-UNIX-socket-hole shape
+    // (`linux::bwrap::build_args`'s `Proxied` arm). Not runtime-verified
+    // here (see module doc); string-level only.
+    if let NetworkPolicy::Proxied { bridge_socket } = &policy.network {
+        profile.push_str(&format!(
+            "(allow network-outbound (literal {}))\n",
+            sbpl_string_literal(bridge_socket)
+        ));
+    }
+
     // Baseline platform read access (dylib loading, /etc, /tmp, /dev,
     // standard system paths) so the sandboxed process can exec and run at
     // all, regardless of readable_scope.
@@ -125,6 +139,22 @@ mod tests {
     fn network_enabled_includes_network_fragment() {
         let profile = compose(&policy(vec![], NetworkPolicy::Enabled));
         assert!(profile.contains("system-socket"));
+    }
+
+    #[test]
+    fn network_proxied_omits_full_network_fragment_but_allows_the_bridge_socket() {
+        let profile = compose(&policy(
+            vec![],
+            NetworkPolicy::Proxied {
+                bridge_socket: "/tmp/horizon-sandbox-proxy.sock".into(),
+            },
+        ));
+        assert!(
+            !profile.contains("system-socket"),
+            "Proxied must not get the full network-enabled fragment"
+        );
+        assert!(profile
+            .contains("(allow network-outbound (literal \"/tmp/horizon-sandbox-proxy.sock\"))"));
     }
 
     #[test]

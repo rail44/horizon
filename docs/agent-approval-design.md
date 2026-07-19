@@ -106,6 +106,54 @@ product-owned API. Decisions:
   maintained, purpose-built MITM/CONNECT toolkit); the allowlist
   policy layer is ours. A request to a domain outside the allowlist
   surfaces as a boundary crossing (tier 2/3), one-time-approvable.
+  **Spike landed 2026-07-19 (`crates/horizon-sandbox-proxy`), reachability
+  proven, not the documented-fallback shape**: a sibling crate to
+  `horizon-sandbox` (kept separate because it's inherently async/
+  tokio+hyper-based — `hudsucker`'s `Proxy` — versus `horizon-sandbox`'s
+  deliberately synchronous, dependency-light per-OS containment layer).
+  `AllowlistProxy` wraps `hudsucker` bound to loopback TCP
+  (`127.0.0.1:0`), refusing a CONNECT (or absolute-form plain-HTTP
+  request) whose target host isn't on the allowlist by returning `403`
+  with a distinctive `x-horizon-sandbox-proxy-denial` header *before*
+  hudsucker's own CONNECT handling ever runs — `should_intercept_connect`/
+  `should_intercept_tls` are hardcoded `false`, so an allowed CONNECT
+  becomes a byte-for-byte tunnel (hudsucker rewinds its own
+  protocol-sniffing peek before falling through to plain
+  `TcpStream::connect` + `copy_bidirectional`), never a TLS-terminating
+  one. Reachability is the real UNIX-socket bridge, not the doc's
+  documented fallback: `NetworkPolicy` grew a third variant,
+  `Proxied { bridge_socket: PathBuf }`, alongside `Enabled`/`Disabled`
+  (`Disabled`'s behavior is untouched — the tier-1 bash path keeps
+  passing it unchanged); both backends give `Proxied` the exact same
+  network-syscall cut as `Disabled` (Linux: seccomp still denies
+  AF_INET/AF_INET6/AF_PACKET at `socket(2)`; macOS: no
+  `seatbelt_network_policy.sbpl` fragment), plus one additional
+  bind/rule for `bridge_socket` alone (Linux: `--ro-bind <path> <path>`,
+  reusing the existing bind helper; macOS: `(allow network-outbound
+  (literal "<path>"))`, string-tested only, matching that backend's
+  existing runtime-unverified posture). `horizon_sandbox_proxy::UdsBridge`
+  is the other half: a `UnixListener` at `bridge_socket` that relays raw
+  bytes into a fresh loopback TCP connection to the proxy — hudsucker
+  itself can only ever be bound to a `TcpListener`, so this is a thin
+  relay in front of it rather than a native UDS listener. Tests
+  (`crates/horizon-sandbox-proxy/tests/containment.rs`) spawn a *real*
+  bwrap-sandboxed process (via `horizon_sandbox::spawn`) whose only
+  network path is a bind-mounted bridge socket, and prove: it reaches a
+  real loopback origin when that origin's host is allowlisted; it is
+  refused (`403`, never even dialed) when attempting a *different*,
+  also-really-listening loopback origin through the very same bridge
+  (the containment invariant — proves the second host is unreachable,
+  not merely unrouted); an empty allowlist denies both; and a direct,
+  unbridged `/dev/tcp` connect attempt stays exactly as blocked under
+  `Proxied` as it is under `Disabled` today. Remaining for the
+  sessiond-wiring/config/judge legs: making this one long-lived
+  `AllowlistProxy`+`UdsBridge` pair a field on `horizon-sessiond`'s own
+  state (spawned once, shared across every sandboxed session, per the
+  owner's pinned lifecycle decision) instead of a per-test standalone
+  pair; a `[network]`/allowlist config surface; wiring the tier-1 bash
+  path (today hardcoded to `NetworkPolicy::Disabled`) to pick `Proxied`
+  when a session wants network; and the one-time new-domain-approval UX
+  that classifies on the `x-horizon-sandbox-proxy-denial` header.
 - **Denial UX** (converged pattern): detect the sandbox denial
   (exit-code/stderr signature), then surface "retry without sandbox?"
   through the normal approval flow — never silently block or bypass.
@@ -201,7 +249,11 @@ refactoring wave folds into this item.
 3. **Policy tiers**: per-call trust predicate; fs auto-approval inside
    isolated worktrees; sandboxed-bash auto-approval; denial-retry UX.
 4. **Network layer**: hudsucker-based allowlist proxy + OS-layer
-   egress lockdown; new-domain one-time approval.
+   egress lockdown; new-domain one-time approval. *Spike landed
+   2026-07-19 (`crates/horizon-sandbox-proxy`): the proxy, the
+   UNIX-socket bridge, and `NetworkPolicy::Proxied` all real (not the
+   documented fallback) — see the "Network is its own layer" bullet
+   above for the shape and what's left for sessiond-wiring/config/judge.*
 5. **Judge**: the inline classifier at the policy seam, judge-model
    config key, audit field. Folds in backlog 47 (turn_id-null tracker
    flaw — fix so approval analytics can measure the judge's effect)
