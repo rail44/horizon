@@ -1,6 +1,8 @@
 # Split Resize — Weight-Native, Component-Free
 
-Status: owner-approved 2026-07-19; not yet implemented. Companion to
+Status: owner-approved 2026-07-19; implemented (`src/workspace/render.rs`'s
+`LayoutNode::Split` arm and `SplitDrag`/`begin_split_drag`/
+`update_split_drag`/`end_split_drag`). Companion to
 `recursive-layout-design.md` (which owns the tree/weight model this doc
 renders); this doc owns how split sizes reach the screen and how drag
 resize feeds back.
@@ -51,29 +53,46 @@ the split branch of `render_node` as a plain flex row/column and own
 the resize handles. Model weights (`horizon-workspace`) are the single
 source of truth; data flows one way:
 
-- **Layout**: each child gets `flex_basis(0)` + `flex_grow(weight)` —
-  the idiom the Floem shell used
-  (`floem-shell-final:src/workspace/view/layout_tree.rs`). Zero basis
-  makes the whole container leftover space, and flex distributes
-  leftover ∝ grow, so 100% of the extent divides by weight ratio at any
-  container size. Window resize proportionality falls out of flex; no
-  bookkeeping, no container-change hook.
-  *Trap, learned the hard way*: the fraction-basis idiom the
-  gpui-component-era code carried (`flex_basis(weight/total × 1000 px)`
-  + `flex_grow_1`) does **not** render ratios — grow factors tied at 1
-  split the real leftover *evenly*, diluting any ratio toward equal as
-  the container grows past the 1000 px reference (3:1 renders as
-  ~0.63:0.37 at 1920 px). The GPUI migration picked it up to fit
-  `resizable_panel`'s API, and `ResizableState`'s pixel overwrite
-  masked it within a few frames.
+- **Layout**: each child gets `flex_basis(0)` + `flex_grow(weight /
+  total_weight)` — *not* a weight-scaled basis with an equal grow factor
+  (the fraction-basis idiom an earlier draft of this doc described, and
+  the current code's own predecessor used): flex only distributes
+  *leftover* space (container minus the sum of every sibling's basis) by
+  grow-factor ratio, so a nonzero basis with equal grow dilutes the
+  ratio toward equal the wider the container is past that basis budget
+  (3:1 renders as ~0.63:0.37 at 1920 px). That form crept in during the
+  GPUI migration to fit `resizable_panel`'s API, and `ResizableState`'s
+  pixel overwrite masked the dilution within a few frames.
+  Zero basis puts the *entire* container into leftover, so 100% of it
+  divides by weight ratio — the idiom the pre-gpui-component Floem shell
+  used (`floem-shell-final:src/workspace/view/layout_tree.rs:126-127`).
+  **Trap**: Taffy's flexbox implementation (CSS Flexbox spec, not a
+  Taffy quirk) only distributes *all* the leftover when the grow factors
+  sum to ≥ 1; below that, the space actually distributed is capped at
+  `leftover × sum_of_grow_factors`, leaving the rest as dead space. Raw
+  model weights routinely sum below 1 (`Workspace::set_split_weights`
+  normalizes to a sum of 1 on every *drag*, but closing a pane afterwards
+  removes one child's weight from the sum without rescaling the others),
+  so the "100% divides by weight ratio" claim above only holds because
+  the grow factor passed to each child is normalized by `total_weight` at
+  render time, not the raw weight itself. Window resize proportionality
+  falls out of flex; no bookkeeping, no container-change hook.
 - **Drag**: a handle between children `i` and `i+1` converts the mouse
-  delta once, px → weight (`Δw = Δpx / effective_px × total_weight`),
-  and updates the model per move. Pixels are never stored.
-  `effective_px` is the container's measured length minus the handles'
-  fixed footprint (`(n−1) × hit-area px`; handles are
-  `flex_grow_0`/`flex_shrink_0`, outside the grow distribution) — using
-  the raw length would make the handle lag the mouse and miss the floor
-  by the handles' total width.
+  delta once, px → weight (`Δw = Δpx / container_px × total_weight`),
+  and updates the model per move. Pixels are never stored. `container_px`
+  is the container's own measured length minus every handle's fixed
+  footprint (handles are `flex_grow_0`/`flex_shrink_0` at a constant
+  width and never participate in the grow distribution above) — the raw
+  measured length would track the mouse and hit the floor at a slightly
+  wrong pixel size otherwise.
+  **Known limitation**: live tracking is scoped to the split container's
+  own hover area (`on_mouse_move`/`on_mouse_up`/`on_mouse_up_out` on that
+  element), not a window-wide handler — a fast drag that leaves the
+  container's bounds pauses reflow until the cursor re-enters (release
+  is still always caught via `on_mouse_up_out`, which fires regardless of
+  hover). The pre-this-decision component used a window-level handler
+  instead; if this proves to feel bad in practice, that's the
+  improvement path, not implemented here.
 - **Minimum size**: a display-side floor (`min_w`/`min_h`, replacing
   the component's `PANEL_MIN_SIZE` role). When the *window* shrinks,
   flex clamps the display and weights stay untouched, so ratios restore
