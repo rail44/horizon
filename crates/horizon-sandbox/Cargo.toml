@@ -1,0 +1,25 @@
+# Sandbox spike for the agent approval trust model (`docs/agent-approval-design.md`,
+# "Sandbox architecture"): a thin, product-owned unified API over per-OS
+# containment (Linux bubblewrap+seccomp+landlock, macOS sandbox-exec+SBPL),
+# plus sandbox-denial classification. Prototype + tests only -- not yet
+# wired into `horizon-sessiond`'s tool spawn path.
+[package]
+name = "horizon-sandbox"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+thiserror = "2.0"
+
+[target.'cfg(unix)'.dependencies]
+# `denial.rs`'s SIGSYS-exit-code check wants `libc` on every Unix, not
+# just Linux (it's `cfg(unix)`, so it also builds -- compile-structured
+# only -- for the macOS backend).
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4.5"
+seccompiler = "0.5.0"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
