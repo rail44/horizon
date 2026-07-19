@@ -1,69 +1,93 @@
-//! Linux sandbox backend: bubblewrap (namespace/fs containment) +
-//! seccompiler (network-syscall cut). See `docs/agent-approval-design.md`'s
-//! "Sandbox architecture" for the design, and each submodule for its
-//! slice.
+//! Linux sandbox backend: `nono` (Landlock-based capability sandboxing;
+//! see `docs/agent-approval-design.md`'s "Sandbox architecture" for the
+//! design and `caps.rs` for the `SandboxPolicy` -> `nono::CapabilitySet`
+//! mapping). Migrated 2026-07-19 from a self-built
+//! bwrap+seccompiler+landlock stack (`docs/roadmap.md`'s backlog-60
+//! entry, "option C"), de-risked in `experiments/nono-spike/` (branch
+//! `worktree-agent-afb6d8b9e874320c8`, commit `533554b`).
 //!
-//! Landlock (`landlock.rs`) is negotiated for its `LandlockReport`
-//! diagnostic but is **not** applied around the bwrap-spawning thread
-//! below: doing so was tried and reliably breaks bwrap itself (a landlocked
-//! thread can never call `mount(2)` again, a kernel-level Landlock
-//! limitation, and bwrap's entire mechanism *is* mount syscalls). See
-//! `landlock.rs`'s module doc for the full finding and what real
-//! Landlock-as-live-backstop would require.
+//! `nono::Sandbox::apply_auto` is a plain blocking call that restricts
+//! the *calling thread* (inherited by that thread's future `fork`/`exec`
+//! descendants only) -- no `pre_exec` needed. This drops into the exact
+//! dedicated-thread shape the old backend already used for its seccomp
+//! filter: apply on a throwaway `std::thread::spawn`, spawn the child
+//! from that same thread, `join` to hand it back. Every other thread of a
+//! multi-threaded host (e.g. `horizon-sessiond`) stays fully
+//! unrestricted -- verified in the spike's Q1 probe.
+//!
+//! **Accepted regression (backlog 60):** nono has no mount or PID
+//! namespace, unlike bwrap. A sandboxed child can see the host's full
+//! process list (`ps`, `/proc/<pid>`) and mount table. Filesystem,
+//! network, and (new, see `caps.rs`) signal containment are still fully
+//! enforced via Landlock.
 
-mod bwrap;
-mod landlock;
-mod seccomp;
-
-pub use landlock::LandlockReport;
+mod caps;
 
 use crate::error::SandboxError;
-use crate::policy::{NetworkPolicy, SandboxPolicy, SandboxStdio};
+use crate::policy::{SandboxPolicy, SandboxStdio};
 use crate::SandboxedChild;
-use std::path::Path;
+use std::ffi::OsString;
 use std::process::Command;
 
-/// Absolute locations checked for `bwrap`, in order. Deliberately not a
-/// bare-name `PATH` lookup: the same "don't trust an environment the
-/// sandboxed command might influence" reasoning the design doc calls for
-/// on macOS's hardcoded `sandbox-exec` path.
-const BWRAP_CANDIDATES: [&str; 2] = ["/usr/bin/bwrap", "/bin/bwrap"];
-
-fn resolve_bwrap() -> Result<&'static str, SandboxError> {
-    BWRAP_CANDIDATES
-        .into_iter()
-        .find(|p| Path::new(p).is_file())
-        .ok_or(SandboxError::BwrapNotFound {
-            searched: BWRAP_CANDIDATES.to_vec(),
-        })
+/// Diagnostic summary of what nono actually applied for a spawned child.
+/// Repurposes the old backend's `LandlockReport`'s diagnostic role
+/// (`docs/roadmap.md`'s backlog-60 entry): unlike that report, this
+/// reflects containment that is genuinely live around `SandboxedChild`,
+/// since nono's `Sandbox::apply_auto` *is* the primary containment now,
+/// not a separate probe decoupled from bwrap's own mechanism.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NonoReport {
+    /// The Landlock ABI version nono detected on this kernel (e.g. `"V6"`).
+    pub abi: &'static str,
+    /// Debug-formatted `nono::Sandbox::apply_auto`'s seccomp-fallback
+    /// outcome -- whether Landlock alone enforced the policy's network
+    /// mode, or a seccomp filter was additionally installed because the
+    /// detected ABI lacks network support (< V4). The concrete type
+    /// (`nono`'s private `SeccompNetFallback`) isn't part of nono's public
+    /// API surface, so this carries its `Debug` rendering instead.
+    pub network_fallback: String,
 }
 
-/// Cheap capability probe backing [`crate::is_available`]: whether `bwrap`
-/// resolves at all, with no process spawned and no Landlock/seccomp
-/// negotiation.
+/// Cheap capability probe backing [`crate::is_available`]: whether
+/// Landlock is available on this kernel at all (nono's own
+/// `Sandbox::detect_abi`, internally cached after the first call), with
+/// no process spawned and no capability set built.
 pub(crate) fn is_available() -> bool {
-    resolve_bwrap().is_ok()
+    nono::Sandbox::detect_abi().is_ok()
 }
 
-/// Prepares and spawns `command` under `policy`. Rebuilds `command`'s
-/// program/args/cwd/env onto a fresh `bwrap` invocation, applies the
-/// seccomp network-cut on the thread that spawns it (seccomp, unlike
-/// Landlock, doesn't interfere with bwrap's own `mount(2)`-heavy setup --
-/// verified directly), and separately negotiates (but does not apply) the
-/// Landlock report on its own throwaway thread for diagnostics.
+/// Whether `command`'s explicit environment overrides already set
+/// `TMPDIR`, or this process's own ambient environment does (which
+/// `Command` inherits into the child by default unless the caller
+/// explicitly cleared it) -- see [`spawn`]'s TMPDIR-parity comment for
+/// why this gates the scratch-dir provisioning below.
+fn command_already_sets_tmpdir(command: &Command) -> bool {
+    let mut overrides = command.get_envs();
+    if let Some((_, value)) = overrides.find(|(key, _)| *key == "TMPDIR") {
+        return value.is_some();
+    }
+    std::env::var_os("TMPDIR").is_some()
+}
+
+/// Prepares and spawns `command` under `policy`. Builds a `nono::
+/// CapabilitySet` from `policy` (`caps::build`), then applies it via
+/// `Sandbox::apply_auto` on a dedicated thread that also spawns the
+/// child -- see the module doc for why that thread shape matters. Unlike
+/// the old bwrap backend, `command`'s program/args are run directly: nono
+/// has no wrapper binary, so there is no argv to rebuild around.
 pub(crate) fn spawn(
     command: Command,
     policy: &SandboxPolicy,
     stdio: SandboxStdio,
 ) -> Result<SandboxedChild, SandboxError> {
-    let bwrap_path = resolve_bwrap()?;
+    let abi = nono::Sandbox::detect_abi()?;
+    let caps = caps::build(policy)?;
 
     let program = command.get_program().to_os_string();
-    let args: Vec<_> = command.get_args().map(|a| a.to_os_string()).collect();
-    let argv = bwrap::build_args(policy, &program, &args)?;
+    let args: Vec<OsString> = command.get_args().map(|a| a.to_os_string()).collect();
 
-    let mut wrapped = Command::new(bwrap_path);
-    wrapped.args(&argv);
+    let mut wrapped = Command::new(&program);
+    wrapped.args(&args);
     if let Some(cwd) = command.get_current_dir() {
         wrapped.current_dir(cwd);
     }
@@ -77,41 +101,54 @@ pub(crate) fn spawn(
             }
         }
     }
+
+    // TMPDIR parity (`docs/roadmap.md`'s backlog-60 entry): bwrap gave a
+    // private tmpfs `/tmp` for free via its mount namespace; nono has no
+    // mount namespace at all, so there is nothing to substitute a fresh
+    // `/tmp` with. Instead, this crate's policy layer replaces it: if the
+    // caller hasn't already set `TMPDIR` and the policy has at least one
+    // writable root, provision `<root>/.horizon-sandbox-tmp` and inject
+    // `TMPDIR` pointing at it, so TMPDIR-respecting tools (`mktemp`, most
+    // language runtimes' temp-file helpers) keep working exactly as they
+    // did against bwrap's private tmpfs, without every caller
+    // re-implementing this themselves. A caller with no writable roots
+    // (a fully read-only sandbox) correctly gets no scratch space. A
+    // literal `/tmp` write that ignores `TMPDIR` is now denied outright
+    // (`/tmp` is only ever readable, never a writable root) -- a real,
+    // deliberate behavior change from bwrap's private-tmpfs illusion; see
+    // `linux::tests` for the regression coverage.
+    if !command_already_sets_tmpdir(&command) {
+        if let Some(root) = policy.writable_roots.first() {
+            let scratch = root.join(crate::SCRATCH_DIR_NAME);
+            std::fs::create_dir_all(&scratch)?;
+            wrapped.env("TMPDIR", &scratch);
+        }
+    }
+
     wrapped
         .stdin(stdio.stdin)
         .stdout(stdio.stdout)
         .stderr(stdio.stderr);
 
-    // `Proxied` gets the exact same seccomp cut as `Disabled` -- the whole
-    // point of the network-proxy leg is that AF_INET/AF_INET6/AF_PACKET
-    // stay denied even when a UNIX-socket bridge to a proxy is bind-mounted
-    // in (see `bwrap::build_args`'s `Proxied` arm); only `Enabled` skips it.
-    let network_filter = match &policy.network {
-        NetworkPolicy::Enabled => None,
-        NetworkPolicy::Disabled | NetworkPolicy::Proxied { .. } => {
-            Some(seccomp::build_network_cut_filter().map_err(SandboxError::Seccomp)?)
-        }
-    };
+    // `CapabilitySet`, `DetectedAbi`, and `Command` are all `Send +
+    // 'static`, so this thread can own everything it needs and hand back
+    // the spawned child plus a diagnostic summary.
+    let handle = std::thread::spawn(
+        move || -> Result<(std::process::Child, String), SandboxError> {
+            let fallback = nono::Sandbox::apply_auto_with_abi(&caps, &abi)?;
+            let child = wrapped.spawn()?;
+            Ok((child, format!("{fallback:?}")))
+        },
+    );
 
-    // Diagnostic only -- see module doc and `landlock.rs` for why this
-    // negotiation is deliberately decoupled from the spawn below.
-    let landlock_report = landlock::negotiate(policy)?;
-
-    // `Command` and `BpfProgram` (`Vec<u64>`) are `Send + 'static`, so
-    // this thread can own both and hand back the spawned child. Only
-    // seccomp is applied here (see module doc for why Landlock isn't).
-    let handle = std::thread::spawn(move || -> Result<std::process::Child, SandboxError> {
-        if let Some(filter) = &network_filter {
-            seccompiler::apply_filter(filter).map_err(|e| SandboxError::Seccomp(e.to_string()))?;
-        }
-        Ok(wrapped.spawn()?)
-    });
-
-    let child = handle.join().map_err(|_| SandboxError::ThreadPanicked)??;
+    let (child, network_fallback) = handle.join().map_err(|_| SandboxError::ThreadPanicked)??;
 
     Ok(SandboxedChild {
         child,
-        landlock: Some(landlock_report),
+        nono: Some(NonoReport {
+            abi: abi.version_string(),
+            network_fallback,
+        }),
     })
 }
 

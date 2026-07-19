@@ -8,6 +8,7 @@ anyhow = "1.0"
 crossbeam-channel = "0.5"
 horizon-agent = { path = "../horizon-agent" }
 horizon-config = { path = "../horizon-config" }
+horizon-sandbox = { path = "../horizon-sandbox" }
 horizon-sandbox-proxy = { path = "../horizon-sandbox-proxy" }
 horizon-session-protocol = { path = "../horizon-session-protocol" }
 horizon-terminal-core = { path = "../horizon-terminal-core" }

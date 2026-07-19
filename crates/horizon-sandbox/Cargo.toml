@@ -1,8 +1,7 @@
 # Sandbox spike for the agent approval trust model (`docs/agent-approval-design.md`,
 # "Sandbox architecture"): a thin, product-owned unified API over per-OS
-# containment (Linux bubblewrap+seccomp+landlock, macOS sandbox-exec+SBPL),
-# plus sandbox-denial classification. Prototype + tests only -- not yet
-# wired into `horizon-sessiond`'s tool spawn path.
+# containment (Linux: nono/Landlock, see `docs/roadmap.md`'s backlog-60
+# entry; macOS sandbox-exec+SBPL), plus sandbox-denial classification.
 [package]
 name = "horizon-sandbox"
 version = "0.1.0"
@@ -18,8 +17,13 @@ thiserror = "2.0"
 libc = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-landlock = "0.4.5"
-seccompiler = "0.5.0"
+# The Linux sandbox backend (`docs/roadmap.md`'s backlog-60 "option C"
+# decision, de-risked in `experiments/nono-spike/`): Landlock-based
+# capability sandboxing, replacing the old self-built
+# bwrap+seccompiler+landlock stack. macOS keeps its own sandbox-exec+SBPL
+# backend (untouched, separate follow-up), so this dependency stays
+# Linux-only.
+nono = "0.68"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

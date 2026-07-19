@@ -12,21 +12,18 @@ pub enum SandboxError {
     )]
     UnsupportedPlatform,
 
-    #[error(
-        "bubblewrap (`bwrap`) was not found at any expected location ({}); install it to \
-         sandbox commands",
-        .searched.join(", ")
-    )]
-    BwrapNotFound { searched: Vec<&'static str> },
-
     #[error("sandbox-exec is missing at the hardcoded path {0} (macOS only)")]
     SandboxExecNotFound(&'static str),
 
-    #[error("failed to prepare the Landlock fs backstop: {0}")]
-    Landlock(String),
-
-    #[error("failed to prepare the seccomp network-cut filter: {0}")]
-    Seccomp(String),
+    /// The Linux backend's nono/Landlock error, covering both capability-set
+    /// construction (e.g. a policy path nono itself rejects for a reason
+    /// this crate's own `InvalidRoot` pre-check didn't catch) and
+    /// `nono::Sandbox::apply_auto`'s own failure (e.g. Landlock unavailable
+    /// on this kernel at all -- the nono-based replacement for the old
+    /// `BwrapNotFound` "containment mechanism isn't available" case).
+    #[cfg(target_os = "linux")]
+    #[error("nono sandbox error: {0}")]
+    Nono(#[from] nono::NonoError),
 
     #[error("policy root {path} is not usable: {source}")]
     InvalidRoot {

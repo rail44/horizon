@@ -1392,14 +1392,23 @@ fn bash_auto_executes_sandboxed_and_is_killed_on_timeout() {
 /// (`echo outside > /tmp/horizon-dogfood-boundary.txt`) and the file showed
 /// up on the *host's real* `/tmp`, even though the result carried
 /// `sandboxed: true`. Root cause was `run_sandboxed` adding the host's own
-/// `std::env::temp_dir()` as a second writable root, which (on Linux) bind-
-/// mounted the shared host `/tmp` directly over bwrap's private
-/// `--tmpfs /tmp`, undoing it (see `tools::bash::exec::run_sandboxed`'s doc
-/// comment). This drives the exact reported command through the full
-/// product path (`execute_agent_tool` -> tier-1 dispatch -> the real
-/// background bash thread -> real bwrap) and asserts the file never lands
-/// on the host, while still finishing successfully *inside* the sandbox
-/// (bwrap's private tmpfs is still perfectly good scratch space).
+/// `std::env::temp_dir()` as a second writable root, which (on the then-
+/// bwrap Linux backend) bind-mounted the shared host `/tmp` directly over
+/// bwrap's private `--tmpfs /tmp`, undoing it (see
+/// `tools::bash::exec::run_sandboxed`'s doc comment). This drives the exact
+/// reported command through the full product path (`execute_agent_tool` ->
+/// tier-1 dispatch -> the real background bash thread -> the real sandbox
+/// backend) and asserts the file never lands on the host.
+///
+/// Behavior updated for the nono/Landlock backend migration
+/// (`docs/roadmap.md`'s backlog-60 entry): nono has no mount namespace, so
+/// there is no private tmpfs for a literal `/tmp` write to land in (a
+/// deliberate, accepted behavior change -- see `horizon_sandbox::linux::
+/// spawn`'s TMPDIR-parity comment). The write is now denied outright
+/// (`is_likely_sandbox_denied` classifies it as sandbox-denied), so this
+/// tier-1 call surfaces `BashCompletion::RetryWithoutSandbox` instead of
+/// finishing successfully -- still never landing on the host's real `/tmp`,
+/// just via denial rather than a silently-redirected private overlay.
 #[test]
 fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
     let root = temp_workspace("tier1-bash-sandboxed-tmp-leak");
@@ -1428,19 +1437,27 @@ fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
     let completion = bash_results_rx
         .recv_timeout(std::time::Duration::from_secs(10))
         .expect("the sandboxed bash call should finish");
-    let result = expect_finished(completion);
 
-    assert_eq!(
-        result.output["exit_code"], 0,
-        "writing to /tmp inside the sandbox should still succeed (private \
-         scratch space): {:?}",
-        result.output
-    );
-    assert_eq!(result.output["sandboxed"], true, "{:?}", result.output);
+    match completion {
+        BashCompletion::RetryWithoutSandbox { call_id, reason } => {
+            assert_eq!(call_id, request.call_id);
+            assert!(
+                reason.contains("denied"),
+                "expected a sandbox-denial reason: {reason}"
+            );
+        }
+        BashCompletion::Finished(result) => {
+            panic!(
+                "expected the literal /tmp write to be denied by the sandbox \
+                 (no private tmpfs under nono), got a finished result instead: {:?}",
+                result.output
+            );
+        }
+    }
     assert!(
         !host_target.exists(),
-        "a tier-1 sandboxed bash write to /tmp leaked onto the host's real \
-         /tmp -- the exact 2026-07-19 dogfooding containment hole"
+        "a tier-1 sandboxed bash write to /tmp must never leak onto the host's \
+         real /tmp -- the exact 2026-07-19 dogfooding containment hole"
     );
 
     let _ = std::fs::remove_file(&host_target);
