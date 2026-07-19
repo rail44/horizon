@@ -3,9 +3,11 @@
 Status: design settled and implemented 2026-07-06 (v1 core: mode,
 cursor, `:`-palette, visualization; phase B: `ctrl+'` default, global
 palette chord retired, click-dives). The former pending check
-(Super+Esc) is resolved — see "Pending verification". This document
-records the design conversation between the owner and the planning
-session.
+(Super+Esc) is resolved — see "Pending verification". Amended
+2026-07-19: an empty workspace is now an implicit command surface, no
+`ctrl+'` needed — see "Empty workspace is an implicit command surface"
+below. This document records the design conversation between the owner
+and the planning session.
 
 ## Problem
 
@@ -151,3 +153,89 @@ redesign.
   available as a future name for multi-select).
 - Configurable in-mode keymap (only the escape chord is configurable at
   first).
+
+## Empty workspace is an implicit command surface (2026-07-19)
+
+`5d62143` (2026-07-18) made a zero-tab workspace a valid, persistable
+state and kept the mode reachable from it by decoupling
+`workspace_mode_active` from the cursor (a cursor needs a pane to seed
+it; the "is the mode active at all" flag doesn't). That still required
+the owner to press `ctrl+'` *first*, then `:` — a real two-step dance
+issue 003 separately flagged as invisible (no pane exists to carry any
+of the mode's visual signals, so the owner had to press `:` blind to
+find out whether the entry chord had taken effect).
+
+The owner's follow-up clarification cuts deeper than "make the entry
+step visible": workspace mode exists to separate "keys go to the
+focused pane" from "keys command the workspace" (see "Problem" above).
+With zero panes there is simply no pane input left to protect, so
+requiring the entry chord in that state protects nothing — it's not an
+under-signaled state, it's an unnecessary one. An empty workspace is
+therefore **implicitly always** a command surface: `:` (opening the
+palette, the only reachable path back to `New Tab…` once every pane is
+gone) works directly, no `ctrl+'` needed first.
+
+**Seam chosen: the getter, not a separate context.** Two shapes were on
+the table — (a) make `Workspace::is_workspace_mode_active()` report
+`true` unconditionally whenever the workspace has zero tabs, regardless
+of the raw "explicitly toggled" bookkeeping, or (b) introduce a second,
+distinct key context carrying just the pane-independent subset of the
+mode's bindings for the empty case. (a) won: it falls directly out of
+the existing decoupling `5d62143` already did (the raw flag and "is the
+mode reachable" were already separate concerns; this just adds one more
+condition to the read side) and is airtight *by construction* in both
+transition directions — no call site has to remember to flip a flag on
+the way into or out of empty, since the answer is recomputed fresh from
+`tab_count()` every time. (b) would have needed a parallel, mostly-
+duplicate binding table for the pane-independent subset (in practice
+just `:`, since `t`/`a`/`s`/`x`/`tab`/hjkl/Enter/Esc are all either
+already pane-independent through the *same* mechanism (`t`/`a` open the
+view chooser, which doesn't need an existing pane either) or naturally
+inert with zero tabs through their own existing guards (`s`/`x`/`tab`),
+so there was nothing left for a separate context to carry that the
+existing one doesn't already cover once it's reachable.
+
+**What `is_workspace_mode_active()` now means.** `true` because the mode
+was explicitly toggled on (the raw field, exact for a non-empty
+workspace) *or*, unconditionally, because the workspace has zero tabs.
+The raw field keeps its narrower, exact meaning; the getter layers the
+zero-tab bypass on top. A direct, harmless consequence: `ctrl+'` on an
+empty workspace becomes a no-op, because `toggle_mode`
+(`src/workspace/render.rs`) always sees this method return `true` there
+and takes its "cancel" branch, which is already idempotent when the
+cursor is `None`. No visual change either way, since `render_node`
+(the only place that paints the scrim/cursor-border chrome) never runs
+without a pane to paint it on.
+
+**The one hazard this reopened, and how it's closed.** Every
+modal-opening handler (`open_palette`/`open_view_chooser`/
+`open_session_manager`) calls `Workspace::exit_workspace_mode` before
+the modal takes focus, specifically so the mode's own fixed hjkl/Enter/
+Escape bindings stop competing with the modal's typed search keys (see
+`effective_scrim_pattern`'s doc comment for the identical scrim-side
+concern). The zero-tab bypass doesn't care about that flag, so on an
+empty workspace `is_workspace_mode_active()` would otherwise keep
+reporting `true` right through that exit call — reopening exactly the
+hazard the exit call exists to close. `src/workspace/render.rs`'s
+`mode_key_context_active(is_workspace_mode_active, modal_open)` is the
+fix: the render's key-context decision suppresses the mode context
+outright whenever any control-surface modal is open, independent of
+what the getter itself reports. The render additionally suppresses the
+mode context while a workspace restore is in flight (unless it failed,
+mirroring `workspace_mode_blocked_by_restore`'s existing exception for
+reaching `Reload Session Runtime`) — a persisted zero-tab workspace
+still runs a real background round trip to `horizon-sessiond` before the
+restore barrier lifts, so without this the bypass could let `:` open the
+palette mid-restore.
+
+**Transitions.** Both directions are airtight by the same construction:
+closing the last tab makes `tab_count() == 0` true, so the very next
+render sees the bypass fire with no explicit hand-off needed; creating
+the first tab (from the palette's `New Tab…`, or any other path) makes
+it false again, so the bypass stops applying and ordinary raw-field
+gating resumes immediately — matching "non-empty behavior changes not
+at all."
+
+Explicitly out of scope here (per issue 003's own resolution note): the
+pane-bound visual signals themselves (cursor-pane border, scrim dim) for
+a *non-empty* workspace are untouched.

@@ -1,10 +1,33 @@
 ---
 id: 003
 title: Workspace mode is invisible in an empty workspace — no pane, no cursor frame, no way to tell the mode is active
-status: open
+status: resolved
 severity: medium
 area: workspace
 ---
+
+## Resolution (2026-07-19)
+
+The owner's follow-up clarification superseded this issue's premise rather
+than asking for a better invisible-mode signal: with zero panes there is
+no pane input left to protect, so requiring the `ctrl+'` entry step at
+all in an empty workspace was the wrong shape, not merely an
+under-signaled one. `Workspace::is_workspace_mode_active`
+(`crates/horizon-workspace/src/mode.rs`) now reports `true` whenever the
+workspace has zero tabs, regardless of whether the mode was ever
+explicitly toggled on — so `:` (opening the palette, the only reachable
+path back to `New Tab…`) works directly with no `ctrl+'` first, and
+`ctrl+'` itself becomes a harmless no-op in that state (see that
+method's doc comment, and `docs/workspace-mode-design.md`'s "Empty
+workspace is an implicit command surface" section). This dissolves the
+empty-workspace half of what this issue described: there is no longer an
+invisible *entered* state to be blind about, because entry is no longer a
+separate step.
+Mode visibility in a *non-empty* workspace — the cursor-pane border and
+the scrim dim (`src/workspace/render.rs`'s pane-chrome functions) this
+issue's "Observed" section points at — is completely untouched by this
+change and was never in scope here; that pane-bound signal set continues
+to work exactly as before whenever at least one pane exists.
 
 ## Repro
 

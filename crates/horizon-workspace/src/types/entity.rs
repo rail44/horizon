@@ -26,17 +26,24 @@ pub struct Workspace {
     /// `workspace_mode_active` for the independent "is the mode active at
     /// all" signal. See `workspace::mode` for the state transitions.
     pub workspace_mode_cursor: Option<PaneId>,
-    /// Whether workspace mode is active, independent of whether
-    /// `workspace_mode_cursor` currently holds a pane. Kept as its own
-    /// field (rather than inferring "active" from the cursor being
-    /// `Some`) because a zero-tab workspace must still be able to enter
-    /// the mode -- its `MODE_CONTEXT`-gated bindings (`:` opening the
-    /// palette foremost) are the only reachable path back to `New Tab…`
-    /// once every pane is gone (2026-07-18 owner clarification: an empty
-    /// workspace is a valid, first-class state, not an error condition to
-    /// paper over). `workspace::mode` keeps the two fields in lockstep:
-    /// the cursor is only ever `Some` while this is `true`, but this can
-    /// be `true` while the cursor stays `None`.
+    /// The raw "explicitly entered via the reserved chord" bookkeeping,
+    /// independent of whether `workspace_mode_cursor` currently holds a
+    /// pane. Kept as its own field (rather than inferring "active" from
+    /// the cursor being `Some`) because a zero-tab workspace has no pane
+    /// to seed the cursor with at all. `workspace::mode` keeps the two
+    /// fields in lockstep: the cursor is only ever `Some` while this is
+    /// `true`, but this can be `true` while the cursor stays `None`.
+    ///
+    /// This field alone is *not* the public answer to "is workspace mode
+    /// active" -- `Workspace::is_workspace_mode_active` additionally
+    /// reports `true` whenever the workspace has zero tabs, regardless of
+    /// this field's value (2026-07-19 owner clarification: with no panes
+    /// at all there is no pane input left to protect, so an empty
+    /// workspace is implicitly *always* a command surface -- `:` opening
+    /// the palette, the only reachable path back to `New Tab…`, must not
+    /// need the entry chord first). See that method's doc comment for the
+    /// full rationale; this field keeps its narrower, exact meaning for a
+    /// non-empty workspace.
     pub workspace_mode_active: bool,
 }
 

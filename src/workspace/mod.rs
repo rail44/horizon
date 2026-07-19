@@ -365,13 +365,17 @@ impl WorkspaceShell {
     /// empty (zero-tab) workspace -- the shell root's own `focus_handle`
     /// instead of leaving focus wherever it happened to land. Reachability
     /// depends on this: the root `div` (`render::render`) is the one
-    /// element `track_focus`-ing `focus_handle`, and every workspace-mode
-    /// binding (`ctrl+'` foremost, and once entered, `:` opening the
-    /// palette) is registered on it, so with no pane left to hold focus,
-    /// window focus must still land somewhere that routes those bindings
-    /// (2026-07-18 owner clarification: `ctrl+'`/`:` must stay reachable
-    /// even with every pane closed, since the palette is the only way back
-    /// to `New Tab…`).
+    /// element `track_focus`-ing `focus_handle`, and both `ctrl+'` and `:`
+    /// opening the palette are registered on it, so with no pane left to
+    /// hold focus, window focus must still land somewhere that routes
+    /// those bindings. `:` no longer needs `ctrl+'` first once the
+    /// workspace is empty (2026-07-19 owner clarification, superseding
+    /// 2026-07-18's two-step version of this same guarantee: with zero
+    /// panes there is no pane input to protect, so the empty workspace is
+    /// an implicit command surface -- see `Workspace::
+    /// is_workspace_mode_active`'s doc comment); either way, the palette
+    /// is the only reachable path back to `New Tab…` once every pane is
+    /// gone, so it must stay reachable.
     fn focus_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self
             .workspace
