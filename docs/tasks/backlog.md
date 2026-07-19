@@ -514,3 +514,26 @@ entries live in `backlog-resolved.md` keeping their original numbers
     review-only for darwin paths. Real-mac runtime verification of the
     whole macOS backend (helper exec handoff, profile application,
     Proxied bridge grant, baseline dirs) is the standing open follow-up.
+
+62. **gpui-component's `ColorPicker` builds its palette panel every render
+    even while closed.** Upstream (rev `0775df3`,
+    `crates/ui/src/color_picker.rs:785` in the pinned checkout) passes
+    `self.render_colors(window, cx)` eagerly into the Popover child with
+    no `state.open` gate, so a *closed* picker still constructs ~111
+    swatch elements per render (`render_item` per swatch plus a fresh
+    `color_palettes()` `Vec<Vec<Hsla>>` rebuild). Theme settings renders
+    7–8 pickers at once (`src/theme_settings/mod.rs:351-387`), ≈800–900
+    element builds per render while that pane's tab is frontmost —
+    measured at 4.4% of GUI main-thread samples in the 2026-07-19
+    profile. The cost is transient, not standing: `WorkspaceShell`
+    renders only the active tab (`src/workspace/render.rs:716-720`), so
+    it vanishes on tab switch (the pane does persist and restore via
+    `ViewKindState::ThemeSettings`, so it can come back frontmost).
+    Decision (owner, 2026-07-19): accept as-is — lazy-unmount buys
+    nothing (background tabs already don't render) and a bespoke palette
+    UI is overkill. The proper fix is upstream: gate the palette panel
+    on `state.open` (a few lines); adopt by bumping the pinned rev when
+    it lands, or fork+pin if it ever becomes urgent. Optional
+    horizon-side nibble meanwhile: pass `.featured_colors(...)`
+    explicitly to skip the per-render 12-color rebuild from
+    `cx.theme()`.
