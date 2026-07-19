@@ -1,8 +1,10 @@
 //! The GPUI projection of the shared workspace model
-//! (`crates/horizon-workspace`): tab strip, recursive split rendering on
-//! gpui-component's resizable primitives, pane focus, and workspace mode
-//! with spatial navigation. The model owns all layout truth; this module
-//! only renders it and translates GPUI actions into model operations.
+//! (`crates/horizon-workspace`): tab strip, recursive split rendering as a
+//! plain flex tree with self-owned resize handles (weight-native, no
+//! `gpui_component::resizable` -- see `docs/split-resize-design.md`), pane
+//! focus, and workspace mode with spatial navigation. The model owns all
+//! layout truth; this module only renders it and translates GPUI actions
+//! into model operations.
 //!
 //! The key bindings registered by [`init`] (via `bindings::derive_bindings`) are
 //! M2 stand-ins wired straight to model calls — M3 replaces them with the
@@ -53,6 +55,7 @@ mod modals;
 mod render;
 mod session_lifecycle;
 
+use render::SplitDrag;
 use session_lifecycle::{PendingAgentSpawn, PendingTerminalSpawn};
 
 pub(crate) fn init(cx: &mut App) {
@@ -269,6 +272,13 @@ pub(crate) struct WorkspaceShell {
     // scrim section. `None` means the mode wasn't active when the modal
     // opened (or no modal is open).
     scrim_freeze: Option<PaneId>,
+    // Live state for an in-progress split-handle drag (`render_node`'s
+    // `LayoutNode::Split` arm) -- set on a handle's `on_mouse_down`,
+    // updated on the split container's `on_mouse_move` (live reflow),
+    // cleared and persisted on `on_mouse_up`/`on_mouse_up_out`. View-only
+    // scratch state: never touches the `horizon_workspace` model
+    // directly, see `SplitDrag`'s own doc comment.
+    active_split_drag: Option<SplitDrag>,
     // The terminal session `sync_terminal_focus` last sent `Focus(true)`
     // to, so a transition can send `Focus(false)` to the one it's about
     // to stop being true for. See `focus_transition`.
@@ -317,6 +327,7 @@ impl WorkspaceShell {
             _view_chooser_subscription: None,
             pending_placement: None,
             scrim_freeze: None,
+            active_split_drag: None,
             last_focused_terminal: None,
             terminal_exit_tx,
         };
