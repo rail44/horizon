@@ -104,13 +104,18 @@ pub fn spawn(
 
 /// Kicks off a *sandboxed* bash call (`docs/agent-approval-design.md`'s tier
 /// 1: auto-approved `bash` in an isolated, sandbox-engaged session) and
-/// returns immediately, same contract as [`spawn`]. `workspace_root` becomes
-/// `horizon_sandbox`'s writable root (plus this host's temp dir, since the
-/// bash tool's own output spill files -- `output::spill` -- and a command's
-/// own scratch use land there); network is off. Still goes through the same
-/// per-session FIFO (`registry::enqueue`) as [`spawn`] -- a session's bash
-/// calls never run concurrently with each other regardless of which path
-/// started them. If the run looks sandbox-denied, the completion sent is
+/// returns immediately, same contract as [`spawn`]. `workspace_root` is
+/// `horizon_sandbox`'s only writable root; network is off. The host's real
+/// temp dir is deliberately *not* added as a writable root here -- a 2026-07
+/// dogfooding incident found that doing so made the whole shared host `/tmp`
+/// writable from inside every sandboxed call (see `exec::run_sandboxed`'s
+/// doc comment for the containment story). `output::spill`'s own write
+/// happens host-side, after this call's output has already been captured
+/// over a pipe, never from inside the sandboxed child -- it needs no
+/// writable-root grant at all. Still goes through the same per-session FIFO
+/// (`registry::enqueue`) as [`spawn`] -- a session's bash calls never run
+/// concurrently with each other regardless of which path started them. If
+/// the run looks sandbox-denied, the completion sent is
 /// [`BashCompletion::RetryWithoutSandbox`] instead of a finished result --
 /// see that variant's doc comment.
 pub fn spawn_sandboxed(

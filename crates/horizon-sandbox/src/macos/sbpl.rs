@@ -18,6 +18,24 @@ const BASE_POLICY: &str = include_str!("vendor/seatbelt_base_policy.sbpl");
 const NETWORK_POLICY: &str = include_str!("vendor/seatbelt_network_policy.sbpl");
 const PLATFORM_DEFAULTS: &str = include_str!("vendor/restricted_read_only_platform_defaults.sbpl");
 
+/// The vendored `PLATFORM_DEFAULTS` template (unmodified, per its own header
+/// comment) includes a blanket "scratch space so tools can create temp
+/// files" grant: `(allow file-read* file-write* (subpath "/tmp"))` and the
+/// same for its aliases. That is a real, host-shared temp dir on macOS
+/// (`/tmp` is a symlink to `/private/tmp`) -- exactly the containment hole a
+/// 2026-07-19 dogfooding session found on Linux (see
+/// `tools::bash::exec::run_sandboxed`'s doc comment in `horizon-agent`),
+/// just baked into the vendored baseline instead of a caller-supplied
+/// policy. Seatbelt SBPL evaluates rules in order and the *last* matching
+/// rule for a given path/operation wins, so these `deny file-write*` rules,
+/// emitted right after `PLATFORM_DEFAULTS` and before the caller's own
+/// `writable_roots` loop, override that blanket grant while leaving it a
+/// no-op for any `writable_roots` entry that happens to live under one of
+/// these paths -- the loop's own `allow` comes later still and wins back.
+/// Read access is untouched (`ReadableScope::Full`'s own rule, not this one,
+/// governs that) -- only the *write* allowance is a containment hole.
+const HOST_SHARED_TMP_DIRS: [&str; 4] = ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp"];
+
 /// Composes the full SBPL profile text for `policy`.
 pub(crate) fn compose(policy: &SandboxPolicy) -> String {
     let mut profile = String::new();
@@ -36,6 +54,14 @@ pub(crate) fn compose(policy: &SandboxPolicy) -> String {
     profile.push('\n');
 
     profile.push_str("; --- horizon-sandbox policy rules (generated, not vendored) ---\n");
+
+    // Negate PLATFORM_DEFAULTS's blanket host-shared-/tmp write allowance --
+    // see HOST_SHARED_TMP_DIRS's doc comment. Must come before the
+    // `writable_roots` loop below so an explicit writable root under one of
+    // these paths still wins (last matching rule wins in SBPL).
+    for dir in HOST_SHARED_TMP_DIRS {
+        profile.push_str(&deny_rule("file-write*", Path::new(dir)));
+    }
 
     match &policy.readable_scope {
         ReadableScope::Full => {
@@ -57,6 +83,10 @@ pub(crate) fn compose(policy: &SandboxPolicy) -> String {
 
 fn allow_rule(ops: &str, path: &Path) -> String {
     format!("(allow {ops} (subpath {}))\n", sbpl_string_literal(path))
+}
+
+fn deny_rule(ops: &str, path: &Path) -> String {
+    format!("(deny {ops} (subpath {}))\n", sbpl_string_literal(path))
 }
 
 /// Renders `path` as an SBPL string literal, escaping backslashes and
@@ -125,5 +155,56 @@ mod tests {
     fn path_with_quote_is_escaped() {
         let literal = sbpl_string_literal(Path::new("/tmp/weird\"name"));
         assert_eq!(literal, "\"/tmp/weird\\\"name\"");
+    }
+
+    /// Containment fix (2026-07-19 dogfooding, mirrored from the Linux
+    /// `--tmpfs /tmp` fix): the vendored `PLATFORM_DEFAULTS` template grants
+    /// blanket write access to the host's shared `/tmp` and its aliases
+    /// (`(allow file-read* file-write* (subpath "/tmp"))` etc. -- see the
+    /// vendored file's own "Scratch space" comment). The generated policy
+    /// must deny that write allowance for every writable-root-free policy,
+    /// same "no blanket host temp-dir write" semantics `run_sandboxed` now
+    /// enforces on Linux.
+    #[test]
+    fn blanket_host_tmp_write_from_platform_defaults_is_denied() {
+        let profile = compose(&policy(vec![], NetworkPolicy::Disabled));
+        for dir in ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp"] {
+            assert!(
+                profile.contains(&format!("(deny file-write* (subpath \"{dir}\"))")),
+                "expected a deny rule for {dir}, profile:\n{profile}"
+            );
+        }
+        // The vendored template's own blanket allow is still present
+        // (unmodified, per its header) -- this proves the fix works by
+        // *overriding* it with a later rule, not by editing the vendored
+        // file.
+        assert!(profile.contains("Scratch space so tools can create temp files"));
+    }
+
+    /// SBPL's last-matching-rule-wins semantics mean the deny above only
+    /// actually contains the hole if it is emitted *before* the
+    /// caller's own `writable_roots` allow -- otherwise an explicit
+    /// writable root nested under `/tmp` (a realistic shape: a session's
+    /// isolated worktree living under the OS temp dir) would itself get
+    /// silently denied by this fix. Assert the ordering directly rather
+    /// than just the rules' presence.
+    #[test]
+    fn explicit_writable_root_under_tmp_still_overrides_the_deny() {
+        let profile = compose(&policy(
+            vec!["/tmp/session-root".into()],
+            NetworkPolicy::Disabled,
+        ));
+        let deny_pos = profile
+            .find("(deny file-write* (subpath \"/tmp\"))")
+            .expect("deny rule for /tmp should be present");
+        let allow_pos = profile
+            .find("(allow file-read* file-write* (subpath \"/tmp/session-root\"))")
+            .expect("explicit writable root should still be allowed");
+        assert!(
+            deny_pos < allow_pos,
+            "the blanket deny must come before the caller's explicit \
+             writable-root allow so the more specific, later rule wins: \
+             deny at {deny_pos}, allow at {allow_pos}"
+        );
     }
 }

@@ -162,6 +162,80 @@ fn writes_outside_writable_root_are_denied() {
     cleanup(outside);
 }
 
+/// The crux regression test for the 2026-07-19 dogfooding containment hole:
+/// a sandboxed write to `/tmp/<name>` must land in bwrap's own private
+/// `--tmpfs /tmp` (torn down with the sandbox), never on the host's real
+/// `/tmp` -- *as long as the caller's `writable_roots` doesn't itself
+/// include a path that resolves onto `/tmp`* (see `build_args`'s doc
+/// comment on why that specific mistake defeats the private tmpfs; the
+/// fix living in `horizon-agent` is to simply never do that, which is what
+/// this test's policy mirrors). The write+readback happens in one script so
+/// a successful write inside the sandbox is proven directly (this is
+/// expected, intentional scratch-space behavior, not something to deny),
+/// with the writable root under `writable`, entirely separate from `/tmp`.
+#[test]
+fn writes_to_tmp_land_in_the_private_tmpfs_not_the_hosts_real_tmp() {
+    let writable = tempdir("tmp-private-writable");
+    let log = writable.join("stderr.log");
+    let readback = writable.join("readback.txt");
+    // A name unique enough that a pre-existing file at this exact host path
+    // would be an astonishing coincidence, plus a defensive pre-clean and a
+    // best-effort post-clean, so a hypothetical regression here can't leave
+    // a stray file behind on the real machine running this test.
+    let marker = format!(
+        "horizon-sandbox-test-tmpfs-leak-{}-{}.txt",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default()
+    );
+    let host_target = std::path::Path::new("/tmp").join(&marker);
+    let _ = std::fs::remove_file(&host_target);
+
+    let policy = SandboxPolicy {
+        // Deliberately *not* `std::env::temp_dir()` or any path under
+        // `/tmp` -- this policy shape is exactly what
+        // `tools::bash::exec::run_sandboxed` now constructs.
+        writable_roots: vec![writable.clone()],
+        readable_scope: ReadableScope::Full,
+        network: NetworkPolicy::Disabled,
+    };
+    let cmd = shell(
+        "/bin/sh",
+        &format!(
+            "exec 2>{}; echo leaked > {} && cat {} > {}",
+            shell_quote(&log),
+            shell_quote(&host_target),
+            shell_quote(&host_target),
+            shell_quote(&readback)
+        ),
+    );
+    let sandboxed = spawn(cmd, &policy, SandboxStdio::inherit()).expect("spawn should succeed");
+    let code = wait_with_timeout(sandboxed.child, TEST_TIMEOUT);
+
+    assert_eq!(
+        code,
+        0,
+        "writing to /tmp inside the sandbox should succeed (private tmpfs \
+         scratch space), stderr: {}",
+        read_log(&log)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&readback).expect("readback file should exist"),
+        "leaked\n",
+        "the sandboxed process should see its own write via its private /tmp"
+    );
+    assert!(
+        !host_target.exists(),
+        "a sandboxed write to /tmp must never leak onto the host's real /tmp \
+         (the 2026-07-19 dogfooding containment hole)"
+    );
+
+    cleanup(writable);
+    let _ = std::fs::remove_file(&host_target);
+}
+
 #[test]
 fn network_off_fails_a_tcp_connect() {
     let dir = tempdir("network-off");

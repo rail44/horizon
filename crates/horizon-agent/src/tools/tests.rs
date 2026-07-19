@@ -1387,6 +1387,66 @@ fn bash_auto_executes_sandboxed_and_is_killed_on_timeout() {
     unregister_session_runtime(session_id);
 }
 
+/// The crux regression test for the 2026-07-19 dogfooding containment hole:
+/// a live session ran a tier-1 auto-approved, sandboxed `bash` call
+/// (`echo outside > /tmp/horizon-dogfood-boundary.txt`) and the file showed
+/// up on the *host's real* `/tmp`, even though the result carried
+/// `sandboxed: true`. Root cause was `run_sandboxed` adding the host's own
+/// `std::env::temp_dir()` as a second writable root, which (on Linux) bind-
+/// mounted the shared host `/tmp` directly over bwrap's private
+/// `--tmpfs /tmp`, undoing it (see `tools::bash::exec::run_sandboxed`'s doc
+/// comment). This drives the exact reported command through the full
+/// product path (`execute_agent_tool` -> tier-1 dispatch -> the real
+/// background bash thread -> real bwrap) and asserts the file never lands
+/// on the host, while still finishing successfully *inside* the sandbox
+/// (bwrap's private tmpfs is still perfectly good scratch space).
+#[test]
+fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
+    let root = temp_workspace("tier1-bash-sandboxed-tmp-leak");
+    let tool_state = ToolSessionState::new(root).with_isolated_worktree(true);
+    let session_id = SessionId::new();
+    let live_state = LiveState::new();
+    let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
+    register_session_runtime(session_id, tool_state.clone(), live_state, bash_results_tx);
+
+    let marker = format!(
+        "horizon-dogfood-boundary-regression-{}.txt",
+        uuid::Uuid::new_v4()
+    );
+    let host_target = std::path::Path::new("/tmp").join(&marker);
+    let _ = std::fs::remove_file(&host_target);
+
+    let request = ToolCallRequest {
+        call_id: ToolCallId("call-1".to_string()),
+        tool_id: "bash".to_string(),
+        input: json!({ "command": format!("echo outside > {}", host_target.display()) }),
+    };
+
+    let execution = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
+    assert!(matches!(execution, Execution::Started(_)));
+
+    let completion = bash_results_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the sandboxed bash call should finish");
+    let result = expect_finished(completion);
+
+    assert_eq!(
+        result.output["exit_code"], 0,
+        "writing to /tmp inside the sandbox should still succeed (private \
+         scratch space): {:?}",
+        result.output
+    );
+    assert_eq!(result.output["sandboxed"], true, "{:?}", result.output);
+    assert!(
+        !host_target.exists(),
+        "a tier-1 sandboxed bash write to /tmp leaked onto the host's real \
+         /tmp -- the exact 2026-07-19 dogfooding containment hole"
+    );
+
+    let _ = std::fs::remove_file(&host_target);
+    unregister_session_runtime(session_id);
+}
+
 /// Never-silently-degrade: even on a host where the sandbox genuinely
 /// engages, a *non-isolated* session's `bash` call still goes through the
 /// ordinary approval gate -- isolation is load-bearing, not cosmetic. The
