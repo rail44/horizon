@@ -136,6 +136,7 @@ impl WorkspaceShell {
                     self.persist_workspace();
                 }
                 self.pending_terminal_spawns.clear();
+                self.pending_agent_spawns.clear();
                 self.sessions.clear();
                 self.agent_sessions.clear();
                 self.panes.clear();

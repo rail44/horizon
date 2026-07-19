@@ -36,7 +36,25 @@ pub(super) struct PendingTerminalSpawn {
     fallback_cwd: std::path::PathBuf,
 }
 
-fn terminal_spawn_source(
+/// Staged the same way as [`PendingTerminalSpawn`] (before a
+/// session-creating workspace mutation, consumed by `reconcile`), but for
+/// agent spawns' own two knobs (`docs/session-relationship-design.md`
+/// decision 3): the pane this spawn derives from, and whether sessiond
+/// should give it an isolated worktree. `Default` is "no source, not
+/// isolated" -- `reconcile`'s fallback when nothing staged anything (e.g. a
+/// resumed/attached session, never a fresh spawn).
+#[derive(Clone, Default)]
+pub(super) struct PendingAgentSpawn {
+    source_session_id: Option<SessionId>,
+    isolate: bool,
+}
+
+/// Kind-agnostic spawn-source resolution: an explicit target (e.g. the
+/// `--split`/split-target session) wins, else whatever pane is currently
+/// active. Shared by [`WorkspaceShell::pending_terminal_spawn`] and
+/// [`WorkspaceShell::pending_agent_spawn`] -- terminal cwd inheritance and
+/// agent lineage/isolation both need exactly the same "spawned from" pane.
+fn resolve_spawn_source(
     explicit_source: Option<SessionId>,
     active_session: Option<SessionId>,
 ) -> Option<SessionId> {
@@ -144,6 +162,10 @@ impl WorkspaceShell {
                     let provider_id =
                         horizon_agent::contract::ProviderRegistry::default().default_provider_id();
                     let role_id = self.pending_roles.remove(&summary.id);
+                    let spawn = self
+                        .pending_agent_spawns
+                        .remove(&summary.id)
+                        .unwrap_or_default();
                     // A brand-new agent session (this branch never runs for
                     // one `spawn_agent_resume`/`spawn_workspace_restore`
                     // already adopted -- see their own doc comments) has no
@@ -154,6 +176,12 @@ impl WorkspaceShell {
                     // exactly what used to be computed inside
                     // `SessiondHandle::start_session` itself (see
                     // `wire::SessionNew::workspace_root`'s doc comment).
+                    // For an isolated spawn this is only the *pre-isolation*
+                    // value -- sessiond overrides it with the worktree path
+                    // it creates and reports the authoritative root back via
+                    // `wire::SessionSummary::workspace_root`, which the
+                    // resume/restore sweeps below re-apply with
+                    // `Workspace::set_session_workspace_root`.
                     let workspace_root =
                         summary.workspace_root.or_else(default_agent_workspace_root);
                     if let Some(root) = workspace_root.clone() {
@@ -164,6 +192,8 @@ impl WorkspaceShell {
                         provider_id,
                         role_id,
                         workspace_root,
+                        spawn.source_session_id.map(agent_session_id),
+                        spawn.isolate,
                     );
                     self.agent_sessions.insert(
                         summary.id,
@@ -363,6 +393,18 @@ impl WorkspaceShell {
                         shell
                             .workspace
                             .register_detached_session(PaneKind::Agent, session_id);
+                        // The daemon's own `SessionEntry` is authoritative
+                        // for `workspace_root` -- for an isolated session
+                        // this is the worktree path sessiond actually
+                        // created, which nothing on the shell side could
+                        // have known at spawn time (worktree creation
+                        // finishes asynchronously, after `start_session`
+                        // already returned -- see `wire::SessionSummary::
+                        // workspace_root`'s doc comment). Overwrites
+                        // whatever the model already had, if anything.
+                        if let Some(root) = summary.workspace_root.clone() {
+                            shell.workspace.set_session_workspace_root(session_id, root);
+                        }
                         let session_handle = adopted.attach_session(summary.session_id);
                         shell.agent_sessions.insert(
                             session_id,
@@ -429,6 +471,21 @@ impl WorkspaceShell {
                         .into_iter()
                         .map(|summary| summary.session_id)
                         .collect();
+                    // Captured before `agent_summaries` is consumed below --
+                    // the daemon's own report of each session's
+                    // `workspace_root` (the authoritative post-isolation
+                    // worktree path for an isolated session; see
+                    // `wire::SessionSummary::workspace_root`'s doc comment),
+                    // applied to the surviving candidates further down.
+                    let agent_workspace_roots: HashMap<Uuid, std::path::PathBuf> = agent_summaries
+                        .iter()
+                        .filter_map(|summary| {
+                            summary
+                                .workspace_root
+                                .clone()
+                                .map(|root| (summary.session_id.as_uuid(), root))
+                        })
+                        .collect();
                     let agent_ids: HashSet<_> = agent_summaries
                         .into_iter()
                         .map(|summary| summary.session_id.as_uuid())
@@ -471,11 +528,11 @@ impl WorkspaceShell {
                             matches
                         })
                         .collect::<Vec<_>>();
-                    Some((terminals, agents))
+                    Some((terminals, agents, agent_workspace_roots))
                 })
                 .ok()
                 .flatten();
-            let Some((terminal_ids, agent_ids)) = candidates else {
+            let Some((terminal_ids, agent_ids, agent_workspace_roots)) = candidates else {
                 return;
             };
 
@@ -500,7 +557,7 @@ impl WorkspaceShell {
             };
 
             let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = this.update(cx, |shell, cx| {
+                let _ = this.update(cx, move |shell, cx| {
                     let Some(adopted) = shell.sessiond.as_ref() else {
                         return;
                     };
@@ -541,6 +598,16 @@ impl WorkspaceShell {
                     for (id, wire) in agents {
                         let session_id = SessionId::from_uuid(id);
                         if shell.workspace.session_pane_kind(session_id) == Some(PaneKind::Agent) {
+                            // See `spawn_agent_resume`'s matching comment:
+                            // the daemon's report is authoritative,
+                            // especially for an isolated session whose real
+                            // (worktree) root was only known after
+                            // `SessionNew` returned.
+                            if let Some(root) = agent_workspace_roots.get(&id) {
+                                shell
+                                    .workspace
+                                    .set_session_workspace_root(session_id, root.clone());
+                            }
                             shell.agent_sessions.insert(
                                 session_id,
                                 cx.new(|cx| AgentSession::new(wire, cx)),
@@ -685,11 +752,30 @@ impl WorkspaceShell {
 
     fn pending_terminal_spawn(&self, explicit_source: Option<SessionId>) -> PendingTerminalSpawn {
         PendingTerminalSpawn {
-            source_session_id: terminal_spawn_source(
+            source_session_id: resolve_spawn_source(
                 explicit_source,
                 self.workspace.active_session_id(),
             ),
             fallback_cwd: Self::default_terminal_cwd(),
+        }
+    }
+
+    /// Stages an agent spawn's source pane and isolation choice for
+    /// `reconcile` to consume -- `isolate` here is already the fully
+    /// resolved per-spawn choice (origin default folded with any explicit
+    /// override; see `create_session`/`external_new_session`), not a
+    /// further default to apply.
+    fn pending_agent_spawn(
+        &self,
+        explicit_source: Option<SessionId>,
+        isolate: bool,
+    ) -> PendingAgentSpawn {
+        PendingAgentSpawn {
+            source_session_id: resolve_spawn_source(
+                explicit_source,
+                self.workspace.active_session_id(),
+            ),
+            isolate,
         }
     }
 
@@ -759,6 +845,12 @@ impl WorkspaceShell {
         }
         let terminal_spawn =
             matches!(kind, PaneKind::Terminal).then(|| self.pending_terminal_spawn(None));
+        // Palette origin defaults to shared, not isolated (`docs/session-
+        // relationship-design.md` decision 3) -- there is no palette UI yet
+        // to opt in to isolation (that's decision 4's surfacing slice), so
+        // this is always `false` for now.
+        let agent_spawn =
+            matches!(kind, PaneKind::Agent).then(|| self.pending_agent_spawn(None, false));
         let session_id = match placement {
             Placement::NewTab => Some(
                 self.workspace
@@ -779,6 +871,9 @@ impl WorkspaceShell {
         if let Some(session_id) = session_id {
             if let Some(spawn) = terminal_spawn {
                 self.pending_terminal_spawns.insert(session_id, spawn);
+            }
+            if let Some(spawn) = agent_spawn {
+                self.pending_agent_spawns.insert(session_id, spawn);
             }
             if let Some(role_id) = role_id {
                 self.pending_roles.insert(session_id, role_id);
@@ -823,7 +918,13 @@ impl WorkspaceShell {
     /// the first user message right after the session starts — the
     /// create-with-prompt composite from the CLI design. `role_id` is
     /// fixed by the caller (e.g. `new-config-agent`), never client-supplied
-    /// — see `pending_roles`.
+    /// — see `pending_roles`. `isolate` is agent sessions' own per-spawn
+    /// override of `docs/session-relationship-design.md` decision 3's
+    /// origin default (CLI/control-plane origin defaults to isolated,
+    /// mirroring `activate`'s opposite default): `None` applies that
+    /// default, `Some` is an explicit override (the CLI's `--share`) --
+    /// `control_plane::dispatch_invoke` already rejects a non-`None` value
+    /// for a terminal spawn, so this never has to.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn external_new_session(
         &mut self,
@@ -832,6 +933,7 @@ impl WorkspaceShell {
         split: Option<(SessionId, SplitAxis)>,
         activate: bool,
         prompt: Option<String>,
+        isolate: Option<bool>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
@@ -840,6 +942,9 @@ impl WorkspaceShell {
         }
         let terminal_spawn = matches!(kind, PaneKind::Terminal)
             .then(|| self.pending_terminal_spawn(split.map(|(target, _)| target)));
+        let agent_spawn = matches!(kind, PaneKind::Agent).then(|| {
+            self.pending_agent_spawn(split.map(|(target, _)| target), isolate.unwrap_or(true))
+        });
         let session_id = match split {
             Some((target, axis)) => self
                 .workspace
@@ -851,6 +956,9 @@ impl WorkspaceShell {
         };
         if let Some(spawn) = terminal_spawn {
             self.pending_terminal_spawns.insert(session_id, spawn);
+        }
+        if let Some(spawn) = agent_spawn {
+            self.pending_agent_spawns.insert(session_id, spawn);
         }
         if let Some(role_id) = role_id {
             self.pending_roles.insert(session_id, role_id);
@@ -874,19 +982,19 @@ mod tests {
     use horizon_workspace::{PaneKind, SessionId, Workspace};
 
     use super::{
-        pinned_terminal_spawn, terminal_fallback_cwd, terminal_resume_candidates,
-        terminal_spawn_source,
+        pinned_terminal_spawn, resolve_spawn_source, terminal_fallback_cwd,
+        terminal_resume_candidates,
     };
 
     #[test]
-    fn explicit_split_target_wins_as_terminal_spawn_source() {
+    fn explicit_split_target_wins_as_the_spawn_source() {
         let explicit = SessionId::new();
         let active = SessionId::new();
         assert_eq!(
-            terminal_spawn_source(Some(explicit), Some(active)),
+            resolve_spawn_source(Some(explicit), Some(active)),
             Some(explicit)
         );
-        assert_eq!(terminal_spawn_source(None, Some(active)), Some(active));
+        assert_eq!(resolve_spawn_source(None, Some(active)), Some(active));
     }
 
     #[test]
@@ -910,7 +1018,7 @@ mod tests {
         // request's cwd must be exactly the target session's
         // `workspace_root`, with no spawn-source pid inheritance (unlike a
         // plain new terminal, which sources from the active pane instead --
-        // see `terminal_spawn_source`) since the directory is already known.
+        // see `resolve_spawn_source`) since the directory is already known.
         let workspace_root = std::path::PathBuf::from("/some/agent/workspace");
 
         let spawn = pinned_terminal_spawn(workspace_root.clone());
@@ -987,5 +1095,45 @@ mod tests {
         assert_eq!(workspace.tab_count(), 0);
         assert!(workspace.session_summaries().is_empty());
         assert!(workspace.to_persisted_json().is_ok());
+    }
+
+    // `spawn_agent_resume`/`spawn_workspace_restore` are themselves
+    // GPUI-entity/async-shaped and not unit-testable without a window and a
+    // live sessiond connection, same as `handle_terminal_exited` above --
+    // but their model-level step (`Workspace::set_session_workspace_root`,
+    // called with `wire::SessionSummary.workspace_root` once the daemon's
+    // own report of it arrives) is the same pure building block, standing
+    // in for an end-to-end resume/adopt test.
+
+    #[test]
+    fn an_isolated_sessions_reported_workspace_root_wins_over_the_shells_pre_spawn_value() {
+        // `docs/session-relationship-design.md`: `reconcile`'s Agent branch
+        // records a session's *pre-isolation* `workspace_root` on the model
+        // right away (the value it sent in `SessionNew`), since sessiond's
+        // real isolated worktree only resolves asynchronously afterward.
+        // `spawn_agent_resume`/`spawn_workspace_restore` must overwrite that
+        // with whatever `wire::SessionSummary.workspace_root` the daemon
+        // reports later -- the authoritative post-isolation root -- not
+        // leave the stale pre-spawn value standing.
+        let mut workspace = Workspace::mvp();
+        let session_id = SessionId::new();
+        workspace.register_detached_session(PaneKind::Agent, session_id);
+
+        let pre_spawn_root = std::path::PathBuf::from("/home/user/project");
+        workspace.set_session_workspace_root(session_id, pre_spawn_root.clone());
+        assert_eq!(
+            workspace.session_workspace_root(session_id),
+            Some(pre_spawn_root.as_path())
+        );
+
+        let isolated_root =
+            std::path::PathBuf::from("/home/user/project/.horizon/worktrees/abcd1234");
+        workspace.set_session_workspace_root(session_id, isolated_root.clone());
+
+        assert_eq!(
+            workspace.session_workspace_root(session_id),
+            Some(isolated_root.as_path()),
+            "the daemon-reported root must win over the shell's pre-spawn value"
+        );
     }
 }

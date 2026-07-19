@@ -147,10 +147,47 @@ brand-new-agent-session path in `reconcile` ever calls the setter.
 Per-row "open its directory" on an arbitrary session (decision 4b) still
 needs the session-manager's lineage view and rides a later slice.
 
+Decisions 1-3 and 5's core landed: the lineage tree lives daemon-side, in
+`horizon-sessiond`'s in-memory `SessionEntry` (`parent_session_id`/
+`workspace_root`/`worktree`) -- additive over the wire as `SessionSummary.
+parent_session_id`/`workspace_root` and `SessionNew.spawn_source_session_id`/
+`isolate` (no `CONTRACT_VERSION` bump; `SessionEntry`'s lineage doesn't
+survive a `horizon-sessiond` process restart, the same accepted gap
+`workspace_root` already had). An isolated spawn gets a real git worktree
+at `<repo_root>/.horizon/worktrees/<slug>` on branch `horizon/<slug>`
+(`.horizon` ignored via that repo's own `.git/info/exclude`, never its
+tracked `.gitignore`); base ref is fresh from `origin/<default-branch>`
+for a lineage root, or the source session's own worktree `HEAD` for a
+derived child, per decision 3. The edge is recorded only when isolation
+actually succeeds -- a failed worktree creation degrades to an ordinary
+shared spawn with no edge. Decision 5's terminate cleanup runs `git
+worktree remove` (never the branch) when a session's own thread ends,
+which already refuses when the worktree is dirty. The origin-based
+default is wired the same way `activate`'s was: palette spawns default
+shared (no override surface yet -- that's decision 4b's UI slice); CLI/
+control-plane spawns default isolated, with an explicit `--share`
+opt-out. Terminal-as-isolated-child stays deferred, per the "agents-first"
+note above.
+
+This closes a gap decision 4a's landing above had left open: worktree
+creation resolves *after* `Control::SessionNew` already returned (it's
+real IO on the new session's own thread), so the shell's pre-spawn
+`workspace_root` value is only ever the inherited-cwd guess for an
+isolated session, not the real worktree path. `SessionSummary.
+workspace_root` is `horizon-sessiond`'s authoritative answer once
+resolved; `WorkspaceShell::spawn_agent_resume`/`spawn_workspace_restore`
+(the two places the shell already re-lists sessions from the daemon) now
+overwrite the model's stored root with it, so `OpenTerminalInSessionDirectory`
+opens the real worktree once one of those sweeps has run. Still eventual,
+not live, for a session created and used within one continuous run:
+there's no push channel for a mid-run root correction yet (unlike
+`SessionModel`'s live announce), so until the next resume/reload the
+model keeps the pre-isolation guess for a session created interactively
+this run.
+
 Remaining is a roadmap item under shared-foundation 4: terminal-cwd
-sourcing (process-info crate + pid capture, surfaced to the shell so
-non-agent sessions can get a real `workspace_root` too), the lineage tree
-in the session domain, isolation/worktree creation with the
-origin-default, and the session-manager lineage view (decision 4b).
-Messaging/supervision layer onto the same tree in shared-foundation 4's
-own consultation.
+sourcing surfaced to the shell (non-agent sessions still have no
+`workspace_root` at all), the session-manager lineage view (decision 4b),
+and a live root-correction push for a freshly isolated session within the
+same run. Messaging/supervision layer onto the same tree in
+shared-foundation 4's own consultation.

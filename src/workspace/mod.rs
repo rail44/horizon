@@ -53,7 +53,7 @@ mod modals;
 mod render;
 mod session_lifecycle;
 
-use session_lifecycle::PendingTerminalSpawn;
+use session_lifecycle::{PendingAgentSpawn, PendingTerminalSpawn};
 
 pub(crate) fn init(cx: &mut App) {
     bindings::apply_bindings(cx, horizon_config::load());
@@ -210,6 +210,9 @@ pub(crate) struct WorkspaceShell {
     // reconcile. Sessiond resolves the source session's live cwd; Horizon
     // carries only the source id and fallback spawn input.
     pending_terminal_spawns: HashMap<SessionId, PendingTerminalSpawn>,
+    // Same staging shape, for agent spawns' own two knobs (source pane +
+    // isolation) -- see `PendingAgentSpawn`.
+    pending_agent_spawns: HashMap<SessionId, PendingAgentSpawn>,
     // Created eagerly before the first reconcile. Its raw FIFO accepts
     // terminal and agent requests while connect/Hello proceeds in the
     // background.
@@ -276,6 +279,7 @@ impl WorkspaceShell {
             agent_sessions: HashMap::new(),
             pending_roles: HashMap::new(),
             pending_terminal_spawns: HashMap::new(),
+            pending_agent_spawns: HashMap::new(),
             sessiond: Some(sessiond.clone()),
             reload_in_progress: false,
             panes: HashMap::new(),

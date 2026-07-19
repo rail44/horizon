@@ -17,6 +17,7 @@ tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-
 uuid = { version = "1.18", features = ["v4"] }
 
 [dev-dependencies]
+tempfile = "3"
 termwiz = { version = "0.23.3", features = ["use_serde"] }
 
 [lints.clippy]

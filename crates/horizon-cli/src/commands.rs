@@ -67,19 +67,35 @@ pub fn to_request(subcommand: &Subcommand, resolved_split: Option<&str>) -> Requ
     match subcommand {
         Subcommand::NewTerminal { activate, .. } => invoke(
             "new-terminal",
-            create_session_args(resolved_split, *activate, None),
+            create_session_args(resolved_split, *activate, None, None),
         ),
         Subcommand::NewAgent {
-            prompt, activate, ..
+            prompt,
+            activate,
+            share,
+            ..
         } => invoke(
             "new-agent",
-            create_session_args(resolved_split, *activate, prompt.as_deref()),
+            create_session_args(
+                resolved_split,
+                *activate,
+                prompt.as_deref(),
+                share.then_some(false),
+            ),
         ),
         Subcommand::NewConfigAgent {
-            prompt, activate, ..
+            prompt,
+            activate,
+            share,
+            ..
         } => invoke(
             "new-config-agent",
-            create_session_args(resolved_split, *activate, prompt.as_deref()),
+            create_session_args(
+                resolved_split,
+                *activate,
+                prompt.as_deref(),
+                share.then_some(false),
+            ),
         ),
         Subcommand::Attach {
             session_id,
@@ -138,14 +154,20 @@ fn invoke(command: &str, args: serde_json::Value) -> Request {
 
 /// `new-terminal`/`new-agent`'s wire args -- the mirror image of
 /// `app::external_commands::create_session_invocation`'s parsing on the
-/// server side. `split`/`prompt` are only included when present, so an
-/// unadorned `new-terminal`/`new-agent` sends the same `{"activate":false}`
-/// shape v1 already sent (plus the always-present `activate` field the
-/// Second revision adds).
+/// server side. `split`/`prompt`/`isolate` are only included when present,
+/// so an unadorned `new-terminal`/`new-agent` sends the same
+/// `{"activate":false}` shape v1 already sent (plus the always-present
+/// `activate` field the Second revision adds). `isolate` is `new-agent`/
+/// `new-config-agent`'s `--share` override (`Some(false)`) turned into the
+/// wire's `docs/session-relationship-design.md` decision 3 knob; `None`
+/// (the common case) omits the key entirely, letting the server apply its
+/// own CLI-origin default (isolated) -- `new-terminal` always passes `None`
+/// here, since isolation isn't offered for terminal spawns.
 fn create_session_args(
     split: Option<&str>,
     activate: bool,
     prompt: Option<&str>,
+    isolate: Option<bool>,
 ) -> serde_json::Value {
     let mut args = serde_json::Map::new();
     if let Some(split) = split {
@@ -160,6 +182,9 @@ fn create_session_args(
             "prompt".to_string(),
             serde_json::Value::String(prompt.to_string()),
         );
+    }
+    if let Some(isolate) = isolate {
+        args.insert("isolate".to_string(), serde_json::Value::Bool(isolate));
     }
     serde_json::Value::Object(args)
 }
@@ -178,6 +203,7 @@ mod tests {
             prompt: prompt.map(str::to_string),
             split,
             activate,
+            share: false,
         }
     }
 
@@ -282,6 +308,29 @@ mod tests {
         };
         assert_eq!(invoke.command, "new-agent");
         assert_eq!(invoke.args, serde_json::json!({ "activate": false }));
+    }
+
+    /// `--share` (decision 3's CLI-origin opt-out override) becomes an
+    /// explicit `"isolate": false` in the wire args; omitted (the default)
+    /// sends no `isolate` key at all, letting the server apply its own
+    /// CLI-origin default.
+    #[test]
+    fn new_agent_with_share_sends_an_explicit_isolate_false() {
+        let Request::Invoke(invoke) = to_request(
+            &Subcommand::NewAgent {
+                prompt: None,
+                split: None,
+                activate: false,
+                share: true,
+            },
+            None,
+        ) else {
+            panic!("expected an Invoke request");
+        };
+        assert_eq!(
+            invoke.args,
+            serde_json::json!({ "activate": false, "isolate": false })
+        );
     }
 
     #[test]

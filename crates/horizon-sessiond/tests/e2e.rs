@@ -1036,6 +1036,8 @@ async fn send_session_new(writer: &mut OwnedWriteHalf, session_id: SessionId) {
             provider_id: mock_provider_id(),
             role_id: None,
             workspace_root: None,
+            spawn_source_session_id: None,
+            isolate: false,
         })),
     )
     .await
@@ -1060,6 +1062,8 @@ async fn send_session_new_with_role(
             provider_id: mock_provider_id(),
             role_id: Some(role_id),
             workspace_root: None,
+            spawn_source_session_id: None,
+            isolate: false,
         })),
     )
     .await
@@ -1175,6 +1179,8 @@ async fn session_list_reflects_live_sessions_after_session_new() {
                     session_id,
                     provider_id: mock_provider_id(),
                     role_id: None,
+                    parent_session_id: None,
+                    workspace_root: None,
                 }]
             );
             return;
@@ -1801,6 +1807,8 @@ async fn killed_sessiond_respawns_and_replays_transcript_with_open_turn_cancelle
             session_id,
             provider_id: mock_provider_id(),
             role_id: None,
+            parent_session_id: None,
+            workspace_root: None,
         }])),
         "the resumed session must be listed as live again"
     );
@@ -1907,6 +1915,8 @@ async fn resume_restores_the_sessions_role_after_a_crash_and_respawn() {
             session_id,
             provider_id: mock_provider_id(),
             role_id: Some(RoleId("config".to_string())),
+            parent_session_id: None,
+            workspace_root: None,
         }])),
         "resume must restore the session's role, not just its provider"
     );
@@ -2029,6 +2039,8 @@ async fn drained_sessiond_respawns_and_preserves_a_completed_session() {
             session_id,
             provider_id: mock_provider_id(),
             role_id: None,
+            parent_session_id: None,
+            workspace_root: None,
         }])),
         "a gracefully drained session must resume too, not just a crashed one"
     );
@@ -2127,6 +2139,8 @@ async fn resume_skips_sessions_whose_log_already_ended_in_a_terminal_state() {
             session_id: live_session,
             provider_id: mock_provider_id(),
             role_id: None,
+            parent_session_id: None,
+            workspace_root: None,
         }])),
         "only the live session should have been resumed, got {reply:?}"
     );
@@ -2193,6 +2207,8 @@ async fn hello_answers_immediately_while_session_list_waits_for_a_slow_resume() 
             session_id: live_session,
             provider_id: mock_provider_id(),
             role_id: None,
+            parent_session_id: None,
+            workspace_root: None,
         }])),
     );
 }
@@ -2360,6 +2376,8 @@ async fn duckdb_rebuild_delay_does_not_block_hello_or_session_list() {
             session_id: live_session,
             provider_id: mock_provider_id(),
             role_id: None,
+            parent_session_id: None,
+            workspace_root: None,
         }])),
     );
 }

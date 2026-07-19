@@ -1,0 +1,470 @@
+//! Isolation/worktree creation at spawn -- `docs/session-relationship-design.md`
+//! decisions 3 and 5. Sessiond-side (the design's pinned call): a spawn
+//! requesting isolation gets its own `git worktree` under the target
+//! repository's `.horizon/worktrees/<slug>`, branched per decision 3's base-ref
+//! rule, and that worktree is removed (never the branch) on a clean terminate
+//! (decision 5). Everything here shells out to the `git` binary rather than
+//! adding a libgit2/gix dependency -- consistent with there being no existing
+//! git-library dependency anywhere in this workspace, and `git worktree`/
+//! `git worktree remove`'s own dirtiness check already implements exactly the
+//! "no uncommitted changes" rule decision 5 asks for, so there is no reason to
+//! duplicate it with a hand-rolled status parse.
+
+use std::path::{Path, PathBuf};
+
+use uuid::Uuid;
+
+/// A session's own isolated worktree: enough to confine its file tools to
+/// `path`, and to let a later child spawned *from* this session (decision
+/// 3's multi-level chaining) find both the branch point (`path`'s HEAD) and
+/// where sibling worktrees belong (`repo_root`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorktreeInfo {
+    pub(crate) repo_root: PathBuf,
+    pub(crate) path: PathBuf,
+    pub(crate) branch: String,
+}
+
+/// Decision 3's base-ref rule, as a pure decision (no IO): whether the new
+/// worktree is a lineage root (branch fresh from the repo's origin default)
+/// or a derived child (branch from the spawn source's own worktree HEAD).
+/// [`create_isolated_worktree`] turns this into an actual git ref/commit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BaseRefStrategy {
+    /// No owned parent worktree: this spawn is a lineage root.
+    FreshFromOrigin,
+    /// The spawn source itself owns a worktree: branch from *its* current
+    /// HEAD, so a multi-level delegation chain includes the parent's own
+    /// commits, not just origin's ("a child of an agent's worktree must
+    /// branch from that worktree, not origin/main").
+    SourceWorktreeHead,
+}
+
+pub(crate) fn base_ref_strategy(source_is_owned_worktree: bool) -> BaseRefStrategy {
+    if source_is_owned_worktree {
+        BaseRefStrategy::SourceWorktreeHead
+    } else {
+        BaseRefStrategy::FreshFromOrigin
+    }
+}
+
+/// Resolves where a new isolated worktree should be created *from* and
+/// which [`BaseRefStrategy`] applies -- the one pure function the design's
+/// implementation notes ask for. `source` is `Some((dir, source_is_owned_
+/// worktree))` when the spawn's source session is still live in `sessiond`
+/// (see `SessiondState::session_directory`): `dir` is that session's own
+/// worktree path if it owns one, else its plain `workspace_root`; `source_
+/// is_owned_worktree` says which. `source` is `None` for an unknown/foreign
+/// source id (a terminal isn't tracked here yet -- deferred, see the design
+/// doc's "agents-first" note) or no source pane at all, in which case
+/// `fallback` (the spawn's own `workspace_root`, or this process's cwd)
+/// stands in and the spawn is treated as a lineage root.
+pub(crate) fn resolve_isolation_source(
+    source: Option<(PathBuf, bool)>,
+    fallback: PathBuf,
+) -> (PathBuf, bool) {
+    match source {
+        Some((dir, source_is_owned_worktree)) => (dir, source_is_owned_worktree),
+        None => (fallback, false),
+    }
+}
+
+/// The worktree directory name / branch suffix derived from a session id:
+/// short enough to keep `.horizon/worktrees/<slug>` paths reasonable, long
+/// enough that two live sessions colliding is practically a non-issue.
+pub(crate) fn short_slug(session_id: Uuid) -> String {
+    session_id.simple().to_string()[..8].to_string()
+}
+
+fn run_git(dir: &Path, args: &[&str]) -> Result<String, String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .map_err(|error| format!("failed to run git {args:?} in {}: {error}", dir.display()))?;
+    if !output.status.success() {
+        return Err(format!(
+            "git {args:?} in {} failed: {}",
+            dir.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// The repository's shared git dir (`<repo_root>/.git` for an ordinary
+/// non-bare repo), resolved from `dir` -- which may itself already be a
+/// linked worktree, in which case `--show-toplevel` would report *that*
+/// worktree's own path, not the main repository's. `--git-common-dir` is
+/// shared by every worktree of the same repository, so it's the stable way
+/// to find the one true repo root regardless of which worktree `dir` is.
+fn git_common_dir(dir: &Path) -> Result<PathBuf, String> {
+    run_git(
+        dir,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )
+    .map(PathBuf::from)
+}
+
+fn repo_root_from_common_dir(common_dir: &Path) -> Result<PathBuf, String> {
+    common_dir
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| format!("git common dir {} has no parent", common_dir.display()))
+}
+
+/// `origin/<default-branch>` resolved via `origin/HEAD`'s symbolic ref, the
+/// same thing a normal `git clone` sets up automatically (this repo may not
+/// have gone through a clone, e.g. a fresh scratch repo in a test, or one
+/// where `git remote set-head origin -a` was never run). Falls back to the
+/// local `HEAD` when there's no configured origin at all -- a sane default
+/// for local-only development, and what keeps this hermetic in tests (no
+/// network, see the module doc).
+fn fresh_origin_ref(repo_root: &Path) -> String {
+    match run_git(
+        repo_root,
+        &["symbolic-ref", "-q", "refs/remotes/origin/HEAD"],
+    ) {
+        Ok(target) => target
+            .strip_prefix("refs/remotes/")
+            .map(str::to_string)
+            .unwrap_or(target),
+        Err(_) => "HEAD".to_string(),
+    }
+}
+
+/// Best-effort: makes sure `.horizon` won't show up as untracked clutter in
+/// the target repository's own `git status`, mirroring this repo's own
+/// `/.horizon` `.gitignore` entry -- but via `.git/info/exclude` rather than
+/// editing the target repo's tracked `.gitignore`, since sessiond has no
+/// business committing a change to a file the repo's own history owns. Never
+/// fails the worktree creation itself: an ignore-file write is a nicety, not
+/// a correctness requirement.
+fn ensure_horizon_ignored(common_dir: &Path) {
+    let Ok(repo_root) = repo_root_from_common_dir(common_dir) else {
+        return;
+    };
+    if run_git(&repo_root, &["check-ignore", "-q", ".horizon"]).is_ok() {
+        return;
+    }
+    let exclude_path = common_dir.join("info").join("exclude");
+    let existing = std::fs::read_to_string(&exclude_path).unwrap_or_default();
+    if existing.lines().any(|line| line.trim() == "/.horizon") {
+        return;
+    }
+    if let Some(parent) = exclude_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut content = existing;
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str("/.horizon\n");
+    let _ = std::fs::write(&exclude_path, content);
+}
+
+/// Creates a fresh isolated worktree for `session_id`, per decision 3:
+/// discovers `source_dir`'s repository, resolves the base ref per
+/// [`base_ref_strategy`], then `git worktree add -b horizon/<slug>
+/// <repo_root>/.horizon/worktrees/<slug> <base_ref>`. Branch naming is
+/// stable and session-derived (`horizon/<slug>`); the directory lives at
+/// the repository root regardless of whether `source_dir` is itself a
+/// linked worktree, so chained (multi-level) isolation never nests a
+/// worktree inside another one.
+pub(crate) fn create_isolated_worktree(
+    source_dir: &Path,
+    source_is_owned_worktree: bool,
+    session_id: Uuid,
+) -> Result<WorktreeInfo, String> {
+    let common_dir = git_common_dir(source_dir)?;
+    let repo_root = repo_root_from_common_dir(&common_dir)?;
+    ensure_horizon_ignored(&common_dir);
+
+    let base_ref = match base_ref_strategy(source_is_owned_worktree) {
+        BaseRefStrategy::SourceWorktreeHead => run_git(source_dir, &["rev-parse", "HEAD"])?,
+        BaseRefStrategy::FreshFromOrigin => fresh_origin_ref(&repo_root),
+    };
+
+    let slug = short_slug(session_id);
+    let worktree_path = repo_root.join(".horizon").join("worktrees").join(&slug);
+    let branch = format!("horizon/{slug}");
+    let worktree_path_str = worktree_path.to_str().ok_or_else(|| {
+        format!(
+            "worktree path {} is not valid UTF-8",
+            worktree_path.display()
+        )
+    })?;
+
+    run_git(
+        &repo_root,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            &branch,
+            worktree_path_str,
+            &base_ref,
+        ],
+    )?;
+
+    Ok(WorktreeInfo {
+        repo_root,
+        path: worktree_path,
+        branch,
+    })
+}
+
+/// Decision 5's terminate-cleanup rule: removes `info`'s worktree if it's
+/// clean, keeps it (returns `false`) if it has any uncommitted or untracked
+/// changes -- `git worktree remove` already refuses a dirty worktree on its
+/// own (without `--force`), which is exactly "no uncommitted changes", so
+/// this doesn't duplicate that check with a hand-rolled `git status` parse.
+/// The branch itself is never deleted either way.
+pub(crate) fn remove_worktree_if_clean(info: &WorktreeInfo) -> bool {
+    let Some(path_str) = info.path.to_str() else {
+        return false;
+    };
+    run_git(&info.repo_root, &["worktree", "remove", path_str]).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- Pure logic ---------------------------------------------------
+
+    #[test]
+    fn resolve_isolation_source_with_no_source_uses_the_fallback_as_a_root() {
+        let fallback = PathBuf::from("/tmp/fallback");
+        assert_eq!(
+            resolve_isolation_source(None, fallback.clone()),
+            (fallback, false)
+        );
+    }
+
+    #[test]
+    fn resolve_isolation_source_uses_a_plain_source_dir_as_a_root() {
+        let source_dir = PathBuf::from("/tmp/source");
+        assert_eq!(
+            resolve_isolation_source(
+                Some((source_dir.clone(), false)),
+                PathBuf::from("/tmp/fallback")
+            ),
+            (source_dir, false)
+        );
+    }
+
+    #[test]
+    fn resolve_isolation_source_marks_an_owned_source_worktree_as_derived() {
+        let worktree_dir = PathBuf::from("/tmp/source-worktree");
+        assert_eq!(
+            resolve_isolation_source(
+                Some((worktree_dir.clone(), true)),
+                PathBuf::from("/tmp/fallback")
+            ),
+            (worktree_dir, true)
+        );
+    }
+
+    #[test]
+    fn base_ref_strategy_maps_owned_source_worktree_to_source_head() {
+        assert_eq!(base_ref_strategy(true), BaseRefStrategy::SourceWorktreeHead);
+        assert_eq!(base_ref_strategy(false), BaseRefStrategy::FreshFromOrigin);
+    }
+
+    #[test]
+    fn short_slug_is_short_and_deterministic_for_the_same_id() {
+        let id = Uuid::new_v4();
+        let slug = short_slug(id);
+        assert_eq!(slug.len(), 8);
+        assert!(slug.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(slug, short_slug(id));
+    }
+
+    // --- Real git, in temp repositories --------------------------------
+
+    fn git(dir: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .status()
+            .unwrap_or_else(|error| panic!("failed to run git {args:?}: {error}"));
+        assert!(status.success(), "git {args:?} failed in {}", dir.display());
+    }
+
+    fn init_repo(dir: &Path) {
+        git(dir, &["init", "-q", "-b", "main"]);
+        git(dir, &["config", "user.email", "test@example.com"]);
+        git(dir, &["config", "user.name", "Test"]);
+    }
+
+    fn commit_file(dir: &Path, name: &str, contents: &str, message: &str) {
+        std::fs::write(dir.join(name), contents).unwrap();
+        git(dir, &["add", name]);
+        git(dir, &["commit", "-q", "-m", message]);
+    }
+
+    /// The base "no origin remote" shape every other real-git test builds
+    /// on: an initialized repo with one commit, so `HEAD` always resolves.
+    fn scratch_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        init_repo(dir.path());
+        commit_file(dir.path(), "README.md", "root\n", "root commit");
+        dir
+    }
+
+    #[test]
+    fn create_isolated_worktree_has_the_expected_branch_and_path_shape() {
+        let repo = scratch_repo();
+        let session_id = Uuid::new_v4();
+
+        let info = create_isolated_worktree(repo.path(), false, session_id)
+            .expect("worktree creation should succeed");
+
+        let slug = short_slug(session_id);
+        assert_eq!(info.branch, format!("horizon/{slug}"));
+        assert_eq!(
+            info.path,
+            repo.path().join(".horizon").join("worktrees").join(&slug)
+        );
+        assert!(info.path.is_dir(), "worktree directory should exist");
+        assert_eq!(
+            std::fs::read_to_string(info.path.join("README.md")).unwrap(),
+            "root\n"
+        );
+
+        let current_branch = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&info.path)
+            .args(["branch", "--show-current"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&current_branch.stdout).trim(),
+            info.branch
+        );
+    }
+
+    #[test]
+    fn create_isolated_worktree_falls_back_to_local_head_without_an_origin_remote() {
+        let repo = scratch_repo();
+        commit_file(repo.path(), "second.txt", "second\n", "second commit");
+
+        let info = create_isolated_worktree(repo.path(), false, Uuid::new_v4())
+            .expect("worktree creation should succeed");
+
+        // The new worktree must include the *local* tip (no origin to
+        // fall back to at all), proving the "HEAD" fallback actually ran.
+        assert!(info.path.join("second.txt").is_file());
+    }
+
+    #[test]
+    fn create_isolated_worktree_branches_fresh_from_the_origin_default_branch() {
+        let repo = scratch_repo();
+
+        // A bare "origin" the local repo tracks, one commit ahead of it --
+        // simulates a properly cloned repo (`git clone` sets `origin/HEAD`
+        // for us; here it's done explicitly since there was no clone).
+        let origin = tempfile::tempdir().expect("create temp dir");
+        git(origin.path(), &["init", "-q", "--bare", "-b", "main"]);
+        git(
+            repo.path(),
+            &["remote", "add", "origin", origin.path().to_str().unwrap()],
+        );
+        git(repo.path(), &["push", "-q", "origin", "main"]);
+        git(repo.path(), &["remote", "set-head", "origin", "-a"]);
+        // A local-only commit past what origin has -- the new worktree must
+        // NOT include this, proving it branched from origin, not local HEAD.
+        commit_file(
+            repo.path(),
+            "local-only.txt",
+            "local\n",
+            "local-only commit",
+        );
+
+        let info = create_isolated_worktree(repo.path(), false, Uuid::new_v4())
+            .expect("worktree creation should succeed");
+
+        assert!(
+            !info.path.join("local-only.txt").is_file(),
+            "a root spawn must branch from origin's tip, not the local-only commit"
+        );
+        assert!(info.path.join("README.md").is_file());
+    }
+
+    #[test]
+    fn create_isolated_worktree_branches_from_the_source_head_when_the_source_is_owned() {
+        let repo = scratch_repo();
+        let parent_id = Uuid::new_v4();
+        let parent = create_isolated_worktree(repo.path(), false, parent_id)
+            .expect("parent worktree creation should succeed");
+        // Simulate the parent session's own agent having committed work in
+        // its worktree -- the child must see this, since it's supposed to
+        // derive from the parent's *worktree* HEAD, not the repo root's.
+        commit_file(
+            &parent.path,
+            "parent-work.txt",
+            "parent work\n",
+            "parent work",
+        );
+
+        let child = create_isolated_worktree(&parent.path, true, Uuid::new_v4())
+            .expect("child worktree creation should succeed");
+
+        assert!(child.path.join("parent-work.txt").is_file());
+        assert_eq!(child.repo_root, parent.repo_root);
+    }
+
+    #[test]
+    fn ensure_horizon_ignored_adds_the_exclude_line_exactly_once() {
+        let repo = scratch_repo();
+        create_isolated_worktree(repo.path(), false, Uuid::new_v4())
+            .expect("first worktree creation should succeed");
+        create_isolated_worktree(repo.path(), false, Uuid::new_v4())
+            .expect("second worktree creation should succeed");
+
+        let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude")).unwrap();
+        assert_eq!(
+            exclude
+                .lines()
+                .filter(|line| line.trim() == "/.horizon")
+                .count(),
+            1,
+            "exclude file should list /.horizon exactly once, got:\n{exclude}"
+        );
+    }
+
+    #[test]
+    fn remove_worktree_if_clean_removes_a_clean_worktree_but_keeps_the_branch() {
+        let repo = scratch_repo();
+        let info = create_isolated_worktree(repo.path(), false, Uuid::new_v4())
+            .expect("worktree creation should succeed");
+
+        assert!(remove_worktree_if_clean(&info));
+        assert!(!info.path.exists(), "clean worktree should be removed");
+
+        let branches = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(["branch", "--list", &info.branch])
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&branches.stdout).contains(&info.branch),
+            "the branch must survive worktree removal"
+        );
+    }
+
+    #[test]
+    fn remove_worktree_if_clean_keeps_a_dirty_worktree() {
+        let repo = scratch_repo();
+        let info = create_isolated_worktree(repo.path(), false, Uuid::new_v4())
+            .expect("worktree creation should succeed");
+        std::fs::write(info.path.join("untracked.txt"), "dirty\n").unwrap();
+
+        assert!(!remove_worktree_if_clean(&info));
+        assert!(info.path.is_dir(), "dirty worktree must be kept");
+    }
+}

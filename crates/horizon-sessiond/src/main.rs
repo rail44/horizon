@@ -58,6 +58,7 @@
 
 mod session;
 mod terminal;
+mod worktree;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

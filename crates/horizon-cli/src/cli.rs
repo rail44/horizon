@@ -42,7 +42,10 @@ pub enum SplitFlag {
 /// `activate` (the CLI's `--active`, wired to `docs/cli-control-plane-
 /// design.md`'s "activate rides on creating/attaching operations" decision)
 /// and (for the first two) `split` (the CLI's `--split`, "Placement
-/// vocabulary").
+/// vocabulary"). `NewAgent`/`NewConfigAgent` also carry `share` (`--share`):
+/// `docs/session-relationship-design.md` decision 3's CLI-origin default is
+/// an *isolated* worktree, so `--share` is the opt-out override (there is no
+/// `--isolate` counterpart -- it would be a no-op given the default).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Subcommand {
     NewTerminal {
@@ -53,6 +56,7 @@ pub enum Subcommand {
         prompt: Option<String>,
         split: Option<SplitFlag>,
         activate: bool,
+        share: bool,
     },
     /// `new-agent`'s role-tagged flavor: spawns the configuration agent
     /// (the `config` role -- theme/keybinding editing). A separate
@@ -63,6 +67,7 @@ pub enum Subcommand {
         prompt: Option<String>,
         split: Option<SplitFlag>,
         activate: bool,
+        share: bool,
     },
     Attach {
         session_id: String,
@@ -118,8 +123,8 @@ const USAGE: &str = "Usage: horizon [--socket <path>] [--json] [--yes] <subcomma
 Running `horizon` with no subcommand launches the GUI application.\n\
 Subcommands:\n  \
   new-terminal [--split [<session-id>]] [--active]\n  \
-  new-agent [--prompt <text>] [--split [<session-id>]] [--active]\n  \
-  new-config-agent [--prompt <text>] [--split [<session-id>]] [--active]\n  \
+  new-agent [--prompt <text>] [--split [<session-id>]] [--active] [--share]\n  \
+  new-config-agent [--prompt <text>] [--split [<session-id>]] [--active] [--share]\n  \
   attach <session-id> [--active]\n  \
   terminate-session <session-id>\n  \
   terminate-all-detached\n  \
@@ -134,9 +139,9 @@ Subcommands:\n  \
   state";
 
 /// Parses `argv` (already stripped of `argv[0]`). Global flags
-/// (`--socket`/`--json`/`--yes`/`--prompt`/`--split`/`--active`) are
-/// recognized anywhere in the argument list, not just before the subcommand
-/// name -- simpler than enforcing a strict positional grammar, and
+/// (`--socket`/`--json`/`--yes`/`--prompt`/`--split`/`--active`/`--share`)
+/// are recognized anywhere in the argument list, not just before the
+/// subcommand name -- simpler than enforcing a strict positional grammar, and
 /// unambiguous because every subcommand's own positional arguments
 /// (session/call ids) never start with `--`.
 ///
@@ -154,6 +159,7 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
     let mut prompt: Option<String> = None;
     let mut split: Option<SplitFlag> = None;
     let mut active = false;
+    let mut share = false;
     let mut positionals: Vec<String> = Vec::new();
 
     let mut iter = args.iter().peekable();
@@ -171,6 +177,8 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             yes = true;
         } else if arg == "--active" {
             active = true;
+        } else if arg == "--share" {
+            share = true;
         } else if arg == "--prompt" {
             let value = iter
                 .next()
@@ -214,6 +222,7 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
                 prompt: prompt.take(),
                 split: split.take(),
                 activate: std::mem::take(&mut active),
+                share: std::mem::take(&mut share),
             }
         }
         "new-config-agent" => {
@@ -222,6 +231,7 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
                 prompt: prompt.take(),
                 split: split.take(),
                 activate: std::mem::take(&mut active),
+                share: std::mem::take(&mut share),
             }
         }
         "attach" => {
@@ -455,6 +465,7 @@ mod tests {
                 prompt: Some("fix the bug".to_string()),
                 split: None,
                 activate: false,
+                share: false,
             }
         );
     }
@@ -468,6 +479,21 @@ mod tests {
                 prompt: Some("fix the bug".to_string()),
                 split: None,
                 activate: false,
+                share: false,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_new_agent_with_share() {
+        let parsed = parse(&args(&["new-agent", "--share"])).unwrap();
+        assert_eq!(
+            parsed.subcommand,
+            Subcommand::NewAgent {
+                prompt: None,
+                split: None,
+                activate: false,
+                share: true,
             }
         );
     }
@@ -489,6 +515,7 @@ mod tests {
                 prompt: Some("make it dark".to_string()),
                 split: Some(SplitFlag::Explicit("s-1".to_string())),
                 activate: true,
+                share: false,
             }
         );
     }
@@ -502,6 +529,7 @@ mod tests {
                 prompt: None,
                 split: None,
                 activate: false,
+                share: false,
             }
         );
     }
@@ -563,6 +591,7 @@ mod tests {
                 prompt: None,
                 split: Some(SplitFlag::Explicit("s-1".to_string())),
                 activate: false,
+                share: false,
             }
         );
     }
@@ -765,6 +794,7 @@ mod tests {
             prompt: None,
             split: Some(SplitFlag::Here),
             activate: false,
+            share: false,
         };
         assert_eq!(
             resolved_split_for(&new_agent, Some("s-2".to_string())),
