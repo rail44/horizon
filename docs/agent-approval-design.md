@@ -52,9 +52,10 @@ research doc).
    judge narrows what reaches the human; it never widens what the
    rules and sandbox would deny (the field-consensus asymmetry).
 3. **Always human.** Irreversible/destructive operations and anything
-   the judge flags. Backstop: 3 consecutive or 20 total judge
-   escalations/denials in a turn → stop and wait for the human
-   (Claude Code auto mode's pattern).
+   the judge flags. (The originally-planned denial-counting backstop —
+   3 consecutive / 20 total escalations per turn — is dropped as of the
+   2026-07-19 consultation; see the Judge design section for why the
+   judge subsumes it and what replaces the concerns it bundled.)
 
 Non-isolated sessions (explicit opt-out of worktree isolation, running
 in the user's real cwd) keep today's per-action gate unchanged.
@@ -325,6 +326,36 @@ product-owned API. Decisions:
   needs "this bash call is contained / this one crosses the boundary".
   This predicate is shared infrastructure with the sandbox layer
   (which defines what "contained" means).
+- **Classification is a structural predicate, not a tool allowlist**
+  (2026-07-19 consultation): `classify_call` returns Contained only when
+  the call runs *inside* the containment perimeter (an isolated
+  session's sandboxed `bash`, an in-worktree `fs` op). Every tool that
+  runs in the host agent/daemon process outside that perimeter — MCP
+  tools and any future non-sandboxed tool — is a boundary crossing *by
+  construction* and is the judge's canonical case, not an afterthought;
+  bash-out-of-sandbox / outside-worktree writes / network are the
+  specific instances. Network additionally carries leg-4b's specialized
+  domain-approval affordance; MCP/opaque tools have no such affordance
+  and get the plain judge verdict (auto-approve or escalate). Open
+  question for an opaque MCP tool judged from name+args alone: whether to
+  also feed the judge the tool's own declared description/schema
+  (registration metadata, not agent prose) — deferred to the judge-prompt
+  research (`docs/research/agent-approval-judge-prompt-2026-07-19.md`).
+- **Judge-unreachable is fail-safe** (2026-07-19): a judge call that
+  times out or errors escalates to the human (never auto-approves); the
+  unreachable rate is recorded in the audit so a judge that is silently
+  failing-open-to-human is visible rather than invisibly degrading the
+  approval-reduction the judge exists to provide.
+- **Why the denial-counting backstop is dropped** (2026-07-19): the
+  3-consecutive / 20-total backstop was a blunt proxy for the per-call
+  judgment the judge now performs directly, so its job over boundary
+  crossings is subsumed — and it counted *denials*, so it never guarded
+  the judge's real failure mode (false-negatives that auto-approve) in
+  the first place. The two concerns it bundled move to the right tools:
+  cost/DoS (an LLM call per crossing) → a rate limit on judge calls
+  (nono's 10 req/s, burst 5, deny-on-exceed is the reference); silent
+  drift → calibration + observability (log every verdict, measure
+  FNR/FPR against a human-labeled set), not a runtime counter.
 
 ## The agent-kinds note
 
