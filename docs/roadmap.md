@@ -111,19 +111,21 @@ lands:
   project-session consultation informed by the pre-LLM
   implicit-feedback literature decides this
   (`docs/agent-feedback-design.md` decision 5).
-- **Agent approval trust model — consultation in flight (2026-07-19).**
-  Owner direction: replace per-action approval with auto-approval by
-  construction — worktree isolation (reversibility, builds on the
-  session relationship model above) + a sessiond-side OS sandbox for
-  bash (containment; `docs/agent-tools-design.md` "Deferred" already
-  records this endgame) + the receipt transcript (visibility); only
-  boundary crossings ask, non-isolated sessions keep the per-action
-  gate. Grounded in 2026-07-19 event-log analysis: bash is ~76% of all
-  approvals, the worst same-file `fs.edit` run cost 22 prompts, and
-  the edit-failure→write-fallback hypothesis was refuted. Pending
-  decisions (boundary shape, sandbox spike vs fs-first staging, the
-  always-ask list) crystallize into `docs/agent-approval-design.md`.
-  Folds in the roles-registry boundary decision and backlog 42/47/48.
+- **Agent approval trust model — design decided 2026-07-19**
+  (`docs/agent-approval-design.md`; prior-art record in
+  `docs/research/agent-approval-prior-art-2026-07-19.md`). Three
+  tiers: contained actions auto-approve by construction (worktree
+  isolation + a sessiond-side per-command OS sandbox — thin
+  Horizon-owned API over bwrap/seccompiler/landlock on Linux and
+  sandbox-exec/SBPL on macOS — plus a hudsucker-based domain-allowlist
+  proxy), boundary crossings triage through an inline two-stage model
+  judge at the policy seam (restricted input, verdict audited on the
+  gated call's own record, judge model = second model id on the
+  current provider), irreversible actions always ask. Staged:
+  relationship-model foundation → sandbox spike (self-composed, no
+  ai-jail) → policy tiers → network layer → judge. Folds in the
+  roles-registry boundary decision and backlog 47/48; grounded in the
+  2026-07-19 event-log analysis (bash ≈ 76% of approvals).
 - **Agent web search / public-code search** (backlog 18/19). Needs
   its own consultation: provider, trust-boundary/approval design.
 - **portable-pty fork-safety root fix** (backlog 28/31).
