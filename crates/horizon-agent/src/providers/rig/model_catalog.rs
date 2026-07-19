@@ -100,12 +100,20 @@ pub(super) async fn resolve_model_window(config: &RigAgentConfig) -> Option<Mode
         .await
 }
 
+/// Total timeout for the one-shot `/models` query. This runs on the session
+/// creation critical path (`spawn_rig_session` `block_on`s it before the
+/// session loop starts), so a slow or unreachable provider must degrade to
+/// the conservative built-in budget rather than hang session creation --
+/// the whole graceful-fallback intent depends on this being bounded.
+const MODEL_CATALOG_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 async fn fetch_model_window(base_url: String, model: String) -> Option<ModelWindow> {
     let api_key = std::env::var(crate::config::OPENAI_API_KEY_VAR).ok()?;
     let url = format!("{}/models", base_url.trim_end_matches('/'));
     let body = reqwest::Client::new()
         .get(url)
         .bearer_auth(api_key)
+        .timeout(MODEL_CATALOG_QUERY_TIMEOUT)
         .send()
         .await
         .ok()?
