@@ -1,7 +1,7 @@
 # Sandbox spike for the agent approval trust model (`docs/agent-approval-design.md`,
 # "Sandbox architecture"): a thin, product-owned unified API over per-OS
-# containment (Linux: nono/Landlock, see `docs/roadmap.md`'s backlog-60
-# entry; macOS sandbox-exec+SBPL), plus sandbox-denial classification.
+# containment (both OSes on nono/Landlock+Seatbelt, see `docs/roadmap.md`'s
+# backlog-60 entry), plus sandbox-denial classification.
 [package]
 name = "horizon-sandbox"
 version = "0.1.0"
@@ -9,6 +9,13 @@ edition = "2021"
 
 [dependencies]
 thiserror = "2.0"
+# Wire format for the macOS backend's exec-helper handoff
+# (`SandboxPolicy` JSON on one argv -- see `src/bin/horizon-sandbox-helper.rs`
+# and `macos::spawn`). Unconditional (not target-gated): the derives on
+# `SandboxPolicy`/`ReadableScope`/`NetworkPolicy` must type-check on every
+# platform even though only the macOS backend actually serializes them.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [target.'cfg(unix)'.dependencies]
 # `denial.rs`'s SIGSYS-exit-code check wants `libc` on every Unix, not
@@ -16,13 +23,15 @@ thiserror = "2.0"
 # only -- for the macOS backend).
 libc = "0.2"
 
-[target.'cfg(target_os = "linux")'.dependencies]
-# The Linux sandbox backend (`docs/roadmap.md`'s backlog-60 "option C"
-# decision, de-risked in `experiments/nono-spike/`): Landlock-based
-# capability sandboxing, replacing the old self-built
-# bwrap+seccompiler+landlock stack. macOS keeps its own sandbox-exec+SBPL
-# backend (untouched, separate follow-up), so this dependency stays
-# Linux-only.
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+# Both OS backends (`docs/roadmap.md`'s backlog-60 "option C" decision,
+# de-risked in `experiments/nono-spike/`): Landlock-based capability
+# sandboxing on Linux, Seatbelt on macOS. The Linux backend applies
+# `CapabilitySet`s directly on its spawning thread (`linux::spawn`); macOS
+# applies the same mapping (`crate::caps::build`, shared between both
+# backends) inside a tiny exec helper, since nono's macOS `apply_auto`
+# restricts the *whole calling process* rather than a single thread (see
+# `macos/mod.rs`'s module doc).
 nono = "0.68"
 
 [lints.clippy]

@@ -10,21 +10,23 @@
 //! `docs/agent-approval-design.md`) instead of surfacing a raw failure the
 //! model has no way to distinguish from its own bug.
 
-/// Substrings that show up in sandbox-denial stderr across the Linux
-/// backend (nono/Landlock, migrated from bwrap+seccompiler+landlock --
-/// see `docs/roadmap.md`'s backlog-60 entry) and macOS Seatbelt.
+/// Substrings that show up in sandbox-denial stderr across both OS
+/// backends -- Linux (nono/Landlock, migrated from
+/// bwrap+seccompiler+landlock) and macOS (nono/Seatbelt, migrated from
+/// `sandbox-exec`+SBPL) -- see `docs/roadmap.md`'s backlog-60 entry for
+/// both migrations.
 ///
-/// The Linux backend's own denial signatures (spike-confirmed in
-/// `experiments/nono-spike/`): a denied filesystem write or a denied TCP
-/// connect both surface as `EACCES` ("permission denied"); a denied
-/// signal (`SignalMode::AllowSameSandbox`) surfaces as `EPERM`
-/// ("operation not permitted"). Both are already covered below, so no
-/// list change was needed for the migration itself -- "read-only file
-/// system"/"seccomp"/"landlock" are kept as they were before (no longer
-/// reachable from the Linux backend now that mount-namespace bind-mounts
-/// and a bespoke seccomp filter are both gone, but macOS's still-`sandbox-
-/// exec`-based backend shares this same list and may still legitimately
-/// emit them).
+/// Both backends' actual denial signatures now converge on the same nono
+/// primitives (spike-confirmed in `experiments/nono-spike/` for Linux; the
+/// macOS Seatbelt equivalents are the standard POSIX errno text for the
+/// same underlying denials): a denied filesystem write or a denied TCP
+/// connect surface as `EACCES` ("permission denied"); a denied signal
+/// (`SignalMode::AllowSameSandbox`) surfaces as `EPERM` ("operation not
+/// permitted"). Both are already covered below. "read-only file
+/// system"/"seccomp"/"landlock" are kept for older/other sandbox tooling's
+/// exit shapes (no longer reachable from either backend now that neither
+/// mounts a namespace or installs a bespoke seccomp filter of its own,
+/// beyond nono's automatic Landlock-ABI-gradient fallback).
 const SANDBOX_DENIED_KEYWORDS: [&str; 7] = [
     "operation not permitted",
     "permission denied",

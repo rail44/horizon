@@ -1,10 +1,10 @@
 //! Linux sandbox backend: `nono` (Landlock-based capability sandboxing;
 //! see `docs/agent-approval-design.md`'s "Sandbox architecture" for the
-//! design and `caps.rs` for the `SandboxPolicy` -> `nono::CapabilitySet`
-//! mapping). Migrated 2026-07-19 from a self-built
-//! bwrap+seccompiler+landlock stack (`docs/roadmap.md`'s backlog-60
-//! entry, "option C"), de-risked in `experiments/nono-spike/` (branch
-//! `worktree-agent-afb6d8b9e874320c8`, commit `533554b`).
+//! design and `crate::caps` for the `SandboxPolicy` -> `nono::CapabilitySet`
+//! mapping, shared with the macOS backend). Migrated 2026-07-19 from a
+//! self-built bwrap+seccompiler+landlock stack (`docs/roadmap.md`'s
+//! backlog-60 entry, "option C"), de-risked in `experiments/nono-spike/`
+//! (branch `worktree-agent-afb6d8b9e874320c8`, commit `533554b`).
 //!
 //! `nono::Sandbox::apply_auto` is a plain blocking call that restricts
 //! the *calling thread* (inherited by that thread's future `fork`/`exec`
@@ -13,15 +13,15 @@
 //! filter: apply on a throwaway `std::thread::spawn`, spawn the child
 //! from that same thread, `join` to hand it back. Every other thread of a
 //! multi-threaded host (e.g. `horizon-sessiond`) stays fully
-//! unrestricted -- verified in the spike's Q1 probe.
+//! unrestricted -- verified in the spike's Q1 probe. macOS's `apply_auto`
+//! has no equivalent thread-scoping (see `macos/mod.rs`'s module doc for
+//! why that backend needs a separate exec helper instead).
 //!
 //! **Accepted regression (backlog 60):** nono has no mount or PID
 //! namespace, unlike bwrap. A sandboxed child can see the host's full
 //! process list (`ps`, `/proc/<pid>`) and mount table. Filesystem,
-//! network, and (new, see `caps.rs`) signal containment are still fully
-//! enforced via Landlock.
-
-mod caps;
+//! network, and (new, see `crate::caps`) signal containment are still
+//! fully enforced via Landlock.
 
 use crate::error::SandboxError;
 use crate::policy::{SandboxPolicy, SandboxStdio};
@@ -56,32 +56,20 @@ pub(crate) fn is_available() -> bool {
     nono::Sandbox::detect_abi().is_ok()
 }
 
-/// Whether `command`'s explicit environment overrides already set
-/// `TMPDIR`, or this process's own ambient environment does (which
-/// `Command` inherits into the child by default unless the caller
-/// explicitly cleared it) -- see [`spawn`]'s TMPDIR-parity comment for
-/// why this gates the scratch-dir provisioning below.
-fn command_already_sets_tmpdir(command: &Command) -> bool {
-    let mut overrides = command.get_envs();
-    if let Some((_, value)) = overrides.find(|(key, _)| *key == "TMPDIR") {
-        return value.is_some();
-    }
-    std::env::var_os("TMPDIR").is_some()
-}
-
 /// Prepares and spawns `command` under `policy`. Builds a `nono::
-/// CapabilitySet` from `policy` (`caps::build`), then applies it via
-/// `Sandbox::apply_auto` on a dedicated thread that also spawns the
-/// child -- see the module doc for why that thread shape matters. Unlike
-/// the old bwrap backend, `command`'s program/args are run directly: nono
-/// has no wrapper binary, so there is no argv to rebuild around.
+/// CapabilitySet` from `policy` (`crate::caps::build`, shared with the
+/// macOS backend), then applies it via `Sandbox::apply_auto` on a
+/// dedicated thread that also spawns the child -- see the module doc for
+/// why that thread shape matters. Unlike the old bwrap backend,
+/// `command`'s program/args are run directly: nono has no wrapper binary
+/// on Linux, so there is no argv to rebuild around.
 pub(crate) fn spawn(
     command: Command,
     policy: &SandboxPolicy,
     stdio: SandboxStdio,
 ) -> Result<SandboxedChild, SandboxError> {
     let abi = nono::Sandbox::detect_abi()?;
-    let caps = caps::build(policy)?;
+    let caps = crate::caps::build(policy)?;
 
     let program = command.get_program().to_os_string();
     let args: Vec<OsString> = command.get_args().map(|a| a.to_os_string()).collect();
@@ -105,25 +93,9 @@ pub(crate) fn spawn(
     // TMPDIR parity (`docs/roadmap.md`'s backlog-60 entry): bwrap gave a
     // private tmpfs `/tmp` for free via its mount namespace; nono has no
     // mount namespace at all, so there is nothing to substitute a fresh
-    // `/tmp` with. Instead, this crate's policy layer replaces it: if the
-    // caller hasn't already set `TMPDIR` and the policy has at least one
-    // writable root, provision `<root>/.horizon-sandbox-tmp` and inject
-    // `TMPDIR` pointing at it, so TMPDIR-respecting tools (`mktemp`, most
-    // language runtimes' temp-file helpers) keep working exactly as they
-    // did against bwrap's private tmpfs, without every caller
-    // re-implementing this themselves. A caller with no writable roots
-    // (a fully read-only sandbox) correctly gets no scratch space. A
-    // literal `/tmp` write that ignores `TMPDIR` is now denied outright
-    // (`/tmp` is only ever readable, never a writable root) -- a real,
-    // deliberate behavior change from bwrap's private-tmpfs illusion; see
-    // `linux::tests` for the regression coverage.
-    if !command_already_sets_tmpdir(&command) {
-        if let Some(root) = policy.writable_roots.first() {
-            let scratch = root.join(crate::SCRATCH_DIR_NAME);
-            std::fs::create_dir_all(&scratch)?;
-            wrapped.env("TMPDIR", &scratch);
-        }
-    }
+    // `/tmp` with. Hoisted to `crate::tmpdir` since macOS needs the exact
+    // same substitution -- see that module's doc.
+    crate::tmpdir::provision(policy, &command, &mut wrapped)?;
 
     wrapped
         .stdin(stdio.stdin)

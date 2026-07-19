@@ -3,12 +3,13 @@
 //! no backend-specific knob leaks in here (see
 //! `docs/agent-approval-design.md`'s "Sandbox architecture").
 
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Stdio;
 
 /// What a sandboxed command may read, beyond `SandboxPolicy::writable_roots`
 /// (which are always readable too, since write implies read here).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReadableScope {
     /// Everything the host filesystem exposes is readable. This is the
     /// default posture of every surveyed coding agent (see
@@ -26,15 +27,15 @@ pub enum ReadableScope {
 ///
 /// `Proxied` is the network-proxy leg (`docs/agent-approval-design.md`,
 /// "Sandbox architecture" / "Staging" leg 4): direct egress stays fully cut
-/// (same seccomp/namespace treatment as `Disabled` -- see
-/// `linux::spawn`/`macos::sbpl::compose`), and the *only* path out is a
-/// UNIX domain socket bind-mounted into the sandbox at `bridge_socket`,
-/// which the caller has already wired to bridge into a long-lived
-/// `horizon-sandbox-proxy` allowlist proxy (see that crate's `UdsBridge`).
-/// This crate only carries the path and performs the bind/profile-rule
-/// plumbing -- it has no notion of allowlists or proxying itself, keeping
-/// the OS-containment layer decoupled from the network-policy layer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// (same network-blocked posture as `Disabled` -- see `crate::caps::build`,
+/// the mapping shared by both OS backends), and the *only* path out is a
+/// UNIX domain socket at `bridge_socket`, which the caller has already
+/// wired to bridge into a long-lived `horizon-sandbox-proxy` allowlist
+/// proxy (see that crate's `UdsBridge`). This crate only carries the path
+/// and performs the capability-grant plumbing -- it has no notion of
+/// allowlists or proxying itself, keeping the OS-containment layer
+/// decoupled from the network-policy layer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NetworkPolicy {
     Enabled,
     Disabled,
@@ -43,8 +44,12 @@ pub enum NetworkPolicy {
 
 /// A command's sandbox policy: writable roots, readable scope, network
 /// posture. Constructed by the caller (the future tool-call spawn site in
-/// `horizon-sessiond`); this crate only ever consumes it.
-#[derive(Debug, Clone)]
+/// `horizon-sessiond`); this crate only ever consumes it. `Serialize`/
+/// `Deserialize` back the macOS backend's exec-helper handoff (the policy
+/// crosses a process boundary as JSON -- see `macos::spawn` and
+/// `src/bin/horizon-sandbox-helper.rs`); the Linux backend never
+/// serializes it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SandboxPolicy {
     /// Paths the sandboxed command may create, modify, or delete inside.
     /// Implicitly readable and executable too.
