@@ -187,6 +187,10 @@ fn dispatch_invoke(
             shell.execute_external(CommandId::ReloadConfig, window, cx);
             EnvelopeBody::Ok
         }
+        "open-terminal-in-session-directory" => {
+            shell.execute_external(CommandId::OpenTerminalInSessionDirectory, window, cx);
+            EnvelopeBody::Ok
+        }
         "approve" => {
             let session_id = match session_id_arg(args, "session_id") {
                 Ok(id) => id,

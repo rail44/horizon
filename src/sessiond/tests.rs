@@ -109,7 +109,7 @@ async fn incoming_shared_agent_and_terminal_messages_are_demultiplexed() {
     let terminal_id = Uuid::new_v4();
     let terminal = handle.start_terminal(terminal_id, spec());
     let agent_id = SessionId::new();
-    let agent = handle.start_session(agent_id, ProviderId("mock".into()), None, None, false);
+    let agent = handle.start_session(agent_id, ProviderId("mock".into()), None, None, None, false);
 
     let (read_half, mut writer) = tokio::io::split(server);
     let mut reader = BufReader::new(read_half);
@@ -428,7 +428,7 @@ async fn established_disconnect_reports_errors_without_reconnecting() {
     let terminal_id = Uuid::new_v4();
     let terminal = handle.start_terminal(terminal_id, spec());
     let agent_id = SessionId::new();
-    let agent = handle.start_session(agent_id, ProviderId("mock".into()), None, None, false);
+    let agent = handle.start_session(agent_id, ProviderId("mock".into()), None, None, None, false);
 
     let (read_half, mut writer) = tokio::io::split(server);
     let mut reader = BufReader::new(read_half);

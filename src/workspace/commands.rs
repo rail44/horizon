@@ -109,6 +109,16 @@ impl WorkspaceShell {
                 }
                 Err(error) => eprintln!("reload-config failed: {error}"),
             },
+            CommandId::OpenTerminalInSessionDirectory => {
+                let workspace_root = self
+                    .workspace
+                    .active_session_id()
+                    .and_then(|id| self.workspace.session_workspace_root(id))
+                    .map(|path| path.to_path_buf());
+                if let Some(workspace_root) = workspace_root {
+                    self.open_terminal_in_directory(workspace_root, window, cx);
+                }
+            }
             CommandId::ReloadSessionRuntime => {
                 if self.reload_in_progress {
                     return;
@@ -296,6 +306,11 @@ impl WorkspaceShell {
             has_pending_approval,
             has_turn_in_flight,
             has_paused_turn,
+            has_active_session_workspace_root: self
+                .workspace
+                .active_session_id()
+                .and_then(|id| self.workspace.session_workspace_root(id))
+                .is_some(),
         }
     }
 }

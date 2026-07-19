@@ -93,6 +93,11 @@ pub enum Subcommand {
     },
     ReloadSessionRuntime,
     ReloadConfig,
+    /// Opens a new terminal tab whose cwd is the active session's directory
+    /// (`docs/session-relationship-design.md` decision 4a) -- a bare invoke
+    /// like `ReloadSessionRuntime`/`ReloadConfig`, since v1 always targets
+    /// "whichever session is active", never a client-supplied id.
+    OpenTerminalInSessionDirectory,
     Sessions,
     State,
 }
@@ -129,6 +134,7 @@ Subcommands:\n  \
   continue-turn <session-id>\n  \
   reload-session-runtime\n  \
   reload-config\n  \
+  open-terminal-in-session-directory\n  \
   sessions\n  \
   state";
 
@@ -280,6 +286,10 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
         "reload-config" => {
             reject_extra(&mut positionals, "reload-config")?;
             Subcommand::ReloadConfig
+        }
+        "open-terminal-in-session-directory" => {
+            reject_extra(&mut positionals, "open-terminal-in-session-directory")?;
+            Subcommand::OpenTerminalInSessionDirectory
         }
         "sessions" => {
             reject_extra(&mut positionals, "sessions")?;
@@ -662,6 +672,12 @@ mod tests {
         assert_eq!(
             parse(&args(&["reload-config"])).unwrap().subcommand,
             Subcommand::ReloadConfig
+        );
+        assert_eq!(
+            parse(&args(&["open-terminal-in-session-directory"]))
+                .unwrap()
+                .subcommand,
+            Subcommand::OpenTerminalInSessionDirectory
         );
     }
 

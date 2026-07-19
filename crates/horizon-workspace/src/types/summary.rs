@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::SessionId;
 
 use super::{PaneKind, SessionKind};
@@ -18,6 +20,8 @@ pub struct SessionSummary {
     pub display_number: usize,
     pub title: String,
     pub attached: bool,
+    /// Mirrors `WorkspaceSession::workspace_root` -- see its doc comment.
+    pub workspace_root: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -161,19 +161,28 @@ impl SessiondHandle {
         (handle, host_tools)
     }
 
-    /// `spawn_source_session_id`/`isolate` are `docs/session-relationship-
-    /// design.md` decision 3's per-spawn knobs: the pane this spawn was
-    /// invoked "from" (kind-agnostic -- may be a terminal or an agent
-    /// session id) and whether `horizon-sessiond` should give this session
-    /// its own git worktree derived from it. Both are resolved by the
-    /// caller (origin-based default plus any explicit override -- see
+    /// `workspace_root` is computed shell-side (`WorkspaceShell::reconcile`)
+    /// and recorded on the workspace model before this is called, so the
+    /// model and the daemon spawn can never disagree -- see `wire::
+    /// SessionNew::workspace_root`'s doc comment. `spawn_source_session_id`/
+    /// `isolate` are `docs/session-relationship-design.md` decision 3's
+    /// per-spawn knobs: the pane this spawn was invoked "from"
+    /// (kind-agnostic -- may be a terminal or an agent session id) and
+    /// whether `horizon-sessiond` should give this session its own git
+    /// worktree derived from it. Both are resolved by the caller
+    /// (origin-based default plus any explicit override -- see
     /// `workspace::session_lifecycle::PendingAgentSpawn`); this method just
-    /// forwards whatever concrete choice it's given.
+    /// forwards whatever concrete choice it's given. Note that for an
+    /// isolated spawn, `workspace_root` here is only the *pre-isolation*
+    /// value -- the daemon overrides it with the worktree path it creates,
+    /// reported back via `wire::SessionSummary::workspace_root` (see
+    /// `WorkspaceShell::spawn_agent_resume`/`spawn_workspace_restore`).
     pub(crate) fn start_session(
         &self,
         session_id: contract::SessionId,
         provider_id: contract::ProviderId,
         role_id: Option<horizon_agent::roles::RoleId>,
+        workspace_root: Option<std::path::PathBuf>,
         spawn_source_session_id: Option<contract::SessionId>,
         isolate: bool,
     ) -> AgentSessionHandle {
@@ -182,7 +191,7 @@ impl SessiondHandle {
             session_id,
             provider_id,
             role_id,
-            workspace_root: std::env::current_dir().ok(),
+            workspace_root,
             spawn_source_session_id,
             isolate,
         })));

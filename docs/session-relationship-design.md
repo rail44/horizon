@@ -120,9 +120,37 @@ messaging need, so it is designed once, here.
 ## Delivery
 
 Foundation landed: per-session `workspace_root` on `SessionNew`
-(`9110c7c`). Remaining is a roadmap item under shared-foundation 4:
-terminal-cwd sourcing (process-info crate + pid capture), the lineage
-tree in the session domain, isolation/worktree creation with the
-origin-default, and the control surfacing (open-directory command +
-session-manager lineage view). Messaging/supervision layer onto the
-same tree in shared-foundation 4's own consultation.
+(`9110c7c`).
+
+Decision 4a's v1 slice landed (active-session scope only): a
+`CommandId::OpenTerminalInSessionDirectory` command ("Open Terminal in
+Session Directory", palette + `horizon open-terminal-in-session-directory`
+CLI parity) opens a new terminal tab whose cwd is pinned to the active
+session's `workspace_root`, disabled when there is no active session or
+its `workspace_root` is unknown. This required making `workspace_root`
+visible on the *shell* side of the model for the first time:
+`WorkspaceSession`/`SessionSummary` now carry an additive
+`workspace_root: Option<PathBuf>`, set once (`Workspace::
+set_session_workspace_root`) right before a brand-new agent session's
+`SessionNew` goes out (`WorkspaceShell::reconcile`), using the same value
+that's sent over the wire -- so the model and the daemon never disagree
+on what a session's root is. Two scope calls worth recording: (1) it's
+agent-only for now -- terminal sessions have no `workspace_root` sourcing
+mechanism to read from yet (the pid-sampling cwd inheritance in
+`horizon-sessiond::terminal::resolve_cwd` is spawn-time-only and keyed by
+*terminal* session id, not exposed to the shell), so a terminal active
+session simply disables the command rather than fabricating an
+approximate answer; (2) it's not persisted -- a session resumed via
+`Reload Session Runtime` or a workspace restore goes back to
+`workspace_root: None` until it's recreated, since only the
+brand-new-agent-session path in `reconcile` ever calls the setter.
+Per-row "open its directory" on an arbitrary session (decision 4b) still
+needs the session-manager's lineage view and rides a later slice.
+
+Remaining is a roadmap item under shared-foundation 4: terminal-cwd
+sourcing (process-info crate + pid capture, surfaced to the shell so
+non-agent sessions can get a real `workspace_root` too), the lineage tree
+in the session domain, isolation/worktree creation with the
+origin-default, and the session-manager lineage view (decision 4b).
+Messaging/supervision layer onto the same tree in shared-foundation 4's
+own consultation.
