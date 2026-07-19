@@ -254,6 +254,7 @@ fn detached_session_summaries_list_unattached_sessions() {
             display_number: 2,
             title: "Terminal #2".to_string(),
             attached: false,
+            workspace_root: None,
         }]
     );
 }
@@ -275,6 +276,7 @@ fn session_summaries_include_attached_and_detached_sessions() {
                 display_number: 1,
                 title: "Terminal #1".to_string(),
                 attached: true,
+                workspace_root: None,
             },
             SessionSummary {
                 id: detached_session,
@@ -282,6 +284,7 @@ fn session_summaries_include_attached_and_detached_sessions() {
                 display_number: 2,
                 title: "Terminal #2".to_string(),
                 attached: false,
+                workspace_root: None,
             },
         ]
     );

@@ -52,6 +52,26 @@ fn terminal_fallback_cwd(
         .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
+/// The default `workspace_root` for a brand-new agent session: the Horizon
+/// process's own cwd, `None` only if that can't be read -- see
+/// `wire::SessionNew::workspace_root`'s doc comment for why this, not the
+/// spawn-source pane's cwd, is what's used today.
+fn default_agent_workspace_root() -> Option<std::path::PathBuf> {
+    std::env::current_dir().ok()
+}
+
+/// `docs/session-relationship-design.md` decision 4a's "Open Terminal in
+/// Session Directory" spawn request: the cwd is pinned to `workspace_root`
+/// directly, with no spawn-source pid inheritance (`source_session_id:
+/// None`) -- unlike a plain new terminal, the target directory is already
+/// known exactly, so there is nothing to inherit.
+fn pinned_terminal_spawn(workspace_root: std::path::PathBuf) -> PendingTerminalSpawn {
+    PendingTerminalSpawn {
+        source_session_id: None,
+        fallback_cwd: workspace_root,
+    }
+}
+
 fn terminal_resume_candidates(
     summaries: Vec<horizon_terminal_core::TerminalSummary>,
     known: &std::collections::HashSet<SessionId>,
@@ -124,8 +144,27 @@ impl WorkspaceShell {
                     let provider_id =
                         horizon_agent::contract::ProviderRegistry::default().default_provider_id();
                     let role_id = self.pending_roles.remove(&summary.id);
-                    let session_handle =
-                        handle.start_session(agent_session_id(summary.id), provider_id, role_id);
+                    // A brand-new agent session (this branch never runs for
+                    // one `spawn_agent_resume`/`spawn_workspace_restore`
+                    // already adopted -- see their own doc comments) has no
+                    // `workspace_root` recorded yet; default it here and
+                    // persist it on the model so `docs/session-relationship-
+                    // design.md` decision 4a's "Open Terminal in Session
+                    // Directory" command can read it back later, mirroring
+                    // exactly what used to be computed inside
+                    // `SessiondHandle::start_session` itself (see
+                    // `wire::SessionNew::workspace_root`'s doc comment).
+                    let workspace_root =
+                        summary.workspace_root.or_else(default_agent_workspace_root);
+                    if let Some(root) = workspace_root.clone() {
+                        self.workspace.set_session_workspace_root(summary.id, root);
+                    }
+                    let session_handle = handle.start_session(
+                        agent_session_id(summary.id),
+                        provider_id,
+                        role_id,
+                        workspace_root,
+                    );
                     self.agent_sessions.insert(
                         summary.id,
                         cx.new(|cx| AgentSession::new(session_handle, cx)),
@@ -749,6 +788,35 @@ impl WorkspaceShell {
         self.focus_active(window, cx);
     }
 
+    /// `CommandId::OpenTerminalInSessionDirectory`
+    /// (`docs/session-relationship-design.md` decision 4a): opens a new
+    /// terminal tab pinned to `workspace_root`'s cwd -- v1's placement is a
+    /// new tab, matching `create_session`'s own `Placement::NewTab` default
+    /// for a plain new terminal. `execute` (`workspace/commands.rs`) is the
+    /// only caller, having already resolved the active session's
+    /// `workspace_root`; this stays a plain `PathBuf` parameter (not a
+    /// `SessionId` re-lookup) since v1 targets only the active session --
+    /// per-row "open its directory" on an arbitrary session is a later
+    /// slice (see the design doc's decision 4b).
+    pub(super) fn open_terminal_in_directory(
+        &mut self,
+        workspace_root: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.restoring_workspace {
+            return;
+        }
+        self.workspace.exit_workspace_mode();
+        let session_id = self
+            .workspace
+            .open_tab_with_new_session_activated(PaneKind::Terminal, true);
+        self.pending_terminal_spawns
+            .insert(session_id, pinned_terminal_spawn(workspace_root));
+        self.reconcile(window, cx);
+        self.focus_active(window, cx);
+    }
+
     /// External (control-plane) operations — the CLI's verbs, mirroring
     /// the Floem shell's `external_commands` semantics: `activate:
     /// false` never steals focus. `prompt` (agent sessions only) sends
@@ -805,7 +873,10 @@ mod tests {
     use horizon_terminal_core::TerminalSummary;
     use horizon_workspace::{PaneKind, SessionId, Workspace};
 
-    use super::{terminal_fallback_cwd, terminal_resume_candidates, terminal_spawn_source};
+    use super::{
+        pinned_terminal_spawn, terminal_fallback_cwd, terminal_resume_candidates,
+        terminal_spawn_source,
+    };
 
     #[test]
     fn explicit_split_target_wins_as_terminal_spawn_source() {
@@ -831,6 +902,21 @@ mod tests {
             terminal_fallback_cwd(None, None),
             std::path::PathBuf::from(".")
         );
+    }
+
+    #[test]
+    fn open_terminal_in_directory_pins_the_target_cwd_with_no_source_inheritance() {
+        // `docs/session-relationship-design.md` decision 4a: the spawn
+        // request's cwd must be exactly the target session's
+        // `workspace_root`, with no spawn-source pid inheritance (unlike a
+        // plain new terminal, which sources from the active pane instead --
+        // see `terminal_spawn_source`) since the directory is already known.
+        let workspace_root = std::path::PathBuf::from("/some/agent/workspace");
+
+        let spawn = pinned_terminal_spawn(workspace_root.clone());
+
+        assert_eq!(spawn.fallback_cwd, workspace_root);
+        assert_eq!(spawn.source_session_id, None);
     }
 
     #[test]

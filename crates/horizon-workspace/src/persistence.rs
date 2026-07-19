@@ -495,6 +495,10 @@ impl WorkspaceState {
                     kind: SessionKind::from(session.kind),
                     display_number: session.display_number,
                     title: session.title,
+                    // Not persisted (see `WorkspaceSession::workspace_root`'s
+                    // doc comment) -- a restored session's workspace_root
+                    // starts unknown again.
+                    workspace_root: None,
                 })
                 .collect(),
             active_tab: self.active_tab,
