@@ -68,9 +68,9 @@ fn vt_stream_preserves_ansi_foreground_color() {
     assert!(first_line
         .spans
         .iter()
-        .any(|span| { span.text == "r" && span.fg == TerminalColor::Named(NamedColor::Red) }));
+        .any(|span| { span.text == "red" && span.fg == TerminalColor::Named(NamedColor::Red) }));
     assert!(first_line.spans.iter().any(|span| {
-        span.text == "p" && span.fg == TerminalColor::Named(NamedColor::Foreground)
+        span.text == "plain" && span.fg == TerminalColor::Named(NamedColor::Foreground)
     }));
 }
 
@@ -339,8 +339,6 @@ fn sgr_58_underline_color_reaches_the_span() {
 /// blank (space) run only extends the previous blank span while *every*
 /// attribute matches, so an underlined blank run and a plain blank run
 /// stay separate spans instead of silently collapsing into one.
-/// (Printable characters are one span each today -- run merging across
-/// them is separate, future work per `docs/terminal-protocol-goals.md`.)
 #[test]
 fn style_attributes_are_part_of_the_span_merge_key() {
     let mut core = TerminalCore::new(TerminalSize::new(40, 4));
@@ -357,6 +355,102 @@ fn style_attributes_are_part_of_the_span_merge_key() {
     assert_eq!(spans[1].underline, TerminalUnderline::None);
     assert_eq!(spans[2].text, "X");
     assert!(!spans[2].italic);
+}
+
+/// Goal 4 of `docs/terminal-protocol-goals.md`, first step: frame size is
+/// proportional to *style runs*, not characters. Before run merging every
+/// printable cell was its own span, so a full 80-column single-style row
+/// cost 80 spans -- and the GUI pays one shape_line + scene-layer
+/// insertion per span (the measured 31% of main-thread time). Merged, the
+/// same row is exactly one span.
+#[test]
+fn same_style_printable_run_merges_into_one_span() {
+    let mut core = TerminalCore::new(TerminalSize::new(80, 4));
+    let row = "0123456789".repeat(8); // 80 columns, one style
+    core.write_vt(row.as_bytes());
+
+    let frame = core.snapshot_frame();
+    let spans = &frame.lines[0].spans;
+    assert_eq!(
+        spans.len(),
+        1,
+        "80 same-style printable cells must merge into one span (pre-merge: one span per cell)"
+    );
+    assert_eq!(spans[0].text, row);
+    assert_eq!(spans[0].columns, 80);
+    assert_eq!(frame.text.lines().next(), Some(row.as_str()));
+}
+
+/// Every style change is a run boundary: fg, italic, underline, and the
+/// return to the default style each start a fresh span. The reassembled
+/// `frame.text` is byte-identical to what the per-cell spans produced.
+#[test]
+fn style_changes_split_the_merged_run() {
+    let mut core = TerminalCore::new(TerminalSize::new(40, 4));
+    core.write_vt(b"ab\x1b[31mcd\x1b[0m\x1b[3mef\x1b[0m\x1b[4mgh\x1b[0mij");
+
+    let frame = core.snapshot_frame();
+    let spans = &frame.lines[0].spans;
+    assert_eq!(
+        spans
+            .iter()
+            .map(|span| span.text.as_str())
+            .collect::<Vec<_>>(),
+        // The trailing entry is the erased remainder of the 40-column row
+        // (a blank run, the same shape the BCE test above locks down).
+        vec!["ab", "cd", "ef", "gh", "ij", ""]
+    );
+    assert_eq!(spans[1].fg, TerminalColor::Named(NamedColor::Red));
+    assert!(spans[2].italic);
+    assert_eq!(spans[3].underline, TerminalUnderline::Single);
+    assert_eq!(spans[4].fg, TerminalColor::Named(NamedColor::Foreground));
+    assert_eq!(frame.text.lines().next(), Some("abcdefghij"));
+}
+
+/// Width class is part of the merge key: same-style runs still split where
+/// 1-column and 2-column cells meet. The GUI (`paint_terminal`'s
+/// force_width) snaps a run to the cell grid only while `columns == chars`
+/// or `columns == 2 * chars` holds for the whole run -- a mixed run falls
+/// back to natural shaping and drifts off the grid, so CJK and ASCII may
+/// not share a span even when their style matches.
+#[test]
+fn width_class_boundary_splits_a_same_style_run() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt("ab日本cd".as_bytes());
+
+    let frame = core.snapshot_frame();
+    let spans = &frame.lines[0].spans;
+    assert_eq!(
+        spans
+            .iter()
+            .map(|span| (span.text.as_str(), span.columns))
+            .collect::<Vec<_>>(),
+        vec![("ab", 2), ("日本", 4), ("cd", 2), ("", 12)]
+    );
+    assert_eq!(frame.text.lines().next(), Some("ab日本cd"));
+    assert_eq!(frame.cursor.map(|cursor| cursor.col), Some(8));
+}
+
+/// A cell carrying zero-width combining chars keeps a span of its own, on
+/// both sides: merged into a neighboring run, the extra chars would flip
+/// the GUI's whole-run `columns == chars` grid-snap classification to
+/// natural shaping for the surrounding text too. Isolated, any shaping
+/// drift stays confined to the one cell -- the pre-merge rendering.
+#[test]
+fn combining_chars_keep_their_cell_out_of_the_run_merge() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt("abc\u{0301}de".as_bytes());
+
+    let frame = core.snapshot_frame();
+    let spans = &frame.lines[0].spans;
+    assert_eq!(
+        spans
+            .iter()
+            .map(|span| (span.text.as_str(), span.columns))
+            .collect::<Vec<_>>(),
+        vec![("ab", 2), ("c\u{0301}", 1), ("de", 2), ("", 15)]
+    );
+    assert_eq!(frame.text.lines().next(), Some("abc\u{0301}de"));
 }
 
 /// DECSCUSR (`CSI Ps SP q`) shape changes ride `TerminalCursor::shape`;
@@ -393,10 +487,12 @@ fn vt_stream_tracks_wide_character_columns() {
     assert!(frame.text.contains("日本語"));
     assert_eq!(frame.text.lines().next(), Some("日本語"));
     assert_eq!(frame.cursor.map(|cursor| cursor.col), Some(6));
+    // The three wide cells share one style and one width class, so they
+    // arrive as a single merged span.
     assert!(frame.lines[0]
         .spans
         .iter()
-        .any(|span| span.text == "日" && span.columns == 2));
+        .any(|span| span.text == "日本語" && span.columns == 6));
 }
 
 /// Backlog 45: SGR 8 (conceal) sets `Flags::HIDDEN` on a cell but leaves
@@ -422,7 +518,7 @@ fn concealed_text_still_occupies_its_columns() {
     let first_line = &frame.lines[0];
     let mut col = 0;
     for span in &first_line.spans {
-        if span.text == "v" {
+        if span.text == "visible" {
             break;
         }
         col += span.columns;
