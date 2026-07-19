@@ -9,8 +9,9 @@
 //! `activate_pane`) that only the `Render` impl below dispatches into, and
 //! the split-handle drag pipeline (`SplitDrag`, `begin_split_drag`/
 //! `update_split_drag`/`end_split_drag`, the pure pairwise clamp
-//! `pairwise_resize_weights`) that replaces `gpui_component::resizable` --
-//! see `docs/split-resize-design.md`.
+//! `pairwise_resize_weights` and its `effective_container_px` pixel
+//! accounting) that replaces `gpui_component::resizable` -- see
+//! `docs/split-resize-design.md`.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -245,16 +246,36 @@ fn axis_extent(axis: SplitAxis, size: Size<Pixels>) -> f32 {
     }
 }
 
+/// The pixel length actually available for weight-proportional
+/// distribution among a split's children: the container's own measured
+/// length minus every resize handle's fixed footprint. Child wrappers use
+/// `flex_basis(0) + flex_grow(weight)` (see `render_node`'s `LayoutNode::
+/// Split` arm), so *all* of this length divides by weight ratio -- a
+/// handle is a separate `flex_grow_0`/`flex_shrink_0` sibling with an
+/// explicit `SPLIT_HANDLE_HIT_PX` width, so it never participates in that
+/// distribution and its pixels must come out of the denominator before
+/// converting a drag's pixel delta to a weight delta (`pairwise_resize_
+/// weights`'s `container_px`) -- otherwise both drag tracking and the
+/// floor land at a slightly wrong pixel size. `child_count` children have
+/// `child_count - 1` handles between them.
+fn effective_container_px(container_px: f32, child_count: usize) -> f32 {
+    let handles = child_count.saturating_sub(1) as f32;
+    (container_px - handles * SPLIT_HANDLE_HIT_PX).max(0.0)
+}
+
 /// The pairwise-clamped resize computation for one split-handle drag
 /// (`docs/split-resize-design.md`'s Drag semantics): converts a pixel
 /// delta into a weight transfer strictly between two adjacent children,
 /// hard-stopping at `floor_px` (translated into the same weight units)
 /// rather than cascading into other siblings. `total_weight` is the
 /// split's full weight sum at drag start, used only to convert between
-/// pixel and weight units; `container_px` is the split's own pixel length
-/// along its axis. Returns the pair's two new weights, still summing to
-/// `weight_a + weight_b` -- callers renormalize the whole child vector via
-/// `Workspace::set_split_weights`.
+/// pixel and weight units; `container_px` is the pixel length that
+/// actually divides by weight ratio -- callers pass
+/// [`effective_container_px`]'s result, not the container's raw measured
+/// length, or both drag tracking and the floor land at the wrong pixel
+/// size (see that function's doc comment). Returns the pair's two new
+/// weights, still summing to `weight_a + weight_b` -- callers renormalize
+/// the whole child vector via `Workspace::set_split_weights`.
 fn pairwise_resize_weights(
     weight_a: f32,
     weight_b: f32,
@@ -645,7 +666,6 @@ impl WorkspaceShell {
             }
             LayoutNode::Split { axis, children } => {
                 let axis = *axis;
-                let total_weight = children.iter().map(|child| child.weight).sum::<f32>();
                 let start_weights = children
                     .iter()
                     .map(|child| child.weight)
@@ -687,11 +707,13 @@ impl WorkspaceShell {
                     let child_anchors = child_anchors.clone();
                     let container_len = container_len.clone();
                     cx.listener(move |shell, event: &MouseMoveEvent, _window, cx| {
+                        let effective_px =
+                            effective_container_px(container_len.get(), child_anchors.len());
                         shell.update_split_drag(
                             split_anchor,
                             &child_anchors,
                             axis_position(axis, event.position),
-                            container_len.get(),
+                            effective_px,
                             cx,
                         );
                     })
@@ -787,13 +809,30 @@ impl WorkspaceShell {
                     }
 
                     let child_element = self.render_node(tab_id, &child.node, cx);
-                    let basis = px(child.weight / total_weight * 1_000.0);
                     container = container.child(
                         div()
                             .size_full()
-                            .flex_grow_1()
-                            .flex_shrink_1()
-                            .flex_basis(basis)
+                            // `flex_basis(0) + flex_grow(weight)`, not a
+                            // weight-scaled basis -- flex only distributes
+                            // *leftover* space (container minus the sum of
+                            // every sibling's basis) by grow-factor ratio,
+                            // so a nonzero basis with an equal grow factor
+                            // dilutes the ratio toward equal the wider the
+                            // container is past that basis sum (e.g. a 3:1
+                            // weight split rendered as ~1.7:1 in a
+                            // container much bigger than the old fixed
+                            // 1000px basis budget). Zero basis puts the
+                            // *entire* container into that leftover, so
+                            // 100% of it divides by weight ratio,
+                            // regardless of container size -- the idiom
+                            // the pre-gpui-component Floem shell used
+                            // (`floem-shell-final:src/workspace/view/
+                            // layout_tree.rs`). `flex_grow` takes the raw
+                            // weight directly since only the *ratio*
+                            // between siblings' grow factors matters, not
+                            // its absolute scale.
+                            .flex_basis(px(0.0))
+                            .flex_grow(child.weight)
                             .when(axis == SplitAxis::Horizontal, |this| {
                                 this.min_w(px(SPLIT_PANEL_MIN_SIZE_PX))
                             })
@@ -1089,9 +1128,9 @@ mod tests {
     use horizon_workspace::PaneId;
 
     use super::{
-        effective_scrim_pattern, equal_tab_width, mode_key_context_active, pairwise_resize_weights,
-        pane_border_role, pane_scrim_alpha, workspace_mode_blocked_by_restore, PaneBorderRole,
-        SCRIM_DIM_ALPHA,
+        effective_container_px, effective_scrim_pattern, equal_tab_width, mode_key_context_active,
+        pairwise_resize_weights, pane_border_role, pane_scrim_alpha,
+        workspace_mode_blocked_by_restore, PaneBorderRole, SCRIM_DIM_ALPHA,
     };
 
     #[test]
@@ -1116,11 +1155,43 @@ mod tests {
     }
 
     #[test]
+    fn effective_container_px_subtracts_every_handles_fixed_width() {
+        // 4 children -> 3 handles, each SPLIT_HANDLE_HIT_PX (9px) wide --
+        // only the remainder actually divides by weight ratio (child
+        // wrappers are flex_basis(0) + flex_grow(weight), the handles are
+        // flex_grow_0/flex_shrink_0 at a fixed width, so their pixels
+        // never participate in that distribution).
+        assert_eq!(effective_container_px(1000.0, 4), 1000.0 - 3.0 * 9.0);
+    }
+
+    #[test]
+    fn effective_container_px_is_unchanged_for_a_bare_pane() {
+        // No handles at all -- the whole length is available (also
+        // covers the degenerate `child_count == 0` case sanely).
+        assert_eq!(effective_container_px(500.0, 1), 500.0);
+        assert_eq!(effective_container_px(500.0, 0), 500.0);
+    }
+
+    #[test]
+    fn effective_container_px_never_goes_negative() {
+        // A pathologically narrow container with many handles -- clamp
+        // at zero rather than handing a negative length downstream.
+        assert_eq!(effective_container_px(10.0, 10), 0.0);
+    }
+
+    // `pairwise_resize_weights`'s own `container_px` parameter is always
+    // the *effective* length (`effective_container_px`'s result) in real
+    // drag code -- these tests exercise the pure conversion math directly
+    // with round numbers, so "container" below means that effective
+    // length, not a container's raw measured size.
+
+    #[test]
     fn pairwise_resize_weights_transfers_between_the_pair_only() {
-        // 1000px container, two equal siblings (500px each), dragged
-        // 100px toward b: weight moves from a to b in direct proportion,
-        // and the pair's total weight is preserved (renormalization by
-        // the caller keeps other siblings' shares untouched).
+        // 1000px effective container, two equal siblings (500px each),
+        // dragged 100px toward b: weight moves from a to b in direct
+        // proportion, and the pair's total weight is preserved
+        // (renormalization by the caller keeps other siblings' shares
+        // untouched).
         let (new_a, new_b) = pairwise_resize_weights(1.0, 1.0, 2.0, 1000.0, 100.0, 100.0);
         assert!((new_a - 1.2).abs() < 1e-4);
         assert!((new_b - 0.8).abs() < 1e-4);
