@@ -13,8 +13,10 @@ entries live in `backlog-resolved.md` keeping their original numbers
     trust-boundary/network-access approval design, and whether it sits
     behind a crush-`agentic_fetch`-style throwaway subagent (one outer
     approval, inner search/fetch chain) — a shape close to Horizon's
-    delegation + skill mechanism. See docs/research on crush/opencode
-    tools (in the session transcript, not yet a doc).
+    delegation + skill mechanism. See
+    `docs/research/crush-opencode-tools-2026-07-07.md` (recovered from
+    the session transcript 2026-07-19; also covers item 19's
+    sourcegraph/LSP details).
 19. **Public-code / symbol search** — crush exposes `sourcegraph`
     (public GitHub via Sourcegraph GraphQL, no API key) and
     `lsp_references` (LSP-backed symbol references); opencode has an
@@ -555,3 +557,23 @@ entries live in `backlog-resolved.md` keeping their original numbers
     horizon-side nibble meanwhile: pass `.featured_colors(...)`
     explicitly to skip the per-render 12-color rebuild from
     `cx.theme()`.
+
+63. **Process gap: the GitHub merge button bypasses the quality gate
+    (no CI exists), and same-evening branches can silently share a
+    protocol version number.** Incident record, 2026-07-19 evening:
+    PR #16 (`123b6a0`) bumped `SESSION_PROTOCOL_VERSION` 7→8 for
+    `TerminalCommand::SetColorScheme` and landed via the GitHub merge
+    button — which runs neither the local pre-commit gate nor any CI —
+    leaving main red for about an hour (horizon-agent's `wire.rs`
+    contract-version pins still asserted 7). The in-flight
+    `frame-text-removal` branch had independently claimed the same v8
+    for removing `TerminalFrame.text`; because both bumps were the
+    identical one-line change, git would have merged them clean with
+    no conflict, letting two different vocabulary changes share v8
+    (the handshake is an equality check — mixed builds would pass
+    version negotiation, then fail at deserialization). Both halves
+    resolved the same evening: the frame-text session renumbered its
+    bump to v9 and fixed the pins in its merge commit (`422b2a7`,
+    landed as PR #15). Left open: whether merges should go back
+    through the review-queue flow (gate runs locally) instead of the
+    GitHub button, or a CI gate should exist — owner call.
