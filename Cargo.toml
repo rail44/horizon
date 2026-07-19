@@ -82,3 +82,11 @@ uuid = { version = "1.18", features = ["v4", "serde"] }
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }
+
+# Debug-build CPU profiles show the hot code lives almost entirely in
+# dependencies (gpui's Scene::push_layer/BoundsTree comparisons ~31%,
+# taffy layout ~16%), so optimize external crates even in dev builds.
+# The `"*"` wildcard does not match workspace members, which keep the
+# default dev opt-level for debuggability and fast incremental builds.
+[profile.dev.package."*"]
+opt-level = 3
