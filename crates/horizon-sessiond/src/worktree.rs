@@ -76,11 +76,32 @@ pub(crate) fn short_slug(session_id: Uuid) -> String {
     session_id.simple().to_string()[..8].to_string()
 }
 
+/// Strips every inherited `GIT_*` environment variable from `cmd`. Git
+/// honors several of these (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`,
+/// `GIT_COMMON_DIR`, ...) as overrides that take precedence over `-C`: an
+/// absolute `GIT_DIR` in particular silently redirects an entire invocation
+/// to a *different* repository, regardless of `-C`'s target directory.
+/// Backlog 53: this repo's own `hooks/pre-commit` runs the full test suite,
+/// and git exports exactly such an absolute `GIT_DIR` (pointing at
+/// `$GIT_COMMON_DIR/worktrees/<name>`) to hook processes invoked from a
+/// *linked* worktree -- which every session in this repo works from. That
+/// env var then propagates through cargo -> nextest -> the test binary -> a
+/// `git` subprocess spawned here, none of which sanitize it. Every git
+/// invocation in this module (production and test) must scrub it so `-C
+/// <dir>` is the sole source of truth for which repository is targeted.
+fn scrub_git_env(cmd: &mut std::process::Command) {
+    for (key, _) in std::env::vars() {
+        if key.starts_with("GIT_") {
+            cmd.env_remove(key);
+        }
+    }
+}
+
 fn run_git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
+    let mut cmd = std::process::Command::new("git");
+    cmd.arg("-C").arg(dir).args(args);
+    scrub_git_env(&mut cmd);
+    let output = cmd
         .output()
         .map_err(|error| format!("failed to run git {args:?} in {}: {error}", dir.display()))?;
     if !output.status.success() {
@@ -285,13 +306,108 @@ mod tests {
     // --- Real git, in temp repositories --------------------------------
 
     fn git(dir: &Path, args: &[&str]) {
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
+        let mut cmd = std::process::Command::new("git");
+        cmd.arg("-C").arg(dir).args(args);
+        scrub_git_env(&mut cmd);
+        let status = cmd
             .status()
             .unwrap_or_else(|error| panic!("failed to run git {args:?}: {error}"));
         assert!(status.success(), "git {args:?} failed in {}", dir.display());
+    }
+
+    // --- Hermeticity canary (backlog 53) -------------------------------
+    //
+    // 2026-07-18: a leaked `GIT_DIR` (see `scrub_git_env`'s doc) made every
+    // "isolated" TempDir-scoped git call below actually operate on the
+    // enclosing repository -- flipping its `core.bare` to `true`, spawning
+    // a `.horizon/worktrees/` skeleton at its root, and landing a phantom
+    // commit (tree content matching `scratch_repo`'s fixture) on whatever
+    // branch was checked out in the worktree that ran the tests. Every real
+    // -git test below captures an `EnclosingRepoGuard` first: it snapshots
+    // the enclosing repo (discovered once from `CARGO_MANIFEST_DIR`, a
+    // compile-time constant immune to any runtime env/cwd leak) and
+    // re-asserts it unchanged on drop, so any future escape fails loudly
+    // right at the offending test instead of surfacing as unrelated damage
+    // discovered later.
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct EnclosingRepoState {
+        /// `false`/unset in every sane repo; the leak observed in practice
+        /// flipped this to `true` on the shared (common) config, breaking
+        /// `git status` for every worktree of the repo at once.
+        bare: String,
+        /// Catches both a stray untracked `.horizon/` directory and any
+        /// other working-tree/index fallout from an escaped commit.
+        status: String,
+        /// Catches a stray `horizon/<slug>` branch landing in the
+        /// enclosing repo instead of a scratch repo.
+        horizon_branches: String,
+    }
+
+    fn enclosing_repo_root() -> PathBuf {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut cmd = std::process::Command::new("git");
+        cmd.arg("-C").arg(manifest_dir).args([
+            "rev-parse",
+            "--path-format=absolute",
+            "--show-toplevel",
+        ]);
+        scrub_git_env(&mut cmd);
+        let output = cmd
+            .output()
+            .expect("discovering the enclosing repo's root should never fail");
+        assert!(
+            output.status.success(),
+            "git rev-parse --show-toplevel in {} failed: {}",
+            manifest_dir.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        PathBuf::from(String::from_utf8_lossy(&output.stdout).trim())
+    }
+
+    fn enclosing_repo_state(root: &Path) -> EnclosingRepoState {
+        EnclosingRepoState {
+            bare: run_git(root, &["config", "--get", "core.bare"])
+                .unwrap_or_else(|_| "false".to_string()),
+            status: run_git(root, &["status", "--porcelain"]).unwrap_or_default(),
+            horizon_branches: run_git(
+                root,
+                &["for-each-ref", "--format=%(refname)", "refs/heads/horizon"],
+            )
+            .unwrap_or_default(),
+        }
+    }
+
+    struct EnclosingRepoGuard {
+        root: PathBuf,
+        before: EnclosingRepoState,
+    }
+
+    impl EnclosingRepoGuard {
+        fn capture() -> Self {
+            let root = enclosing_repo_root();
+            let before = enclosing_repo_state(&root);
+            Self { root, before }
+        }
+    }
+
+    impl Drop for EnclosingRepoGuard {
+        fn drop(&mut self) {
+            // Don't mask a genuine test failure's panic with a canary
+            // panic during unwind -- and don't risk a double-panic abort.
+            if std::thread::panicking() {
+                return;
+            }
+            let after = enclosing_repo_state(&self.root);
+            assert_eq!(
+                self.before,
+                after,
+                "hermeticity canary: the enclosing repository at {} changed during \
+                 a worktree test -- a git invocation escaped its TempDir scratch repo \
+                 (see worktree.rs's scrub_git_env doc / backlog 53)",
+                self.root.display()
+            );
+        }
     }
 
     fn init_repo(dir: &Path) {
@@ -317,6 +433,7 @@ mod tests {
 
     #[test]
     fn create_isolated_worktree_has_the_expected_branch_and_path_shape() {
+        let _canary = EnclosingRepoGuard::capture();
         let repo = scratch_repo();
         let session_id = Uuid::new_v4();
 
@@ -335,20 +452,14 @@ mod tests {
             "root\n"
         );
 
-        let current_branch = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&info.path)
-            .args(["branch", "--show-current"])
-            .output()
-            .unwrap();
-        assert_eq!(
-            String::from_utf8_lossy(&current_branch.stdout).trim(),
-            info.branch
-        );
+        let current_branch =
+            run_git(&info.path, &["branch", "--show-current"]).expect("branch --show-current");
+        assert_eq!(current_branch, info.branch);
     }
 
     #[test]
     fn create_isolated_worktree_falls_back_to_local_head_without_an_origin_remote() {
+        let _canary = EnclosingRepoGuard::capture();
         let repo = scratch_repo();
         commit_file(repo.path(), "second.txt", "second\n", "second commit");
 
@@ -362,6 +473,7 @@ mod tests {
 
     #[test]
     fn create_isolated_worktree_branches_fresh_from_the_origin_default_branch() {
+        let _canary = EnclosingRepoGuard::capture();
         let repo = scratch_repo();
 
         // A bare "origin" the local repo tracks, one commit ahead of it --
@@ -396,6 +508,7 @@ mod tests {
 
     #[test]
     fn create_isolated_worktree_branches_from_the_source_head_when_the_source_is_owned() {
+        let _canary = EnclosingRepoGuard::capture();
         let repo = scratch_repo();
         let parent_id = Uuid::new_v4();
         let parent = create_isolated_worktree(repo.path(), false, parent_id)
@@ -419,6 +532,7 @@ mod tests {
 
     #[test]
     fn ensure_horizon_ignored_adds_the_exclude_line_exactly_once() {
+        let _canary = EnclosingRepoGuard::capture();
         let repo = scratch_repo();
         create_isolated_worktree(repo.path(), false, Uuid::new_v4())
             .expect("first worktree creation should succeed");
@@ -438,6 +552,7 @@ mod tests {
 
     #[test]
     fn remove_worktree_if_clean_removes_a_clean_worktree_but_keeps_the_branch() {
+        let _canary = EnclosingRepoGuard::capture();
         let repo = scratch_repo();
         let info = create_isolated_worktree(repo.path(), false, Uuid::new_v4())
             .expect("worktree creation should succeed");
@@ -445,20 +560,17 @@ mod tests {
         assert!(remove_worktree_if_clean(&info));
         assert!(!info.path.exists(), "clean worktree should be removed");
 
-        let branches = std::process::Command::new("git")
-            .arg("-C")
-            .arg(repo.path())
-            .args(["branch", "--list", &info.branch])
-            .output()
-            .unwrap();
+        let branches = run_git(repo.path(), &["branch", "--list", &info.branch])
+            .expect("branch --list should succeed");
         assert!(
-            String::from_utf8_lossy(&branches.stdout).contains(&info.branch),
+            branches.contains(&info.branch),
             "the branch must survive worktree removal"
         );
     }
 
     #[test]
     fn remove_worktree_if_clean_keeps_a_dirty_worktree() {
+        let _canary = EnclosingRepoGuard::capture();
         let repo = scratch_repo();
         let info = create_isolated_worktree(repo.path(), false, Uuid::new_v4())
             .expect("worktree creation should succeed");
