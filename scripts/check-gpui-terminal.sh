@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Headless verification for the GPUI shell (shell-gpui/), the gui-verify
-# counterpart of check-terminal-visual.sh for the Floem shell -- see
+# Headless verification for the GPUI shell -- the gui-verify successor of
+# the retired Floem shell's check-terminal-visual.sh; see
 # docs/gpui-migration-design.md's "GUI verification rebuild" section.
 #
 # The GPUI shell has no Xvfb-based path; it has built-in headless taps
-# instead (env vars read once at session spawn, shell-gpui/src/terminal/
-# session.rs):
+# instead (env vars read once at session spawn, src/terminal/session.rs):
 #
 #   HORIZON_GPUI_DUMP=<path>    mirrors every terminal frame (plain text
 #                               plus a per-line span/color table -- see
-#                               shell-gpui/src/terminal/mod.rs's
-#                               dump_frame) to <path> on each update.
+#                               src/terminal/mod.rs's dump_frame) to
+#                               <path> on each update.
 #   HORIZON_GPUI_DRIVE=<bytes>  typed as raw PTY input into the first
 #                               session ~1.5s after startup.
 #   HORIZON_GPUI_DRIVE_ENTER=1  sends the trailing Enter through the key
@@ -63,7 +62,7 @@ done
 
 if [[ ! -x "$binary" ]]; then
   echo "binary not found or not executable: $binary" >&2
-  echo "build it first: (cd shell-gpui && cargo build)" >&2
+  echo "build it first: cargo build --workspace" >&2
   exit 1
 fi
 
@@ -138,7 +137,7 @@ while ((SECONDS < deadline)); do
   if [[ -s "$dump" ]]; then
     grep -qF -- "$marker" "$dump" && marker_ok=1 || marker_ok=0
     grep -qF -- "Indexed(208)" "$dump" && indexed_ok=1 || indexed_ok=0
-    grep -qF -- "Spec(Rgb" "$dump" && truecolor_ok=1 || truecolor_ok=0
+    grep -qF -- "Rgb([" "$dump" && truecolor_ok=1 || truecolor_ok=0
     if [[ "$marker_ok" == "1" && "$indexed_ok" == "1" && "$truecolor_ok" == "1" ]]; then
       break
     fi
@@ -160,9 +159,9 @@ else
   fail=1
 fi
 if [[ "$truecolor_ok" == "1" ]]; then
-  echo "OK: truecolor span present (Spec(Rgb...))"
+  echo "OK: truecolor span present (Rgb([...]))"
 else
-  echo "FAIL: truecolor span (Spec(Rgb) not found in dump: $dump" >&2
+  echo "FAIL: truecolor span (Rgb([) not found in dump: $dump" >&2
   fail=1
 fi
 

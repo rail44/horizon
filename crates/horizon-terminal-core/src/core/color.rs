@@ -2,10 +2,11 @@
 //! (`Event::ColorRequest`, wired in `core/events.rs` and resolved in
 //! `TerminalCore::write_vt`).
 //!
-//! `core::render` has an equivalent table (`resolve_color`/`named_rgb`/
+//! `core::render` had an equivalent table (`resolve_color`/`named_rgb`/
 //! `indexed_rgb`) for painting cells, but that one moved to the host
-//! (`terminal::view`, `docs/session-daemon-design.md` decision 8) once cell
-//! colors stopped needing an immediate RGB answer at all. This module's
+//! (now `theme::resolve` in `src/theme/ansi.rs`;
+//! `docs/session-daemon-design.md` decision 8) once cell colors stopped
+//! needing an immediate RGB answer at all. This module's
 //! table stays here because a color *query reply* is a byte sequence sent
 //! back to the app right now — it cannot be deferred to a UI paint the way
 //! a cell's color can — so it keeps its own copy, resolved against

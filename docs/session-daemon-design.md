@@ -170,7 +170,8 @@ foreseen at the design-decision stage:
   parser, alacritty_terminal is not a UI dependency (so this doesn't
   compromise the zero-floem-dependency requirement), and it avoids an
   otherwise-pure duplication. The host's `terminal::view::color` module
-  moved `resolve_color`/`named_rgb`/`indexed_rgb` over unchanged, operating
+  (now `theme::resolve` in `src/theme/ansi.rs`) moved
+  `resolve_color`/`named_rgb`/`indexed_rgb` over unchanged, operating
   on the same type.
 - **OSC 4/10/11/12 query replies still need real RGB, right now, from
   inside the crate** — that feature (not cell rendering) is the one place
@@ -193,7 +194,8 @@ foreseen at the design-decision stage:
   carries the override table as a sparse logical-index → literal-RGB list
   (sorted, for the frame's `Eq`), populated from `Term::colors()` at
   snapshot time and consulted by `terminal::view::color::resolve_color`
-  before the theme. A literal override always wins for its slot; the theme
+  (now `theme::resolve`) before the theme. A literal override always wins
+  for its slot; the theme
   governs only non-overridden slots, which stays coherent with decision
   8's multi-client theming (a differently-themed second client still shows
   the app's literal override for that slot). `TerminalCore`'s own OSC
@@ -219,8 +221,9 @@ succeeds with zero `floem`/`ui` dependency (`cargo tree` confirms), every
 pre-existing terminal test moved with the code and is green (53 tests in
 the crate, plus session-loop/kitty-protocol tests), and a new golden test
 (`terminal::view::color::tests::known_bytes_resolve_to_the_pre_cut_rgb_values_under_the_default_theme`,
-host-side) confirms a known byte sequence's logical-color frame resolves to
-the exact RGB values (`[224, 108, 117]` for ANSI red, etc.) the pre-cut
+host-side; the resolver is now `theme::resolve`) confirms a known byte
+sequence's logical-color frame resolves to the exact RGB values
+(`[224, 108, 117]` for ANSI red, etc.) the pre-cut
 `TerminalCore` used to bake in directly.
 
 ## Step 1 implementation decisions (2026-07-11)

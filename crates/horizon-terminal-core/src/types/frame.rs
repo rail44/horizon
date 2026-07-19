@@ -35,8 +35,8 @@ pub struct TerminalFrame {
     /// `docs/session-daemon-design.md` decision 8. Index space: 0..=15 base
     /// ANSI, 16..=255 the color cube, 256/257/258
     /// foreground/background/cursor (`NamedColor::Foreground`/`Background`/
-    /// `Cursor`). Consulted by `terminal::view::color::resolve_color` before
-    /// falling back to the per-client theme.
+    /// `Cursor`). Consulted by the host's `theme::resolve`
+    /// (`src/theme/ansi.rs`) before falling back to the per-client theme.
     pub palette_overrides: Vec<(u16, [u8; 3])>,
 }
 
