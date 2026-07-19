@@ -604,7 +604,7 @@ entries live in `backlog-resolved.md` keeping their original numbers
     through the review-queue flow (gate runs locally) instead of the
     GitHub button, or a CI gate should exist — owner call.
 
-64. **[DISPATCHED 2026-07-20] Agent history budget + tool-result-aware
+64. **[LANDED 4816d3c] Agent history budget + tool-result-aware
     eviction.** Root-caused from the dispatched-agent incident where a
     worker's first turn read ~99k tokens of files and evicted its own
     task instruction (the provider then saw only sandbox/approval source
@@ -625,4 +625,13 @@ entries live in `backlog-resolved.md` keeping their original numbers
     byproduct. Replay-cache (re-inject a stored result without
     re-executing) considered and dropped — no prior art in opencode/crush,
     value concentrated in expensive tools, revisit with web tools
-    (backlog 18). Recorded 2026-07-20.
+    (backlog 18). Landed 2026-07-20 (merge `4816d3c`): `model_catalog`
+    module (cached `/models` query, 5s timeout so a stalled provider
+    degrades to the fallback budget rather than hanging session creation
+    — added in review), `derive_history_token_budget` (pure), and
+    `ToolResultPruningMemory` replacing the stock `TokenWindowMemory`.
+    Non-blocking follow-up noted at review: step-2 elision shrinks tool
+    *results* but not tool-*call* argument bloat (fs.write/edit args live
+    on the assistant message), so write-heavy sessions lean on step-3
+    turn-dropping — acceptable, fs.read-shaped bloat is the incident's
+    case. Recorded 2026-07-20.

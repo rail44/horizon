@@ -207,8 +207,9 @@ lands:
   opencode-prune-shaped policy that elides old tool-result content to a
   reference placeholder (keeping the call, pairing intact) before ever
   dropping conversation, so the task instruction survives. Replay cache
-  dropped (no prior art; revisit with web tools). Dispatched to a worker
-  2026-07-20.
+  dropped (no prior art; revisit with web tools). LANDED 2026-07-20
+  (merge `4816d3c`): `model_catalog` (cached, timeout-bounded `/models`
+  query), `derive_history_token_budget`, and `ToolResultPruningMemory`.
 - **portable-pty fork-safety root fix** (backlog 28/31).
   Bounded-retry mitigation shipped. Bounded investigation 2026-07-19:
   hypothesis CONFIRMED at source level (heap-allocating
