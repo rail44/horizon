@@ -80,6 +80,16 @@ product-owned API. Decisions:
   a silent floor (Codex's silent-Landlock-disable bug is the recorded
   cautionary tale). Verified on the owner's dev machine (Void Linux):
   unprivileged userns available, bwrap 0.11.2 installed.
+  **Spike finding (2026-07-19, `crates/horizon-sandbox`): Landlock and
+  bwrap cannot share a thread** — a Landlock-restricted thread is
+  permanently denied `mount(2)`, and mounts are bwrap's entire
+  mechanism (unlike seccomp, which bwrap applies after its own setup
+  via `--seccomp FD`; verified seccomp has no such conflict). The
+  spike therefore ships Landlock as a negotiated, reported diagnostic
+  only; making it a live backstop needs a small helper binary that
+  bwrap execs after mount setup, which applies `restrict_self()` and
+  then execs the real target — recorded follow-up for the policy-tier
+  leg, not a spike blocker.
 - **macOS**: `/usr/bin/sandbox-exec` (hardcoded path, PATH-injection
   defense) with generated SBPL profiles. Codex's three `.sbpl`
   template files are Apache-2.0, self-contained, and worth vendoring
@@ -99,6 +109,13 @@ product-owned API. Decisions:
 - **Denial UX** (converged pattern): detect the sandbox denial
   (exit-code/stderr signature), then surface "retry without sandbox?"
   through the normal approval flow — never silently block or bypass.
+  Two integration notes from the spike for the wiring leg: denial
+  classification is substring-based and locale-sensitive — run
+  sandboxed commands with `LC_ALL=C`; and `horizon_sandbox::spawn`
+  cannot carry the caller's stdio configuration
+  (`std::process::Command` exposes no getter), so the bash tool's
+  piped-output integration needs the API to grow explicit stdio
+  handling first (known limitation recorded in the crate's `lib.rs`).
 - **Spike** (owner decision): build the thin API + per-OS composition
   directly from the start — no ai-jail stopgap (writing the thin layer
   is the spike). Deliverable: prototype + tests
@@ -172,10 +189,15 @@ refactoring wave folds into this item.
 
 1. **Foundation**: session relationship model implementation (worktree
    isolation at spawn) — the already-designed roadmap item; tier 1's
-   fs half depends on it.
+   fs half depends on it. *Core landed 2026-07-19 (merges `e8300d7`,
+   `ca36ea9`): lineage + isolated worktree spawn + open-directory;
+   the session-manager lineage view is the in-flight remainder.*
 2. **Sandbox spike**: thin unified API + Linux (bwrap/seccompiler/
    landlock) + macOS (sandbox-exec/SBPL) per-command composition in
-   sessiond, with denial detection. Prototype + tests.
+   sessiond, with denial detection. Prototype + tests. *Landed
+   2026-07-19 (`e4c3ad4`, `crates/horizon-sandbox`): Linux containment
+   proven by real-process tests; macOS runtime-gated on the owner's
+   next build; Landlock-as-diagnostic per the spike finding above.*
 3. **Policy tiers**: per-call trust predicate; fs auto-approval inside
    isolated worktrees; sandboxed-bash auto-approval; denial-retry UX.
 4. **Network layer**: hudsucker-based allowlist proxy + OS-layer

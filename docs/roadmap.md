@@ -79,11 +79,18 @@ test); and the `turns/` structural relocation into
 interaction stay UI-side). Feature items, unordered until the wave
 lands:
 
-- **Session relationship model — implementation.** The decided design
-  (`docs/session-relationship-design.md`): lineage tree,
-  origin-defaulted worktree isolation at spawn, the open-directory
-  command, and the session-manager lineage view. Foundation already
-  landed (per-session `workspace_root`, terminal cwd sourcing).
+- **Session relationship model — core landed 2026-07-19** (merges
+  `e8300d7`, `ca36ea9`; design `docs/session-relationship-design.md`):
+  daemon-side lineage tree, isolated worktree spawn under
+  `.horizon/worktrees/` with origin-based defaults (palette shared /
+  CLI isolated, `--share` override), clean-only worktree cleanup on
+  terminate, the open-directory command (palette + CLI, active-session
+  v1), and authoritative workspace_root report-back on summaries.
+  Remaining (in flight): the session-manager lineage view, per-row
+  open-directory, subtree-terminate, and the palette isolation opt-in.
+  Known v1 gaps recorded in the design doc's Delivery section
+  (mid-run root correction is sweep-consistent, not live; lineage does
+  not survive a daemon restart).
 - **Inter-agent messaging.** Sessions addressing sessions — the
   coordination substrate for project → domain → task teams. Designed
   on the same derivation tree as the relationship model; a
@@ -125,7 +132,10 @@ lands:
   relationship-model foundation → sandbox spike (self-composed, no
   ai-jail) → policy tiers → network layer → judge. Folds in the
   roles-registry boundary decision and backlog 47/48; grounded in the
-  2026-07-19 event-log analysis (bash ≈ 76% of approvals).
+  2026-07-19 event-log analysis (bash ≈ 76% of approvals). Spike
+  landed 2026-07-19 (`e4c3ad4`, `crates/horizon-sandbox`) with the
+  Landlock/bwrap thread finding recorded in the design doc; next leg
+  is the policy tiers.
 - **Agent web search / public-code search** (backlog 18/19). Needs
   its own consultation: provider, trust-boundary/approval design.
 - **portable-pty fork-safety root fix** (backlog 28/31).

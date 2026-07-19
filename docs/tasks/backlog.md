@@ -260,3 +260,14 @@ entries live in `backlog-resolved.md` keeping their original numbers
     occasionally still fail (now reported as an error rather than freezing
     forever, per the mitigation above) under heavy host load. Recorded
     2026-07-12.
+
+52. **`split_pane_in_tab` corrupts state when the active tab is
+    missing.** Found during the backlog-49 fix (2026-07-19): with zero
+    tabs, the View-kind split path (`split_active_tab_with_view` →
+    `split_tab` → `split_pane_in_tab` in `horizon-workspace`) fails to
+    find the active tab but still pushes an orphan `Pane` into
+    `self.panes` and points `active_tab` at a nonexistent tab id.
+    Command enablement now gates the only user-reachable entry
+    (`c325cd0`), so this is defense-in-depth: make the model operation
+    itself refuse (early return) when the active tab isn't found, with
+    a regression test calling it directly. Mechanical.

@@ -1191,10 +1191,11 @@ fn fold_bash_completion(
 
 /// A `Command` envelope arriving from Horizon for this session.
 /// `ApproveToolCall`/`DenyToolCall` are resolved right here (decision 2:
-/// "Approval decisions stay in Horizon... resolved in sessiond") via the same
-/// `resolve_approval` Horizon's in-process pane click handler
-/// (`app::command_actions::resolve_and_send_approval`) uses; everything else
-/// forwards straight to the provider, unchanged.
+/// "Approval decisions stay in Horizon... resolved in sessiond") via
+/// `tools::approval::resolve_approval`; everything else forwards straight
+/// to the provider, unchanged. (An earlier in-process shell shared this
+/// helper from its own click handler; that path retired with the
+/// runtime split.)
 fn dispatch_inbound_command(
     state: &Arc<SessiondState>,
     live_state: &LiveState,
