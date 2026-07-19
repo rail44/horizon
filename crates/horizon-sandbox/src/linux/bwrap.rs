@@ -63,6 +63,18 @@ pub(crate) fn build_args(
     // punch a read-write hole through it at their own (more specific)
     // path, the same layering `--ro-bind / /` followed by `--bind <sub>
     // <sub>` gets in a hand-written bwrap invocation.
+    //
+    // Containment hazard (2026-07-19 dogfooding): this ordering means a
+    // `writable_roots` entry that is `/tmp` itself (or the host's real temp
+    // dir, when that resolves to `/tmp`) bind-mounts the host's *real* `/tmp`
+    // directly over the private `--tmpfs /tmp` above, undoing it entirely --
+    // the sandboxed child would see and be able to write the shared host
+    // temp dir, not its own private one. `crates/horizon-agent`'s bash tool
+    // was doing exactly this (see `tools::bash::exec::run_sandboxed`'s doc
+    // comment for the incident) until it stopped adding the host temp dir as
+    // a writable root; callers must never do so unless they genuinely intend
+    // to expose the host's shared `/tmp` (they almost never do -- the
+    // private tmpfs above already covers ordinary scratch use).
     for root in &policy.writable_roots {
         bind_rw(&mut argv, root)?;
     }

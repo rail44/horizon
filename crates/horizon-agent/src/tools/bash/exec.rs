@@ -462,14 +462,30 @@ fn error_output(message: &str, partial_output: Option<Vec<u8>>, config: &BashToo
 // there is no UI-thread-blocking concern in doing this synchronously.
 
 /// Runs one *sandboxed* bash call to completion (or until it times out, or
-/// looks sandbox-denied). `workspace_root` becomes the sandbox's writable
-/// root (plus this host's temp dir, for the bash tool's own output-spill
-/// files and ordinary command scratch use); network is off
-/// (`docs/agent-approval-design.md`'s tier 1). Returns
+/// looks sandbox-denied). `workspace_root` is the sandbox's *only* writable
+/// root; network is off (`docs/agent-approval-design.md`'s tier 1). Returns
 /// [`BashCompletion::RetryWithoutSandbox`] instead of a finished result when
 /// the run looks sandbox-denied (`horizon_sandbox::is_likely_sandbox_denied`)
 /// -- see that variant's doc comment for why. Run with `LC_ALL=C`: denial
 /// classification is locale-sensitive.
+///
+/// Containment fix (2026-07-19 dogfooding, backlog): this policy used to add
+/// `std::env::temp_dir()` (the *host's* real temp dir) as a second writable
+/// root, on the theory that the bash tool's own output-spill file
+/// (`output::spill`) and a command's ordinary scratch use both needed it.
+/// That was wrong on both counts and, worse, actively dangerous: `spill` is
+/// called from *this* function, on the host process, after the sandboxed
+/// child has already exited and its output has been captured over a pipe --
+/// it never runs inside the sandbox and needs no writable-root grant at all.
+/// And on Linux, `horizon_sandbox::linux::bwrap` already gives the sandboxed
+/// child a *private* `--tmpfs /tmp` for its own scratch use (torn down with
+/// the sandbox, never touching the host); adding the host's real temp dir as
+/// a writable root bind-mounted it *over* that private tmpfs (writable-root
+/// binds are composed after the tmpfs -- see that module's `build_args`),
+/// making the entire shared host `/tmp` writable from inside every
+/// sandboxed call. A live dogfooding session observed exactly this: a
+/// tier-1 auto-approved `echo ... > /tmp/<name>` wrote through to the real
+/// host `/tmp`, while the result still carried `sandboxed: true`.
 pub(super) fn run_sandboxed(
     call_id: &ToolCallId,
     input: &Value,
@@ -511,7 +527,7 @@ pub(super) fn run_sandboxed(
     cmd.env("LC_ALL", "C");
 
     let policy = horizon_sandbox::SandboxPolicy {
-        writable_roots: vec![workspace_root.to_path_buf(), std::env::temp_dir()],
+        writable_roots: vec![workspace_root.to_path_buf()],
         readable_scope: horizon_sandbox::ReadableScope::Full,
         network: horizon_sandbox::NetworkPolicy::Disabled,
     };

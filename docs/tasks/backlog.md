@@ -372,3 +372,23 @@ entries live in `backlog-resolved.md` keeping their original numbers
     daemon's repo, not its own worktree (usually the same repo today,
     but wrong once sessions span repositories). Same-shape fix: thread
     the session root in. Recorded 2026-07-19 from the fix's review.
+
+59. **Denial detection is blind behind a pipeline.** Tier-1's "denial ->
+    surface a retry-without-sandbox prompt" flow (`docs/agent-approval-
+    design.md`'s "Denial UX", `horizon_sandbox::is_likely_sandbox_denied`)
+    classifies against the wrapped command's own exit code and merged
+    output. A piped command masks both: `curl ... | head -n 1` under
+    network-off observed empty output with exit 0 (`head`'s own success
+    code is what `$?` reports, even though `curl` failed) — no denial
+    classification, no retry-without-sandbox offer, the model just sees
+    silence. Two options recorded, neither implemented: (a) `set -o
+    pipefail` in the bash tool's wrapper script
+    (`tools::bash::exec::wrapped_script`) — reports the last *failing*
+    stage's exit code instead of the last stage's, but changes the
+    command's actual semantics (a script relying on the current
+    non-pipefail behavior would see a different `$?`), so needs care;
+    (b) stderr-pattern-based denial detection independent of exit code
+    (weaker signal, but doesn't touch command semantics). Recorded
+    2026-07-19 from the tier-1 `/tmp` containment-hole fix's review —
+    found while auditing denial classification around that fix, not
+    itself part of it.
