@@ -94,7 +94,12 @@ reuse a stale "Fresh" artifact carrying the *other* worktree's version
 of that crate — symptoms are a phantom E0432 on an export that grep
 confirms exists, cross-crate builds failing while `cargo check -p
 <crate>` passes, or a surprising workspace test count. Fix: `cargo
-clean -p <crate>` (or touch the crate's sources) and rerun. This makes the old worker convention of reflinking the
+clean -p <crate>` (or touch the crate's sources) and rerun. If a second
+post-clean rerun fails differently (concurrent sibling builds can
+re-poison mid-build), bypass the shared cache deterministically:
+`CARGO_BUILD_BUILD_DIR=$PWD/target-local-build cargo nextest run ...`
+(one cold build of external deps, then immune; delete the dir when done
+— details in backlog 43). This makes the old worker convention of reflinking the
 main checkout's `target/` into a fresh worktree mostly redundant for the
 heavy artifacts (only the now-small per-worktree `target/` benefits).
 

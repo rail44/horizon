@@ -183,6 +183,21 @@ entries live in `backlog-resolved.md` keeping their original numbers
     leaked crate tells the truth. A "deterministic" cross-crate failure
     contradicting a recent green run should be treated as this bug
     until a post-clean rerun says otherwise.
+    *Escalation + deterministic escape hatch (2026-07-20)*: on a night
+    with many sibling worktrees on divergent bases (several sessions +
+    dogfooding worktrees) and at least one concurrent nextest, `cargo
+    clean -p` whack-a-mole LOST repeatedly — a full clean of every
+    workspace crate got re-poisoned mid-build by a sibling's concurrent
+    output (four false-red gate failures in one hour, each with a
+    different stale crate: wrong `CONTRACT_VERSION` values 7 and 8,
+    phantom-missing `SetColorScheme`, phantom-missing
+    `TerminalFrame::text()` reported as "field, not a method"). The
+    deterministic way out: run the gate with
+    `CARGO_BUILD_BUILD_DIR=$PWD/target-local-build` (worktree-private
+    build dir bypassing the shared cache — one cold build of external
+    deps, ~6.6GB, then immune; delete the dir before handing the
+    worktree back). Worth reaching for as soon as a *second* clean
+    -p rerun fails differently.
 
 42. **Tool-call rows have no per-occurrence identity when a provider
     reuses a call_id.** The 2026-07-18 reused-call_id fix (`1d86521`)
