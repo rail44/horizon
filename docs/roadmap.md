@@ -143,8 +143,21 @@ lands:
   (bash only when the sandbox actually engages — never silent
   degradation), sandbox-denial retry as a fresh approval, audit
   markers on output JSON (follow-ups: backlog 55 double-row artifact,
-  56 niceness gap). Owner tier-1 dogfooding is the current gate;
-  remaining legs are the network layer and the judge.
+  56 niceness gap). Owner tier-1 dogfooding is the current gate.
+  Network layer (leg 4b) LANDED. **Judge (leg 5) LANDED in SHADOW MODE**
+  (merge `d890b43`): the two-stage boundary-crossing classifier
+  (`syn:small:text`, Plan-B parse, fire-and-forget) runs and logs a
+  `call_id`-keyed calibration record but changes NO approval outcome.
+  **Important limitation surfaced at merge:** nothing in today's catalog
+  is classified `BoundaryCrossing` — everything is contained→auto or
+  irreversible→ask, and network has its own leg-4b path — so the judge
+  is dormant, exercised only by the `mock.boundary_crossing` fixture. It
+  will not accumulate real calibration data (and the enforcing flip
+  cannot be calibrated) until the first real boundary-crossing tool
+  exists: MCP/external tools, or agent web search (backlog 18/19). The
+  judge is now ready infrastructure waiting on that. Two legs remain but
+  are gated on real boundary-crossing traffic: calibration, then the
+  enforcing flip (a `select!` gate at the `BoundaryCrossing` arm).
   **Sandbox backend decided 2026-07-19: migrate `horizon-sandbox`
   from the self-built bwrap+seccompiler+landlock stack to depend on
   nono (`nono` 0.68, Apache-2.0) -- full adoption, both OSes
