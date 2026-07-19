@@ -1,14 +1,15 @@
 use serde_json::json;
 
 use crate::contract::{
-    Error, Event, Message, MessageRole, SessionState, ToolCallId, ToolCallRequest, ToolCallResult,
-    ToolPermission,
+    Error, Event, Message, MessageRole, SessionId, SessionState, ToolCallId, ToolCallRequest,
+    ToolCallResult, ToolPermission,
 };
+use crate::policy::{annotate_auto_approval, classify_call, Classification};
 use crate::tools::config;
 use crate::tools::fs;
 use crate::tools::permission_for_tool;
 use crate::tools::recall;
-use crate::tools::state::ToolSessionState;
+use crate::tools::state::{session_runtime, ToolSessionState};
 
 /// Seam for tools this crate doesn't implement itself because they need
 /// Horizon-side state this crate can't depend on — currently just
@@ -30,6 +31,15 @@ pub trait HostTools {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Execution {
     Auto(Vec<Event>),
+    /// A tier-1-contained call that had to move to a background thread
+    /// (`bash`, via `horizon_sandbox`) instead of finishing synchronously
+    /// like [`Execution::Auto`] -- mirrors `tools::approval::
+    /// ApprovalOutcome::Started`'s split for the same reason (a command can
+    /// run for up to its timeout). `events` are the `ToolRunning`/
+    /// `ToolCallStarted` pair already folded by the caller; the eventual
+    /// result arrives later on the session's `bash_results` channel exactly
+    /// like a manually approved bash call's does.
+    Started(Vec<Event>),
     RequiresApproval,
     Denied(Vec<Event>),
     Unknown(Vec<Event>),
@@ -38,13 +48,27 @@ pub enum Execution {
 pub fn execute_agent_tool(
     host: &dyn HostTools,
     tool_state: &ToolSessionState,
+    session_id: SessionId,
     request: &ToolCallRequest,
 ) -> Execution {
     match permission_for_tool(&request.tool_id) {
         Some(ToolPermission::AutoAllowRead | ToolPermission::AutoAllowUi) => {
             Execution::Auto(execute_auto_tool(host, tool_state, request))
         }
-        Some(ToolPermission::RequireApproval) => Execution::RequiresApproval,
+        Some(ToolPermission::RequireApproval) => {
+            let classification = classify_call(
+                &request.tool_id,
+                &request.input,
+                tool_state.is_isolated_worktree(),
+                horizon_sandbox::is_available(),
+            );
+            match classification {
+                Classification::Contained => execute_tier1(tool_state, session_id, request),
+                Classification::BoundaryCrossing | Classification::AlwaysAsk => {
+                    Execution::RequiresApproval
+                }
+            }
+        }
         Some(ToolPermission::Deny) => Execution::Denied(vec![Event::Error(Error {
             message: format!("Tool `{}` is denied by Horizon policy.", request.tool_id),
         })]),
@@ -52,6 +76,80 @@ pub fn execute_agent_tool(
             message: format!("Unknown tool `{}`.", request.tool_id),
         })]),
     }
+}
+
+/// Auto-executes a tier-1-`Contained` `RequireApproval` call -- the
+/// approval-skipping half of `docs/agent-approval-design.md`'s tier 1.
+/// Dispatches by tool id; `classify_call` never returns `Contained` for any
+/// id not handled below, but this still falls back to the ordinary approval
+/// gate rather than panicking on a future mismatch between the two.
+fn execute_tier1(
+    tool_state: &ToolSessionState,
+    session_id: SessionId,
+    request: &ToolCallRequest,
+) -> Execution {
+    match request.tool_id.as_str() {
+        "fs.write" | "fs.edit" => execute_tier1_fs(tool_state, request),
+        "bash" => execute_tier1_bash(tool_state, session_id, request),
+        _ => Execution::RequiresApproval,
+    }
+}
+
+/// `fs.write`/`fs.edit`: run to completion synchronously right now, reusing
+/// the exact same execution path a manual approval would (`tools::
+/// execute_approved`), just skipping the approval round trip. The audit
+/// marker (tier + reason) is added to the result the same way a real
+/// `ToolCallResult` gets built anywhere else in this crate.
+fn execute_tier1_fs(tool_state: &ToolSessionState, request: &ToolCallRequest) -> Execution {
+    let mut output = crate::tools::execute_approved(tool_state, &request.tool_id, &request.input);
+    annotate_auto_approval(&mut output, "contained", "isolated worktree session");
+
+    Execution::Auto(vec![
+        Event::StateChanged(SessionState::ToolRunning),
+        Event::ToolCallStarted(request.call_id.clone()),
+        Event::ToolCallFinished(ToolCallResult::new(request.call_id.clone(), output)),
+    ])
+}
+
+/// `bash`: starts a sandboxed run on the bash background thread, exactly
+/// like `tools::approval::resolve_bash`'s approve path except the sandbox
+/// engages (writable root = this session's isolated workspace root) and
+/// nothing folds `ToolRunning`/`ToolCallStarted` here -- the caller
+/// (`tools::processing::process_agent_provider_event`) folds
+/// `Execution::Started`'s events itself, the same way it already folds
+/// `Execution::Auto`'s. Falls back to the ordinary approval gate (never
+/// silently drops the call) if this session has no registered runtime or no
+/// workspace root -- both should be impossible whenever `classify_call`
+/// returned `Contained`, but this stays defensive rather than panicking.
+fn execute_tier1_bash(
+    tool_state: &ToolSessionState,
+    session_id: SessionId,
+    request: &ToolCallRequest,
+) -> Execution {
+    let Some(runtime) = session_runtime(session_id) else {
+        return Execution::RequiresApproval;
+    };
+    let Some(workspace_root) = tool_state.workspace_root() else {
+        return Execution::RequiresApproval;
+    };
+
+    let call_id = request.call_id.clone();
+    let events = vec![
+        Event::StateChanged(SessionState::ToolRunning),
+        Event::ToolCallStarted(call_id.clone()),
+    ];
+
+    crate::tools::bash::spawn_sandboxed(
+        session_id,
+        call_id,
+        request.input.clone(),
+        tool_state.bash_cwd_handle(),
+        tool_state.bash_config(),
+        workspace_root.to_path_buf(),
+        runtime.bash_results.clone(),
+    );
+
+    Execution::Started(events)
 }
 
 fn execute_auto_tool(

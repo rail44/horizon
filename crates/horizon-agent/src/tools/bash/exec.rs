@@ -8,10 +8,12 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command as TokioCommand;
 
 use crate::config::BashToolConfig;
-use crate::contract::ToolCallId;
+use crate::contract::{ToolCallId, ToolCallResult};
+use crate::policy::annotate_sandboxed;
 
 use super::output::{self, Capped};
 use super::registry::RegistryGuard;
+use super::BashCompletion;
 
 /// Niceness applied to every spawned bash child (`docs/agent-tools-design.md`,
 /// "Bash Containment"). An agent-driven command must not contend with
@@ -442,3 +444,303 @@ fn error_output(message: &str, partial_output: Option<Vec<u8>>, config: &BashToo
         }
     }
 }
+
+// --- sandboxed execution (tier 1: docs/agent-approval-design.md) ----------
+//
+// A tier-1-auto-approved `bash` call runs through `horizon_sandbox::spawn`
+// instead of a plain `TokioCommand`. `horizon_sandbox::spawn` hands back a
+// plain `std::process::Child` (there is no tokio integration in that crate
+// -- see its own crate doc), so this is a fully synchronous, thread-based
+// implementation rather than reusing `run_async`'s tokio machinery: a
+// watcher thread bounds the wait with `timeout` (killing by pid on
+// expiry -- see `wait_child_with_timeout`'s doc comment for why a plain,
+// non-negated pid kill is enough here, unlike the unsandboxed path's
+// process-group kill), and two more threads blocking-pump stdout/stderr
+// into shared buffers, bounded by `drain_grace` the same way `run_async`
+// bounds its own tokio pumps. This already runs on its own dedicated
+// background thread (`bash::spawn_sandboxed` -> `registry::enqueue`), so
+// there is no UI-thread-blocking concern in doing this synchronously.
+
+/// Runs one *sandboxed* bash call to completion (or until it times out, or
+/// looks sandbox-denied). `workspace_root` becomes the sandbox's writable
+/// root (plus this host's temp dir, for the bash tool's own output-spill
+/// files and ordinary command scratch use); network is off
+/// (`docs/agent-approval-design.md`'s tier 1). Returns
+/// [`BashCompletion::RetryWithoutSandbox`] instead of a finished result when
+/// the run looks sandbox-denied (`horizon_sandbox::is_likely_sandbox_denied`)
+/// -- see that variant's doc comment for why. Run with `LC_ALL=C`: denial
+/// classification is locale-sensitive.
+pub(super) fn run_sandboxed(
+    call_id: &ToolCallId,
+    input: &Value,
+    cwd_handle: &Arc<StdMutex<PathBuf>>,
+    workspace_root: &Path,
+    config: &BashToolConfig,
+) -> BashCompletion {
+    let Some(command) = input.get("command").and_then(Value::as_str) else {
+        return finished(
+            call_id,
+            error_output("bash requires a `command` string argument", None, config),
+        );
+    };
+    if command.trim().is_empty() {
+        return finished(
+            call_id,
+            error_output("bash requires a non-empty `command` string", None, config),
+        );
+    }
+
+    let timeout = resolve_timeout(input, config);
+    let cwd = cwd_handle
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+
+    // Same wrapper shape as the unsandboxed path (`wrapped_script`): merges
+    // the command's own stdout+stderr, and reports the final `$PWD` on the
+    // wrapper's own stderr afterward so cwd tracking keeps working across
+    // sandboxed calls too. The command's own stderr (and so any denial
+    // text -- bwrap/the shell write it to fd 2) ends up in this wrapper's
+    // *stdout* via that merge, which is exactly what `raw_stdout` below is
+    // classified against.
+    let script = wrapped_script(command);
+    let mut cmd = std::process::Command::new("bash");
+    cmd.arg("-c").arg(&script).current_dir(&cwd);
+    // Force English error text regardless of the host's locale -- denial
+    // classification is substring-based (see `horizon_sandbox::denial`).
+    cmd.env("LC_ALL", "C");
+
+    let policy = horizon_sandbox::SandboxPolicy {
+        writable_roots: vec![workspace_root.to_path_buf(), std::env::temp_dir()],
+        readable_scope: horizon_sandbox::ReadableScope::Full,
+        network: horizon_sandbox::NetworkPolicy::Disabled,
+    };
+
+    let sandboxed =
+        match horizon_sandbox::spawn(cmd, &policy, horizon_sandbox::SandboxStdio::piped_output()) {
+            Ok(sandboxed) => sandboxed,
+            Err(error) => {
+                return finished(
+                    call_id,
+                    error_output(
+                        &format!("failed to start sandboxed bash: {error}"),
+                        None,
+                        config,
+                    ),
+                );
+            }
+        };
+    let mut child = sandboxed.child;
+
+    let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return finished(
+            call_id,
+            error_output(
+                "failed to start bash: stdout/stderr pipe was not available",
+                None,
+                config,
+            ),
+        );
+    };
+
+    let (stdout_buf, stdout_handle) = spawn_blocking_pump(stdout);
+    let (stderr_buf, stderr_handle) = spawn_blocking_pump(stderr);
+
+    // Registered only once the child truly exists (mirroring `run_async`'s
+    // own comment) so a racing cancellation always has something real to
+    // kill. Unlike tokio's `Child::id()` (`Option<u32>`, `None` once
+    // already reaped), `std::process::Child::id()` is plain `u32` -- always
+    // available up to this point.
+    let guard = RegistryGuard::new(call_id.clone(), child.id());
+
+    let (status, killed) = wait_child_with_timeout(child, timeout);
+
+    // Bounded drain, same rationale as `run_async`'s: a background process
+    // the command left running can still hold the pipes open well past the
+    // command's own exit.
+    let drain_grace = Duration::from_secs(config.drain_grace_secs);
+    let drained = join_within(vec![stdout_handle, stderr_handle], drain_grace);
+    drop(guard);
+
+    let raw_stdout = take(&stdout_buf);
+    let raw_stderr = take(&stderr_buf);
+
+    if killed {
+        let mut value = timeout_output(timeout, raw_stdout, config);
+        annotate_sandboxed(&mut value, true);
+        if !drained {
+            note_undrained(&mut value, config);
+        }
+        return finished(call_id, value);
+    }
+
+    let Some(status) = status else {
+        let mut value = error_output(
+            "failed to wait for sandboxed bash",
+            Some(raw_stdout),
+            config,
+        );
+        annotate_sandboxed(&mut value, true);
+        return finished(call_id, value);
+    };
+
+    // Classify against the merged stdout (see the wrapper-shape comment
+    // above), not `raw_stderr` (which, on success, is only ever the cwd
+    // report) -- this is the crate's own denial heuristic, sandboxed and
+    // exited with a real code being prerequisites it already checks.
+    if let Some(exit_code) = status.code() {
+        let merged = String::from_utf8_lossy(&raw_stdout);
+        if horizon_sandbox::is_likely_sandbox_denied(true, exit_code, &merged) {
+            let reason = format!(
+                "the sandboxed run looked denied by containment (exit {exit_code}): {}",
+                merged.trim()
+            );
+            return BashCompletion::RetryWithoutSandbox {
+                call_id: call_id.clone(),
+                reason,
+            };
+        }
+    }
+
+    let mut value = match status.code() {
+        Some(_) => success_output(status, raw_stdout, raw_stderr, cwd_handle, config),
+        // No exit code at all means signal-terminated -- this crate's own
+        // seccomp filter denies via `Errno`, not `Trap` (see
+        // `horizon_sandbox::linux::seccomp`'s module doc), so a genuine
+        // denial from *our* containment never lands here; treated as an
+        // ordinary harness failure, same as the unsandboxed path's
+        // `terminated_output`.
+        None => terminated_output(status, raw_stdout, config),
+    };
+    annotate_sandboxed(&mut value, true);
+    if !drained {
+        note_undrained(&mut value, config);
+    }
+    finished(call_id, value)
+}
+
+fn finished(call_id: &ToolCallId, output: Value) -> BashCompletion {
+    BashCompletion::Finished(ToolCallResult::new(call_id.clone(), output))
+}
+
+fn note_undrained(value: &mut Value, config: &BashToolConfig) {
+    if let Some(map) = value.as_object_mut() {
+        map.insert(
+            "note".to_string(),
+            Value::String(format!(
+                "output capture stopped {}ms after the command ended: a background \
+                 process is still holding the output pipe, so anything it prints later \
+                 is not included",
+                Duration::from_secs(config.drain_grace_secs).as_millis()
+            )),
+        );
+    }
+}
+
+/// Spawns a background OS thread that blocking-reads `reader` to EOF,
+/// appending every chunk into a shared buffer -- the synchronous analogue
+/// of `pump` above (which is async, for the unsandboxed tokio path). A
+/// `std::process::Child`'s piped stdio has no async wrapper available in
+/// this crate (`horizon_sandbox::spawn` returns a plain `std::process::
+/// Child`, not a tokio one -- see that crate's doc), so this reads
+/// synchronously on its own thread instead. Returns the shared buffer and
+/// the join handle, so the caller can bound how long it waits for a
+/// straggler (see `join_within`) without blocking this thread past that
+/// bound.
+fn spawn_blocking_pump(
+    mut reader: impl std::io::Read + Send + 'static,
+) -> (Arc<StdMutex<Vec<u8>>>, std::thread::JoinHandle<()>) {
+    let buf = Arc::new(StdMutex::new(Vec::new()));
+    let buf_for_thread = buf.clone();
+    let handle = std::thread::spawn(move || {
+        let mut chunk = [0u8; 8192];
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => buf_for_thread
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .extend_from_slice(&chunk[..n]),
+            }
+        }
+    });
+    (buf, handle)
+}
+
+/// Waits up to `timeout` for every handle in `handles` to finish, without
+/// blocking past it -- the synchronous-thread analogue of `run_async`'s
+/// `tokio::time::timeout` drain bound (a background process a command left
+/// running can still hold the write end of its pipe well after the command
+/// itself exited; an unbounded join here would hang the call forever past
+/// the point cancellation can help). Returns whether every handle actually
+/// finished in time. `JoinHandle` has no timed join, so this polls
+/// `is_finished`, sleeping briefly between checks -- fine here since this
+/// path is already a dedicated background bash-call thread, never the UI
+/// thread. A handle that didn't finish in time is simply left running,
+/// detached (std threads can't be aborted): whatever it later appends to
+/// its buffer is never read again, since this call's caller reads the
+/// buffer's contents immediately after and moves on.
+fn join_within(handles: Vec<std::thread::JoinHandle<()>>, timeout: Duration) -> bool {
+    const POLL_INTERVAL: Duration = Duration::from_millis(20);
+    let deadline = std::time::Instant::now() + timeout;
+    let mut all_finished = true;
+    for handle in handles {
+        while !handle.is_finished() && std::time::Instant::now() < deadline {
+            std::thread::sleep(POLL_INTERVAL);
+        }
+        if handle.is_finished() {
+            let _ = handle.join();
+        } else {
+            all_finished = false;
+        }
+    }
+    all_finished
+}
+
+/// Waits for `child` to finish, without blocking past `timeout`: a
+/// background thread runs the actual (blocking) `child.wait()` and reports
+/// back over a channel, so this can bound the wait with `recv_timeout`
+/// rather than blocking on `wait()` directly. On expiry, kills `child` by
+/// pid and blocks (unbounded -- killing should make `wait()` return
+/// promptly) for the final status. Returns `(status, killed)`; `status` is
+/// `None` only if waiting on the child itself failed (an OS-level error,
+/// not a normal exit/signal outcome).
+fn wait_child_with_timeout(
+    mut child: std::process::Child,
+    timeout: Duration,
+) -> (Option<ExitStatus>, bool) {
+    let pid = child.id();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let status = child.wait().ok();
+        let _ = tx.send(status);
+    });
+
+    match rx.recv_timeout(timeout) {
+        Ok(status) => (status, false),
+        Err(_) => {
+            kill_pid(pid);
+            let status = rx.recv().unwrap_or(None);
+            (status, true)
+        }
+    }
+}
+
+#[cfg(unix)]
+fn kill_pid(pid: u32) {
+    // SAFETY: plain single-argument `kill(2)` on a pid this process owns
+    // (our own sandboxed child); no memory unsafety. A single, non-negated
+    // pid rather than a process-group kill: bwrap's own `--unshare-all`
+    // puts the sandboxed command in its own pid namespace, so killing the
+    // namespace's init-equivalent process tears down every descendant with
+    // it -- no process-group dance needed the way the unsandboxed path's
+    // `process_group(0)` requires.
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGKILL);
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_pid(_pid: u32) {}

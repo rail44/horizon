@@ -18,7 +18,7 @@ mod seccomp;
 pub use landlock::LandlockReport;
 
 use crate::error::SandboxError;
-use crate::policy::{NetworkPolicy, SandboxPolicy};
+use crate::policy::{NetworkPolicy, SandboxPolicy, SandboxStdio};
 use crate::SandboxedChild;
 use std::path::Path;
 use std::process::Command;
@@ -38,6 +38,13 @@ fn resolve_bwrap() -> Result<&'static str, SandboxError> {
         })
 }
 
+/// Cheap capability probe backing [`crate::is_available`]: whether `bwrap`
+/// resolves at all, with no process spawned and no Landlock/seccomp
+/// negotiation.
+pub(crate) fn is_available() -> bool {
+    resolve_bwrap().is_ok()
+}
+
 /// Prepares and spawns `command` under `policy`. Rebuilds `command`'s
 /// program/args/cwd/env onto a fresh `bwrap` invocation, applies the
 /// seccomp network-cut on the thread that spawns it (seccomp, unlike
@@ -47,6 +54,7 @@ fn resolve_bwrap() -> Result<&'static str, SandboxError> {
 pub(crate) fn spawn(
     command: Command,
     policy: &SandboxPolicy,
+    stdio: SandboxStdio,
 ) -> Result<SandboxedChild, SandboxError> {
     let bwrap_path = resolve_bwrap()?;
 
@@ -69,6 +77,10 @@ pub(crate) fn spawn(
             }
         }
     }
+    wrapped
+        .stdin(stdio.stdin)
+        .stdout(stdio.stdout)
+        .stderr(stdio.stderr);
 
     let network_filter = if policy.network == NetworkPolicy::Disabled {
         Some(seccomp::build_network_cut_filter().map_err(SandboxError::Seccomp)?)

@@ -646,13 +646,15 @@ fn agent_frame_lists_multiple_pending_approvals_oldest_first() {
 #[test]
 fn horizon_policy_adds_approval_for_requested_tool() {
     let call_id = agent::ToolCallId("call-1".to_string());
-    let events = horizon_events_for_provider_event(&agent::Event::ToolCallRequested(
-        agent::ToolCallRequest {
+    let tool_state = crate::tools::ToolSessionState::new(std::env::temp_dir());
+    let events = horizon_events_for_provider_event(
+        &agent::Event::ToolCallRequested(agent::ToolCallRequest {
             call_id: call_id.clone(),
             tool_id: "mock.approval_required".to_string(),
             input: serde_json::json!({}),
-        },
-    ));
+        }),
+        &tool_state,
+    );
 
     assert!(events.iter().any(|event| matches!(
         event,

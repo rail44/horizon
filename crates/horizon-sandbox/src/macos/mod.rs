@@ -11,7 +11,7 @@
 mod sbpl;
 
 use crate::error::SandboxError;
-use crate::policy::SandboxPolicy;
+use crate::policy::{SandboxPolicy, SandboxStdio};
 use crate::SandboxedChild;
 use std::io::Write;
 use std::path::Path;
@@ -23,6 +23,12 @@ use std::process::Command;
 /// alternative location.
 const SANDBOX_EXEC_PATH: &str = "/usr/bin/sandbox-exec";
 
+/// Cheap capability probe backing [`crate::is_available`]: whether
+/// `sandbox-exec` exists at its hardcoded path, with nothing spawned.
+pub(crate) fn is_available() -> bool {
+    Path::new(SANDBOX_EXEC_PATH).is_file()
+}
+
 /// Prepares and spawns `command` under `policy` via `sandbox-exec -f
 /// <profile file> -- <command>`. `-f` (a profile file) is used instead of
 /// `-p` (an inline profile string) so the profile never has to round-trip
@@ -30,6 +36,7 @@ const SANDBOX_EXEC_PATH: &str = "/usr/bin/sandbox-exec";
 pub(crate) fn spawn(
     command: Command,
     policy: &SandboxPolicy,
+    stdio: SandboxStdio,
 ) -> Result<SandboxedChild, SandboxError> {
     if !Path::new(SANDBOX_EXEC_PATH).is_file() {
         return Err(SandboxError::SandboxExecNotFound(SANDBOX_EXEC_PATH));
@@ -60,6 +67,10 @@ pub(crate) fn spawn(
             }
         }
     }
+    wrapped
+        .stdin(stdio.stdin)
+        .stdout(stdio.stdout)
+        .stderr(stdio.stderr);
 
     let child = wrapped.spawn()?;
     // The profile file only needs to survive until sandbox-exec has read

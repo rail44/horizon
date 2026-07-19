@@ -8,15 +8,15 @@
 //! the *sandboxed script itself* redirect its own fd 2 to a file inside
 //! its writable root (`exec 2>logfile` as the script's first statement,
 //! before anything that might fail), read back from the host after the
-//! process exits. `spawn` doesn't preserve a caller's piped
-//! stdout/stderr today (see the crate's top-level doc for why:
-//! `std::process::Command` has no getter for stdio, only for
-//! program/args/cwd/env) -- this sidesteps that entirely rather than
-//! relying on it.
+//! process exits -- simpler than piping for these tests' purposes, even
+//! though `spawn` can now carry a caller's piped stdio too (see
+//! `SandboxStdio`, and `spawn_preserves_piped_stdout` below for direct
+//! proof of that).
 
 use super::*;
 use crate::denial::is_likely_sandbox_denied;
-use crate::policy::{NetworkPolicy, ReadableScope, SandboxPolicy};
+use crate::policy::{NetworkPolicy, ReadableScope, SandboxPolicy, SandboxStdio};
+use std::io::Read;
 use std::time::{Duration, Instant};
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -111,7 +111,7 @@ fn writes_inside_writable_root_succeed() {
             shell_quote(&target)
         ),
     );
-    let sandboxed = spawn(cmd, &policy).expect("spawn should succeed");
+    let sandboxed = spawn(cmd, &policy, SandboxStdio::inherit()).expect("spawn should succeed");
     let code = wait_with_timeout(sandboxed.child, TEST_TIMEOUT);
     assert_eq!(code, 0, "stderr: {}", read_log(&log));
     assert_eq!(
@@ -147,7 +147,7 @@ fn writes_outside_writable_root_are_denied() {
             shell_quote(&target)
         ),
     );
-    let sandboxed = spawn(cmd, &policy).expect("spawn should succeed");
+    let sandboxed = spawn(cmd, &policy, SandboxStdio::inherit()).expect("spawn should succeed");
     let code = wait_with_timeout(sandboxed.child, TEST_TIMEOUT);
     let stderr = read_log(&log);
 
@@ -181,7 +181,7 @@ fn network_off_fails_a_tcp_connect() {
             shell_quote(&log)
         ),
     );
-    let sandboxed = spawn(cmd, &policy).expect("spawn should succeed");
+    let sandboxed = spawn(cmd, &policy, SandboxStdio::inherit()).expect("spawn should succeed");
     let code = wait_with_timeout(sandboxed.child, TEST_TIMEOUT);
     let stderr = read_log(&log).to_lowercase();
 
@@ -227,7 +227,7 @@ fn network_on_allows_reaching_the_kernel_network_stack() {
         "/bin/bash",
         &format!("exec 2>{}; exec 3<>/dev/tcp/127.0.0.1/1", shell_quote(&log)),
     );
-    let sandboxed = spawn(cmd, &policy).expect("spawn should succeed");
+    let sandboxed = spawn(cmd, &policy, SandboxStdio::inherit()).expect("spawn should succeed");
     let code = wait_with_timeout(sandboxed.child, TEST_TIMEOUT);
     let stderr = read_log(&log);
 
@@ -249,7 +249,7 @@ fn landlock_negotiation_reports_an_abi_level_or_is_skipped() {
         network: NetworkPolicy::Disabled,
     };
     let cmd = std::process::Command::new("/bin/true");
-    let sandboxed = spawn(cmd, &policy).expect("spawn should succeed");
+    let sandboxed = spawn(cmd, &policy, SandboxStdio::inherit()).expect("spawn should succeed");
     let code = wait_with_timeout(sandboxed.child, TEST_TIMEOUT);
     assert_eq!(code, 0);
 
@@ -271,6 +271,39 @@ fn landlock_negotiation_reports_an_abi_level_or_is_skipped() {
     }
 
     cleanup(dir);
+}
+
+#[test]
+fn spawn_preserves_piped_stdout() {
+    let dir = tempdir("piped-stdout");
+    let policy = SandboxPolicy {
+        writable_roots: vec![dir.clone()],
+        readable_scope: ReadableScope::Full,
+        network: NetworkPolicy::Disabled,
+    };
+    let cmd = shell("/bin/sh", "echo from-inside-the-sandbox");
+    let mut sandboxed =
+        spawn(cmd, &policy, SandboxStdio::piped_output()).expect("spawn should succeed");
+    let mut stdout = sandboxed
+        .child
+        .stdout
+        .take()
+        .expect("stdout should be piped");
+    let mut captured = String::new();
+    stdout
+        .read_to_string(&mut captured)
+        .expect("read piped stdout");
+    let code = wait_with_timeout(sandboxed.child, TEST_TIMEOUT);
+
+    assert_eq!(code, 0);
+    assert_eq!(captured, "from-inside-the-sandbox\n");
+
+    cleanup(dir);
+}
+
+#[test]
+fn is_available_agrees_with_whether_bwrap_resolves() {
+    assert_eq!(super::is_available(), resolve_bwrap().is_ok());
 }
 
 #[test]

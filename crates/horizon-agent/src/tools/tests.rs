@@ -8,7 +8,8 @@ use serde_json::json;
 
 use super::*;
 use crate::contract::{
-    Command, Event, ProviderEvent, SessionId, ToolCallId, ToolCallRequest, ToolPermission,
+    Command, Event, ProviderEvent, SessionId, ToolCallId, ToolCallRequest, ToolCallResult,
+    ToolPermission,
 };
 use crate::frame::{AgentFrame, AgentFrameItem};
 use crate::live::LiveState;
@@ -83,6 +84,19 @@ fn is_error(output: &serde_json::Value) -> bool {
     output["is_error"] == json!(true)
 }
 
+/// Unwraps a completion expected to be finished -- every bash test in this
+/// module exercises the plain (unsandboxed) manual-approval path, which
+/// never produces a retry-without-sandbox prompt.
+fn expect_finished(completion: BashCompletion) -> ToolCallResult {
+    match completion {
+        BashCompletion::Finished(result) => result,
+        BashCompletion::RetryWithoutSandbox { call_id, reason } => panic!(
+            "expected a finished bash completion, got a retry-without-sandbox \
+             request for {call_id:?}: {reason}"
+        ),
+    }
+}
+
 #[test]
 fn workspace_snapshot_tool_is_read_only_auto_allow() {
     assert_eq!(
@@ -123,6 +137,7 @@ fn processing_preserves_provider_payload_on_original_event_only() {
     let processing = process_agent_provider_event(
         &StubHostTools,
         &tool_state,
+        SessionId::new(),
         ProviderEvent::with_provider_payload(
             Event::ToolCallRequested(ToolCallRequest {
                 call_id: call_id.clone(),
@@ -215,7 +230,12 @@ fn execute_agent_tool_dispatches_fs_read_through_auto_execution() {
         input: json!({ "path": target.display().to_string() }),
     };
 
-    let output = tool_output(execute_agent_tool(&StubHostTools, &tool_state, &request));
+    let output = tool_output(execute_agent_tool(
+        &StubHostTools,
+        &tool_state,
+        SessionId::new(),
+        &request,
+    ));
 
     assert!(!is_error(&output));
     assert!(output["content"].as_str().unwrap().contains("hello"));
@@ -1105,6 +1125,269 @@ fn resolve_approval_executes_a_new_occurrence_of_a_reused_call_id() {
     assert_eq!(fs::read_to_string(&target_b).unwrap(), "second");
 }
 
+// --- policy tiers: tier-1 auto-approval (docs/agent-approval-design.md) ---
+
+#[test]
+fn fs_write_auto_executes_in_an_isolated_session_with_the_audit_marker() {
+    let root = temp_workspace("tier1-fs-write-isolated");
+    let tool_state = ToolSessionState::new(root.clone()).with_isolated_worktree(true);
+    let target = root.join("new.txt");
+    let request = ToolCallRequest {
+        call_id: ToolCallId("call-1".to_string()),
+        tool_id: "fs.write".to_string(),
+        input: json!({ "path": target.display().to_string(), "content": "hi" }),
+    };
+
+    let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
+    let Execution::Auto(events) = execution else {
+        panic!("expected Execution::Auto for a contained fs.write");
+    };
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, Event::ToolCallStarted(id) if id == &request.call_id)));
+    let output = events
+        .into_iter()
+        .find_map(|event| match event {
+            Event::ToolCallFinished(result) => Some(result.output),
+            _ => None,
+        })
+        .expect("expected a ToolCallFinished event");
+
+    assert_eq!(fs::read_to_string(&target).unwrap(), "hi");
+    assert_eq!(output["auto_approved"], true);
+    assert_eq!(output["policy_tier"], "contained");
+}
+
+#[test]
+fn fs_edit_auto_executes_in_an_isolated_session() {
+    let root = temp_workspace("tier1-fs-edit-isolated");
+    let target = root.join("file.txt");
+    fs::write(&target, "before").unwrap();
+    let tool_state = ToolSessionState::new(root).with_isolated_worktree(true);
+    // fs.edit's staleness gate needs a prior fs.read recorded -- mirrors
+    // `fs_edit_success_updates_mtime_and_allows_chained_edit` above.
+    fs_tools::execute_auto(
+        &tool_state,
+        "fs.read",
+        &json!({ "path": target.display().to_string() }),
+    )
+    .expect("fs.read is auto-executed");
+    let request = ToolCallRequest {
+        call_id: ToolCallId("call-1".to_string()),
+        tool_id: "fs.edit".to_string(),
+        input: json!({ "path": target.display().to_string(), "old_string": "before", "new_string": "after" }),
+    };
+
+    let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
+    assert!(
+        matches!(execution, Execution::Auto(_)),
+        "expected Execution::Auto for a contained fs.edit, got {execution:?}"
+    );
+    assert_eq!(fs::read_to_string(&target).unwrap(), "after");
+}
+
+#[test]
+fn fs_write_still_requires_approval_when_the_session_is_not_isolated() {
+    let root = temp_workspace("tier1-fs-write-not-isolated");
+    let tool_state = ToolSessionState::new(root.clone()); // isolation defaults to false
+    let target = root.join("new.txt");
+    let request = ToolCallRequest {
+        call_id: ToolCallId("call-1".to_string()),
+        tool_id: "fs.write".to_string(),
+        input: json!({ "path": target.display().to_string(), "content": "hi" }),
+    };
+
+    let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
+    assert_eq!(execution, Execution::RequiresApproval);
+    assert!(!target.exists(), "must not have run yet");
+}
+
+#[test]
+fn horizon_events_for_provider_event_omits_the_approval_prompt_for_a_contained_fs_write() {
+    let tool_state = ToolSessionState::new(std::env::temp_dir()).with_isolated_worktree(true);
+    let events = crate::policy::horizon_events_for_provider_event(
+        &Event::ToolCallRequested(ToolCallRequest {
+            call_id: ToolCallId("call-1".to_string()),
+            tool_id: "fs.write".to_string(),
+            input: json!({ "path": "/tmp/x", "content": "hi" }),
+        }),
+        &tool_state,
+    );
+    assert_eq!(events.len(), 1, "no approval prompt expected: {events:?}");
+}
+
+/// The real thing this whole leg exists for: a `bash` call in an isolated
+/// session, on a host where `horizon_sandbox::is_available()` is genuinely
+/// true (this dev machine has bwrap -- see AGENTS.md), auto-executes
+/// *sandboxed* on the background thread, and its eventual result carries
+/// both audit markers (`sandboxed`, `auto_approved`/tier/reason).
+#[test]
+fn bash_auto_executes_sandboxed_in_an_isolated_session_with_an_engaged_sandbox() {
+    let root = temp_workspace("tier1-bash-sandboxed");
+    let tool_state = ToolSessionState::new(root).with_isolated_worktree(true);
+    let session_id = SessionId::new();
+    let live_state = LiveState::new();
+    let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
+    register_session_runtime(session_id, tool_state.clone(), live_state, bash_results_tx);
+
+    let request = ToolCallRequest {
+        call_id: ToolCallId("call-1".to_string()),
+        tool_id: "bash".to_string(),
+        input: json!({ "command": "echo hi" }),
+    };
+
+    let execution = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
+    let Execution::Started(events) = execution else {
+        panic!("expected Execution::Started for a contained bash call");
+    };
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, Event::ToolCallStarted(id) if id == &request.call_id)));
+
+    let completion = bash_results_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the sandboxed bash call should finish");
+    let result = expect_finished(completion);
+    assert_eq!(result.call_id, request.call_id);
+    assert_eq!(result.output["exit_code"], 0);
+    assert_eq!(result.output["output"], "hi\n");
+    assert_eq!(result.output["sandboxed"], true, "{:?}", result.output);
+    assert_eq!(result.output["auto_approved"], true);
+    assert_eq!(result.output["policy_tier"], "contained");
+
+    unregister_session_runtime(session_id);
+}
+
+/// A sandboxed tier-1 call that overruns its timeout must still be killed
+/// and report promptly -- proving `wait_child_with_timeout`'s pid-based
+/// kill actually tears down a real bwrap-contained child, not just the
+/// unsandboxed process-group path `timeout_kills_the_process_and_reports_
+/// captured_partial_output` (`bash::tests`) already covers.
+#[test]
+fn bash_auto_executes_sandboxed_and_is_killed_on_timeout() {
+    let root = temp_workspace("tier1-bash-sandboxed-timeout");
+    let tool_state = ToolSessionState::new(root).with_isolated_worktree(true);
+    let session_id = SessionId::new();
+    let live_state = LiveState::new();
+    let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
+    register_session_runtime(session_id, tool_state.clone(), live_state, bash_results_tx);
+
+    let request = ToolCallRequest {
+        call_id: ToolCallId("call-1".to_string()),
+        tool_id: "bash".to_string(),
+        input: json!({ "command": "echo start; sleep 5", "timeout_secs": 1 }),
+    };
+
+    let started = std::time::Instant::now();
+    let execution = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
+    assert!(matches!(execution, Execution::Started(_)));
+
+    let completion = bash_results_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the sandboxed bash call should be killed and report promptly");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(4),
+        "should be killed well before the full 5s sleep completes"
+    );
+    let result = expect_finished(completion);
+    assert_eq!(result.output["is_error"], true);
+    assert!(result.output["message"]
+        .as_str()
+        .expect("message")
+        .contains("timed out"));
+    assert_eq!(result.output["sandboxed"], true);
+
+    unregister_session_runtime(session_id);
+}
+
+/// Never-silently-degrade: even on a host where the sandbox genuinely
+/// engages, a *non-isolated* session's `bash` call still goes through the
+/// ordinary approval gate -- isolation is load-bearing, not cosmetic. The
+/// complementary "isolated but no engaged sandbox" case is
+/// `policy::tests::bash_is_contained_only_when_isolated_and_sandboxed`,
+/// exercised directly against the pure predicate since this dev machine
+/// can't be made to lack bwrap for an integration-level test.
+#[test]
+fn bash_requires_approval_when_the_session_is_not_isolated() {
+    let root = temp_workspace("tier1-bash-not-isolated");
+    let tool_state = ToolSessionState::new(root); // isolation defaults to false
+    let request = ToolCallRequest {
+        call_id: ToolCallId("call-1".to_string()),
+        tool_id: "bash".to_string(),
+        input: json!({ "command": "echo hi" }),
+    };
+
+    let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
+    assert_eq!(execution, Execution::RequiresApproval);
+}
+
+/// The denial-retry flow's frame-level mechanic
+/// (`docs/agent-approval-design.md`'s "Denial UX"): `horizon-sessiond`'s
+/// `fold_bash_retry_without_sandbox` reissues a fresh `ToolCallRequested`
+/// for the same `call_id` right before a fresh `ApprovalRequested`, after a
+/// first (sandboxed) attempt already folded `ToolCallStarted` but never
+/// `ToolCallFinished`. This proves that reissue is what makes the retry's
+/// own eventual Approve resolve normally (`Started`), instead of being
+/// misclassified as `AlreadyResolved` by `tools::approval::try_execute`'s
+/// idempotence guard -- without needing the real sandboxed exec plumbing.
+#[test]
+fn resolve_approval_accepts_a_denial_retry_reissue_and_runs_it_unsandboxed() {
+    let tool_state = dummy_tool_state();
+    let session_id = SessionId::new();
+    let live_state = LiveState::new();
+    register_session_runtime(
+        session_id,
+        tool_state,
+        live_state.clone(),
+        dummy_bash_results(),
+    );
+
+    let call_id = ToolCallId("bash-retry".to_string());
+
+    // First (sandboxed) attempt: requested, started -- never finished (the
+    // sandboxed job detected a denial instead of completing normally).
+    live_state.extend_events([Event::ToolCallRequested(ToolCallRequest {
+        call_id: call_id.clone(),
+        tool_id: "bash".to_string(),
+        input: json!({ "command": "echo hi" }),
+    })]);
+    let after_started = live_state.extend_events([Event::ToolCallStarted(call_id.clone())]);
+    assert!(after_started.has_tool_call_started(&call_id));
+    assert!(!after_started.has_tool_call_finished(&call_id));
+
+    // The reissue: a fresh `ToolCallRequested` for the same call_id, then
+    // the normal approval-request events -- exactly what
+    // `fold_bash_retry_without_sandbox` folds in `horizon-sessiond`.
+    let after_retry_request = live_state.extend_events([
+        Event::ToolCallRequested(ToolCallRequest {
+            call_id: call_id.clone(),
+            tool_id: "bash".to_string(),
+            input: json!({ "command": "echo hi" }),
+        }),
+        Event::ApprovalRequested(crate::contract::ApprovalRequest {
+            call_id: call_id.clone(),
+            reason: "sandboxed run looked denied".to_string(),
+        }),
+    ]);
+    assert!(
+        !after_retry_request.has_tool_call_started(&call_id),
+        "the reissue must reset the started/finished scope, or the retry's \
+         own approve would be misclassified as AlreadyResolved"
+    );
+
+    let outcome = resolve_approval(
+        &after_retry_request,
+        session_id,
+        call_id,
+        ApprovalDecision::Approve,
+    );
+    assert!(
+        matches!(outcome, ApprovalOutcome::Started { .. }),
+        "the retry's approve must actually start the call, not be dropped \
+         as AlreadyResolved: {outcome:?}"
+    );
+}
+
 // --- approval wiring: bash -------------------------------------------------
 
 #[test]
@@ -1151,9 +1434,10 @@ fn resolve_approval_starts_bash_on_approve_and_delivers_its_result() {
     let completion = bash_results_rx
         .recv_timeout(std::time::Duration::from_secs(5))
         .expect("the approved bash call should finish and report a result");
-    assert_eq!(completion.result.call_id, call_id);
-    assert_eq!(completion.result.output["exit_code"], 0);
-    assert_eq!(completion.result.output["output"], "hi\n");
+    let result = expect_finished(completion);
+    assert_eq!(result.call_id, call_id);
+    assert_eq!(result.output["exit_code"], 0);
+    assert_eq!(result.output["output"], "hi\n");
 }
 
 #[test]
@@ -1260,7 +1544,7 @@ fn resolve_approval_second_approve_of_a_still_running_bash_call_is_noop() {
     let completion = bash_results_rx
         .recv_timeout(std::time::Duration::from_secs(5))
         .expect("the single approved bash call should finish");
-    assert_eq!(completion.result.call_id, call_id);
+    assert_eq!(expect_finished(completion).call_id, call_id);
     assert!(
         bash_results_rx.try_recv().is_err(),
         "a duplicate approve must not have spawned a second bash process"

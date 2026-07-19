@@ -1,4 +1,4 @@
-use crate::contract::{Command, Event, ProviderEvent};
+use crate::contract::{Command, Event, ProviderEvent, SessionId};
 use crate::policy::horizon_events_for_provider_event;
 use crate::tools::bash;
 use crate::tools::state::ToolSessionState;
@@ -13,6 +13,7 @@ pub struct Processing {
 pub fn process_agent_provider_event(
     host: &dyn HostTools,
     tool_state: &ToolSessionState,
+    session_id: SessionId,
     provider_event: impl Into<ProviderEvent>,
 ) -> Processing {
     let provider_event = provider_event.into();
@@ -44,7 +45,7 @@ pub fn process_agent_provider_event(
         bash::kill_if_running(&result.call_id);
     }
 
-    let mut horizon_events = horizon_events_for_provider_event(&event)
+    let mut horizon_events = horizon_events_for_provider_event(&event, tool_state)
         .into_iter()
         .enumerate()
         .map(|(index, event)| {
@@ -63,13 +64,24 @@ pub fn process_agent_provider_event(
     let mut provider_commands = Vec::new();
 
     if let Event::ToolCallRequested(request) = &event {
-        match execute_agent_tool(host, tool_state, request) {
+        match execute_agent_tool(host, tool_state, session_id, request) {
             Execution::Auto(events) => {
                 for result_event in &events {
                     if let Event::ToolCallFinished(result) = result_event {
                         provider_commands.push(Command::ToolCallResult(result.clone()));
                     }
                 }
+                horizon_events.extend(events.into_iter().map(ProviderEvent::from));
+            }
+            Execution::Started(events) => {
+                // A tier-1-contained `bash` call moved to the background
+                // thread (`horizon_sandbox`) -- no `Command::ToolCallResult`
+                // yet, exactly like a manually approved bash call's
+                // `ApprovalOutcome::Started`. The eventual result (or a
+                // retry-without-sandbox prompt) arrives later on the
+                // session's `bash_results` channel and is folded by
+                // `fold_bash_completion` in `horizon-sessiond`'s session
+                // loop.
                 horizon_events.extend(events.into_iter().map(ProviderEvent::from));
             }
             Execution::RequiresApproval => {}

@@ -103,6 +103,19 @@ struct Inner {
     /// `config.read`/`config.write` degrade to an actionable error instead
     /// of guessing a path.
     config_path: Option<PathBuf>,
+    /// Whether `workspace_root` is an isolated worktree the daemon itself
+    /// created for this session (`docs/session-relationship-design.md`),
+    /// as opposed to a plain shared directory -- the per-call trust
+    /// predicate's isolation input (`docs/agent-approval-design.md`'s tier
+    /// 1: `policy::classify_call`). Deliberately *not* inferred from
+    /// `workspace_root`'s path shape here (e.g. "lives under
+    /// `.horizon/worktrees/`") -- the daemon already knows the real
+    /// outcome of its own worktree creation (see `horizon-sessiond`'s
+    /// `resolve_and_create_isolated_worktree`), so this is threaded in
+    /// after construction the same way [`Self::with_skills`]/[`Self::
+    /// with_config_path`] are, rather than re-derived. `false` everywhere
+    /// except the one production call site.
+    isolated_worktree: bool,
 }
 
 impl ToolSessionState {
@@ -145,6 +158,7 @@ impl ToolSessionState {
                 recall,
                 skills: SkillRegistry::default(),
                 config_path: None,
+                isolated_worktree: false,
             }),
         }
     }
@@ -174,6 +188,25 @@ impl ToolSessionState {
             inner.config_path = config_path;
         }
         self
+    }
+
+    /// Records whether `workspace_root` is an isolated worktree the daemon
+    /// itself created for this session -- see [`Inner::isolated_worktree`]'s
+    /// doc comment. Same construction-time-only safety contract as
+    /// [`Self::with_skills`]/[`Self::with_config_path`].
+    pub fn with_isolated_worktree(mut self, isolated: bool) -> Self {
+        if let Some(inner) = Rc::get_mut(&mut self.inner) {
+            inner.isolated_worktree = isolated;
+        }
+        self
+    }
+
+    /// Whether this session's `workspace_root` is a daemon-created isolated
+    /// worktree -- see [`Inner::isolated_worktree`]'s doc comment. `false`
+    /// for every session that isn't (including one with no workspace root
+    /// at all).
+    pub(crate) fn is_isolated_worktree(&self) -> bool {
+        self.inner.isolated_worktree
     }
 
     /// v1 workspace root: the process's current directory at session start,

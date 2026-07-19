@@ -35,6 +35,7 @@ use serde_json::Value;
 use crate::config::BashToolConfig;
 use crate::contract::{SessionId, ToolCallId, ToolCallResult};
 use crate::frame::AgentFrame;
+use crate::policy::{annotate_auto_approval, annotate_sandboxed};
 
 /// A bash call's outcome, delivered from the background thread that ran it
 /// back to the session loop. `crates/horizon-sessiond/src/session.rs`
@@ -43,8 +44,19 @@ use crate::frame::AgentFrame;
 /// folding a received completion into the session's `LiveState`/`Frames`
 /// via `fold_bash_completion`.
 #[derive(Clone, Debug)]
-pub struct BashCompletion {
-    pub result: ToolCallResult,
+pub enum BashCompletion {
+    /// The call actually finished (successfully or not) -- fold
+    /// `ToolCallFinished` and forward the result to the provider, exactly
+    /// what every bash call did before this type grew a second variant.
+    Finished(ToolCallResult),
+    /// A sandboxed attempt (`spawn_sandboxed`, tier 1) looked denied by the
+    /// sandbox itself (`horizon_sandbox::is_likely_sandbox_denied`) --
+    /// surface the normal `ApprovalRequested` flow for a retry of the same
+    /// call without the sandbox, instead of reporting a raw failure the
+    /// model has no way to act on (`docs/agent-approval-design.md`'s
+    /// "Denial UX"). Never produced by the plain (unsandboxed) [`spawn`]
+    /// path -- only a sandboxed run can be sandbox-denied.
+    RetryWithoutSandbox { call_id: ToolCallId, reason: String },
 }
 
 /// Kicks off a bash call and returns immediately; the UI thread must not
@@ -78,34 +90,87 @@ pub fn spawn(
         Box::new(move || {
             let run_call_id = call_id.clone();
             run_job_body(session_id, call_id, &result_tx, move || {
-                exec::run(&run_call_id, &input, &cwd, &config)
+                let mut output = exec::run(&run_call_id, &input, &cwd, &config);
+                // Honest either way (`docs/agent-approval-design.md`'s
+                // "Audit"): this path never engages the sandbox, whether
+                // it's an ordinary manual approval or a retry-without-
+                // sandbox rerun after a tier-1 denial.
+                annotate_sandboxed(&mut output, false);
+                BashCompletion::Finished(ToolCallResult::new(run_call_id.clone(), output))
             });
         }),
     );
 }
 
-/// Runs `work` (in practice, `exec::run`) and *always* sends a
-/// `BashCompletion` on `result_tx` -- even if `work` panics. This is the fix
-/// for the "answered -- running..." wedge a bare panic used to cause: without
-/// catching it here, a panic on this job's thread would skip the
-/// `result_tx.send` below entirely, so the approved tool call never gets a
-/// `ToolCallFinished` and stays stuck forever. Catching also means this
+/// Kicks off a *sandboxed* bash call (`docs/agent-approval-design.md`'s tier
+/// 1: auto-approved `bash` in an isolated, sandbox-engaged session) and
+/// returns immediately, same contract as [`spawn`]. `workspace_root` becomes
+/// `horizon_sandbox`'s writable root (plus this host's temp dir, since the
+/// bash tool's own output spill files -- `output::spill` -- and a command's
+/// own scratch use land there); network is off. Still goes through the same
+/// per-session FIFO (`registry::enqueue`) as [`spawn`] -- a session's bash
+/// calls never run concurrently with each other regardless of which path
+/// started them. If the run looks sandbox-denied, the completion sent is
+/// [`BashCompletion::RetryWithoutSandbox`] instead of a finished result --
+/// see that variant's doc comment.
+pub fn spawn_sandboxed(
+    session_id: SessionId,
+    call_id: ToolCallId,
+    input: Value,
+    cwd: Arc<Mutex<PathBuf>>,
+    config: BashToolConfig,
+    workspace_root: PathBuf,
+    result_tx: Sender<BashCompletion>,
+) {
+    registry::enqueue(
+        session_id,
+        Box::new(move || {
+            let run_call_id = call_id.clone();
+            run_job_body(session_id, call_id, &result_tx, move || {
+                let mut completion =
+                    exec::run_sandboxed(&run_call_id, &input, &cwd, &workspace_root, &config);
+                // Audit marker (tier + reason) on every finished result this
+                // path produces -- `spawn_sandboxed` is only ever reached via
+                // tier-1 auto-approval (`tools::execution::execute_tier1_bash`),
+                // never a manual approve. A `RetryWithoutSandbox` outcome has
+                // no result yet to annotate.
+                if let BashCompletion::Finished(result) = &mut completion {
+                    annotate_auto_approval(
+                        &mut result.output,
+                        "contained",
+                        "isolated worktree session with an engaged sandbox",
+                    );
+                }
+                completion
+            });
+        }),
+    );
+}
+
+/// Runs `work` (in practice, `exec::run`/`exec::run_sandboxed`) and *always*
+/// sends a `BashCompletion` on `result_tx` -- even if `work` panics. This is
+/// the fix for the "answered -- running..." wedge a bare panic used to
+/// cause: without catching it here, a panic on this job's thread would skip
+/// the `result_tx.send` below entirely, so the approved tool call never gets
+/// a `ToolCallFinished` and stays stuck forever. Catching also means this
 /// function itself returns normally, so the job closure `registry::run_job`
 /// spawned returns normally too and `advance` still fires on schedule --
 /// the FIFO doesn't wedge on the *next* call either.
 ///
-/// `work` must be `UnwindSafe`: `bash::spawn`'s call site wraps a plain
-/// `FnOnce` closure (no shared/interior-mutable state visible to the
-/// closure that catching a panic mid-mutation could leave inconsistent),
-/// so this is a real guarantee, not an assertion papered over.
+/// `work` must be `UnwindSafe`: both `spawn`'s and `spawn_sandboxed`'s call
+/// sites wrap a plain `FnOnce` closure (no shared/interior-mutable state
+/// visible to the closure that catching a panic mid-mutation could leave
+/// inconsistent), so this is a real guarantee, not an assertion papered
+/// over. A panic always resolves to `BashCompletion::Finished` (never a
+/// retry-without-sandbox prompt) -- a harness panic isn't a sandbox denial.
 fn run_job_body(
     session_id: SessionId,
     call_id: ToolCallId,
     result_tx: &Sender<BashCompletion>,
-    work: impl FnOnce() -> Value + std::panic::UnwindSafe,
+    work: impl FnOnce() -> BashCompletion + std::panic::UnwindSafe,
 ) {
-    let output = match std::panic::catch_unwind(work) {
-        Ok(output) => output,
+    let completion = match std::panic::catch_unwind(work) {
+        Ok(completion) => completion,
         Err(payload) => {
             // `&*payload`, not `&payload`: `payload` is a `Box<dyn Any +
             // Send>`, and coercing `&Box<dyn Any + Send>` straight to
@@ -116,12 +181,13 @@ fn run_job_body(
             // the actual payload.
             let message = panic_payload_message(&*payload);
             eprintln!("bash worker panicked (session {session_id:?}, call {call_id:?}): {message}");
-            exec::panic_output(&format!("bash worker panicked: {message}"))
+            BashCompletion::Finished(ToolCallResult::new(
+                call_id,
+                exec::panic_output(&format!("bash worker panicked: {message}")),
+            ))
         }
     };
-    let _ = result_tx.send(BashCompletion {
-        result: ToolCallResult::new(call_id, output),
-    });
+    let _ = result_tx.send(completion);
 }
 
 /// Extracts a human-readable message from a caught panic's payload. Panic

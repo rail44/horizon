@@ -4,6 +4,7 @@
 //! `docs/agent-approval-design.md`'s "Sandbox architecture").
 
 use std::path::PathBuf;
+use std::process::Stdio;
 
 /// What a sandboxed command may read, beyond `SandboxPolicy::writable_roots`
 /// (which are always readable too, since write implies read here).
@@ -39,4 +40,40 @@ pub struct SandboxPolicy {
     pub writable_roots: Vec<PathBuf>,
     pub readable_scope: ReadableScope,
     pub network: NetworkPolicy,
+}
+
+/// Explicit stdio configuration for a sandboxed spawn. `std::process::
+/// Command` has no getter for whatever the caller already configured on
+/// its own `command` (write-only API), so `spawn` cannot infer it and the
+/// caller must state it separately -- see the crate root doc's "Stdio"
+/// section.
+#[derive(Debug)]
+pub struct SandboxStdio {
+    pub stdin: Stdio,
+    pub stdout: Stdio,
+    pub stderr: Stdio,
+}
+
+impl SandboxStdio {
+    /// The bash-tool shape: stdin closed, stdout/stderr piped back to the
+    /// caller for capture.
+    pub fn piped_output() -> Self {
+        Self {
+            stdin: Stdio::null(),
+            stdout: Stdio::piped(),
+            stderr: Stdio::piped(),
+        }
+    }
+
+    /// Inherits this process's own stdio -- what `spawn` silently did for
+    /// every caller before this type existed. Still the right choice for a
+    /// caller (e.g. this crate's own tests) that has no need to capture
+    /// anything itself.
+    pub fn inherit() -> Self {
+        Self {
+            stdin: Stdio::inherit(),
+            stdout: Stdio::inherit(),
+            stderr: Stdio::inherit(),
+        }
+    }
 }
