@@ -15,10 +15,16 @@ entries live in `backlog-resolved.md` keeping their original numbers
     (`web_search`/`web_fetch`) over swappable vendor adapters; fetch =
     own plain-HTTP extraction, no JS rendering initially; DuckDuckGo
     scraping excluded; Brave recorded as second-adapter candidate.
-    Still open before implementation: the approval/trust-boundary
-    design — judge's first real BoundaryCrossing customer vs a
-    crush-`agentic_fetch`-style delegated subagent (one outer approval,
-    inner search/fetch chain) — and the Exa REST-vs-hosted-MCP route.
+    Approval design decided 2026-07-20 (recorded in
+    `docs/agent-approval-design.md` "Web tools" section): both tools =
+    `BoundaryCrossing` (the judge's first real customers);
+    `web_search` auto-approved + shadow-judged (industry-standard
+    disposition), `web_fetch` per-domain session allowlist shared with
+    leg 4b's store; Exa route = REST + `EXA_API_KEY` (env-only);
+    fetch = own reqwest + dom_smoothie with SSRF guard;
+    `agentic_fetch`-style delegation deferred until judge calibration.
+    Implementation dispatched 2026-07-20 to a Horizon agent session
+    (dogfooding) via `horizon new-agent`.
     Background: `docs/research/crush-opencode-tools-2026-07-07.md`
     (recovered from the session transcript 2026-07-19; also covers item
     19's sourcegraph/LSP details).

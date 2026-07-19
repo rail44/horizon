@@ -189,10 +189,13 @@ lands:
   `docs/research/agent-web-search-api-2026-07-19.md`, 2026-07-20
   addendum), shape = thin Horizon-owned `web_search`/`web_fetch` tools
   over swappable adapters, own plain-HTTP fetch/extraction (no JS
-  rendering initially). Remaining before implementation: the
-  approval/trust-boundary design (candidate first real
-  `BoundaryCrossing` customer for the shadow judge) and the Exa
-  REST-vs-hosted-MCP route choice.
+  rendering initially). Approval design decided 2026-07-20
+  (`docs/agent-approval-design.md` "Web tools" section): both tools
+  classified `BoundaryCrossing` — the judge's first real customers,
+  ending its dormancy — with search auto-approved + shadow-judged and
+  fetch per-domain-allowlisted (store shared with leg 4b); Exa via
+  REST + env-only `EXA_API_KEY`. Implementation dispatched to a
+  Horizon agent session (dogfooding) 2026-07-20.
 - **portable-pty fork-safety root fix** (backlog 28/31).
   Bounded-retry mitigation shipped. Bounded investigation 2026-07-19:
   hypothesis CONFIRMED at source level (heap-allocating

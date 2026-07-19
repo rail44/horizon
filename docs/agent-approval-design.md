@@ -366,6 +366,63 @@ product-owned API. Decisions:
   drift → calibration + observability (log every verdict, measure
   FNR/FPR against a human-labeled set), not a runtime counter.
 
+## Web tools: the first real boundary crossers (2026-07-20)
+
+Owner-decided design for the `web_search`/`web_fetch` tools (backlog
+18; vendor decision and evidence in
+`docs/research/agent-web-search-api-2026-07-19.md`, 2026-07-20
+addendum). These are the first production tools classified
+**BoundaryCrossing** — they end the judge's dormancy: they send data
+outward (query text / URLs are exfiltration channels), pull untrusted
+content inward, and mutate nothing.
+
+- **`web_search` (Exa REST adapter): auto-approved from day one, with
+  the shadow judge logging a verdict on every call.** Per-call human
+  approval for search exists in no surveyed product (crush and
+  opencode run search unapproved — crush gates only its outer
+  `agentic_fetch` delegation; Claude Code auto-approves `WebSearch`
+  and gates only fetch; Codex/Gemini run provider-side search with no
+  per-call prompt): the exfiltration channel is "query string to one
+  fixed vendor," the narrow end of the risk. Suspicious-query
+  detection is the judge's job, reviewed post-hoc from the audit
+  record rather than pre-approved by a human. The API key
+  (`EXA_API_KEY`) is environment-only, per the config rule that
+  secrets never come from the file; without it the tool reports
+  unconfigured rather than failing cryptically.
+- **`web_fetch` (own implementation): per-domain session allowlist,
+  sharing leg 4b's store.** First fetch of a domain asks a human;
+  approval adds the domain to the same per-session allowlist the
+  sandbox network proxy consults, so the owner sees one model —
+  "which domains may this session talk to" — regardless of whether
+  bash-curl or `web_fetch` initiated contact. Arbitrary URLs are the
+  wide end of the exfiltration risk, and this mirrors the one
+  surveyed product that gates anything here (Claude Code's per-domain
+  fetch prompt). These human decisions are the judge's calibration
+  pairs.
+- **After the enforcing flip**, the judge takes over both dispositions
+  (including new-domain fetch decisions). Until then
+  `BoundaryCrossing` carries a per-tool disposition: search = auto +
+  shadow verdict; fetch = allowlist check → human on miss + shadow
+  verdict.
+- **Implementation shape** (sized 2026-07-20, ~1k lines with tests):
+  thin Horizon-owned tool schemas over swappable vendor adapters.
+  Search: Exa REST (`numResults`/`maxCharacters`-style caller-side
+  token budget). Fetch: reqwest + `dom_smoothie` (maintained Rust
+  port of Mozilla readability with built-in markdown output), plus a
+  mandatory **SSRF guard** (reject private/link-local/localhost and
+  cloud-metadata targets — the agent must not be steerable into its
+  own control socket or sessiond), size/time caps, and content-type
+  branching (HTML → readability; text/JSON → capped pass-through;
+  binary → reject).
+- **Deferred, recorded**: a crush-`agentic_fetch`-style throwaway
+  delegated subagent (one outer approval, inner chain, context
+  hygiene) — attractive but heavier infrastructure, and it would
+  starve the judge of exactly the per-call calibration signal this
+  first customer finally provides; revisit after calibration.
+  Also v2 candidates: Claude-Code-style small-model digestion of
+  fetched pages before they enter the main context, and
+  `yusukebe/ax`-style structure discovery / token-budget flags.
+
 ## The agent-kinds note
 
 The judge is the "second, differently-shaped role" that
