@@ -13,6 +13,16 @@ impl Workspace {
         }
     }
 
+    /// Records `parent_session_id` on an existing session (a no-op if
+    /// `session_id` is unknown) -- see `WorkspaceSession::parent_session_id`'s
+    /// doc comment for who calls this and when. Mirrors
+    /// `set_session_workspace_root` above exactly.
+    pub fn set_session_parent(&mut self, session_id: SessionId, parent_session_id: SessionId) {
+        if let Some(session) = self.sessions.iter_mut().find(|s| s.id == session_id) {
+            session.parent_session_id = Some(parent_session_id);
+        }
+    }
+
     pub fn terminate_session(&mut self, session_id: SessionId) -> bool {
         let Some(_) = self.session(session_id) else {
             return false;

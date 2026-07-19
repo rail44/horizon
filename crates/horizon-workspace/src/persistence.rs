@@ -499,6 +499,9 @@ impl WorkspaceState {
                     // doc comment) -- a restored session's workspace_root
                     // starts unknown again.
                     workspace_root: None,
+                    // Same as `workspace_root` above -- `WorkspaceSession::
+                    // parent_session_id`'s doc comment.
+                    parent_session_id: None,
                 })
                 .collect(),
             active_tab: self.active_tab,

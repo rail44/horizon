@@ -63,6 +63,17 @@ pub struct WorkspaceSession {
     /// restart/reload; a resumed session's `workspace_root` goes back to
     /// `None` until recreated.
     pub workspace_root: Option<PathBuf>,
+    /// Mirrors `wire::SessionSummary.parent_session_id` -- the derivation
+    /// edge (`docs/session-relationship-design.md` decisions 1-3), recorded
+    /// only when an isolated spawn's worktree creation actually succeeded.
+    /// `None` for a lineage root or a session nothing has reported an edge
+    /// for yet. Populated the same way as `workspace_root` above: the
+    /// daemon's `SessionSummary` is authoritative, so this is only ever set
+    /// from the adoption/resume sweeps (`spawn_agent_resume`/
+    /// `spawn_workspace_restore` in `src/workspace/session_lifecycle.rs`),
+    /// never guessed at spawn time. Same "not persisted, goes back to
+    /// `None` until re-adopted" caveat as `workspace_root`.
+    pub parent_session_id: Option<SessionId>,
 }
 
 #[derive(Clone, Debug)]
@@ -80,6 +91,7 @@ impl WorkspaceSession {
             display_number,
             title: session_title(kind, display_number),
             workspace_root: None,
+            parent_session_id: None,
         }
     }
 }

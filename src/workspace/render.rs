@@ -18,8 +18,9 @@ use horizon_workspace::{Direction, PaneId, PaneKind, SplitAxis};
 
 use super::{
     ClosePane, ModeCancel, ModeCommit, ModeMoveDown, ModeMoveLeft, ModeMoveRight, ModeMoveUp,
-    NewAgentTab, NewTab, NextTab, OpenPalette, RunCommand, SplitPane, ToggleWorkspaceMode,
-    WorkspaceShell, MODE_CONTEXT,
+    NewAgentTab, NewTab, NextTab, OpenPalette, OpenSessionDirectory, RunCommand, SplitPane,
+    TerminateSessionSubtree, ToggleWorkspaceMode, WorkspaceShell, MODE_CONTEXT,
+    SESSION_MANAGER_CONTEXT,
 };
 use crate::theme;
 use crate::view_chooser::Placement;
@@ -710,7 +711,7 @@ impl Render for WorkspaceShell {
                 shell.execute(CommandId::NewTab, window, cx);
             }))
             .on_action(cx.listener(|shell, _: &NewAgentTab, window, cx| {
-                shell.create_session(PaneKind::Agent, None, Placement::NewTab, window, cx);
+                shell.create_session(PaneKind::Agent, None, false, Placement::NewTab, window, cx);
             }))
             .on_action(cx.listener(|shell, _: &SplitPane, window, cx| {
                 shell.execute(CommandId::SplitRight, window, cx);
@@ -803,6 +804,17 @@ impl Render for WorkspaceShell {
                         this.child(
                             div()
                                 .id("session-manager-backdrop")
+                                .key_context(SESSION_MANAGER_CONTEXT)
+                                .on_action(cx.listener(
+                                    |shell, _: &OpenSessionDirectory, window, cx| {
+                                        shell.open_selected_session_directory(window, cx);
+                                    },
+                                ))
+                                .on_action(cx.listener(
+                                    |shell, _: &TerminateSessionSubtree, window, cx| {
+                                        shell.terminate_selected_session_subtree(window, cx);
+                                    },
+                                ))
                                 .absolute()
                                 .top_0()
                                 .left_0()

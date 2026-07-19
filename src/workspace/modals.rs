@@ -10,7 +10,7 @@ use horizon_workspace::commands::command_entries;
 
 use super::WorkspaceShell;
 use crate::palette::PaletteDelegate;
-use crate::session_manager::SessionManagerDelegate;
+use crate::session_manager::{subtree_session_ids, SessionManagerDelegate};
 use crate::view_chooser::{Placement, ViewChooserDelegate};
 
 /// The first row is selectable exactly when the list isn't empty — the
@@ -78,7 +78,14 @@ impl WorkspaceShell {
                     let placement = shell.pending_placement.take();
                     shell.close_view_chooser(window, cx);
                     if let (Some(choice), Some(placement)) = (choice, placement) {
-                        shell.create_session(choice.kind, choice.role_id, placement, window, cx);
+                        shell.create_session(
+                            choice.kind,
+                            choice.role_id,
+                            choice.isolate,
+                            placement,
+                            window,
+                            cx,
+                        );
                     }
                 }
                 ListEvent::Cancel => {
@@ -171,6 +178,76 @@ impl WorkspaceShell {
         self.scrim_freeze = None;
         self.focus_active(window, cx);
         cx.notify();
+    }
+
+    /// `OpenSessionDirectory` (`docs/session-relationship-design.md`
+    /// decision 4b): opens a new terminal pinned to the session manager's
+    /// currently *selected* row's directory -- generalizing decision 4a's
+    /// active-session-only v1 (`CommandId::OpenTerminalInSessionDirectory`)
+    /// to an arbitrary row. A no-op if nothing is selected or the selected
+    /// row's `workspace_root` isn't known (every terminal session today,
+    /// plus a resumed agent session -- same enablement rule as the active-
+    /// session command).
+    pub(super) fn open_selected_session_directory(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(manager) = self.session_manager.clone() else {
+            return;
+        };
+        let workspace_root = manager.read(cx).selected_index().and_then(|index| {
+            manager
+                .read(cx)
+                .delegate()
+                .summary_at(index)
+                .and_then(|summary| summary.workspace_root.clone())
+        });
+        if let Some(workspace_root) = workspace_root {
+            self.open_terminal_in_directory(workspace_root, window, cx);
+        }
+    }
+
+    /// `TerminateSessionSubtree` (decision 5's explicit, more-destructive-
+    /// than-plain-terminate opt-in): terminates the session manager's
+    /// currently *selected* row and every descendant, leaving unrelated
+    /// sessions (including the row's own ancestors) untouched. A no-op
+    /// unless the selected row actually has children -- this must never
+    /// substitute for the plain per-session terminate a leaf row already
+    /// gets from secondary confirm. Each terminated session keeps its own
+    /// independent cleanup semantics (clean worktree removed, dirty kept,
+    /// branch never deleted; design decision 5) -- `Workspace::
+    /// terminate_session` doesn't care about traversal order, so
+    /// `subtree_session_ids`'s order is used as-is.
+    pub(super) fn terminate_selected_session_subtree(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(manager) = self.session_manager.clone() else {
+            return;
+        };
+        let target = manager.read(cx).selected_index().and_then(|index| {
+            manager
+                .read(cx)
+                .delegate()
+                .row_at(index)
+                .filter(|row| row.has_children)
+                .map(|row| row.summary.id)
+        });
+        let Some(target) = target else {
+            return;
+        };
+        let sessions = self.workspace.session_summaries();
+        for session_id in subtree_session_ids(&sessions, target) {
+            self.workspace.terminate_session(session_id);
+        }
+        self.reconcile(window, cx);
+        let sessions = self.workspace.session_summaries();
+        manager.update(cx, |list, cx| {
+            list.delegate_mut().reset(sessions);
+            cx.notify();
+        });
     }
 
     pub(super) fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
