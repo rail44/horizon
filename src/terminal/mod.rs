@@ -20,12 +20,13 @@
 mod glyphs;
 mod input;
 mod session;
+mod shape_cache;
 #[cfg(test)]
 mod tests;
 
 pub(crate) use session::TerminalSession;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
@@ -39,6 +40,7 @@ use self::input::{
     cell_from_position, selection_kind_from_clicks, term_key_code, term_modifiers,
     terminal_mouse_button, terminal_mouse_modifiers, ScrollAccumulator,
 };
+use self::shape_cache::{CacheEpoch, RowItem, ShapedLineCache, NO_GENERATION};
 use crate::input_trace::input_trace;
 use crate::theme;
 
@@ -141,6 +143,10 @@ pub(crate) struct TerminalView {
     // entity) so bounds-driven resize can be deduped without an update.
     last_size: Rc<Cell<TerminalSize>>,
     metrics: Rc<Cell<Option<PaintMetrics>>>,
+    // Row-keyed memo of shaped lines (see `shape_cache`), shared with the
+    // paint closure the same way as `last_size`/`metrics`; `RefCell`
+    // because the cache is a real struct, not a `Copy` value.
+    shape_cache: Rc<RefCell<ShapedLineCache>>,
     // IME preedit — client-side only, never sent to the PTY. The commit
     // path (replace_text_in_range) writes raw UTF-8 bytes instead.
     ime_marked_text: Option<String>,
@@ -187,6 +193,7 @@ impl TerminalView {
                 pixel_height: 0,
             })),
             metrics: Rc::new(Cell::new(None)),
+            shape_cache: Rc::new(RefCell::new(ShapedLineCache::new())),
             ime_marked_text: None,
             ime_commit_guard: ImeCommitGuard::default(),
             key_text_dedup: KeyTextDedup::default(),
@@ -731,6 +738,7 @@ impl Render for TerminalView {
         let entity = cx.entity();
         let last_size = self.last_size.clone();
         let metrics = self.metrics.clone();
+        let shape_cache = self.shape_cache.clone();
         let focus_handle = self.focus_handle.clone();
         let (status, status_color) = self.status_line(cx);
         fn on_down(
@@ -783,7 +791,15 @@ impl Render for TerminalView {
                                 ElementInputHandler::new(bounds, entity.clone()),
                                 cx,
                             );
-                            paint_terminal(bounds, &entity, &last_size, &metrics, window, cx);
+                            paint_terminal(
+                                bounds,
+                                &entity,
+                                &last_size,
+                                &metrics,
+                                &shape_cache,
+                                window,
+                                cx,
+                            );
                         },
                     )
                     .size_full(),
@@ -810,6 +826,7 @@ fn paint_terminal(
     entity: &Entity<TerminalView>,
     last_size: &Rc<Cell<TerminalSize>>,
     metrics: &Rc<Cell<Option<PaintMetrics>>>,
+    shape_cache: &RefCell<ShapedLineCache>,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -846,165 +863,92 @@ fn paint_terminal(
         let view = entity.read(cx);
         (view.session.clone(), view.ime_marked_text.clone())
     };
-    let Some(frame) = session.read(cx).frame.clone() else {
-        return;
+    let (frame, row_generations) = {
+        let session = session.read(cx);
+        let Some(frame) = session.frame.clone() else {
+            return;
+        };
+        (frame, session.row_generations().to_vec())
     };
 
     let default_bg = theme::to_hsla(theme::resolve(
         horizon_terminal_core::TerminalColor::Named(horizon_terminal_core::NamedColor::Background),
         &frame.palette_overrides,
     ));
-    let scale_factor = window.scale_factor();
+
+    // Row-keyed shaping memo (goal 3/4 of docs/terminal-protocol-goals.md,
+    // see `shape_cache`): a row whose generation stamp is unchanged since
+    // the last paint replays its cached ShapedLines/geometric glyphs;
+    // only changed rows walk their spans and shape again. The epoch
+    // compare clears everything when resolved colors moved out from under
+    // the cached runs (theme reload, OSC palette override).
+    let mut cache = shape_cache.borrow_mut();
+    cache.begin_frame(
+        CacheEpoch {
+            theme: theme::terminal_color_scheme(),
+            palette_overrides: frame.palette_overrides.clone(),
+        },
+        size.rows as usize,
+    );
 
     // Grid-positioned painting (the pattern every surveyed GPUI terminal
     // converges on): each span is painted at its computed column offset,
     // never left to shaped-text flow, and glyph advances are snapped to
     // the cell grid via shape_line's force_width when the span is
-    // width-uniform.
+    // width-uniform (see `shape_row_items`).
     for (row, line) in frame.lines.iter().enumerate() {
         if row >= size.rows as usize {
             break;
         }
-        let y = line_height * row as f32;
+        let row_origin = bounds.origin + point(px(0.0), line_height * row as f32);
+
+        // Background quads paint every frame — the scene is rebuilt from
+        // scratch each frame, so only shaping is worth memoizing. Painting
+        // must not be gated on `span.text` being non-empty: a run of blank
+        // cells (`push_styled_cell` in horizon-terminal-core's `render`
+        // module represents a space run as an empty-text span carrying
+        // only `columns`/`bg`) is exactly how BCE-erased regions
+        // (`CSI K`/`CSI J` filling with the currently active background --
+        // classic `bce` terminfo semantics) and explicit bg-colored space
+        // padding (a status line's fill, a selection highlight over blank
+        // cells) reach the screen. An earlier
+        // `if span.text.is_empty() { continue }` here skipped this block
+        // for those spans, silently dropping their background fill -- the
+        // root cause of the gaps/interruptions in bg-colored regions
+        // (owner dogfooding report, 2026-07-18).
         let mut col = 0_usize;
         for span in &line.spans {
             let x = cell_width * col as f32;
             col += span.columns;
-            let origin = bounds.origin + point(x, y);
-
-            // Background painting must not be gated on `span.text` being
-            // non-empty: a run of blank cells (`push_styled_cell` in
-            // horizon-terminal-core's `render` module represents a space
-            // run as an empty-text span carrying only `columns`/`bg`) is
-            // exactly how BCE-erased regions (`CSI K`/`CSI J` filling with
-            // the currently active background -- classic `bce` terminfo
-            // semantics) and explicit bg-colored space padding (a status
-            // line's fill, a selection highlight over blank cells) reach
-            // the screen. An earlier `if span.text.is_empty() { continue }`
-            // here skipped this whole block for those spans, silently
-            // dropping their background fill -- the root cause of the
-            // gaps/interruptions in bg-colored regions (owner dogfooding
-            // report, 2026-07-18).
             let bg = theme::to_hsla(theme::resolve(span.bg, &frame.palette_overrides));
             if bg != default_bg {
                 window.paint_quad(fill(
                     Bounds::new(
-                        origin,
+                        row_origin + point(x, px(0.0)),
                         gpui::size(cell_width * span.columns as f32, line_height),
                     ),
                     bg,
                 ));
             }
-
-            if span.text.trim().is_empty() {
-                continue;
-            }
-            let fg = theme::to_hsla(theme::resolve(span.fg, &frame.palette_overrides));
-
-            // Box-drawing/block/sextant/Braille characters (see `glyphs`)
-            // paint as geometry sized exactly to their cell instead of
-            // shaped font glyphs, which can't fill a cell taller than the
-            // font's own em box -- the seams reported in ASCII-art
-            // rectangles. A span's characters are walked one at a time so a
-            // run mixing geometric and ordinary text (same fg/bg, so
-            // already merged into one span) still gets both treatments;
-            // consecutive ordinary-text characters are still batched
-            // through one `shape_line` call, matching the old whole-span
-            // behavior when a span has no geometric characters at all.
-            let chars: Vec<char> = span.text.chars().collect();
-            let mut char_index = 0;
-            let mut col_in_span = 0_usize;
-            while char_index < chars.len() {
-                let ch = chars[char_index];
-                if glyphs::is_geometric(ch) {
-                    let width_cols = char_columns(ch).max(1);
-                    let cell_origin = origin + point(cell_width * col_in_span as f32, px(0.0));
-                    let cell_bounds = Bounds::new(
-                        cell_origin,
-                        gpui::size(cell_width * width_cols as f32, line_height),
-                    );
-                    glyphs::paint_glyph(window, cell_bounds, ch, fg, font_size, scale_factor);
-                    col_in_span += width_cols;
-                    char_index += 1;
-                    continue;
-                }
-
-                let run_start_col = col_in_span;
-                let mut run_text = String::new();
-                while char_index < chars.len() && !glyphs::is_geometric(chars[char_index]) {
-                    run_text.push(chars[char_index]);
-                    col_in_span += char_columns(chars[char_index]).max(1);
-                    char_index += 1;
-                }
-                let run_origin = origin + point(cell_width * run_start_col as f32, px(0.0));
-                let run_columns = col_in_span - run_start_col;
-                let run_chars = run_text.chars().count();
-                // Snap glyphs to the cell grid only when every char in the
-                // run occupies the same number of columns; a mixed-width
-                // run keeps natural shaping (positioned correctly at its
-                // start column, with only intra-run drift possible).
-                let force_width = if run_columns == run_chars {
-                    Some(cell_width)
-                } else if run_columns == run_chars * 2 {
-                    Some(cell_width * 2.0)
-                } else {
-                    None
-                };
-                // v7 style attributes. Underline color falls back to the
-                // run's own fg (the SGR 58 contract on
-                // `TerminalSpan::underline_color`); Curl maps to gpui's
-                // wavy underline, while Dotted/Dashed draw as a plain
-                // single line for now (gpui's `UnderlineStyle` has no
-                // dotted/dashed variant). Geometric characters above take
-                // the `paint_glyph` path and carry no style attributes --
-                // box-drawing cells are their own geometry.
-                let underline = match span.underline {
-                    horizon_terminal_core::TerminalUnderline::None => None,
-                    kind => {
-                        let color = span
-                            .underline_color
-                            .map(|color| {
-                                theme::to_hsla(theme::resolve(color, &frame.palette_overrides))
-                            })
-                            .unwrap_or(fg);
-                        Some(UnderlineStyle {
-                            // Approximate a double underline by thickness
-                            // -- gpui draws exactly one line per run.
-                            thickness: match kind {
-                                horizon_terminal_core::TerminalUnderline::Double => px(2.0),
-                                _ => px(1.0),
-                            },
-                            color: Some(color),
-                            wavy: kind == horizon_terminal_core::TerminalUnderline::Curl,
-                        })
-                    }
-                };
-                let strikethrough = span.strikethrough.then(|| StrikethroughStyle {
-                    thickness: px(1.0),
-                    color: Some(fg),
-                });
-                let run_font = if span.italic {
-                    Font {
-                        style: FontStyle::Italic,
-                        ..font.clone()
-                    }
-                } else {
-                    font.clone()
-                };
-                let run = TextRun {
-                    len: run_text.len(),
-                    font: run_font,
-                    color: fg,
-                    background_color: None,
-                    underline,
-                    strikethrough,
-                };
-                let shaped =
-                    text_system.shape_line(run_text.into(), font_size, &[run], force_width);
-                let _ = shaped.paint(run_origin, line_height, TextAlign::Left, None, window, cx);
-            }
         }
+
+        let generation = row_generations.get(row).copied().unwrap_or(NO_GENERATION);
+        let items = cache.get_or_shape(row, generation, || {
+            shape_row_items(
+                line,
+                &frame.palette_overrides,
+                &font,
+                font_size,
+                cell_width,
+                &text_system,
+            )
+        });
+        paint_row_items(items, row_origin, cell_width, window, cx);
     }
+    if let Some(trace) = cache.trace_line() {
+        input_trace!("{trace}");
+    }
+    drop(cache);
 
     // Selection overlay -- the client-side half of the v7 semantic
     // selection (`TerminalFrame::selection`, goal 2 of
@@ -1119,6 +1063,172 @@ fn paint_terminal(
             }
             horizon_terminal_core::TerminalCursorShape::HollowBlock => {
                 window.paint_quad(outline(cell, color, BorderStyle::Solid));
+            }
+        }
+    }
+}
+
+/// Builds one row's text layer as cache-ready [`RowItem`]s: walks the
+/// row's spans, classifies characters, and shapes the ordinary-text runs.
+/// Pure with respect to the window — everything here depends only on row
+/// content, the startup-fixed font metrics, and resolved colors (the
+/// cache's epoch axes), which is what makes the result safe to replay on
+/// later frames.
+fn shape_row_items(
+    line: &horizon_terminal_core::TerminalLine,
+    palette_overrides: &[(u16, [u8; 3])],
+    font: &Font,
+    font_size: Pixels,
+    cell_width: Pixels,
+    text_system: &WindowTextSystem,
+) -> Vec<RowItem> {
+    let mut items = Vec::new();
+    let mut col = 0_usize;
+    for span in &line.spans {
+        let span_start = col;
+        col += span.columns;
+        if span.text.trim().is_empty() {
+            continue;
+        }
+        let fg = theme::to_hsla(theme::resolve(span.fg, palette_overrides));
+
+        // Box-drawing/block/sextant/Braille characters (see `glyphs`)
+        // paint as geometry sized exactly to their cell instead of
+        // shaped font glyphs, which can't fill a cell taller than the
+        // font's own em box -- the seams reported in ASCII-art
+        // rectangles. A span's characters are walked one at a time so a
+        // run mixing geometric and ordinary text (same fg/bg, so
+        // already merged into one span) still gets both treatments;
+        // consecutive ordinary-text characters are still batched
+        // through one `shape_line` call, matching the old whole-span
+        // behavior when a span has no geometric characters at all.
+        let chars: Vec<char> = span.text.chars().collect();
+        let mut char_index = 0;
+        let mut col_in_span = 0_usize;
+        while char_index < chars.len() {
+            let ch = chars[char_index];
+            if glyphs::is_geometric(ch) {
+                let width_cols = char_columns(ch).max(1);
+                items.push(RowItem::Glyph {
+                    col: span_start + col_in_span,
+                    ch,
+                    width_cols,
+                    fg,
+                });
+                col_in_span += width_cols;
+                char_index += 1;
+                continue;
+            }
+
+            let run_start_col = col_in_span;
+            let mut run_text = String::new();
+            while char_index < chars.len() && !glyphs::is_geometric(chars[char_index]) {
+                run_text.push(chars[char_index]);
+                col_in_span += char_columns(chars[char_index]).max(1);
+                char_index += 1;
+            }
+            let run_columns = col_in_span - run_start_col;
+            let run_chars = run_text.chars().count();
+            // Snap glyphs to the cell grid only when every char in the
+            // run occupies the same number of columns; a mixed-width
+            // run keeps natural shaping (positioned correctly at its
+            // start column, with only intra-run drift possible).
+            let force_width = if run_columns == run_chars {
+                Some(cell_width)
+            } else if run_columns == run_chars * 2 {
+                Some(cell_width * 2.0)
+            } else {
+                None
+            };
+            // v7 style attributes. Underline color falls back to the
+            // run's own fg (the SGR 58 contract on
+            // `TerminalSpan::underline_color`); Curl maps to gpui's
+            // wavy underline, while Dotted/Dashed draw as a plain
+            // single line for now (gpui's `UnderlineStyle` has no
+            // dotted/dashed variant). Geometric characters above take
+            // the `paint_glyph` path and carry no style attributes --
+            // box-drawing cells are their own geometry.
+            let underline = match span.underline {
+                horizon_terminal_core::TerminalUnderline::None => None,
+                kind => {
+                    let color = span
+                        .underline_color
+                        .map(|color| theme::to_hsla(theme::resolve(color, palette_overrides)))
+                        .unwrap_or(fg);
+                    Some(UnderlineStyle {
+                        // Approximate a double underline by thickness
+                        // -- gpui draws exactly one line per run.
+                        thickness: match kind {
+                            horizon_terminal_core::TerminalUnderline::Double => px(2.0),
+                            _ => px(1.0),
+                        },
+                        color: Some(color),
+                        wavy: kind == horizon_terminal_core::TerminalUnderline::Curl,
+                    })
+                }
+            };
+            let strikethrough = span.strikethrough.then(|| StrikethroughStyle {
+                thickness: px(1.0),
+                color: Some(fg),
+            });
+            let run_font = if span.italic {
+                Font {
+                    style: FontStyle::Italic,
+                    ..font.clone()
+                }
+            } else {
+                font.clone()
+            };
+            let run = TextRun {
+                len: run_text.len(),
+                font: run_font,
+                color: fg,
+                background_color: None,
+                underline,
+                strikethrough,
+            };
+            let shaped = text_system.shape_line(run_text.into(), font_size, &[run], force_width);
+            items.push(RowItem::Text {
+                col: span_start + run_start_col,
+                shaped: Box::new(shaped),
+            });
+        }
+    }
+    items
+}
+
+/// Replays a row's [`RowItem`]s into the scene at `row_origin` — the
+/// per-frame half of the split: cheap paint calls only, no shaping, no
+/// span walking. Cell metrics come from the same startup-fixed globals
+/// `shape_row_items` shaped under; scale factor is read live because it
+/// is applied at paint time, not baked into the cached items.
+fn paint_row_items(
+    items: &[RowItem],
+    row_origin: Point<Pixels>,
+    cell_width: Pixels,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let font_size = px(font_size());
+    let line_height = px(line_height());
+    let scale_factor = window.scale_factor();
+    for item in items {
+        match item {
+            RowItem::Text { col, shaped } => {
+                let origin = row_origin + point(cell_width * *col as f32, px(0.0));
+                let _ = shaped.paint(origin, line_height, TextAlign::Left, None, window, cx);
+            }
+            RowItem::Glyph {
+                col,
+                ch,
+                width_cols,
+                fg,
+            } => {
+                let cell_bounds = Bounds::new(
+                    row_origin + point(cell_width * *col as f32, px(0.0)),
+                    gpui::size(cell_width * *width_cols as f32, line_height),
+                );
+                glyphs::paint_glyph(window, cell_bounds, *ch, *fg, font_size, scale_factor);
             }
         }
     }

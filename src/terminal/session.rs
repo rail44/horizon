@@ -24,8 +24,8 @@ use crate::sessiond::TerminalSessionHandle;
 /// changed. A row's generation moves exactly when its content is replaced
 /// — by a row diff, by rows a resize adds, or by a full snapshot (which
 /// bumps everything, mirroring its repaint-everything semantics) — so a
-/// row-keyed render cache (the goals doc's planned `ShapedLine` cache,
-/// this table's intended consumer) can invalidate per row instead of
+/// row-keyed render cache (`super::shape_cache`, this table's consumer)
+/// can invalidate per row instead of
 /// re-shaping every visible row every frame. Kept free-standing and
 /// GPUI-free, like [`RuntimeReachability`], so its transitions are
 /// unit-testable without a `Context`.
@@ -258,13 +258,10 @@ impl TerminalSession {
     }
 
     /// Read access to the per-row generation table (see
-    /// [`RowGenerations`]). No consumer yet by design: this is goal 3's
-    /// plumbing, published for the planned row-keyed `ShapedLine` cache
-    /// (`docs/terminal-protocol-goals.md`, "Derived near-term work") to
-    /// key invalidation on. `#[allow(dead_code)]` follows this codebase's
-    /// pattern for deliberately-kept API surface (e.g.
-    /// `theme::surface_raised`).
-    #[allow(dead_code)]
+    /// [`RowGenerations`]): the validity signal for the paint-side
+    /// row-keyed `ShapedLine` cache (`super::shape_cache`), which
+    /// compares each row's stamp here against the one captured with its
+    /// cached shaping — goal 3's plumbing reaching its consumer.
     pub(crate) fn row_generations(&self) -> &[u64] {
         self.row_generations.rows()
     }
