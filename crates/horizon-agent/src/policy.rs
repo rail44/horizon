@@ -8,7 +8,7 @@
 
 use serde_json::Value;
 
-use crate::contract::{ApprovalRequest, Error, Event, SessionState, ToolPermission};
+use crate::contract::{ApprovalKind, ApprovalRequest, Error, Event, SessionState, ToolPermission};
 use crate::tools::ToolSessionState;
 
 /// A per-call trust classification -- the tier a single tool call falls
@@ -103,6 +103,40 @@ pub(crate) fn annotate_sandboxed(output: &mut Value, sandboxed: bool) {
     }
 }
 
+/// Records that a sandboxed `bash` call's network egress was refused by the
+/// allowlist proxy for one or more domains (`docs/agent-approval-design.md`
+/// leg 4b) -- additive, same convention as [`annotate_auto_approval`]/
+/// [`annotate_sandboxed`]. Also forces `is_error: true`, overriding whatever
+/// the wrapped shell pipeline's own exit-code-derived convention said:
+/// backlog 59 -- a command like `curl ... | head` can exit `0` even though
+/// the network call itself was refused, and a call the proxy actually
+/// denied network access for is never a clean success from the agent's
+/// point of view, whatever the shell's own exit code claims.
+pub(crate) fn annotate_denied_domains(output: &mut Value, domains: &[String]) {
+    if let Some(map) = output.as_object_mut() {
+        map.insert(
+            "denied_domains".to_string(),
+            Value::Array(domains.iter().cloned().map(Value::String).collect()),
+        );
+        map.insert("is_error".to_string(), Value::Bool(true));
+    }
+}
+
+/// Records that a human approved one or more network domains for this
+/// session before this retry ran (`docs/agent-approval-design.md` leg 4b)
+/// -- additive, same convention as [`annotate_auto_approval`]. Kept
+/// distinct from `auto_approved`: this retry was a human decision, not an
+/// auto-approval, so the audit trail must never conflate the two.
+pub(crate) fn annotate_domain_approval(output: &mut Value, domains: &[String]) {
+    if let Some(map) = output.as_object_mut() {
+        map.insert("domain_approved".to_string(), Value::Bool(true));
+        map.insert(
+            "approved_domains".to_string(),
+            Value::Array(domains.iter().cloned().map(Value::String).collect()),
+        );
+    }
+}
+
 pub fn horizon_events_for_provider_event(
     event: &Event,
     tool_state: &ToolSessionState,
@@ -130,6 +164,7 @@ pub fn horizon_events_for_provider_event(
                                 "`{}` requested Horizon approval for this tool call.",
                                 request.tool_id
                             ),
+                            kind: ApprovalKind::Standard,
                         }));
                         events.push(Event::StateChanged(SessionState::WaitingForApproval));
                     }

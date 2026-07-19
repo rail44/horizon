@@ -9,7 +9,8 @@ use tokio::process::Command as TokioCommand;
 
 use crate::config::BashToolConfig;
 use crate::contract::{ToolCallId, ToolCallResult};
-use crate::policy::annotate_sandboxed;
+use crate::policy::{annotate_denied_domains, annotate_sandboxed};
+use crate::tools::network::SessionNetworkProxy;
 
 use super::output::{self, Capped};
 use super::registry::RegistryGuard;
@@ -468,19 +469,25 @@ fn error_output(message: &str, partial_output: Option<Vec<u8>>, config: &BashToo
 /// is_likely_sandbox_denied`) -- see that variant's doc comment for why. Run
 /// with `LC_ALL=C`: denial classification is locale-sensitive.
 ///
-/// Network (`docs/agent-approval-design.md`'s "Staging" leg 4a): `Some`
-/// `bridge_socket` gets `NetworkPolicy::Proxied { bridge_socket }` -- the
-/// same seccomp/namespace network-syscall cut as `Disabled`, plus one
-/// bind-mounted UNIX socket that reaches `horizon-sessiond`'s own
-/// long-lived `AllowlistProxy` (`horizon_sandbox_proxy`). The allowlist
-/// starts empty and there's no config surface yet (leg 4b), so today this
-/// is honest but not yet useful: a command that tries to use the network
-/// still fails -- exactly the pre-4a `Disabled` experience from the
-/// caller's point of view, just refused one layer further out (the proxy's
-/// `403` with an `x-horizon-sandbox-proxy-denial` header, instead of a bare
-/// seccomp-denied `socket(2)`) for whichever narrow slice of traffic
-/// actually reaches the bridge. `None` (no bridge running) falls back to
-/// plain `NetworkPolicy::Disabled`, unchanged from before this leg.
+/// Network (`docs/agent-approval-design.md` leg 4b): `Some(network)` gets
+/// `NetworkPolicy::Proxied { bridge_socket }` against that session's own
+/// bridge -- the same seccomp/namespace network-syscall cut as `Disabled`,
+/// plus one UNIX socket that reaches this session's own `AllowlistProxy`
+/// (`horizon_sandbox_proxy`, owned by `tools::network::SessionNetworkProxy`).
+/// `None` (no proxy running for this session) falls back to plain
+/// `NetworkPolicy::Disabled`.
+///
+/// A denied domain is detected proxy-side, never from the child's own exit
+/// code (backlog 59: a piped command like `curl ... | head` can exit `0`
+/// even though the network call itself was refused) -- right after the
+/// child exits, this drains `network`'s recorded denials
+/// (`SessionNetworkProxy::drain_denied_hosts`) and, if any were recorded,
+/// returns [`BashCompletion::DomainDenied`] instead of a plain `Finished`
+/// result, regardless of what the child's own exit status/output would
+/// otherwise suggest. Checked *before*, and independent of, the
+/// `is_likely_sandbox_denied` heuristic below: the proxy's own structured
+/// record is strictly better evidence than a substring guess on stdout, so
+/// a real domain denial always wins that classification.
 ///
 /// Containment fix (2026-07-19 dogfooding, backlog): this policy used to add
 /// `std::env::temp_dir()` (the *host's* real temp dir) as a second writable
@@ -504,7 +511,7 @@ pub(super) fn run_sandboxed(
     input: &Value,
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     workspace_root: &Path,
-    bridge_socket: Option<&Path>,
+    network: Option<&SessionNetworkProxy>,
     config: &BashToolConfig,
 ) -> BashCompletion {
     let Some(command) = input.get("command").and_then(Value::as_str) else {
@@ -540,7 +547,7 @@ pub(super) fn run_sandboxed(
     // classification is substring-based (see `horizon_sandbox::denial`).
     cmd.env("LC_ALL", "C");
 
-    let network = match bridge_socket {
+    let network_policy = match network.map(SessionNetworkProxy::bridge_socket) {
         Some(bridge_socket) => horizon_sandbox::NetworkPolicy::Proxied {
             bridge_socket: bridge_socket.to_path_buf(),
         },
@@ -549,7 +556,7 @@ pub(super) fn run_sandboxed(
     let policy = horizon_sandbox::SandboxPolicy {
         writable_roots: vec![workspace_root.to_path_buf()],
         readable_scope: horizon_sandbox::ReadableScope::Full,
-        network,
+        network: network_policy,
     };
 
     let sandboxed =
@@ -603,11 +610,23 @@ pub(super) fn run_sandboxed(
     let raw_stdout = take(&stdout_buf);
     let raw_stderr = take(&stderr_buf);
 
+    // Drained once the child has fully exited, so no further request can
+    // still be in flight against the proxy -- see this function's own doc
+    // comment for why this is checked ahead of (and independent of) the
+    // child's own exit status.
+    let denied_domains = network
+        .map(SessionNetworkProxy::drain_denied_hosts)
+        .unwrap_or_default();
+
     if killed {
         let mut value = timeout_output(timeout, raw_stdout, config);
         annotate_sandboxed(&mut value, true);
         if !drained {
             note_undrained(&mut value, config);
+        }
+        if !denied_domains.is_empty() {
+            annotate_denied_domains(&mut value, &denied_domains);
+            return domain_denied(call_id, denied_domains, value);
         }
         return finished(call_id, value);
     }
@@ -619,8 +638,27 @@ pub(super) fn run_sandboxed(
             config,
         );
         annotate_sandboxed(&mut value, true);
+        if !denied_domains.is_empty() {
+            annotate_denied_domains(&mut value, &denied_domains);
+            return domain_denied(call_id, denied_domains, value);
+        }
         return finished(call_id, value);
     };
+
+    // Authoritative regardless of the wrapped shell pipeline's own exit
+    // code -- see this function's own doc comment (backlog 59). Skips the
+    // exit-code-based `is_likely_sandbox_denied` heuristic below entirely
+    // when it fires: there is nothing that heuristic could tell us that the
+    // proxy's own record doesn't already answer better.
+    if !denied_domains.is_empty() {
+        let mut value = status_output(status, raw_stdout, raw_stderr, cwd_handle, config);
+        annotate_sandboxed(&mut value, true);
+        annotate_denied_domains(&mut value, &denied_domains);
+        if !drained {
+            note_undrained(&mut value, config);
+        }
+        return domain_denied(call_id, denied_domains, value);
+    }
 
     // Classify against the merged stdout (see the wrapper-shape comment
     // above), not `raw_stderr` (which, on success, is only ever the cwd
@@ -640,7 +678,29 @@ pub(super) fn run_sandboxed(
         }
     }
 
-    let mut value = match status.code() {
+    let mut value = status_output(status, raw_stdout, raw_stderr, cwd_handle, config);
+    annotate_sandboxed(&mut value, true);
+    if !drained {
+        note_undrained(&mut value, config);
+    }
+    finished(call_id, value)
+}
+
+/// Builds the ordinary (non-timeout, non-wait-failure) result value from a
+/// sandboxed child's exit status -- shared by the plain success path and the
+/// domain-denied path above, which both need the same success/terminated
+/// dispatch just to wrap a different [`BashCompletion`] shape around it.
+/// Mirrors the `None` (signal-terminated) arm's existing behavior: `terminated_output`
+/// takes no `raw_stderr` at all, so it is simply dropped in that arm, same
+/// as before this was factored out.
+fn status_output(
+    status: ExitStatus,
+    raw_stdout: Vec<u8>,
+    raw_stderr: Vec<u8>,
+    cwd_handle: &Arc<StdMutex<PathBuf>>,
+    config: &BashToolConfig,
+) -> Value {
+    match status.code() {
         Some(_) => success_output(status, raw_stdout, raw_stderr, cwd_handle, config),
         // No exit code at all means signal-terminated -- this crate's own
         // seccomp filter denies via `Errno`, not `Trap` (see
@@ -649,12 +709,15 @@ pub(super) fn run_sandboxed(
         // ordinary harness failure, same as the unsandboxed path's
         // `terminated_output`.
         None => terminated_output(status, raw_stdout, config),
-    };
-    annotate_sandboxed(&mut value, true);
-    if !drained {
-        note_undrained(&mut value, config);
     }
-    finished(call_id, value)
+}
+
+fn domain_denied(call_id: &ToolCallId, domains: Vec<String>, output: Value) -> BashCompletion {
+    BashCompletion::DomainDenied {
+        call_id: call_id.clone(),
+        domains,
+        result: ToolCallResult::new(call_id.clone(), output),
+    }
 }
 
 fn finished(call_id: &ToolCallId, output: Value) -> BashCompletion {

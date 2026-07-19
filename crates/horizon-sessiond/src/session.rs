@@ -46,9 +46,9 @@ use crossbeam_channel::{unbounded, Receiver, Sender};
 
 use horizon_agent::config::{AgentConfig, AgentToolsConfig};
 use horizon_agent::contract::{
-    self, ApprovalRequest, Command, Error as AgentError, Event, Initialization, ProviderEvent,
-    ProviderId, ProviderRegistry, SessionId, SessionState, ToolCallId, ToolCallResult,
-    TurnEndReason,
+    self, ApprovalKind, ApprovalRequest, Command, Error as AgentError, Event, Initialization,
+    ProviderEvent, ProviderId, ProviderRegistry, SessionId, SessionState, ToolCallId,
+    ToolCallResult, TurnEndReason,
 };
 use horizon_agent::frame::{agent_frame_from_events, AgentFrame, AgentFrameItem};
 use horizon_agent::live::LiveState;
@@ -157,16 +157,6 @@ pub(crate) struct SessiondState {
     /// `horizon_config::resolved_path`: no `HOME`/`XDG_CONFIG_HOME` to fall
     /// back to.
     config_path: Option<PathBuf>,
-    /// This process's own long-lived network-proxy bridge socket path
-    /// (`docs/agent-approval-design.md`'s "Staging" leg 4a --
-    /// `crate::network::NetworkProxy`), if `main` managed to start one.
-    /// `None` if the proxy failed to bind (non-fatal -- see `main`);
-    /// either way every session's `ToolSessionState` falls back to
-    /// `NetworkPolicy::Disabled` for tier-1 sandboxed `bash`, exactly the
-    /// pre-4a behavior. Injected into every spawned session's
-    /// `ToolSessionState` the same way `config_path` is (see
-    /// `run_session`).
-    bridge_socket: Option<PathBuf>,
 }
 
 impl SessiondState {
@@ -177,7 +167,6 @@ impl SessiondState {
         writer: Option<WriterHandle>,
         duckdb_cell: SharedDuckdbStore,
         config_path: Option<PathBuf>,
-        bridge_socket: Option<PathBuf>,
     ) -> Self {
         Self {
             providers,
@@ -191,7 +180,6 @@ impl SessiondState {
             skipped_lines_summary: Mutex::new(None),
             duckdb_cell,
             config_path,
-            bridge_socket,
         }
     }
 
@@ -1045,11 +1033,37 @@ fn run_session(
     // the wrong directory, only what `skill.read` can see -- out of this
     // fix's reported scope.
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
+    // Leg 4b (`docs/agent-approval-design.md`): the network proxy is now
+    // `horizon-agent`'s own responsibility, started per session (never one
+    // shared daemon-wide instance -- see `tools::network::
+    // SessionNetworkProxy`'s doc comment for the per-session-attribution
+    // reasoning) and only when this session could ever actually reach tier
+    // 1 -- the exact same `isolated && sandbox_available` precondition
+    // `policy::classify_call` gates `bash`'s `Contained` classification on,
+    // so a session that could never engage the sandbox never pays for a
+    // proxy it will never use. A bind failure is non-fatal: this session
+    // just falls back to `NetworkPolicy::Disabled` for tier-1 sandboxed
+    // `bash`, exactly the pre-leg-4a behavior.
+    let network = if isolated && horizon_sandbox::is_available() {
+        match horizon_agent::tools::SessionNetworkProxy::start() {
+            Ok(proxy) => Some(Arc::new(proxy)),
+            Err(error) => {
+                eprintln!(
+                    "horizon-sessiond: failed to start session {session_id:?}'s network-proxy \
+                     bridge ({error}); tier-1 sandboxed bash will run with network disabled"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let tool_state = tool_session_state_for(workspace_root, state.agent_config.tools, recall)
         .with_isolated_worktree(isolated)
         .with_skills(SkillRegistry::discover(&cwd))
         .with_config_path(state.config_path.clone())
-        .with_bridge_socket(state.bridge_socket.clone());
+        .with_network_proxy(network);
     let live_state = match state.writer() {
         Some(writer) => LiveState::with_event_log_and_history(
             session_id,
@@ -1204,6 +1218,11 @@ fn fold_bash_completion(
         BashCompletion::RetryWithoutSandbox { call_id, reason } => {
             fold_bash_retry_without_sandbox(state, live_state, session_id, call_id, reason)
         }
+        BashCompletion::DomainDenied {
+            call_id,
+            domains,
+            result,
+        } => fold_domain_denied(state, live_state, session_id, call_id, domains, result),
     }
 }
 
@@ -1301,7 +1320,65 @@ fn fold_bash_retry_without_sandbox(
 
     let events = vec![
         Event::ToolCallRequested(original_request),
-        Event::ApprovalRequested(ApprovalRequest { call_id, reason }),
+        Event::ApprovalRequested(ApprovalRequest {
+            call_id,
+            reason,
+            kind: ApprovalKind::SandboxDenialRetry,
+        }),
+        Event::StateChanged(SessionState::WaitingForApproval),
+    ];
+    let _ = live_state.extend_provider_events(events.clone().into_iter().map(Into::into));
+    for event in events {
+        send_envelope(&state.outgoing, Envelope::event(session_id, event));
+    }
+}
+
+/// A tier-1 sandboxed `bash` call's network egress was refused for one or
+/// more `domains` (`docs/agent-approval-design.md` leg 4b) -- surface a
+/// fresh, differently-named approval offer ("allow domain X for this
+/// session and retry") instead of handing `result` straight to the
+/// provider. Same reissue mechanic as [`fold_bash_retry_without_sandbox`]
+/// (a fresh `ToolCallRequested` right before the `ApprovalRequested`, so the
+/// eventual Approve/Deny isn't misclassified as `AlreadyResolved`) -- but
+/// unlike that sibling, `result` is a genuine, already-computed outcome
+/// (the call ran to completion, it just couldn't reach some host), carried
+/// on the pending request's own [`ApprovalKind::DomainDenialRetry`] so a
+/// later deny can forward it as-is (`tools::approval::
+/// resolve_domain_denial_retry`).
+fn fold_domain_denied(
+    state: &Arc<SessiondState>,
+    live_state: &LiveState,
+    session_id: SessionId,
+    call_id: ToolCallId,
+    domains: Vec<String>,
+    result: ToolCallResult,
+) {
+    let frame = live_state.frame();
+    if !should_fold_completion(&frame, &call_id) {
+        return;
+    }
+    let Some(original_request) = frame.tool_call_request(&call_id).cloned() else {
+        // Should be unreachable (this call_id was necessarily requested to
+        // have gotten this far) -- nothing sane to reissue against.
+        return;
+    };
+
+    let domain_list = domains.join(", ");
+    let reason = format!(
+        "`bash` tried to reach {domain_list} while running this command, but it isn't allowed \
+         for this session yet. Allow {} for this session and retry?",
+        if domains.len() == 1 { "it" } else { "them" }
+    );
+    let events = vec![
+        Event::ToolCallRequested(original_request),
+        Event::ApprovalRequested(ApprovalRequest {
+            call_id,
+            reason,
+            kind: ApprovalKind::DomainDenialRetry {
+                domains,
+                prior_result: result,
+            },
+        }),
         Event::StateChanged(SessionState::WaitingForApproval),
     ];
     let _ = live_state.extend_provider_events(events.clone().into_iter().map(Into::into));
@@ -1524,7 +1601,6 @@ mod tests {
             None,
             SharedDuckdbStore::unavailable(),
             None,
-            None,
         ));
         let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Envelope>();
         *state.outgoing.lock().unwrap() = Some(outgoing_tx);
@@ -1540,10 +1616,12 @@ mod tests {
                 Event::ApprovalRequested(ApprovalRequest {
                     call_id: call_a.clone(),
                     reason: "bash".to_string(),
+                    kind: ApprovalKind::Standard,
                 }),
                 Event::ApprovalRequested(ApprovalRequest {
                     call_id: call_b.clone(),
                     reason: "bash".to_string(),
+                    kind: ApprovalKind::Standard,
                 }),
                 Event::StateChanged(SessionState::ToolRunning),
                 Event::ToolCallStarted(call_a.clone()),
@@ -1625,7 +1703,6 @@ mod tests {
             agent_config,
             None,
             SharedDuckdbStore::unavailable(),
-            None,
             None,
         ));
         let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Envelope>();
@@ -1718,7 +1795,6 @@ mod tests {
             agent_config,
             None,
             SharedDuckdbStore::unavailable(),
-            None,
             None,
         ));
         let (outgoing_tx, outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Envelope>();

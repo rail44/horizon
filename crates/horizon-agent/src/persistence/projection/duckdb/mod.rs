@@ -186,8 +186,8 @@ fn session_id_text(session_id: SessionId) -> Result<String> {
 mod tests {
     use super::*;
     use crate::contract::{
-        event_kind, ApprovalRequest, Event, Message, MessageDelta, MessageRole, ProviderId,
-        ProviderRequestSent, SessionState, ToolCallId, ToolCallRequest, ToolCallResult,
+        event_kind, ApprovalKind, ApprovalRequest, Event, Message, MessageDelta, MessageRole,
+        ProviderId, ProviderRequestSent, SessionState, ToolCallId, ToolCallRequest, ToolCallResult,
         TurnEndReason,
     };
     use crate::roles::RoleId;
@@ -219,6 +219,7 @@ mod tests {
                     Event::ApprovalRequested(ApprovalRequest {
                         call_id: call_id.clone(),
                         reason: "needs approval".to_string(),
+                        kind: ApprovalKind::Standard,
                     }),
                     Event::ToolCallFinished(ToolCallResult::new(
                         call_id,
@@ -257,6 +258,7 @@ mod tests {
                     Event::ApprovalRequested(ApprovalRequest {
                         call_id: call_id.clone(),
                         reason: "approval".to_string(),
+                        kind: ApprovalKind::Standard,
                     }),
                     Event::ToolCallFinished(ToolCallResult::new(
                         call_id,
@@ -460,6 +462,7 @@ mod tests {
                         Event::ApprovalRequested(ApprovalRequest {
                             call_id: call_id.clone(),
                             reason: "approval".to_string(),
+                            kind: ApprovalKind::Standard,
                         }),
                     ],
                 )
@@ -528,6 +531,7 @@ mod tests {
                     Event::ApprovalRequested(ApprovalRequest {
                         call_id: call_id.clone(),
                         reason: "approval".to_string(),
+                        kind: ApprovalKind::Standard,
                     }),
                     Event::ToolCallFinished(ToolCallResult::new(
                         call_id,
@@ -1122,6 +1126,7 @@ mod tests {
                     Event::ApprovalRequested(ApprovalRequest {
                         call_id: call_id.clone(),
                         reason: "needs approval".to_string(),
+                        kind: ApprovalKind::Standard,
                     }),
                     Event::ToolCallStarted(call_id.clone()),
                     Event::ToolCallFinished(ToolCallResult::new(
@@ -1155,6 +1160,7 @@ mod tests {
                     Event::ApprovalRequested(ApprovalRequest {
                         call_id: call_id.clone(),
                         reason: "needs approval".to_string(),
+                        kind: ApprovalKind::Standard,
                     }),
                     // A deny short-circuits: `ToolCallFinished` arrives with
                     // no `ToolCallStarted` in between (`tools::approval::
@@ -1266,6 +1272,7 @@ mod tests {
                 Event::ApprovalRequested(ApprovalRequest {
                     call_id: call_id.clone(),
                     reason: "needs approval".to_string(),
+                    kind: ApprovalKind::Standard,
                 }),
                 2,
             ),
@@ -1577,6 +1584,7 @@ mod tests {
             7 => Event::ApprovalRequested(ApprovalRequest {
                 call_id: ToolCallId(format!("call-{}", index - 1)),
                 reason: "benchmark approval".to_string(),
+                kind: ApprovalKind::Standard,
             }),
             8 => Event::ToolCallFinished(ToolCallResult::new(
                 ToolCallId(format!("call-{}", index - 2)),

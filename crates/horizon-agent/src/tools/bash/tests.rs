@@ -29,6 +29,12 @@ fn expect_finished(completion: BashCompletion) -> ToolCallResult {
             "expected a finished bash completion, got a retry-without-sandbox \
              request for {call_id:?}: {reason}"
         ),
+        BashCompletion::DomainDenied {
+            call_id, domains, ..
+        } => panic!(
+            "expected a finished bash completion, got a domain-denied request for \
+             {call_id:?} ({domains:?})"
+        ),
     }
 }
 

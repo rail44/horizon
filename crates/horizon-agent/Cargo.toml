@@ -17,6 +17,7 @@ duckdb = { version = "1" }
 futures-util = "0.3"
 globset = "0.4"
 horizon-sandbox = { path = "../horizon-sandbox" }
+horizon-sandbox-proxy = { path = "../horizon-sandbox-proxy" }
 horizon-session-protocol = { path = "../horizon-session-protocol" }
 ignore = "0.4"
 libc = "0.2"
@@ -30,9 +31,6 @@ tokio-util = "0.7"
 tracing = "0.1"
 toml = "0.8"
 uuid = { version = "1.18", features = ["v4", "serde"] }
-
-[dev-dependencies]
-horizon-sandbox-proxy = { path = "../horizon-sandbox-proxy" }
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

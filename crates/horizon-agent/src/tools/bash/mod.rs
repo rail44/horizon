@@ -35,7 +35,8 @@ use serde_json::Value;
 use crate::config::BashToolConfig;
 use crate::contract::{SessionId, ToolCallId, ToolCallResult};
 use crate::frame::AgentFrame;
-use crate::policy::{annotate_auto_approval, annotate_sandboxed};
+use crate::policy::{annotate_auto_approval, annotate_domain_approval, annotate_sandboxed};
+use crate::tools::network::SessionNetworkProxy;
 
 /// A bash call's outcome, delivered from the background thread that ran it
 /// back to the session loop. `crates/horizon-sessiond/src/session.rs`
@@ -57,6 +58,41 @@ pub enum BashCompletion {
     /// "Denial UX"). Never produced by the plain (unsandboxed) [`spawn`]
     /// path -- only a sandboxed run can be sandbox-denied.
     RetryWithoutSandbox { call_id: ToolCallId, reason: String },
+    /// A sandboxed attempt's network egress was refused by the allowlist
+    /// proxy for one or more domains (`docs/agent-approval-design.md` leg
+    /// 4b) -- distinct from [`Self::RetryWithoutSandbox`]: the call
+    /// actually ran to completion (`result` is a genuine, already-computed
+    /// outcome, not just a denial-shaped reason string), it just couldn't
+    /// reach some host(s). Detected proxy-side (`SessionNetworkProxy::
+    /// drain_denied_hosts`), independent of the sandboxed child's own exit
+    /// code -- see `exec::run_sandboxed`'s doc comment for why that matters
+    /// (backlog 59). Surfaced as a fresh, differently-named approval offer
+    /// ("allow domain X for this session and retry"): approving adds
+    /// `domains` to this session's allowlist and reruns the same call,
+    /// still sandboxed; denying forwards `result` as-is.
+    DomainDenied {
+        call_id: ToolCallId,
+        domains: Vec<String>,
+        result: ToolCallResult,
+    },
+}
+
+/// What a [`spawn_sandboxed`] run's eventual `Finished` completion should be
+/// annotated with, once it lands -- distinguishes a genuine tier-1
+/// auto-approval from a human's domain-denial-retry approval (`docs/
+/// agent-approval-design.md` leg 4b), so the audit trail never claims a
+/// human decision was auto-approved. Never consulted for a `RetryWithout
+/// Sandbox`/`DomainDenied` completion -- both are annotated by `exec::
+/// run_sandboxed` itself before this ever applies (see [`spawn_sandboxed`]'s
+/// call site below).
+#[derive(Clone, Debug)]
+pub(crate) enum SandboxedApprovalOrigin {
+    /// `tools::execution::execute_tier1_bash`'s auto-approval path.
+    Tier1Auto,
+    /// `tools::approval`'s domain-denial-retry approve path -- a human
+    /// decision, carrying the domain(s) they just approved for this
+    /// session.
+    ManualDomainRetry { domains: Vec<String> },
 }
 
 /// Kicks off a bash call and returns immediately; the UI thread must not
@@ -119,11 +155,13 @@ pub fn spawn(
 /// [`BashCompletion::RetryWithoutSandbox`] instead of a finished result --
 /// see that variant's doc comment.
 ///
-/// `bridge_socket` (`docs/agent-approval-design.md`'s "Staging" leg 4a) is
-/// `horizon-sessiond`'s own long-lived network-proxy bridge path, if it has
-/// one running -- `Some` gets the sandbox `NetworkPolicy::Proxied`, `None`
-/// falls back to the pre-4a `NetworkPolicy::Disabled` (see
-/// `exec::run_sandboxed`).
+/// `network` (`docs/agent-approval-design.md` leg 4b) is this session's own
+/// `SessionNetworkProxy`, if one is running -- `Some` gets the sandbox
+/// `NetworkPolicy::Proxied` against that session's own bridge, `None` falls
+/// back to `NetworkPolicy::Disabled` (see `exec::run_sandboxed`). `origin`
+/// says whether this run is a tier-1 auto-approval or a human's
+/// domain-denial-retry approve -- see [`SandboxedApprovalOrigin`] -- so the
+/// eventual `Finished` result is annotated honestly either way.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_sandboxed(
     session_id: SessionId,
@@ -132,36 +170,54 @@ pub fn spawn_sandboxed(
     cwd: Arc<Mutex<PathBuf>>,
     config: BashToolConfig,
     workspace_root: PathBuf,
-    bridge_socket: Option<PathBuf>,
+    network: Option<Arc<SessionNetworkProxy>>,
+    origin: SandboxedApprovalOrigin,
     result_tx: Sender<BashCompletion>,
 ) {
     registry::enqueue(
         session_id,
         Box::new(move || {
             let run_call_id = call_id.clone();
-            run_job_body(session_id, call_id, &result_tx, move || {
+            // `network` (an `Option<Arc<SessionNetworkProxy>>`) holds its
+            // own locks/oneshot channels internally, which makes it
+            // interior-mutable enough that rustc's auto `UnwindSafe` check
+            // refuses it by default. `run_sandboxed` below only ever reads
+            // through it (`network.as_deref()`, then a couple of narrow,
+            // self-locking accessor calls) -- it never holds one of
+            // `SessionNetworkProxy`'s own locks across a point that could
+            // panic mid-mutation, so a caught panic here can't leave it in
+            // an inconsistent state for the next call on the same session
+            // to observe. Same reasoning `run_job_body`'s own doc comment
+            // already gives for why this closure shape is safe to assert.
+            let work = std::panic::AssertUnwindSafe(move || {
                 let mut completion = exec::run_sandboxed(
                     &run_call_id,
                     &input,
                     &cwd,
                     &workspace_root,
-                    bridge_socket.as_deref(),
+                    network.as_deref(),
                     &config,
                 );
-                // Audit marker (tier + reason) on every finished result this
-                // path produces -- `spawn_sandboxed` is only ever reached via
-                // tier-1 auto-approval (`tools::execution::execute_tier1_bash`),
-                // never a manual approve. A `RetryWithoutSandbox` outcome has
-                // no result yet to annotate.
+                // Audit marker on every finished result this path produces
+                // -- `RetryWithoutSandbox`/`DomainDenied` outcomes are
+                // already annotated by `exec::run_sandboxed` itself (a
+                // `DomainDenied` result already carries `denied_domains`;
+                // there is nothing left for `origin` to add there).
                 if let BashCompletion::Finished(result) = &mut completion {
-                    annotate_auto_approval(
-                        &mut result.output,
-                        "contained",
-                        "isolated worktree session with an engaged sandbox",
-                    );
+                    match &origin {
+                        SandboxedApprovalOrigin::Tier1Auto => annotate_auto_approval(
+                            &mut result.output,
+                            "contained",
+                            "isolated worktree session with an engaged sandbox",
+                        ),
+                        SandboxedApprovalOrigin::ManualDomainRetry { domains } => {
+                            annotate_domain_approval(&mut result.output, domains)
+                        }
+                    }
                 }
                 completion
             });
+            run_job_body(session_id, call_id, &result_tx, work);
         }),
     );
 }

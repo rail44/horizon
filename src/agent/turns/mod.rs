@@ -63,8 +63,8 @@ fn pluralize(count: usize, singular: &str, plural: &str) -> String {
 #[cfg(test)]
 pub(crate) mod test_support {
     use horizon_agent::contract::{
-        ApprovalRequest, Message, MessageDelta, MessageRole, ToolCallId, ToolCallRequest,
-        ToolCallResult,
+        ApprovalKind, ApprovalRequest, Message, MessageDelta, MessageRole, ToolCallId,
+        ToolCallRequest, ToolCallResult,
     };
     use horizon_agent::frame::AgentFrameItem;
     use serde_json::Value;
@@ -108,6 +108,7 @@ pub(crate) mod test_support {
         AgentFrameItem::ApprovalRequested(ApprovalRequest {
             call_id: ToolCallId(call_id.to_string()),
             reason: "writes a file".to_string(),
+            kind: ApprovalKind::Standard,
         })
     }
 

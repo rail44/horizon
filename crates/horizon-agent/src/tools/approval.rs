@@ -1,9 +1,12 @@
 use serde_json::{json, Value};
 
 use crate::contract::SessionId;
-use crate::contract::{Command, Event, SessionState, ToolCallId, ToolCallRequest, ToolCallResult};
+use crate::contract::{
+    ApprovalKind, Command, Event, SessionState, ToolCallId, ToolCallRequest, ToolCallResult,
+};
 use crate::frame::AgentFrame;
 use crate::tools::bash;
+use crate::tools::bash::SandboxedApprovalOrigin;
 use crate::tools::state::{session_runtime, SessionRuntime};
 
 /// The user's decision on a pending `ApprovalRequested` tool call.
@@ -122,7 +125,15 @@ fn try_execute(
     let runtime = session_runtime(session_id)?;
 
     Some(if request.tool_id == "bash" {
-        resolve_bash(session_id, &runtime, request, decision)
+        // The pending request's own kind (`docs/agent-approval-design.md`
+        // leg 4b): a domain-denial retry resolves an Approve very
+        // differently from an ordinary approval or a sandbox-denial retry
+        // (see `resolve_bash`'s doc comment) -- looked up from `frame`
+        // itself, not carried by the caller, so every entry point into this
+        // function (approve, deny, a future replay) reads the same source
+        // of truth.
+        let kind = frame.approval_kind(call_id).unwrap_or_default();
+        resolve_bash(session_id, &runtime, request, decision, kind)
     } else {
         resolve_synchronous_tool(&runtime, request, decision)
     })
@@ -153,13 +164,35 @@ fn resolve_synchronous_tool(
 
 /// `bash`: a deny short-circuits synchronously exactly like the fs tools,
 /// but an approve only *starts* the command — see `ApprovalOutcome::
-/// Started`.
+/// Started`. A `kind` of [`ApprovalKind::DomainDenialRetry`] resolves
+/// entirely differently (see [`resolve_domain_denial_retry`]) -- both
+/// [`ApprovalKind::Standard`] and [`ApprovalKind::SandboxDenialRetry`] reach
+/// this ordinary path unchanged: an approve always reruns the call
+/// unsandboxed (`bash::spawn`), whether it's a first-time approval or a
+/// retry after a sandbox-denial (`docs/agent-approval-design.md`'s "Denial
+/// UX").
 fn resolve_bash(
     session_id: SessionId,
     runtime: &SessionRuntime,
     request: &ToolCallRequest,
     decision: &ApprovalDecision,
+    kind: ApprovalKind,
 ) -> ApprovalOutcome {
+    if let ApprovalKind::DomainDenialRetry {
+        domains,
+        prior_result,
+    } = kind
+    {
+        return resolve_domain_denial_retry(
+            session_id,
+            runtime,
+            request,
+            decision,
+            domains,
+            prior_result,
+        );
+    }
+
     match decision {
         ApprovalDecision::Approve => {
             let call_id = request.call_id.clone();
@@ -184,6 +217,89 @@ fn resolve_bash(
         }
         ApprovalDecision::Deny { .. } => {
             synchronous_result(runtime, &request.call_id, denied_output(), false)
+        }
+    }
+}
+
+/// A tier-1 sandboxed `bash` call's network egress was refused for
+/// `domains` (`docs/agent-approval-design.md` leg 4b). Unlike an ordinary
+/// bash approval, the call already ran to completion -- `prior_result` is a
+/// genuine, already-computed outcome, not just a denial-shaped reason
+/// string -- so a deny simply forwards it as-is (the real attempt already
+/// happened and its own output already reflects the denial; there is
+/// nothing to execute now, unlike a fresh tool-call deny). An approve adds
+/// `domains` to this session's own network-proxy allowlist and reruns the
+/// SAME call, still sandboxed (`bash::spawn_sandboxed`, not the plain
+/// unsandboxed `bash::spawn` an ordinary/sandbox-denial-retry approve
+/// uses) -- both the network mutation and the rerun are session-scoped:
+/// only this call's own session's `SessionNetworkProxy` and workspace root
+/// are touched.
+fn resolve_domain_denial_retry(
+    session_id: SessionId,
+    runtime: &SessionRuntime,
+    request: &ToolCallRequest,
+    decision: &ApprovalDecision,
+    domains: Vec<String>,
+    prior_result: ToolCallResult,
+) -> ApprovalOutcome {
+    match decision {
+        ApprovalDecision::Deny { .. } => {
+            let events = vec![Event::ToolCallFinished(prior_result.clone())];
+            let frame = runtime
+                .live_state
+                .extend_provider_events(events.clone().into_iter().map(Into::into));
+            ApprovalOutcome::Executed {
+                events,
+                frame,
+                command: Command::ToolCallResult(prior_result),
+            }
+        }
+        ApprovalDecision::Approve => {
+            // Both should be impossible here -- a `DomainDenialRetry` is
+            // only ever produced by a tier-1 sandboxed call, which requires
+            // both -- but this stays defensive (forwarding the prior,
+            // already-computed result) rather than silently dropping the
+            // approval if either is somehow missing.
+            let (Some(network), Some(workspace_root)) = (
+                runtime.tool_state.network_proxy(),
+                runtime.tool_state.workspace_root(),
+            ) else {
+                let events = vec![Event::ToolCallFinished(prior_result.clone())];
+                let frame = runtime
+                    .live_state
+                    .extend_provider_events(events.clone().into_iter().map(Into::into));
+                return ApprovalOutcome::Executed {
+                    events,
+                    frame,
+                    command: Command::ToolCallResult(prior_result),
+                };
+            };
+            for domain in &domains {
+                network.allow_domain(domain.clone());
+            }
+
+            let call_id = request.call_id.clone();
+            let events = vec![
+                Event::StateChanged(SessionState::ToolRunning),
+                Event::ToolCallStarted(call_id.clone()),
+            ];
+            let frame = runtime
+                .live_state
+                .extend_provider_events(events.clone().into_iter().map(Into::into));
+
+            bash::spawn_sandboxed(
+                session_id,
+                call_id,
+                request.input.clone(),
+                runtime.tool_state.bash_cwd_handle(),
+                runtime.tool_state.bash_config(),
+                workspace_root.to_path_buf(),
+                Some(network),
+                SandboxedApprovalOrigin::ManualDomainRetry { domains },
+                runtime.bash_results.clone(),
+            );
+
+            ApprovalOutcome::Started { events, frame }
         }
     }
 }

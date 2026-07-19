@@ -190,6 +190,21 @@ impl AgentFrame {
         })
     }
 
+    /// The most recent `ApprovalRequested` item's [`ApprovalKind`] for
+    /// `call_id`, if any -- what `tools::approval::resolve_bash` needs to
+    /// tell a domain-denial retry apart from an ordinary approval or a
+    /// sandbox-denial retry (`docs/agent-approval-design.md` leg 4b), the
+    /// same way [`Self::tool_call_request`] recovers a pending call's
+    /// `tool_id`/`input`.
+    pub fn approval_kind(&self, call_id: &ToolCallId) -> Option<ApprovalKind> {
+        self.items.iter().rev().find_map(|item| match item {
+            AgentFrameItem::ApprovalRequested(request) if &request.call_id == call_id => {
+                Some(request.kind.clone())
+            }
+            _ => None,
+        })
+    }
+
     /// Whether a turn is currently in flight (streaming, running a tool, or
     /// waiting on tool-call approval) and therefore cancellable. Delegates
     /// to [`state_indicates_turn_in_flight`] -- see that function's doc
@@ -695,6 +710,7 @@ mod field_scoped_reads_tests {
         AgentFrameItem::ApprovalRequested(ApprovalRequest {
             call_id: ToolCallId(call_id.to_string()),
             reason: "writes a file".to_string(),
+            kind: ApprovalKind::Standard,
         })
     }
 

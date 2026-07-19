@@ -4,6 +4,7 @@ mod catalog;
 mod config;
 mod execution;
 mod fs;
+mod network;
 mod processing;
 mod recall;
 mod state;
@@ -19,6 +20,12 @@ pub(crate) use catalog::{definitions, permission_for_tool, Definition};
 // this module owns stays crate-local per the usual convention.
 pub(crate) use execution::tool_result_message;
 pub use execution::{cancelled_tool_call_result, execute_agent_tool, Execution, HostTools};
+// `SessionNetworkProxy` is `pub` (not `pub(crate)`) for the same reason as
+// `execute_agent_tool`/`Execution` above: the leg 4b containment tests in
+// `tests/tier1_network_containment.rs` construct one directly to wire up a
+// real per-session proxy/bridge pair the same way `horizon-sessiond`'s
+// `session::run_session` does.
+pub use network::SessionNetworkProxy;
 pub use processing::process_agent_provider_event;
 pub use state::{
     register_session_runtime, unregister_session_runtime, RecallContext, ToolSessionState,
