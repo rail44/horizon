@@ -187,6 +187,7 @@ impl Workspace {
                 title: session.title.clone(),
                 attached: self.session_is_referenced(session.id),
                 workspace_root: session.workspace_root.clone(),
+                parent_session_id: session.parent_session_id,
             })
             .collect()
     }

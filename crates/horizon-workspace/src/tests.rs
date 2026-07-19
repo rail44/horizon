@@ -255,6 +255,7 @@ fn detached_session_summaries_list_unattached_sessions() {
             title: "Terminal #2".to_string(),
             attached: false,
             workspace_root: None,
+            parent_session_id: None,
         }]
     );
 }
@@ -277,6 +278,7 @@ fn session_summaries_include_attached_and_detached_sessions() {
                 title: "Terminal #1".to_string(),
                 attached: true,
                 workspace_root: None,
+                parent_session_id: None,
             },
             SessionSummary {
                 id: detached_session,
@@ -285,9 +287,39 @@ fn session_summaries_include_attached_and_detached_sessions() {
                 title: "Terminal #2".to_string(),
                 attached: false,
                 workspace_root: None,
+                parent_session_id: None,
             },
         ]
     );
+}
+
+#[test]
+fn set_session_parent_is_reflected_in_session_summaries() {
+    // `docs/session-relationship-design.md` decision 4b: the session
+    // manager's lineage view derives its tree from `SessionSummary.
+    // parent_session_id`, so `set_session_parent` (mirroring `set_session_
+    // workspace_root`) must actually reach the summary a caller reads back.
+    let mut workspace = Workspace::mvp();
+    let parent_id = workspace.active_terminal_session_id().expect("session");
+    let child_id = SessionId::new();
+    workspace.register_detached_session(PaneKind::Agent, child_id);
+
+    workspace.set_session_parent(child_id, parent_id);
+
+    let child_summary = workspace
+        .session_summaries()
+        .into_iter()
+        .find(|summary| summary.id == child_id)
+        .expect("child summary");
+    assert_eq!(child_summary.parent_session_id, Some(parent_id));
+
+    // Unrelated sessions stay parentless.
+    let parent_summary = workspace
+        .session_summaries()
+        .into_iter()
+        .find(|summary| summary.id == parent_id)
+        .expect("parent summary");
+    assert_eq!(parent_summary.parent_session_id, None);
 }
 
 #[test]

@@ -22,6 +22,11 @@ pub struct SessionSummary {
     pub attached: bool,
     /// Mirrors `WorkspaceSession::workspace_root` -- see its doc comment.
     pub workspace_root: Option<PathBuf>,
+    /// Mirrors `WorkspaceSession::parent_session_id` -- see its doc
+    /// comment. The session manager modal's lineage view
+    /// (`docs/session-relationship-design.md` decision 4b) derives its
+    /// derivation tree from this field across every summary.
+    pub parent_session_id: Option<SessionId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

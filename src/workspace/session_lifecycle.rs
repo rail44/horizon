@@ -405,6 +405,17 @@ impl WorkspaceShell {
                         if let Some(root) = summary.workspace_root.clone() {
                             shell.workspace.set_session_workspace_root(session_id, root);
                         }
+                        // Same authoritative-daemon-report treatment as
+                        // `workspace_root` above, for the lineage edge
+                        // (`docs/session-relationship-design.md` decisions
+                        // 1-3): the shell never guesses this at spawn time
+                        // (isolation may fail and degrade to a shared, edge-
+                        // less spawn), so it's only ever populated here and
+                        // in `spawn_workspace_restore`.
+                        if let Some(parent) = summary.parent_session_id {
+                            let parent_id = SessionId::from_uuid(parent.as_uuid());
+                            shell.workspace.set_session_parent(session_id, parent_id);
+                        }
                         let session_handle = adopted.attach_session(summary.session_id);
                         shell.agent_sessions.insert(
                             session_id,
@@ -486,6 +497,20 @@ impl WorkspaceShell {
                                 .map(|root| (summary.session_id.as_uuid(), root))
                         })
                         .collect();
+                    // Same capture-before-consume treatment as `agent_
+                    // workspace_roots` above, for the lineage edge
+                    // (`docs/session-relationship-design.md` decisions
+                    // 1-3): the daemon's report is authoritative, so this
+                    // is applied to the surviving candidates further down
+                    // exactly like the workspace root is.
+                    let agent_parents: HashMap<Uuid, Uuid> = agent_summaries
+                        .iter()
+                        .filter_map(|summary| {
+                            summary
+                                .parent_session_id
+                                .map(|parent| (summary.session_id.as_uuid(), parent.as_uuid()))
+                        })
+                        .collect();
                     let agent_ids: HashSet<_> = agent_summaries
                         .into_iter()
                         .map(|summary| summary.session_id.as_uuid())
@@ -528,11 +553,12 @@ impl WorkspaceShell {
                             matches
                         })
                         .collect::<Vec<_>>();
-                    Some((terminals, agents, agent_workspace_roots))
+                    Some((terminals, agents, agent_workspace_roots, agent_parents))
                 })
                 .ok()
                 .flatten();
-            let Some((terminal_ids, agent_ids, agent_workspace_roots)) = candidates else {
+            let Some((terminal_ids, agent_ids, agent_workspace_roots, agent_parents)) = candidates
+            else {
                 return;
             };
 
@@ -607,6 +633,14 @@ impl WorkspaceShell {
                                 shell
                                     .workspace
                                     .set_session_workspace_root(session_id, root.clone());
+                            }
+                            // See `spawn_agent_resume`'s matching comment
+                            // for the lineage edge -- same authoritative
+                            // treatment as `workspace_root` above.
+                            if let Some(parent) = agent_parents.get(&id) {
+                                shell
+                                    .workspace
+                                    .set_session_parent(session_id, SessionId::from_uuid(*parent));
                             }
                             shell.agent_sessions.insert(
                                 session_id,
@@ -808,11 +842,16 @@ impl WorkspaceShell {
 
     /// The one interactive session-creation path: what the view chooser
     /// confirms with. Terminal cwd and agent role ride the same staging
-    /// maps `reconcile` consumes.
+    /// maps `reconcile` consumes. `isolate` is the view chooser's own
+    /// per-choice override of decision 3's palette-origin default (shared);
+    /// `false` for every choice except the dedicated "Agent (Isolated
+    /// Worktree)…" one (`ViewChoice::isolate`) -- ignored for a
+    /// session-less `PaneKind::View` choice, same as `role_id`.
     pub(super) fn create_session(
         &mut self,
         kind: PaneKind,
         role_id: Option<horizon_agent::roles::RoleId>,
+        isolate: bool,
         placement: Placement,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -846,11 +885,11 @@ impl WorkspaceShell {
         let terminal_spawn =
             matches!(kind, PaneKind::Terminal).then(|| self.pending_terminal_spawn(None));
         // Palette origin defaults to shared, not isolated (`docs/session-
-        // relationship-design.md` decision 3) -- there is no palette UI yet
-        // to opt in to isolation (that's decision 4's surfacing slice), so
-        // this is always `false` for now.
+        // relationship-design.md` decision 3); `isolate` is the caller's
+        // explicit opt-in (the view chooser's dedicated "Agent (Isolated
+        // Worktree)…" choice), not a further default to apply here.
         let agent_spawn =
-            matches!(kind, PaneKind::Agent).then(|| self.pending_agent_spawn(None, false));
+            matches!(kind, PaneKind::Agent).then(|| self.pending_agent_spawn(None, isolate));
         let session_id = match placement {
             Placement::NewTab => Some(
                 self.workspace

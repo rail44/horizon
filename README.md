@@ -45,7 +45,8 @@ supports these manual smoke checks:
 
 - `new tab`: opens the view chooser (`Enter` on `Terminal` opens another
   terminal tab; `Enter` on `Agent` or a role like `Configuration Agent`
-  opens an agent tab).
+  opens an agent tab; `Agent (Isolated Worktree)…` opens an agent tab in
+  its own git worktree instead of the shared directory).
 - `split right`: opens the same view chooser, but the chosen view splits the
   active pane horizontally instead of opening a new tab.
 - `split down`: same as `split right`, but splits vertically.
@@ -61,10 +62,16 @@ supports these manual smoke checks:
   the session runtime crates, or to recover from a lost connection.
 
 Running the `manage sessions` command opens a separate modal listing every
-session the workspace knows about: arrows move the selection, `Enter`
+session the workspace knows about, as a derivation tree rather than a flat
+list (a session an isolated agent was spawned from is its parent; children
+are indented under it, roots first): arrows move the selection, `Enter`
 attaches a detached session as a split (or jumps to an attached session's
 pane), `cmd+Enter` terminates the selected session (the modal stays open),
-and `Esc` closes the modal.
+`cmd+o` opens a terminal in the selected session's directory (when known --
+rows with one show `dir`), `cmd+shift+t` terminates the selected session
+and every descendant (only on a row with children, shown with `subtree`;
+more destructive than the plain `cmd+Enter` terminate, which leaves
+children untouched), and `Esc` closes the modal.
 
 The same command model is also reachable from outside the GUI: `horizon
 <subcommand>` (no arguments launches the GUI itself) is a thin client over a

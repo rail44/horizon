@@ -26,6 +26,14 @@ pub(crate) struct ViewChoice {
     pub(crate) title: &'static str,
     pub(crate) kind: PaneKind,
     pub(crate) role_id: Option<horizon_agent::roles::RoleId>,
+    /// Whether confirming this choice spawns an isolated worktree
+    /// (`docs/session-relationship-design.md` decisions 3-4): `false` for
+    /// every plain choice (palette origin defaults to shared), `true` only
+    /// for the dedicated isolated-worktree agent choice below -- the
+    /// palette's minimal opt-in surface, riding this same placement flow
+    /// rather than a redesigned one. Ignored for a session-less
+    /// `PaneKind::View` choice.
+    pub(crate) isolate: bool,
 }
 
 fn view_choices() -> Vec<ViewChoice> {
@@ -34,11 +42,19 @@ fn view_choices() -> Vec<ViewChoice> {
             title: "Terminal",
             kind: PaneKind::Terminal,
             role_id: None,
+            isolate: false,
         },
         ViewChoice {
             title: "Agent",
             kind: PaneKind::Agent,
             role_id: None,
+            isolate: false,
+        },
+        ViewChoice {
+            title: "Agent (Isolated Worktree)…",
+            kind: PaneKind::Agent,
+            role_id: None,
+            isolate: true,
         },
         ViewChoice {
             title: "Configuration Agent",
@@ -46,11 +62,13 @@ fn view_choices() -> Vec<ViewChoice> {
             role_id: Some(horizon_agent::roles::RoleId(
                 horizon_agent::roles::CONFIG_ROLE.id.to_string(),
             )),
+            isolate: false,
         },
         ViewChoice {
             title: "Theme Settings",
             kind: PaneKind::View(ViewKind::ThemeSettings),
             role_id: None,
+            isolate: false,
         },
     ]
 }
@@ -150,5 +168,39 @@ impl ListDelegate for ViewChooserDelegate {
                 rgb(theme::background()).into(),
             ))
             .child(Icon::new(IconName::Inbox).size_12())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use horizon_workspace::PaneKind;
+
+    use super::view_choices;
+
+    #[test]
+    fn only_the_dedicated_isolated_worktree_choice_opts_in_to_isolation() {
+        // `docs/session-relationship-design.md` decision 3: palette origin
+        // defaults to shared; the isolated-worktree choice is the minimal
+        // explicit opt-in surface (decision 4), so every other choice must
+        // still carry `isolate: false`.
+        let choices = view_choices();
+
+        let isolated = choices
+            .iter()
+            .find(|choice| choice.title == "Agent (Isolated Worktree)…")
+            .expect("isolated-worktree agent choice");
+        assert_eq!(isolated.kind, PaneKind::Agent);
+        assert!(isolated.isolate);
+
+        for choice in choices
+            .iter()
+            .filter(|choice| choice.title != isolated.title)
+        {
+            assert!(
+                !choice.isolate,
+                "{} should default to a shared spawn, not isolated",
+                choice.title
+            );
+        }
     }
 }

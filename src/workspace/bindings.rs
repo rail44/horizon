@@ -7,7 +7,7 @@
 
 use gpui::*;
 
-use super::{RunCommand, MODE_CONTEXT};
+use super::{RunCommand, MODE_CONTEXT, SESSION_MANAGER_CONTEXT};
 use crate::keymap;
 
 /// Built-in default chord for [`super::ToggleWorkspaceMode`] — mirrors the
@@ -72,6 +72,28 @@ fn derive_bindings(cx: &App, config: &horizon_config::RawConfig) -> (Vec<KeyBind
         KeyBinding::new("x", super::ClosePane, Some(MODE_CONTEXT)),
         KeyBinding::new("tab", super::NextTab, Some(MODE_CONTEXT)),
         KeyBinding::new(":", super::OpenPalette, Some(MODE_CONTEXT)),
+        // Session manager row actions (`docs/session-relationship-design.md`
+        // decision 4b), alongside the primary/secondary confirm the List
+        // itself already gives every row (attach/jump, plain terminate):
+        // `secondary-o` opens the selected row's directory, generalizing
+        // decision 4a's active-session-only v1; `secondary-shift-t`
+        // terminates the selected row's whole subtree (decision 5's
+        // explicit, more-destructive-than-plain-terminate opt-in) --
+        // escalating the same secondary modifier `secondary-enter` already
+        // uses for plain terminate, with `shift` added, rather than a bare
+        // key (which the modal's own search input would otherwise consume
+        // as a character). Fixed, like the `MODE_CONTEXT` bindings above --
+        // never `[keybindings]`-configurable.
+        KeyBinding::new(
+            "secondary-o",
+            super::OpenSessionDirectory,
+            Some(SESSION_MANAGER_CONTEXT),
+        ),
+        KeyBinding::new(
+            "secondary-shift-t",
+            super::TerminateSessionSubtree,
+            Some(SESSION_MANAGER_CONTEXT),
+        ),
     ];
 
     let mut dynamic_keystrokes = Vec::new();

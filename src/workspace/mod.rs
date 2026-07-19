@@ -74,9 +74,25 @@ actions!(
         SplitPane,
         ClosePane,
         NextTab,
-        OpenPalette
+        OpenPalette,
+        // Session-manager row actions
+        // (`docs/session-relationship-design.md` decision 4b) -- scoped to
+        // `SESSION_MANAGER_CONTEXT` (see `bindings::derive_bindings`) and
+        // targeting whichever row is currently selected, rather than
+        // carrying a `SessionId` of their own: gpui actions built from a
+        // `KeyBinding` (unlike `RunCommand`, dispatched from the palette
+        // with the id already resolved) never carry per-invocation data.
+        OpenSessionDirectory,
+        TerminateSessionSubtree
     ]
 );
+
+/// Key context for the session manager modal's own row-scoped actions
+/// (`OpenSessionDirectory`/`TerminateSessionSubtree`), applied to the
+/// modal's backdrop `div` in `render.rs` alongside their `.on_action`
+/// handlers -- mirrors [`MODE_CONTEXT`]'s "context and handler live on the
+/// same element" shape rather than relying on cross-level action bubbling.
+const SESSION_MANAGER_CONTEXT: &str = "SessionManager";
 
 /// A `[keybindings]`-config-driven binding to a `CommandId` — gpui actions
 /// used with `KeyBinding` are compile-time types, so a config chord can't

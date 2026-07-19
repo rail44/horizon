@@ -144,8 +144,8 @@ approximate answer; (2) it's not persisted -- a session resumed via
 `Reload Session Runtime` or a workspace restore goes back to
 `workspace_root: None` until it's recreated, since only the
 brand-new-agent-session path in `reconcile` ever calls the setter.
-Per-row "open its directory" on an arbitrary session (decision 4b) still
-needs the session-manager's lineage view and rides a later slice.
+Per-row "open its directory" on an arbitrary session (decision 4b) landed
+alongside the lineage view itself -- see below.
 
 Decisions 1-3 and 5's core landed: the lineage tree lives daemon-side, in
 `horizon-sessiond`'s in-memory `SessionEntry` (`parent_session_id`/
@@ -164,7 +164,7 @@ shared spawn with no edge. Decision 5's terminate cleanup runs `git
 worktree remove` (never the branch) when a session's own thread ends,
 which already refuses when the worktree is dirty. The origin-based
 default is wired the same way `activate`'s was: palette spawns default
-shared (no override surface yet -- that's decision 4b's UI slice); CLI/
+shared, with an explicit opt-in (see decision 4b's UI slice below); CLI/
 control-plane spawns default isolated, with an explicit `--share`
 opt-out. Terminal-as-isolated-child stays deferred, per the "agents-first"
 note above.
@@ -185,9 +185,49 @@ there's no push channel for a mid-run root correction yet (unlike
 model keeps the pre-isolation guess for a session created interactively
 this run.
 
+Decision 4b's UI slice landed: the session manager modal
+(`src/session_manager.rs`) renders the derivation tree instead of a flat
+list. `WorkspaceSession`/`SessionSummary` grew an additive
+`parent_session_id: Option<SessionId>` mirror of the wire field
+(`Workspace::set_session_parent`, following `workspace_root`'s own
+mirror), populated in the same two adoption/resume sweeps
+(`spawn_agent_resume`/`spawn_workspace_restore` in
+`src/workspace/session_lifecycle.rs`) and carrying the same "not
+persisted, eventual not live within one run" caveats `workspace_root`
+already has. `order_as_lineage_tree` (pure, unit-tested) turns the flat
+summary list into rows -- roots first, each followed immediately by its
+own descendants, indented one level per generation (list-with-
+indentation, no custom tree widget); a parent missing from the current
+(possibly search-filtered) list demotes a child to its own root, keeping
+"unrelated sessions as today" true even under search. Two new row-scoped
+actions ride the modal's existing List, alongside its primary confirm
+(attach/jump) and secondary confirm (plain per-session terminate): `secondary-
+o` opens the selected row's directory (generalizing decision 4a's active-
+session-only v1 off `WorkspaceShell::open_terminal_in_directory`, a no-op
+without a known `workspace_root`), and `secondary-shift-t` terminates the
+selected row's whole subtree (decision 5's explicit, more-destructive-than-
+plain-terminate opt-in -- `subtree_session_ids`, pure and unit-tested,
+collects the row plus every transitive descendant; a no-op unless the row
+actually has children, so it can never substitute for the plain terminate a
+leaf row already gets). Both are gpui actions bound to a dedicated
+`SessionManager` key context (modifier-only keystrokes, since the modal's
+search input would otherwise consume a bare key) rather than new
+`CommandId` variants -- like the existing terminate, they act on "whichever
+row is currently selected," a piece of modal-local state the workspace-wide
+command model has no notion of.
+
+The palette's own isolation opt-in (decision 3's "no override surface yet"
+gap) also landed: the view chooser (`New Tab…`/`Split Right…`/`Split
+Down…`) gained a dedicated "Agent (Isolated Worktree)…" choice alongside
+plain "Agent" -- `ViewChoice` grew an `isolate: bool` (`true` only for that
+one choice), threaded through `WorkspaceShell::create_session` to the same
+`pending_agent_spawn` staging `external_new_session` (the CLI path) already
+used. No redesign of the placement flow itself.
+
 Remaining is a roadmap item under shared-foundation 4: terminal-cwd
 sourcing surfaced to the shell (non-agent sessions still have no
-`workspace_root` at all), the session-manager lineage view (decision 4b),
-and a live root-correction push for a freshly isolated session within the
-same run. Messaging/supervision layer onto the same tree in
-shared-foundation 4's own consultation.
+`workspace_root` at all), parent/child navigation from the session manager
+(jumping directly to an ancestor/descendant row), and a live root/parent-
+correction push for a freshly isolated session within the same run.
+Messaging/supervision layer onto the same tree in shared-foundation 4's
+own consultation.
