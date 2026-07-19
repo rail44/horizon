@@ -92,6 +92,19 @@ pub(crate) fn surface_selected() -> Hsla {
     packed_hsla(scheme().surface_selected)
 }
 
+/// The terminal pane's text-selection highlight. Until the v7 frame
+/// vocabulary, sessiond baked `[132, 220, 198]` -- the built-in accent,
+/// `#84dcc6` -- into selected spans' `bg` as literal RGB; selection is now
+/// semantic frame metadata (`TerminalFrame::selection`) and the client
+/// resolves its color here instead (`docs/terminal-protocol-goals.md`
+/// goal 2). The accent role keeps the default scheme's look identical to
+/// the old baked color while following a configured accent. Opaque here;
+/// the paint site (`src/terminal/mod.rs`) applies its overlay alpha, the
+/// same split as `scrim_color`/`SCRIM_DIM_ALPHA`.
+pub(crate) fn terminal_selection() -> Hsla {
+    packed_hsla(scheme().accent)
+}
+
 /// An elevated surface for floating chrome -- a derived neutral-ladder
 /// step (see `Scheme`'s own `surface_raised` field doc). Kept for other
 /// consumers

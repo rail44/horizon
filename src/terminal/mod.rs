@@ -112,6 +112,16 @@ fn line_height() -> f32 {
     *HEIGHT.get_or_init(|| (font_size() * 18.0 / 13.0).round())
 }
 
+/// Alpha for the selection overlay quad (`paint_terminal`'s
+/// `frame.selection` pass): translucent enough that the selected text --
+/// painted underneath, with its own untouched colors -- stays readable,
+/// following the block cursor's translucent-quad-over-glyph precedent.
+const SELECTION_OVERLAY_ALPHA: f32 = 0.35;
+
+/// Bar thickness for the Underline/Beam cursor shapes
+/// (`TerminalCursor::shape`).
+const CURSOR_BAR_THICKNESS: Pixels = px(2.0);
+
 /// Paint-time geometry shared with event handlers (which need to convert
 /// window-relative pixel positions into cell coordinates). Written every
 /// paint, read by the mouse handlers.
@@ -940,18 +950,97 @@ fn paint_terminal(
                 } else {
                     None
                 };
+                // v7 style attributes. Underline color falls back to the
+                // run's own fg (the SGR 58 contract on
+                // `TerminalSpan::underline_color`); Curl maps to gpui's
+                // wavy underline, while Dotted/Dashed draw as a plain
+                // single line for now (gpui's `UnderlineStyle` has no
+                // dotted/dashed variant). Geometric characters above take
+                // the `paint_glyph` path and carry no style attributes --
+                // box-drawing cells are their own geometry.
+                let underline = match span.underline {
+                    horizon_terminal_core::TerminalUnderline::None => None,
+                    kind => {
+                        let color = span
+                            .underline_color
+                            .map(|color| {
+                                theme::to_hsla(theme::resolve(color, &frame.palette_overrides))
+                            })
+                            .unwrap_or(fg);
+                        Some(UnderlineStyle {
+                            // Approximate a double underline by thickness
+                            // -- gpui draws exactly one line per run.
+                            thickness: match kind {
+                                horizon_terminal_core::TerminalUnderline::Double => px(2.0),
+                                _ => px(1.0),
+                            },
+                            color: Some(color),
+                            wavy: kind == horizon_terminal_core::TerminalUnderline::Curl,
+                        })
+                    }
+                };
+                let strikethrough = span.strikethrough.then(|| StrikethroughStyle {
+                    thickness: px(1.0),
+                    color: Some(fg),
+                });
+                let run_font = if span.italic {
+                    Font {
+                        style: FontStyle::Italic,
+                        ..font.clone()
+                    }
+                } else {
+                    font.clone()
+                };
                 let run = TextRun {
                     len: run_text.len(),
-                    font: font.clone(),
+                    font: run_font,
                     color: fg,
                     background_color: None,
-                    underline: None,
-                    strikethrough: None,
+                    underline,
+                    strikethrough,
                 };
                 let shaped =
                     text_system.shape_line(run_text.into(), font_size, &[run], force_width);
                 let _ = shaped.paint(run_origin, line_height, TextAlign::Left, None, window, cx);
             }
+        }
+    }
+
+    // Selection overlay -- the client-side half of the v7 semantic
+    // selection (`TerminalFrame::selection`, goal 2 of
+    // docs/terminal-protocol-goals.md): a theme-resolved translucent quad
+    // per selected row, painted over the finished text so the spans
+    // underneath stay untouched (their fg/bg no longer carry selection
+    // state). Endpoint rows cover their partial column range; every row
+    // between them is fully covered.
+    if let Some(selection) = frame.selection {
+        let mut color = theme::terminal_selection();
+        color.a = SELECTION_OVERLAY_ALPHA;
+        let last_row = (size.rows as usize).saturating_sub(1);
+        let last_col = (size.cols as usize).saturating_sub(1);
+        for row in selection.start.row..=selection.end.row.min(last_row) {
+            let start_col = if row == selection.start.row {
+                selection.start.col
+            } else {
+                0
+            };
+            let end_col = if row == selection.end.row {
+                selection.end.col.min(last_col)
+            } else {
+                last_col
+            };
+            if start_col > end_col {
+                continue;
+            }
+            let origin =
+                bounds.origin + point(cell_width * start_col as f32, line_height * row as f32);
+            window.paint_quad(fill(
+                Bounds::new(
+                    origin,
+                    gpui::size(cell_width * (end_col - start_col + 1) as f32, line_height),
+                ),
+                color,
+            ));
         }
     }
 
@@ -1004,11 +1093,34 @@ fn paint_terminal(
             horizon_terminal_core::TerminalColor::Named(horizon_terminal_core::NamedColor::Cursor),
             &frame.palette_overrides,
         ));
-        color.a = 0.6;
-        window.paint_quad(fill(
-            Bounds::new(origin, gpui::size(cell_width, line_height)),
-            color,
-        ));
+        let cell = Bounds::new(origin, gpui::size(cell_width, line_height));
+        // Shape from the v7 vocabulary (`TerminalCursor::shape`, DECSCUSR).
+        // Block keeps its pre-v7 translucency so the glyph under it stays
+        // readable; the bar/outline shapes cover no glyph and paint opaque.
+        match cursor.shape {
+            horizon_terminal_core::TerminalCursorShape::Block => {
+                color.a = 0.6;
+                window.paint_quad(fill(cell, color));
+            }
+            horizon_terminal_core::TerminalCursorShape::Underline => {
+                window.paint_quad(fill(
+                    Bounds::new(
+                        origin + point(px(0.0), line_height - CURSOR_BAR_THICKNESS),
+                        gpui::size(cell_width, CURSOR_BAR_THICKNESS),
+                    ),
+                    color,
+                ));
+            }
+            horizon_terminal_core::TerminalCursorShape::Beam => {
+                window.paint_quad(fill(
+                    Bounds::new(origin, gpui::size(CURSOR_BAR_THICKNESS, line_height)),
+                    color,
+                ));
+            }
+            horizon_terminal_core::TerminalCursorShape::HollowBlock => {
+                window.paint_quad(outline(cell, color, BorderStyle::Solid));
+            }
+        }
     }
 }
 
@@ -1019,27 +1131,53 @@ fn char_columns(ch: char) -> usize {
     ch.width().unwrap_or(0)
 }
 
-/// Plain text plus a per-line span/color table (logical colors as
-/// parsed, cursor position) — the headless half of visual verification;
-/// actual pixel output still needs eyes on the window.
+/// Plain text plus a per-line span/color table (logical colors and style
+/// bits as parsed, cursor position/shape, semantic selection) — the
+/// headless half of visual verification; actual pixel output still needs
+/// eyes on the window. Style attributes print only when set, keeping the
+/// common unstyled line identical to the pre-v7 dump shape.
 fn dump_frame(frame: &TerminalFrame) -> String {
     use std::fmt::Write as _;
 
     let mut out = frame.text.clone();
     out.push_str("\n--- spans ---\n");
     if let Some(cursor) = frame.cursor {
-        let _ = writeln!(out, "cursor: row={} col={}", cursor.row, cursor.col);
+        let _ = writeln!(
+            out,
+            "cursor: row={} col={} shape={:?}",
+            cursor.row, cursor.col, cursor.shape
+        );
+    }
+    if let Some(selection) = frame.selection {
+        let _ = writeln!(
+            out,
+            "selection: start=({},{}) end=({},{})",
+            selection.start.row, selection.start.col, selection.end.row, selection.end.col
+        );
     }
     for (row, line) in frame.lines.iter().enumerate() {
         for span in &line.spans {
             if span.text.trim().is_empty() {
                 continue;
             }
-            let _ = writeln!(
+            let _ = write!(
                 out,
                 "row {row}: {:?} fg={:?} bg={:?}",
                 span.text, span.fg, span.bg
             );
+            if span.italic {
+                let _ = write!(out, " italic");
+            }
+            if span.strikethrough {
+                let _ = write!(out, " strikethrough");
+            }
+            if span.underline != horizon_terminal_core::TerminalUnderline::None {
+                let _ = write!(out, " underline={:?}", span.underline);
+                if let Some(color) = span.underline_color {
+                    let _ = write!(out, " underline_color={color:?}");
+                }
+            }
+            let _ = writeln!(out);
         }
     }
     out

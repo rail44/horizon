@@ -25,7 +25,21 @@ use uuid::Uuid;
 /// no actual use. Removing a field changes the wire shape, so a stale
 /// peer sending the old shape must fail the handshake rather than
 /// misdecode.
-pub const SESSION_PROTOCOL_VERSION: u32 = 6;
+///
+/// Version 7: one frame-vocabulary bump carrying three extensions together
+/// (resolving `docs/terminal-protocol-goals.md`'s open question of whether
+/// they land as one bump or two):
+/// - `TerminalSpan` gains text-style attributes -- `italic`,
+///   `strikethrough`, `underline` (single/double/curl/dotted/dashed), and
+///   the SGR 58 `underline_color` (backlog #44).
+/// - Selection becomes semantic frame metadata: `TerminalFrame::selection`
+///   (viewport-space, inclusive endpoints, window-clamped) with the
+///   cursor's nested-`Option` diff idiom, replacing the literal RGB
+///   highlight previously baked into selected spans' `fg`/`bg` (goal 2).
+/// - `TerminalCursor` gains its DECSCUSR `shape`
+///   (block/underline/beam/hollow-block); a DECTCEM-hidden cursor is now
+///   `cursor: None` on the wire instead of a stale always-visible block.
+pub const SESSION_PROTOCOL_VERSION: u32 = 7;
 
 pub const SESSION_CONTROL_KIND: &str = "session_control";
 

@@ -94,7 +94,7 @@ mod warnings;
 pub(crate) use accessors::{
     accent, background, border, danger, diff_added_surface, diff_added_text, diff_removed_surface,
     diff_removed_text, info, on_accent, success, surface_panel, surface_raised, surface_selected,
-    text_muted, text_primary, text_subtle, warning,
+    terminal_selection, text_muted, text_primary, text_subtle, warning,
 };
 pub(crate) use accessors::{overlay_shadow, scrim_color, surface_chrome};
 pub(crate) use ansi::{resolve, terminal_color_scheme, to_hsla};
