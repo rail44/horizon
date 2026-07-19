@@ -62,7 +62,7 @@ fn vt_stream_preserves_ansi_foreground_color() {
     core.write_vt(b"\x1b[31mred\x1b[0m plain");
 
     let frame = core.snapshot_frame();
-    assert!(frame.text.contains("red plain"));
+    assert!(frame.text().contains("red plain"));
     let first_line = &frame.lines[0];
     assert!(first_line
         .spans
@@ -376,12 +376,12 @@ fn same_style_printable_run_merges_into_one_span() {
     );
     assert_eq!(spans[0].text, row);
     assert_eq!(spans[0].columns, 80);
-    assert_eq!(frame.text.lines().next(), Some(row.as_str()));
+    assert_eq!(frame.text().lines().next(), Some(row.as_str()));
 }
 
 /// Every style change is a run boundary: fg, italic, underline, and the
 /// return to the default style each start a fresh span. The reassembled
-/// `frame.text` is byte-identical to what the per-cell spans produced.
+/// `frame.text()` is byte-identical to what the per-cell spans produced.
 #[test]
 fn style_changes_split_the_merged_run() {
     let mut core = TerminalCore::new(TerminalSize::new(40, 4));
@@ -402,7 +402,7 @@ fn style_changes_split_the_merged_run() {
     assert!(spans[2].italic);
     assert_eq!(spans[3].underline, TerminalUnderline::Single);
     assert_eq!(spans[4].fg, TerminalColor::Named(NamedColor::Foreground));
-    assert_eq!(frame.text.lines().next(), Some("abcdefghij"));
+    assert_eq!(frame.text().lines().next(), Some("abcdefghij"));
 }
 
 /// Width class is part of the merge key: same-style runs still split where
@@ -425,7 +425,7 @@ fn width_class_boundary_splits_a_same_style_run() {
             .collect::<Vec<_>>(),
         vec![("ab", 2), ("日本", 4), ("cd", 2), ("", 12)]
     );
-    assert_eq!(frame.text.lines().next(), Some("ab日本cd"));
+    assert_eq!(frame.text().lines().next(), Some("ab日本cd"));
     assert_eq!(frame.cursor.map(|cursor| cursor.col), Some(8));
 }
 
@@ -448,7 +448,7 @@ fn combining_chars_keep_their_cell_out_of_the_run_merge() {
             .collect::<Vec<_>>(),
         vec![("ab", 2), ("c\u{0301}", 1), ("de", 2), ("", 15)]
     );
-    assert_eq!(frame.text.lines().next(), Some("abc\u{0301}de"));
+    assert_eq!(frame.text().lines().next(), Some("abc\u{0301}de"));
 }
 
 /// DECSCUSR (`CSI Ps SP q`) shape changes ride `TerminalCursor::shape`;
@@ -482,8 +482,8 @@ fn vt_stream_tracks_wide_character_columns() {
     core.write_vt("日本語".as_bytes());
 
     let frame = core.snapshot_frame();
-    assert!(frame.text.contains("日本語"));
-    assert_eq!(frame.text.lines().next(), Some("日本語"));
+    assert!(frame.text().contains("日本語"));
+    assert_eq!(frame.text().lines().next(), Some("日本語"));
     assert_eq!(frame.cursor.map(|cursor| cursor.col), Some(6));
     // The three wide cells share one style and one width class, so they
     // arrive as a single merged span.
@@ -511,7 +511,7 @@ fn concealed_text_still_occupies_its_columns() {
     let frame = core.snapshot_frame();
     // "secret" is 6 columns; "visible" must start at column 6, not slide
     // left to fill the gap the concealed run would otherwise leave.
-    assert_eq!(frame.text.lines().next(), Some("      visible"));
+    assert_eq!(frame.text().lines().next(), Some("      visible"));
 
     let first_line = &frame.lines[0];
     let mut col = 0;
@@ -625,7 +625,7 @@ fn scroll_frame_diff_reconstructs_history_content_end_to_end() {
     // `baselines` map holds just before the scroll below.
     let live_frame = core.snapshot_frame();
     assert_eq!(core.display_offset(), 0);
-    assert!(live_frame.text.contains("line39"));
+    assert!(live_frame.text().contains("line39"));
 
     // Scroll toward history by two viewports' worth of rows -- the shape a
     // real multi-tick trackpad gesture produces via `ScrollAccumulator`,
@@ -656,11 +656,11 @@ fn scroll_frame_diff_reconstructs_history_content_end_to_end() {
         assert!(
             text.starts_with("line"),
             "row {index} should show scrollback content, got {text:?} (full frame: {:?})",
-            reconstructed.text
+            reconstructed.text()
         );
     }
     assert!(
-        !reconstructed.text.contains("line39"),
+        !reconstructed.text().contains("line39"),
         "a scroll toward history must leave the live tail behind"
     );
 }
@@ -2138,7 +2138,6 @@ fn test_frame(rows: &[&str]) -> TerminalFrame {
         })
         .collect::<Vec<_>>();
     TerminalFrame {
-        text: rows.join("\n"),
         lines,
         cursor: None,
         selection: None,
@@ -2414,7 +2413,7 @@ fn selection_only_change_diffs_without_rows() {
 }
 
 #[test]
-fn frame_diff_apply_reconstructs_snapshot_text_from_styled_rows() {
+fn frame_diff_apply_reconstructs_styled_rows_and_text_derivation_matches() {
     let old = test_frame(&["old"]);
     let mut new = test_frame(&["placeholder", "wide"]);
     new.lines[0].spans = vec![
@@ -2431,7 +2430,8 @@ fn frame_diff_apply_reconstructs_snapshot_text_from_styled_rows() {
         },
     ];
     new.lines[1].spans = vec![plain_span("界".into(), 2)];
-    new.text = "  value\n界".into();
+    // Blank-run padding plus the wide char exercise the `text()` derivation.
+    assert_eq!(new.text(), "  value\n界");
     new.cursor = Some(TerminalCursor {
         row: 1,
         col: 2,

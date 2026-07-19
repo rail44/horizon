@@ -6,7 +6,6 @@ use super::mouse::TerminalSelectionPoint;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TerminalFrame {
-    pub text: String,
     pub lines: Vec<TerminalLine>,
     pub cursor: Option<TerminalCursor>,
     /// The live selection as semantic frame metadata (goal 2 of
@@ -176,7 +175,6 @@ pub fn apply_frame_diff(old: &TerminalFrame, diff: &TerminalFrameDiff) -> Termin
     }
 
     TerminalFrame {
-        text: frame_text(&lines),
         lines,
         cursor: diff.cursor.unwrap_or(old.cursor),
         selection: diff.selection.unwrap_or(old.selection),
@@ -191,26 +189,31 @@ pub fn apply_frame_diff(old: &TerminalFrame, diff: &TerminalFrameDiff) -> Termin
     }
 }
 
-pub(crate) fn frame_text(lines: &[TerminalLine]) -> String {
-    lines
-        .iter()
-        .map(|line| {
-            let mut text = String::new();
-            for span in &line.spans {
-                let text_columns = span.text.chars().map(char_width).sum::<usize>();
-                text.extend(std::iter::repeat_n(
-                    ' ',
-                    span.columns.saturating_sub(text_columns),
-                ));
-                text.push_str(&span.text);
-            }
-            text.trim_end().to_string()
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 impl TerminalFrame {
+    /// The frame's plain-text rendering, derived from `lines` (blank-run
+    /// spans pad with spaces, each row is right-trimmed, rows join with
+    /// `\n`). A debug/test derivation helper — the `HORIZON_GPUI_DUMP`
+    /// dump and test assertions; since wire v8 the frame carries no `text`
+    /// field because this is fully derivable.
+    pub fn text(&self) -> String {
+        self.lines
+            .iter()
+            .map(|line| {
+                let mut text = String::new();
+                for span in &line.spans {
+                    let text_columns = span.text.chars().map(char_width).sum::<usize>();
+                    text.extend(std::iter::repeat_n(
+                        ' ',
+                        span.columns.saturating_sub(text_columns),
+                    ));
+                    text.push_str(&span.text);
+                }
+                text.trim_end().to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     pub fn from_text(text: String) -> Self {
         let lines = text
             .lines()
@@ -228,7 +231,6 @@ impl TerminalFrame {
             })
             .collect();
         Self {
-            text,
             lines,
             cursor: None,
             selection: None,

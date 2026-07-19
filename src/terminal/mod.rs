@@ -1249,7 +1249,7 @@ fn char_columns(ch: char) -> usize {
 fn dump_frame(frame: &TerminalFrame) -> String {
     use std::fmt::Write as _;
 
-    let mut out = frame.text.clone();
+    let mut out = frame.text();
     out.push_str("\n--- spans ---\n");
     if let Some(cursor) = frame.cursor {
         let _ = writeln!(

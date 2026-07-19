@@ -235,10 +235,10 @@ fn report(label: &str, mut samples_ms: Vec<f64>) {
 }
 
 /// Reads updates, applying each to a running frame reconstruction, until
-/// `matches(&frame.text)` is true -- returns the elapsed time from `since`
+/// `matches(&frame.text())` is true -- returns the elapsed time from `since`
 /// to the update that *actually* satisfied it, how many updates were
 /// consumed getting there, and how many of those were "spurious" (arrived
-/// but did not change `frame.text` at all).
+/// but did not change `frame.text()` at all).
 ///
 /// Two independent sources of spurious (content-unchanged) updates were
 /// found while building this probe, both worth calling out since a naive
@@ -270,16 +270,16 @@ async fn wait_for_marker(
     let mut spurious = 0;
     for reads in 1..=50 {
         let (update, arrived) = read_terminal_update_timed(reader, session_id).await;
-        let before = frame.text.clone();
+        let before = frame.text();
         match update {
             TerminalUpdate::Snapshot(snap) => *frame = snap,
             TerminalUpdate::FrameDiff(diff) => *frame = apply_frame_diff(frame, &diff),
             _ => continue,
         }
-        if frame.text == before {
+        if frame.text() == before {
             spurious += 1;
         }
-        if matches(&frame.text) {
+        if matches(&frame.text()) {
             return (
                 arrived.duration_since(since).as_secs_f64() * 1000.0,
                 reads,
@@ -289,7 +289,7 @@ async fn wait_for_marker(
     }
     panic!(
         "gave up waiting for the marker; last frame: {:?}",
-        frame.text
+        frame.text()
     );
 }
 
@@ -744,9 +744,10 @@ async fn probe_decrqm_negotiation_bare_query() {
             Ok(_) => {}
             Err(_) => {}
         }
-        if let Some(start) = frame.text.find("DECRQM-REPLY:") {
-            if let Some(end_rel) = frame.text[start..].find(":END") {
-                let hex = &frame.text[start + "DECRQM-REPLY:".len()..start + end_rel];
+        let text = frame.text();
+        if let Some(start) = text.find("DECRQM-REPLY:") {
+            if let Some(end_rel) = text[start..].find(":END") {
+                let hex = &text[start + "DECRQM-REPLY:".len()..start + end_rel];
                 found = Some(hex.to_string());
                 break;
             }

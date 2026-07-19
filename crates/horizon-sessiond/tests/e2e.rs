@@ -614,13 +614,13 @@ async fn collect_terminal_frame_until(
             TerminalUpdate::Exited => panic!("terminal exited while waiting for {needle:?}"),
             TerminalUpdate::Title(_) | TerminalUpdate::Bell | TerminalUpdate::Clipboard { .. } => {}
         }
-        if frame.text.contains(needle) {
+        if frame.text().contains(needle) {
             return (frame, saw_diff);
         }
     }
     panic!(
         "gave up waiting for {needle:?}; last frame: {:?}",
-        frame.text
+        frame.text()
     );
 }
 
@@ -758,8 +758,8 @@ async fn terminal_create_diff_reconnect_attach_and_shutdown_over_the_real_socket
     else {
         panic!("attach on a new connection must reset to a full snapshot");
     };
-    assert!(attached.text.contains("HORIZON_DIFF_MARKER"));
-    assert!(frame.text.contains("HORIZON_DIFF_MARKER"));
+    assert!(attached.text().contains("HORIZON_DIFF_MARKER"));
+    assert!(frame.text().contains("HORIZON_DIFF_MARKER"));
 
     write_terminal_command(
         &mut writer,
@@ -901,7 +901,7 @@ async fn terminal_spawn_uses_fallback_and_source_session_cwds() {
     // canonicalize so the expected path is physical too.
     let source_cwd = source_cwd.canonicalize().unwrap();
     // That macOS temp path also pushes the needle past 80 columns, and a
-    // wrapped row inserts '\n' into `frame.text` where the substring
+    // wrapped row inserts '\n' into `frame.text()` where the substring
     // match would look — widen the PTY so the needle never wraps.
     let wide = TerminalSize::new(200, 24);
 

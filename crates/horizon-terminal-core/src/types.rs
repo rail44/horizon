@@ -5,7 +5,6 @@ mod mouse;
 mod size;
 
 pub use color::{NamedColor, TerminalColor};
-pub(crate) use frame::frame_text;
 pub use frame::{
     apply_frame_diff, compute_frame_diff, TerminalCursor, TerminalCursorShape, TerminalFrame,
     TerminalFrameDiff, TerminalLine, TerminalRowDiff, TerminalSelection, TerminalSpan,
