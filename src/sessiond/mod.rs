@@ -161,11 +161,21 @@ impl SessiondHandle {
         (handle, host_tools)
     }
 
+    /// `spawn_source_session_id`/`isolate` are `docs/session-relationship-
+    /// design.md` decision 3's per-spawn knobs: the pane this spawn was
+    /// invoked "from" (kind-agnostic -- may be a terminal or an agent
+    /// session id) and whether `horizon-sessiond` should give this session
+    /// its own git worktree derived from it. Both are resolved by the
+    /// caller (origin-based default plus any explicit override -- see
+    /// `workspace::session_lifecycle::PendingAgentSpawn`); this method just
+    /// forwards whatever concrete choice it's given.
     pub(crate) fn start_session(
         &self,
         session_id: contract::SessionId,
         provider_id: contract::ProviderId,
         role_id: Option<horizon_agent::roles::RoleId>,
+        spawn_source_session_id: Option<contract::SessionId>,
+        isolate: bool,
     ) -> AgentSessionHandle {
         let handle = self.register_agent(session_id);
         self.enqueue_agent(Envelope::control(Control::SessionNew(wire::SessionNew {
@@ -173,6 +183,8 @@ impl SessiondHandle {
             provider_id,
             role_id,
             workspace_root: std::env::current_dir().ok(),
+            spawn_source_session_id,
+            isolate,
         })));
         handle
     }

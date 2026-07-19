@@ -36,7 +36,25 @@ pub(super) struct PendingTerminalSpawn {
     fallback_cwd: std::path::PathBuf,
 }
 
-fn terminal_spawn_source(
+/// Staged the same way as [`PendingTerminalSpawn`] (before a
+/// session-creating workspace mutation, consumed by `reconcile`), but for
+/// agent spawns' own two knobs (`docs/session-relationship-design.md`
+/// decision 3): the pane this spawn derives from, and whether sessiond
+/// should give it an isolated worktree. `Default` is "no source, not
+/// isolated" -- `reconcile`'s fallback when nothing staged anything (e.g. a
+/// resumed/attached session, never a fresh spawn).
+#[derive(Clone, Default)]
+pub(super) struct PendingAgentSpawn {
+    source_session_id: Option<SessionId>,
+    isolate: bool,
+}
+
+/// Kind-agnostic spawn-source resolution: an explicit target (e.g. the
+/// `--split`/split-target session) wins, else whatever pane is currently
+/// active. Shared by [`WorkspaceShell::pending_terminal_spawn`] and
+/// [`WorkspaceShell::pending_agent_spawn`] -- terminal cwd inheritance and
+/// agent lineage/isolation both need exactly the same "spawned from" pane.
+fn resolve_spawn_source(
     explicit_source: Option<SessionId>,
     active_session: Option<SessionId>,
 ) -> Option<SessionId> {
@@ -124,8 +142,17 @@ impl WorkspaceShell {
                     let provider_id =
                         horizon_agent::contract::ProviderRegistry::default().default_provider_id();
                     let role_id = self.pending_roles.remove(&summary.id);
-                    let session_handle =
-                        handle.start_session(agent_session_id(summary.id), provider_id, role_id);
+                    let spawn = self
+                        .pending_agent_spawns
+                        .remove(&summary.id)
+                        .unwrap_or_default();
+                    let session_handle = handle.start_session(
+                        agent_session_id(summary.id),
+                        provider_id,
+                        role_id,
+                        spawn.source_session_id.map(agent_session_id),
+                        spawn.isolate,
+                    );
                     self.agent_sessions.insert(
                         summary.id,
                         cx.new(|cx| AgentSession::new(session_handle, cx)),
@@ -646,11 +673,30 @@ impl WorkspaceShell {
 
     fn pending_terminal_spawn(&self, explicit_source: Option<SessionId>) -> PendingTerminalSpawn {
         PendingTerminalSpawn {
-            source_session_id: terminal_spawn_source(
+            source_session_id: resolve_spawn_source(
                 explicit_source,
                 self.workspace.active_session_id(),
             ),
             fallback_cwd: Self::default_terminal_cwd(),
+        }
+    }
+
+    /// Stages an agent spawn's source pane and isolation choice for
+    /// `reconcile` to consume -- `isolate` here is already the fully
+    /// resolved per-spawn choice (origin default folded with any explicit
+    /// override; see `create_session`/`external_new_session`), not a
+    /// further default to apply.
+    fn pending_agent_spawn(
+        &self,
+        explicit_source: Option<SessionId>,
+        isolate: bool,
+    ) -> PendingAgentSpawn {
+        PendingAgentSpawn {
+            source_session_id: resolve_spawn_source(
+                explicit_source,
+                self.workspace.active_session_id(),
+            ),
+            isolate,
         }
     }
 
@@ -720,6 +766,12 @@ impl WorkspaceShell {
         }
         let terminal_spawn =
             matches!(kind, PaneKind::Terminal).then(|| self.pending_terminal_spawn(None));
+        // Palette origin defaults to shared, not isolated (`docs/session-
+        // relationship-design.md` decision 3) -- there is no palette UI yet
+        // to opt in to isolation (that's decision 4's surfacing slice), so
+        // this is always `false` for now.
+        let agent_spawn =
+            matches!(kind, PaneKind::Agent).then(|| self.pending_agent_spawn(None, false));
         let session_id = match placement {
             Placement::NewTab => Some(
                 self.workspace
@@ -741,6 +793,9 @@ impl WorkspaceShell {
             if let Some(spawn) = terminal_spawn {
                 self.pending_terminal_spawns.insert(session_id, spawn);
             }
+            if let Some(spawn) = agent_spawn {
+                self.pending_agent_spawns.insert(session_id, spawn);
+            }
             if let Some(role_id) = role_id {
                 self.pending_roles.insert(session_id, role_id);
             }
@@ -755,7 +810,13 @@ impl WorkspaceShell {
     /// the first user message right after the session starts — the
     /// create-with-prompt composite from the CLI design. `role_id` is
     /// fixed by the caller (e.g. `new-config-agent`), never client-supplied
-    /// — see `pending_roles`.
+    /// — see `pending_roles`. `isolate` is agent sessions' own per-spawn
+    /// override of `docs/session-relationship-design.md` decision 3's
+    /// origin default (CLI/control-plane origin defaults to isolated,
+    /// mirroring `activate`'s opposite default): `None` applies that
+    /// default, `Some` is an explicit override (the CLI's `--share`) --
+    /// `control_plane::dispatch_invoke` already rejects a non-`None` value
+    /// for a terminal spawn, so this never has to.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn external_new_session(
         &mut self,
@@ -764,6 +825,7 @@ impl WorkspaceShell {
         split: Option<(SessionId, SplitAxis)>,
         activate: bool,
         prompt: Option<String>,
+        isolate: Option<bool>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
@@ -772,6 +834,9 @@ impl WorkspaceShell {
         }
         let terminal_spawn = matches!(kind, PaneKind::Terminal)
             .then(|| self.pending_terminal_spawn(split.map(|(target, _)| target)));
+        let agent_spawn = matches!(kind, PaneKind::Agent).then(|| {
+            self.pending_agent_spawn(split.map(|(target, _)| target), isolate.unwrap_or(true))
+        });
         let session_id = match split {
             Some((target, axis)) => self
                 .workspace
@@ -783,6 +848,9 @@ impl WorkspaceShell {
         };
         if let Some(spawn) = terminal_spawn {
             self.pending_terminal_spawns.insert(session_id, spawn);
+        }
+        if let Some(spawn) = agent_spawn {
+            self.pending_agent_spawns.insert(session_id, spawn);
         }
         if let Some(role_id) = role_id {
             self.pending_roles.insert(session_id, role_id);
@@ -805,17 +873,17 @@ mod tests {
     use horizon_terminal_core::TerminalSummary;
     use horizon_workspace::{PaneKind, SessionId, Workspace};
 
-    use super::{terminal_fallback_cwd, terminal_resume_candidates, terminal_spawn_source};
+    use super::{resolve_spawn_source, terminal_fallback_cwd, terminal_resume_candidates};
 
     #[test]
-    fn explicit_split_target_wins_as_terminal_spawn_source() {
+    fn explicit_split_target_wins_as_the_spawn_source() {
         let explicit = SessionId::new();
         let active = SessionId::new();
         assert_eq!(
-            terminal_spawn_source(Some(explicit), Some(active)),
+            resolve_spawn_source(Some(explicit), Some(active)),
             Some(explicit)
         );
-        assert_eq!(terminal_spawn_source(None, Some(active)), Some(active));
+        assert_eq!(resolve_spawn_source(None, Some(active)), Some(active));
     }
 
     #[test]

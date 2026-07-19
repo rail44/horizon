@@ -141,7 +141,16 @@ fn dispatch_invoke(
                 }
                 Some(_) => return error_body("`prompt` must be a string"),
             };
-            match shell.external_new_session(kind, role_id, split, activate, prompt, window, cx) {
+            let isolate = match isolate_arg(args) {
+                Ok(isolate) => isolate,
+                Err(message) => return error_body(message),
+            };
+            if isolate.is_some() && kind != PaneKind::Agent {
+                return error_body("`isolate` is only accepted for agent sessions");
+            }
+            match shell
+                .external_new_session(kind, role_id, split, activate, prompt, isolate, window, cx)
+            {
                 Ok(()) => EnvelopeBody::Ok,
                 Err(message) => error_body(message),
             }
@@ -314,6 +323,19 @@ fn activate_arg(args: &serde_json::Value) -> Result<bool, String> {
         None | Some(serde_json::Value::Null) => Ok(false),
         Some(serde_json::Value::Bool(activate)) => Ok(*activate),
         Some(_) => Err("`activate` must be a boolean".to_string()),
+    }
+}
+
+/// `docs/session-relationship-design.md` decision 3's per-spawn isolation
+/// override: `None` (the key omitted, or explicit `null`) means "apply the
+/// origin default" (control-plane origin: isolated -- see
+/// `WorkspaceShell::external_new_session`), mirroring `activate_arg`'s own
+/// omitted-means-apply-the-surface-default shape.
+fn isolate_arg(args: &serde_json::Value) -> Result<Option<bool>, String> {
+    match args.get("isolate") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::Bool(isolate)) => Ok(Some(*isolate)),
+        Some(_) => Err("`isolate` must be a boolean".to_string()),
     }
 }
 

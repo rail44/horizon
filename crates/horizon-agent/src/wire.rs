@@ -159,6 +159,21 @@ pub struct SessionSummary {
     /// So a (re)connecting client can label a resumed/live session by its
     /// role without a separate round trip -- mirrors `provider_id` above.
     pub role_id: Option<RoleId>,
+    /// The session this one derives from, per
+    /// `docs/session-relationship-design.md` decisions 1-3: set only when
+    /// this session was actually spawned isolated (its own git worktree
+    /// branched from the source session's directory) -- a shared-directory
+    /// spawn creates no edge, so this stays `None` even if a spawn source
+    /// was given. `#[serde(default)]`, purely additive like `SessionNew.
+    /// workspace_root` below -- no `CONTRACT_VERSION` bump. A resumed
+    /// session (`session::resume_persisted_sessions`) always reports
+    /// `None` here today: lineage lives in `horizon-sessiond`'s in-memory
+    /// `SessiondState`, not the event log, so it doesn't survive a
+    /// `horizon-sessiond` process restart -- the same accepted gap
+    /// `SessionNew.workspace_root` already has (see that field's doc
+    /// comment).
+    #[serde(default)]
+    pub parent_session_id: Option<SessionId>,
 }
 
 /// Per `docs/agent-runtime-split-design.md` guardrail 5, `session_new` is
@@ -190,6 +205,28 @@ pub struct SessionNew {
     /// happened to be current the first time it was launched).
     #[serde(default)]
     pub workspace_root: Option<PathBuf>,
+    /// The pane/session this spawn was invoked "from" -- e.g. the split
+    /// target, or whatever pane was active/named at spawn time. Independent
+    /// of `isolate` (decision 3's two knobs): carried even for a
+    /// shared-directory spawn, but only turns into a recorded
+    /// `SessionSummary.parent_session_id` lineage edge when `isolate` is
+    /// also true (decision 2: "the edge exists only via isolation"). `None`
+    /// for a spawn with no source pane at all (e.g. a fresh tab with
+    /// nothing active). Additive, like `workspace_root` above.
+    #[serde(default)]
+    pub spawn_source_session_id: Option<SessionId>,
+    /// Whether `horizon-sessiond` should give this session its own git
+    /// worktree, branched from `spawn_source_session_id`'s directory,
+    /// instead of confining it to `workspace_root` directly -- decision 3's
+    /// per-spawn isolation knob. The origin-based default (palette: shared;
+    /// CLI/control-plane: isolated) plus any explicit per-spawn override are
+    /// both resolved client-side before this ever reaches the wire;
+    /// `horizon-sessiond` just executes whatever concrete choice arrives
+    /// here (see `docs/session-relationship-design.md` decision 3). `false`
+    /// (via `#[serde(default)]`) reproduces today's shared-directory
+    /// behavior for a peer built before this field existed.
+    #[serde(default)]
+    pub isolate: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -295,12 +332,15 @@ mod tests {
                 session_id: SessionId::new(),
                 provider_id: ProviderId("builtin.agent.rig".to_string()),
                 role_id: Some(RoleId("config".to_string())),
+                parent_session_id: Some(SessionId::new()),
             }]),
             Control::SessionNew(SessionNew {
                 session_id: SessionId::new(),
                 provider_id: ProviderId("builtin.agent.rig".to_string()),
                 role_id: Some(RoleId("config".to_string())),
                 workspace_root: Some(PathBuf::from("/tmp/some-workspace")),
+                spawn_source_session_id: Some(SessionId::new()),
+                isolate: true,
             }),
             Control::SessionLoad(SessionLoad {
                 session_id: SessionId::new(),
@@ -345,6 +385,16 @@ mod tests {
         assert_eq!(CONTRACT_VERSION, 6);
     }
 
+    /// Same rule as `workspace_root` above, for the two session-relationship
+    /// fields (`docs/session-relationship-design.md` decision 3):
+    /// `SessionNew.spawn_source_session_id`/`isolate` and `SessionSummary.
+    /// parent_session_id` are all brand-new `#[serde(default)]` fields, not
+    /// reshapes of existing ones -- no version bump needed.
+    #[test]
+    fn contract_version_was_not_bumped_for_the_additive_lineage_fields() {
+        assert_eq!(CONTRACT_VERSION, 6);
+    }
+
     /// A `session_new` control message written by a peer built before
     /// `workspace_root` existed has no such key in its JSON payload at all
     /// -- `#[serde(default)]` must still parse it (as `None`), not reject
@@ -384,6 +434,91 @@ mod tests {
                 assert_eq!(new.workspace_root, None);
             }
             other => panic!("expected Control::SessionNew, got {other:?}"),
+        }
+    }
+
+    /// Same regression guard as the `workspace_root` test above, for the two
+    /// fields added alongside the session-relationship model: a peer built
+    /// before they existed sends a `session_new` payload with neither key at
+    /// all, and it must still parse, defaulting to "no source, not
+    /// isolated" (today's only behavior before this pair existed).
+    #[tokio::test]
+    async fn session_new_without_lineage_keys_deserializes_to_no_source_and_not_isolated() {
+        let (mut client, server) = tokio::io::duplex(1024);
+        let mut server_reader = BufReader::new(server);
+
+        let session_id = SessionId::new();
+        let line = serde_json::json!({
+            "v": CONTRACT_VERSION,
+            "session_id": null,
+            "kind": AGENT_CONTROL_KIND,
+            "payload": {
+                "session_new": {
+                    "session_id": session_id,
+                    "provider_id": "builtin.agent.rig",
+                    "role_id": null,
+                }
+            }
+        })
+        .to_string();
+        client
+            .write_all(format!("{line}\n").as_bytes())
+            .await
+            .unwrap();
+        drop(client);
+
+        let envelope = read_envelope(&mut server_reader)
+            .await
+            .unwrap()
+            .expect("envelope should parse despite the missing lineage keys");
+        match envelope.body {
+            EnvelopeBody::Control(Control::SessionNew(new)) => {
+                assert_eq!(new.spawn_source_session_id, None);
+                assert!(!new.isolate);
+            }
+            other => panic!("expected Control::SessionNew, got {other:?}"),
+        }
+    }
+
+    /// Same for `SessionSummary.parent_session_id` on the *reply* side: a
+    /// `session_list_result` entry from a peer built before this field
+    /// existed has no such key, and must parse as `None`, not reject the
+    /// envelope.
+    #[tokio::test]
+    async fn session_summary_without_a_parent_session_id_key_deserializes_to_none() {
+        let (mut client, server) = tokio::io::duplex(1024);
+        let mut server_reader = BufReader::new(server);
+
+        let session_id = SessionId::new();
+        let line = serde_json::json!({
+            "v": CONTRACT_VERSION,
+            "session_id": null,
+            "kind": AGENT_CONTROL_KIND,
+            "payload": {
+                "session_list_result": [{
+                    "session_id": session_id,
+                    "provider_id": "builtin.agent.rig",
+                    "role_id": null,
+                }]
+            }
+        })
+        .to_string();
+        client
+            .write_all(format!("{line}\n").as_bytes())
+            .await
+            .unwrap();
+        drop(client);
+
+        let envelope = read_envelope(&mut server_reader)
+            .await
+            .unwrap()
+            .expect("envelope should parse despite the missing parent_session_id key");
+        match envelope.body {
+            EnvelopeBody::Control(Control::SessionListResult(summaries)) => {
+                assert_eq!(summaries.len(), 1);
+                assert_eq!(summaries[0].parent_session_id, None);
+            }
+            other => panic!("expected Control::SessionListResult, got {other:?}"),
         }
     }
 

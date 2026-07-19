@@ -66,6 +66,8 @@ use horizon_agent::wire::{
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Notify;
 
+use crate::worktree::{self, WorktreeInfo};
+
 /// How long a session thread waits for Horizon to answer a `host_tool_*`
 /// round trip before giving up. Generous but finite: a client that never
 /// answers must not hang a session forever.
@@ -232,6 +234,45 @@ impl SessiondState {
             notified.await;
         }
     }
+
+    /// `(directory, source_is_owned_worktree)` for `session_id`'s current
+    /// state, if it's a session this process still hosts live -- the
+    /// spawn-source lookup [`worktree::resolve_isolation_source`] needs.
+    /// `None` for an unknown/foreign id (a terminal isn't tracked in this
+    /// map at all -- deferred, see `worktree`'s module doc -- or the source
+    /// session has already ended), which the caller treats as "no source",
+    /// per that function's own doc comment.
+    pub(crate) fn session_directory(&self, session_id: SessionId) -> Option<(PathBuf, bool)> {
+        let sessions = self.sessions.lock().unwrap();
+        let entry = sessions.get(&session_id)?;
+        match &entry.worktree {
+            Some(worktree) => Some((worktree.path.clone(), true)),
+            None => entry.workspace_root.clone().map(|root| (root, false)),
+        }
+    }
+
+    /// Records the outcome of a successful [`worktree::create_isolated_worktree`]
+    /// call on `session_id`'s own `SessionEntry`: decision 2's derivation
+    /// edge (`parent_session_id`, only when there actually was a spawn
+    /// source -- an isolated-but-sourceless spawn is still a valid lineage
+    /// root that merely owns a worktree) plus the resolved directory a
+    /// later child spawned *from this session* would see via
+    /// [`Self::session_directory`]. A no-op if `session_id` somehow isn't
+    /// in `sessions` any more (the session ended before its own worktree
+    /// creation finished) -- nothing left to record onto.
+    pub(crate) fn record_isolated_worktree(
+        &self,
+        session_id: SessionId,
+        parent_session_id: Option<SessionId>,
+        worktree: WorktreeInfo,
+    ) {
+        let mut sessions = self.sessions.lock().unwrap();
+        if let Some(entry) = sessions.get_mut(&session_id) {
+            entry.workspace_root = Some(worktree.path.clone());
+            entry.parent_session_id = parent_session_id;
+            entry.worktree = Some(worktree);
+        }
+    }
 }
 
 struct SessionEntry {
@@ -254,6 +295,24 @@ struct SessionEntry {
     /// `LiveState::events()` has accumulated — see
     /// [`Connection::replay_events`].
     replay: Sender<Sender<Vec<Event>>>,
+    /// The session this one derives from -- `Some` only when this session
+    /// was actually spawned isolated (see [`SessiondState::
+    /// record_isolated_worktree`]); `docs/session-relationship-design.md`
+    /// decision 2's "the edge exists only via isolation". Surfaced
+    /// additively as `SessionSummary.parent_session_id` by
+    /// [`Connection::session_list`].
+    parent_session_id: Option<SessionId>,
+    /// The directory this session's file tools are actually confined to --
+    /// its own worktree path if `worktree.is_some()`, else whatever
+    /// `SessionNew.workspace_root` carried. Read by [`SessiondState::
+    /// session_directory`] so a *child* spawned from this session knows
+    /// where to branch its own worktree from.
+    workspace_root: Option<PathBuf>,
+    /// This session's own isolated worktree, if [`worktree::
+    /// create_isolated_worktree`] succeeded for it -- `None` for an
+    /// ordinary shared-directory session. Removed (if clean) when the
+    /// session ends, see [`spawn_session_thread`]'s thread body.
+    worktree: Option<WorktreeInfo>,
 }
 
 /// Resolves this session's model (pure and synchronous -- see
@@ -299,13 +358,20 @@ fn resolve_and_announce_session_model(
 /// from a fresh `SessionNew` that carried one — resumed sessions don't
 /// persist it (out of scope here), so they always pass `None` and fall back
 /// to `run_session`'s process-cwd default, same as before this field
-/// existed.
+/// existed. `spawn_source_session_id`/`isolate` are resumed sessions'
+/// `None`/`false` too, for the same reason: lineage lives in this process's
+/// in-memory `SessiondState` (see `SessionEntry::parent_session_id`'s doc
+/// comment), not the event log, so it doesn't survive a `horizon-sessiond`
+/// restart either.
+#[allow(clippy::too_many_arguments)]
 fn spawn_session_thread(
     state: Arc<SessiondState>,
     session_id: SessionId,
     provider_id: ProviderId,
     role_id: Option<RoleId>,
     workspace_root: Option<PathBuf>,
+    spawn_source_session_id: Option<SessionId>,
+    isolate: bool,
     history: Vec<Event>,
 ) {
     let (inbound_tx, inbound_rx) = unbounded::<Command>();
@@ -320,6 +386,9 @@ fn spawn_session_thread(
             model,
             inbound: inbound_tx,
             replay: replay_tx,
+            parent_session_id: None,
+            workspace_root: workspace_root.clone(),
+            worktree: None,
         },
     );
 
@@ -330,12 +399,28 @@ fn spawn_session_thread(
             provider_id,
             role_id,
             workspace_root,
+            spawn_source_session_id,
+            isolate,
             &thread_state,
             inbound_rx,
             replay_rx,
             history,
         );
-        thread_state.sessions.lock().unwrap().remove(&session_id);
+        // Decision 5: a session that owned an isolated worktree gets it
+        // cleaned up (if clean) exactly when its own thread ends -- which
+        // only happens on a genuine `Command::Shutdown`/provider exit (the
+        // daemon-side "terminate" signal), never on a mere close/detach
+        // (those leave the thread, and this session, running -- see the
+        // module doc's "sessions are scoped to the process" note).
+        let entry = thread_state.sessions.lock().unwrap().remove(&session_id);
+        if let Some(worktree) = entry.and_then(|entry| entry.worktree) {
+            if !worktree::remove_worktree_if_clean(&worktree) {
+                eprintln!(
+                    "horizon-sessiond: kept worktree {} for {session_id:?} (not clean)",
+                    worktree.path.display()
+                );
+            }
+        }
     });
 }
 
@@ -448,6 +533,8 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<SessiondState>, records: Vec
             provider_id,
             role_id,
             None,
+            None,
+            false,
             events,
         );
     }
@@ -539,6 +626,8 @@ impl Connection {
             new.provider_id,
             new.role_id,
             new.workspace_root,
+            new.spawn_source_session_id,
+            new.isolate,
             Vec::new(),
         );
     }
@@ -603,6 +692,7 @@ impl Connection {
                 session_id: *session_id,
                 provider_id: entry.provider_id.clone(),
                 role_id: entry.role_id.clone(),
+                parent_session_id: entry.parent_session_id,
             })
             .collect()
     }
@@ -761,6 +851,64 @@ fn tool_session_state_for(
     }
 }
 
+/// Resolves and creates this session's isolated worktree (`docs/
+/// session-relationship-design.md` decisions 2-3), returning the directory
+/// its file tools should actually be confined to. Runs on the session's own
+/// dedicated thread, before `tool_session_state_for` -- a few tens of
+/// milliseconds of blocking `git` subprocess calls at session-start time,
+/// the same shape `state.wait_for_duckdb_store()` just above already
+/// accepts for this thread. Degrades gracefully on any failure (no git repo
+/// found, no commits yet, ...): falls back to `workspace_root` (today's
+/// shared-directory behavior) and records no lineage edge, since isolation
+/// didn't actually happen -- matching decision 2's "the edge exists only
+/// via isolation" for the *actual* outcome, not merely the request. A
+/// `contract::Event::Error` is also emitted so the failure is visible in
+/// the session's own transcript rather than only sessiond's stderr.
+fn resolve_and_create_isolated_worktree(
+    state: &Arc<SessiondState>,
+    session_id: SessionId,
+    spawn_source_session_id: Option<SessionId>,
+    workspace_root: Option<PathBuf>,
+) -> Option<PathBuf> {
+    let fallback_dir = workspace_root
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
+    let parent_info =
+        spawn_source_session_id.and_then(|source_id| state.session_directory(source_id));
+    let (source_dir, source_is_owned_worktree) =
+        worktree::resolve_isolation_source(parent_info, fallback_dir);
+
+    match worktree::create_isolated_worktree(
+        &source_dir,
+        source_is_owned_worktree,
+        session_id.as_uuid(),
+    ) {
+        Ok(info) => {
+            let root = info.path.clone();
+            state.record_isolated_worktree(session_id, spawn_source_session_id, info);
+            Some(root)
+        }
+        Err(error) => {
+            eprintln!(
+                "horizon-sessiond: failed to create isolated worktree for {session_id:?}: {error}"
+            );
+            send_envelope(
+                &state.outgoing,
+                Envelope::event(
+                    session_id,
+                    Event::Error(AgentError {
+                        message: format!(
+                            "failed to create an isolated worktree ({error}); continuing without \
+                             isolation"
+                        ),
+                    }),
+                ),
+            );
+            workspace_root
+        }
+    }
+}
+
 /// The session's whole lifetime, from `Initialize` through to the
 /// provider's channel closing. Runs entirely synchronously on its own
 /// dedicated thread -- see the module doc for why. Faithfully mirrors the
@@ -777,6 +925,8 @@ fn run_session(
     provider_id: ProviderId,
     role_id: Option<RoleId>,
     workspace_root: Option<PathBuf>,
+    spawn_source_session_id: Option<SessionId>,
+    isolate: bool,
     state: &Arc<SessiondState>,
     inbound_rx: Receiver<Command>,
     replay_rx: Receiver<Sender<Vec<Event>>>,
@@ -826,6 +976,16 @@ fn run_session(
     // Skill discovery above always uses the process cwd regardless of
     // `workspace_root` -- see the comment just above `cwd`'s definition on
     // why that's an intentionally separate, unthreaded value.
+    let workspace_root = if isolate {
+        resolve_and_create_isolated_worktree(
+            state,
+            session_id,
+            spawn_source_session_id,
+            workspace_root,
+        )
+    } else {
+        workspace_root
+    };
     let tool_state = tool_session_state_for(workspace_root, state.agent_config.tools, recall)
         .with_skills(SkillRegistry::discover(&cwd))
         .with_config_path(state.config_path.clone());
@@ -1417,6 +1577,9 @@ mod tests {
                 model: Some("stored-model".to_string()),
                 inbound: inbound_tx,
                 replay: replay_tx,
+                parent_session_id: None,
+                workspace_root: None,
+                worktree: None,
             },
         );
 
@@ -1428,5 +1591,84 @@ mod tests {
             Some("stored-model")
         );
         assert_eq!(connection.session_model(SessionId::new()), None);
+    }
+
+    /// An id sessiond has never hosted (or has already ended) reports no
+    /// directory -- the "no source" case [`worktree::resolve_isolation_source`]
+    /// treats as a lineage root, falling back to the spawn's own
+    /// `workspace_root`.
+    #[test]
+    fn session_directory_is_none_for_an_unknown_session() {
+        let (state, _outgoing_rx) = state_with_rig_config(true, "test-model");
+        assert_eq!(state.session_directory(SessionId::new()), None);
+    }
+
+    /// A plain (non-isolated) session reports its own `workspace_root` and
+    /// `false` (not an owned worktree) -- what a *child* spawned from it
+    /// would branch fresh-from-origin against.
+    #[test]
+    fn session_directory_reports_the_plain_workspace_root_when_not_isolated() {
+        let (state, _outgoing_rx) = state_with_rig_config(true, "test-model");
+        let session_id = SessionId::new();
+        let (inbound_tx, _inbound_rx) = unbounded::<Command>();
+        let (replay_tx, _replay_rx) = unbounded::<Sender<Vec<Event>>>();
+        let root = std::path::PathBuf::from("/tmp/plain-root");
+        state.sessions.lock().unwrap().insert(
+            session_id,
+            SessionEntry {
+                provider_id: ProviderId("builtin.agent.rig".to_string()),
+                role_id: None,
+                model: None,
+                inbound: inbound_tx,
+                replay: replay_tx,
+                parent_session_id: None,
+                workspace_root: Some(root.clone()),
+                worktree: None,
+            },
+        );
+
+        assert_eq!(state.session_directory(session_id), Some((root, false)));
+    }
+
+    /// [`SessiondState::record_isolated_worktree`] updates the session's own
+    /// entry so a later [`SessiondState::session_directory`] lookup (from a
+    /// grandchild spawn) reports the worktree path and `true` (owned) --
+    /// the multi-level chaining decision 3 asks for.
+    #[test]
+    fn record_isolated_worktree_makes_the_session_report_as_an_owned_worktree() {
+        let (state, _outgoing_rx) = state_with_rig_config(true, "test-model");
+        let session_id = SessionId::new();
+        let parent_id = SessionId::new();
+        let (inbound_tx, _inbound_rx) = unbounded::<Command>();
+        let (replay_tx, _replay_rx) = unbounded::<Sender<Vec<Event>>>();
+        state.sessions.lock().unwrap().insert(
+            session_id,
+            SessionEntry {
+                provider_id: ProviderId("builtin.agent.rig".to_string()),
+                role_id: None,
+                model: None,
+                inbound: inbound_tx,
+                replay: replay_tx,
+                parent_session_id: None,
+                workspace_root: Some(std::path::PathBuf::from("/tmp/pre-isolation")),
+                worktree: None,
+            },
+        );
+
+        let info = WorktreeInfo {
+            repo_root: std::path::PathBuf::from("/tmp/repo"),
+            path: std::path::PathBuf::from("/tmp/repo/.horizon/worktrees/abcd1234"),
+            branch: "horizon/abcd1234".to_string(),
+        };
+        state.record_isolated_worktree(session_id, Some(parent_id), info.clone());
+
+        assert_eq!(
+            state.session_directory(session_id),
+            Some((info.path.clone(), true))
+        );
+        let sessions = state.sessions.lock().unwrap();
+        let entry = &sessions[&session_id];
+        assert_eq!(entry.parent_session_id, Some(parent_id));
+        assert_eq!(entry.worktree, Some(info));
     }
 }
