@@ -15,9 +15,29 @@
 //! Every spawned process/task here is bounded and cleaned up by test end:
 //! the sandboxed child is watchdog-killed if it overruns a timeout, and
 //! `AllowlistProxy`/`UdsBridge` abort their background tasks on `Drop`.
+//!
+//! **Readiness, not single-shot** (2026-07-19 hardening): under the full
+//! workspace's own concurrent nextest run -- dozens of *other* tests
+//! spawning their own bwrap sandboxes for CPU at the same time -- a bare
+//! single spawn-probe-and-read could observe empty output even though
+//! nothing is actually broken: this process's own `AllowlistProxy`/
+//! `UdsBridge` tokio tasks (spawned but not yet polled) or the sandboxed
+//! probe's own bwrap setup can simply be slow to get their first CPU
+//! timeslice under that contention, and the probe's `TEST_TIMEOUT`
+//! watchdog then kills it before it prints anything. [`wait_for_bridge_warm`]
+//! confirms the bridge+proxy pipeline is actually serving (a real HTTP-
+//! shaped reply, allow or deny, to a throwaway target) before ever paying
+//! for the comparatively expensive sandboxed run; [`expect_probe_reaches`]/
+//! [`expect_probe_denied`] additionally retry the sandboxed probe itself
+//! (bwrap setup can independently be slow) with a bounded backoff. The DENY
+//! side never accepts silence as proof: only an explicit `PROBE-DENIED`
+//! counts, and a reach of the forbidden marker on *any* attempt is an
+//! immediate, non-retryable failure -- see those functions' own doc
+//! comments.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::net::SocketAddr;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -115,6 +135,119 @@ fn run_probe_in_sandbox(bridge_socket: &Path, target: &str) -> String {
     out
 }
 
+/// A direct (non-sandboxed) CONNECT probe against the bridge, run from
+/// this test process itself -- mirrors `uds_http_probe`'s own wire
+/// protocol exactly, just without going through bwrap. Used only as a
+/// readiness check ([`wait_for_bridge_warm`]): returns an empty string on
+/// any failure to connect/read rather than panicking, since "not ready
+/// yet" is an expected, retriable outcome here, not an error.
+fn direct_probe(bridge_socket: &Path, target: &str) -> String {
+    let Ok(mut stream) = UnixStream::connect(bridge_socket) else {
+        return String::new();
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let connect_req = format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n");
+    if stream.write_all(connect_req.as_bytes()).is_err() {
+        return String::new();
+    }
+    let mut buf = [0u8; 4096];
+    match stream.read(&mut buf) {
+        Ok(n) if n > 0 => String::from_utf8_lossy(&buf[..n]).to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Blocks (briefly, bounded) until the bridge + proxy pipeline is actually
+/// serving requests -- confirmed by an HTTP-shaped CONNECT reply to an
+/// arbitrary throwaway target (`127.0.0.1:1`; nothing needs to be
+/// listening there -- `AllowlistHandler::handle_request` rejects an
+/// unlisted host before ever dialing it, so either a `200` or a `403`
+/// equally proves the handler code actually ran). This closes the
+/// readiness race described in the module doc: confirming the pipeline is
+/// warm *before* ever paying for a comparatively expensive sandboxed probe
+/// run means that run's own result reflects the allowlist decision, not
+/// whether this process's tokio tasks had been scheduled yet.
+fn wait_for_bridge_warm(bridge_socket: &Path) {
+    const MAX_ATTEMPTS: u32 = 100;
+    const BACKOFF: Duration = Duration::from_millis(50);
+    for attempt in 0..MAX_ATTEMPTS {
+        if direct_probe(bridge_socket, "127.0.0.1:1").starts_with("HTTP/") {
+            return;
+        }
+        if attempt + 1 < MAX_ATTEMPTS {
+            std::thread::sleep(BACKOFF);
+        }
+    }
+    panic!(
+        "bridge/proxy pipeline at {} never became ready within {:?}",
+        bridge_socket.display(),
+        BACKOFF * MAX_ATTEMPTS
+    );
+}
+
+/// Repeatedly runs the sandboxed probe against `target` until it reports a
+/// definitive `PROBE-OK` containing `expected_marker`, or the attempt
+/// budget is exhausted. Tolerates transient emptiness/`PROBE-ERROR` (bwrap
+/// sandbox creation itself can independently be slow under heavy
+/// concurrent load, even after [`wait_for_bridge_warm`] has confirmed the
+/// bridge/proxy side is ready) by retrying with a backoff -- a real
+/// containment *success* requires actually reaching the origin, so this
+/// never accepts a denial as good enough.
+fn expect_probe_reaches(bridge_socket: &Path, target: &str, expected_marker: &str) -> String {
+    const MAX_ATTEMPTS: u32 = 5;
+    const BACKOFF: Duration = Duration::from_millis(500);
+    let mut last = String::new();
+    for attempt in 0..MAX_ATTEMPTS {
+        let out = run_probe_in_sandbox(bridge_socket, target);
+        if out.starts_with("PROBE-OK") && out.contains(expected_marker) {
+            return out;
+        }
+        last = out;
+        if attempt + 1 < MAX_ATTEMPTS {
+            std::thread::sleep(BACKOFF);
+        }
+    }
+    panic!(
+        "probe never reached {target} with marker {expected_marker:?} after {MAX_ATTEMPTS} \
+         attempts; last output: {last:?}"
+    );
+}
+
+/// Repeatedly runs the sandboxed probe against `target` until it reports a
+/// definitive `PROBE-DENIED`, tolerating transient emptiness the same way
+/// [`expect_probe_reaches`] does -- but a genuine reach of
+/// `forbidden_marker` is an immediate, unconditional failure on *any*
+/// attempt, retried or not: a real containment breach must never be
+/// masked by "well, a later attempt came back denied". Mere emptiness or
+/// exhausting every attempt without ever seeing an explicit `PROBE-DENIED`
+/// is *also* not accepted as proof -- that would be exactly the "timeout
+/// masquerading as a denial" failure mode this exists to rule out, so it
+/// panics (fails the test) instead of returning.
+fn expect_probe_denied(bridge_socket: &Path, target: &str, forbidden_marker: &str) -> String {
+    const MAX_ATTEMPTS: u32 = 5;
+    const BACKOFF: Duration = Duration::from_millis(500);
+    let mut last = String::new();
+    for attempt in 0..MAX_ATTEMPTS {
+        let out = run_probe_in_sandbox(bridge_socket, target);
+        assert!(
+            !out.contains(forbidden_marker),
+            "the sandboxed probe must never actually reach the denied origin: {out}"
+        );
+        if out.starts_with("PROBE-DENIED") {
+            return out;
+        }
+        last = out;
+        if attempt + 1 < MAX_ATTEMPTS {
+            std::thread::sleep(BACKOFF);
+        }
+    }
+    panic!(
+        "probe never got an explicit denial for {target} after {MAX_ATTEMPTS} attempts (never \
+         PROBE-DENIED, and never reached the forbidden marker either -- inconclusive, not proof \
+         of containment); last output: {last:?}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sandboxed_probe_reaches_the_allowlisted_host_through_the_bridge() {
     let allowed = spawn_origin("127.0.0.2", "ALLOWED-ORIGIN-MARKER").await;
@@ -128,9 +261,12 @@ async fn sandboxed_probe_reaches_the_allowlisted_host_through_the_bridge() {
         .expect("bridge should start");
 
     let target = allowed.to_string();
-    let out = tokio::task::spawn_blocking(move || run_probe_in_sandbox(&bridge_socket, &target))
-        .await
-        .unwrap();
+    let out = tokio::task::spawn_blocking(move || {
+        wait_for_bridge_warm(&bridge_socket);
+        expect_probe_reaches(&bridge_socket, &target, "ALLOWED-ORIGIN-MARKER")
+    })
+    .await
+    .unwrap();
 
     assert!(out.starts_with("PROBE-OK 200"), "probe output: {out}");
     assert!(
@@ -160,24 +296,30 @@ async fn sandboxed_probe_cannot_reach_a_different_host_through_the_same_bridge()
         .expect("bridge should start");
 
     let target = denied.to_string();
-    let out = tokio::task::spawn_blocking(move || run_probe_in_sandbox(&bridge_socket, &target))
-        .await
-        .unwrap();
+    let out = tokio::task::spawn_blocking(move || {
+        wait_for_bridge_warm(&bridge_socket);
+        expect_probe_denied(
+            &bridge_socket,
+            &target,
+            "DENIED-ORIGIN-MARKER-SHOULD-NEVER-APPEAR",
+        )
+    })
+    .await
+    .unwrap();
 
     assert!(out.starts_with("PROBE-DENIED 403"), "probe output: {out}");
-    assert!(
-        !out.contains("DENIED-ORIGIN-MARKER-SHOULD-NEVER-APPEAR"),
-        "the sandboxed process must never actually reach the non-allowlisted host, got: {out}"
-    );
 
     // The allowed host stays reachable through the very same bridge --
-    // this isn't a bridge outage, it's the allowlist doing its job.
+    // this isn't a bridge outage, it's the allowlist doing its job. No
+    // separate `wait_for_bridge_warm` needed here: the denied probe above
+    // already proved the pipeline is warm.
     let allowed_target = allowed.to_string();
     let allowed_socket = bridge.socket_path().to_path_buf();
-    let allowed_out =
-        tokio::task::spawn_blocking(move || run_probe_in_sandbox(&allowed_socket, &allowed_target))
-            .await
-            .unwrap();
+    let allowed_out = tokio::task::spawn_blocking(move || {
+        expect_probe_reaches(&allowed_socket, &allowed_target, "ALLOWED-ORIGIN-MARKER")
+    })
+    .await
+    .unwrap();
     assert!(
         allowed_out.starts_with("PROBE-OK 200"),
         "probe output: {allowed_out}"
@@ -200,9 +342,12 @@ async fn empty_allowlist_denies_the_bridge_for_every_host() {
         .expect("bridge should start");
 
     let target = origin.to_string();
-    let out = tokio::task::spawn_blocking(move || run_probe_in_sandbox(&bridge_socket, &target))
-        .await
-        .unwrap();
+    let out = tokio::task::spawn_blocking(move || {
+        wait_for_bridge_warm(&bridge_socket);
+        expect_probe_denied(&bridge_socket, &target, "SHOULD-NEVER-BE-SEEN")
+    })
+    .await
+    .unwrap();
 
     assert!(out.starts_with("PROBE-DENIED 403"), "probe output: {out}");
 

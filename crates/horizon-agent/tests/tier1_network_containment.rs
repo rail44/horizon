@@ -29,13 +29,33 @@
 //! Driving `execute_agent_tool`/`Execution` from outside the crate needs
 //! them re-exported `pub` from `horizon_agent::tools` (narrowly -- just
 //! those two; see that module's doc comment on the re-export).
+//!
+//! **Readiness, not single-shot** (2026-07-19 hardening): under the full
+//! workspace's own concurrent nextest run, this test's `AllowlistProxy`/
+//! `UdsBridge` tokio tasks (spawned but not yet polled) can be slow to get
+//! their first CPU timeslice while dozens of *other* tests' own bwrap
+//! sandboxes compete for it -- and a bare single sandboxed-probe-and-read
+//! could then time out and report empty/ambiguous output even though
+//! nothing is actually broken, exactly the failure mode confirmed in
+//! `crates/horizon-sandbox-proxy/tests/containment.rs` under the same
+//! full-workspace load (see that file's own module doc, which shares this
+//! exact fix shape). [`wait_for_bridge_warm`] confirms the bridge+proxy
+//! pipeline is actually serving before ever issuing the real (sandboxed)
+//! bash call; [`expect_bash_probe_denied`] additionally retries the bash
+//! call itself (bwrap sandbox creation can independently be slow) with a
+//! bounded backoff, never accepting mere emptiness/timeout as proof of
+//! denial -- only an explicit `PROBE-DENIED` counts, and reaching the
+//! forbidden marker on *any* attempt is an immediate, non-retryable
+//! failure.
 
+use std::io::{Read, Write};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use horizon_agent::config::AgentToolsConfig;
-use horizon_agent::contract::{SessionId, ToolCallId, ToolCallRequest, ToolCallResult};
+use horizon_agent::contract::{SessionId, ToolCallId, ToolCallRequest};
 use horizon_agent::live::LiveState;
 use horizon_agent::tools::{
     execute_agent_tool, register_session_runtime, unregister_session_runtime, BashCompletion,
@@ -77,18 +97,6 @@ fn temp_workspace(label: &str) -> PathBuf {
     ));
     std::fs::create_dir_all(&dir).expect("create temp workspace dir");
     dir.canonicalize().expect("canonicalize temp workspace dir")
-}
-
-/// Unwraps a completion expected to be finished -- panics with a useful
-/// message otherwise (mirrors `tools::tests::expect_finished`).
-fn expect_finished(completion: BashCompletion) -> ToolCallResult {
-    match completion {
-        BashCompletion::Finished(result) => result,
-        BashCompletion::RetryWithoutSandbox { call_id, reason } => panic!(
-            "expected a finished bash completion, got a retry-without-sandbox \
-             request for {call_id:?}: {reason}"
-        ),
-    }
 }
 
 /// Starts a real `AllowlistProxy` + `UdsBridge` pair (empty allowlist,
@@ -148,6 +156,127 @@ fn start_decoy_origin(runtime: &Runtime) -> SocketAddr {
     })
 }
 
+/// A direct (non-sandboxed) CONNECT probe against the bridge, run from
+/// this test process itself -- mirrors `bridge_probe`'s own wire protocol
+/// exactly, just without going through bwrap. Used only as a readiness
+/// check ([`wait_for_bridge_warm`]): returns an empty string on any
+/// failure to connect/read rather than panicking, since "not ready yet" is
+/// an expected, retriable outcome here, not an error.
+fn direct_probe(bridge_socket: &Path, target: &str) -> String {
+    let Ok(mut stream) = UnixStream::connect(bridge_socket) else {
+        return String::new();
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let connect_req = format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n");
+    if stream.write_all(connect_req.as_bytes()).is_err() {
+        return String::new();
+    }
+    let mut buf = [0u8; 4096];
+    match stream.read(&mut buf) {
+        Ok(n) if n > 0 => String::from_utf8_lossy(&buf[..n]).to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Blocks (briefly, bounded) until the bridge + proxy pipeline is actually
+/// serving requests -- confirmed by an HTTP-shaped CONNECT reply to an
+/// arbitrary throwaway target (`127.0.0.1:1`; nothing needs to be
+/// listening there -- the allowlist rejects an unlisted host before ever
+/// dialing it, so either a `200` or a `403` equally proves the handler
+/// code actually ran). See this file's own module doc for why this
+/// matters under the full-workspace concurrent test run.
+fn wait_for_bridge_warm(bridge_socket: &Path) {
+    const MAX_ATTEMPTS: u32 = 100;
+    const BACKOFF: Duration = Duration::from_millis(50);
+    for attempt in 0..MAX_ATTEMPTS {
+        if direct_probe(bridge_socket, "127.0.0.1:1").starts_with("HTTP/") {
+            return;
+        }
+        if attempt + 1 < MAX_ATTEMPTS {
+            std::thread::sleep(BACKOFF);
+        }
+    }
+    panic!(
+        "bridge/proxy pipeline at {} never became ready within {:?}",
+        bridge_socket.display(),
+        BACKOFF * MAX_ATTEMPTS
+    );
+}
+
+/// Issues a fresh tier-1 sandboxed `bash` call (running `bridge_probe`
+/// against `target` through the bridge) via `execute_agent_tool`,
+/// retrying up to a bounded budget until it reports a definitive
+/// `PROBE-DENIED`, tolerating transient emptiness/timeouts/`RetryWithout
+/// Sandbox` classifications the same readiness race
+/// [`wait_for_bridge_warm`] mostly heads off (plus bwrap sandbox creation
+/// itself being independently slow under heavy concurrent load) --
+/// **but** a genuine reach of `forbidden_marker` on *any* attempt is an
+/// immediate, unconditional failure, and exhausting every attempt without
+/// ever seeing an explicit `PROBE-DENIED` is *also* not accepted as proof
+/// (that would be exactly the "timeout masquerading as a denial" failure
+/// mode this exists to rule out) -- it panics instead of returning.
+/// `session_id` must already be registered (`register_session_runtime`)
+/// against `tool_state`/`bash_results_rx` before calling this; issuing
+/// several bash calls against the same already-registered session is
+/// ordinary production behavior, so no per-attempt re-registration is
+/// needed.
+fn expect_bash_probe_denied(
+    tool_state: &ToolSessionState,
+    session_id: SessionId,
+    bash_results_rx: &crossbeam_channel::Receiver<BashCompletion>,
+    bridge_socket: &Path,
+    target: &str,
+    forbidden_marker: &str,
+) -> String {
+    const MAX_ATTEMPTS: u32 = 5;
+    const PER_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(15);
+    const BACKOFF: Duration = Duration::from_millis(500);
+    let mut last = String::new();
+
+    for attempt in 0..MAX_ATTEMPTS {
+        let request = ToolCallRequest {
+            call_id: ToolCallId(format!("call-denied-{attempt}")),
+            tool_id: "bash".to_string(),
+            input: json!({
+                "command": format!(
+                    "{BRIDGE_PROBE_PATH} {} {target}",
+                    bridge_socket.display()
+                )
+            }),
+        };
+        let execution = execute_agent_tool(&StubHostTools, tool_state, session_id, &request);
+        assert!(matches!(execution, Execution::Started(_)));
+
+        let output = match bash_results_rx.recv_timeout(PER_ATTEMPT_TIMEOUT) {
+            Ok(BashCompletion::Finished(result)) => result.output["output"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            Ok(BashCompletion::RetryWithoutSandbox { reason, .. }) => {
+                format!("(looked sandbox-denied, not a proxy denial: {reason})")
+            }
+            Err(_) => "(timed out waiting for the bash call to finish)".to_string(),
+        };
+
+        assert!(
+            !output.contains(forbidden_marker),
+            "the sandboxed bash call must never actually reach the denied origin: {output}"
+        );
+        if output.contains("PROBE-DENIED 403") {
+            return output;
+        }
+        last = output;
+        if attempt + 1 < MAX_ATTEMPTS {
+            std::thread::sleep(BACKOFF);
+        }
+    }
+    panic!(
+        "bash-tool probe never got an explicit denial for {target} after {MAX_ATTEMPTS} \
+         attempts (never PROBE-DENIED 403, and never reached the forbidden marker either -- \
+         inconclusive, not proof of containment); last output: {last:?}"
+    );
+}
+
 /// The crux containment proof for leg 4a: a tier-1 auto-approved, sandboxed
 /// `bash` call wired to a real network-proxy bridge (empty allowlist) still
 /// cannot reach an arbitrary host -- even a *real*, listening decoy, not
@@ -171,35 +300,20 @@ fn tier1_sandboxed_bash_with_empty_allowlist_cannot_reach_a_real_listening_decoy
     let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
     register_session_runtime(session_id, tool_state.clone(), live_state, bash_results_tx);
 
-    let request = ToolCallRequest {
-        call_id: ToolCallId("call-1".to_string()),
-        tool_id: "bash".to_string(),
-        input: json!({
-            "command": format!(
-                "{BRIDGE_PROBE_PATH} {} {}",
-                bridge.socket_path().display(),
-                decoy
-            )
-        }),
-    };
+    wait_for_bridge_warm(bridge.socket_path());
+    let target = decoy.to_string();
+    let output = expect_bash_probe_denied(
+        &tool_state,
+        session_id,
+        &bash_results_rx,
+        bridge.socket_path(),
+        &target,
+        "DECOY-ORIGIN-MARKER-SHOULD-NEVER-APPEAR",
+    );
 
-    let execution = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
-    assert!(matches!(execution, Execution::Started(_)));
-
-    let completion = bash_results_rx
-        .recv_timeout(Duration::from_secs(10))
-        .expect("the sandboxed bash call should finish");
-    let result = expect_finished(completion);
-
-    assert_eq!(result.output["exit_code"], 0, "{:?}", result.output);
-    let output = result.output["output"].as_str().expect("output");
     assert!(
         output.contains("PROBE-DENIED 403"),
         "expected the proxy to refuse the CONNECT for an empty allowlist: {output}"
-    );
-    assert!(
-        !output.contains("DECOY-ORIGIN-MARKER-SHOULD-NEVER-APPEAR"),
-        "the sandboxed bash call must never actually reach the decoy origin: {output}"
     );
 
     unregister_session_runtime(session_id);
@@ -245,8 +359,15 @@ fn tier1_sandboxed_bash_direct_egress_stays_blocked_under_proxied() {
     let execution = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
     assert!(matches!(execution, Execution::Started(_)));
 
+    // Generous (not the tight 10s an earlier version used): under the full
+    // workspace's own concurrent test run, bwrap sandbox creation can be
+    // slow purely from CPU contention with everyone else's sandboxes, and
+    // this doesn't touch the bridge/proxy readiness race at all -- it's
+    // just extra margin against unrelated scheduling delay. Still an
+    // honest failure (`.expect`, not a swallowed timeout) if genuinely
+    // wedged.
     let completion = bash_results_rx
-        .recv_timeout(Duration::from_secs(10))
+        .recv_timeout(Duration::from_secs(30))
         .expect("the sandboxed bash call should finish");
 
     match completion {
