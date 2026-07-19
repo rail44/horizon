@@ -385,3 +385,45 @@ control plane's settled design (explicit targets, fixed socket,
 `SessionId`-only reference) composes across this move unchanged (its
 reversibility audit holds). Inter-agent messaging is designed together
 with this daemon, per the roadmap's shared-foundations item.
+
+## Contract-mismatch auto-recovery decisions (2026-07-20)
+
+Rebuilding Horizon while an older `horizon-sessiond` keeps running used to
+strand the UI: a pre-v9 daemon rejects any foreign-versioned envelope
+before even reading its kind, so the new UI's hello got a silent close (an
+endless hello retry loop), and skews where a reply did arrive stopped at a
+fatal "reload required". The owner asked for the manual kill-the-daemon
+step to be automated. Decisions:
+
+- **`session_control` is the version-stable shared vocabulary, now at the
+  wire level too.** `read_envelope` exempts `session_control` envelopes
+  from the exact-`v` check; every other kind still requires an exact
+  match. The handshake and mismatch recovery are precisely the
+  conversations that must survive a version skew. In exchange, existing
+  `SessionControl` variants may never change shape or meaning -- extend
+  additively only.
+- **A rejected hello keeps its connection open.** After sending
+  `HandshakeRejected`, sessiond keeps serving shared controls on that
+  connection so the one thing a mismatched client can still legitimately
+  say -- `Drain` -- is honored with the usual flush-and-exit. EOF still
+  ends the connection.
+- **Recovery is drain-shaped, not signal-shaped.** The UI runtime, on
+  detecting a mismatch, sends `SessionControl::Drain` at *the daemon's own
+  envelope version* on a fresh connection (the pre-hello loop has honored
+  Drain since v3), waits for the socket to refuse connections (same 2s
+  budget as `wait_for_drain`), and lets its existing
+  `connect_or_spawn_retrying` loop start a fresh daemon. SIGTERM was
+  rejected as the mechanism: no pidfile or `Child` handle survives to
+  target it with, and the SIGTERM path exits without the event-log flush
+  that only a graceful drain performs.
+- **A silent stale daemon is version-probed.** Pre-v9 daemons close a
+  foreign-versioned hello without ever revealing their version, so the
+  recovering UI probes Drain downward from `SESSION_PROTOCOL_VERSION - 1`
+  to v3, one connection per candidate. A wrong-version probe is harmless
+  (logged as malformed, that connection closed); the right one drains.
+  The UI's own version is never probed, so a healthy same-version daemon
+  is unreachable from this path.
+- **Recovery runs once per runtime.** If the respawned daemon still
+  mismatches -- the classic cause being a stale `horizon-sessiond` binary
+  that `cargo run` never rebuilt -- the second mismatch goes fatal with a
+  rebuild hint instead of drain-restarting forever.
