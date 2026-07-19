@@ -129,6 +129,57 @@ pub(crate) fn subtree_session_ids(sessions: &[SessionSummary], root: SessionId) 
     result
 }
 
+/// Abbreviates `root` for a session-manager row's secondary-info text:
+/// relative to `repo_root` when `root` sits strictly inside it (e.g.
+/// `.horizon/worktrees/calm-otter` -- an isolated child's own worktree thus
+/// reads as visibly distinct from a shared session's directory at a
+/// glance), else `~`-relative when `root` sits under `home`, else the full
+/// path (rare -- neither is normally unset, but still a valid fallback
+/// rather than an empty label). `repo_root`/`home` are resolved by the
+/// caller (`render_item`) rather than discovered here, so this stays pure
+/// and unit-testable without touching the filesystem or `$HOME`. A `root`
+/// equal to `repo_root` itself (a shared session spawned at the repo root,
+/// not a subdirectory) falls through to the `home` branch instead of
+/// rendering an empty relative path.
+pub(crate) fn abbreviate_workspace_root(
+    root: &std::path::Path,
+    repo_root: Option<&std::path::Path>,
+    home: Option<&std::path::Path>,
+) -> String {
+    if let Some(repo_root) = repo_root {
+        if let Ok(relative) = root.strip_prefix(repo_root) {
+            if !relative.as_os_str().is_empty() {
+                return relative.display().to_string();
+            }
+        }
+    }
+    if let Some(home) = home {
+        if let Ok(relative) = root.strip_prefix(home) {
+            return if relative.as_os_str().is_empty() {
+                "~".to_string()
+            } else {
+                format!("~/{}", relative.display())
+            };
+        }
+    }
+    root.display().to_string()
+}
+
+/// Walks `root`'s ancestors for the nearest **main** repository checkout --
+/// skipping a linked worktree's own `.git` (a plain *file*, not a
+/// directory, pointing back at the main repo's `.git/worktrees/<name>`), so
+/// an isolated session's own worktree directory (itself a valid, if linked,
+/// repo) still resolves to the *enclosing* project root -- matching
+/// `abbreviate_workspace_root`'s `.horizon/worktrees/<slug>` example rather
+/// than collapsing to an empty relative path against itself. No `git`
+/// subprocess, just cheap `stat` calls bounded by directory depth -- cheap
+/// enough to run on every visible row's render pass.
+fn enclosing_repo_root(root: &std::path::Path) -> Option<std::path::PathBuf> {
+    root.ancestors()
+        .find(|ancestor| ancestor.join(".git").is_dir())
+        .map(std::path::Path::to_path_buf)
+}
+
 pub(crate) struct SessionManagerDelegate {
     all: Vec<SessionSummary>,
     filtered: Vec<SessionRow>,
@@ -253,12 +304,18 @@ impl ListDelegate for SessionManagerDelegate {
                             .text_color(status_color)
                             .child(status),
                     )
-                    .when(summary.workspace_root.is_some(), |this| {
+                    .when_some(summary.workspace_root.as_deref(), |this, root| {
+                        let repo_root = enclosing_repo_root(root);
+                        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
                         this.child(
                             div()
                                 .text_size(px(11.0))
                                 .text_color(theme::text_muted())
-                                .child("dir"),
+                                .child(abbreviate_workspace_root(
+                                    root,
+                                    repo_root.as_deref(),
+                                    home.as_deref(),
+                                )),
                         )
                     })
                     .when(row.has_children, |this| {
@@ -314,7 +371,11 @@ mod tests {
     use horizon_workspace::types::SessionKind;
     use horizon_workspace::SessionId;
 
-    use super::{order_as_lineage_tree, subtree_session_ids, SessionSummary};
+    use std::path::Path;
+
+    use super::{
+        abbreviate_workspace_root, order_as_lineage_tree, subtree_session_ids, SessionSummary,
+    };
 
     fn summary(
         id: SessionId,
@@ -469,5 +530,80 @@ mod tests {
         let ids: HashSet<_> = subtree_session_ids(&sessions, a).into_iter().collect();
 
         assert_eq!(ids, [a, b].into_iter().collect());
+    }
+
+    #[test]
+    fn a_root_strictly_inside_the_repo_renders_relative_to_it() {
+        assert_eq!(
+            abbreviate_workspace_root(
+                Path::new("/home/user/project/.horizon/worktrees/calm-otter"),
+                Some(Path::new("/home/user/project")),
+                Some(Path::new("/home/user")),
+            ),
+            ".horizon/worktrees/calm-otter"
+        );
+    }
+
+    #[test]
+    fn a_root_equal_to_the_repo_root_falls_through_to_home_abbreviation() {
+        // A shared (non-isolated) session's workspace_root is often the
+        // repo root itself, not a subdirectory -- rendering that relative
+        // to itself would be an uninformative empty string, so it falls
+        // through to the `home` branch instead.
+        assert_eq!(
+            abbreviate_workspace_root(
+                Path::new("/home/user/project"),
+                Some(Path::new("/home/user/project")),
+                Some(Path::new("/home/user")),
+            ),
+            "~/project"
+        );
+    }
+
+    #[test]
+    fn a_root_outside_any_repo_renders_home_relative() {
+        assert_eq!(
+            abbreviate_workspace_root(
+                Path::new("/home/user/scratch/notes"),
+                None,
+                Some(Path::new("/home/user")),
+            ),
+            "~/scratch/notes"
+        );
+    }
+
+    #[test]
+    fn a_root_equal_to_home_itself_renders_the_bare_tilde() {
+        assert_eq!(
+            abbreviate_workspace_root(Path::new("/home/user"), None, Some(Path::new("/home/user"))),
+            "~"
+        );
+    }
+
+    #[test]
+    fn a_root_under_neither_repo_nor_home_falls_back_to_the_full_path() {
+        assert_eq!(
+            abbreviate_workspace_root(
+                Path::new("/mnt/data/project"),
+                Some(Path::new("/home/user/project")),
+                Some(Path::new("/home/user")),
+            ),
+            "/mnt/data/project"
+        );
+    }
+
+    #[test]
+    fn a_repo_root_that_doesnt_contain_the_workspace_root_is_ignored() {
+        // `repo_root` came from walking a *different* path's ancestors --
+        // defensive coverage for a mismatched pair, even though
+        // `render_item` always derives both from the same `root`.
+        assert_eq!(
+            abbreviate_workspace_root(
+                Path::new("/home/user/other-project/src"),
+                Some(Path::new("/home/user/project")),
+                Some(Path::new("/home/user")),
+            ),
+            "~/other-project/src"
+        );
     }
 }

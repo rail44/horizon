@@ -19,6 +19,13 @@ pub(super) enum Incoming {
 pub(super) struct Routes {
     state: Mutex<RouteState>,
     host_tools: Sender<HostToolRequest>,
+    /// The live-announcement counterpart of `host_tools` above: a
+    /// process-wide channel (not the per-session `agent` map) since
+    /// `wire::Control::WorkspaceRootResolved` corrects the *workspace
+    /// model*, not a `contract::ProviderEvent` any per-session `AgentSession`
+    /// transcript would fold -- see `WorkspaceShell::
+    /// wire_workspace_root_updates`.
+    workspace_roots: Sender<(contract::SessionId, wire::WorkspaceRootResolved)>,
 }
 
 struct RouteState {
@@ -31,7 +38,10 @@ struct RouteState {
 }
 
 impl Routes {
-    pub(super) fn new(host_tools: Sender<HostToolRequest>) -> Self {
+    pub(super) fn new(
+        host_tools: Sender<HostToolRequest>,
+        workspace_roots: Sender<(contract::SessionId, wire::WorkspaceRootResolved)>,
+    ) -> Self {
         Self {
             state: Mutex::new(RouteState {
                 agent: HashMap::new(),
@@ -42,6 +52,7 @@ impl Routes {
                 failure: None,
             }),
             host_tools,
+            workspace_roots,
         }
     }
 
@@ -222,6 +233,11 @@ impl Routes {
             }
             EnvelopeBody::Control(Control::HostToolRequest(request)) => {
                 let _ = self.host_tools.send(request);
+            }
+            EnvelopeBody::Control(Control::WorkspaceRootResolved(resolved)) => {
+                if let Some(session_id) = envelope.session_id {
+                    let _ = self.workspace_roots.send((session_id, resolved));
+                }
             }
             EnvelopeBody::Control(Control::SessionListResult(summaries)) => {
                 if let Some(reply) = self.state.lock().unwrap().pending_session_list.take() {

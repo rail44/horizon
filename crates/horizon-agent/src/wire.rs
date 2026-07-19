@@ -149,6 +149,36 @@ pub enum Control {
     /// (receiver, which folds it into `agent_state_status`, the status
     /// bar's existing signal).
     SkippedLines(String),
+    /// Live correction of a freshly isolated session's authoritative
+    /// `workspace_root` (and, since the same resolution moment also decides
+    /// the derivation edge, `parent_session_id`) -- session-scoped via the
+    /// envelope's own `session_id`, same shape of exception as
+    /// [`Control::SessionModel`] above. Sent once by `horizon-sessiond`,
+    /// right after `session::resolve_and_create_isolated_worktree` resolves
+    /// this session's isolated worktree: worktree creation is real IO that
+    /// only finishes *after* `Control::SessionNew` already returned, so a
+    /// fresh spawn's shell-side `workspace_root` is only ever the
+    /// pre-isolation guess until now. Closes the last "still eventual, not
+    /// live" gap `docs/session-relationship-design.md`'s delivery notes call
+    /// out: without this, a session created and used within one continuous
+    /// run only saw its corrected root/parent via a later
+    /// `spawn_agent_resume`/`spawn_workspace_restore` sweep (daemon restart
+    /// or UI restart). Not sent at all when isolation fails and degrades to
+    /// a shared spawn -- there is nothing to correct then, mirroring
+    /// [`SessionSummary::parent_session_id`]'s "the edge exists only via
+    /// isolation".
+    WorkspaceRootResolved(WorkspaceRootResolved),
+}
+
+/// [`Control::WorkspaceRootResolved`]'s payload.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkspaceRootResolved {
+    pub workspace_root: PathBuf,
+    /// Additive, like [`SessionSummary::parent_session_id`] -- `None` for an
+    /// isolated-but-sourceless spawn (still a valid lineage root, see that
+    /// field's own doc comment).
+    #[serde(default)]
+    pub parent_session_id: Option<SessionId>,
 }
 
 /// One entry of a [`Control::SessionListResult`] reply.
@@ -386,6 +416,10 @@ mod tests {
             }),
             Control::SessionModel("gpt-4o".to_string()),
             Control::SkippedLines("skipped 1 corrupt line".to_string()),
+            Control::WorkspaceRootResolved(WorkspaceRootResolved {
+                workspace_root: PathBuf::from("/tmp/some-workspace/.horizon/worktrees/abcd1234"),
+                parent_session_id: Some(SessionId::new()),
+            }),
         ]
     }
 
@@ -417,6 +451,16 @@ mod tests {
     /// reshapes of existing ones -- no version bump needed.
     #[test]
     fn contract_version_was_not_bumped_for_the_additive_lineage_fields() {
+        assert_eq!(CONTRACT_VERSION, 6);
+    }
+
+    /// A brand-new `Control` variant is exactly as additive as a new field
+    /// on an existing one, per the same rule -- `Control::
+    /// WorkspaceRootResolved` follows `Control::SessionModel`'s own
+    /// precedent of adding a session-scoped announcement variant without a
+    /// version bump.
+    #[test]
+    fn contract_version_was_not_bumped_for_the_workspace_root_resolved_announcement() {
         assert_eq!(CONTRACT_VERSION, 6);
     }
 

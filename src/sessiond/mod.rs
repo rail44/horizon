@@ -106,8 +106,12 @@ impl SessiondHandle {
     pub(crate) fn start(
         socket_path: &Path,
         control_socket: &Path,
-    ) -> (Self, Receiver<HostToolRequest>) {
-        let (handle, host_tools, outgoing) = Self::parts();
+    ) -> (
+        Self,
+        Receiver<HostToolRequest>,
+        Receiver<(contract::SessionId, wire::WorkspaceRootResolved)>,
+    ) {
+        let (handle, host_tools, workspace_roots, outgoing) = Self::parts();
         let weak_outgoing = handle.outgoing.downgrade();
         connection::spawn(
             socket_path.to_path_buf(),
@@ -117,17 +121,20 @@ impl SessiondHandle {
             handle.routes.clone(),
             handle.control.clone(),
         );
-        (handle, host_tools)
+        (handle, host_tools, workspace_roots)
     }
 
+    #[allow(clippy::type_complexity)]
     fn parts() -> (
         Self,
         Receiver<HostToolRequest>,
+        Receiver<(contract::SessionId, wire::WorkspaceRootResolved)>,
         tokio::sync::mpsc::UnboundedReceiver<RawEnvelope>,
     ) {
         let (raw_tx, raw_rx) = tokio::sync::mpsc::unbounded_channel();
         let (host_tool_tx, host_tool_rx) = unbounded();
-        let routes = Arc::new(Routes::new(host_tool_tx));
+        let (workspace_root_tx, workspace_root_rx) = unbounded();
+        let routes = Arc::new(Routes::new(host_tool_tx, workspace_root_tx));
         let control = Arc::new(connection::RuntimeControl::new());
         let lifetime = Arc::new(RuntimeLifetime {
             control: control.clone(),
@@ -140,16 +147,23 @@ impl SessiondHandle {
                 _lifetime: lifetime,
             },
             host_tool_rx,
+            workspace_root_rx,
             raw_rx,
         )
     }
 
     #[cfg(test)]
-    fn start_on_stream<S>(stream: S) -> (Self, Receiver<HostToolRequest>)
+    fn start_on_stream<S>(
+        stream: S,
+    ) -> (
+        Self,
+        Receiver<HostToolRequest>,
+        Receiver<(contract::SessionId, wire::WorkspaceRootResolved)>,
+    )
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
-        let (handle, host_tools, outgoing) = Self::parts();
+        let (handle, host_tools, workspace_roots, outgoing) = Self::parts();
         let weak_outgoing = handle.outgoing.downgrade();
         connection::spawn_test_stream(
             stream,
@@ -158,7 +172,7 @@ impl SessiondHandle {
             handle.routes.clone(),
             handle.control.clone(),
         );
-        (handle, host_tools)
+        (handle, host_tools, workspace_roots)
     }
 
     /// `workspace_root` is computed shell-side (`WorkspaceShell::reconcile`)
