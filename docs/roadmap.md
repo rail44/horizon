@@ -173,9 +173,13 @@ lands:
 - **Agent web search / public-code search** (backlog 18/19). Needs
   its own consultation: provider, trust-boundary/approval design.
 - **portable-pty fork-safety root fix** (backlog 28/31).
-  Bounded-retry mitigation shipped; the root-cause fix (vendor
-  patch/upgrade) or a live capture confirming the hypothesis is
-  still open.
+  Bounded-retry mitigation shipped. Bounded investigation 2026-07-19:
+  hypothesis CONFIRMED at source level (heap-allocating
+  `close_random_fds` between fork/exec); no upstream fix or release
+  exists; the small `close_range(2)` patch is Linux-only so a vendor
+  patch isn't "obviously correct". Recommendation on record: accept
+  the mitigation as the practical ceiling, revisit if wezterm fixes
+  #7742/#7893. Open only pending the owner's close/keep call.
 
 - **Terminal presentation wave** — all five slices merged 2026-07-18
   (up to `bd7f52f`, protocol v5): geometric box/block/sextant/braille

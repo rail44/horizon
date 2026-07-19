@@ -261,6 +261,24 @@ entries live in `backlog-resolved.md` keeping their original numbers
     occasionally still fail (now reported as an error rather than freezing
     forever, per the mitigation above) under heavy host load. Recorded
     2026-07-12.
+    **Bounded root-cause investigation (2026-07-19, owner-approved):
+    hypothesis CONFIRMED at source level; recommendation = accept the
+    mitigation as the practical ceiling.** Findings: (a) 0.9.0 is the
+    newest release AND matches wezterm git HEAD (last push 2026-07-16)
+    -- no upstream fix exists; the `read_dir`-based `close_random_fds`
+    has never been touched since 2020. (b) Two open, unanswered
+    upstream issues (wezterm/wezterm#7742, #7893) hit a *different*
+    symptom of the same function (it closes std's exec-error pipe,
+    turning exec failure into abort) -- an upstream fix for those would
+    very likely also fix this; that is the revisit trigger. (c) The one
+    technically-correct small patch -- replace the enumeration with
+    async-signal-safe `close_range(2)` -- is Linux-only (no macOS
+    equivalent in libc 0.2.186), so a vendor patch needs per-platform
+    branching validated on a mac: not "small and obviously correct",
+    left undone deliberately. (d) The mitigation
+    (`TERMINAL_SPAWN_TIMEOUT`/`MAX_SPAWN_ATTEMPTS`/`install_if_vacant`)
+    was re-verified intact. Roadmap item stays open only as the
+    owner's close/keep call; no further engineering is queued.
 
 52. **`split_pane_in_tab` corrupts state when the active tab is
     missing.** Found during the backlog-49 fix (2026-07-19): with zero
