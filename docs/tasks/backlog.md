@@ -392,3 +392,28 @@ entries live in `backlog-resolved.md` keeping their original numbers
     2026-07-19 from the tier-1 `/tmp` containment-hole fix's review —
     found while auditing denial classification around that fix, not
     itself part of it.
+
+60. **Prior-art evaluation: nono (nolabs-ai/nono) vs Horizon's
+    self-built sandbox — owner-deferred.** nono is a mature (3k stars,
+    ~daily commits, v0.68, Apache-2.0, Sigstore-team pedigree)
+    kernel-enforced AI-agent sandbox in Rust, whose `crates/nono` is an
+    explicitly policy-free, FFI-embeddable library covering exactly
+    Horizon's OS-sandbox surface (Landlock/Seatbelt, no daemon,
+    per-command). Directly relevant to a "build vs depend" decision for
+    `horizon-sandbox`. Concrete borrowables regardless of that decision:
+    (a) their Landlock-floor + seccomp-notify-gate + fd-injection design
+    that closes the TOCTOU race SECCOMP_USER_NOTIF_FLAG_CONTINUE leaves
+    open — a reference for our Landlock/bwrap non-coexistence follow-up
+    (the helper-binary idea); (b) an `ApprovalBackend` trait seam (our
+    LLM judge would be one backend — and note we're AHEAD of nono here,
+    it has only a terminal y/N backend, LLM judge is not built); (c)
+    approval rate-limiting (10 req/s, burst 5, deny-on-exceed) as a
+    concrete judge-DoS mitigation; (d) their profile/registry
+    (JSON, `extends`/groups) as a data-driven counter-example to a
+    code-level agent-kinds abstraction; (e) their Capability Broker
+    (nested per-tool child sandboxes with per-hop credential scoping) as
+    prior art if bash-subprocess granularity ever matters. `security-
+    model.mdx` is the rigorous public write-up of the Landlock-vs-mount-
+    ns / why-not-DYLD tradeoffs worth reading before re-deriving them.
+    Owner will schedule if/when to weigh depend-on-nono; recorded
+    2026-07-19, not a request to act now.
