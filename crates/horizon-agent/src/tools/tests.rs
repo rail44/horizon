@@ -1447,6 +1447,259 @@ fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
     unregister_session_runtime(session_id);
 }
 
+// --- tier-1 bash containment: network proxy (leg 4a, docs/agent-approval-design.md) ---
+//
+// Prior spikes (`crates/horizon-sandbox-proxy/tests/containment.rs`) already
+// proved the proxy/bridge/sandbox layers hold in isolation, against raw
+// `horizon_sandbox::spawn`. These tests prove the same invariants through
+// the *actual* production call path a tier-1 auto-approved `bash` call
+// takes: `execute_agent_tool` -> `execute_tier1_bash` ->
+// `bash::spawn_sandboxed` -> `exec::run_sandboxed`, wired with a real
+// `AllowlistProxy` + `UdsBridge` via `ToolSessionState::with_bridge_socket`
+// exactly the way `horizon-sessiond`'s `session::run_session` wires the
+// daemon's own long-lived pair in.
+
+/// Starts a real `AllowlistProxy` + `UdsBridge` pair (empty allowlist,
+/// mirroring leg 4a's default posture -- there's no config surface yet) on
+/// a dedicated tokio runtime kept alive for the caller. `run_sandboxed`
+/// itself is fully synchronous and never touches tokio (see its own doc
+/// comment), so this is purely test scaffolding standing in for what
+/// `horizon-sessiond`'s `network::NetworkProxy` owns for the daemon's whole
+/// lifetime.
+fn start_test_proxy() -> (
+    tokio::runtime::Runtime,
+    horizon_sandbox_proxy::AllowlistProxy,
+    horizon_sandbox_proxy::UdsBridge,
+) {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("build test tokio runtime");
+    let bridge_socket = std::env::temp_dir().join(format!(
+        "horizon-agent-bridge-test-{}.sock",
+        uuid::Uuid::new_v4()
+    ));
+    let (proxy, bridge) = runtime.block_on(async {
+        let proxy = horizon_sandbox_proxy::AllowlistProxy::spawn(
+            horizon_sandbox_proxy::Allowlist::new(Vec::<String>::new()),
+        )
+        .await
+        .expect("proxy should start");
+        let bridge = horizon_sandbox_proxy::UdsBridge::spawn(bridge_socket, proxy.addr())
+            .await
+            .expect("bridge should start");
+        (proxy, bridge)
+    });
+    (runtime, proxy, bridge)
+}
+
+/// Resolves the path to this crate's own `bridge_probe` binary (`src/bin/
+/// bridge_probe.rs`). Mirrors `horizon-sessiond`'s own `resolve_sessiond_
+/// binary` pattern (`tests/e2e.rs`, backlog #40): prefer the runtime
+/// `CARGO_BIN_EXE_bridge_probe` env var cargo/nextest inject fresh into
+/// this test process's own environment, if present and valid. The
+/// compile-time `env!()` form of the same name is *not* available at all
+/// here -- confirmed a hard compile error -- since Cargo only bakes that
+/// into integration-test/bench/example compilation units, never a crate's
+/// own lib unit tests. The fallback derives the path the same way this
+/// repo's shared `build.build-dir` split (`AGENTS.md` "Build setup") makes
+/// necessary for `e2e.rs`'s own compile-time fallback: from
+/// `CARGO_MANIFEST_DIR` (always this *worktree's* own crate directory,
+/// never redirected by the build-dir split), not `current_exe()` (which,
+/// for a lib test binary, resolves *inside the shared build-dir* -- see
+/// `e2e.rs`'s doc comment for the full mechanism -- so it can't anchor a
+/// per-worktree path at all).
+fn bridge_probe_path() -> PathBuf {
+    if let Ok(runtime_var) = std::env::var("CARGO_BIN_EXE_bridge_probe") {
+        let path = PathBuf::from(runtime_var);
+        if path.is_file() {
+            return path;
+        }
+    }
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .expect("horizon-agent's manifest dir should be nested under <workspace root>/crates");
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    let path = workspace_root
+        .join("target")
+        .join(profile)
+        .join("bridge_probe");
+    assert!(
+        path.is_file(),
+        "expected a `bridge_probe` binary at {} -- build it first \
+         (`cargo build -p horizon-agent --bin bridge_probe`)",
+        path.display()
+    );
+    path
+}
+
+/// A real, listening loopback origin standing in for an arbitrary
+/// non-allowlisted host -- a successful reach would be unambiguous proof of
+/// a containment failure, not just "nothing answered" (mirrors
+/// `horizon-sandbox-proxy`'s own `tests/containment.rs::spawn_origin`).
+fn start_decoy_origin(runtime: &tokio::runtime::Runtime) -> std::net::SocketAddr {
+    runtime.block_on(async {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.2", 0))
+            .await
+            .expect("bind decoy origin");
+        let addr = listener.local_addr().expect("decoy origin local_addr");
+        tokio::spawn(async move {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf).await;
+            let body = "DECOY-ORIGIN-MARKER-SHOULD-NEVER-APPEAR";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        });
+        addr
+    })
+}
+
+/// The crux containment proof for leg 4a: a tier-1 auto-approved, sandboxed
+/// `bash` call wired to a real network-proxy bridge (empty allowlist) still
+/// cannot reach an arbitrary host -- even a *real*, listening decoy, not
+/// merely an unrouted address. This is the honest behavior a network-using
+/// command sees today (no config surface / approval UX yet, `docs/
+/// agent-approval-design.md`'s leg 4b): the proxy's own `403` (carrying
+/// `x-horizon-sandbox-proxy-denial`), surfaced here via the probe's
+/// `PROBE-DENIED` line.
+#[test]
+fn tier1_sandboxed_bash_with_empty_allowlist_cannot_reach_a_real_listening_decoy() {
+    let (runtime, _proxy, bridge) = start_test_proxy();
+    let decoy = start_decoy_origin(&runtime);
+
+    let root = temp_workspace("tier1-bash-network-denied");
+    let tool_state = ToolSessionState::new(root)
+        .with_isolated_worktree(true)
+        .with_bridge_socket(Some(bridge.socket_path().to_path_buf()));
+    let session_id = SessionId::new();
+    let live_state = LiveState::new();
+    let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
+    register_session_runtime(session_id, tool_state.clone(), live_state, bash_results_tx);
+
+    let request = ToolCallRequest {
+        call_id: ToolCallId("call-1".to_string()),
+        tool_id: "bash".to_string(),
+        input: json!({
+            "command": format!(
+                "{} {} {}",
+                bridge_probe_path().display(),
+                bridge.socket_path().display(),
+                decoy
+            )
+        }),
+    };
+
+    let execution = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
+    assert!(matches!(execution, Execution::Started(_)));
+
+    let completion = bash_results_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the sandboxed bash call should finish");
+    let result = expect_finished(completion);
+
+    assert_eq!(result.output["exit_code"], 0, "{:?}", result.output);
+    let output = result.output["output"].as_str().expect("output");
+    assert!(
+        output.contains("PROBE-DENIED 403"),
+        "expected the proxy to refuse the CONNECT for an empty allowlist: {output}"
+    );
+    assert!(
+        !output.contains("DECOY-ORIGIN-MARKER-SHOULD-NEVER-APPEAR"),
+        "the sandboxed bash call must never actually reach the decoy origin: {output}"
+    );
+
+    unregister_session_runtime(session_id);
+}
+
+/// Mirrors `horizon-sandbox-proxy`'s own `direct_egress_stays_fully_blocked_
+/// even_under_a_proxied_policy` test, but through the actual bash-tool call
+/// path (`execute_agent_tool` -> tier-1 dispatch -> `spawn_sandboxed` ->
+/// `run_sandboxed`) instead of raw `horizon_sandbox::spawn`: a direct,
+/// unbridged TCP connect attempt from inside the sandbox must stay exactly
+/// as blocked under `Proxied` as it is under `Disabled` today -- the
+/// seccomp network-syscall cut is unconditional for both (see
+/// `horizon_sandbox::linux::spawn`). Accepts either of the two ways
+/// `run_sandboxed` can report that: the denial can look sandbox-shaped
+/// enough that `horizon_sandbox::is_likely_sandbox_denied` classifies it as
+/// a retry-without-sandbox prompt, or (if the exact wording doesn't match
+/// its keyword list) a plain finished result with a non-zero exit and a
+/// denial-shaped message. Either way, a genuine escape (exit 0, a real
+/// response) is the only outcome that must never happen.
+#[test]
+fn tier1_sandboxed_bash_direct_egress_stays_blocked_under_proxied() {
+    let (_runtime, _proxy, bridge) = start_test_proxy();
+
+    let root = temp_workspace("tier1-bash-network-direct-egress");
+    let tool_state = ToolSessionState::new(root)
+        .with_isolated_worktree(true)
+        .with_bridge_socket(Some(bridge.socket_path().to_path_buf()));
+    let session_id = SessionId::new();
+    let live_state = LiveState::new();
+    let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
+    register_session_runtime(session_id, tool_state.clone(), live_state, bash_results_tx);
+
+    let request = ToolCallRequest {
+        call_id: ToolCallId("call-1".to_string()),
+        tool_id: "bash".to_string(),
+        // A direct connect attempt, bypassing the bridge entirely -- exactly
+        // what the network layer promises stays cut off even though *a*
+        // UNIX-domain-socket egress now exists for this session.
+        input: json!({ "command": "exec 3<>/dev/tcp/93.184.216.34/80" }),
+    };
+
+    let execution = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
+    assert!(matches!(execution, Execution::Started(_)));
+
+    let completion = bash_results_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the sandboxed bash call should finish");
+
+    match completion {
+        BashCompletion::RetryWithoutSandbox { reason, .. } => {
+            let lower = reason.to_lowercase();
+            assert!(
+                lower.contains("network") || lower.contains("operation not permitted"),
+                "expected a sandbox-denial-shaped reason: {reason}"
+            );
+        }
+        BashCompletion::Finished(result) => {
+            assert_ne!(
+                result.output["exit_code"], 0,
+                "a direct TCP connect must fail under Proxied too: {:?}",
+                result.output
+            );
+            let output = result.output["output"]
+                .as_str()
+                .unwrap_or_default()
+                .to_lowercase();
+            assert!(
+                output.contains("network") || output.contains("operation not permitted"),
+                "expected a sandbox-denied-shaped error, got: {:?}",
+                result.output
+            );
+        }
+    }
+
+    unregister_session_runtime(session_id);
+}
+
 /// Never-silently-degrade: even on a host where the sandbox genuinely
 /// engages, a *non-isolated* session's `bash` call still goes through the
 /// ordinary approval gate -- isolation is load-bearing, not cosmetic. The

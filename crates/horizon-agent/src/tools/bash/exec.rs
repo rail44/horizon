@@ -463,11 +463,24 @@ fn error_output(message: &str, partial_output: Option<Vec<u8>>, config: &BashToo
 
 /// Runs one *sandboxed* bash call to completion (or until it times out, or
 /// looks sandbox-denied). `workspace_root` is the sandbox's *only* writable
-/// root; network is off (`docs/agent-approval-design.md`'s tier 1). Returns
-/// [`BashCompletion::RetryWithoutSandbox`] instead of a finished result when
-/// the run looks sandbox-denied (`horizon_sandbox::is_likely_sandbox_denied`)
-/// -- see that variant's doc comment for why. Run with `LC_ALL=C`: denial
-/// classification is locale-sensitive.
+/// root. Returns [`BashCompletion::RetryWithoutSandbox`] instead of a
+/// finished result when the run looks sandbox-denied (`horizon_sandbox::
+/// is_likely_sandbox_denied`) -- see that variant's doc comment for why. Run
+/// with `LC_ALL=C`: denial classification is locale-sensitive.
+///
+/// Network (`docs/agent-approval-design.md`'s "Staging" leg 4a): `Some`
+/// `bridge_socket` gets `NetworkPolicy::Proxied { bridge_socket }` -- the
+/// same seccomp/namespace network-syscall cut as `Disabled`, plus one
+/// bind-mounted UNIX socket that reaches `horizon-sessiond`'s own
+/// long-lived `AllowlistProxy` (`horizon_sandbox_proxy`). The allowlist
+/// starts empty and there's no config surface yet (leg 4b), so today this
+/// is honest but not yet useful: a command that tries to use the network
+/// still fails -- exactly the pre-4a `Disabled` experience from the
+/// caller's point of view, just refused one layer further out (the proxy's
+/// `403` with an `x-horizon-sandbox-proxy-denial` header, instead of a bare
+/// seccomp-denied `socket(2)`) for whichever narrow slice of traffic
+/// actually reaches the bridge. `None` (no bridge running) falls back to
+/// plain `NetworkPolicy::Disabled`, unchanged from before this leg.
 ///
 /// Containment fix (2026-07-19 dogfooding, backlog): this policy used to add
 /// `std::env::temp_dir()` (the *host's* real temp dir) as a second writable
@@ -491,6 +504,7 @@ pub(super) fn run_sandboxed(
     input: &Value,
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     workspace_root: &Path,
+    bridge_socket: Option<&Path>,
     config: &BashToolConfig,
 ) -> BashCompletion {
     let Some(command) = input.get("command").and_then(Value::as_str) else {
@@ -526,10 +540,16 @@ pub(super) fn run_sandboxed(
     // classification is substring-based (see `horizon_sandbox::denial`).
     cmd.env("LC_ALL", "C");
 
+    let network = match bridge_socket {
+        Some(bridge_socket) => horizon_sandbox::NetworkPolicy::Proxied {
+            bridge_socket: bridge_socket.to_path_buf(),
+        },
+        None => horizon_sandbox::NetworkPolicy::Disabled,
+    };
     let policy = horizon_sandbox::SandboxPolicy {
         writable_roots: vec![workspace_root.to_path_buf()],
         readable_scope: horizon_sandbox::ReadableScope::Full,
-        network: horizon_sandbox::NetworkPolicy::Disabled,
+        network,
     };
 
     let sandboxed =
