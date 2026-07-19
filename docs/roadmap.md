@@ -177,9 +177,12 @@ lands:
   hypothesis CONFIRMED at source level (heap-allocating
   `close_random_fds` between fork/exec); no upstream fix or release
   exists; the small `close_range(2)` patch is Linux-only so a vendor
-  patch isn't "obviously correct". Recommendation on record: accept
-  the mitigation as the practical ceiling, revisit if wezterm fixes
-  #7742/#7893. Open only pending the owner's close/keep call.
+  patch isn't "obviously correct". Superseded 2026-07-19: the owner chose to
+  pursue an owner-led fork fix in a separate session (unified shape:
+  replace fd-closing with async-signal-safe CLOEXEC-marking —
+  `close_range(CLOSE_RANGE_CLOEXEC)` on Linux, bounded `fcntl` loop on
+  macOS/BSD — which also fixes upstream #7742/#7893; Horizon consumes
+  it via `[patch.crates-io]`). Item stays open tracking that work.
 
 - **Terminal presentation wave** — all five slices merged 2026-07-18
   (up to `bd7f52f`, protocol v5): geometric box/block/sextant/braille
