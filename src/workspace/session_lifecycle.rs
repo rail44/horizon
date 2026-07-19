@@ -393,6 +393,18 @@ impl WorkspaceShell {
                         shell
                             .workspace
                             .register_detached_session(PaneKind::Agent, session_id);
+                        // The daemon's own `SessionEntry` is authoritative
+                        // for `workspace_root` -- for an isolated session
+                        // this is the worktree path sessiond actually
+                        // created, which nothing on the shell side could
+                        // have known at spawn time (worktree creation
+                        // finishes asynchronously, after `start_session`
+                        // already returned -- see `wire::SessionSummary::
+                        // workspace_root`'s doc comment). Overwrites
+                        // whatever the model already had, if anything.
+                        if let Some(root) = summary.workspace_root.clone() {
+                            shell.workspace.set_session_workspace_root(session_id, root);
+                        }
                         let session_handle = adopted.attach_session(summary.session_id);
                         shell.agent_sessions.insert(
                             session_id,
@@ -459,6 +471,21 @@ impl WorkspaceShell {
                         .into_iter()
                         .map(|summary| summary.session_id)
                         .collect();
+                    // Captured before `agent_summaries` is consumed below --
+                    // the daemon's own report of each session's
+                    // `workspace_root` (the authoritative post-isolation
+                    // worktree path for an isolated session; see
+                    // `wire::SessionSummary::workspace_root`'s doc comment),
+                    // applied to the surviving candidates further down.
+                    let agent_workspace_roots: HashMap<Uuid, std::path::PathBuf> = agent_summaries
+                        .iter()
+                        .filter_map(|summary| {
+                            summary
+                                .workspace_root
+                                .clone()
+                                .map(|root| (summary.session_id.as_uuid(), root))
+                        })
+                        .collect();
                     let agent_ids: HashSet<_> = agent_summaries
                         .into_iter()
                         .map(|summary| summary.session_id.as_uuid())
@@ -501,11 +528,11 @@ impl WorkspaceShell {
                             matches
                         })
                         .collect::<Vec<_>>();
-                    Some((terminals, agents))
+                    Some((terminals, agents, agent_workspace_roots))
                 })
                 .ok()
                 .flatten();
-            let Some((terminal_ids, agent_ids)) = candidates else {
+            let Some((terminal_ids, agent_ids, agent_workspace_roots)) = candidates else {
                 return;
             };
 
@@ -530,7 +557,7 @@ impl WorkspaceShell {
             };
 
             let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = this.update(cx, |shell, cx| {
+                let _ = this.update(cx, move |shell, cx| {
                     let Some(adopted) = shell.sessiond.as_ref() else {
                         return;
                     };
@@ -571,6 +598,16 @@ impl WorkspaceShell {
                     for (id, wire) in agents {
                         let session_id = SessionId::from_uuid(id);
                         if shell.workspace.session_pane_kind(session_id) == Some(PaneKind::Agent) {
+                            // See `spawn_agent_resume`'s matching comment:
+                            // the daemon's report is authoritative,
+                            // especially for an isolated session whose real
+                            // (worktree) root was only known after
+                            // `SessionNew` returned.
+                            if let Some(root) = agent_workspace_roots.get(&id) {
+                                shell
+                                    .workspace
+                                    .set_session_workspace_root(session_id, root.clone());
+                            }
                             shell.agent_sessions.insert(
                                 session_id,
                                 cx.new(|cx| AgentSession::new(wire, cx)),
@@ -1058,5 +1095,45 @@ mod tests {
         assert_eq!(workspace.tab_count(), 0);
         assert!(workspace.session_summaries().is_empty());
         assert!(workspace.to_persisted_json().is_ok());
+    }
+
+    // `spawn_agent_resume`/`spawn_workspace_restore` are themselves
+    // GPUI-entity/async-shaped and not unit-testable without a window and a
+    // live sessiond connection, same as `handle_terminal_exited` above --
+    // but their model-level step (`Workspace::set_session_workspace_root`,
+    // called with `wire::SessionSummary.workspace_root` once the daemon's
+    // own report of it arrives) is the same pure building block, standing
+    // in for an end-to-end resume/adopt test.
+
+    #[test]
+    fn an_isolated_sessions_reported_workspace_root_wins_over_the_shells_pre_spawn_value() {
+        // `docs/session-relationship-design.md`: `reconcile`'s Agent branch
+        // records a session's *pre-isolation* `workspace_root` on the model
+        // right away (the value it sent in `SessionNew`), since sessiond's
+        // real isolated worktree only resolves asynchronously afterward.
+        // `spawn_agent_resume`/`spawn_workspace_restore` must overwrite that
+        // with whatever `wire::SessionSummary.workspace_root` the daemon
+        // reports later -- the authoritative post-isolation root -- not
+        // leave the stale pre-spawn value standing.
+        let mut workspace = Workspace::mvp();
+        let session_id = SessionId::new();
+        workspace.register_detached_session(PaneKind::Agent, session_id);
+
+        let pre_spawn_root = std::path::PathBuf::from("/home/user/project");
+        workspace.set_session_workspace_root(session_id, pre_spawn_root.clone());
+        assert_eq!(
+            workspace.session_workspace_root(session_id),
+            Some(pre_spawn_root.as_path())
+        );
+
+        let isolated_root =
+            std::path::PathBuf::from("/home/user/project/.horizon/worktrees/abcd1234");
+        workspace.set_session_workspace_root(session_id, isolated_root.clone());
+
+        assert_eq!(
+            workspace.session_workspace_root(session_id),
+            Some(isolated_root.as_path()),
+            "the daemon-reported root must win over the shell's pre-spawn value"
+        );
     }
 }

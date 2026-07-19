@@ -693,6 +693,7 @@ impl Connection {
                 provider_id: entry.provider_id.clone(),
                 role_id: entry.role_id.clone(),
                 parent_session_id: entry.parent_session_id,
+                workspace_root: entry.workspace_root.clone(),
             })
             .collect()
     }
@@ -1670,5 +1671,49 @@ mod tests {
         let entry = &sessions[&session_id];
         assert_eq!(entry.parent_session_id, Some(parent_id));
         assert_eq!(entry.worktree, Some(info));
+    }
+
+    /// [`Connection::session_list`] must report the authoritative,
+    /// post-isolation `workspace_root` from the session's own `SessionEntry`
+    /// -- the wire-level counterpart of the state-level assertion above,
+    /// and the coordinator's requested regression guard: the workspace
+    /// model on the Horizon side reads exactly this field to correct its
+    /// own pre-spawn value (`WorkspaceShell::spawn_agent_resume`/
+    /// `spawn_workspace_restore`).
+    #[test]
+    fn session_list_reports_the_entrys_workspace_root_and_parent() {
+        let (state, _outgoing_rx) = state_with_rig_config(true, "test-model");
+        let session_id = SessionId::new();
+        let parent_id = SessionId::new();
+        let (inbound_tx, _inbound_rx) = unbounded::<Command>();
+        let (replay_tx, _replay_rx) = unbounded::<Sender<Vec<Event>>>();
+        state.sessions.lock().unwrap().insert(
+            session_id,
+            SessionEntry {
+                provider_id: ProviderId("builtin.agent.rig".to_string()),
+                role_id: None,
+                model: None,
+                inbound: inbound_tx,
+                replay: replay_tx,
+                parent_session_id: Some(parent_id),
+                workspace_root: Some(std::path::PathBuf::from(
+                    "/tmp/repo/.horizon/worktrees/abcd1234",
+                )),
+                worktree: None,
+            },
+        );
+
+        let connection = Connection { state };
+        let summaries = connection.session_list();
+
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].session_id, session_id);
+        assert_eq!(summaries[0].parent_session_id, Some(parent_id));
+        assert_eq!(
+            summaries[0].workspace_root,
+            Some(std::path::PathBuf::from(
+                "/tmp/repo/.horizon/worktrees/abcd1234"
+            ))
+        );
     }
 }

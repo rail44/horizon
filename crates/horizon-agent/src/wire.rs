@@ -174,6 +174,27 @@ pub struct SessionSummary {
     /// comment).
     #[serde(default)]
     pub parent_session_id: Option<SessionId>,
+    /// This session's *actual* confinement directory, as `horizon-sessiond`
+    /// itself resolved it -- the authoritative counterpart to `SessionNew.
+    /// workspace_root` (that field is only ever the caller's pre-spawn
+    /// value; for an isolated session, `horizon-sessiond` overrides it with
+    /// the worktree path it creates, which the caller cannot know in
+    /// advance since worktree creation finishes asynchronously, after
+    /// `Control::SessionNew` already returned -- see
+    /// `session::resolve_and_create_isolated_worktree`). Additive, like
+    /// `parent_session_id` above; populated from the same `SessionEntry.
+    /// workspace_root` a resumed session's summary reads too, so this
+    /// *does* survive a `horizon-sessiond` restart even though `parent_
+    /// session_id` doesn't -- a resumed session's `SessionEntry.
+    /// workspace_root` is `None` today regardless (see `SessionNew.
+    /// workspace_root`'s "resumed sessions don't persist it" note), so in
+    /// practice this is `None` for a resumed session too, but for a
+    /// different, narrower reason (no persisted value to resume from, not
+    /// "lineage doesn't survive a restart"). Read by `WorkspaceShell::
+    /// spawn_agent_resume`/`spawn_workspace_restore` to correct the
+    /// workspace model's stored root for a session it adopts.
+    #[serde(default)]
+    pub workspace_root: Option<PathBuf>,
 }
 
 /// Per `docs/agent-runtime-split-design.md` guardrail 5, `session_new` is
@@ -336,6 +357,7 @@ mod tests {
                 provider_id: ProviderId("builtin.agent.rig".to_string()),
                 role_id: Some(RoleId("config".to_string())),
                 parent_session_id: Some(SessionId::new()),
+                workspace_root: Some(PathBuf::from("/tmp/some-workspace")),
             }]),
             Control::SessionNew(SessionNew {
                 session_id: SessionId::new(),
