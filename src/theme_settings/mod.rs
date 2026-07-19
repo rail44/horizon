@@ -91,16 +91,23 @@ pub(crate) struct ThemeSettingsView {
     status: Option<String>,
 
     _subscriptions: Vec<Subscription>,
-    /// Cloned in at construction so [`Self::apply_live`] can re-push the
-    /// live scheme to running terminal sessions on its own, without
-    /// routing back through `WorkspaceShell` -- see
-    /// `SessiondHandle::broadcast_terminal_color_scheme`.
-    sessiond: Option<crate::sessiond::SessiondHandle>,
+    /// A live-reading handle to `WorkspaceShell::sessiond`, so
+    /// [`Self::apply_live`] can re-push the live scheme to running
+    /// terminal sessions on its own, without routing back through
+    /// `WorkspaceShell` -- see `SessiondHandle::
+    /// broadcast_terminal_color_scheme`. Deliberately not a cloned
+    /// `Option<SessiondHandle>` captured once at construction: this view
+    /// can be (re)constructed while `Reload Session Runtime`'s async
+    /// drain is still in flight (`WorkspaceShell::sessiond` is `None`
+    /// then), and a plain clone would freeze on that `None` forever, since
+    /// `reconcile` never rebuilds a pane view that already exists. See
+    /// `SessiondSlot`'s doc comment.
+    sessiond: crate::sessiond::SessiondSlot,
 }
 
 impl ThemeSettingsView {
     pub(crate) fn new(
-        sessiond: Option<crate::sessiond::SessiondHandle>,
+        sessiond: crate::sessiond::SessiondSlot,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -253,7 +260,7 @@ impl ThemeSettingsView {
         theme::reload_from(&self.seed.to_raw_config());
         theme::apply_gpui_component_theme(cx);
         window.refresh();
-        if let Some(sessiond) = &self.sessiond {
+        if let Some(sessiond) = self.sessiond.get() {
             sessiond.broadcast_terminal_color_scheme(theme::terminal_color_scheme());
         }
         cx.notify();

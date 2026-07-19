@@ -139,6 +139,7 @@ impl WorkspaceShell {
                 }
                 self.reload_in_progress = true;
                 let old = self.sessiond.take();
+                self.sessiond_slot.set(None);
                 if self.workspace_restore_failed {
                     self.workspace = Workspace::mvp();
                     self.restoring_workspace = false;

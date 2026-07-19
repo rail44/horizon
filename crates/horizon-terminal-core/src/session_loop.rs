@@ -802,22 +802,39 @@ mod tests {
                 ..TerminalColorScheme::default()
             })
             .unwrap();
-        let expected_repushed = format!(
-            "\x1b]11;rgb:{0:02x}{0:02x}/{1:02x}{1:02x}/{2:02x}{2:02x}\x07",
-            repushed.r, repushed.g, repushed.b
-        )
-        .into_bytes();
         assert!(
-            poll_osc11_reply(&pty_tx, &command_rx, &expected_repushed),
+            poll_query_reply(
+                &pty_tx,
+                &command_rx,
+                b"\x1b]11;?\x07",
+                &osc_reply(11, repushed)
+            ),
             "OSC 11 query should reply with the re-pushed background"
         );
 
         // The attached app now sets its own OSC 11 override.
         pty_tx.send(b"\x1b]11;#010203\x07".to_vec()).unwrap();
 
-        // A second re-push must not clobber that override.
+        // A second re-push, changing the *foreground* this time (not the
+        // background the override above targets). `color_scheme_tx` and
+        // `pty_tx` are different channels with no ordering guarantee
+        // between them, so the override-set above and this push could be
+        // applied in either order -- polling OSC 10 (below) until it
+        // reflects this push's foreground is a positive, deterministic
+        // confirmation that the push has actually landed, rather than
+        // just assuming the send order above is also the processing
+        // order. Without that confirmation, an implementation that
+        // clobbered live overrides on every push could still pass this
+        // test purely by luck of which channel the select loop happened
+        // to service first.
+        let new_foreground = Rgb {
+            r: 200,
+            g: 201,
+            b: 202,
+        };
         color_scheme_tx
             .send(TerminalColorScheme {
+                foreground: new_foreground,
                 background: Rgb {
                     r: 90,
                     g: 90,
@@ -826,30 +843,69 @@ mod tests {
                 ..TerminalColorScheme::default()
             })
             .unwrap();
-        let expected_override = b"\x1b]11;rgb:0101/0202/0303\x07".to_vec();
         assert!(
-            poll_osc11_reply(&pty_tx, &command_rx, &expected_override),
+            poll_query_reply(
+                &pty_tx,
+                &command_rx,
+                b"\x1b]10;?\x07",
+                &osc_reply(10, new_foreground)
+            ),
+            "OSC 10 query should reply with the second re-push's foreground"
+        );
+
+        // The push is now confirmed applied (and `poll_query_reply` left
+        // no straggler reply behind it), so this query -- sent only after
+        // that confirmation -- is guaranteed to be answered against the
+        // already-landed push, not racing it: the override must still
+        // win.
+        pty_tx.send(b"\x1b]11;?\x07".to_vec()).unwrap();
+        let reply = command_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("OSC 11 query reply after the confirmed re-push");
+        assert!(
+            matches!(reply, TerminalCommand::Input(bytes) if bytes == b"\x1b]11;rgb:0101/0202/0303\x07"),
             "an app-set OSC 11 override must keep winning over a re-pushed scheme"
         );
     }
 
-    /// Sends a fresh OSC 11 query and retries (bounded by a 2s deadline)
-    /// until a reply matching `expected` arrives -- the color-scheme
-    /// re-push test's synchronization primitive, since a scheme push alone
+    /// Formats the OSC `osc` (10/11/12) query-reply escape sequence
+    /// `rgb` should produce -- shared by the color-scheme re-push test's
+    /// assertions against both OSC 10 (foreground) and OSC 11
+    /// (background).
+    fn osc_reply(osc: u8, rgb: alacritty_terminal::vte::ansi::Rgb) -> Vec<u8> {
+        format!(
+            "\x1b]{osc};rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}\x07",
+            osc = osc,
+            r = rgb.r,
+            g = rgb.g,
+            b = rgb.b
+        )
+        .into_bytes()
+    }
+
+    /// Sends a fresh `query` and retries (bounded by a 2s deadline) until a
+    /// reply matching `expected` arrives -- the color-scheme re-push
+    /// test's synchronization primitive, since a scheme push alone
     /// produces no `TerminalUpdate` to wait on instead (see that test's
-    /// doc comment).
-    fn poll_osc11_reply(
+    /// doc comment). On success, also drains any straggler reply a
+    /// slow-to-arrive earlier iteration's duplicate query left queued
+    /// behind the matching one, so a caller that treats this return as
+    /// "state confirmed as of now" can rely on the channel holding nothing
+    /// older.
+    fn poll_query_reply(
         pty_tx: &Sender<Vec<u8>>,
         command_rx: &Receiver<TerminalCommand>,
+        query: &[u8],
         expected: &[u8],
     ) -> bool {
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
-            let _ = pty_tx.send(b"\x1b]11;?\x07".to_vec());
+            let _ = pty_tx.send(query.to_vec());
             if let Ok(TerminalCommand::Input(bytes)) =
                 command_rx.recv_timeout(Duration::from_millis(50))
             {
                 if bytes == expected {
+                    while command_rx.try_recv().is_ok() {}
                     return true;
                 }
             }

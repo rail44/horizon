@@ -39,6 +39,36 @@ pub(crate) struct SessiondResponder {
     outgoing: tokio::sync::mpsc::WeakUnboundedSender<RawEnvelope>,
 }
 
+/// A live view of `WorkspaceShell::sessiond`, threaded into panes that can
+/// outlive a single runtime instance -- currently just the theme settings
+/// view (`src/theme_settings/mod.rs`). A `SessiondHandle` cloned once at
+/// pane-construction time goes stale across `Reload Session Runtime`:
+/// `WorkspaceShell::sessiond` is `None` from the moment the old handle is
+/// taken until the async drain finishes and a fresh one lands, and
+/// `WorkspaceShell::reconcile` never recreates a pane view that already
+/// exists in `self.panes` -- so a pane whose view happens to be
+/// (re)constructed inside that window (its underlying model pane survives
+/// the reload; only the view cache is cleared) would otherwise capture
+/// `None` forever. This slot is cloned cheaply (an `Rc`) and always
+/// reflects whatever `WorkspaceShell` currently holds, as long as it's kept
+/// in sync at every `self.sessiond` write site.
+#[derive(Clone, Default)]
+pub(crate) struct SessiondSlot(std::rc::Rc<std::cell::RefCell<Option<SessiondHandle>>>);
+
+impl SessiondSlot {
+    pub(crate) fn new(handle: Option<SessiondHandle>) -> Self {
+        Self(std::rc::Rc::new(std::cell::RefCell::new(handle)))
+    }
+
+    pub(crate) fn get(&self) -> Option<SessiondHandle> {
+        self.0.borrow().clone()
+    }
+
+    pub(crate) fn set(&self, handle: Option<SessiondHandle>) {
+        *self.0.borrow_mut() = handle;
+    }
+}
+
 pub(crate) struct AgentSessionHandle {
     inner: contract::SessionHandle,
     session_id: contract::SessionId,

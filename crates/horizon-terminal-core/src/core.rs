@@ -125,8 +125,10 @@ impl TerminalCore {
     /// Push the host's live color scheme in, for [`Self`]'s own OSC
     /// 4/10/11/12 default-reply resolution (`docs/session-daemon-design.md`
     /// decision 9's crate-local mirror pattern) — called once right after
-    /// construction (`TerminalSession::spawn`), since this crate has no way
-    /// to observe `Reload Config` itself.
+    /// construction (`TerminalSession::spawn`), and again on every live
+    /// theme apply (`Reload Config`/the theme settings view) via
+    /// `TerminalCommand::SetColorScheme`, since this crate has no way to
+    /// observe those directly itself.
     pub fn set_color_scheme(&mut self, scheme: TerminalColorScheme) {
         self.color_scheme = scheme;
     }
