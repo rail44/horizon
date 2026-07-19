@@ -272,6 +272,17 @@ The frame channel becomes a snapshot-valued signal. Consequences:
   semantics (spike §1c — a slow reader observes a skipping sequence but
   always converges on the final value) are exactly the right policy for
   a screen, with no queue to bound.
+- Diffs are stateful, and statefulness composes badly with §4's
+  tolerant decoding — this is the decisive argument, not performance. A
+  skewed peer degrades what it reads (an `Unknown` span attribute, a
+  defaulted field); under snapshot⊕diff that degradation is baked into
+  the receiver's baseline, every subsequent diff extends the divergence
+  between what the daemon believes the row holds and what the UI holds,
+  and the drift survives until the next full snapshot. The diff
+  contract implicitly assumes both ends share identical frame
+  semantics; v10's skew regime explicitly abandons that assumption.
+  Under watch, every delivery is the complete truth: a degraded decode
+  lasts exactly one frame and self-heals on the next.
 - Measured headroom says full frames are affordable: 361 fps at 200x50
   full-styled frames (the pathological all-rows-change case) against a
   60 fps ceiling; same-host unix socket, so bandwidth is not a scarce
