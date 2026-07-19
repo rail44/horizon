@@ -361,3 +361,14 @@ entries live in `backlog-resolved.md` keeping their original numbers
     `horizon sessions --json` right after spawning — racy if two
     spawns interleave. Echoing the created id in the invoke response
     closes the loop cleanly. Small, additive. Recorded 2026-07-19.
+
+58. **`skill.read`'s registry still discovers from the daemon's cwd.**
+    The 2026-07-19 prompt-cwd fix (`cb8e41f`) routed the session's
+    workspace_root into prompt assembly and the prompt-side skill
+    listing, but `horizon-sessiond`'s own `SkillRegistry::discover(&cwd)`
+    (feeding the `skill.read` tool, `run_session` in
+    crates/horizon-sessiond/src/session.rs) still walks from the daemon
+    process's cwd — an isolated session reading skills sees the
+    daemon's repo, not its own worktree (usually the same repo today,
+    but wrong once sessions span repositories). Same-shape fix: thread
+    the session root in. Recorded 2026-07-19 from the fix's review.
