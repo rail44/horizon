@@ -333,3 +333,24 @@ entries live in `backlog-resolved.md` keeping their original numbers
     per decision 5) so the session manager's lineage view can still show
     the relationship the owner expects without conflating it with a real
     derivation/worktree-branch edge.
+
+55. **Sandbox-denial retry leaves a double transcript row.** The
+    denial-retry mechanism (leg 3, `207392c`) reissues a fresh
+    `ToolCallRequested` for the same call_id, and
+    `build_tool_call_views` starts a new row per occurrence — so one
+    conceptual bash call shows two rows: the abandoned sandboxed
+    attempt (started, never finished, no approval state) and the
+    retry that actually completes. Functionally correct, cosmetically
+    misleading. Same per-occurrence-identity family as backlog 42 —
+    fixing 42's identity model is likely the real fix; a targeted
+    "superseded by retry" row state is the cheaper alternative.
+    Recorded 2026-07-19 from the leg-3 review.
+
+56. **Sandboxed bash loses the CPU-niceness hardening.** The
+    unsandboxed bash path applies `setpriority` via `pre_exec`;
+    `horizon_sandbox::spawn` rebuilds the `Command` and
+    `std::process::Command` exposes no getter for `pre_exec` hooks, so
+    the sandboxed path runs without it. Options: a niceness knob on
+    `horizon-sandbox`'s policy/API, or `setpriority` on the returned
+    child's pid post-spawn (racy but adequate). Recorded 2026-07-19
+    from the leg-3 review.

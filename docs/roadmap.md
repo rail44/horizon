@@ -137,8 +137,14 @@ lands:
   roles-registry boundary decision and backlog 47/48; grounded in the
   2026-07-19 event-log analysis (bash ≈ 76% of approvals). Spike
   landed 2026-07-19 (`e4c3ad4`, `crates/horizon-sandbox`) with the
-  Landlock/bwrap thread finding recorded in the design doc; next leg
-  is the policy tiers.
+  Landlock/bwrap thread finding recorded in the design doc. Policy
+  tiers landed later the same day (`207392c`): per-call trust
+  predicate, fs/bash tier-1 auto-approval inside isolated worktrees
+  (bash only when the sandbox actually engages — never silent
+  degradation), sandbox-denial retry as a fresh approval, audit
+  markers on output JSON (follow-ups: backlog 55 double-row artifact,
+  56 niceness gap). Owner tier-1 dogfooding is the current gate;
+  remaining legs are the network layer and the judge.
 - **Agent web search / public-code search** (backlog 18/19). Needs
   its own consultation: provider, trust-boundary/approval design.
 - **portable-pty fork-safety root fix** (backlog 28/31).
