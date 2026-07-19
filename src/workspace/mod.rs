@@ -40,7 +40,7 @@ use horizon_workspace::{PaneId, PaneKind, SessionId, Workspace, WORKSPACE_STATE_
 use crate::agent::{AgentSession, AgentView};
 use crate::palette::PaletteDelegate;
 use crate::session_manager::SessionManagerDelegate;
-use crate::sessiond::SessiondHandle;
+use crate::sessiond::{SessiondHandle, SessiondSlot};
 use crate::terminal::{TerminalSession, TerminalView};
 use crate::terminal_focus::focus_transition;
 use crate::theme_settings::ThemeSettingsView;
@@ -233,6 +233,13 @@ pub(crate) struct WorkspaceShell {
     // terminal and agent requests while connect/Hello proceeds in the
     // background.
     sessiond: Option<SessiondHandle>,
+    // A live-reading mirror of `sessiond` above, kept in sync at every
+    // write site (`new`, `ReloadSessionRuntime`, `reload_session_runtime`'s
+    // resume) -- handed to panes that can outlive a single runtime
+    // instance (the theme settings view) so a clone captured mid-`Reload
+    // Session Runtime` never gets stuck on a stale `None`. See
+    // `SessiondSlot`'s doc comment.
+    sessiond_slot: SessiondSlot,
     reload_in_progress: bool,
     panes: HashMap<PaneId, PaneView>,
     // This window — needed by `Reload Session Runtime`'s post-resume step,
@@ -297,6 +304,7 @@ impl WorkspaceShell {
             pending_terminal_spawns: HashMap::new(),
             pending_agent_spawns: HashMap::new(),
             sessiond: Some(sessiond.clone()),
+            sessiond_slot: SessiondSlot::new(Some(sessiond.clone())),
             reload_in_progress: false,
             panes: HashMap::new(),
             window: window.window_handle(),

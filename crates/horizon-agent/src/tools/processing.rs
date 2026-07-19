@@ -45,7 +45,7 @@ pub fn process_agent_provider_event(
         bash::kill_if_running(&result.call_id);
     }
 
-    let mut horizon_events = horizon_events_for_provider_event(&event, tool_state)
+    let mut horizon_events = horizon_events_for_provider_event(&event, tool_state, session_id)
         .into_iter()
         .enumerate()
         .map(|(index, event)| {

@@ -40,14 +40,21 @@ use uuid::Uuid;
 ///   (block/underline/beam/hollow-block); a DECTCEM-hidden cursor is now
 ///   `cursor: None` on the wire instead of a stale always-visible block.
 ///
-/// Version 8: `TerminalFrame.text` removed -- it was fully derivable from
+/// Version 8: `TerminalCommand` gains `SetColorScheme`, re-pushing the
+/// host's live theme-derived color scheme into an already-running
+/// session (a live `Reload Config`/theme-settings apply) so OSC 10/11/12
+/// query replies stop reflecting a stale spawn-time snapshot. A new
+/// command variant on an already-versioned vocabulary, same bump
+/// discipline as every other wire-shape addition here.
+///
+/// Version 9: `TerminalFrame.text` removed -- it was fully derivable from
 /// `lines`, and its only production reader was the `HORIZON_GPUI_DUMP`
 /// debug dump (copy goes through the daemon's `selected_text`, paint never
 /// read it). Dropping it removes a per-snapshot and per-diff-apply String
 /// rebuild plus its share of every snapshot's wire weight; the derivation
 /// survives as the debug/test helper `TerminalFrame::text()`. Removing a
 /// field changes the wire shape, so a stale peer must fail the handshake.
-pub const SESSION_PROTOCOL_VERSION: u32 = 8;
+pub const SESSION_PROTOCOL_VERSION: u32 = 9;
 
 pub const SESSION_CONTROL_KIND: &str = "session_control";
 

@@ -9,6 +9,8 @@ use std::{
 
 use crate::config::{AgentToolsConfig, BashToolConfig};
 use crate::contract::SessionId;
+use crate::frame::AgentFrame;
+use crate::judge::JudgeHandle;
 use crate::live::LiveState;
 use crate::persistence::projection::duckdb::DuckdbStoreHandle;
 use crate::skills::SkillRegistry;
@@ -135,6 +137,19 @@ struct Inner {
     /// place that knows whether this session is isolated with an engaged
     /// sandbox, the precondition for starting one at all.
     network: Option<Arc<SessionNetworkProxy>>,
+    /// This session's shadow-mode judge handle (`docs/agent-approval-
+    /// design.md`'s "Judge design", implemented in shadow mode only --
+    /// `crate::judge`'s module doc), if one could be built for it. `None`
+    /// means the judge never fires for this session's boundary-crossing
+    /// calls (no `OPENAI_API_KEY`, no event-log writer, or -- every
+    /// construction site in this crate's own tests except where a test
+    /// explicitly installs one via [`Self::with_judge`]) -- see
+    /// `JudgeHandle::new`. Injected post-construction the same way
+    /// [`Self::with_network_proxy`] is: the one production call site
+    /// (`horizon-sessiond`'s `session::run_session`) is the only place that
+    /// has both this session's resolved provider `base_url` and the
+    /// process's event-log writer handle.
+    judge: Option<Arc<JudgeHandle>>,
 }
 
 impl ToolSessionState {
@@ -179,6 +194,7 @@ impl ToolSessionState {
                 config_path: None,
                 isolated_worktree: false,
                 network: None,
+                judge: None,
             }),
         }
     }
@@ -246,6 +262,26 @@ impl ToolSessionState {
     /// (`SessionNetworkProxy::allow_domain`) on approve.
     pub(crate) fn network_proxy(&self) -> Option<Arc<SessionNetworkProxy>> {
         self.inner.network.clone()
+    }
+
+    /// Installs this session's shadow-mode judge handle after construction
+    /// -- see [`Inner::judge`]'s doc comment. Same construction-time-only
+    /// safety contract as [`Self::with_skills`]/[`Self::with_config_path`]/
+    /// [`Self::with_network_proxy`].
+    pub fn with_judge(mut self, judge: Option<Arc<JudgeHandle>>) -> Self {
+        if let Some(inner) = Rc::get_mut(&mut self.inner) {
+            inner.judge = judge;
+        }
+        self
+    }
+
+    /// This session's shadow-mode judge handle, if one is installed -- see
+    /// [`Inner::judge`]'s doc comment. What `judge::maybe_fire_shadow_judge`
+    /// (called from `policy::horizon_events_for_provider_event`'s
+    /// `Classification::BoundaryCrossing` arm) reads to decide whether to
+    /// fire at all.
+    pub(crate) fn judge_handle(&self) -> Option<Arc<JudgeHandle>> {
+        self.inner.judge.clone()
     }
 
     /// v1 workspace root: the process's current directory at session start,
@@ -388,8 +424,18 @@ pub fn register_session_runtime(
     });
 }
 
-pub fn session_runtime(session_id: SessionId) -> Option<SessionRuntime> {
+pub(crate) fn session_runtime(session_id: SessionId) -> Option<SessionRuntime> {
     SESSION_RUNTIMES.with(|runtimes| runtimes.borrow().get(&session_id).cloned())
+}
+
+/// `session_id`'s current live frame, if it has a registered runtime -- the
+/// narrow read `judge::maybe_fire_shadow_judge` needs (prior user messages
+/// for the shadow judge's input, `docs/agent-approval-design.md`'s "Input
+/// restriction" bullet) without exposing the whole [`SessionRuntime`]
+/// outside this module (only `tools::execution`, a sibling submodule,
+/// reads `session_runtime` directly today).
+pub(crate) fn live_frame_for_session(session_id: SessionId) -> Option<AgentFrame> {
+    session_runtime(session_id).map(|runtime| runtime.live_state.frame())
 }
 
 /// Drops a terminated session's runtime so its tool state and live frame

@@ -309,11 +309,20 @@ product-owned API. Decisions:
   loop bypassed" stance (`docs/trust-boundaries.md`).
 - **Judge model** (owner decision): a second model id on the *current*
   provider (same `base_url`) — a deliberate, named exception to the
-  2026-07-18 config-narrowing wave. Future: per-model provider
-  selection, merging with the model-routing roadmap item. The
-  standing caution from `docs/agent-feedback-design.md`'s non-goals
-  transfers: prefer a different model family from the acting agent,
-  and calibrate against a human-labeled set before trusting the FNR.
+  2026-07-18 config-narrowing wave. **Chosen 2026-07-19: `syn:small:text`**
+  — a synthetic.new provider-maintained small-model alias (concretely
+  backed by GLM-4.7-Flash today, updated by the provider as better small
+  models ship), preferred over a raw vendor id (`hf:zai-org/GLM-4.7-Flash`)
+  so Horizon tracks the provider's small-model choice rather than committing
+  to one vendor's model/governance direction. It satisfies the
+  different-family caution (the acting agent is `moonshotai/Kimi-K2.7-Code`)
+  and was empirically the cleanest cheap single-token responder on the
+  endpoint (see the judge-prompt research's provider-probe appendix). Keep
+  it config-selectable, not hardcoded. Future: per-model provider selection,
+  merging with the model-routing roadmap item. The standing caution from
+  `docs/agent-feedback-design.md`'s non-goals transfers: prefer a different
+  model family from the acting agent, and calibrate against a human-labeled
+  set before trusting the FNR.
 - **Audit** (owner decision): the verdict rides the tool call's
   `output` JSON (the `is_error` convention) — zero projection change,
   immediately `json_extract`-queryable in DuckDB; promote to a
@@ -413,6 +422,67 @@ refactoring wave folds into this item.
    config key, audit field. Folds in backlog 47 (turn_id-null tracker
    flaw — fix so approval analytics can measure the judge's effect)
    and backlog 48 (identical-edit resubmission feedback).
+   **Shadow mode landed 2026-07-19** (`crates/horizon-agent/src/judge/`):
+   the calibration gate this section's "Prerequisite"/the owner's
+   "don't enforce until FNR is measured on real traffic" decision asks
+   for is realized structurally by shipping shadow-first — the judge
+   runs on every `Classification::BoundaryCrossing` call and logs a
+   verdict, but never gates the actual approve/execute decision; the
+   human still sees `ApprovalRequested` exactly as before (proven by an
+   integration test asserting the returned events are byte-for-byte
+   identical whether or not a firing judge is installed). The enforcing
+   flip (a `select!` arm at this seam that actually waits on the
+   judge and gates execution) is explicitly a separate, later change —
+   not built here. Implementation notes not otherwise in this doc:
+   - **Audit shape differs from this section's own pin.** The verdict
+     riding the gated call's `ToolCallResult.output` JSON only works once
+     the judge's verdict *is* the result; in shadow mode the real result
+     is still produced later, by the human's decision. Instead, each
+     verdict (or rate-limit skip) is a standalone record written straight
+     through `WriterHandle::append` (bypassing `LiveState`/`Appender`,
+     since the async judge call runs off the session's own thread) --
+     riding the already-existing, already-everywhere-a-no-op-on-fold
+     `Event::ProviderRequestFinished` variant with the real payload in
+     `provider_payload` and `event_kind` overridden to
+     `judge::SHADOW_VERDICT_EVENT_KIND` (`"judge_shadow_verdict"`), rather
+     than a new `Event` variant (this doc's "Audit" bullet already
+     rejected one, for the enforcing shape's different reason). Durable
+     through the normal JSONL/DuckDB pipeline (survives a projection
+     rebuild) and `json_extract`-queryable via `agent_events` the same
+     way `agent-inspect` reads any other free-form payload column;
+     confirmed a no-op on frame fold, rig-history replay, and DB
+     projection by inspection, not assumed.
+   - **No real tool is classified `BoundaryCrossing` yet.** MCP/external
+     tools (this classification's canonical case, per the "Classification
+     is a structural predicate" bullet above) don't exist in this crate
+     yet, so `classify_call`'s real branches (`fs.write`/`fs.edit`/`bash`)
+     are untouched -- reclassifying their non-isolated/non-sandboxed
+     branches from `AlwaysAsk` to `BoundaryCrossing` was considered and
+     rejected, since this section's own "Non-isolated sessions ... keep
+     today's per-action gate unchanged" line pins those as tier-3, not
+     tier-2. A test-only fixture tool id, `mock.boundary_crossing`
+     (mirroring the existing `mock.approval_required` fixture), is what
+     exercises the wiring until a real boundary-crossing tool lands --
+     the judge is dead code in production until then, by design.
+   - **Judge model config**: `syn:small:text` (this section's pin) is a
+     Rust constant (`config::DEFAULT_JUDGE_MODEL`), overridable via
+     `HORIZON_AGENT_JUDGE_MODEL` -- env-only, mirroring
+     `HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB`'s no-file-key
+     treatment (the config surface stays frozen). Reuses the session's
+     already-resolved `[provider].base_url` and `OPENAI_API_KEY` -- a
+     second model on the same provider, never a new endpoint/credential.
+   - **Stage 2 also stays Plan B.** The judge-prompt research doc's own
+     "native structured output vs. loose JSON mode" fork wasn't resolved
+     in this provider's favor either way (the appendix's probe never
+     exercised stage 2), so this implementation doesn't wire
+     `output_schema`/`response_format` at all -- stage 2 asks for a
+     `VERDICT: ...` line or a JSON object in plain text and parses
+     defensively (JSON first, then a `VERDICT:` regex, else escalate),
+     the same portable posture stage 1 already commits to.
+   - **Rate limit**: a simple in-process token bucket (10 req/s, burst 5
+     -- nono's reference figures), checked synchronously before ever
+     spawning the async call; an exceeded budget skips that call's
+     judging and logs the skip, never blocking the approval.
 
 Legs 2–4 deliver most of the measured pain relief (bash ≈ 76% of
 approvals) before the judge exists at all; the judge closes the

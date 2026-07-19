@@ -437,6 +437,7 @@ fn spawn_terminal(
     let (key_tx, key_rx) = crossbeam_channel::unbounded();
     let (selection_tx, selection_rx) = crossbeam_channel::unbounded();
     let (focus_tx, focus_rx) = crossbeam_channel::unbounded();
+    let (color_scheme_tx, color_scheme_rx) = crossbeam_channel::unbounded();
 
     let response_tx = command_tx.clone();
     let read_update_tx = update_tx.clone();
@@ -459,6 +460,7 @@ fn spawn_terminal(
                 key_rx,
                 selection_rx,
                 focus_rx,
+                color_scheme_rx,
             },
             response_tx,
             update_tx,
@@ -479,6 +481,7 @@ fn spawn_terminal(
                 key_tx,
                 selection_tx,
                 focus_tx,
+                color_scheme_tx,
             },
         );
     });
@@ -531,6 +534,7 @@ fn run_writer(
         key_tx,
         selection_tx,
         focus_tx,
+        color_scheme_tx,
     } = senders;
     let mut last_size = None;
     while let Ok(command) = command_rx.recv() {
@@ -578,6 +582,9 @@ fn run_writer(
             }
             TerminalCommand::Focus(focused) => {
                 let _ = focus_tx.send(focused);
+            }
+            TerminalCommand::SetColorScheme(scheme) => {
+                let _ = color_scheme_tx.send(scheme);
             }
             TerminalCommand::Shutdown => {
                 let _ = killer.lock().unwrap().kill();

@@ -12,6 +12,7 @@ bundled-duckdb = ["duckdb/bundled"]
 
 [dependencies]
 anyhow = "1.0"
+async-trait = "0.1"
 crossbeam-channel = "0.5"
 duckdb = { version = "1" }
 futures-util = "0.3"

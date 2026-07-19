@@ -193,7 +193,7 @@ impl TerminalFrame {
     /// The frame's plain-text rendering, derived from `lines` (blank-run
     /// spans pad with spaces, each row is right-trimmed, rows join with
     /// `\n`). A debug/test derivation helper — the `HORIZON_GPUI_DUMP`
-    /// dump and test assertions; since wire v8 the frame carries no `text`
+    /// dump and test assertions; since wire v9 the frame carries no `text`
     /// field because this is fully derivable.
     pub fn text(&self) -> String {
         self.lines

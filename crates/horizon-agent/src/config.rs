@@ -61,6 +61,26 @@ const EVENT_LOG_PATH_VAR: &str = "HORIZON_AGENT_EVENT_LOG";
 /// `~/` is expanded against `$HOME`, same as `event_log_path` above.
 const STATE_DB_PATH_VAR: &str = "HORIZON_AGENT_STATE_DB";
 
+/// Overrides the shadow-mode judge's model id (`crate::judge`,
+/// `docs/agent-approval-design.md`'s "Judge design"). Falls back to
+/// [`DEFAULT_JUDGE_MODEL`]. Env-only, mirroring `HORIZON_AGENT_EVENT_LOG`/
+/// `HORIZON_AGENT_STATE_DB`'s no-file-key treatment above -- the config
+/// surface is frozen (2026-07-18 config-narrowing wave), so promoting this
+/// to a config-file key is a deliberate later decision, not implied by this
+/// override existing.
+pub const JUDGE_MODEL_VAR: &str = "HORIZON_AGENT_JUDGE_MODEL";
+
+/// The judge's default model id: a synthetic.new provider-maintained
+/// small-model *alias* (owner decision 2026-07-19, `docs/agent-approval-
+/// design.md`'s "Judge model" bullet) -- concretely backed by GLM-4.7-Flash
+/// today, updated by the provider as better small models ship. Chosen over
+/// a raw vendor id (`hf:zai-org/GLM-4.7-Flash`) so Horizon tracks the
+/// provider's own small-model choice rather than committing to one
+/// vendor's model/governance direction. Never hardcode a raw vendor id in
+/// its place -- this constant, or [`JUDGE_MODEL_VAR`]'s override, is the
+/// only sanctioned source of the judge's model id.
+pub const DEFAULT_JUDGE_MODEL: &str = "syn:small:text";
+
 /// `$HOME`, read once per resolution call to expand a leading `~/` in a
 /// path-typed env value (`HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB`)
 /// and, absent `$XDG_DATA_HOME`, to build the event log's and DuckDB
@@ -318,6 +338,14 @@ fn resolve_model(env_value: Option<String>, provider_value: Option<String>) -> S
 /// URL to fall back to.
 fn resolve_base_url(env_value: Option<String>, provider_value: Option<String>) -> Option<String> {
     env_value.or(provider_value)
+}
+
+/// Pure precedence resolution for the judge's model id -- [`JUDGE_MODEL_VAR`]
+/// wins, else [`DEFAULT_JUDGE_MODEL`]. No config-file/provider-value input
+/// (unlike [`resolve_model`]): the judge model is env-only by design (see
+/// [`JUDGE_MODEL_VAR`]'s own doc comment).
+pub(crate) fn resolve_judge_model(env_value: Option<String>) -> String {
+    env_value.unwrap_or_else(|| DEFAULT_JUDGE_MODEL.to_string())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -610,6 +638,15 @@ mod tests {
             config.base_url,
             Some("https://provider.invalid".to_string())
         );
+    }
+
+    #[test]
+    fn judge_model_prefers_env_over_default() {
+        assert_eq!(
+            resolve_judge_model(Some("hf:some/other-model".to_string())),
+            "hf:some/other-model"
+        );
+        assert_eq!(resolve_judge_model(None), DEFAULT_JUDGE_MODEL);
     }
 
     #[test]
