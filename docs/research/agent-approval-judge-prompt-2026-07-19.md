@@ -632,8 +632,15 @@ here, not hypothetical.
    "different family" caution says avoid it for the judge anyway.
 4. **Clean single-token judge candidates exist on the same endpoint** (with
    `reasoning_effort:"none"` + a strong system prompt, no `logit_bias` needed):
-   - `hf:zai-org/GLM-4.7-Flash` — `content:"Y"`, p≈1.00, ~0.85s (fastest clean; Zhipu family, != Kimi)
-   - `syn:small:text` — `content:"Y"`, p≈1.00, ~0.90s
+   - **`syn:small:text` — `content:"Y"`, p≈1.00, ~0.90s — CHOSEN as the judge
+     model (owner decision 2026-07-19).** It is a synthetic.new *alias* whose
+     concrete backing model is updated by the provider as better small models
+     ship (currently GLM-4.7-Flash); pinning the alias rather than the raw
+     `hf:zai-org/GLM-4.7-Flash` id keeps Horizon following the provider's
+     small-model choice instead of committing to a specific vendor whose
+     model/governance direction the owner has no influence over.
+   - `hf:zai-org/GLM-4.7-Flash` — `content:"Y"`, p≈1.00, ~0.85s (the current
+     concrete backing of `syn:small:text`; not pinned directly)
    - `hf:Qwen/Qwen3.6-27B` — `content:"Y"`, p≈0.99, ~1.16s
    - `hf:MiniMaxAI/MiniMax-M3` returns the correct verdict but only after
      ~43-50 reasoning tokens it emits regardless of `reasoning_effort:"none"`
@@ -651,7 +658,7 @@ here, not hypothetical.
    ~0.18s is one network RTT, ~0.3s is compute). Implications: (a) the setup
    portion is model-INDEPENDENT infrastructure; the server-side portion is
    model-DEPENDENT (a smaller/faster judge model directly cuts the dominant
-   cost - another reason GLM-4.7-Flash wins). (b) The implementation should
+   cost - reinforcing the small-model alias choice). (b) The implementation should
    reuse a pooled/pre-warmed client to the judge endpoint rather than dialing
    per call. A stage-2 escalation adds another warm round-trip (~0.5s+ plus
    its longer generation).
@@ -660,10 +667,12 @@ here, not hypothetical.
 - Stage-1 output = **Plan B** (prompt + `max_tokens` small-but-not-1 +
   lenient parse defaulting to escalate). `logit_bias` is off the table on this
   provider without an offline tokenizer.
-- Judge model ≠ the acting Kimi model; **GLM-4.7-Flash is the standout default**
-  (clean single token, fastest, different family) with `syn:small:text` as a
-  fallback. Keep it a config-selectable id, not hardcoded (models on the
-  endpoint change).
+- Judge model ≠ the acting Kimi model; **`syn:small:text` is the chosen judge
+  model** (owner decision 2026-07-19) — a provider-maintained small-model alias
+  (currently backed by GLM-4.7-Flash) preferred over a raw vendor id so Horizon
+  tracks the provider's small-model choice rather than one vendor's direction.
+  Keep it config-selectable, not hardcoded (both the alias target and the
+  endpoint's model list change over time).
 - Always send `reasoning_effort:"none"` for stage 1 to keep it cheap; stage 2
   may want reasoning back on (that IS the chain-of-thought step).
 - `logprobs:true, top_logprobs:N` for the stage-1 confidence value.

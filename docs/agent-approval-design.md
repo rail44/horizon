@@ -309,11 +309,20 @@ product-owned API. Decisions:
   loop bypassed" stance (`docs/trust-boundaries.md`).
 - **Judge model** (owner decision): a second model id on the *current*
   provider (same `base_url`) — a deliberate, named exception to the
-  2026-07-18 config-narrowing wave. Future: per-model provider
-  selection, merging with the model-routing roadmap item. The
-  standing caution from `docs/agent-feedback-design.md`'s non-goals
-  transfers: prefer a different model family from the acting agent,
-  and calibrate against a human-labeled set before trusting the FNR.
+  2026-07-18 config-narrowing wave. **Chosen 2026-07-19: `syn:small:text`**
+  — a synthetic.new provider-maintained small-model alias (concretely
+  backed by GLM-4.7-Flash today, updated by the provider as better small
+  models ship), preferred over a raw vendor id (`hf:zai-org/GLM-4.7-Flash`)
+  so Horizon tracks the provider's small-model choice rather than committing
+  to one vendor's model/governance direction. It satisfies the
+  different-family caution (the acting agent is `moonshotai/Kimi-K2.7-Code`)
+  and was empirically the cleanest cheap single-token responder on the
+  endpoint (see the judge-prompt research's provider-probe appendix). Keep
+  it config-selectable, not hardcoded. Future: per-model provider selection,
+  merging with the model-routing roadmap item. The standing caution from
+  `docs/agent-feedback-design.md`'s non-goals transfers: prefer a different
+  model family from the acting agent, and calibrate against a human-labeled
+  set before trusting the FNR.
 - **Audit** (owner decision): the verdict rides the tool call's
   `output` JSON (the `is_error` convention) — zero projection change,
   immediately `json_extract`-queryable in DuckDB; promote to a
