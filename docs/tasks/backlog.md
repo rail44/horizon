@@ -444,3 +444,27 @@ entries live in `backlog-resolved.md` keeping their original numbers
     backend) and/or `nono-proxy` as a proxy upgrade. Owner decision on
     A(all-self-built)/B(partial)/C(full-depend, not advised) is deferred
     while implementation continues on the self-built stack.
+    **Refinement (2026-07-19 owner consult): the "zero namespace
+    isolation" obstacle largely dissolves under scrutiny.** (a) /tmp:
+    the private-tmpfs substitution is a bwrap convenience, not a
+    requirement -- a harness-provisioned per-session temp dir + `TMPDIR`
+    + a Landlock write rule covers TMPDIR-respecting tools, and
+    hardcoded-`/tmp` failures are visible and adaptable; owner: this
+    provisioning is harness work, consistent with nono's policy-free
+    stance. (b) same-uid `/proc/<pid>/environ` secret exposure (e.g.
+    `OPENAI_API_KEY` in sessiond's exec-time environ): owner accepts
+    the risk; independently shrinkable by not passing secrets via env
+    (note `/proc` environ shows the exec-time block -- `remove_var`
+    does not scrub it). (c) signal reach: the original claim was
+    WRONG for modern kernels -- verified in nono 0.68.0 source
+    (`src/sandbox/linux.rs`, `src/capability.rs`) that `SignalMode`
+    maps to Landlock ABI v6 `LANDLOCK_SCOPE_SIGNAL` (kernel 6.12+),
+    scoping signals to the sandbox domain; `AllowSameSandbox` fails
+    closed on older kernels, `Isolated` silently degrades (ABI-gradient
+    caveat). Enforced on the dev machine (kernel 7.0.9). Remaining
+    real Linux obstacles are therefore: the 278-crate dependency tax,
+    and apply-to-self needing a helper-binary shape (a tiny
+    self-applying exec helper -- the same separate-binary shape bwrap
+    already has) instead of `pre_exec` from multi-threaded sessiond.
+    Net: option C is more viable than first recorded; A/B/C remains
+    owner-deferred.
