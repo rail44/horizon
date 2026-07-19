@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 /// same style as [`crate::contract::ProviderId`], so it round-trips through
 /// JSON (`wire::SessionNew`/`SessionSummary`) and the persisted event log
 /// (`persistence::event_log::Record`) unchanged.
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct RoleId(pub String);
 
 /// A single role: a static, compile-time-authored bundle of the handful of

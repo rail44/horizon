@@ -79,6 +79,11 @@ impl TerminalHost {
                 }
             }
             TerminalControl::ListResult { .. } | TerminalControl::AttachResult { .. } => {}
+            // Skew catch-all (`TerminalControl::Unknown`'s doc): a control
+            // this build can't name is logged and dropped.
+            TerminalControl::Unknown(_) => {
+                eprintln!("horizon-sessiond: ignoring unknown terminal control from a newer peer");
+            }
         }
     }
 
@@ -589,6 +594,12 @@ fn run_writer(
             TerminalCommand::Shutdown => {
                 let _ = killer.lock().unwrap().kill();
                 return;
+            }
+            // Skew catch-all (`TerminalCommand::Unknown`'s doc): a command
+            // this build can't name is logged and dropped -- never written
+            // to the PTY, never guessed at.
+            TerminalCommand::Unknown(_) => {
+                eprintln!("horizon-sessiond: ignoring unknown terminal command from a newer peer");
             }
         }
     }

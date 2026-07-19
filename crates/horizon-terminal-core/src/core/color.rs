@@ -19,6 +19,7 @@
 
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::vte::ansi::{NamedColor, Rgb};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Crate-local mirror of the host's `ui::theme`-derived color roles
@@ -36,27 +37,59 @@ use serde::{Deserialize, Serialize};
 /// with the same values Horizon has always shipped. In the running app this
 /// default is only ever transiently observed (`TerminalSession::spawn`
 /// pushes the live theme immediately after construction).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TerminalColorScheme {
+    #[schemars(with = "RgbSchema")]
     pub foreground: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub background: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub cursor: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub black: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub red: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub green: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub yellow: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub blue: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub magenta: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub cyan: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub white: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub bright_black: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub bright_red: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub bright_green: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub bright_yellow: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub bright_blue: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub bright_magenta: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub bright_cyan: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub bright_white: Rgb,
+}
+
+/// Schema stand-in for `alacritty_terminal::vte::ansi::Rgb`, which
+/// (de)serializes as a plain `{r, g, b}` u8 struct but is external and
+/// cannot derive `JsonSchema` itself. Kept byte-for-byte in sync with that
+/// serde shape; the wire-schema artifact sees this in its place.
+#[derive(JsonSchema)]
+#[schemars(rename = "Rgb")]
+#[allow(dead_code)]
+struct RgbSchema {
+    r: u8,
+    g: u8,
+    b: u8,
 }
 
 impl Default for TerminalColorScheme {

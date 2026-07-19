@@ -212,6 +212,12 @@ async fn run_session_loop(
                 let _ = events_tx.send(Event::StateChanged(SessionState::Running).into());
                 let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
             }
+            // Skew catch-all (`Command::Unknown`'s doc): a command this
+            // build can't name is logged and dropped -- never acked, never
+            // half-executed.
+            Command::Unknown(_) => {
+                tracing::warn!("ignoring unknown agent command from a newer peer");
+            }
             Command::UserMessage { text } => {
                 // Typing past a halt instead of clicking Continue: the
                 // real result a guard halt stashed still has to land in

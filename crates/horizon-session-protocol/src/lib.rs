@@ -12,9 +12,74 @@
 //! `v` check. In exchange, [`SessionControl`]'s existing variants may never
 //! change shape or meaning -- extend it additively only.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 use uuid::Uuid;
+
+pub mod schema_check;
+
+/// The payload of a wire enum's deserialize-only `Unknown` variant — the
+/// skew-discipline catch-all every wire enum carries from
+/// `docs/remoc-adoption-design.md` §4 onwards: a peer evolved past this
+/// build may send variants this build has never heard of, and the receive
+/// path must degrade them to "an unknown item, to be skipped" instead of
+/// tearing the connection down.
+///
+/// Mechanics: serde's `#[serde(other)]` only exists for internally/
+/// adjacently tagged enums, and every Horizon wire enum is externally
+/// tagged — so the catch-all is instead a trailing `#[serde(untagged)]`
+/// newtype variant wrapping this zero-sized type, whose `Deserialize`
+/// accepts (and discards) any value. Two consequences, both deliberate:
+///
+/// - **Deserialize-only.** Serializing this type is an error (never a
+///   panic): `Unknown` is something a peer *received*, not something it is
+///   ever allowed to put back on the wire.
+/// - **A malformed known variant also degrades to `Unknown`.** serde tries
+///   the tagged variants first and falls back to the untagged catch-all on
+///   *any* failure, so a known tag with an undecodable payload decodes as
+///   `Unknown` too. That is the same "skip this item, keep the channel"
+///   posture the remoc adoption decided for deserialization errors
+///   (adoption condition 2), applied one layer earlier.
+///
+/// New variants on a wire enum must be declared *above* the `Unknown`
+/// catch-all: serde requires untagged variants to come last, and the
+/// schema checker's appended-variant rule relies on declaration order.
+///
+/// The schema artifact (`schema/session-wire.json`) deliberately excludes
+/// these catch-all branches: the schema documents what a peer may *send*,
+/// and `Unknown` never legally crosses the wire.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub struct UnknownPayload;
+
+impl Serialize for UnknownPayload {
+    fn serialize<S: serde::Serializer>(&self, _serializer: S) -> Result<S::Ok, S::Error> {
+        Err(serde::ser::Error::custom(
+            "wire Unknown variants are deserialize-only and must never be sent",
+        ))
+    }
+}
+
+impl<'de> Deserialize<'de> for UnknownPayload {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        serde::de::IgnoredAny::deserialize(deserializer)?;
+        Ok(UnknownPayload)
+    }
+}
+
+impl JsonSchema for UnknownPayload {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "UnknownPayload".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        // `{"not": {}}` matches nothing: `Unknown` can never legally be
+        // *sent*. The schema-artifact generator strips these branches
+        // entirely (see this type's doc comment); the unsatisfiable schema
+        // is only what a stray direct `schema_for!` call would see.
+        schemars::json_schema!({"not": {}})
+    }
+}
 
 /// The shared session-daemon envelope and handshake version.
 ///
@@ -71,9 +136,11 @@ pub const SESSION_CONTROL_KIND: &str = "session_control";
 /// regardless of the envelope's `v`, because the handshake and
 /// contract-mismatch recovery are exactly the conversations that happen
 /// *between* versions. Existing variants must never change shape or
-/// meaning; extend additively only, and remember an older peer treats an
-/// unknown variant as malformed.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+/// meaning; extend additively only. Peers built before the `Unknown`
+/// catch-all existed (v9 and earlier builds predating the skew groundwork)
+/// treat an unknown variant as malformed; peers from this build on decode
+/// it as [`SessionControl::Unknown`] and ignore it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionControl {
     Hello(Hello),
@@ -81,12 +148,15 @@ pub enum SessionControl {
     Ping,
     Pong,
     Drain,
+    /// Deserialize-only skew catch-all — see [`UnknownPayload`]. Keep last.
+    #[serde(untagged)]
+    Unknown(UnknownPayload),
 }
 
 /// A domain-neutral session-daemon envelope. `kind` selects a sister
 /// vocabulary; `payload` is decoded by that domain only after the shared
 /// version check succeeds.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Envelope {
     pub v: u32,
     #[serde(default)]
@@ -145,7 +215,7 @@ impl Envelope {
 }
 
 /// Sent by either peer during the session-daemon handshake.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Hello {
     pub contract_version: u32,
     pub binary_id: String,
@@ -274,6 +344,29 @@ mod tests {
                 .unwrap(),
             SessionControl::Drain
         );
+    }
+
+    /// A `session_control` variant from a future build decodes as
+    /// [`SessionControl::Unknown`] instead of failing the whole envelope —
+    /// the §4 skew catch-all, on the one vocabulary that must already work
+    /// across versions today.
+    #[test]
+    fn unknown_session_control_variant_decodes_to_unknown() {
+        for raw in [
+            serde_json::json!("future_unit_control"),
+            serde_json::json!({"future_payload_control": {"anything": [1, 2, 3]}}),
+        ] {
+            let control: SessionControl = serde_json::from_value(raw).unwrap();
+            assert_eq!(control, SessionControl::Unknown(UnknownPayload));
+        }
+    }
+
+    /// `Unknown` is deserialize-only: an attempt to put it back on the wire
+    /// is a serialization *error*, never a panic and never bytes.
+    #[test]
+    fn serializing_the_unknown_variant_is_an_error_not_a_panic() {
+        let result = serde_json::to_string(&SessionControl::Unknown(UnknownPayload));
+        assert!(result.is_err(), "{result:?}");
     }
 
     #[test]

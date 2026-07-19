@@ -224,6 +224,10 @@ impl Routes {
                 TerminalControl::List { .. }
                 | TerminalControl::Create(_)
                 | TerminalControl::Attach { .. } => {}
+                // Skew catch-all (`TerminalControl::Unknown`'s doc): a
+                // control this build can't name is dropped; the connection
+                // stays up.
+                TerminalControl::Unknown(_) => {}
             }
             return Ok(Incoming::Handled);
         }

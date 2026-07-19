@@ -47,7 +47,7 @@ pub(crate) fn to_hsla(rgb888: [u8; 3]) -> Hsla {
 
 pub(crate) fn resolve(color: TerminalColor, overrides: &[(u16, [u8; 3])]) -> [u8; 3] {
     let override_index = match color {
-        TerminalColor::Rgb(_) => None,
+        TerminalColor::Rgb(_) | TerminalColor::Unknown(_) => None,
         TerminalColor::Indexed(index) => Some(index as u16),
         TerminalColor::Named(named) => named.override_index(),
     };
@@ -66,6 +66,10 @@ pub(crate) fn resolve(color: TerminalColor, overrides: &[(u16, [u8; 3])]) -> [u8
         TerminalColor::Rgb(rgb) => rgb,
         TerminalColor::Indexed(index) => indexed_rgb(index),
         TerminalColor::Named(named) => named_rgb(named),
+        // Skew catch-all (`TerminalColor::Unknown`'s doc): resolve like
+        // the default foreground role -- one cell loses its hue for one
+        // frame, nothing else.
+        TerminalColor::Unknown(_) => named_rgb(NamedColor::Foreground),
     }
 }
 
@@ -97,6 +101,9 @@ fn named_rgb(color: NamedColor) -> [u8; 3] {
         }
         NamedColor::Background => split(scheme().background),
         NamedColor::Cursor => split(scheme().cursor),
+        // Skew catch-all (`NamedColor::Unknown`'s doc): resolved like the
+        // default foreground role.
+        NamedColor::Unknown(_) => split(scheme().foreground),
     }
 }
 

@@ -17,7 +17,8 @@
 
 use std::path::PathBuf;
 
-use horizon_session_protocol::Envelope as ProtocolEnvelope;
+use horizon_session_protocol::{Envelope as ProtocolEnvelope, UnknownPayload};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufRead, AsyncWrite};
 
@@ -36,9 +37,9 @@ pub use horizon_session_protocol::{
     Hello, WireError, SESSION_PROTOCOL_VERSION as CONTRACT_VERSION,
 };
 
-pub(crate) const AGENT_CONTROL_KIND: &str = "agent_control";
-pub(crate) const AGENT_COMMAND_KIND: &str = "agent_command";
-pub(crate) const AGENT_EVENT_KIND: &str = "agent_event";
+pub const AGENT_CONTROL_KIND: &str = "agent_control";
+pub const AGENT_COMMAND_KIND: &str = "agent_command";
+pub const AGENT_EVENT_KIND: &str = "agent_event";
 
 /// One JSONL agent-domain message. `session_id` is `None` for
 /// connection-global agent controls such as `session_list` and `Some`
@@ -98,7 +99,7 @@ pub enum EnvelopeBody {
 
 /// Agent-domain control messages. Shared connection lifecycle controls live
 /// in `horizon_session_protocol::SessionControl`.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Control {
     SessionList,
@@ -168,10 +169,15 @@ pub enum Control {
     /// [`SessionSummary::parent_session_id`]'s "the edge exists only via
     /// isolation".
     WorkspaceRootResolved(WorkspaceRootResolved),
+    /// Deserialize-only skew catch-all — see
+    /// [`horizon_session_protocol::UnknownPayload`]. Keep last. Both ends
+    /// log and drop an unknown control.
+    #[serde(untagged)]
+    Unknown(UnknownPayload),
 }
 
 /// [`Control::WorkspaceRootResolved`]'s payload.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceRootResolved {
     pub workspace_root: PathBuf,
     /// Additive, like [`SessionSummary::parent_session_id`] -- `None` for an
@@ -182,12 +188,13 @@ pub struct WorkspaceRootResolved {
 }
 
 /// One entry of a [`Control::SessionListResult`] reply.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionSummary {
     pub session_id: SessionId,
     pub provider_id: ProviderId,
     /// So a (re)connecting client can label a resumed/live session by its
     /// role without a separate round trip -- mirrors `provider_id` above.
+    #[serde(default)]
     pub role_id: Option<RoleId>,
     /// The session this one derives from, per
     /// `docs/session-relationship-design.md` decisions 1-3: set only when
@@ -233,10 +240,11 @@ pub struct SessionSummary {
 /// (`config_overrides: Option<serde_json::Value>`) -- see
 /// [`CONTRACT_VERSION`]'s doc comment for why that was a breaking, not
 /// additive, change.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionNew {
     pub session_id: SessionId,
     pub provider_id: ProviderId,
+    #[serde(default)]
     pub role_id: Option<RoleId>,
     /// The directory `horizon-sessiond`'s file tools should confine this
     /// session to (`tools::state::ToolSessionState::workspace_root`).
@@ -283,7 +291,7 @@ pub struct SessionNew {
     pub isolate: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionLoad {
     pub session_id: SessionId,
 }
@@ -292,14 +300,14 @@ pub struct SessionLoad {
 /// `workspace.snapshot`) over this same connection -- guardrail 4. Not yet
 /// sent or handled anywhere in step 2 (tool execution stays in Horizon
 /// until step 3); the shape exists here so the wire format is settled.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct HostToolRequest {
     pub request_id: RequestId,
     pub tool_id: String,
     pub input: serde_json::Value,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct HostToolResponse {
     pub request_id: RequestId,
     pub output: serde_json::Value,
@@ -423,49 +431,57 @@ mod tests {
         ]
     }
 
-    /// The shared contract has since advanced past the breaking terminal
-    /// discovery/attach vocabulary introduced alongside session recovery
-    /// (v4); v5 is the terminal frame's move to the Horizon-owned color
-    /// vocabulary, v6 is the removal of `Hello`'s dead `capabilities`
-    /// field (2026-07-18), v7 is the frame vocabulary's style bits /
-    /// semantic selection / cursor shape extension (2026-07-19), v8 is the
-    /// `SetColorScheme` live theme re-push command (2026-07-19), and v9
-    /// drops `TerminalFrame.text` (derivable from `lines`, 2026-07-19).
-    #[test]
-    fn contract_version_includes_correlated_terminal_recovery() {
-        assert_eq!(CONTRACT_VERSION, 9);
+    // The four `contract_version_*` pin tests that lived here -- each a
+    // hand-maintained `assert_eq!(CONTRACT_VERSION, 9)` whose doc comment
+    // re-argued why a given change was or wasn't a bump -- are retired
+    // (`docs/remoc-adoption-design.md` §4 rule 4). Their job, forcing a
+    // human decision on every wire-shape change, now belongs to the
+    // committed schema artifact and its checkers: any wire change shows up
+    // as a diff of `crates/horizon-session-protocol/schema/session-wire.json`
+    // (drift-enforced by `crates/horizon-sessiond/tests/wire_schema.rs`,
+    // where the v1-v9 bump history those tests narrated now lives), and
+    // `scripts/check-wire-schema.sh` fails any non-additive change that
+    // doesn't bump `SESSION_PROTOCOL_VERSION` alongside it.
+
+    /// A control variant from a future build decodes as [`Control::Unknown`]
+    /// -- the §4 skew catch-all -- instead of failing the whole envelope.
+    #[tokio::test]
+    async fn unknown_control_variant_decodes_to_unknown_not_an_error() {
+        let (mut client, server) = tokio::io::duplex(1024);
+        let mut server_reader = BufReader::new(server);
+
+        let line = serde_json::json!({
+            "v": CONTRACT_VERSION,
+            "session_id": null,
+            "kind": AGENT_CONTROL_KIND,
+            "payload": {"session_teleport": {"target": "future"}}
+        })
+        .to_string();
+        client
+            .write_all(format!("{line}\n").as_bytes())
+            .await
+            .unwrap();
+        drop(client);
+
+        let envelope = read_envelope(&mut server_reader)
+            .await
+            .unwrap()
+            .expect("an unknown control variant should still parse");
+        assert_eq!(
+            envelope.body,
+            EnvelopeBody::Control(Control::Unknown(horizon_session_protocol::UnknownPayload))
+        );
     }
 
-    /// Unlike `role_id` above, `SessionNew.workspace_root` is a brand-new,
-    /// `#[serde(default)]` field, not a reshape of an existing one -- see
-    /// its own doc comment. Additive changes don't need a version bump;
-    /// the current value reflects later breaking changes in the terminal
-    /// domain's vocabulary (v4 discovery/attach, v5 owned colors, v6
-    /// dropped `Hello.capabilities`, v7 frame styles/selection/cursor
-    /// shape, v8 `SetColorScheme`, v9 dropped `TerminalFrame.text`).
+    /// The catch-all is deserialize-only: encoding an envelope that somehow
+    /// carries `Unknown` is an error (never a panic, never bytes on the
+    /// wire).
     #[test]
-    fn contract_version_was_not_bumped_for_the_additive_workspace_root_field() {
-        assert_eq!(CONTRACT_VERSION, 9);
-    }
-
-    /// Same rule as `workspace_root` above, for the two session-relationship
-    /// fields (`docs/session-relationship-design.md` decision 3):
-    /// `SessionNew.spawn_source_session_id`/`isolate` and `SessionSummary.
-    /// parent_session_id` are all brand-new `#[serde(default)]` fields, not
-    /// reshapes of existing ones -- no version bump needed.
-    #[test]
-    fn contract_version_was_not_bumped_for_the_additive_lineage_fields() {
-        assert_eq!(CONTRACT_VERSION, 9);
-    }
-
-    /// A brand-new `Control` variant is exactly as additive as a new field
-    /// on an existing one, per the same rule -- `Control::
-    /// WorkspaceRootResolved` follows `Control::SessionModel`'s own
-    /// precedent of adding a session-scoped announcement variant without a
-    /// version bump.
-    #[test]
-    fn contract_version_was_not_bumped_for_the_workspace_root_resolved_announcement() {
-        assert_eq!(CONTRACT_VERSION, 9);
+    fn encoding_an_unknown_control_is_an_error_not_a_panic() {
+        let envelope =
+            Envelope::control(Control::Unknown(horizon_session_protocol::UnknownPayload));
+        let result = encode_envelope(&envelope);
+        assert!(matches!(result, Err(WireError::Json(_))), "{result:?}");
     }
 
     /// A `session_new` control message written by a peer built before

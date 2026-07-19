@@ -385,7 +385,11 @@ impl SessiondHandle {
             .into_iter()
             .filter_map(|(session_id, handle, reply)| match reply.recv() {
                 Ok(Ok(TerminalAttachResult::Attached)) => Some((session_id, handle)),
-                Ok(Ok(TerminalAttachResult::NotFound)) | Ok(Err(_)) | Err(_) => None,
+                // `Unknown` (skew catch-all) counts as not attached: only
+                // an explicit `Attached` may claim the session.
+                Ok(Ok(TerminalAttachResult::NotFound | TerminalAttachResult::Unknown(_)))
+                | Ok(Err(_))
+                | Err(_) => None,
             })
             .collect()
     }
