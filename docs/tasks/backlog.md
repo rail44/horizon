@@ -260,3 +260,48 @@ entries live in `backlog-resolved.md` keeping their original numbers
     occasionally still fail (now reported as an error rather than freezing
     forever, per the mitigation above) under heavy host load. Recorded
     2026-07-12.
+
+53. **[RESOLVED ca36ea9-follow-up] `horizon-sessiond`'s worktree tests
+    leaked real `git` operations onto the enclosing repository.** Merged
+    same-day incident (`ca36ea9`, 2026-07-19): `crates/horizon-sessiond/
+    src/worktree.rs`'s "isolated" tests shell out to `git -C <TempDir>
+    ...`, which looks correctly scoped, but `-C` does not override an
+    already-set `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE` environment
+    variable — it only changes cwd. Every session in this repo works from
+    a *linked* git worktree, and `git commit` run from a linked worktree
+    (as `hooks/pre-commit` does — it runs the full `cargo nextest run
+    --workspace` gate) exports an absolute `GIT_DIR` (pointing at
+    `$GIT_COMMON_DIR/worktrees/<name>`) into the hook's environment;
+    nothing downstream (cargo, nextest, the test binary) sanitizes it, so
+    every "isolated" git call in the test module silently operated on the
+    real repository instead of its scratch `TempDir`. Confirmed by
+    reproduction in a disposable fake repo+worktree pair under `/tmp`
+    (never against the real repo): with that env leaked, `git init` in
+    the scratch dir reinitializes the leaked git-dir instead and flips
+    `core.bare` to `true` on the *shared* config (explains the observed
+    `core.bare=true`, since that setting isn't per-worktree); `repo_root`
+    resolution goes through `--git-common-dir`, which always returns the
+    shared common dir regardless of which worktree leaked, so
+    `.horizon/worktrees/<slug>` gets created as a real directory at the
+    main checkout's root (explains the `.horizon` skeleton); and
+    `commit_file`'s `add`+`commit` land a real commit — tree content
+    matching the scratch fixture (`README.md` = `"root\n"`) — on whatever
+    branch was checked out in the leaking worktree (explains the
+    `README.md` content once that worktree's working tree next synced to
+    its now-corrupted HEAD). The flaky first-run-vs-rerun
+    `remove_worktree_if_clean_keeps_a_dirty_worktree` was a symptom of the
+    same leak: with GIT_DIR shared, every worktree test across the whole
+    `--workspace` nextest run raced on one real git-dir instead of each
+    getting its own independent repo. Fix: every git invocation in the
+    module (production `run_git` and the test module's own `git()`
+    helper, plus two ad-hoc `Command::new("git")` calls in tests) now
+    strips every inherited `GIT_*` env var before spawning
+    (`scrub_git_env`), making `-C` the sole source of truth again. Added
+    an `EnclosingRepoGuard` hermeticity canary to every real-git test:
+    it snapshots the enclosing repo (found once via `git rev-parse` from
+    `CARGO_MANIFEST_DIR`, a compile-time constant immune to the same
+    class of leak) — `core.bare`, `git status --porcelain`, and any stray
+    `refs/heads/horizon/*` — and re-asserts it unchanged on drop, so any
+    future escape fails loudly at the offending test. Verified: 13
+    consecutive `cargo nextest run -p horizon-sessiond worktree` passes
+    with no flake, canary green throughout.
