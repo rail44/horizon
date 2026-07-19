@@ -1305,6 +1305,7 @@ fn horizon_events_for_provider_event_omits_the_approval_prompt_for_a_contained_f
             input: json!({ "path": "/tmp/x", "content": "hi" }),
         }),
         &tool_state,
+        SessionId::new(),
     );
     assert_eq!(events.len(), 1, "no approval prompt expected: {events:?}");
 }

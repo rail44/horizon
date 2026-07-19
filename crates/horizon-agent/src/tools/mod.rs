@@ -30,6 +30,10 @@ pub use processing::process_agent_provider_event;
 pub use state::{
     register_session_runtime, unregister_session_runtime, RecallContext, ToolSessionState,
 };
+// Narrow, crate-internal-only read for `judge::maybe_fire_shadow_judge` --
+// see `state::live_frame_for_session`'s own doc comment for why this stays
+// `pub(crate)` rather than exposing `SessionRuntime` itself.
+pub(crate) use state::live_frame_for_session;
 
 /// Executes a Horizon-approved (`RequireApproval`) tool once the user has
 /// approved it -- `tools::approval`'s single entry point for the tools this

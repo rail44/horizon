@@ -51,6 +51,7 @@ use horizon_agent::contract::{
     ToolCallResult, TurnEndReason,
 };
 use horizon_agent::frame::{agent_frame_from_events, AgentFrame, AgentFrameItem};
+use horizon_agent::judge::JudgeHandle;
 use horizon_agent::live::LiveState;
 use horizon_agent::persistence::event_log::{Appender, Record, WriterHandle};
 use horizon_agent::persistence::projection::duckdb::{DuckdbStoreHandle, SharedDuckdbStore};
@@ -1059,11 +1060,20 @@ fn run_session(
         None
     };
 
+    // Shadow-mode judge (`docs/agent-approval-design.md`'s "Judge design",
+    // implemented shadow-only -- `horizon_agent::judge`'s module doc): a
+    // second model id on this process's *same* provider/`base_url`, reusing
+    // the process's own event-log writer for the calibration record. `None`
+    // (no judge fires for this session) whenever `OPENAI_API_KEY` isn't set
+    // or no writer is configured -- see `JudgeHandle::new`.
+    let judge = JudgeHandle::new(state.agent_config.rig.base_url.clone(), state.writer());
+
     let tool_state = tool_session_state_for(workspace_root, state.agent_config.tools, recall)
         .with_isolated_worktree(isolated)
         .with_skills(SkillRegistry::discover(&cwd))
         .with_config_path(state.config_path.clone())
-        .with_network_proxy(network);
+        .with_network_proxy(network)
+        .with_judge(judge);
     let live_state = match state.writer() {
         Some(writer) => LiveState::with_event_log_and_history(
             session_id,

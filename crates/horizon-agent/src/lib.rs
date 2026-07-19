@@ -18,6 +18,7 @@ pub mod config;
 pub mod contract;
 pub mod frame;
 pub(crate) mod instructions;
+pub mod judge;
 pub mod live;
 pub mod persistence;
 pub(crate) mod policy;
