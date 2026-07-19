@@ -90,13 +90,15 @@ product-owned API. Decisions:
   bwrap execs after mount setup, which applies `restrict_self()` and
   then execs the real target — recorded follow-up for the policy-tier
   leg, not a spike blocker.
-- **macOS**: `/usr/bin/sandbox-exec` (hardcoded path, PATH-injection
-  defense) with generated SBPL profiles. Codex's three `.sbpl`
-  template files are Apache-2.0, self-contained, and worth vendoring
-  as the starting point (carry LICENSE/NOTICE attribution); the
-  templating layer is ours. `sandbox-exec` has been deprecated-but-
-  functional for a decade with no Apple replacement — a durable sharp
-  edge, not a wait-it-out problem.
+- **macOS** (updated 2026-07-19, `docs/roadmap.md`'s backlog-60 entry):
+  nono's Seatbelt backend, applied via a tiny exec helper
+  (`horizon-sandbox-helper`) rather than the originally-planned
+  `sandbox-exec`+SBPL invocation — nono's macOS `Sandbox::apply_auto`
+  self-applies Seatbelt to the whole calling process (no thread scoping
+  the way Linux's Landlock has), so a separate process has to carry the
+  policy across the boundary instead of a vendored `.sbpl` profile file.
+  Superseded the original plan of vendoring Codex's three `.sbpl`
+  template files (deleted along with `sandbox-exec` itself).
 - **Windows**: out of scope (no native industry answer;
   container/WSL2 later, matching the winit external gate posture).
 - **Network is its own layer** (universal industry pattern): the OS

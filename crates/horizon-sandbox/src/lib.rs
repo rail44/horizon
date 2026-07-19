@@ -20,26 +20,30 @@
 //! [`SandboxError::UnsupportedPlatform`]. This crate started as a prototype
 //! (see the crate-level `Cargo.toml` doc comment and the roadmap item that
 //! dispatched the spike) and is now wired into `horizon-agent`'s bash tool
-//! for the policy-tiers leg (`docs/agent-approval-design.md`). The Linux
-//! backend migrated from a self-built bwrap+seccompiler+landlock stack to
-//! depend on `nono` (Landlock-based capability sandboxing) on
-//! 2026-07-19 (`docs/roadmap.md`'s backlog-60 entry); macOS still uses
-//! `sandbox-exec`+SBPL.
+//! for the policy-tiers leg (`docs/agent-approval-design.md`). Both OS
+//! backends now depend on `nono` (Landlock on Linux, Seatbelt on macOS --
+//! `docs/roadmap.md`'s backlog-60 entry), migrated 2026-07-19 from
+//! self-built bwrap+seccompiler+landlock (Linux) and `sandbox-exec`+SBPL
+//! (macOS) respectively; the two backends apply it very differently --
+//! see `linux/mod.rs` and `macos/mod.rs`'s module docs.
 //!
 //! ## Stdio: the caller must state it explicitly
 //!
-//! `spawn` rebuilds a fresh `Command` around the caller's `command`
-//! (on macOS, `sandbox-exec -f <profile> -- <command>`; on Linux the
-//! program/args are run directly, with nono's capabilities applied to the
-//! spawning thread beforehand -- see `linux::spawn`), copying over the
-//! program, arguments, working directory, and explicit environment
-//! overrides -- all things `std::process::Command` exposes getters for
-//! (`get_program`/`get_args`/`get_current_dir`/`get_envs`). It cannot
-//! also copy whatever `stdin`/`stdout`/`stderr` the caller configured on
-//! `command` itself, because `Command` provides no getter for that at all
-//! (write-only API) -- so `spawn` takes a separate [`SandboxStdio`]
-//! parameter instead of trying to infer it.
+//! `spawn` rebuilds a fresh `Command` around the caller's `command` (on
+//! Linux the program/args are run directly, with nono's capabilities
+//! applied to the spawning thread beforehand -- see `linux::spawn`; on
+//! macOS it execs a tiny helper binary that self-applies the same
+//! capabilities before exec'ing the real program -- see `macos::spawn`),
+//! copying over the program, arguments, working directory, and explicit
+//! environment overrides -- all things `std::process::Command` exposes
+//! getters for (`get_program`/`get_args`/`get_current_dir`/`get_envs`). It
+//! cannot also copy whatever `stdin`/`stdout`/`stderr` the caller
+//! configured on `command` itself, because `Command` provides no getter
+//! for that at all (write-only API) -- so `spawn` takes a separate
+//! [`SandboxStdio`] parameter instead of trying to infer it.
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod caps;
 mod denial;
 mod error;
 #[cfg(target_os = "linux")]
@@ -47,6 +51,8 @@ mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 mod policy;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod tmpdir;
 
 pub use denial::is_likely_sandbox_denied;
 pub use error::SandboxError;
@@ -55,11 +61,14 @@ pub use policy::{NetworkPolicy, ReadableScope, SandboxPolicy, SandboxStdio};
 #[cfg(target_os = "linux")]
 pub use linux::NonoReport;
 
+#[cfg(target_os = "macos")]
+pub use macos::apply_seatbelt_to_self;
+
 use std::process::{Child, Command};
 
-/// Name of the TMPDIR-parity scratch directory the Linux backend provisions
-/// under a sandboxed command's first writable root (see `linux::spawn`'s
-/// TMPDIR comment) -- e.g. `<root>/.horizon-sandbox-tmp`. Exposed so callers
+/// Name of the TMPDIR-parity scratch directory both OS backends provision
+/// under a sandboxed command's first writable root (see `crate::tmpdir`'s
+/// module doc) -- e.g. `<root>/.horizon-sandbox-tmp`. Exposed so callers
 /// that manage the writable root's lifecycle themselves (e.g.
 /// `horizon-sessiond`'s isolated-worktree cleanup) can special-case this
 /// specific directory without duplicating the literal.
@@ -68,14 +77,17 @@ pub const SCRATCH_DIR_NAME: &str = ".horizon-sandbox-tmp";
 /// A spawned sandboxed process, plus whatever per-backend containment
 /// report is available.
 ///
-/// `nono` is only ever `Some` on Linux; other backends carry no equivalent
-/// (macOS's `sandbox-exec` has no comparable negotiated-ABI concept).
+/// `nono` is only ever `Some` on Linux; other backends carry no equivalent.
+/// macOS's `nono::Sandbox::apply_auto` returns no comparable diagnostic --
+/// unlike Linux's Landlock, Seatbelt has no ABI-gradient/seccomp-fallback
+/// concept to report on, it's simply present or not (`macos::is_available`).
 /// Unlike the old backend's `LandlockReport` (a diagnostic negotiated on a
 /// throwaway thread, decoupled from what actually protected the spawned
 /// bwrap child -- Landlock and bwrap could not share a thread), this
 /// report reflects the containment that is genuinely live around `child`:
 /// nono's `Sandbox::apply_auto` *is* what restricts the thread that then
-/// spawns it.
+/// spawns it (Linux) -- or the helper process that execs into it (macOS,
+/// though there's no report to carry back for that case).
 pub struct SandboxedChild {
     pub child: Child,
     #[cfg(target_os = "linux")]
@@ -85,10 +97,11 @@ pub struct SandboxedChild {
 /// Prepares `command` to run under `policy` and spawns it, dispatching to
 /// the current OS's backend. `command`'s program, arguments, working
 /// directory, and explicit environment overrides are preserved; the
-/// backend rebuilds the actual spawn around them (e.g. as
-/// `bwrap <containment args> -- <command>` on Linux). `stdio` is applied to
-/// the rebuilt command explicitly -- see the crate root doc's "Stdio"
-/// section for why `spawn` can't infer it from `command` itself.
+/// backend rebuilds the actual spawn around them (directly on Linux, with
+/// nono applied to the spawning thread; via the `horizon-sandbox-helper`
+/// exec helper on macOS -- see `linux::spawn`/`macos::spawn`). `stdio` is
+/// applied to the rebuilt command explicitly -- see the crate root doc's
+/// "Stdio" section for why `spawn` can't infer it from `command` itself.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn spawn(
     command: Command,

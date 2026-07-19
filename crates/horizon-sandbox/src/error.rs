@@ -12,16 +12,27 @@ pub enum SandboxError {
     )]
     UnsupportedPlatform,
 
-    #[error("sandbox-exec is missing at the hardcoded path {0} (macOS only)")]
-    SandboxExecNotFound(&'static str),
+    /// macOS only: the `horizon-sandbox-helper` exec-helper binary
+    /// couldn't be resolved next to the running executable or on `PATH`
+    /// (see `macos::resolve_helper`).
+    #[error("horizon-sandbox-helper binary not found next to the running executable or on PATH")]
+    HelperNotFound,
 
-    /// The Linux backend's nono/Landlock error, covering both capability-set
-    /// construction (e.g. a policy path nono itself rejects for a reason
-    /// this crate's own `InvalidRoot` pre-check didn't catch) and
-    /// `nono::Sandbox::apply_auto`'s own failure (e.g. Landlock unavailable
-    /// on this kernel at all -- the nono-based replacement for the old
-    /// `BwrapNotFound` "containment mechanism isn't available" case).
-    #[cfg(target_os = "linux")]
+    /// macOS only: failed to serialize the policy for the exec-helper
+    /// handoff (see `macos::spawn` and `src/bin/horizon-sandbox-helper.rs`).
+    /// In practice this only happens for a non-UTF-8 policy path -- serde's
+    /// `PathBuf` support requires valid UTF-8.
+    #[error("failed to serialize sandbox policy for the macOS exec helper: {0}")]
+    PolicySerialize(#[from] serde_json::Error),
+
+    /// Either OS backend's nono/Landlock (Linux) or Seatbelt (macOS) error,
+    /// covering both capability-set construction (e.g. a policy path nono
+    /// itself rejects for a reason this crate's own `InvalidRoot` pre-check
+    /// didn't catch) and `nono::Sandbox::apply_auto`'s own failure (e.g.
+    /// Landlock unavailable on this kernel at all -- the nono-based
+    /// replacement for the old `BwrapNotFound` "containment mechanism isn't
+    /// available" case).
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[error("nono sandbox error: {0}")]
     Nono(#[from] nono::NonoError),
 
