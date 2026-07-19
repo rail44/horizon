@@ -62,6 +62,7 @@ use horizon_agent::tools::{
 };
 use horizon_agent::wire::{
     Control, Envelope, EnvelopeBody, HostToolRequest, HostToolResponse, SessionNew, SessionSummary,
+    WorkspaceRootResolved,
 };
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Notify;
@@ -865,6 +866,12 @@ fn tool_session_state_for(
 /// via isolation" for the *actual* outcome, not merely the request. A
 /// `contract::Event::Error` is also emitted so the failure is visible in
 /// the session's own transcript rather than only sessiond's stderr.
+///
+/// On success, also pushes a live `Control::WorkspaceRootResolved`
+/// announcement (mirroring `resolve_and_announce_session_model`'s shape) so
+/// a UI connected for this whole session's lifetime sees the authoritative
+/// root/parent immediately, not just via a later resume/reload sweep -- see
+/// that `Control` variant's own doc comment.
 fn resolve_and_create_isolated_worktree(
     state: &Arc<SessiondState>,
     session_id: SessionId,
@@ -887,6 +894,19 @@ fn resolve_and_create_isolated_worktree(
         Ok(info) => {
             let root = info.path.clone();
             state.record_isolated_worktree(session_id, spawn_source_session_id, info);
+            send_envelope(
+                &state.outgoing,
+                Envelope {
+                    v: horizon_agent::wire::CONTRACT_VERSION,
+                    session_id: Some(session_id),
+                    body: EnvelopeBody::Control(Control::WorkspaceRootResolved(
+                        WorkspaceRootResolved {
+                            workspace_root: root.clone(),
+                            parent_session_id: spawn_source_session_id,
+                        },
+                    )),
+                },
+            );
             Some(root)
         }
         Err(error) => {
@@ -1716,5 +1736,244 @@ mod tests {
                 "/tmp/repo/.horizon/worktrees/abcd1234"
             ))
         );
+    }
+
+    // --- Live workspace-root announcement (real git, in temp repositories) --
+    //
+    // `resolve_and_create_isolated_worktree` shells out to real `git` via
+    // `worktree::create_isolated_worktree`, so exercising its announcement
+    // needs a real scratch repo -- mirrors `worktree.rs`'s own real-git test
+    // convention, including its `EnclosingRepoGuard` hermeticity canary and
+    // `GIT_*` env scrubbing (see that module's doc comment / backlog 53) to
+    // guard against a leaked `GIT_DIR` operating on the enclosing repository
+    // instead of the temp one.
+    mod isolation_announcement {
+        use std::path::{Path, PathBuf};
+
+        use super::*;
+
+        fn scrub_git_env(cmd: &mut std::process::Command) {
+            for (key, _) in std::env::vars() {
+                if key.starts_with("GIT_") {
+                    cmd.env_remove(key);
+                }
+            }
+        }
+
+        fn git(dir: &Path, args: &[&str]) {
+            let mut cmd = std::process::Command::new("git");
+            cmd.arg("-C").arg(dir).args(args);
+            scrub_git_env(&mut cmd);
+            let status = cmd
+                .status()
+                .unwrap_or_else(|error| panic!("failed to run git {args:?}: {error}"));
+            assert!(status.success(), "git {args:?} failed in {}", dir.display());
+        }
+
+        fn run_git(dir: &Path, args: &[&str]) -> Result<String, String> {
+            let mut cmd = std::process::Command::new("git");
+            cmd.arg("-C").arg(dir).args(args);
+            scrub_git_env(&mut cmd);
+            let output = cmd.output().map_err(|error| error.to_string())?;
+            if !output.status.success() {
+                return Err(String::from_utf8_lossy(&output.stderr).into_owned());
+            }
+            Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        }
+
+        fn init_repo(dir: &Path) {
+            git(dir, &["init", "-q", "-b", "main"]);
+            git(dir, &["config", "user.email", "test@example.com"]);
+            git(dir, &["config", "user.name", "Test"]);
+        }
+
+        fn commit_file(dir: &Path, name: &str, contents: &str, message: &str) {
+            std::fs::write(dir.join(name), contents).unwrap();
+            git(dir, &["add", name]);
+            git(dir, &["commit", "-q", "-m", message]);
+        }
+
+        fn scratch_repo() -> tempfile::TempDir {
+            let dir = tempfile::tempdir().expect("create temp dir");
+            init_repo(dir.path());
+            commit_file(dir.path(), "README.md", "root\n", "root commit");
+            dir
+        }
+
+        #[derive(Debug, PartialEq, Eq)]
+        struct EnclosingRepoState {
+            bare: String,
+            status: String,
+            horizon_branches: String,
+        }
+
+        fn enclosing_repo_root() -> PathBuf {
+            let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+            let mut cmd = std::process::Command::new("git");
+            cmd.arg("-C").arg(manifest_dir).args([
+                "rev-parse",
+                "--path-format=absolute",
+                "--show-toplevel",
+            ]);
+            scrub_git_env(&mut cmd);
+            let output = cmd
+                .output()
+                .expect("discovering the enclosing repo's root should never fail");
+            assert!(
+                output.status.success(),
+                "git rev-parse --show-toplevel in {} failed: {}",
+                manifest_dir.display(),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            PathBuf::from(String::from_utf8_lossy(&output.stdout).trim())
+        }
+
+        fn enclosing_repo_state(root: &Path) -> EnclosingRepoState {
+            EnclosingRepoState {
+                bare: run_git(root, &["config", "--get", "core.bare"])
+                    .unwrap_or_else(|_| "false".to_string()),
+                status: run_git(root, &["status", "--porcelain"]).unwrap_or_default(),
+                horizon_branches: run_git(
+                    root,
+                    &["for-each-ref", "--format=%(refname)", "refs/heads/horizon"],
+                )
+                .unwrap_or_default(),
+            }
+        }
+
+        struct EnclosingRepoGuard {
+            root: PathBuf,
+            before: EnclosingRepoState,
+        }
+
+        impl EnclosingRepoGuard {
+            fn capture() -> Self {
+                let root = enclosing_repo_root();
+                let before = enclosing_repo_state(&root);
+                Self { root, before }
+            }
+        }
+
+        impl Drop for EnclosingRepoGuard {
+            fn drop(&mut self) {
+                if std::thread::panicking() {
+                    return;
+                }
+                let after = enclosing_repo_state(&self.root);
+                assert_eq!(
+                    self.before,
+                    after,
+                    "hermeticity canary: the enclosing repository at {} changed during \
+                     a worktree test -- a git invocation escaped its TempDir scratch repo \
+                     (see worktree.rs's scrub_git_env doc / backlog 53)",
+                    self.root.display()
+                );
+            }
+        }
+
+        fn entry_with_root(
+            inbound: Sender<Command>,
+            replay: Sender<Sender<Vec<Event>>>,
+            root: PathBuf,
+        ) -> SessionEntry {
+            SessionEntry {
+                provider_id: ProviderId("builtin.agent.rig".to_string()),
+                role_id: None,
+                model: None,
+                inbound,
+                replay,
+                parent_session_id: None,
+                workspace_root: Some(root),
+                worktree: None,
+            }
+        }
+
+        /// The regression guard this whole announcement exists for: a
+        /// successful isolated-worktree resolution must push a session-scoped
+        /// `Control::WorkspaceRootResolved` carrying the *same* root/parent
+        /// [`SessiondState::record_isolated_worktree`] just recorded on the
+        /// entry -- so a UI connected for this session's whole lifetime sees
+        /// the authoritative worktree path live, without waiting for a
+        /// `session_list`/resume sweep.
+        #[test]
+        fn resolve_and_create_isolated_worktree_announces_the_resolved_root_live() {
+            let _canary = EnclosingRepoGuard::capture();
+            let (state, mut outgoing_rx) = state_with_rig_config(true, "test-model");
+            let repo = scratch_repo();
+            let session_id = SessionId::new();
+            let parent_id = SessionId::new();
+            let (inbound_tx, _inbound_rx) = unbounded::<Command>();
+            let (replay_tx, _replay_rx) = unbounded::<Sender<Vec<Event>>>();
+            state.sessions.lock().unwrap().insert(
+                session_id,
+                entry_with_root(inbound_tx, replay_tx, repo.path().to_path_buf()),
+            );
+
+            let resolved = resolve_and_create_isolated_worktree(
+                &state,
+                session_id,
+                Some(parent_id),
+                Some(repo.path().to_path_buf()),
+            );
+
+            let root = resolved.expect("isolation against a real git repo should succeed");
+            assert!(
+                root.starts_with(repo.path().join(".horizon").join("worktrees")),
+                "resolved root {} should be under .horizon/worktrees",
+                root.display()
+            );
+
+            let sent = outgoing_rx
+                .try_recv()
+                .expect("a WorkspaceRootResolved control should have been sent");
+            assert_eq!(sent.session_id, Some(session_id));
+            match sent.body {
+                EnvelopeBody::Control(Control::WorkspaceRootResolved(payload)) => {
+                    assert_eq!(payload.workspace_root, root);
+                    assert_eq!(payload.parent_session_id, Some(parent_id));
+                }
+                other => panic!("expected a WorkspaceRootResolved control, got: {other:?}"),
+            }
+        }
+
+        /// The failure path degrades to a shared spawn and records no
+        /// lineage edge (existing behavior) -- nothing to announce either,
+        /// mirroring `Control::SkippedLines`'s "just don't send it"
+        /// convention. A non-existent source directory is not a git repo at
+        /// all, so worktree creation fails deterministically without needing
+        /// a real corrupt-repo fixture.
+        #[test]
+        fn resolve_and_create_isolated_worktree_sends_nothing_when_isolation_fails() {
+            let _canary = EnclosingRepoGuard::capture();
+            let (state, mut outgoing_rx) = state_with_rig_config(true, "test-model");
+            let not_a_repo = tempfile::tempdir().expect("create temp dir");
+            let session_id = SessionId::new();
+            let (inbound_tx, _inbound_rx) = unbounded::<Command>();
+            let (replay_tx, _replay_rx) = unbounded::<Sender<Vec<Event>>>();
+            state.sessions.lock().unwrap().insert(
+                session_id,
+                entry_with_root(inbound_tx, replay_tx, not_a_repo.path().to_path_buf()),
+            );
+
+            let resolved = resolve_and_create_isolated_worktree(
+                &state,
+                session_id,
+                None,
+                Some(not_a_repo.path().to_path_buf()),
+            );
+
+            assert_eq!(
+                resolved,
+                Some(not_a_repo.path().to_path_buf()),
+                "a failed isolation must fall back to the plain workspace_root"
+            );
+            // An `Event::Error` is still sent (see the function's own doc
+            // comment) -- drain it before asserting nothing else follows.
+            let _ = outgoing_rx.try_recv();
+            assert!(
+                outgoing_rx.try_recv().is_err(),
+                "nothing should be announced when isolation never actually happened"
+            );
+        }
     }
 }

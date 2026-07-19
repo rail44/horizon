@@ -281,7 +281,7 @@ impl WorkspaceShell {
         let mut workspace_state = WorkspaceStateStore::from_environment();
         let (workspace, restoring_workspace, persistence_ready) =
             load_workspace_state(&mut workspace_state);
-        let (sessiond, host_tool_rx) =
+        let (sessiond, host_tool_rx, workspace_root_rx) =
             SessiondHandle::start(&horizon_agent::socket::default_socket_path(), &socket_path);
         let (terminal_exit_tx, terminal_exit_rx) = futures::channel::mpsc::unbounded();
         let mut shell = Self {
@@ -321,6 +321,7 @@ impl WorkspaceShell {
         })
         .detach();
         shell.wire_host_tools(sessiond.responder(), host_tool_rx, cx);
+        shell.wire_workspace_root_updates(workspace_root_rx, cx);
         shell.wire_terminal_exit(terminal_exit_rx, cx);
         if shell.restoring_workspace {
             shell.spawn_workspace_restore(sessiond, cx);

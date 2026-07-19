@@ -283,6 +283,52 @@ impl WorkspaceShell {
         .detach();
     }
 
+    /// Wires the live push of a freshly isolated session's authoritative
+    /// `workspace_root`/`parent_session_id` (`wire::Control::
+    /// WorkspaceRootResolved`, routed onto its own process-wide channel by
+    /// `sessiond::routing::Routes` -- see that `Control` variant's own doc
+    /// comment) straight into the model the moment it arrives, closing the
+    /// gap `spawn_agent_resume`/`spawn_workspace_restore` only closed on the
+    /// next resume/reload sweep: a session created and used within one
+    /// continuous run now sees its corrected root/parent immediately.
+    /// Bridged to async the same way `wire_host_tools` bridges its own
+    /// crossbeam receiver.
+    pub(super) fn wire_workspace_root_updates(
+        &mut self,
+        workspace_root_rx: crossbeam_channel::Receiver<(
+            horizon_agent::contract::SessionId,
+            horizon_agent::wire::WorkspaceRootResolved,
+        )>,
+        cx: &mut Context<Self>,
+    ) {
+        let (async_tx, mut async_rx) = futures::channel::mpsc::unbounded();
+        std::thread::spawn(move || {
+            while let Ok(update) = workspace_root_rx.recv() {
+                if async_tx.unbounded_send(update).is_err() {
+                    return;
+                }
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            use futures::StreamExt as _;
+            while let Some((session_id, resolved)) = async_rx.next().await {
+                let session_id = SessionId::from_uuid(session_id.as_uuid());
+                let _ = this.update(cx, |shell, cx| {
+                    shell
+                        .workspace
+                        .set_session_workspace_root(session_id, resolved.workspace_root);
+                    if let Some(parent) = resolved.parent_session_id {
+                        shell
+                            .workspace
+                            .set_session_parent(session_id, SessionId::from_uuid(parent.as_uuid()));
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
     /// Wires the receiving end of every `TerminalSession`'s `exit_tx`: a PTY
     /// child exiting (e.g. the user typing `exit`) notifies the shell with
     /// its session id, and the shell terminates that workspace session --
@@ -773,11 +819,12 @@ impl WorkspaceShell {
             }
             let _ = this.update(cx, |shell, cx| {
                 ensure_workspace_has_pane(&mut shell.workspace);
-                let (handle, host_tool_rx) =
+                let (handle, host_tool_rx, workspace_root_rx) =
                     SessiondHandle::start(&restart_socket, &control_socket);
                 shell.sessiond = Some(handle.clone());
                 shell.reload_in_progress = false;
                 shell.wire_host_tools(handle.responder(), host_tool_rx, cx);
+                shell.wire_workspace_root_updates(workspace_root_rx, cx);
                 shell.spawn_agent_resume(handle, cx);
             });
         })
@@ -1173,6 +1220,50 @@ mod tests {
             workspace.session_workspace_root(session_id),
             Some(isolated_root.as_path()),
             "the daemon-reported root must win over the shell's pre-spawn value"
+        );
+    }
+
+    /// `wire_workspace_root_updates` is, like `spawn_agent_resume`/
+    /// `spawn_workspace_restore` above, GPUI-entity/async-shaped and not
+    /// unit-testable without a window and a live sessiond connection -- but
+    /// its whole fold body is exactly these two model setters, called
+    /// together the moment a `wire::Control::WorkspaceRootResolved`
+    /// announcement arrives. Unlike the test above, this never goes through
+    /// a resume/restore sweep at all: it stands in for a session created and
+    /// used within one continuous run, which used to keep its pre-spawn
+    /// guess (and no lineage edge) until the next sweep -- the live push
+    /// this test's building block backs closes exactly that gap.
+    #[test]
+    fn a_freshly_isolated_sessions_live_announcement_updates_root_and_parent_together() {
+        let mut workspace = Workspace::mvp();
+        let session_id = SessionId::new();
+        let parent_id = SessionId::new();
+        workspace.register_detached_session(PaneKind::Agent, session_id);
+
+        let pre_spawn_root = std::path::PathBuf::from("/home/user/project");
+        workspace.set_session_workspace_root(session_id, pre_spawn_root);
+
+        // What `wire_workspace_root_updates` does with an incoming
+        // `WorkspaceRootResolved { workspace_root, parent_session_id }`.
+        let isolated_root =
+            std::path::PathBuf::from("/home/user/project/.horizon/worktrees/abcd1234");
+        workspace.set_session_workspace_root(session_id, isolated_root.clone());
+        workspace.set_session_parent(session_id, parent_id);
+
+        assert_eq!(
+            workspace.session_workspace_root(session_id),
+            Some(isolated_root.as_path()),
+            "the live announcement's root must be visible without any resume/restore sweep"
+        );
+        let summary = workspace
+            .session_summaries()
+            .into_iter()
+            .find(|summary| summary.id == session_id)
+            .expect("the session should still be registered");
+        assert_eq!(
+            summary.parent_session_id,
+            Some(parent_id),
+            "the live announcement's lineage edge must be visible without any sweep either"
         );
     }
 }

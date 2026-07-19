@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use horizon_agent::contract::{Event, ProviderId, SessionId, SessionState};
-use horizon_agent::wire::{self as agent_wire, Envelope};
+use horizon_agent::wire::{
+    self as agent_wire, Control, Envelope, EnvelopeBody, WorkspaceRootResolved,
+};
 use horizon_session_protocol::{self as session_wire, Hello, SESSION_PROTOCOL_VERSION};
 use horizon_terminal_core::{
     decode_terminal_command, decode_terminal_control, encode_terminal_update, TerminalColorScheme,
@@ -49,7 +51,7 @@ async fn receive_hello_and_reply<S>(
 async fn start_returns_before_hello_and_queued_create_is_first_after_handshake() {
     let (client, server) = tokio::io::duplex(64 * 1024);
     let started = Instant::now();
-    let (handle, _host_tools) = SessiondHandle::start_on_stream(client);
+    let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
     assert!(started.elapsed() < Duration::from_millis(50));
 
     let terminal_id = Uuid::new_v4();
@@ -105,7 +107,7 @@ async fn start_returns_before_hello_and_queued_create_is_first_after_handshake()
 #[tokio::test]
 async fn incoming_shared_agent_and_terminal_messages_are_demultiplexed() {
     let (client, server) = tokio::io::duplex(64 * 1024);
-    let (handle, _host_tools) = SessiondHandle::start_on_stream(client);
+    let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
     let terminal_id = Uuid::new_v4();
     let terminal = handle.start_terminal(terminal_id, spec());
     let agent_id = SessionId::new();
@@ -191,10 +193,49 @@ async fn incoming_shared_agent_and_terminal_messages_are_demultiplexed() {
     assert!(saw_command && saw_pong);
 }
 
+/// `Control::WorkspaceRootResolved` is a live daemon->shell announcement
+/// (`docs/session-relationship-design.md`'s "still eventual, not live" gap),
+/// not a `contract::ProviderEvent` any per-session route folds -- `Routes`
+/// sends it on its own `workspace_roots` channel instead (see
+/// `sessiond::routing::Routes::dispatch`). This is the wire-level
+/// counterpart of `WorkspaceShell::wire_workspace_root_updates`'s model-fold
+/// test: an incoming envelope must actually reach that channel, tagged with
+/// the right session id.
+#[tokio::test]
+async fn incoming_workspace_root_resolved_reaches_its_own_channel() {
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let (_handle, _host_tools, workspace_roots) = SessiondHandle::start_on_stream(client);
+    let (read_half, mut writer) = tokio::io::split(server);
+    let mut reader = BufReader::new(read_half);
+    receive_hello_and_reply(&mut reader, &mut writer).await;
+
+    let session_id = SessionId::new();
+    let parent_id = SessionId::new();
+    let resolved = WorkspaceRootResolved {
+        workspace_root: std::path::PathBuf::from("/tmp/repo/.horizon/worktrees/abcd1234"),
+        parent_session_id: Some(parent_id),
+    };
+    let raw = agent_wire::encode_envelope(&Envelope {
+        v: agent_wire::CONTRACT_VERSION,
+        session_id: Some(session_id),
+        body: EnvelopeBody::Control(Control::WorkspaceRootResolved(resolved.clone())),
+    })
+    .unwrap();
+    session_wire::write_envelope(&mut writer, &raw)
+        .await
+        .unwrap();
+
+    let (received_session_id, received_resolved) = workspace_roots
+        .recv_timeout(Duration::from_secs(1))
+        .expect("the WorkspaceRootResolved control should reach its own channel");
+    assert_eq!(received_session_id, session_id);
+    assert_eq!(received_resolved, resolved);
+}
+
 #[tokio::test]
 async fn concurrent_terminal_lists_are_correlated_by_request_id() {
     let (client, server) = tokio::io::duplex(64 * 1024);
-    let (handle, _host_tools) = SessiondHandle::start_on_stream(client);
+    let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
     let (read_half, mut writer) = tokio::io::split(server);
     let mut reader = BufReader::new(read_half);
     receive_hello_and_reply(&mut reader, &mut writer).await;
@@ -270,7 +311,7 @@ async fn concurrent_terminal_lists_are_correlated_by_request_id() {
 #[tokio::test]
 async fn terminal_batch_attach_keeps_attached_sessions_and_drops_not_found() {
     let (client, server) = tokio::io::duplex(64 * 1024);
-    let (handle, _host_tools) = SessiondHandle::start_on_stream(client);
+    let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
     let (read_half, mut writer) = tokio::io::split(server);
     let mut reader = BufReader::new(read_half);
     receive_hello_and_reply(&mut reader, &mut writer).await;
@@ -343,7 +384,7 @@ async fn terminal_batch_attach_keeps_attached_sessions_and_drops_not_found() {
 #[tokio::test]
 async fn terminal_attach_rejects_a_result_for_a_different_session() {
     let (client, server) = tokio::io::duplex(64 * 1024);
-    let (handle, _host_tools) = SessiondHandle::start_on_stream(client);
+    let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
     let (read_half, mut writer) = tokio::io::split(server);
     let mut reader = BufReader::new(read_half);
     receive_hello_and_reply(&mut reader, &mut writer).await;
@@ -378,7 +419,7 @@ async fn terminal_attach_rejects_a_result_for_a_different_session() {
 #[tokio::test]
 async fn dropping_the_runtime_does_not_send_drain() {
     let (client, server) = tokio::io::duplex(4096);
-    let (handle, _host_tools) = SessiondHandle::start_on_stream(client);
+    let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
     let responder = handle.responder();
     let (read_half, mut writer) = tokio::io::split(server);
     let mut reader = BufReader::new(read_half);
@@ -399,7 +440,7 @@ async fn dropping_the_runtime_does_not_send_drain() {
 #[tokio::test]
 async fn dropping_before_hello_cancels_the_runtime_without_drain() {
     let (client, server) = tokio::io::duplex(4096);
-    let (handle, _host_tools) = SessiondHandle::start_on_stream(client);
+    let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
     let responder = handle.responder();
     let (read_half, _write_half) = tokio::io::split(server);
     let mut reader = BufReader::new(read_half);
@@ -424,7 +465,7 @@ async fn dropping_before_hello_cancels_the_runtime_without_drain() {
 #[tokio::test]
 async fn established_disconnect_reports_errors_without_reconnecting() {
     let (client, server) = tokio::io::duplex(64 * 1024);
-    let (handle, _host_tools) = SessiondHandle::start_on_stream(client);
+    let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
     let terminal_id = Uuid::new_v4();
     let terminal = handle.start_terminal(terminal_id, spec());
     let agent_id = SessionId::new();

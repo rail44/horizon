@@ -178,12 +178,29 @@ workspace_root` is `horizon-sessiond`'s authoritative answer once
 resolved; `WorkspaceShell::spawn_agent_resume`/`spawn_workspace_restore`
 (the two places the shell already re-lists sessions from the daemon) now
 overwrite the model's stored root with it, so `OpenTerminalInSessionDirectory`
-opens the real worktree once one of those sweeps has run. Still eventual,
-not live, for a session created and used within one continuous run:
-there's no push channel for a mid-run root correction yet (unlike
-`SessionModel`'s live announce), so until the next resume/reload the
-model keeps the pre-isolation guess for a session created interactively
-this run.
+opens the real worktree once one of those sweeps has run.
+
+2026-07-19 dogfooding fix: the "still eventual, not live" gap above is
+closed. `resolve_and_create_isolated_worktree`
+(`crates/horizon-sessiond/src/session.rs`) now pushes a session-scoped
+`wire::Control::WorkspaceRootResolved { workspace_root, parent_session_id }`
+the moment isolation resolves, mirroring `Control::SessionModel`'s own
+live-announce shape and additive-`#[serde(default)]`/no-version-bump
+convention. Not sent at all when isolation fails and degrades to a shared
+spawn -- nothing to correct then. Shell-side, this is a new process-wide
+channel alongside `host_tools` (not the per-session `agent`/`ProviderEvent`
+map `SessionModel` rides, since a workspace-root correction is a model
+fold, not a transcript event): `sessiond::routing::Routes` gained a
+`workspace_roots` sender, `SessiondHandle::start`/`start_on_stream` return
+its receiver as a third tuple element, and `WorkspaceShell::
+wire_workspace_root_updates` (wired at both the same call sites as
+`wire_host_tools`: `WorkspaceShell::new` and `reload_session_runtime`)
+folds each arrival straight into `Workspace::set_session_workspace_root`/
+`set_session_parent` and `cx.notify()`s. A session created and used within
+one continuous run now sees its corrected root/parent immediately, not
+just at the next resume/reload sweep -- the sweeps remain the catch-up
+path for a daemon restart or UI restart, where no live connection existed
+to push over in the first place.
 
 Decision 4b's UI slice landed: the session manager modal
 (`src/session_manager.rs`) renders the derivation tree instead of a flat
@@ -224,10 +241,27 @@ one choice), threaded through `WorkspaceShell::create_session` to the same
 `pending_agent_spawn` staging `external_new_session` (the CLI path) already
 used. No redesign of the placement flow itself.
 
+2026-07-19 dogfooding fix: session manager rows now show the session's
+`workspace_root` itself, not just the small `dir`/`subtree` action-hint
+text that previously stood in for it -- so an isolated child's own
+worktree reads as visibly distinct from a shared session's directory at a
+glance, per decision 4b's own goal. `abbreviate_workspace_root` (pure,
+unit-tested, `src/session_manager.rs`) renders it relative to the
+enclosing repository root when the path sits strictly inside one (e.g.
+`.horizon/worktrees/calm-otter`), else `~`-relative under `$HOME`, else the
+full path -- a full absolute path is too long for the list. The enclosing
+repo root itself is found by a separate, deliberately `git`-subprocess-free
+walk up the path's ancestors for the nearest directory-shaped `.git` (a
+linked worktree's own `.git` is a *file*, so this walks past an isolated
+session's own worktree to the *main* checkout it branched from, matching
+the example above); cheap enough to run on every visible row's render.
+
 Remaining is a roadmap item under shared-foundation 4: terminal-cwd
 sourcing surfaced to the shell (non-agent sessions still have no
-`workspace_root` at all), parent/child navigation from the session manager
-(jumping directly to an ancestor/descendant row), and a live root/parent-
-correction push for a freshly isolated session within the same run.
-Messaging/supervision layer onto the same tree in shared-foundation 4's
-own consultation.
+`workspace_root` at all), and parent/child navigation from the session
+manager (jumping directly to an ancestor/descendant row). Messaging/
+supervision layer onto the same tree in shared-foundation 4's own
+consultation. A separate, owner-deferred design consultation on
+shared-spawn lineage semantics (does a plain, non-isolated spawn deserve
+its own edge kind, distinct from a real derivation edge?) is recorded as
+backlog 54 -- not a request to change decisions 2/3 now.

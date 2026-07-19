@@ -315,3 +315,21 @@ entries live in `backlog-resolved.md` keeping their original numbers
     future escape fails loudly at the offending test. Verified: 13
     consecutive `cargo nextest run -p horizon-sessiond worktree` passes
     with no flake, canary green throughout.
+
+54. **Owner-deferred design consultation: shared-spawn lineage
+    semantics.** First dogfooding of the session-relationship model
+    (2026-07-19) surfaced a gap between the owner's felt model and the
+    shipped one: opening a session from an existing pane (a plain, non-
+    isolated spawn) *feels* like it should make the new session a child
+    in the derivation tree, but `docs/session-relationship-design.md`
+    decisions 2/3 deliberately create an edge only via isolation — a
+    shared spawn co-locates with its source (same directory) but derives
+    nothing, keeping the tree pure derivation rather than accreting a
+    reference/co-location edge. Not a request to change now — the owner
+    will schedule the discussion; options seen so far: (a) keep the
+    tree as-is (isolation-only edges, shared spawns stay unrelated
+    roots); (b) surface shared spawns as a distinct, weaker edge kind
+    (e.g. "spawned alongside," exempt from subtree-terminate's cascade,
+    per decision 5) so the session manager's lineage view can still show
+    the relationship the owner expects without conflating it with a real
+    derivation/worktree-branch edge.
