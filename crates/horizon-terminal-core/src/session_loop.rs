@@ -391,7 +391,7 @@ mod tests {
         let mut healed = false;
         while Instant::now() < deadline {
             match update_rx.recv_timeout(Duration::from_millis(50)) {
-                Ok(TerminalUpdate::Snapshot(frame)) if !frame.text.contains("STALE") => {
+                Ok(TerminalUpdate::Snapshot(frame)) if !frame.text().contains("STALE") => {
                     healed = true;
                     break;
                 }
@@ -539,7 +539,7 @@ mod tests {
                 update_rx.recv_timeout(Duration::from_millis(50))
             {
                 assert!(
-                    !frame.text.contains("STALE"),
+                    !frame.text().contains("STALE"),
                     "the flush must apply the buffered erase"
                 );
                 flushed = true;
@@ -646,7 +646,7 @@ mod tests {
             if let Ok(TerminalUpdate::Snapshot(frame)) =
                 update_rx.recv_timeout(Duration::from_millis(50))
             {
-                if frame.text.contains("hello") {
+                if frame.text().contains("hello") {
                     break;
                 }
             }

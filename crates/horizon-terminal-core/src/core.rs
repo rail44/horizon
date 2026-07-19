@@ -317,7 +317,7 @@ impl TerminalCore {
 
     #[cfg(test)]
     pub fn snapshot_text(&self) -> String {
-        self.snapshot_frame().text
+        self.snapshot_frame().text()
     }
 
     pub fn snapshot_frame(&self) -> TerminalFrame {

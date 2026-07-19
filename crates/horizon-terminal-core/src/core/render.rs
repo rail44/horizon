@@ -8,7 +8,6 @@ use alacritty_terminal::vte::ansi::{
 use unicode_width::UnicodeWidthChar;
 
 use crate::core::events::EventSink;
-use crate::types::frame_text;
 use crate::types::{
     NamedColor, TerminalColor, TerminalCursor, TerminalCursorShape, TerminalFrame, TerminalLine,
     TerminalSelection, TerminalSelectionPoint, TerminalSize, TerminalSpan, TerminalUnderline,
@@ -93,10 +92,7 @@ pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> Term
         }
     }
 
-    let text = frame_text(&styled_rows);
-
     TerminalFrame {
-        text,
         lines: styled_rows,
         cursor: cursor_position(
             content.cursor.shape,
