@@ -123,17 +123,18 @@ mod tests {
     use crate::theme::scheme::reload_from;
     use crate::theme::test_support::config_with;
 
-    /// docs/tasks/backlog.md item 25: `resolve`/`to_hsla` (the exact pair
-    /// `src/terminal/mod.rs::paint_terminal` calls fresh for every visible
-    /// span on every repaint) read `scheme()` -- a plain `RwLock` read --
-    /// with no intermediate cache of resolved RGB anywhere. So a `Reload
+    /// docs/tasks/backlog.md item 25 (since retired): `resolve`/`to_hsla`
+    /// read `scheme()` -- a plain `RwLock` read -- with no intermediate
+    /// cache of resolved RGB anywhere *in this module*. So a `Reload
     /// Config` (`reload_from` + `window.refresh()`, `src/workspace.rs`)
     /// recolors a static terminal screen with no extra invalidation step:
     /// `window.refresh()` alone is already sufficient, because there is
-    /// nothing here to go stale. (The row-cache item 25's original
-    /// analysis described belonged to the Floem shell, retired -- `04d9f0e`
-    /// -- two days after that analysis was recorded; the GPUI-only paint
-    /// path replacing it never grew an equivalent cache.)
+    /// nothing here to go stale. (The paint path has since grown a
+    /// row-keyed `ShapedLine` cache -- `src/terminal/shape_cache.rs` --
+    /// that *does* bake resolved colors into its cached runs, but it
+    /// fingerprints the theme via `terminal_color_scheme()` and
+    /// self-clears on mismatch at the next paint, so this reload contract
+    /// still needs no explicit invalidation call.)
     #[test]
     fn resolve_reflects_a_reload_immediately_with_no_separate_cache_to_invalidate() {
         // `terminal_background` was retired as a key (2026-07-16,
