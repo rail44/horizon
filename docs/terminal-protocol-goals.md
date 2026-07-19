@@ -124,13 +124,14 @@ the wire so this swap is invisible to clients.
 
 ## Derived near-term work (recorded, not scheduled)
 
-The profile, not the protocol, names the first wins: dependency-only
-`opt-level` in the dev profile (in flight); one shape+paint per row
-instead of per run (cuts the per-run layer insertions behind the 31%);
-a `ShapedLine` cache keyed by row content, invalidated by `changed_rows`
-(goal 3's plumbing); agent-pane notify coalescing to match the
-terminal's 16 ms window; the theme color picker's per-frame palette
-rebuild (upstream gpui-component defect; accepted for now — backlog #62).
+The profile, not the protocol, named the first wins — all landed as of
+2026-07-19: dependency-only `opt-level` in the dev profile (PR #8); one
+shape+paint per row instead of per run (PR #11 — cut the per-run layer
+insertions behind the 31%); a `ShapedLine` cache keyed by row content,
+invalidated by `changed_rows` (PR #13 — goal 3's plumbing); agent-pane
+notify coalescing to match the terminal's 16 ms window (PR #10). The
+theme color picker's per-frame palette rebuild (upstream gpui-component
+defect) remains accepted as backlog #62.
 
 ## References
 

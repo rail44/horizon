@@ -55,8 +55,7 @@ fn frame_mirrors_report_all_keys_flag() {
 /// `docs/session-daemon-design.md` decision 8: a cell's color is a logical
 /// value (here, `NamedColor::Red`/`NamedColor::Foreground`), not a resolved
 /// RGB triple — resolving against a theme is the host's job now
-/// (`terminal::view`'s golden test covers that RGB values are unchanged
-/// once resolved with the default theme).
+/// (`theme::resolve`, `src/theme/ansi.rs`).
 #[test]
 fn vt_stream_preserves_ansi_foreground_color() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 4));
@@ -76,9 +75,8 @@ fn vt_stream_preserves_ansi_foreground_color() {
 
 /// `docs/session-daemon-design.md` decision 8: an app's live OSC 4 palette
 /// override now rides the frame as `TerminalFrame::palette_overrides`, a
-/// sparse index→RGB table the host consults at paint time (see
-/// `terminal::view::color::resolve_color`'s test coverage for the host
-/// half).
+/// sparse index→RGB table the host consults at paint time (the host half
+/// is `theme::resolve`, `src/theme/ansi.rs`).
 #[test]
 fn osc_4_palette_override_is_captured_in_the_frame() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 4));
