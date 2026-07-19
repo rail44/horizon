@@ -12,7 +12,7 @@ use rig_core::{
     streaming::{StreamedAssistantContent, ToolCallDeltaContent},
     OneOrMany,
 };
-use rig_memory::{HeuristicTokenCounter, MemoryPolicy, TokenWindowMemory};
+use rig_memory::{HeuristicTokenCounter, MemoryPolicy};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -30,6 +30,7 @@ use super::{
         horizon_provider_events_from_rig_message, rig_multi_snapshot_calls,
         rig_tool_call_provider_payload, rig_tool_call_request,
     },
+    memory::ToolResultPruningMemory,
     rig_workspace_snapshot_call, StreamDeltaBuffer, StreamDeltaKind, ToolCallProgressBuffer,
 };
 
@@ -302,16 +303,31 @@ async fn rig_openai_turn_streaming(
     ))
 }
 
-/// Builds the token-window memory policy applied to the outgoing history
-/// just before it is sent to the provider (see
-/// [`windowed_history_for_request`]). Uses `rig-memory`'s OpenAI
-/// [`HeuristicTokenCounter`] preset -- a provider-agnostic, byte-length
-/// heuristic, not the real tokenizer of whatever model `config.model`
-/// names -- which is why `config.history_token_budget`'s built-in default
-/// (`config::DEFAULT_HISTORY_TOKEN_BUDGET`) leaves headroom against that
-/// approximation rather than tracking a specific context window exactly.
-pub(super) fn history_token_window_policy(config: &RigAgentConfig) -> TokenWindowMemory {
-    TokenWindowMemory::new(config.history_token_budget, HeuristicTokenCounter::openai())
+/// Builds the memory policy applied to the outgoing history just before it
+/// is sent to the provider (see [`windowed_history_for_request`]) --
+/// [`ToolResultPruningMemory`] (axis B,
+/// `docs/research/agent-context-memory-separation-2026-07-20.md`'s
+/// "Decision (2026-07-20)"), which prefers to shrink old tool-result
+/// *content* to a short placeholder before ever dropping a whole message,
+/// so the task instruction (a plain `UserContent::Text`, never touched by
+/// that step) survives as a byproduct. Replaces the stock `rig_memory::
+/// TokenWindowMemory` this used to return, which applied a pure recency
+/// cutoff with no distinction between tool output and everything else.
+///
+/// Uses `rig-memory`'s OpenAI [`HeuristicTokenCounter`] preset -- a
+/// provider-agnostic, byte-length heuristic, not the real tokenizer of
+/// whatever model `config.model` names -- which is why
+/// `config.history_token_budget` (axis A: model-derived when resolvable,
+/// see `model_catalog::apply_model_derived_history_budget`, else
+/// `config::DEFAULT_HISTORY_TOKEN_BUDGET`) already reserves a safety margin
+/// against that approximation's own documented ~30% error rather than
+/// tracking a specific context window exactly.
+pub(super) fn history_token_window_policy(config: &RigAgentConfig) -> ToolResultPruningMemory {
+    ToolResultPruningMemory::new(
+        config.history_token_budget,
+        config.protected_recent_tool_result_tokens,
+        HeuristicTokenCounter::openai(),
+    )
 }
 
 /// Applies `policy` to `history` -- the *view* of the conversation sent to
@@ -320,13 +336,13 @@ pub(super) fn history_token_window_policy(config: &RigAgentConfig) -> TokenWindo
 /// DuckDB projection unchanged by the caller in `complete_rig_turn`): only
 /// the clone handed to this function is ever windowed.
 ///
-/// `TokenWindowMemory::apply` cannot currently fail (its `MemoryPolicy`
-/// impl only ever returns `Ok`), but [`MemoryPolicy::apply`] is fallible by
-/// contract, so a future policy change (or a different policy swapped in
-/// here) could start returning `Err`. On `Err` the original, unwindowed
-/// history is used instead and the failure is logged via `tracing` --
-/// never silently dropping context (an empty history) or failing the
-/// turn outright over a policy bug.
+/// [`ToolResultPruningMemory::apply`] cannot currently fail (its
+/// `MemoryPolicy` impl only ever returns `Ok`), but [`MemoryPolicy::apply`]
+/// is fallible by contract, so a future policy change (or a different
+/// policy swapped in here) could start returning `Err`. On `Err` the
+/// original, unwindowed history is used instead and the failure is logged
+/// via `tracing` -- never silently dropping context (an empty history) or
+/// failing the turn outright over a policy bug.
 pub(super) fn windowed_history_for_request(
     history: Vec<Message>,
     policy: &dyn MemoryPolicy,

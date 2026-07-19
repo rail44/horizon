@@ -168,6 +168,67 @@ pub(crate) const DEFAULT_HISTORY_TOKEN_BUDGET: usize = 60_000;
 /// token history budget, leaving the rest for conversation history and the
 /// turn's own prompt.
 pub(crate) const DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS: usize = 24_000;
+/// Token floor within which `providers::rig::memory::ToolResultPruningMemory`
+/// (axis B, `docs/research/agent-context-memory-separation-2026-07-20.md`'s
+/// "Decision (2026-07-20)") never elides a tool-result message's content,
+/// even under budget pressure -- protects the most recently landed
+/// tool-driven turns so pruning always reaches for the *oldest* bulky tool
+/// output first. 8,000 tokens is the same order of magnitude as opencode's
+/// own reported "protect most-recent ... 40k tokens" floor (see the research
+/// doc's opencode/crush deep-dive), scaled down to stay a modest fraction of
+/// Horizon's history budget rather than dominating it.
+pub(crate) const DEFAULT_PROTECTED_RECENT_TOOL_RESULT_TOKENS: usize = 8_000;
+/// Reserve subtracted from a model-derived history budget (see
+/// [`derive_history_token_budget`]) for the system prompt plus the composed
+/// "Repository instructions" section (`instructions::extra_sections`,
+/// capped at [`DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS`] = 24,000 chars,
+/// ~6,000 tokens at a ~4-chars-per-token rule of thumb). A fixed, generous
+/// estimate rather than a live measurement -- the real preamble varies per
+/// session (role/skills sections vary in size) and this only needs to be in
+/// the right order of magnitude, on the conservative side: ~6,000 tokens for
+/// repository instructions plus ~2,000 for the rest of the system prompt
+/// (identity, environment block, tool policy, destructive-action list -- see
+/// `prompt::system_prompt`).
+pub(crate) const HISTORY_BUDGET_PREAMBLE_RESERVE_TOKENS: usize = 8_000;
+/// Percentage of the remaining window (after subtracting a model's
+/// `max_output_length` and [`HISTORY_BUDGET_PREAMBLE_RESERVE_TOKENS`]) held
+/// back as safety margin in [`derive_history_token_budget`], against
+/// `rig_memory::HeuristicTokenCounter`'s own documented ~30% under-/
+/// over-count error on real content (a byte-length heuristic, not a real
+/// tokenizer -- see [`DEFAULT_HISTORY_TOKEN_BUDGET`]'s doc comment).
+pub(crate) const HISTORY_BUDGET_SAFETY_MARGIN_PERCENT: usize = 30;
+
+/// Derives a model-derived history token budget from a provider's `/models`
+/// catalog entry (`providers::rig::model_catalog`), per
+/// `docs/research/agent-context-memory-separation-2026-07-20.md`'s
+/// "Decision (2026-07-20)": `context_length − max_output_length −
+/// preamble_reserve − safety_margin`. Pure (no I/O) so it's directly
+/// unit-testable -- the network query and process-wide cache live in
+/// `providers::rig::model_catalog`, which calls this once it has resolved
+/// both raw fields.
+///
+/// Returns `None` (the caller keeps [`DEFAULT_HISTORY_TOKEN_BUDGET`]) when
+/// `context_length` is `0` -- mirrors crush's own "unknown window"
+/// protection (`internal/agent/agent.go`'s `cw==0` check, per the research
+/// doc): an unset/unresolvable window must never be *derived from*, only
+/// fallen back on -- or when the reserves leave nothing to budget with.
+pub(crate) fn derive_history_token_budget(
+    context_length: usize,
+    max_output_length: usize,
+) -> Option<usize> {
+    if context_length == 0 {
+        return None;
+    }
+    let available = context_length
+        .saturating_sub(max_output_length)
+        .saturating_sub(HISTORY_BUDGET_PREAMBLE_RESERVE_TOKENS);
+    if available == 0 {
+        return None;
+    }
+    let margin = available.saturating_mul(HISTORY_BUDGET_SAFETY_MARGIN_PERCENT) / 100;
+    let budget = available.saturating_sub(margin);
+    (budget > 0).then_some(budget)
+}
 
 pub const FS_GREP_MAX_BYTES_PRODUCTION_DEFAULT: u64 = 64 * 1024 * 1024;
 pub const FS_TRAVERSAL_MAX_FILES_PRODUCTION_DEFAULT: usize = 20_000;
@@ -265,6 +326,13 @@ pub struct RigAgentConfig {
     /// windowed_history_for_request`) -- `rig_history` itself, and the
     /// DuckDB-persisted event log it's rebuilt from, are never truncated.
     pub history_token_budget: usize,
+    /// Token floor within which a tool-result message is never elided by
+    /// axis B's pruning policy -- see
+    /// [`DEFAULT_PROTECTED_RECENT_TOOL_RESULT_TOKENS`] for why 8,000 was
+    /// chosen. Always that constant; read by `providers::rig::completion::
+    /// history_token_window_policy` when it builds
+    /// `providers::rig::memory::ToolResultPruningMemory`.
+    pub protected_recent_tool_result_tokens: usize,
     /// Character cap applied to the composed "Repository instructions"
     /// system-prompt section -- see
     /// [`DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS`] for why 24,000 was
@@ -297,6 +365,7 @@ impl Default for RigAgentConfig {
             stream_flush_interval_ms: DEFAULT_STREAM_FLUSH_INTERVAL_MS,
             stream_flush_chars: DEFAULT_STREAM_FLUSH_CHARS,
             history_token_budget: DEFAULT_HISTORY_TOKEN_BUDGET,
+            protected_recent_tool_result_tokens: DEFAULT_PROTECTED_RECENT_TOOL_RESULT_TOKENS,
             repository_instructions_cap_chars: DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS,
             allowed_tool_ids: None,
         }
@@ -314,6 +383,7 @@ impl RigAgentConfig {
             stream_flush_interval_ms: DEFAULT_STREAM_FLUSH_INTERVAL_MS,
             stream_flush_chars: DEFAULT_STREAM_FLUSH_CHARS,
             history_token_budget: DEFAULT_HISTORY_TOKEN_BUDGET,
+            protected_recent_tool_result_tokens: DEFAULT_PROTECTED_RECENT_TOOL_RESULT_TOKENS,
             repository_instructions_cap_chars: DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS,
             allowed_tool_ids: None,
         }
@@ -620,6 +690,10 @@ mod tests {
         assert_eq!(config.stream_flush_chars, DEFAULT_STREAM_FLUSH_CHARS);
         assert_eq!(config.history_token_budget, DEFAULT_HISTORY_TOKEN_BUDGET);
         assert_eq!(
+            config.protected_recent_tool_result_tokens,
+            DEFAULT_PROTECTED_RECENT_TOOL_RESULT_TOKENS
+        );
+        assert_eq!(
             config.repository_instructions_cap_chars,
             DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS
         );
@@ -788,5 +862,49 @@ mod tests {
         assert_eq!(config.fs.read_line_cap, DEFAULT_FS_READ_LINE_CAP);
         assert_eq!(config.fs.grep_result_limit, DEFAULT_FS_GREP_RESULT_LIMIT);
         assert_eq!(config.fs.glob_result_limit, DEFAULT_FS_GLOB_RESULT_LIMIT);
+    }
+
+    // --- derive_history_token_budget: axis A's pure formula ----------------
+
+    #[test]
+    fn derive_history_token_budget_matches_the_kimi_k2_7_code_example() {
+        // context_length/max_output_length as reported by synthetic.new for
+        // `hf:moonshotai/Kimi-K2.7-Code` (the research doc's own example,
+        // `docs/research/agent-context-memory-separation-2026-07-20.md`).
+        let budget = derive_history_token_budget(262_144, 65_536).expect("derivable");
+
+        let expected_available = 262_144 - 65_536 - HISTORY_BUDGET_PREAMBLE_RESERVE_TOKENS;
+        let expected_margin = expected_available * HISTORY_BUDGET_SAFETY_MARGIN_PERCENT / 100;
+        assert_eq!(budget, expected_available - expected_margin);
+        // Comfortably larger than the fixed 60k default this replaces --
+        // the whole point of axis A (would have fit the incident's ~99k
+        // tokens of turn-1 reads with room to spare).
+        assert!(budget > DEFAULT_HISTORY_TOKEN_BUDGET);
+    }
+
+    #[test]
+    fn derive_history_token_budget_scales_down_for_a_smaller_model() {
+        let small = derive_history_token_budget(32_000, 4_000).expect("derivable");
+        let large = derive_history_token_budget(262_144, 65_536).expect("derivable");
+
+        assert!(
+            small < large,
+            "a smaller served window must derive a smaller budget"
+        );
+    }
+
+    #[test]
+    fn derive_history_token_budget_is_none_when_context_length_is_zero() {
+        // Mirrors crush's own `cw==0` protection: an unresolvable/unknown
+        // window must never be derived from, only fallen back on.
+        assert_eq!(derive_history_token_budget(0, 0), None);
+        assert_eq!(derive_history_token_budget(0, 1_000), None);
+    }
+
+    #[test]
+    fn derive_history_token_budget_is_none_when_reserves_exceed_the_window() {
+        // A tiny model whose reserves alone (max output + preamble) already
+        // consume the whole context window must fall back, not underflow.
+        assert_eq!(derive_history_token_budget(10_000, 9_000), None);
     }
 }
