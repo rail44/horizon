@@ -426,11 +426,12 @@ mod tests {
     /// The shared contract has since advanced past the breaking terminal
     /// discovery/attach vocabulary introduced alongside session recovery
     /// (v4); v5 is the terminal frame's move to the Horizon-owned color
-    /// vocabulary, and v6 is the removal of `Hello`'s dead `capabilities`
-    /// field (2026-07-18).
+    /// vocabulary, v6 is the removal of `Hello`'s dead `capabilities`
+    /// field (2026-07-18), and v7 is the frame vocabulary's style bits /
+    /// semantic selection / cursor shape extension (2026-07-19).
     #[test]
     fn contract_version_includes_correlated_terminal_recovery() {
-        assert_eq!(CONTRACT_VERSION, 6);
+        assert_eq!(CONTRACT_VERSION, 7);
     }
 
     /// Unlike `role_id` above, `SessionNew.workspace_root` is a brand-new,
@@ -438,10 +439,11 @@ mod tests {
     /// its own doc comment. Additive changes don't need a version bump;
     /// the current value reflects later breaking changes in the terminal
     /// domain's vocabulary (v4 discovery/attach, v5 owned colors, v6
-    /// dropped `Hello.capabilities`).
+    /// dropped `Hello.capabilities`, v7 frame styles/selection/cursor
+    /// shape).
     #[test]
     fn contract_version_was_not_bumped_for_the_additive_workspace_root_field() {
-        assert_eq!(CONTRACT_VERSION, 6);
+        assert_eq!(CONTRACT_VERSION, 7);
     }
 
     /// Same rule as `workspace_root` above, for the two session-relationship
@@ -451,7 +453,7 @@ mod tests {
     /// reshapes of existing ones -- no version bump needed.
     #[test]
     fn contract_version_was_not_bumped_for_the_additive_lineage_fields() {
-        assert_eq!(CONTRACT_VERSION, 6);
+        assert_eq!(CONTRACT_VERSION, 7);
     }
 
     /// A brand-new `Control` variant is exactly as additive as a new field
@@ -461,7 +463,7 @@ mod tests {
     /// version bump.
     #[test]
     fn contract_version_was_not_bumped_for_the_workspace_root_resolved_announcement() {
-        assert_eq!(CONTRACT_VERSION, 6);
+        assert_eq!(CONTRACT_VERSION, 7);
     }
 
     /// A `session_new` control message written by a peer built before

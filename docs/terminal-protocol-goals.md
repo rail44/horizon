@@ -57,9 +57,11 @@ the wire so this swap is invisible to clients.
 2. **The vocabulary is Horizon-owned and semantic; presentation resolves
    client-side.** This generalizes decision 8 (logical colors on the
    wire). Style bits extend `TerminalSpan` per backlog #44. Selection
-   stops being baked into frames as literal RGB (`core/render.rs`'s
-   hardcoded highlight is a recorded deviation from this goal) and
-   becomes semantic metadata the client resolves against the theme.
+   stops being baked into frames as literal RGB and becomes semantic
+   metadata the client resolves against the theme. (Both landed
+   2026-07-19 in the v7 vocabulary; `core/render.rs`'s hardcoded
+   highlight — the previously recorded deviation from this goal — is
+   gone.)
 
 3. **Diff information survives end to end — but correctness never
    depends on it.** `changed_rows` reaches the view layer and drives
@@ -116,9 +118,9 @@ the wire so this swap is invisible to clients.
 
 ## Open
 
-- Wire-version cadence: whether backlog #44's style bits and goal 2's
-  semantic selection land as one frame-vocabulary bump or two. Neither
-  ordering breaks the goals; decide when implementation order is known.
+- Wire-version cadence: resolved 2026-07-19 — backlog #44's style bits
+  and goal 2's semantic selection landed as one frame-vocabulary bump
+  (session-protocol v7, which also added the cursor's DECSCUSR shape).
 
 ## Derived near-term work (recorded, not scheduled)
 

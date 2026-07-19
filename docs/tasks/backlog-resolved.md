@@ -905,3 +905,30 @@ full resolution/closing records.
       that never produced a child. Passes; no production code change was
       needed since `exec::run`'s single-shot `spawn()` call already
       cleans up completely on every `Err` path.
+44. *(resolved 2026-07-19)* **SGR text styles never reach frames —
+    `TerminalSpan` has no style field.** Found during the 2026-07-18
+    background-fill investigation: alacritty_terminal parses italic,
+    underline (including styled underlines/undercurl), and
+    strikethrough, but `core/render.rs`'s span production threaded only
+    fg/bg — the frame vocabulary could not express text styles at all.
+    Real-world surface: nvim probed undercurl support via DECRQSS
+    (`4:3m` then `DCS $q m`) and got silence. **Fix:** landed as the
+    designed contract extension the entry called for, one third of the
+    session-protocol v7 frame-vocabulary bump (together with goal 2's
+    semantic selection and the cursor-shape addition — see
+    `docs/terminal-protocol-goals.md` and `crates/horizon-session-
+    protocol/src/lib.rs`'s version history). `TerminalSpan` now carries
+    `italic`, `strikethrough`, `underline` (a `TerminalUnderline` enum:
+    single/double/curl/dotted/dashed), and the SGR 58 `underline_color`
+    (`None` = draw with the span's fg); `core/render.rs` maps them from
+    the cell's `Flags`/`underline_color()` and includes them in the
+    span-merge key, while the existing BOLD/DIM→color folding and
+    INVERSE→fg/bg swap deliberately stay as they were (recorded
+    decisions). `paint_terminal` (`src/terminal/mod.rs`) maps them onto
+    gpui: italic → `FontStyle::Italic`, underline/strikethrough →
+    `TextRun`'s `UnderlineStyle`/`StrikethroughStyle` (curl → wavy;
+    dotted/dashed draw as single for now — gpui has no such variants;
+    double approximates via 2px thickness). Covered by
+    `sgr_text_styles_reach_the_span`/`sgr_58_underline_color_reaches_
+    the_span`/`style_attributes_are_part_of_the_span_merge_key` in
+    `crates/horizon-terminal-core/src/tests.rs`.

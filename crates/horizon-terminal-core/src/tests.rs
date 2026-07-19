@@ -181,31 +181,207 @@ fn mid_line_space_run_with_background_is_a_blank_colored_span() {
     assert_eq!(padding.columns, 3);
 }
 
-/// Selection highlighting rides the same `push_styled_cell` path
-/// (`core::render::snapshot_frame` overrides `fg`/`bg` to the selection
-/// colors *before* building spans) -- so a selection dragged across
-/// blank/space cells past the end of typed text must produce a blank span
-/// carrying the selection's background, the frame-level half of the
-/// "selected lines' backgrounds are interrupted" symptom.
+/// Goal 2 of `docs/terminal-protocol-goals.md`: selection is semantic
+/// frame metadata (`TerminalFrame::selection`), not literal RGB baked into
+/// span colors -- a selected frame's rows are byte-identical to the
+/// unselected frame's, and only the `selection` field moves. (Before v7,
+/// `snapshot_frame` overrode selected cells' `fg`/`bg` to a hardcoded
+/// highlight, so every drag rewrote row content.)
 #[test]
-fn selection_over_blank_cells_is_a_selection_colored_blank_span() {
+fn selection_is_frame_metadata_and_leaves_spans_untouched() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     core.write_vt(b"hi");
+    let unselected = core.snapshot_frame();
+    assert_eq!(unselected.selection, None);
+
     core.start_selection(
         TerminalSelectionPoint { row: 0, col: 0 },
         TerminalSelectionKind::Simple,
     );
     core.update_selection(TerminalSelectionPoint { row: 0, col: 19 });
 
+    let selected = core.snapshot_frame();
+    assert_eq!(selected.lines, unselected.lines);
+    assert_eq!(
+        selected.selection,
+        Some(TerminalSelection {
+            start: TerminalSelectionPoint { row: 0, col: 0 },
+            end: TerminalSelectionPoint { row: 0, col: 19 },
+        })
+    );
+}
+
+/// `TerminalFrame::selection` is viewport-space and window-clamped: a
+/// selection made on the live screen then scrolled out through history
+/// browsing either clamps to the visible intersection (partially visible)
+/// or drops to `None` (fully outside), never reporting an out-of-range
+/// row.
+#[test]
+fn selection_is_clamped_to_the_viewport_or_dropped() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    // 12 numbered lines on a 4-row screen: rows 8..=11 are visible, the
+    // rest is scrollback history above the live screen.
+    for n in 0..12 {
+        core.write_vt(format!("line{n}\r\n").as_bytes());
+    }
+    core.start_selection(
+        TerminalSelectionPoint { row: 0, col: 1 },
+        TerminalSelectionKind::Simple,
+    );
+    core.update_selection(TerminalSelectionPoint { row: 1, col: 2 });
+    assert_eq!(
+        core.snapshot_frame().selection,
+        Some(TerminalSelection {
+            start: TerminalSelectionPoint { row: 0, col: 1 },
+            end: TerminalSelectionPoint { row: 1, col: 2 },
+        })
+    );
+
+    // Scroll one line back into history: the selection's rows shift down
+    // by one and its tail row leaves the window, clamping the end to the
+    // bottom edge's full-row boundary.
+    core.scroll_display(3);
+    assert_eq!(
+        core.snapshot_frame().selection,
+        Some(TerminalSelection {
+            start: TerminalSelectionPoint { row: 3, col: 1 },
+            end: TerminalSelectionPoint { row: 3, col: 19 },
+        })
+    );
+
+    // Scroll far enough that the whole selection is below the viewport.
+    core.scroll_display(5);
+    assert_eq!(core.snapshot_frame().selection, None);
+}
+
+/// Backlog #44: SGR text styles reach the frame as span attributes.
+/// Covers the plain forms (3/4/9) plus SGR 4's colon sub-parameter styles
+/// (`4:2`..`4:5` -- `4:3` is nvim's undercurl probe) and reset (`4:0`).
+#[test]
+fn sgr_text_styles_reach_the_span() {
+    let mut core = TerminalCore::new(TerminalSize::new(40, 8));
+    core.write_vt(
+        b"\x1b[3mI\x1b[0m\r\n\
+          \x1b[9mS\x1b[0m\r\n\
+          \x1b[4mU\x1b[0m\r\n\
+          \x1b[4:2mD\x1b[0m\r\n\
+          \x1b[4:3mC\x1b[0m\r\n\
+          \x1b[4:4mO\x1b[0m\r\n\
+          \x1b[4:5mA\x1b[0m\r\n\
+          \x1b[4mX\x1b[4:0mP",
+    );
+
     let frame = core.snapshot_frame();
-    let first_line = &frame.lines[0];
-    let selected_blank = first_line
-        .spans
-        .iter()
-        .find(|span| span.text.is_empty())
-        .expect("the selected blank tail should be a blank span");
-    assert_eq!(selected_blank.bg, TerminalColor::Rgb([132, 220, 198]));
-    assert_eq!(selected_blank.columns, 18);
+    let span = |row: usize, text: &str| {
+        frame.lines[row]
+            .spans
+            .iter()
+            .find(|span| span.text == text)
+            .unwrap_or_else(|| panic!("no span {text:?} on row {row}"))
+            .clone()
+    };
+
+    assert!(span(0, "I").italic);
+    assert!(!span(0, "I").strikethrough);
+    assert!(span(1, "S").strikethrough);
+    assert_eq!(span(2, "U").underline, TerminalUnderline::Single);
+    assert_eq!(span(3, "D").underline, TerminalUnderline::Double);
+    assert_eq!(span(4, "C").underline, TerminalUnderline::Curl);
+    assert_eq!(span(5, "O").underline, TerminalUnderline::Dotted);
+    assert_eq!(span(6, "A").underline, TerminalUnderline::Dashed);
+    assert_eq!(span(7, "X").underline, TerminalUnderline::Single);
+    assert_eq!(span(7, "P").underline, TerminalUnderline::None);
+    // Style is part of the span-merge key: the underlined "X" and plain
+    // "P" may not collapse into one span.
+    assert!(frame.lines[7].spans.len() >= 2);
+}
+
+/// SGR 58 (underline color) reaches the span in both its truecolor and
+/// indexed forms, and is normalized away on a cell that is not underlined
+/// (`TerminalSpan::underline_color`'s contract).
+#[test]
+fn sgr_58_underline_color_reaches_the_span() {
+    let mut core = TerminalCore::new(TerminalSize::new(40, 4));
+    core.write_vt(
+        b"\x1b[4:3m\x1b[58:2::255:10:20mR\x1b[0m\r\n\
+          \x1b[4m\x1b[58:5:208mI\x1b[0m\r\n\
+          \x1b[58:2::1:2:3mN",
+    );
+
+    let frame = core.snapshot_frame();
+    let span = |row: usize, text: &str| {
+        frame.lines[row]
+            .spans
+            .iter()
+            .find(|span| span.text == text)
+            .unwrap_or_else(|| panic!("no span {text:?} on row {row}"))
+            .clone()
+    };
+
+    let curl = span(0, "R");
+    assert_eq!(curl.underline, TerminalUnderline::Curl);
+    assert_eq!(
+        curl.underline_color,
+        Some(TerminalColor::Rgb([255, 10, 20]))
+    );
+
+    let indexed = span(1, "I");
+    assert_eq!(indexed.underline, TerminalUnderline::Single);
+    assert_eq!(indexed.underline_color, Some(TerminalColor::Indexed(208)));
+
+    // No underline -> the SGR 58 color is presentation-dead and dropped.
+    let plain = span(2, "N");
+    assert_eq!(plain.underline, TerminalUnderline::None);
+    assert_eq!(plain.underline_color, None);
+}
+
+/// Style attributes are part of `push_styled_cell`'s span-merge key: a
+/// blank (space) run only extends the previous blank span while *every*
+/// attribute matches, so an underlined blank run and a plain blank run
+/// stay separate spans instead of silently collapsing into one.
+/// (Printable characters are one span each today -- run merging across
+/// them is separate, future work per `docs/terminal-protocol-goals.md`.)
+#[test]
+fn style_attributes_are_part_of_the_span_merge_key() {
+    let mut core = TerminalCore::new(TerminalSize::new(40, 4));
+    // Two underlined spaces, then two plain spaces, then a marker.
+    core.write_vt(b"\x1b[4m  \x1b[0m  X");
+
+    let frame = core.snapshot_frame();
+    let spans = &frame.lines[0].spans;
+    assert_eq!(spans[0].text, "");
+    assert_eq!(spans[0].columns, 2);
+    assert_eq!(spans[0].underline, TerminalUnderline::Single);
+    assert_eq!(spans[1].text, "");
+    assert_eq!(spans[1].columns, 2);
+    assert_eq!(spans[1].underline, TerminalUnderline::None);
+    assert_eq!(spans[2].text, "X");
+    assert!(!spans[2].italic);
+}
+
+/// DECSCUSR (`CSI Ps SP q`) shape changes ride `TerminalCursor::shape`;
+/// DECTCEM hide (`CSI ?25l`) drops the cursor from the frame entirely.
+#[test]
+fn cursor_shape_and_visibility_reach_the_frame() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    let shape = |core: &TerminalCore| core.snapshot_frame().cursor.map(|cursor| cursor.shape);
+
+    assert_eq!(shape(&core), Some(TerminalCursorShape::Block));
+
+    core.write_vt(b"\x1b[4 q");
+    assert_eq!(shape(&core), Some(TerminalCursorShape::Underline));
+
+    core.write_vt(b"\x1b[6 q");
+    assert_eq!(shape(&core), Some(TerminalCursorShape::Beam));
+
+    core.write_vt(b"\x1b[?25l");
+    assert_eq!(shape(&core), None);
+
+    core.write_vt(b"\x1b[?25h");
+    assert_eq!(shape(&core), Some(TerminalCursorShape::Beam));
+
+    core.write_vt(b"\x1b[2 q");
+    assert_eq!(shape(&core), Some(TerminalCursorShape::Block));
 }
 
 #[test]
@@ -1864,21 +2040,30 @@ fn test_frame(rows: &[&str]) -> TerminalFrame {
     let lines = rows
         .iter()
         .map(|text| TerminalLine {
-            spans: vec![TerminalSpan {
-                text: (*text).to_string(),
-                columns: text.chars().count(),
-                fg: TerminalColor::Named(NamedColor::Foreground),
-                bg: TerminalColor::Named(NamedColor::Background),
-            }],
+            spans: vec![plain_span((*text).to_string(), text.chars().count())],
         })
         .collect::<Vec<_>>();
     TerminalFrame {
         text: rows.join("\n"),
         lines,
         cursor: None,
+        selection: None,
         mouse_reporting: false,
         keys_as_escape_codes: false,
         palette_overrides: Vec::new(),
+    }
+}
+
+fn plain_span(text: String, columns: usize) -> TerminalSpan {
+    TerminalSpan {
+        text,
+        columns,
+        fg: TerminalColor::Named(NamedColor::Foreground),
+        bg: TerminalColor::Named(NamedColor::Background),
+        italic: false,
+        strikethrough: false,
+        underline: TerminalUnderline::None,
+        underline_color: None,
     }
 }
 
@@ -2042,6 +2227,7 @@ fn frame_diff_no_op_has_no_changes() {
     assert!(diff.changed_rows.is_empty());
     assert_eq!(diff.row_count, 2);
     assert_eq!(diff.cursor, None);
+    assert_eq!(diff.selection, None);
     assert_eq!(diff.mouse_reporting, None);
     assert_eq!(diff.keys_as_escape_codes, None);
     assert_eq!(diff.palette_overrides, None);
@@ -2079,7 +2265,16 @@ fn frame_diff_grows_and_shrinks_rows() {
 fn frame_diff_tracks_each_metadata_change_without_rows() {
     let old = test_frame(&["same"]);
     let mut cursor = old.clone();
-    cursor.cursor = Some(TerminalCursor { row: 0, col: 2 });
+    cursor.cursor = Some(TerminalCursor {
+        row: 0,
+        col: 2,
+        shape: TerminalCursorShape::Block,
+    });
+    let mut selection = old.clone();
+    selection.selection = Some(TerminalSelection {
+        start: TerminalSelectionPoint { row: 0, col: 1 },
+        end: TerminalSelectionPoint { row: 0, col: 3 },
+    });
     let mut mouse = old.clone();
     mouse.mouse_reporting = true;
     let mut keys = old.clone();
@@ -2087,11 +2282,41 @@ fn frame_diff_tracks_each_metadata_change_without_rows() {
     let mut palette = old.clone();
     palette.palette_overrides = vec![(3, [10, 20, 30])];
 
-    for expected in [cursor, mouse, keys, palette] {
+    for expected in [cursor, selection, mouse, keys, palette] {
         let diff = compute_frame_diff(&old, &expected);
         assert!(diff.changed_rows.is_empty());
         assert_eq!(apply_frame_diff(&old, &diff), expected);
     }
+}
+
+/// The wire-level half of goal 2 (`docs/terminal-protocol-goals.md`):
+/// dragging a selection changes no row content, so the diff between two
+/// frames differing only in selection is `changed_rows`-empty and carries
+/// the transition in the `selection` field alone -- including the
+/// `Some(None)` "selection cleared" transition, the cursor idiom.
+#[test]
+fn selection_only_change_diffs_without_rows() {
+    let unselected = test_frame(&["one", "two"]);
+    let mut selected = unselected.clone();
+    let selection = TerminalSelection {
+        start: TerminalSelectionPoint { row: 0, col: 0 },
+        end: TerminalSelectionPoint { row: 1, col: 2 },
+    };
+    selected.selection = Some(selection);
+
+    let select = compute_frame_diff(&unselected, &selected);
+    assert!(select.changed_rows.is_empty());
+    assert_eq!(select.selection, Some(Some(selection)));
+    assert_eq!(apply_frame_diff(&unselected, &select), selected);
+
+    let clear = compute_frame_diff(&selected, &unselected);
+    assert!(clear.changed_rows.is_empty());
+    assert_eq!(clear.selection, Some(None));
+    assert_eq!(apply_frame_diff(&selected, &clear), unselected);
+
+    let unchanged = compute_frame_diff(&selected, &selected);
+    assert_eq!(unchanged.selection, None);
+    assert_eq!(apply_frame_diff(&selected, &unchanged), selected);
 }
 
 #[test]
@@ -2099,27 +2324,29 @@ fn frame_diff_apply_reconstructs_snapshot_text_from_styled_rows() {
     let old = test_frame(&["old"]);
     let mut new = test_frame(&["placeholder", "wide"]);
     new.lines[0].spans = vec![
-        TerminalSpan {
-            text: String::new(),
-            columns: 2,
-            fg: TerminalColor::Named(NamedColor::Foreground),
-            bg: TerminalColor::Named(NamedColor::Background),
-        },
+        plain_span(String::new(), 2),
         TerminalSpan {
             text: "value".into(),
             columns: 5,
             fg: TerminalColor::Indexed(12),
             bg: TerminalColor::Rgb([4, 5, 6]),
+            italic: true,
+            strikethrough: true,
+            underline: TerminalUnderline::Curl,
+            underline_color: Some(TerminalColor::Rgb([250, 60, 60])),
         },
     ];
-    new.lines[1].spans = vec![TerminalSpan {
-        text: "界".into(),
-        columns: 2,
-        fg: TerminalColor::Named(NamedColor::Foreground),
-        bg: TerminalColor::Named(NamedColor::Background),
-    }];
+    new.lines[1].spans = vec![plain_span("界".into(), 2)];
     new.text = "  value\n界".into();
-    new.cursor = Some(TerminalCursor { row: 1, col: 2 });
+    new.cursor = Some(TerminalCursor {
+        row: 1,
+        col: 2,
+        shape: TerminalCursorShape::Beam,
+    });
+    new.selection = Some(TerminalSelection {
+        start: TerminalSelectionPoint { row: 0, col: 2 },
+        end: TerminalSelectionPoint { row: 1, col: 1 },
+    });
     new.mouse_reporting = true;
     new.keys_as_escape_codes = true;
     new.palette_overrides = vec![(256, [7, 8, 9])];

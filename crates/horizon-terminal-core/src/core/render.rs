@@ -1,15 +1,17 @@
+use alacritty_terminal::selection::SelectionRange;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte::ansi::{
-    Color as AnsiColor, NamedColor as AnsiNamedColor, Rgb as AnsiRgb,
+    Color as AnsiColor, CursorShape as AnsiCursorShape, NamedColor as AnsiNamedColor,
+    Rgb as AnsiRgb,
 };
 use unicode_width::UnicodeWidthChar;
 
 use crate::core::events::EventSink;
 use crate::types::frame_text;
 use crate::types::{
-    NamedColor, TerminalColor, TerminalCursor, TerminalFrame, TerminalLine, TerminalSize,
-    TerminalSpan,
+    NamedColor, TerminalColor, TerminalCursor, TerminalCursorShape, TerminalFrame, TerminalLine,
+    TerminalSelection, TerminalSelectionPoint, TerminalSize, TerminalSpan, TerminalUnderline,
 };
 
 pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> TerminalFrame {
@@ -50,20 +52,12 @@ pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> Term
             continue;
         }
 
-        let fg = convert_color(cell_fg(cell.fg, cell.flags));
-        let bg = convert_color(cell_bg(cell.bg, cell.flags));
-        let (fg, bg) = if content
-            .selection
-            .as_ref()
-            .is_some_and(|selection| selection.contains(indexed.point))
-        {
-            (
-                TerminalColor::Named(NamedColor::Background),
-                TerminalColor::Rgb([132, 220, 198]),
-            )
-        } else {
-            (fg, bg)
-        };
+        // Selection deliberately does *not* touch fg/bg here anymore: it
+        // rides the frame as semantic metadata (`TerminalFrame::selection`,
+        // built below from `content.selection`), so spans stay pure content
+        // and dragging a selection changes no rows -- goal 2 of
+        // `docs/terminal-protocol-goals.md`.
+        let style = SpanStyle::from_cell(cell.fg, cell.bg, cell.flags, cell.underline_color());
         let columns = cell_width(cell.c, cell.flags);
         if cell.flags.contains(Flags::HIDDEN) {
             // SGR 8 (conceal) hides the glyph but the cell still occupies
@@ -75,13 +69,13 @@ pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> Term
             // offset stays correct for whatever comes after it, instead of
             // silently dropping the column and shifting later spans left
             // (backlog 45).
-            push_styled_cell(&mut styled_rows[row], ' ', columns, fg, bg);
+            push_styled_cell(&mut styled_rows[row], ' ', columns, style);
             continue;
         }
-        push_styled_cell(&mut styled_rows[row], cell.c, columns, fg, bg);
+        push_styled_cell(&mut styled_rows[row], cell.c, columns, style);
         if let Some(zerowidth) = cell.zerowidth() {
             for ch in zerowidth {
-                push_styled_cell(&mut styled_rows[row], *ch, 0, fg, bg);
+                push_styled_cell(&mut styled_rows[row], *ch, 0, style);
             }
         }
     }
@@ -92,10 +86,12 @@ pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> Term
         text,
         lines: styled_rows,
         cursor: cursor_position(
+            content.cursor.shape,
             content.cursor.point.line.0 + display_offset,
             content.cursor.point.column.0,
             size.rows as usize,
         ),
+        selection: selection_in_viewport(content.selection, display_offset, size),
         mouse_reporting: term.mode().intersects(TermMode::MOUSE_MODE)
             && term.mode().contains(TermMode::SGR_MOUSE),
         keys_as_escape_codes: term.mode().contains(TermMode::REPORT_ALL_KEYS_AS_ESC),
@@ -115,41 +111,107 @@ fn palette_overrides(term: &Term<EventSink>) -> Vec<(u16, [u8; 3])> {
         .collect()
 }
 
-fn push_styled_cell(
-    line: &mut TerminalLine,
-    ch: char,
-    columns: usize,
+/// A cell's full presentation state, as one value: the span-merge key of
+/// [`push_styled_cell`] (two adjacent cells share a span exactly when every
+/// field here matches) and the source of every style field on the produced
+/// [`TerminalSpan`].
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct SpanStyle {
     fg: TerminalColor,
     bg: TerminalColor,
-) {
+    italic: bool,
+    strikethrough: bool,
+    underline: TerminalUnderline,
+    underline_color: Option<TerminalColor>,
+}
+
+impl SpanStyle {
+    fn from_cell(
+        fg: AnsiColor,
+        bg: AnsiColor,
+        flags: Flags,
+        underline_color: Option<AnsiColor>,
+    ) -> Self {
+        let underline = underline_kind(flags);
+        Self {
+            fg: convert_color(cell_fg(fg, flags)),
+            bg: convert_color(cell_bg(bg, flags)),
+            italic: flags.contains(Flags::ITALIC),
+            strikethrough: flags.contains(Flags::STRIKEOUT),
+            underline,
+            // An SGR 58 color on a cell that is not underlined is
+            // presentation-dead -- normalize it away so it neither splits
+            // spans nor rides the wire (`TerminalSpan::underline_color`'s
+            // contract).
+            underline_color: (underline != TerminalUnderline::None)
+                .then(|| underline_color.map(convert_color))
+                .flatten(),
+        }
+    }
+
+    fn matches(&self, span: &TerminalSpan) -> bool {
+        span.fg == self.fg
+            && span.bg == self.bg
+            && span.italic == self.italic
+            && span.strikethrough == self.strikethrough
+            && span.underline == self.underline
+            && span.underline_color == self.underline_color
+    }
+
+    fn span(&self, text: String, columns: usize) -> TerminalSpan {
+        TerminalSpan {
+            text,
+            columns,
+            fg: self.fg,
+            bg: self.bg,
+            italic: self.italic,
+            strikethrough: self.strikethrough,
+            underline: self.underline,
+            underline_color: self.underline_color,
+        }
+    }
+}
+
+/// The one underline style a cell's flags express. alacritty stores the
+/// five SGR 4 sub-styles as separate bits but only ever sets one at a time
+/// (`Term::set_attribute` clears `ALL_UNDERLINES` before setting); the
+/// match order below is alacritty's own display precedence for the
+/// (unreachable in practice) multi-bit case.
+fn underline_kind(flags: Flags) -> TerminalUnderline {
+    if flags.contains(Flags::DOUBLE_UNDERLINE) {
+        TerminalUnderline::Double
+    } else if flags.contains(Flags::UNDERCURL) {
+        TerminalUnderline::Curl
+    } else if flags.contains(Flags::DOTTED_UNDERLINE) {
+        TerminalUnderline::Dotted
+    } else if flags.contains(Flags::DASHED_UNDERLINE) {
+        TerminalUnderline::Dashed
+    } else if flags.contains(Flags::UNDERLINE) {
+        TerminalUnderline::Single
+    } else {
+        TerminalUnderline::None
+    }
+}
+
+fn push_styled_cell(line: &mut TerminalLine, ch: char, columns: usize, style: SpanStyle) {
     if let Some(last) = line.spans.last_mut() {
-        if columns == 0 && last.fg == fg && last.bg == bg {
+        if columns == 0 && style.matches(last) {
             last.text.push(ch);
             return;
         }
 
-        if ch == ' ' && columns > 0 && last.text.is_empty() && last.fg == fg && last.bg == bg {
+        if ch == ' ' && columns > 0 && last.text.is_empty() && style.matches(last) {
             last.columns += columns;
             return;
         }
     }
 
     if ch == ' ' && columns > 0 {
-        line.spans.push(TerminalSpan {
-            text: String::new(),
-            columns,
-            fg,
-            bg,
-        });
+        line.spans.push(style.span(String::new(), columns));
         return;
     }
 
-    line.spans.push(TerminalSpan {
-        text: ch.to_string(),
-        columns,
-        fg,
-        bg,
-    });
+    line.spans.push(style.span(ch.to_string(), columns));
 }
 
 fn cell_width(ch: char, flags: Flags) -> usize {
@@ -200,12 +262,72 @@ fn cell_bg(color: AnsiColor, flags: Flags) -> AnsiColor {
 /// the live cursor is above the current (scrolled-up) viewport, and
 /// `row >= rows` means it's below -- either way the real cursor isn't part
 /// of what's currently on screen, so it must not be reported as visible at
-/// some other, wrong row.
-fn cursor_position(row: i32, col: usize, rows: usize) -> Option<TerminalCursor> {
+/// some other, wrong row. A DECTCEM-hidden cursor (`shape == Hidden`, how
+/// `RenderableCursor` reports `CSI ?25l`) is likewise `None` -- hidden means
+/// no cursor on the wire, not a shape variant.
+fn cursor_position(
+    shape: AnsiCursorShape,
+    row: i32,
+    col: usize,
+    rows: usize,
+) -> Option<TerminalCursor> {
+    let shape = match shape {
+        AnsiCursorShape::Block => TerminalCursorShape::Block,
+        AnsiCursorShape::Underline => TerminalCursorShape::Underline,
+        AnsiCursorShape::Beam => TerminalCursorShape::Beam,
+        AnsiCursorShape::HollowBlock => TerminalCursorShape::HollowBlock,
+        AnsiCursorShape::Hidden => return None,
+    };
     (row >= 0 && (row as usize) < rows).then_some(TerminalCursor {
         row: row as usize,
         col,
+        shape,
     })
+}
+
+/// Convert alacritty's buffer-coordinate `SelectionRange` into the frame's
+/// viewport-space [`TerminalSelection`]: shift by `display_offset` (the
+/// same absolute-line -> viewport-row conversion `snapshot_frame` applies
+/// to every cell) and clamp to the visible window. `None` when the
+/// selection misses the window entirely. Every row strictly between the
+/// two endpoints is fully selected (`TerminalSelectionKind` mints no block
+/// selections, so `SelectionRange::is_block` is never set on this path),
+/// which is what makes clamping an endpoint to the window edge exact: the
+/// off-screen remainder covered its rows in full.
+fn selection_in_viewport(
+    range: Option<SelectionRange>,
+    display_offset: i32,
+    size: TerminalSize,
+) -> Option<TerminalSelection> {
+    let range = range?;
+    let rows = size.rows as i32;
+    let last_col = size.cols.saturating_sub(1) as usize;
+    let start_row = range.start.line.0 + display_offset;
+    let end_row = range.end.line.0 + display_offset;
+    if end_row < 0 || start_row >= rows {
+        return None;
+    }
+
+    let start = if start_row < 0 {
+        TerminalSelectionPoint { row: 0, col: 0 }
+    } else {
+        TerminalSelectionPoint {
+            row: start_row as usize,
+            col: range.start.column.0.min(last_col),
+        }
+    };
+    let end = if end_row >= rows {
+        TerminalSelectionPoint {
+            row: (rows - 1) as usize,
+            col: last_col,
+        }
+    } else {
+        TerminalSelectionPoint {
+            row: end_row as usize,
+            col: range.end.column.0.min(last_col),
+        }
+    };
+    Some(TerminalSelection { start, end })
 }
 
 /// Convert `alacritty_terminal`'s VT-internal color representation into

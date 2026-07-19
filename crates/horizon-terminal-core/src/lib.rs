@@ -31,9 +31,10 @@ pub use core::{TerminalColorScheme, DEFAULT_SCROLLBACK_LINES};
 pub use session_loop::{run_terminal_core, CoreReceivers, CoreSenders, TerminalCoreOptions};
 pub use types::{
     apply_frame_diff, compute_frame_diff, KeyEventKind, NamedColor, TerminalColor, TerminalCursor,
-    TerminalFrame, TerminalFrameDiff, TerminalLine, TerminalMouseButton, TerminalMouseKind,
-    TerminalMouseModifiers, TerminalMouseReport, TerminalRowDiff, TerminalScroll,
-    TerminalSelectionKind, TerminalSelectionPoint, TerminalSize, TerminalSpan,
+    TerminalCursorShape, TerminalFrame, TerminalFrameDiff, TerminalLine, TerminalMouseButton,
+    TerminalMouseKind, TerminalMouseModifiers, TerminalMouseReport, TerminalRowDiff,
+    TerminalScroll, TerminalSelection, TerminalSelectionKind, TerminalSelectionPoint, TerminalSize,
+    TerminalSpan, TerminalUnderline,
 };
 
 #[cfg(test)]

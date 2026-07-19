@@ -75,17 +75,6 @@ entries live in `backlog-resolved.md` keeping their original numbers
     follow-up: see the `portable-pty` backlog entry for options (upgrade,
     vendor patch, or accept the retry mitigation as the practical ceiling
     given how rare it now is).
-44. **SGR text styles never reach frames — `TerminalSpan` has no style
-    field.** Found during the 2026-07-18 background-fill investigation:
-    alacritty_terminal parses italic, underline (including styled
-    underlines/undercurl), and strikethrough, but `core/render.rs`'s
-    span production threads only fg/bg — the frame vocabulary cannot
-    express text styles at all. Real-world surface: nvim probed
-    undercurl support via DECRQSS (`4:3m` then `DCS $q m`) and got
-    silence. Fixing needs a frame-shape addition (style bits on
-    `TerminalSpan`, protocol-affecting) plus paint support — a designed
-    contract extension, not a patch. Recorded 2026-07-18.
-
 47. **Event-log turn tracker: `turn_id` goes permanently null after a
     turn's first approval.** `persistence/event_log/turn.rs` opens a
     turn on a user message and closes it on `WaitingForApproval`/

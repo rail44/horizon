@@ -2,12 +2,22 @@ use serde::{Deserialize, Serialize};
 use unicode_width::UnicodeWidthChar;
 
 use super::color::{NamedColor, TerminalColor};
+use super::mouse::TerminalSelectionPoint;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TerminalFrame {
     pub text: String,
     pub lines: Vec<TerminalLine>,
     pub cursor: Option<TerminalCursor>,
+    /// The live selection as semantic frame metadata (goal 2 of
+    /// `docs/terminal-protocol-goals.md`): spans stay pure content, and the
+    /// client resolves the highlight color against its own theme. Viewport
+    /// coordinates (the same space as [`TerminalCursor`]), both ends
+    /// inclusive. Clamped to the visible window: `None` while nothing is
+    /// selected *or* while the selection lies entirely outside the current
+    /// viewport; a partially visible selection carries only its visible
+    /// intersection.
+    pub selection: Option<TerminalSelection>,
     pub mouse_reporting: bool,
     /// Whether the attached app negotiated kitty's "report all keys as
     /// escape codes" progressive enhancement (`TermMode::
@@ -41,21 +51,82 @@ pub struct TerminalSpan {
     pub columns: usize,
     pub fg: TerminalColor,
     pub bg: TerminalColor,
+    /// SGR 3. `BOLD`/`DIM` are deliberately *not* mirrored here — they stay
+    /// folded into `fg` as color promotion (`core::render::cell_fg`), and
+    /// `INVERSE` stays folded in as the fg/bg swap (`cell_bg`), both
+    /// recorded decisions.
+    pub italic: bool,
+    /// SGR 9.
+    pub strikethrough: bool,
+    /// SGR 4 and its `4:x` sub-parameter styles (backlog #44's nvim
+    /// undercurl probe is `4:3`).
+    pub underline: TerminalUnderline,
+    /// SGR 58 underline color. `None` means the client draws the underline
+    /// with the span's own `fg`. Only ever `Some` while `underline` is not
+    /// [`TerminalUnderline::None`] — a color set on a cell that is not
+    /// underlined is presentation-dead and normalized away at frame build.
+    pub underline_color: Option<TerminalColor>,
+}
+
+/// The underline styles of SGR 4's colon sub-parameters (`4:0`..`4:5`),
+/// Horizon-owned like every frame type (`TerminalColor`'s doc has the
+/// rationale). Maps 1:1 from `alacritty_terminal`'s cell flags
+/// (`UNDERLINE`/`DOUBLE_UNDERLINE`/`UNDERCURL`/`DOTTED_UNDERLINE`/
+/// `DASHED_UNDERLINE`).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub enum TerminalUnderline {
+    #[default]
+    None,
+    Single,
+    Double,
+    Curl,
+    Dotted,
+    Dashed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TerminalCursor {
     pub row: usize,
     pub col: usize,
+    /// The DECSCUSR-negotiated shape (`CSI Ps SP q`; blink variants are
+    /// collapsed by `alacritty_terminal` itself — the frame carries no
+    /// blink state). A hidden cursor (DECTCEM reset, `CSI ?25l`) is
+    /// `TerminalFrame::cursor == None`, never a shape variant.
+    pub shape: TerminalCursorShape,
+}
+
+/// Mirrors `alacritty_terminal`'s `CursorShape` minus `Hidden` (a hidden
+/// cursor never reaches the wire — see [`TerminalCursor::shape`]).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub enum TerminalCursorShape {
+    #[default]
+    Block,
+    Underline,
+    Beam,
+    HollowBlock,
+}
+
+/// A selection's two inclusive endpoints in viewport coordinates — see
+/// `TerminalFrame::selection` for the coordinate/clamping contract. Reuses
+/// [`TerminalSelectionPoint`], the same cell-coordinate type the input side
+/// (`TerminalCommand::SelectionStart`/`SelectionUpdate`) already speaks.
+/// Full rows between `start.row` and `end.row` are entirely selected —
+/// there is no block-selection variant in this vocabulary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TerminalSelection {
+    pub start: TerminalSelectionPoint,
+    pub end: TerminalSelectionPoint,
 }
 
 /// The rows and frame metadata that changed between two terminal snapshots.
-/// `cursor` is nested so `None` means unchanged and `Some(None)` means hidden.
+/// `cursor` is nested so `None` means unchanged and `Some(None)` means hidden;
+/// `selection` follows the same idiom (`Some(None)` = selection cleared).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TerminalFrameDiff {
     pub changed_rows: Vec<TerminalRowDiff>,
     pub row_count: usize,
     pub cursor: Option<Option<TerminalCursor>>,
+    pub selection: Option<Option<TerminalSelection>>,
     pub mouse_reporting: Option<bool>,
     pub keys_as_escape_codes: Option<bool>,
     pub palette_overrides: Option<Vec<(u16, [u8; 3])>>,
@@ -84,6 +155,7 @@ pub fn compute_frame_diff(old: &TerminalFrame, new: &TerminalFrame) -> TerminalF
         changed_rows,
         row_count: new.lines.len(),
         cursor: (old.cursor != new.cursor).then_some(new.cursor),
+        selection: (old.selection != new.selection).then_some(new.selection),
         mouse_reporting: (old.mouse_reporting != new.mouse_reporting)
             .then_some(new.mouse_reporting),
         keys_as_escape_codes: (old.keys_as_escape_codes != new.keys_as_escape_codes)
@@ -107,6 +179,7 @@ pub fn apply_frame_diff(old: &TerminalFrame, diff: &TerminalFrameDiff) -> Termin
         text: frame_text(&lines),
         lines,
         cursor: diff.cursor.unwrap_or(old.cursor),
+        selection: diff.selection.unwrap_or(old.selection),
         mouse_reporting: diff.mouse_reporting.unwrap_or(old.mouse_reporting),
         keys_as_escape_codes: diff
             .keys_as_escape_codes
@@ -147,6 +220,10 @@ impl TerminalFrame {
                     text: line.to_string(),
                     fg: TerminalColor::Named(NamedColor::Foreground),
                     bg: TerminalColor::Named(NamedColor::Background),
+                    italic: false,
+                    strikethrough: false,
+                    underline: TerminalUnderline::None,
+                    underline_color: None,
                 }],
             })
             .collect();
@@ -154,6 +231,7 @@ impl TerminalFrame {
             text,
             lines,
             cursor: None,
+            selection: None,
             mouse_reporting: false,
             keys_as_escape_codes: false,
             palette_overrides: Vec::new(),
