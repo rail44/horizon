@@ -225,6 +225,12 @@ pub(super) struct SplitDrag {
     /// measured from this fixed point for the whole drag (not
     /// incrementally frame-to-frame), so there's no accumulation drift.
     start_pos_px: f32,
+    /// Whether any move during this drag actually changed a weight (a
+    /// `Workspace::set_split_weights` call returned `true`). An unmoved
+    /// click -- mouse-down immediately followed by mouse-up with no move
+    /// in between -- shouldn't persist on release; see
+    /// `end_active_split_drag`.
+    applied: bool,
 }
 
 /// The component of `position` along `axis` -- horizontal splits (a row of
@@ -666,6 +672,7 @@ impl WorkspaceShell {
             }
             LayoutNode::Split { axis, children } => {
                 let axis = *axis;
+                let total_weight = children.iter().map(|child| child.weight).sum::<f32>();
                 let start_weights = children
                     .iter()
                     .map(|child| child.weight)
@@ -714,6 +721,7 @@ impl WorkspaceShell {
                             &child_anchors,
                             axis_position(axis, event.position),
                             effective_px,
+                            event.dragging(),
                             cx,
                         );
                     })
@@ -799,6 +807,7 @@ impl WorkspaceShell {
                                                         axis,
                                                         event.position,
                                                     ),
+                                                    applied: false,
                                                 },
                                                 cx,
                                             );
@@ -822,17 +831,39 @@ impl WorkspaceShell {
                             // weight split rendered as ~1.7:1 in a
                             // container much bigger than the old fixed
                             // 1000px basis budget). Zero basis puts the
-                            // *entire* container into that leftover, so
-                            // 100% of it divides by weight ratio,
-                            // regardless of container size -- the idiom
-                            // the pre-gpui-component Floem shell used
+                            // *entire* container into that leftover -- the
+                            // idiom the pre-gpui-component Floem shell used
                             // (`floem-shell-final:src/workspace/view/
-                            // layout_tree.rs`). `flex_grow` takes the raw
-                            // weight directly since only the *ratio*
-                            // between siblings' grow factors matters, not
-                            // its absolute scale.
+                            // layout_tree.rs`).
+                            //
+                            // `flex_grow` takes `child.weight / total_weight`,
+                            // not the raw weight: Taffy's flexbox
+                            // implementation (`compute/flexbox.rs`, pinned
+                            // 0.10.1) only distributes *all* of the
+                            // leftover space when the grow factors sum to
+                            // >= 1 -- when they sum to less, the space
+                            // actually distributed is capped at
+                            // `leftover * sum_of_grow_factors`, leaving the
+                            // rest as dead space (verified against the
+                            // pinned source, `flexbox.rs:1271-1272`; CSS
+                            // Flexbox's own spec, not a Taffy quirk). Raw
+                            // model weights routinely sum below 1 --
+                            // `Workspace::set_split_weights` normalizes to
+                            // a sum of 1 on every *drag*, but closing a
+                            // pane afterwards removes one child's weight
+                            // from the sum without renormalizing the
+                            // others (by design -- `without_pane` doesn't
+                            // rescale siblings), so three panes normalized
+                            // to 1/3 each become two panes still at 1/3
+                            // each (sum 2/3) the moment one closes. Only
+                            // the *ratio* between siblings' grow factors
+                            // needs to be preserved, so dividing by
+                            // `total_weight` here keeps that ratio while
+                            // guaranteeing the sum is exactly 1 (mod
+                            // float rounding, which lands sub-pixel and
+                            // isn't visible).
                             .flex_basis(px(0.0))
-                            .flex_grow(child.weight)
+                            .flex_grow(child.weight / total_weight)
                             .when(axis == SplitAxis::Horizontal, |this| {
                                 this.min_w(px(SPLIT_PANEL_MIN_SIZE_PX))
                             })
@@ -859,21 +890,45 @@ impl WorkspaceShell {
         cx.notify();
     }
 
-    /// The split container's `on_mouse_move`: live reflow, once per move,
-    /// for as long as `self.active_split_drag` identifies *this* split
-    /// (`split_anchor` plus `child_anchors`, the same disambiguation
-    /// `Workspace::set_split_weights` itself uses -- a first-pane anchor
-    /// alone is ambiguous between nested splits). No-ops for every other
-    /// split's container, and for this one when no drag (or someone
-    /// else's) is in progress.
+    /// The split container's `on_mouse_move`. Two responsibilities:
+    ///
+    /// - Live reflow, once per move, for as long as `self.
+    ///   active_split_drag` identifies *this* split (`split_anchor` plus
+    ///   `child_anchors`, the same disambiguation `Workspace::
+    ///   set_split_weights` itself uses -- a first-pane anchor alone is
+    ///   ambiguous between nested splits). No-ops for every other
+    ///   split's container, and for this one when no drag (or someone
+    ///   else's) is in progress.
+    /// - Recovering a *leaked* drag session: if the split container that
+    ///   started a drag gets unmounted mid-drag (e.g. the active tab
+    ///   changes), its own `on_mouse_up`/`on_mouse_up_out` never fires,
+    ///   so `active_split_drag` would otherwise survive indefinitely --
+    ///   and every later plain hover (no button held) over *whatever*
+    ///   split the leaked drag still points at would silently resume
+    ///   resizing it, since `set_split_weights` doesn't know the
+    ///   difference between a real drag and a stale one.  `is_dragging`
+    ///   (the platform's own `pressed_button == Some(Left)`, exposed as
+    ///   `MouseMoveEvent::dragging()`) distinguishes the two; when it's
+    ///   `false` and a drag is still active, end it exactly like a real
+    ///   mouse-up would -- checked *before* the anchor match below, and
+    ///   unconditionally via `end_active_split_drag`, so this also
+    ///   cleans up the rarer variant where a pane close changed the
+    ///   tree enough that no split's anchors match the leaked drag
+    ///   anymore (it would otherwise never be reachable by the
+    ///   anchor-checked `end_split_drag` path at all).
     fn update_split_drag(
         &mut self,
         split_anchor: PaneId,
         child_anchors: &[PaneId],
         mouse_pos_px: f32,
         container_px: f32,
+        is_dragging: bool,
         cx: &mut Context<Self>,
     ) {
+        if !is_dragging {
+            self.end_active_split_drag(cx);
+            return;
+        }
         let Some(drag) = self.active_split_drag.clone() else {
             return;
         };
@@ -897,16 +952,18 @@ impl WorkspaceShell {
             .workspace
             .set_split_weights(drag.tab_id, split_anchor, child_anchors, &sizes)
         {
+            if let Some(active) = self.active_split_drag.as_mut() {
+                active.applied = true;
+            }
             cx.notify();
         }
     }
 
     /// The split container's `on_mouse_up`/`on_mouse_up_out`: ends the
-    /// drag and persists once (matching the pre-existing `on_resize`
-    /// cadence -- once per drag, not once per move). Both are registered
-    /// on the same container so the release is caught regardless of
-    /// whether the cursor is still over the split when the button comes
-    /// up.
+    /// drag if `self.active_split_drag` is *this* split's (both are
+    /// registered on the same container so the release is caught
+    /// regardless of whether the cursor is still over the split when
+    /// the button comes up). A no-op for every other split's container.
     fn end_split_drag(
         &mut self,
         split_anchor: PaneId,
@@ -919,8 +976,25 @@ impl WorkspaceShell {
         if !matches_this_split {
             return;
         }
-        self.active_split_drag = None;
-        self.persist_workspace();
+        self.end_active_split_drag(cx);
+    }
+
+    /// Ends whatever drag is currently active (if any), persisting once
+    /// -- matching the pre-existing `on_resize` cadence -- but only if
+    /// it actually changed a weight (`SplitDrag::applied`; an unmoved
+    /// click shouldn't touch the persisted file). Shared by the normal,
+    /// anchor-checked mouse-up path (`end_split_drag`) and the leaked-
+    /// drag recovery path in `update_split_drag`, which calls this
+    /// unconditionally (deliberately not anchor-checked there -- a
+    /// leaked drag must be clearable by *any* split's hover, not only
+    /// the one whose anchors still happen to match).
+    fn end_active_split_drag(&mut self, cx: &mut Context<Self>) {
+        let Some(drag) = self.active_split_drag.take() else {
+            return;
+        };
+        if drag.applied {
+            self.persist_workspace();
+        }
         cx.notify();
     }
 }
