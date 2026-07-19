@@ -2,17 +2,22 @@
 //! the `Render` impl that wires GPUI actions to model calls, the
 //! workspace-mode cursor/dim pattern's pure pane-chrome functions
 //! (`pane_scrim_alpha`, `effective_scrim_pattern`, `pane_border_role`,
-//! `split_child_insets`, `equal_tab_width`), the pure
-//! `mode_key_context_active` (whether the root's key context should be
-//! `MODE_CONTEXT` this render -- see its own doc comment), and the
-//! mode/tab/pane action handlers (`toggle_mode`, `mode_move`,
-//! `mode_commit`, `mode_cancel`, `next_tab`, `activate_tab`,
-//! `activate_pane`) that only the `Render` impl below dispatches into.
+//! `equal_tab_width`), the pure `mode_key_context_active` (whether the
+//! root's key context should be `MODE_CONTEXT` this render -- see its own
+//! doc comment), the mode/tab/pane action handlers (`toggle_mode`,
+//! `mode_move`, `mode_commit`, `mode_cancel`, `next_tab`, `activate_tab`,
+//! `activate_pane`) that only the `Render` impl below dispatches into, and
+//! the split-handle drag pipeline (`SplitDrag`, `begin_split_drag`/
+//! `update_split_drag`/`end_split_drag`, the pure pairwise clamp
+//! `pairwise_resize_weights`) that replaces `gpui_component::resizable` --
+//! see `docs/split-resize-design.md`.
+
+use std::cell::Cell;
+use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::list::List;
-use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable, ResizablePanelGroup};
 use gpui_component::tab::{Tab, TabBar};
 use horizon_workspace::commands::CommandId;
 use horizon_workspace::types::{LayoutNode, TabId};
@@ -164,95 +169,116 @@ const CURSOR_GLOW_BLUR_PX: f32 = 4.0;
 /// `theme::accent()`. Feel-tunable, same as [`CURSOR_GLOW_BLUR_PX`].
 const CURSOR_GLOW_ALPHA: f32 = 0.35;
 
-/// How far `render_node`'s `LayoutNode::Split` branch pulls each pane's
-/// border back from a split boundary it's adjacent to (round 5,
-/// 2026-07-16 owner report: pane borders relate to the split boundary
-/// asymmetrically -- one side's border reads as overlapping the
-/// boundary, the other as sitting cleanly inside it).
-///
-/// Root cause, traced into gpui-component's vendored `resizable` module
-/// (pinned rev, `crates/ui/src/resizable/{panel,resize_handle}.rs`): the
-/// draggable divider between two adjacent panes is *not* a shared,
-/// neutral element both panes contribute to. `ResizablePanel::render`
-/// (`panel.rs`) attaches a `resize_handle` only as a child of "each panel
-/// after the first" (the file's own doc comment) -- i.e. solely owned by
-/// the *trailing* pane of a pair. That handle is absolutely positioned at
-/// `left`/`top: -HANDLE_PADDING` (`resize_handle.rs`, `HANDLE_PADDING =
-/// 4px`) relative to the trailing pane's own origin, reaching *backward*
-/// into the leading pane -- and deliberately left unclipped
-/// (`ResizablePanel`'s own doc comment forbids `.overflow_hidden()` on
-/// the panel specifically because it would clip this handle). Since
-/// flex siblings paint in child order, the trailing pane's whole subtree
-/// (its own content *and* this handle) paints *after* the leading pane's,
-/// so the handle -- reaching back into the leading pane's screen region
-/// -- paints over part of the leading pane's border from *outside* the
-/// leading pane's own render tree, while it paints over part of the
-/// trailing pane's border from *inside* the trailing pane's own render
-/// tree (it's the trailing pane's own child). Same visual effect
-/// (something else drawn over the border near the boundary), opposite
-/// compositional relationship -- which is exactly the reported "overlaps
-/// vs. sits inside" asymmetry once phrased pane-by-pane.
-///
-/// Horizon's own pane content (`render_node`'s `LayoutNode::Pane` arm) is
-/// `.size_full()` inside its `resizable_panel()`, so nothing in
-/// Horizon's *own* code currently keeps either border clear of that
-/// reach. Rather than fighting the stock resizable component (reserved
-/// styles, see `panel.rs`'s own warning), the fix lives entirely on
-/// Horizon's side: `LayoutNode::Split` wraps each child in a thin
-/// padding div before handing it to `resizable_panel()`, pulling the
-/// child's own rendered content back by this exact amount on every edge
-/// that faces a split boundary (every edge except a group's own outer
-/// edges) -- see `split_child_insets`. `HANDLE_PADDING` is
-/// `pub(crate)` inside gpui-component's own crate (not part of its public
-/// API), so it can't be imported; this mirrors its value directly,
-/// matching the handle's own documented reach depth exactly rather than
-/// guessing a smaller number tuned to its 1px visible line specifically
-/// (`HANDLE_SIZE`) -- deliberately the more conservative of the two, so
-/// the fix holds regardless of exactly how gpui/Taffy's border-box
-/// sizing resolves that inner line's precise sub-pixel position (verified
-/// Taffy's box-sizing default is `BorderBox`,
-/// `taffy-0.10.1/src/style/mod.rs`, but did not attempt to re-derive the
-/// handle's own padding-vs-explicit-width resolution from that alone).
-///
-/// Round 6 (2026-07-16) asked for the handle's own resting divider LINE
-/// to be removed too, keeping this 4px gutter. Investigated but left
-/// unimplemented: the 1px line is `resize_handle.rs`'s inner
-/// `div().bg(bg_color)...w(HANDLE_SIZE)` child, where `bg_color =
-/// cx.theme().border` at rest (`cx.theme().drag_border` while actively
-/// dragging -- a real, distinct, and still-working highlight; hover
-/// itself reapplies the identical resting color via `group_hover`, a
-/// no-op in the vendored source, not something this investigation
-/// touched). Neither `ResizablePanelGroup`/`ResizablePanel` nor
-/// `resize_handle` (itself `pub(crate)` inside gpui-component, not
-/// public API) expose any builder to recolor or hide it. `cx.theme()`
-/// resolves through a single gpui `Global` (`ActiveTheme for App`,
-/// `theme/mod.rs`) with no subtree-scoped override mechanism, and the
-/// `border` token it reads is the same one `gpui_component_theme_config`
-/// (`src/theme.rs`) already projects Horizon's own `theme::border()`
-/// onto for every other stock surface -- 43 files across the vendored
-/// `ui` crate read `cx.theme().border` (buttons, inputs, tabs, dialogs,
-/// tables, scrollbars, ...), so blanking that token to transparent to
-/// silence this one line would blank borders everywhere else in the
-/// app. No narrower token exists to isolate just this line. Per the
-/// task's own instruction, left unimplemented rather than papering over
-/// it with a Horizon-side overlay -- see the round-6 report for the
-/// full trail.
-const SPLIT_BOUNDARY_INSET_PX: f32 = 4.0;
+/// Visible width (or height, for a vertical-axis split) of a split's
+/// resize-handle divider line -- mirrors the vendored gpui-component
+/// `resizable` module's own `HANDLE_SIZE` (`docs/split-resize-design.md`).
+const SPLIT_HANDLE_LINE_PX: f32 = 1.0;
 
-/// Which of a split child's own edges (leading = left/top, trailing =
-/// right/bottom, along the split's axis) face another pane across a
-/// boundary and so need `SPLIT_BOUNDARY_INSET_PX`'s pullback -- see its
-/// doc comment for why. `index` is this child's position among
-/// `sibling_count` total children of the same split; every child except
-/// the first is reached into on its own leading edge by its *own*
-/// resize handle (owned because it isn't the first), and every child
-/// except the last is reached into on its trailing edge by the *next*
-/// child's handle. Pure and unit-tested so the edge selection is covered
-/// without a GPUI render.
-fn split_child_insets(index: usize, sibling_count: usize) -> (bool, bool) {
-    let leading = index > 0;
-    let trailing = index + 1 < sibling_count;
-    (leading, trailing)
+/// Total clickable/draggable extent of a resize handle along its split's
+/// axis: the 1px line plus a comfortable hit-area padding on each side
+/// (mirrors the vendored component's `HANDLE_SIZE + 2 * HANDLE_PADDING`,
+/// i.e. `1 + 2*4`), so the handle is easy to grab without widening what's
+/// visibly drawn.
+const SPLIT_HANDLE_HIT_PX: f32 = 9.0;
+
+/// Display-side floor for a split child's size along its split's axis --
+/// replaces gpui-component's `PANEL_MIN_SIZE` (same 100px value). Weights
+/// are untouched when the *window* shrinks past this (flex clamps the
+/// display only, via `min_w`/`min_h` below); ratios restore exactly when
+/// it grows back. See `docs/split-resize-design.md`'s Decision section.
+const SPLIT_PANEL_MIN_SIZE_PX: f32 = 100.0;
+
+/// `Interactivity::group`/`group_hover` name shared by every split
+/// handle: scoped by nearest ancestor (the same Tailwind-style scheme the
+/// vendored `resize_handle.rs` itself uses with a single hardcoded name),
+/// so reusing one literal across every handle in the tree is safe -- a
+/// sibling handle's hover never lights up another handle's line.
+const SPLIT_HANDLE_GROUP: &str = "split-handle";
+
+/// Live state for an in-progress split-handle drag (`docs/split-resize-
+/// design.md`'s Drag semantics): pairwise, live-reflowing, persisted once
+/// on release. Set by a handle's own `on_mouse_down`
+/// ([`WorkspaceShell::begin_split_drag`]), read and applied by the split
+/// container's `on_mouse_move` ([`WorkspaceShell::update_split_drag`]),
+/// and cleared by its `on_mouse_up`/`on_mouse_up_out`
+/// ([`WorkspaceShell::end_split_drag`]). Purely view-side scratch state,
+/// held on `WorkspaceShell` itself (not GPUI element state, not the
+/// model) -- every actual mutation still goes through
+/// `Workspace::set_split_weights`, so `horizon_workspace` never sees a
+/// pixel.
+#[derive(Clone)]
+pub(super) struct SplitDrag {
+    tab_id: TabId,
+    split_anchor: PaneId,
+    child_anchors: Vec<PaneId>,
+    /// The handle's leading child index among `child_anchors`; the pair
+    /// being resized is `(pair_index, pair_index + 1)` -- pairwise, no
+    /// cascade onto other siblings.
+    pair_index: usize,
+    /// Every child's weight at drag start. `Workspace::set_split_weights`
+    /// sets the whole vector at once, so unchanged siblings are re-sent
+    /// at their original value -- their *relative* shares stay put once
+    /// the vector is renormalized.
+    start_weights: Vec<f32>,
+    /// Mouse position along `axis`, in pixels, at drag start. Deltas are
+    /// measured from this fixed point for the whole drag (not
+    /// incrementally frame-to-frame), so there's no accumulation drift.
+    start_pos_px: f32,
+}
+
+/// The component of `position` along `axis` -- horizontal splits (a row of
+/// side-by-side children) resize along x, vertical splits (a stack) along
+/// y.
+fn axis_position(axis: SplitAxis, position: Point<Pixels>) -> f32 {
+    match axis {
+        SplitAxis::Horizontal => f32::from(position.x),
+        SplitAxis::Vertical => f32::from(position.y),
+    }
+}
+
+/// The component of `size` along `axis` -- the split container's own
+/// pixel length in the direction handles actually resize along.
+fn axis_extent(axis: SplitAxis, size: Size<Pixels>) -> f32 {
+    match axis {
+        SplitAxis::Horizontal => f32::from(size.width),
+        SplitAxis::Vertical => f32::from(size.height),
+    }
+}
+
+/// The pairwise-clamped resize computation for one split-handle drag
+/// (`docs/split-resize-design.md`'s Drag semantics): converts a pixel
+/// delta into a weight transfer strictly between two adjacent children,
+/// hard-stopping at `floor_px` (translated into the same weight units)
+/// rather than cascading into other siblings. `total_weight` is the
+/// split's full weight sum at drag start, used only to convert between
+/// pixel and weight units; `container_px` is the split's own pixel length
+/// along its axis. Returns the pair's two new weights, still summing to
+/// `weight_a + weight_b` -- callers renormalize the whole child vector via
+/// `Workspace::set_split_weights`.
+fn pairwise_resize_weights(
+    weight_a: f32,
+    weight_b: f32,
+    total_weight: f32,
+    container_px: f32,
+    delta_px: f32,
+    floor_px: f32,
+) -> (f32, f32) {
+    if container_px <= 0.0 || total_weight <= 0.0 {
+        return (weight_a, weight_b);
+    }
+    let pair_total = weight_a + weight_b;
+    let floor_weight = floor_px / container_px * total_weight;
+    let (lo, hi) = if pair_total >= 2.0 * floor_weight {
+        (floor_weight, pair_total - floor_weight)
+    } else {
+        // Both floors can't be satisfied at once (e.g. a narrow window
+        // with many panes already below floor) -- split the difference
+        // rather than handing `clamp` an inverted (min > max) range.
+        (pair_total / 2.0, pair_total / 2.0)
+    };
+    let delta_weight = delta_px / container_px * total_weight;
+    let new_a = (weight_a + delta_weight).clamp(lo, hi);
+    (new_a, pair_total - new_a)
 }
 
 /// Equal-width distribution for the segmented tab strip: `true` gives
@@ -487,13 +513,7 @@ impl WorkspaceShell {
             }))
     }
 
-    fn render_node(
-        &self,
-        tab_id: TabId,
-        node: &LayoutNode,
-        path: String,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn render_node(&self, tab_id: TabId, node: &LayoutNode, cx: &mut Context<Self>) -> AnyElement {
         match node {
             LayoutNode::Pane(pane_id) => {
                 let pane_id = *pane_id;
@@ -624,73 +644,245 @@ impl WorkspaceShell {
                     .into_any_element()
             }
             LayoutNode::Split { axis, children } => {
-                let mut group: ResizablePanelGroup = match axis {
-                    SplitAxis::Horizontal => h_resizable(SharedString::from(path.clone())),
-                    SplitAxis::Vertical => v_resizable(SharedString::from(path.clone())),
-                };
+                let axis = *axis;
+                let total_weight = children.iter().map(|child| child.weight).sum::<f32>();
+                let start_weights = children
+                    .iter()
+                    .map(|child| child.weight)
+                    .collect::<Vec<_>>();
                 let child_anchors = children
                     .iter()
                     .filter_map(|child| child.node.first_pane())
                     .collect::<Vec<_>>();
                 let split_anchor = child_anchors[0];
-                let weak_shell = cx.entity().downgrade();
-                let resize_anchors = child_anchors.clone();
-                group = group.on_resize(move |state, _, cx| {
-                    let sizes = state
-                        .read(cx)
-                        .sizes()
-                        .iter()
-                        .map(|size| size.as_f32())
-                        .collect::<Vec<_>>();
-                    let _ = weak_shell.update(cx, |shell, cx| {
-                        if shell.restoring_workspace {
-                            return;
-                        }
-                        if shell.workspace.set_split_weights(
-                            tab_id,
-                            split_anchor,
-                            &resize_anchors,
-                            &sizes,
-                        ) {
-                            shell.persist_workspace();
-                            cx.notify();
-                        }
-                    });
+
+                // This container's own pixel length along `axis`,
+                // refreshed every frame by the absolutely positioned,
+                // full-size canvas child below -- the standard gpui
+                // trick for reading an element's own layout bounds
+                // without a custom `Element` impl (an invisible canvas
+                // whose bounds equal its parent's content box). Purely a
+                // view-layer scratch value shared between this frame's
+                // own canvas and mouse-event closures; never touches the
+                // model.
+                let container_len: Rc<Cell<f32>> = Rc::new(Cell::new(0.0));
+
+                let mut container = div().size_full().flex();
+                container = match axis {
+                    SplitAxis::Horizontal => container.flex_row(),
+                    SplitAxis::Vertical => container.flex_col(),
+                };
+                container = container.child({
+                    let container_len = container_len.clone();
+                    canvas(
+                        move |bounds, _, _| {
+                            container_len.set(axis_extent(axis, bounds.size));
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .size_full()
                 });
-                let total_weight = children.iter().map(|child| child.weight).sum::<f32>();
-                let sibling_count = children.len();
+                container = container.on_mouse_move({
+                    let child_anchors = child_anchors.clone();
+                    let container_len = container_len.clone();
+                    cx.listener(move |shell, event: &MouseMoveEvent, _window, cx| {
+                        shell.update_split_drag(
+                            split_anchor,
+                            &child_anchors,
+                            axis_position(axis, event.position),
+                            container_len.get(),
+                            cx,
+                        );
+                    })
+                });
+                container = container.on_mouse_up(MouseButton::Left, {
+                    let child_anchors = child_anchors.clone();
+                    cx.listener(move |shell, _event: &MouseUpEvent, _window, cx| {
+                        shell.end_split_drag(split_anchor, &child_anchors, cx);
+                    })
+                });
+                container = container.on_mouse_up_out(MouseButton::Left, {
+                    let child_anchors = child_anchors.clone();
+                    cx.listener(move |shell, _event: &MouseUpEvent, _window, cx| {
+                        shell.end_split_drag(split_anchor, &child_anchors, cx);
+                    })
+                });
+
                 for (index, child) in children.iter().enumerate() {
-                    let child_element =
-                        self.render_node(tab_id, &child.node, format!("{path}-{index}"), cx);
+                    if index > 0 {
+                        let pair_index = index - 1;
+                        let is_dragging = self.active_split_drag.as_ref().is_some_and(|drag| {
+                            drag.split_anchor == split_anchor
+                                && drag.child_anchors == child_anchors
+                                && drag.pair_index == pair_index
+                        });
+                        let line_color = if is_dragging {
+                            theme::accent()
+                        } else {
+                            theme::border()
+                        };
+                        let handle_child_anchors = child_anchors.clone();
+                        let handle_start_weights = start_weights.clone();
+                        container = container.child(
+                            div()
+                                .relative()
+                                .flex_shrink_0()
+                                .flex_grow_0()
+                                .group(SPLIT_HANDLE_GROUP)
+                                .when(axis == SplitAxis::Horizontal, |this| {
+                                    this.w(px(SPLIT_HANDLE_HIT_PX)).h_full().cursor_col_resize()
+                                })
+                                .when(axis == SplitAxis::Vertical, |this| {
+                                    this.h(px(SPLIT_HANDLE_HIT_PX)).w_full().cursor_row_resize()
+                                })
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .when(axis == SplitAxis::Horizontal, |this| {
+                                            this.left(px((SPLIT_HANDLE_HIT_PX
+                                                - SPLIT_HANDLE_LINE_PX)
+                                                / 2.0))
+                                                .top_0()
+                                                .w(px(SPLIT_HANDLE_LINE_PX))
+                                                .h_full()
+                                        })
+                                        .when(axis == SplitAxis::Vertical, |this| {
+                                            this.top(px((SPLIT_HANDLE_HIT_PX
+                                                - SPLIT_HANDLE_LINE_PX)
+                                                / 2.0))
+                                                .left_0()
+                                                .h(px(SPLIT_HANDLE_LINE_PX))
+                                                .w_full()
+                                        })
+                                        .bg(line_color)
+                                        .when(!is_dragging, |this| {
+                                            this.group_hover(SPLIT_HANDLE_GROUP, |style| {
+                                                style.bg(theme::accent())
+                                            })
+                                        }),
+                                )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(
+                                        move |shell, event: &MouseDownEvent, _window, cx| {
+                                            shell.begin_split_drag(
+                                                SplitDrag {
+                                                    tab_id,
+                                                    split_anchor,
+                                                    child_anchors: handle_child_anchors.clone(),
+                                                    pair_index,
+                                                    start_weights: handle_start_weights.clone(),
+                                                    start_pos_px: axis_position(
+                                                        axis,
+                                                        event.position,
+                                                    ),
+                                                },
+                                                cx,
+                                            );
+                                        },
+                                    ),
+                                ),
+                        );
+                    }
+
+                    let child_element = self.render_node(tab_id, &child.node, cx);
                     let basis = px(child.weight / total_weight * 1_000.0);
-                    // Pull this child's own rendered content back from
-                    // every edge that faces a split boundary, so its
-                    // pane border(s) never fall under gpui-component's
-                    // resize-handle divider -- see
-                    // `SPLIT_BOUNDARY_INSET_PX`'s doc comment for the
-                    // root cause. Applies to the whole `child_element`
-                    // subtree, not a specific leaf pane: for a nested
-                    // split, that subtree's own outer edge is exactly
-                    // its own first/last leaf pane's edge, so the inset
-                    // still lands on the right pane recursively.
-                    let (leading_inset, trailing_inset) = split_child_insets(index, sibling_count);
-                    let inset_px = px(SPLIT_BOUNDARY_INSET_PX);
-                    let inset_child = div()
-                        .size_full()
-                        .when(leading_inset, |this| match axis {
-                            SplitAxis::Horizontal => this.pl(inset_px),
-                            SplitAxis::Vertical => this.pt(inset_px),
-                        })
-                        .when(trailing_inset, |this| match axis {
-                            SplitAxis::Horizontal => this.pr(inset_px),
-                            SplitAxis::Vertical => this.pb(inset_px),
-                        })
-                        .child(child_element);
-                    group = group.child(resizable_panel().flex_basis(basis).child(inset_child));
+                    container = container.child(
+                        div()
+                            .size_full()
+                            .flex_grow_1()
+                            .flex_shrink_1()
+                            .flex_basis(basis)
+                            .when(axis == SplitAxis::Horizontal, |this| {
+                                this.min_w(px(SPLIT_PANEL_MIN_SIZE_PX))
+                            })
+                            .when(axis == SplitAxis::Vertical, |this| {
+                                this.min_h(px(SPLIT_PANEL_MIN_SIZE_PX))
+                            })
+                            .child(child_element),
+                    );
                 }
-                group.into_any_element()
+                container.into_any_element()
             }
         }
+    }
+
+    /// A split handle's `on_mouse_down`: opens a pairwise drag session
+    /// (`docs/split-resize-design.md`'s Drag semantics), immediately
+    /// visible via the handle's own dragging-highlight check in
+    /// `render_node`.
+    fn begin_split_drag(&mut self, drag: SplitDrag, cx: &mut Context<Self>) {
+        if self.restoring_workspace {
+            return;
+        }
+        self.active_split_drag = Some(drag);
+        cx.notify();
+    }
+
+    /// The split container's `on_mouse_move`: live reflow, once per move,
+    /// for as long as `self.active_split_drag` identifies *this* split
+    /// (`split_anchor` plus `child_anchors`, the same disambiguation
+    /// `Workspace::set_split_weights` itself uses -- a first-pane anchor
+    /// alone is ambiguous between nested splits). No-ops for every other
+    /// split's container, and for this one when no drag (or someone
+    /// else's) is in progress.
+    fn update_split_drag(
+        &mut self,
+        split_anchor: PaneId,
+        child_anchors: &[PaneId],
+        mouse_pos_px: f32,
+        container_px: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(drag) = self.active_split_drag.clone() else {
+            return;
+        };
+        if drag.split_anchor != split_anchor || drag.child_anchors != child_anchors {
+            return;
+        }
+        let total_weight = drag.start_weights.iter().sum::<f32>();
+        let delta_px = mouse_pos_px - drag.start_pos_px;
+        let (new_a, new_b) = pairwise_resize_weights(
+            drag.start_weights[drag.pair_index],
+            drag.start_weights[drag.pair_index + 1],
+            total_weight,
+            container_px,
+            delta_px,
+            SPLIT_PANEL_MIN_SIZE_PX,
+        );
+        let mut sizes = drag.start_weights.clone();
+        sizes[drag.pair_index] = new_a;
+        sizes[drag.pair_index + 1] = new_b;
+        if self
+            .workspace
+            .set_split_weights(drag.tab_id, split_anchor, child_anchors, &sizes)
+        {
+            cx.notify();
+        }
+    }
+
+    /// The split container's `on_mouse_up`/`on_mouse_up_out`: ends the
+    /// drag and persists once (matching the pre-existing `on_resize`
+    /// cadence -- once per drag, not once per move). Both are registered
+    /// on the same container so the release is caught regardless of
+    /// whether the cursor is still over the split when the button comes
+    /// up.
+    fn end_split_drag(
+        &mut self,
+        split_anchor: PaneId,
+        child_anchors: &[PaneId],
+        cx: &mut Context<Self>,
+    ) {
+        let matches_this_split = self.active_split_drag.as_ref().is_some_and(|drag| {
+            drag.split_anchor == split_anchor && drag.child_anchors == child_anchors
+        });
+        if !matches_this_split {
+            return;
+        }
+        self.active_split_drag = None;
+        self.persist_workspace();
+        cx.notify();
     }
 }
 
@@ -717,7 +909,7 @@ impl Render for WorkspaceShell {
             .workspace
             .active_tab()
             .map(|tab| (tab.id, tab.root.clone()))
-            .map(|(tab_id, root)| self.render_node(tab_id, &root, format!("{tab_id:?}-root"), cx));
+            .map(|(tab_id, root)| self.render_node(tab_id, &root, cx));
 
         div()
             .size_full()
@@ -897,8 +1089,8 @@ mod tests {
     use horizon_workspace::PaneId;
 
     use super::{
-        effective_scrim_pattern, equal_tab_width, mode_key_context_active, pane_border_role,
-        pane_scrim_alpha, split_child_insets, workspace_mode_blocked_by_restore, PaneBorderRole,
+        effective_scrim_pattern, equal_tab_width, mode_key_context_active, pairwise_resize_weights,
+        pane_border_role, pane_scrim_alpha, workspace_mode_blocked_by_restore, PaneBorderRole,
         SCRIM_DIM_ALPHA,
     };
 
@@ -924,33 +1116,54 @@ mod tests {
     }
 
     #[test]
-    fn split_child_insets_the_first_child_only_on_its_trailing_edge() {
-        // The first child of a split has no neighbor to its left/top, so
-        // nothing reaches into its leading edge -- only its trailing edge
-        // (touched by its own resize handle reaching backward from the
-        // next child) needs the pullback.
-        assert_eq!(split_child_insets(0, 3), (false, true));
+    fn pairwise_resize_weights_transfers_between_the_pair_only() {
+        // 1000px container, two equal siblings (500px each), dragged
+        // 100px toward b: weight moves from a to b in direct proportion,
+        // and the pair's total weight is preserved (renormalization by
+        // the caller keeps other siblings' shares untouched).
+        let (new_a, new_b) = pairwise_resize_weights(1.0, 1.0, 2.0, 1000.0, 100.0, 100.0);
+        assert!((new_a - 1.2).abs() < 1e-4);
+        assert!((new_b - 0.8).abs() < 1e-4);
+        assert!((new_a + new_b - 2.0).abs() < 1e-4);
     }
 
     #[test]
-    fn split_child_insets_the_last_child_only_on_its_leading_edge() {
-        // The last child owns a resize handle (every child but the first
-        // does) reaching backward into its own leading edge, but has no
-        // neighbor after it to be reached into on its trailing edge.
-        assert_eq!(split_child_insets(2, 3), (true, false));
+    fn pairwise_resize_weights_hard_stops_at_the_floor_instead_of_cascading() {
+        // Same pair, dragged far past where `b` would go below its 100px
+        // floor -- clamps to exactly the floor rather than continuing
+        // (there are no other siblings here to cascade into, but the
+        // clamp itself must not overshoot).
+        let (new_a, new_b) = pairwise_resize_weights(1.0, 1.0, 2.0, 1000.0, 900.0, 100.0);
+        assert!((new_b - 0.2).abs() < 1e-4); // 100px / 1000px * 2.0 total weight
+        assert!((new_a + new_b - 2.0).abs() < 1e-4);
     }
 
     #[test]
-    fn split_child_insets_a_middle_child_on_both_edges() {
-        assert_eq!(split_child_insets(1, 3), (true, true));
+    fn pairwise_resize_weights_hard_stops_in_the_other_direction_too() {
+        let (new_a, new_b) = pairwise_resize_weights(1.0, 1.0, 2.0, 1000.0, -900.0, 100.0);
+        assert!((new_a - 0.2).abs() < 1e-4);
+        assert!((new_a + new_b - 2.0).abs() < 1e-4);
     }
 
     #[test]
-    fn split_child_insets_the_sole_child_of_a_single_pane_split_on_neither_edge() {
-        // Degenerate case: a "split" with exactly one child (shouldn't
-        // occur in practice, but the pure function should still answer
-        // sanely) has no boundary at all.
-        assert_eq!(split_child_insets(0, 1), (false, false));
+    fn pairwise_resize_weights_is_a_no_op_for_a_degenerate_container() {
+        assert_eq!(
+            pairwise_resize_weights(1.0, 1.0, 2.0, 0.0, 50.0, 100.0),
+            (1.0, 1.0)
+        );
+    }
+
+    #[test]
+    fn pairwise_resize_weights_splits_evenly_when_both_floors_cant_fit() {
+        // A 150px container with a 100px floor: the floor alone is
+        // already two-thirds of the whole container, so no split of the
+        // pair can keep both children at or above it simultaneously.
+        // There's no valid clamp range, so this degrades to an even
+        // split rather than panicking on an inverted (min > max) range --
+        // and the large delta below confirms it holds regardless of drag
+        // direction/distance.
+        let (new_a, new_b) = pairwise_resize_weights(0.5, 0.5, 1.0, 150.0, 500.0, 100.0);
+        assert_eq!((new_a, new_b), (0.5, 0.5));
     }
 
     #[test]
