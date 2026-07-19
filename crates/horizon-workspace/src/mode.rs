@@ -31,12 +31,51 @@ pub enum Direction {
 }
 
 impl Workspace {
-    /// Whether workspace mode is currently active. Independent of whether
-    /// [`Self::workspace_mode_cursor`] holds a pane -- a zero-tab workspace
-    /// can still enter the mode (see the field's doc comment), so "active"
-    /// is tracked on its own rather than inferred from the cursor.
+    /// Whether workspace mode is currently active. `true` either because
+    /// it was explicitly toggled on ([`Self::workspace_mode_active`], the
+    /// raw "entered via the reserved chord" bookkeeping [`enter_workspace_
+    /// mode`]/[`cancel_workspace_mode`]/[`commit_workspace_mode`]/
+    /// [`exit_workspace_mode`] read and write) *or*, unconditionally,
+    /// because the workspace has zero tabs.
+    ///
+    /// The zero-tab bypass is the owner's 2026-07-19 clarification of the
+    /// mode's own purpose: workspace mode exists to separate "keys go to
+    /// the focused pane" from "keys command the workspace"
+    /// (`docs/workspace-mode-design.md`), and with no panes at all there
+    /// is no pane input left to protect -- so an empty workspace is
+    /// implicitly *always* a command surface, and requiring the entry
+    /// chord first is meaningless. This getter is the single place that
+    /// encodes that: every mode-resident key binding (`:` opening the
+    /// palette foremost -- the only reachable path back to `New Tab…`
+    /// once every pane is gone) becomes reachable the instant the
+    /// workspace empties, no entry chord needed, and reverts the instant
+    /// a tab exists again, purely because the bypass stops applying --
+    /// airtight in both directions by construction, since nothing needs
+    /// to remember to flip a flag on the way in or out. The entry chord
+    /// itself becomes a harmless no-op while empty as a direct
+    /// consequence: `toggle_mode` (`src/workspace/render.rs`) always sees
+    /// this method return `true` while empty and takes its "cancel"
+    /// branch, which is already idempotent when [`Self::
+    /// workspace_mode_cursor`] is `None` (see [`cancel_workspace_mode`]).
+    ///
+    /// The raw field alone remains the exact answer once a tab exists --
+    /// the bypass only ever adds, never removes, activeness, so a
+    /// non-empty workspace's behavior is untouched.
+    ///
+    /// The GPUI shell additionally suppresses this (for its key-context
+    /// decision only, not this method's own answer) while a
+    /// control-surface modal is open -- see `render::
+    /// mode_key_context_active`'s doc comment for why: the mode's own
+    /// hjkl/Enter/Escape bindings must not compete with a modal's typed
+    /// search keys, the same hazard `effective_scrim_pattern` already
+    /// guards against on the scrim/border side.
+    ///
+    /// [`enter_workspace_mode`]: Self::enter_workspace_mode
+    /// [`cancel_workspace_mode`]: Self::cancel_workspace_mode
+    /// [`commit_workspace_mode`]: Self::commit_workspace_mode
+    /// [`exit_workspace_mode`]: Self::exit_workspace_mode
     pub fn is_workspace_mode_active(&self) -> bool {
-        self.workspace_mode_active
+        self.workspace_mode_active || self.tab_count() == 0
     }
 
     /// Enters workspace mode, seeding the cursor at the currently focused
@@ -345,38 +384,100 @@ mod tests {
     }
 
     #[test]
-    fn workspace_mode_is_enterable_with_zero_tabs() {
-        // 2026-07-18 owner clarification: an empty workspace is a valid,
-        // first-class state, and `:` (opening the command palette, e.g.
-        // to run `New Tab…`) must still be reachable -- which requires
-        // `is_workspace_mode_active()` to actually flip true even though
-        // there is no pane left to seed `workspace_mode_cursor` with (see
-        // that field's doc comment). Before this fix, `enter_workspace_
-        // mode` inferred "already active" from the cursor being `Some`,
-        // so with zero tabs it could never actually report itself active.
+    fn zero_tab_workspace_is_implicitly_in_workspace_mode() {
+        // 2026-07-19 owner clarification (superseding the prior "enterable
+        // with zero tabs" framing): with no panes at all there is no pane
+        // input left to protect, so an empty workspace is *always* a
+        // command surface -- `is_workspace_mode_active()` must already
+        // report `true` the instant the last tab closes, with no explicit
+        // `enter_workspace_mode()` call needed first (that's the whole
+        // point: `:` opening the palette, the only reachable path back to
+        // `New Tab…`, must not require the entry chord when there is
+        // nothing left for it to protect).
         let mut workspace = Workspace::mvp();
+        assert!(!workspace.is_workspace_mode_active());
+
         workspace.terminate_active_session();
+
         assert_eq!(workspace.tab_count(), 0);
-
-        workspace.enter_workspace_mode();
-
         assert!(workspace.is_workspace_mode_active());
         assert_eq!(workspace.cursor_pane_id(), None);
+        // The raw "explicitly entered" bookkeeping never had to flip --
+        // the getter's zero-tab bypass is doing all the work.
+        assert!(!workspace.workspace_mode_active);
+    }
 
-        workspace.exit_workspace_mode();
+    #[test]
+    fn creating_the_first_tab_exits_the_implicit_empty_mode() {
+        // The reverse transition must be just as immediate: the moment a
+        // tab exists again, the zero-tab bypass stops applying and normal
+        // (raw-field) gating resumes -- no call site needs to remember to
+        // flip anything off.
+        let mut workspace = Workspace::mvp();
+        workspace.terminate_active_session();
+        assert!(workspace.is_workspace_mode_active());
+
+        workspace.open_tab_with_new_session_activated(PaneKind::Terminal, true);
+
         assert!(!workspace.is_workspace_mode_active());
     }
 
     #[test]
+    fn toggling_off_is_a_harmless_no_op_on_an_empty_workspace() {
+        // Mirrors what `toggle_mode` (`src/workspace/render.rs`) actually
+        // does when the entry chord fires on an empty workspace:
+        // `is_workspace_mode_active()` is unconditionally `true` there, so
+        // the toggle always takes the "cancel" branch -- which must be a
+        // true no-op (nothing observable changes, and the workspace stays
+        // exactly as implicitly active as before).
+        let mut workspace = Workspace::mvp();
+        workspace.terminate_active_session();
+
+        workspace.cancel_workspace_mode();
+
+        assert!(workspace.is_workspace_mode_active());
+        assert_eq!(workspace.cursor_pane_id(), None);
+    }
+
+    #[test]
+    fn pane_dependent_mode_keys_are_inert_on_an_empty_workspace() {
+        // hjkl navigation, `Enter` (commit), and `Esc` (cancel) are
+        // pane-dependent (`docs/workspace-mode-design.md`'s v1 keyset) --
+        // with no panes at all, moving/committing/canceling must have
+        // nothing to act on, even though the mode reads as active
+        // throughout (the empty-workspace bypass, not a real cursor).
+        let mut workspace = Workspace::mvp();
+        workspace.terminate_active_session();
+        assert!(workspace.is_workspace_mode_active());
+
+        workspace.move_cursor(Direction::Right);
+        assert_eq!(workspace.cursor_pane_id(), None);
+
+        workspace.commit_workspace_mode();
+        assert!(workspace.is_workspace_mode_active());
+        assert_eq!(workspace.tab_count(), 0);
+
+        workspace.cancel_workspace_mode();
+        assert!(workspace.is_workspace_mode_active());
+        assert_eq!(workspace.tab_count(), 0);
+    }
+
+    #[test]
     fn committing_with_no_cursor_still_exits_the_mode() {
-        // `Enter` with nothing to commit to (zero tabs) must not leave the
-        // workspace stuck in the mode.
+        // `Enter` with nothing to commit to (zero tabs) must still clear
+        // the raw "explicitly entered" bookkeeping -- even though
+        // `is_workspace_mode_active()` keeps reporting `true` afterward
+        // regardless, since the workspace is still empty (the zero-tab
+        // bypass), so the getter itself can no longer distinguish
+        // "committed" from "never entered" the way it could before this
+        // bypass existed.
         let mut workspace = Workspace::mvp();
         workspace.terminate_active_session();
         workspace.enter_workspace_mode();
 
         workspace.commit_workspace_mode();
 
-        assert!(!workspace.is_workspace_mode_active());
+        assert!(!workspace.workspace_mode_active);
+        assert!(workspace.is_workspace_mode_active());
     }
 }

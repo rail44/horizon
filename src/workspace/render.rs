@@ -2,10 +2,12 @@
 //! the `Render` impl that wires GPUI actions to model calls, the
 //! workspace-mode cursor/dim pattern's pure pane-chrome functions
 //! (`pane_scrim_alpha`, `effective_scrim_pattern`, `pane_border_role`,
-//! `split_child_insets`, `equal_tab_width`), and the mode/tab/pane
-//! action handlers (`toggle_mode`, `mode_move`, `mode_commit`,
-//! `mode_cancel`, `next_tab`, `activate_tab`, `activate_pane`) that only
-//! the `Render` impl below dispatches into.
+//! `split_child_insets`, `equal_tab_width`), the pure
+//! `mode_key_context_active` (whether the root's key context should be
+//! `MODE_CONTEXT` this render -- see its own doc comment), and the
+//! mode/tab/pane action handlers (`toggle_mode`, `mode_move`,
+//! `mode_commit`, `mode_cancel`, `next_tab`, `activate_tab`,
+//! `activate_pane`) that only the `Render` impl below dispatches into.
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -300,7 +302,36 @@ fn workspace_mode_blocked_by_restore(restoring: bool, failed: bool) -> bool {
     restoring && !failed
 }
 
+/// Whether the shell root's key context should be [`MODE_CONTEXT`] this
+/// render. `is_workspace_mode_active` is `Workspace::
+/// is_workspace_mode_active`'s own answer -- `true` either because the
+/// mode was explicitly toggled on, or, unconditionally, because the
+/// workspace has zero tabs (see that method's doc comment for the
+/// 2026-07-19 "empty workspace is an implicit command surface" decision).
+/// `modal_open` suppresses it regardless: a control-surface modal already
+/// exits workspace mode for a non-empty workspace (every modal-opening
+/// handler calls `Workspace::exit_workspace_mode` first), but the
+/// zero-tab bypass would otherwise survive that exit and keep reporting
+/// active -- letting the mode's own fixed hjkl/Enter/Escape bindings
+/// compete with the modal's typed search/confirm keys instead of
+/// reaching the modal's own `List` context. Same hazard
+/// `effective_scrim_pattern` already freezes against on the scrim/border
+/// side; this is the key-dispatch-side counterpart. Pure and unit-tested
+/// so the combination is covered without a GPUI render.
+fn mode_key_context_active(is_workspace_mode_active: bool, modal_open: bool) -> bool {
+    is_workspace_mode_active && !modal_open
+}
+
 impl WorkspaceShell {
+    /// Whether any control-surface modal (palette, view chooser, session
+    /// manager) currently has the shell's attention -- shared by
+    /// [`mode_key_context_active`]'s caller below and `render_node`'s
+    /// scrim/border freeze logic (`effective_scrim_pattern`), both of
+    /// which must treat "a modal is open" identically.
+    fn any_modal_open(&self) -> bool {
+        self.palette.is_some() || self.view_chooser.is_some() || self.session_manager.is_some()
+    }
+
     fn toggle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if workspace_mode_blocked_by_restore(
             self.restoring_workspace,
@@ -476,11 +507,8 @@ impl WorkspaceShell {
                 // they were right before the modal opened (2026-07-15
                 // round 3: modal-open is fully chrome-neutral, not just
                 // scrim-neutral).
-                let modal_open = self.palette.is_some()
-                    || self.view_chooser.is_some()
-                    || self.session_manager.is_some();
                 let (mode_active, cursor_pane) = effective_scrim_pattern(
-                    modal_open,
+                    self.any_modal_open(),
                     self.scrim_freeze,
                     self.workspace.is_workspace_mode_active(),
                     self.workspace.cursor_pane_id(),
@@ -668,7 +696,23 @@ impl WorkspaceShell {
 
 impl Render for WorkspaceShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mode_active = self.workspace.is_workspace_mode_active();
+        // Suppressed outright while a restore is in progress (unless it
+        // failed, which still allows reaching `Reload Session Runtime` --
+        // same predicate `toggle_mode`/`mode_move`/`mode_commit`/
+        // `mode_cancel` already gate on): a workspace persisted with zero
+        // tabs would otherwise have `is_workspace_mode_active()`'s
+        // zero-tab bypass firing immediately on load, before the restore
+        // sweep (which still runs a background round trip to sessiond
+        // even when there's nothing to resume) has actually finished.
+        let restore_blocked = workspace_mode_blocked_by_restore(
+            self.restoring_workspace,
+            self.workspace_restore_failed,
+        );
+        let mode_active = !restore_blocked
+            && mode_key_context_active(
+                self.workspace.is_workspace_mode_active(),
+                self.any_modal_open(),
+            );
         let content = self
             .workspace
             .active_tab()
@@ -853,8 +897,9 @@ mod tests {
     use horizon_workspace::PaneId;
 
     use super::{
-        effective_scrim_pattern, equal_tab_width, pane_border_role, pane_scrim_alpha,
-        split_child_insets, workspace_mode_blocked_by_restore, PaneBorderRole, SCRIM_DIM_ALPHA,
+        effective_scrim_pattern, equal_tab_width, mode_key_context_active, pane_border_role,
+        pane_scrim_alpha, split_child_insets, workspace_mode_blocked_by_restore, PaneBorderRole,
+        SCRIM_DIM_ALPHA,
     };
 
     #[test]
@@ -981,5 +1026,24 @@ mod tests {
         assert!(workspace_mode_blocked_by_restore(true, false));
         assert!(!workspace_mode_blocked_by_restore(true, true));
         assert!(!workspace_mode_blocked_by_restore(false, false));
+    }
+
+    #[test]
+    fn mode_key_context_follows_the_live_state_when_no_modal_is_open() {
+        assert!(mode_key_context_active(true, false));
+        assert!(!mode_key_context_active(false, false));
+    }
+
+    #[test]
+    fn mode_key_context_is_suppressed_while_a_modal_is_open() {
+        // The hazard this guards against: an empty workspace's
+        // `is_workspace_mode_active()` stays `true` even after a
+        // modal-opening handler calls `Workspace::exit_workspace_mode`
+        // (the zero-tab bypass doesn't care about the raw field) -- so
+        // without this suppression, the mode's fixed hjkl/Enter/Escape
+        // bindings would keep competing with the modal's own typed
+        // search/confirm keys.
+        assert!(!mode_key_context_active(true, true));
+        assert!(!mode_key_context_active(false, true));
     }
 }

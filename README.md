@@ -40,8 +40,12 @@ arguments after it, e.g. `just dev sessions`.
 
 After `cargo run`, press `ctrl+'` to enter workspace mode, then `:` to open
 the control surface (see `docs/workspace-mode-design.md`) — a Commands-only
-palette now that session management has its own modal (see below). It
-supports these manual smoke checks:
+palette now that session management has its own modal (see below). With
+zero tabs open (e.g. after `terminate active session` closes the last one),
+`:` opens the palette directly with no `ctrl+'` first — an empty workspace
+is an implicit command surface, since there is no pane input left to
+protect; `ctrl+'` is a harmless no-op in that state. It supports these
+manual smoke checks:
 
 - `new tab`: opens the view chooser (`Enter` on `Terminal` opens another
   terminal tab; `Enter` on `Agent` or a role like `Configuration Agent`
