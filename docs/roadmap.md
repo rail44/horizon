@@ -157,10 +157,13 @@ lands:
   list visible, same category as the accepted `/proc` environ read).
   Migration keeps `horizon-sandbox`'s public API
   (`SandboxPolicy`/`spawn`/`is_available`/denial detection) stable so
-  `horizon-agent` is untouched. Linux backend migrates + is verified
-  on this host first; macOS backend follows (verifiable only on a
-  mac). The paused network-domain approval (leg 4b) resumes on the
-  nono foundation -- its policy layer is backend-agnostic (spike-
+  `horizon-agent` is untouched. Linux backend LANDED 2026-07-19
+  (merge `61b446e`: migration + the scratch-dir/worktree-auto-removal
+  interaction fix found in review; gate cross-checked against a
+  pre-nono baseline to attribute a recurring backlog-28 e2e flake to
+  host load, not the migration). macOS backend follows (verifiable
+  only on a mac). The paused network-domain approval (leg 4b) resumes
+  on the nono foundation -- its policy layer is backend-agnostic (spike-
   confirmed), so only the spawn wiring rebases.
 - **Agent web search / public-code search** (backlog 18/19). Needs
   its own consultation: provider, trust-boundary/approval design.

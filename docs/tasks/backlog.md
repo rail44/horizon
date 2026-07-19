@@ -75,6 +75,18 @@ entries live in `backlog-resolved.md` keeping their original numbers
     follow-up: see the `portable-pty` backlog entry for options (upgrade,
     vendor patch, or accept the retry mitigation as the practical ceiling
     given how rare it now is).
+    Observation 2026-07-19 (nono-merge gate): same signature (this test,
+    exactly the 120s ceiling) at ~3/8 full-suite runs in the shared main
+    checkout while the owner's live GUI + several sessiond processes were
+    running -- and reproduced 1/6 on a pre-nono baseline worktree
+    (0d00c5c) in the same conditions, confirming it tracks host load, not
+    the sandbox-backend migration. The same baseline round also showed
+    one fast (0.05s) one-off failure of the bwrap-era
+    `bash_auto_executes_sandboxed_in_an_isolated_session_with_an_engaged_
+    sandbox` -- unreproduced, consistent with a backlog-43 shared-cache
+    artifact or a latent tier-1 test race; the bwrap variant is deleted
+    post-migration, so only worth chasing if the nono-era tier-1 tests
+    ever show the same shape.
 47. **Event-log turn tracker: `turn_id` goes permanently null after a
     turn's first approval.** `persistence/event_log/turn.rs` opens a
     turn on a user message and closes it on `WaitingForApproval`/
