@@ -417,3 +417,30 @@ entries live in `backlog-resolved.md` keeping their original numbers
     ns / why-not-DYLD tradeoffs worth reading before re-deriving them.
     Owner will schedule if/when to weigh depend-on-nono; recorded
     2026-07-19, not a request to act now.
+    **SDK-feasibility verdict (2026-07-19, built against nono 0.68.0 and
+    ran a real sandboxed spawn on this host):** all four acceptance
+    criteria MET at the library level — `crates/nono` is crates.io-
+    published, CLI/profile-decoupled, a pure programmatic `CapabilitySet`
+    builder + `Sandbox::apply_auto` self-apply primitive (no `spawn`
+    convenience — it restricts the *calling* process, meant for a forked
+    child pre-exec); `nono-proxy` is library-usable and richer than our
+    `horizon-sandbox-proxy` (TLS-intercept, credential injection, OAuth);
+    macOS Seatbelt is real-CI-tested (macos-14), stronger than our
+    compile-only state. BUT full build-vs-depend replacement is NOT
+    advised — three obstacles: (1) nono's Linux backend is Landlock+
+    seccomp only, **zero namespace isolation** (no mount/PID/UTS/IPC),
+    so a nono-sandboxed process still sees the full process list/mounts/
+    hostname — a real capability regression vs our bwrap; (2) its
+    apply-to-self-then-exec pattern needs async-signal-safe `pre_exec`
+    engineering from our multi-threaded sessiond that our
+    bwrap-as-separate-binary design currently avoids; (3) even
+    `default-features=false` pulls sigstore/reqwest/tokio/hyper
+    unconditionally — 278 crates for "just the mechanism". Churn is
+    concentrated in `nono-cli`, not the library (library history is
+    additive). **Owner-preferred axis was "can we use it as an
+    SDK/library" — answer: yes, but partial adoption is the sensible
+    shape, not full replacement.** Live options: keep bwrap for Linux;
+    adopt nono for macOS (its real-CI Seatbelt beats our unverified
+    backend) and/or `nono-proxy` as a proxy upgrade. Owner decision on
+    A(all-self-built)/B(partial)/C(full-depend, not advised) is deferred
+    while implementation continues on the self-built stack.
