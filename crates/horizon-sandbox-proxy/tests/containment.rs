@@ -357,12 +357,13 @@ async fn empty_allowlist_denies_the_bridge_for_every_host() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn direct_egress_stays_fully_blocked_even_under_a_proxied_policy() {
-    // No live bridge needed for this one: it only proves the seccomp cut
-    // still applies when the policy is `Proxied` rather than `Disabled`
+    // No live bridge needed for this one: it only proves direct TCP still
+    // stays blocked when the policy is `Proxied` rather than `Disabled`
     // (mirroring `horizon-sandbox`'s own `network_off_fails_a_tcp_connect`).
-    // `NetworkPolicy::Proxied` still requires the bridge-socket path to
-    // exist (`bwrap::bind_ro`'s hard error on a missing path), so a plain
-    // placeholder file stands in -- it's never actually dialed here.
+    // A plain placeholder file stands in for the bridge socket -- it's
+    // never actually dialed here (the Linux backend only requires the
+    // socket's containing directory to exist, so the file itself doesn't
+    // strictly need to, but this mirrors a real caller's shape).
     let workdir = tempdir("direct-egress-workdir");
     let bridge_socket = workdir.join("placeholder.sock");
     std::fs::File::create(&bridge_socket).unwrap();
@@ -394,8 +395,15 @@ async fn direct_egress_stays_fully_blocked_even_under_a_proxied_policy() {
         .unwrap_or_default()
         .to_lowercase();
     assert_ne!(out, 0, "direct TCP connect must fail under Proxied too");
+    // Landlock denies the connect with EACCES ("permission denied"); an
+    // older-ABI seccomp fallback would deny `socket(2)` with EPERM
+    // ("operation not permitted"); a kernel where neither layer engaged
+    // would instead see a plain "network is unreachable" at the routing
+    // step.
     assert!(
-        stderr.contains("network") || stderr.contains("operation not permitted"),
+        stderr.contains("network")
+            || stderr.contains("operation not permitted")
+            || stderr.contains("permission denied"),
         "expected a sandbox-denied-shaped error, got: {stderr:?}"
     );
 

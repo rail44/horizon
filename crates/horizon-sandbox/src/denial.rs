@@ -10,8 +10,21 @@
 //! `docs/agent-approval-design.md`) instead of surfacing a raw failure the
 //! model has no way to distinguish from its own bug.
 
-/// Substrings that show up in sandbox-denial stderr across bwrap,
-/// Landlock, seccomp, and macOS Seatbelt.
+/// Substrings that show up in sandbox-denial stderr across the Linux
+/// backend (nono/Landlock, migrated from bwrap+seccompiler+landlock --
+/// see `docs/roadmap.md`'s backlog-60 entry) and macOS Seatbelt.
+///
+/// The Linux backend's own denial signatures (spike-confirmed in
+/// `experiments/nono-spike/`): a denied filesystem write or a denied TCP
+/// connect both surface as `EACCES` ("permission denied"); a denied
+/// signal (`SignalMode::AllowSameSandbox`) surfaces as `EPERM`
+/// ("operation not permitted"). Both are already covered below, so no
+/// list change was needed for the migration itself -- "read-only file
+/// system"/"seccomp"/"landlock" are kept as they were before (no longer
+/// reachable from the Linux backend now that mount-namespace bind-mounts
+/// and a bespoke seccomp filter are both gone, but macOS's still-`sandbox-
+/// exec`-based backend shares this same list and may still legitimately
+/// emit them).
 const SANDBOX_DENIED_KEYWORDS: [&str; 7] = [
     "operation not permitted",
     "permission denied",
@@ -29,9 +42,11 @@ const SANDBOX_DENIED_KEYWORDS: [&str; 7] = [
 const QUICK_REJECT_EXIT_CODES: [i32; 3] = [2, 126, 127];
 
 /// `128 + SIGSYS`: the exit code of a process killed by a `Trap`-action
-/// seccomp filter. This crate's own network-cut filter uses `Errno`
-/// instead of `Trap` (see `linux::seccomp`), so this mostly documents the
-/// shape for callers who might install a `Trap`-based filter of their own.
+/// seccomp filter. Neither this crate's old bwrap-era network-cut filter
+/// nor nono's own seccomp fallback (`linux::spawn`) ever installs a
+/// `Trap`-action filter -- both use `Errno` -- so this mostly documents
+/// the shape for callers who might install a `Trap`-based filter of their
+/// own.
 #[cfg(unix)]
 fn sigsys_exit_code() -> i32 {
     128 + libc::SIGSYS
@@ -98,6 +113,28 @@ mod tests {
     #[test]
     fn keyword_match_is_case_insensitive() {
         assert!(is_likely_sandbox_denied(true, 1, "PERMISSION DENIED"));
+    }
+
+    /// The Linux backend's actual denial shapes (nono/Landlock,
+    /// spike-confirmed): a denied fs write or TCP connect surfaces as
+    /// `EACCES`, a denied signal as `EPERM` -- both formatted the way
+    /// `std::io::Error`'s `Display` renders them.
+    #[test]
+    fn nono_eacces_denial_is_detected() {
+        assert!(is_likely_sandbox_denied(
+            true,
+            1,
+            "sh: 1: cannot create /outside/nope.txt: Permission denied (os error 13)"
+        ));
+    }
+
+    #[test]
+    fn nono_eperm_signal_denial_is_detected() {
+        assert!(is_likely_sandbox_denied(
+            true,
+            1,
+            "sh: 1: kill: (12345) - Operation not permitted (os error 1)"
+        ));
     }
 
     #[test]

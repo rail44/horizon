@@ -370,11 +370,18 @@ fn tier1_sandboxed_bash_direct_egress_stays_blocked_under_proxied() {
         .recv_timeout(Duration::from_secs(30))
         .expect("the sandboxed bash call should finish");
 
+    // Landlock denies the connect with EACCES ("permission denied"); an
+    // older-ABI seccomp fallback would deny `socket(2)` with EPERM
+    // ("operation not permitted"); a kernel where neither layer engaged
+    // would instead see a plain "network is unreachable" at the routing
+    // step.
     match completion {
         BashCompletion::RetryWithoutSandbox { reason, .. } => {
             let lower = reason.to_lowercase();
             assert!(
-                lower.contains("network") || lower.contains("operation not permitted"),
+                lower.contains("network")
+                    || lower.contains("operation not permitted")
+                    || lower.contains("permission denied"),
                 "expected a sandbox-denial-shaped reason: {reason}"
             );
         }
@@ -389,7 +396,9 @@ fn tier1_sandboxed_bash_direct_egress_stays_blocked_under_proxied() {
                 .unwrap_or_default()
                 .to_lowercase();
             assert!(
-                output.contains("network") || output.contains("operation not permitted"),
+                output.contains("network")
+                    || output.contains("operation not permitted")
+                    || output.contains("permission denied"),
                 "expected a sandbox-denied-shaped error, got: {:?}",
                 result.output
             );

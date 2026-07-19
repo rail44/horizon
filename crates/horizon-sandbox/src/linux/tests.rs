@@ -1,8 +1,9 @@
-//! Real, hermetic end-to-end tests: each spawns an actual `bwrap` process
-//! (no root required -- unprivileged user namespaces, verified present on
-//! this dev machine) and asserts on its actual observed behavior, not just
-//! argv shape. Every spawned child is waited on with a bounded timeout so
-//! a regression here can't hang the test suite.
+//! Real, hermetic end-to-end tests: each spawns an actual process under a
+//! real nono/Landlock sandbox (no root required -- unprivileged Landlock,
+//! verified present on this dev machine) and asserts on its actual
+//! observed behavior, not just `CapabilitySet` shape (see `caps::tests`
+//! for that level). Every spawned child is waited on with a bounded
+//! timeout so a regression here can't hang the test suite.
 //!
 //! Diagnostic text (a sandboxed command's stderr) is captured by having
 //! the *sandboxed script itself* redirect its own fd 2 to a file inside
@@ -131,7 +132,7 @@ fn writes_outside_writable_root_are_denied() {
 
     let policy = SandboxPolicy {
         writable_roots: vec![writable.clone()],
-        // `Full` scope means `outside` is visible (bwrap `--ro-bind / /`)
+        // `Full` scope means `outside` is visible (nono's `/` Read grant)
         // but not writable -- the interesting negative case. A `Roots`
         // scope that never mentions `outside` would instead fail with
         // ENOENT (the path isn't even visible), a different, less useful
@@ -162,28 +163,27 @@ fn writes_outside_writable_root_are_denied() {
     cleanup(outside);
 }
 
-/// The crux regression test for the 2026-07-19 dogfooding containment hole:
-/// a sandboxed write to `/tmp/<name>` must land in bwrap's own private
-/// `--tmpfs /tmp` (torn down with the sandbox), never on the host's real
-/// `/tmp` -- *as long as the caller's `writable_roots` doesn't itself
-/// include a path that resolves onto `/tmp`* (see `build_args`'s doc
-/// comment on why that specific mistake defeats the private tmpfs; the
-/// fix living in `horizon-agent` is to simply never do that, which is what
-/// this test's policy mirrors). The write+readback happens in one script so
-/// a successful write inside the sandbox is proven directly (this is
-/// expected, intentional scratch-space behavior, not something to deny),
-/// with the writable root under `writable`, entirely separate from `/tmp`.
+/// TMPDIR parity (`docs/roadmap.md`'s backlog-60 entry): the one
+/// deliberate behavior change from the old bwrap backend. bwrap gave a
+/// private `--tmpfs /tmp`, so a sandboxed write to a literal `/tmp/<name>`
+/// always succeeded (landing in that private overlay, torn down with the
+/// sandbox). nono has no mount namespace, so there is no such overlay to
+/// substitute -- a literal `/tmp` write is now denied outright unless the
+/// caller's own `writable_roots` happens to cover it (which callers
+/// should not do; see `linux::spawn`'s TMPDIR-parity comment). This is
+/// the regression test proving that denial is real and leaves no trace
+/// on the host's actual `/tmp`, not a silent no-op.
 #[test]
-fn writes_to_tmp_land_in_the_private_tmpfs_not_the_hosts_real_tmp() {
-    let writable = tempdir("tmp-private-writable");
-    let log = writable.join("stderr.log");
-    let readback = writable.join("readback.txt");
-    // A name unique enough that a pre-existing file at this exact host path
-    // would be an astonishing coincidence, plus a defensive pre-clean and a
-    // best-effort post-clean, so a hypothetical regression here can't leave
-    // a stray file behind on the real machine running this test.
+fn literal_tmp_write_is_denied_without_a_matching_writable_root() {
+    let workspace = tempdir("literal-tmp-denied-workspace");
+    let log = workspace.join("stderr.log");
+    // A name unique enough that a pre-existing file at this exact host
+    // path would be an astonishing coincidence, plus a defensive
+    // pre-clean and a best-effort post-clean, so a hypothetical
+    // regression here can't leave a stray file behind on the real
+    // machine running this test.
     let marker = format!(
-        "horizon-sandbox-test-tmpfs-leak-{}-{}.txt",
+        "horizon-sandbox-test-tmp-denied-{}-{}.txt",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -194,46 +194,92 @@ fn writes_to_tmp_land_in_the_private_tmpfs_not_the_hosts_real_tmp() {
     let _ = std::fs::remove_file(&host_target);
 
     let policy = SandboxPolicy {
-        // Deliberately *not* `std::env::temp_dir()` or any path under
-        // `/tmp` -- this policy shape is exactly what
-        // `tools::bash::exec::run_sandboxed` now constructs.
-        writable_roots: vec![writable.clone()],
+        // Deliberately not `/tmp` or anything under it.
+        writable_roots: vec![workspace.clone()],
         readable_scope: ReadableScope::Full,
         network: NetworkPolicy::Disabled,
     };
     let cmd = shell(
         "/bin/sh",
         &format!(
-            "exec 2>{}; echo leaked > {} && cat {} > {}",
+            "exec 2>{}; echo leaked > {}",
             shell_quote(&log),
-            shell_quote(&host_target),
-            shell_quote(&host_target),
-            shell_quote(&readback)
+            shell_quote(&host_target)
         ),
     );
     let sandboxed = spawn(cmd, &policy, SandboxStdio::inherit()).expect("spawn should succeed");
     let code = wait_with_timeout(sandboxed.child, TEST_TIMEOUT);
+    let stderr = read_log(&log);
 
+    assert_ne!(code, 0, "a literal /tmp write should be denied");
+    assert!(
+        !host_target.exists(),
+        "the write must never actually land on the host's real /tmp"
+    );
+    assert!(
+        is_likely_sandbox_denied(true, code, &stderr),
+        "expected a denial-shaped failure, got exit {code} stderr {stderr:?}"
+    );
+
+    cleanup(workspace);
+    let _ = std::fs::remove_file(&host_target);
+}
+
+/// The other half of TMPDIR parity: `spawn` auto-provisions
+/// `<writable_root>/.horizon-sandbox-tmp` and injects `TMPDIR` when the
+/// caller hasn't already set one, so TMPDIR-respecting tools (`mktemp`
+/// here, standing in for the many language runtimes that behave the
+/// same way) get private, writable scratch space without ever touching
+/// the host's real `/tmp` -- functionally replacing bwrap's private
+/// tmpfs. `TMPDIR` is explicitly cleared on this test's own `Command` so
+/// the result doesn't depend on whether the test process's own ambient
+/// environment happens to have `TMPDIR` set.
+#[test]
+fn tmpdir_is_provisioned_when_the_caller_hasnt_set_one_and_mktemp_respects_it() {
+    let workspace = tempdir("tmpdir-provision-workspace");
+    let log = workspace.join("stderr.log");
+    let readback = workspace.join("mktemp-path.txt");
+
+    let policy = SandboxPolicy {
+        writable_roots: vec![workspace.clone()],
+        readable_scope: ReadableScope::Full,
+        network: NetworkPolicy::Disabled,
+    };
+    let mut cmd = shell(
+        "/bin/sh",
+        &format!(
+            "exec 2>{}; mktemp > {}",
+            shell_quote(&log),
+            shell_quote(&readback)
+        ),
+    );
+    cmd.env_remove("TMPDIR");
+    let sandboxed = spawn(cmd, &policy, SandboxStdio::inherit()).expect("spawn should succeed");
+    let code = wait_with_timeout(sandboxed.child, TEST_TIMEOUT);
     assert_eq!(
         code,
         0,
-        "writing to /tmp inside the sandbox should succeed (private tmpfs \
-         scratch space), stderr: {}",
+        "mktemp under the provisioned TMPDIR should succeed, stderr: {}",
         read_log(&log)
     );
-    assert_eq!(
-        std::fs::read_to_string(&readback).expect("readback file should exist"),
-        "leaked\n",
-        "the sandboxed process should see its own write via its private /tmp"
+
+    let created_path = std::fs::read_to_string(&readback).expect("readback file should exist");
+    let created_path = created_path.trim();
+    let expected_scratch = workspace
+        .join(".horizon-sandbox-tmp")
+        .canonicalize()
+        .expect("spawn should have created the scratch dir");
+    assert!(
+        std::path::Path::new(created_path).starts_with(&expected_scratch),
+        "mktemp's output {created_path:?} should land under the provisioned scratch dir \
+         {expected_scratch:?}"
     );
     assert!(
-        !host_target.exists(),
-        "a sandboxed write to /tmp must never leak onto the host's real /tmp \
-         (the 2026-07-19 dogfooding containment hole)"
+        std::path::Path::new(created_path).exists(),
+        "the mktemp'd file must be a real host path"
     );
 
-    cleanup(writable);
-    let _ = std::fs::remove_file(&host_target);
+    cleanup(workspace);
 }
 
 #[test]
@@ -245,9 +291,11 @@ fn network_off_fails_a_tcp_connect() {
         readable_scope: ReadableScope::Full,
         network: NetworkPolicy::Disabled,
     };
-    // bash's `/dev/tcp` pseudo-device needs no external binary. With no
-    // network namespace (and no routes), the connect fails immediately --
-    // no real packet ever leaves the host, so this is fast and hermetic.
+    // bash's `/dev/tcp` pseudo-device needs no external binary. With
+    // Landlock denying the connect (or, on an older kernel ABI without
+    // Landlock network support, nono's automatic seccomp fallback denying
+    // `socket(2)` itself), no real packet ever leaves the host, so this
+    // is fast and hermetic.
     let cmd = shell(
         "/bin/bash",
         &format!(
@@ -260,17 +308,15 @@ fn network_off_fails_a_tcp_connect() {
     let stderr = read_log(&log).to_lowercase();
 
     assert_ne!(code, 0, "TCP connect should fail with network disabled");
-    // Two legitimate failure shapes, depending on which containment layer
-    // gets there first: the seccomp network-cut denies `socket(2)` itself
-    // ("operation not permitted", observed in practice -- it runs before
-    // bwrap's `--unshare-net` would even get a chance to matter, since
-    // there's no `connect(2)`/routing step left to reach); a kernel
-    // without seccomp support (or a filter that somehow didn't apply)
-    // would instead see bwrap's namespace-based "network is unreachable"
-    // at the routing step. Either is the sandbox denying it, not the
-    // command's own logic.
+    // Landlock denies with EACCES ("permission denied"); a seccomp
+    // fallback (older ABI) denies `socket(2)` with EPERM ("operation not
+    // permitted"); a kernel where neither layer engaged would instead see
+    // a plain "network is unreachable" at the routing step. Any of these
+    // is the sandbox denying it, not the command's own logic.
     assert!(
-        stderr.contains("network") || stderr.contains("operation not permitted"),
+        stderr.contains("network")
+            || stderr.contains("operation not permitted")
+            || stderr.contains("permission denied"),
         "expected a sandbox-denied-shaped error, got: {stderr:?}"
     );
 
@@ -314,9 +360,103 @@ fn network_on_allows_reaching_the_kernel_network_stack() {
     cleanup(dir);
 }
 
+/// Signal scoping (`SignalMode::AllowSameSandbox`) is a new containment
+/// win over the old bwrap+seccompiler backend, which had no equivalent at
+/// all (`docs/roadmap.md`'s backlog-60 entry). A same-uid process outside
+/// the sandbox must survive a real `kill(2)` sent from inside it -- not
+/// just a syscall that *reports* denial, but one the target genuinely
+/// never received.
 #[test]
-fn landlock_negotiation_reports_an_abi_level_or_is_skipped() {
-    let dir = tempdir("landlock-report");
+fn external_signal_is_denied_and_the_decoy_survives() {
+    let dir = tempdir("signal-external-denied");
+    let log = dir.join("stderr.log");
+
+    let mut decoy = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("spawn decoy process");
+    let decoy_pid = decoy.id();
+
+    let policy = SandboxPolicy {
+        writable_roots: vec![dir.clone()],
+        readable_scope: ReadableScope::Full,
+        network: NetworkPolicy::Disabled,
+    };
+    let cmd = shell(
+        "/bin/sh",
+        &format!("exec 2>{}; kill -TERM {}", shell_quote(&log), decoy_pid),
+    );
+    let sandboxed = spawn(cmd, &policy, SandboxStdio::inherit()).expect("spawn should succeed");
+    let code = wait_with_timeout(sandboxed.child, TEST_TIMEOUT);
+    let stderr = read_log(&log);
+
+    assert_ne!(
+        code, 0,
+        "signaling an external same-uid process should be denied"
+    );
+    assert!(
+        is_likely_sandbox_denied(true, code, &stderr),
+        "expected a denial-shaped failure, got exit {code} stderr {stderr:?}"
+    );
+
+    // The definitive check: the decoy actually never received the
+    // signal, not just that the syscall reported an error.
+    std::thread::sleep(Duration::from_millis(200));
+    match decoy.try_wait() {
+        Ok(None) => {} // still alive -- signal scoping held
+        Ok(Some(status)) => panic!(
+            "CONTAINMENT BREACH: decoy process exited ({status:?}) -- the sandboxed \
+             command's kill(2) reached a process outside its sandbox"
+        ),
+        Err(e) => panic!("try_wait on decoy failed: {e}"),
+    }
+    let _ = decoy.kill();
+    let _ = decoy.wait();
+
+    cleanup(dir);
+}
+
+/// The complementary case to `external_signal_is_denied_and_the_decoy_survives`:
+/// `SignalMode::AllowSameSandbox` must not block a sandboxed process from
+/// signaling its own children.
+#[test]
+fn sandboxed_process_can_still_signal_its_own_child() {
+    let dir = tempdir("signal-own-child-allowed");
+    let log = dir.join("stderr.log");
+
+    let policy = SandboxPolicy {
+        writable_roots: vec![dir.clone()],
+        readable_scope: ReadableScope::Full,
+        network: NetworkPolicy::Disabled,
+    };
+    // `wait "$child"` reports the terminated child's own exit status
+    // (128 + SIGTERM) once `kill` actually reaches it -- a real syscall
+    // outcome, not a timeout: if signaling were denied, `sleep 5` would
+    // instead run to its own natural completion (exit 0) before `wait`
+    // returns.
+    let cmd = shell(
+        "/bin/bash",
+        &format!(
+            "exec 2>{}; sleep 5 & child=$!; sleep 0.2; kill -TERM \"$child\"; wait \"$child\"",
+            shell_quote(&log)
+        ),
+    );
+    let sandboxed = spawn(cmd, &policy, SandboxStdio::inherit()).expect("spawn should succeed");
+    let code = wait_with_timeout(sandboxed.child, TEST_TIMEOUT);
+
+    assert_eq!(
+        code,
+        128 + libc::SIGTERM,
+        "the sandboxed process should be able to SIGTERM its own child, stderr: {}",
+        read_log(&log)
+    );
+
+    cleanup(dir);
+}
+
+#[test]
+fn nono_report_reflects_the_detected_abi() {
+    let dir = tempdir("nono-report");
     let policy = SandboxPolicy {
         writable_roots: vec![dir.clone()],
         readable_scope: ReadableScope::Full,
@@ -327,22 +467,15 @@ fn landlock_negotiation_reports_an_abi_level_or_is_skipped() {
     let code = wait_with_timeout(sandboxed.child, TEST_TIMEOUT);
     assert_eq!(code, 0);
 
-    match sandboxed.landlock {
-        Some(report) => {
-            // Skip-not-fail: on a kernel without Landlock this crate must
-            // still function (bwrap remains the primary containment); we
-            // only assert the report is internally consistent, not that
-            // enforcement is full (that depends on the kernel we happen
-            // to run the test on).
-            println!(
-                "Landlock report: target_abi={:?} enforcement={:?} downgraded={}",
-                report.target_abi,
-                report.enforcement,
-                report.is_downgraded()
-            );
-        }
-        None => println!("Landlock report unavailable on this backend"),
-    }
+    let report = sandboxed
+        .nono
+        .expect("a nono report should be present on Linux");
+    let abi = nono::Sandbox::detect_abi().expect("Landlock must be available on this dev host");
+    assert_eq!(report.abi, abi.version_string());
+    println!(
+        "nono report: abi={} network_fallback={}",
+        report.abi, report.network_fallback
+    );
 
     cleanup(dir);
 }
@@ -376,22 +509,8 @@ fn spawn_preserves_piped_stdout() {
 }
 
 #[test]
-fn is_available_agrees_with_whether_bwrap_resolves() {
-    assert_eq!(super::is_available(), resolve_bwrap().is_ok());
-}
-
-#[test]
-fn missing_bwrap_candidate_list_is_exposed_in_the_error() {
-    // Not a real "bwrap missing" scenario (it's installed on this dev
-    // machine) -- exercises that `resolve_bwrap` fails closed rather than
-    // falling back to an unqualified PATH search, by checking the
-    // documented candidate paths directly.
-    for candidate in BWRAP_CANDIDATES {
-        assert!(
-            candidate.starts_with('/'),
-            "bwrap candidates must be absolute paths, not a PATH lookup"
-        );
-    }
+fn is_available_agrees_with_detect_abi() {
+    assert_eq!(super::is_available(), nono::Sandbox::detect_abi().is_ok());
 }
 
 fn tempdir(label: &str) -> std::path::PathBuf {
