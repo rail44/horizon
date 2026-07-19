@@ -79,6 +79,17 @@ pub(crate) fn build_args(
         bind_rw(&mut argv, root)?;
     }
 
+    // The network-proxy leg's only egress path (`docs/agent-approval-design.md`):
+    // bind the bridge socket in read-only (a client only ever needs to
+    // `connect(2)` to it, never create/unlink it) at the same absolute path
+    // it has on the host, same convention as every other explicit bind
+    // above. AF_UNIX stays outside `seccomp`'s denied-families list (see
+    // `linux::seccomp`), so this is the one hole in an otherwise fully cut
+    // network namespace.
+    if let NetworkPolicy::Proxied { bridge_socket } = &policy.network {
+        bind_ro(&mut argv, bridge_socket)?;
+    }
+
     push(&mut argv, "--");
     argv.push(program.to_os_string());
     argv.extend(args.iter().cloned());
@@ -169,6 +180,36 @@ mod tests {
         let policy = policy(vec![], NetworkPolicy::Enabled);
         let argv = build_args(&policy, OsStr::new("/bin/true"), &[]).unwrap();
         assert!(contains_flag(&argv, "--share-net"));
+    }
+
+    #[test]
+    fn network_proxied_has_no_share_net_but_binds_the_bridge_socket() {
+        let socket = std::env::temp_dir();
+        let policy = policy(
+            vec![],
+            NetworkPolicy::Proxied {
+                bridge_socket: socket.clone(),
+            },
+        );
+        let argv = build_args(&policy, OsStr::new("/bin/true"), &[]).unwrap();
+        assert!(
+            !contains_flag(&argv, "--share-net"),
+            "Proxied must keep the network namespace fully unshared, same as Disabled"
+        );
+        // The last `--ro-bind` in argv is ours: `ReadableScope::Full` above
+        // already emitted one `--ro-bind / /` for the root, and the bridge
+        // socket bind is appended after that plus the (empty here)
+        // `writable_roots` loop -- `rposition` picks ours specifically
+        // rather than colliding with the earlier one (both `/` and
+        // `std::env::temp_dir()` can share literal path text with other
+        // flags, e.g. `--tmpfs /tmp`, so matching on the flag's position is
+        // more robust than matching on the path text alone).
+        let idx = argv
+            .iter()
+            .rposition(|a| a == "--ro-bind")
+            .expect("a --ro-bind flag for the bridge socket should be present");
+        assert_eq!(argv[idx + 1], OsString::from(&socket));
+        assert_eq!(argv[idx + 2], OsString::from(&socket));
     }
 
     #[test]

@@ -22,12 +22,23 @@ pub enum ReadableScope {
     Roots(Vec<PathBuf>),
 }
 
-/// Network posture. On/off only for this spike; domain-level allowlisting
-/// is the later network-proxy leg in `docs/agent-approval-design.md`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Network posture.
+///
+/// `Proxied` is the network-proxy leg (`docs/agent-approval-design.md`,
+/// "Sandbox architecture" / "Staging" leg 4): direct egress stays fully cut
+/// (same seccomp/namespace treatment as `Disabled` -- see
+/// `linux::spawn`/`macos::sbpl::compose`), and the *only* path out is a
+/// UNIX domain socket bind-mounted into the sandbox at `bridge_socket`,
+/// which the caller has already wired to bridge into a long-lived
+/// `horizon-sandbox-proxy` allowlist proxy (see that crate's `UdsBridge`).
+/// This crate only carries the path and performs the bind/profile-rule
+/// plumbing -- it has no notion of allowlists or proxying itself, keeping
+/// the OS-containment layer decoupled from the network-policy layer.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NetworkPolicy {
     Enabled,
     Disabled,
+    Proxied { bridge_socket: PathBuf },
 }
 
 /// A command's sandbox policy: writable roots, readable scope, network
