@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::SessionId;
 
 use super::{LayoutNode, PaneId, PaneKind, SessionKind, TabId};
@@ -51,6 +53,16 @@ pub struct WorkspaceSession {
     pub kind: SessionKind,
     pub display_number: usize,
     pub title: String,
+    /// The directory this session is confined to / was spawned in, when
+    /// known (`docs/session-relationship-design.md` decision 4a: "Horizon
+    /// knows every session's `workspace_root`"). `None` until something
+    /// records one -- today only agent sessions get one, set right before
+    /// `SessionNew` is sent (`WorkspaceShell::reconcile` in
+    /// `src/workspace/session_lifecycle.rs`) via
+    /// [`Workspace::set_session_workspace_root`]. Not persisted across a
+    /// restart/reload; a resumed session's `workspace_root` goes back to
+    /// `None` until recreated.
+    pub workspace_root: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -67,6 +79,7 @@ impl WorkspaceSession {
             kind,
             display_number,
             title: session_title(kind, display_number),
+            workspace_root: None,
         }
     }
 }

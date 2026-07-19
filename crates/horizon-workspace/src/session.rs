@@ -1,7 +1,18 @@
+use std::path::PathBuf;
+
 use super::types::{PaneKind, SessionKind, Workspace, WorkspaceSession};
 use crate::SessionId;
 
 impl Workspace {
+    /// Records `workspace_root` on an existing session (a no-op if
+    /// `session_id` is unknown) -- see `WorkspaceSession::workspace_root`'s
+    /// doc comment for who calls this and when.
+    pub fn set_session_workspace_root(&mut self, session_id: SessionId, workspace_root: PathBuf) {
+        if let Some(session) = self.sessions.iter_mut().find(|s| s.id == session_id) {
+            session.workspace_root = Some(workspace_root);
+        }
+    }
+
     pub fn terminate_session(&mut self, session_id: SessionId) -> bool {
         let Some(_) = self.session(session_id) else {
             return false;

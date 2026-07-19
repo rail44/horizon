@@ -35,6 +35,7 @@ pub fn external_name(subcommand: &Subcommand) -> &'static str {
         Subcommand::ContinueTurn { .. } => "continue-turn",
         Subcommand::ReloadSessionRuntime => "reload-session-runtime",
         Subcommand::ReloadConfig => "reload-config",
+        Subcommand::OpenTerminalInSessionDirectory => "open-terminal-in-session-directory",
         Subcommand::Sessions => "sessions",
         Subcommand::State => "state",
     }
@@ -116,6 +117,9 @@ pub fn to_request(subcommand: &Subcommand, resolved_split: Option<&str>) -> Requ
         ),
         Subcommand::ReloadSessionRuntime => invoke("reload-session-runtime", serde_json::json!({})),
         Subcommand::ReloadConfig => invoke("reload-config", serde_json::json!({})),
+        Subcommand::OpenTerminalInSessionDirectory => {
+            invoke("open-terminal-in-session-directory", serde_json::json!({}))
+        }
         Subcommand::Sessions => Request::Query(Query {
             what: "sessions".to_string(),
         }),
@@ -371,6 +375,22 @@ mod tests {
             panic!("expected an Invoke request");
         };
         assert_eq!(invoke.command, "reload-config");
+        assert_eq!(invoke.args, serde_json::json!({}));
+    }
+
+    #[test]
+    fn open_terminal_in_session_directory_is_a_bare_invoke() {
+        assert_eq!(
+            external_name(&Subcommand::OpenTerminalInSessionDirectory),
+            "open-terminal-in-session-directory"
+        );
+        assert!(!is_destructive(&Subcommand::OpenTerminalInSessionDirectory));
+
+        let Request::Invoke(invoke) = to_request(&Subcommand::OpenTerminalInSessionDirectory, None)
+        else {
+            panic!("expected an Invoke request");
+        };
+        assert_eq!(invoke.command, "open-terminal-in-session-directory");
         assert_eq!(invoke.args, serde_json::json!({}));
     }
 

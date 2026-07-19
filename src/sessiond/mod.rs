@@ -166,13 +166,14 @@ impl SessiondHandle {
         session_id: contract::SessionId,
         provider_id: contract::ProviderId,
         role_id: Option<horizon_agent::roles::RoleId>,
+        workspace_root: Option<std::path::PathBuf>,
     ) -> AgentSessionHandle {
         let handle = self.register_agent(session_id);
         self.enqueue_agent(Envelope::control(Control::SessionNew(wire::SessionNew {
             session_id,
             provider_id,
             role_id,
-            workspace_root: std::env::current_dir().ok(),
+            workspace_root,
         })));
         handle
     }

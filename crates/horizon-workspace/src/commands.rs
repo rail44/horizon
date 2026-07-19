@@ -15,6 +15,11 @@ pub enum CommandId {
     ReloadSessionRuntime,
     OpenSessionManager,
     ReloadConfig,
+    /// Opens a new terminal tab whose cwd is the active session's
+    /// `workspace_root` (`docs/session-relationship-design.md` decision
+    /// 4a) -- v1's "hunt down the agent's worktree and cd there" fix,
+    /// scoped to the active session only.
+    OpenTerminalInSessionDirectory,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -53,6 +58,15 @@ pub struct CommandState {
     /// guard halt returns the session to `WaitingForUser`, so the two are
     /// never both true at once for the same session.
     pub has_paused_turn: bool,
+    /// Whether the active session has a known `workspace_root` --
+    /// `CommandId::OpenTerminalInSessionDirectory`'s enablement signal
+    /// (`docs/session-relationship-design.md` decision 4a). Kept as a
+    /// bare bool here (mirroring every other enablement flag on this
+    /// struct) rather than carrying the path itself, which stays
+    /// `Copy`-friendly and keeps the actual value's resolution
+    /// (`Workspace::session_workspace_root`) at the one call site that
+    /// needs it (`WorkspaceShell::execute`).
+    pub has_active_session_workspace_root: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -168,6 +182,14 @@ pub fn core_commands() -> Vec<CommandSpec> {
             description: "Re-read the config file and apply theme and keybindings live.",
             destructive: false,
         },
+        CommandSpec {
+            id: CommandId::OpenTerminalInSessionDirectory,
+            title: "Open Terminal in Session Directory",
+            category: CommandCategory::Workspace,
+            description:
+                "Open a new terminal whose working directory is the active session's directory.",
+            destructive: false,
+        },
     ]
 }
 
@@ -197,6 +219,7 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
         CommandId::ApproveToolCall | CommandId::DenyToolCall => state.has_pending_approval,
         CommandId::CancelAgentTurn => state.has_turn_in_flight,
         CommandId::ContinueAgentTurn => state.has_paused_turn,
+        CommandId::OpenTerminalInSessionDirectory => state.has_active_session_workspace_root,
     }
 }
 
@@ -239,7 +262,7 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 15);
+        assert_eq!(commands.len(), 16);
         assert_eq!(commands[0].id, CommandId::SplitRight);
         assert_eq!(commands[0].title, "Split Right…");
         assert_eq!(commands[1].id, CommandId::SplitDown);
@@ -258,6 +281,8 @@ mod tests {
         assert_eq!(commands[13].title, "Manage Sessions");
         assert_eq!(commands[14].id, CommandId::ReloadConfig);
         assert_eq!(commands[14].title, "Reload Config");
+        assert_eq!(commands[15].id, CommandId::OpenTerminalInSessionDirectory);
+        assert_eq!(commands[15].title, "Open Terminal in Session Directory");
     }
 
     #[test]
@@ -272,6 +297,7 @@ mod tests {
                 has_pending_approval: false,
                 has_turn_in_flight: false,
                 has_paused_turn: false,
+                has_active_session_workspace_root: false,
             }
         ));
     }
@@ -315,6 +341,7 @@ mod tests {
             has_pending_approval: false,
             has_turn_in_flight: false,
             has_paused_turn: false,
+            has_active_session_workspace_root: false,
         });
 
         let close_pane = entries
@@ -341,6 +368,7 @@ mod tests {
                 has_pending_approval: false,
                 has_turn_in_flight: false,
                 has_paused_turn: false,
+                has_active_session_workspace_root: false,
             }
         ));
         assert!(command_enabled(
@@ -353,6 +381,7 @@ mod tests {
                 has_pending_approval: false,
                 has_turn_in_flight: false,
                 has_paused_turn: false,
+                has_active_session_workspace_root: false,
             }
         ));
     }
@@ -370,6 +399,7 @@ mod tests {
                 has_pending_approval: false,
                 has_turn_in_flight: false,
                 has_paused_turn: false,
+                has_active_session_workspace_root: false,
             }
         ));
     }
@@ -388,6 +418,7 @@ mod tests {
                 has_pending_approval: false,
                 has_turn_in_flight: false,
                 has_paused_turn: false,
+                has_active_session_workspace_root: false,
             }
         ));
         assert!(!command_enabled(
@@ -400,6 +431,7 @@ mod tests {
                 has_pending_approval: false,
                 has_turn_in_flight: false,
                 has_paused_turn: false,
+                has_active_session_workspace_root: false,
             }
         ));
         assert!(command_enabled(
@@ -412,6 +444,7 @@ mod tests {
                 has_pending_approval: false,
                 has_turn_in_flight: false,
                 has_paused_turn: false,
+                has_active_session_workspace_root: false,
             }
         ));
         assert!(command_enabled(
@@ -424,6 +457,7 @@ mod tests {
                 has_pending_approval: false,
                 has_turn_in_flight: false,
                 has_paused_turn: false,
+                has_active_session_workspace_root: false,
             }
         ));
     }
@@ -444,6 +478,7 @@ mod tests {
                 has_pending_approval: false,
                 has_turn_in_flight: false,
                 has_paused_turn: false,
+                has_active_session_workspace_root: false,
             }
         ));
     }
@@ -460,6 +495,7 @@ mod tests {
                 has_pending_approval: false,
                 has_turn_in_flight: false,
                 has_paused_turn: false,
+                has_active_session_workspace_root: false,
             }
         ));
         assert!(command_enabled(
@@ -472,6 +508,7 @@ mod tests {
                 has_pending_approval: false,
                 has_turn_in_flight: false,
                 has_paused_turn: false,
+                has_active_session_workspace_root: false,
             }
         ));
     }
@@ -488,6 +525,7 @@ mod tests {
                 has_pending_approval: false,
                 has_turn_in_flight: false,
                 has_paused_turn: false,
+                has_active_session_workspace_root: false,
             }
         ));
         assert!(command_enabled(
@@ -500,6 +538,7 @@ mod tests {
                 has_pending_approval: false,
                 has_turn_in_flight: false,
                 has_paused_turn: false,
+                has_active_session_workspace_root: false,
             }
         ));
     }
@@ -516,6 +555,7 @@ mod tests {
                 has_pending_approval: false,
                 has_turn_in_flight: false,
                 has_paused_turn: false,
+                has_active_session_workspace_root: false,
             }
         ));
         assert!(command_enabled(
@@ -528,6 +568,7 @@ mod tests {
                 has_pending_approval: true,
                 has_turn_in_flight: false,
                 has_paused_turn: false,
+                has_active_session_workspace_root: false,
             }
         ));
         assert!(!command_enabled(
@@ -540,6 +581,7 @@ mod tests {
                 has_pending_approval: false,
                 has_turn_in_flight: false,
                 has_paused_turn: false,
+                has_active_session_workspace_root: false,
             }
         ));
         assert!(command_enabled(
@@ -552,6 +594,7 @@ mod tests {
                 has_pending_approval: true,
                 has_turn_in_flight: false,
                 has_paused_turn: false,
+                has_active_session_workspace_root: false,
             }
         ));
     }
@@ -568,6 +611,7 @@ mod tests {
                 has_pending_approval: false,
                 has_turn_in_flight: false,
                 has_paused_turn: false,
+                has_active_session_workspace_root: false,
             }
         ));
         assert!(command_enabled(
@@ -580,6 +624,7 @@ mod tests {
                 has_pending_approval: false,
                 has_turn_in_flight: true,
                 has_paused_turn: false,
+                has_active_session_workspace_root: false,
             }
         ));
     }
@@ -596,6 +641,7 @@ mod tests {
                 has_pending_approval: false,
                 has_turn_in_flight: false,
                 has_paused_turn: false,
+                has_active_session_workspace_root: false,
             }
         ));
         assert!(command_enabled(
@@ -608,6 +654,7 @@ mod tests {
                 has_pending_approval: false,
                 has_turn_in_flight: false,
                 has_paused_turn: true,
+                has_active_session_workspace_root: false,
             }
         ));
     }
@@ -622,6 +669,7 @@ mod tests {
             has_pending_approval: false,
             has_turn_in_flight: false,
             has_paused_turn: false,
+            has_active_session_workspace_root: false,
         });
 
         let split = filter_command_entries(entries.clone(), "split right");
@@ -631,5 +679,53 @@ mod tests {
         let new_tab = filter_command_entries(entries, "new tab");
         assert_eq!(new_tab.len(), 1);
         assert_eq!(new_tab[0].spec.id, CommandId::NewTab);
+    }
+
+    #[test]
+    fn open_terminal_in_session_directory_requires_a_known_workspace_root() {
+        // `docs/session-relationship-design.md` decision 4a: disabled with
+        // no active session, and disabled just the same when there is one
+        // but its `workspace_root` isn't known (today: every terminal
+        // session, plus a resumed agent session) -- only enabled once both
+        // an active session and a known `workspace_root` line up.
+        assert!(!command_enabled(
+            CommandId::OpenTerminalInSessionDirectory,
+            CommandState {
+                tab_count: 0,
+                visible_pane_count: 0,
+                has_active_session: false,
+                detached_session_count: 0,
+                has_pending_approval: false,
+                has_turn_in_flight: false,
+                has_paused_turn: false,
+                has_active_session_workspace_root: false,
+            }
+        ));
+        assert!(!command_enabled(
+            CommandId::OpenTerminalInSessionDirectory,
+            CommandState {
+                tab_count: 1,
+                visible_pane_count: 1,
+                has_active_session: true,
+                detached_session_count: 0,
+                has_pending_approval: false,
+                has_turn_in_flight: false,
+                has_paused_turn: false,
+                has_active_session_workspace_root: false,
+            }
+        ));
+        assert!(command_enabled(
+            CommandId::OpenTerminalInSessionDirectory,
+            CommandState {
+                tab_count: 1,
+                visible_pane_count: 1,
+                has_active_session: true,
+                detached_session_count: 0,
+                has_pending_approval: false,
+                has_turn_in_flight: false,
+                has_paused_turn: false,
+                has_active_session_workspace_root: true,
+            }
+        ));
     }
 }
