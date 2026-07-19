@@ -13,8 +13,8 @@ use super::mapping::{
 };
 use super::session::{
     append_cancelled_tool_results_to_history, apply_turn_outcome, fold_batched_tool_result,
-    halt_turn_loop, session_extra_sections, tool_result_fingerprint, BatchStep, GuardHalt,
-    TurnLoopGuard,
+    halt_turn_loop, session_environment, session_extra_sections, tool_result_fingerprint,
+    BatchStep, GuardHalt, TurnLoopGuard,
 };
 use super::*;
 use crate::config::RigAgentConfig;
@@ -653,6 +653,7 @@ fn start_fallback_rig_session_with_config(
         session_id: SessionId::new(),
         provider_id: AgentProvider::provider_id(&provider),
         role_id: None,
+        workspace_root: None,
     });
     let tx = handle.sender();
     let rx = handle.events();
@@ -1435,6 +1436,7 @@ fn config_role_start_session_advertises_only_its_three_allowed_tools() {
             session_id: SessionId::new(),
             provider_id: AgentProvider::provider_id(&provider),
             role_id: Some(RoleId("config".to_string())),
+            workspace_root: None,
         },
     );
 
@@ -1529,6 +1531,55 @@ fn resolved_model_is_none_in_deterministic_fallback_mode() {
     );
 
     assert_eq!(AgentProvider::resolved_model(&provider, None), None);
+}
+
+// --- session_environment: StartSession.workspace_root reaches the prompt --
+//
+// The 2026-07-19 dogfooding bug: an isolated session's system prompt
+// reported the daemon process's own `cwd` (the root repository checkout) as
+// its working directory, so the model tried to write files there instead of
+// into its actual isolated worktree. `spawn_rig_session` builds its
+// `SessionEnvironment` via `session_environment` below, so these tests
+// exercise that exact seam directly rather than spinning up a real session
+// thread (whose environment isn't otherwise observable without a live
+// OpenAI-shaped request -- see `complete_rig_turn`'s doc comment on why the
+// deterministic fallback path never builds a system prompt at all).
+
+#[test]
+fn session_environment_uses_the_start_session_workspace_root_for_an_isolated_session() {
+    let isolated_root = std::env::temp_dir().join(format!(
+        "horizon-agent-isolated-worktree-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let request = StartSession {
+        session_id: SessionId::new(),
+        provider_id: ProviderId("builtin.agent.rig".to_string()),
+        role_id: None,
+        workspace_root: Some(isolated_root.clone()),
+    };
+
+    let environment = session_environment(&request);
+
+    assert_eq!(environment.cwd, isolated_root);
+    assert_ne!(
+        environment.cwd,
+        std::env::current_dir().unwrap(),
+        "an isolated session's environment must never fall back to the daemon's own cwd"
+    );
+}
+
+#[test]
+fn session_environment_falls_back_to_process_cwd_when_no_workspace_root_is_known() {
+    let request = StartSession {
+        session_id: SessionId::new(),
+        provider_id: ProviderId("builtin.agent.rig".to_string()),
+        role_id: None,
+        workspace_root: None,
+    };
+
+    let environment = session_environment(&request);
+
+    assert_eq!(environment.cwd, std::env::current_dir().unwrap());
 }
 
 // --- session_extra_sections: role/skills/repository-instructions ordering -

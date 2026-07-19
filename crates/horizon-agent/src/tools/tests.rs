@@ -241,6 +241,93 @@ fn execute_agent_tool_dispatches_fs_read_through_auto_execution() {
     assert!(output["content"].as_str().unwrap().contains("hello"));
 }
 
+// --- unknown tool ids ------------------------------------------------------
+//
+// The 2026-07-19 dogfooding bug: the model called a nonexistent `write` tool
+// (the catalog id is `fs.write`); a real `Event::ApprovalRequested` reached
+// the human, and only *after* approving did the call fail with a bare
+// session `Event::Error` the model never saw as a tool outcome (no matching
+// `ToolCallFinished`, so the turn stalled). An unknown tool id must instead
+// resolve immediately to a `ToolCallFinished` error result -- never an
+// approval prompt, never a bare session error -- so the model can correct
+// itself in the same turn.
+
+#[test]
+fn execute_agent_tool_reports_an_unknown_tool_as_an_error_tool_result() {
+    let tool_state = dummy_tool_state();
+    let request = ToolCallRequest {
+        call_id: ToolCallId("call-1".to_string()),
+        tool_id: "write".to_string(),
+        input: json!({ "path": "/tmp/x", "content": "hi" }),
+    };
+
+    let Execution::Unknown(events) =
+        execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request)
+    else {
+        panic!("expected Execution::Unknown for an unrecognized tool id");
+    };
+
+    let result = events
+        .into_iter()
+        .find_map(|event| match event {
+            Event::ToolCallFinished(result) => Some(result),
+            _ => None,
+        })
+        .expect("unknown tool id must resolve to a ToolCallFinished, not a bare Event::Error");
+
+    assert_eq!(result.call_id, ToolCallId("call-1".to_string()));
+    assert!(is_error(&result.output));
+    let message = result.output["message"].as_str().unwrap();
+    assert!(message.contains("Unknown tool `write`"));
+    assert!(
+        message.contains("fs.write"),
+        "message should list available tools so the model can self-correct: {message}"
+    );
+}
+
+#[test]
+fn process_agent_provider_event_never_asks_approval_for_an_unknown_tool_and_continues_the_turn() {
+    let tool_state = dummy_tool_state();
+    let call_id = ToolCallId("call-1".to_string());
+    let processing = process_agent_provider_event(
+        &StubHostTools,
+        &tool_state,
+        SessionId::new(),
+        Event::ToolCallRequested(ToolCallRequest {
+            call_id: call_id.clone(),
+            tool_id: "write".to_string(),
+            input: json!({}),
+        }),
+    );
+
+    assert!(
+        !processing
+            .horizon_events
+            .iter()
+            .any(|event| matches!(event.event, Event::ApprovalRequested(_))),
+        "an unknown tool id must never reach a human approval prompt: {:?}",
+        processing.horizon_events
+    );
+
+    let result = processing
+        .horizon_events
+        .iter()
+        .find_map(|event| match &event.event {
+            Event::ToolCallFinished(result) => Some(result.clone()),
+            _ => None,
+        })
+        .expect("expected a ToolCallFinished error result the model can see");
+    assert!(is_error(&result.output));
+
+    // The turn continues: the provider gets the result back as a real
+    // `Command::ToolCallResult`, exactly like any other tool's outcome, so
+    // the model can correct itself instead of the turn stalling forever.
+    assert!(processing
+        .provider_commands
+        .iter()
+        .any(|command| matches!(command, Command::ToolCallResult(r) if r.call_id == call_id)));
+}
+
 // --- fs.write ------------------------------------------------------------
 
 #[test]

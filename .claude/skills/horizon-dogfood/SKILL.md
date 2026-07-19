@@ -19,14 +19,16 @@ happens, and report friction/bugs with evidence.
 
 ## The loop
 
-**Spawn.** `horizon new-agent "<prompt>"` creates an agent session and
-sends the prompt. CLI-origin spawns default to an **isolated git
-worktree** (`.horizon/worktrees/<slug>`, branch `horizon/<slug>`) —
-this is exactly what exercises tier-1 auto-approval. Add `--share` for
-the non-isolated control case (per-action approval, unchanged
-behavior), `--split right|down` / `--activate` for placement,
-`new-config-agent` for the config role. Destructive verbs need
-`--yes`.
+**Spawn.** `horizon new-agent --prompt "<prompt>"` creates an agent
+session and sends the prompt. CLI-origin spawns default to an
+**isolated git worktree** (`.horizon/worktrees/<slug>`, branch
+`horizon/<slug>`) — this is exactly what exercises tier-1
+auto-approval. Add `--share` for the non-isolated control case
+(per-action approval, unchanged behavior), `--split [<session-id>]`
+to place it in a split (bare `--split` splits off the pane you're
+running in; pass a session-id to split off a different pane) /
+`--active` to activate the new pane, `new-config-agent` for the
+config role. Destructive verbs need `--yes`.
 
 **Identify.** `horizon sessions --json` lists sessions (id, role,
 attach state). The newest agent session after your spawn is yours.
@@ -51,8 +53,9 @@ markers). Schema subtleties and data-quality caveats (top-level
 the `agent-inspect` skill — read it before aggregate analysis.
 
 **Act.** `horizon approve <session_id> <call_id>` / `deny <session_id>
-<call_id>` resolve a pending approval; `horizon continue-turn` resumes
-a guard-paused turn; `cancel-turn` aborts. **Read the pending call's
+<call_id>` resolve a pending approval; `horizon continue-turn
+<session_id>` resumes a guard-paused turn; `cancel-turn <session_id>`
+aborts. **Read the pending call's
 `input` before approving — an approval runs a real command on this
 machine.** Never approve an outside-worktree write or a network-shaped
 command unless the owner asked for exactly that test.

@@ -65,7 +65,17 @@ pub fn process_agent_provider_event(
 
     if let Event::ToolCallRequested(request) = &event {
         match execute_agent_tool(host, tool_state, session_id, request) {
-            Execution::Auto(events) => {
+            // `Denied`/`Unknown` join `Auto` here: any of the three can
+            // resolve a call synchronously with a real `ToolCallFinished`
+            // (today, only `Unknown`'s does -- an unrecognized tool id --
+            // see `execute_agent_tool`'s doc comment), and that result must
+            // reach the provider as a `Command::ToolCallResult` exactly the
+            // same way, or the model never learns the call finished and the
+            // turn stalls waiting on a result that never arrives -- this was
+            // the second half of the 2026-07-19 dogfooding bug (the first
+            // half was `policy::horizon_events_for_provider_event` routing
+            // an unknown tool id through `ApprovalRequested` at all).
+            Execution::Auto(events) | Execution::Denied(events) | Execution::Unknown(events) => {
                 for result_event in &events {
                     if let Event::ToolCallFinished(result) = result_event {
                         provider_commands.push(Command::ToolCallResult(result.clone()));
@@ -85,9 +95,6 @@ pub fn process_agent_provider_event(
                 horizon_events.extend(events.into_iter().map(ProviderEvent::from));
             }
             Execution::RequiresApproval => {}
-            Execution::Denied(events) | Execution::Unknown(events) => {
-                horizon_events.extend(events.into_iter().map(ProviderEvent::from));
-            }
         }
     }
 

@@ -16,6 +16,7 @@ fn mock_agent_emits_initial_session_events() {
             session_id: SessionId::new(),
             provider_id: agent::Provider::provider_id(&provider),
             role_id: None,
+            workspace_root: None,
         },
     );
 
@@ -677,6 +678,7 @@ fn mock_agent_accepts_tool_call_result_command() {
             session_id: SessionId::new(),
             provider_id: agent::Provider::provider_id(&provider),
             role_id: None,
+            workspace_root: None,
         },
     );
     let tx = handle.sender();
@@ -711,6 +713,7 @@ fn mock_agent_cancel_mid_turn_keeps_partial_and_marks_cancelled() {
             session_id: SessionId::new(),
             provider_id: agent::Provider::provider_id(&provider),
             role_id: None,
+            workspace_root: None,
         },
     );
     let tx = handle.sender();
@@ -806,6 +809,7 @@ fn mock_agent_slow_turn_emits_provider_request_lifecycle_in_order() {
             session_id: SessionId::new(),
             provider_id: agent::Provider::provider_id(&provider),
             role_id: None,
+            workspace_root: None,
         },
     );
     let tx = handle.sender();
@@ -858,6 +862,7 @@ fn mock_agent_cancel_marks_pending_approval_cancelled_and_recovers() {
             session_id: SessionId::new(),
             provider_id: agent::Provider::provider_id(&provider),
             role_id: None,
+            workspace_root: None,
         },
     );
     let tx = handle.sender();
@@ -1083,11 +1088,33 @@ fn system_prompt_appends_extra_sections_after_the_base_prompt() {
 }
 
 #[test]
-fn current_environment_reports_this_process_cwd() {
-    let environment = SessionEnvironment::current();
+fn environment_for_workspace_root_uses_the_given_root_not_process_cwd() {
+    // The 2026-07-19 dogfooding bug: an isolated session's prompt reported
+    // the daemon process's own cwd as its working directory. A session's
+    // real root (e.g. an isolated worktree) must win over the process cwd.
+    let root = std::path::PathBuf::from("/tmp/some-isolated-worktree");
+
+    let environment = SessionEnvironment::for_workspace_root(Some(&root));
+
+    assert_eq!(environment.cwd, root);
+    assert_ne!(environment.cwd, std::env::current_dir().unwrap());
+}
+
+#[test]
+fn environment_for_workspace_root_falls_back_to_process_cwd_when_none() {
+    let environment = SessionEnvironment::for_workspace_root(None);
 
     assert_eq!(environment.cwd, std::env::current_dir().unwrap());
-    assert_eq!(environment.os, std::env::consts::OS);
+}
+
+#[test]
+fn system_prompt_built_from_workspace_root_reports_the_session_root() {
+    let root = std::path::PathBuf::from("/tmp/some-isolated-worktree");
+    let environment = SessionEnvironment::for_workspace_root(Some(&root));
+
+    let prompt = system_prompt(&environment, &[]);
+
+    assert!(prompt.contains("/tmp/some-isolated-worktree"));
 }
 
 #[test]
@@ -1095,7 +1122,7 @@ fn provider_registry_starts_builtin_provider() {
     let registry = agent::ProviderRegistry::builtin();
     let provider_id = registry.default_provider_id();
     let handle = registry
-        .start_session(&provider_id, SessionId::new(), None)
+        .start_session(&provider_id, SessionId::new(), None, None)
         .expect("builtin provider");
 
     let first = handle.events().recv().expect("first event");

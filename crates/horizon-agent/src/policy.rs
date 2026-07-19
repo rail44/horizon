@@ -109,11 +109,9 @@ pub fn horizon_events_for_provider_event(
 ) -> Vec<Event> {
     let mut events = vec![event.clone()];
     if let Event::ToolCallRequested(request) = event {
-        match crate::tools::permission_for_tool(&request.tool_id)
-            .unwrap_or(ToolPermission::RequireApproval)
-        {
-            ToolPermission::AutoAllowRead | ToolPermission::AutoAllowUi => {}
-            ToolPermission::RequireApproval => {
+        match crate::tools::permission_for_tool(&request.tool_id) {
+            Some(ToolPermission::AutoAllowRead | ToolPermission::AutoAllowUi) => {}
+            Some(ToolPermission::RequireApproval) => {
                 let classification = classify_call(
                     &request.tool_id,
                     &request.input,
@@ -137,11 +135,25 @@ pub fn horizon_events_for_provider_event(
                     }
                 }
             }
-            ToolPermission::Deny => {
+            Some(ToolPermission::Deny) => {
                 events.push(Event::Error(Error {
                     message: format!("Tool `{}` is denied by Horizon policy.", request.tool_id),
                 }));
             }
+            // An unknown tool id (not in `tools::catalog::definitions` at
+            // all) must never reach a human approval prompt -- there is
+            // nothing for a human to approve, and defaulting it to
+            // `RequireApproval` (as this used to) was exactly the
+            // 2026-07-19 dogfooding bug: the model called a nonexistent
+            // `write` tool, a real `ApprovalRequested` reached the human,
+            // and only *after* approving did the call fail with a bare
+            // session `Event::Error` the model never saw as a tool outcome.
+            // No event here at all: `tools::execution::execute_agent_tool`
+            // (invoked separately, on this same `ToolCallRequested`, by
+            // `tools::processing::process_agent_provider_event`) already
+            // produces the one user- and model-visible outcome -- a
+            // `ToolCallFinished` error result -- for this case.
+            None => {}
         }
     }
 
@@ -265,6 +277,31 @@ mod tests {
         assert!(events
             .iter()
             .any(|event| matches!(event, Event::StateChanged(SessionState::WaitingForApproval))));
+    }
+
+    #[test]
+    fn an_unknown_tool_id_never_gets_an_approval_prompt() {
+        // The 2026-07-19 dogfooding bug: an unrecognized tool id (not in
+        // `tools::catalog::definitions` at all, e.g. the model calling
+        // `write` instead of `fs.write`) used to default to
+        // `ToolPermission::RequireApproval`, reaching a real human approval
+        // prompt for a tool call that could never actually run.
+        // `tools::execution::execute_agent_tool` (exercised separately, on
+        // this same event, by `tools::processing::
+        // process_agent_provider_event`) is the one place this now resolves
+        // -- immediately, with a `ToolCallFinished` error result -- so this
+        // seam must contribute nothing beyond the original event.
+        let tool_state = ToolSessionState::new(std::env::temp_dir()).with_isolated_worktree(true);
+        let events = horizon_events_for_provider_event(&requested("write"), &tool_state);
+
+        assert_eq!(
+            events.len(),
+            1,
+            "only the original event, nothing else: {events:?}"
+        );
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, Event::ApprovalRequested(_))));
     }
 
     #[test]

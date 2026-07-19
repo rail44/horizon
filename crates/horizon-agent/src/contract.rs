@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use crossbeam_channel::{Receiver, Sender};
 
@@ -57,6 +57,16 @@ pub struct StartSession {
     /// start_session`) -- see `roles`'s module doc on never silently
     /// degrading an unresolvable role id to role-less.
     pub role_id: Option<RoleId>,
+    /// This session's real working directory -- for an isolated session,
+    /// the isolated worktree (already resolved by the caller before this
+    /// reaches a provider), not wherever the daemon process happens to be
+    /// running from. `None` when no root is available at all. Consumed by
+    /// the rig provider to build [`crate::prompt::SessionEnvironment`]
+    /// (`providers::rig::session::spawn_rig_session`), so the system
+    /// prompt's "Working directory" line and the skills listing
+    /// (`providers::rig::session::session_extra_sections`) both reflect the
+    /// session's actual root instead of the daemon's `cwd`.
+    pub workspace_root: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -536,6 +546,7 @@ impl ProviderRegistry {
         provider_id: &ProviderId,
         session_id: SessionId,
         role_id: Option<RoleId>,
+        workspace_root: Option<PathBuf>,
     ) -> Option<SessionHandle> {
         if let Some(role_id) = &role_id {
             crate::roles::resolve(role_id)?;
@@ -545,6 +556,7 @@ impl ProviderRegistry {
                 session_id,
                 provider_id: provider_id.clone(),
                 role_id,
+                workspace_root,
             })
         })
     }
