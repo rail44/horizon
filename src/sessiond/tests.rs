@@ -502,6 +502,300 @@ async fn established_disconnect_reports_errors_without_reconnecting() {
     ));
 }
 
+/// A version-mismatched hello reply on a test stream (no real socket to
+/// drain, no daemon to respawn) must surface as a terminal failure rather
+/// than being retried or recovered.
+#[tokio::test]
+async fn a_mismatched_hello_reply_on_a_test_stream_is_a_terminal_failure() {
+    let (client, server) = tokio::io::duplex(4096);
+    let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
+    let (read_half, mut writer) = tokio::io::split(server);
+    let mut reader = BufReader::new(read_half);
+    let hello = session_wire::read_envelope(&mut reader)
+        .await
+        .unwrap()
+        .expect("client hello");
+    assert_eq!(hello.kind, horizon_session_protocol::SESSION_CONTROL_KIND);
+
+    let stale_version = SESSION_PROTOCOL_VERSION - 1;
+    let reply = RawEnvelope::session_control_at(
+        &SessionControl::Hello(Hello {
+            contract_version: stale_version,
+            binary_id: "stale-sessiond".into(),
+        }),
+        stale_version,
+    )
+    .unwrap();
+    session_wire::write_envelope(&mut writer, &reply)
+        .await
+        .unwrap();
+
+    let error = handle.session_list().unwrap_err();
+    assert!(
+        error.contains("contract version mismatch"),
+        "error was: {error}"
+    );
+}
+
+fn stub_socket_paths(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    // Keep well under SUN_LEN, same as the sessiond e2e tests.
+    let short_id = &Uuid::new_v4().simple().to_string()[..8];
+    (
+        std::env::temp_dir().join(format!("hzn-{tag}-{short_id}.sock")),
+        std::env::temp_dir().join(format!("hzn-{tag}-ctl-{short_id}.sock")),
+    )
+}
+
+/// Binds a fresh stub listener at `path`, removing any stale socket file
+/// first -- the same stale-file handling the real daemon's `bind_listener`
+/// performs, which matters after simulating a drained daemon's exit (its
+/// `std::process::exit(0)` leaves the socket file behind).
+fn bind_stub_listener(path: &std::path::Path) -> tokio::net::UnixListener {
+    let _ = std::fs::remove_file(path);
+    tokio::net::UnixListener::bind(path).unwrap()
+}
+
+/// The full auto-recovery loop against a stale daemon that *announces* its
+/// version (a lenient v9+ daemon one version behind): mismatch detected ->
+/// a Drain aimed at exactly the announced version on a fresh connection ->
+/// the replacement daemon's current-version handshake completes and traffic
+/// flows.
+#[tokio::test]
+async fn a_version_mismatched_daemon_is_drained_and_the_respawned_daemon_is_adopted() {
+    let (socket_path, control_socket) = stub_socket_paths("mm");
+    let stale_version = SESSION_PROTOCOL_VERSION - 1;
+    let listener = bind_stub_listener(&socket_path);
+    let (handle, _host_tools, _workspace_roots) =
+        SessiondHandle::start(&socket_path, &control_socket);
+
+    // Connection 1: the stale daemon replies to our hello with its own,
+    // older version (session_control is version-stable, so both sides can
+    // decode across the skew).
+    let (stream, _) = listener.accept().await.unwrap();
+    let (read_half, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(read_half);
+    let hello = session_wire::read_envelope(&mut reader)
+        .await
+        .unwrap()
+        .expect("client hello");
+    assert_eq!(hello.kind, horizon_session_protocol::SESSION_CONTROL_KIND);
+    let stale_reply = RawEnvelope::session_control_at(
+        &SessionControl::Hello(Hello {
+            contract_version: stale_version,
+            binary_id: "stale-sessiond".into(),
+        }),
+        stale_version,
+    )
+    .unwrap();
+    session_wire::write_envelope(&mut writer, &stale_reply)
+        .await
+        .unwrap();
+
+    // Connection 2: the recovery drain, stamped with the version the stale
+    // hello announced.
+    let (stream, _) = listener.accept().await.unwrap();
+    let (read_half, drain_writer) = stream.into_split();
+    let mut drain_reader = BufReader::new(read_half);
+    let drain = session_wire::read_envelope(&mut drain_reader)
+        .await
+        .unwrap()
+        .expect("recovery drain");
+    assert_eq!(drain.v, stale_version);
+    assert_eq!(
+        drain
+            .decode_payload::<SessionControl>(horizon_session_protocol::SESSION_CONTROL_KIND)
+            .unwrap(),
+        SessionControl::Drain
+    );
+
+    // "Exit" the stale daemon: stop accepting, leaving the socket file
+    // behind exactly like the real Drain handler's `std::process::exit(0)`.
+    // Hold the window open past the runtime's 50ms drain poll so the
+    // refusal is reliably observed, then bring up the "respawned" daemon.
+    drop(listener);
+    drop(drain_reader);
+    drop(drain_writer);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let listener = bind_stub_listener(&socket_path);
+
+    let (stream, _) = listener.accept().await.unwrap();
+    let (read_half, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(read_half);
+    receive_hello_and_reply(&mut reader, &mut writer).await;
+
+    // Prove the recovered connection is fully established: a daemon-side
+    // ping must round-trip to a pong.
+    session_wire::write_envelope(
+        &mut writer,
+        &RawEnvelope::session_control(&SessionControl::Ping).unwrap(),
+    )
+    .await
+    .unwrap();
+    let pong = session_wire::read_envelope(&mut reader)
+        .await
+        .unwrap()
+        .expect("pong from the recovered runtime");
+    assert_eq!(
+        pong.decode_payload::<SessionControl>(horizon_session_protocol::SESSION_CONTROL_KIND)
+            .unwrap(),
+        SessionControl::Pong
+    );
+
+    drop(handle);
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+/// The same recovery against a *silent* stale daemon (v8 and earlier
+/// close a foreign-versioned hello without replying, so the version is
+/// unknown): the runtime probes downward, and the first probe -- the
+/// newest plausible stale version -- must be aimed at
+/// `SESSION_PROTOCOL_VERSION - 1`.
+#[tokio::test]
+async fn a_silently_closing_stale_daemon_is_probed_and_drained() {
+    let (socket_path, control_socket) = stub_socket_paths("probe");
+    let listener = bind_stub_listener(&socket_path);
+    let (handle, _host_tools, _workspace_roots) =
+        SessiondHandle::start(&socket_path, &control_socket);
+
+    // Connection 1: a strict pre-v9 daemon reads our hello, cannot decode
+    // its envelope version, and closes without a word.
+    let (stream, _) = listener.accept().await.unwrap();
+    let (read_half, writer) = stream.into_split();
+    let mut reader = BufReader::new(read_half);
+    let _hello = session_wire::read_envelope(&mut reader)
+        .await
+        .unwrap()
+        .expect("client hello");
+    drop(reader);
+    drop(writer);
+
+    // Connection 2: the first drain probe.
+    let (stream, _) = listener.accept().await.unwrap();
+    let (read_half, probe_writer) = stream.into_split();
+    let mut probe_reader = BufReader::new(read_half);
+    let probe = session_wire::read_envelope(&mut probe_reader)
+        .await
+        .unwrap()
+        .expect("drain probe");
+    assert_eq!(probe.v, SESSION_PROTOCOL_VERSION - 1);
+    assert_eq!(
+        probe
+            .decode_payload::<SessionControl>(horizon_session_protocol::SESSION_CONTROL_KIND)
+            .unwrap(),
+        SessionControl::Drain
+    );
+
+    // The probe found its mark: "exit", then come back as the respawned
+    // current-version daemon (see the sibling test for the timing).
+    drop(listener);
+    drop(probe_reader);
+    drop(probe_writer);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let listener = bind_stub_listener(&socket_path);
+
+    let (stream, _) = listener.accept().await.unwrap();
+    let (read_half, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(read_half);
+    receive_hello_and_reply(&mut reader, &mut writer).await;
+
+    session_wire::write_envelope(
+        &mut writer,
+        &RawEnvelope::session_control(&SessionControl::Ping).unwrap(),
+    )
+    .await
+    .unwrap();
+    let pong = session_wire::read_envelope(&mut reader)
+        .await
+        .unwrap()
+        .expect("pong from the recovered runtime");
+    assert_eq!(
+        pong.decode_payload::<SessionControl>(horizon_session_protocol::SESSION_CONTROL_KIND)
+            .unwrap(),
+        SessionControl::Pong
+    );
+
+    drop(handle);
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+/// Recovery is attempted exactly once per runtime: if the replacement
+/// daemon still mismatches (a stale horizon-sessiond binary that a rebuild
+/// never touched), the runtime must fail loudly instead of drain-and-
+/// restarting forever.
+#[tokio::test]
+async fn a_second_mismatch_after_recovery_goes_fatal_instead_of_looping() {
+    let (socket_path, control_socket) = stub_socket_paths("fatal");
+    let stale_version = SESSION_PROTOCOL_VERSION - 1;
+    let listener = bind_stub_listener(&socket_path);
+    let (handle, _host_tools, _workspace_roots) =
+        SessiondHandle::start(&socket_path, &control_socket);
+
+    let stale_reply = RawEnvelope::session_control_at(
+        &SessionControl::Hello(Hello {
+            contract_version: stale_version,
+            binary_id: "stale-sessiond".into(),
+        }),
+        stale_version,
+    )
+    .unwrap();
+
+    // Connection 1: stale hello reply -> recovery starts.
+    let (stream, _) = listener.accept().await.unwrap();
+    let (read_half, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(read_half);
+    session_wire::read_envelope(&mut reader)
+        .await
+        .unwrap()
+        .expect("client hello");
+    session_wire::write_envelope(&mut writer, &stale_reply)
+        .await
+        .unwrap();
+
+    // Connection 2: the one drain this runtime is allowed.
+    let (stream, _) = listener.accept().await.unwrap();
+    let (read_half, drain_writer) = stream.into_split();
+    let mut drain_reader = BufReader::new(read_half);
+    let drain = session_wire::read_envelope(&mut drain_reader)
+        .await
+        .unwrap()
+        .expect("recovery drain");
+    assert_eq!(drain.v, stale_version);
+
+    drop(listener);
+    drop(drain_reader);
+    drop(drain_writer);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let listener = bind_stub_listener(&socket_path);
+
+    // Connection 3: the "respawned" daemon is just as stale.
+    let (stream, _) = listener.accept().await.unwrap();
+    let (read_half, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(read_half);
+    session_wire::read_envelope(&mut reader)
+        .await
+        .unwrap()
+        .expect("client hello");
+    session_wire::write_envelope(&mut writer, &stale_reply)
+        .await
+        .unwrap();
+
+    // The runtime gives up rather than draining again.
+    let error = handle.session_list().unwrap_err();
+    assert!(
+        error.contains("contract version mismatch") && error.contains("already attempted"),
+        "error was: {error}"
+    );
+    let no_more_connections =
+        tokio::time::timeout(Duration::from_millis(500), listener.accept()).await;
+    assert!(
+        no_more_connections.is_err(),
+        "the runtime must not reconnect (or drain again) after going fatal"
+    );
+
+    drop(handle);
+    let _ = std::fs::remove_file(&socket_path);
+}
+
 /// Host-side coverage for `SessiondHandle::broadcast_terminal_color_scheme`
 /// (the live theme-apply re-push, and its adoption-path use in
 /// `spawn_workspace_restore`/`spawn_terminal_resume` -- both call it only

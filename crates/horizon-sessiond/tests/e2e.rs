@@ -960,8 +960,8 @@ async fn terminal_spawn_uses_fallback_and_source_session_cwds() {
 }
 
 #[tokio::test]
-async fn a_hello_with_the_wrong_contract_version_is_rejected_with_a_reason() {
-    let sessiond = SessiondProcess::spawn();
+async fn a_hello_with_the_wrong_contract_version_is_rejected_but_drain_still_works() {
+    let mut sessiond = SessiondProcess::spawn();
     let stream = connect_with_retry(&sessiond.socket_path).await;
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
@@ -985,11 +985,71 @@ async fn a_hello_with_the_wrong_contract_version_is_rejected_with_a_reason() {
         "rejection reason was: {reason}"
     );
 
-    // Rejected handshakes end the connection -- the next read observes a
-    // clean close rather than the server continuing to serve requests for
-    // a client whose contract version it can't trust.
-    let next = session_wire::read_envelope(&mut reader).await.unwrap();
-    assert!(next.is_none(), "expected the connection to be closed");
+    // A rejected handshake no longer closes the connection (contract-
+    // mismatch auto-recovery, docs/session-daemon-design.md 2026-07-20):
+    // the one thing a mismatched client can still legitimately say is
+    // Drain -- "flush and exit so I can restart you at my version" -- and
+    // the same connection must honor it with a graceful exit 0.
+    write_shared(&mut write_half, SessionControl::Drain).await;
+    let status = wait_for_exit(&mut sessiond.child).await;
+    assert!(
+        status.success(),
+        "horizon-sessiond should exit 0 after a post-rejection drain, got {status:?}"
+    );
+}
+
+/// The other half of contract-mismatch auto-recovery: a client speaking a
+/// *different envelope version* entirely (a future Horizon talking to this
+/// build as its stale daemon). `session_control` is version-stable, so this
+/// daemon must decode the foreign-versioned hello (rejecting it with a
+/// reason instead of closing silently, the way pre-v9 daemons do) and then
+/// honor the foreign-versioned Drain the recovering client follows up with.
+#[tokio::test]
+async fn a_foreign_envelope_version_still_gets_a_rejection_and_can_drain() {
+    let mut sessiond = SessiondProcess::spawn();
+    let stream = connect_with_retry(&sessiond.socket_path).await;
+    let (read_half, mut write_half) = stream.into_split();
+    let mut reader = BufReader::new(read_half);
+
+    let future_version = CONTRACT_VERSION + 1;
+    let hello = session_wire::Envelope::session_control_at(
+        &SessionControl::Hello(Hello {
+            contract_version: future_version,
+            binary_id: "future-horizon".to_string(),
+        }),
+        future_version,
+    )
+    .unwrap();
+    session_wire::write_envelope(&mut write_half, &hello)
+        .await
+        .unwrap();
+
+    let reply = session_wire::read_envelope(&mut reader)
+        .await
+        .unwrap()
+        .expect("sessiond should reply to a foreign-versioned hello");
+    // The reply's envelope version is the version this daemon actually
+    // speaks -- exactly what a recovering client uses to aim its Drain.
+    assert_eq!(reply.v, CONTRACT_VERSION);
+    let control: SessionControl = reply.decode_payload(SESSION_CONTROL_KIND).unwrap();
+    let SessionControl::HandshakeRejected(reason) = control else {
+        panic!("expected a handshake rejection, got {control:?}");
+    };
+    assert!(
+        reason.contains(&format!("client sent v{future_version}")),
+        "rejection reason was: {reason}"
+    );
+
+    let drain =
+        session_wire::Envelope::session_control_at(&SessionControl::Drain, future_version).unwrap();
+    session_wire::write_envelope(&mut write_half, &drain)
+        .await
+        .unwrap();
+    let status = wait_for_exit(&mut sessiond.child).await;
+    assert!(
+        status.success(),
+        "horizon-sessiond should exit 0 after a foreign-versioned drain, got {status:?}"
+    );
 }
 
 // --- step 3: session hosting -----------------------------------------------

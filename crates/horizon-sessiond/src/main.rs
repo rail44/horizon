@@ -311,10 +311,20 @@ async fn run(
 /// support is explicitly out of scope -- see the design doc's "Out of scope
 /// here"). Two phases: a fully sequential handshake (identical to step 2 --
 /// must succeed before any concurrency starts, so a rejected/mismatched
-/// hello can reply and close deterministically without racing an
-/// independent writer task), then [`run_session_hosting_loop`], which needs
-/// genuine read/write concurrency since a hosted session can push events at
-/// any time, not just in reply to something Horizon sent.
+/// hello can reply deterministically without racing an independent writer
+/// task), then [`run_session_hosting_loop`], which needs genuine read/write
+/// concurrency since a hosted session can push events at any time, not just
+/// in reply to something Horizon sent.
+///
+/// A rejected hello no longer closes the connection (contract-mismatch
+/// auto-recovery, `docs/session-daemon-design.md`'s 2026-07-20 decisions):
+/// `session_control` is the version-stable shared vocabulary, so the one
+/// thing a version-mismatched client can still legitimately say is
+/// `Drain` -- "flush and exit so I can restart you at my version" -- and
+/// this loop keeps serving shared controls after the rejection so that
+/// request is honored. The client closing (EOF) still ends the connection,
+/// and any undecodable envelope still closes it via the `read_envelope`
+/// error arm.
 async fn handle_connection(
     stream: UnixStream,
     state: Arc<SessiondState>,
@@ -357,7 +367,10 @@ async fn handle_connection(
                     let rejected =
                         RawEnvelope::session_control(&SessionControl::HandshakeRejected(reason))?;
                     let _ = session_wire::write_envelope(&mut writer, &rejected).await;
-                    return Ok(());
+                    // Keep the connection open: a mismatched client's next
+                    // message is expected to be `Drain` (see this
+                    // function's doc comment), handled by this same loop.
+                    continue;
                 }
                 session_wire::write_envelope(&mut writer, &our_hello_envelope()?).await?;
                 break;
