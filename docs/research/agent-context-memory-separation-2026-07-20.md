@@ -512,6 +512,109 @@ needed on top of history for the preamble and the turn's own generated
 output — so a model-derived budget is `served_window - preamble -
 max_output - safety_margin`, not the whole window.
 
+## Deep-dive + decision (2026-07-20)
+
+A source-level follow-up on opencode (`anomalyco/opencode` @ `dev`,
+`67caf89`) and crush (`charmbracelet/crush` @ `main`, `d162615`), plus a
+live check of the provider path, settled both axes.
+
+### Corrections to the survey above
+
+- **opencode has TWO compaction implementations.** A wired production path
+  (`packages/opencode/src/session/{compaction,overflow}.ts`, `SessionV1`)
+  and an unwired "V2" native runner (`packages/core/src/session/`, reachable
+  only from `runner/llm.ts`, which nothing in the shipped CLI imports). So
+  the earlier "V1 pruning removed in V2" reading (from a GitHub issue /
+  DeepWiki) is inaccurate: the production path STILL has tool-output pruning
+  (opt-in, default off); the next-gen path simply hasn't implemented it yet
+  ("Deterministic old tool-result pruning remains a separate follow-up",
+  `specs/v2/session.md`).
+- The "crush deletes low-signal lines verbatim via a small model" claim
+  (also GitHub-issue-sourced) was NOT found at current `main` — crush does
+  whole-conversation summarization only. Medium-confidence grep-based
+  negative.
+
+### How mature agents derive the compaction threshold from the model
+
+Both fetch the model's context window from an external model-metadata
+catalog, via an identical three-tier fallback (network → disk cache →
+build-embedded snapshot):
+
+- opencode: models.dev `/api.json` → `Model.limit.{context,input,output}`.
+- crush: `catwalk.charm.land` → `catwalk.Model.ContextWindow`/`DefaultMaxTokens`.
+
+Threshold formulas (crush's is the simplest to borrow):
+
+- crush (`internal/agent/agent.go:1027-1048`): `threshold = cw>200_000 ?
+  20_000 : cw*0.2`; fire when `remaining (= cw − cumulative usage tokens)
+  <= threshold`; **`cw==0` (unknown model) never fires** (protection).
+- opencode prod (`overflow.ts:10-33`): `reserved = min(20_000,
+  maxOutputTokens)`; overflow when actual usage total `>= usable
+  (= input − reserved, or context − maxOutput)`.
+
+Both drive the decision off the provider's **actual usage tokens**, not a
+byte heuristic (only opencode's unwired V2 uses a heuristic pre-estimate).
+
+### How they handle old tool results (and the replay-cache question)
+
+- **opencode prod**: opt-in prune (default off) replaces OLD tool-result
+  *bodies* with a placeholder (`[Old tool result content cleared]`) while
+  KEEPING the tool call (pairing preserved), protecting the recent 2 turns
+  + 40k tokens; `skill` outputs exempt. This is almost exactly axis B below.
+- **crush**: whole-conversation summarization only (hard cutoff, summary
+  role rewritten assistant→user).
+- **Neither implements a tool-result REPLAY cache** (store the result,
+  re-inject later without re-executing), nor file-read dedup, nor a
+  content-addressed result store. crush's `filetracker` is a
+  read-before-edit guard, not a context cache. Both DO use provider prompt
+  caching (Anthropic `cache_control`) — the LLM-API caching explicitly out
+  of scope here. So the owner's replay-cache idea has no prior art in either
+  and is dropped for now (its value concentrates in expensive/non-idempotent
+  tools; revisit with the web tools, backlog 18, if pursued).
+- Pairing: crush repairs orphans every send (`filterOrphanedToolResults` +
+  `syntheticToolResultsForOrphanedCalls`); opencode keeps call+result in one
+  "tool part" so turn-level trimming can't split them.
+
+### Provider path confirmation (axis A source)
+
+synthetic.new's `GET /openai/v1/models` returns, per model, a
+`context_length` (`262144` for `hf:moonshotai/Kimi-K2.7-Code`) AND a
+`max_output_length` (`65536`), programmatically — so Horizon can derive the
+budget **in-band** from the provider it already talks to, no external
+catalog needed for the current provider. Standard OpenAI `/models` does NOT
+return these, so the derivation must use them when present and fall back
+conservatively when absent.
+
+### Decision (2026-07-20)
+
+Axis A and axis B are implemented together; the replay cache is dropped for
+now.
+
+**Axis A — model-derived history budget.** At provider/session start, query
+`{base_url}/models` once (cached per process per `(base_url, model)`), and
+set `history_token_budget = context_length − max_output_length −
+preamble_reserve − safety_margin`. Graceful fallback to the current
+conservative constant when the query fails, the model is unlisted, or
+`context_length` is absent (provider-agnostic — use the field when present,
+degrade otherwise). Borrow crush's `cw==0 → don't derive, keep the fixed
+default` protection. Driving the decision off the provider's actual usage
+tokens (crush/opencode's approach) is a noted follow-up, not required now;
+the byte heuristic stays for the per-message "what to trim" estimate.
+
+**Axis B — tool-result-aware eviction (opencode-prune-shaped).** A custom
+`MemoryPolicy` that, on overflow, replaces OLD tool-result message *content*
+with a short reference placeholder (keeping the tool call and its `call_id`,
+so pairing holds), oldest-first, protecting the most recent tool results;
+only if still over budget after all tool results are elided does it fall
+back to dropping the oldest whole interactions (rig-memory's existing
+orphan handling preserves pairing). The task instruction
+(`UserContent::Text`) is never touched by the tool-result pass, so it
+survives as a byproduct (the "option 2 protects the instruction" property).
+Full results remain in `rig_history` + the DuckDB event log, so a later
+re-read re-executes and returns fresh content. Integration point: replace
+stock `TokenWindowMemory` in `history_token_window_policy`;
+`windowed_history_for_request` unchanged. Dispatched to a worker 2026-07-20.
+
 ## Confidence notes — where this report is less sure
 
 - **Cursor**: no official technical documentation of internal context

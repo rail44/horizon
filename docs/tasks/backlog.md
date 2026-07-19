@@ -603,3 +603,26 @@ entries live in `backlog-resolved.md` keeping their original numbers
     landed as PR #15). Left open: whether merges should go back
     through the review-queue flow (gate runs locally) instead of the
     GitHub button, or a CI gate should exist — owner call.
+
+64. **[DISPATCHED 2026-07-20] Agent history budget + tool-result-aware
+    eviction.** Root-caused from the dispatched-agent incident where a
+    worker's first turn read ~99k tokens of files and evicted its own
+    task instruction (the provider then saw only sandbox/approval source
+    and misread the task). Two axes, decided in
+    `docs/research/agent-context-memory-separation-2026-07-20.md`
+    (Decision 2026-07-20). **Axis A**: `history_token_budget` is a fixed
+    60k constant (`config.rs:157`), model-independent — derive it instead
+    from the model's served window (`{base_url}/models` returns
+    `context_length` + `max_output_length` on synthetic.new; Kimi-K2.7-Code
+    is 262144/65536, so 60k used ~23% of the window), with a conservative
+    fallback when the field is absent (vanilla OpenAI `/models` omits it).
+    **Axis B**: `TokenWindowMemory`'s pure recency cutoff evicts tool
+    output and instructions alike; replace with an opencode-prune-shaped
+    policy that elides OLD tool-result *content* to a reference placeholder
+    (keeping the tool call + `call_id`, pairing intact — both orphan
+    directions are provider-rejected, `session.rs:219,271`) before ever
+    dropping conversation, so the task instruction survives as a
+    byproduct. Replay-cache (re-inject a stored result without
+    re-executing) considered and dropped — no prior art in opencode/crush,
+    value concentrated in expensive tools, revisit with web tools
+    (backlog 18). Recorded 2026-07-20.

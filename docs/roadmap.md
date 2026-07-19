@@ -196,6 +196,19 @@ lands:
   fetch per-domain-allowlisted (store shared with leg 4b); Exa via
   REST + env-only `EXA_API_KEY`. Implementation dispatched to a
   Horizon agent session (dogfooding) 2026-07-20.
+- **Agent history budget + tool-result-aware eviction** (backlog 64).
+  Surfaced when a dispatched worker's first turn read ~99k tokens and
+  evicted its own task instruction (fixed-60k history budget on a 256k
+  model, plus `TokenWindowMemory`'s kind-blind recency cutoff).
+  Decided 2026-07-20 (`docs/research/agent-context-memory-separation-
+  2026-07-20.md`, Decision section): **axis A** derives the budget from
+  the model's served window (`/models` `context_length`/`max_output_length`,
+  conservative fallback); **axis B** replaces the recency cutoff with an
+  opencode-prune-shaped policy that elides old tool-result content to a
+  reference placeholder (keeping the call, pairing intact) before ever
+  dropping conversation, so the task instruction survives. Replay cache
+  dropped (no prior art; revisit with web tools). Dispatched to a worker
+  2026-07-20.
 - **portable-pty fork-safety root fix** (backlog 28/31).
   Bounded-retry mitigation shipped. Bounded investigation 2026-07-19:
   hypothesis CONFIRMED at source level (heap-allocating
