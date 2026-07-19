@@ -51,14 +51,29 @@ the split branch of `render_node` as a plain flex row/column and own
 the resize handles. Model weights (`horizon-workspace`) are the single
 source of truth; data flows one way:
 
-- **Layout**: each child gets `flex_grow_1` + `flex_shrink_1` +
-  `flex_basis(weight/total × 1000 px)` — the fraction-basis idiom the
-  current code already uses, now with nothing overriding it. Window
-  resize proportionality falls out of flex; no bookkeeping, no
-  container-change hook.
+- **Layout**: each child gets `flex_basis(0)` + `flex_grow(weight)` —
+  the idiom the Floem shell used
+  (`floem-shell-final:src/workspace/view/layout_tree.rs`). Zero basis
+  makes the whole container leftover space, and flex distributes
+  leftover ∝ grow, so 100% of the extent divides by weight ratio at any
+  container size. Window resize proportionality falls out of flex; no
+  bookkeeping, no container-change hook.
+  *Trap, learned the hard way*: the fraction-basis idiom the
+  gpui-component-era code carried (`flex_basis(weight/total × 1000 px)`
+  + `flex_grow_1`) does **not** render ratios — grow factors tied at 1
+  split the real leftover *evenly*, diluting any ratio toward equal as
+  the container grows past the 1000 px reference (3:1 renders as
+  ~0.63:0.37 at 1920 px). The GPUI migration picked it up to fit
+  `resizable_panel`'s API, and `ResizableState`'s pixel overwrite
+  masked it within a few frames.
 - **Drag**: a handle between children `i` and `i+1` converts the mouse
-  delta once, px → weight (`Δw = Δpx / container_px × total_weight`),
+  delta once, px → weight (`Δw = Δpx / effective_px × total_weight`),
   and updates the model per move. Pixels are never stored.
+  `effective_px` is the container's measured length minus the handles'
+  fixed footprint (`(n−1) × hit-area px`; handles are
+  `flex_grow_0`/`flex_shrink_0`, outside the grow distribution) — using
+  the raw length would make the handle lag the mouse and miss the floor
+  by the handles' total width.
 - **Minimum size**: a display-side floor (`min_w`/`min_h`, replacing
   the component's `PANEL_MIN_SIZE` role). When the *window* shrinks,
   flex clamps the display and weights stay untouched, so ratios restore
