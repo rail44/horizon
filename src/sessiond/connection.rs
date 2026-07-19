@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -90,6 +90,7 @@ pub(super) fn spawn(
         };
         runtime.block_on(async {
             let mut hello_retry_delay = Duration::from_millis(50);
+            let mut mismatch_recovery_attempted = false;
             loop {
                 let stream = tokio::select! {
                     result = horizon_agent::client::connect_or_spawn_retrying(
@@ -125,6 +126,56 @@ pub(super) fn spawn(
                             }
                         }
                         hello_retry_delay = (hello_retry_delay * 2).min(Duration::from_secs(1));
+                    }
+                    StreamEnd::VersionMismatch {
+                        daemon_version,
+                        message,
+                    } => {
+                        // Auto-recovery (docs/session-daemon-design.md,
+                        // 2026-07-20): drain the stale daemon gracefully and
+                        // let the next iteration's connect_or_spawn_retrying
+                        // start a fresh one. Attempted exactly once per
+                        // runtime: if the respawned daemon still mismatches
+                        // (a stale horizon-sessiond binary -- `cargo run`
+                        // rebuilds only the horizon binary), restarting it
+                        // again would loop forever, so give up loudly
+                        // instead.
+                        if mismatch_recovery_attempted {
+                            let error = format!(
+                                "{message} -- automatic drain-and-restart was already attempted \
+                                 once; rebuild horizon-sessiond (`cargo build --workspace`) and \
+                                 run `Reload Session Runtime`"
+                            );
+                            eprintln!("horizon-sessiond connection stopped: {error}");
+                            routes.connection_failed(error);
+                            break;
+                        }
+                        mismatch_recovery_attempted = true;
+                        match daemon_version {
+                            Some(version) => eprintln!(
+                                "horizon-sessiond v{version} detected (horizon speaks \
+                                 v{SESSION_PROTOCOL_VERSION}), draining and restarting it"
+                            ),
+                            None => eprintln!(
+                                "a horizon-sessiond speaking an unknown older contract version \
+                                 detected (horizon speaks v{SESSION_PROTOCOL_VERSION}), draining \
+                                 and restarting it"
+                            ),
+                        }
+                        let drained = tokio::select! {
+                            drained = drain_stale_sessiond(&socket_path, daemon_version) => drained,
+                            _ = control.cancelled() => {
+                                routes.connection_failed("sessiond runtime stopped".to_string());
+                                break;
+                            }
+                        };
+                        if let Err(error) = drained {
+                            let error =
+                                format!("{message} -- and the automatic drain failed: {error}");
+                            eprintln!("horizon-sessiond connection stopped: {error}");
+                            routes.connection_failed(error);
+                            break;
+                        }
                     }
                     StreamEnd::Fatal(error) | StreamEnd::EstablishedFailure(error) => {
                         eprintln!("horizon-sessiond connection stopped: {error}");
@@ -165,8 +216,15 @@ pub(super) fn spawn_test_stream<S>(
             routes.clone(),
             control.clone(),
         ));
-        if let StreamEnd::Fatal(error) | StreamEnd::EstablishedFailure(error) = end {
-            routes.connection_failed(error);
+        match end {
+            StreamEnd::Fatal(error) | StreamEnd::EstablishedFailure(error) => {
+                routes.connection_failed(error)
+            }
+            // Mismatch recovery needs a real socket to drain and a daemon
+            // to respawn; a test stream has neither, so the mismatch
+            // surfaces as a terminal failure instead.
+            StreamEnd::VersionMismatch { message, .. } => routes.connection_failed(message),
+            StreamEnd::PreHelloTransport(_) | StreamEnd::Cancelled | StreamEnd::Dropped => {}
         }
         control.mark_stopped();
     });
@@ -176,6 +234,15 @@ enum StreamEnd {
     PreHelloTransport(String),
     Fatal(String),
     EstablishedFailure(String),
+    /// The daemon on the socket speaks a different contract version --
+    /// either it said so (`daemon_version` known) or it closed our hello
+    /// without a reply, which is how a pre-v9 daemon (unable to decode a
+    /// foreign-versioned envelope at all) presents (`daemon_version`
+    /// unknown). Recoverable: see `spawn`'s drain-and-restart arm.
+    VersionMismatch {
+        daemon_version: Option<u32>,
+        message: String,
+    },
     Cancelled,
     Dropped,
 }
@@ -200,6 +267,15 @@ where
         Ok(()) => control.mark_established(),
         Err(HandshakeError::Transport(error)) => return StreamEnd::PreHelloTransport(error),
         Err(HandshakeError::Fatal(error)) => return StreamEnd::Fatal(error),
+        Err(HandshakeError::VersionMismatch {
+            daemon_version,
+            message,
+        }) => {
+            return StreamEnd::VersionMismatch {
+                daemon_version,
+                message,
+            }
+        }
     }
 
     loop {
@@ -242,6 +318,11 @@ where
 enum HandshakeError {
     Transport(String),
     Fatal(String),
+    /// See `StreamEnd::VersionMismatch`.
+    VersionMismatch {
+        daemon_version: Option<u32>,
+        message: String,
+    },
 }
 
 async fn handshake<R, W>(reader: &mut R, writer: &mut W) -> Result<(), HandshakeError>
@@ -262,10 +343,22 @@ where
 
     let reply = match session_wire::read_envelope(reader).await {
         Ok(Some(reply)) => reply,
+        // A clean close with no reply at all is how a pre-v9 daemon
+        // presents a contract mismatch: it rejects any foreign-versioned
+        // envelope before even looking at its kind, so it can neither
+        // answer our hello nor tell us its own version. A daemon that
+        // genuinely died in this window looks the same, but the recovery
+        // path is harmless there (its socket already refuses connections,
+        // so the drain is a no-op and the respawn is exactly what a dead
+        // daemon needs).
         Ok(None) => {
-            return Err(HandshakeError::Transport(
-                "sessiond disconnected before replying to hello".to_string(),
-            ))
+            return Err(HandshakeError::VersionMismatch {
+                daemon_version: None,
+                message: format!(
+                    "sessiond closed the connection without answering hello -- likely a stale \
+                     daemon that cannot decode v{SESSION_PROTOCOL_VERSION} envelopes"
+                ),
+            })
         }
         Err(session_wire::WireError::Io(error)) => {
             return Err(HandshakeError::Transport(format!(
@@ -276,6 +369,15 @@ where
             return Err(HandshakeError::Transport(
                 "sessiond disconnected during its hello reply".to_string(),
             ))
+        }
+        Err(session_wire::WireError::VersionMismatch { found, .. }) => {
+            return Err(HandshakeError::VersionMismatch {
+                daemon_version: Some(found),
+                message: format!(
+                    "sessiond contract version mismatch: horizon speaks \
+                     v{SESSION_PROTOCOL_VERSION}, sessiond speaks v{found}"
+                ),
+            })
         }
         Err(error) => {
             return Err(HandshakeError::Fatal(format!(
@@ -292,16 +394,107 @@ where
         SessionControl::Hello(hello) if hello.contract_version == SESSION_PROTOCOL_VERSION => {
             Ok(())
         }
-        SessionControl::Hello(hello) => Err(HandshakeError::Fatal(format!(
-            "sessiond contract version mismatch: horizon speaks v{SESSION_PROTOCOL_VERSION}, \
-             sessiond speaks v{} -- reload required",
-            hello.contract_version
-        ))),
-        SessionControl::HandshakeRejected(reason) => Err(HandshakeError::Fatal(format!(
-            "sessiond rejected the handshake: {reason}"
-        ))),
+        SessionControl::Hello(hello) => Err(HandshakeError::VersionMismatch {
+            daemon_version: Some(hello.contract_version),
+            message: format!(
+                "sessiond contract version mismatch: horizon speaks \
+                 v{SESSION_PROTOCOL_VERSION}, sessiond speaks v{}",
+                hello.contract_version
+            ),
+        }),
+        // The daemon's only rejection today *is* the contract-version
+        // check, and its reply envelope's `v` is the version it actually
+        // speaks (the two constants are one re-export) -- so treat a
+        // rejection as a recoverable mismatch rather than fatal. A future
+        // rejection for some other reason costs one futile drain attempt
+        // before the same message goes fatal.
+        SessionControl::HandshakeRejected(reason) => Err(HandshakeError::VersionMismatch {
+            daemon_version: Some(reply.v),
+            message: format!("sessiond rejected the handshake: {reason}"),
+        }),
         other => Err(HandshakeError::Fatal(format!(
             "sessiond sent an unexpected hello reply: {other:?}"
         ))),
+    }
+}
+
+/// The earliest contract version whose `horizon-sessiond` honors a
+/// pre-hello `SessionControl::Drain` (that handling landed together with
+/// terminal hosting, in the v3 vocabulary). Daemons older than that predate
+/// the `Drain` control entirely, so probing below it is pointless.
+const OLDEST_DRAINABLE_VERSION: u32 = 3;
+
+/// Per-probe budget for a drained daemon's process to actually exit,
+/// observed as its socket refusing connections -- the same signal (and the
+/// same 2s budget) as `super::wait_for_drain`, which the explicit `Reload
+/// Session Runtime` flow uses.
+const DRAIN_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
+const DRAIN_POLL: Duration = Duration::from_millis(50);
+
+/// Gracefully stops a version-mismatched daemon by sending it
+/// `SessionControl::Drain` *at its own envelope version* on a fresh
+/// connection -- the daemon's pre-hello loop has honored Drain since v3,
+/// and a graceful drain (unlike a signal) flushes its event log before
+/// exiting. When the daemon never told us its version (a pre-v9 daemon
+/// closes a foreign-versioned hello without replying), probe downward from
+/// the newest plausible stale version; a probe at the wrong version is
+/// harmless (the daemon logs a malformed message and closes that one
+/// connection), and a probe at the right one drains it.
+///
+/// Never probes at `SESSION_PROTOCOL_VERSION` itself: a healthy
+/// same-version daemon must be unreachable from this path.
+async fn drain_stale_sessiond(
+    socket_path: &Path,
+    daemon_version: Option<u32>,
+) -> Result<(), String> {
+    let candidates: Vec<u32> = match daemon_version {
+        Some(version) => vec![version],
+        None => (OLDEST_DRAINABLE_VERSION..SESSION_PROTOCOL_VERSION)
+            .rev()
+            .collect(),
+    };
+    for version in candidates {
+        let mut stream = match tokio::net::UnixStream::connect(socket_path).await {
+            Ok(stream) => stream,
+            // Nothing is accepting any more: either a previous probe's
+            // drain just landed or the daemon died on its own. Done either
+            // way -- the caller's next connect_or_spawn_retrying starts a
+            // fresh daemon.
+            Err(_) => return Ok(()),
+        };
+        let envelope = RawEnvelope::session_control_at(&SessionControl::Drain, version)
+            .map_err(|error| format!("failed to encode a v{version} drain: {error}"))?;
+        if session_wire::write_envelope(&mut stream, &envelope)
+            .await
+            .is_err()
+        {
+            continue;
+        }
+        drop(stream);
+        if wait_until_refusing(socket_path).await {
+            return Ok(());
+        }
+    }
+    Err(
+        "horizon-sessiond kept accepting connections after every drain probe; \
+         stop it manually"
+            .to_string(),
+    )
+}
+
+/// True once `socket_path` refuses connections (the daemon process is
+/// gone -- its `Drain` exit leaves the socket file behind, so file
+/// existence proves nothing); false if it still accepts when
+/// [`DRAIN_EXIT_TIMEOUT`] runs out.
+async fn wait_until_refusing(socket_path: &Path) -> bool {
+    let deadline = tokio::time::Instant::now() + DRAIN_EXIT_TIMEOUT;
+    loop {
+        if tokio::net::UnixStream::connect(socket_path).await.is_err() {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(DRAIN_POLL).await;
     }
 }

@@ -2,6 +2,15 @@
 //! domains. Agent and terminal commands remain sister vocabularies in their
 //! own crates; this crate owns only the envelope, handshake shape, and stream
 //! framing they share.
+//!
+//! One kind is special: `session_control` is the version-stable shared
+//! vocabulary. Domain payloads are only decoded after the version handshake
+//! succeeds, but the handshake itself (and contract-mismatch recovery --
+//! telling a stale daemon to [`SessionControl::Drain`] so it can be
+//! restarted at the right version) must work *across* a version skew, so
+//! [`read_envelope`] exempts `session_control` envelopes from the exact
+//! `v` check. In exchange, [`SessionControl`]'s existing variants may never
+//! change shape or meaning -- extend it additively only.
 
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
@@ -58,6 +67,12 @@ pub const SESSION_PROTOCOL_VERSION: u32 = 9;
 
 pub const SESSION_CONTROL_KIND: &str = "session_control";
 
+/// The version-stable shared vocabulary (see the crate doc): decodable
+/// regardless of the envelope's `v`, because the handshake and
+/// contract-mismatch recovery are exactly the conversations that happen
+/// *between* versions. Existing variants must never change shape or
+/// meaning; extend additively only, and remember an older peer treats an
+/// unknown variant as malformed.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionControl {
@@ -110,6 +125,23 @@ impl Envelope {
     pub fn session_control(control: &SessionControl) -> Result<Self, WireError> {
         Self::from_typed(SESSION_CONTROL_KIND, None, control)
     }
+
+    /// Same as [`Self::session_control`], but stamped with a *peer's*
+    /// envelope version instead of this build's own. Contract-mismatch
+    /// recovery needs this: `session_control` is version-stable (see the
+    /// crate doc), but a daemon built before the [`read_envelope`]
+    /// exemption landed (v8 and earlier) rejects any envelope whose `v`
+    /// differs from its own before ever looking at `kind` -- so a `Drain`
+    /// aimed at a stale daemon must travel at *that daemon's* version to be
+    /// decoded at all.
+    pub fn session_control_at(control: &SessionControl, v: u32) -> Result<Self, WireError> {
+        Ok(Self {
+            v,
+            session_id: None,
+            kind: SESSION_CONTROL_KIND.to_string(),
+            payload: serde_json::to_value(control)?,
+        })
+    }
 }
 
 /// Sent by either peer during the session-daemon handshake.
@@ -160,7 +192,13 @@ where
     }
 
     let envelope: Envelope = serde_json::from_str(line.trim_end_matches(['\n', '\r']))?;
-    if envelope.v != SESSION_PROTOCOL_VERSION {
+    // `session_control` is the version-stable shared vocabulary (see the
+    // crate doc): a foreign-versioned peer must still be able to say Hello
+    // (and be told why it's rejected), and a mismatch-recovering client
+    // must still be able to ask a stale daemon to Drain. Every other kind
+    // is a domain vocabulary that only decodes safely at an exact version
+    // match.
+    if envelope.v != SESSION_PROTOCOL_VERSION && envelope.kind != SESSION_CONTROL_KIND {
         return Err(WireError::VersionMismatch {
             expected: SESSION_PROTOCOL_VERSION,
             found: envelope.v,
@@ -215,6 +253,27 @@ mod tests {
                 found: 99
             })
         ));
+    }
+
+    #[tokio::test]
+    async fn session_control_is_readable_at_a_foreign_version() {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let sent =
+            Envelope::session_control_at(&SessionControl::Drain, SESSION_PROTOCOL_VERSION + 1)
+                .unwrap();
+        write_envelope(&mut client, &sent).await.unwrap();
+
+        let received = read_envelope(&mut BufReader::new(server))
+            .await
+            .unwrap()
+            .expect("a foreign-versioned session_control envelope should be readable");
+        assert_eq!(received.v, SESSION_PROTOCOL_VERSION + 1);
+        assert_eq!(
+            received
+                .decode_payload::<SessionControl>(SESSION_CONTROL_KIND)
+                .unwrap(),
+            SessionControl::Drain
+        );
     }
 
     #[test]
