@@ -130,7 +130,7 @@ instead of per run (cuts the per-run layer insertions behind the 31%);
 a `ShapedLine` cache keyed by row content, invalidated by `changed_rows`
 (goal 3's plumbing); agent-pane notify coalescing to match the
 terminal's 16 ms window; the theme color picker's per-frame palette
-rebuild.
+rebuild (upstream gpui-component defect; accepted for now — backlog #62).
 
 ## References
 
