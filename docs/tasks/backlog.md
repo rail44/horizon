@@ -354,3 +354,10 @@ entries live in `backlog-resolved.md` keeping their original numbers
     `horizon-sandbox`'s policy/API, or `setpriority` on the returned
     child's pid post-spawn (racy but adequate). Recorded 2026-07-19
     from the leg-3 review.
+
+57. **`new-agent` should print the created session id (at least under
+    `--json`).** The CLI dogfooding loop (`.claude/skills/
+    horizon-dogfood/SKILL.md`) has to infer the new session via
+    `horizon sessions --json` right after spawning — racy if two
+    spawns interleave. Echoing the created id in the invoke response
+    closes the loop cleanly. Small, additive. Recorded 2026-07-19.
