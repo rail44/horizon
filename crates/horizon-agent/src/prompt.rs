@@ -34,11 +34,24 @@ pub struct SessionEnvironment {
 }
 
 impl SessionEnvironment {
-    /// Gathers environment facts for the current process. Falls back to
-    /// `/` for `cwd` if it cannot be read (rare — e.g. the directory was
-    /// removed out from under the process).
-    pub fn current() -> Self {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+    /// Gathers environment facts for a session whose real working directory
+    /// is `workspace_root` -- an isolated session's isolated worktree, or a
+    /// plain shared directory, already resolved by the caller
+    /// (`contract::StartSession::workspace_root`, threaded in by
+    /// `horizon-sessiond`'s `session::run_session`). Falls back to this
+    /// process's own `cwd` only when `workspace_root` is `None` (a session
+    /// with no workspace concept at all), and to `/` if even that can't be
+    /// read (rare -- e.g. the directory was removed out from under the
+    /// process). Using anything other than the session's own root here was
+    /// exactly the 2026-07-19 dogfooding bug: an isolated session's system
+    /// prompt claimed the daemon's own cwd (the root repository checkout)
+    /// as its working directory, so the model tried to write files there
+    /// instead of into its actual isolated worktree.
+    pub fn for_workspace_root(workspace_root: Option<&Path>) -> Self {
+        let cwd = workspace_root
+            .map(Path::to_path_buf)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("/"));
         let git_repo = is_git_repository(&cwd);
         Self {
             cwd,

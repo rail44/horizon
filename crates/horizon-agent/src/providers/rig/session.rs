@@ -34,6 +34,15 @@ pub(super) fn spawn_rig_session(
 ) -> SessionHandle {
     let (commands_tx, commands_rx) = unbounded();
     let (events_tx, events_rx) = unbounded::<ProviderEvent>();
+    // Gathered once, right as the session starts, and reused for every
+    // turn's system prompt — cwd/OS/git-repo status don't change over a
+    // session's lifetime. Computed here (before `request` is partially
+    // moved-from just below) from `request.workspace_root` -- the session's
+    // own real root (an isolated worktree, post-isolation, when this
+    // session is isolated), not this daemon process's own cwd -- so both
+    // the prompt's "Working directory" line and `session_extra_sections`'s
+    // skill discovery below reflect where this session actually runs.
+    let environment = session_environment(&request);
     let provider_id = request.provider_id;
     let session_id = request.session_id;
 
@@ -48,10 +57,6 @@ pub(super) fn spawn_rig_session(
         // silently not showing up.
         let duckdb_store = duckdb_cell.wait();
         let rig_history = load_rig_history(duckdb_store.as_ref(), session_id);
-        // Gathered once, right as the session starts, and reused for every
-        // turn's system prompt — cwd/OS/git-repo status don't change over a
-        // session's lifetime.
-        let environment = SessionEnvironment::current();
         let extra_sections = session_extra_sections(&environment, &config, role);
 
         let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
@@ -89,6 +94,16 @@ pub(super) fn spawn_rig_session(
     });
 
     SessionHandle::new(commands_tx, events_rx)
+}
+
+/// Builds a session's [`SessionEnvironment`] from the `StartSession` request
+/// that started it. Extracted as its own function (rather than inlined at
+/// its one call site above) so the 2026-07-19 dogfooding fix -- an isolated
+/// session's prompt must reflect its own workspace root, not the daemon
+/// process's `cwd` -- is directly unit-testable without spinning up the
+/// session's real thread.
+pub(super) fn session_environment(request: &StartSession) -> SessionEnvironment {
+    SessionEnvironment::for_workspace_root(request.workspace_root.as_deref())
 }
 
 /// Builds the `extra_sections` a session's system prompt is composed from

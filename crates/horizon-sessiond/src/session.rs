@@ -958,10 +958,41 @@ fn run_session(
     replay_rx: Receiver<Sender<Vec<Event>>>,
     history: Vec<Event>,
 ) {
-    let Some(handle) = state
-        .providers
-        .start_session(&provider_id, session_id, role_id.clone())
-    else {
+    // Resolved *before* starting the provider session (below) so the real,
+    // post-isolation root -- an isolated worktree, when this session is
+    // isolated, not merely the pre-isolation `workspace_root` this function
+    // was called with -- can be threaded straight into `start_session`'s new
+    // `workspace_root` argument (`contract::StartSession::workspace_root`'s
+    // doc comment): the rig provider builds its system prompt's environment
+    // (and the prompt's skills listing, `providers::rig::session::
+    // session_extra_sections`) from exactly that value, once, at session
+    // spawn time -- there's no later seam to correct it through. This was
+    // the 2026-07-19 dogfooding bug: an isolated session's prompt claimed the
+    // daemon's own cwd as its working directory, so the model tried to write
+    // files into the root checkout instead of its own worktree. Doing this
+    // ahead of the provider/role validation just below means a (rare --
+    // effectively never in production, see that check's own doc comment)
+    // unknown provider or role pays for an isolated worktree's creation and
+    // immediate teardown; `spawn_session_thread`'s post-`run_session`
+    // cleanup removes it regardless of how this function returns, so
+    // nothing is leaked.
+    let (workspace_root, isolated) = if isolate {
+        resolve_and_create_isolated_worktree(
+            state,
+            session_id,
+            spawn_source_session_id,
+            workspace_root,
+        )
+    } else {
+        (workspace_root, false)
+    };
+
+    let Some(handle) = state.providers.start_session(
+        &provider_id,
+        session_id,
+        role_id.clone(),
+        workspace_root.clone(),
+    ) else {
         // `ProviderRegistry::start_session` returns `None` for either an
         // unknown `provider_id` or an unresolvable `role_id` (see its own
         // doc comment on why role validation is centralized there) -- this
@@ -991,27 +1022,16 @@ fn run_session(
         session_id: Some(session_id),
         store: state.wait_for_duckdb_store(),
     };
-    // Discovered from this process's own cwd, same as `providers::rig::
-    // session::session_extra_sections` independently does for the prompt's
-    // skills section -- both are cheap, session-start-once listings of the
-    // same on-disk state, so there's no shared value worth threading
-    // between these two otherwise-unconnected session-start sites (this
-    // thread's `ToolSessionState`/tool execution vs. the rig provider's own
-    // dedicated thread and its system prompt).
+    // Discovered from this process's own cwd, deliberately independent of
+    // the resolved `workspace_root` above -- this registry feeds the
+    // `skill.read` tool (`ToolSessionState::skill_registry`), a separate
+    // seam from the prompt's own skills listing (now built from
+    // `workspace_root`, see the comment on this function's first block).
+    // Left as process cwd rather than fixed in the same pass: unlike the
+    // prompt, a wrong root here doesn't misdirect the model into acting on
+    // the wrong directory, only what `skill.read` can see -- out of this
+    // fix's reported scope.
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
-    // Skill discovery above always uses the process cwd regardless of
-    // `workspace_root` -- see the comment just above `cwd`'s definition on
-    // why that's an intentionally separate, unthreaded value.
-    let (workspace_root, isolated) = if isolate {
-        resolve_and_create_isolated_worktree(
-            state,
-            session_id,
-            spawn_source_session_id,
-            workspace_root,
-        )
-    } else {
-        (workspace_root, false)
-    };
     let tool_state = tool_session_state_for(workspace_root, state.agent_config.tools, recall)
         .with_isolated_worktree(isolated)
         .with_skills(SkillRegistry::discover(&cwd))

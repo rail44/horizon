@@ -7,9 +7,9 @@ use crate::contract::{
 use crate::policy::{annotate_auto_approval, classify_call, Classification};
 use crate::tools::config;
 use crate::tools::fs;
-use crate::tools::permission_for_tool;
 use crate::tools::recall;
 use crate::tools::state::{session_runtime, ToolSessionState};
+use crate::tools::{definitions, permission_for_tool};
 
 /// Seam for tools this crate doesn't implement itself because they need
 /// Horizon-side state this crate can't depend on — currently just
@@ -72,10 +72,32 @@ pub fn execute_agent_tool(
         Some(ToolPermission::Deny) => Execution::Denied(vec![Event::Error(Error {
             message: format!("Tool `{}` is denied by Horizon policy.", request.tool_id),
         })]),
-        None => Execution::Unknown(vec![Event::Error(Error {
-            message: format!("Unknown tool `{}`.", request.tool_id),
-        })]),
+        // An unrecognized tool id (not in `tools::catalog::definitions`)
+        // must resolve to a `ToolCallFinished` error result, not a bare
+        // session `Event::Error` -- the latter is never routed back to the
+        // provider as a tool outcome (see `tools::processing::
+        // process_agent_provider_event`'s `Command::ToolCallResult`
+        // forwarding), so the model would never see why its call failed and
+        // the turn would stall waiting on a result that never arrives. The
+        // available id list is included so the model can self-correct
+        // (e.g. `write` -> `fs.write`) without another round trip to ask.
+        None => Execution::Unknown(vec![Event::ToolCallFinished(ToolCallResult::new(
+            request.call_id.clone(),
+            unknown_tool_output(&request.tool_id),
+        ))]),
     }
+}
+
+fn unknown_tool_output(tool_id: &str) -> serde_json::Value {
+    let available = definitions()
+        .into_iter()
+        .map(|definition| definition.id)
+        .collect::<Vec<_>>()
+        .join(", ");
+    json!({
+        "is_error": true,
+        "message": format!("Unknown tool `{tool_id}`; available: {available}."),
+    })
 }
 
 /// Auto-executes a tier-1-`Contained` `RequireApproval` call -- the
