@@ -301,6 +301,12 @@ entire baseline/diff/resync complexity survives the migration untouched,
 and backpressure policy (queue depth, coalescing interaction) remains
 Horizon's to own.
 
+**Decision (2026-07-20): the owner ratified Option A** for the current
+stage, after the statefulness-vs-tolerant-decoding argument above was
+made explicit. The recorded reopening conditions stand: a remote-domain
+goal or measured multi-pane aggregate encode cost would revisit this in
+Option B's favor.
+
 **This document recommends Option A.** The daemon keeps its retained
 latest frame (it seeds the watch and serves attach) and the 16 ms
 coalescing (which bounds full-frame production rate); everything else in
@@ -358,7 +364,7 @@ Staged PR sequence, each independently green:
    semantics** here — Snapshot/FrameDiff updates travel verbatim over the
    attachment's mpsc channel — so this PR is a transport swap, reviewable
    as such. e2e suite ported (§7).
-3. **Frame path (Option A, if ratified).** Swap the frame channel to
+3. **Frame path (Option A, ratified 2026-07-20).** Swap the frame channel to
    `rch::watch`, delete the diff/baseline machinery, move row-change
    detection client-side. Separated from PR 2 so the semantic change is
    reviewed on its own.
