@@ -208,6 +208,25 @@ pub fn definitions() -> Vec<Definition> {
             }),
             permission: ToolPermission::RequireApproval,
         },
+        // Test-only, mirroring `mock.approval_required` above: no current
+        // real tool is ever classified `Classification::BoundaryCrossing`
+        // (MCP/non-sandboxed tools don't exist in this crate yet -- see
+        // `policy::classify_call`'s doc comment), so this is the fixture
+        // that exercises the judge's shadow-mode wiring
+        // (`judge::maybe_fire_shadow_judge`) at the
+        // `policy::horizon_events_for_provider_event` seam.
+        Definition {
+            id: "mock.boundary_crossing".to_string(),
+            title: "Mock Boundary Crossing".to_string(),
+            description: "Test tool that exercises the judge's shadow-mode boundary-crossing \
+                path."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "additionalProperties": true
+            }),
+            permission: ToolPermission::RequireApproval,
+        },
         // config.read/config.write (`tools::config`) are the config role's
         // only allowed tools (`roles::CONFIG_ROLE`). Cataloging them
         // globally here adds no new *capability* -- `bash` can already

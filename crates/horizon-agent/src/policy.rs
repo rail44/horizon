@@ -8,7 +8,9 @@
 
 use serde_json::Value;
 
-use crate::contract::{ApprovalKind, ApprovalRequest, Error, Event, SessionState, ToolPermission};
+use crate::contract::{
+    ApprovalKind, ApprovalRequest, Error, Event, SessionId, SessionState, ToolPermission,
+};
 use crate::tools::ToolSessionState;
 
 /// A per-call trust classification -- the tier a single tool call falls
@@ -20,12 +22,15 @@ pub(crate) enum Classification {
     /// (an isolated worktree's git diff) and/or containment (the OS
     /// sandbox) stand in for consent.
     Contained,
-    /// Crosses the containment boundary (tier 2, not yet built --
-    /// `docs/agent-approval-design.md`'s "Judge at the boundary"). No
-    /// current tool call is ever classified this way; reserved so the
-    /// judge leg can add boundary-crossing tools (network egress, future
-    /// MCP/external tools) without another shape change here.
-    #[allow(dead_code)]
+    /// Crosses the containment boundary (tier 2 --
+    /// `docs/agent-approval-design.md`'s "Judge at the boundary"): the
+    /// judge's canonical case (MCP/non-sandboxed tools; network egress is
+    /// excluded, see leg 4b's own `DomainDenialRetry` path). No *real*
+    /// tool in this crate's catalog is classified this way today (there are
+    /// no MCP/external tools wired in yet); `mock.boundary_crossing` is the
+    /// fixture that exercises this classification and the shadow-mode
+    /// judge wiring it drives (`judge::maybe_fire_shadow_judge`) until a
+    /// real boundary-crossing tool exists.
     BoundaryCrossing,
     /// Always human (tier 3): irreversible/destructive by policy, or a
     /// contained-eligible tool call whose session isn't isolated / has no
@@ -66,6 +71,11 @@ pub(crate) fn classify_call(
                 Classification::AlwaysAsk
             }
         }
+        // Test-only fixture -- see `Classification::BoundaryCrossing`'s doc
+        // comment. Not sensitive to `session_isolated`/`sandbox_available`:
+        // a boundary crossing is defined by running outside the containment
+        // perimeter regardless of this session's own isolation.
+        "mock.boundary_crossing" => Classification::BoundaryCrossing,
         // `config.write`, `mock.approval_required`, and anything else this
         // crate ever catalogs as `RequireApproval` in the future: always
         // ask unless explicitly classified above -- the conservative
@@ -140,6 +150,7 @@ pub(crate) fn annotate_domain_approval(output: &mut Value, domains: &[String]) {
 pub fn horizon_events_for_provider_event(
     event: &Event,
     tool_state: &ToolSessionState,
+    session_id: SessionId,
 ) -> Vec<Event> {
     let mut events = vec![event.clone()];
     if let Event::ToolCallRequested(request) = event {
@@ -167,6 +178,20 @@ pub fn horizon_events_for_provider_event(
                             kind: ApprovalKind::Standard,
                         }));
                         events.push(Event::StateChanged(SessionState::WaitingForApproval));
+                        // Shadow-mode judge (`docs/agent-approval-design.md`'s
+                        // "Judge design", implemented shadow-only per
+                        // `crate::judge`'s module doc): fire-and-forget, after
+                        // the events above are already decided -- this can
+                        // never change what the human sees. Contained and
+                        // AlwaysAsk calls never reach the judge (tier-1
+                        // auto-approve and tier-3 irreversible are not its
+                        // domain); network domain crossings are excluded by
+                        // construction (leg 4b's `DomainDenialRetry` approval
+                        // is emitted from an entirely separate seam in
+                        // `horizon-sessiond`, never through this function).
+                        if let Classification::BoundaryCrossing = classification {
+                            crate::judge::maybe_fire_shadow_judge(tool_state, session_id, request);
+                        }
                     }
                 }
             }
@@ -276,6 +301,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn mock_boundary_crossing_is_always_a_boundary_crossing() {
+        let input = serde_json::json!({});
+        for session_isolated in [false, true] {
+            for sandbox_available in [false, true] {
+                assert_eq!(
+                    classify_call(
+                        "mock.boundary_crossing",
+                        &input,
+                        session_isolated,
+                        sandbox_available
+                    ),
+                    Classification::BoundaryCrossing
+                );
+            }
+        }
+    }
+
     // --- horizon_events_for_provider_event ---------------------------------
 
     fn requested(tool_id: &str) -> Event {
@@ -289,7 +332,11 @@ mod tests {
     #[test]
     fn contained_fs_write_in_an_isolated_session_gets_no_approval_prompt() {
         let tool_state = ToolSessionState::new(std::env::temp_dir()).with_isolated_worktree(true);
-        let events = horizon_events_for_provider_event(&requested("fs.write"), &tool_state);
+        let events = horizon_events_for_provider_event(
+            &requested("fs.write"),
+            &tool_state,
+            SessionId::new(),
+        );
 
         assert_eq!(
             events.len(),
@@ -304,7 +351,11 @@ mod tests {
     #[test]
     fn non_isolated_fs_write_still_gets_the_ordinary_approval_prompt() {
         let tool_state = ToolSessionState::new(std::env::temp_dir());
-        let events = horizon_events_for_provider_event(&requested("fs.write"), &tool_state);
+        let events = horizon_events_for_provider_event(
+            &requested("fs.write"),
+            &tool_state,
+            SessionId::new(),
+        );
 
         assert!(events
             .iter()
@@ -327,7 +378,8 @@ mod tests {
         // -- immediately, with a `ToolCallFinished` error result -- so this
         // seam must contribute nothing beyond the original event.
         let tool_state = ToolSessionState::new(std::env::temp_dir()).with_isolated_worktree(true);
-        let events = horizon_events_for_provider_event(&requested("write"), &tool_state);
+        let events =
+            horizon_events_for_provider_event(&requested("write"), &tool_state, SessionId::new());
 
         assert_eq!(
             events.len(),
@@ -342,12 +394,61 @@ mod tests {
     #[test]
     fn mock_approval_required_always_gets_a_prompt_even_when_isolated() {
         let tool_state = ToolSessionState::new(std::env::temp_dir()).with_isolated_worktree(true);
-        let events =
-            horizon_events_for_provider_event(&requested("mock.approval_required"), &tool_state);
+        let events = horizon_events_for_provider_event(
+            &requested("mock.approval_required"),
+            &tool_state,
+            SessionId::new(),
+        );
 
         assert!(events
             .iter()
             .any(|event| matches!(event, Event::ApprovalRequested(_))));
+    }
+
+    /// The core shadow-mode guarantee: a `BoundaryCrossing`-classified call
+    /// gets byte-for-byte the same events a plain `AlwaysAsk` call would --
+    /// installing (and firing) a judge handle changes nothing about what
+    /// the human sees. `judge_fires_for_a_boundary_crossing_call_but_not_a_
+    /// contained_one` (in `judge`'s own tests) proves the judge really does
+    /// activate for one and not the other; this test proves that activation
+    /// has zero effect on this function's return value either way.
+    #[test]
+    fn boundary_crossing_produces_the_same_events_as_always_ask() {
+        let tool_state = ToolSessionState::new(std::env::temp_dir()).with_isolated_worktree(true);
+        let session_id = SessionId::new();
+
+        let boundary_events = horizon_events_for_provider_event(
+            &requested("mock.boundary_crossing"),
+            &tool_state,
+            session_id,
+        );
+        let always_ask_events = horizon_events_for_provider_event(
+            &requested("mock.approval_required"),
+            &tool_state,
+            session_id,
+        );
+
+        // Compare shape (event kind + reason/kind fields), not the tool id
+        // each carries in its own `ToolCallRequested`/`ApprovalRequested`.
+        assert_eq!(boundary_events.len(), always_ask_events.len());
+        assert_eq!(
+            boundary_events.len(),
+            3,
+            "request + approval + state change"
+        );
+        assert!(matches!(boundary_events[0], Event::ToolCallRequested(_)));
+        assert!(matches!(boundary_events[1], Event::ApprovalRequested(_)));
+        assert!(matches!(
+            boundary_events[2],
+            Event::StateChanged(SessionState::WaitingForApproval)
+        ));
+        if let (Event::ApprovalRequested(boundary), Event::ApprovalRequested(always_ask)) =
+            (&boundary_events[1], &always_ask_events[1])
+        {
+            assert_eq!(boundary.kind, always_ask.kind);
+        } else {
+            panic!("both must be ApprovalRequested");
+        }
     }
 
     // --- audit markers ------------------------------------------------------

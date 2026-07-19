@@ -658,6 +658,7 @@ fn horizon_policy_adds_approval_for_requested_tool() {
             input: serde_json::json!({}),
         }),
         &tool_state,
+        SessionId::new(),
     );
 
     assert!(events.iter().any(|event| matches!(
