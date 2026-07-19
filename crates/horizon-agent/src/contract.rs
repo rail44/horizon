@@ -413,6 +413,46 @@ impl ToolCallResult {
 pub struct ApprovalRequest {
     pub call_id: ToolCallId,
     pub reason: String,
+    /// Which kind of approval this is -- see [`ApprovalKind`]. `#[serde(
+    /// default)]` so a `Record` persisted before this field existed still
+    /// deserializes, reading as the same [`ApprovalKind::Standard`] every
+    /// approval request was before this leg.
+    #[serde(default)]
+    pub kind: ApprovalKind,
+}
+
+/// Distinguishes the shape of a pending [`ApprovalRequest`] -- what
+/// `tools::approval::resolve_bash` needs to tell an ordinary approval, a
+/// sandbox-denial retry, and a network-domain-denial retry apart, since the
+/// three resolve an Approve decision differently (`docs/agent-approval-
+/// design.md`'s "Denial UX" and leg 4b's "denial -> approval -> retry
+/// flow"). Also lets the UI render each kind with its own copy without
+/// having to sniff `ApprovalRequest::reason`'s free text (today it doesn't,
+/// but this keeps that door open).
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub enum ApprovalKind {
+    /// An ordinary first-time approval request -- the only kind that
+    /// existed before this leg.
+    #[default]
+    Standard,
+    /// A tier-1 sandboxed `bash` call looked denied by the sandbox itself
+    /// (`horizon_sandbox::is_likely_sandbox_denied`) -- approving reruns the
+    /// same call with the sandbox off (`bash::BashCompletion::
+    /// RetryWithoutSandbox`, `docs/agent-approval-design.md`'s "Denial UX").
+    SandboxDenialRetry,
+    /// A tier-1 sandboxed `bash` call's network egress was refused by the
+    /// allowlist proxy for one or more domains (`bash::BashCompletion::
+    /// DomainDenied`, `docs/agent-approval-design.md` leg 4b). Approving
+    /// adds `domains` to this session's own allowlist and reruns the SAME
+    /// call, still sandboxed; denying forwards `prior_result` as-is -- the
+    /// call already ran to completion (unlike `SandboxDenialRetry`, there is
+    /// a genuine result, not just a denial-shaped reason string), so a deny
+    /// leaves that real, already-failed-on-its-own-terms outcome as the
+    /// final one rather than synthesizing a fresh "denied by user" marker.
+    DomainDenialRetry {
+        domains: Vec<String>,
+        prior_result: ToolCallResult,
+    },
 }
 
 /// Payload for [`Event::ProviderRequestSent`]: the model id the provider was

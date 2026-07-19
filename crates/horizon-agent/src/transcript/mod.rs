@@ -108,8 +108,8 @@ pub(crate) mod test_support {
     use std::time::Duration;
 
     use crate::contract::{
-        ApprovalRequest, Message, MessageDelta, MessageRole, ToolCallId, ToolCallRequest,
-        ToolCallResult, TurnEndReason,
+        ApprovalKind, ApprovalRequest, Message, MessageDelta, MessageRole, ToolCallId,
+        ToolCallRequest, ToolCallResult, TurnEndReason,
     };
     use crate::frame::AgentFrameItem;
     use serde_json::Value;
@@ -179,6 +179,7 @@ pub(crate) mod test_support {
         AgentFrameItem::ApprovalRequested(ApprovalRequest {
             call_id: ToolCallId(call_id.to_string()),
             reason: "writes a file".to_string(),
+            kind: ApprovalKind::Standard,
         })
     }
 

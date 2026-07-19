@@ -13,6 +13,7 @@ use crate::live::LiveState;
 use crate::persistence::projection::duckdb::DuckdbStoreHandle;
 use crate::skills::SkillRegistry;
 use crate::tools::bash::BashCompletion;
+use crate::tools::network::SessionNetworkProxy;
 
 /// Where this session's persisted history lives, for the recall tools
 /// (`tools::recall`) to search/read it: the session's own id (the tools'
@@ -116,19 +117,24 @@ struct Inner {
     /// with_config_path`] are, rather than re-derived. `false` everywhere
     /// except the one production call site.
     isolated_worktree: bool,
-    /// The daemon-owned network-proxy bridge socket path (`docs/
-    /// agent-approval-design.md`'s "Staging" leg 4a) -- what a tier-1
-    /// sandboxed `bash` call's `NetworkPolicy::Proxied { bridge_socket }`
-    /// should carry. `None` means either `horizon-sessiond`'s own
-    /// long-lived `AllowlistProxy`/`UdsBridge` pair never started (or
-    /// failed to), or this `ToolSessionState` is one of this crate's own
-    /// test constructions -- either way, `tools::execution::
-    /// execute_tier1_bash` falls back to `NetworkPolicy::Disabled`, exactly
-    /// today's behavior. Injected post-construction the same way
-    /// [`Self::with_skills`]/[`Self::with_config_path`] are: the one
-    /// production call site (`horizon-sessiond`'s `session::run_session`)
-    /// is the only place that knows the daemon's own resolved bridge path.
-    bridge_socket: Option<PathBuf>,
+    /// This session's own network-proxy pair (`docs/agent-approval-
+    /// design.md`'s "Staging" leg 4b -- `tools::network::
+    /// SessionNetworkProxy`), if one was started for it. `None` means
+    /// either this session isn't eligible for tier-1 sandboxed `bash` at
+    /// all (not isolated, or no engaged sandbox), the proxy failed to bind,
+    /// or this `ToolSessionState` is one of this crate's own test
+    /// constructions -- either way, `tools::execution::execute_tier1_bash`
+    /// falls back to `NetworkPolicy::Disabled`, exactly the pre-leg-4a
+    /// behavior. `Arc` (not a bare value) so the handle is cheap to clone
+    /// across this `Rc`-based struct's threading boundary onto the bash
+    /// background thread (`tools::bash::exec::run_sandboxed` needs it to
+    /// drain denied hosts) the same way `bash_cwd` already crosses that
+    /// boundary. Injected post-construction the same way [`Self::
+    /// with_skills`]/[`Self::with_config_path`] are: the one production
+    /// call site (`horizon-sessiond`'s `session::run_session`) is the only
+    /// place that knows whether this session is isolated with an engaged
+    /// sandbox, the precondition for starting one at all.
+    network: Option<Arc<SessionNetworkProxy>>,
 }
 
 impl ToolSessionState {
@@ -172,7 +178,7 @@ impl ToolSessionState {
                 skills: SkillRegistry::default(),
                 config_path: None,
                 isolated_worktree: false,
-                bridge_socket: None,
+                network: None,
             }),
         }
     }
@@ -223,22 +229,23 @@ impl ToolSessionState {
         self.inner.isolated_worktree
     }
 
-    /// Installs the daemon's own network-proxy bridge socket path after
-    /// construction -- see [`Inner::bridge_socket`]'s doc comment. Same
-    /// construction-time-only safety contract as [`Self::with_skills`]/
-    /// [`Self::with_config_path`].
-    pub fn with_bridge_socket(mut self, bridge_socket: Option<PathBuf>) -> Self {
+    /// Installs this session's own network-proxy pair after construction --
+    /// see [`Inner::network`]'s doc comment. Same construction-time-only
+    /// safety contract as [`Self::with_skills`]/[`Self::with_config_path`].
+    pub fn with_network_proxy(mut self, network: Option<Arc<SessionNetworkProxy>>) -> Self {
         if let Some(inner) = Rc::get_mut(&mut self.inner) {
-            inner.bridge_socket = bridge_socket;
+            inner.network = network;
         }
         self
     }
 
-    /// The daemon's own network-proxy bridge socket path, if one is running
-    /// -- see [`Inner::bridge_socket`]'s doc comment. What `tools::
-    /// execution::execute_tier1_bash` passes into `NetworkPolicy::Proxied`.
-    pub(crate) fn bridge_socket(&self) -> Option<&Path> {
-        self.inner.bridge_socket.as_deref()
+    /// This session's own network-proxy pair, if one is running -- see
+    /// [`Inner::network`]'s doc comment. What `tools::execution::
+    /// execute_tier1_bash` passes into `bash::spawn_sandboxed`, and what
+    /// `tools::approval`'s domain-denial-retry path mutates
+    /// (`SessionNetworkProxy::allow_domain`) on approve.
+    pub(crate) fn network_proxy(&self) -> Option<Arc<SessionNetworkProxy>> {
+        self.inner.network.clone()
     }
 
     /// v1 workspace root: the process's current directory at session start,

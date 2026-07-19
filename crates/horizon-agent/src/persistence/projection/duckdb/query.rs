@@ -572,8 +572,8 @@ fn parse_json_column(column: usize, json: &str) -> duckdb::Result<Value> {
 mod recall_tests {
     use super::*;
     use crate::contract::{
-        ApprovalRequest, Event, Message, MessageDelta, MessageRole, ToolCallId, ToolCallRequest,
-        ToolCallResult, TurnEndReason,
+        ApprovalKind, ApprovalRequest, Event, Message, MessageDelta, MessageRole, ToolCallId,
+        ToolCallRequest, ToolCallResult, TurnEndReason,
     };
     use crate::persistence::projection::duckdb::AppendEvent;
 
@@ -848,6 +848,7 @@ mod recall_tests {
                     Event::ApprovalRequested(ApprovalRequest {
                         call_id: call_id.clone(),
                         reason: "needs approval".to_string(),
+                        kind: ApprovalKind::Standard,
                     }),
                     Event::ToolCallFinished(ToolCallResult::new(
                         call_id,

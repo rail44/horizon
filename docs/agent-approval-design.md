@@ -183,11 +183,68 @@ product-owned API. Decisions:
   guaranteed built for that compilation kind, not a crate's own unit
   tests), not just the raw sandbox layer: an empty allowlist still
   refuses a real listening decoy host, and direct egress (bypassing the
-  bridge) still hits the unconditional seccomp cut. Remaining for
-  config/judge legs: a `[network]`/allowlist config surface, dynamic
-  allowlist mutation, and the one-time new-domain-approval UX that
-  classifies on the `x-horizon-sandbox-proxy-denial` header (still the
-  right hook — untouched by 4a).
+  bridge) still hits the unconditional seccomp cut.
+  **Leg 4b (per-session domain approval) landed, resumed on the nono
+  foundation**: two decisions bundled with it. *Proxy relocation* (owner
+  decision) — ownership moved from `horizon-sessiond` to `horizon-agent`
+  (`crate::network::NetworkProxy` deleted; `horizon-agent`'s `tools::
+  network::SessionNetworkProxy` is the new home), since the agent
+  implementation already owns every other piece of per-session tool state
+  (`tools::state::ToolSessionState`) and the daemon has no other reason to
+  touch network policy directly. *Per-session unit* (owner-pinned "YOUR
+  call" resolved as per-session, not per-process): each isolated,
+  sandbox-eligible session gets its *own* `AllowlistProxy`+`UdsBridge`
+  pair — nono's per-session bridge socket path (no bind-mount constraint,
+  unlike the old bwrap backend) makes a dedicated instance per session free,
+  and it's the cleanest possible attribution/no-leak mechanism: mutating
+  one session's allowlist touches only that instance's own `Allowlist`,
+  with no shared mutable state across sessions to accidentally leak
+  through. Every session's proxy/bridge pair still runs on one *shared*,
+  lazily-started, process-lifetime tokio runtime (`tools::network`'s own
+  runtime, never the per-session `rig` runtime) rather than a thread per
+  session. `horizon_sandbox_proxy::Allowlist` grew interior mutability
+  (`RwLock<HashSet<String>>`) plus `allow`/`AllowlistProxy::allow` so a
+  session's set can grow at runtime, and a new `DenialLog` (`Arc`-shared
+  with the handler) records every refused host so `AllowlistProxy::
+  drain_denied_hosts` can attribute a denial to the exact bash call that
+  triggered it — proxy-side, independent of the sandboxed process's own
+  exit code (backlog 59: `curl ... | head` exits `0` even though `curl`
+  itself never reached the network). `bash::exec::run_sandboxed` drains
+  this right after the child exits and, if non-empty, returns a new
+  `BashCompletion::DomainDenied { domains, result }` instead of a plain
+  `Finished` — `result` is a genuine, already-computed outcome (the call
+  ran; it just couldn't reach some host), annotated with `denied_domains`
+  and a forced `is_error: true` regardless of the wrapped shell's own exit
+  code. `horizon-sessiond`'s `fold_domain_denied` (mirroring the existing
+  `fold_bash_retry_without_sandbox` shape) reissues a fresh
+  `ToolCallRequested` + a differently-**kinded** `ApprovalRequested`
+  (`contract::ApprovalKind::DomainDenialRetry { domains, prior_result }`,
+  alongside a new `SandboxDenialRetry` kind now given to the pre-existing
+  sandbox-denial retry, and the default `Standard` for every other
+  approval) — the kind is what lets `tools::approval::resolve_bash` tell
+  the three apart and route each one's Approve/Deny correctly: a domain
+  approve calls `SessionNetworkProxy::allow_domain` for this session only,
+  then reruns the SAME call still sandboxed (`bash::spawn_sandboxed`, not
+  the plain unsandboxed retry a `SandboxDenialRetry` approve uses); a deny
+  simply forwards `prior_result` as-is (the real attempt already
+  happened). Audit: `policy::annotate_domain_approval` marks
+  `domain_approved`/`approved_domains` on the eventual retry's result,
+  kept distinct from `auto_approved` since this is a human decision, not
+  an auto-approval. Proxy-agnostic seam: the allowlist-mutation/denial-log
+  API lives entirely on `horizon_sandbox_proxy::AllowlistProxy` (`allow`/
+  `drain_denied_hosts`), so a future proxy swap (nono-proxy remains a
+  candidate) only needs to keep that same shape; the one place that
+  *isn't* decoupled is `bash::exec::run_sandboxed`'s direct dependency on
+  `SessionNetworkProxy`'s concrete type. Containment re-proven for the new
+  shape in `tier1_network_containment.rs`: a domain denial is detected and
+  named in the tool result even though `bridge_probe` (the test fixture)
+  always exits `0`; approving a domain for one session lets that session
+  reach it while a second, separate session's own proxy still refuses the
+  same host (no leak); approving one domain doesn't unlock a different
+  one; direct egress stays dead under `Proxied`. Remaining for the judge
+  leg: a `[network]`/persistent-allowlist config surface (explicitly out of
+  scope for this leg — the per-session allowlist lives only for the
+  session's lifetime) and the judge's own boundary-crossing classification.
 - **Denial UX** (converged pattern): detect the sandbox denial
   (exit-code/stderr signature), then surface "retry without sandbox?"
   through the normal approval flow — never silently block or bypass.
@@ -293,8 +350,21 @@ refactoring wave folds into this item.
    over `Disabled` when the bridge is up — see the "Network is its own
    layer" bullet's "Leg 4a" note for the shape, the nested-runtime
    pitfall it worked around, and the honest (still-refused, empty
-   allowlist) behavior this leaves for a network-using command. Config
-   surface and the new-domain approval UX (leg 4b) remain.*
+   allowlist) behavior this leaves for a network-using command.*
+   *Leg 4b (per-session domain approval) landed: ownership moved to
+   `horizon-agent` (one `SessionNetworkProxy` per isolated,
+   sandbox-eligible session, no longer one per `horizon-sessiond`
+   process), a session's allowlist can now grow at runtime
+   (`Allowlist::allow`), a denial is attributed to its domain
+   independent of the sandboxed process's own exit code
+   (`AllowlistProxy::drain_denied_hosts`, backlog 59), and a new
+   `ApprovalKind::DomainDenialRetry` offers "allow domain X for this
+   session and retry" — approving mutates only that session's own
+   allowlist and reruns the same call sandboxed; denying forwards the
+   already-computed result. See the "Network is its own layer" bullet's
+   "Leg 4b" note for the full shape. A persistent, config-file allowlist
+   remains out of scope (this leg's allowlist lives only for the
+   session's lifetime); the judge leg is the only remainder.*
 5. **Judge**: the inline classifier at the policy seam, judge-model
    config key, audit field. Folds in backlog 47 (turn_id-null tracker
    flaw — fix so approval analytics can measure the judge's effect)

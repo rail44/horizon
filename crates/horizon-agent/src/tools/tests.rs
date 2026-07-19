@@ -94,6 +94,12 @@ fn expect_finished(completion: BashCompletion) -> ToolCallResult {
             "expected a finished bash completion, got a retry-without-sandbox \
              request for {call_id:?}: {reason}"
         ),
+        BashCompletion::DomainDenied {
+            call_id, domains, ..
+        } => panic!(
+            "expected a finished bash completion, got a domain-denied request for \
+             {call_id:?} ({domains:?})"
+        ),
     }
 }
 
@@ -1453,6 +1459,14 @@ fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
                 result.output
             );
         }
+        BashCompletion::DomainDenied {
+            call_id, domains, ..
+        } => {
+            panic!(
+                "expected the literal /tmp write to be denied by the sandbox, got a \
+                 domain-denied request instead for {call_id:?} ({domains:?})"
+            );
+        }
     }
     assert!(
         !host_target.exists(),
@@ -1546,6 +1560,7 @@ fn resolve_approval_accepts_a_denial_retry_reissue_and_runs_it_unsandboxed() {
         Event::ApprovalRequested(crate::contract::ApprovalRequest {
             call_id: call_id.clone(),
             reason: "sandboxed run looked denied".to_string(),
+            kind: crate::contract::ApprovalKind::SandboxDenialRetry,
         }),
     ]);
     assert!(
@@ -1565,6 +1580,101 @@ fn resolve_approval_accepts_a_denial_retry_reissue_and_runs_it_unsandboxed() {
         "the retry's approve must actually start the call, not be dropped \
          as AlreadyResolved: {outcome:?}"
     );
+}
+
+// --- approval wiring: domain-denial retry (leg 4b) -------------------------
+
+fn domain_denial_retry_frame(
+    live_state: &LiveState,
+    call_id: &ToolCallId,
+    domains: Vec<String>,
+) -> (AgentFrame, ToolCallResult) {
+    live_state.extend_events([Event::ToolCallRequested(ToolCallRequest {
+        call_id: call_id.clone(),
+        tool_id: "bash".to_string(),
+        input: json!({ "command": "curl https://example.com" }),
+    })]);
+
+    let prior_result = ToolCallResult::new(
+        call_id.clone(),
+        json!({ "is_error": true, "denied_domains": domains, "exit_code": 0 }),
+    );
+    let frame =
+        live_state.extend_events([Event::ApprovalRequested(crate::contract::ApprovalRequest {
+            call_id: call_id.clone(),
+            reason: "allow example.com for this session and retry?".to_string(),
+            kind: crate::contract::ApprovalKind::DomainDenialRetry {
+                domains: vec!["example.com".to_string()],
+                prior_result: prior_result.clone(),
+            },
+        })]);
+    (frame, prior_result)
+}
+
+/// The domain-denial-retry flow's deny path (`docs/agent-approval-
+/// design.md` leg 4b): unlike an ordinary bash deny (which synthesizes a
+/// fresh "denied by user" marker), this forwards the already-computed
+/// `prior_result` unchanged -- the call already ran to completion, it just
+/// couldn't reach some host, and that outcome already reflects the denial.
+#[test]
+fn resolve_approval_domain_denial_retry_deny_forwards_the_prior_result_unchanged() {
+    let tool_state = dummy_tool_state();
+    let session_id = SessionId::new();
+    let live_state = LiveState::new();
+    register_session_runtime(
+        session_id,
+        tool_state,
+        live_state.clone(),
+        dummy_bash_results(),
+    );
+
+    let call_id = ToolCallId("bash-domain-retry-deny".to_string());
+    let (frame, prior_result) =
+        domain_denial_retry_frame(&live_state, &call_id, vec!["example.com".to_string()]);
+
+    let outcome = resolve_approval(
+        &frame,
+        session_id,
+        call_id,
+        ApprovalDecision::Deny { reason: None },
+    );
+    match outcome {
+        ApprovalOutcome::Executed { command, .. } => {
+            assert_eq!(command, Command::ToolCallResult(prior_result));
+        }
+        other => panic!("expected Executed forwarding the prior result, got {other:?}"),
+    }
+}
+
+/// The domain-denial-retry flow's approve path, defensive branch: a
+/// `DomainDenialRetry` should only ever be produced for a tier-1 sandboxed
+/// call (which always has a `SessionNetworkProxy` attached), but if this
+/// session somehow has none, approve must not panic or silently drop the
+/// decision -- it falls back to forwarding the already-computed result,
+/// exactly like a deny would.
+#[test]
+fn resolve_approval_domain_denial_retry_approve_without_a_network_proxy_falls_back_to_forwarding() {
+    let tool_state = dummy_tool_state();
+    let session_id = SessionId::new();
+    let live_state = LiveState::new();
+    register_session_runtime(
+        session_id,
+        tool_state,
+        live_state.clone(),
+        dummy_bash_results(),
+    );
+
+    let call_id = ToolCallId("bash-domain-retry-approve-no-proxy".to_string());
+    let (frame, prior_result) =
+        domain_denial_retry_frame(&live_state, &call_id, vec!["example.com".to_string()]);
+
+    let outcome = resolve_approval(&frame, session_id, call_id, ApprovalDecision::Approve);
+    match outcome {
+        ApprovalOutcome::Executed { command, .. } => {
+            assert_eq!(command, Command::ToolCallResult(prior_result));
+        }
+        other => panic!("expected a defensive fallback forwarding the prior result, got {other:?}"),
+    }
 }
 
 // --- approval wiring: bash -------------------------------------------------

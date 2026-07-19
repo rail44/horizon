@@ -17,6 +17,7 @@ use hudsucker::hyper::{Method, Request, Response, StatusCode};
 use hudsucker::{Body, HttpContext, HttpHandler, RequestOrResponse};
 
 use crate::allowlist::Allowlist;
+use crate::denial_log::DenialLog;
 
 /// A response header naming this proxy's own refusal, distinct from a 403
 /// the destination server itself might send -- the "expose that refusal in
@@ -30,12 +31,19 @@ pub const DENIAL_REASON_NOT_ALLOWLISTED: &str = "host-not-allowlisted";
 #[derive(Clone)]
 pub(crate) struct AllowlistHandler {
     allowlist: Arc<Allowlist>,
+    denial_log: Arc<DenialLog>,
 }
 
 impl AllowlistHandler {
-    pub(crate) fn new(allowlist: Allowlist) -> Self {
+    /// `allowlist`/`denial_log` are shared with the [`crate::proxy::
+    /// AllowlistProxy`] that owns this handler, so a caller can mutate the
+    /// allowlist (`Allowlist::allow`) or drain recorded denials (`DenialLog::
+    /// drain`) via the proxy handle without a second, out-of-band channel
+    /// into this handler.
+    pub(crate) fn new(allowlist: Arc<Allowlist>, denial_log: Arc<DenialLog>) -> Self {
         Self {
-            allowlist: Arc::new(allowlist),
+            allowlist,
+            denial_log,
         }
     }
 }
@@ -48,7 +56,13 @@ impl HttpHandler for AllowlistHandler {
     ) -> RequestOrResponse {
         match target_host(&req) {
             Some(host) if self.allowlist.is_allowed(&host) => req.into(),
-            Some(host) => forbidden(&host).into(),
+            Some(host) => {
+                self.denial_log.record(&host);
+                forbidden(&host).into()
+            }
+            // No host to record here -- there is no domain name a later
+            // approval offer could name, so this is left out of the denial
+            // log entirely (see that type's own doc comment).
             None => forbidden("(no host in request)").into(),
         }
     }

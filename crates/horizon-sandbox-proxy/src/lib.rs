@@ -20,14 +20,22 @@
 //! # }
 //! ```
 //!
-//! ## Architecture (owner-pinned, 2026-07-19)
+//! ## Architecture (owner-pinned, 2026-07-19; ownership updated leg 4b)
 //!
-//! - **One long-lived proxy per `horizon-sessiond` process**, shared across
-//!   every sandboxed session -- not stood up per command (the cost profile
-//!   the sandbox survey rejected for `srt`). This crate provides the
-//!   standalone proxy + bridge and their tests; wiring a single instance
-//!   into `horizon-sessiond`'s own lifecycle, a `[network]` config surface,
-//!   and the one-time new-domain-approval UX are the follow-up legs.
+//! - **One proxy + bridge pair per isolated, sandboxed session**, owned by
+//!   `horizon-agent` (`tools::network::SessionNetworkProxy`) on its own
+//!   dedicated tokio runtime -- not stood up per command (the cost profile
+//!   the sandbox survey rejected for `srt`), and no longer one shared
+//!   instance per `horizon-sessiond` process (leg 4a's shape): a per-session
+//!   allowlist is what makes an approved domain scoped to the session that
+//!   approved it, with zero cross-session leakage, and nono's per-session
+//!   bridge socket path made that attribution mechanism free (no bind-mount
+//!   constraint to work around). This crate itself is unaware of "session"
+//!   as a concept either way -- it just provides the standalone proxy +
+//!   bridge, an [`Allowlist`] that can grow at runtime (`Allowlist::allow`),
+//!   and a denial log a caller can drain (`AllowlistProxy::
+//!   drain_denied_hosts`) to attribute a refusal to whichever call
+//!   triggered it, independent of that call's own exit code.
 //! - **Reachability is a UNIX-socket bridge, not a loosened seccomp.** A
 //!   sandboxed process never talks AF_INET at all (`horizon-sandbox`'s
 //!   seccomp cut stays exactly as strict under `NetworkPolicy::Proxied` as
@@ -45,6 +53,7 @@
 
 mod allowlist;
 mod bridge;
+mod denial_log;
 mod error;
 mod handler;
 mod proxy;

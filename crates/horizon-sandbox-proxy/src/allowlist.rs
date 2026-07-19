@@ -1,15 +1,22 @@
 //! The allowlist policy input (`docs/agent-approval-design.md`: "a plain
 //! constructor-provided allowlist (Vec of domains, exact + subdomain match)
-//! is the spike surface"). Config-file surfacing and one-time-approval UX
-//! are later legs; this type is deliberately just data plus a match rule.
+//! is the spike surface"). Leg 4b (per-session domain approval, `horizon-
+//! agent`'s `tools::network::SessionNetworkProxy`) needs it to grow at
+//! runtime too -- a session's allowlist starts empty and gains entries as
+//! the user approves domains one at a time -- so the domain set is behind a
+//! `RwLock` rather than plain owned data; the match rule itself is
+//! unchanged.
+
+use std::collections::HashSet;
+use std::sync::RwLock;
 
 /// A set of allowed hosts, matched by exact name or as a subdomain,
 /// case-insensitively. An empty allowlist allows nothing -- the default
-/// posture the design doc calls for until the judge leg exists (`docs/
-/// agent-approval-design.md`: "Default allowlist is EMPTY").
-#[derive(Debug, Clone, Default)]
+/// posture the design doc calls for until a domain is explicitly approved
+/// (`docs/agent-approval-design.md`: "Default allowlist is EMPTY").
+#[derive(Debug, Default)]
 pub struct Allowlist {
-    domains: Vec<String>,
+    domains: RwLock<HashSet<String>>,
 }
 
 impl Allowlist {
@@ -19,7 +26,7 @@ impl Allowlist {
     /// [`Allowlist::is_allowed`]).
     pub fn new(domains: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self {
-            domains: domains.into_iter().map(|d| normalize(&d.into())).collect(),
+            domains: RwLock::new(domains.into_iter().map(|d| normalize(&d.into())).collect()),
         }
     }
 
@@ -28,9 +35,27 @@ impl Allowlist {
     /// com` matches an `example.com` entry; `notexample.com` does not).
     pub fn is_allowed(&self, host: &str) -> bool {
         let host = normalize(host);
-        self.domains
+        let domains = self
+            .domains
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        domains
             .iter()
             .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+    }
+
+    /// Adds `domain` to this allowlist at runtime -- the per-session
+    /// domain-approval mutation leg 4b needs (`docs/agent-approval-
+    /// design.md`): approving a denied domain for a session adds it here so
+    /// the retried call (and every later call in the same session) can
+    /// reach it, with no effect on any other session's own `Allowlist`
+    /// instance. Normalized the same way [`Allowlist::new`]'s entries are.
+    pub fn allow(&self, domain: impl Into<String>) {
+        let mut domains = self
+            .domains
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        domains.insert(normalize(&domain.into()));
     }
 }
 

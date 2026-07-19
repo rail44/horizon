@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use serde_json::json;
 
 use crate::contract::{
@@ -146,14 +144,12 @@ fn execute_tier1_fs(tool_state: &ToolSessionState, request: &ToolCallRequest) ->
 /// workspace root -- both should be impossible whenever `classify_call`
 /// returned `Contained`, but this stays defensive rather than panicking.
 ///
-/// Network (`docs/agent-approval-design.md`'s "Staging" leg 4a): when the
-/// daemon has a running network-proxy bridge (`tool_state.bridge_socket()`),
-/// the sandbox gets `NetworkPolicy::Proxied { bridge_socket }` instead of
+/// Network (`docs/agent-approval-design.md` leg 4b): when this session has
+/// its own running network-proxy pair (`tool_state.network_proxy()`), the
+/// sandbox gets `NetworkPolicy::Proxied { bridge_socket }` instead of
 /// `NetworkPolicy::Disabled` -- see `bash::exec::run_sandboxed`'s doc
-/// comment for what that actually gets a command today (the allowlist
-/// starts empty; leg 4b adds the approval-driven mutation). `None` (no
-/// bridge available) falls back to the pre-4a `Disabled` behavior
-/// unchanged.
+/// comment for the denial-attribution this enables. `None` (no proxy
+/// available for this session) falls back to `Disabled`.
 fn execute_tier1_bash(
     tool_state: &ToolSessionState,
     session_id: SessionId,
@@ -165,7 +161,7 @@ fn execute_tier1_bash(
     let Some(workspace_root) = tool_state.workspace_root() else {
         return Execution::RequiresApproval;
     };
-    let bridge_socket = tool_state.bridge_socket().map(Path::to_path_buf);
+    let network = tool_state.network_proxy();
 
     let call_id = request.call_id.clone();
     let events = vec![
@@ -180,7 +176,8 @@ fn execute_tier1_bash(
         tool_state.bash_cwd_handle(),
         tool_state.bash_config(),
         workspace_root.to_path_buf(),
-        bridge_socket,
+        network,
+        crate::tools::bash::SandboxedApprovalOrigin::Tier1Auto,
         runtime.bash_results.clone(),
     );
 

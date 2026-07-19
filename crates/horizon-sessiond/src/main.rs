@@ -56,7 +56,6 @@
 //! projecting every later append live instead of only at the next restart
 //! (`docs/agent-duckdb-state-design.md`'s "Runtime Boundary" addendum).
 
-mod network;
 mod session;
 mod terminal;
 mod worktree;
@@ -78,7 +77,6 @@ use horizon_terminal_core::{
     decode_terminal_command, decode_terminal_control, TerminalControl, TERMINAL_COMMAND_KIND,
     TERMINAL_CONTROL_KIND,
 };
-use network::NetworkProxy;
 use session::{Connection, SessiondState};
 use terminal::TerminalHost;
 use tokio::io::{AsyncWriteExt, BufReader};
@@ -131,37 +129,6 @@ async fn main() -> anyhow::Result<()> {
     // the socket path, and it happens before the event log is even opened.
     let listener = bind_listener(&socket_path).await?;
 
-    // One long-lived network-proxy pair for this whole process
-    // (`docs/agent-approval-design.md`'s "Staging" leg 4a --
-    // `network::NetworkProxy`'s doc comment): the bridge socket lives
-    // alongside the session socket, derived from its own file name (rather
-    // than a fixed name) so it's scoped per-daemon-instance exactly the way
-    // `socket_path` already is -- the plain `/tmp/horizon-sessiond-$UID.sock`
-    // fallback (no `$XDG_RUNTIME_DIR`) has no per-user *directory*, so a
-    // fixed bridge file name would collide across different users' daemons
-    // sharing that same `/tmp`. A bind failure is non-fatal: every session
-    // just falls back to `NetworkPolicy::Disabled` for tier-1 sandboxed
-    // `bash`, exactly the pre-4a behavior.
-    let bridge_file_name = format!(
-        "{}-sandbox-proxy.sock",
-        socket_path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .unwrap_or("horizon-sessiond")
-    );
-    let bridge_socket_path = socket_path.with_file_name(bridge_file_name);
-    let network_proxy = match NetworkProxy::start(bridge_socket_path) {
-        Ok(proxy) => Some(proxy),
-        Err(error) => {
-            eprintln!(
-                "horizon-sessiond: failed to start the network-proxy bridge ({error}); tier-1 \
-                 sandboxed bash calls will run with network disabled"
-            );
-            None
-        }
-    };
-    let bridge_socket = network_proxy.as_ref().map(NetworkProxy::bridge_socket);
-
     // Shared, multi-reader-blocking handle onto the live DuckDB projection
     // -- see `SharedDuckdbStore`'s doc comment. Created empty here (before
     // the event log's writer thread, and therefore any real DuckDB store,
@@ -177,16 +144,11 @@ async fn main() -> anyhow::Result<()> {
         None,
         duckdb_cell.clone(),
         config_path,
-        bridge_socket,
     ));
 
     spawn_resume_task(state.clone(), agent_config, duckdb_cell);
     let terminals = TerminalHost::new();
 
-    // `network_proxy` is kept alive here, across the whole accept loop --
-    // dropped (tearing down the proxy + bridge) only once `run` returns on
-    // the graceful SIGTERM path; see `network::NetworkProxy`'s doc comment
-    // for why the abrupt `Control::Drain` exit path doesn't reach this.
     run(listener, &socket_path, state, terminals).await
 }
 

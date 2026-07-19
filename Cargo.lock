@@ -3371,7 +3371,6 @@ dependencies = [
  "horizon-agent",
  "horizon-config",
  "horizon-sandbox",
- "horizon-sandbox-proxy",
  "horizon-session-protocol",
  "horizon-terminal-core",
  "portable-pty",

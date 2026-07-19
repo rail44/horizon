@@ -598,6 +598,7 @@ fn agent_frame_tracks_pending_approval_until_tool_finishes() {
         .push(AgentFrameItem::ApprovalRequested(agent::ApprovalRequest {
             call_id: call_id.clone(),
             reason: "needs approval".to_string(),
+            kind: agent::ApprovalKind::Standard,
         }));
 
     assert_eq!(frame.pending_approval_call_id(), Some(call_id.clone()));
@@ -622,12 +623,14 @@ fn agent_frame_lists_multiple_pending_approvals_oldest_first() {
         .push(AgentFrameItem::ApprovalRequested(agent::ApprovalRequest {
             call_id: first.clone(),
             reason: "first".to_string(),
+            kind: agent::ApprovalKind::Standard,
         }));
     frame
         .items
         .push(AgentFrameItem::ApprovalRequested(agent::ApprovalRequest {
             call_id: second.clone(),
             reason: "second".to_string(),
+            kind: agent::ApprovalKind::Standard,
         }));
 
     assert_eq!(

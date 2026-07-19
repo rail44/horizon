@@ -5,6 +5,7 @@
 //! `linux::seccomp`); the only way in is [`crate::bridge::UdsBridge`].
 
 use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::Arc;
 
 use hudsucker::hyper_util::client::legacy::connect::HttpConnector;
 use hudsucker::Proxy;
@@ -13,15 +14,17 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use crate::allowlist::Allowlist;
+use crate::denial_log::DenialLog;
 use crate::error::ProxyError;
 use crate::handler::{AllowlistHandler, NeverInterceptCa};
 
 /// A running allowlist proxy. Dropping it aborts the background task and
-/// releases the listener; `docs/agent-approval-design.md`'s "one long-lived
-/// proxy per `horizon-sessiond` process" shape means the real caller holds
-/// this for the process's whole lifetime instead of dropping it quickly,
-/// but nothing here assumes that -- this spike's own tests create and drop
-/// one per test.
+/// releases the listener. As of leg 4b (`docs/agent-approval-design.md`),
+/// ownership is per-session (`horizon-agent`'s `tools::network::
+/// SessionNetworkProxy` holds one alongside its own `UdsBridge`) rather than
+/// one long-lived instance per `horizon-sessiond` process -- but nothing
+/// here assumes a particular owner or lifetime; this crate's own tests
+/// still create and drop one per test.
 pub struct AllowlistProxy {
     addr: SocketAddr,
     join_handle: JoinHandle<()>,
@@ -29,6 +32,11 @@ pub struct AllowlistProxy {
     // shutdown future; kept as `Option` so `Drop` can take it without a
     // second field just for that.
     shutdown: Option<oneshot::Sender<()>>,
+    // Shared with `AllowlistHandler` so `Self::allow`/`Self::
+    // drain_denied_hosts` can mutate/read the exact same state the handler
+    // consults on every request -- see those methods' doc comments.
+    allowlist: Arc<Allowlist>,
+    denial_log: Arc<DenialLog>,
 }
 
 impl AllowlistProxy {
@@ -42,7 +50,9 @@ impl AllowlistProxy {
         let addr = listener.local_addr().map_err(ProxyError::Bind)?;
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let handler = AllowlistHandler::new(allowlist);
+        let allowlist = Arc::new(allowlist);
+        let denial_log = Arc::new(DenialLog::default());
+        let handler = AllowlistHandler::new(Arc::clone(&allowlist), Arc::clone(&denial_log));
 
         let proxy = Proxy::builder()
             .with_listener(listener)
@@ -67,6 +77,8 @@ impl AllowlistProxy {
             addr,
             join_handle,
             shutdown: Some(shutdown_tx),
+            allowlist,
+            denial_log,
         })
     }
 
@@ -74,6 +86,28 @@ impl AllowlistProxy {
     /// [`crate::bridge::UdsBridge`]'s relay target.
     pub fn addr(&self) -> SocketAddr {
         self.addr
+    }
+
+    /// Adds `domain` to this proxy's own allowlist at runtime -- leg 4b's
+    /// per-session domain-approval mutation (`docs/agent-approval-
+    /// design.md`): a caller (`horizon-agent`'s `tools::network::
+    /// SessionNetworkProxy`) calls this when the user approves a
+    /// previously-denied domain for a session, so every later request
+    /// through this same proxy (including an immediate retry of the call
+    /// that got denied) can reach it. Scoped to this one `AllowlistProxy`
+    /// instance only -- a per-session proxy means this never leaks to any
+    /// other session's own instance.
+    pub fn allow(&self, domain: impl Into<String>) {
+        self.allowlist.allow(domain);
+    }
+
+    /// Drains every host this proxy has refused since the last drain (or
+    /// since construction) -- see [`crate::denial_log::DenialLog::drain`].
+    /// The mechanism `docs/agent-approval-design.md` leg 4b uses to
+    /// attribute a denial to the specific bash call that triggered it,
+    /// independent of that call's own exit code.
+    pub fn drain_denied_hosts(&self) -> Vec<String> {
+        self.denial_log.drain()
     }
 }
 
