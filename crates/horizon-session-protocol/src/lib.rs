@@ -39,7 +39,14 @@ use uuid::Uuid;
 /// - `TerminalCursor` gains its DECSCUSR `shape`
 ///   (block/underline/beam/hollow-block); a DECTCEM-hidden cursor is now
 ///   `cursor: None` on the wire instead of a stale always-visible block.
-pub const SESSION_PROTOCOL_VERSION: u32 = 7;
+///
+/// Version 8: `TerminalCommand` gains `SetColorScheme`, re-pushing the
+/// host's live theme-derived color scheme into an already-running
+/// session (a live `Reload Config`/theme-settings apply) so OSC 10/11/12
+/// query replies stop reflecting a stale spawn-time snapshot. A new
+/// command variant on an already-versioned vocabulary, same bump
+/// discipline as every other wire-shape addition here.
+pub const SESSION_PROTOCOL_VERSION: u32 = 8;
 
 pub const SESSION_CONTROL_KIND: &str = "session_control";
 

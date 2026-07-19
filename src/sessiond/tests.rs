@@ -501,3 +501,106 @@ async fn established_disconnect_reports_errors_without_reconnecting() {
         TerminalUpdate::Error(_)
     ));
 }
+
+/// Host-side coverage for `SessiondHandle::broadcast_terminal_color_scheme`
+/// (the live theme-apply re-push, and its adoption-path use in
+/// `spawn_workspace_restore`/`spawn_terminal_resume` -- both call it only
+/// after `attach_terminals` returns, exactly as reproduced here): it must
+/// emit a `TerminalCommand::SetColorScheme` envelope for every attached
+/// session and nothing for a session `attach_terminals` reported
+/// `NotFound` for (whose route is already dropped by the time the
+/// broadcast runs, via `TerminalSessionHandle`'s `Drop`).
+#[tokio::test]
+async fn broadcast_terminal_color_scheme_targets_exactly_the_attached_sessions() {
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
+    let (read_half, mut writer) = tokio::io::split(server);
+    let mut reader = BufReader::new(read_half);
+    receive_hello_and_reply(&mut reader, &mut writer).await;
+
+    let attached_a = Uuid::new_v4();
+    let attached_b = Uuid::new_v4();
+    let missing = Uuid::new_v4();
+    let attach_handle = handle.clone();
+    let attached = std::thread::spawn(move || {
+        attach_handle.attach_terminals(vec![attached_a, attached_b, missing])
+    });
+
+    let mut requests = HashMap::new();
+    for _ in 0..3 {
+        let envelope = session_wire::read_envelope(&mut reader)
+            .await
+            .unwrap()
+            .expect("terminal attach request");
+        let TerminalControl::Attach { request_id } = decode_terminal_control(&envelope).unwrap()
+        else {
+            panic!("expected terminal attach request");
+        };
+        requests.insert(envelope.session_id.unwrap(), request_id);
+    }
+    for (id, result) in [
+        (missing, TerminalAttachResult::NotFound),
+        (attached_a, TerminalAttachResult::Attached),
+        (attached_b, TerminalAttachResult::Attached),
+    ] {
+        session_wire::write_envelope(
+            &mut writer,
+            &encode_terminal_control(
+                Some(id),
+                &TerminalControl::AttachResult {
+                    request_id: requests[&id],
+                    result,
+                },
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    }
+
+    let sessions = attached.join().unwrap();
+    assert_eq!(
+        sessions.len(),
+        2,
+        "only the two Attached results should survive"
+    );
+
+    // Mirrors `spawn_workspace_restore`/`spawn_terminal_resume`'s own
+    // sequencing: the re-push is sent only after `attach_terminals`
+    // returns -- by which point `missing`'s route has already been
+    // dropped (`TerminalSessionHandle::drop`, on its `NotFound` result
+    // above) and both `attached_a`/`attached_b`'s are confirmed live.
+    let scheme = TerminalColorScheme::default();
+    handle.broadcast_terminal_color_scheme(scheme);
+
+    let mut targeted = Vec::new();
+    for _ in 0..2 {
+        let envelope = session_wire::read_envelope(&mut reader)
+            .await
+            .unwrap()
+            .expect("SetColorScheme envelope");
+        assert_eq!(envelope.kind, horizon_terminal_core::TERMINAL_COMMAND_KIND);
+        assert_eq!(
+            decode_terminal_command(&envelope).unwrap(),
+            TerminalCommand::SetColorScheme(scheme)
+        );
+        targeted.push(envelope.session_id.unwrap());
+    }
+    targeted.sort_unstable();
+    let mut expected = vec![attached_a, attached_b];
+    expected.sort_unstable();
+    assert_eq!(
+        targeted, expected,
+        "the broadcast must target exactly the attached sessions"
+    );
+
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            session_wire::read_envelope(&mut reader)
+        )
+        .await
+        .is_err(),
+        "the never-attached (missing) session must not receive a color-scheme push"
+    );
+}

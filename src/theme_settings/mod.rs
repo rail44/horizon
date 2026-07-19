@@ -91,10 +91,26 @@ pub(crate) struct ThemeSettingsView {
     status: Option<String>,
 
     _subscriptions: Vec<Subscription>,
+    /// A live-reading handle to `WorkspaceShell::sessiond`, so
+    /// [`Self::apply_live`] can re-push the live scheme to running
+    /// terminal sessions on its own, without routing back through
+    /// `WorkspaceShell` -- see `SessiondHandle::
+    /// broadcast_terminal_color_scheme`. Deliberately not a cloned
+    /// `Option<SessiondHandle>` captured once at construction: this view
+    /// can be (re)constructed while `Reload Session Runtime`'s async
+    /// drain is still in flight (`WorkspaceShell::sessiond` is `None`
+    /// then), and a plain clone would freeze on that `None` forever, since
+    /// `reconcile` never rebuilds a pane view that already exists. See
+    /// `SessiondSlot`'s doc comment.
+    sessiond: crate::sessiond::SessiondSlot,
 }
 
 impl ThemeSettingsView {
-    pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(
+        sessiond: crate::sessiond::SessiondSlot,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         // The currently-resolved scheme, read once here (not inside
         // `seed::from_current_config` itself -- see `ResolvedFallback`'s
         // doc for why that stays a pure function of its arguments).
@@ -222,23 +238,31 @@ impl ThemeSettingsView {
             dirty: false,
             status: None,
             _subscriptions: subscriptions,
+            sessiond,
         }
     }
 
     /// Derives and applies the whole scheme from the current in-memory
     /// [`Seed`] -- the same live-apply sequence `Reload Config` uses
     /// (`src/workspace.rs`'s `CommandId::ReloadConfig`): swap the resolved
-    /// scheme, re-project it onto gpui-component's global theme, then
-    /// refresh the window so every already-painted pane (terminal ANSI,
-    /// chrome) picks it up immediately. Pure math plus one global-state
-    /// write -- no file I/O, no sessiond round-trip -- so calling this on
-    /// every slider tick/color-picker drag frame is cheap.
+    /// scheme, re-project it onto gpui-component's global theme, refresh
+    /// the window so every already-painted pane (terminal ANSI, chrome)
+    /// picks it up immediately, then re-push the resolved terminal scheme
+    /// to every running terminal session so a subsequent OSC 10/11/12
+    /// query reflects it too (`SessiondHandle::
+    /// broadcast_terminal_color_scheme`). Pure math plus one global-state
+    /// write plus a fire-and-forget send over the already-open sessiond
+    /// connection (no reply awaited) -- cheap enough to call on every
+    /// slider tick/color-picker drag frame.
     fn apply_live(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.dirty = true;
         self.status = None;
         theme::reload_from(&self.seed.to_raw_config());
         theme::apply_gpui_component_theme(cx);
         window.refresh();
+        if let Some(sessiond) = self.sessiond.get() {
+            sessiond.broadcast_terminal_color_scheme(theme::terminal_color_scheme());
+        }
         cx.notify();
     }
 

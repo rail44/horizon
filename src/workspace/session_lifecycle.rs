@@ -231,9 +231,12 @@ impl WorkspaceShell {
                 self.workspace.pane_kind(pane_id),
                 Some(PaneKind::View(ViewKind::ThemeSettings))
             ) {
+                let sessiond = self.sessiond_slot.clone();
                 self.panes.insert(
                     pane_id,
-                    PaneView::ThemeSettings(cx.new(|cx| ThemeSettingsView::new(window, cx))),
+                    PaneView::ThemeSettings(
+                        cx.new(|cx| ThemeSettingsView::new(sessiond, window, cx)),
+                    ),
                 );
             }
         }
@@ -695,6 +698,17 @@ impl WorkspaceShell {
                         }
                     }
 
+                    // Adopted sessions carry the prior process's spawn-time
+                    // scheme (or an even older one, resumed again); a
+                    // theme change between runs would otherwise leave
+                    // their OSC 10/11/12 replies stale until the next live
+                    // theme apply. `adopted` is still valid here -- Attach
+                    // already confirmed the daemon-side session exists, so
+                    // this push lands after the session it targets is
+                    // already routable, the same ordering guarantee
+                    // `Create` gets by carrying the scheme inline.
+                    adopted.broadcast_terminal_color_scheme(theme::terminal_color_scheme());
+
                     shell.restoring_workspace = false;
                     shell.workspace_restore_failed = false;
                     shell.persistence_ready = true;
@@ -780,6 +794,11 @@ impl WorkspaceShell {
                             cx.new(|cx| TerminalSession::spawn(wire, session_id, exit_tx, cx)),
                         );
                     }
+                    // See `spawn_workspace_restore`'s matching comment: an
+                    // adopted session carries a possibly-stale spawn-time
+                    // scheme, and the Attach round-trip already confirmed
+                    // it's routable before this push is sent.
+                    adopted.broadcast_terminal_color_scheme(theme::terminal_color_scheme());
                     shell.reconcile(window, cx);
                     shell.focus_active(window, cx);
                 });
@@ -822,6 +841,7 @@ impl WorkspaceShell {
                 let (handle, host_tool_rx, workspace_root_rx) =
                     SessiondHandle::start(&restart_socket, &control_socket);
                 shell.sessiond = Some(handle.clone());
+                shell.sessiond_slot.set(Some(handle.clone()));
                 shell.reload_in_progress = false;
                 shell.wire_host_tools(handle.responder(), host_tool_rx, cx);
                 shell.wire_workspace_root_updates(workspace_root_rx, cx);

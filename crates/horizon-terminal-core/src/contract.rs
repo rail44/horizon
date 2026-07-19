@@ -82,6 +82,15 @@ pub enum TerminalCommand {
     /// source is `app::runtime::wire_focus_reporting`, which composes
     /// Horizon's own window focus with which visible pane is active.
     Focus(bool),
+    /// Re-pushes the host's live theme-derived color scheme into a
+    /// *running* session's `TerminalCore` (`TerminalCore::set_color_scheme`),
+    /// so a subsequent OSC 10/11/12 query reply reflects a live theme apply
+    /// (`Reload Config` / the theme settings view) instead of the stale
+    /// spawn-time snapshot (`TerminalSpawnSpec::color_scheme`). App-set
+    /// live overrides (`Term::colors()`, e.g. an OSC 4/10/11/12 write the
+    /// attached app made itself) still win over this, exactly as they do
+    /// over the spawn-time scheme -- see `core::color::resolve_query_color`.
+    SetColorScheme(TerminalColorScheme),
     Shutdown,
 }
 
