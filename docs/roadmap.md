@@ -79,18 +79,21 @@ test); and the `turns/` structural relocation into
 interaction stay UI-side). Feature items, unordered until the wave
 lands:
 
-- **Session relationship model — core landed 2026-07-19** (merges
-  `e8300d7`, `ca36ea9`; design `docs/session-relationship-design.md`):
-  daemon-side lineage tree, isolated worktree spawn under
-  `.horizon/worktrees/` with origin-based defaults (palette shared /
-  CLI isolated, `--share` override), clean-only worktree cleanup on
-  terminate, the open-directory command (palette + CLI, active-session
-  v1), and authoritative workspace_root report-back on summaries.
-  Remaining (in flight): the session-manager lineage view, per-row
-  open-directory, subtree-terminate, and the palette isolation opt-in.
-  Known v1 gaps recorded in the design doc's Delivery section
-  (mid-run root correction is sweep-consistent, not live; lineage does
-  not survive a daemon restart).
+- **Session relationship model — shipped 2026-07-19** (merges
+  `e8300d7`, `ca36ea9`, `6167199`; design
+  `docs/session-relationship-design.md`): daemon-side lineage tree,
+  isolated worktree spawn under `.horizon/worktrees/` with
+  origin-based defaults (palette shared with the view chooser's
+  "Agent (Isolated Worktree)…" opt-in / CLI isolated with `--share`),
+  clean-only worktree cleanup on terminate, the open-directory command
+  (palette + CLI + session-manager row action), the session-manager
+  derivation-tree view with explicit subtree-terminate, and
+  authoritative workspace_root report-back on summaries. Known v1
+  gaps in the design doc's Delivery section (mid-run root correction
+  is sweep-consistent, not live; lineage does not survive a daemon
+  restart). Owner dogfooding of the whole flow is the remaining gate.
+  Follow-up hardening same day: the worktree tests' GIT_DIR-leak
+  hermeticity fix + canary (`771f5a2`, backlog 53).
 - **Inter-agent messaging.** Sessions addressing sessions — the
   coordination substrate for project → domain → task teams. Designed
   on the same derivation tree as the relationship model; a
