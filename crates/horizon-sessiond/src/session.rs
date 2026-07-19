@@ -2071,6 +2071,8 @@ mod tests {
                 Some(repo.path().to_path_buf()),
             );
 
+            let (resolved, isolation_resolved) = resolved;
+            assert!(isolation_resolved, "success path must report resolved=true");
             let root = resolved.expect("isolation against a real git repo should succeed");
             assert!(
                 root.starts_with(repo.path().join(".horizon").join("worktrees")),
@@ -2119,8 +2121,8 @@ mod tests {
 
             assert_eq!(
                 resolved,
-                Some(not_a_repo.path().to_path_buf()),
-                "a failed isolation must fall back to the plain workspace_root"
+                (Some(not_a_repo.path().to_path_buf()), false),
+                "a failed isolation must fall back to the plain workspace_root, resolved=false"
             );
             // An `Event::Error` is still sent (see the function's own doc
             // comment) -- drain it before asserting nothing else follows.
