@@ -3281,6 +3281,7 @@ name = "horizon-agent"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "crossbeam-channel",
  "duckdb",
  "futures-util",
