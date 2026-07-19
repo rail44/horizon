@@ -3022,6 +3022,7 @@ dependencies = [
  "duckdb",
  "futures-util",
  "globset",
+ "horizon-sandbox",
  "horizon-session-protocol",
  "ignore",
  "libc",

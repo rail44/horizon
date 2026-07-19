@@ -46,8 +46,9 @@ use crossbeam_channel::{unbounded, Receiver, Sender};
 
 use horizon_agent::config::{AgentConfig, AgentToolsConfig};
 use horizon_agent::contract::{
-    self, Command, Error as AgentError, Event, Initialization, ProviderEvent, ProviderId,
-    ProviderRegistry, SessionId, SessionState, ToolCallId, TurnEndReason,
+    self, ApprovalRequest, Command, Error as AgentError, Event, Initialization, ProviderEvent,
+    ProviderId, ProviderRegistry, SessionId, SessionState, ToolCallId, ToolCallResult,
+    TurnEndReason,
 };
 use horizon_agent::frame::{agent_frame_from_events, AgentFrame, AgentFrameItem};
 use horizon_agent::live::LiveState;
@@ -854,12 +855,16 @@ fn tool_session_state_for(
 
 /// Resolves and creates this session's isolated worktree (`docs/
 /// session-relationship-design.md` decisions 2-3), returning the directory
-/// its file tools should actually be confined to. Runs on the session's own
-/// dedicated thread, before `tool_session_state_for` -- a few tens of
-/// milliseconds of blocking `git` subprocess calls at session-start time,
-/// the same shape `state.wait_for_duckdb_store()` just above already
-/// accepts for this thread. Degrades gracefully on any failure (no git repo
-/// found, no commits yet, ...): falls back to `workspace_root` (today's
+/// its file tools should actually be confined to, plus whether isolation
+/// actually succeeded -- the latter is what `ToolSessionState::
+/// with_isolated_worktree` needs (`docs/agent-approval-design.md`'s tier 1:
+/// the per-call trust predicate's isolation input must reflect the real
+/// outcome, never merely the request). Runs on the session's own dedicated
+/// thread, before `tool_session_state_for` -- a few tens of milliseconds of
+/// blocking `git` subprocess calls at session-start time, the same shape
+/// `state.wait_for_duckdb_store()` just above already accepts for this
+/// thread. Degrades gracefully on any failure (no git repo found, no
+/// commits yet, ...): falls back to `workspace_root` (today's
 /// shared-directory behavior) and records no lineage edge, since isolation
 /// didn't actually happen -- matching decision 2's "the edge exists only
 /// via isolation" for the *actual* outcome, not merely the request. A
@@ -870,7 +875,7 @@ fn resolve_and_create_isolated_worktree(
     session_id: SessionId,
     spawn_source_session_id: Option<SessionId>,
     workspace_root: Option<PathBuf>,
-) -> Option<PathBuf> {
+) -> (Option<PathBuf>, bool) {
     let fallback_dir = workspace_root
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
@@ -887,7 +892,7 @@ fn resolve_and_create_isolated_worktree(
         Ok(info) => {
             let root = info.path.clone();
             state.record_isolated_worktree(session_id, spawn_source_session_id, info);
-            Some(root)
+            (Some(root), true)
         }
         Err(error) => {
             eprintln!(
@@ -905,7 +910,7 @@ fn resolve_and_create_isolated_worktree(
                     }),
                 ),
             );
-            workspace_root
+            (workspace_root, false)
         }
     }
 }
@@ -977,7 +982,7 @@ fn run_session(
     // Skill discovery above always uses the process cwd regardless of
     // `workspace_root` -- see the comment just above `cwd`'s definition on
     // why that's an intentionally separate, unthreaded value.
-    let workspace_root = if isolate {
+    let (workspace_root, isolated) = if isolate {
         resolve_and_create_isolated_worktree(
             state,
             session_id,
@@ -985,9 +990,10 @@ fn run_session(
             workspace_root,
         )
     } else {
-        workspace_root
+        (workspace_root, false)
     };
     let tool_state = tool_session_state_for(workspace_root, state.agent_config.tools, recall)
+        .with_isolated_worktree(isolated)
         .with_skills(SkillRegistry::discover(&cwd))
         .with_config_path(state.config_path.clone());
     let live_state = match state.writer() {
@@ -1090,7 +1096,7 @@ fn handle_provider_event(
     session_id: SessionId,
     provider_event: ProviderEvent,
 ) {
-    let processing = process_agent_provider_event(host, tool_state, provider_event);
+    let processing = process_agent_provider_event(host, tool_state, session_id, provider_event);
     for command in processing.provider_commands {
         let _ = commands_tx.send(command);
     }
@@ -1137,7 +1143,25 @@ fn fold_bash_completion(
     session_id: SessionId,
     completion: BashCompletion,
 ) {
-    let result = completion.result;
+    match completion {
+        BashCompletion::Finished(result) => {
+            fold_finished_bash_result(state, live_state, commands_tx, session_id, result)
+        }
+        BashCompletion::RetryWithoutSandbox { call_id, reason } => {
+            fold_bash_retry_without_sandbox(state, live_state, session_id, call_id, reason)
+        }
+    }
+}
+
+/// The ordinary case: a bash call actually finished (successfully or not).
+/// Unchanged behavior from before [`BashCompletion`] grew a second variant.
+fn fold_finished_bash_result(
+    state: &Arc<SessiondState>,
+    live_state: &LiveState,
+    commands_tx: &Sender<Command>,
+    session_id: SessionId,
+    result: ToolCallResult,
+) {
     let frame = live_state.frame();
     if !should_fold_completion(&frame, &result.call_id) {
         return;
@@ -1187,6 +1211,49 @@ fn fold_bash_completion(
     }
 
     let _ = commands_tx.send(Command::ToolCallResult(result));
+}
+
+/// A sandboxed tier-1 attempt looked denied by the sandbox itself
+/// (`horizon_sandbox::is_likely_sandbox_denied`) -- surface the normal
+/// approval flow for a retry of the same call without the sandbox
+/// (`docs/agent-approval-design.md`'s "Denial UX"), instead of reporting a
+/// raw failure straight to the provider. Reissues a fresh `ToolCallRequested`
+/// for the same `call_id` right before the `ApprovalRequested`: `AgentFrame::
+/// has_tool_call_started`/`has_tool_call_finished` are scoped to items
+/// *since the latest* `ToolCallRequested` occurrence for a call_id (see
+/// their doc comments -- the same mechanism already supports a provider
+/// reusing a call_id for a genuinely new call), so this moves that scope
+/// boundary past the first (sandboxed) attempt's own `ToolCallStarted`;
+/// without it, the user's eventual Approve of this retry would be
+/// misclassified as `AlreadyResolved` by `tools::approval::try_execute`.
+/// Not forwarded to the provider: the original call is still open from its
+/// point of view, exactly as if it hadn't been auto-approved yet at all.
+fn fold_bash_retry_without_sandbox(
+    state: &Arc<SessiondState>,
+    live_state: &LiveState,
+    session_id: SessionId,
+    call_id: ToolCallId,
+    reason: String,
+) {
+    let frame = live_state.frame();
+    if !should_fold_completion(&frame, &call_id) {
+        return;
+    }
+    let Some(original_request) = frame.tool_call_request(&call_id).cloned() else {
+        // Should be unreachable (this call_id was necessarily requested to
+        // have gotten this far) -- nothing sane to reissue against.
+        return;
+    };
+
+    let events = vec![
+        Event::ToolCallRequested(original_request),
+        Event::ApprovalRequested(ApprovalRequest { call_id, reason }),
+        Event::StateChanged(SessionState::WaitingForApproval),
+    ];
+    let _ = live_state.extend_provider_events(events.clone().into_iter().map(Into::into));
+    for event in events {
+        send_envelope(&state.outgoing, Envelope::event(session_id, event));
+    }
 }
 
 /// A `Command` envelope arriving from Horizon for this session.
@@ -1437,9 +1504,10 @@ mod tests {
             &live_state,
             &commands_tx,
             session_id,
-            BashCompletion {
-                result: ToolCallResult::new(call_a.clone(), serde_json::json!({ "exit_code": 0 })),
-            },
+            BashCompletion::Finished(ToolCallResult::new(
+                call_a.clone(),
+                serde_json::json!({ "exit_code": 0 }),
+            )),
         );
 
         let forwarded = drain_events(&mut outgoing_rx);
@@ -1470,9 +1538,10 @@ mod tests {
             &live_state,
             &commands_tx,
             session_id,
-            BashCompletion {
-                result: ToolCallResult::new(call_b.clone(), serde_json::json!({ "exit_code": 0 })),
-            },
+            BashCompletion::Finished(ToolCallResult::new(
+                call_b.clone(),
+                serde_json::json!({ "exit_code": 0 }),
+            )),
         );
 
         let forwarded = drain_events(&mut outgoing_rx);
@@ -1481,6 +1550,92 @@ mod tests {
             Some(&Event::StateChanged(SessionState::WaitingForUser)),
             "every approval is resolved now, so the reported state must finally \
              be WaitingForUser, got: {forwarded:?}"
+        );
+    }
+
+    /// The denial-retry flow's session-loop half
+    /// (`docs/agent-approval-design.md`'s "Denial UX"): a `BashCompletion::
+    /// RetryWithoutSandbox` must fold a fresh `ToolCallRequested` +
+    /// `ApprovalRequested` + `WaitingForApproval` for the same call_id --
+    /// never a `ToolCallResult` to the provider, since the original call is
+    /// still open from its point of view.
+    #[test]
+    fn fold_bash_completion_turns_a_sandbox_denial_into_a_fresh_approval_request() {
+        let agent_config = AgentConfig::from_env_and_provider(None, None);
+        let state = Arc::new(SessiondState::new(
+            ProviderRegistry::builtin_with_config(
+                agent_config.clone(),
+                SharedDuckdbStore::unavailable(),
+            ),
+            agent_config,
+            None,
+            SharedDuckdbStore::unavailable(),
+            None,
+        ));
+        let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Envelope>();
+        *state.outgoing.lock().unwrap() = Some(outgoing_tx);
+
+        let live_state = LiveState::with_disabled_persistence();
+        let session_id = SessionId::new();
+        let call_id = ToolCallId("bash-denied".to_string());
+
+        live_state.extend_provider_events(
+            vec![
+                Event::ToolCallRequested(horizon_agent::contract::ToolCallRequest {
+                    call_id: call_id.clone(),
+                    tool_id: "bash".to_string(),
+                    input: serde_json::json!({ "command": "echo hi" }),
+                }),
+                Event::StateChanged(SessionState::ToolRunning),
+                Event::ToolCallStarted(call_id.clone()),
+            ]
+            .into_iter()
+            .map(Into::into),
+        );
+
+        let (commands_tx, commands_rx) = unbounded::<Command>();
+
+        fold_bash_completion(
+            &state,
+            &live_state,
+            &commands_tx,
+            session_id,
+            BashCompletion::RetryWithoutSandbox {
+                call_id: call_id.clone(),
+                reason: "looked sandbox-denied".to_string(),
+            },
+        );
+
+        let forwarded = drain_events(&mut outgoing_rx);
+        assert!(
+            forwarded.iter().any(|event| matches!(
+                event,
+                Event::ToolCallRequested(request) if request.call_id == call_id
+            )),
+            "expected a reissued ToolCallRequested for the same call_id: {forwarded:?}"
+        );
+        assert!(
+            forwarded.iter().any(|event| matches!(
+                event,
+                Event::ApprovalRequested(request) if request.call_id == call_id
+            )),
+            "expected a fresh ApprovalRequested: {forwarded:?}"
+        );
+        assert_eq!(
+            forwarded.last(),
+            Some(&Event::StateChanged(SessionState::WaitingForApproval))
+        );
+        assert!(
+            commands_rx.try_recv().is_err(),
+            "the original call is still open from the provider's point of view -- \
+             nothing should be forwarded to it yet"
+        );
+
+        let frame = live_state.frame();
+        assert!(
+            !frame.has_tool_call_started(&call_id),
+            "the reissue must move the started/finished scope boundary past the \
+             first (sandboxed) attempt's own ToolCallStarted"
         );
     }
 

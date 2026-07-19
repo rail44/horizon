@@ -8,12 +8,28 @@ use crate::config::BashToolConfig;
 use crate::contract::{SessionId, ToolCallId, ToolCallResult};
 use crate::frame::{AgentFrame, AgentFrameItem};
 
+use super::BashCompletion;
+
 fn cwd_handle(path: PathBuf) -> Arc<Mutex<PathBuf>> {
     Arc::new(Mutex::new(path))
 }
 
 fn config() -> BashToolConfig {
     BashToolConfig::default()
+}
+
+/// Unwraps a completion expected to be finished (the overwhelming majority
+/// of this module's tests, which exercise the plain unsandboxed path that
+/// never produces a retry-without-sandbox prompt) -- panics with a useful
+/// message otherwise, rather than every call site pattern-matching by hand.
+fn expect_finished(completion: BashCompletion) -> ToolCallResult {
+    match completion {
+        BashCompletion::Finished(result) => result,
+        BashCompletion::RetryWithoutSandbox { call_id, reason } => panic!(
+            "expected a finished bash completion, got a retry-without-sandbox \
+             request for {call_id:?}: {reason}"
+        ),
+    }
 }
 
 // --- basic execution ------------------------------------------------------
@@ -305,7 +321,7 @@ fn kill_registry_entry_is_removed_after_normal_completion() {
     let completion = rx
         .recv_timeout(Duration::from_secs(5))
         .expect("bash call should finish");
-    assert_eq!(completion.result.call_id, call_id);
+    assert_eq!(expect_finished(completion).call_id, call_id);
     assert!(!super::registry::is_registered(&call_id));
 }
 
@@ -343,7 +359,7 @@ fn kill_registry_kills_a_running_child_and_removes_its_entry() {
     let completion = rx
         .recv_timeout(Duration::from_secs(5))
         .expect("a killed bash call should still report a result promptly");
-    assert_eq!(completion.result.output["is_error"], true);
+    assert_eq!(expect_finished(completion).output["is_error"], true);
 }
 
 // --- bash containment: per-session FIFO + niceness ------------------------
@@ -394,9 +410,11 @@ fn approved_bash_calls_for_the_same_session_are_serialized() {
 
     // A session's bash calls run strictly one at a time, so completions
     // must also arrive in submission order.
-    assert_eq!(first.result.call_id, ToolCallId("fifo-first".to_string()));
-    assert_eq!(second.result.call_id, ToolCallId("fifo-second".to_string()));
-    assert_eq!(second.result.output["output"], "OK\n");
+    let first = expect_finished(first);
+    let second = expect_finished(second);
+    assert_eq!(first.call_id, ToolCallId("fifo-first".to_string()));
+    assert_eq!(second.call_id, ToolCallId("fifo-second".to_string()));
+    assert_eq!(second.output["output"], "OK\n");
 
     let _ = std::fs::remove_file(&sentinel);
 }
@@ -559,18 +577,20 @@ fn run_job_body_sends_a_completion_when_work_succeeds() {
     let call_id = ToolCallId("panic-safe-normal".to_string());
     let (tx, rx) = crossbeam_channel::unbounded();
 
-    super::run_job_body(
-        SessionId::new(),
-        call_id.clone(),
-        &tx,
-        || json!({ "ok": true }),
-    );
+    let work_call_id = call_id.clone();
+    super::run_job_body(SessionId::new(), call_id.clone(), &tx, move || {
+        BashCompletion::Finished(ToolCallResult::new(
+            work_call_id.clone(),
+            json!({ "ok": true }),
+        ))
+    });
 
     let completion = rx
         .recv_timeout(Duration::from_secs(1))
         .expect("completion should be sent");
-    assert_eq!(completion.result.call_id, call_id);
-    assert_eq!(completion.result.output, json!({ "ok": true }));
+    let result = expect_finished(completion);
+    assert_eq!(result.call_id, call_id);
+    assert_eq!(result.output, json!({ "ok": true }));
 }
 
 /// The core guarantee: even if the work function panics (standing in for a
@@ -590,9 +610,10 @@ fn run_job_body_still_sends_a_completion_when_work_panics() {
     let completion = rx
         .recv_timeout(Duration::from_secs(1))
         .expect("a completion must still be delivered when the work function panics");
-    assert_eq!(completion.result.call_id, call_id);
-    assert_eq!(completion.result.output["is_error"], true);
-    assert!(completion.result.output["message"]
+    let result = expect_finished(completion);
+    assert_eq!(result.call_id, call_id);
+    assert_eq!(result.output["is_error"], true);
+    assert!(result.output["message"]
         .as_str()
         .expect("message")
         .contains("injected panic"));
