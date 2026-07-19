@@ -497,15 +497,14 @@ fn error_output(message: &str, partial_output: Option<Vec<u8>>, config: &BashToo
 /// called from *this* function, on the host process, after the sandboxed
 /// child has already exited and its output has been captured over a pipe --
 /// it never runs inside the sandbox and needs no writable-root grant at all.
-/// And on Linux, `horizon_sandbox::linux::bwrap` already gives the sandboxed
-/// child a *private* `--tmpfs /tmp` for its own scratch use (torn down with
-/// the sandbox, never touching the host); adding the host's real temp dir as
-/// a writable root bind-mounted it *over* that private tmpfs (writable-root
-/// binds are composed after the tmpfs -- see that module's `build_args`),
-/// making the entire shared host `/tmp` writable from inside every
-/// sandboxed call. A live dogfooding session observed exactly this: a
-/// tier-1 auto-approved `echo ... > /tmp/<name>` wrote through to the real
-/// host `/tmp`, while the result still carried `sandboxed: true`.
+/// And adding the host's real temp dir as a writable root actively broke
+/// containment: a live dogfooding session observed a tier-1 auto-approved
+/// `echo ... > /tmp/<name>` writing through to the real host `/tmp` while
+/// the result still carried `sandboxed: true`. The sandbox now provides a
+/// private scratch dir instead (`horizon_sandbox`'s TMPDIR-parity
+/// provisioning under the first writable root -- `SCRATCH_DIR_NAME` -- which
+/// replaced the retired bwrap backend's private `--tmpfs /tmp`), so the host
+/// temp dir must never be a writable root.
 pub(super) fn run_sandboxed(
     call_id: &ToolCallId,
     input: &Value,

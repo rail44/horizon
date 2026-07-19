@@ -245,6 +245,19 @@ product-owned API. Decisions:
   leg: a `[network]`/persistent-allowlist config surface (explicitly out of
   scope for this leg — the per-session allowlist lives only for the
   session's lifetime) and the judge's own boundary-crossing classification.
+  **Mechanism reconciliation (2026-07-19, post-nono migration):** the
+  leg-4a/4b paragraphs above describe the containment mechanism as it
+  stood when each leg landed (bwrap `--ro-bind`, a `seccomp` `socket(2)`
+  cut, `horizon-sessiond/src/network.rs`). The sandbox backend has since
+  migrated to nono (backlog 60, option C) and the proxy has moved into
+  `horizon-agent`, so the *current* mechanism reads: direct egress is cut
+  by nono's `NetworkMode::Blocked` (Landlock, not a bespoke seccomp
+  filter); `Proxied` grants the bridge socket via a plain filesystem Read
+  capability (`crate::caps`), not a bwrap bind-mount; and there is no
+  per-daemon `network.rs` — each isolated session owns its proxy/bridge in
+  `horizon-agent`'s `tools::network`. The leg-by-leg text is kept as a
+  dated record rather than rewritten; this note is the single source of
+  truth for the mechanism as it actually runs today.
 - **Denial UX** (converged pattern): detect the sandbox denial
   (exit-code/stderr signature), then surface "retry without sandbox?"
   through the normal approval flow — never silently block or bypass.
