@@ -105,19 +105,26 @@ pub fn spawn(
 /// Kicks off a *sandboxed* bash call (`docs/agent-approval-design.md`'s tier
 /// 1: auto-approved `bash` in an isolated, sandbox-engaged session) and
 /// returns immediately, same contract as [`spawn`]. `workspace_root` is
-/// `horizon_sandbox`'s only writable root; network is off. The host's real
-/// temp dir is deliberately *not* added as a writable root here -- a 2026-07
-/// dogfooding incident found that doing so made the whole shared host `/tmp`
-/// writable from inside every sandboxed call (see `exec::run_sandboxed`'s
-/// doc comment for the containment story). `output::spill`'s own write
-/// happens host-side, after this call's output has already been captured
-/// over a pipe, never from inside the sandboxed child -- it needs no
-/// writable-root grant at all. Still goes through the same per-session FIFO
+/// `horizon_sandbox`'s only writable root. The host's real temp dir is
+/// deliberately *not* added as a writable root here -- a 2026-07 dogfooding
+/// incident found that doing so made the whole shared host `/tmp` writable
+/// from inside every sandboxed call (see `exec::run_sandboxed`'s doc comment
+/// for the containment story). `output::spill`'s own write happens
+/// host-side, after this call's output has already been captured over a
+/// pipe, never from inside the sandboxed child -- it needs no writable-root
+/// grant at all. Still goes through the same per-session FIFO
 /// (`registry::enqueue`) as [`spawn`] -- a session's bash calls never run
 /// concurrently with each other regardless of which path started them. If
 /// the run looks sandbox-denied, the completion sent is
 /// [`BashCompletion::RetryWithoutSandbox`] instead of a finished result --
 /// see that variant's doc comment.
+///
+/// `bridge_socket` (`docs/agent-approval-design.md`'s "Staging" leg 4a) is
+/// `horizon-sessiond`'s own long-lived network-proxy bridge path, if it has
+/// one running -- `Some` gets the sandbox `NetworkPolicy::Proxied`, `None`
+/// falls back to the pre-4a `NetworkPolicy::Disabled` (see
+/// `exec::run_sandboxed`).
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_sandboxed(
     session_id: SessionId,
     call_id: ToolCallId,
@@ -125,6 +132,7 @@ pub fn spawn_sandboxed(
     cwd: Arc<Mutex<PathBuf>>,
     config: BashToolConfig,
     workspace_root: PathBuf,
+    bridge_socket: Option<PathBuf>,
     result_tx: Sender<BashCompletion>,
 ) {
     registry::enqueue(
@@ -132,8 +140,14 @@ pub fn spawn_sandboxed(
         Box::new(move || {
             let run_call_id = call_id.clone();
             run_job_body(session_id, call_id, &result_tx, move || {
-                let mut completion =
-                    exec::run_sandboxed(&run_call_id, &input, &cwd, &workspace_root, &config);
+                let mut completion = exec::run_sandboxed(
+                    &run_call_id,
+                    &input,
+                    &cwd,
+                    &workspace_root,
+                    bridge_socket.as_deref(),
+                    &config,
+                );
                 // Audit marker (tier + reason) on every finished result this
                 // path produces -- `spawn_sandboxed` is only ever reached via
                 // tier-1 auto-approval (`tools::execution::execute_tier1_bash`),

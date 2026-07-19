@@ -116,6 +116,19 @@ struct Inner {
     /// with_config_path`] are, rather than re-derived. `false` everywhere
     /// except the one production call site.
     isolated_worktree: bool,
+    /// The daemon-owned network-proxy bridge socket path (`docs/
+    /// agent-approval-design.md`'s "Staging" leg 4a) -- what a tier-1
+    /// sandboxed `bash` call's `NetworkPolicy::Proxied { bridge_socket }`
+    /// should carry. `None` means either `horizon-sessiond`'s own
+    /// long-lived `AllowlistProxy`/`UdsBridge` pair never started (or
+    /// failed to), or this `ToolSessionState` is one of this crate's own
+    /// test constructions -- either way, `tools::execution::
+    /// execute_tier1_bash` falls back to `NetworkPolicy::Disabled`, exactly
+    /// today's behavior. Injected post-construction the same way
+    /// [`Self::with_skills`]/[`Self::with_config_path`] are: the one
+    /// production call site (`horizon-sessiond`'s `session::run_session`)
+    /// is the only place that knows the daemon's own resolved bridge path.
+    bridge_socket: Option<PathBuf>,
 }
 
 impl ToolSessionState {
@@ -159,6 +172,7 @@ impl ToolSessionState {
                 skills: SkillRegistry::default(),
                 config_path: None,
                 isolated_worktree: false,
+                bridge_socket: None,
             }),
         }
     }
@@ -207,6 +221,24 @@ impl ToolSessionState {
     /// at all).
     pub(crate) fn is_isolated_worktree(&self) -> bool {
         self.inner.isolated_worktree
+    }
+
+    /// Installs the daemon's own network-proxy bridge socket path after
+    /// construction -- see [`Inner::bridge_socket`]'s doc comment. Same
+    /// construction-time-only safety contract as [`Self::with_skills`]/
+    /// [`Self::with_config_path`].
+    pub fn with_bridge_socket(mut self, bridge_socket: Option<PathBuf>) -> Self {
+        if let Some(inner) = Rc::get_mut(&mut self.inner) {
+            inner.bridge_socket = bridge_socket;
+        }
+        self
+    }
+
+    /// The daemon's own network-proxy bridge socket path, if one is running
+    /// -- see [`Inner::bridge_socket`]'s doc comment. What `tools::
+    /// execution::execute_tier1_bash` passes into `NetworkPolicy::Proxied`.
+    pub(crate) fn bridge_socket(&self) -> Option<&Path> {
+        self.inner.bridge_socket.as_deref()
     }
 
     /// v1 workspace root: the process's current directory at session start,

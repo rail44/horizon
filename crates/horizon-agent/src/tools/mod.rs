@@ -11,8 +11,14 @@ mod state;
 pub use approval::{resolve_approval, ApprovalDecision, ApprovalOutcome};
 pub use bash::{should_fold_completion, BashCompletion};
 pub(crate) use catalog::{definitions, permission_for_tool, Definition};
-pub use execution::{cancelled_tool_call_result, HostTools};
-pub(crate) use execution::{tool_result_message, Execution};
+// `execute_agent_tool`/`Execution` are re-exported fully `pub` (not
+// `pub(crate)`) specifically so `tests/tier1_network_containment.rs` --
+// an integration test, hence external to this crate -- can drive the real
+// tier-1 dispatch path end to end (`docs/agent-approval-design.md`'s leg
+// 4a containment proof). Kept to exactly these two items: everything else
+// this module owns stays crate-local per the usual convention.
+pub(crate) use execution::tool_result_message;
+pub use execution::{cancelled_tool_call_result, execute_agent_tool, Execution, HostTools};
 pub use processing::process_agent_provider_event;
 pub use state::{
     register_session_runtime, unregister_session_runtime, RecallContext, ToolSessionState,

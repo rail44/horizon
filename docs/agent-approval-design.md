@@ -145,15 +145,46 @@ product-owned API. Decisions:
   (the containment invariant — proves the second host is unreachable,
   not merely unrouted); an empty allowlist denies both; and a direct,
   unbridged `/dev/tcp` connect attempt stays exactly as blocked under
-  `Proxied` as it is under `Disabled` today. Remaining for the
-  sessiond-wiring/config/judge legs: making this one long-lived
-  `AllowlistProxy`+`UdsBridge` pair a field on `horizon-sessiond`'s own
-  state (spawned once, shared across every sandboxed session, per the
-  owner's pinned lifecycle decision) instead of a per-test standalone
-  pair; a `[network]`/allowlist config surface; wiring the tier-1 bash
-  path (today hardcoded to `NetworkPolicy::Disabled`) to pick `Proxied`
-  when a session wants network; and the one-time new-domain-approval UX
-  that classifies on the `x-horizon-sandbox-proxy-denial` header.
+  `Proxied` as it is under `Disabled` today.
+  **Leg 4a (wiring) landed 2026-07-19**: `horizon-sessiond` now owns one
+  `AllowlistProxy`+`UdsBridge` pair for the whole process
+  (`crates/horizon-sessiond/src/network.rs`), built on its own dedicated
+  tokio runtime — constructing and driving it inline in `main`'s own
+  `#[tokio::main]` body panics ("cannot start/drop a runtime from within a
+  runtime"), so it's built on a plain `std::thread::spawn` (mirroring
+  `horizon-agent`'s own per-call nested-runtime pattern in
+  `tools::bash::exec::run_inner`) and torn down via `Runtime::
+  shutdown_background` (not the default blocking `Drop`) on the graceful
+  SIGTERM path. The bridge socket path is derived from `horizon-sessiond`'s
+  own `--socket`/`$HORIZON_SESSIOND_SOCKET`-resolved path (sibling file,
+  same directory), so it's already scoped per-daemon-instance without a new
+  config key. `tools::execution::execute_tier1_bash` now threads
+  `ToolSessionState::bridge_socket()` (`Option<PathBuf>`, injected the same
+  way `config_path`/`is_isolated_worktree` already are) into
+  `bash::spawn_sandboxed` → `exec::run_sandboxed`, which builds
+  `NetworkPolicy::Proxied { bridge_socket }` when `Some`, falling back to
+  the pre-4a `Disabled` when `None` (proxy failed to start). Allowlist is
+  still empty (leg 4b), so a network-using command is refused exactly as
+  before, just one layer further out — and since no standard tool
+  (`curl`/`reqwest` included) speaks the CONNECT-over-UNIX-socket protocol
+  `UdsBridge` expects (the same limitation the spike's own test fixture
+  worked around with a hand-rolled probe, `crates/horizon-agent/src/bin/
+  bridge_probe.rs`), a real `curl` inside a tier-1 sandboxed session today
+  just fails at the OS/DNS layer (`curl: (6) Could not resolve host` for a
+  hostname — no network namespace to resolve through; `curl: (7) ... Could
+  not connect to server` for a literal IP), indistinguishable from the
+  pre-4a `Disabled` experience. Containment re-proven end-to-end through
+  the actual bash-tool call path (`crates/horizon-agent/tests/
+  tier1_network_containment.rs` — an integration test, not a lib unit
+  test: `env!("CARGO_BIN_EXE_bridge_probe")` is only baked in and
+  guaranteed built for that compilation kind, not a crate's own unit
+  tests), not just the raw sandbox layer: an empty allowlist still
+  refuses a real listening decoy host, and direct egress (bypassing the
+  bridge) still hits the unconditional seccomp cut. Remaining for
+  config/judge legs: a `[network]`/allowlist config surface, dynamic
+  allowlist mutation, and the one-time new-domain-approval UX that
+  classifies on the `x-horizon-sandbox-proxy-denial` header (still the
+  right hook — untouched by 4a).
 - **Denial UX** (converged pattern): detect the sandbox denial
   (exit-code/stderr signature), then surface "retry without sandbox?"
   through the normal approval flow — never silently block or bypass.
@@ -254,6 +285,13 @@ refactoring wave folds into this item.
    UNIX-socket bridge, and `NetworkPolicy::Proxied` all real (not the
    documented fallback) — see the "Network is its own layer" bullet
    above for the shape and what's left for sessiond-wiring/config/judge.*
+   *Leg 4a (sessiond wiring) landed 2026-07-19: one long-lived proxy per
+   `horizon-sessiond` process, tier-1 sandboxed `bash` picks `Proxied`
+   over `Disabled` when the bridge is up — see the "Network is its own
+   layer" bullet's "Leg 4a" note for the shape, the nested-runtime
+   pitfall it worked around, and the honest (still-refused, empty
+   allowlist) behavior this leaves for a network-using command. Config
+   surface and the new-domain approval UX (leg 4b) remain.*
 5. **Judge**: the inline classifier at the policy seam, judge-model
    config key, audit field. Folds in backlog 47 (turn_id-null tracker
    flaw — fix so approval analytics can measure the judge's effect)

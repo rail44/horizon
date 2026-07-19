@@ -157,15 +157,27 @@ pub(crate) struct SessiondState {
     /// `horizon_config::resolved_path`: no `HOME`/`XDG_CONFIG_HOME` to fall
     /// back to.
     config_path: Option<PathBuf>,
+    /// This process's own long-lived network-proxy bridge socket path
+    /// (`docs/agent-approval-design.md`'s "Staging" leg 4a --
+    /// `crate::network::NetworkProxy`), if `main` managed to start one.
+    /// `None` if the proxy failed to bind (non-fatal -- see `main`);
+    /// either way every session's `ToolSessionState` falls back to
+    /// `NetworkPolicy::Disabled` for tier-1 sandboxed `bash`, exactly the
+    /// pre-4a behavior. Injected into every spawned session's
+    /// `ToolSessionState` the same way `config_path` is (see
+    /// `run_session`).
+    bridge_socket: Option<PathBuf>,
 }
 
 impl SessiondState {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         providers: ProviderRegistry,
         agent_config: AgentConfig,
         writer: Option<WriterHandle>,
         duckdb_cell: SharedDuckdbStore,
         config_path: Option<PathBuf>,
+        bridge_socket: Option<PathBuf>,
     ) -> Self {
         Self {
             providers,
@@ -179,6 +191,7 @@ impl SessiondState {
             skipped_lines_summary: Mutex::new(None),
             duckdb_cell,
             config_path,
+            bridge_socket,
         }
     }
 
@@ -1035,7 +1048,8 @@ fn run_session(
     let tool_state = tool_session_state_for(workspace_root, state.agent_config.tools, recall)
         .with_isolated_worktree(isolated)
         .with_skills(SkillRegistry::discover(&cwd))
-        .with_config_path(state.config_path.clone());
+        .with_config_path(state.config_path.clone())
+        .with_bridge_socket(state.bridge_socket.clone());
     let live_state = match state.writer() {
         Some(writer) => LiveState::with_event_log_and_history(
             session_id,
@@ -1510,6 +1524,7 @@ mod tests {
             None,
             SharedDuckdbStore::unavailable(),
             None,
+            None,
         ));
         let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Envelope>();
         *state.outgoing.lock().unwrap() = Some(outgoing_tx);
@@ -1611,6 +1626,7 @@ mod tests {
             None,
             SharedDuckdbStore::unavailable(),
             None,
+            None,
         ));
         let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Envelope>();
         *state.outgoing.lock().unwrap() = Some(outgoing_tx);
@@ -1702,6 +1718,7 @@ mod tests {
             agent_config,
             None,
             SharedDuckdbStore::unavailable(),
+            None,
             None,
         ));
         let (outgoing_tx, outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Envelope>();

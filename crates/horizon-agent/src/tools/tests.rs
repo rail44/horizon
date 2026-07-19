@@ -1447,6 +1447,21 @@ fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
     unregister_session_runtime(session_id);
 }
 
+// --- tier-1 bash containment: network proxy (leg 4a) -----------------------
+//
+// The two containment tests that used to live here (empty-allowlist decoy
+// refusal, direct-egress-under-Proxied) moved to
+// `tests/tier1_network_containment.rs`, an integration test: they need
+// `env!("CARGO_BIN_EXE_bridge_probe")`, which Cargo only bakes in for
+// integration-test/bench/example compilation units, never a crate's own lib
+// unit tests (confirmed the hard way -- a runtime-resolved fallback path
+// passed locally against a build that happened to already have the binary,
+// then failed deterministically on a clean `cargo clean -p horizon-agent &&
+// cargo nextest run`, since nothing guarantees `[[bin]]` targets are built
+// before lib unit tests run). `execute_agent_tool`/`Execution` are
+// re-exported `pub` from `tools::mod` (narrowly, just those two) so that
+// external test can still drive the real tier-1 dispatch path.
+
 /// Never-silently-degrade: even on a host where the sandbox genuinely
 /// engages, a *non-isolated* session's `bash` call still goes through the
 /// ordinary approval gate -- isolation is load-bearing, not cosmetic. The

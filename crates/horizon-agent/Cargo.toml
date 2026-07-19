@@ -31,5 +31,8 @@ tracing = "0.1"
 toml = "0.8"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 
+[dev-dependencies]
+horizon-sandbox-proxy = { path = "../horizon-sandbox-proxy" }
+
 [lints.clippy]
 all = { level = "warn", priority = -1 }
