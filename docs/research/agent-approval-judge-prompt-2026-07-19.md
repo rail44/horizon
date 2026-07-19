@@ -593,3 +593,62 @@ that exact id.
 - `docs/agent-approval-design.md` and
   `docs/research/agent-approval-prior-art-2026-07-19.md` (this repo) —
   pinned decisions and prior-art grounding this doc builds on.
+
+
+## Appendix: empirical probe of the actual provider (synthetic.new, 2026-07-19)
+
+The body above reasoned generically ("OpenAI-compatible, not necessarily
+OpenAI"). This appendix records what the *actually configured* provider does,
+measured directly (owner-approved probe; `base_url =
+https://api.synthetic.new/openai/v1`, acting model `hf:moonshotai/Kimi-K2.7-Code`).
+~15 small chat-completions calls.
+
+**Provider serves open-weight models, not OpenAI.** `/models` lists 11:
+`syn:small:text`, `syn:large:text`, `syn:{small,large}:vision`,
+`hf:openai/gpt-oss-120b`, `hf:zai-org/GLM-5.2`, `hf:zai-org/GLM-4.7-Flash`,
+`hf:moonshotai/Kimi-K2.7-Code`, `hf:Qwen/Qwen3.6-27B`, `hf:MiniMaxAI/MiniMax-M3`,
+`hf:nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4`. Each carries its own
+tokenizer — so §3's Plan-A tokenizer-mismatch footgun is the *real* situation
+here, not hypothetical.
+
+**Findings:**
+1. **`logprobs` are returned** in standard OpenAI shape (per-token
+   `token`/`logprob`/`bytes`/`top_logprobs`) — so the confidence signal §3
+   relies on is available. Caveat: the integer token *id* is NOT in the
+   response (only the string + bytes).
+2. **`logit_bias` is accepted and honored** (biasing two ids visibly forced
+   the output toward those tokens). BUT it takes integer token ids, the
+   response never exposes ids, and each model has its own tokenizer — so using
+   it *correctly* needs the model's tokenizer offline (absent from Horizon's
+   deps). **Confirms Plan B (prompt + robust parse) as the right default; do
+   not reach for `logit_bias`.**
+3. **The acting model (Kimi-K2.7-Code) is a reasoning model** and a poor judge
+   fit: by default it spends the first completion tokens on `reasoning_content`
+   (so `max_tokens:1` yields zero answer, `finish_reason:length`). Reasoning is
+   disableable via **`reasoning_effort:"none"`** (the `enable_thinking` /
+   `chat_template_kwargs` knobs did NOT work), but even then it preambles its
+   `content` with prose ("We need to..."), so a bare single-token verdict still
+   fails without `logit_bias`. It is also the acting agent — the design's
+   "different family" caution says avoid it for the judge anyway.
+4. **Clean single-token judge candidates exist on the same endpoint** (with
+   `reasoning_effort:"none"` + a strong system prompt, no `logit_bias` needed):
+   - `hf:zai-org/GLM-4.7-Flash` — `content:"Y"`, p≈1.00, ~0.85s (fastest clean; Zhipu family, != Kimi)
+   - `syn:small:text` — `content:"Y"`, p≈1.00, ~0.90s
+   - `hf:Qwen/Qwen3.6-27B` — `content:"Y"`, p≈0.99, ~1.16s
+   - `hf:openai/gpt-oss-120b` and `MiniMax-M3` returned empty `content` under
+     this shape (harmony/channel handling) — not usable as-is.
+5. **Inline latency floor ≈ 0.85s per call** on this endpoint (stage 1 alone).
+   A stage-2 escalation adds another ~1s+. This is the real budget for an
+   inline per-boundary-crossing gate — the dominant cost, far more than tokens.
+
+**Actionable conclusions for leg-5 implementation:**
+- Stage-1 output = **Plan B** (prompt + `max_tokens` small-but-not-1 +
+  lenient parse defaulting to escalate). `logit_bias` is off the table on this
+  provider without an offline tokenizer.
+- Judge model ≠ the acting Kimi model; **GLM-4.7-Flash is the standout default**
+  (clean single token, fastest, different family) with `syn:small:text` as a
+  fallback. Keep it a config-selectable id, not hardcoded (models on the
+  endpoint change).
+- Always send `reasoning_effort:"none"` for stage 1 to keep it cheap; stage 2
+  may want reasoning back on (that IS the chain-of-thought step).
+- `logprobs:true, top_logprobs:N` for the stage-1 confidence value.
