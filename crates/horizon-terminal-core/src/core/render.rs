@@ -72,11 +72,24 @@ pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> Term
             push_styled_cell(&mut styled_rows[row], ' ', columns, style);
             continue;
         }
-        push_styled_cell(&mut styled_rows[row], cell.c, columns, style);
-        if let Some(zerowidth) = cell.zerowidth() {
-            for ch in zerowidth {
-                push_styled_cell(&mut styled_rows[row], *ch, 0, style);
-            }
+        let line = &mut styled_rows[row];
+        let zerowidth = cell.zerowidth().unwrap_or(&[]);
+        if zerowidth.is_empty() || cell.c == ' ' {
+            push_styled_cell(line, cell.c, columns, style);
+        } else {
+            // A printable cell carrying zero-width combining chars gets a
+            // span of its own instead of joining the neighboring run: the
+            // extra chars break the `columns == chars` equality the GUI's
+            // grid snapping keys on (see `push_styled_cell`), so merging
+            // them in would drop the *whole* run to natural shaping.
+            // Isolated, any shaping drift stays confined to this one cell
+            // -- exactly the pre-merge rendering. The trailing zero-width
+            // chars also fence the next cell out of this span
+            // (`push_styled_cell`'s ends-in-zero-width test).
+            line.spans.push(style.span(cell.c.to_string(), columns));
+        }
+        for ch in zerowidth {
+            push_styled_cell(line, *ch, 0, style);
         }
     }
 
@@ -111,10 +124,11 @@ fn palette_overrides(term: &Term<EventSink>) -> Vec<(u16, [u8; 3])> {
         .collect()
 }
 
-/// A cell's full presentation state, as one value: the span-merge key of
-/// [`push_styled_cell`] (two adjacent cells share a span exactly when every
-/// field here matches) and the source of every style field on the produced
-/// [`TerminalSpan`].
+/// A cell's full presentation state, as one value: the style half of
+/// [`push_styled_cell`]'s span-merge key (two adjacent cells can share a
+/// span only when every field here matches; the width-class fence
+/// documented there applies on top) and the source of every style field on
+/// the produced [`TerminalSpan`].
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct SpanStyle {
     fg: TerminalColor,
@@ -193,6 +207,23 @@ fn underline_kind(flags: Flags) -> TerminalUnderline {
     }
 }
 
+/// Append one cell to the row, merging it into the trailing span whenever
+/// rendering semantics allow: zero-width chars ride their base cell's span,
+/// blank (space) cells extend a blank run of the same style, and printable
+/// cells extend a text run of the same style *and the same width class*
+/// (goal 4 of `docs/terminal-protocol-goals.md` -- frame size proportional
+/// to style runs, not characters).
+///
+/// The width-class fence exists for the GUI's grid snapping:
+/// `paint_terminal` (src/terminal/mod.rs) snaps a run's glyphs to the cell
+/// grid only while `columns == chars` (all single-width) or
+/// `columns == 2 * chars` (all double-width) holds for the whole run; a run
+/// mixing 1-column and 2-column cells falls back to natural shaping and can
+/// drift off the grid. A mergeable text run is width-uniform and free of
+/// zero-width chars by construction (`snapshot_frame` isolates
+/// combining-char cells, and a run that ends in a zero-width char never
+/// accepts printables), so `last.columns == chars * columns` below says
+/// exactly "the run's width class equals this cell's width".
 fn push_styled_cell(line: &mut TerminalLine, ch: char, columns: usize, style: SpanStyle) {
     if let Some(last) = line.spans.last_mut() {
         if columns == 0 && style.matches(last) {
@@ -201,6 +232,17 @@ fn push_styled_cell(line: &mut TerminalLine, ch: char, columns: usize, style: Sp
         }
 
         if ch == ' ' && columns > 0 && last.text.is_empty() && style.matches(last) {
+            last.columns += columns;
+            return;
+        }
+
+        if ch != ' '
+            && columns > 0
+            && style.matches(last)
+            && last.columns == last.text.chars().count() * columns
+            && !ends_with_zero_width(&last.text)
+        {
+            last.text.push(ch);
             last.columns += columns;
             return;
         }
@@ -224,6 +266,18 @@ fn cell_width(ch: char, flags: Flags) -> usize {
 
 fn char_width(ch: char) -> usize {
     ch.width().unwrap_or(0).max(1)
+}
+
+/// True when the span's text ends in a zero-width (combining) char --
+/// `push_styled_cell`'s fence keeping printable cells out of a span that
+/// carries a combining sequence. Also disambiguates the one case the
+/// width-class equation alone cannot: a wide base char plus one zero-width
+/// char (2 columns, 2 chars) is indistinguishable from two single-width
+/// printables by arithmetic.
+fn ends_with_zero_width(text: &str) -> bool {
+    text.chars()
+        .next_back()
+        .is_some_and(|ch| ch.width().unwrap_or(0) == 0)
 }
 
 /// A cell's logical foreground color, with the bold/dim promotion
