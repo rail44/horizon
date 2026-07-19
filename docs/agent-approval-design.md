@@ -72,24 +72,25 @@ product-owned API. Decisions:
 - **Horizon owns a thin unified API** (shape informed by Codex's
   `SandboxManager`/`SandboxExecRequest`/`SandboxType` dispatch),
   applied per command at the `horizon-sessiond` spawn site.
-- **Linux**: bubblewrap (system binary; bundling-from-source is a
-  later decision) for namespace/fs containment + `seccompiler` for the
-  network-syscall cut; `landlock` (the kernel author's own crate) as
-  an additional fs backstop where the kernel supports it, with
-  explicit ABI negotiation and a visible warning on downgrade — never
-  a silent floor (Codex's silent-Landlock-disable bug is the recorded
-  cautionary tale). Verified on the owner's dev machine (Void Linux):
-  unprivileged userns available, bwrap 0.11.2 installed.
-  **Spike finding (2026-07-19, `crates/horizon-sandbox`): Landlock and
-  bwrap cannot share a thread** — a Landlock-restricted thread is
-  permanently denied `mount(2)`, and mounts are bwrap's entire
-  mechanism (unlike seccomp, which bwrap applies after its own setup
-  via `--seccomp FD`; verified seccomp has no such conflict). The
-  spike therefore ships Landlock as a negotiated, reported diagnostic
-  only; making it a live backstop needs a small helper binary that
-  bwrap execs after mount setup, which applies `restrict_self()` and
-  then execs the real target — recorded follow-up for the policy-tier
-  leg, not a spike blocker.
+- **Linux** (updated 2026-07-19, backlog-60 option C, merge `61b446e`):
+  nono's Landlock backend — `Sandbox::apply_auto` applied on a
+  throwaway thread that then spawns the child from that same thread
+  (thread-scoped, inherited by descendants, no `pre_exec`; the same
+  thread shape the bwrap-era backend already used for its seccomp
+  filter). Filesystem and network containment via Landlock (ABI
+  negotiated by nono; V6 on the dev machine), plus signal scoping
+  (`SignalMode::AllowSameSandbox` -> `LANDLOCK_SCOPE_SIGNAL`) — a
+  containment win the old stack lacked. bwrap's private tmpfs `/tmp`
+  is replaced by policy-layer TMPDIR provisioning
+  (`SCRATCH_DIR_NAME` under the first writable root). Accepted
+  regression: no mount/PID namespace (host process list visible; same
+  category as the accepted `/proc` environ read — backlog 60).
+  The original self-built design (bubblewrap + `seccompiler` +
+  `landlock`-as-diagnostic) is retired; its spike finding — **Landlock
+  and bwrap cannot share a thread** (a Landlock-restricted thread is
+  permanently denied `mount(2)`) — stays on record as why that stack
+  could not make Landlock a live backstop, and is moot now that the
+  backend is Landlock-first with no mount step.
 - **macOS** (updated 2026-07-19, `docs/roadmap.md`'s backlog-60 entry):
   nono's Seatbelt backend, applied via a tiny exec helper
   (`horizon-sandbox-helper`) rather than the originally-planned

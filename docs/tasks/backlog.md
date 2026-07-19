@@ -498,3 +498,19 @@ entries live in `backlog-resolved.md` keeping their original numbers
     Read covers the bridge socket. Follow-up: macOS backend can only be
     verified on a mac (spike host is Linux). Migration tracked in the
     roadmap's approval-trust-model entry.
+
+61. **Darwin cross-typecheck from Linux is blocked by nono's dependency
+    graph.** `cargo check --target x86_64-apple-darwin -p horizon-sandbox`
+    fails host-wide: nono unconditionally pulls
+    sigstore-verify->reqwest->rustls->aws-lc-rs, whose `aws-lc-sys` build
+    script needs an Apple-aware C toolchain (`-arch`/
+    `-mmacosx-version-min`) this Linux host lacks. Discovered during the
+    macOS backend migration (2026-07-19); the old SBPL backend's
+    "compile-only" bar was met instead via an API-faithful local stub of
+    nono patched in with `[patch.crates-io]`, checked, then fully
+    reverted (see `.claude/review-queue/nono-macos-backend.request.md`).
+    Options if this bar needs to be routine (e.g. on nono bumps): keep
+    the stub as a checked-in dev tool, set up osxcross, or accept
+    review-only for darwin paths. Real-mac runtime verification of the
+    whole macOS backend (helper exec handoff, profile application,
+    Proxied bridge grant, baseline dirs) is the standing open follow-up.

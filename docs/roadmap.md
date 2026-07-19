@@ -161,8 +161,13 @@ lands:
   (merge `61b446e`: migration + the scratch-dir/worktree-auto-removal
   interaction fix found in review; gate cross-checked against a
   pre-nono baseline to attribute a recurring backlog-28 e2e flake to
-  host load, not the migration). macOS backend follows (verifiable
-  only on a mac). The paused network-domain approval (leg 4b) resumes
+  host load, not the migration). macOS backend LANDED 2026-07-19
+  (merge `d002d6e`: Seatbelt via the `horizon-sandbox-helper` exec
+  helper, policy->CapabilitySet mapping and TMPDIR parity hoisted
+  OS-shared; verified to the same compile-only bar the old SBPL
+  backend held — real-mac runtime verification is the open follow-up,
+  backlog 61). The network-domain approval (leg 4b, now including the
+  proxy relocation into horizon-agent) is re-dispatched
   on the nono foundation -- its policy layer is backend-agnostic (spike-
   confirmed), so only the spawn wiring rebases.
 - **Agent web search / public-code search** (backlog 18/19). Needs
