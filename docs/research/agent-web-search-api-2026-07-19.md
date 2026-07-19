@@ -459,3 +459,93 @@ the crush/opencode approval mechanics in detail if picking that up next.
 Primary sources are inlined above at each claim. No further consolidated
 list — every non-obvious number or claim in this document carries its own
 URL at the point of use.
+
+## Addendum 2026-07-20: quality/latency evidence and the vendor decision (Exa)
+
+The owner pushed back on deciding from price/free-tier alone (those are
+commoditized) and asked for quality, response-usability, and speed
+evidence. Two passes were run on 2026-07-20; raw probe data (24 response
+JSONs + timings) was captured in-session (ephemeral, not committed).
+
+### Empirical probe: Parallel vs Exa free hosted MCP endpoints
+
+Both vendors run keyless hosted MCP endpoints — the exact pair opencode
+uses in production (`search.parallel.ai/mcp`, Parallel basic-mode
+equivalent; `mcp.exa.ai/mcp`). Six dev-representative queries with
+verifiable ground truth (Landlock ABI v6 kernel version, portable-pty
+`close_random_fds`, cargo build-dir staleness across worktrees, tokio
+`select!` biased semantics, GPUI custom elements, synthetic.new
+pricing), each run twice per endpoint (cold/warm), 24 search calls
+total, zero rate-limit or protocol errors.
+
+| Measure | Parallel | Exa |
+|---|---|---|
+| Quality (reached=2 / near=1 / missed=0, max 12) | 9 | **12** |
+| Latency, cold avg | 1.88s | 1.23s |
+| Latency, warm avg | 1.84s (no caching observed) | **0.32s** (same-query cache) |
+| Reproducibility | result count varied (7 vs 10) and top URLs differed across identical runs | top-3 identical across runs, all six queries |
+| Response format | `content` is a stringified-JSON dump (markdown escapes leak through) duplicated by `structuredContent` (~2x wire bytes); **no result-count argument at all** (~7k tokens/call forced) | plain `Title/URL/Published/Highlights` text blocks, LLM-readable as-is; `numResults` + `maxCharacters` give the caller token-budget control |
+
+Parallel's three dropped queries were characteristic: the Landlock
+excerpts never contained "6.12"; the cargo-worktree query returned
+different results on identical reruns; the synthetic.new query's top
+excerpt was an unrendered "Loading provider…" JS placeholder. Exa hit
+the exact docs.rs function page for portable-pty, reached
+rust-lang/cargo#16642 (the same defect family as this repo's backlog
+43), and returned all-official-domain results for synthetic.new.
+Fairness note: Parallel's paid REST `turbo` mode (self-reported 216ms,
+$1/1k) was not probed; it is a lighter mode than the probed basic, so a
+quality reversal is implausible.
+
+### Quality/latency literature
+
+- The one systematic independent benchmark found (AIMultiple "Agentic
+  Search in 2026", 2026-05-25; 100 queries x 8 APIs, GPT-5.2 judge, 10%
+  human-reviewed): **Brave #1 overall (14.89, 669ms)**, Firecrawl 14.58,
+  **Exa 14.39 (~1.2s; strongest in the technical-documentation
+  category)**, Parallel Pro 14.21 (13.6s), Tavily 13.67, Parallel Base
+  13.50 (2.9s), Perplexity 12.96 (11s+), SerpAPI 12.28. Jina untested.
+  (https://aimultiple.com/agentic-search)
+- Perplexity shows the largest claim-vs-independent gap (self-reported
+  median 358ms vs 11s+ measured) — its published numbers cannot be
+  trusted at face value.
+- Parallel has **no independently-verified strength**: every favorable
+  number is self-published (and drifts across snapshots, BrowseComp
+  27%→51%); its CEO confirmed on HN that latency is deliberately traded
+  for multi-hop accuracy — a research-agent orientation, not the
+  short-factual-lookup profile of a coding agent.
+- Tavily: independent user complaint of flaky JS-rendered-page handling.
+  Jina: essentially no independent data. Firecrawl: high independent
+  relevance scores but unclear whether search *discovery* is its own or
+  upstream-dependent.
+
+### Decision (owner, 2026-07-20)
+
+**Search vendor = Exa.** Grounds: our probe (12/12, fastest measured,
+deterministic, LLM-ready format with token-budget control) and the
+independent benchmark's technical-documentation result agree; Parallel's
+counter-case rests entirely on unverified self-published numbers, and
+its stated design center (multi-hop research) is not Horizon's use case.
+DuckDuckGo scraping was excluded earlier the same consultation (single
+undocumented endpoint as a global SPOF + deliberate evasion of the
+operator's bot detection). Architecture direction from the same
+consultation: two thin Horizon-owned tools (`web_search`, `web_fetch`)
+with swappable vendor adapters (shape B of section 5); Exa is the first
+search adapter; fetch is own plain-HTTP extraction (no JS rendering
+initially — a future embedded-browser viewer engine, e.g. Servo/wry,
+could later back a JS-capable fetch adapter); **Brave** is the
+documented second-adapter candidate (independent #1 overall; untested
+by us only for lack of a key).
+
+Known Exa caveats to carry into implementation: API churn (endpoint
+retirements and field deprecations through H1 2026 — pin and watch the
+changelog), SSE-framed responses on the hosted MCP endpoint (one extra
+parse step if that route is used instead of REST), and the
+REST-vs-hosted-MCP route choice itself (REST + API key is the
+contract-clear option; signup credit figures were inconsistent across
+sources — verify at signup time).
+
+Still open (next consultation): approval/trust-boundary design — whether
+`web_search`/`web_fetch` become the judge's first real BoundaryCrossing
+customer, and whether they sit behind a crush-`agentic_fetch`-style
+delegated subagent or as direct top-level tools.

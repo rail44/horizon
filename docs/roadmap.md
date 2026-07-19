@@ -183,8 +183,16 @@ lands:
   proxy relocation into horizon-agent) is re-dispatched
   on the nono foundation -- its policy layer is backend-agnostic (spike-
   confirmed), so only the spawn wiring rebases.
-- **Agent web search / public-code search** (backlog 18/19). Needs
-  its own consultation: provider, trust-boundary/approval design.
+- **Agent web search / public-code search** (backlog 18/19).
+  Consultation 2026-07-19/20: **vendor = Exa** (owner decision;
+  empirical probe + independent-benchmark evidence in
+  `docs/research/agent-web-search-api-2026-07-19.md`, 2026-07-20
+  addendum), shape = thin Horizon-owned `web_search`/`web_fetch` tools
+  over swappable adapters, own plain-HTTP fetch/extraction (no JS
+  rendering initially). Remaining before implementation: the
+  approval/trust-boundary design (candidate first real
+  `BoundaryCrossing` customer for the shadow judge) and the Exa
+  REST-vs-hosted-MCP route choice.
 - **portable-pty fork-safety root fix** (backlog 28/31).
   Bounded-retry mitigation shipped. Bounded investigation 2026-07-19:
   hypothesis CONFIRMED at source level (heap-allocating

@@ -6,17 +6,22 @@ entries live in `backlog-resolved.md` keeping their original numbers
 (split 2026-07-18).
 
 18. **Web search tool** — give the agent outward web search (the "search
-    tool" the owner originally meant, 2026-07-07). Needs its own
-    consultation: provider choice (crush shells out to DuckDuckGo Lite
-    HTML scraping = free but brittle; opencode uses Exa/Parallel over
-    MCP endpoints = API key required; or a plain search API), the
-    trust-boundary/network-access approval design, and whether it sits
-    behind a crush-`agentic_fetch`-style throwaway subagent (one outer
-    approval, inner search/fetch chain) — a shape close to Horizon's
-    delegation + skill mechanism. See
-    `docs/research/crush-opencode-tools-2026-07-07.md` (recovered from
-    the session transcript 2026-07-19; also covers item 19's
-    sourcegraph/LSP details).
+    tool" the owner originally meant, 2026-07-07). Consultation
+    2026-07-19/20 settled most of it (owner decisions, evidence and
+    rationale in `docs/research/agent-web-search-api-2026-07-19.md`,
+    esp. its 2026-07-20 addendum): **vendor = Exa** (probe 12/12 +
+    independent tech-docs benchmark; Parallel's counter-case is
+    self-published only); shape = two thin Horizon-owned tools
+    (`web_search`/`web_fetch`) over swappable vendor adapters; fetch =
+    own plain-HTTP extraction, no JS rendering initially; DuckDuckGo
+    scraping excluded; Brave recorded as second-adapter candidate.
+    Still open before implementation: the approval/trust-boundary
+    design — judge's first real BoundaryCrossing customer vs a
+    crush-`agentic_fetch`-style delegated subagent (one outer approval,
+    inner search/fetch chain) — and the Exa REST-vs-hosted-MCP route.
+    Background: `docs/research/crush-opencode-tools-2026-07-07.md`
+    (recovered from the session transcript 2026-07-19; also covers item
+    19's sourcegraph/LSP details).
 19. **Public-code / symbol search** — crush exposes `sourcegraph`
     (public GitHub via Sourcegraph GraphQL, no API key) and
     `lsp_references` (LSP-backed symbol references); opencode has an
