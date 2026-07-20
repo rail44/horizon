@@ -7,6 +7,8 @@ use uuid::Uuid;
 
 use crate::config::AgentConfig;
 use crate::roles::RoleId;
+use horizon_session_protocol::UnknownPayload;
+use schemars::JsonSchema;
 
 /// This crate's own session identifier: a UUID newtype that serializes as a
 /// bare UUID string (serde's transparent treatment of one-field tuple
@@ -16,7 +18,7 @@ use crate::roles::RoleId;
 /// this crate cannot depend on it (that's the whole point of the split), so
 /// the two are distinct types connected by `From` impls at the seam in
 /// Horizon's `agent` module.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct SessionId(Uuid);
 
 impl SessionId {
@@ -39,13 +41,13 @@ impl Default for SessionId {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ProviderId(pub String);
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct RequestId(pub String);
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ToolCallId(pub String);
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -69,13 +71,14 @@ pub struct StartSession {
     pub workspace_root: Option<PathBuf>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub enum Command {
     Initialize(Initialization),
     UserMessage {
         text: String,
     },
     Cancel {
+        #[serde(default)]
         request_id: Option<RequestId>,
     },
     ApproveToolCall {
@@ -83,6 +86,7 @@ pub enum Command {
     },
     DenyToolCall {
         call_id: ToolCallId,
+        #[serde(default)]
         reason: Option<String>,
     },
     ToolCallResult(ToolCallResult),
@@ -98,16 +102,22 @@ pub enum Command {
     /// bootstrap ever sends this on a session's behalf).
     ContinueTurn,
     Shutdown,
+    /// Deserialize-only skew catch-all — see
+    /// [`horizon_session_protocol::UnknownPayload`]. Keep last. A receiver
+    /// logs and drops an unknown command; it never acks or executes it.
+    #[serde(untagged)]
+    Unknown(UnknownPayload),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct Initialization {
     pub session_id: SessionId,
     pub provider_id: ProviderId,
+    #[serde(default)]
     pub role_id: Option<RoleId>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub enum Event {
     StateChanged(SessionState),
     ReasoningDelta(MessageDelta),
@@ -153,6 +163,11 @@ pub enum Event {
     /// reducer-side wall clock, respectively), not carried on this event
     /// itself, so this variant's own wire shape stays unchanged.
     TurnEnded(TurnEndReason),
+    /// Deserialize-only skew catch-all — see
+    /// [`horizon_session_protocol::UnknownPayload`]. Keep last. A receiver skips an
+    /// unknown event: it folds into no frame item and projects into no row.
+    #[serde(untagged)]
+    Unknown(UnknownPayload),
 }
 
 /// Why a turn ended — see [`Event::TurnEnded`]. Named after the design doc's
@@ -167,7 +182,7 @@ pub enum Event {
 /// (`config::DEFAULT_ITERATION_CAP`/`DEFAULT_DOOM_LOOP_WINDOW`) rather than
 /// per-session config, the variant alone is enough for the UI to build
 /// that text without carrying a number on the wire.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub enum TurnEndReason {
     Completed,
     Cancelled,
@@ -186,6 +201,12 @@ pub enum TurnEndReason {
     /// detector stopped the turn (`TurnLoopGuard::record_fingerprint`).
     /// Same section of the design doc.
     HaltedByDoomLoop,
+    /// Deserialize-only skew catch-all — see
+    /// [`horizon_session_protocol::UnknownPayload`]. Keep last. Rendered like the
+    /// legacy bare [`TurnEndReason::Halted`]: a calm "paused" receipt with
+    /// no guard-specific sentence.
+    #[serde(untagged)]
+    Unknown(UnknownPayload),
 }
 
 pub fn event_kind(event: &Event) -> &'static str {
@@ -204,6 +225,7 @@ pub fn event_kind(event: &Event) -> &'static str {
         Event::Error(_) => "error",
         Event::Exited(_) => "exited",
         Event::TurnEnded(_) => "turn_ended",
+        Event::Unknown(_) => "unknown",
     }
 }
 
@@ -240,7 +262,7 @@ pub struct ProviderEvent {
 /// `StreamedAssistantContent::ToolCallDelta`). Purely a UI feedback signal:
 /// never folded into conversation history and never persisted — see
 /// [`ProviderEvent::tool_call_progress`].
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ToolCallProgress {
     /// Rig's `internal_call_id`: stable across every delta for one tool
     /// call from the very first chunk, unlike the provider's own tool-call
@@ -250,6 +272,7 @@ pub struct ToolCallProgress {
     pub key: String,
     /// The tool/function name, once a `ToolCallDeltaContent::Name` chunk
     /// has been observed for this call.
+    #[serde(default)]
     pub tool_id: Option<String>,
     /// Cumulative argument bytes streamed so far for this call.
     pub bytes: usize,
@@ -306,7 +329,7 @@ impl From<Event> for ProviderEvent {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub enum SessionState {
     Created,
     Running,
@@ -317,34 +340,44 @@ pub enum SessionState {
     Completed,
     Failed,
     Terminated,
+    /// Deserialize-only skew catch-all — see
+    /// [`horizon_session_protocol::UnknownPayload`]. Keep last.
+    #[serde(untagged)]
+    Unknown(UnknownPayload),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct Message {
     pub role: MessageRole,
     pub text: String,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub enum MessageRole {
     User,
     Assistant,
+    /// Deserialize-only skew catch-all — see
+    /// [`horizon_session_protocol::UnknownPayload`]. Keep last. Treated as
+    /// assistant-authored wherever a side must be picked (a transcript can
+    /// misattribute a skewed message; it must never invent user words).
+    #[serde(untagged)]
+    Unknown(UnknownPayload),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct MessageDelta {
     pub role: MessageRole,
     pub text: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ToolCallRequest {
     pub call_id: ToolCallId,
     pub tool_id: String,
     pub input: serde_json::Value,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ToolCallResult {
     pub call_id: ToolCallId,
     pub output: serde_json::Value,
@@ -409,7 +442,7 @@ impl ToolCallResult {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ApprovalRequest {
     pub call_id: ToolCallId,
     pub reason: String,
@@ -429,7 +462,7 @@ pub struct ApprovalRequest {
 /// flow"). Also lets the UI render each kind with its own copy without
 /// having to sniff `ApprovalRequest::reason`'s free text (today it doesn't,
 /// but this keeps that door open).
-#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub enum ApprovalKind {
     /// An ordinary first-time approval request -- the only kind that
     /// existed before this leg.
@@ -453,13 +486,18 @@ pub enum ApprovalKind {
         domains: Vec<String>,
         prior_result: ToolCallResult,
     },
+    /// Deserialize-only skew catch-all — see
+    /// [`horizon_session_protocol::UnknownPayload`]. Keep last. Resolved like
+    /// [`ApprovalKind::Standard`] (plain approve/deny, no retry semantics).
+    #[serde(untagged)]
+    Unknown(UnknownPayload),
 }
 
 /// Payload for [`Event::ProviderRequestSent`]: the model id the provider was
 /// asked to complete against, so the persisted event log doesn't depend on
 /// separately-stored config to answer "which model was this turn waiting
 /// on?".
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ProviderRequestSent {
     pub model: String,
 }
@@ -472,12 +510,12 @@ pub(crate) enum ToolPermission {
     Deny,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct Error {
     pub message: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct Exit {
     pub reason: String,
 }

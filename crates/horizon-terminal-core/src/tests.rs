@@ -2454,3 +2454,53 @@ fn frame_diff_apply_reconstructs_styled_rows_and_text_derivation_matches() {
     assert_eq!(hide_diff.cursor, Some(None));
     assert_eq!(apply_frame_diff(&new, &hide_diff), hidden);
 }
+
+/// The §4 skew catch-alls on this crate's own vocabularies
+/// (`docs/remoc-adoption-design.md`; the generic V1/V2 pairs live in
+/// `horizon-session-protocol/tests/skew.rs`): a variant from a future build
+/// decodes to `Unknown` instead of failing the payload, and `Unknown` can
+/// never be serialized back onto the wire.
+#[test]
+fn unknown_wire_variants_decode_to_the_catch_all() {
+    let command: TerminalCommand =
+        serde_json::from_value(serde_json::json!({"FutureCommand": {"anything": true}})).unwrap();
+    assert!(
+        matches!(command, TerminalCommand::Unknown(_)),
+        "{command:?}"
+    );
+
+    let update: TerminalUpdate =
+        serde_json::from_value(serde_json::json!("FutureUnitUpdate")).unwrap();
+    assert!(matches!(update, TerminalUpdate::Unknown(_)), "{update:?}");
+
+    let color: TerminalColor =
+        serde_json::from_value(serde_json::json!({"Oklch": [0.5, 0.1, 200.0]})).unwrap();
+    assert!(matches!(color, TerminalColor::Unknown(_)), "{color:?}");
+}
+
+#[test]
+fn serializing_an_unknown_wire_variant_is_an_error_not_a_panic() {
+    let result = serde_json::to_string(&TerminalCommand::Unknown(
+        horizon_session_protocol::UnknownPayload,
+    ));
+    assert!(result.is_err(), "{result:?}");
+}
+
+/// A frame whose span carries an unknown color still decodes as a frame --
+/// the degradation is per-cell (`TerminalColor::Unknown`), not per-update,
+/// and it self-heals on the next full snapshot.
+#[test]
+fn a_span_with_an_unknown_color_still_decodes_as_a_frame() {
+    let mut frame = serde_json::to_value(TerminalFrame::from_text("hi".to_string())).unwrap();
+    frame["lines"][0]["spans"][0]["fg"] = serde_json::json!({"Oklch": [0.5, 0.1, 200.0]});
+    let update: TerminalUpdate =
+        serde_json::from_value(serde_json::json!({"Snapshot": frame})).unwrap();
+    let TerminalUpdate::Snapshot(frame) = update else {
+        panic!("expected a snapshot, got {update:?}");
+    };
+    assert!(matches!(
+        frame.lines[0].spans[0].fg,
+        TerminalColor::Unknown(_)
+    ));
+    assert_eq!(frame.text(), "hi");
+}

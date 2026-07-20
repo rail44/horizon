@@ -18,6 +18,8 @@ tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-
 uuid = { version = "1.18", features = ["v4"] }
 
 [dev-dependencies]
+# The wire-schema artifact generator/drift test (`tests/wire_schema.rs`).
+schemars = { version = "1", features = ["uuid1"] }
 tempfile = "3"
 termwiz = { version = "0.23.3", features = ["use_serde"] }
 

@@ -1,3 +1,5 @@
+use horizon_session_protocol::UnknownPayload;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// A cell's logical color: one of the 16 base ANSI slots (+ their bold/dim
@@ -24,11 +26,18 @@ use serde::{Deserialize, Serialize};
 /// OSC 4/10/11/12 *query replies* (`core::color::resolve_query_color`) use
 /// alacritty's own `Colors`/`NamedColor` directly, independent of this
 /// boundary.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum TerminalColor {
     Named(NamedColor),
     Indexed(u8),
     Rgb([u8; 3]),
+    /// Deserialize-only skew catch-all — see
+    /// [`horizon_session_protocol::UnknownPayload`]. Keep last. A client
+    /// resolves an unknown color like the default foreground role
+    /// (`theme::resolve` in `src/theme/ansi.rs`), losing only that cell's
+    /// hue until the next frame replaces it.
+    #[serde(untagged)]
+    Unknown(UnknownPayload),
 }
 
 /// One of the fixed named color roles a cell can carry. This set was
@@ -48,7 +57,7 @@ pub enum TerminalColor {
 ///   `BrightForeground`/`DimForeground` (`Background`/`Cursor` cells never
 ///   carry `BOLD`/`DIM` promotion — `cell_bg` only reads the *default*
 ///   foreground's promoted form when swapping colors under `INVERSE`).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum NamedColor {
     Black,
     Red,
@@ -79,6 +88,12 @@ pub enum NamedColor {
     Cursor,
     BrightForeground,
     DimForeground,
+    /// Deserialize-only skew catch-all — see
+    /// [`horizon_session_protocol::UnknownPayload`]. Keep last. Resolved
+    /// like [`NamedColor::Foreground`] wherever an RGB answer is needed;
+    /// it has no palette-override slot.
+    #[serde(untagged)]
+    Unknown(UnknownPayload),
 }
 
 impl NamedColor {
@@ -113,7 +128,7 @@ impl NamedColor {
             Background => 257,
             Cursor => 258,
             DimBlack | DimRed | DimGreen | DimYellow | DimBlue | DimMagenta | DimCyan
-            | DimWhite | BrightForeground | DimForeground => return None,
+            | DimWhite | BrightForeground | DimForeground | Unknown(_) => return None,
         })
     }
 }

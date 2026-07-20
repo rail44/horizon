@@ -3295,6 +3295,7 @@ dependencies = [
  "reqwest 0.13.4",
  "rig-core",
  "rig-memory",
+ "schemars 1.2.1",
  "serde",
  "serde_json",
  "tokio",
@@ -3357,6 +3358,7 @@ dependencies = [
 name = "horizon-session-protocol"
 version = "0.1.0"
 dependencies = [
+ "schemars 1.2.1",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -3376,6 +3378,7 @@ dependencies = [
  "horizon-session-protocol",
  "horizon-terminal-core",
  "portable-pty",
+ "schemars 1.2.1",
  "serde_json",
  "sysinfo 0.39.6",
  "tempfile",
@@ -3392,6 +3395,7 @@ dependencies = [
  "base64",
  "crossbeam-channel",
  "horizon-session-protocol",
+ "schemars 1.2.1",
  "serde",
  "serde_json",
  "termwiz",
@@ -7184,6 +7188,7 @@ dependencies = [
  "schemars_derive 1.2.1",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]

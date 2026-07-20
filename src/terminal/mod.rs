@@ -1042,7 +1042,10 @@ fn paint_terminal(
         // Block keeps its pre-v7 translucency so the glyph under it stays
         // readable; the bar/outline shapes cover no glyph and paint opaque.
         match cursor.shape {
-            horizon_terminal_core::TerminalCursorShape::Block => {
+            // `Unknown` (skew catch-all) paints as the default block --
+            // see `TerminalCursorShape::Unknown`'s doc.
+            horizon_terminal_core::TerminalCursorShape::Block
+            | horizon_terminal_core::TerminalCursorShape::Unknown(_) => {
                 color.a = 0.6;
                 window.paint_quad(fill(cell, color));
             }

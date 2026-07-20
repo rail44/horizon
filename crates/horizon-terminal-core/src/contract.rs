@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-use horizon_session_protocol::{Envelope as ProtocolEnvelope, WireError};
+use horizon_session_protocol::{Envelope as ProtocolEnvelope, UnknownPayload, WireError};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use termwiz::input::{KeyCode, Modifiers};
 use uuid::Uuid;
@@ -15,7 +16,7 @@ pub const TERMINAL_CONTROL_KIND: &str = "terminal_control";
 pub const TERMINAL_COMMAND_KIND: &str = "terminal_command";
 pub const TERMINAL_UPDATE_KIND: &str = "terminal_update";
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TerminalSpawnSpec {
     pub shell: String,
     pub args: Vec<String>,
@@ -24,22 +25,27 @@ pub struct TerminalSpawnSpec {
     pub color_scheme: TerminalColorScheme,
     pub control_socket: PathBuf,
     pub fallback_cwd: PathBuf,
+    #[serde(default)]
     pub spawn_source_session_id: Option<Uuid>,
     pub initial_size: TerminalSize,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TerminalSummary {
     pub session_id: Uuid,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum TerminalAttachResult {
     Attached,
     NotFound,
+    /// Deserialize-only skew catch-all — see
+    /// [`horizon_session_protocol::UnknownPayload`]. Keep last.
+    #[serde(untagged)]
+    Unknown(UnknownPayload),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum TerminalControl {
     List {
         request_id: Uuid,
@@ -56,13 +62,25 @@ pub enum TerminalControl {
         request_id: Uuid,
         result: TerminalAttachResult,
     },
+    /// Deserialize-only skew catch-all — see
+    /// [`horizon_session_protocol::UnknownPayload`]. Keep last.
+    #[serde(untagged)]
+    Unknown(UnknownPayload),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum TerminalCommand {
     Input(Vec<u8>),
     Key {
+        /// termwiz's own serde shape, pinned by the termwiz version — an
+        /// external type the schema artifact cannot introspect, so it
+        /// appears there as "any value". A termwiz bump that changes this
+        /// encoding is invisible to the schema checker and must be
+        /// reviewed as the wire change it is.
+        #[schemars(with = "serde_json::Value")]
         key: KeyCode,
+        /// See `key`: termwiz-owned serde shape, "any value" in the schema.
+        #[schemars(with = "serde_json::Value")]
         modifiers: Modifiers,
         event: KeyEventKind,
     },
@@ -92,9 +110,13 @@ pub enum TerminalCommand {
     /// over the spawn-time scheme -- see `core::color::resolve_query_color`.
     SetColorScheme(TerminalColorScheme),
     Shutdown,
+    /// Deserialize-only skew catch-all — see
+    /// [`horizon_session_protocol::UnknownPayload`]. Keep last.
+    #[serde(untagged)]
+    Unknown(UnknownPayload),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum TerminalUpdate {
     Snapshot(TerminalFrame),
     FrameDiff(TerminalFrameDiff),
@@ -106,6 +128,10 @@ pub enum TerminalUpdate {
     },
     Exited,
     Error(String),
+    /// Deserialize-only skew catch-all — see
+    /// [`horizon_session_protocol::UnknownPayload`]. Keep last.
+    #[serde(untagged)]
+    Unknown(UnknownPayload),
 }
 
 /// Which OS clipboard buffer a [`TerminalUpdate::Clipboard`] targets.
@@ -114,10 +140,14 @@ pub enum TerminalUpdate {
 /// automatically as selection completes/updates (Linux convention -- select
 /// = copy to primary). One update type with a destination discriminator,
 /// rather than a second full clipboard pathway.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum ClipboardDestination {
     Clipboard,
     Primary,
+    /// Deserialize-only skew catch-all — see
+    /// [`horizon_session_protocol::UnknownPayload`]. Keep last.
+    #[serde(untagged)]
+    Unknown(UnknownPayload),
 }
 
 pub fn encode_terminal_control(
@@ -155,7 +185,10 @@ pub fn decode_terminal_update(envelope: &ProtocolEnvelope) -> Result<TerminalUpd
 
 /// Demuxed selection sub-commands (`TerminalCommand::SelectionStart`/
 /// `SelectionUpdate`/`CopySelection`), routed onto their own channel by the
-/// host's PTY writer thread — see [`crate::CoreReceivers`].
+/// host's PTY writer thread — see [`crate::CoreReceivers`]. Process-local
+/// (crossbeam channels only, never enveloped onto the socket), so it is
+/// deliberately outside the wire-schema artifact and carries no `Unknown`
+/// skew catch-all.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SelectionCommand {
     Start {

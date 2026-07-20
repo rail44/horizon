@@ -1,0 +1,2138 @@
+{
+  "$comment": "Generated from the live wire types. Regenerate with `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-sessiond wire_schema`; additive-vs-reshape classification of changes is scripts/check-wire-schema.sh (docs/remoc-adoption-design.md §4).",
+  "$defs": {
+    "ApprovalKind": {
+      "anyOf": [
+        {
+          "const": "Standard",
+          "description": "An ordinary first-time approval request -- the only kind that\nexisted before this leg.",
+          "type": "string"
+        },
+        {
+          "const": "SandboxDenialRetry",
+          "description": "A tier-1 sandboxed `bash` call looked denied by the sandbox itself\n(`horizon_sandbox::is_likely_sandbox_denied`) -- approving reruns the\nsame call with the sandbox off (`bash::BashCompletion::\nRetryWithoutSandbox`, `docs/agent-approval-design.md`'s \"Denial UX\").",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A tier-1 sandboxed `bash` call's network egress was refused by the\nallowlist proxy for one or more domains (`bash::BashCompletion::\nDomainDenied`, `docs/agent-approval-design.md` leg 4b). Approving\nadds `domains` to this session's own allowlist and reruns the SAME\ncall, still sandboxed; denying forwards `prior_result` as-is -- the\ncall already ran to completion (unlike `SandboxDenialRetry`, there is\na genuine result, not just a denial-shaped reason string), so a deny\nleaves that real, already-failed-on-its-own-terms outcome as the\nfinal one rather than synthesizing a fresh \"denied by user\" marker.",
+          "properties": {
+            "DomainDenialRetry": {
+              "properties": {
+                "domains": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "prior_result": {
+                  "$ref": "#/$defs/ToolCallResult"
+                }
+              },
+              "required": [
+                "domains",
+                "prior_result"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "DomainDenialRetry"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "Distinguishes the shape of a pending [`ApprovalRequest`] -- what\n`tools::approval::resolve_bash` needs to tell an ordinary approval, a\nsandbox-denial retry, and a network-domain-denial retry apart, since the\nthree resolve an Approve decision differently (`docs/agent-approval-\ndesign.md`'s \"Denial UX\" and leg 4b's \"denial -> approval -> retry\nflow\"). Also lets the UI render each kind with its own copy without\nhaving to sniff `ApprovalRequest::reason`'s free text (today it doesn't,\nbut this keeps that door open)."
+    },
+    "ApprovalRequest": {
+      "properties": {
+        "call_id": {
+          "$ref": "#/$defs/ToolCallId"
+        },
+        "kind": {
+          "$ref": "#/$defs/ApprovalKind",
+          "default": "Standard",
+          "description": "Which kind of approval this is -- see [`ApprovalKind`]. `#[serde(\ndefault)]` so a `Record` persisted before this field existed still\ndeserializes, reading as the same [`ApprovalKind::Standard`] every\napproval request was before this leg."
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ClipboardDestination": {
+      "anyOf": [
+        {
+          "enum": [
+            "Clipboard",
+            "Primary"
+          ],
+          "type": "string"
+        }
+      ],
+      "description": "Which OS clipboard buffer a [`TerminalUpdate::Clipboard`] targets.\n`Clipboard` is the explicit-copy path (Cmd/Ctrl+C, OSC 52 writes);\n`Primary` is the X11/Wayland middle-click-paste buffer, written\nautomatically as selection completes/updates (Linux convention -- select\n= copy to primary). One update type with a destination discriminator,\nrather than a second full clipboard pathway."
+    },
+    "Command": {
+      "anyOf": [
+        {
+          "enum": [
+            "Shutdown"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Initialize": {
+              "$ref": "#/$defs/Initialization"
+            }
+          },
+          "required": [
+            "Initialize"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "UserMessage": {
+              "properties": {
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "UserMessage"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Cancel": {
+              "properties": {
+                "request_id": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/RequestId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "Cancel"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ApproveToolCall": {
+              "properties": {
+                "call_id": {
+                  "$ref": "#/$defs/ToolCallId"
+                }
+              },
+              "required": [
+                "call_id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "ApproveToolCall"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "DenyToolCall": {
+              "properties": {
+                "call_id": {
+                  "$ref": "#/$defs/ToolCallId"
+                },
+                "reason": {
+                  "default": null,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "call_id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "DenyToolCall"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ToolCallResult": {
+              "$ref": "#/$defs/ToolCallResult"
+            }
+          },
+          "required": [
+            "ToolCallResult"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "ContinueTurn",
+          "description": "Resumes a turn the turn-loop guard halted (`TurnEndReason::\nHaltedByIterationCap`/`HaltedByDoomLoop`), without composing a new\nuser message -- `docs/issues/002-agent-iteration-cap-halts-real-\nwork.md`'s resolution, decision 3 (\"Continue is one action\"). The\nsession loop (`providers::rig::session::run_session_loop`) resets\nthe guard and re-enters the turn loop from the halted result it\nalready recorded. A safe no-op when there is nothing halted to\nresume (e.g. sent to an idle session, or replayed from a persisted\nlog -- replay must never auto-resume a halted turn, so nothing in\nbootstrap ever sends this on a session's behalf).",
+          "type": "string"
+        }
+      ]
+    },
+    "Control": {
+      "anyOf": [
+        {
+          "enum": [
+            "session_list"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "session_list_result": {
+              "items": {
+                "$ref": "#/$defs/SessionSummary"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "session_list_result"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "session_new": {
+              "$ref": "#/$defs/SessionNew"
+            }
+          },
+          "required": [
+            "session_new"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "session_load": {
+              "$ref": "#/$defs/SessionLoad"
+            }
+          },
+          "required": [
+            "session_load"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "host_tool_request": {
+              "$ref": "#/$defs/HostToolRequest"
+            }
+          },
+          "required": [
+            "host_tool_request"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "host_tool_response": {
+              "$ref": "#/$defs/HostToolResponse"
+            }
+          },
+          "required": [
+            "host_tool_response"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Ephemeral tool-call-argument-streaming preview\n(`contract::ProviderEvent::tool_call_progress`), session-scoped via\nthe envelope's own `session_id` (not this payload). `contract::Event`\ndeliberately has no variant for this -- it's UI-only feedback, never\npart of conversation history and never persisted (see\n[`ToolCallProgress`]'s own doc comment) -- so a step-3 pass filtered\nit out entirely rather than invent a wire `Event` representation for\nsomething the contract itself excludes. Restored here as its own\ncontrol message instead: reuses `contract::ToolCallProgress` as-is\n(guardrail 1 is about the *direction* `wire` -> `contract` already\nestablished by every other `Control` payload, not about which module\nowns a struct). See `horizon-sessiond`'s `session::handle_provider_event`\n(sender) and `horizon`'s `agent::connection::dispatch_incoming`\n(receiver, which folds it through the exact same\n`apply_tool_call_progress_to_frame` path a persisted event would).",
+          "properties": {
+            "tool_call_progress": {
+              "$ref": "#/$defs/ToolCallProgress"
+            }
+          },
+          "required": [
+            "tool_call_progress"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A session's resolved model id, session-scoped via the envelope's own\n`session_id` -- same shape of exception as [`Control::ToolCallProgress`]\njust above: `contract::ProviderEvent::session_model` is ephemeral\n(never part of conversation history, never persisted), so it travels\nas its own `Control` rather than a new `contract::Event` variant. Sent\nonce by `horizon-sessiond`, either right after a fresh\n`Control::SessionNew` resolves its session's model, or alongside a\n`Control::SessionLoad`'s replayed events (so a (re)attaching client\ngets it too, not just the client present at session start) -- see\n`docs/agent-output-ui-amendment.md`'s dated model-chip addendum.\nOmitted entirely when the provider has no resolvable model (mirrors\n[`Control::SkippedLines`]'s \"just don't send it\" convention below).",
+          "properties": {
+            "session_model": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "session_model"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "This process's own startup event-log corruption diagnostics\n(`persistence::event_log::ReadReport::skipped_summary`), sent once\nper connection -- after `horizon-sessiond`'s startup resume finishes,\nnever blocking `Hello`'s immediate reply the way answering inside\n`Hello` itself would (see `horizon-sessiond::main`'s bind-first\nordering doc comment; `session_list`/`session_load` already block on\nthe same readiness gate for the same reason). Connection-global, like\n[`Control::SessionList`] -- omitted entirely when nothing was\nskipped. See `horizon-sessiond`'s `main::run_session_hosting_loop`\n(sender) and `horizon`'s `agent::connection::dispatch_incoming`\n(receiver, which folds it into `agent_state_status`, the status\nbar's existing signal).",
+          "properties": {
+            "skipped_lines": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "skipped_lines"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Live correction of a freshly isolated session's authoritative\n`workspace_root` (and, since the same resolution moment also decides\nthe derivation edge, `parent_session_id`) -- session-scoped via the\nenvelope's own `session_id`, same shape of exception as\n[`Control::SessionModel`] above. Sent once by `horizon-sessiond`,\nright after `session::resolve_and_create_isolated_worktree` resolves\nthis session's isolated worktree: worktree creation is real IO that\nonly finishes *after* `Control::SessionNew` already returned, so a\nfresh spawn's shell-side `workspace_root` is only ever the\npre-isolation guess until now. Closes the last \"still eventual, not\nlive\" gap `docs/session-relationship-design.md`'s delivery notes call\nout: without this, a session created and used within one continuous\nrun only saw its corrected root/parent via a later\n`spawn_agent_resume`/`spawn_workspace_restore` sweep (daemon restart\nor UI restart). Not sent at all when isolation fails and degrades to\na shared spawn -- there is nothing to correct then, mirroring\n[`SessionSummary::parent_session_id`]'s \"the edge exists only via\nisolation\".",
+          "properties": {
+            "workspace_root_resolved": {
+              "$ref": "#/$defs/WorkspaceRootResolved"
+            }
+          },
+          "required": [
+            "workspace_root_resolved"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "Agent-domain control messages. Shared connection lifecycle controls live\nin `horizon_session_protocol::SessionControl`."
+    },
+    "Envelope": {
+      "description": "A domain-neutral session-daemon envelope. `kind` selects a sister\nvocabulary; `payload` is decoded by that domain only after the shared\nversion check succeeds.",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "payload": true,
+        "session_id": {
+          "default": null,
+          "format": "uuid",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "v": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "v",
+        "kind",
+        "payload"
+      ],
+      "type": "object"
+    },
+    "Error": {
+      "properties": {
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "type": "object"
+    },
+    "Event": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "StateChanged": {
+              "$ref": "#/$defs/SessionState"
+            }
+          },
+          "required": [
+            "StateChanged"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ReasoningDelta": {
+              "$ref": "#/$defs/MessageDelta"
+            }
+          },
+          "required": [
+            "ReasoningDelta"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "AssistantTextDelta": {
+              "$ref": "#/$defs/MessageDelta"
+            }
+          },
+          "required": [
+            "AssistantTextDelta"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "MessageCommitted": {
+              "$ref": "#/$defs/Message"
+            }
+          },
+          "required": [
+            "MessageCommitted"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ToolCallRequested": {
+              "$ref": "#/$defs/ToolCallRequest"
+            }
+          },
+          "required": [
+            "ToolCallRequested"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ToolCallStarted": {
+              "$ref": "#/$defs/ToolCallId"
+            }
+          },
+          "required": [
+            "ToolCallStarted"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ToolCallFinished": {
+              "$ref": "#/$defs/ToolCallResult"
+            }
+          },
+          "required": [
+            "ToolCallFinished"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ApprovalRequested": {
+              "$ref": "#/$defs/ApprovalRequest"
+            }
+          },
+          "required": [
+            "ApprovalRequested"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A turn's completion request left Horizon for the provider (e.g. the\nrig OpenAI streaming call in `providers::rig::completion`). Marks the\nstart of the \"waiting on the model\" window so persisted history can\nattribute silence between a user message and the first delta to\nprovider latency rather than local processing — see\n`docs/agent-duckdb-state-design.md`. Carries the model id so replay\ndoesn't need to cross-reference config.",
+          "properties": {
+            "ProviderRequestSent": {
+              "$ref": "#/$defs/ProviderRequestSent"
+            }
+          },
+          "required": [
+            "ProviderRequestSent"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "ProviderRequestFirstToken",
+          "description": "The first chunk of any kind (text, reasoning, tool-call delta, or an\nerror frame) arrived from the provider for the request marked by the\nmost recent [`Event::ProviderRequestSent`]. Ends the \"waiting on the\nmodel\" window; the gap between the two is provider time-to-first-byte.",
+          "type": "string"
+        },
+        {
+          "const": "ProviderRequestFinished",
+          "description": "The provider's response stream for the most recent\n[`Event::ProviderRequestSent`] ended (normally or via cancellation).\nEmitted before any resulting `MessageCommitted`/`ToolCallRequested`\nevents, so replay can bound the request's total wall-clock span.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Error": {
+              "$ref": "#/$defs/Error"
+            }
+          },
+          "required": [
+            "Error"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Exited": {
+              "$ref": "#/$defs/Exit"
+            }
+          },
+          "required": [
+            "Exited"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A turn's explicit end, carrying why it ended — added in\n`docs/agent-runtime-split-design.md`'s step 4 (\"Turn end becomes an\nexplicit contract event\") so bootstrap/replay never has to infer a\nturn's fate from state churn, and so an ACP `session/prompt`\nresponse's stop reason is derivable rather than inferred (guardrail\n3). Emitted by the session loop right before the `StateChanged` that\nfollows a turn's end (see `providers::rig::session`), so it still\ncarries the ending turn's `turn_id` under `persistence::event_log`'s\nexisting tracking. Folded into an `AgentFrameItem::TurnEnded` receipt\nby `frame::apply_agent_event_to_frame` (see\n`docs/agent-output-ui-amendment.md`'s 2026-07-12 addendum) — the\nmodel id and elapsed duration attached to that item are derived at\nfold time (from the turn's most recent `ProviderRequestSent` and a\nreducer-side wall clock, respectively), not carried on this event\nitself, so this variant's own wire shape stays unchanged.",
+          "properties": {
+            "TurnEnded": {
+              "$ref": "#/$defs/TurnEndReason"
+            }
+          },
+          "required": [
+            "TurnEnded"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Exit": {
+      "properties": {
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
+    "Hello": {
+      "description": "Sent by either peer during the session-daemon handshake.",
+      "properties": {
+        "binary_id": {
+          "type": "string"
+        },
+        "contract_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "contract_version",
+        "binary_id"
+      ],
+      "type": "object"
+    },
+    "HostToolRequest": {
+      "description": "The agent (child) asking the client to run a host-coupled tool (e.g.\n`workspace.snapshot`) over this same connection -- guardrail 4. Not yet\nsent or handled anywhere in step 2 (tool execution stays in Horizon\nuntil step 3); the shape exists here so the wire format is settled.",
+      "properties": {
+        "input": true,
+        "request_id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "tool_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "tool_id",
+        "input"
+      ],
+      "type": "object"
+    },
+    "HostToolResponse": {
+      "properties": {
+        "output": true,
+        "request_id": {
+          "$ref": "#/$defs/RequestId"
+        }
+      },
+      "required": [
+        "request_id",
+        "output"
+      ],
+      "type": "object"
+    },
+    "Initialization": {
+      "properties": {
+        "provider_id": {
+          "$ref": "#/$defs/ProviderId"
+        },
+        "role_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoleId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        }
+      },
+      "required": [
+        "session_id",
+        "provider_id"
+      ],
+      "type": "object"
+    },
+    "KeyEventKind": {
+      "anyOf": [
+        {
+          "enum": [
+            "Press",
+            "Repeat",
+            "Release"
+          ],
+          "type": "string"
+        }
+      ],
+      "description": "Classifies a key event per the Kitty keyboard protocol's \"event types\"\n(<https://sw.kovidgoyal.net/kitty/keyboard-protocol/>, gated on the\n`REPORT_EVENT_TYPES` progressive-enhancement flag): an initial press, an\nOS/winit-synthesized repeat while the key is held, or a release.\n\nThreaded from `src/terminal/mod.rs`'s key handling (where gpui's\n`KeyDownEvent`/`KeyUpEvent` and its `is_held` repeat flag are classified)\ndown through `TerminalCommand::Key` to\n`terminal::core::TerminalCore::encode_key` and\n`terminal::protocol::kitty_keyboard`, which is the only place a\nnon-`Press` kind changes the bytes actually sent — see that module's doc\nfor how (and when) it does."
+    },
+    "Message": {
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/MessageRole"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "text"
+      ],
+      "type": "object"
+    },
+    "MessageDelta": {
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/MessageRole"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "text"
+      ],
+      "type": "object"
+    },
+    "MessageRole": {
+      "anyOf": [
+        {
+          "enum": [
+            "User",
+            "Assistant"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "NamedColor": {
+      "anyOf": [
+        {
+          "enum": [
+            "Black",
+            "Red",
+            "Green",
+            "Yellow",
+            "Blue",
+            "Magenta",
+            "Cyan",
+            "White",
+            "BrightBlack",
+            "BrightRed",
+            "BrightGreen",
+            "BrightYellow",
+            "BrightBlue",
+            "BrightMagenta",
+            "BrightCyan",
+            "BrightWhite",
+            "DimBlack",
+            "DimRed",
+            "DimGreen",
+            "DimYellow",
+            "DimBlue",
+            "DimMagenta",
+            "DimCyan",
+            "DimWhite",
+            "Foreground",
+            "Background",
+            "Cursor",
+            "BrightForeground",
+            "DimForeground"
+          ],
+          "type": "string"
+        }
+      ],
+      "description": "One of the fixed named color roles a cell can carry. This set was\nderived by reading exactly what `core::render::snapshot_frame` (via\n`cell_fg`/`cell_bg`) can produce from a live `alacritty_terminal::Term`,\nnot assumed:\n\n- The 8 base ANSI hues (`Black`..`White`) and their bright forms\n  (`BrightBlack`..`BrightWhite`) reach frames directly from SGR\n  30-37/90-97, or as the bold-promoted form of a base hue (`cell_fg`\n  applies `NamedColor::to_bright` under the `BOLD` flag).\n- Dim forms (`DimBlack`..`DimWhite`) are *not* a normal SGR target —\n  they only ever appear as the dim-promoted form of a base hue\n  (`cell_fg` applies `NamedColor::to_dim` under the `DIM` flag).\n- `Foreground`/`Background`/`Cursor` are the default-role slots; only\n  `Foreground` is ever bold/dim-promoted this way too, producing\n  `BrightForeground`/`DimForeground` (`Background`/`Cursor` cells never\n  carry `BOLD`/`DIM` promotion — `cell_bg` only reads the *default*\n  foreground's promoted form when swapping colors under `INVERSE`)."
+    },
+    "ProviderId": {
+      "type": "string"
+    },
+    "ProviderRequestSent": {
+      "description": "Payload for [`Event::ProviderRequestSent`]: the model id the provider was\nasked to complete against, so the persisted event log doesn't depend on\nseparately-stored config to answer \"which model was this turn waiting\non?\".",
+      "properties": {
+        "model": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "type": "object"
+    },
+    "RequestId": {
+      "type": "string"
+    },
+    "Rgb": {
+      "description": "Schema stand-in for `alacritty_terminal::vte::ansi::Rgb`, which\n(de)serializes as a plain `{r, g, b}` u8 struct but is external and\ncannot derive `JsonSchema` itself. Kept byte-for-byte in sync with that\nserde shape; the wire-schema artifact sees this in its place.",
+      "properties": {
+        "b": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "g": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "r": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "r",
+        "g",
+        "b"
+      ],
+      "type": "object"
+    },
+    "RoleId": {
+      "description": "The wire/contract-level role identifier -- a `String` newtype in the\nsame style as [`crate::contract::ProviderId`], so it round-trips through\nJSON (`wire::SessionNew`/`SessionSummary`) and the persisted event log\n(`persistence::event_log::Record`) unchanged.",
+      "type": "string"
+    },
+    "SessionControl": {
+      "anyOf": [
+        {
+          "enum": [
+            "ping",
+            "pong",
+            "drain"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "hello": {
+              "$ref": "#/$defs/Hello"
+            }
+          },
+          "required": [
+            "hello"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "handshake_rejected": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "handshake_rejected"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "The version-stable shared vocabulary (see the crate doc): decodable\nregardless of the envelope's `v`, because the handshake and\ncontract-mismatch recovery are exactly the conversations that happen\n*between* versions. Existing variants must never change shape or\nmeaning; extend additively only. Peers built before the `Unknown`\ncatch-all existed (v9 and earlier builds predating the skew groundwork)\ntreat an unknown variant as malformed; peers from this build on decode\nit as [`SessionControl::Unknown`] and ignore it."
+    },
+    "SessionId": {
+      "description": "This crate's own session identifier: a UUID newtype that serializes as a\nbare UUID string (serde's transparent treatment of one-field tuple\nstructs) — the shape a future wire/IPC boundary will use (see\n`docs/agent-runtime-split-design.md`). Horizon has its own shared\n`session::SessionId` (used across terminal and agent sessions alike) —\nthis crate cannot depend on it (that's the whole point of the split), so\nthe two are distinct types connected by `From` impls at the seam in\nHorizon's `agent` module.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "SessionLoad": {
+      "properties": {
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "type": "object"
+    },
+    "SessionNew": {
+      "description": "Per `docs/agent-runtime-split-design.md` guardrail 5, `session_new` is\ndistinct from `session_load` and carries per-session overrides.\n`role_id` replaces this field's former placeholder shape\n(`config_overrides: Option<serde_json::Value>`) -- see\n[`CONTRACT_VERSION`]'s doc comment for why that was a breaking, not\nadditive, change.",
+      "properties": {
+        "isolate": {
+          "default": false,
+          "description": "Whether `horizon-sessiond` should give this session its own git\nworktree, branched from `spawn_source_session_id`'s directory,\ninstead of confining it to `workspace_root` directly -- decision 3's\nper-spawn isolation knob. The origin-based default (palette: shared;\nCLI/control-plane: isolated) plus any explicit per-spawn override are\nboth resolved client-side before this ever reaches the wire;\n`horizon-sessiond` just executes whatever concrete choice arrives\nhere (see `docs/session-relationship-design.md` decision 3). `false`\n(via `#[serde(default)]`) reproduces today's shared-directory\nbehavior for a peer built before this field existed.",
+          "type": "boolean"
+        },
+        "provider_id": {
+          "$ref": "#/$defs/ProviderId"
+        },
+        "role_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoleId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        },
+        "spawn_source_session_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The pane/session this spawn was invoked \"from\" -- e.g. the split\ntarget, or whatever pane was active/named at spawn time. Independent\nof `isolate` (decision 3's two knobs): carried even for a\nshared-directory spawn, but only turns into a recorded\n`SessionSummary.parent_session_id` lineage edge when `isolate` is\nalso true (decision 2: \"the edge exists only via isolation\"). `None`\nfor a spawn with no source pane at all (e.g. a fresh tab with\nnothing active). Additive, like `workspace_root` above."
+        },
+        "workspace_root": {
+          "default": null,
+          "description": "The directory `horizon-sessiond`'s file tools should confine this\nsession to (`tools::state::ToolSessionState::workspace_root`).\n`None` keeps today's behavior -- the session falls back to\n`horizon-sessiond`'s own process cwd (`session::run_session`'s\n`ToolSessionState::for_current_dir` call). Unlike `role_id` above,\nthis is a brand-new field, not a reshape of an existing one, so it's\npurely additive: `#[serde(default)]` lets a peer's `SessionNew`\nwritten before this field existed still parse (as `None`), mirroring\n`persistence::event_log::Record::role_id`'s own additive-field\nprecedent rather than [`CONTRACT_VERSION`]'s breaking-change one.\nPassed into `SessiondHandle::start_session` by the workspace layer\n(`WorkspaceShell::reconcile`), which computes the Horizon process's\nown cwd once per session (falling back to `None` only if that cwd\ncan't be read) and records the same value on the session's\n`WorkspaceSession::workspace_root` -- so a session's workspace root\ntracks whichever Horizon window spawned it, not `horizon-sessiond`'s\nown cwd (one shared, long-lived daemon per user, started from\nwhatever directory happened to be current the first time it was\nlaunched).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "session_id",
+        "provider_id"
+      ],
+      "type": "object"
+    },
+    "SessionState": {
+      "anyOf": [
+        {
+          "enum": [
+            "Created",
+            "Running",
+            "WaitingForUser",
+            "WaitingForApproval",
+            "ToolRunning",
+            "Cancelled",
+            "Completed",
+            "Failed",
+            "Terminated"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "SessionSummary": {
+      "description": "One entry of a [`Control::SessionListResult`] reply.",
+      "properties": {
+        "parent_session_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The session this one derives from, per\n`docs/session-relationship-design.md` decisions 1-3: set only when\nthis session was actually spawned isolated (its own git worktree\nbranched from the source session's directory) -- a shared-directory\nspawn creates no edge, so this stays `None` even if a spawn source\nwas given. `#[serde(default)]`, purely additive like `SessionNew.\nworkspace_root` below -- no `CONTRACT_VERSION` bump. A resumed\nsession (`session::resume_persisted_sessions`) always reports\n`None` here today: lineage lives in `horizon-sessiond`'s in-memory\n`SessiondState`, not the event log, so it doesn't survive a\n`horizon-sessiond` process restart -- the same accepted gap\n`SessionNew.workspace_root` already has (see that field's doc\ncomment)."
+        },
+        "provider_id": {
+          "$ref": "#/$defs/ProviderId"
+        },
+        "role_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoleId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "So a (re)connecting client can label a resumed/live session by its\nrole without a separate round trip -- mirrors `provider_id` above."
+        },
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        },
+        "workspace_root": {
+          "default": null,
+          "description": "This session's *actual* confinement directory, as `horizon-sessiond`\nitself resolved it -- the authoritative counterpart to `SessionNew.\nworkspace_root` (that field is only ever the caller's pre-spawn\nvalue; for an isolated session, `horizon-sessiond` overrides it with\nthe worktree path it creates, which the caller cannot know in\nadvance since worktree creation finishes asynchronously, after\n`Control::SessionNew` already returned -- see\n`session::resolve_and_create_isolated_worktree`). Additive, like\n`parent_session_id` above; populated from the same `SessionEntry.\nworkspace_root` a resumed session's summary reads too, so this\n*does* survive a `horizon-sessiond` restart even though `parent_\nsession_id` doesn't -- a resumed session's `SessionEntry.\nworkspace_root` is `None` today regardless (see `SessionNew.\nworkspace_root`'s \"resumed sessions don't persist it\" note), so in\npractice this is `None` for a resumed session too, but for a\ndifferent, narrower reason (no persisted value to resume from, not\n\"lineage doesn't survive a restart\"). Read by `WorkspaceShell::\nspawn_agent_resume`/`spawn_workspace_restore` to correct the\nworkspace model's stored root for a session it adopts.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "session_id",
+        "provider_id"
+      ],
+      "type": "object"
+    },
+    "TerminalAttachResult": {
+      "anyOf": [
+        {
+          "enum": [
+            "Attached",
+            "NotFound"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "TerminalColor": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Named": {
+              "$ref": "#/$defs/NamedColor"
+            }
+          },
+          "required": [
+            "Named"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Indexed": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "Indexed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Rgb": {
+              "items": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            }
+          },
+          "required": [
+            "Rgb"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "A cell's logical color: one of the 16 base ANSI slots (+ their bold/dim\npromotions), a default-role slot (foreground/background/cursor, also\nbold/dim-promotable), an xterm 256-color palette index, or a literal\n24-bit truecolor value.\n\nHorizon-owned rather than re-exported from `alacritty_terminal` (as it\nwas before this type existed) so UI clients (`src/theme/ansi.rs`,\n`src/terminal/`) don't need `alacritty_terminal` as a dependency just to\nmatch on a cell's color. `core::render::snapshot_frame` is the one place\nthat converts from `alacritty_terminal`'s own `vte::ansi::Color`/\n`NamedColor` into this type, at frame-build time.\n\n`docs/session-daemon-design.md` decision 8: this is what actually crosses\nthe `TerminalFrame`/`TerminalSpan` boundary now, instead of a resolved\n`[u8; 3]` RGB triple — resolving a logical color against a theme (the app\ndefault, or in the future a per-client one) is the UI's job\n(`theme::resolve`, `src/theme/ansi.rs`), not this crate's. A color a\nterminal app redefined at runtime via OSC 4/10/11/12 (`Term::colors()`'s\nlive per-session overrides) still affects cell *rendering*: `TerminalFrame::palette_overrides`\ncarries that sparse index→RGB table alongside the logical colors, and the\nUI consults it before falling back to the theme. `TerminalCore`'s own\nOSC 4/10/11/12 *query replies* (`core::color::resolve_query_color`) use\nalacritty's own `Colors`/`NamedColor` directly, independent of this\nboundary."
+    },
+    "TerminalColorScheme": {
+      "description": "Crate-local mirror of the host's `ui::theme`-derived color roles\n(`terminal::config::TerminalColors`). This crate has no dependency on\n`ui::theme`/floem at all (`docs/session-daemon-design.md` decision 9), so\nthe host converts its live theme into this plain-data struct and pushes\nit in via `TerminalCore::set_color_scheme` — the same \"crate-local\nnewtype / plain-data mirror\" pattern `crates/horizon-agent` already uses\nfor `SessionId`.\n\n[`Default`] duplicates the host's own built-in theme defaults\n(`ui::theme`'s `ansi` module and `text_primary`/`surface_base`/`accent`\nroles) so a freshly constructed `TerminalCore` that never receives an\nexplicit scheme (every test in this crate) still answers color queries\nwith the same values Horizon has always shipped. In the running app this\ndefault is only ever transiently observed (`TerminalSession::spawn`\npushes the live theme immediately after construction).",
+      "properties": {
+        "background": {
+          "$ref": "#/$defs/Rgb"
+        },
+        "black": {
+          "$ref": "#/$defs/Rgb"
+        },
+        "blue": {
+          "$ref": "#/$defs/Rgb"
+        },
+        "bright_black": {
+          "$ref": "#/$defs/Rgb"
+        },
+        "bright_blue": {
+          "$ref": "#/$defs/Rgb"
+        },
+        "bright_cyan": {
+          "$ref": "#/$defs/Rgb"
+        },
+        "bright_green": {
+          "$ref": "#/$defs/Rgb"
+        },
+        "bright_magenta": {
+          "$ref": "#/$defs/Rgb"
+        },
+        "bright_red": {
+          "$ref": "#/$defs/Rgb"
+        },
+        "bright_white": {
+          "$ref": "#/$defs/Rgb"
+        },
+        "bright_yellow": {
+          "$ref": "#/$defs/Rgb"
+        },
+        "cursor": {
+          "$ref": "#/$defs/Rgb"
+        },
+        "cyan": {
+          "$ref": "#/$defs/Rgb"
+        },
+        "foreground": {
+          "$ref": "#/$defs/Rgb"
+        },
+        "green": {
+          "$ref": "#/$defs/Rgb"
+        },
+        "magenta": {
+          "$ref": "#/$defs/Rgb"
+        },
+        "red": {
+          "$ref": "#/$defs/Rgb"
+        },
+        "white": {
+          "$ref": "#/$defs/Rgb"
+        },
+        "yellow": {
+          "$ref": "#/$defs/Rgb"
+        }
+      },
+      "required": [
+        "foreground",
+        "background",
+        "cursor",
+        "black",
+        "red",
+        "green",
+        "yellow",
+        "blue",
+        "magenta",
+        "cyan",
+        "white",
+        "bright_black",
+        "bright_red",
+        "bright_green",
+        "bright_yellow",
+        "bright_blue",
+        "bright_magenta",
+        "bright_cyan",
+        "bright_white"
+      ],
+      "type": "object"
+    },
+    "TerminalCommand": {
+      "anyOf": [
+        {
+          "enum": [
+            "CopySelection",
+            "Shutdown"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Input": {
+              "items": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "Input"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Key": {
+              "properties": {
+                "event": {
+                  "$ref": "#/$defs/KeyEventKind"
+                },
+                "key": {
+                  "description": "termwiz's own serde shape, pinned by the termwiz version — an\nexternal type the schema artifact cannot introspect, so it\nappears there as \"any value\". A termwiz bump that changes this\nencoding is invisible to the schema checker and must be\nreviewed as the wire change it is."
+                },
+                "modifiers": {
+                  "description": "See `key`: termwiz-owned serde shape, \"any value\" in the schema."
+                }
+              },
+              "required": [
+                "key",
+                "modifiers",
+                "event"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Paste": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Paste"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Resize": {
+              "$ref": "#/$defs/TerminalSize"
+            }
+          },
+          "required": [
+            "Resize"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Scroll": {
+              "$ref": "#/$defs/TerminalScroll"
+            }
+          },
+          "required": [
+            "Scroll"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Mouse": {
+              "$ref": "#/$defs/TerminalMouseReport"
+            }
+          },
+          "required": [
+            "Mouse"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "SelectionStart": {
+              "properties": {
+                "kind": {
+                  "$ref": "#/$defs/TerminalSelectionKind"
+                },
+                "point": {
+                  "$ref": "#/$defs/TerminalSelectionPoint"
+                }
+              },
+              "required": [
+                "point",
+                "kind"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "SelectionStart"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "SelectionUpdate": {
+              "$ref": "#/$defs/TerminalSelectionPoint"
+            }
+          },
+          "required": [
+            "SelectionUpdate"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A pane focus transition (`true` = gained focus, `false` = lost it),\nforwarded to `TerminalCore::focus_input` so it can be reported to\nthe attached app as `CSI I`/`CSI O` if it negotiated mode 1004. The\nsource is `app::runtime::wire_focus_reporting`, which composes\nHorizon's own window focus with which visible pane is active.",
+          "properties": {
+            "Focus": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "Focus"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Re-pushes the host's live theme-derived color scheme into a\n*running* session's `TerminalCore` (`TerminalCore::set_color_scheme`),\nso a subsequent OSC 10/11/12 query reply reflects a live theme apply\n(`Reload Config` / the theme settings view) instead of the stale\nspawn-time snapshot (`TerminalSpawnSpec::color_scheme`). App-set\nlive overrides (`Term::colors()`, e.g. an OSC 4/10/11/12 write the\nattached app made itself) still win over this, exactly as they do\nover the spawn-time scheme -- see `core::color::resolve_query_color`.",
+          "properties": {
+            "SetColorScheme": {
+              "$ref": "#/$defs/TerminalColorScheme"
+            }
+          },
+          "required": [
+            "SetColorScheme"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TerminalControl": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "List": {
+              "properties": {
+                "request_id": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "request_id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "List"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ListResult": {
+              "properties": {
+                "request_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "sessions": {
+                  "items": {
+                    "$ref": "#/$defs/TerminalSummary"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "request_id",
+                "sessions"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "ListResult"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Create": {
+              "$ref": "#/$defs/TerminalSpawnSpec"
+            }
+          },
+          "required": [
+            "Create"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Attach": {
+              "properties": {
+                "request_id": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "request_id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Attach"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "AttachResult": {
+              "properties": {
+                "request_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "result": {
+                  "$ref": "#/$defs/TerminalAttachResult"
+                }
+              },
+              "required": [
+                "request_id",
+                "result"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "AttachResult"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TerminalCursor": {
+      "properties": {
+        "col": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "row": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "shape": {
+          "$ref": "#/$defs/TerminalCursorShape",
+          "description": "The DECSCUSR-negotiated shape (`CSI Ps SP q`; blink variants are\ncollapsed by `alacritty_terminal` itself — the frame carries no\nblink state). A hidden cursor (DECTCEM reset, `CSI ?25l`) is\n`TerminalFrame::cursor == None`, never a shape variant."
+        }
+      },
+      "required": [
+        "row",
+        "col",
+        "shape"
+      ],
+      "type": "object"
+    },
+    "TerminalCursorShape": {
+      "anyOf": [
+        {
+          "enum": [
+            "Block",
+            "Underline",
+            "Beam",
+            "HollowBlock"
+          ],
+          "type": "string"
+        }
+      ],
+      "description": "Mirrors `alacritty_terminal`'s `CursorShape` minus `Hidden` (a hidden\ncursor never reaches the wire — see [`TerminalCursor::shape`])."
+    },
+    "TerminalFrame": {
+      "properties": {
+        "cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalCursor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "keys_as_escape_codes": {
+          "description": "Whether the attached app negotiated kitty's \"report all keys as\nescape codes\" progressive enhancement (`TermMode::\nREPORT_ALL_KEYS_AS_ESC`). Mirrored on the frame — like\n`mouse_reporting` — because it is the *host view's* routing\nsignal: while set, printable text keys must reach the session as\n`TerminalCommand::Key` (so `TerminalCore::encode_key` emits the\nnegotiated kitty encoding) instead of the host's plain-text\ninput path. Encoding itself never depends on this field; the\ncore consults live `TermMode` per key event.",
+          "type": "boolean"
+        },
+        "lines": {
+          "items": {
+            "$ref": "#/$defs/TerminalLine"
+          },
+          "type": "array"
+        },
+        "mouse_reporting": {
+          "type": "boolean"
+        },
+        "palette_overrides": {
+          "description": "Sparse table of this session's live OSC 4/10/11/12 palette overrides\n(`alacritty_terminal::term::color::Colors`), sorted ascending by\nindex for deterministic `Eq`/`PartialEq` — see\n`docs/session-daemon-design.md` decision 8. Index space: 0..=15 base\nANSI, 16..=255 the color cube, 256/257/258\nforeground/background/cursor (`NamedColor::Foreground`/`Background`/\n`Cursor`). Consulted by the host's `theme::resolve`\n(`src/theme/ansi.rs`) before falling back to the per-client theme.",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "items": {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              }
+            ],
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "selection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalSelection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The live selection as semantic frame metadata (goal 2 of\n`docs/terminal-protocol-goals.md`): spans stay pure content, and the\nclient resolves the highlight color against its own theme. Viewport\ncoordinates (the same space as [`TerminalCursor`]), both ends\ninclusive. Clamped to the visible window: `None` while nothing is\nselected *or* while the selection lies entirely outside the current\nviewport; a partially visible selection carries only its visible\nintersection."
+        }
+      },
+      "required": [
+        "lines",
+        "mouse_reporting",
+        "keys_as_escape_codes",
+        "palette_overrides"
+      ],
+      "type": "object"
+    },
+    "TerminalFrameDiff": {
+      "description": "The rows and frame metadata that changed between two terminal snapshots.\n`cursor` is nested so `None` means unchanged and `Some(None)` means hidden;\n`selection` follows the same idiom (`Some(None)` = selection cleared).",
+      "properties": {
+        "changed_rows": {
+          "items": {
+            "$ref": "#/$defs/TerminalRowDiff"
+          },
+          "type": "array"
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalCursor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "keys_as_escape_codes": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "mouse_reporting": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "palette_overrides": {
+          "default": null,
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "items": {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              }
+            ],
+            "type": "array"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "row_count": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "selection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalSelection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "changed_rows",
+        "row_count"
+      ],
+      "type": "object"
+    },
+    "TerminalLine": {
+      "properties": {
+        "spans": {
+          "items": {
+            "$ref": "#/$defs/TerminalSpan"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "spans"
+      ],
+      "type": "object"
+    },
+    "TerminalMouseButton": {
+      "anyOf": [
+        {
+          "enum": [
+            "Left",
+            "Middle",
+            "Right"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "TerminalMouseKind": {
+      "anyOf": [
+        {
+          "enum": [
+            "Press",
+            "Release",
+            "Drag"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "TerminalMouseModifiers": {
+      "properties": {
+        "alt": {
+          "type": "boolean"
+        },
+        "control": {
+          "type": "boolean"
+        },
+        "shift": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "shift",
+        "alt",
+        "control"
+      ],
+      "type": "object"
+    },
+    "TerminalMouseReport": {
+      "properties": {
+        "button": {
+          "$ref": "#/$defs/TerminalMouseButton"
+        },
+        "kind": {
+          "$ref": "#/$defs/TerminalMouseKind"
+        },
+        "modifiers": {
+          "$ref": "#/$defs/TerminalMouseModifiers"
+        },
+        "point": {
+          "$ref": "#/$defs/TerminalSelectionPoint"
+        }
+      },
+      "required": [
+        "kind",
+        "button",
+        "point",
+        "modifiers"
+      ],
+      "type": "object"
+    },
+    "TerminalRowDiff": {
+      "properties": {
+        "index": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "line": {
+          "$ref": "#/$defs/TerminalLine"
+        }
+      },
+      "required": [
+        "index",
+        "line"
+      ],
+      "type": "object"
+    },
+    "TerminalScroll": {
+      "properties": {
+        "lines": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "point": {
+          "$ref": "#/$defs/TerminalSelectionPoint"
+        }
+      },
+      "required": [
+        "lines",
+        "point"
+      ],
+      "type": "object"
+    },
+    "TerminalSelection": {
+      "description": "A selection's two inclusive endpoints in viewport coordinates — see\n`TerminalFrame::selection` for the coordinate/clamping contract. Reuses\n[`TerminalSelectionPoint`], the same cell-coordinate type the input side\n(`TerminalCommand::SelectionStart`/`SelectionUpdate`) already speaks.\nFull rows between `start.row` and `end.row` are entirely selected —\nthere is no block-selection variant in this vocabulary.",
+      "properties": {
+        "end": {
+          "$ref": "#/$defs/TerminalSelectionPoint"
+        },
+        "start": {
+          "$ref": "#/$defs/TerminalSelectionPoint"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "type": "object"
+    },
+    "TerminalSelectionKind": {
+      "anyOf": [
+        {
+          "const": "Simple",
+          "description": "Plain character-range selection (a single click-and-drag).",
+          "type": "string"
+        },
+        {
+          "const": "Word",
+          "description": "Word-boundary selection (a double click), alacritty's \"semantic\".",
+          "type": "string"
+        },
+        {
+          "const": "Line",
+          "description": "Whole-line selection (a triple click or beyond).",
+          "type": "string"
+        }
+      ],
+      "description": "Horizon-owned selection-kind vocabulary for the wire (`TerminalCommand::\nSelectionStart`/`SelectionCommand::Start`) -- deliberately not\n`alacritty_terminal::selection::SelectionType` itself, since that type\ncrosses the daemon/host boundary and this crate's contract types are the\nonly ones allowed to. `TerminalCore::start_selection` maps this onto\n`SelectionType::{Simple, Semantic, Lines}`; see its doc for why\n`Semantic`/`Lines` give word/line selection \"for free\" daemon-side."
+    },
+    "TerminalSelectionPoint": {
+      "properties": {
+        "col": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "row": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "row",
+        "col"
+      ],
+      "type": "object"
+    },
+    "TerminalSize": {
+      "properties": {
+        "cols": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pixel_height": {
+          "description": "Grid height in pixels (`rows * line_height`); see `pixel_width`.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pixel_width": {
+          "description": "Grid width in pixels (`cols * cell_width`), forwarded to the PTY's\n`ws_xpixel` field so every process reading `TIOCGWINSZ` — not just\nHorizon's own renderer — sees real geometry instead of zeros. Derived\nin the host's terminal view (`src/terminal/mod.rs`) from measured\nfont metrics; `0` means \"not yet known\" (e.g. before the view has\nlaid out once).",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rows": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cols",
+        "rows",
+        "pixel_width",
+        "pixel_height"
+      ],
+      "type": "object"
+    },
+    "TerminalSpan": {
+      "properties": {
+        "bg": {
+          "$ref": "#/$defs/TerminalColor"
+        },
+        "columns": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fg": {
+          "$ref": "#/$defs/TerminalColor"
+        },
+        "italic": {
+          "description": "SGR 3. `BOLD`/`DIM` are deliberately *not* mirrored here — they stay\nfolded into `fg` as color promotion (`core::render::cell_fg`), and\n`INVERSE` stays folded in as the fg/bg swap (`cell_bg`), both\nrecorded decisions.",
+          "type": "boolean"
+        },
+        "strikethrough": {
+          "description": "SGR 9.",
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string"
+        },
+        "underline": {
+          "$ref": "#/$defs/TerminalUnderline",
+          "description": "SGR 4 and its `4:x` sub-parameter styles (backlog #44's nvim\nundercurl probe is `4:3`)."
+        },
+        "underline_color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalColor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "SGR 58 underline color. `None` means the client draws the underline\nwith the span's own `fg`. Only ever `Some` while `underline` is not\n[`TerminalUnderline::None`] — a color set on a cell that is not\nunderlined is presentation-dead and normalized away at frame build."
+        }
+      },
+      "required": [
+        "text",
+        "columns",
+        "fg",
+        "bg",
+        "italic",
+        "strikethrough",
+        "underline"
+      ],
+      "type": "object"
+    },
+    "TerminalSpawnSpec": {
+      "properties": {
+        "args": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "color_scheme": {
+          "$ref": "#/$defs/TerminalColorScheme"
+        },
+        "control_socket": {
+          "type": "string"
+        },
+        "fallback_cwd": {
+          "type": "string"
+        },
+        "initial_size": {
+          "$ref": "#/$defs/TerminalSize"
+        },
+        "scrollback_lines": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "shell": {
+          "type": "string"
+        },
+        "spawn_source_session_id": {
+          "default": null,
+          "format": "uuid",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "term": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "shell",
+        "args",
+        "term",
+        "scrollback_lines",
+        "color_scheme",
+        "control_socket",
+        "fallback_cwd",
+        "initial_size"
+      ],
+      "type": "object"
+    },
+    "TerminalSummary": {
+      "properties": {
+        "session_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "type": "object"
+    },
+    "TerminalUnderline": {
+      "anyOf": [
+        {
+          "enum": [
+            "None",
+            "Single",
+            "Double",
+            "Curl",
+            "Dotted",
+            "Dashed"
+          ],
+          "type": "string"
+        }
+      ],
+      "description": "The underline styles of SGR 4's colon sub-parameters (`4:0`..`4:5`),\nHorizon-owned like every frame type (`TerminalColor`'s doc has the\nrationale). Maps 1:1 from `alacritty_terminal`'s cell flags\n(`UNDERLINE`/`DOUBLE_UNDERLINE`/`UNDERCURL`/`DOTTED_UNDERLINE`/\n`DASHED_UNDERLINE`)."
+    },
+    "TerminalUpdate": {
+      "anyOf": [
+        {
+          "enum": [
+            "Bell",
+            "Exited"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Snapshot": {
+              "$ref": "#/$defs/TerminalFrame"
+            }
+          },
+          "required": [
+            "Snapshot"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "FrameDiff": {
+              "$ref": "#/$defs/TerminalFrameDiff"
+            }
+          },
+          "required": [
+            "FrameDiff"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "Title"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Clipboard": {
+              "properties": {
+                "destination": {
+                  "$ref": "#/$defs/ClipboardDestination"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text",
+                "destination"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Clipboard"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Error": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Error"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ToolCallId": {
+      "type": "string"
+    },
+    "ToolCallProgress": {
+      "description": "Tool-call-argument-streaming progress observed mid-turn, before the\nprovider's tool call is complete (rig's\n`StreamedAssistantContent::ToolCallDelta`). Purely a UI feedback signal:\nnever folded into conversation history and never persisted — see\n[`ProviderEvent::tool_call_progress`].",
+      "properties": {
+        "bytes": {
+          "description": "Cumulative argument bytes streamed so far for this call.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "key": {
+          "description": "Rig's `internal_call_id`: stable across every delta for one tool\ncall from the very first chunk, unlike the provider's own tool-call\nid which may not be known yet. Used only to fold repeated deltas for\nthe same call into a single frame item — this is not the eventual\n`ToolCallId` the eventual `ToolCallRequested` carries.",
+          "type": "string"
+        },
+        "tool_id": {
+          "default": null,
+          "description": "The tool/function name, once a `ToolCallDeltaContent::Name` chunk\nhas been observed for this call.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "key",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "ToolCallRequest": {
+      "properties": {
+        "call_id": {
+          "$ref": "#/$defs/ToolCallId"
+        },
+        "input": true,
+        "tool_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "tool_id",
+        "input"
+      ],
+      "type": "object"
+    },
+    "ToolCallResult": {
+      "properties": {
+        "call_id": {
+          "$ref": "#/$defs/ToolCallId"
+        },
+        "denied": {
+          "default": false,
+          "description": "Explicit marker for a user's tool-call denial, set only by\n[`Self::denied`] (used by `tools::approval::synchronous_result`'s\n`ran = false` path -- the deny arms of `resolve_synchronous_tool`/\n`resolve_bash` in `crates/horizon-agent/src/tools/approval.rs`).\nReplaces the old convention of a consumer sniffing `output` for\n`denied_output`'s exact `{\"is_error\": true, \"message\": \"denied by\nuser\"}` shape -- documented as brittle when that convention shipped\n(`docs/agent-output-ui-amendment.md`'s round 3 note) since it\ncouldn't distinguish \"the field happens to read that way\" from \"this\nis contractually a denial\". `#[serde(default)]` (false) so a\n`Record` persisted before this field existed still deserializes --\n`src/agent/turns.rs`'s `is_denied` falls back to the old message-text\ncheck specifically to keep classifying those old records correctly.",
+          "type": "boolean"
+        },
+        "is_error": {
+          "default": false,
+          "description": "Explicit success/failure outcome, lifted out of `output`'s\n`\"is_error\"` JSON convention (every tool in `tools::` already writes\nit on failure -- `docs/agent-feedback-design.md`'s decision 1;\n`persistence::projection::duckdb`'s `insert_tool_result` already\nreads that same convention independently) so a consumer like the\nturn-receipts UI (`docs/agent-output-ui-amendment.md`'s 2026-07-12\naddendum) has a typed field instead of having to sniff `output`\nitself. Use [`Self::new`] rather than a struct literal to keep this\nderived automatically. `#[serde(default)]` (false, i.e. success) so\na `Record` written before this field existed still deserializes --\nmatching the same convention's \"absence means success\" reading.",
+          "type": "boolean"
+        },
+        "output": true
+      },
+      "required": [
+        "call_id",
+        "output"
+      ],
+      "type": "object"
+    },
+    "TurnEndReason": {
+      "anyOf": [
+        {
+          "enum": [
+            "Completed",
+            "Cancelled",
+            "Failed"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "Halted",
+          "description": "Legacy: every guard halt used this bare variant before the above\nresolution. Kept only so a pre-existing persisted event log with\nthis reason still deserializes on replay; no current code path\nproduces it. Renders the same calm \"paused\" treatment as the two\nvariants below, just without a specific guard-kind sentence.",
+          "type": "string"
+        },
+        {
+          "const": "HaltedByIterationCap",
+          "description": "The turn-loop guard's consecutive-tool-turn safety net stopped the\nturn (`providers::rig::session`'s `TurnLoopGuard::record_tool_turn`)\n-- see `docs/agent-tools-design.md`'s \"Error Model and Loop Guards\".",
+          "type": "string"
+        },
+        {
+          "const": "HaltedByDoomLoop",
+          "description": "The turn-loop guard's doom-loop (identical-consecutive-tool-result)\ndetector stopped the turn (`TurnLoopGuard::record_fingerprint`).\nSame section of the design doc.",
+          "type": "string"
+        }
+      ],
+      "description": "Why a turn ended — see [`Event::TurnEnded`]. Named after the design doc's\nfour stop reasons verbatim: \"completed / cancelled / failed /\nhalted-by-guard\" -- `halted-by-guard` is now the two specific\nguard-sourced variants below rather than one bare `Halted`\n(`docs/issues/002-agent-iteration-cap-halts-real-work.md`'s resolution,\ndecision 2): the UI needs to know *which* guard fired to render the\nright calm reason text (\"paused after 100 consecutive tool-driven\nturns\" vs. \"...5 consecutive identical tool results\"), and since the\nguard's thresholds are now fixed built-in constants\n(`config::DEFAULT_ITERATION_CAP`/`DEFAULT_DOOM_LOOP_WINDOW`) rather than\nper-session config, the variant alone is enough for the UI to build\nthat text without carrying a number on the wire."
+    },
+    "WorkspaceRootResolved": {
+      "description": "[`Control::WorkspaceRootResolved`]'s payload.",
+      "properties": {
+        "parent_session_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Additive, like [`SessionSummary::parent_session_id`] -- `None` for an\nisolated-but-sourceless spawn (still a valid lineage root, see that\nfield's own doc comment)."
+        },
+        "workspace_root": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_root"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "envelope": {
+    "$ref": "#/$defs/Envelope"
+  },
+  "kinds": {
+    "agent_command": {
+      "$ref": "#/$defs/Command"
+    },
+    "agent_control": {
+      "$ref": "#/$defs/Control"
+    },
+    "agent_event": {
+      "$ref": "#/$defs/Event"
+    },
+    "session_control": {
+      "$ref": "#/$defs/SessionControl"
+    },
+    "terminal_command": {
+      "$ref": "#/$defs/TerminalCommand"
+    },
+    "terminal_control": {
+      "$ref": "#/$defs/TerminalControl"
+    },
+    "terminal_update": {
+      "$ref": "#/$defs/TerminalUpdate"
+    }
+  },
+  "title": "horizon-session-wire",
+  "x-session-protocol-version": 9
+}
