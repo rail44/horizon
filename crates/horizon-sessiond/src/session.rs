@@ -861,7 +861,7 @@ impl HostTools for SessiondHostTools {
         let request = HostToolRequest {
             request_id: contract::RequestId(request_id.clone()),
             tool_id: tool_id.to_string(),
-            input: input.clone(),
+            input: input.clone().into(),
         };
         if !send_host_tool_request(&self.state, request) {
             self.state
@@ -878,7 +878,7 @@ impl HostTools for SessiondHostTools {
             .lock()
             .unwrap()
             .remove(&request_id);
-        response.map(|response| response.output)
+        response.map(|response| response.output.0)
     }
 }
 
@@ -1756,7 +1756,7 @@ mod tests {
                 Event::ToolCallRequested(horizon_agent::contract::ToolCallRequest {
                     call_id: call_id.clone(),
                     tool_id: "bash".to_string(),
-                    input: serde_json::json!({ "command": "echo hi" }),
+                    input: serde_json::json!({ "command": "echo hi" }).into(),
                 }),
                 Event::StateChanged(SessionState::ToolRunning),
                 Event::ToolCallStarted(call_id.clone()),

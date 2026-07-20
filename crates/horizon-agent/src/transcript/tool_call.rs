@@ -217,7 +217,7 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
     building
         .into_iter()
         .map(|entry| {
-            let output = entry.result.map(|result| &result.output);
+            let output = entry.result.map(|result| &result.output.0);
             let (verb, target, result_summary, kind) = classify(entry.tool_id, entry.input, output);
             ToolCallView {
                 call_id: entry.call_id,

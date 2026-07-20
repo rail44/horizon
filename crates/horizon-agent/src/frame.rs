@@ -435,7 +435,7 @@ pub fn render_agent_transcript(events: &[Event]) -> String {
             Event::ToolCallFinished(result) => {
                 lines.push(format!(
                     "tool finished: {} {}",
-                    result.call_id.0, result.output
+                    result.call_id.0, result.output.0
                 ));
             }
             Event::ApprovalRequested(request) => {

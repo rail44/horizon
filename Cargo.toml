@@ -20,21 +20,14 @@ members = [
 # OFF so no `default-codec-*` feature is ever enabled -- naming
 # `codec::Default` then fails to compile, which is the adoption decision's
 # countermeasure to the 0.18.0 silent default-codec change (JSON ->
-# Postbag). Every codec is named explicitly (never `codec::Default`), via
-# `horizon_session_protocol::{WireCodec, AgentCodec}`. `rtc` pulls in `rch`
-# + the derive macro.
-#
-# Two codecs, both explicitly pinned (see `horizon_session_protocol`'s doc):
-# `codec-postbag` for the rtc transport and the frame/terminal channels
-# (`WireCodec` -- the Postbag Full config the spike's perf/skew work
-# validated), and `codec-ciborium` for the agent/host-tool channels
-# (`AgentCodec`) because their vocabulary carries `serde_json::Value`
-# (tool inputs/outputs), whose `Deserialize` uses serde's `deserialize_any`
-# -- which Postbag's non-self-describing format rejects. This divergence
-# from the doc's single-Postbag assumption is documented in the PR: the
-# doc's spike only ever exercised `TerminalFrame` payloads (no `Value`).
+# Postbag). Every use names `codec::Postbag` explicitly (via
+# `horizon_session_protocol::WireCodec`). `rtc` pulls in `rch` + the
+# derive macro; `codec-postbag` is the only codec compiled in. (The
+# vocabularies' JSON payloads travel as `contract::JsonValue` -- JSON text
+# on this binary wire -- precisely so no second, self-describing codec is
+# ever needed.)
 [workspace.dependencies]
-remoc = { version = "=0.18.3", default-features = false, features = ["rtc", "codec-postbag", "codec-ciborium"] }
+remoc = { version = "=0.18.3", default-features = false, features = ["rtc", "codec-postbag"] }
 
 [package]
 name = "horizon"

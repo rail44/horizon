@@ -39,7 +39,7 @@ use horizon_agent::wire::{
     AgentWireEvent, HostToolRequest, HostToolResponse, SessionNew, SessionSummary,
 };
 use horizon_session_protocol::{
-    AgentCodec, ClientHello, HubError, SessionHub as _, SessionHubClient, VersionRange, WireCodec,
+    ClientHello, HubError, SessionHub as _, SessionHubClient, VersionRange, WireCodec,
     MIN_SUPPORTED_PROTOCOL_VERSION, SESSION_PROTOCOL_VERSION,
 };
 use horizon_terminal_core::{
@@ -474,8 +474,8 @@ struct HubTestClient {
     hub: SessionHubClient<WireCodec>,
     negotiated: u32,
     binary_id: String,
-    host_tools: rch::mpsc::Receiver<HostToolRequest, AgentCodec>,
-    host_tool_responses: rch::mpsc::Sender<HostToolResponse, AgentCodec>,
+    host_tools: rch::mpsc::Receiver<HostToolRequest, WireCodec>,
+    host_tool_responses: rch::mpsc::Sender<HostToolResponse, WireCodec>,
     skipped_lines: rch::mpsc::Receiver<String, WireCodec>,
     conn_task: tokio::task::JoinHandle<()>,
 }
@@ -636,7 +636,7 @@ async fn collect_terminal_frame_until(
 /// (`ToolCallProgress`, `SessionModel`, `WorkspaceRootResolved`) that share
 /// the channel. Panics after a generous number of reads.
 async fn collect_events_until(
-    events: &mut rch::mpsc::Receiver<AgentWireEvent, AgentCodec>,
+    events: &mut rch::mpsc::Receiver<AgentWireEvent, WireCodec>,
     mut predicate: impl FnMut(&Event) -> bool,
 ) -> Vec<Event> {
     let mut collected = Vec::new();
@@ -664,7 +664,7 @@ async fn collect_events_until(
 /// `replay_events` can take real time under contention), then a short
 /// quiescence window once the burst starts.
 async fn collect_replayed_events(
-    events: &mut rch::mpsc::Receiver<AgentWireEvent, AgentCodec>,
+    events: &mut rch::mpsc::Receiver<AgentWireEvent, WireCodec>,
 ) -> Vec<Event> {
     const REPLAY_FIRST_EVENT_TIMEOUT: Duration = Duration::from_secs(120);
     const REPLAY_QUIESCENCE_WINDOW: Duration = Duration::from_millis(500);
@@ -1153,7 +1153,7 @@ async fn auto_tool_executes_sessiond_side_via_host_tool_round_trip() {
         &client,
         HostToolResponse {
             request_id: request.request_id,
-            output: serde_json::json!({ "tab_count": 1 }),
+            output: serde_json::json!({ "tab_count": 1 }).into(),
         },
     )
     .await;

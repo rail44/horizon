@@ -6,8 +6,8 @@ use std::time::Duration;
 use horizon_agent::contract::{self, Command};
 use horizon_agent::wire::{self, HostToolResponse};
 use horizon_session_protocol::{
-    legacy, AgentCodec, ClientHello, HubError, HubHello, SessionHub as _, SessionHubClient,
-    TerminalAttachment, WireCodec, SESSION_PROTOCOL_VERSION,
+    legacy, ClientHello, HubError, HubHello, SessionHub as _, SessionHubClient, TerminalAttachment,
+    WireCodec, SESSION_PROTOCOL_VERSION,
 };
 use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
 use remoc::rch;
@@ -311,7 +311,7 @@ enum StreamEnd {
 /// What a successful establishment hands the op loop.
 struct Live {
     hub: SessionHubClient<WireCodec>,
-    host_tool_responses: rch::mpsc::Sender<HostToolResponse, AgentCodec>,
+    host_tool_responses: rch::mpsc::Sender<HostToolResponse, WireCodec>,
     routes: Arc<Routes>,
 }
 
@@ -470,7 +470,7 @@ where
 }
 
 fn spawn_host_tool_pump(
-    mut host_tools: rch::mpsc::Receiver<wire::HostToolRequest, AgentCodec>,
+    mut host_tools: rch::mpsc::Receiver<wire::HostToolRequest, WireCodec>,
     routes: Arc<Routes>,
 ) {
     tokio::spawn(async move {

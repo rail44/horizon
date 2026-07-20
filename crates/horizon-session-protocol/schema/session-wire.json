@@ -481,7 +481,9 @@
     "HostToolRequest": {
       "description": "The agent (child) asking the client to run a host-coupled tool (e.g.\n`workspace.snapshot`) over this same connection -- guardrail 4. Rides\nthe connection-global `HubHello::host_tools` channel; the `request_id`\ncorrelation survives the cutover because the exchange is genuinely\nasynchronous on the daemon side (a session thread blocks on the\nmatching [`HostToolResponse`]).",
       "properties": {
-        "input": true,
+        "input": {
+          "$ref": "#/$defs/JsonValue"
+        },
         "request_id": {
           "$ref": "#/$defs/RequestId"
         },
@@ -498,7 +500,9 @@
     },
     "HostToolResponse": {
       "properties": {
-        "output": true,
+        "output": {
+          "$ref": "#/$defs/JsonValue"
+        },
         "request_id": {
           "$ref": "#/$defs/RequestId"
         }
@@ -629,6 +633,9 @@
         "provider_id"
       ],
       "type": "object"
+    },
+    "JsonValue": {
+      "$comment": "any JSON value; on the binary (Postbag) wire it travels as its JSON text in one string"
     },
     "KeyEventKind": {
       "description": "Classifies a key event per the Kitty keyboard protocol's \"event types\"\n(<https://sw.kovidgoyal.net/kitty/keyboard-protocol/>, gated on the\n`REPORT_EVENT_TYPES` progressive-enhancement flag): an initial press, an\nOS/winit-synthesized repeat while the key is held, or a release.\n\nThreaded from `src/terminal/mod.rs`'s key handling (where gpui's\n`KeyDownEvent`/`KeyUpEvent` and its `is_held` repeat flag are classified)\ndown through `TerminalCommand::Key` to\n`terminal::core::TerminalCore::encode_key` and\n`terminal::protocol::kitty_keyboard`, which is the only place a\nnon-`Press` kind changes the bytes actually sent — see that module's doc\nfor how (and when) it does.",
@@ -1876,7 +1883,9 @@
         "call_id": {
           "$ref": "#/$defs/ToolCallId"
         },
-        "input": true,
+        "input": {
+          "$ref": "#/$defs/JsonValue"
+        },
         "tool_id": {
           "type": "string"
         }
@@ -1903,7 +1912,9 @@
           "description": "Explicit success/failure outcome, lifted out of `output`'s\n`\"is_error\"` JSON convention (every tool in `tools::` already writes\nit on failure -- `docs/agent-feedback-design.md`'s decision 1;\n`persistence::projection::duckdb`'s `insert_tool_result` already\nreads that same convention independently) so a consumer like the\nturn-receipts UI (`docs/agent-output-ui-amendment.md`'s 2026-07-12\naddendum) has a typed field instead of having to sniff `output`\nitself. Use [`Self::new`] rather than a struct literal to keep this\nderived automatically. `#[serde(default)]` (false, i.e. success) so\na `Record` written before this field existed still deserializes --\nmatching the same convention's \"absence means success\" reading.",
           "type": "boolean"
         },
-        "output": true
+        "output": {
+          "$ref": "#/$defs/JsonValue"
+        }
       },
       "required": [
         "call_id",

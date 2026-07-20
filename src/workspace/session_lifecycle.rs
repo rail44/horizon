@@ -279,7 +279,7 @@ impl WorkspaceShell {
                     );
                 responder.respond_host_tool(horizon_agent::wire::HostToolResponse {
                     request_id: request.request_id,
-                    output,
+                    output: output.into(),
                 });
             }
         })

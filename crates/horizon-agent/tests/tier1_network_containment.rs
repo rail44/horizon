@@ -230,7 +230,8 @@ fn run_bridge_probe(
         tool_id: "bash".to_string(),
         input: json!({
             "command": format!("{BRIDGE_PROBE_PATH} {} {target}", bridge_socket.display())
-        }),
+        })
+        .into(),
     };
     let execution = execute_agent_tool(&StubHostTools, tool_state, session_id, &request);
     assert!(matches!(execution, Execution::Started(_)));
@@ -586,7 +587,7 @@ fn tier1_sandboxed_bash_direct_egress_stays_blocked_under_proxied() {
         // A direct connect attempt, bypassing the bridge entirely -- exactly
         // what the network layer promises stays cut off even though *a*
         // UNIX-domain-socket egress now exists for this session.
-        input: json!({ "command": "exec 3<>/dev/tcp/93.184.216.34/80" }),
+        input: json!({ "command": "exec 3<>/dev/tcp/93.184.216.34/80" }).into(),
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);

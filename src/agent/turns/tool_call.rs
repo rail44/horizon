@@ -255,7 +255,7 @@ pub(crate) fn tool_call_body(
     Some(build_tool_call_body(
         &request.tool_id,
         &request.input,
-        result.map(|result| &result.output),
+        result.map(|result| &result.output.0),
     ))
 }
 

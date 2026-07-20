@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use horizon_agent::contract::{Event, ProviderId, SessionId, SessionState};
 use horizon_agent::wire::{AgentWireEvent, SessionNew, WorkspaceRootResolved};
 use horizon_session_protocol::{
-    AgentAttachment, AgentCodec, ClientHello, HubError, HubHello, SessionHub, SessionHubClient,
+    AgentAttachment, ClientHello, HubError, HubHello, SessionHub, SessionHubClient,
     SessionHubServerShared, TerminalAttachment, VersionRange, WireCodec, SESSION_PROTOCOL_VERSION,
 };
 use horizon_terminal_core::{TerminalColorScheme, TerminalFrame, TerminalSize};
@@ -52,9 +52,9 @@ struct TerminalPeer {
 
 /// The peer halves of an agent attachment.
 struct AgentPeer {
-    events: rch::mpsc::Sender<AgentWireEvent, AgentCodec>,
+    events: rch::mpsc::Sender<AgentWireEvent, WireCodec>,
     #[allow(dead_code)]
-    commands: rch::mpsc::Receiver<Command, AgentCodec>,
+    commands: rch::mpsc::Receiver<Command, WireCodec>,
 }
 
 /// One recorded hub call, with whatever live halves the fake daemon kept.
@@ -133,8 +133,8 @@ impl FakeHub {
     }
 
     fn agent_attachment(&self) -> (AgentAttachment, AgentPeer) {
-        let (event_tx, event_rx) = rch::mpsc::channel::<AgentWireEvent, AgentCodec>(16);
-        let (command_tx, command_rx) = rch::mpsc::channel::<Command, AgentCodec>(16);
+        let (event_tx, event_rx) = rch::mpsc::channel::<AgentWireEvent, WireCodec>(16);
+        let (command_tx, command_rx) = rch::mpsc::channel::<Command, WireCodec>(16);
         (
             AgentAttachment {
                 events: event_rx,
@@ -160,8 +160,8 @@ impl SessionHub for FakeHub {
             });
         }
         let _ = self.calls.send(FakeCall::Hello);
-        let (_request_tx, request_rx) = rch::mpsc::channel::<HostToolRequest, AgentCodec>(4);
-        let (response_tx, _response_rx) = rch::mpsc::channel::<HostToolResponse, AgentCodec>(4);
+        let (_request_tx, request_rx) = rch::mpsc::channel::<HostToolRequest, WireCodec>(4);
+        let (response_tx, _response_rx) = rch::mpsc::channel::<HostToolResponse, WireCodec>(4);
         let (_skipped_tx, skipped_rx) = rch::mpsc::channel::<String, WireCodec>(1);
         Ok(HubHello {
             negotiated: SESSION_PROTOCOL_VERSION,

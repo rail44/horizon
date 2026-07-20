@@ -21,8 +21,8 @@ use horizon_agent::wire::{
     AgentWireEvent, HostToolRequest, HostToolResponse, SessionNew, SessionSummary,
 };
 use horizon_session_protocol::{
-    AgentAttachment, AgentCodec, ClientHello, HubError, HubHello, SessionHub, TerminalAttachment,
-    VersionRange, WireCodec,
+    AgentAttachment, ClientHello, HubError, HubHello, SessionHub, TerminalAttachment, VersionRange,
+    WireCodec,
 };
 use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
 use remoc::rch;
@@ -109,7 +109,7 @@ impl Hub {
         session_id: SessionId,
         mut local_events: UnboundedReceiver<AgentWireEvent>,
     ) -> AgentAttachment {
-        let (event_tx, event_rx) = rch::mpsc::channel::<AgentWireEvent, AgentCodec>(CHANNEL_BUFFER);
+        let (event_tx, event_rx) = rch::mpsc::channel::<AgentWireEvent, WireCodec>(CHANNEL_BUFFER);
         tokio::spawn(async move {
             while let Some(event) = local_events.recv().await {
                 if event_tx.send(event).await.is_err() {
@@ -118,8 +118,7 @@ impl Hub {
             }
         });
 
-        let (command_tx, mut command_rx) =
-            rch::mpsc::channel::<Command, AgentCodec>(CHANNEL_BUFFER);
+        let (command_tx, mut command_rx) = rch::mpsc::channel::<Command, WireCodec>(CHANNEL_BUFFER);
         let connection = self.connection.clone();
         tokio::spawn(async move {
             loop {
@@ -163,7 +162,7 @@ impl SessionHub for Hub {
         // Host-tool requests: sessions push into the connection-global
         // local bridge; this pump forwards them to the client.
         let (request_tx, request_rx) =
-            rch::mpsc::channel::<HostToolRequest, AgentCodec>(CHANNEL_BUFFER);
+            rch::mpsc::channel::<HostToolRequest, WireCodec>(CHANNEL_BUFFER);
         let (local_tx, mut local_rx) = tokio::sync::mpsc::unbounded_channel();
         self.connection.connect_host_tools(local_tx);
         tokio::spawn(async move {
@@ -177,7 +176,7 @@ impl SessionHub for Hub {
         // Host-tool responses: routed to whichever session thread blocks
         // on the matching request id.
         let (response_tx, mut response_rx) =
-            rch::mpsc::channel::<HostToolResponse, AgentCodec>(CHANNEL_BUFFER);
+            rch::mpsc::channel::<HostToolResponse, WireCodec>(CHANNEL_BUFFER);
         let connection = self.connection.clone();
         tokio::spawn(async move {
             loop {

@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::contract::{Event, ProviderId, RequestId, SessionId, ToolCallProgress};
+use crate::contract::{Event, JsonValue, ProviderId, RequestId, SessionId, ToolCallProgress};
 use crate::roles::RoleId;
 
 /// Everything a hosted agent session pushes to its attached client, on the
@@ -183,13 +183,13 @@ pub struct SessionNew {
 pub struct HostToolRequest {
     pub request_id: RequestId,
     pub tool_id: String,
-    pub input: serde_json::Value,
+    pub input: JsonValue,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct HostToolResponse {
     pub request_id: RequestId,
-    pub output: serde_json::Value,
+    pub output: JsonValue,
 }
 
 #[cfg(test)]
@@ -259,7 +259,7 @@ mod tests {
             AgentWireEvent::Event(Event::ToolCallRequested(crate::contract::ToolCallRequest {
                 call_id: crate::contract::ToolCallId("call-1".to_string()),
                 tool_id: "fs.read".to_string(),
-                input: serde_json::json!({"path": "a.txt"}),
+                input: serde_json::json!({"path": "a.txt"}).into(),
             })),
             AgentWireEvent::ToolCallProgress(ToolCallProgress {
                 key: "call-1".to_string(),
