@@ -1,11 +1,14 @@
 # Containment Denials and Narrow-Grant Retries
 
-Status: network direction accepted, 2026-07-20. The owner has decided that
-containment denials become boundary-grant decisions, approval never removes
-the sandbox, and the local cross-platform network baseline is a proxy-aware
-compatibility layer backed by OS enforcement rather than transparent
-redirection. The filesystem discovery delivery scope below still needs a
-separate owner decision before that half is implemented.
+Status: network direction accepted 2026-07-20; runtime ownership narrowed
+2026-07-21. The owner has decided that containment denials become
+boundary-grant decisions, approval never removes the sandbox, and the local
+cross-platform network baseline is a proxy-aware compatibility layer backed
+by OS enforcement rather than transparent redirection. Horizon will first
+extract the smallest relevant nono-cli v0.68.0 supervised-runtime slice into
+a local workspace crate instead of designing a new kernel-facing runtime from
+scratch. The filesystem discovery delivery scope below still needs a separate
+owner decision before that half is connected.
 
 This document corrects assumptions in `docs/agent-approval-design.md` as of
 commit `f82da5b`. It covers tier-1 sandboxed `bash`; host-side web tools retain
@@ -34,17 +37,54 @@ mechanism's structured denial records.
   human. It remains shadow-only until its separately planned enforcing flip;
   this work must not silently turn shadow verdicts into execution authority.
 
-The network half is implementable with nono 0.68.0 plus a Horizon-owned Linux
-supervisor and a combined seccomp user-notify filter. nono exposes the decode/
-response primitives and separate network/open filter installers, but Linux
-allows only one `SECCOMP_FILTER_FLAG_NEW_LISTENER` filter per thread, so those
-installers cannot simply be stacked (the
+The network half is implementable from nono 0.68.0's existing public
+primitives and its nono-cli supervised-runtime implementation, but the
+ownership boundary matters: Horizon should adapt a reduced, provenance-pinned
+copy rather than independently design a Linux supervisor. nono exposes the
+decode/response primitives and separate network/open filter installers, but
+Linux allows only one `SECCOMP_FILTER_FLAG_NEW_LISTENER` filter per thread, so
+those installers cannot simply be assumed to compose (the
 [seccomp(2) specification](https://man7.org/linux/man-pages/man2/seccomp.2.html)
 returns `EBUSY` for a second listener). The combined filter needs a small
-upstream nono API addition or Horizon-owned BPF composition. The filesystem
-grant store and sandboxed retry are implementable now. Complete, trustworthy
-automatic discovery of every filesystem denial is **not** provided by nono's
-current `Sandbox::apply_auto` API; the exact limitation is described below.
+upstream nono API addition or a bounded local deviation from the copied
+runtime, backed by a real integration test. The filesystem grant store and
+sandboxed retry are implementable now. Complete, trustworthy automatic
+discovery of every filesystem denial is **not** provided by nono's current
+`Sandbox::apply_auto` API; the exact limitation is described below.
+
+## Runtime ownership and extraction boundary
+
+The first delivery is `crates/horizon-sandbox-runtime`, pinned to nono
+v0.68.0 (`00692e8c7846c6ee00ad6239d1be3b9e9b8d5dea`). Its `UPSTREAM.md`
+records the exact source paths, exclusions, local deviations, and update
+procedure; the upstream Apache-2.0 license and attribution ship beside it.
+
+The upstream file named `supervised_runtime.rs` is not itself a reusable
+runtime. It orchestrates nono-cli sessions, PTYs, rollback, trust, audit,
+resource cgroups, and profile UX, while the actual fork/seccomp mechanisms are
+spread across `exec_strategy.rs` and `exec_strategy/supervisor_linux.rs`.
+Copying the wrapper wholesale would import product policy that Horizon does
+not use. The reduced extraction therefore keeps nono's public
+`ApprovalRequest -> ApprovalBackend -> ApprovalDecision -> AuditEntry`
+contract. Its next slice will port only the fork, notification validation, fd
+injection, rate-limit, and event-loop code exercised by Horizon.
+
+`horizon-sessiond` is multi-threaded, whereas nono-cli validates a
+single-threaded process before its supervised `fork()`. The extracted runner
+must consequently execute in a dedicated helper process, on Linux as well as
+the existing helper boundary on macOS. The helper and command form one process
+group so timeout/cancellation can terminate the entire tree. The initial
+approval backend records the trusted request and immediately denies the
+blocked syscall; Horizon then presents its normal asynchronous approval,
+adds a session-scoped static grant, and starts a fresh sandboxed retry. This
+preserves Horizon's existing event model without blocking sessiond on a live
+UI decision.
+
+The local crate's first scaffold deliberately does not change runtime
+behavior. It establishes the pinned approval/audit contract, evidence-strength
+vocabulary, and Linux seccomp policy/rate-limit primitives before the helper
+cutover. This is an integration seam, not a claim that structured denial
+collection has already landed.
 
 ## Required invariants
 
@@ -297,14 +337,15 @@ Recommended shape:
    per-session `AllowlistProxy`, expose its loopback `SocketAddr`, and carry
    that endpoint in `NetworkPolicy::Proxied`.
 2. Map `Proxied` to nono `NetworkMode::ProxyOnly { port, bind_ports: [] }`.
-   On Linux, additionally install a combined user-notify filter containing
-   nono's proxy-filter rules for every proxied spawn, not only nono's pre-V4
-   fallback, and run a Horizon-owned supervisor loop. It permits only IPv4/
+   On Linux, run the reduced nono-cli-derived helper and install a combined
+   user-notify filter containing nono's proxy-filter rules for every proxied
+   spawn, not only nono's pre-V4 fallback. It permits only IPv4/
    IPv6 loopback at that exact proxy port, denies UDP destinations, and denies
    pathname/abstract UDS except explicit capabilities. The same listener can
-   later carry filesystem-open notifications; do not try to stack nono's two
-   `NEW_LISTENER` installers. This closes both locally reproduced holes and
-   the Landlock destination-IP gap.
+   later carry filesystem-open notifications. Do not copy the upstream
+   separate-listener installation blindly: composition must be proved by the
+   integration test or replaced by one combined filter. This closes both
+   locally reproduced holes and the Landlock destination-IP gap.
 3. For `NetworkPolicy::Disabled`, install a full AF_INET/AF_INET6 block even
    on Landlock V4+, plus pathname-UDS mediation. Do not rely on Landlock's TCP
    rules as an all-protocol network boundary.
@@ -353,7 +394,8 @@ The storage/retry half is straightforward:
 - on denial forward the prior result;
 - remove `RetryWithoutSandbox`.
 
-The discovery half needs an explicit scope decision:
+The discovery half needs an explicit scope decision. Its Linux implementation
+belongs in the reduced helper rather than in `horizon-agent` or sessiond:
 
 - **Linux incident-complete slice:** supervise `openat`/`openat2` using nono's
   public notification primitives through the same combined listener as the
@@ -378,7 +420,10 @@ captured.
 
 ## Delivery order and acceptance tests
 
-1. **Restore the network invariant.** Permanent real-process tests prove:
+0. **Establish the extraction boundary.** Add the pinned local runtime crate,
+   fail-closed recording backend, evidence-strength vocabulary, source
+   provenance, and license. This step changes no sandbox behavior.
+1. **Restore the network invariant through the helper.** Permanent real-process tests prove:
    UDP cannot reach an outer listener; an arbitrary pathname UDS cannot reach
    an outer listener; direct TCP cannot reach a same-port decoy; configured
    proxy TCP can reach the proxy on loopback; macOS has equivalent
@@ -413,6 +458,16 @@ Accepted on 2026-07-20:
 - Treat a proxy-bypassing client as a structured, non-grantable contained
   failure. Never offer direct-IP egress as a domain grant.
 - Keep all containment grants session-scoped and non-persistent.
+
+Accepted on 2026-07-21:
+
+- Avoid a Horizon-original supervisor design. Start from a provenance-pinned,
+  reduced copy of nono-cli v0.68.0 inside the repository, retain nono core for
+  public policy/notification/protocol primitives, and exclude CLI-only PTY,
+  rollback, trust, profile, and session machinery.
+- Keep the first extraction scaffold behavior-neutral. Connect it later via a
+  dedicated helper process; never call the upstream supervised `fork()` path
+  directly inside multi-threaded sessiond.
 
 One filesystem delivery decision remains:
 

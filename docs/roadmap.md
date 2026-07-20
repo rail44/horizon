@@ -183,7 +183,7 @@ lands:
   proxy relocation into horizon-agent) is re-dispatched
   on the nono foundation -- its policy layer is backend-agnostic (spike-
   confirmed), so only the spawn wiring rebases.
-  **Containment-denial correction / redesign started 2026-07-20**
+  **Containment-denial correction / redesign shaped 2026-07-20/21**
   (`docs/containment-denial-narrow-grants-design.md`): dogfooding showed that
   ordinary HTTP clients never reach the UDS bridge and filesystem denials can
   disappear behind exit 0. Source audit plus real throwaway probes found a
@@ -193,9 +193,14 @@ lands:
   grants and sandboxed retry for network and FS. Proposed first leg is a TCP
   proxy endpoint using nono `ProxyOnly` plus always-on Linux seccomp mediation
   (bare Landlock is only port-exact and leaves UDP/UDS holes), followed by the
-  generic grant contract and FS discovery. Implementation waits on the owner
-  decisions listed in the design doc; current leg 4b must not be treated as a
-  complete ordinary-client or all-protocol egress boundary meanwhile.
+  generic grant contract and FS discovery. Owner narrowed the implementation
+  boundary on 2026-07-21: copy the minimum nono-cli v0.68.0 supervised-runtime
+  machinery into a provenance-pinned local `horizon-sandbox-runtime` crate
+  instead of owning a new supervisor design. The behavior-neutral extraction
+  scaffold is in flight; the later cutover uses a dedicated helper because
+  sessiond is multi-threaded and preserves macOS Seatbelt log evidence as
+  explicitly best-effort. Current leg 4b must not be treated as a complete
+  ordinary-client or all-protocol egress boundary meanwhile.
 - **Agent web search / public-code search** (backlog 18/19).
   Consultation 2026-07-19/20: **vendor = Exa** (owner decision;
   empirical probe + independent-benchmark evidence in

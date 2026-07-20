@@ -1,0 +1,17 @@
+# Reduced supervised-runtime foundation extracted from nono-cli v0.68.0.
+# See UPSTREAM.md for the exact source revision and retained scope.
+[package]
+name = "horizon-sandbox-runtime"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+# Keep the extraction aligned with the source revision recorded in UPSTREAM.md.
+# horizon-sandbox deliberately accepts the compatible 0.68 line; this crate is
+# stricter because its copied runtime assumptions track one exact release.
+nono = { version = "=0.68.0", default-features = false }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

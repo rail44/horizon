@@ -3354,6 +3354,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-sandbox-runtime"
+version = "0.1.0"
+dependencies = [
+ "nono",
+]
+
+[[package]]
 name = "horizon-session-protocol"
 version = "0.1.0"
 dependencies = [
