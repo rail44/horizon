@@ -328,8 +328,7 @@ async fn handle_connection(
         read_half,
         write_half,
     );
-    let (conn, mut base_tx, _base_rx) = match tokio::time::timeout(CONNECT_TIMEOUT, connect).await
-    {
+    let (conn, mut base_tx, _base_rx) = match tokio::time::timeout(CONNECT_TIMEOUT, connect).await {
         Ok(Ok(connected)) => connected,
         Ok(Err(error)) => {
             eprintln!(

@@ -3,21 +3,41 @@
 //! (`spike/remoc/tests/skew.rs`, branch `remoc-spike`) to a permanent
 //! resident. A frozen copy of a vocabulary shape (`*V1`) sits beside its
 //! evolved twin (`*V2`), and each §4 rule is proven in both directions over
-//! the wire encoding the live JSONL protocol actually uses (`serde_json`).
-//! The frozen types are the *executable* form of the schema artifact
-//! (`schema/session-wire.json`); the artifact's own drift/additive checks
-//! live in `crates/horizon-sessiond/tests/wire_schema.rs` and
+//! the *actual v10 wire codec* (Postbag, [`WireCodec`]) — at the codec
+//! level and, for the poisoned-item rule, through a live `rch::mpsc`
+//! channel. The frozen types are the *executable* form of the schema
+//! artifact (`schema/session-wire.json`); the artifact's own drift/additive
+//! checks live in `crates/horizon-sessiond/tests/wire_schema.rs` and
 //! `scripts/check-wire-schema.sh`.
 //!
-//! Only the rules that are meaningful on JSONL are here: unknown fields
-//! ignored, missing `#[serde(default)]` fields completed, unknown variants
-//! decoding to the `Unknown` catch-all (and that catch-all being
-//! deserialize-only). The remaining spike scenario — one poisoned item not
-//! killing a channel — is a channel-semantics property of the remoc
-//! transport and joins these tests with the v10 cutover.
+//! v10 note: the catch-all is `#[serde(other)] Unknown` (a plain unit
+//! variant), not the JSONL era's `#[serde(untagged)] Unknown(UnknownPayload)`.
+//! Postbag rejects serde's `deserialize_any` (which the untagged pattern
+//! relied on), so the `#[serde(other)]` unit form is both what the adoption
+//! conditions specify and what the spike validated under Postbag. One
+//! consequence the tests pin: a *payload-carrying* unknown variant degrades
+//! to `Unknown` too (its bytes are read and discarded), and `Unknown` is a
+//! legal — if never intentionally sent — encoding of the literal tag.
 
-use horizon_session_protocol::UnknownPayload;
+use horizon_session_protocol::WireCodec;
+use remoc::codec::Codec;
+use remoc::prelude::*;
 use serde::{Deserialize, Serialize};
+use tokio::net::UnixStream;
+
+// The `Connect::io` (conn, base-sender, base-receiver) triples, named to
+// keep clippy's `type_complexity` lint quiet in the live-channel test.
+type Conn = remoc::Connect<'static, std::io::Error, std::io::Error>;
+type OldSide = (
+    Conn,
+    rch::base::Sender<(), WireCodec>,
+    rch::base::Receiver<rch::mpsc::Receiver<CommandV1, WireCodec>, WireCodec>,
+);
+type NewSide = (
+    Conn,
+    rch::base::Sender<rch::mpsc::Receiver<CommandV2, WireCodec>, WireCodec>,
+    rch::base::Receiver<(), WireCodec>,
+);
 
 /// Frozen: a wire struct as an older build shipped it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -40,7 +60,7 @@ struct SpawnV2 {
 
 /// Frozen: a wire enum as an older build shipped it — mixed unit, newtype,
 /// and struct variants, externally tagged like every Horizon wire enum,
-/// with the deserialize-only `Unknown` catch-all.
+/// with the `#[serde(other)]` catch-all last.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum CommandV1 {
@@ -50,12 +70,13 @@ enum CommandV1 {
         rows: u16,
         cols: u16,
     },
-    #[serde(untagged)]
-    Unknown(UnknownPayload),
+    #[serde(other)]
+    Unknown,
 }
 
-/// Evolved: the same enum after appending a variant (§4 rule 1: "new enum
-/// variants are appended" — above the trailing catch-all).
+/// Evolved: the same enum after appending variants (§4 rule 1: "new enum
+/// variants are appended" — above the trailing catch-all). One unit, one
+/// payload-carrying, to exercise both shapes of skew.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum CommandV2 {
@@ -65,14 +86,18 @@ enum CommandV2 {
         rows: u16,
         cols: u16,
     },
+    Bell,
     SetTitle(String),
-    #[serde(untagged)]
-    Unknown(UnknownPayload),
+    #[serde(other)]
+    Unknown,
 }
 
+/// Encode with `value`'s type, decode as `D` — through the exact codec the
+/// v10 wire uses.
 fn wire_roundtrip<S: Serialize, D: serde::de::DeserializeOwned>(value: &S) -> D {
-    let line = serde_json::to_string(value).expect("sender must serialize");
-    serde_json::from_str(&line).expect("receiver must decode")
+    let mut bytes = Vec::new();
+    <WireCodec as Codec>::serialize(&mut bytes, value).expect("sender must serialize");
+    <WireCodec as Codec>::deserialize(&bytes[..]).expect("receiver must decode")
 }
 
 /// §4 rule 1, new-to-old direction: an old receiver ignores the fields a
@@ -115,16 +140,28 @@ fn a_new_reader_defaults_fields_an_old_sender_never_sent() {
     );
 }
 
-/// §4 rule 2: a variant appended by a newer sender decodes to the old
-/// receiver's `Unknown` catch-all — never an error, never a teardown.
+/// §4 rule 2, unit variant: a unit variant appended by a newer sender
+/// decodes to the old receiver's `Unknown` catch-all — never an error.
 #[test]
-fn an_old_reader_decodes_an_appended_variant_to_unknown() {
-    let received: CommandV1 = wire_roundtrip(&CommandV2::SetTitle("hi".to_string()));
-    assert_eq!(received, CommandV1::Unknown(UnknownPayload));
+fn an_old_reader_decodes_an_appended_unit_variant_to_unknown() {
+    let received: CommandV1 = wire_roundtrip(&CommandV2::Bell);
+    assert_eq!(received, CommandV1::Unknown);
 }
 
-/// The shared variants stay bit-for-bit compatible around the appended one,
-/// in both directions.
+/// §4 rule 2, payload-carrying variant: the Postbag win the spike
+/// validated — an unknown variant that *carries data* also degrades to the
+/// unit `Unknown` (its payload bytes are read and discarded), where
+/// serde_json's `#[serde(other)]` would have errored. This is the whole
+/// reason v10 uses Postbag's `#[serde(other)]` rather than the JSONL
+/// untagged form.
+#[test]
+fn an_old_reader_decodes_an_appended_payload_variant_to_unknown() {
+    let received: CommandV1 = wire_roundtrip(&CommandV2::SetTitle("hi".to_string()));
+    assert_eq!(received, CommandV1::Unknown);
+}
+
+/// The shared variants stay bit-for-bit compatible around the appended
+/// ones, in both directions.
 #[test]
 fn shared_variants_survive_the_skew_in_both_directions() {
     let received: CommandV1 = wire_roundtrip(&CommandV2::Resize { rows: 3, cols: 7 });
@@ -133,12 +170,75 @@ fn shared_variants_survive_the_skew_in_both_directions() {
     assert_eq!(received, CommandV2::Input(vec![1, 2, 3]));
 }
 
-/// The catch-all is deserialize-only: a receiver that decoded `Unknown`
-/// gets an *error* (never a panic, never bytes) if it tries to forward it
-/// back onto the wire.
-#[test]
-fn forwarding_a_received_unknown_is_a_serialize_error_not_a_panic() {
-    let received: CommandV1 = wire_roundtrip(&CommandV2::SetTitle("hi".to_string()));
-    let forwarded = serde_json::to_string(&received);
-    assert!(forwarded.is_err(), "{forwarded:?}");
+/// The §7 poisoned-item rule, over a *live* `rch::mpsc` channel (the
+/// spike's c2 scenario, now a standing test): a newer sender pushes a known
+/// variant, then an unknown one, then another known one; the old receiver
+/// gets both known items and — because the catch-all decodes the unknown
+/// one rather than erroring — the channel survives the middle item intact.
+///
+/// The skew is real (the two ends are genuinely different Rust types): the
+/// channel is transported over an asymmetric base connection whose sender
+/// side carries `Receiver<CommandV2>` and whose receiver side reconstructs
+/// it as `Receiver<CommandV1>`. Adoption condition 3: both `Connect::io`
+/// handshakes are driven concurrently.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn one_unknown_item_does_not_kill_a_live_channel() {
+    let (a, b) = UnixStream::pair().unwrap();
+    let (a_r, a_w) = a.into_split();
+    let (b_r, b_w) = b.into_split();
+
+    // Old side (V1 receiver).
+    let old = tokio::spawn(async move {
+        let (conn, _tx, mut rx): OldSide = remoc::Connect::io(remoc::Cfg::default(), b_r, b_w)
+            .await
+            .unwrap();
+        tokio::spawn(conn);
+
+        let mut commands = rx.recv().await.unwrap().unwrap();
+        let mut delivered = Vec::new();
+        let mut skipped = 0;
+        loop {
+            match commands.recv().await {
+                Ok(Some(command)) => delivered.push(command),
+                Ok(None) => break,
+                // A per-item decode failure (a non-final recv error) is
+                // skipped, never a teardown — the loop keeps going.
+                Err(err) if !err.is_final() => skipped += 1,
+                Err(_) => break,
+            }
+        }
+        (delivered, skipped)
+    });
+
+    // New side (V2 sender).
+    let (conn, mut tx, _rx): NewSide = remoc::Connect::io(remoc::Cfg::default(), a_r, a_w)
+        .await
+        .unwrap();
+    tokio::spawn(conn);
+
+    let (command_tx, command_rx) = rch::mpsc::channel::<CommandV2, WireCodec>(8);
+    tx.send(command_rx).await.unwrap();
+    for command in [
+        CommandV2::Input(b"before".to_vec()),
+        CommandV2::SetTitle("unknown to v1".to_string()),
+        CommandV2::Input(b"after".to_vec()),
+    ] {
+        drop(command_tx.send(command).await.unwrap());
+    }
+    drop(command_tx);
+
+    let (delivered, _skipped) = old.await.unwrap();
+    // Both known items arrive; the unknown one in between degrades to the
+    // catch-all rather than poisoning the stream. (Under Postbag's
+    // `#[serde(other)]` the middle item decodes to `Unknown` rather than
+    // erroring, so it also lands as a delivered item — either way the
+    // channel is never torn down and the trailing known item arrives.)
+    assert!(
+        delivered.contains(&CommandV1::Input(b"before".to_vec())),
+        "the first known item must arrive, got: {delivered:?}"
+    );
+    assert!(
+        delivered.contains(&CommandV1::Input(b"after".to_vec())),
+        "the trailing known item must survive the unknown one, got: {delivered:?}"
+    );
 }

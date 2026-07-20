@@ -30,15 +30,15 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use horizon_session_protocol::{self as session_wire, Hello, SessionControl, SESSION_CONTROL_KIND};
+use horizon_session_protocol::{
+    ClientHello, SessionHub as _, SessionHubClient, TerminalAttachment, WireCodec,
+};
 use horizon_terminal_core::{
-    apply_frame_diff, decode_terminal_update, encode_terminal_command, encode_terminal_control,
-    KeyEventKind, TerminalColorScheme, TerminalCommand, TerminalControl, TerminalSize,
+    apply_frame_diff, KeyEventKind, TerminalColorScheme, TerminalCommand, TerminalSize,
     TerminalSpawnSpec, TerminalUpdate,
 };
+use remoc::rch;
 use termwiz::input::{KeyCode, Modifiers};
-use tokio::io::BufReader;
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::UnixStream;
 
 const TRANSIENT_LINK_RETRY_DELAY: Duration = Duration::from_millis(200);
@@ -129,75 +129,78 @@ async fn connect_with_retry(path: &std::path::Path) -> UnixStream {
     );
 }
 
-async fn connect_and_handshake(
-    socket_path: &std::path::Path,
-) -> (BufReader<OwnedReadHalf>, OwnedWriteHalf) {
+/// A connected `SessionHub` client over the real socket, plus the chmux
+/// mux task (aborted on drop). The v10 successor of the JSONL
+/// connect-and-handshake this probe used to open by hand.
+struct HubClient {
+    hub: SessionHubClient<WireCodec>,
+    conn_task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for HubClient {
+    fn drop(&mut self) {
+        self.conn_task.abort();
+    }
+}
+
+async fn connect_hub(socket_path: &std::path::Path) -> HubClient {
     let stream = connect_with_retry(socket_path).await;
-    let (read_half, mut write_half) = stream.into_split();
-    let mut reader = BufReader::new(read_half);
-
-    let hello = session_wire::Envelope::session_control(&SessionControl::Hello(Hello {
-        contract_version: horizon_session_protocol::SESSION_PROTOCOL_VERSION,
-        binary_id: "latency-probe".to_string(),
-    }))
-    .unwrap();
-    session_wire::write_envelope(&mut write_half, &hello)
+    let (read_half, write_half) = stream.into_split();
+    let (conn, _base_tx, mut base_rx) =
+        remoc::Connect::io::<_, _, (), SessionHubClient<WireCodec>, WireCodec>(
+            remoc::Cfg::default(),
+            read_half,
+            write_half,
+        )
         .await
-        .unwrap();
-    let reply = session_wire::read_envelope(&mut reader)
+        .expect("remoc connect");
+    let conn_task = tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    let hub = base_rx
+        .recv()
         .await
-        .unwrap()
-        .unwrap();
-    let control: SessionControl = reply.decode_payload(SESSION_CONTROL_KIND).unwrap();
-    assert!(matches!(control, SessionControl::Hello(_)));
-
-    (reader, write_half)
+        .expect("base recv")
+        .expect("hub client handover");
+    hub.hello(ClientHello::new("latency-probe"))
+        .await
+        .expect("hello");
+    HubClient { hub, conn_task }
 }
 
-async fn write_terminal_control(
-    writer: &mut OwnedWriteHalf,
-    session_id: uuid::Uuid,
-    control: TerminalControl,
-) {
-    let envelope = encode_terminal_control(Some(session_id), &control).unwrap();
-    session_wire::write_envelope(writer, &envelope)
+/// Spawns a terminal and returns its attachment (the v10 replacement for
+/// the JSONL create-then-read-snapshot dance -- the seeding snapshot still
+/// arrives as the attachment's first update).
+async fn create_terminal(client: &HubClient, spec: TerminalSpawnSpec) -> TerminalAttachment {
+    client
+        .hub
+        .create_terminal(uuid::Uuid::new_v4(), spec)
         .await
-        .unwrap();
+        .expect("create terminal")
 }
 
-async fn write_key(writer: &mut OwnedWriteHalf, session_id: uuid::Uuid, ch: char) {
-    let envelope = encode_terminal_command(
-        session_id,
-        &TerminalCommand::Key {
+async fn write_key(commands: &rch::mpsc::Sender<TerminalCommand, WireCodec>, ch: char) {
+    commands
+        .send(TerminalCommand::Key {
             key: KeyCode::Char(ch),
             modifiers: Modifiers::NONE,
             event: KeyEventKind::Press,
-        },
-    )
-    .unwrap();
-    session_wire::write_envelope(writer, &envelope)
+        })
         .await
-        .unwrap();
+        .expect("send key");
 }
 
-/// Reads the next terminal-update envelope for `session_id`, returning the
-/// decoded update, the arrival `Instant`, and whether it actually carries
-/// grid content different from the frame passed in (`content_changed`) --
-/// evidence for the "spurious content-free snapshot" mechanism documented
-/// on [`wait_for_marker`].
+/// Reads the next terminal update off an attachment's channel with its
+/// arrival `Instant`.
 async fn read_terminal_update_timed(
-    reader: &mut BufReader<OwnedReadHalf>,
-    session_id: uuid::Uuid,
+    updates: &mut rch::mpsc::Receiver<TerminalUpdate, WireCodec>,
 ) -> (TerminalUpdate, Instant) {
-    let envelope =
-        tokio::time::timeout(Duration::from_secs(5), session_wire::read_envelope(reader))
-            .await
-            .expect("timed out waiting for a terminal update")
-            .unwrap()
-            .expect("sessiond should keep the terminal connection open");
-    let arrived = Instant::now();
-    assert_eq!(envelope.session_id, Some(session_id));
-    (decode_terminal_update(&envelope).unwrap(), arrived)
+    let update = tokio::time::timeout(Duration::from_secs(5), updates.recv())
+        .await
+        .expect("timed out waiting for a terminal update")
+        .expect("update channel error")
+        .expect("the daemon should keep the terminal attachment open");
+    (update, Instant::now())
 }
 
 fn terminal_spec(shell: &str, args: Vec<String>, cols: u16, rows: u16) -> TerminalSpawnSpec {
@@ -261,15 +264,14 @@ fn report(label: &str, mut samples_ms: Vec<f64>) {
 ///   module doc / the investigation report for the numbers this
 ///   produces.
 async fn wait_for_marker(
-    reader: &mut BufReader<OwnedReadHalf>,
-    session_id: uuid::Uuid,
+    updates: &mut rch::mpsc::Receiver<TerminalUpdate, WireCodec>,
     frame: &mut horizon_terminal_core::TerminalFrame,
     matches: impl Fn(&str) -> bool,
     since: Instant,
 ) -> (f64, usize, usize) {
     let mut spurious = 0;
     for reads in 1..=50 {
-        let (update, arrived) = read_terminal_update_timed(reader, session_id).await;
+        let (update, arrived) = read_terminal_update_timed(updates).await;
         let before = frame.text();
         match update {
             TerminalUpdate::Snapshot(snap) => *frame = snap,
@@ -302,22 +304,13 @@ async fn wait_for_marker(
 #[ignore = "research probe, not a product gate -- run explicitly, see module doc"]
 async fn probe_baseline_shell_echo() {
     let sessiond = SessiondProcess::spawn();
-    let session_id = uuid::Uuid::new_v4();
-    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
+    let client = connect_hub(&sessiond.socket_path).await;
 
-    write_terminal_control(
-        &mut writer,
-        session_id,
-        TerminalControl::Create(Box::new(terminal_spec(
-            "/bin/sh",
-            vec!["-i".into()],
-            80,
-            24,
-        ))),
-    )
-    .await;
-    let (TerminalUpdate::Snapshot(mut frame), _) =
-        read_terminal_update_timed(&mut reader, session_id).await
+    let TerminalAttachment {
+        mut updates,
+        commands,
+    } = create_terminal(&client, terminal_spec("/bin/sh", vec!["-i".into()], 80, 24)).await;
+    let (TerminalUpdate::Snapshot(mut frame), _) = read_terminal_update_timed(&mut updates).await
     else {
         panic!("expected an initial snapshot");
     };
@@ -326,7 +319,7 @@ async fn probe_baseline_shell_echo() {
     loop {
         match tokio::time::timeout(
             Duration::from_millis(50),
-            read_terminal_update_timed(&mut reader, session_id),
+            read_terminal_update_timed(&mut updates),
         )
         .await
         {
@@ -346,10 +339,9 @@ async fn probe_baseline_shell_echo() {
     for i in 0..40 {
         let ch = char::from(b'a' + (i % 26) as u8);
         let sent = Instant::now();
-        write_key(&mut writer, session_id, ch).await;
+        write_key(&commands, ch).await;
         let (ms, reads, spurious) = wait_for_marker(
-            &mut reader,
-            session_id,
+            &mut updates,
             &mut frame,
             |text| text.trim_end().ends_with(ch),
             sent,
@@ -457,22 +449,22 @@ while True:
 async fn run_sync_tui_scenario(label: &str, mode: &str, iterations: usize, gap: Duration) {
     let script = write_fixture(&format!("hzn-latprobe-sync-tui-{mode}.py"), SYNC_TUI_SCRIPT);
     let sessiond = SessiondProcess::spawn();
-    let session_id = uuid::Uuid::new_v4();
-    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
+    let client = connect_hub(&sessiond.socket_path).await;
 
-    write_terminal_control(
-        &mut writer,
-        session_id,
-        TerminalControl::Create(Box::new(terminal_spec(
+    let TerminalAttachment {
+        mut updates,
+        commands,
+    } = create_terminal(
+        &client,
+        terminal_spec(
             "python3",
             vec!["-u".into(), script.display().to_string(), mode.into()],
             80,
             24,
-        ))),
+        ),
     )
     .await;
-    let (TerminalUpdate::Snapshot(mut frame), _) =
-        read_terminal_update_timed(&mut reader, session_id).await
+    let (TerminalUpdate::Snapshot(mut frame), _) = read_terminal_update_timed(&mut updates).await
     else {
         panic!("expected an initial snapshot");
     };
@@ -482,15 +474,9 @@ async fn run_sync_tui_scenario(label: &str, mode: &str, iterations: usize, gap: 
     for i in 1..=iterations {
         let marker = format!("tag={i} ");
         let sent = Instant::now();
-        write_key(&mut writer, session_id, 'x').await;
-        let (ms, reads, spurious) = wait_for_marker(
-            &mut reader,
-            session_id,
-            &mut frame,
-            |t| t.contains(&marker),
-            sent,
-        )
-        .await;
+        write_key(&commands, 'x').await;
+        let (ms, reads, spurious) =
+            wait_for_marker(&mut updates, &mut frame, |t| t.contains(&marker), sent).await;
         println!(
             "[latency-probe]   keystroke {i}: {ms:.3}ms after {reads} update(s), {spurious} spurious"
         );
@@ -551,13 +537,14 @@ async fn probe_synthetic_sync_output_multi_chunk() {
 async fn probe_synthetic_sync_output_delayed_esu() {
     let script = write_fixture("hzn-latprobe-sync-tui-delayed-esu.py", SYNC_TUI_SCRIPT);
     let sessiond = SessiondProcess::spawn();
-    let session_id = uuid::Uuid::new_v4();
-    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
+    let client = connect_hub(&sessiond.socket_path).await;
 
-    write_terminal_control(
-        &mut writer,
-        session_id,
-        TerminalControl::Create(Box::new(terminal_spec(
+    let TerminalAttachment {
+        mut updates,
+        commands,
+    } = create_terminal(
+        &client,
+        terminal_spec(
             "python3",
             vec![
                 "-u".into(),
@@ -566,11 +553,10 @@ async fn probe_synthetic_sync_output_delayed_esu() {
             ],
             80,
             24,
-        ))),
+        ),
     )
     .await;
-    let (TerminalUpdate::Snapshot(mut frame), _) =
-        read_terminal_update_timed(&mut reader, session_id).await
+    let (TerminalUpdate::Snapshot(mut frame), _) = read_terminal_update_timed(&mut updates).await
     else {
         panic!("expected an initial snapshot");
     };
@@ -579,15 +565,9 @@ async fn probe_synthetic_sync_output_delayed_esu() {
     for i in 1..=3 {
         let marker = format!("tag={i} ");
         let sent = Instant::now();
-        write_key(&mut writer, session_id, 'x').await;
-        let (ms, reads, spurious) = wait_for_marker(
-            &mut reader,
-            session_id,
-            &mut frame,
-            |t| t.contains(&marker),
-            sent,
-        )
-        .await;
+        write_key(&commands, 'x').await;
+        let (ms, reads, spurious) =
+            wait_for_marker(&mut updates, &mut frame, |t| t.contains(&marker), sent).await;
         println!(
             "[latency-probe] delayed-esu keystroke {i}: real content landed at {ms:.3}ms \
              (after {reads} update(s), {spurious} spurious)"
@@ -608,13 +588,14 @@ async fn probe_synthetic_sync_output_delayed_esu() {
 async fn probe_synthetic_sync_output_malformed() {
     let script = write_fixture("hzn-latprobe-sync-tui-malformed.py", SYNC_TUI_SCRIPT);
     let sessiond = SessiondProcess::spawn();
-    let session_id = uuid::Uuid::new_v4();
-    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
+    let client = connect_hub(&sessiond.socket_path).await;
 
-    write_terminal_control(
-        &mut writer,
-        session_id,
-        TerminalControl::Create(Box::new(terminal_spec(
+    let TerminalAttachment {
+        mut updates,
+        commands,
+    } = create_terminal(
+        &client,
+        terminal_spec(
             "python3",
             vec![
                 "-u".into(),
@@ -623,26 +604,19 @@ async fn probe_synthetic_sync_output_malformed() {
             ],
             80,
             24,
-        ))),
+        ),
     )
     .await;
-    let (TerminalUpdate::Snapshot(mut frame), _) =
-        read_terminal_update_timed(&mut reader, session_id).await
+    let (TerminalUpdate::Snapshot(mut frame), _) = read_terminal_update_timed(&mut updates).await
     else {
         panic!("expected an initial snapshot");
     };
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let sent = Instant::now();
-    write_key(&mut writer, session_id, 'x').await;
-    let (ms, reads, spurious) = wait_for_marker(
-        &mut reader,
-        session_id,
-        &mut frame,
-        |t| t.contains("tag=1 "),
-        sent,
-    )
-    .await;
+    write_key(&commands, 'x').await;
+    let (ms, reads, spurious) =
+        wait_for_marker(&mut updates, &mut frame, |t| t.contains("tag=1 "), sent).await;
     println!(
         "[latency-probe] malformed (never-closed) sync window: real content healed at {ms:.3}ms \
          (after {reads} update(s), {spurious} spurious)"
@@ -710,22 +684,22 @@ while True:
 async fn probe_decrqm_negotiation_bare_query() {
     let script = write_fixture("hzn-latprobe-decrqm-probe.py", DECRQM_PROBE_SCRIPT);
     let sessiond = SessiondProcess::spawn();
-    let session_id = uuid::Uuid::new_v4();
-    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
+    let client = connect_hub(&sessiond.socket_path).await;
 
-    write_terminal_control(
-        &mut writer,
-        session_id,
-        TerminalControl::Create(Box::new(terminal_spec(
+    let TerminalAttachment {
+        mut updates,
+        commands: _commands,
+    } = create_terminal(
+        &client,
+        terminal_spec(
             "python3",
             vec!["-u".into(), script.display().to_string()],
             80,
             24,
-        ))),
+        ),
     )
     .await;
-    let (TerminalUpdate::Snapshot(mut frame), _) =
-        read_terminal_update_timed(&mut reader, session_id).await
+    let (TerminalUpdate::Snapshot(mut frame), _) = read_terminal_update_timed(&mut updates).await
     else {
         panic!("expected an initial snapshot");
     };
@@ -735,7 +709,7 @@ async fn probe_decrqm_negotiation_bare_query() {
     while Instant::now() < deadline {
         match tokio::time::timeout(
             Duration::from_millis(200),
-            read_terminal_update_timed(&mut reader, session_id),
+            read_terminal_update_timed(&mut updates),
         )
         .await
         {
@@ -787,17 +761,13 @@ async fn probe_real_claude_composer_typing() {
     };
 
     let sessiond = SessiondProcess::spawn();
-    let session_id = uuid::Uuid::new_v4();
-    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
+    let client = connect_hub(&sessiond.socket_path).await;
 
-    write_terminal_control(
-        &mut writer,
-        session_id,
-        TerminalControl::Create(Box::new(terminal_spec(&claude_path, vec![], 120, 40))),
-    )
-    .await;
-    let (TerminalUpdate::Snapshot(mut frame), _) =
-        read_terminal_update_timed(&mut reader, session_id).await
+    let TerminalAttachment {
+        mut updates,
+        commands,
+    } = create_terminal(&client, terminal_spec(&claude_path, vec![], 120, 40)).await;
+    let (TerminalUpdate::Snapshot(mut frame), _) = read_terminal_update_timed(&mut updates).await
     else {
         panic!("expected an initial snapshot");
     };
@@ -807,7 +777,7 @@ async fn probe_real_claude_composer_typing() {
     while Instant::now() < deadline {
         match tokio::time::timeout(
             Duration::from_millis(300),
-            read_terminal_update_timed(&mut reader, session_id),
+            read_terminal_update_timed(&mut updates),
         )
         .await
         {
@@ -819,11 +789,10 @@ async fn probe_real_claude_composer_typing() {
     // Enter isn't a printable char via KeyCode::Char -- send the literal
     // control byte instead, matching what a real Enter keypress encodes to
     // for a plain (non-kitty) terminal.
-    let enter_envelope =
-        encode_terminal_command(session_id, &TerminalCommand::Input(b"\r".to_vec())).unwrap();
-    session_wire::write_envelope(&mut writer, &enter_envelope)
+    commands
+        .send(TerminalCommand::Input(b"\r".to_vec()))
         .await
-        .unwrap();
+        .expect("send enter");
 
     // Drain until the composer's ready (best-effort fixed settle time --
     // there's no reliable content marker to wait on across CLI versions).
@@ -831,7 +800,7 @@ async fn probe_real_claude_composer_typing() {
     while Instant::now() < settle_deadline {
         match tokio::time::timeout(
             Duration::from_millis(200),
-            read_terminal_update_timed(&mut reader, session_id),
+            read_terminal_update_timed(&mut updates),
         )
         .await
         {
@@ -850,10 +819,9 @@ async fn probe_real_claude_composer_typing() {
         typed.push(ch);
         let expect_prefix = typed.clone();
         let sent = Instant::now();
-        write_key(&mut writer, session_id, ch).await;
+        write_key(&commands, ch).await;
         let (ms, reads, spurious) = wait_for_marker(
-            &mut reader,
-            session_id,
+            &mut updates,
             &mut frame,
             |text| text.contains(&expect_prefix),
             sent,

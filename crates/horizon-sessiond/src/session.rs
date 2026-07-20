@@ -354,7 +354,11 @@ fn resolve_and_announce_session_model(
 ) -> Option<String> {
     let model = state.providers.resolved_model(provider_id, role_id);
     if let Some(model) = &model {
-        send_session_event(state, session_id, AgentWireEvent::SessionModel(model.clone()));
+        send_session_event(
+            state,
+            session_id,
+            AgentWireEvent::SessionModel(model.clone()),
+        );
     }
     model
 }

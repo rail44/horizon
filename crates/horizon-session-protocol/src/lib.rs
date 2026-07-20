@@ -13,9 +13,13 @@
 //! here:
 //!
 //! 1. **The codec is pinned, never defaulted**: every channel field and
-//!    every server/client construction names [`WireCodec`] (Postbag, Full
-//!    configuration); the workspace disables remoc's `default-codec-*`
-//!    features so `codec::Default` fails to compile if anything names it.
+//!    every server/client construction names an explicit codec —
+//!    [`WireCodec`] (Postbag Full) for the rtc transport and the
+//!    frame/terminal channels, [`AgentCodec`] (CBOR) for the agent and
+//!    host-tool channels (see [`AgentCodec`] for why those carry a
+//!    self-describing codec). The workspace disables remoc's
+//!    `default-codec-*` features so `codec::Default` fails to compile if
+//!    anything names it.
 //! 2. **Every wire enum carries a `#[serde(other)] Unknown` catch-all**,
 //!    and receive loops treat a non-final deserialization error as "skip
 //!    this item", never "tear down the channel".
@@ -37,15 +41,41 @@ use uuid::Uuid;
 pub mod legacy;
 pub mod schema_check;
 
-/// The one wire codec, named everywhere a codec parameter appears
-/// (adoption condition 1): Postbag in its Full configuration — the exact
-/// configuration the spike's skew experiments validated
-/// (`docs/research/remoc-spike-2026-07-20.md` §2). Never
+/// The primary wire codec — the rtc transport plus the frame/terminal
+/// channels: Postbag in its Full configuration, the exact configuration
+/// the spike's perf/skew experiments validated
+/// (`docs/research/remoc-spike-2026-07-20.md` §§1–2). Never
 /// `remoc::codec::Default`: the workspace builds remoc with default
 /// features off, so the default-codec alias deliberately does not resolve
 /// to a usable codec and a remoc upgrade that changes its default cannot
-/// silently fork the wire.
+/// silently fork the wire (adoption condition 1).
 pub type WireCodec = remoc::codec::Postbag;
+
+/// The codec for the agent-domain and host-tool channels
+/// ([`AgentAttachment`]'s `events`/`commands`, [`HubHello`]'s
+/// `host_tools`/`host_tool_responses`): CBOR (ciborium).
+///
+/// **Why a second codec, and why exactly here.** Those vocabularies carry
+/// `serde_json::Value` (a tool call's `input`, a result's `output` —
+/// `horizon_agent::contract::{ToolCallRequest, ToolCallResult}` and
+/// `horizon_agent::wire::HostTool{Request,Response}`). `serde_json::Value`'s
+/// `Deserialize` is implemented in terms of serde's `deserialize_any`,
+/// which only a **self-describing** format can answer — Postbag, being
+/// non-self-describing, returns `DeserializeAnyUnsupported`. The spike that
+/// ratified Postbag (`docs/remoc-adoption-design.md` §1) only ever
+/// exercised `TerminalFrame` payloads, which contain no `Value`, so this
+/// gap went unmeasured; CBOR is the spike's own recorded self-describing
+/// codec (§1a), it decodes `Value` natively, and — unlike JSON — it still
+/// degrades a payload-carrying unknown `#[serde(other)]` variant to
+/// `Unknown` (verified), preserving the §4 skew posture on these channels.
+///
+/// Still an *explicit* pin, never `codec::Default` — the same discipline
+/// adoption condition 1 requires. The frame path, whose performance the
+/// whole codec analysis was about, is untouched: it stays [`WireCodec`]
+/// (Postbag). The contract types keep their exact serde shape (no
+/// `#[serde(with)]` rewrites), so the event log's on-disk JSONL format is
+/// unchanged (`docs/remoc-adoption-design.md` §6, out of scope).
+pub type AgentCodec = remoc::codec::Ciborium;
 
 /// The session-daemon protocol version this build speaks.
 ///
@@ -186,13 +216,13 @@ pub struct HubHello {
     /// host-coupled tool (e.g. `workspace.snapshot`). Replaces the
     /// connection-global `host_tool_request` envelopes.
     #[schemars(schema_with = "channel_schema")]
-    pub host_tools: rch::mpsc::Receiver<HostToolRequest, WireCodec>,
+    pub host_tools: rch::mpsc::Receiver<HostToolRequest, AgentCodec>,
     /// Client → daemon: the answers to `host_tools` requests, correlated by
     /// `request_id` exactly as before (the one correlation map the cutover
     /// keeps: the exchange is genuinely asynchronous on the daemon side,
     /// where a session thread blocks on the matching response).
     #[schemars(schema_with = "channel_schema")]
-    pub host_tool_responses: rch::mpsc::Sender<HostToolResponse, WireCodec>,
+    pub host_tool_responses: rch::mpsc::Sender<HostToolResponse, AgentCodec>,
     /// Daemon → client: the daemon's startup event-log corruption summary,
     /// sent at most once per connection, after its resume finishes.
     /// Replaces the `SkippedLines` control envelope.
@@ -235,9 +265,9 @@ pub struct TerminalAttachment {
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct AgentAttachment {
     #[schemars(schema_with = "channel_schema")]
-    pub events: rch::mpsc::Receiver<AgentWireEvent, WireCodec>,
+    pub events: rch::mpsc::Receiver<AgentWireEvent, AgentCodec>,
     #[schemars(schema_with = "channel_schema")]
-    pub commands: rch::mpsc::Sender<Command, WireCodec>,
+    pub commands: rch::mpsc::Sender<Command, AgentCodec>,
 }
 
 /// The hub's error vocabulary. One enum for every method: domain errors
@@ -401,7 +431,8 @@ mod tests {
             },
         )
         .unwrap();
-        let decoded: HubError = <WireCodec as remoc::codec::Codec>::deserialize(&bytes[..]).unwrap();
+        let decoded: HubError =
+            <WireCodec as remoc::codec::Codec>::deserialize(&bytes[..]).unwrap();
         assert_eq!(decoded, HubError::Unknown);
     }
 }

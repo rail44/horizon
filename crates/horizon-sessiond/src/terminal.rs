@@ -339,7 +339,9 @@ impl TerminalHost {
                         // snapshot to a baseline-less attachment, diff
                         // against the per-attachment baseline otherwise.
                         let update = match subscriber.baseline.take() {
-                            Some(old) => TerminalUpdate::FrameDiff(compute_frame_diff(&old, &frame)),
+                            Some(old) => {
+                                TerminalUpdate::FrameDiff(compute_frame_diff(&old, &frame))
+                            }
                             None => TerminalUpdate::Snapshot(frame.clone()),
                         };
                         if subscriber.updates.send(update).is_ok() {

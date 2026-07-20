@@ -4,6 +4,22 @@
 //! `env!()` bake -- only available because this test lives in the same
 //! package as the `[[bin]]` target -- see `docs/tasks/backlog.md` #40) --
 //! see `docs/agent-runtime-split-design.md`'s step 2 deliverables.
+//!
+//! Since the v10 remoc cutover (`docs/remoc-adoption-design.md`) these talk
+//! to the daemon over the actual `SessionHub` rtc trait on the actual unix
+//! socket, through the [`HubTestClient`] harness below: `hello` range
+//! negotiation, the terminal/agent attach calls returning channel-bearing
+//! attachments, and `drain`. The frame-delivery semantics are unchanged in
+//! v10 (`Snapshot`/`FrameDiff` still travel verbatim on the attachment's
+//! updates channel), so the terminal tests still assert snapshot-then-diff.
+//! Cross-generation recovery (a v10 UI meeting a JSONL daemon) is covered
+//! on the *client* side, in `src/sessiond/tests.rs`, where the runtime that
+//! owns the probe-drain-respawn sequence lives.
+//!
+//! The tests use a multi-thread runtime because the remoc chmux mux task
+//! must be polled concurrently with the test's own awaits (adoption
+//! condition 3) while some helpers block briefly (process spawn/kill,
+//! stderr reads); a current-thread runtime would starve the mux.
 
 use std::io::{BufRead, ErrorKind, Read};
 use std::path::{Path, PathBuf};
@@ -20,17 +36,17 @@ use horizon_agent::frame::agent_frame_from_events;
 use horizon_agent::persistence::event_log::{Appender, WriterHandle, WriterInit};
 use horizon_agent::roles::RoleId;
 use horizon_agent::wire::{
-    self, Control, Envelope, EnvelopeBody, HostToolRequest, HostToolResponse, SessionLoad,
-    SessionNew, SessionSummary, CONTRACT_VERSION,
+    AgentWireEvent, HostToolRequest, HostToolResponse, SessionNew, SessionSummary,
 };
-use horizon_session_protocol::{self as session_wire, Hello, SessionControl, SESSION_CONTROL_KIND};
+use horizon_session_protocol::{
+    AgentCodec, ClientHello, HubError, SessionHub as _, SessionHubClient, VersionRange, WireCodec,
+    MIN_SUPPORTED_PROTOCOL_VERSION, SESSION_PROTOCOL_VERSION,
+};
 use horizon_terminal_core::{
-    apply_frame_diff, decode_terminal_control, decode_terminal_update, encode_terminal_command,
-    encode_terminal_control, TerminalAttachResult, TerminalColorScheme, TerminalCommand,
-    TerminalControl, TerminalFrame, TerminalSize, TerminalSpawnSpec, TerminalUpdate,
+    apply_frame_diff, TerminalColorScheme, TerminalCommand, TerminalFrame, TerminalSize,
+    TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
 };
-use tokio::io::BufReader;
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
+use remoc::rch;
 use tokio::net::UnixStream;
 
 /// The env var `horizon-sessiond`'s `main` reads to artificially delay its
@@ -156,12 +172,6 @@ fn resolve_sessiond_binary_finds_an_existing_binary_via_the_runtime_env_var() {
     // `docs/tasks/backlog.md` #40.
 }
 
-/// Spawns `command`, retrying once (see [`TRANSIENT_LINK_RETRY_DELAY`]) if
-/// the first attempt fails with [`ErrorKind::NotFound`] -- the residual
-/// race between [`resolve_sessiond_binary`]'s own existence check and the
-/// actual `execve` this performs. Panics with a diagnostic (both errors,
-/// the resolved program path, and whether it exists at panic time) if the
-/// retry also fails, rather than a bare "No such file or directory".
 fn spawn_sessiond(command: &mut Command) -> Child {
     match command.spawn() {
         Ok(child) => child,
@@ -453,128 +463,119 @@ async fn wait_for_exit(child: &mut Child) -> std::process::ExitStatus {
     panic!("horizon-sessiond did not exit in time");
 }
 
-/// Connects and completes the `hello` handshake, returning the split halves
-/// ready for step 3's session-hosting traffic (`session_new`, commands,
-/// events) -- every new test below needs this same sequence, so it's
-/// factored out rather than repeated the way the two step 2 tests above
-/// (which test the handshake itself) inline it.
-async fn connect_and_handshake(
-    socket_path: &std::path::Path,
-) -> (BufReader<OwnedReadHalf>, OwnedWriteHalf) {
-    let stream = connect_with_retry(socket_path).await;
-    let (read_half, mut write_half) = stream.into_split();
-    let mut reader = BufReader::new(read_half);
+// --- the remoc hub test harness --------------------------------------------
 
-    write_shared(
-        &mut write_half,
-        SessionControl::Hello(Hello {
-            contract_version: CONTRACT_VERSION,
-            binary_id: "test-client".to_string(),
+/// A connected `SessionHub` client over the real socket: the v10 successor
+/// of the JSONL `connect_and_handshake` split halves. Owns the chmux mux
+/// task (aborted on drop, which closes the socket so the daemon's
+/// one-at-a-time accept loop can serve the next connection) and holds the
+/// connection-global `HubHello` channels.
+struct HubTestClient {
+    hub: SessionHubClient<WireCodec>,
+    negotiated: u32,
+    binary_id: String,
+    host_tools: rch::mpsc::Receiver<HostToolRequest, AgentCodec>,
+    host_tool_responses: rch::mpsc::Sender<HostToolResponse, AgentCodec>,
+    skipped_lines: rch::mpsc::Receiver<String, WireCodec>,
+    conn_task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for HubTestClient {
+    fn drop(&mut self) {
+        self.conn_task.abort();
+    }
+}
+
+/// Establishes the remoc connection over an already-connected stream, hands
+/// the daemon its client, and runs `hello` with the given advertised range.
+async fn establish_hub(
+    stream: UnixStream,
+    supported: VersionRange,
+) -> Result<HubTestClient, HubError> {
+    let (read_half, write_half) = stream.into_split();
+    let (conn, _base_tx, mut base_rx) =
+        remoc::Connect::io::<_, _, (), SessionHubClient<WireCodec>, WireCodec>(
+            remoc::Cfg::default(),
+            read_half,
+            write_half,
+        )
+        .await
+        .expect("remoc connect to the real daemon");
+    let conn_task = tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    let hub = base_rx
+        .recv()
+        .await
+        .expect("base channel recv")
+        .expect("the daemon should hand over a hub client");
+
+    let client_hello = ClientHello {
+        supported,
+        binary_id: "test-client".to_string(),
+    };
+    match hub.hello(client_hello).await {
+        Ok(hello) => Ok(HubTestClient {
+            hub,
+            negotiated: hello.negotiated,
+            binary_id: hello.binary_id,
+            host_tools: hello.host_tools,
+            host_tool_responses: hello.host_tool_responses,
+            skipped_lines: hello.skipped_lines,
+            conn_task,
         }),
-    )
-    .await;
-    let reply = read_shared(&mut reader).await;
-    assert!(matches!(reply, SessionControl::Hello(_)));
-
-    (reader, write_half)
-}
-
-async fn write_shared(writer: &mut OwnedWriteHalf, control: SessionControl) {
-    let envelope = session_wire::Envelope::session_control(&control).unwrap();
-    session_wire::write_envelope(writer, &envelope)
-        .await
-        .unwrap();
-}
-
-async fn read_shared(reader: &mut BufReader<OwnedReadHalf>) -> SessionControl {
-    let envelope = session_wire::read_envelope(reader)
-        .await
-        .unwrap()
-        .expect("sessiond should send a shared control");
-    envelope.decode_payload(SESSION_CONTROL_KIND).unwrap()
-}
-
-async fn write_terminal_control(
-    writer: &mut OwnedWriteHalf,
-    session_id: uuid::Uuid,
-    control: TerminalControl,
-) {
-    let envelope = encode_terminal_control(Some(session_id), &control).unwrap();
-    session_wire::write_envelope(writer, &envelope)
-        .await
-        .unwrap();
-}
-
-async fn write_global_terminal_control(writer: &mut OwnedWriteHalf, control: TerminalControl) {
-    let envelope = encode_terminal_control(None, &control).unwrap();
-    session_wire::write_envelope(writer, &envelope)
-        .await
-        .unwrap();
-}
-
-async fn read_terminal_control(
-    reader: &mut BufReader<OwnedReadHalf>,
-) -> (Option<uuid::Uuid>, TerminalControl) {
-    let envelope = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let envelope = session_wire::read_envelope(reader)
-                .await
-                .unwrap()
-                .expect("sessiond should keep the terminal connection open");
-            if envelope.kind == horizon_terminal_core::TERMINAL_CONTROL_KIND {
-                break envelope;
-            }
+        Err(error) => {
+            // The connection stays alive (the mux task keeps running) so a
+            // rejected client can still call `drain` -- return a live hub
+            // for that, threaded through the error's own path in the one
+            // test that needs it.
+            conn_task.abort();
+            Err(error)
         }
-    })
-    .await
-    .expect("timed out waiting for a terminal control");
-    (
-        envelope.session_id,
-        decode_terminal_control(&envelope).unwrap(),
-    )
+    }
 }
 
-async fn write_terminal_command(
-    writer: &mut OwnedWriteHalf,
-    session_id: uuid::Uuid,
-    command: TerminalCommand,
-) {
-    let envelope = encode_terminal_command(session_id, &command).unwrap();
-    session_wire::write_envelope(writer, &envelope)
+/// Connects to the real socket and completes `hello` at this build's own
+/// advertised range -- every session-hosting test's entry point.
+async fn connect_hub(socket_path: &Path) -> HubTestClient {
+    let stream = connect_with_retry(socket_path).await;
+    establish_hub(stream, VersionRange::ours())
         .await
-        .unwrap();
+        .expect("hello should succeed at a matching version range")
 }
 
-/// How long a single [`read_terminal_update`] call waits for the next
-/// update. This test spawns a *real* PTY backed by a real interactive shell
-/// (`terminal_spec`'s `/bin/sh -i`) -- fork/exec, shell rc processing, and
-/// the `read_pty` thread that pumps its output all cost real wall-clock
-/// time that a CPU-starved host (e.g. the full workspace suite running in
-/// parallel, or a concurrent `cargo build`) can genuinely stretch past a
-/// tight budget; this isn't a fixed local computation with a knowable
-/// upper bound. Generous on purpose (`docs/tasks/backlog.md` #28: 10s was
-/// observed to flake under exactly this kind of contention even with no
-/// other horizon-sessiond instance involved; even 60s was observed to flake
-/// once during this fix's own validation, under a deliberately extreme
-/// concurrent `cargo build --release` loop) -- the nextest test-group in
-/// `.config/nextest.toml` also serializes this binary's own tests against
-/// each other so they don't contend with themselves, but a large ceiling
-/// here still protects against contention from processes outside this test
-/// run.
+impl HubTestClient {
+    /// Gracefully drains the daemon. The daemon exits inside the call, so
+    /// the reply never travels -- the call resolves as a transport error,
+    /// which is expected; the caller confirms the exit via
+    /// [`wait_for_exit`].
+    async fn drain(&self) {
+        let _ = tokio::time::timeout(Duration::from_secs(5), self.hub.drain()).await;
+    }
+}
+
 const TERMINAL_UPDATE_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Reads the next update from an attachment's channel, or panics on
+/// timeout/disconnect.
 async fn read_terminal_update(
-    reader: &mut BufReader<OwnedReadHalf>,
-    session_id: uuid::Uuid,
+    updates: &mut rch::mpsc::Receiver<TerminalUpdate, WireCodec>,
 ) -> TerminalUpdate {
-    let envelope =
-        tokio::time::timeout(TERMINAL_UPDATE_TIMEOUT, session_wire::read_envelope(reader))
-            .await
-            .expect("timed out waiting for a terminal update")
-            .unwrap()
-            .expect("sessiond should keep the terminal connection open");
-    assert_eq!(envelope.session_id, Some(session_id));
-    decode_terminal_update(&envelope).unwrap()
+    tokio::time::timeout(TERMINAL_UPDATE_TIMEOUT, updates.recv())
+        .await
+        .expect("timed out waiting for a terminal update")
+        .expect("terminal update channel error")
+        .expect("the daemon should keep the terminal attachment open")
+}
+
+async fn send_terminal_command(
+    commands: &rch::mpsc::Sender<TerminalCommand, WireCodec>,
+    command: TerminalCommand,
+) {
+    commands
+        .send(command)
+        .await
+        .expect("send a terminal command");
 }
 
 fn terminal_spec(
@@ -594,15 +595,17 @@ fn terminal_spec(
     }
 }
 
+/// Folds updates from an attachment's channel into `frame` until its text
+/// contains `needle`; returns the accumulated frame and whether any diff
+/// (not just snapshots) was observed along the way.
 async fn collect_terminal_frame_until(
-    reader: &mut BufReader<OwnedReadHalf>,
-    session_id: uuid::Uuid,
+    updates: &mut rch::mpsc::Receiver<TerminalUpdate, WireCodec>,
     mut frame: TerminalFrame,
     needle: &str,
 ) -> (TerminalFrame, bool) {
     let mut saw_diff = false;
     for _ in 0..100 {
-        match read_terminal_update(reader, session_id).await {
+        match read_terminal_update(updates).await {
             TerminalUpdate::Snapshot(snapshot) => frame = snapshot,
             TerminalUpdate::FrameDiff(diff) => {
                 saw_diff = true;
@@ -615,7 +618,7 @@ async fn collect_terminal_frame_until(
             TerminalUpdate::Title(_)
             | TerminalUpdate::Bell
             | TerminalUpdate::Clipboard { .. }
-            | TerminalUpdate::Unknown(_) => {}
+            | TerminalUpdate::Unknown => {}
         }
         if frame.text().contains(needle) {
             return (frame, saw_diff);
@@ -627,449 +630,112 @@ async fn collect_terminal_frame_until(
     );
 }
 
-/// Reads envelopes until `predicate` matches one and returns every event
-/// observed so far (including the matching one), in arrival order -- the
-/// "streamed events arrive in order" / "transcript assertions" shape the
-/// step 3 deliverables call for. Panics after a generous number of reads
-/// rather than hanging forever if `predicate` never matches.
+/// Reads events from an agent attachment's channel until `predicate`
+/// matches one, returning every event observed (including the matching
+/// one), in arrival order. Skips the non-`Event` announcements
+/// (`ToolCallProgress`, `SessionModel`, `WorkspaceRootResolved`) that share
+/// the channel. Panics after a generous number of reads.
 async fn collect_events_until(
-    reader: &mut BufReader<OwnedReadHalf>,
-    session_id: SessionId,
+    events: &mut rch::mpsc::Receiver<AgentWireEvent, AgentCodec>,
     mut predicate: impl FnMut(&Event) -> bool,
 ) -> Vec<Event> {
-    let mut events = Vec::new();
-    for _ in 0..200 {
-        let envelope = wire::read_envelope(reader)
+    let mut collected = Vec::new();
+    for _ in 0..400 {
+        let wire_event = tokio::time::timeout(Duration::from_secs(120), events.recv())
             .await
-            .unwrap()
-            .expect("sessiond should keep streaming events, not close the connection");
-        assert_eq!(
-            envelope.session_id,
-            Some(session_id),
-            "event envelope should be scoped to the session that produced it"
-        );
-        let EnvelopeBody::Event(event) = envelope.body else {
-            panic!("expected an event envelope, got {:?}", envelope.body);
-        };
-        let done = predicate(&event);
-        events.push(event);
-        if done {
-            return events;
+            .expect("timed out waiting for an agent event")
+            .expect("agent event channel error")
+            .expect("the daemon should keep streaming events, not close the attachment");
+        if let AgentWireEvent::Event(event) = wire_event {
+            let done = predicate(&event);
+            collected.push(event);
+            if done {
+                return collected;
+            }
         }
     }
-    panic!("gave up waiting for the expected event after 200 reads; got: {events:?}");
+    panic!("gave up waiting for the expected event after 400 reads; got: {collected:?}");
 }
 
-#[tokio::test]
-async fn hello_ping_session_list_and_drain_over_the_real_socket() {
-    let mut sessiond = SessiondProcess::spawn();
-    let stream = connect_with_retry(&sessiond.socket_path).await;
-    let (read_half, mut write_half) = stream.into_split();
-    let mut reader = BufReader::new(read_half);
+/// Reads a session's replayed events off a fresh `attach_agent` attachment
+/// (`AgentAttachment::events`) until they go quiet -- `attach_agent`'s
+/// replay burst has no single terminal event to watch for. Same two-wait
+/// shape as the JSONL era: a long first-event budget (the daemon's
+/// `replay_events` can take real time under contention), then a short
+/// quiescence window once the burst starts.
+async fn collect_replayed_events(
+    events: &mut rch::mpsc::Receiver<AgentWireEvent, AgentCodec>,
+) -> Vec<Event> {
+    const REPLAY_FIRST_EVENT_TIMEOUT: Duration = Duration::from_secs(120);
+    const REPLAY_QUIESCENCE_WINDOW: Duration = Duration::from_millis(500);
 
-    write_shared(
-        &mut write_half,
-        SessionControl::Hello(Hello {
-            contract_version: CONTRACT_VERSION,
-            binary_id: "test-client".to_string(),
-        }),
-    )
-    .await;
-
-    let reply = read_shared(&mut reader).await;
-    let SessionControl::Hello(hello) = reply else {
-        panic!("expected a hello reply, got {reply:?}");
-    };
-    assert_eq!(hello.contract_version, CONTRACT_VERSION);
-    assert_eq!(
-        hello.binary_id,
-        concat!("horizon-sessiond/", env!("CARGO_PKG_VERSION"))
-    );
-
-    write_shared(&mut write_half, SessionControl::Ping).await;
-    assert_eq!(read_shared(&mut reader).await, SessionControl::Pong);
-
-    wire::write_envelope(&mut write_half, &Envelope::control(Control::SessionList))
-        .await
-        .unwrap();
-    let reply = wire::read_envelope(&mut reader).await.unwrap().unwrap();
-    assert_eq!(
-        reply.body,
-        EnvelopeBody::Control(Control::SessionListResult(Vec::new()))
-    );
-
-    write_shared(&mut write_half, SessionControl::Drain).await;
-
-    let status = wait_for_exit(&mut sessiond.child).await;
-    assert!(
-        status.success(),
-        "horizon-sessiond should exit 0 after drain, got {status:?}"
-    );
-}
-
-#[tokio::test]
-async fn terminal_create_diff_reconnect_attach_and_shutdown_over_the_real_socket() {
-    let sessiond = SessiondProcess::spawn();
-    let session_id = uuid::Uuid::new_v4();
-    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
-
-    write_terminal_control(
-        &mut writer,
-        session_id,
-        TerminalControl::Create(Box::new(terminal_spec(std::env::temp_dir(), None))),
-    )
-    .await;
-    let TerminalUpdate::Snapshot(initial) = read_terminal_update(&mut reader, session_id).await
-    else {
-        panic!("terminal create must begin with a full snapshot");
-    };
-
-    write_terminal_command(
-        &mut writer,
-        session_id,
-        TerminalCommand::Input(b"printf 'HORIZON_DIFF_MARKER\\n'\n".to_vec()),
-    )
-    .await;
-    let (frame, saw_diff) =
-        collect_terminal_frame_until(&mut reader, session_id, initial, "HORIZON_DIFF_MARKER").await;
-    assert!(
-        saw_diff,
-        "updates after the create baseline should be diffs"
-    );
-
-    drop(writer);
-    drop(reader);
-    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
-    let request_id = uuid::Uuid::new_v4();
-    write_terminal_control(
-        &mut writer,
-        session_id,
-        TerminalControl::Attach { request_id },
-    )
-    .await;
-    assert_eq!(
-        read_terminal_control(&mut reader).await,
-        (
-            Some(session_id),
-            TerminalControl::AttachResult {
-                request_id,
-                result: TerminalAttachResult::Attached,
-            },
-        )
-    );
-    let TerminalUpdate::Snapshot(attached) = read_terminal_update(&mut reader, session_id).await
-    else {
-        panic!("attach on a new connection must reset to a full snapshot");
-    };
-    assert!(attached.text().contains("HORIZON_DIFF_MARKER"));
-    assert!(frame.text().contains("HORIZON_DIFF_MARKER"));
-
-    write_terminal_command(
-        &mut writer,
-        session_id,
-        TerminalCommand::Input(b"printf 'HORIZON_REATTACH_MARKER\\n'\n".to_vec()),
-    )
-    .await;
-    let (_, saw_diff) =
-        collect_terminal_frame_until(&mut reader, session_id, attached, "HORIZON_REATTACH_MARKER")
-            .await;
-    assert!(saw_diff, "reattached PTY should continue streaming diffs");
-
-    write_terminal_command(&mut writer, session_id, TerminalCommand::Shutdown).await;
-    for _ in 0..20 {
-        if matches!(
-            read_terminal_update(&mut reader, session_id).await,
-            TerminalUpdate::Exited
-        ) {
-            return;
+    let mut collected = Vec::new();
+    let mut budget = REPLAY_FIRST_EVENT_TIMEOUT;
+    loop {
+        match tokio::time::timeout(budget, events.recv()).await {
+            Ok(Ok(Some(AgentWireEvent::Event(event)))) => {
+                collected.push(event);
+                budget = REPLAY_QUIESCENCE_WINDOW;
+            }
+            // Non-event announcements (SessionModel, etc.) also arrive on
+            // this channel -- keep waiting, they don't end the burst.
+            Ok(Ok(Some(_))) => budget = REPLAY_QUIESCENCE_WINDOW,
+            Ok(Ok(None)) => panic!("attachment closed while collecting replayed events"),
+            Ok(Err(err)) => panic!("channel error while collecting replayed events: {err}"),
+            Err(_timeout) => return collected,
         }
     }
-    panic!("terminal shutdown did not produce an exited update");
 }
 
-#[tokio::test]
-async fn terminal_list_is_correlated_sorted_and_unknown_attach_is_explicit() {
-    let sessiond = SessiondProcess::spawn();
-    let high_id = uuid::Uuid::from_u128(2);
-    let low_id = uuid::Uuid::from_u128(1);
-    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
-
-    let empty_list_request = uuid::Uuid::new_v4();
-    write_global_terminal_control(
-        &mut writer,
-        TerminalControl::List {
-            request_id: empty_list_request,
-        },
-    )
-    .await;
-    assert_eq!(
-        read_terminal_control(&mut reader).await,
-        (
-            None,
-            TerminalControl::ListResult {
-                request_id: empty_list_request,
-                sessions: Vec::new(),
-            },
-        )
-    );
-
-    write_terminal_control(
-        &mut writer,
-        high_id,
-        TerminalControl::Create(Box::new(terminal_spec(std::env::temp_dir(), None))),
-    )
-    .await;
-    assert!(matches!(
-        read_terminal_update(&mut reader, high_id).await,
-        TerminalUpdate::Snapshot(_)
-    ));
-
-    drop(writer);
-    drop(reader);
-    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
-    write_terminal_control(
-        &mut writer,
-        low_id,
-        TerminalControl::Create(Box::new(terminal_spec(std::env::temp_dir(), None))),
-    )
-    .await;
-    assert!(matches!(
-        read_terminal_update(&mut reader, low_id).await,
-        TerminalUpdate::Snapshot(_)
-    ));
-
-    drop(writer);
-    drop(reader);
-    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
-    let list_request = uuid::Uuid::new_v4();
-    write_global_terminal_control(
-        &mut writer,
-        TerminalControl::List {
-            request_id: list_request,
-        },
-    )
-    .await;
-    assert_eq!(
-        read_terminal_control(&mut reader).await,
-        (
-            None,
-            TerminalControl::ListResult {
-                request_id: list_request,
-                sessions: vec![
-                    horizon_terminal_core::TerminalSummary { session_id: low_id },
-                    horizon_terminal_core::TerminalSummary {
-                        session_id: high_id,
-                    },
-                ],
-            },
-        )
-    );
-
-    let missing_id = uuid::Uuid::from_u128(3);
-    let attach_request = uuid::Uuid::new_v4();
-    write_terminal_control(
-        &mut writer,
-        missing_id,
-        TerminalControl::Attach {
-            request_id: attach_request,
-        },
-    )
-    .await;
-    assert_eq!(
-        read_terminal_control(&mut reader).await,
-        (
-            Some(missing_id),
-            TerminalControl::AttachResult {
-                request_id: attach_request,
-                result: TerminalAttachResult::NotFound,
-            },
-        )
-    );
-
-    write_terminal_command(&mut writer, low_id, TerminalCommand::Shutdown).await;
-    write_terminal_command(&mut writer, high_id, TerminalCommand::Shutdown).await;
-}
-
-#[tokio::test]
-async fn terminal_spawn_uses_fallback_and_source_session_cwds() {
-    let sessiond = SessiondProcess::spawn();
-    let root = std::env::temp_dir().join(format!("hzn-cwd-e2e-{}", uuid::Uuid::new_v4()));
-    let source_cwd = root.join("source");
-    let fallback_cwd = root.join("fallback");
-    std::fs::create_dir_all(&source_cwd).unwrap();
-    std::fs::create_dir_all(&fallback_cwd).unwrap();
-    // The needles below compare against the shell's `$PWD` (getcwd, a
-    // physical path) and the sampled source cwd (also physical), but on
-    // macOS `temp_dir()` is under `/var`, a symlink to `/private/var` —
-    // canonicalize so the expected path is physical too.
-    let source_cwd = source_cwd.canonicalize().unwrap();
-    // That macOS temp path also pushes the needle past 80 columns, and a
-    // wrapped row inserts '\n' into `frame.text()` where the substring
-    // match would look — widen the PTY so the needle never wraps.
-    let wide = TerminalSize::new(200, 24);
-
-    let source_id = uuid::Uuid::new_v4();
-    let target_id = uuid::Uuid::new_v4();
-    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
-    let mut source_spec = terminal_spec(source_cwd.clone(), None);
-    source_spec.initial_size = wide;
-    write_terminal_control(
-        &mut writer,
-        source_id,
-        TerminalControl::Create(Box::new(source_spec)),
-    )
-    .await;
-    let TerminalUpdate::Snapshot(source_initial) =
-        read_terminal_update(&mut reader, source_id).await
-    else {
-        panic!("source terminal create must begin with a snapshot");
-    };
-    write_terminal_command(
-        &mut writer,
-        source_id,
-        TerminalCommand::Input(b"printf 'SOURCE_CWD:%s\\n' \"$PWD\"\n".to_vec()),
-    )
-    .await;
-    let source_needle = format!("SOURCE_CWD:{}", source_cwd.display());
-    let _ =
-        collect_terminal_frame_until(&mut reader, source_id, source_initial, &source_needle).await;
-
-    let mut target_spec = terminal_spec(fallback_cwd.clone(), Some(source_id));
-    target_spec.initial_size = wide;
-    write_terminal_control(
-        &mut writer,
-        target_id,
-        TerminalControl::Create(Box::new(target_spec)),
-    )
-    .await;
-    let TerminalUpdate::Snapshot(target_initial) =
-        read_terminal_update(&mut reader, target_id).await
-    else {
-        panic!("target terminal create must begin with a snapshot");
-    };
-    write_terminal_command(
-        &mut writer,
-        target_id,
-        TerminalCommand::Input(b"printf 'TARGET_CWD:%s\\n' \"$PWD\"\n".to_vec()),
-    )
-    .await;
-    let target_needle = format!("TARGET_CWD:{}", source_cwd.display());
-    let _ =
-        collect_terminal_frame_until(&mut reader, target_id, target_initial, &target_needle).await;
-
-    write_terminal_command(&mut writer, source_id, TerminalCommand::Shutdown).await;
-    write_terminal_command(&mut writer, target_id, TerminalCommand::Shutdown).await;
-    std::fs::remove_dir_all(root).unwrap();
-}
-
-#[tokio::test]
-async fn a_hello_with_the_wrong_contract_version_is_rejected_but_drain_still_works() {
-    let mut sessiond = SessiondProcess::spawn();
-    let stream = connect_with_retry(&sessiond.socket_path).await;
-    let (read_half, mut write_half) = stream.into_split();
-    let mut reader = BufReader::new(read_half);
-
-    let wrong_version = CONTRACT_VERSION + 1;
-    write_shared(
-        &mut write_half,
-        SessionControl::Hello(Hello {
-            contract_version: wrong_version,
-            binary_id: "test-client".to_string(),
-        }),
-    )
-    .await;
-
-    let reply = read_shared(&mut reader).await;
-    let SessionControl::HandshakeRejected(reason) = reply else {
-        panic!("expected a handshake rejection, got {reply:?}");
-    };
-    assert!(
-        reason.contains("reload required"),
-        "rejection reason was: {reason}"
-    );
-
-    // A rejected handshake no longer closes the connection (contract-
-    // mismatch auto-recovery, docs/session-daemon-design.md 2026-07-20):
-    // the one thing a mismatched client can still legitimately say is
-    // Drain -- "flush and exit so I can restart you at my version" -- and
-    // the same connection must honor it with a graceful exit 0.
-    write_shared(&mut write_half, SessionControl::Drain).await;
-    let status = wait_for_exit(&mut sessiond.child).await;
-    assert!(
-        status.success(),
-        "horizon-sessiond should exit 0 after a post-rejection drain, got {status:?}"
-    );
-}
-
-/// The other half of contract-mismatch auto-recovery: a client speaking a
-/// *different envelope version* entirely (a future Horizon talking to this
-/// build as its stale daemon). `session_control` is version-stable, so this
-/// daemon must decode the foreign-versioned hello (rejecting it with a
-/// reason instead of closing silently, the way pre-v9 daemons do) and then
-/// honor the foreign-versioned Drain the recovering client follows up with.
-#[tokio::test]
-async fn a_foreign_envelope_version_still_gets_a_rejection_and_can_drain() {
-    let mut sessiond = SessiondProcess::spawn();
-    let stream = connect_with_retry(&sessiond.socket_path).await;
-    let (read_half, mut write_half) = stream.into_split();
-    let mut reader = BufReader::new(read_half);
-
-    let future_version = CONTRACT_VERSION + 1;
-    let hello = session_wire::Envelope::session_control_at(
-        &SessionControl::Hello(Hello {
-            contract_version: future_version,
-            binary_id: "future-horizon".to_string(),
-        }),
-        future_version,
-    )
-    .unwrap();
-    session_wire::write_envelope(&mut write_half, &hello)
+/// Reads the connection-global host-tool request channel
+/// (`HubHello::host_tools`) until a request arrives.
+async fn read_host_tool_request(client: &mut HubTestClient) -> HostToolRequest {
+    tokio::time::timeout(Duration::from_secs(120), client.host_tools.recv())
         .await
-        .unwrap();
-
-    let reply = session_wire::read_envelope(&mut reader)
-        .await
-        .unwrap()
-        .expect("sessiond should reply to a foreign-versioned hello");
-    // The reply's envelope version is the version this daemon actually
-    // speaks -- exactly what a recovering client uses to aim its Drain.
-    assert_eq!(reply.v, CONTRACT_VERSION);
-    let control: SessionControl = reply.decode_payload(SESSION_CONTROL_KIND).unwrap();
-    let SessionControl::HandshakeRejected(reason) = control else {
-        panic!("expected a handshake rejection, got {control:?}");
-    };
-    assert!(
-        reason.contains(&format!("client sent v{future_version}")),
-        "rejection reason was: {reason}"
-    );
-
-    let drain =
-        session_wire::Envelope::session_control_at(&SessionControl::Drain, future_version).unwrap();
-    session_wire::write_envelope(&mut write_half, &drain)
-        .await
-        .unwrap();
-    let status = wait_for_exit(&mut sessiond.child).await;
-    assert!(
-        status.success(),
-        "horizon-sessiond should exit 0 after a foreign-versioned drain, got {status:?}"
-    );
+        .expect("timed out waiting for a host-tool request")
+        .expect("host-tool channel error")
+        .expect("the daemon should keep the host-tool channel open")
 }
 
-// --- step 3: session hosting -----------------------------------------------
+async fn respond_host_tool(client: &HubTestClient, response: HostToolResponse) {
+    client
+        .host_tool_responses
+        .send(response)
+        .await
+        .expect("send a host-tool response");
+}
 
 fn mock_provider_id() -> ProviderId {
     ProviderId("builtin.agent.mock".to_string())
 }
 
+fn session_new(session_id: SessionId) -> SessionNew {
+    SessionNew {
+        session_id,
+        provider_id: mock_provider_id(),
+        role_id: None,
+        workspace_root: None,
+        spawn_source_session_id: None,
+        isolate: false,
+    }
+}
+
+fn session_new_with_role(session_id: SessionId, role_id: RoleId) -> SessionNew {
+    SessionNew {
+        session_id,
+        provider_id: mock_provider_id(),
+        role_id: Some(role_id),
+        workspace_root: None,
+        spawn_source_session_id: None,
+        isolate: false,
+    }
+}
+
 /// Writes a fixture event log directly at `path`, one session per
 /// `(SessionId, Vec<Event>)` pair, via the same `WriterHandle`/`Appender`
 /// machinery `horizon-agent`'s own event-log tests use -- for tests below
-/// that need a specific pre-existing log (particular sessions in particular
-/// terminal/live states) *before* `horizon-sessiond` itself ever runs, rather
-/// than building one up by talking to a live process. Every record gets
-/// [`mock_provider_id`] as its provider id, matching what `send_session_new`
-/// uses, so resumed sessions' `SessionSummary`s are directly comparable to
-/// the ones the rest of this file already asserts against.
+/// that need a specific pre-existing log *before* `horizon-sessiond` itself
+/// ever runs. Every record gets [`mock_provider_id`] as its provider id.
 fn write_session_fixture(path: &std::path::Path, sessions: Vec<(SessionId, Vec<Event>)>) {
     let (writer, init_rx) = WriterHandle::open(path);
     match init_rx
@@ -1091,94 +757,321 @@ fn write_session_fixture(path: &std::path::Path, sessions: Vec<(SessionId, Vec<E
     writer.flush().expect("flush fixture events");
 }
 
-async fn send_session_new(writer: &mut OwnedWriteHalf, session_id: SessionId) {
-    wire::write_envelope(
-        writer,
-        &Envelope::control(Control::SessionNew(SessionNew {
-            session_id,
-            provider_id: mock_provider_id(),
-            role_id: None,
-            workspace_root: None,
-            spawn_source_session_id: None,
-            isolate: false,
-        })),
-    )
-    .await
-    .unwrap();
-}
-
-/// Same as [`send_session_new`], with a role attached -- the mock provider
-/// accepts and ignores it (`providers::mock`), so this only exercises
-/// role_id's *persistence* (`Appender`/`Record`) and resume path, not any
-/// role-specific prompt/tool behavior (that's the rig provider's job, and
-/// mock is used here precisely to avoid a real completion-provider
-/// dependency in an e2e test).
-async fn send_session_new_with_role(
-    writer: &mut OwnedWriteHalf,
+/// Polls `path`'s on-disk event log until a record for `session_id`
+/// matching `predicate` appears, or panics after a generous timeout. See
+/// the JSONL-era note preserved on `killed_sessiond...`: a client can
+/// observe an event over the wire before it is durable, so kill-based tests
+/// must wait for the disk write.
+async fn wait_for_persisted_event(
+    path: &std::path::Path,
     session_id: SessionId,
-    role_id: RoleId,
+    mut predicate: impl FnMut(&Event) -> bool,
 ) {
-    wire::write_envelope(
-        writer,
-        &Envelope::control(Control::SessionNew(SessionNew {
-            session_id,
-            provider_id: mock_provider_id(),
-            role_id: Some(role_id),
-            workspace_root: None,
-            spawn_source_session_id: None,
-            isolate: false,
-        })),
-    )
-    .await
-    .unwrap();
+    for _ in 0..200 {
+        if let Ok(report) = horizon_agent::persistence::event_log::read(path) {
+            if report
+                .records
+                .iter()
+                .any(|record| record.session_id == session_id && predicate(&record.event))
+            {
+                return;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!(
+        "gave up waiting for the expected event to reach disk at {}",
+        path.display()
+    );
 }
 
-/// Reads envelopes until a `Control::HostToolRequest` scoped to `session_id`
-/// arrives, tolerating (and discarding) any event envelopes ahead of it --
-/// sessiond forwards the host tool's own `ToolCallRequested`/`ToolCallStarted`/
-/// `ToolCallFinished` events only *after* the round trip completes (see
-/// `session::handle_provider_event`), but earlier events in the same turn
-/// (e.g. the triggering `StateChanged`/`MessageCommitted`) can arrive first.
-async fn read_host_tool_request(
-    reader: &mut BufReader<OwnedReadHalf>,
-    session_id: SessionId,
-) -> HostToolRequest {
-    for _ in 0..200 {
-        let envelope = wire::read_envelope(reader)
-            .await
-            .unwrap()
-            .expect("connection should stay open while a session is live");
-        if let EnvelopeBody::Control(Control::HostToolRequest(request)) = envelope.body {
-            assert_eq!(envelope.session_id, Some(session_id));
-            return request;
+// --- tests -----------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hello_negotiates_lists_agents_and_drains_over_the_real_socket() {
+    let mut sessiond = SessiondProcess::spawn();
+    let client = connect_hub(&sessiond.socket_path).await;
+
+    // hello's range negotiation settles on this build's version, and the
+    // reply carries the daemon's binary id.
+    assert_eq!(client.negotiated, SESSION_PROTOCOL_VERSION);
+    assert_eq!(
+        client.binary_id,
+        concat!("horizon-sessiond/", env!("CARGO_PKG_VERSION"))
+    );
+
+    // No sessions yet.
+    assert_eq!(client.hub.list_agents().await.unwrap(), Vec::new());
+
+    client.drain().await;
+    let status = wait_for_exit(&mut sessiond.child).await;
+    assert!(
+        status.success(),
+        "horizon-sessiond should exit 0 after drain, got {status:?}"
+    );
+}
+
+/// The v10 successor of the JSONL cross-version rejection tests: a remoc
+/// client whose advertised range does not overlap the daemon's
+/// (`[MIN_SUPPORTED, current]`) is rejected by `hello` with an explicit
+/// `IncompatibleVersion` error naming both ranges -- and the connection
+/// stays alive enough for the one thing a rejected client may still do:
+/// `drain`, so the auto-recovery path can restart the daemon at a
+/// compatible version.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_incompatible_version_range_is_rejected_but_drain_still_works() {
+    let mut sessiond = SessiondProcess::spawn();
+
+    // A client that only speaks a future version the daemon doesn't.
+    let future = SESSION_PROTOCOL_VERSION + 5;
+    let stream = connect_with_retry(&sessiond.socket_path).await;
+    let (read_half, write_half) = stream.into_split();
+    let (conn, _base_tx, mut base_rx) =
+        remoc::Connect::io::<_, _, (), SessionHubClient<WireCodec>, WireCodec>(
+            remoc::Cfg::default(),
+            read_half,
+            write_half,
+        )
+        .await
+        .unwrap();
+    let conn_task = tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    let hub = base_rx.recv().await.unwrap().unwrap();
+
+    let result = hub
+        .hello(ClientHello {
+            supported: VersionRange {
+                min_supported: future,
+                current: future,
+            },
+            binary_id: "future-horizon".to_string(),
+        })
+        .await;
+    match result {
+        Err(HubError::IncompatibleVersion { client, daemon }) => {
+            assert_eq!(client.current, future);
+            assert_eq!(daemon.min_supported, MIN_SUPPORTED_PROTOCOL_VERSION);
+            assert_eq!(daemon.current, SESSION_PROTOCOL_VERSION);
+        }
+        Err(other) => panic!("expected IncompatibleVersion, got {other:?}"),
+        Ok(_) => panic!("a disjoint version range must be rejected"),
+    }
+
+    // The version-stable `drain` still works on the same connection.
+    let _ = tokio::time::timeout(Duration::from_secs(5), hub.drain()).await;
+    let status = wait_for_exit(&mut sessiond.child).await;
+    assert!(
+        status.success(),
+        "horizon-sessiond should exit 0 after a post-rejection drain, got {status:?}"
+    );
+    conn_task.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn terminal_create_diff_reconnect_attach_and_shutdown_over_the_real_socket() {
+    let sessiond = SessiondProcess::spawn();
+    let session_id = uuid::Uuid::new_v4();
+    let client = connect_hub(&sessiond.socket_path).await;
+
+    let mut attachment = client
+        .hub
+        .create_terminal(session_id, terminal_spec(std::env::temp_dir(), None))
+        .await
+        .expect("create should succeed");
+    let TerminalUpdate::Snapshot(initial) = read_terminal_update(&mut attachment.updates).await
+    else {
+        panic!("terminal create must begin with a full snapshot");
+    };
+
+    send_terminal_command(
+        &attachment.commands,
+        TerminalCommand::Input(b"printf 'HORIZON_DIFF_MARKER\\n'\n".to_vec()),
+    )
+    .await;
+    let (frame, saw_diff) =
+        collect_terminal_frame_until(&mut attachment.updates, initial, "HORIZON_DIFF_MARKER").await;
+    assert!(
+        saw_diff,
+        "updates after the create baseline should be diffs"
+    );
+
+    // Disconnect this client entirely; the terminal session keeps running
+    // (process-scoped), so a fresh connection can reattach.
+    drop(attachment);
+    drop(client);
+
+    let client = connect_hub(&sessiond.socket_path).await;
+    let mut attachment = client
+        .hub
+        .attach_terminal(session_id)
+        .await
+        .expect("attach on a fresh connection should succeed");
+    let TerminalUpdate::Snapshot(attached) = read_terminal_update(&mut attachment.updates).await
+    else {
+        panic!("attach on a new connection must reset to a full snapshot");
+    };
+    assert!(attached.text().contains("HORIZON_DIFF_MARKER"));
+    assert!(frame.text().contains("HORIZON_DIFF_MARKER"));
+
+    send_terminal_command(
+        &attachment.commands,
+        TerminalCommand::Input(b"printf 'HORIZON_REATTACH_MARKER\\n'\n".to_vec()),
+    )
+    .await;
+    let (_, saw_diff) =
+        collect_terminal_frame_until(&mut attachment.updates, attached, "HORIZON_REATTACH_MARKER")
+            .await;
+    assert!(saw_diff, "reattached PTY should continue streaming diffs");
+
+    send_terminal_command(&attachment.commands, TerminalCommand::Shutdown).await;
+    for _ in 0..20 {
+        if matches!(
+            read_terminal_update(&mut attachment.updates).await,
+            TerminalUpdate::Exited
+        ) {
+            return;
         }
     }
-    panic!("host_tool_request never arrived");
+    panic!("terminal shutdown did not produce an exited update");
 }
 
-/// `session_new` -> `UserMessage` -> the resulting events arrive over the
-/// wire in the same order the mock provider produced them, forming a
-/// coherent transcript (the user's message, then the assistant's reply).
-#[tokio::test]
-async fn session_new_then_user_message_streams_events_in_order() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn terminal_list_is_sorted_and_a_missing_attach_is_explicit() {
     let sessiond = SessiondProcess::spawn();
-    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
+    let high_id = uuid::Uuid::from_u128(2);
+    let low_id = uuid::Uuid::from_u128(1);
+
+    let client = connect_hub(&sessiond.socket_path).await;
+    assert_eq!(client.hub.list_terminals().await.unwrap(), Vec::new());
+
+    // Create two terminals across two connections; both survive the
+    // disconnect (process-scoped sessions).
+    let mut high = client
+        .hub
+        .create_terminal(high_id, terminal_spec(std::env::temp_dir(), None))
+        .await
+        .unwrap();
+    assert!(matches!(
+        read_terminal_update(&mut high.updates).await,
+        TerminalUpdate::Snapshot(_)
+    ));
+    drop(high);
+    drop(client);
+
+    let client = connect_hub(&sessiond.socket_path).await;
+    let mut low = client
+        .hub
+        .create_terminal(low_id, terminal_spec(std::env::temp_dir(), None))
+        .await
+        .unwrap();
+    assert!(matches!(
+        read_terminal_update(&mut low.updates).await,
+        TerminalUpdate::Snapshot(_)
+    ));
+    drop(low);
+    drop(client);
+
+    let client = connect_hub(&sessiond.socket_path).await;
+    assert_eq!(
+        client.hub.list_terminals().await.unwrap(),
+        vec![
+            TerminalSummary { session_id: low_id },
+            TerminalSummary {
+                session_id: high_id
+            },
+        ]
+    );
+
+    let missing_id = uuid::Uuid::from_u128(3);
+    assert!(matches!(
+        client.hub.attach_terminal(missing_id).await,
+        Err(HubError::TerminalNotFound)
+    ));
+
+    let low = client.hub.attach_terminal(low_id).await.unwrap();
+    let high = client.hub.attach_terminal(high_id).await.unwrap();
+    send_terminal_command(&low.commands, TerminalCommand::Shutdown).await;
+    send_terminal_command(&high.commands, TerminalCommand::Shutdown).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn terminal_spawn_uses_fallback_and_source_session_cwds() {
+    let sessiond = SessiondProcess::spawn();
+    let root = std::env::temp_dir().join(format!("hzn-cwd-e2e-{}", uuid::Uuid::new_v4()));
+    let source_cwd = root.join("source");
+    let fallback_cwd = root.join("fallback");
+    std::fs::create_dir_all(&source_cwd).unwrap();
+    std::fs::create_dir_all(&fallback_cwd).unwrap();
+    let source_cwd = source_cwd.canonicalize().unwrap();
+    let wide = TerminalSize::new(200, 24);
+
+    let source_id = uuid::Uuid::new_v4();
+    let target_id = uuid::Uuid::new_v4();
+    let client = connect_hub(&sessiond.socket_path).await;
+
+    let mut source_spec = terminal_spec(source_cwd.clone(), None);
+    source_spec.initial_size = wide;
+    let mut source = client
+        .hub
+        .create_terminal(source_id, source_spec)
+        .await
+        .unwrap();
+    let TerminalUpdate::Snapshot(source_initial) = read_terminal_update(&mut source.updates).await
+    else {
+        panic!("source terminal create must begin with a snapshot");
+    };
+    send_terminal_command(
+        &source.commands,
+        TerminalCommand::Input(b"printf 'SOURCE_CWD:%s\\n' \"$PWD\"\n".to_vec()),
+    )
+    .await;
+    let source_needle = format!("SOURCE_CWD:{}", source_cwd.display());
+    let _ = collect_terminal_frame_until(&mut source.updates, source_initial, &source_needle).await;
+
+    let mut target_spec = terminal_spec(fallback_cwd.clone(), Some(source_id));
+    target_spec.initial_size = wide;
+    let mut target = client
+        .hub
+        .create_terminal(target_id, target_spec)
+        .await
+        .unwrap();
+    let TerminalUpdate::Snapshot(target_initial) = read_terminal_update(&mut target.updates).await
+    else {
+        panic!("target terminal create must begin with a snapshot");
+    };
+    send_terminal_command(
+        &target.commands,
+        TerminalCommand::Input(b"printf 'TARGET_CWD:%s\\n' \"$PWD\"\n".to_vec()),
+    )
+    .await;
+    let target_needle = format!("TARGET_CWD:{}", source_cwd.display());
+    let _ = collect_terminal_frame_until(&mut target.updates, target_initial, &target_needle).await;
+
+    send_terminal_command(&source.commands, TerminalCommand::Shutdown).await;
+    send_terminal_command(&target.commands, TerminalCommand::Shutdown).await;
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// `new_agent` -> `UserMessage` -> the resulting events arrive over the
+/// attachment's event channel in the same order the mock provider produced
+/// them, forming a coherent transcript.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn new_agent_then_user_message_streams_events_in_order() {
+    let sessiond = SessiondProcess::spawn();
+    let client = connect_hub(&sessiond.socket_path).await;
 
     let session_id = SessionId::new();
-    send_session_new(&mut writer, session_id).await;
-    wire::write_envelope(
-        &mut writer,
-        &Envelope::command(
-            session_id,
-            AgentCommand::UserMessage {
-                text: "hello".to_string(),
-            },
-        ),
-    )
-    .await
-    .unwrap();
+    let mut attachment = client.hub.new_agent(session_new(session_id)).await.unwrap();
+    attachment
+        .commands
+        .send(AgentCommand::UserMessage {
+            text: "hello".to_string(),
+        })
+        .await
+        .unwrap();
 
-    let events = collect_events_until(&mut reader, session_id, |event| {
+    let events = collect_events_until(&mut attachment.events, |event| {
         matches!(
             event,
             Event::MessageCommitted(message)
@@ -1213,92 +1106,63 @@ async fn session_new_then_user_message_streams_events_in_order() {
     );
 }
 
-/// `session_list` reflects a session created via `session_new` on the same
-/// connection -- sessiond, not an empty stub (step 2's behavior).
-#[tokio::test]
-async fn session_list_reflects_live_sessions_after_session_new() {
+/// `list_agents` reflects a session created via `new_agent` on the same
+/// connection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_agents_reflects_live_sessions_after_new_agent() {
     let sessiond = SessiondProcess::spawn();
-    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
+    let client = connect_hub(&sessiond.socket_path).await;
 
     let session_id = SessionId::new();
-    send_session_new(&mut writer, session_id).await;
-    wire::write_envelope(&mut writer, &Envelope::control(Control::SessionList))
+    let _attachment = client.hub.new_agent(session_new(session_id)).await.unwrap();
+
+    assert_eq!(
+        client.hub.list_agents().await.unwrap(),
+        vec![SessionSummary {
+            session_id,
+            provider_id: mock_provider_id(),
+            role_id: None,
+            parent_session_id: None,
+            workspace_root: None,
+        }]
+    );
+}
+
+/// An auto-allow *host* tool (`workspace.snapshot`) executes sessiond-side
+/// but can't answer itself -- it round-trips a host-tool request over the
+/// connection-global channel (guardrail 4) and folds the client's response
+/// into the same `ToolCallFinished` an ordinary auto tool would produce.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_tool_executes_sessiond_side_via_host_tool_round_trip() {
+    let sessiond = SessiondProcess::spawn();
+    let mut client = connect_hub(&sessiond.socket_path).await;
+
+    let session_id = SessionId::new();
+    let mut attachment = client.hub.new_agent(session_new(session_id)).await.unwrap();
+    attachment
+        .commands
+        .send(AgentCommand::UserMessage {
+            text: "please take a snapshot".to_string(),
+        })
         .await
         .unwrap();
 
-    // The session's own startup burst and the `SessionListResult` reply can
-    // arrive in either order (one is produced by the freshly spawned
-    // session thread, the other by the connection loop itself) -- skip past
-    // any event envelopes to find the control reply.
-    for _ in 0..200 {
-        let envelope = wire::read_envelope(&mut reader)
-            .await
-            .unwrap()
-            .expect("connection should stay open");
-        if let EnvelopeBody::Control(Control::SessionListResult(sessions)) = envelope.body {
-            assert_eq!(
-                sessions,
-                vec![SessionSummary {
-                    session_id,
-                    provider_id: mock_provider_id(),
-                    role_id: None,
-                    parent_session_id: None,
-                    workspace_root: None,
-                }]
-            );
-            return;
-        }
-    }
-    panic!("SessionListResult never arrived");
-}
-
-/// An auto-allow *host* tool (`workspace.snapshot`) executes sessiond-side but
-/// can't answer itself -- it must round-trip a `host_tool_request` over the
-/// connection (guardrail 4) and fold the client's `host_tool_response` into
-/// the same `ToolCallFinished` event an ordinary auto tool would produce.
-#[tokio::test]
-async fn auto_tool_executes_sessiond_side_via_host_tool_round_trip() {
-    let sessiond = SessiondProcess::spawn();
-    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
-
-    let session_id = SessionId::new();
-    send_session_new(&mut writer, session_id).await;
-    wire::write_envelope(
-        &mut writer,
-        &Envelope::command(
-            session_id,
-            AgentCommand::UserMessage {
-                text: "please take a snapshot".to_string(),
-            },
-        ),
-    )
-    .await
-    .unwrap();
-
-    let request = read_host_tool_request(&mut reader, session_id).await;
+    let request = read_host_tool_request(&mut client).await;
     assert_eq!(request.tool_id, "workspace.snapshot");
-
-    wire::write_envelope(
-        &mut writer,
-        &Envelope {
-            v: CONTRACT_VERSION,
-            session_id: Some(session_id),
-            body: EnvelopeBody::Control(Control::HostToolResponse(HostToolResponse {
-                request_id: request.request_id,
-                output: serde_json::json!({ "tab_count": 1 }),
-            })),
+    respond_host_tool(
+        &client,
+        HostToolResponse {
+            request_id: request.request_id,
+            output: serde_json::json!({ "tab_count": 1 }),
         },
-    )
-    .await
-    .unwrap();
-
-    let events = collect_events_until(
-        &mut reader,
-        session_id,
-        |event| matches!(event, Event::ToolCallFinished(result) if result.output["tab_count"] == 1),
     )
     .await;
 
+    let events = collect_events_until(
+        &mut attachment.events,
+        |event| matches!(event, Event::ToolCallFinished(result) if result.output["tab_count"] == 1),
+    )
+    .await;
     assert!(
         events.iter().any(|event| matches!(
             event,
@@ -1309,28 +1173,24 @@ async fn auto_tool_executes_sessiond_side_via_host_tool_round_trip() {
 }
 
 /// Approval round trip: an `ApprovalRequested` event flows out, an
-/// `ApproveToolCall` command flows back in, and sessiond resolves it (decision
-/// 2: "resolved in sessiond") and reports the result as an ordinary event.
-#[tokio::test]
+/// `ApproveToolCall` command flows back in, and sessiond resolves it and
+/// reports the result as an ordinary event.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn approval_round_trip_request_out_approve_in_result_event_out() {
     let sessiond = SessiondProcess::spawn();
-    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
+    let client = connect_hub(&sessiond.socket_path).await;
 
     let session_id = SessionId::new();
-    send_session_new(&mut writer, session_id).await;
-    wire::write_envelope(
-        &mut writer,
-        &Envelope::command(
-            session_id,
-            AgentCommand::UserMessage {
-                text: "please run a tool".to_string(),
-            },
-        ),
-    )
-    .await
-    .unwrap();
+    let mut attachment = client.hub.new_agent(session_new(session_id)).await.unwrap();
+    attachment
+        .commands
+        .send(AgentCommand::UserMessage {
+            text: "please run a tool".to_string(),
+        })
+        .await
+        .unwrap();
 
-    let events = collect_events_until(&mut reader, session_id, |event| {
+    let events = collect_events_until(&mut attachment.events, |event| {
         matches!(event, Event::ApprovalRequested(_))
     })
     .await;
@@ -1342,21 +1202,16 @@ async fn approval_round_trip_request_out_approve_in_result_event_out() {
         })
         .expect("an approval request should have been observed");
 
-    wire::write_envelope(
-        &mut writer,
-        &Envelope::command(
-            session_id,
-            AgentCommand::ApproveToolCall {
-                call_id: call_id.clone(),
-            },
-        ),
-    )
-    .await
-    .unwrap();
+    attachment
+        .commands
+        .send(AgentCommand::ApproveToolCall {
+            call_id: call_id.clone(),
+        })
+        .await
+        .unwrap();
 
     let events = collect_events_until(
-        &mut reader,
-        session_id,
+        &mut attachment.events,
         |event| matches!(event, Event::ToolCallFinished(result) if result.call_id == call_id),
     )
     .await;
@@ -1369,31 +1224,24 @@ async fn approval_round_trip_request_out_approve_in_result_event_out() {
 }
 
 /// `bash` runs sessiond-side: approving a real `bash` tool call spawns an
-/// actual subprocess in sessiond (via `tools::bash::spawn`, the same code
-/// path Horizon used to run in-process) and the eventual result -- not just
-/// the running-state events -- arrives back over the wire as an ordinary
-/// event, proving the async completion (delivered internally on its own
-/// channel, see `session::fold_bash_completion`) makes it out.
-#[tokio::test]
+/// actual subprocess in sessiond, and the eventual result arrives back over
+/// the attachment's event channel.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn bash_runs_sessiond_side_and_reports_its_result_over_the_wire() {
     let sessiond = SessiondProcess::spawn();
-    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
+    let client = connect_hub(&sessiond.socket_path).await;
 
     let session_id = SessionId::new();
-    send_session_new(&mut writer, session_id).await;
-    wire::write_envelope(
-        &mut writer,
-        &Envelope::command(
-            session_id,
-            AgentCommand::UserMessage {
-                text: "please run bash".to_string(),
-            },
-        ),
-    )
-    .await
-    .unwrap();
+    let mut attachment = client.hub.new_agent(session_new(session_id)).await.unwrap();
+    attachment
+        .commands
+        .send(AgentCommand::UserMessage {
+            text: "please run bash".to_string(),
+        })
+        .await
+        .unwrap();
 
-    let events = collect_events_until(&mut reader, session_id, |event| {
+    let events = collect_events_until(&mut attachment.events, |event| {
         matches!(event, Event::ApprovalRequested(_))
     })
     .await;
@@ -1405,29 +1253,19 @@ async fn bash_runs_sessiond_side_and_reports_its_result_over_the_wire() {
         })
         .expect("bash should request approval before running");
 
-    wire::write_envelope(
-        &mut writer,
-        &Envelope::command(
-            session_id,
-            AgentCommand::ApproveToolCall {
-                call_id: call_id.clone(),
-            },
-        ),
-    )
-    .await
-    .unwrap();
+    attachment
+        .commands
+        .send(AgentCommand::ApproveToolCall {
+            call_id: call_id.clone(),
+        })
+        .await
+        .unwrap();
 
-    // `ToolCallStarted` arrives synchronously with the approval; the result
-    // arrives later, once the spawned process actually exits -- give it a
-    // generous number of reads (`collect_events_until`'s cap) since this is
-    // a real subprocess, not a synchronous fold.
     let events = collect_events_until(
-        &mut reader,
-        session_id,
+        &mut attachment.events,
         |event| matches!(event, Event::ToolCallFinished(result) if result.call_id == call_id),
     )
     .await;
-
     let Some(Event::ToolCallFinished(result)) = events.iter().rev().find(
         |event| matches!(event, Event::ToolCallFinished(result) if result.call_id == call_id),
     ) else {
@@ -1437,39 +1275,27 @@ async fn bash_runs_sessiond_side_and_reports_its_result_over_the_wire() {
     assert_eq!(result.output["output"], "sessiond-bash-ok\n");
 }
 
-/// Regression test for the 2026-07 repeated-approval OOM incident: a banner
-/// that didn't visibly react to a held `y` key re-sent `Approve` for the
-/// same still-running `bash` call 134 times in 29 seconds, spawning 134
-/// concurrent subprocesses and OOMing the machine. Sends 10 `ApproveToolCall`
-/// commands for the exact same `call_id` back-to-back, without waiting for
-/// any reply in between, and confirms the tool call started exactly once —
-/// both in the events this connection observed and in the persisted event
-/// log — regardless of how many duplicates arrived. This holds
-/// deterministically (not just "usually", given the real subprocess's own
-/// timing) because a session's commands are processed one at a time, in
-/// order, on its own dedicated thread (`session::run_session`): the first
-/// `Approve` folds `ToolCallStarted` synchronously before the second one is
-/// even dequeued.
-#[tokio::test]
+/// Regression test for the 2026-07 repeated-approval OOM incident: 10
+/// rapid duplicate `ApproveToolCall`s for the same still-running `bash`
+/// call must start it exactly once -- both in observed events and the
+/// persisted log -- because a session's commands are processed one at a
+/// time on its own dedicated thread.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
     let sessiond = SessiondProcess::spawn();
-    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
+    let client = connect_hub(&sessiond.socket_path).await;
 
     let session_id = SessionId::new();
-    send_session_new(&mut writer, session_id).await;
-    wire::write_envelope(
-        &mut writer,
-        &Envelope::command(
-            session_id,
-            AgentCommand::UserMessage {
-                text: "please run bash".to_string(),
-            },
-        ),
-    )
-    .await
-    .unwrap();
+    let mut attachment = client.hub.new_agent(session_new(session_id)).await.unwrap();
+    attachment
+        .commands
+        .send(AgentCommand::UserMessage {
+            text: "please run bash".to_string(),
+        })
+        .await
+        .unwrap();
 
-    let events = collect_events_until(&mut reader, session_id, |event| {
+    let events = collect_events_until(&mut attachment.events, |event| {
         matches!(event, Event::ApprovalRequested(_))
     })
     .await;
@@ -1481,26 +1307,18 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
         })
         .expect("bash should request approval before running");
 
-    // 10 rapid duplicate approvals for the exact same call, sent before
-    // waiting on any reply -- reproduces a banner keypress repeated while
-    // the round trip is still in flight.
     for _ in 0..10 {
-        wire::write_envelope(
-            &mut writer,
-            &Envelope::command(
-                session_id,
-                AgentCommand::ApproveToolCall {
-                    call_id: call_id.clone(),
-                },
-            ),
-        )
-        .await
-        .unwrap();
+        attachment
+            .commands
+            .send(AgentCommand::ApproveToolCall {
+                call_id: call_id.clone(),
+            })
+            .await
+            .unwrap();
     }
 
     let events = collect_events_until(
-        &mut reader,
-        session_id,
+        &mut attachment.events,
         |event| matches!(event, Event::ToolCallFinished(result) if result.call_id == call_id),
     )
     .await;
@@ -1524,8 +1342,6 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
         "a duplicate approval must never produce a second result, got: {events:?}"
     );
 
-    // Confirm the same holds in the persisted on-disk log, not just what
-    // this connection happened to observe over the wire.
     let mut report = None;
     for _ in 0..100 {
         let candidate = horizon_agent::persistence::event_log::read(&sessiond.event_log_path)
@@ -1551,56 +1367,37 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
     );
 }
 
-// --- step-3 trims restored: streaming preview + skipped-lines status -------
-//
-// `docs/agent-runtime-split-design.md`'s step-3 notes recorded two UX
-// features lost in the split: the tool-call-argument streaming preview
-// never crossed the wire (filtered out before forwarding), and sessiond's
-// startup event-log corruption diagnostics were only ever printed to its
-// own stderr. Both are restored; these two tests prove it end to end over
-// the real socket, not just at the crate's own in-process seam (see
-// `crates/horizon-agent/src/tests.rs`'s
-// `runtime_state_store_folds_tool_call_progress_but_excludes_it_from_the_jsonl_log`
-// for that pre-existing in-process coverage).
-
-/// The mock provider's `"streaming tool"` trigger emits a few ephemeral
-/// `ProviderEvent::tool_call_progress` ticks before the real
-/// `ToolCallRequested` -- these must still reach a connected client (now as
-/// `Control::ToolCallProgress`, since `contract::Event` has no slot for
-/// them) even though tool execution/policy mapping moved into sessiond, and
-/// they must never appear in the durable on-disk event log in any form.
-#[tokio::test]
+/// The mock provider's `"streaming tool"` trigger emits ephemeral
+/// tool-call-progress ticks before the real `ToolCallRequested` -- these
+/// must still reach a connected client (now as
+/// `AgentWireEvent::ToolCallProgress` on the attachment's event channel)
+/// and must never appear in the durable on-disk event log.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn streaming_tool_call_progress_reaches_the_client_but_never_the_event_log() {
     let sessiond = SessiondProcess::spawn();
-    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
+    let client = connect_hub(&sessiond.socket_path).await;
 
     let session_id = SessionId::new();
-    send_session_new(&mut writer, session_id).await;
-    wire::write_envelope(
-        &mut writer,
-        &Envelope::command(
-            session_id,
-            AgentCommand::UserMessage {
-                text: "please use the streaming tool".to_string(),
-            },
-        ),
-    )
-    .await
-    .unwrap();
+    let mut attachment = client.hub.new_agent(session_new(session_id)).await.unwrap();
+    attachment
+        .commands
+        .send(AgentCommand::UserMessage {
+            text: "please use the streaming tool".to_string(),
+        })
+        .await
+        .unwrap();
 
     let mut progress_ticks = Vec::new();
     let mut saw_tool_call_requested = false;
-    for _ in 0..200 {
-        let envelope = wire::read_envelope(&mut reader)
+    for _ in 0..400 {
+        let wire_event = tokio::time::timeout(Duration::from_secs(120), attachment.events.recv())
             .await
-            .unwrap()
-            .expect("sessiond should keep streaming events while the session is live");
-        assert_eq!(envelope.session_id, Some(session_id));
-        match envelope.body {
-            EnvelopeBody::Control(Control::ToolCallProgress(progress)) => {
-                progress_ticks.push(progress);
-            }
-            EnvelopeBody::Event(Event::ToolCallRequested(request)) => {
+            .expect("timed out")
+            .expect("channel error")
+            .expect("the daemon should keep streaming events");
+        match wire_event {
+            AgentWireEvent::ToolCallProgress(progress) => progress_ticks.push(progress),
+            AgentWireEvent::Event(Event::ToolCallRequested(request)) => {
                 assert_eq!(request.tool_id, "mock.approval_required");
                 saw_tool_call_requested = true;
                 break;
@@ -1614,8 +1411,7 @@ async fn streaming_tool_call_progress_reaches_the_client_but_never_the_event_log
     );
     assert!(
         progress_ticks.len() >= 3,
-        "expected every mock streaming tick to reach the client as its own control message, \
-         got: {progress_ticks:?}"
+        "expected every mock streaming tick to reach the client as its own event, got: {progress_ticks:?}"
     );
     assert!(
         progress_ticks
@@ -1624,14 +1420,6 @@ async fn streaming_tool_call_progress_reaches_the_client_but_never_the_event_log
         "byte counts should grow monotonically as the mock provider streams, got: {progress_ticks:?}"
     );
 
-    // The writer flushes after every append (step 4's durability fix), but
-    // appending itself is asynchronous -- `Appender::append_provider_events`
-    // just enqueues onto the writer's own background thread, which is what
-    // actually touches the file (see `WriterHandle::open`'s "Ordering
-    // guarantee" doc comment) -- so the on-disk write can trail the wire
-    // delivery this test just raced ahead on. Poll rather than read once,
-    // waiting for the real tool call request to actually land before
-    // asserting anything about the file's contents.
     let mut report = None;
     for _ in 0..100 {
         let candidate = horizon_agent::persistence::event_log::read(&sessiond.event_log_path)
@@ -1660,20 +1448,14 @@ async fn streaming_tool_call_progress_reaches_the_client_but_never_the_event_log
         !log_contents
             .to_ascii_lowercase()
             .contains("tool_call_progress"),
-        "the persisted event log must never contain the ephemeral tool-call-progress preview, \
-         got:\n{log_contents}"
+        "the persisted event log must never contain the ephemeral tool-call-progress preview, got:\n{log_contents}"
     );
 }
 
-/// A corrupt line found during this process's own startup event-log read
-/// must be reported to a connecting client once, as a dedicated
-/// `Control::SkippedLines` message -- not just printed to sessiond's stderr --
-/// so Horizon's status bar (`agent_state_status`) can surface it. Sent
-/// after `hello` (never blocking it -- see `main`'s bind-first ordering)
-/// but, for a log this small, well before anything else would arrive on a
-/// connection with no sessions in it, so the very next envelope after the
-/// handshake is deterministically the one under test.
-#[tokio::test]
+/// A corrupt line found during startup must be reported to a connecting
+/// client once, on the `HubHello::skipped_lines` channel -- not just
+/// printed to stderr -- so Horizon's status bar can surface it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn corrupt_event_log_lines_are_reported_to_the_client_once_per_connection() {
     let socket_path = std::env::temp_dir().join(format!(
         "hzn-e2e-{}.sock",
@@ -1687,197 +1469,67 @@ async fn corrupt_event_log_lines_are_reported_to_the_client_once_per_connection(
     std::fs::write(&event_log_path, "not valid json\n").expect("write corrupt fixture log");
 
     let sessiond = SessiondProcess::spawn_at(socket_path, event_log_path);
-    let (mut reader, _writer) = connect_and_handshake(&sessiond.socket_path).await;
+    let mut client = connect_hub(&sessiond.socket_path).await;
 
-    let envelope = wire::read_envelope(&mut reader)
+    let summary = tokio::time::timeout(Duration::from_secs(30), client.skipped_lines.recv())
         .await
-        .unwrap()
-        .expect("sessiond should report its startup diagnostics rather than close the connection");
-    let EnvelopeBody::Control(Control::SkippedLines(summary)) = envelope.body else {
-        panic!(
-            "expected a SkippedLines control message, got {:?}",
-            envelope.body
-        );
-    };
+        .expect("timed out waiting for the skipped-lines summary")
+        .expect("skipped-lines channel error")
+        .expect("the daemon should report its startup diagnostics on the skipped-lines channel");
     assert_eq!(summary, "skipped 1 corrupt line");
 }
 
-// --- step 4: replay, reconnect, session_load --------------------------------
-
-async fn send_session_load(writer: &mut OwnedWriteHalf, session_id: SessionId) {
-    wire::write_envelope(
-        writer,
-        &Envelope::control(Control::SessionLoad(SessionLoad { session_id })),
-    )
-    .await
-    .unwrap();
-}
-
-/// Reads envelopes scoped to `session_id` until none arrive for a while,
-/// returning them in order -- used for `session_load`'s replay burst, which
-/// (unlike `collect_events_until`'s callers) has no single terminal event to
-/// watch for: the reply is just "however many committed events this session
-/// has", full stop.
-///
-/// Two different waits, not one: the *first* read waits out
-/// [`REPLAY_FIRST_EVENT_TIMEOUT`], because on the server side
-/// `Connection::replay_events` (`crates/horizon-sessiond/src/session.rs`)
-/// can legitimately take that long under contention -- a just-resumed
-/// session's thread does real work (including a DuckDB rebuild-or-open
-/// wait) before it's able to answer at all, and that wait is deliberately
-/// not ordered against the `session_list`/`session_load` readiness gate a
-/// client already passed by the time it calls this. Every read *after* the
-/// first only needs a short quiet window: once the burst starts, the
-/// server sends every event back-to-back with no per-event wait, so a
-/// window "bigger than a same-host loopback round trip needs" reliably
-/// distinguishes "done replaying" from "still coming". Using the long
-/// timeout for every read (the original shape) would work too but makes a
-/// genuinely-empty session's replay take the full generous timeout to
-/// confirm; using the short window for the first read (also the original
-/// shape) is what made this collector race the server's own contention
-/// budget and report a real session as empty (`docs/tasks/backlog.md`
-/// #27).
-async fn collect_replayed_events(
-    reader: &mut BufReader<OwnedReadHalf>,
-    session_id: SessionId,
-) -> Vec<Event> {
-    const REPLAY_FIRST_EVENT_TIMEOUT: Duration = Duration::from_secs(120);
-    const REPLAY_QUIESCENCE_WINDOW: Duration = Duration::from_millis(500);
-
-    let mut events = Vec::new();
-    let mut budget = REPLAY_FIRST_EVENT_TIMEOUT;
-    loop {
-        match tokio::time::timeout(budget, wire::read_envelope(reader)).await {
-            Ok(Ok(Some(envelope))) => {
-                assert_eq!(envelope.session_id, Some(session_id));
-                let EnvelopeBody::Event(event) = envelope.body else {
-                    panic!("expected an event envelope, got {:?}", envelope.body);
-                };
-                events.push(event);
-                budget = REPLAY_QUIESCENCE_WINDOW;
-            }
-            Ok(Ok(None)) => panic!("connection closed while collecting replayed events"),
-            Ok(Err(err)) => panic!("wire error while collecting replayed events: {err}"),
-            Err(_timeout) => return events,
-        }
-    }
-}
-
-/// Polls `path`'s on-disk event log until a record for `session_id`
-/// matching `predicate` appears, or panics after a generous timeout.
-///
-/// The event log's durability contract (see `persistence::event_log::
-/// writer`'s flush-per-append doc comment) is "records that reached disk
-/// survive a hard kill" -- it does **not** promise a record merely accepted
-/// onto the writer's channel is already durable. `Appender::
-/// append_provider_events` just enqueues onto the writer's own background
-/// thread and returns; forwarding the resulting event to a connected client
-/// (what every `collect_events_until` caller observes) happens right after
-/// that same enqueue, on the same session thread, so a client can see an
-/// event well before it has actually reached disk. Killing right after
-/// observing an event over the wire, without waiting for this, races that
-/// disk write and can spuriously lose it -- or, since the writer drains its
-/// single channel strictly in FIFO order (see `WriterHandle::open`'s
-/// "Ordering guarantee"), lose everything from that point in the session
-/// backward that also hadn't been drained yet. Confirming a later event is
-/// durable also confirms every earlier one in the same session already is,
-/// which is why callers only need to wait for the *last* event they depend
-/// on before killing.
-async fn wait_for_persisted_event(
-    path: &std::path::Path,
-    session_id: SessionId,
-    mut predicate: impl FnMut(&Event) -> bool,
-) {
-    for _ in 0..200 {
-        if let Ok(report) = horizon_agent::persistence::event_log::read(path) {
-            if report
-                .records
-                .iter()
-                .any(|record| record.session_id == session_id && predicate(&record.event))
-            {
-                return;
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    panic!(
-        "gave up waiting for the expected event to reach disk at {}",
-        path.display()
-    );
-}
-
-/// Step 4's headline scenario: `kill -9` a live `horizon-sessiond` mid-session
-/// (while a turn is genuinely still open -- parked in `WaitingForApproval`
-/// with no timer to close it on its own), respawn a fresh process pointed at
-/// the same event log, and confirm replay does what the design promises:
-/// the transcript survives, the interrupted turn is committed as cancelled
-/// rather than left dangling, the session is immediately usable again
-/// (listed by `session_list`, answers a fresh `session_load`), and a new
-/// user message works normally.
-#[tokio::test]
+/// Step 4's headline scenario: `kill -9` a live daemon mid-session (a turn
+/// genuinely still open in `WaitingForApproval`), respawn against the same
+/// log, and confirm replay: transcript survives, the interrupted turn is
+/// committed as cancelled, the session is immediately usable again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn killed_sessiond_respawns_and_replays_transcript_with_open_turn_cancelled() {
     let sessiond = SessiondProcess::spawn();
     let socket_path = sessiond.socket_path.clone();
     let event_log_path = sessiond.event_log_path.clone();
-    let (mut reader, mut writer) = connect_and_handshake(&socket_path).await;
+    let client = connect_hub(&socket_path).await;
 
     let session_id = SessionId::new();
-    send_session_new(&mut writer, session_id).await;
-    wire::write_envelope(
-        &mut writer,
-        &Envelope::command(
-            session_id,
-            AgentCommand::UserMessage {
-                text: "please run a tool".to_string(),
-            },
-        ),
-    )
-    .await
-    .unwrap();
+    let mut attachment = client.hub.new_agent(session_new(session_id)).await.unwrap();
+    attachment
+        .commands
+        .send(AgentCommand::UserMessage {
+            text: "please run a tool".to_string(),
+        })
+        .await
+        .unwrap();
 
-    // Parks the session in `WaitingForApproval` indefinitely -- a genuinely
-    // open turn, not a race against a timer -- once this arrives.
-    collect_events_until(&mut reader, session_id, |event| {
+    collect_events_until(&mut attachment.events, |event| {
         matches!(event, Event::ApprovalRequested(_))
     })
     .await;
-
-    // Observing the approval request over the wire is not the same as it
-    // being durable yet (see `wait_for_persisted_event`'s doc comment) --
-    // wait for it to actually reach disk before the hard kill below, so
-    // this test exercises the event log's documented durability contract
-    // instead of racing the writer's background thread.
     wait_for_persisted_event(&event_log_path, session_id, |event| {
         matches!(event, Event::ApprovalRequested(_))
     })
     .await;
 
+    drop(attachment);
+    drop(client);
     sessiond.kill_and_wait();
 
-    // A fresh process, pointed at the same socket and event log paths --
-    // simulating a real restart (e.g. after a crash, or the binary being
-    // rebuilt), not a clean shutdown.
     let respawned = SessiondProcess::spawn_at(socket_path, event_log_path);
-    let (mut reader, mut writer) = connect_and_handshake(&respawned.socket_path).await;
+    let client = connect_hub(&respawned.socket_path).await;
 
-    wire::write_envelope(&mut writer, &Envelope::control(Control::SessionList))
-        .await
-        .unwrap();
-    let reply = wire::read_envelope(&mut reader).await.unwrap().unwrap();
     assert_eq!(
-        reply.body,
-        EnvelopeBody::Control(Control::SessionListResult(vec![SessionSummary {
+        client.hub.list_agents().await.unwrap(),
+        vec![SessionSummary {
             session_id,
             provider_id: mock_provider_id(),
             role_id: None,
             parent_session_id: None,
             workspace_root: None,
-        }])),
+        }],
         "the resumed session must be listed as live again"
     );
 
-    send_session_load(&mut writer, session_id).await;
-    let replayed = collect_replayed_events(&mut reader, session_id).await;
+    let mut attachment = client.hub.attach_agent(session_id).await.unwrap();
+    let replayed = collect_replayed_events(&mut attachment.events).await;
 
     assert!(
         replayed.iter().any(|event| matches!(
@@ -1909,19 +1561,14 @@ async fn killed_sessiond_respawns_and_replays_transcript_with_open_turn_cancelle
         "the cancelled approval must not still read as pending, got frame: {frame:?}"
     );
 
-    // The session is genuinely live, not just listed: a fresh message works.
-    wire::write_envelope(
-        &mut writer,
-        &Envelope::command(
-            session_id,
-            AgentCommand::UserMessage {
-                text: "hello again".to_string(),
-            },
-        ),
-    )
-    .await
-    .unwrap();
-    let events = collect_events_until(&mut reader, session_id, |event| {
+    attachment
+        .commands
+        .send(AgentCommand::UserMessage {
+            text: "hello again".to_string(),
+        })
+        .await
+        .unwrap();
+    let events = collect_events_until(&mut attachment.events, |event| {
         matches!(
             event,
             Event::MessageCommitted(message)
@@ -1937,87 +1584,73 @@ async fn killed_sessiond_respawns_and_replays_transcript_with_open_turn_cancelle
 }
 
 /// A crash-and-respawn must restore a session's role, not just its
-/// provider (`docs/plans/agent-foundation/03-roles-and-config-agent.md`):
-/// `session::resume_persisted_sessions` extracts `role_id` from the log the
-/// same way it already extracted `provider_id`, and the resumed thread's
-/// `SessionEntry` must reflect it in `session_list`.
-#[tokio::test]
+/// provider.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_restores_the_sessions_role_after_a_crash_and_respawn() {
     let sessiond = SessiondProcess::spawn();
     let socket_path = sessiond.socket_path.clone();
     let event_log_path = sessiond.event_log_path.clone();
-    let (mut reader, mut writer) = connect_and_handshake(&socket_path).await;
+    let client = connect_hub(&socket_path).await;
 
     let session_id = SessionId::new();
-    send_session_new_with_role(&mut writer, session_id, RoleId("config".to_string())).await;
-
-    // Wait for the session's init message to actually reach disk before the
-    // hard kill below, so this proves resume reads the role back from the
-    // log rather than racing the writer's background thread.
-    collect_events_until(&mut reader, session_id, |event| {
+    let mut attachment = client
+        .hub
+        .new_agent(session_new_with_role(
+            session_id,
+            RoleId("config".to_string()),
+        ))
+        .await
+        .unwrap();
+    // Drain the startup burst until its init message reaches the wire...
+    collect_events_until(&mut attachment.events, |event| {
         matches!(event, Event::MessageCommitted(_))
     })
     .await;
+    // ...and disk, before the hard kill.
     wait_for_persisted_event(&event_log_path, session_id, |event| {
         matches!(event, Event::MessageCommitted(_))
     })
     .await;
 
+    drop(attachment);
+    drop(client);
     sessiond.kill_and_wait();
 
     let respawned = SessiondProcess::spawn_at(socket_path, event_log_path);
-    let (mut reader, mut writer) = connect_and_handshake(&respawned.socket_path).await;
-
-    wire::write_envelope(&mut writer, &Envelope::control(Control::SessionList))
-        .await
-        .unwrap();
-    let reply = wire::read_envelope(&mut reader).await.unwrap().unwrap();
+    let client = connect_hub(&respawned.socket_path).await;
     assert_eq!(
-        reply.body,
-        EnvelopeBody::Control(Control::SessionListResult(vec![SessionSummary {
+        client.hub.list_agents().await.unwrap(),
+        vec![SessionSummary {
             session_id,
             provider_id: mock_provider_id(),
             role_id: Some(RoleId("config".to_string())),
             parent_session_id: None,
             workspace_root: None,
-        }])),
+        }],
         "resume must restore the session's role, not just its provider"
     );
 }
 
-/// `session_load` bootstrap (no crash involved this time): a client that
-/// disconnects and reconnects to the *same* running `horizon-sessiond` must
-/// see the session's frame come back identical to the one it had live,
-/// proving `session_load`'s replayed events are genuinely fold-equivalent
-/// to the events the client already saw -- not just "some events".
-#[tokio::test]
-async fn session_load_after_reconnect_rebuilds_an_equivalent_frame() {
+/// `attach_agent` bootstrap (no crash): a client that disconnects and
+/// reconnects to the same running daemon must see the session's frame come
+/// back identical to the one it had live.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn attach_agent_after_reconnect_rebuilds_an_equivalent_frame() {
     let sessiond = SessiondProcess::spawn();
-    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
+    let client = connect_hub(&sessiond.socket_path).await;
 
     let session_id = SessionId::new();
-    send_session_new(&mut writer, session_id).await;
-    wire::write_envelope(
-        &mut writer,
-        &Envelope::command(
-            session_id,
-            AgentCommand::UserMessage {
-                text: "hello".to_string(),
-            },
-        ),
-    )
-    .await
-    .unwrap();
+    let mut attachment = client.hub.new_agent(session_new(session_id)).await.unwrap();
+    attachment
+        .commands
+        .send(AgentCommand::UserMessage {
+            text: "hello".to_string(),
+        })
+        .await
+        .unwrap();
 
-    // Waits for the turn's actual closing event (`WaitingForUser` *after*
-    // the reply -- the session emits it a couple of other times during its
-    // own startup noise too), not just the assistant's reply that precedes
-    // it: otherwise this frame would be missing the final state transition
-    // `session_load`'s replay (read after the whole turn has long since
-    // committed) always includes, comparing two frames that were never
-    // really "the same point in time".
     let mut seen_reply = false;
-    let live_events = collect_events_until(&mut reader, session_id, |event| {
+    let live_events = collect_events_until(&mut attachment.events, |event| {
         if matches!(
             event,
             Event::MessageCommitted(message)
@@ -2030,53 +1663,41 @@ async fn session_load_after_reconnect_rebuilds_an_equivalent_frame() {
     .await;
     let live_frame = agent_frame_from_events(&live_events);
 
-    // Disconnect (drop both halves) without draining sessiond -- the session
-    // keeps running; only this client's connection goes away.
-    drop(reader);
-    drop(writer);
+    // Disconnect without draining -- the session keeps running.
+    drop(attachment);
+    drop(client);
 
-    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
-    send_session_load(&mut writer, session_id).await;
-    let replayed_events = collect_replayed_events(&mut reader, session_id).await;
+    let client = connect_hub(&sessiond.socket_path).await;
+    let mut attachment = client.hub.attach_agent(session_id).await.unwrap();
+    let replayed_events = collect_replayed_events(&mut attachment.events).await;
     let replayed_frame = agent_frame_from_events(&replayed_events);
 
     assert_eq!(
         replayed_frame, live_frame,
-        "session_load's replay must fold to the exact same frame the live connection saw"
+        "attach_agent's replay must fold to the exact same frame the live connection saw"
     );
 }
 
-/// The server-side substance of the `Reload Session Runtime` command
-/// (`WorkspaceShell::reload_session_runtime` on the Horizon side, not
-/// exercisable from this crate's tests -- `CARGO_BIN_EXE_horizon-sessiond` is
-/// only set for *this* package's own integration tests, per step 2's
-/// notes): drain a live session gracefully (not a crash this time), respawn
-/// against the same paths, and confirm the session survives with its
-/// transcript intact and ready for more traffic -- the same guarantee
-/// `killed_sessiond_respawns_and_replays_transcript_with_open_turn_cancelled`
-/// proves for a hard kill, proven here for the clean-shutdown path the
-/// reload command actually drives.
-#[tokio::test]
+/// The server-side substance of `Reload Session Runtime`: drain a live
+/// session gracefully (not a crash), respawn against the same paths, and
+/// confirm the session survives with its transcript intact.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn drained_sessiond_respawns_and_preserves_a_completed_session() {
     let mut sessiond = SessiondProcess::spawn();
     let socket_path = sessiond.socket_path.clone();
     let event_log_path = sessiond.event_log_path.clone();
-    let (mut reader, mut writer) = connect_and_handshake(&socket_path).await;
+    let client = connect_hub(&socket_path).await;
 
     let session_id = SessionId::new();
-    send_session_new(&mut writer, session_id).await;
-    wire::write_envelope(
-        &mut writer,
-        &Envelope::command(
-            session_id,
-            AgentCommand::UserMessage {
-                text: "hello".to_string(),
-            },
-        ),
-    )
-    .await
-    .unwrap();
-    collect_events_until(&mut reader, session_id, |event| {
+    let mut attachment = client.hub.new_agent(session_new(session_id)).await.unwrap();
+    attachment
+        .commands
+        .send(AgentCommand::UserMessage {
+            text: "hello".to_string(),
+        })
+        .await
+        .unwrap();
+    collect_events_until(&mut attachment.events, |event| {
         matches!(
             event,
             Event::MessageCommitted(message)
@@ -2085,31 +1706,28 @@ async fn drained_sessiond_respawns_and_preserves_a_completed_session() {
     })
     .await;
 
-    write_shared(&mut writer, SessionControl::Drain).await;
+    client.drain().await;
+    drop(attachment);
+    drop(client);
     let status = wait_for_exit(&mut sessiond.child).await;
     assert!(status.success(), "drain should exit 0, got {status:?}");
 
     let respawned = SessiondProcess::spawn_at(socket_path, event_log_path);
-    let (mut reader, mut writer) = connect_and_handshake(&respawned.socket_path).await;
-
-    wire::write_envelope(&mut writer, &Envelope::control(Control::SessionList))
-        .await
-        .unwrap();
-    let reply = wire::read_envelope(&mut reader).await.unwrap().unwrap();
+    let client = connect_hub(&respawned.socket_path).await;
     assert_eq!(
-        reply.body,
-        EnvelopeBody::Control(Control::SessionListResult(vec![SessionSummary {
+        client.hub.list_agents().await.unwrap(),
+        vec![SessionSummary {
             session_id,
             provider_id: mock_provider_id(),
             role_id: None,
             parent_session_id: None,
             workspace_root: None,
-        }])),
+        }],
         "a gracefully drained session must resume too, not just a crashed one"
     );
 
-    send_session_load(&mut writer, session_id).await;
-    let replayed = collect_replayed_events(&mut reader, session_id).await;
+    let mut attachment = client.hub.attach_agent(session_id).await.unwrap();
+    let replayed = collect_replayed_events(&mut attachment.events).await;
     assert!(
         replayed.iter().any(|event| matches!(
             event,
@@ -2127,22 +1745,9 @@ async fn drained_sessiond_respawns_and_preserves_a_completed_session() {
     );
 }
 
-// --- bind-first startup ordering + dead-session resume filter ---------------
-//
-// Regression coverage for a real startup failure: `horizon-sessiond` used to
-// read its event log and resume every session it found *before* binding the
-// socket. On a big log this took long enough that Horizon's connect-retry
-// budget timed out, concluded nothing was listening, and spawned a second
-// `horizon-sessiond` -- which itself replayed the whole log again before
-// discovering the first instance already owned the socket. Separately,
-// every session ever created (including long-dead ones) was being resumed
-// on every restart, growing startup cost with history forever.
-
-/// Fix 2: a session whose log already ends in a terminal state (`Terminated`
-/// or an `Exited` item) must not be resumed -- only a session with no such
-/// terminal marker at its tail should show up in `session_list` after
-/// startup.
-#[tokio::test]
+/// Fix 2: a session whose log already ends in a terminal state must not be
+/// resumed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_skips_sessions_whose_log_already_ended_in_a_terminal_state() {
     let socket_path = std::env::temp_dir().join(format!(
         "hzn-e2e-{}.sock",
@@ -2190,32 +1795,24 @@ async fn resume_skips_sessions_whose_log_already_ended_in_a_terminal_state() {
     );
 
     let sessiond = SessiondProcess::spawn_at(socket_path, event_log_path);
-    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
-
-    wire::write_envelope(&mut writer, &Envelope::control(Control::SessionList))
-        .await
-        .unwrap();
-    let reply = wire::read_envelope(&mut reader).await.unwrap().unwrap();
+    let client = connect_hub(&sessiond.socket_path).await;
     assert_eq!(
-        reply.body,
-        EnvelopeBody::Control(Control::SessionListResult(vec![SessionSummary {
+        client.hub.list_agents().await.unwrap(),
+        vec![SessionSummary {
             session_id: live_session,
             provider_id: mock_provider_id(),
             role_id: None,
             parent_session_id: None,
             workspace_root: None,
-        }])),
-        "only the live session should have been resumed, got {reply:?}"
+        }],
+        "only the live session should have been resumed"
     );
 }
 
 /// Fix 1: `hello` must answer well before a slow resume finishes, and
-/// `session_list` must wait for it rather than racing it -- proven here with
-/// the test-only resume-delay hook rather than relying on incidental timing,
-/// since a normal (empty or tiny) fixture log resumes too fast to
-/// distinguish "answered immediately" from "answered after a fast resume".
-#[tokio::test]
-async fn hello_answers_immediately_while_session_list_waits_for_a_slow_resume() {
+/// `list_agents` must wait for it -- proven with the resume-delay hook.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hello_answers_immediately_while_list_agents_waits_for_a_slow_resume() {
     let socket_path = std::env::temp_dir().join(format!(
         "hzn-e2e-{}.sock",
         &uuid::Uuid::new_v4().simple().to_string()[..8]
@@ -2246,43 +1843,35 @@ async fn hello_answers_immediately_while_session_list_waits_for_a_slow_resume() 
     );
 
     let hello_started = Instant::now();
-    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
+    let client = connect_hub(&sessiond.socket_path).await;
     let hello_elapsed = hello_started.elapsed();
     assert!(
         hello_elapsed < Duration::from_millis(RESUME_DELAY_MS / 2),
         "hello should answer well before the artificial resume delay elapses, took {hello_elapsed:?}"
     );
 
-    let session_list_started = Instant::now();
-    wire::write_envelope(&mut writer, &Envelope::control(Control::SessionList))
-        .await
-        .unwrap();
-    let reply = wire::read_envelope(&mut reader).await.unwrap().unwrap();
-    let session_list_elapsed = session_list_started.elapsed();
+    let list_started = Instant::now();
+    let agents = client.hub.list_agents().await.unwrap();
+    let list_elapsed = list_started.elapsed();
     assert!(
-        session_list_elapsed >= Duration::from_millis(RESUME_DELAY_MS) - Duration::from_millis(300),
-        "session_list should have waited for the (artificially slow) resume to finish, \
-         took {session_list_elapsed:?}"
+        list_elapsed >= Duration::from_millis(RESUME_DELAY_MS) - Duration::from_millis(300),
+        "list_agents should have waited for the (artificially slow) resume to finish, took {list_elapsed:?}"
     );
     assert_eq!(
-        reply.body,
-        EnvelopeBody::Control(Control::SessionListResult(vec![SessionSummary {
+        agents,
+        vec![SessionSummary {
             session_id: live_session,
             provider_id: mock_provider_id(),
             role_id: None,
             parent_session_id: None,
             workspace_root: None,
-        }])),
+        }]
     );
 }
 
-/// Fix 1's other half: a second `horizon-sessiond` pointed at a socket path a
-/// live instance already owns must detect that and exit *before* it ever
-/// reads its own event log -- proven by asserting the second instance's
-/// stderr never mentions resuming a session, not just that it eventually
-/// exits non-zero (which the old, wrongly-ordered code also did, just after
-/// wastefully replaying the whole log first).
-#[tokio::test]
+/// Fix 1's other half: a second daemon against a live socket must bail
+/// before reading its own log.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn second_sessiond_against_a_live_socket_exits_before_reading_its_own_log() {
     let socket_path = std::env::temp_dir().join(format!(
         "hzn-e2e-{}.sock",
@@ -2307,28 +1896,17 @@ async fn second_sessiond_against_a_live_socket_exits_before_reading_its_own_log(
     );
 
     let first = SessiondProcess::spawn_at(socket_path.clone(), event_log_path.clone());
-    // Wait for the first instance to be up and to have finished resuming
-    // (via `SessionList`'s own readiness gate) before racing a second one
-    // against it, so this test is only exercising the "socket already
-    // live" path, not an unrelated bind race between the two.
-    let (mut reader, mut writer) = connect_and_handshake(&first.socket_path).await;
-    wire::write_envelope(&mut writer, &Envelope::control(Control::SessionList))
-        .await
-        .unwrap();
-    wire::read_envelope(&mut reader).await.unwrap().unwrap();
-    drop(reader);
-    drop(writer);
+    // Wait for the first instance to be up and resumed (list_agents' own
+    // readiness gate) before racing a second one against it.
+    let client = connect_hub(&first.socket_path).await;
+    let _ = client.hub.list_agents().await.unwrap();
+    drop(client);
 
     let missing_config_path = std::env::temp_dir().join(format!(
         "horizon-sessiond-e2e-no-such-config-{}-{}.toml",
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
-    // Same hermeticity fix as `SessiondProcess::spawn_at_with_resume_delay`:
-    // an unset `HORIZON_AGENT_STATE_DB` now resolves to a real default path
-    // rather than "no DuckDB", so point it at its own throwaway path too --
-    // though this instance is expected to bail (see below) before ever
-    // reaching the code that would open it.
     let state_db_path = std::env::temp_dir().join(format!(
         "horizon-sessiond-e2e-state-{}-{}.duckdb",
         std::process::id(),
@@ -2370,21 +1948,10 @@ async fn second_sessiond_against_a_live_socket_exits_before_reading_its_own_log(
     drop(first);
 }
 
-// --- DuckDB rebuild off the readiness path + skip-when-current -------------
-//
-// Regression coverage for the two other diagnosed causes of a slow-feeling
-// `Reload Session Runtime`/restart: the DuckDB projection rebuild used to run
-// synchronously *before* readiness (`hello`/`session_list`/`session_new`
-// all waited on it), and it always ran a full rebuild even when the log
-// hadn't changed since the projection was last built.
-
-/// Task 1: `hello`/`session_list` must both answer promptly even while an
-/// (artificially slowed) DuckDB rebuild is still running in its own
-/// background task -- proven with the same delay-hook shape
-/// `hello_answers_immediately_while_session_list_waits_for_a_slow_resume`
-/// uses for the resume phase, applied to the DuckDB rebuild instead.
-#[tokio::test]
-async fn duckdb_rebuild_delay_does_not_block_hello_or_session_list() {
+/// Task 1: `hello`/`list_agents` must both answer promptly even while an
+/// (artificially slowed) DuckDB rebuild is still running in the background.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn duckdb_rebuild_delay_does_not_block_hello_or_list_agents() {
     let socket_path = std::env::temp_dir().join(format!(
         "hzn-e2e-{}.sock",
         &uuid::Uuid::new_v4().simple().to_string()[..8]
@@ -2415,56 +1982,35 @@ async fn duckdb_rebuild_delay_does_not_block_hello_or_session_list() {
     );
 
     let hello_started = Instant::now();
-    let (mut reader, mut writer) = connect_and_handshake(&sessiond.socket_path).await;
+    let client = connect_hub(&sessiond.socket_path).await;
     let hello_elapsed = hello_started.elapsed();
     assert!(
         hello_elapsed < Duration::from_millis(REBUILD_DELAY_MS / 2),
-        "hello should answer well before the artificial duckdb rebuild delay elapses, \
-         took {hello_elapsed:?}"
+        "hello should answer well before the artificial duckdb rebuild delay elapses, took {hello_elapsed:?}"
     );
 
-    let session_list_started = Instant::now();
-    wire::write_envelope(&mut writer, &Envelope::control(Control::SessionList))
-        .await
-        .unwrap();
-    let reply = wire::read_envelope(&mut reader).await.unwrap().unwrap();
-    let session_list_elapsed = session_list_started.elapsed();
+    let list_started = Instant::now();
+    let agents = client.hub.list_agents().await.unwrap();
+    let list_elapsed = list_started.elapsed();
     assert!(
-        session_list_elapsed < Duration::from_millis(REBUILD_DELAY_MS / 2),
-        "session_list must not wait on the (slow) duckdb rebuild, took {session_list_elapsed:?}"
+        list_elapsed < Duration::from_millis(REBUILD_DELAY_MS / 2),
+        "list_agents must not wait on the (slow) duckdb rebuild, took {list_elapsed:?}"
     );
     assert_eq!(
-        reply.body,
-        EnvelopeBody::Control(Control::SessionListResult(vec![SessionSummary {
+        agents,
+        vec![SessionSummary {
             session_id: live_session,
             provider_id: mock_provider_id(),
             role_id: None,
             parent_session_id: None,
             workspace_root: None,
-        }])),
+        }]
     );
 }
 
 /// Task 2's skip path: a second spawn against an *unchanged* event log must
-/// skip the DuckDB rebuild entirely once the freshness check finds the
-/// existing projection's high-water mark already matches the log's tail --
-/// observed directly via the "already current, skipping rebuild" stderr
-/// marker `event_log::writer::rebuild_and_open_duckdb_projection` logs
-/// (folded there from `main.rs` as part of the recall work -- see
-/// `docs/agent-runtime-split-design.md`'s trailing addendum), polled for
-/// while the process is still alive (there's no over-the-wire signal for
-/// this: task 1's whole point is that nothing waits on it).
-///
-/// The fixture's session must already be terminated: a *live* resumed
-/// session's own thread replays its startup burst (`Created`/init-message/
-/// `WaitingForUser`, per `session::resume_persisted_sessions`'s doc
-/// comment) and persists it like any other event, which would keep growing
-/// the log across every restart and make "unchanged" impossible to set up
-/// at all. A terminated session is skipped by `resume_persisted_sessions`
-/// entirely (see `session_is_dead`), so nothing appends to the log just
-/// from starting `horizon-sessiond` -- exactly the genuinely-static-log case
-/// the skip optimization targets.
-#[tokio::test]
+/// skip the DuckDB rebuild entirely.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unchanged_log_skips_duckdb_rebuild_on_respawn() {
     let socket_path = std::env::temp_dir().join(format!(
         "hzn-e2e-{}.sock",
@@ -2499,7 +2045,7 @@ async fn unchanged_log_skips_duckdb_rebuild_on_respawn() {
         event_log_path.clone(),
         state_db_path.clone(),
     );
-    connect_and_handshake(&first.socket_path).await;
+    drop(connect_hub(&first.socket_path).await);
     first
         .wait_for_stderr_line("DuckDB projection rebuilt (")
         .await;
@@ -2507,26 +2053,15 @@ async fn unchanged_log_skips_duckdb_rebuild_on_respawn() {
 
     let second =
         SessiondProcess::spawn_at_with_duckdb_options(socket_path, event_log_path, state_db_path);
-    connect_and_handshake(&second.socket_path).await;
+    drop(connect_hub(&second.socket_path).await);
     second
         .wait_for_stderr_line("DuckDB projection already current, skipping rebuild")
         .await;
 }
 
-/// Task 2's other half: a log that grew (or otherwise changed) since the
-/// projection was last built must still be reconciled -- the skip
-/// optimization must never cause stale data to look "current". Since
-/// backlog-32's incremental-catch-up work, a log that merely *grew* (this
-/// test's case: a second session's events appended while sessiond was
-/// down, with the existing mark still a valid prefix of the new tail) is
-/// reconciled by catching up just the new tail rather than a full rebuild
-/// -- see `event_log::writer::ProjectionCurrency::Behind`, and its sibling
-/// unit tests in that module (`behind_mark_triggers_incremental_catch_up_
-/// that_preserves_earlier_rows`, `ahead_mark_falls_back_to_a_full_rebuild`)
-/// for the full-rebuild-fallback cases (an ahead mark, or a missing store)
-/// that are cheaper to exercise as in-process unit tests than as a second
-/// `horizon-sessiond` e2e spawn.
-#[tokio::test]
+/// Task 2's other half: a log that grew since the projection was last built
+/// must still be reconciled.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stale_log_triggers_duckdb_rebuild_on_respawn() {
     let socket_path = std::env::temp_dir().join(format!(
         "hzn-e2e-{}.sock",
@@ -2560,14 +2095,12 @@ async fn stale_log_triggers_duckdb_rebuild_on_respawn() {
         event_log_path.clone(),
         state_db_path.clone(),
     );
-    connect_and_handshake(&first.socket_path).await;
+    drop(connect_hub(&first.socket_path).await);
     first
         .wait_for_stderr_line("DuckDB projection rebuilt (")
         .await;
     first.kill_and_wait();
 
-    // Append a new session to the *same* log file while sessiond is down --
-    // advances the log's tail sequence past what the projection recorded.
     let second_session = SessionId::new();
     write_session_fixture(
         &event_log_path,
@@ -2582,13 +2115,12 @@ async fn stale_log_triggers_duckdb_rebuild_on_respawn() {
 
     let second =
         SessiondProcess::spawn_at_with_duckdb_options(socket_path, event_log_path, state_db_path);
-    connect_and_handshake(&second.socket_path).await;
+    drop(connect_hub(&second.socket_path).await);
     let catch_up_line = second
         .wait_for_stderr_line("DuckDB projection caught up incrementally (")
         .await;
     assert!(
         !catch_up_line.contains("already current"),
-        "a stale (grown) log must trigger real reconciliation work, not the skip path: \
-         {catch_up_line}"
+        "a stale (grown) log must trigger real reconciliation work, not the skip path: {catch_up_line}"
     );
 }

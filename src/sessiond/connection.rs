@@ -6,7 +6,7 @@ use std::time::Duration;
 use horizon_agent::contract::{self, Command};
 use horizon_agent::wire::{self, HostToolResponse};
 use horizon_session_protocol::{
-    legacy, ClientHello, HubError, HubHello, SessionHub as _, SessionHubClient,
+    legacy, AgentCodec, ClientHello, HubError, HubHello, SessionHub as _, SessionHubClient,
     TerminalAttachment, WireCodec, SESSION_PROTOCOL_VERSION,
 };
 use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
@@ -294,10 +294,14 @@ enum StreamEnd {
     /// (its socket already refuses connections, so the drain is a no-op
     /// and the respawn is exactly what a dead daemon needs). Recoverable:
     /// see `spawn`'s probe-drain-restart arm.
-    GenerationMismatch { message: String },
+    GenerationMismatch {
+        message: String,
+    },
     /// The daemon speaks remoc and answered `hello` with an explicit
     /// version-range rejection. Recoverable via an rtc `drain`.
-    VersionRejected { message: String },
+    VersionRejected {
+        message: String,
+    },
     Fatal(String),
     EstablishedFailure(String),
     Cancelled,
@@ -307,7 +311,7 @@ enum StreamEnd {
 /// What a successful establishment hands the op loop.
 struct Live {
     hub: SessionHubClient<WireCodec>,
-    host_tool_responses: rch::mpsc::Sender<HostToolResponse, WireCodec>,
+    host_tool_responses: rch::mpsc::Sender<HostToolResponse, AgentCodec>,
     routes: Arc<Routes>,
 }
 
@@ -403,12 +407,11 @@ where
     let deadline = tokio::time::Instant::now() + ESTABLISH_TIMEOUT;
     let (read_half, write_half) = tokio::io::split(stream);
 
-    let connect =
-        remoc::Connect::io::<_, _, (), SessionHubClient<WireCodec>, WireCodec>(
-            remoc::Cfg::default(),
-            read_half,
-            write_half,
-        );
+    let connect = remoc::Connect::io::<_, _, (), SessionHubClient<WireCodec>, WireCodec>(
+        remoc::Cfg::default(),
+        read_half,
+        write_half,
+    );
     let (conn, _base_tx, mut base_rx) = match tokio::time::timeout_at(deadline, connect).await {
         Ok(Ok(connected)) => connected,
         Ok(Err(error)) => {
@@ -467,7 +470,7 @@ where
 }
 
 fn spawn_host_tool_pump(
-    mut host_tools: rch::mpsc::Receiver<wire::HostToolRequest, WireCodec>,
+    mut host_tools: rch::mpsc::Receiver<wire::HostToolRequest, AgentCodec>,
     routes: Arc<Routes>,
 ) {
     tokio::spawn(async move {
@@ -710,9 +713,7 @@ const DRAIN_POLL: Duration = Duration::from_millis(50);
 /// harmless: the line is chmux garbage, the daemon's handshake timeout
 /// drops that one connection.
 async fn drain_stale_sessiond(socket_path: &Path) -> Result<(), String> {
-    for version in
-        (legacy::OLDEST_DRAINABLE_VERSION..=legacy::NEWEST_JSONL_VERSION).rev()
-    {
+    for version in (legacy::OLDEST_DRAINABLE_VERSION..=legacy::NEWEST_JSONL_VERSION).rev() {
         let mut stream = match tokio::net::UnixStream::connect(socket_path).await {
             Ok(stream) => stream,
             // Nothing is accepting any more: either a previous probe's
@@ -761,9 +762,11 @@ async fn drain_incompatible_remoc_sessiond(socket_path: &Path) -> Result<(), Str
     if wait_until_refusing(socket_path).await {
         Ok(())
     } else {
-        Err("horizon-sessiond kept accepting connections after the drain call; \
+        Err(
+            "horizon-sessiond kept accepting connections after the drain call; \
              stop it manually"
-            .to_string())
+                .to_string(),
+        )
     }
 }
 
