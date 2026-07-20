@@ -1,9 +1,11 @@
 # Containment Denials and Narrow-Grant Retries
 
-Status: design investigation, 2026-07-20. The owner has decided the product
-direction (containment denials become boundary-grant decisions; approval never
-removes the sandbox). The network enforcement shape and filesystem discovery
-scope below still need owner confirmation before implementation.
+Status: network direction accepted, 2026-07-20. The owner has decided that
+containment denials become boundary-grant decisions, approval never removes
+the sandbox, and the local cross-platform network baseline is a proxy-aware
+compatibility layer backed by OS enforcement rather than transparent
+redirection. The filesystem discovery delivery scope below still needs a
+separate owner decision before that half is implemented.
 
 This document corrects assumptions in `docs/agent-approval-design.md` as of
 commit `f82da5b`. It covers tier-1 sandboxed `bash`; host-side web tools retain
@@ -399,18 +401,23 @@ captured.
 All per-OS tests must exercise real containment, not only `CapabilitySet`
 shape. The normal workspace quality gate remains mandatory.
 
-## Owner decisions before implementation
+## Owner decisions
 
-1. Accept the recommended TCP proxy + always-on Linux seccomp mediation,
-   replacing the current UDS relay for tier-1 bash, or fund a different
-   transparent transport design.
-2. Choose filesystem delivery scope:
+Accepted on 2026-07-20:
+
+- Use the recommended TCP HTTP proxy and enforce the boundary with always-on
+  Linux seccomp mediation. SOCKS may be added later as a compatibility
+  extension, but it is not a security prerequisite. Transparent
+  arbitrary-protocol redirection is not a requirement for the local
+  Linux/macOS baseline.
+- Treat a proxy-bypassing client as a structured, non-grantable contained
+  failure. Never offer direct-IP egress as a domain grant.
+- Keep all containment grants session-scoped and non-persistent.
+
+One filesystem delivery decision remains:
+
+1. Choose filesystem delivery scope:
    - land the Linux `openat`/`openat2` incident-complete slice first, with
      explicit residual limitations; or
    - hold the filesystem feature until comprehensive Linux mediation and a
      real-Mac denial source are both proven.
-3. Confirm that a proxy-bypassing client receives a structured,
-   non-grantable contained failure rather than an offer to allow direct IP
-   egress. This document recommends fail-closed/non-grantable.
-4. Confirm session-lifetime grants only. Persistence across sessions remains
-   out of scope, matching the current domain allowlist.
