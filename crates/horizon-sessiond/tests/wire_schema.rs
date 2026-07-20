@@ -16,26 +16,36 @@
 //! ```
 //!
 //! This generator lives in `horizon-sessiond` (rather than the protocol
-//! crate that hosts the artifact) because the daemon is the one crate that
-//! already depends on every wire vocabulary: the shared
-//! `horizon-session-protocol` envelope plus the agent and terminal sister
-//! vocabularies, which deliberately never reference each other
-//! (`docs/session-daemon-design.md` decision 3).
+//! crate that hosts the artifact) because the daemon is the one binary that
+//! already links every wire vocabulary through `horizon-session-protocol`'s
+//! own re-exports and the sister crates.
+//!
+//! ## What the v10 artifact documents
+//!
+//! The wire is the `SessionHub` rtc trait over remoc, not JSONL envelopes
+//! (`docs/remoc-adoption-design.md` §2). The document therefore has two
+//! sections instead of the old `envelope`+`kinds`:
+//!
+//! - `hub`: every rtc method mapped to its request/reply payload types
+//!   (`hello`'s `ClientHello`→`HubHello`, the terminal/agent attach calls,
+//!   `drain`). The channel-bearing reply structs (`HubHello`,
+//!   `TerminalAttachment`, `AgentAttachment`) carry remoc channel halves,
+//!   which are chmux port references on the wire, not data — they appear
+//!   here as opaque markers.
+//! - `channels`: the vocabularies those channels carry
+//!   (`TerminalUpdate`/`TerminalCommand`, `AgentWireEvent`/agent `Command`,
+//!   `HostToolRequest`/`HostToolResponse`). This is where the frame
+//!   vocabulary (`Snapshot`/`FrameDiff`, unchanged in v10) and every
+//!   `#[serde(other)] Unknown`-guarded command/event live.
 //!
 //! ## Version history, inherited from the retired pin tests
 //!
 //! This check replaces the four `contract_version_*` pin tests of
-//! `crates/horizon-agent/src/wire.rs` — hand-maintained
-//! `assert_eq!(CONTRACT_VERSION, 9)`s whose doc comments recorded, change
-//! by change, whether a wire edit was a bump or additive. That narrative
-//! lives on in two places: `SESSION_PROTOCOL_VERSION`'s own doc comment
-//! (the v4–v9 bump-by-bump history — terminal discovery/attach, owned
-//! colors, dropped `Hello.capabilities`, frame styles/selection/cursor
-//! shape, `SetColorScheme`, dropped `TerminalFrame.text`), and the
-//! additive precedents the pin tests defended (`SessionNew.workspace_root`,
-//! the lineage fields, `Control::WorkspaceRootResolved`) which are now
-//! simply *visible* as `#[serde(default)]` optional properties and trailing
-//! variants in the artifact itself. From here on, v9 stays put for
+//! `crates/horizon-agent/src/wire.rs`. The v4–v9 bump narrative lives on in
+//! `SESSION_PROTOCOL_VERSION`'s own doc comment (terminal discovery/attach,
+//! owned colors, dropped `Hello.capabilities`, frame styles/selection/
+//! cursor shape, `SetColorScheme`, dropped `TerminalFrame.text`), extended
+//! by v10 (the remoc cutover). From here on the version stays put for
 //! additive changes — the checker enforces exactly that — and a reshape
 //! demands a `SESSION_PROTOCOL_VERSION` bump in the same change, which the
 //! artifact carries as `x-session-protocol-version`.
@@ -43,61 +53,78 @@
 use std::path::Path;
 
 use schemars::generate::SchemaSettings;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
-use horizon_agent::contract::{Command, Event};
-use horizon_agent::wire::{Control, AGENT_COMMAND_KIND, AGENT_CONTROL_KIND, AGENT_EVENT_KIND};
+use horizon_agent::contract::{Command, Event, SessionId};
+use horizon_agent::wire::{
+    AgentWireEvent, HostToolRequest, HostToolResponse, SessionNew, SessionSummary,
+};
 use horizon_session_protocol::{
-    schema_check::PROTOCOL_VERSION_KEY, Envelope, SessionControl, SESSION_CONTROL_KIND,
-    SESSION_PROTOCOL_VERSION,
+    schema_check::PROTOCOL_VERSION_KEY, AgentAttachment, ClientHello, HubError, HubHello,
+    TerminalAttachment, SESSION_PROTOCOL_VERSION,
 };
-use horizon_terminal_core::{
-    TerminalCommand, TerminalControl, TerminalUpdate, TERMINAL_COMMAND_KIND, TERMINAL_CONTROL_KIND,
-    TERMINAL_UPDATE_KIND,
-};
+use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
 
 const ARTIFACT_RELATIVE_PATH: &str = "../horizon-session-protocol/schema/session-wire.json";
 
-/// One canonical document: the shared envelope, plus each envelope `kind`
-/// mapped to the payload vocabulary that decodes it, with every named type
-/// collected once under `$defs`.
+/// One canonical document: the hub's method signatures, the channel
+/// payload vocabularies, and every named type collected once under
+/// `$defs`.
 fn generate_wire_schema() -> Value {
     let mut generator = SchemaSettings::draft2020_12().into_generator();
 
-    let envelope = generator.subschema_for::<Envelope>().to_value();
-    let kinds = [
-        (
-            SESSION_CONTROL_KIND,
-            generator.subschema_for::<SessionControl>().to_value(),
-        ),
-        (
-            AGENT_COMMAND_KIND,
-            generator.subschema_for::<Command>().to_value(),
-        ),
-        (
-            AGENT_EVENT_KIND,
-            generator.subschema_for::<Event>().to_value(),
-        ),
-        (
-            AGENT_CONTROL_KIND,
-            generator.subschema_for::<Control>().to_value(),
-        ),
-        (
-            TERMINAL_CONTROL_KIND,
-            generator.subschema_for::<TerminalControl>().to_value(),
-        ),
-        (
-            TERMINAL_COMMAND_KIND,
-            generator.subschema_for::<TerminalCommand>().to_value(),
-        ),
-        (
-            TERMINAL_UPDATE_KIND,
-            generator.subschema_for::<TerminalUpdate>().to_value(),
-        ),
-    ]
-    .into_iter()
-    .map(|(kind, schema)| (kind.to_string(), schema))
-    .collect::<Map<String, Value>>();
+    // The unit `()` request/reply of the argument-less / result-less
+    // methods is documented as JSON `null` rather than a schema.
+    let unit = json!({"type": "null"});
+
+    let hub = json!({
+        "hello": {
+            "request": generator.subschema_for::<ClientHello>().to_value(),
+            "reply": generator.subschema_for::<HubHello>().to_value(),
+            "error": generator.subschema_for::<HubError>().to_value(),
+        },
+        "list_terminals": {
+            "request": unit,
+            "reply": generator.subschema_for::<Vec<TerminalSummary>>().to_value(),
+        },
+        "create_terminal": {
+            "request": {
+                "session_id": generator.subschema_for::<uuid::Uuid>().to_value(),
+                "spec": generator.subschema_for::<TerminalSpawnSpec>().to_value(),
+            },
+            "reply": generator.subschema_for::<TerminalAttachment>().to_value(),
+        },
+        "attach_terminal": {
+            "request": generator.subschema_for::<uuid::Uuid>().to_value(),
+            "reply": generator.subschema_for::<TerminalAttachment>().to_value(),
+        },
+        "list_agents": {
+            "request": unit,
+            "reply": generator.subschema_for::<Vec<SessionSummary>>().to_value(),
+        },
+        "new_agent": {
+            "request": generator.subschema_for::<SessionNew>().to_value(),
+            "reply": generator.subschema_for::<AgentAttachment>().to_value(),
+        },
+        "attach_agent": {
+            "request": generator.subschema_for::<SessionId>().to_value(),
+            "reply": generator.subschema_for::<AgentAttachment>().to_value(),
+        },
+        "drain": {
+            "request": unit,
+            "reply": unit,
+        },
+    });
+
+    let channels = json!({
+        "terminal_updates": generator.subschema_for::<TerminalUpdate>().to_value(),
+        "terminal_commands": generator.subschema_for::<TerminalCommand>().to_value(),
+        "agent_events": generator.subschema_for::<AgentWireEvent>().to_value(),
+        "agent_commands": generator.subschema_for::<Command>().to_value(),
+        "agent_event_payload": generator.subschema_for::<Event>().to_value(),
+        "host_tool_requests": generator.subschema_for::<HostToolRequest>().to_value(),
+        "host_tool_responses": generator.subschema_for::<HostToolResponse>().to_value(),
+    });
 
     let mut defs = Value::Object(generator.take_definitions(true));
     strip_unknown_catch_alls(&mut defs);
@@ -105,41 +132,43 @@ fn generate_wire_schema() -> Value {
     let mut schema = json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "horizon-session-wire",
-        "$comment": "Generated from the live wire types. Regenerate with \
+        "$comment": "Generated from the live wire types (the SessionHub rtc trait and the \
+                     vocabularies its channels carry). Regenerate with \
                      `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-sessiond \
                      wire_schema`; additive-vs-reshape classification of changes is \
                      scripts/check-wire-schema.sh (docs/remoc-adoption-design.md §4).",
         PROTOCOL_VERSION_KEY: SESSION_PROTOCOL_VERSION,
-        "envelope": envelope,
-        "kinds": kinds,
+        "hub": hub,
+        "channels": channels,
         "$defs": defs,
     });
     sort_object_keys(&mut schema);
     schema
 }
 
-/// Removes the deserialize-only `Unknown` catch-all branches (and the
-/// `UnknownPayload` definition backing them) from the generated schema: the
-/// artifact documents what a peer may *send*, and `Unknown` never legally
-/// crosses the wire — see `horizon_session_protocol::UnknownPayload`.
-/// Stripping also keeps the checker's appended-variant rule simple: a new
-/// variant, declared above the catch-all in code, lands as a genuine
-/// trailing element here.
+/// Removes the `#[serde(other)] Unknown` skew catch-all from the generated
+/// schema: the artifact documents what a peer may *send*, and `Unknown` is
+/// never legally put on the wire (nothing constructs it on a send path).
+/// Removing it also keeps the checker's appended-variant rule simple —
+/// schemars renders a `#[serde(other)]` unit variant as a trailing
+/// `{"const": "Unknown"}` `oneOf` branch (or, when it groups with other
+/// unit variants, as a `"Unknown"` entry in an `enum` array); a newly
+/// appended variant would otherwise read as "the branch that used to be
+/// `Unknown` changed", a false reshape. With it stripped, a new variant
+/// declared above the catch-all lands as a genuine trailing element.
 fn strip_unknown_catch_alls(value: &mut Value) {
-    // The branch is a `$ref` to `UnknownPayload`, possibly annotated with
-    // the variant's own doc comment as `description` — match on the ref.
-    let is_catch_all = |variant: &Value| {
-        variant.get("$ref").and_then(Value::as_str) == Some("#/$defs/UnknownPayload")
-    };
     match value {
         Value::Object(map) => {
-            map.remove("UnknownPayload");
-            for (key, child) in map.iter_mut() {
-                if matches!(key.as_str(), "anyOf" | "oneOf") {
-                    if let Value::Array(variants) = &mut *child {
-                        variants.retain(|variant| !is_catch_all(variant));
-                    }
+            // A grouped unit-variant enum: drop the "Unknown" member.
+            if let Some(Value::Array(items)) = map.get_mut("enum") {
+                items.retain(|item| item.as_str() != Some("Unknown"));
+            }
+            for key in ["oneOf", "anyOf"] {
+                if let Some(Value::Array(branches)) = map.get_mut(key) {
+                    branches.retain(|branch| !is_unknown_catch_all(branch));
                 }
+            }
+            for child in map.values_mut() {
                 strip_unknown_catch_alls(child);
             }
         }
@@ -150,6 +179,20 @@ fn strip_unknown_catch_alls(value: &mut Value) {
         }
         _ => {}
     }
+}
+
+/// Whether a `oneOf`/`anyOf` branch is the standalone `Unknown` catch-all:
+/// a `{"const": "Unknown"}` branch, or a `{"enum": ["Unknown"]}` branch
+/// that carries nothing else.
+fn is_unknown_catch_all(branch: &Value) -> bool {
+    if branch.get("const").and_then(Value::as_str) == Some("Unknown") {
+        return true;
+    }
+    matches!(
+        branch.get("enum"),
+        Some(Value::Array(items))
+            if items.len() == 1 && items[0].as_str() == Some("Unknown")
+    )
 }
 
 /// Byte-stable artifact output independent of `serde_json`'s map ordering
@@ -208,14 +251,16 @@ fn committed_wire_schema_artifact_is_current() {
     );
 }
 
-/// The artifact never advertises the deserialize-only catch-all: neither
-/// the `UnknownPayload` definition nor any `$ref` to it survives
-/// generation.
+/// The artifact never advertises the deserialize-only catch-all: no
+/// `{"const": "Unknown"}` branch survives generation.
 #[test]
 fn generated_schema_contains_no_unknown_catch_all() {
     let schema = generate_wire_schema();
     let text = serde_json::to_string(&schema).unwrap();
-    assert!(!text.contains("UnknownPayload"), "{text}");
+    assert!(
+        !text.contains("\"const\":\"Unknown\""),
+        "an Unknown catch-all branch leaked into the artifact: {text}"
+    );
 }
 
 /// The artifact carries the protocol version the checker keys its

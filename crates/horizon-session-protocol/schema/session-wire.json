@@ -1,8 +1,82 @@
 {
-  "$comment": "Generated from the live wire types. Regenerate with `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-sessiond wire_schema`; additive-vs-reshape classification of changes is scripts/check-wire-schema.sh (docs/remoc-adoption-design.md §4).",
+  "$comment": "Generated from the live wire types (the SessionHub rtc trait and the vocabularies its channels carry). Regenerate with `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-sessiond wire_schema`; additive-vs-reshape classification of changes is scripts/check-wire-schema.sh (docs/remoc-adoption-design.md §4).",
   "$defs": {
+    "AgentAttachment": {
+      "description": "What [`SessionHub::new_agent`]/[`SessionHub::attach_agent`] hand back.\n`events` carries both the session's provider events and the\nsession-scoped announcements that used to be their own control\nenvelopes (`SessionModel`, `ToolCallProgress`,\n`WorkspaceRootResolved`) — see\n[`horizon_agent::wire::AgentWireEvent`].",
+      "properties": {
+        "commands": {
+          "$comment": "remoc rch channel half: a chmux port reference on the wire"
+        },
+        "events": {
+          "$comment": "remoc rch channel half: a chmux port reference on the wire"
+        }
+      },
+      "required": [
+        "events",
+        "commands"
+      ],
+      "type": "object"
+    },
+    "AgentWireEvent": {
+      "description": "Everything a hosted agent session pushes to its attached client, on the\nattachment's event channel (`horizon_session_protocol::AgentAttachment::\nevents`): the session's provider events, plus the session-scoped\nannouncements that were their own control envelopes on the JSONL wire.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A folded provider event — the transcript's raw material, identical\nto what the event log persists.",
+          "properties": {
+            "Event": {
+              "$ref": "#/$defs/Event"
+            }
+          },
+          "required": [
+            "Event"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Ephemeral tool-call-argument-streaming preview\n(`contract::ProviderEvent::tool_call_progress`). UI-only feedback:\nnever part of conversation history and never persisted (see\n[`ToolCallProgress`]'s own doc comment), which is why\n`contract::Event` deliberately has no variant for it.",
+          "properties": {
+            "ToolCallProgress": {
+              "$ref": "#/$defs/ToolCallProgress"
+            }
+          },
+          "required": [
+            "ToolCallProgress"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The session's resolved model id — sent once right after a fresh\nsession resolves it, and re-announced to every later attachment\n(see `docs/agent-output-ui-amendment.md`'s dated model-chip\naddendum). Ephemeral like `ToolCallProgress`.",
+          "properties": {
+            "SessionModel": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "SessionModel"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Live correction of a freshly isolated session's authoritative\n`workspace_root` (and derivation edge) — sent once, right after\n`horizon-sessiond` resolves the session's isolated worktree, which\nonly finishes *after* `new_agent` already returned. Not sent at all\nwhen isolation fails and degrades to a shared spawn (nothing to\ncorrect then, mirroring [`SessionSummary::parent_session_id`]'s\n\"the edge exists only via isolation\").",
+          "properties": {
+            "WorkspaceRootResolved": {
+              "$ref": "#/$defs/WorkspaceRootResolved"
+            }
+          },
+          "required": [
+            "WorkspaceRootResolved"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ApprovalKind": {
-      "anyOf": [
+      "description": "Distinguishes the shape of a pending [`ApprovalRequest`] -- what\n`tools::approval::resolve_bash` needs to tell an ordinary approval, a\nsandbox-denial retry, and a network-domain-denial retry apart, since the\nthree resolve an Approve decision differently (`docs/agent-approval-\ndesign.md`'s \"Denial UX\" and leg 4b's \"denial -> approval -> retry\nflow\"). Also lets the UI render each kind with its own copy without\nhaving to sniff `ApprovalRequest::reason`'s free text (today it doesn't,\nbut this keeps that door open).",
+      "oneOf": [
         {
           "const": "Standard",
           "description": "An ordinary first-time approval request -- the only kind that\nexisted before this leg.",
@@ -41,8 +115,7 @@
           ],
           "type": "object"
         }
-      ],
-      "description": "Distinguishes the shape of a pending [`ApprovalRequest`] -- what\n`tools::approval::resolve_bash` needs to tell an ordinary approval, a\nsandbox-denial retry, and a network-domain-denial retry apart, since the\nthree resolve an Approve decision differently (`docs/agent-approval-\ndesign.md`'s \"Denial UX\" and leg 4b's \"denial -> approval -> retry\nflow\"). Also lets the UI render each kind with its own copy without\nhaving to sniff `ApprovalRequest::reason`'s free text (today it doesn't,\nbut this keeps that door open)."
+      ]
     },
     "ApprovalRequest": {
       "properties": {
@@ -64,8 +137,25 @@
       ],
       "type": "object"
     },
+    "ClientHello": {
+      "description": "The client half of the version negotiation, carried by the first rtc\ncall on every connection ([`SessionHub::hello`]).",
+      "properties": {
+        "binary_id": {
+          "type": "string"
+        },
+        "supported": {
+          "$ref": "#/$defs/VersionRange"
+        }
+      },
+      "required": [
+        "supported",
+        "binary_id"
+      ],
+      "type": "object"
+    },
     "ClipboardDestination": {
-      "anyOf": [
+      "description": "Which OS clipboard buffer a [`TerminalUpdate::Clipboard`] targets.\n`Clipboard` is the explicit-copy path (Cmd/Ctrl+C, OSC 52 writes);\n`Primary` is the X11/Wayland middle-click-paste buffer, written\nautomatically as selection completes/updates (Linux convention -- select\n= copy to primary). One update type with a destination discriminator,\nrather than a second full clipboard pathway.",
+      "oneOf": [
         {
           "enum": [
             "Clipboard",
@@ -73,11 +163,10 @@
           ],
           "type": "string"
         }
-      ],
-      "description": "Which OS clipboard buffer a [`TerminalUpdate::Clipboard`] targets.\n`Clipboard` is the explicit-copy path (Cmd/Ctrl+C, OSC 52 writes);\n`Primary` is the X11/Wayland middle-click-paste buffer, written\nautomatically as selection completes/updates (Linux convention -- select\n= copy to primary). One update type with a destination discriminator,\nrather than a second full clipboard pathway."
+      ]
     },
     "Command": {
-      "anyOf": [
+      "oneOf": [
         {
           "enum": [
             "Shutdown"
@@ -207,160 +296,6 @@
         }
       ]
     },
-    "Control": {
-      "anyOf": [
-        {
-          "enum": [
-            "session_list"
-          ],
-          "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "session_list_result": {
-              "items": {
-                "$ref": "#/$defs/SessionSummary"
-              },
-              "type": "array"
-            }
-          },
-          "required": [
-            "session_list_result"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "session_new": {
-              "$ref": "#/$defs/SessionNew"
-            }
-          },
-          "required": [
-            "session_new"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "session_load": {
-              "$ref": "#/$defs/SessionLoad"
-            }
-          },
-          "required": [
-            "session_load"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "host_tool_request": {
-              "$ref": "#/$defs/HostToolRequest"
-            }
-          },
-          "required": [
-            "host_tool_request"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "host_tool_response": {
-              "$ref": "#/$defs/HostToolResponse"
-            }
-          },
-          "required": [
-            "host_tool_response"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "Ephemeral tool-call-argument-streaming preview\n(`contract::ProviderEvent::tool_call_progress`), session-scoped via\nthe envelope's own `session_id` (not this payload). `contract::Event`\ndeliberately has no variant for this -- it's UI-only feedback, never\npart of conversation history and never persisted (see\n[`ToolCallProgress`]'s own doc comment) -- so a step-3 pass filtered\nit out entirely rather than invent a wire `Event` representation for\nsomething the contract itself excludes. Restored here as its own\ncontrol message instead: reuses `contract::ToolCallProgress` as-is\n(guardrail 1 is about the *direction* `wire` -> `contract` already\nestablished by every other `Control` payload, not about which module\nowns a struct). See `horizon-sessiond`'s `session::handle_provider_event`\n(sender) and `horizon`'s `agent::connection::dispatch_incoming`\n(receiver, which folds it through the exact same\n`apply_tool_call_progress_to_frame` path a persisted event would).",
-          "properties": {
-            "tool_call_progress": {
-              "$ref": "#/$defs/ToolCallProgress"
-            }
-          },
-          "required": [
-            "tool_call_progress"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "A session's resolved model id, session-scoped via the envelope's own\n`session_id` -- same shape of exception as [`Control::ToolCallProgress`]\njust above: `contract::ProviderEvent::session_model` is ephemeral\n(never part of conversation history, never persisted), so it travels\nas its own `Control` rather than a new `contract::Event` variant. Sent\nonce by `horizon-sessiond`, either right after a fresh\n`Control::SessionNew` resolves its session's model, or alongside a\n`Control::SessionLoad`'s replayed events (so a (re)attaching client\ngets it too, not just the client present at session start) -- see\n`docs/agent-output-ui-amendment.md`'s dated model-chip addendum.\nOmitted entirely when the provider has no resolvable model (mirrors\n[`Control::SkippedLines`]'s \"just don't send it\" convention below).",
-          "properties": {
-            "session_model": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "session_model"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "This process's own startup event-log corruption diagnostics\n(`persistence::event_log::ReadReport::skipped_summary`), sent once\nper connection -- after `horizon-sessiond`'s startup resume finishes,\nnever blocking `Hello`'s immediate reply the way answering inside\n`Hello` itself would (see `horizon-sessiond::main`'s bind-first\nordering doc comment; `session_list`/`session_load` already block on\nthe same readiness gate for the same reason). Connection-global, like\n[`Control::SessionList`] -- omitted entirely when nothing was\nskipped. See `horizon-sessiond`'s `main::run_session_hosting_loop`\n(sender) and `horizon`'s `agent::connection::dispatch_incoming`\n(receiver, which folds it into `agent_state_status`, the status\nbar's existing signal).",
-          "properties": {
-            "skipped_lines": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "skipped_lines"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "Live correction of a freshly isolated session's authoritative\n`workspace_root` (and, since the same resolution moment also decides\nthe derivation edge, `parent_session_id`) -- session-scoped via the\nenvelope's own `session_id`, same shape of exception as\n[`Control::SessionModel`] above. Sent once by `horizon-sessiond`,\nright after `session::resolve_and_create_isolated_worktree` resolves\nthis session's isolated worktree: worktree creation is real IO that\nonly finishes *after* `Control::SessionNew` already returned, so a\nfresh spawn's shell-side `workspace_root` is only ever the\npre-isolation guess until now. Closes the last \"still eventual, not\nlive\" gap `docs/session-relationship-design.md`'s delivery notes call\nout: without this, a session created and used within one continuous\nrun only saw its corrected root/parent via a later\n`spawn_agent_resume`/`spawn_workspace_restore` sweep (daemon restart\nor UI restart). Not sent at all when isolation fails and degrades to\na shared spawn -- there is nothing to correct then, mirroring\n[`SessionSummary::parent_session_id`]'s \"the edge exists only via\nisolation\".",
-          "properties": {
-            "workspace_root_resolved": {
-              "$ref": "#/$defs/WorkspaceRootResolved"
-            }
-          },
-          "required": [
-            "workspace_root_resolved"
-          ],
-          "type": "object"
-        }
-      ],
-      "description": "Agent-domain control messages. Shared connection lifecycle controls live\nin `horizon_session_protocol::SessionControl`."
-    },
-    "Envelope": {
-      "description": "A domain-neutral session-daemon envelope. `kind` selects a sister\nvocabulary; `payload` is decoded by that domain only after the shared\nversion check succeeds.",
-      "properties": {
-        "kind": {
-          "type": "string"
-        },
-        "payload": true,
-        "session_id": {
-          "default": null,
-          "format": "uuid",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "v": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "v",
-        "kind",
-        "payload"
-      ],
-      "type": "object"
-    },
     "Error": {
       "properties": {
         "message": {
@@ -373,7 +308,7 @@
       "type": "object"
     },
     "Event": {
-      "anyOf": [
+      "oneOf": [
         {
           "additionalProperties": false,
           "properties": {
@@ -543,26 +478,8 @@
       ],
       "type": "object"
     },
-    "Hello": {
-      "description": "Sent by either peer during the session-daemon handshake.",
-      "properties": {
-        "binary_id": {
-          "type": "string"
-        },
-        "contract_version": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "contract_version",
-        "binary_id"
-      ],
-      "type": "object"
-    },
     "HostToolRequest": {
-      "description": "The agent (child) asking the client to run a host-coupled tool (e.g.\n`workspace.snapshot`) over this same connection -- guardrail 4. Not yet\nsent or handled anywhere in step 2 (tool execution stays in Horizon\nuntil step 3); the shape exists here so the wire format is settled.",
+      "description": "The agent (child) asking the client to run a host-coupled tool (e.g.\n`workspace.snapshot`) over this same connection -- guardrail 4. Rides\nthe connection-global `HubHello::host_tools` channel; the `request_id`\ncorrelation survives the cutover because the exchange is genuinely\nasynchronous on the daemon side (a session thread blocks on the\nmatching [`HostToolResponse`]).",
       "properties": {
         "input": true,
         "request_id": {
@@ -589,6 +506,101 @@
       "required": [
         "request_id",
         "output"
+      ],
+      "type": "object"
+    },
+    "HubError": {
+      "description": "The hub's error vocabulary. One enum for every method: domain errors\nand transport errors share it, per remoc's own rtc pattern (the\n`From<rtc::CallError>` impl is what lets a lost connection surface as\nan `Err` from any pending call).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "`hello`: the peers' version ranges do not overlap. Feeds the same\nauto-drain recovery as the JSONL era's `HandshakeRejected`.",
+          "properties": {
+            "IncompatibleVersion": {
+              "properties": {
+                "client": {
+                  "$ref": "#/$defs/VersionRange"
+                },
+                "daemon": {
+                  "$ref": "#/$defs/VersionRange"
+                }
+              },
+              "required": [
+                "client",
+                "daemon"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "IncompatibleVersion"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "TerminalNotFound",
+          "description": "`attach_terminal`: no live terminal session with that id.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`create_terminal`: the PTY spawn itself failed (bad shell,\npermissions, or the bounded spawn retries were exhausted). What the\nJSONL wire reported as a `TerminalUpdate::Error` on the update\nstream is now the create call's own result.",
+          "properties": {
+            "TerminalSpawnFailed": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "TerminalSpawnFailed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Transport failure of the rtc call itself, carried as its rendered\nmessage (`rtc::CallError` itself is not `Eq`/`JsonSchema`; nothing\nprogrammatic branches on its inner structure). Constructed\nclient-side by the `From<rtc::CallError>` impl below — a server\nnever sends it.",
+          "properties": {
+            "Call": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Call"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HubHello": {
+      "description": "The daemon's `hello` reply: the negotiated version plus the\nconnection-global channels (`docs/remoc-adoption-design.md` §2 — what\nused to be connection-global envelope kinds now rides channels handed\nover here; everything session-scoped rides the per-attachment channels\ninstead).",
+      "properties": {
+        "binary_id": {
+          "type": "string"
+        },
+        "host_tool_responses": {
+          "$comment": "remoc rch channel half: a chmux port reference on the wire",
+          "description": "Client → daemon: the answers to `host_tools` requests, correlated by\n`request_id` exactly as before (the one correlation map the cutover\nkeeps: the exchange is genuinely asynchronous on the daemon side,\nwhere a session thread blocks on the matching response)."
+        },
+        "host_tools": {
+          "$comment": "remoc rch channel half: a chmux port reference on the wire",
+          "description": "Daemon → client: a hosted session asking the client to run a\nhost-coupled tool (e.g. `workspace.snapshot`). Replaces the\nconnection-global `host_tool_request` envelopes."
+        },
+        "negotiated": {
+          "description": "The highest mutually supported version — the version this\nconnection's *behavior* may rely on (§3: gates behavior, not\ndecodability).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "skipped_lines": {
+          "$comment": "remoc rch channel half: a chmux port reference on the wire",
+          "description": "Daemon → client: the daemon's startup event-log corruption summary,\nsent at most once per connection, after its resume finishes.\nReplaces the `SkippedLines` control envelope."
+        }
+      },
+      "required": [
+        "negotiated",
+        "binary_id",
+        "host_tools",
+        "host_tool_responses",
+        "skipped_lines"
       ],
       "type": "object"
     },
@@ -619,7 +631,8 @@
       "type": "object"
     },
     "KeyEventKind": {
-      "anyOf": [
+      "description": "Classifies a key event per the Kitty keyboard protocol's \"event types\"\n(<https://sw.kovidgoyal.net/kitty/keyboard-protocol/>, gated on the\n`REPORT_EVENT_TYPES` progressive-enhancement flag): an initial press, an\nOS/winit-synthesized repeat while the key is held, or a release.\n\nThreaded from `src/terminal/mod.rs`'s key handling (where gpui's\n`KeyDownEvent`/`KeyUpEvent` and its `is_held` repeat flag are classified)\ndown through `TerminalCommand::Key` to\n`terminal::core::TerminalCore::encode_key` and\n`terminal::protocol::kitty_keyboard`, which is the only place a\nnon-`Press` kind changes the bytes actually sent — see that module's doc\nfor how (and when) it does.",
+      "oneOf": [
         {
           "enum": [
             "Press",
@@ -628,8 +641,7 @@
           ],
           "type": "string"
         }
-      ],
-      "description": "Classifies a key event per the Kitty keyboard protocol's \"event types\"\n(<https://sw.kovidgoyal.net/kitty/keyboard-protocol/>, gated on the\n`REPORT_EVENT_TYPES` progressive-enhancement flag): an initial press, an\nOS/winit-synthesized repeat while the key is held, or a release.\n\nThreaded from `src/terminal/mod.rs`'s key handling (where gpui's\n`KeyDownEvent`/`KeyUpEvent` and its `is_held` repeat flag are classified)\ndown through `TerminalCommand::Key` to\n`terminal::core::TerminalCore::encode_key` and\n`terminal::protocol::kitty_keyboard`, which is the only place a\nnon-`Press` kind changes the bytes actually sent — see that module's doc\nfor how (and when) it does."
+      ]
     },
     "Message": {
       "properties": {
@@ -662,7 +674,7 @@
       "type": "object"
     },
     "MessageRole": {
-      "anyOf": [
+      "oneOf": [
         {
           "enum": [
             "User",
@@ -673,7 +685,8 @@
       ]
     },
     "NamedColor": {
-      "anyOf": [
+      "description": "One of the fixed named color roles a cell can carry. This set was\nderived by reading exactly what `core::render::snapshot_frame` (via\n`cell_fg`/`cell_bg`) can produce from a live `alacritty_terminal::Term`,\nnot assumed:\n\n- The 8 base ANSI hues (`Black`..`White`) and their bright forms\n  (`BrightBlack`..`BrightWhite`) reach frames directly from SGR\n  30-37/90-97, or as the bold-promoted form of a base hue (`cell_fg`\n  applies `NamedColor::to_bright` under the `BOLD` flag).\n- Dim forms (`DimBlack`..`DimWhite`) are *not* a normal SGR target —\n  they only ever appear as the dim-promoted form of a base hue\n  (`cell_fg` applies `NamedColor::to_dim` under the `DIM` flag).\n- `Foreground`/`Background`/`Cursor` are the default-role slots; only\n  `Foreground` is ever bold/dim-promoted this way too, producing\n  `BrightForeground`/`DimForeground` (`Background`/`Cursor` cells never\n  carry `BOLD`/`DIM` promotion — `cell_bg` only reads the *default*\n  foreground's promoted form when swapping colors under `INVERSE`).",
+      "oneOf": [
         {
           "enum": [
             "Black",
@@ -708,8 +721,7 @@
           ],
           "type": "string"
         }
-      ],
-      "description": "One of the fixed named color roles a cell can carry. This set was\nderived by reading exactly what `core::render::snapshot_frame` (via\n`cell_fg`/`cell_bg`) can produce from a live `alacritty_terminal::Term`,\nnot assumed:\n\n- The 8 base ANSI hues (`Black`..`White`) and their bright forms\n  (`BrightBlack`..`BrightWhite`) reach frames directly from SGR\n  30-37/90-97, or as the bold-promoted form of a base hue (`cell_fg`\n  applies `NamedColor::to_bright` under the `BOLD` flag).\n- Dim forms (`DimBlack`..`DimWhite`) are *not* a normal SGR target —\n  they only ever appear as the dim-promoted form of a base hue\n  (`cell_fg` applies `NamedColor::to_dim` under the `DIM` flag).\n- `Foreground`/`Background`/`Cursor` are the default-role slots; only\n  `Foreground` is ever bold/dim-promoted this way too, producing\n  `BrightForeground`/`DimForeground` (`Background`/`Cursor` cells never\n  carry `BOLD`/`DIM` promotion — `cell_bg` only reads the *default*\n  foreground's promoted form when swapping colors under `INVERSE`)."
+      ]
     },
     "ProviderId": {
       "type": "string"
@@ -762,61 +774,13 @@
       "description": "The wire/contract-level role identifier -- a `String` newtype in the\nsame style as [`crate::contract::ProviderId`], so it round-trips through\nJSON (`wire::SessionNew`/`SessionSummary`) and the persisted event log\n(`persistence::event_log::Record`) unchanged.",
       "type": "string"
     },
-    "SessionControl": {
-      "anyOf": [
-        {
-          "enum": [
-            "ping",
-            "pong",
-            "drain"
-          ],
-          "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "hello": {
-              "$ref": "#/$defs/Hello"
-            }
-          },
-          "required": [
-            "hello"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "handshake_rejected": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "handshake_rejected"
-          ],
-          "type": "object"
-        }
-      ],
-      "description": "The version-stable shared vocabulary (see the crate doc): decodable\nregardless of the envelope's `v`, because the handshake and\ncontract-mismatch recovery are exactly the conversations that happen\n*between* versions. Existing variants must never change shape or\nmeaning; extend additively only. Peers built before the `Unknown`\ncatch-all existed (v9 and earlier builds predating the skew groundwork)\ntreat an unknown variant as malformed; peers from this build on decode\nit as [`SessionControl::Unknown`] and ignore it."
-    },
     "SessionId": {
       "description": "This crate's own session identifier: a UUID newtype that serializes as a\nbare UUID string (serde's transparent treatment of one-field tuple\nstructs) — the shape a future wire/IPC boundary will use (see\n`docs/agent-runtime-split-design.md`). Horizon has its own shared\n`session::SessionId` (used across terminal and agent sessions alike) —\nthis crate cannot depend on it (that's the whole point of the split), so\nthe two are distinct types connected by `From` impls at the seam in\nHorizon's `agent` module.",
       "format": "uuid",
       "type": "string"
     },
-    "SessionLoad": {
-      "properties": {
-        "session_id": {
-          "$ref": "#/$defs/SessionId"
-        }
-      },
-      "required": [
-        "session_id"
-      ],
-      "type": "object"
-    },
     "SessionNew": {
-      "description": "Per `docs/agent-runtime-split-design.md` guardrail 5, `session_new` is\ndistinct from `session_load` and carries per-session overrides.\n`role_id` replaces this field's former placeholder shape\n(`config_overrides: Option<serde_json::Value>`) -- see\n[`CONTRACT_VERSION`]'s doc comment for why that was a breaking, not\nadditive, change.",
+      "description": "Per `docs/agent-runtime-split-design.md` guardrail 5, spawning a fresh\nsession (`SessionHub::new_agent`) is distinct from attaching to an\nexisting one (`attach_agent`) and carries per-session overrides.",
       "properties": {
         "isolate": {
           "default": false,
@@ -854,7 +818,7 @@
         },
         "workspace_root": {
           "default": null,
-          "description": "The directory `horizon-sessiond`'s file tools should confine this\nsession to (`tools::state::ToolSessionState::workspace_root`).\n`None` keeps today's behavior -- the session falls back to\n`horizon-sessiond`'s own process cwd (`session::run_session`'s\n`ToolSessionState::for_current_dir` call). Unlike `role_id` above,\nthis is a brand-new field, not a reshape of an existing one, so it's\npurely additive: `#[serde(default)]` lets a peer's `SessionNew`\nwritten before this field existed still parse (as `None`), mirroring\n`persistence::event_log::Record::role_id`'s own additive-field\nprecedent rather than [`CONTRACT_VERSION`]'s breaking-change one.\nPassed into `SessiondHandle::start_session` by the workspace layer\n(`WorkspaceShell::reconcile`), which computes the Horizon process's\nown cwd once per session (falling back to `None` only if that cwd\ncan't be read) and records the same value on the session's\n`WorkspaceSession::workspace_root` -- so a session's workspace root\ntracks whichever Horizon window spawned it, not `horizon-sessiond`'s\nown cwd (one shared, long-lived daemon per user, started from\nwhatever directory happened to be current the first time it was\nlaunched).",
+          "description": "The directory `horizon-sessiond`'s file tools should confine this\nsession to (`tools::state::ToolSessionState::workspace_root`).\n`None` keeps today's behavior -- the session falls back to\n`horizon-sessiond`'s own process cwd (`session::run_session`'s\n`ToolSessionState::for_current_dir` call). Unlike `role_id` above,\nthis is a brand-new field, not a reshape of an existing one, so it's\npurely additive: `#[serde(default)]` lets a peer's `SessionNew`\nwritten before this field existed still parse (as `None`), mirroring\n`persistence::event_log::Record::role_id`'s own additive-field\nprecedent. Passed into `SessiondHandle::start_session` by the\nworkspace layer (`WorkspaceShell::reconcile`), which computes the\nHorizon process's own cwd once per session (falling back to `None`\nonly if that cwd can't be read) and records the same value on the\nsession's `WorkspaceSession::workspace_root` -- so a session's\nworkspace root tracks whichever Horizon window spawned it, not\n`horizon-sessiond`'s own cwd (one shared, long-lived daemon per\nuser, started from whatever directory happened to be current the\nfirst time it was launched).",
           "type": [
             "string",
             "null"
@@ -868,7 +832,7 @@
       "type": "object"
     },
     "SessionState": {
-      "anyOf": [
+      "oneOf": [
         {
           "enum": [
             "Created",
@@ -886,7 +850,7 @@
       ]
     },
     "SessionSummary": {
-      "description": "One entry of a [`Control::SessionListResult`] reply.",
+      "description": "One entry of a `SessionHub::list_agents` reply.",
       "properties": {
         "parent_session_id": {
           "anyOf": [
@@ -898,7 +862,7 @@
             }
           ],
           "default": null,
-          "description": "The session this one derives from, per\n`docs/session-relationship-design.md` decisions 1-3: set only when\nthis session was actually spawned isolated (its own git worktree\nbranched from the source session's directory) -- a shared-directory\nspawn creates no edge, so this stays `None` even if a spawn source\nwas given. `#[serde(default)]`, purely additive like `SessionNew.\nworkspace_root` below -- no `CONTRACT_VERSION` bump. A resumed\nsession (`session::resume_persisted_sessions`) always reports\n`None` here today: lineage lives in `horizon-sessiond`'s in-memory\n`SessiondState`, not the event log, so it doesn't survive a\n`horizon-sessiond` process restart -- the same accepted gap\n`SessionNew.workspace_root` already has (see that field's doc\ncomment)."
+          "description": "The session this one derives from, per\n`docs/session-relationship-design.md` decisions 1-3: set only when\nthis session was actually spawned isolated (its own git worktree\nbranched from the source session's directory) -- a shared-directory\nspawn creates no edge, so this stays `None` even if a spawn source\nwas given. `#[serde(default)]`, purely additive like `SessionNew.\nworkspace_root` below -- no version bump. A resumed session\n(`session::resume_persisted_sessions`) always reports `None` here\ntoday: lineage lives in `horizon-sessiond`'s in-memory\n`SessiondState`, not the event log, so it doesn't survive a\n`horizon-sessiond` process restart -- the same accepted gap\n`SessionNew.workspace_root` already has (see that field's doc\ncomment)."
         },
         "provider_id": {
           "$ref": "#/$defs/ProviderId"
@@ -920,7 +884,7 @@
         },
         "workspace_root": {
           "default": null,
-          "description": "This session's *actual* confinement directory, as `horizon-sessiond`\nitself resolved it -- the authoritative counterpart to `SessionNew.\nworkspace_root` (that field is only ever the caller's pre-spawn\nvalue; for an isolated session, `horizon-sessiond` overrides it with\nthe worktree path it creates, which the caller cannot know in\nadvance since worktree creation finishes asynchronously, after\n`Control::SessionNew` already returned -- see\n`session::resolve_and_create_isolated_worktree`). Additive, like\n`parent_session_id` above; populated from the same `SessionEntry.\nworkspace_root` a resumed session's summary reads too, so this\n*does* survive a `horizon-sessiond` restart even though `parent_\nsession_id` doesn't -- a resumed session's `SessionEntry.\nworkspace_root` is `None` today regardless (see `SessionNew.\nworkspace_root`'s \"resumed sessions don't persist it\" note), so in\npractice this is `None` for a resumed session too, but for a\ndifferent, narrower reason (no persisted value to resume from, not\n\"lineage doesn't survive a restart\"). Read by `WorkspaceShell::\nspawn_agent_resume`/`spawn_workspace_restore` to correct the\nworkspace model's stored root for a session it adopts.",
+          "description": "This session's *actual* confinement directory, as `horizon-sessiond`\nitself resolved it -- the authoritative counterpart to `SessionNew.\nworkspace_root` (that field is only ever the caller's pre-spawn\nvalue; for an isolated session, `horizon-sessiond` overrides it with\nthe worktree path it creates, which the caller cannot know in\nadvance since worktree creation finishes asynchronously, after\n`new_agent` already returned -- see\n`session::resolve_and_create_isolated_worktree`). Additive, like\n`parent_session_id` above; populated from the same `SessionEntry.\nworkspace_root` a resumed session's summary reads too, so this\n*does* survive a `horizon-sessiond` restart even though `parent_\nsession_id` doesn't -- a resumed session's `SessionEntry.\nworkspace_root` is `None` today regardless (see `SessionNew.\nworkspace_root`'s \"resumed sessions don't persist it\" note), so in\npractice this is `None` for a resumed session too, but for a\ndifferent, narrower reason (no persisted value to resume from, not\n\"lineage doesn't survive a restart\"). Read by `WorkspaceShell::\nspawn_agent_resume`/`spawn_workspace_restore` to correct the\nworkspace model's stored root for a session it adopts.",
           "type": [
             "string",
             "null"
@@ -933,19 +897,25 @@
       ],
       "type": "object"
     },
-    "TerminalAttachResult": {
-      "anyOf": [
-        {
-          "enum": [
-            "Attached",
-            "NotFound"
-          ],
-          "type": "string"
+    "TerminalAttachment": {
+      "description": "What [`SessionHub::create_terminal`]/[`SessionHub::attach_terminal`]\nhand back: the session's live channel pair. Frame delivery semantics\nare deliberately unchanged in v10 (`docs/remoc-adoption-design.md`\n§6 step 2): `updates` carries the same `Snapshot`/`FrameDiff`/…\nvocabulary the JSONL wire carried, verbatim, over one mpsc channel —\nthe watch-of-full-frames swap (§5 Option A) is the next, separately\nreviewed step.",
+      "properties": {
+        "commands": {
+          "$comment": "remoc rch channel half: a chmux port reference on the wire"
+        },
+        "updates": {
+          "$comment": "remoc rch channel half: a chmux port reference on the wire"
         }
-      ]
+      },
+      "required": [
+        "updates",
+        "commands"
+      ],
+      "type": "object"
     },
     "TerminalColor": {
-      "anyOf": [
+      "description": "A cell's logical color: one of the 16 base ANSI slots (+ their bold/dim\npromotions), a default-role slot (foreground/background/cursor, also\nbold/dim-promotable), an xterm 256-color palette index, or a literal\n24-bit truecolor value.\n\nHorizon-owned rather than re-exported from `alacritty_terminal` (as it\nwas before this type existed) so UI clients (`src/theme/ansi.rs`,\n`src/terminal/`) don't need `alacritty_terminal` as a dependency just to\nmatch on a cell's color. `core::render::snapshot_frame` is the one place\nthat converts from `alacritty_terminal`'s own `vte::ansi::Color`/\n`NamedColor` into this type, at frame-build time.\n\n`docs/session-daemon-design.md` decision 8: this is what actually crosses\nthe `TerminalFrame`/`TerminalSpan` boundary now, instead of a resolved\n`[u8; 3]` RGB triple — resolving a logical color against a theme (the app\ndefault, or in the future a per-client one) is the UI's job\n(`theme::resolve`, `src/theme/ansi.rs`), not this crate's. A color a\nterminal app redefined at runtime via OSC 4/10/11/12 (`Term::colors()`'s\nlive per-session overrides) still affects cell *rendering*: `TerminalFrame::palette_overrides`\ncarries that sparse index→RGB table alongside the logical colors, and the\nUI consults it before falling back to the theme. `TerminalCore`'s own\nOSC 4/10/11/12 *query replies* (`core::color::resolve_query_color`) use\nalacritty's own `Colors`/`NamedColor` directly, independent of this\nboundary.",
+      "oneOf": [
         {
           "additionalProperties": false,
           "properties": {
@@ -993,8 +963,7 @@
           ],
           "type": "object"
         }
-      ],
-      "description": "A cell's logical color: one of the 16 base ANSI slots (+ their bold/dim\npromotions), a default-role slot (foreground/background/cursor, also\nbold/dim-promotable), an xterm 256-color palette index, or a literal\n24-bit truecolor value.\n\nHorizon-owned rather than re-exported from `alacritty_terminal` (as it\nwas before this type existed) so UI clients (`src/theme/ansi.rs`,\n`src/terminal/`) don't need `alacritty_terminal` as a dependency just to\nmatch on a cell's color. `core::render::snapshot_frame` is the one place\nthat converts from `alacritty_terminal`'s own `vte::ansi::Color`/\n`NamedColor` into this type, at frame-build time.\n\n`docs/session-daemon-design.md` decision 8: this is what actually crosses\nthe `TerminalFrame`/`TerminalSpan` boundary now, instead of a resolved\n`[u8; 3]` RGB triple — resolving a logical color against a theme (the app\ndefault, or in the future a per-client one) is the UI's job\n(`theme::resolve`, `src/theme/ansi.rs`), not this crate's. A color a\nterminal app redefined at runtime via OSC 4/10/11/12 (`Term::colors()`'s\nlive per-session overrides) still affects cell *rendering*: `TerminalFrame::palette_overrides`\ncarries that sparse index→RGB table alongside the logical colors, and the\nUI consults it before falling back to the theme. `TerminalCore`'s own\nOSC 4/10/11/12 *query replies* (`core::color::resolve_query_color`) use\nalacritty's own `Colors`/`NamedColor` directly, independent of this\nboundary."
+      ]
     },
     "TerminalColorScheme": {
       "description": "Crate-local mirror of the host's `ui::theme`-derived color roles\n(`terminal::config::TerminalColors`). This crate has no dependency on\n`ui::theme`/floem at all (`docs/session-daemon-design.md` decision 9), so\nthe host converts its live theme into this plain-data struct and pushes\nit in via `TerminalCore::set_color_scheme` — the same \"crate-local\nnewtype / plain-data mirror\" pattern `crates/horizon-agent` already uses\nfor `SessionId`.\n\n[`Default`] duplicates the host's own built-in theme defaults\n(`ui::theme`'s `ansi` module and `text_primary`/`surface_base`/`accent`\nroles) so a freshly constructed `TerminalCore` that never receives an\nexplicit scheme (every test in this crate) still answers color queries\nwith the same values Horizon has always shipped. In the running app this\ndefault is only ever transiently observed (`TerminalSession::spawn`\npushes the live theme immediately after construction).",
@@ -1081,7 +1050,7 @@
       "type": "object"
     },
     "TerminalCommand": {
-      "anyOf": [
+      "oneOf": [
         {
           "enum": [
             "CopySelection",
@@ -1247,117 +1216,6 @@
         }
       ]
     },
-    "TerminalControl": {
-      "anyOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "List": {
-              "properties": {
-                "request_id": {
-                  "format": "uuid",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "request_id"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "List"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "ListResult": {
-              "properties": {
-                "request_id": {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                "sessions": {
-                  "items": {
-                    "$ref": "#/$defs/TerminalSummary"
-                  },
-                  "type": "array"
-                }
-              },
-              "required": [
-                "request_id",
-                "sessions"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "ListResult"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "Create": {
-              "$ref": "#/$defs/TerminalSpawnSpec"
-            }
-          },
-          "required": [
-            "Create"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "Attach": {
-              "properties": {
-                "request_id": {
-                  "format": "uuid",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "request_id"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "Attach"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "AttachResult": {
-              "properties": {
-                "request_id": {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                "result": {
-                  "$ref": "#/$defs/TerminalAttachResult"
-                }
-              },
-              "required": [
-                "request_id",
-                "result"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "AttachResult"
-          ],
-          "type": "object"
-        }
-      ]
-    },
     "TerminalCursor": {
       "properties": {
         "col": {
@@ -1383,7 +1241,8 @@
       "type": "object"
     },
     "TerminalCursorShape": {
-      "anyOf": [
+      "description": "Mirrors `alacritty_terminal`'s `CursorShape` minus `Hidden` (a hidden\ncursor never reaches the wire — see [`TerminalCursor::shape`]).",
+      "oneOf": [
         {
           "enum": [
             "Block",
@@ -1393,8 +1252,7 @@
           ],
           "type": "string"
         }
-      ],
-      "description": "Mirrors `alacritty_terminal`'s `CursorShape` minus `Hidden` (a hidden\ncursor never reaches the wire — see [`TerminalCursor::shape`])."
+      ]
     },
     "TerminalFrame": {
       "properties": {
@@ -1574,7 +1432,7 @@
       "type": "object"
     },
     "TerminalMouseButton": {
-      "anyOf": [
+      "oneOf": [
         {
           "enum": [
             "Left",
@@ -1586,7 +1444,7 @@
       ]
     },
     "TerminalMouseKind": {
-      "anyOf": [
+      "oneOf": [
         {
           "enum": [
             "Press",
@@ -1689,7 +1547,8 @@
       "type": "object"
     },
     "TerminalSelectionKind": {
-      "anyOf": [
+      "description": "Horizon-owned selection-kind vocabulary for the wire (`TerminalCommand::\nSelectionStart`/`SelectionCommand::Start`) -- deliberately not\n`alacritty_terminal::selection::SelectionType` itself, since that type\ncrosses the daemon/host boundary and this crate's contract types are the\nonly ones allowed to. `TerminalCore::start_selection` maps this onto\n`SelectionType::{Simple, Semantic, Lines}`; see its doc for why\n`Semantic`/`Lines` give word/line selection \"for free\" daemon-side.",
+      "oneOf": [
         {
           "const": "Simple",
           "description": "Plain character-range selection (a single click-and-drag).",
@@ -1705,8 +1564,7 @@
           "description": "Whole-line selection (a triple click or beyond).",
           "type": "string"
         }
-      ],
-      "description": "Horizon-owned selection-kind vocabulary for the wire (`TerminalCommand::\nSelectionStart`/`SelectionCommand::Start`) -- deliberately not\n`alacritty_terminal::selection::SelectionType` itself, since that type\ncrosses the daemon/host boundary and this crate's contract types are the\nonly ones allowed to. `TerminalCore::start_selection` maps this onto\n`SelectionType::{Simple, Semantic, Lines}`; see its doc for why\n`Semantic`/`Lines` give word/line selection \"for free\" daemon-side."
+      ]
     },
     "TerminalSelectionPoint": {
       "properties": {
@@ -1881,7 +1739,8 @@
       "type": "object"
     },
     "TerminalUnderline": {
-      "anyOf": [
+      "description": "The underline styles of SGR 4's colon sub-parameters (`4:0`..`4:5`),\nHorizon-owned like every frame type (`TerminalColor`'s doc has the\nrationale). Maps 1:1 from `alacritty_terminal`'s cell flags\n(`UNDERLINE`/`DOUBLE_UNDERLINE`/`UNDERCURL`/`DOTTED_UNDERLINE`/\n`DASHED_UNDERLINE`).",
+      "oneOf": [
         {
           "enum": [
             "None",
@@ -1893,11 +1752,10 @@
           ],
           "type": "string"
         }
-      ],
-      "description": "The underline styles of SGR 4's colon sub-parameters (`4:0`..`4:5`),\nHorizon-owned like every frame type (`TerminalColor`'s doc has the\nrationale). Maps 1:1 from `alacritty_terminal`'s cell flags\n(`UNDERLINE`/`DOUBLE_UNDERLINE`/`UNDERCURL`/`DOTTED_UNDERLINE`/\n`DASHED_UNDERLINE`)."
+      ]
     },
     "TerminalUpdate": {
-      "anyOf": [
+      "oneOf": [
         {
           "enum": [
             "Bell",
@@ -2054,7 +1912,8 @@
       "type": "object"
     },
     "TurnEndReason": {
-      "anyOf": [
+      "description": "Why a turn ended — see [`Event::TurnEnded`]. Named after the design doc's\nfour stop reasons verbatim: \"completed / cancelled / failed /\nhalted-by-guard\" -- `halted-by-guard` is now the two specific\nguard-sourced variants below rather than one bare `Halted`\n(`docs/issues/002-agent-iteration-cap-halts-real-work.md`'s resolution,\ndecision 2): the UI needs to know *which* guard fired to render the\nright calm reason text (\"paused after 100 consecutive tool-driven\nturns\" vs. \"...5 consecutive identical tool results\"), and since the\nguard's thresholds are now fixed built-in constants\n(`config::DEFAULT_ITERATION_CAP`/`DEFAULT_DOOM_LOOP_WINDOW`) rather than\nper-session config, the variant alone is enough for the UI to build\nthat text without carrying a number on the wire.",
+      "oneOf": [
         {
           "enum": [
             "Completed",
@@ -2078,11 +1937,30 @@
           "description": "The turn-loop guard's doom-loop (identical-consecutive-tool-result)\ndetector stopped the turn (`TurnLoopGuard::record_fingerprint`).\nSame section of the design doc.",
           "type": "string"
         }
+      ]
+    },
+    "VersionRange": {
+      "description": "An inclusive protocol-version range one peer supports, as exchanged in\n[`SessionHub::hello`].",
+      "properties": {
+        "current": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_supported": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "min_supported",
+        "current"
       ],
-      "description": "Why a turn ended — see [`Event::TurnEnded`]. Named after the design doc's\nfour stop reasons verbatim: \"completed / cancelled / failed /\nhalted-by-guard\" -- `halted-by-guard` is now the two specific\nguard-sourced variants below rather than one bare `Halted`\n(`docs/issues/002-agent-iteration-cap-halts-real-work.md`'s resolution,\ndecision 2): the UI needs to know *which* guard fired to render the\nright calm reason text (\"paused after 100 consecutive tool-driven\nturns\" vs. \"...5 consecutive identical tool results\"), and since the\nguard's thresholds are now fixed built-in constants\n(`config::DEFAULT_ITERATION_CAP`/`DEFAULT_DOOM_LOOP_WINDOW`) rather than\nper-session config, the variant alone is enough for the UI to build\nthat text without carrying a number on the wire."
+      "type": "object"
     },
     "WorkspaceRootResolved": {
-      "description": "[`Control::WorkspaceRootResolved`]'s payload.",
+      "description": "[`AgentWireEvent::WorkspaceRootResolved`]'s payload.",
       "properties": {
         "parent_session_id": {
           "anyOf": [
@@ -2107,32 +1985,111 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "envelope": {
-    "$ref": "#/$defs/Envelope"
-  },
-  "kinds": {
-    "agent_command": {
+  "channels": {
+    "agent_commands": {
       "$ref": "#/$defs/Command"
     },
-    "agent_control": {
-      "$ref": "#/$defs/Control"
-    },
-    "agent_event": {
+    "agent_event_payload": {
       "$ref": "#/$defs/Event"
     },
-    "session_control": {
-      "$ref": "#/$defs/SessionControl"
+    "agent_events": {
+      "$ref": "#/$defs/AgentWireEvent"
     },
-    "terminal_command": {
+    "host_tool_requests": {
+      "$ref": "#/$defs/HostToolRequest"
+    },
+    "host_tool_responses": {
+      "$ref": "#/$defs/HostToolResponse"
+    },
+    "terminal_commands": {
       "$ref": "#/$defs/TerminalCommand"
     },
-    "terminal_control": {
-      "$ref": "#/$defs/TerminalControl"
-    },
-    "terminal_update": {
+    "terminal_updates": {
       "$ref": "#/$defs/TerminalUpdate"
     }
   },
+  "hub": {
+    "attach_agent": {
+      "reply": {
+        "$ref": "#/$defs/AgentAttachment"
+      },
+      "request": {
+        "$ref": "#/$defs/SessionId"
+      }
+    },
+    "attach_terminal": {
+      "reply": {
+        "$ref": "#/$defs/TerminalAttachment"
+      },
+      "request": {
+        "format": "uuid",
+        "type": "string"
+      }
+    },
+    "create_terminal": {
+      "reply": {
+        "$ref": "#/$defs/TerminalAttachment"
+      },
+      "request": {
+        "session_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "spec": {
+          "$ref": "#/$defs/TerminalSpawnSpec"
+        }
+      }
+    },
+    "drain": {
+      "reply": {
+        "type": "null"
+      },
+      "request": {
+        "type": "null"
+      }
+    },
+    "hello": {
+      "error": {
+        "$ref": "#/$defs/HubError"
+      },
+      "reply": {
+        "$ref": "#/$defs/HubHello"
+      },
+      "request": {
+        "$ref": "#/$defs/ClientHello"
+      }
+    },
+    "list_agents": {
+      "reply": {
+        "items": {
+          "$ref": "#/$defs/SessionSummary"
+        },
+        "type": "array"
+      },
+      "request": {
+        "type": "null"
+      }
+    },
+    "list_terminals": {
+      "reply": {
+        "items": {
+          "$ref": "#/$defs/TerminalSummary"
+        },
+        "type": "array"
+      },
+      "request": {
+        "type": "null"
+      }
+    },
+    "new_agent": {
+      "reply": {
+        "$ref": "#/$defs/AgentAttachment"
+      },
+      "request": {
+        "$ref": "#/$defs/SessionNew"
+      }
+    }
+  },
   "title": "horizon-session-wire",
-  "x-session-protocol-version": 9
+  "x-session-protocol-version": 10
 }
