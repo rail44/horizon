@@ -175,7 +175,7 @@ impl ClientHello {
 /// used to be connection-global envelope kinds now rides channels handed
 /// over here; everything session-scoped rides the per-attachment channels
 /// instead).
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 pub struct HubHello {
     /// The highest mutually supported version — the version this
     /// connection's *behavior* may rely on (§3: gates behavior, not
@@ -185,16 +185,30 @@ pub struct HubHello {
     /// Daemon → client: a hosted session asking the client to run a
     /// host-coupled tool (e.g. `workspace.snapshot`). Replaces the
     /// connection-global `host_tool_request` envelopes.
+    #[schemars(schema_with = "channel_schema")]
     pub host_tools: rch::mpsc::Receiver<HostToolRequest, WireCodec>,
     /// Client → daemon: the answers to `host_tools` requests, correlated by
     /// `request_id` exactly as before (the one correlation map the cutover
     /// keeps: the exchange is genuinely asynchronous on the daemon side,
     /// where a session thread blocks on the matching response).
+    #[schemars(schema_with = "channel_schema")]
     pub host_tool_responses: rch::mpsc::Sender<HostToolResponse, WireCodec>,
     /// Daemon → client: the daemon's startup event-log corruption summary,
     /// sent at most once per connection, after its resume finishes.
     /// Replaces the `SkippedLines` control envelope.
+    #[schemars(schema_with = "channel_schema")]
     pub skipped_lines: rch::mpsc::Receiver<String, WireCodec>,
+}
+
+/// The schema stand-in for a remoc channel half: on the wire it is a chmux
+/// port reference, not data, so the artifact documents it as an opaque
+/// marker. What flows *through* each channel is documented separately by
+/// the artifact's `channels` section (see
+/// `crates/horizon-sessiond/tests/wire_schema.rs`).
+fn channel_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "$comment": "remoc rch channel half: a chmux port reference on the wire"
+    })
 }
 
 /// What [`SessionHub::create_terminal`]/[`SessionHub::attach_terminal`]
@@ -204,9 +218,11 @@ pub struct HubHello {
 /// vocabulary the JSONL wire carried, verbatim, over one mpsc channel —
 /// the watch-of-full-frames swap (§5 Option A) is the next, separately
 /// reviewed step.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 pub struct TerminalAttachment {
+    #[schemars(schema_with = "channel_schema")]
     pub updates: rch::mpsc::Receiver<TerminalUpdate, WireCodec>,
+    #[schemars(schema_with = "channel_schema")]
     pub commands: rch::mpsc::Sender<TerminalCommand, WireCodec>,
 }
 
@@ -216,9 +232,11 @@ pub struct TerminalAttachment {
 /// envelopes (`SessionModel`, `ToolCallProgress`,
 /// `WorkspaceRootResolved`) — see
 /// [`horizon_agent::wire::AgentWireEvent`].
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 pub struct AgentAttachment {
+    #[schemars(schema_with = "channel_schema")]
     pub events: rch::mpsc::Receiver<AgentWireEvent, WireCodec>,
+    #[schemars(schema_with = "channel_schema")]
     pub commands: rch::mpsc::Sender<Command, WireCodec>,
 }
 
