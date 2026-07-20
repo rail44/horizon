@@ -7,7 +7,6 @@ use uuid::Uuid;
 
 use crate::config::AgentConfig;
 use crate::roles::RoleId;
-use horizon_session_protocol::UnknownPayload;
 use schemars::JsonSchema;
 
 /// This crate's own session identifier: a UUID newtype that serializes as a
@@ -102,11 +101,11 @@ pub enum Command {
     /// bootstrap ever sends this on a session's behalf).
     ContinueTurn,
     Shutdown,
-    /// Deserialize-only skew catch-all — see
-    /// [`horizon_session_protocol::UnknownPayload`]. Keep last. A receiver
+    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
+    /// decodes to `Unknown` (its payload, if any, is discarded). Keep last. A receiver
     /// logs and drops an unknown command; it never acks or executes it.
-    #[serde(untagged)]
-    Unknown(UnknownPayload),
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -163,11 +162,11 @@ pub enum Event {
     /// reducer-side wall clock, respectively), not carried on this event
     /// itself, so this variant's own wire shape stays unchanged.
     TurnEnded(TurnEndReason),
-    /// Deserialize-only skew catch-all — see
-    /// [`horizon_session_protocol::UnknownPayload`]. Keep last. A receiver skips an
+    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
+    /// decodes to `Unknown` (its payload, if any, is discarded). Keep last. A receiver skips an
     /// unknown event: it folds into no frame item and projects into no row.
-    #[serde(untagged)]
-    Unknown(UnknownPayload),
+    #[serde(other)]
+    Unknown,
 }
 
 /// Why a turn ended — see [`Event::TurnEnded`]. Named after the design doc's
@@ -201,12 +200,12 @@ pub enum TurnEndReason {
     /// detector stopped the turn (`TurnLoopGuard::record_fingerprint`).
     /// Same section of the design doc.
     HaltedByDoomLoop,
-    /// Deserialize-only skew catch-all — see
-    /// [`horizon_session_protocol::UnknownPayload`]. Keep last. Rendered like the
+    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
+    /// decodes to `Unknown` (its payload, if any, is discarded). Keep last. Rendered like the
     /// legacy bare [`TurnEndReason::Halted`]: a calm "paused" receipt with
     /// no guard-specific sentence.
-    #[serde(untagged)]
-    Unknown(UnknownPayload),
+    #[serde(other)]
+    Unknown,
 }
 
 pub fn event_kind(event: &Event) -> &'static str {
@@ -225,7 +224,7 @@ pub fn event_kind(event: &Event) -> &'static str {
         Event::Error(_) => "error",
         Event::Exited(_) => "exited",
         Event::TurnEnded(_) => "turn_ended",
-        Event::Unknown(_) => "unknown",
+        Event::Unknown => "unknown",
     }
 }
 
@@ -252,7 +251,7 @@ pub struct ProviderEvent {
     /// (`live::State::session_model`), and it's excluded from the persisted
     /// event log the same way (see `LiveState::extend_provider_events`).
     /// Sent once, session-scoped, by `horizon-sessiond` at session start or
-    /// (re)attach (`wire::Control::SessionModel`) -- see
+    /// (re)attach (`wire::AgentWireEvent::SessionModel`) -- see
     /// `docs/agent-output-ui-amendment.md`'s dated model-chip addendum.
     pub session_model: Option<String>,
 }
@@ -340,10 +339,10 @@ pub enum SessionState {
     Completed,
     Failed,
     Terminated,
-    /// Deserialize-only skew catch-all — see
-    /// [`horizon_session_protocol::UnknownPayload`]. Keep last.
-    #[serde(untagged)]
-    Unknown(UnknownPayload),
+    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
+    /// decodes to `Unknown` (its payload, if any, is discarded). Keep last.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -356,12 +355,12 @@ pub struct Message {
 pub enum MessageRole {
     User,
     Assistant,
-    /// Deserialize-only skew catch-all — see
-    /// [`horizon_session_protocol::UnknownPayload`]. Keep last. Treated as
+    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
+    /// decodes to `Unknown` (its payload, if any, is discarded). Keep last. Treated as
     /// assistant-authored wherever a side must be picked (a transcript can
     /// misattribute a skewed message; it must never invent user words).
-    #[serde(untagged)]
-    Unknown(UnknownPayload),
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -486,11 +485,11 @@ pub enum ApprovalKind {
         domains: Vec<String>,
         prior_result: ToolCallResult,
     },
-    /// Deserialize-only skew catch-all — see
-    /// [`horizon_session_protocol::UnknownPayload`]. Keep last. Resolved like
+    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
+    /// decodes to `Unknown` (its payload, if any, is discarded). Keep last. Resolved like
     /// [`ApprovalKind::Standard`] (plain approve/deny, no retry semantics).
-    #[serde(untagged)]
-    Unknown(UnknownPayload),
+    #[serde(other)]
+    Unknown,
 }
 
 /// Payload for [`Event::ProviderRequestSent`]: the model id the provider was

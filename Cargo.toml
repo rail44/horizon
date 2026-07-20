@@ -14,6 +14,18 @@ members = [
     "crates/horizon-sandbox-proxy",
 ]
 
+# The one workspace-wide remoc pin (docs/remoc-adoption-design.md §1,
+# "remoc version policy"): exact version (`=`), reviewed against the remoc
+# CHANGELOG for chmux/codec changes before any bump, and default features
+# OFF so no `default-codec-*` feature is ever enabled -- naming
+# `codec::Default` then fails to compile, which is the adoption decision's
+# countermeasure to the 0.18.0 silent default-codec change (JSON ->
+# Postbag). Every use names `codec::Postbag` explicitly (via
+# `horizon_session_protocol::WireCodec`). `rtc` pulls in `rch` + the
+# derive macro; `codec-postbag` is the only codec compiled in.
+[workspace.dependencies]
+remoc = { version = "=0.18.3", default-features = false, features = ["rtc", "codec-postbag"] }
+
 [package]
 name = "horizon"
 version = "0.1.0"
@@ -66,6 +78,7 @@ horizon-workspace = { path = "crates/horizon-workspace" }
 # `gpui_platform`/`gpui_web`/`gpui_windows` all disappearing from
 # Cargo.lock once this crate's dependency on `gpui_platform` was removed.
 horizon-winit-platform = { path = "crates/horizon-winit-platform" }
+remoc = { workspace = true }
 serde_json = "1.0"
 termwiz = "0.23.3"
 tokio = { version = "1.52", features = ["rt", "net", "io-util", "time", "macros"] }

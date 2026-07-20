@@ -108,7 +108,7 @@ pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message>
                 MessageRole::User => Some(Message::user(message.text.clone())),
                 // Unknown replays as assistant-authored -- see
                 // `MessageRole::Unknown`'s doc (never invent user words).
-                MessageRole::Assistant | MessageRole::Unknown(_) => {
+                MessageRole::Assistant | MessageRole::Unknown => {
                     Some(Message::assistant(message.text.clone()))
                 }
             },
@@ -127,7 +127,7 @@ pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message>
             | Event::ProviderRequestFinished
             | Event::Exited(_)
             | Event::TurnEnded(_)
-            | Event::Unknown(_) => None,
+            | Event::Unknown => None,
         })
         .collect()
 }

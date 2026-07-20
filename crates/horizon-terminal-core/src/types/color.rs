@@ -1,4 +1,3 @@
-use horizon_session_protocol::UnknownPayload;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -31,13 +30,13 @@ pub enum TerminalColor {
     Named(NamedColor),
     Indexed(u8),
     Rgb([u8; 3]),
-    /// Deserialize-only skew catch-all — see
-    /// [`horizon_session_protocol::UnknownPayload`]. Keep last. A client
+    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
+    /// decodes to `Unknown` (its payload, if any, is discarded). Keep last. A client
     /// resolves an unknown color like the default foreground role
     /// (`theme::resolve` in `src/theme/ansi.rs`), losing only that cell's
     /// hue until the next frame replaces it.
-    #[serde(untagged)]
-    Unknown(UnknownPayload),
+    #[serde(other)]
+    Unknown,
 }
 
 /// One of the fixed named color roles a cell can carry. This set was
@@ -88,12 +87,12 @@ pub enum NamedColor {
     Cursor,
     BrightForeground,
     DimForeground,
-    /// Deserialize-only skew catch-all — see
-    /// [`horizon_session_protocol::UnknownPayload`]. Keep last. Resolved
+    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
+    /// decodes to `Unknown` (its payload, if any, is discarded). Keep last. Resolved
     /// like [`NamedColor::Foreground`] wherever an RGB answer is needed;
     /// it has no palette-override slot.
-    #[serde(untagged)]
-    Unknown(UnknownPayload),
+    #[serde(other)]
+    Unknown,
 }
 
 impl NamedColor {
@@ -128,7 +127,7 @@ impl NamedColor {
             Background => 257,
             Cursor => 258,
             DimBlack | DimRed | DimGreen | DimYellow | DimBlue | DimMagenta | DimCyan
-            | DimWhite | BrightForeground | DimForeground | Unknown(_) => return None,
+            | DimWhite | BrightForeground | DimForeground | Unknown => return None,
         })
     }
 }

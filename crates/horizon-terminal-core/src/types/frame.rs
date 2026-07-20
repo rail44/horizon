@@ -1,4 +1,3 @@
-use horizon_session_protocol::UnknownPayload;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use unicode_width::UnicodeWidthChar;
@@ -86,13 +85,13 @@ pub enum TerminalUnderline {
     Curl,
     Dotted,
     Dashed,
-    /// Deserialize-only skew catch-all — see
-    /// [`horizon_session_protocol::UnknownPayload`]. Keep last. A client
+    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
+    /// decodes to `Unknown` (its payload, if any, is discarded). Keep last. A client
     /// paints an unknown underline style as [`TerminalUnderline::Single`]
     /// (better a wrong underline than none: the app asked for *some*
     /// underline).
-    #[serde(untagged)]
-    Unknown(UnknownPayload),
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -115,11 +114,11 @@ pub enum TerminalCursorShape {
     Underline,
     Beam,
     HollowBlock,
-    /// Deserialize-only skew catch-all — see
-    /// [`horizon_session_protocol::UnknownPayload`]. Keep last. A client
+    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
+    /// decodes to `Unknown` (its payload, if any, is discarded). Keep last. A client
     /// paints an unknown shape as the default [`TerminalCursorShape::Block`].
-    #[serde(untagged)]
-    Unknown(UnknownPayload),
+    #[serde(other)]
+    Unknown,
 }
 
 /// A selection's two inclusive endpoints in viewport coordinates — see

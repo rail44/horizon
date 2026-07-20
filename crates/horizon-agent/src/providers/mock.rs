@@ -60,7 +60,7 @@ impl Provider for MockProvider {
                 match command {
                     // Skew catch-all: dropped, mirroring the rig
                     // provider's session loop.
-                    Command::Unknown(_) => {}
+                    Command::Unknown => {}
                     Command::Initialize(_) => {
                         let _ = events_tx.send(Event::StateChanged(SessionState::Running).into());
                         let _ = events_tx
