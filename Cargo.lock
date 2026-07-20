@@ -3381,6 +3381,7 @@ dependencies = [
  "horizon-session-protocol",
  "horizon-terminal-core",
  "portable-pty",
+ "remoc",
  "schemars 1.2.1",
  "serde_json",
  "sysinfo 0.39.6",
