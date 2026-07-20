@@ -259,6 +259,20 @@ product-owned API. Decisions:
   `horizon-agent`'s `tools::network`. The leg-by-leg text is kept as a
   dated record rather than rewritten; this note is the single source of
   truth for the mechanism as it actually runs today.
+- **Correction discovered 2026-07-20:** the preceding current-mechanism
+  summary is not a complete enforcement statement. Standard clients are not
+  configured to use the UDS bridge; on Linux, nono's Landlock-backed
+  `NetworkMode::Blocked` cuts TCP but does not cut UDP, and
+  `ReadableScope::Full` permits arbitrary pathname-UDS connections. Both
+  latter routes were reproduced through the real Horizon sandbox path. The
+  owner-directed replacement is structured containment denials plus
+  session-scoped narrow grants and sandboxed retry; exact findings, proposed
+  TCP `ProxyOnly` + seccomp mediation, filesystem API limits, and pending
+  owner decisions are in `docs/containment-denial-narrow-grants-design.md`.
+  Until that work lands, leg 4b is a hand-rolled-probe mechanism, not working
+  network approval for ordinary `cargo`/`curl`/`git` clients, and the phrase
+  "direct egress is cut" above should be read as its historical TCP-tested
+  claim rather than an all-protocol invariant.
 - **Denial UX** (converged pattern): detect the sandbox denial
   (exit-code/stderr signature), then surface "retry without sandbox?"
   through the normal approval flow — never silently block or bypass.

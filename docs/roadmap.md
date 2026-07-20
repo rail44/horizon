@@ -183,6 +183,19 @@ lands:
   proxy relocation into horizon-agent) is re-dispatched
   on the nono foundation -- its policy layer is backend-agnostic (spike-
   confirmed), so only the spawn wiring rebases.
+  **Containment-denial correction / redesign started 2026-07-20**
+  (`docs/containment-denial-narrow-grants-design.md`): dogfooding showed that
+  ordinary HTTP clients never reach the UDS bridge and filesystem denials can
+  disappear behind exit 0. Source audit plus real throwaway probes found a
+  deeper Linux prerequisite: nono's `Blocked`/Landlock path is TCP-only and
+  `ReadableScope::Full` permits arbitrary pathname UDS. The owner direction is
+  to replace unsandboxed denial retry with structured, session-scoped narrow
+  grants and sandboxed retry for network and FS. Proposed first leg is a TCP
+  proxy endpoint using nono `ProxyOnly` plus always-on Linux seccomp mediation
+  (bare Landlock is only port-exact and leaves UDP/UDS holes), followed by the
+  generic grant contract and FS discovery. Implementation waits on the owner
+  decisions listed in the design doc; current leg 4b must not be treated as a
+  complete ordinary-client or all-protocol egress boundary meanwhile.
 - **Agent web search / public-code search** (backlog 18/19).
   Consultation 2026-07-19/20: **vendor = Exa** (owner decision;
   empirical probe + independent-benchmark evidence in
