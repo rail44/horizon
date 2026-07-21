@@ -18,7 +18,9 @@ use connection::Op;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use horizon_agent::contract::{self, Command, ProviderEvent};
 use horizon_agent::wire::{self, HostToolRequest, HostToolResponse};
-use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
+use horizon_terminal_core::{
+    TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
+};
 use routing::Routes;
 use uuid::Uuid;
 
@@ -90,7 +92,10 @@ pub(crate) struct AgentSessionHandle {
 
 pub(crate) struct TerminalSessionHandle {
     commands: Sender<TerminalCommand>,
-    updates: Receiver<TerminalUpdate>,
+    /// Full frames from the daemon's `watch<TerminalFrame>` (wire v11).
+    frames: Receiver<TerminalFrame>,
+    /// The non-frame events (title/bell/clipboard/exit/error).
+    events: Receiver<TerminalUpdate>,
     session_id: Uuid,
     routes: Arc<Routes>,
 }
@@ -116,8 +121,12 @@ impl TerminalSessionHandle {
         self.commands.clone()
     }
 
-    pub(crate) fn updates(&self) -> Receiver<TerminalUpdate> {
-        self.updates.clone()
+    pub(crate) fn frames(&self) -> Receiver<TerminalFrame> {
+        self.frames.clone()
+    }
+
+    pub(crate) fn events(&self) -> Receiver<TerminalUpdate> {
+        self.events.clone()
     }
 }
 
@@ -320,10 +329,11 @@ impl SessiondHandle {
         tokio::sync::mpsc::UnboundedReceiver<TerminalCommand>,
     ) {
         let (command_tx, command_rx) = unbounded::<TerminalCommand>();
-        let (update_tx, update_rx) = unbounded::<TerminalUpdate>();
+        let (frame_tx, frame_rx) = unbounded::<TerminalFrame>();
+        let (event_tx, event_rx) = unbounded::<TerminalUpdate>();
         let (bridge_tx, bridge_rx) = tokio::sync::mpsc::unbounded_channel();
         self.routes
-            .register_terminal(session_id, update_tx, bridge_tx.clone());
+            .register_terminal(session_id, frame_tx, event_tx, bridge_tx.clone());
 
         std::thread::spawn(move || {
             while let Ok(command) = command_rx.recv() {
@@ -336,7 +346,8 @@ impl SessiondHandle {
         (
             TerminalSessionHandle {
                 commands: command_tx,
-                updates: update_rx,
+                frames: frame_rx,
+                events: event_rx,
                 session_id,
                 routes: self.routes.clone(),
             },

@@ -1029,7 +1029,7 @@
       "type": "object"
     },
     "TerminalAttachment": {
-      "description": "What [`SessionHub::create_terminal`]/[`SessionHub::attach_terminal`]\nhand back: the session's live channel pair. Frame delivery semantics\nare deliberately unchanged in v10 (`docs/remoc-adoption-design.md`\n§6 step 2): `updates` carries the same `Snapshot`/`FrameDiff`/…\nvocabulary the JSONL wire carried, verbatim, over one mpsc channel —\nthe watch-of-full-frames swap (§5 Option A) is the next, separately\nreviewed step.",
+      "description": "What [`SessionHub::create_terminal`]/[`SessionHub::attach_terminal`]\nhand back: the session's live channels. Since wire v11\n(`docs/remoc-adoption-design.md` §5 Option A) frame delivery is a\nsnapshot-valued signal — `frames` is an `rch::watch<TerminalFrame>`\nwhose current value *is* the latest frame at every moment, seeded on\nattach with the daemon-retained latest frame. The wire diff machinery is\ngone: no `Snapshot`/`FrameDiff` split, no per-connection baseline, and\nrow-change detection moved to the client (a `TerminalLine` comparison of\nconsecutive frames). `events` carries everything that is *not* a frame\n(`TerminalUpdate`: title, bell, clipboard, exit, error).",
       "properties": {
         "commands": {
           "$comment": "remoc rch channel half: a chmux port reference on the wire; the x-channel-payload schema is what flows through it",
@@ -1037,15 +1037,23 @@
             "$ref": "#/$defs/TerminalCommand"
           }
         },
-        "updates": {
+        "events": {
           "$comment": "remoc rch channel half: a chmux port reference on the wire; the x-channel-payload schema is what flows through it",
           "x-channel-payload": {
             "$ref": "#/$defs/TerminalUpdate"
           }
+        },
+        "frames": {
+          "$comment": "remoc rch channel half: a chmux port reference on the wire; the x-channel-payload schema is what flows through it",
+          "description": "The snapshot-valued frame signal: every observation is a full\n[`TerminalFrame`]; a slow reader skips intermediate frames and\nconverges on the latest (§5 Option A, spike §1c). Seeded with the\ndaemon-retained latest frame on attach (the structural resync\nanchor), or an empty frame for a freshly created session.",
+          "x-channel-payload": {
+            "$ref": "#/$defs/TerminalFrame"
+          }
         }
       },
       "required": [
-        "updates",
+        "frames",
+        "events",
         "commands"
       ],
       "type": "object"
@@ -1466,94 +1474,6 @@
       ],
       "type": "object"
     },
-    "TerminalFrameDiff": {
-      "description": "The rows and frame metadata that changed between two terminal snapshots.\n`cursor` is nested so `None` means unchanged and `Some(None)` means hidden;\n`selection` follows the same idiom (`Some(None)` = selection cleared).",
-      "properties": {
-        "changed_rows": {
-          "items": {
-            "$ref": "#/$defs/TerminalRowDiff"
-          },
-          "type": "array"
-        },
-        "cursor": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TerminalCursor"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "keys_as_escape_codes": {
-          "default": null,
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "mouse_reporting": {
-          "default": null,
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "palette_overrides": {
-          "default": null,
-          "items": {
-            "maxItems": 2,
-            "minItems": 2,
-            "prefixItems": [
-              {
-                "format": "uint16",
-                "maximum": 65535,
-                "minimum": 0,
-                "type": "integer"
-              },
-              {
-                "items": {
-                  "format": "uint8",
-                  "maximum": 255,
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "maxItems": 3,
-                "minItems": 3,
-                "type": "array"
-              }
-            ],
-            "type": "array"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "row_count": {
-          "format": "uint",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "selection": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TerminalSelection"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        }
-      },
-      "required": [
-        "changed_rows",
-        "row_count"
-      ],
-      "type": "object"
-    },
     "TerminalLine": {
       "properties": {
         "spans": {
@@ -1631,23 +1551,6 @@
         "button",
         "point",
         "modifiers"
-      ],
-      "type": "object"
-    },
-    "TerminalRowDiff": {
-      "properties": {
-        "index": {
-          "format": "uint",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "line": {
-          "$ref": "#/$defs/TerminalLine"
-        }
-      },
-      "required": [
-        "index",
-        "line"
       ],
       "type": "object"
     },
@@ -1892,6 +1795,7 @@
       ]
     },
     "TerminalUpdate": {
+      "description": "The non-frame terminal events, carried on the attachment's `events`\nmpsc channel (`TerminalAttachment::events`). Since wire v11 the frame\nsnapshots that used to be a `Snapshot`/`FrameDiff` variant here travel\non their own `rch::watch<TerminalFrame>` channel instead\n(`docs/remoc-adoption-design.md` §5 Option A): a full frame per delivery,\nwith the diff machinery deleted wholesale and row-change detection moved\nto the client. What remains here is everything that is *not* a frame.",
       "oneOf": [
         {
           "enum": [
@@ -1899,30 +1803,6 @@
             "Exited"
           ],
           "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "Snapshot": {
-              "$ref": "#/$defs/TerminalFrame"
-            }
-          },
-          "required": [
-            "Snapshot"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "FrameDiff": {
-              "$ref": "#/$defs/TerminalFrameDiff"
-            }
-          },
-          "required": [
-            "FrameDiff"
-          ],
-          "type": "object"
         },
         {
           "additionalProperties": false,
@@ -2148,8 +2028,11 @@
     "terminal_commands": {
       "$ref": "#/$defs/TerminalCommand"
     },
-    "terminal_updates": {
+    "terminal_events": {
       "$ref": "#/$defs/TerminalUpdate"
+    },
+    "terminal_frames": {
+      "$ref": "#/$defs/TerminalFrame"
     }
   },
   "hub": {
@@ -2235,5 +2118,5 @@
     }
   },
   "title": "horizon-session-wire",
-  "x-session-protocol-version": 10
+  "x-session-protocol-version": 11
 }

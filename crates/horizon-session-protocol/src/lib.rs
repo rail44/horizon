@@ -33,7 +33,9 @@ use horizon_agent::contract::{Command, SessionId};
 use horizon_agent::wire::{
     AgentWireEvent, HostToolRequest, HostToolResponse, SessionNew, SessionSummary,
 };
-use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
+use horizon_terminal_core::{
+    TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
+};
 use remoc::prelude::*;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -66,21 +68,55 @@ pub type WireCodec = remoc::codec::Postbag;
 // blanket limit for everything; these caps size each channel class to what
 // it actually carries, so a runaway (or corrupted) item fails as a
 // per-item error instead of buffering many megabytes. Enforcement follows
-// rch's transport model: the *creator* of a channel caps both directions —
-// a receiver's cap is its `MAX_ITEM_SIZE` const parameter (see
-// [`CappedReceiver`]), and a sender handed to the peer carries the cap the
-// creator set on it before the handover. Oversized/unserializable items
-// fail item-specifically (`MaxItemSizeExceeded`); the receive loops treat
-// that as a skip, never fatal to the channel.
+// rch's transport model: a receiver's cap is its `MAX_ITEM_SIZE` const
+// parameter (carried with the receiver when it is transported — see
+// [`CappedReceiver`]/[`CappedWatchReceiver`]), which bounds *both* the
+// forwarding serialize on the sending peer and the decode on the receiving
+// peer (the receiver is what every attachment channel here transports).
+//
+// The skip-vs-fatal boundary differs by channel kind, and this matters for
+// the frame path:
+//
+// - **`rch::mpsc`** (events, commands, tool I/O): an item that is oversized
+//   or undecodable is a *per-item* `recv` error the loops skip (adoption
+//   condition 2), and the channel survives.
+// - **`rch::watch`** (the v11 frame path): the *receive* side is equally
+//   forgiving — a `Deserialize`/`MaxItemSizeExceeded` value is
+//   non-final (`is_final() == false`), published as an error value the
+//   reader skips, and the channel self-heals on the next frame. But the
+//   *send* (forwarding) side is not: an item the daemon fails to serialize
+//   within the cap is item-specific and breaks that watch, closing it. That
+//   is acceptable because the frame path's resync is structural — the client
+//   handles a frame-watch close by re-attaching (a fresh watch reseeded with
+//   the retained latest frame), and [`FRAME_MAX_ITEM_BYTES`] carries an
+//   order of magnitude of headroom over real frames, so this is
+//   pathological, not a routine skip.
 // ---------------------------------------------------------------------------
 
-/// Terminal frame/update channel items (`TerminalUpdate`). A full 200x50
-/// fully-styled snapshot measured ~50 KB under Postbag
-/// (`docs/research/remoc-spike-2026-07-20.md` §1a: 178,743 B under the
-/// *worst-case* all-rows-styled synthetic frame); 4 MiB leaves an order
-/// of magnitude of headroom for pathological scrollback/styling without
-/// admitting absurd buffers.
+/// Terminal frame channel items (`TerminalFrame`). Since wire v11 the
+/// frame path is an `rch::watch<TerminalFrame>` snapshot-valued signal
+/// (`docs/remoc-adoption-design.md` §5 Option A), so this caps every full
+/// frame the daemon publishes (the watch keeps only the latest; slow
+/// readers converge). A full 200x50 fully-styled snapshot measured ~50 KB
+/// under Postbag (`docs/research/remoc-spike-2026-07-20.md` §1a: 178,743 B
+/// under the *worst-case* all-rows-styled synthetic frame); 4 MiB leaves an
+/// order of magnitude of headroom for pathological scrollback/styling
+/// without admitting absurd buffers. The cap is the watch *receiver's*
+/// `MAX_ITEM_SIZE` const parameter (carried with the receiver when
+/// transported): the attachment transports the receiver, so this one const
+/// bounds both the daemon's forwarding serialize (`send_impl`) and the
+/// client's decode. The watch *sender's* runtime `max_item_size` is inert
+/// in this topology — nothing transports the sender — so it is not set. See
+/// [`CappedWatchReceiver`].
 pub const FRAME_MAX_ITEM_BYTES: usize = 4 * 1024 * 1024;
+
+/// Terminal *event* channel items (`TerminalUpdate`: title, bell, clipboard,
+/// exit, error — everything the frame watch does not carry). Sized to match
+/// the frame cap (4 MiB) so it regresses the v10 effective limit: v10's
+/// `Clipboard` rode the single 4 MiB `updates` mpsc, and an OSC 52 copy of a
+/// full-screen selection is user-scaled — capping events at a tighter 1 MiB
+/// would silently shrink that ceiling to a quarter.
+pub const TERMINAL_EVENT_MAX_ITEM_BYTES: usize = 4 * 1024 * 1024;
 
 /// Command-channel items (`TerminalCommand`, agent `Command`) and the
 /// JSON-payload-bearing tool exchanges (`AgentWireEvent`,
@@ -108,10 +144,17 @@ pub const CONTROL_MAX_ITEM_BYTES: usize = 64 * 1024;
 /// data has its own channels with their own caps.
 pub const RTC_MAX_REQUEST_BYTES: usize = 64 * 1024;
 
-/// One rtc reply (`HubHello`, attachments, `list_*` vectors). Larger than
-/// requests because `list_agents`/`list_terminals` scale with live
-/// session count.
-pub const RTC_MAX_REPLY_BYTES: usize = 1024 * 1024;
+/// One rtc reply (`HubHello`, attachments, `list_*` vectors). Sized to hold
+/// a terminal attachment, which is the largest reply: since v11 the
+/// attachment's frames watch **inlines its seed (the retained latest frame)
+/// into the reply** — `rch::watch::Receiver`'s serializer snapshots
+/// `borrow()` — so a re-attach to a session holding a large frame must not
+/// be rejected for a frame the *live* watch (a [`FRAME_MAX_ITEM_BYTES`]
+/// port) already accepts. Hence one full frame plus 1 MiB of envelope /
+/// `list_*` headroom (those scale with live session count). Without this,
+/// attaching to a session whose retained frame exceeds 1 MiB failed
+/// permanently while live delivery of the same frame succeeded.
+pub const RTC_MAX_REPLY_BYTES: usize = FRAME_MAX_ITEM_BYTES + 1024 * 1024;
 
 /// A receiver whose per-item size cap is part of its type: rch enforces
 /// the receive-direction cap through the receiver's `MAX_ITEM_SIZE`
@@ -123,6 +166,24 @@ pub const RTC_MAX_REPLY_BYTES: usize = 1024 * 1024;
 /// the creator's cap as the creator-side receive limit).
 pub type CappedReceiver<T, const MAX_ITEM_SIZE: usize> =
     rch::mpsc::Receiver<T, WireCodec, { rch::DEFAULT_BUFFER }, MAX_ITEM_SIZE>;
+
+/// The `rch::watch` counterpart of [`CappedReceiver`] — a watch receiver
+/// whose per-item size cap is its `MAX_ITEM_SIZE` const parameter (carried
+/// with it when transported, exactly as for mpsc). The frame path
+/// (`docs/remoc-adoption-design.md` §5 Option A) is the one channel class
+/// that uses it: a snapshot-valued signal where the current value is always
+/// the latest full frame, a slow reader observes a skipping sequence that
+/// converges on the final value, and there is no queue to bound — only the
+/// per-frame item size, which [`FRAME_MAX_ITEM_BYTES`] sets. The daemon
+/// transports this receiver and keeps the sender, so the receiver's const
+/// is the effective cap in *both* directions: `rch::watch::Receiver`'s
+/// serializer drives the forwarding with this const, and the client's
+/// deserializer decodes with it. The sender's runtime `max_item_size` is
+/// therefore never consulted in this topology and is left unset (see
+/// [`FRAME_MAX_ITEM_BYTES`]); set only this receiver const with
+/// [`set_max_item_size`](remoc::rch::watch::Receiver::set_max_item_size).
+pub type CappedWatchReceiver<T, const MAX_ITEM_SIZE: usize> =
+    rch::watch::Receiver<T, WireCodec, MAX_ITEM_SIZE>;
 
 /// A rate-limited log for the receive/send loops' skip paths (adoption
 /// condition 2: a poisoned item is skipped, never fatal): logs the first
@@ -220,15 +281,33 @@ impl DecodeSkipLog {
 /// new `Unknown`-guarded variants, new hub methods) ships with no version
 /// event, and [`SessionHub::hello`]'s `[min_supported, current]` range
 /// negotiation gates *behavior*, not decodability.
-pub const SESSION_PROTOCOL_VERSION: u32 = 10;
+///
+/// Version 11: **the frame path becomes a snapshot-valued signal**
+/// (`docs/remoc-adoption-design.md` §5 Option A, ratified 2026-07-20). The
+/// terminal attachment's single `updates` mpsc channel splits into a
+/// `frames: rch::watch<TerminalFrame>` (every delivery a full frame; a slow
+/// reader skips to the latest) and an `events: rch::mpsc<TerminalUpdate>`
+/// (the non-frame updates). The wire diff machinery is deleted wholesale:
+/// `TerminalFrameDiff`/`TerminalRowDiff`, `compute_frame_diff`/
+/// `apply_frame_diff`, the daemon's per-connection baseline, and the
+/// `TerminalUpdate::Snapshot`/`FrameDiff` variants all go — row-change
+/// detection (the ShapedLine cache's invalidation signal) moves to the
+/// client as a `TerminalLine` comparison of consecutive frames. A breaking
+/// reshape of the terminal channel vocabulary, hence the bump; the schema
+/// artifact carries it as `x-session-protocol-version`.
+pub const SESSION_PROTOCOL_VERSION: u32 = 11;
 
 /// The oldest protocol version this build is still willing to negotiate
 /// down to in [`SessionHub::hello`] — the low end of the advertised
-/// `[min_supported, current]` range. Rises only when carrying
-/// compatibility code for ancient peers stops being worth it
-/// (`docs/remoc-adoption-design.md` §3). v10 is the first remoc version,
-/// so there is nothing older to support yet.
-pub const MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 10;
+/// `[min_supported, current]` range. Rises when a version carries a
+/// breaking wire reshape that leaves no compatibility code behind
+/// (`docs/remoc-adoption-design.md` §3). v11's frame-path reshape (§5
+/// Option A) is exactly that: the v11 `TerminalAttachment` shape (a
+/// `watch<TerminalFrame>` + an events mpsc) is structurally undecodable to
+/// a v10 peer and vice-versa, so this build cannot honor a negotiated v10.
+/// A v10↔v11 pairing therefore has no overlapping range and `hello` rejects
+/// it — recovered by the auto-drain-and-respawn path (§6), not negotiated.
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 11;
 
 /// An inclusive protocol-version range one peer supports, as exchanged in
 /// [`SessionHub::hello`].
@@ -323,16 +402,26 @@ fn channel_schema<T: JsonSchema>(generator: &mut schemars::SchemaGenerator) -> s
 }
 
 /// What [`SessionHub::create_terminal`]/[`SessionHub::attach_terminal`]
-/// hand back: the session's live channel pair. Frame delivery semantics
-/// are deliberately unchanged in v10 (`docs/remoc-adoption-design.md`
-/// §6 step 2): `updates` carries the same `Snapshot`/`FrameDiff`/…
-/// vocabulary the JSONL wire carried, verbatim, over one mpsc channel —
-/// the watch-of-full-frames swap (§5 Option A) is the next, separately
-/// reviewed step.
+/// hand back: the session's live channels. Since wire v11
+/// (`docs/remoc-adoption-design.md` §5 Option A) frame delivery is a
+/// snapshot-valued signal — `frames` is an `rch::watch<TerminalFrame>`
+/// whose current value *is* the latest frame at every moment, seeded on
+/// attach with the daemon-retained latest frame. The wire diff machinery is
+/// gone: no `Snapshot`/`FrameDiff` split, no per-connection baseline, and
+/// row-change detection moved to the client (a `TerminalLine` comparison of
+/// consecutive frames). `events` carries everything that is *not* a frame
+/// (`TerminalUpdate`: title, bell, clipboard, exit, error).
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct TerminalAttachment {
+    /// The snapshot-valued frame signal: every observation is a full
+    /// [`TerminalFrame`]; a slow reader skips intermediate frames and
+    /// converges on the latest (§5 Option A, spike §1c). Seeded with the
+    /// daemon-retained latest frame on attach (the structural resync
+    /// anchor), or an empty frame for a freshly created session.
+    #[schemars(schema_with = "channel_schema::<TerminalFrame>")]
+    pub frames: CappedWatchReceiver<TerminalFrame, FRAME_MAX_ITEM_BYTES>,
     #[schemars(schema_with = "channel_schema::<TerminalUpdate>")]
-    pub updates: CappedReceiver<TerminalUpdate, FRAME_MAX_ITEM_BYTES>,
+    pub events: CappedReceiver<TerminalUpdate, TERMINAL_EVENT_MAX_ITEM_BYTES>,
     #[schemars(schema_with = "channel_schema::<TerminalCommand>")]
     pub commands: rch::mpsc::Sender<TerminalCommand, WireCodec>,
 }
@@ -433,9 +522,10 @@ pub trait SessionHub {
     ) -> Result<TerminalAttachment, HubError>;
 
     /// Attaches to an already-running terminal session. The returned
-    /// attachment's `updates` channel is seeded with a full `Snapshot`
-    /// (the daemon-retained latest frame), which is also the new diff
-    /// baseline — the same attach contract the JSONL wire had.
+    /// attachment's `frames` watch is seeded with the daemon-retained latest
+    /// frame — the structural resync anchor: since v11 the watch's current
+    /// value *is* the latest frame, so there is no baseline to establish and
+    /// no snapshot-then-diffs dance.
     async fn attach_terminal(&self, session_id: Uuid) -> Result<TerminalAttachment, HubError>;
 
     // -- agent domain --

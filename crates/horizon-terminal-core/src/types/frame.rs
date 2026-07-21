@@ -137,84 +137,25 @@ pub struct TerminalSelection {
     pub end: TerminalSelectionPoint,
 }
 
-/// The rows and frame metadata that changed between two terminal snapshots.
-/// `cursor` is nested so `None` means unchanged and `Some(None)` means hidden;
-/// `selection` follows the same idiom (`Some(None)` = selection cleared).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct TerminalFrameDiff {
-    pub changed_rows: Vec<TerminalRowDiff>,
-    pub row_count: usize,
-    #[serde(default)]
-    pub cursor: Option<Option<TerminalCursor>>,
-    #[serde(default)]
-    pub selection: Option<Option<TerminalSelection>>,
-    #[serde(default)]
-    pub mouse_reporting: Option<bool>,
-    #[serde(default)]
-    pub keys_as_escape_codes: Option<bool>,
-    #[serde(default)]
-    pub palette_overrides: Option<Vec<(u16, [u8; 3])>>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct TerminalRowDiff {
-    pub index: usize,
-    pub line: TerminalLine,
-}
-
-/// Compute the bounded row and metadata changes needed to reproduce `new`.
-pub fn compute_frame_diff(old: &TerminalFrame, new: &TerminalFrame) -> TerminalFrameDiff {
-    let changed_rows = new
-        .lines
-        .iter()
-        .enumerate()
-        .filter(|(index, line)| old.lines.get(*index) != Some(*line))
-        .map(|(index, line)| TerminalRowDiff {
-            index,
-            line: line.clone(),
-        })
-        .collect();
-
-    TerminalFrameDiff {
-        changed_rows,
-        row_count: new.lines.len(),
-        cursor: (old.cursor != new.cursor).then_some(new.cursor),
-        selection: (old.selection != new.selection).then_some(new.selection),
-        mouse_reporting: (old.mouse_reporting != new.mouse_reporting)
-            .then_some(new.mouse_reporting),
-        keys_as_escape_codes: (old.keys_as_escape_codes != new.keys_as_escape_codes)
-            .then_some(new.keys_as_escape_codes),
-        palette_overrides: (old.palette_overrides != new.palette_overrides)
-            .then(|| new.palette_overrides.clone()),
-    }
-}
-
-/// Apply a frame diff without mutating its base snapshot.
-pub fn apply_frame_diff(old: &TerminalFrame, diff: &TerminalFrameDiff) -> TerminalFrame {
-    let mut lines = old.lines.clone();
-    lines.resize_with(diff.row_count, || TerminalLine { spans: Vec::new() });
-    for changed in &diff.changed_rows {
-        if let Some(line) = lines.get_mut(changed.index) {
-            *line = changed.line.clone();
+impl TerminalFrame {
+    /// An empty frame — no rows, no cursor, no styling. Since wire v11 the
+    /// frame path is an `rch::watch<TerminalFrame>` snapshot-valued signal
+    /// (`docs/remoc-adoption-design.md` §5 Option A), and a watch channel
+    /// requires an initial value: this is the seed a freshly created
+    /// terminal's frame channel carries until the session loop produces its
+    /// first real snapshot (the client renders it as a blank grid for the
+    /// few milliseconds before the first frame arrives, then converges).
+    pub fn empty() -> Self {
+        Self {
+            lines: Vec::new(),
+            cursor: None,
+            selection: None,
+            mouse_reporting: false,
+            keys_as_escape_codes: false,
+            palette_overrides: Vec::new(),
         }
     }
 
-    TerminalFrame {
-        lines,
-        cursor: diff.cursor.unwrap_or(old.cursor),
-        selection: diff.selection.unwrap_or(old.selection),
-        mouse_reporting: diff.mouse_reporting.unwrap_or(old.mouse_reporting),
-        keys_as_escape_codes: diff
-            .keys_as_escape_codes
-            .unwrap_or(old.keys_as_escape_codes),
-        palette_overrides: diff
-            .palette_overrides
-            .clone()
-            .unwrap_or_else(|| old.palette_overrides.clone()),
-    }
-}
-
-impl TerminalFrame {
     /// The frame's plain-text rendering, derived from `lines` (blank-run
     /// spans pad with spaces, each row is right-trimmed, rows join with
     /// `\n`). A debug/test derivation helper — the `HORIZON_GPUI_DUMP`

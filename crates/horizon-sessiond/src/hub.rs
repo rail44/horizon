@@ -25,15 +25,17 @@ use horizon_agent::wire::{
 use horizon_session_protocol::{
     AgentAttachment, ClientHello, DecodeSkipLog, HubError, HubHello, SessionHub,
     TerminalAttachment, VersionRange, WireCodec, COMMAND_MAX_ITEM_BYTES, CONTROL_MAX_ITEM_BYTES,
-    FRAME_MAX_ITEM_BYTES, TOOL_IO_MAX_ITEM_BYTES,
+    FRAME_MAX_ITEM_BYTES, TERMINAL_EVENT_MAX_ITEM_BYTES, TOOL_IO_MAX_ITEM_BYTES,
 };
-use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
+use horizon_terminal_core::{
+    TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
+};
 use remoc::rch;
 use tokio::sync::mpsc::UnboundedReceiver;
 use uuid::Uuid;
 
 use crate::session::Connection;
-use crate::terminal::TerminalHost;
+use crate::terminal::{SubscriberChannels, TerminalHost};
 
 /// Local buffer of each remote channel (the rch-side counterpart of the
 /// unbounded local bridges). Frames are the hot path; 64 matches the spike
@@ -76,31 +78,57 @@ impl Hub {
         }
     }
 
-    /// Wires one terminal attachment: local update bridge → remote updates
-    /// channel, remote commands channel → [`TerminalHost::handle_command`].
+    /// Wires one terminal attachment: local frame bridge → remote frames
+    /// watch (seeded with `seed`, the daemon-retained latest frame), local
+    /// event bridge → remote events mpsc, remote commands channel →
+    /// [`TerminalHost::handle_command`]. Since wire v11
+    /// (`docs/remoc-adoption-design.md` §5 Option A) the frame path is a
+    /// snapshot-valued signal: full frames on `rch::watch<TerminalFrame>`,
+    /// latest-value, no diffing.
     fn terminal_attachment(
         &self,
         session_id: Uuid,
-        mut local_updates: UnboundedReceiver<TerminalUpdate>,
+        channels: SubscriberChannels,
     ) -> TerminalAttachment {
-        let (update_tx, update_rx) =
-            rch::mpsc::channel::<TerminalUpdate, WireCodec>(CHANNEL_BUFFER);
-        // Frame-path size cap: a receiver's cap is its const type
-        // parameter, fixed here before the receiver is transported -- see
-        // `FRAME_MAX_ITEM_BYTES`'s doc.
-        let update_rx = update_rx.set_max_item_size::<FRAME_MAX_ITEM_BYTES>();
+        let SubscriberChannels {
+            seed,
+            frames: mut local_frames,
+            events: mut local_events,
+        } = channels;
+
+        // Frames: a watch seeded with the retained latest frame. Only the
+        // receiver's `MAX_ITEM_SIZE` const is set (`FRAME_MAX_ITEM_BYTES`):
+        // we transport the receiver and keep the sender, so that const is
+        // the effective cap in both directions (the receiver's serializer
+        // drives forwarding). The sender's runtime limit is never consulted
+        // here — see `FRAME_MAX_ITEM_BYTES`/`CappedWatchReceiver`.
+        let (frame_tx, frame_rx) = rch::watch::channel::<TerminalFrame, WireCodec>(seed);
+        let frame_rx = frame_rx.set_max_item_size::<FRAME_MAX_ITEM_BYTES>();
         tokio::spawn(async move {
-            while let Some(update) = local_updates.recv().await {
-                if let Err(err) = update_tx.send(update).await {
-                    // Any send failure ends the attachment: a dead remote
-                    // obviously, but also an item over the cap — rch
-                    // *latches* a remote-send error on the local sender
-                    // (measured: every later send fails too), so
-                    // skip-and-continue would error forever. Dropping
-                    // `local_updates` makes the host's next send fail,
-                    // which lazily removes the subscriber; the client
-                    // re-attaches for a fresh channel.
-                    eprintln!("horizon-sessiond: closing a terminal update attachment: {err}");
+            while let Some(frame) = local_frames.recv().await {
+                // `rch::watch::Sender::send` is synchronous and only errors
+                // once every receiver is gone — nothing to skip-loop, no
+                // backpressure to bound (the watch keeps only the latest).
+                if frame_tx.send(frame).is_err() {
+                    break;
+                }
+            }
+        });
+
+        // Events: the non-frame updates on an mpsc.
+        let (event_tx, event_rx) = rch::mpsc::channel::<TerminalUpdate, WireCodec>(CHANNEL_BUFFER);
+        let event_rx = event_rx.set_max_item_size::<TERMINAL_EVENT_MAX_ITEM_BYTES>();
+        tokio::spawn(async move {
+            while let Some(event) = local_events.recv().await {
+                if let Err(err) = event_tx.send(event).await {
+                    // Any send failure ends the event bridge: a dead remote,
+                    // or an item over the cap — rch *latches* a remote-send
+                    // error on the local sender (measured: every later send
+                    // fails too), so skip-and-continue would error forever.
+                    // Dropping `local_events` makes the host's next send
+                    // fail, which lazily removes the subscriber; the client
+                    // re-attaches for fresh channels.
+                    eprintln!("horizon-sessiond: closing a terminal event attachment: {err}");
                     break;
                 }
             }
@@ -127,7 +155,8 @@ impl Hub {
         });
 
         TerminalAttachment {
-            updates: update_rx,
+            frames: frame_rx,
+            events: event_rx,
             commands: command_tx,
         }
     }
@@ -266,11 +295,10 @@ impl SessionHub for Hub {
         spec: TerminalSpawnSpec,
     ) -> Result<TerminalAttachment, HubError> {
         self.require_hello()?;
-        // Subscribe before spawning so the session's very first updates
-        // (and the seeding snapshot, once the core emits one) are never
-        // lost — the JSONL flow's `mark_attached`-before-create, made
-        // structural.
-        let local_updates = self.terminals.subscribe_for_create(session_id);
+        // Subscribe before spawning so the session's very first frames
+        // are never lost — the JSONL flow's `mark_attached`-before-create,
+        // made structural.
+        let channels = self.terminals.subscribe_for_create(session_id);
         // `TerminalHost::create` blocks (bounded spawn attempts with a
         // watchdog timeout each — see its doc comment on the suspected
         // portable-pty fork hazard); `serve(true)` runs this call on its
@@ -279,7 +307,7 @@ impl SessionHub for Hub {
         let terminals = self.terminals.clone();
         let spawned = tokio::task::spawn_blocking(move || terminals.create(session_id, spec)).await;
         match spawned {
-            Ok(Ok(())) => Ok(self.terminal_attachment(session_id, local_updates)),
+            Ok(Ok(())) => Ok(self.terminal_attachment(session_id, channels)),
             Ok(Err(error)) => {
                 self.terminals.unsubscribe(session_id);
                 Err(HubError::TerminalSpawnFailed(error))
@@ -298,10 +326,10 @@ impl SessionHub for Hub {
         // concurrently either turns this into `TerminalNotFound` or
         // delivers `Exited` through the fresh subscriber — never a live
         // attachment onto a dead session.
-        let Some(local_updates) = self.terminals.attach_subscribe(session_id) else {
+        let Some(channels) = self.terminals.attach_subscribe(session_id) else {
             return Err(HubError::TerminalNotFound);
         };
-        Ok(self.terminal_attachment(session_id, local_updates))
+        Ok(self.terminal_attachment(session_id, channels))
     }
 
     /// Readiness-gated exactly as the JSONL `session_list` was (bind-first

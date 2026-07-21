@@ -33,10 +33,11 @@
 //!   which are chmux port references on the wire, not data — they appear
 //!   here as opaque markers.
 //! - `channels`: the vocabularies those channels carry
-//!   (`TerminalUpdate`/`TerminalCommand`, `AgentWireEvent`/agent `Command`,
+//!   (`TerminalFrame` on the v11 frame watch, `TerminalUpdate` events,
+//!   `TerminalCommand`, `AgentWireEvent`/agent `Command`,
 //!   `HostToolRequest`/`HostToolResponse`). This is where the frame
-//!   vocabulary (`Snapshot`/`FrameDiff`, unchanged in v10) and every
-//!   `#[serde(other)] Unknown`-guarded command/event live.
+//!   snapshot type and every `#[serde(other)] Unknown`-guarded command/event
+//!   live.
 //!
 //! ## Version history, inherited from the retired pin tests
 //!
@@ -63,7 +64,9 @@ use horizon_session_protocol::{
     schema_check::PROTOCOL_VERSION_KEY, AgentAttachment, ClientHello, HubError, HubHello,
     TerminalAttachment, SESSION_PROTOCOL_VERSION,
 };
-use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
+use horizon_terminal_core::{
+    TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
+};
 
 const ARTIFACT_RELATIVE_PATH: &str = "../horizon-session-protocol/schema/session-wire.json";
 
@@ -117,7 +120,10 @@ fn generate_wire_schema() -> Value {
     });
 
     let channels = json!({
-        "terminal_updates": generator.subschema_for::<TerminalUpdate>().to_value(),
+        // Since v11 the frame path is an `rch::watch<TerminalFrame>` (full
+        // frames, §5 Option A); the non-frame updates ride the events mpsc.
+        "terminal_frames": generator.subschema_for::<TerminalFrame>().to_value(),
+        "terminal_events": generator.subschema_for::<TerminalUpdate>().to_value(),
         "terminal_commands": generator.subschema_for::<TerminalCommand>().to_value(),
         "agent_events": generator.subschema_for::<AgentWireEvent>().to_value(),
         "agent_commands": generator.subschema_for::<Command>().to_value(),

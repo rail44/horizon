@@ -7,8 +7,8 @@ use uuid::Uuid;
 
 use crate::core::TerminalColorScheme;
 use crate::types::{
-    KeyEventKind, TerminalFrame, TerminalFrameDiff, TerminalMouseReport, TerminalScroll,
-    TerminalSelectionKind, TerminalSelectionPoint, TerminalSize,
+    KeyEventKind, TerminalMouseReport, TerminalScroll, TerminalSelectionKind,
+    TerminalSelectionPoint, TerminalSize,
 };
 
 // The v10 remoc cutover deleted this module's envelope bindings — the
@@ -89,10 +89,15 @@ pub enum TerminalCommand {
     Unknown,
 }
 
+/// The non-frame terminal events, carried on the attachment's `events`
+/// mpsc channel (`TerminalAttachment::events`). Since wire v11 the frame
+/// snapshots that used to be a `Snapshot`/`FrameDiff` variant here travel
+/// on their own `rch::watch<TerminalFrame>` channel instead
+/// (`docs/remoc-adoption-design.md` §5 Option A): a full frame per delivery,
+/// with the diff machinery deleted wholesale and row-change detection moved
+/// to the client. What remains here is everything that is *not* a frame.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum TerminalUpdate {
-    Snapshot(TerminalFrame),
-    FrameDiff(TerminalFrameDiff),
     Title(Option<String>),
     Bell,
     Clipboard {

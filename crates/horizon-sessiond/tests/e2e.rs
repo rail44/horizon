@@ -9,9 +9,11 @@
 //! to the daemon over the actual `SessionHub` rtc trait on the actual unix
 //! socket, through the [`HubTestClient`] harness below: `hello` range
 //! negotiation, the terminal/agent attach calls returning channel-bearing
-//! attachments, and `drain`. The frame-delivery semantics are unchanged in
-//! v10 (`Snapshot`/`FrameDiff` still travel verbatim on the attachment's
-//! updates channel), so the terminal tests still assert snapshot-then-diff.
+//! attachments, and `drain`. Since v11 (§5 Option A) frame delivery is a
+//! snapshot-valued signal: the attachment's `frames` is an
+//! `rch::watch<TerminalFrame>` (full frames, latest-value) and its `events`
+//! mpsc carries the non-frame updates — so the terminal tests fold the watch
+//! toward a needle and assert a reattach reseeds the retained latest frame.
 //! Cross-generation recovery (a v10 UI meeting a JSONL daemon) is covered
 //! on the *client* side, in `src/sessiond/tests.rs`, where the runtime that
 //! owns the probe-drain-respawn sequence lives.
@@ -39,13 +41,14 @@ use horizon_agent::wire::{
     AgentWireEvent, HostToolRequest, HostToolResponse, SessionNew, SessionSummary,
 };
 use horizon_session_protocol::{
-    CappedReceiver, ClientHello, HubError, SessionHub as _, SessionHubClient, VersionRange,
-    WireCodec, CONTROL_MAX_ITEM_BYTES, FRAME_MAX_ITEM_BYTES, MIN_SUPPORTED_PROTOCOL_VERSION,
-    SESSION_PROTOCOL_VERSION, TOOL_IO_MAX_ITEM_BYTES,
+    CappedReceiver, CappedWatchReceiver, ClientHello, HubError, SessionHub as _, SessionHubClient,
+    VersionRange, WireCodec, CONTROL_MAX_ITEM_BYTES, FRAME_MAX_ITEM_BYTES,
+    MIN_SUPPORTED_PROTOCOL_VERSION, SESSION_PROTOCOL_VERSION, TERMINAL_EVENT_MAX_ITEM_BYTES,
+    TOOL_IO_MAX_ITEM_BYTES,
 };
 use horizon_terminal_core::{
-    apply_frame_diff, TerminalColorScheme, TerminalCommand, TerminalFrame, TerminalSize,
-    TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
+    TerminalColorScheme, TerminalCommand, TerminalFrame, TerminalSize, TerminalSpawnSpec,
+    TerminalSummary, TerminalUpdate,
 };
 use remoc::rch;
 use tokio::net::UnixStream;
@@ -557,15 +560,23 @@ impl HubTestClient {
 
 const TERMINAL_UPDATE_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Reads the next update from an attachment's channel, or panics on
-/// timeout/disconnect.
-async fn read_terminal_update(
-    updates: &mut CappedReceiver<TerminalUpdate, FRAME_MAX_ITEM_BYTES>,
+/// The attachment's current frame — the watch's seed on attach (the
+/// daemon-retained latest frame), or the newest published frame.
+fn current_frame(
+    frames: &CappedWatchReceiver<TerminalFrame, FRAME_MAX_ITEM_BYTES>,
+) -> TerminalFrame {
+    frames.borrow().expect("frame watch error").clone()
+}
+
+/// Reads the next non-frame event off an attachment's `events` channel, or
+/// panics on timeout/disconnect.
+async fn read_terminal_event(
+    events: &mut CappedReceiver<TerminalUpdate, TERMINAL_EVENT_MAX_ITEM_BYTES>,
 ) -> TerminalUpdate {
-    tokio::time::timeout(TERMINAL_UPDATE_TIMEOUT, updates.recv())
+    tokio::time::timeout(TERMINAL_UPDATE_TIMEOUT, events.recv())
         .await
-        .expect("timed out waiting for a terminal update")
-        .expect("terminal update channel error")
+        .expect("timed out waiting for a terminal event")
+        .expect("terminal event channel error")
         .expect("the daemon should keep the terminal attachment open")
 }
 
@@ -596,38 +607,32 @@ fn terminal_spec(
     }
 }
 
-/// Folds updates from an attachment's channel into `frame` until its text
-/// contains `needle`; returns the accumulated frame and whether any diff
-/// (not just snapshots) was observed along the way.
+/// Folds the attachment's frame watch toward a frame whose text contains
+/// `needle`, returning it. Checks the current value first (the seed on
+/// attach), then awaits changes; the watch's latest-value semantics mean a
+/// slow reader skips intermediate frames and still converges on the needle.
 async fn collect_terminal_frame_until(
-    updates: &mut CappedReceiver<TerminalUpdate, FRAME_MAX_ITEM_BYTES>,
-    mut frame: TerminalFrame,
+    frames: &mut CappedWatchReceiver<TerminalFrame, FRAME_MAX_ITEM_BYTES>,
     needle: &str,
-) -> (TerminalFrame, bool) {
-    let mut saw_diff = false;
-    for _ in 0..100 {
-        match read_terminal_update(updates).await {
-            TerminalUpdate::Snapshot(snapshot) => frame = snapshot,
-            TerminalUpdate::FrameDiff(diff) => {
-                saw_diff = true;
-                frame = apply_frame_diff(&frame, &diff);
+) -> TerminalFrame {
+    for _ in 0..1000 {
+        {
+            let frame = frames
+                .borrow_and_update()
+                .expect("frame watch error")
+                .clone();
+            if frame.text().contains(needle) {
+                return frame;
             }
-            TerminalUpdate::Error(error) => {
-                panic!("terminal error while waiting for {needle:?}: {error}")
-            }
-            TerminalUpdate::Exited => panic!("terminal exited while waiting for {needle:?}"),
-            TerminalUpdate::Title(_)
-            | TerminalUpdate::Bell
-            | TerminalUpdate::Clipboard { .. }
-            | TerminalUpdate::Unknown => {}
         }
-        if frame.text().contains(needle) {
-            return (frame, saw_diff);
-        }
+        tokio::time::timeout(TERMINAL_UPDATE_TIMEOUT, frames.changed())
+            .await
+            .expect("timed out waiting for a terminal frame")
+            .expect("the frame watch closed before the needle arrived");
     }
     panic!(
         "gave up waiting for {needle:?}; last frame: {:?}",
-        frame.text()
+        current_frame(frames).text()
     );
 }
 
@@ -870,7 +875,7 @@ async fn an_incompatible_version_range_is_rejected_but_drain_still_works() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn terminal_create_diff_reconnect_attach_and_shutdown_over_the_real_socket() {
+async fn terminal_create_frame_reconnect_attach_and_shutdown_over_the_real_socket() {
     let sessiond = SessiondProcess::spawn();
     let session_id = uuid::Uuid::new_v4();
     let client = connect_hub(&sessiond.socket_path).await;
@@ -880,22 +885,15 @@ async fn terminal_create_diff_reconnect_attach_and_shutdown_over_the_real_socket
         .create_terminal(session_id, terminal_spec(std::env::temp_dir(), None))
         .await
         .expect("create should succeed");
-    let TerminalUpdate::Snapshot(initial) = read_terminal_update(&mut attachment.updates).await
-    else {
-        panic!("terminal create must begin with a full snapshot");
-    };
 
     send_terminal_command(
         &attachment.commands,
         TerminalCommand::Input(b"printf 'HORIZON_DIFF_MARKER\\n'\n".to_vec()),
     )
     .await;
-    let (frame, saw_diff) =
-        collect_terminal_frame_until(&mut attachment.updates, initial, "HORIZON_DIFF_MARKER").await;
-    assert!(
-        saw_diff,
-        "updates after the create baseline should be diffs"
-    );
+    // Full frames stream on the watch and converge on the marker.
+    let frame = collect_terminal_frame_until(&mut attachment.frames, "HORIZON_DIFF_MARKER").await;
+    assert!(frame.text().contains("HORIZON_DIFF_MARKER"));
 
     // Disconnect this client entirely; the terminal session keeps running
     // (process-scoped), so a fresh connection can reattach.
@@ -903,38 +901,41 @@ async fn terminal_create_diff_reconnect_attach_and_shutdown_over_the_real_socket
     drop(client);
 
     let client = connect_hub(&sessiond.socket_path).await;
-    let mut attachment = client
+    let attachment = client
         .hub
         .attach_terminal(session_id)
         .await
         .expect("attach on a fresh connection should succeed");
-    let TerminalUpdate::Snapshot(attached) = read_terminal_update(&mut attachment.updates).await
-    else {
-        panic!("attach on a new connection must reset to a full snapshot");
-    };
-    assert!(attached.text().contains("HORIZON_DIFF_MARKER"));
-    assert!(frame.text().contains("HORIZON_DIFF_MARKER"));
+    // The reattach reseeds the full retained latest frame structurally: the
+    // watch's current value already carries the marker, with no snapshot
+    // request or baseline dance (§5 Option A).
+    let attached = current_frame(&attachment.frames);
+    assert!(
+        attached.text().contains("HORIZON_DIFF_MARKER"),
+        "attach must reseed the retained latest frame, got: {:?}",
+        attached.text()
+    );
 
+    let mut attachment = attachment;
     send_terminal_command(
         &attachment.commands,
         TerminalCommand::Input(b"printf 'HORIZON_REATTACH_MARKER\\n'\n".to_vec()),
     )
     .await;
-    let (_, saw_diff) =
-        collect_terminal_frame_until(&mut attachment.updates, attached, "HORIZON_REATTACH_MARKER")
-            .await;
-    assert!(saw_diff, "reattached PTY should continue streaming diffs");
+    let reattached =
+        collect_terminal_frame_until(&mut attachment.frames, "HORIZON_REATTACH_MARKER").await;
+    assert!(reattached.text().contains("HORIZON_REATTACH_MARKER"));
 
     send_terminal_command(&attachment.commands, TerminalCommand::Shutdown).await;
     for _ in 0..20 {
         if matches!(
-            read_terminal_update(&mut attachment.updates).await,
+            read_terminal_event(&mut attachment.events).await,
             TerminalUpdate::Exited
         ) {
             return;
         }
     }
-    panic!("terminal shutdown did not produce an exited update");
+    panic!("terminal shutdown did not produce an exited event");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -948,28 +949,23 @@ async fn terminal_list_is_sorted_and_a_missing_attach_is_explicit() {
 
     // Create two terminals across two connections; both survive the
     // disconnect (process-scoped sessions).
-    let mut high = client
+    let high = client
         .hub
         .create_terminal(high_id, terminal_spec(std::env::temp_dir(), None))
         .await
         .unwrap();
-    assert!(matches!(
-        read_terminal_update(&mut high.updates).await,
-        TerminalUpdate::Snapshot(_)
-    ));
+    // The attachment's frame watch carries a seed frame immediately.
+    let _ = current_frame(&high.frames);
     drop(high);
     drop(client);
 
     let client = connect_hub(&sessiond.socket_path).await;
-    let mut low = client
+    let low = client
         .hub
         .create_terminal(low_id, terminal_spec(std::env::temp_dir(), None))
         .await
         .unwrap();
-    assert!(matches!(
-        read_terminal_update(&mut low.updates).await,
-        TerminalUpdate::Snapshot(_)
-    ));
+    let _ = current_frame(&low.frames);
     drop(low);
     drop(client);
 
@@ -1018,17 +1014,13 @@ async fn terminal_spawn_uses_fallback_and_source_session_cwds() {
         .create_terminal(source_id, source_spec)
         .await
         .unwrap();
-    let TerminalUpdate::Snapshot(source_initial) = read_terminal_update(&mut source.updates).await
-    else {
-        panic!("source terminal create must begin with a snapshot");
-    };
     send_terminal_command(
         &source.commands,
         TerminalCommand::Input(b"printf 'SOURCE_CWD:%s\\n' \"$PWD\"\n".to_vec()),
     )
     .await;
     let source_needle = format!("SOURCE_CWD:{}", source_cwd.display());
-    let _ = collect_terminal_frame_until(&mut source.updates, source_initial, &source_needle).await;
+    let _ = collect_terminal_frame_until(&mut source.frames, &source_needle).await;
 
     let mut target_spec = terminal_spec(fallback_cwd.clone(), Some(source_id));
     target_spec.initial_size = wide;
@@ -1037,17 +1029,13 @@ async fn terminal_spawn_uses_fallback_and_source_session_cwds() {
         .create_terminal(target_id, target_spec)
         .await
         .unwrap();
-    let TerminalUpdate::Snapshot(target_initial) = read_terminal_update(&mut target.updates).await
-    else {
-        panic!("target terminal create must begin with a snapshot");
-    };
     send_terminal_command(
         &target.commands,
         TerminalCommand::Input(b"printf 'TARGET_CWD:%s\\n' \"$PWD\"\n".to_vec()),
     )
     .await;
     let target_needle = format!("TARGET_CWD:{}", source_cwd.display());
-    let _ = collect_terminal_frame_until(&mut target.updates, target_initial, &target_needle).await;
+    let _ = collect_terminal_frame_until(&mut target.frames, &target_needle).await;
 
     send_terminal_command(&source.commands, TerminalCommand::Shutdown).await;
     send_terminal_command(&target.commands, TerminalCommand::Shutdown).await;

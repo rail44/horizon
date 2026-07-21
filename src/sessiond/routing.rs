@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use crossbeam_channel::Sender;
 use horizon_agent::contract::{self, Event, ProviderEvent};
 use horizon_agent::wire::{self, AgentWireEvent, HostToolRequest};
-use horizon_terminal_core::{TerminalCommand, TerminalUpdate};
+use horizon_terminal_core::{TerminalCommand, TerminalFrame, TerminalUpdate};
 use uuid::Uuid;
 
 /// The client-side fan-out table: which pane's channels receive a given
@@ -30,7 +30,12 @@ pub(super) struct Routes {
 
 struct RouteState {
     agent: HashMap<contract::SessionId, Sender<ProviderEvent>>,
-    terminal: HashMap<Uuid, Sender<TerminalUpdate>>,
+    /// The pane-facing frame stream: since wire v11 the frame path is a
+    /// `watch<TerminalFrame>`, so the transport delivers full frames here
+    /// (separate from `terminal_events`).
+    terminal_frames: HashMap<Uuid, Sender<TerminalFrame>>,
+    /// The pane-facing non-frame events (title/bell/clipboard/exit/error).
+    terminal_events: HashMap<Uuid, Sender<TerminalUpdate>>,
     /// The local (sync-sendable) half of each terminal's command bridge —
     /// the same queue the handle's own forwarding thread feeds; registered
     /// here so a broadcast (`SessiondHandle::broadcast_terminal_color_scheme`)
@@ -47,7 +52,8 @@ impl Routes {
         Self {
             state: Mutex::new(RouteState {
                 agent: HashMap::new(),
-                terminal: HashMap::new(),
+                terminal_frames: HashMap::new(),
+                terminal_events: HashMap::new(),
                 terminal_commands: HashMap::new(),
                 failure: None,
             }),
@@ -74,15 +80,19 @@ impl Routes {
     pub(super) fn register_terminal(
         &self,
         session_id: Uuid,
-        updates: Sender<TerminalUpdate>,
+        frames: Sender<TerminalFrame>,
+        events: Sender<TerminalUpdate>,
         commands: tokio::sync::mpsc::UnboundedSender<TerminalCommand>,
     ) {
         let mut state = self.state.lock().unwrap();
         if let Some(message) = state.failure.clone() {
-            let _ = updates.send(TerminalUpdate::Error(message));
+            // A dead runtime surfaces as an error event; the frame stream
+            // simply never delivers (it carries frames, not errors).
+            let _ = events.send(TerminalUpdate::Error(message));
             return;
         }
-        state.terminal.insert(session_id, updates);
+        state.terminal_frames.insert(session_id, frames);
+        state.terminal_events.insert(session_id, events);
         state.terminal_commands.insert(session_id, commands);
     }
 
@@ -92,7 +102,8 @@ impl Routes {
 
     pub(super) fn unregister_terminal(&self, session_id: Uuid) {
         let mut state = self.state.lock().unwrap();
-        state.terminal.remove(&session_id);
+        state.terminal_frames.remove(&session_id);
+        state.terminal_events.remove(&session_id);
         state.terminal_commands.remove(&session_id);
     }
 
@@ -107,19 +118,35 @@ impl Routes {
         }
     }
 
-    /// One incoming update from a terminal attachment's channel, routed to
-    /// its pane. `Exited` also retires the route, exactly as the JSONL
-    /// dispatch did.
+    /// One incoming full frame from a terminal attachment's `frames` watch,
+    /// routed to its pane. A dead pane retires the whole route.
+    pub(super) fn route_terminal_frame(&self, session_id: Uuid, frame: TerminalFrame) {
+        let mut state = self.state.lock().unwrap();
+        if state
+            .terminal_frames
+            .get(&session_id)
+            .is_some_and(|sender| sender.send(frame).is_err())
+        {
+            state.terminal_frames.remove(&session_id);
+            state.terminal_events.remove(&session_id);
+            state.terminal_commands.remove(&session_id);
+        }
+    }
+
+    /// One incoming non-frame event from a terminal attachment's `events`
+    /// channel, routed to its pane. `Exited` also retires the route,
+    /// exactly as the JSONL dispatch did.
     pub(super) fn route_terminal_update(&self, session_id: Uuid, update: TerminalUpdate) {
         let exited = matches!(update, TerminalUpdate::Exited);
         let mut state = self.state.lock().unwrap();
         if state
-            .terminal
+            .terminal_events
             .get(&session_id)
             .is_some_and(|sender| sender.send(update).is_err())
             || exited
         {
-            state.terminal.remove(&session_id);
+            state.terminal_frames.remove(&session_id);
+            state.terminal_events.remove(&session_id);
             state.terminal_commands.remove(&session_id);
         }
     }
@@ -182,7 +209,9 @@ impl Routes {
             state.failure = Some(message.clone());
             state.terminal_commands.clear();
             (
-                state.terminal.values().cloned().collect::<Vec<_>>(),
+                // The error rides the event stream; the frame watch just
+                // stops delivering.
+                state.terminal_events.values().cloned().collect::<Vec<_>>(),
                 state.agent.values().cloned().collect::<Vec<_>>(),
             )
         };
