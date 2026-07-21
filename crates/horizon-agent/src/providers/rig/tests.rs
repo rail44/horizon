@@ -1084,6 +1084,106 @@ fn rig_session_batches_parallel_tool_results_into_one_follow_up_completion() {
 }
 
 #[test]
+fn fresh_user_message_retires_old_tool_batch_before_new_tool_turn() {
+    let (tx, rx) = start_fallback_rig_session();
+
+    let _ = tx.send(Command::UserMessage {
+        text: "multi tool please".to_string(),
+    });
+    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            ..
+        })
+    ));
+
+    let mut old_call_ids = HashSet::new();
+    for _ in 0..MULTI_TOOL_TEST_BATCH_SIZE {
+        match recv(&rx).event {
+            Event::ToolCallRequested(request) => {
+                old_call_ids.insert(request.call_id);
+            }
+            other => panic!("expected an old tool call request, got {other:?}"),
+        }
+    }
+
+    // Reproduce the dogfood failure: submit a fresh instruction while the
+    // previous turn's tool calls are still outstanding, then have that new
+    // turn request a tool of its own.
+    let _ = tx.send(Command::UserMessage {
+        text: "snapshot please".to_string(),
+    });
+
+    let mut cancelled_call_ids = HashSet::new();
+    for _ in 0..MULTI_TOOL_TEST_BATCH_SIZE {
+        match recv(&rx).event {
+            Event::ToolCallFinished(result) => {
+                assert_eq!(result.output["cancelled"], true);
+                cancelled_call_ids.insert(result.call_id);
+            }
+            other => panic!("expected an old call cancellation, got {other:?}"),
+        }
+    }
+    assert_eq!(cancelled_call_ids, old_call_ids);
+    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Cancelled));
+    assert_eq!(
+        recv(&rx).event,
+        Event::StateChanged(SessionState::Cancelled)
+    );
+    assert_eq!(
+        recv(&rx).event,
+        Event::StateChanged(SessionState::WaitingForUser)
+    );
+    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            text,
+        }) if text == "snapshot please"
+    ));
+    let new_call_id = match recv(&rx).event {
+        Event::ToolCallRequested(request) => request.call_id,
+        other => panic!("expected the new turn's tool call, got {other:?}"),
+    };
+    assert!(!old_call_ids.contains(&new_call_id));
+
+    // Every tool implementation can finish late. Those old results must be
+    // ignored rather than rejoining the new turn's normalized batch.
+    for call_id in old_call_ids {
+        let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
+            call_id,
+            serde_json::json!({ "late": true }),
+        )));
+    }
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(200))
+            .is_err(),
+        "late results from the retired turn must be silent"
+    );
+
+    let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
+        new_call_id,
+        serde_json::json!({ "ok": true }),
+    )));
+    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::Assistant,
+            ..
+        })
+    ));
+    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Completed));
+    assert_eq!(
+        recv(&rx).event,
+        Event::StateChanged(SessionState::WaitingForUser)
+    );
+}
+
+#[test]
 fn rig_session_cancel_mid_batch_drops_remaining_results_and_recovers() {
     let (tx, rx) = start_fallback_rig_session();
 

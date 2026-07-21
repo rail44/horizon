@@ -111,7 +111,11 @@ enum Command {
 Notes:
 
 - `Initialize` gives the provider a Horizon-defined session context.
-- `UserMessage` is the fixed-composer MVP input path.
+- `UserMessage` is the fixed-composer MVP input path. If an earlier turn still
+  owns pending tool calls, accepting a new message first cancels that entire
+  normalized call batch (regardless of tool kind) and marks late results as
+  stale. Calls from different user interactions must never share batching
+  state.
 - `Cancel` should cancel the active turn or a specific request when supported.
 - `ApproveToolCall` and `DenyToolCall` are responses to pending approval
   requests created by Horizon.

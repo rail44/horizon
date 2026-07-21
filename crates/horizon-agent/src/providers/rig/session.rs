@@ -231,6 +231,22 @@ async fn run_session_loop(
                 tracing::warn!("ignoring unknown agent command from a newer peer");
             }
             Command::UserMessage { text } => {
+                // A user message starts a new interaction rather than joining
+                // the previous turn's tool batch. This command can arrive
+                // while any kind of tool is still running or awaiting
+                // approval, so retire the whole old batch before asking the
+                // provider to handle the new message. Otherwise those old
+                // call ids remain in `pending_tool_calls` and a result from
+                // the new turn is mistaken for a non-final member of the old
+                // batch, leaving the session waiting forever.
+                if cancel_outstanding_tool_calls(
+                    &events_tx,
+                    &mut rig_history,
+                    &mut pending_tool_calls,
+                    &mut cancelled_call_ids,
+                ) {
+                    emit_cancelled_turn(&events_tx);
+                }
                 // Typing past a halt instead of clicking Continue: the
                 // real result a guard halt stashed still has to land in
                 // `rig_history` before the next request, or the API
@@ -416,23 +432,18 @@ async fn run_session_loop(
                 );
             }
             Command::Cancel { .. } => {
-                if pending_tool_calls.is_empty() {
+                if !cancel_outstanding_tool_calls(
+                    &events_tx,
+                    &mut rig_history,
+                    &mut pending_tool_calls,
+                    &mut cancelled_call_ids,
+                ) {
                     // Nothing in flight (no running turn, no pending tool
                     // call) — cancel is a no-op in v1's "cancel whatever is
                     // in flight" semantics.
                     continue;
                 }
-                let call_ids: Vec<ToolCallId> =
-                    pending_tool_calls.drain().map(|(id, _)| id).collect();
-                cancelled_call_ids.extend(call_ids.iter().cloned());
-                append_cancelled_tool_results_to_history(&mut rig_history, &call_ids);
-                for call_id in call_ids {
-                    let _ = events_tx
-                        .send(Event::ToolCallFinished(cancelled_tool_call_result(call_id)).into());
-                }
-                let _ = events_tx.send(Event::TurnEnded(TurnEndReason::Cancelled).into());
-                let _ = events_tx.send(Event::StateChanged(SessionState::Cancelled).into());
-                let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
+                emit_cancelled_turn(&events_tx);
             }
             Command::Shutdown => {
                 let _ = events_tx.send(Event::StateChanged(SessionState::Terminated).into());
@@ -594,6 +605,38 @@ pub(super) fn append_cancelled_tool_results_to_history(
     }
 }
 
+/// Retires every tool call still owned by the unfinished turn.
+///
+/// This operates on normalized provider call ids, not tool implementations,
+/// so the same path covers synchronous filesystem/config tools, asynchronous
+/// bash/web tools, and approval-gated calls. Real results that arrive after
+/// retirement are recognized through `cancelled_call_ids` and dropped by the
+/// session loop instead of entering a later turn's batch.
+fn cancel_outstanding_tool_calls(
+    events_tx: &Sender<ProviderEvent>,
+    rig_history: &mut Vec<Message>,
+    pending_tool_calls: &mut HashMap<ToolCallId, ToolCallDescriptor>,
+    cancelled_call_ids: &mut HashSet<ToolCallId>,
+) -> bool {
+    let call_ids: Vec<ToolCallId> = pending_tool_calls.drain().map(|(id, _)| id).collect();
+    if call_ids.is_empty() {
+        return false;
+    }
+
+    cancelled_call_ids.extend(call_ids.iter().cloned());
+    append_cancelled_tool_results_to_history(rig_history, &call_ids);
+    for call_id in call_ids {
+        let _ = events_tx.send(Event::ToolCallFinished(cancelled_tool_call_result(call_id)).into());
+    }
+    true
+}
+
+fn emit_cancelled_turn(events_tx: &Sender<ProviderEvent>) {
+    let _ = events_tx.send(Event::TurnEnded(TurnEndReason::Cancelled).into());
+    let _ = events_tx.send(Event::StateChanged(SessionState::Cancelled).into());
+    let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
+}
+
 // --- Turn-loop guards ------------------------------------------------------
 //
 // Two independent safety nets against a runaway tool-calling loop, per
@@ -753,12 +796,12 @@ pub(super) fn halt_turn_loop(
 ) {
     *pending_halt_result = Some(arrived_result.clone());
 
-    let call_ids: Vec<ToolCallId> = pending_tool_calls.drain().map(|(id, _)| id).collect();
-    cancelled_call_ids.extend(call_ids.iter().cloned());
-    append_cancelled_tool_results_to_history(rig_history, &call_ids);
-    for call_id in call_ids {
-        let _ = events_tx.send(Event::ToolCallFinished(cancelled_tool_call_result(call_id)).into());
-    }
+    cancel_outstanding_tool_calls(
+        events_tx,
+        rig_history,
+        pending_tool_calls,
+        cancelled_call_ids,
+    );
 
     guard.reset();
     let _ = events_tx.send(Event::TurnEnded(halt.turn_end_reason()).into());
