@@ -93,7 +93,7 @@ impl JudgeHandle {
         let input = JudgeInput {
             call_id: request.call_id.0.clone(),
             tool_id: request.tool_id.clone(),
-            args: request.input.clone(),
+            args: request.input.0.clone(),
             tool_description: super::builtin_tool_description(&request.tool_id),
             prior_user_messages,
         };

@@ -262,7 +262,7 @@ fn event_type_subfield(event: KeyEventKind, flags: KittyKeyboardFlags) -> Option
     match event {
         // Skew catch-all: an unknown event kind encodes like a press (see
         // `KeyEventKind::Unknown` — dropping a press would lose input).
-        KeyEventKind::Press | KeyEventKind::Unknown(_) => None,
+        KeyEventKind::Press | KeyEventKind::Unknown => None,
         KeyEventKind::Repeat => Some(2),
         KeyEventKind::Release => Some(3),
     }

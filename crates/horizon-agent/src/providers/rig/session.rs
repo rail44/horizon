@@ -227,7 +227,7 @@ async fn run_session_loop(
             // Skew catch-all (`Command::Unknown`'s doc): a command this
             // build can't name is logged and dropped -- never acked, never
             // half-executed.
-            Command::Unknown(_) => {
+            Command::Unknown => {
                 tracing::warn!("ignoring unknown agent command from a newer peer");
             }
             Command::UserMessage { text } => {

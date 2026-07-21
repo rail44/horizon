@@ -60,7 +60,7 @@ impl Provider for MockProvider {
                 match command {
                     // Skew catch-all: dropped, mirroring the rig
                     // provider's session loop.
-                    Command::Unknown(_) => {}
+                    Command::Unknown => {}
                     Command::Initialize(_) => {
                         let _ = events_tx.send(Event::StateChanged(SessionState::Running).into());
                         let _ = events_tx
@@ -106,7 +106,7 @@ impl Provider for MockProvider {
                                 Event::ToolCallRequested(ToolCallRequest {
                                     call_id,
                                     tool_id: "mock.approval_required".to_string(),
-                                    input: serde_json::json!({ "message": text }),
+                                    input: serde_json::json!({ "message": text }).into(),
                                 })
                                 .into(),
                             );
@@ -119,7 +119,7 @@ impl Provider for MockProvider {
                                 Event::ToolCallRequested(ToolCallRequest {
                                     call_id,
                                     tool_id: "workspace.snapshot".to_string(),
-                                    input: serde_json::json!({}),
+                                    input: serde_json::json!({}).into(),
                                 })
                                 .into(),
                             );
@@ -138,7 +138,9 @@ impl Provider for MockProvider {
                                 Event::ToolCallRequested(ToolCallRequest {
                                     call_id,
                                     tool_id: "bash".to_string(),
-                                    input: serde_json::json!({ "command": "echo sessiond-bash-ok" }),
+                                    input:
+                                        serde_json::json!({ "command": "echo sessiond-bash-ok" })
+                                            .into(),
                                 })
                                 .into(),
                             );
@@ -151,7 +153,7 @@ impl Provider for MockProvider {
                                 Event::ToolCallRequested(ToolCallRequest {
                                     call_id: call_id.clone(),
                                     tool_id: "mock.approval_required".to_string(),
-                                    input: serde_json::json!({ "message": text }),
+                                    input: serde_json::json!({ "message": text }).into(),
                                 })
                                 .into(),
                             );

@@ -1,4 +1,3 @@
-use horizon_session_protocol::UnknownPayload;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -23,11 +22,13 @@ pub enum TerminalSelectionKind {
     Word,
     /// Whole-line selection (a triple click or beyond).
     Line,
-    /// Deserialize-only skew catch-all — see
-    /// [`horizon_session_protocol::UnknownPayload`]. Keep last. Treated as
+    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
+    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
+    /// discarded there; under serde_json only *unit* variants degrade —
+    /// a payload-carrying one is a per-item decode error instead). Keep last. Treated as
     /// [`TerminalSelectionKind::Simple`] (the least surprising selection).
-    #[serde(untagged)]
-    Unknown(UnknownPayload),
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -43,11 +44,13 @@ pub enum TerminalMouseKind {
     Press,
     Release,
     Drag,
-    /// Deserialize-only skew catch-all — see
-    /// [`horizon_session_protocol::UnknownPayload`]. Keep last. An unknown
+    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
+    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
+    /// discarded there; under serde_json only *unit* variants degrade —
+    /// a payload-carrying one is a per-item decode error instead). Keep last. An unknown
     /// mouse event kind is dropped rather than guessed at.
-    #[serde(untagged)]
-    Unknown(UnknownPayload),
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -55,11 +58,13 @@ pub enum TerminalMouseButton {
     Left,
     Middle,
     Right,
-    /// Deserialize-only skew catch-all — see
-    /// [`horizon_session_protocol::UnknownPayload`]. Keep last. An unknown
+    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
+    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
+    /// discarded there; under serde_json only *unit* variants degrade —
+    /// a payload-carrying one is a per-item decode error instead). Keep last. An unknown
     /// button is dropped rather than guessed at.
-    #[serde(untagged)]
-    Unknown(UnknownPayload),
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]

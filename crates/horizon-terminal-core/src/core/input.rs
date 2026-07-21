@@ -36,7 +36,7 @@ pub(super) fn sgr_mouse_input(report: TerminalMouseReport) -> Vec<u8> {
                 TerminalMouseButton::Right => 2,
                 // Skew catch-all: a button this build can't name has no
                 // encodable report — send nothing rather than guess.
-                TerminalMouseButton::Unknown(_) => return Vec::new(),
+                TerminalMouseButton::Unknown => return Vec::new(),
             };
             if matches!(report.kind, TerminalMouseKind::Drag) {
                 code += 32;
@@ -44,7 +44,7 @@ pub(super) fn sgr_mouse_input(report: TerminalMouseReport) -> Vec<u8> {
             code + mouse_modifier_code(report.modifiers)
         }
         // Same posture as an unknown button: nothing to report.
-        TerminalMouseKind::Unknown(_) => return Vec::new(),
+        TerminalMouseKind::Unknown => return Vec::new(),
     };
     let col = report.point.col.saturating_add(1);
     let row = report.point.row.saturating_add(1);

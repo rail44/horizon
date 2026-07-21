@@ -1,182 +1,68 @@
-//! The JSONL wire envelope for `horizon-sessiond`'s socket protocol -- see
-//! `docs/agent-runtime-split-design.md`'s decision 4 and ACP guardrails 1-2.
+//! The agent domain's wire vocabulary for `horizon-sessiond`'s socket —
+//! the payload types that cross the process boundary, and nothing else.
 //!
-//! **Guardrail 1 (contract ≠ wire)**: this module references
-//! [`crate::contract`] types (`Command`, `Event`, `SessionId`, ...) to build
-//! the envelope shape; nothing in `contract` references this module. An ACP
-//! adapter is a second binding beside this one, translating JSON-RPC to the
-//! same contract types.
+//! The v10 remoc cutover (`docs/remoc-adoption-design.md` §2) deleted this
+//! module's JSONL machinery wholesale: the `Envelope`/`EnvelopeBody` pair,
+//! the `agent_control`/`agent_command`/`agent_event` kind constants, the
+//! `Control` dispatch enum, and the `encode_*`/`decode_*`/`read_*`/
+//! `write_*` framing helpers. What used to be `Control` variants maps onto
+//! `horizon_session_protocol::SessionHub` instead: `SessionList`/`SessionNew`/
+//! `SessionLoad` are rtc calls (`list_agents`/`new_agent`/`attach_agent`),
+//! `HostToolRequest`/`HostToolResponse` ride connection-global channels
+//! handed over in `HubHello`, and the session-scoped announcements ride the
+//! per-attachment [`AgentWireEvent`] channel.
 //!
-//! **Guardrail 2 (framing over any stream)**: [`read_envelope`]/
-//! [`write_envelope`] are generic over `tokio::io::{AsyncBufRead,
-//! AsyncWrite}` -- nothing here names `UnixStream` or any other concrete
-//! transport. Callers (`horizon-sessiond`'s connection handler, Horizon's
-//! `agent::connection`) wrap whatever socket/pipe they have (typically
-//! `tokio::io::BufReader::new(unix_stream_read_half)` for the read side)
-//! and pass it in here.
+//! **Guardrail 1 (contract ≠ wire)** still holds: this module references
+//! [`crate::contract`] types (`Command`, `Event`, `SessionId`, ...); nothing
+//! in `contract` references this module. And the vocabulary stays
+//! serde-plain and remoc-free — the hub trait that names these types lives
+//! in `horizon-session-protocol`, keeping the exit cost of a transport
+//! re-swap bounded (`docs/remoc-adoption-design.md` §1).
 
 use std::path::PathBuf;
 
-use horizon_session_protocol::{Envelope as ProtocolEnvelope, UnknownPayload};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncBufRead, AsyncWrite};
 
-use crate::contract::{Command, Event, ProviderId, RequestId, SessionId, ToolCallProgress};
+use crate::contract::{Event, JsonValue, ProviderId, RequestId, SessionId, ToolCallProgress};
 use crate::roles::RoleId;
 
-/// Shared handshake types, errors, and the contract/wire version this build
-/// speaks. The version is carried by every envelope and independently by
-/// [`Hello::contract_version`]. Version 3 introduces qualified sister-domain
-/// kinds and moves shared lifecycle controls into `horizon-session-protocol`.
-///
-/// The definitions now live in `horizon-session-protocol`; these re-exports
-/// preserve this module's public API while terminal and agent messages share
-/// one session-daemon connection.
-pub use horizon_session_protocol::{
-    Hello, WireError, SESSION_PROTOCOL_VERSION as CONTRACT_VERSION,
-};
-
-pub const AGENT_CONTROL_KIND: &str = "agent_control";
-pub const AGENT_COMMAND_KIND: &str = "agent_command";
-pub const AGENT_EVENT_KIND: &str = "agent_event";
-
-/// One JSONL agent-domain message. `session_id` is `None` for
-/// connection-global agent controls such as `session_list` and `Some`
-/// for anything scoped to one agent session.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct Envelope {
-    pub v: u32,
-    pub session_id: Option<SessionId>,
-    #[serde(flatten)]
-    pub body: EnvelopeBody,
-}
-
-impl Envelope {
-    pub fn command(session_id: SessionId, command: Command) -> Self {
-        Self {
-            v: CONTRACT_VERSION,
-            session_id: Some(session_id),
-            body: EnvelopeBody::Command(command),
-        }
-    }
-
-    pub fn event(session_id: SessionId, event: Event) -> Self {
-        Self {
-            v: CONTRACT_VERSION,
-            session_id: Some(session_id),
-            body: EnvelopeBody::Event(event),
-        }
-    }
-
-    /// A connection-global control message (`session_id: None`). Construct
-    /// [`Envelope`] directly (struct literal -- every field is `pub`) for a
-    /// control message scoped to one session, e.g. a future session-bound
-    /// host-tool exchange.
-    pub fn control(control: Control) -> Self {
-        Self {
-            v: CONTRACT_VERSION,
-            session_id: None,
-            body: EnvelopeBody::Control(control),
-        }
-    }
-}
-
-/// The envelope's `kind`/`payload` pair. Serializes adjacently tagged
-/// (`{"kind":"agent_command","payload":{..}}`) through the raw-envelope
-/// adapter; deserializing
-/// needs the version check *before* picking which contract type to decode
-/// `payload` as, so [`read_envelope`] performs the shared structural read
-/// before decoding this enum -- see [`WireError::UnknownKind`]/
-/// [`WireError::VersionMismatch`].
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
-pub enum EnvelopeBody {
-    Command(Command),
-    Event(Event),
-    Control(Control),
-}
-
-/// Agent-domain control messages. Shared connection lifecycle controls live
-/// in `horizon_session_protocol::SessionControl`.
+/// Everything a hosted agent session pushes to its attached client, on the
+/// attachment's event channel (`horizon_session_protocol::AgentAttachment::
+/// events`): the session's provider events, plus the session-scoped
+/// announcements that were their own control envelopes on the JSONL wire.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum Control {
-    SessionList,
-    SessionListResult(Vec<SessionSummary>),
-    SessionNew(SessionNew),
-    SessionLoad(SessionLoad),
-    HostToolRequest(HostToolRequest),
-    HostToolResponse(HostToolResponse),
+pub enum AgentWireEvent {
+    /// A folded provider event — the transcript's raw material, identical
+    /// to what the event log persists.
+    Event(Event),
     /// Ephemeral tool-call-argument-streaming preview
-    /// (`contract::ProviderEvent::tool_call_progress`), session-scoped via
-    /// the envelope's own `session_id` (not this payload). `contract::Event`
-    /// deliberately has no variant for this -- it's UI-only feedback, never
-    /// part of conversation history and never persisted (see
-    /// [`ToolCallProgress`]'s own doc comment) -- so a step-3 pass filtered
-    /// it out entirely rather than invent a wire `Event` representation for
-    /// something the contract itself excludes. Restored here as its own
-    /// control message instead: reuses `contract::ToolCallProgress` as-is
-    /// (guardrail 1 is about the *direction* `wire` -> `contract` already
-    /// established by every other `Control` payload, not about which module
-    /// owns a struct). See `horizon-sessiond`'s `session::handle_provider_event`
-    /// (sender) and `horizon`'s `agent::connection::dispatch_incoming`
-    /// (receiver, which folds it through the exact same
-    /// `apply_tool_call_progress_to_frame` path a persisted event would).
+    /// (`contract::ProviderEvent::tool_call_progress`). UI-only feedback:
+    /// never part of conversation history and never persisted (see
+    /// [`ToolCallProgress`]'s own doc comment), which is why
+    /// `contract::Event` deliberately has no variant for it.
     ToolCallProgress(ToolCallProgress),
-    /// A session's resolved model id, session-scoped via the envelope's own
-    /// `session_id` -- same shape of exception as [`Control::ToolCallProgress`]
-    /// just above: `contract::ProviderEvent::session_model` is ephemeral
-    /// (never part of conversation history, never persisted), so it travels
-    /// as its own `Control` rather than a new `contract::Event` variant. Sent
-    /// once by `horizon-sessiond`, either right after a fresh
-    /// `Control::SessionNew` resolves its session's model, or alongside a
-    /// `Control::SessionLoad`'s replayed events (so a (re)attaching client
-    /// gets it too, not just the client present at session start) -- see
-    /// `docs/agent-output-ui-amendment.md`'s dated model-chip addendum.
-    /// Omitted entirely when the provider has no resolvable model (mirrors
-    /// [`Control::SkippedLines`]'s "just don't send it" convention below).
+    /// The session's resolved model id — sent once right after a fresh
+    /// session resolves it, and re-announced to every later attachment
+    /// (see `docs/agent-output-ui-amendment.md`'s dated model-chip
+    /// addendum). Ephemeral like `ToolCallProgress`.
     SessionModel(String),
-    /// This process's own startup event-log corruption diagnostics
-    /// (`persistence::event_log::ReadReport::skipped_summary`), sent once
-    /// per connection -- after `horizon-sessiond`'s startup resume finishes,
-    /// never blocking `Hello`'s immediate reply the way answering inside
-    /// `Hello` itself would (see `horizon-sessiond::main`'s bind-first
-    /// ordering doc comment; `session_list`/`session_load` already block on
-    /// the same readiness gate for the same reason). Connection-global, like
-    /// [`Control::SessionList`] -- omitted entirely when nothing was
-    /// skipped. See `horizon-sessiond`'s `main::run_session_hosting_loop`
-    /// (sender) and `horizon`'s `agent::connection::dispatch_incoming`
-    /// (receiver, which folds it into `agent_state_status`, the status
-    /// bar's existing signal).
-    SkippedLines(String),
     /// Live correction of a freshly isolated session's authoritative
-    /// `workspace_root` (and, since the same resolution moment also decides
-    /// the derivation edge, `parent_session_id`) -- session-scoped via the
-    /// envelope's own `session_id`, same shape of exception as
-    /// [`Control::SessionModel`] above. Sent once by `horizon-sessiond`,
-    /// right after `session::resolve_and_create_isolated_worktree` resolves
-    /// this session's isolated worktree: worktree creation is real IO that
-    /// only finishes *after* `Control::SessionNew` already returned, so a
-    /// fresh spawn's shell-side `workspace_root` is only ever the
-    /// pre-isolation guess until now. Closes the last "still eventual, not
-    /// live" gap `docs/session-relationship-design.md`'s delivery notes call
-    /// out: without this, a session created and used within one continuous
-    /// run only saw its corrected root/parent via a later
-    /// `spawn_agent_resume`/`spawn_workspace_restore` sweep (daemon restart
-    /// or UI restart). Not sent at all when isolation fails and degrades to
-    /// a shared spawn -- there is nothing to correct then, mirroring
-    /// [`SessionSummary::parent_session_id`]'s "the edge exists only via
-    /// isolation".
+    /// `workspace_root` (and derivation edge) — sent once, right after
+    /// `horizon-sessiond` resolves the session's isolated worktree, which
+    /// only finishes *after* `new_agent` already returned. Not sent at all
+    /// when isolation fails and degrades to a shared spawn (nothing to
+    /// correct then, mirroring [`SessionSummary::parent_session_id`]'s
+    /// "the edge exists only via isolation").
     WorkspaceRootResolved(WorkspaceRootResolved),
-    /// Deserialize-only skew catch-all — see
-    /// [`horizon_session_protocol::UnknownPayload`]. Keep last. Both ends
-    /// log and drop an unknown control.
-    #[serde(untagged)]
-    Unknown(UnknownPayload),
+    /// Skew catch-all — `#[serde(other)]`: an event this build can't name
+    /// decodes to `Unknown` on the Postbag wire, payload discarded (the
+    /// receiver skips it; under serde_json only unit variants degrade). Keep last.
+    #[serde(other)]
+    Unknown,
 }
 
-/// [`Control::WorkspaceRootResolved`]'s payload.
+/// [`AgentWireEvent::WorkspaceRootResolved`]'s payload.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceRootResolved {
     pub workspace_root: PathBuf,
@@ -187,7 +73,7 @@ pub struct WorkspaceRootResolved {
     pub parent_session_id: Option<SessionId>,
 }
 
-/// One entry of a [`Control::SessionListResult`] reply.
+/// One entry of a `SessionHub::list_agents` reply.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionSummary {
     pub session_id: SessionId,
@@ -202,9 +88,9 @@ pub struct SessionSummary {
     /// branched from the source session's directory) -- a shared-directory
     /// spawn creates no edge, so this stays `None` even if a spawn source
     /// was given. `#[serde(default)]`, purely additive like `SessionNew.
-    /// workspace_root` below -- no `CONTRACT_VERSION` bump. A resumed
-    /// session (`session::resume_persisted_sessions`) always reports
-    /// `None` here today: lineage lives in `horizon-sessiond`'s in-memory
+    /// workspace_root` below -- no version bump. A resumed session
+    /// (`session::resume_persisted_sessions`) always reports `None` here
+    /// today: lineage lives in `horizon-sessiond`'s in-memory
     /// `SessiondState`, not the event log, so it doesn't survive a
     /// `horizon-sessiond` process restart -- the same accepted gap
     /// `SessionNew.workspace_root` already has (see that field's doc
@@ -217,7 +103,7 @@ pub struct SessionSummary {
     /// value; for an isolated session, `horizon-sessiond` overrides it with
     /// the worktree path it creates, which the caller cannot know in
     /// advance since worktree creation finishes asynchronously, after
-    /// `Control::SessionNew` already returned -- see
+    /// `new_agent` already returned -- see
     /// `session::resolve_and_create_isolated_worktree`). Additive, like
     /// `parent_session_id` above; populated from the same `SessionEntry.
     /// workspace_root` a resumed session's summary reads too, so this
@@ -234,12 +120,9 @@ pub struct SessionSummary {
     pub workspace_root: Option<PathBuf>,
 }
 
-/// Per `docs/agent-runtime-split-design.md` guardrail 5, `session_new` is
-/// distinct from `session_load` and carries per-session overrides.
-/// `role_id` replaces this field's former placeholder shape
-/// (`config_overrides: Option<serde_json::Value>`) -- see
-/// [`CONTRACT_VERSION`]'s doc comment for why that was a breaking, not
-/// additive, change.
+/// Per `docs/agent-runtime-split-design.md` guardrail 5, spawning a fresh
+/// session (`SessionHub::new_agent`) is distinct from attaching to an
+/// existing one (`attach_agent`) and carries per-session overrides.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionNew {
     pub session_id: SessionId,
@@ -255,16 +138,15 @@ pub struct SessionNew {
     /// purely additive: `#[serde(default)]` lets a peer's `SessionNew`
     /// written before this field existed still parse (as `None`), mirroring
     /// `persistence::event_log::Record::role_id`'s own additive-field
-    /// precedent rather than [`CONTRACT_VERSION`]'s breaking-change one.
-    /// Passed into `SessiondHandle::start_session` by the workspace layer
-    /// (`WorkspaceShell::reconcile`), which computes the Horizon process's
-    /// own cwd once per session (falling back to `None` only if that cwd
-    /// can't be read) and records the same value on the session's
-    /// `WorkspaceSession::workspace_root` -- so a session's workspace root
-    /// tracks whichever Horizon window spawned it, not `horizon-sessiond`'s
-    /// own cwd (one shared, long-lived daemon per user, started from
-    /// whatever directory happened to be current the first time it was
-    /// launched).
+    /// precedent. Passed into `SessiondHandle::start_session` by the
+    /// workspace layer (`WorkspaceShell::reconcile`), which computes the
+    /// Horizon process's own cwd once per session (falling back to `None`
+    /// only if that cwd can't be read) and records the same value on the
+    /// session's `WorkspaceSession::workspace_root` -- so a session's
+    /// workspace root tracks whichever Horizon window spawned it, not
+    /// `horizon-sessiond`'s own cwd (one shared, long-lived daemon per
+    /// user, started from whatever directory happened to be current the
+    /// first time it was launched).
     #[serde(default)]
     pub workspace_root: Option<PathBuf>,
     /// The pane/session this spawn was invoked "from" -- e.g. the split
@@ -291,145 +173,28 @@ pub struct SessionNew {
     pub isolate: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct SessionLoad {
-    pub session_id: SessionId,
-}
-
 /// The agent (child) asking the client to run a host-coupled tool (e.g.
-/// `workspace.snapshot`) over this same connection -- guardrail 4. Not yet
-/// sent or handled anywhere in step 2 (tool execution stays in Horizon
-/// until step 3); the shape exists here so the wire format is settled.
+/// `workspace.snapshot`) over this same connection -- guardrail 4. Rides
+/// the connection-global `HubHello::host_tools` channel; the `request_id`
+/// correlation survives the cutover because the exchange is genuinely
+/// asynchronous on the daemon side (a session thread blocks on the
+/// matching [`HostToolResponse`]).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct HostToolRequest {
     pub request_id: RequestId,
     pub tool_id: String,
-    pub input: serde_json::Value,
+    pub input: JsonValue,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct HostToolResponse {
     pub request_id: RequestId,
-    pub output: serde_json::Value,
-}
-
-/// Writes one envelope as a single newline-terminated JSON line and flushes
-/// the writer, so a peer reading line-by-line (e.g. [`read_envelope`]) sees
-/// it immediately rather than waiting on a fuller buffer.
-pub fn encode_envelope(envelope: &Envelope) -> Result<ProtocolEnvelope, WireError> {
-    let (kind, payload) = match &envelope.body {
-        EnvelopeBody::Command(command) => (AGENT_COMMAND_KIND, serde_json::to_value(command)?),
-        EnvelopeBody::Event(event) => (AGENT_EVENT_KIND, serde_json::to_value(event)?),
-        EnvelopeBody::Control(control) => (AGENT_CONTROL_KIND, serde_json::to_value(control)?),
-    };
-    Ok(ProtocolEnvelope {
-        v: envelope.v,
-        session_id: envelope.session_id.map(SessionId::as_uuid),
-        kind: kind.to_string(),
-        payload,
-    })
-}
-
-pub fn decode_envelope(raw: ProtocolEnvelope) -> Result<Envelope, WireError> {
-    let body = match raw.kind.as_str() {
-        AGENT_COMMAND_KIND => EnvelopeBody::Command(serde_json::from_value(raw.payload)?),
-        AGENT_EVENT_KIND => EnvelopeBody::Event(serde_json::from_value(raw.payload)?),
-        AGENT_CONTROL_KIND => EnvelopeBody::Control(serde_json::from_value(raw.payload)?),
-        other => return Err(WireError::UnknownKind(other.to_string())),
-    };
-    Ok(Envelope {
-        v: raw.v,
-        session_id: raw.session_id.map(SessionId::from_uuid),
-        body,
-    })
-}
-
-pub async fn write_envelope<W>(writer: &mut W, envelope: &Envelope) -> Result<(), WireError>
-where
-    W: AsyncWrite + Unpin,
-{
-    let protocol_envelope = encode_envelope(envelope)?;
-    horizon_session_protocol::write_envelope(writer, &protocol_envelope).await
-}
-
-/// Reads one newline-delimited envelope. `Ok(None)` means the peer closed
-/// the connection cleanly between messages (0 bytes read, no partial line
-/// pending); a partial line with no trailing newline (peer closed
-/// mid-message) is [`WireError::TornLine`], never silently treated as a
-/// complete (truncated) message.
-pub async fn read_envelope<R>(reader: &mut R) -> Result<Option<Envelope>, WireError>
-where
-    R: AsyncBufRead + Unpin,
-{
-    let Some(raw) = horizon_session_protocol::read_envelope(reader).await? else {
-        return Ok(None);
-    };
-    Ok(Some(decode_envelope(raw)?))
+    pub output: JsonValue,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::ToolCallId;
-    use tokio::io::{AsyncWriteExt, BufReader};
-
-    fn sample_command() -> Command {
-        Command::UserMessage {
-            text: "hi".to_string(),
-        }
-    }
-
-    fn sample_event() -> Event {
-        Event::ToolCallRequested(crate::contract::ToolCallRequest {
-            call_id: ToolCallId("call-1".to_string()),
-            tool_id: "fs.read".to_string(),
-            input: serde_json::json!({"path": "a.txt"}),
-        })
-    }
-
-    fn sample_controls() -> Vec<Control> {
-        vec![
-            Control::SessionList,
-            Control::SessionListResult(vec![SessionSummary {
-                session_id: SessionId::new(),
-                provider_id: ProviderId("builtin.agent.rig".to_string()),
-                role_id: Some(RoleId("config".to_string())),
-                parent_session_id: Some(SessionId::new()),
-                workspace_root: Some(PathBuf::from("/tmp/some-workspace")),
-            }]),
-            Control::SessionNew(SessionNew {
-                session_id: SessionId::new(),
-                provider_id: ProviderId("builtin.agent.rig".to_string()),
-                role_id: Some(RoleId("config".to_string())),
-                workspace_root: Some(PathBuf::from("/tmp/some-workspace")),
-                spawn_source_session_id: Some(SessionId::new()),
-                isolate: true,
-            }),
-            Control::SessionLoad(SessionLoad {
-                session_id: SessionId::new(),
-            }),
-            Control::HostToolRequest(HostToolRequest {
-                request_id: RequestId("req-1".to_string()),
-                tool_id: "workspace.snapshot".to_string(),
-                input: serde_json::json!({}),
-            }),
-            Control::HostToolResponse(HostToolResponse {
-                request_id: RequestId("req-1".to_string()),
-                output: serde_json::json!({"ok": true}),
-            }),
-            Control::ToolCallProgress(ToolCallProgress {
-                key: "call-1".to_string(),
-                tool_id: Some("fs.read".to_string()),
-                bytes: 64,
-            }),
-            Control::SessionModel("gpt-4o".to_string()),
-            Control::SkippedLines("skipped 1 corrupt line".to_string()),
-            Control::WorkspaceRootResolved(WorkspaceRootResolved {
-                workspace_root: PathBuf::from("/tmp/some-workspace/.horizon/worktrees/abcd1234"),
-                parent_session_id: Some(SessionId::new()),
-            }),
-        ]
-    }
 
     // The four `contract_version_*` pin tests that lived here -- each a
     // hand-maintained `assert_eq!(CONTRACT_VERSION, 9)` whose doc comment
@@ -439,299 +204,78 @@ mod tests {
     // committed schema artifact and its checkers: any wire change shows up
     // as a diff of `crates/horizon-session-protocol/schema/session-wire.json`
     // (drift-enforced by `crates/horizon-sessiond/tests/wire_schema.rs`,
-    // where the v1-v9 bump history those tests narrated now lives), and
+    // where the v1-v10 bump history those tests narrated now lives), and
     // `scripts/check-wire-schema.sh` fails any non-additive change that
     // doesn't bump `SESSION_PROTOCOL_VERSION` alongside it.
 
-    /// A control variant from a future build decodes as [`Control::Unknown`]
-    /// -- the §4 skew catch-all -- instead of failing the whole envelope.
-    #[tokio::test]
-    async fn unknown_control_variant_decodes_to_unknown_not_an_error() {
-        let (mut client, server) = tokio::io::duplex(1024);
-        let mut server_reader = BufReader::new(server);
-
-        let line = serde_json::json!({
-            "v": CONTRACT_VERSION,
-            "session_id": null,
-            "kind": AGENT_CONTROL_KIND,
-            "payload": {"session_teleport": {"target": "future"}}
-        })
-        .to_string();
-        client
-            .write_all(format!("{line}\n").as_bytes())
-            .await
-            .unwrap();
-        drop(client);
-
-        let envelope = read_envelope(&mut server_reader)
-            .await
-            .unwrap()
-            .expect("an unknown control variant should still parse");
-        assert_eq!(
-            envelope.body,
-            EnvelopeBody::Control(Control::Unknown(horizon_session_protocol::UnknownPayload))
-        );
-    }
-
-    /// The catch-all is deserialize-only: encoding an envelope that somehow
-    /// carries `Unknown` is an error (never a panic, never bytes on the
-    /// wire).
+    /// An event variant from a future build decodes as
+    /// [`AgentWireEvent::Unknown`] -- the §4 skew catch-all. serde_json can
+    /// only prove the unit-variant case (`#[serde(other)]` insists on unit
+    /// content there); the payload-carrying case is proven under the wire
+    /// codec in `horizon-session-protocol/tests/skew.rs`.
     #[test]
-    fn encoding_an_unknown_control_is_an_error_not_a_panic() {
-        let envelope =
-            Envelope::control(Control::Unknown(horizon_session_protocol::UnknownPayload));
-        let result = encode_envelope(&envelope);
-        assert!(matches!(result, Err(WireError::Json(_))), "{result:?}");
+    fn unknown_unit_event_variant_decodes_to_unknown_not_an_error() {
+        let event: AgentWireEvent = serde_json::from_value(serde_json::json!("SessionTeleport"))
+            .expect("an unknown unit variant should still parse");
+        assert_eq!(event, AgentWireEvent::Unknown);
     }
 
-    /// A `session_new` control message written by a peer built before
-    /// `workspace_root` existed has no such key in its JSON payload at all
-    /// -- `#[serde(default)]` must still parse it (as `None`), not reject
-    /// the envelope. Mirrors `persistence::event_log::Record`'s
+    /// A `SessionNew` written by a peer built before `workspace_root`
+    /// existed has no such key at all -- `#[serde(default)]` must still
+    /// parse it (as `None`), not reject the payload. Mirrors
+    /// `persistence::event_log::Record`'s
     /// `reads_a_pre_role_record_with_no_role_id_key` regression guard.
-    #[tokio::test]
-    async fn session_new_without_a_workspace_root_key_deserializes_to_none() {
-        let (mut client, server) = tokio::io::duplex(1024);
-        let mut server_reader = BufReader::new(server);
-
+    #[test]
+    fn session_new_without_optional_keys_takes_the_defaults() {
         let session_id = SessionId::new();
-        let line = serde_json::json!({
-            "v": CONTRACT_VERSION,
-            "session_id": null,
-            "kind": AGENT_CONTROL_KIND,
-            "payload": {
-                "session_new": {
-                    "session_id": session_id,
-                    "provider_id": "builtin.agent.rig",
-                    "role_id": null,
-                }
-            }
-        })
-        .to_string();
-        client
-            .write_all(format!("{line}\n").as_bytes())
-            .await
-            .unwrap();
-        drop(client);
-
-        let envelope = read_envelope(&mut server_reader)
-            .await
-            .unwrap()
-            .expect("envelope should parse despite the missing workspace_root key");
-        match envelope.body {
-            EnvelopeBody::Control(Control::SessionNew(new)) => {
-                assert_eq!(new.workspace_root, None);
-            }
-            other => panic!("expected Control::SessionNew, got {other:?}"),
-        }
+        let new: SessionNew = serde_json::from_value(serde_json::json!({
+            "session_id": session_id,
+            "provider_id": "builtin.agent.rig",
+            "role_id": null,
+        }))
+        .expect("payload should parse despite the missing optional keys");
+        assert_eq!(new.workspace_root, None);
+        assert_eq!(new.spawn_source_session_id, None);
+        assert!(!new.isolate);
     }
 
-    /// Same regression guard as the `workspace_root` test above, for the two
-    /// fields added alongside the session-relationship model: a peer built
-    /// before they existed sends a `session_new` payload with neither key at
-    /// all, and it must still parse, defaulting to "no source, not
-    /// isolated" (today's only behavior before this pair existed).
-    #[tokio::test]
-    async fn session_new_without_lineage_keys_deserializes_to_no_source_and_not_isolated() {
-        let (mut client, server) = tokio::io::duplex(1024);
-        let mut server_reader = BufReader::new(server);
-
+    /// Same for `SessionSummary`'s additive fields on the reply side.
+    #[test]
+    fn session_summary_without_optional_keys_takes_the_defaults() {
         let session_id = SessionId::new();
-        let line = serde_json::json!({
-            "v": CONTRACT_VERSION,
-            "session_id": null,
-            "kind": AGENT_CONTROL_KIND,
-            "payload": {
-                "session_new": {
-                    "session_id": session_id,
-                    "provider_id": "builtin.agent.rig",
-                    "role_id": null,
-                }
-            }
-        })
-        .to_string();
-        client
-            .write_all(format!("{line}\n").as_bytes())
-            .await
-            .unwrap();
-        drop(client);
-
-        let envelope = read_envelope(&mut server_reader)
-            .await
-            .unwrap()
-            .expect("envelope should parse despite the missing lineage keys");
-        match envelope.body {
-            EnvelopeBody::Control(Control::SessionNew(new)) => {
-                assert_eq!(new.spawn_source_session_id, None);
-                assert!(!new.isolate);
-            }
-            other => panic!("expected Control::SessionNew, got {other:?}"),
-        }
+        let summary: SessionSummary = serde_json::from_value(serde_json::json!({
+            "session_id": session_id,
+            "provider_id": "builtin.agent.rig",
+            "role_id": null,
+        }))
+        .expect("summary should parse despite the missing optional keys");
+        assert_eq!(summary.parent_session_id, None);
+        assert_eq!(summary.workspace_root, None);
     }
 
-    /// Same for `SessionSummary.parent_session_id` on the *reply* side: a
-    /// `session_list_result` entry from a peer built before this field
-    /// existed has no such key, and must parse as `None`, not reject the
-    /// envelope.
-    #[tokio::test]
-    async fn session_summary_without_a_parent_session_id_key_deserializes_to_none() {
-        let (mut client, server) = tokio::io::duplex(1024);
-        let mut server_reader = BufReader::new(server);
-
-        let session_id = SessionId::new();
-        let line = serde_json::json!({
-            "v": CONTRACT_VERSION,
-            "session_id": null,
-            "kind": AGENT_CONTROL_KIND,
-            "payload": {
-                "session_list_result": [{
-                    "session_id": session_id,
-                    "provider_id": "builtin.agent.rig",
-                    "role_id": null,
-                }]
-            }
-        })
-        .to_string();
-        client
-            .write_all(format!("{line}\n").as_bytes())
-            .await
-            .unwrap();
-        drop(client);
-
-        let envelope = read_envelope(&mut server_reader)
-            .await
-            .unwrap()
-            .expect("envelope should parse despite the missing parent_session_id key");
-        match envelope.body {
-            EnvelopeBody::Control(Control::SessionListResult(summaries)) => {
-                assert_eq!(summaries.len(), 1);
-                assert_eq!(summaries[0].parent_session_id, None);
-            }
-            other => panic!("expected Control::SessionListResult, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn round_trips_every_envelope_kind_over_a_duplex_stream() {
-        let session_id = SessionId::new();
-        let mut envelopes = vec![
-            Envelope::command(session_id, sample_command()),
-            Envelope::command(session_id, Command::ContinueTurn),
-            Envelope::event(session_id, sample_event()),
+    #[test]
+    fn agent_wire_event_round_trips_each_variant() {
+        let events = vec![
+            AgentWireEvent::Event(Event::ToolCallRequested(crate::contract::ToolCallRequest {
+                call_id: crate::contract::ToolCallId("call-1".to_string()),
+                tool_id: "fs.read".to_string(),
+                input: serde_json::json!({"path": "a.txt"}).into(),
+            })),
+            AgentWireEvent::ToolCallProgress(ToolCallProgress {
+                key: "call-1".to_string(),
+                tool_id: Some("fs.read".to_string()),
+                bytes: 64,
+            }),
+            AgentWireEvent::SessionModel("gpt-4o".to_string()),
+            AgentWireEvent::WorkspaceRootResolved(WorkspaceRootResolved {
+                workspace_root: PathBuf::from("/tmp/some-workspace/.horizon/worktrees/abcd1234"),
+                parent_session_id: Some(SessionId::new()),
+            }),
         ];
-        envelopes.extend(sample_controls().into_iter().map(Envelope::control));
-
-        let (mut client, server) = tokio::io::duplex(64 * 1024);
-        let mut server_reader = BufReader::new(server);
-
-        for envelope in &envelopes {
-            write_envelope(&mut client, envelope).await.unwrap();
+        for event in events {
+            let encoded = serde_json::to_value(&event).unwrap();
+            let decoded: AgentWireEvent = serde_json::from_value(encoded).unwrap();
+            assert_eq!(decoded, event);
         }
-        drop(client);
-
-        let mut received = Vec::new();
-        while let Some(envelope) = read_envelope(&mut server_reader).await.unwrap() {
-            received.push(envelope);
-        }
-
-        assert_eq!(received, envelopes);
-    }
-
-    #[tokio::test]
-    async fn torn_line_without_trailing_newline_is_an_explicit_error() {
-        let (mut client, server) = tokio::io::duplex(1024);
-        let mut server_reader = BufReader::new(server);
-
-        client
-            .write_all(b"{\"v\":1,\"kind\":\"control\"")
-            .await
-            .unwrap();
-        drop(client);
-
-        let result = read_envelope(&mut server_reader).await;
-        assert!(matches!(result, Err(WireError::TornLine)), "{result:?}");
-    }
-
-    #[tokio::test]
-    async fn clean_disconnect_between_messages_is_not_an_error() {
-        let (client, server) = tokio::io::duplex(1024);
-        let mut server_reader = BufReader::new(server);
-        drop(client);
-
-        let result = read_envelope(&mut server_reader).await;
-        assert!(matches!(result, Ok(None)), "{result:?}");
-    }
-
-    #[tokio::test]
-    async fn unknown_kind_is_an_explicit_error_not_a_panic() {
-        let (mut client, server) = tokio::io::duplex(1024);
-        let mut server_reader = BufReader::new(server);
-
-        client
-            .write_all(
-                format!(
-                    "{{\"v\":{CONTRACT_VERSION},\"kind\":\"bogus\",\"session_id\":null,\"payload\":{{}}}}\n"
-                )
-                .as_bytes(),
-            )
-            .await
-            .unwrap();
-        drop(client);
-
-        let result = read_envelope(&mut server_reader).await;
-        match result {
-            Err(WireError::UnknownKind(kind)) => assert_eq!(kind, "bogus"),
-            other => panic!("expected UnknownKind, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn wire_version_mismatch_is_an_explicit_error() {
-        let (mut client, server) = tokio::io::duplex(1024);
-        let mut server_reader = BufReader::new(server);
-
-        client
-            .write_all(
-                b"{\"v\":99,\"kind\":\"control\",\"session_id\":null,\"payload\":\"ping\"}\n",
-            )
-            .await
-            .unwrap();
-        drop(client);
-
-        let result = read_envelope(&mut server_reader).await;
-        assert!(
-            matches!(
-                result,
-                Err(WireError::VersionMismatch {
-                    expected: CONTRACT_VERSION,
-                    found: 99
-                })
-            ),
-            "{result:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn unknown_top_level_fields_are_tolerated() {
-        let (mut client, server) = tokio::io::duplex(1024);
-        let mut server_reader = BufReader::new(server);
-
-        client
-            .write_all(
-                format!(
-                    "{{\"v\":{CONTRACT_VERSION},\"kind\":\"agent_control\",\"session_id\":null,\
-                     \"payload\":\"session_list\",\"future_field\":42}}\n"
-                )
-                .as_bytes(),
-            )
-            .await
-            .unwrap();
-        drop(client);
-
-        let envelope = read_envelope(&mut server_reader)
-            .await
-            .unwrap()
-            .expect("envelope should parse despite the unrecognized field");
-        assert_eq!(envelope.body, EnvelopeBody::Control(Control::SessionList));
     }
 }

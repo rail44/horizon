@@ -325,7 +325,7 @@ mod tests {
         Event::ToolCallRequested(crate::contract::ToolCallRequest {
             call_id: crate::contract::ToolCallId("call-1".to_string()),
             tool_id: tool_id.to_string(),
-            input: serde_json::json!({}),
+            input: serde_json::json!({}).into(),
         })
     }
 

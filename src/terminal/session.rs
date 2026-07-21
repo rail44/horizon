@@ -209,13 +209,13 @@ impl TerminalSession {
                             }
                             // Skew catch-all: never write to an OS buffer
                             // this build can't name.
-                            ClipboardDestination::Unknown(_) => {}
+                            ClipboardDestination::Unknown => {}
                         },
                         TerminalUpdate::Title(_) | TerminalUpdate::Bell => {}
                         // Skew catch-all (`TerminalUpdate::Unknown`'s
                         // doc): an update this build can't name is
                         // skipped; the stream stays attached.
-                        TerminalUpdate::Unknown(_) => {}
+                        TerminalUpdate::Unknown => {}
                     }
                     cx.notify();
                 });

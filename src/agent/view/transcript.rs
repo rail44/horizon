@@ -101,7 +101,7 @@ impl AgentView {
                 MessageRole::User => block("you", theme::accent(), message.text.clone()),
                 // Unknown renders as agent-authored -- see `MessageRole::
                 // Unknown`'s doc (never invent user words).
-                MessageRole::Assistant | MessageRole::Unknown(_) => markdown_block(
+                MessageRole::Assistant | MessageRole::Unknown => markdown_block(
                     "agent",
                     theme::info(),
                     ("agent-message", index),

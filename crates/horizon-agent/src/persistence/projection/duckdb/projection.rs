@@ -125,7 +125,7 @@ impl Store {
             // can't name projects into no row. Its raw record still landed
             // in `agent_events` via the caller's insert, so nothing is
             // lost for a future build that does understand it.
-            Event::Unknown(_) => Ok(false),
+            Event::Unknown => Ok(false),
         }
     }
 
@@ -328,7 +328,7 @@ fn turn_end_reason_text(reason: TurnEndReason) -> &'static str {
         | TurnEndReason::HaltedByDoomLoop => "halted",
         // Skew catch-all: projected honestly rather than guessed into one
         // of the four design-doc labels.
-        TurnEndReason::Unknown(_) => "unknown",
+        TurnEndReason::Unknown => "unknown",
     }
 }
 
@@ -338,6 +338,6 @@ fn role_text(role: MessageRole) -> &'static str {
         MessageRole::Assistant => "assistant",
         // Skew catch-all: projected honestly; readers already fall back to
         // assistant for unrecognized labels (`query::parse_role`).
-        MessageRole::Unknown(_) => "unknown",
+        MessageRole::Unknown => "unknown",
     }
 }

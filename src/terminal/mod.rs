@@ -1045,7 +1045,7 @@ fn paint_terminal(
             // `Unknown` (skew catch-all) paints as the default block --
             // see `TerminalCursorShape::Unknown`'s doc.
             horizon_terminal_core::TerminalCursorShape::Block
-            | horizon_terminal_core::TerminalCursorShape::Unknown(_) => {
+            | horizon_terminal_core::TerminalCursorShape::Unknown => {
                 color.a = 0.6;
                 window.paint_quad(fill(cell, color));
             }

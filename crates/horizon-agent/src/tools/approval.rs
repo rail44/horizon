@@ -207,7 +207,7 @@ fn resolve_bash(
             bash::spawn(
                 session_id,
                 call_id,
-                request.input.clone(),
+                request.input.0.clone(),
                 runtime.tool_state.bash_cwd_handle(),
                 runtime.tool_state.bash_config(),
                 runtime.bash_results.clone(),
@@ -290,7 +290,7 @@ fn resolve_domain_denial_retry(
             bash::spawn_sandboxed(
                 session_id,
                 call_id,
-                request.input.clone(),
+                request.input.0.clone(),
                 runtime.tool_state.bash_cwd_handle(),
                 runtime.tool_state.bash_config(),
                 workspace_root.to_path_buf(),

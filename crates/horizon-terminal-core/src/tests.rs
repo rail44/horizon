@@ -2251,7 +2251,7 @@ fn terminal_updates_and_external_value_types_round_trip_through_serde() {
 }
 
 #[test]
-fn terminal_wire_uses_qualified_kinds_and_round_trips_spawn_specs() {
+fn terminal_wire_vocabulary_round_trips() {
     let session_id = uuid::Uuid::nil();
     let spec = TerminalSpawnSpec {
         shell: "/bin/sh".into(),
@@ -2264,52 +2264,14 @@ fn terminal_wire_uses_qualified_kinds_and_round_trips_spawn_specs() {
         spawn_source_session_id: Some(session_id),
         initial_size: TerminalSize::new(80, 24),
     };
+    assert_serde_round_trip(spec);
+    assert_serde_round_trip(TerminalSummary { session_id });
 
-    let control = TerminalControl::Create(Box::new(spec));
-    let envelope = encode_terminal_control(Some(session_id), &control).unwrap();
-    assert_eq!(envelope.kind, TERMINAL_CONTROL_KIND);
-    assert_eq!(envelope.session_id, Some(session_id));
-    assert_eq!(decode_terminal_control(&envelope).unwrap(), control);
-
-    let control = TerminalControl::List {
-        request_id: uuid::Uuid::from_u128(1),
-    };
-    let envelope = encode_terminal_control(None, &control).unwrap();
-    assert_eq!(envelope.kind, TERMINAL_CONTROL_KIND);
-    assert_eq!(envelope.session_id, None);
-    assert_eq!(decode_terminal_control(&envelope).unwrap(), control);
-
-    let request_id = uuid::Uuid::from_u128(2);
-    for control in [
-        TerminalControl::ListResult {
-            request_id,
-            sessions: vec![TerminalSummary { session_id }],
-        },
-        TerminalControl::Attach { request_id },
-        TerminalControl::AttachResult {
-            request_id,
-            result: TerminalAttachResult::Attached,
-        },
-        TerminalControl::AttachResult {
-            request_id,
-            result: TerminalAttachResult::NotFound,
-        },
-    ] {
-        assert_serde_round_trip(control);
-    }
-
-    let command = TerminalCommand::Input(b"echo wire\n".to_vec());
-    let envelope = encode_terminal_command(session_id, &command).unwrap();
-    assert_eq!(envelope.kind, TERMINAL_COMMAND_KIND);
-    assert_eq!(decode_terminal_command(&envelope).unwrap(), command);
-
-    let update = TerminalUpdate::FrameDiff(compute_frame_diff(
+    assert_serde_round_trip(TerminalCommand::Input(b"echo wire\n".to_vec()));
+    assert_serde_round_trip(TerminalUpdate::FrameDiff(compute_frame_diff(
         &test_frame(&["before"]),
         &test_frame(&["after"]),
-    ));
-    let envelope = encode_terminal_update(session_id, &update).unwrap();
-    assert_eq!(envelope.kind, TERMINAL_UPDATE_KIND);
-    assert_eq!(decode_terminal_update(&envelope).unwrap(), update);
+    )));
 }
 
 #[test]
@@ -2456,51 +2418,49 @@ fn frame_diff_apply_reconstructs_styled_rows_and_text_derivation_matches() {
 }
 
 /// The §4 skew catch-alls on this crate's own vocabularies
-/// (`docs/remoc-adoption-design.md`; the generic V1/V2 pairs live in
-/// `horizon-session-protocol/tests/skew.rs`): a variant from a future build
-/// decodes to `Unknown` instead of failing the payload, and `Unknown` can
-/// never be serialized back onto the wire.
+/// (`docs/remoc-adoption-design.md`): an unknown *unit* variant decodes to
+/// `Unknown` under serde_json too (the on-disk event-log side of the
+/// guarantee). Payload-carrying unknown variants only degrade under the
+/// actual wire codec (Postbag) -- serde_json's `#[serde(other)]` insists on
+/// unit content -- so those cases are proven where the codec lives, in
+/// `horizon-session-protocol/tests/skew.rs`.
 #[test]
-fn unknown_wire_variants_decode_to_the_catch_all() {
+fn unknown_unit_wire_variants_decode_to_the_catch_all() {
     let command: TerminalCommand =
-        serde_json::from_value(serde_json::json!({"FutureCommand": {"anything": true}})).unwrap();
-    assert!(
-        matches!(command, TerminalCommand::Unknown(_)),
-        "{command:?}"
-    );
+        serde_json::from_value(serde_json::json!("FutureUnitCommand")).unwrap();
+    assert!(matches!(command, TerminalCommand::Unknown), "{command:?}");
 
     let update: TerminalUpdate =
         serde_json::from_value(serde_json::json!("FutureUnitUpdate")).unwrap();
-    assert!(matches!(update, TerminalUpdate::Unknown(_)), "{update:?}");
-
-    let color: TerminalColor =
-        serde_json::from_value(serde_json::json!({"Oklch": [0.5, 0.1, 200.0]})).unwrap();
-    assert!(matches!(color, TerminalColor::Unknown(_)), "{color:?}");
+    assert!(matches!(update, TerminalUpdate::Unknown), "{update:?}");
 }
 
+/// `Unknown` is a plain unit variant under `#[serde(other)]` (the JSONL
+/// era's deserialize-only `UnknownPayload` wrapper relied on serde's
+/// untagged buffering, which the Postbag wire codec rejects). It therefore
+/// *can* be serialized -- as the literal tag `"Unknown"`, which any peer
+/// degrades right back to its own catch-all -- but no send path ever
+/// constructs it; this test just pins the encoding so a change is loud.
 #[test]
-fn serializing_an_unknown_wire_variant_is_an_error_not_a_panic() {
-    let result = serde_json::to_string(&TerminalCommand::Unknown(
-        horizon_session_protocol::UnknownPayload,
-    ));
-    assert!(result.is_err(), "{result:?}");
+fn serializing_the_unknown_catch_all_writes_its_literal_tag() {
+    let encoded = serde_json::to_string(&TerminalCommand::Unknown).unwrap();
+    assert_eq!(encoded, "\"Unknown\"");
 }
 
-/// A frame whose span carries an unknown color still decodes as a frame --
-/// the degradation is per-cell (`TerminalColor::Unknown`), not per-update,
-/// and it self-heals on the next full snapshot.
+/// A frame whose span carries an unknown *unit* color still decodes as a
+/// frame -- the degradation is per-cell (`TerminalColor::Unknown`), not
+/// per-update, and it self-heals on the next full snapshot. The
+/// payload-carrying-unknown-color case is proven under the wire codec in
+/// `horizon-session-protocol/tests/skew.rs`.
 #[test]
 fn a_span_with_an_unknown_color_still_decodes_as_a_frame() {
     let mut frame = serde_json::to_value(TerminalFrame::from_text("hi".to_string())).unwrap();
-    frame["lines"][0]["spans"][0]["fg"] = serde_json::json!({"Oklch": [0.5, 0.1, 200.0]});
+    frame["lines"][0]["spans"][0]["fg"] = serde_json::json!("Oklch");
     let update: TerminalUpdate =
         serde_json::from_value(serde_json::json!({"Snapshot": frame})).unwrap();
     let TerminalUpdate::Snapshot(frame) = update else {
         panic!("expected a snapshot, got {update:?}");
     };
-    assert!(matches!(
-        frame.lines[0].spans[0].fg,
-        TerminalColor::Unknown(_)
-    ));
+    assert!(matches!(frame.lines[0].spans[0].fg, TerminalColor::Unknown));
     assert_eq!(frame.text(), "hi");
 }

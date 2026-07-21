@@ -228,7 +228,7 @@ async fn rig_openai_turn_streaming(
                     request.call_id.clone(),
                     ToolCallDescriptor {
                         tool_id: request.tool_id.clone(),
-                        args: request.input.clone(),
+                        args: request.input.0.clone(),
                     },
                 );
                 let _ = events_tx.send(ProviderEvent::with_provider_payload(
@@ -512,7 +512,7 @@ fn tool_call_requests_from_events(
                 request.call_id.clone(),
                 ToolCallDescriptor {
                     tool_id: request.tool_id.clone(),
-                    args: request.input.clone(),
+                    args: request.input.0.clone(),
                 },
             )),
             _ => None,

@@ -243,7 +243,7 @@ fn rebuilds_rig_memory_messages_from_horizon_transcript_events() {
         Event::ToolCallRequested(ToolCallRequest {
             call_id: ToolCallId("call-1".to_string()),
             tool_id: "workspace.snapshot".to_string(),
-            input: serde_json::json!({}),
+            input: serde_json::json!({}).into(),
         }),
         Event::ToolCallFinished(ToolCallResult::new(
             ToolCallId("call-1".to_string()),

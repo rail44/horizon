@@ -83,7 +83,7 @@ pub(crate) fn receipt_status(end: &TurnEnd) -> ReceiptStatus {
         // calm pause with no guard-specific sentence (`TurnEndReason::
         // Unknown`'s doc): a reason this build can't name must not read as
         // an error.
-        TurnEndReason::Halted | TurnEndReason::Unknown(_) => ReceiptStatus {
+        TurnEndReason::Halted | TurnEndReason::Unknown => ReceiptStatus {
             text: format!("paused · {elapsed}"),
             is_error: false,
         },

@@ -221,3 +221,34 @@ fn named_rgb(color: NamedColor, scheme: TerminalColorScheme) -> Rgb {
         _ => scheme.foreground,
     }
 }
+
+#[cfg(test)]
+mod rgb_schema_tests {
+    use super::*;
+
+    /// [`RgbSchema`] claims to mirror `vte::ansi::Rgb`'s serde shape
+    /// byte-for-byte — pinned here against the *real* type's output, so a
+    /// vte/alacritty bump that changes `Rgb`'s encoding goes red instead
+    /// of silently making the wire-schema artifact describe a shape the
+    /// wire no longer carries (a review-found checker blind spot: `with =`
+    /// stand-ins are otherwise never validated against their subjects).
+    #[test]
+    fn rgb_schema_matches_the_real_rgb_serde_shape() {
+        let real = serde_json::to_value(Rgb { r: 1, g: 2, b: 3 }).unwrap();
+        assert_eq!(real, serde_json::json!({"r": 1, "g": 2, "b": 3}));
+
+        // And the stand-in's schema describes exactly those properties.
+        let schema = serde_json::to_value(schemars::schema_for!(RgbSchema)).unwrap();
+        let properties = schema["properties"]
+            .as_object()
+            .expect("RgbSchema must describe an object with properties");
+        let mut keys: Vec<&str> = properties.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["b", "g", "r"]);
+        assert_eq!(
+            schema["required"],
+            serde_json::json!(["r", "g", "b"]),
+            "every channel is required, like the real struct's fields"
+        );
+    }
+}

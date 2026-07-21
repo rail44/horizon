@@ -603,7 +603,7 @@ mod recall_tests {
                     Event::ToolCallRequested(ToolCallRequest {
                         call_id: call_id.clone(),
                         tool_id: "fs.grep".to_string(),
-                        input: serde_json::json!({ "pattern": "fox" }),
+                        input: serde_json::json!({ "pattern": "fox" }).into(),
                     }),
                     Event::ToolCallFinished(ToolCallResult::new(
                         call_id,
@@ -843,7 +843,7 @@ mod recall_tests {
                     Event::ToolCallRequested(ToolCallRequest {
                         call_id: call_id.clone(),
                         tool_id: "fs.read".to_string(),
-                        input: serde_json::json!({}),
+                        input: serde_json::json!({}).into(),
                     }),
                     Event::ApprovalRequested(ApprovalRequest {
                         call_id: call_id.clone(),

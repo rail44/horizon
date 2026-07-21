@@ -1,13 +1,11 @@
 //! Horizon-side client for `horizon-sessiond`: spawn-or-connect (decision 4 in
-//! `docs/agent-runtime-split-design.md`) and the `hello` handshake, with a
-//! contract-version mismatch surfaced as a plain `String` error rather than
-//! silently ignored (the design's replay/reconnect section calls this out
-//! by name: "surfaced to the user as reload required").
+//! `docs/agent-runtime-split-design.md`). Transport-agnostic on purpose --
+//! this module hands back a raw, connected `UnixStream`; the v10 remoc
+//! connection (and the `hello` range negotiation that rides it as the
+//! first rtc call) is owned by the shared `src/sessiond` runtime.
 //!
 //! `horizon-sessiond` is the *only* place agent sessions run -- there is no
-//! in-process fallback or daemon feature flag. The shared `src/sessiond`
-//! runtime uses [`connect_or_spawn_retrying`] to obtain the raw stream, then
-//! owns the cross-domain handshake and multiplexing itself.
+//! in-process fallback or daemon feature flag.
 //!
 //! Horizon has no process-wide Tokio runtime; `src/sessiond` owns a dedicated
 //! current-thread runtime on a background OS thread so a slow or failing
@@ -16,13 +14,6 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-#[cfg(test)]
-use horizon_session_protocol::{
-    self as session_wire, Hello, SessionControl, SESSION_CONTROL_KIND,
-    SESSION_PROTOCOL_VERSION as CONTRACT_VERSION,
-};
-#[cfg(test)]
-use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, BufReader};
 use tokio::net::UnixStream;
 
 /// Starting delay for [`connect_or_spawn_retrying`]'s exponential backoff
@@ -119,71 +110,6 @@ fn resolve_sessiond_binary() -> PathBuf {
     PathBuf::from(SESSIOND_BINARY_NAME)
 }
 
-/// The hello exchange itself, generic over `AsyncRead + AsyncWrite` (same
-/// framing-over-any-stream guardrail `horizon_agent::wire` follows) so it's
-/// directly testable over `tokio::io::duplex` without a real socket -- see
-/// this module's tests.
-#[cfg(test)]
-async fn handshake<S>(stream: S) -> Result<Hello, String>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
-    let (read_half, mut write_half) = tokio::io::split(stream);
-    let mut reader = BufReader::new(read_half);
-    handshake_over(&mut reader, &mut write_half).await
-}
-
-/// The hello exchange itself, generic over an already-split `AsyncBufRead`/
-/// `AsyncWrite` pair rather than owning the whole stream. `handshake` above
-/// is the same exchange over an owned, not-yet-split stream, kept for this
-/// module's tests (which construct a single `tokio::io::duplex` stream
-/// directly) so they don't need to juggle split halves themselves; this is
-/// the split-halves version `handshake` itself delegates to. Test-only:
-/// production connects via [`connect_or_spawn_retrying`], and `src/sessiond`
-/// owns its own independent handshake over the resulting stream (see this
-/// module's doc comment).
-#[cfg(test)]
-async fn handshake_over<R, W>(reader: &mut R, writer: &mut W) -> Result<Hello, String>
-where
-    R: AsyncBufRead + Unpin,
-    W: AsyncWrite + Unpin,
-{
-    let our_hello = Hello {
-        contract_version: CONTRACT_VERSION,
-        binary_id: concat!("horizon/", env!("CARGO_PKG_VERSION")).to_string(),
-    };
-    let hello_envelope = session_wire::Envelope::session_control(&SessionControl::Hello(our_hello))
-        .map_err(|err| format!("failed to encode hello for horizon-sessiond: {err}"))?;
-    session_wire::write_envelope(writer, &hello_envelope)
-        .await
-        .map_err(|err| format!("failed to send hello to horizon-sessiond: {err}"))?;
-
-    let envelope = session_wire::read_envelope(reader)
-        .await
-        .map_err(|err| format!("failed to read horizon-sessiond's hello reply: {err}"))?
-        .ok_or_else(|| {
-            "horizon-sessiond closed the connection before replying to hello".to_string()
-        })?;
-
-    let control: SessionControl = envelope
-        .decode_payload(SESSION_CONTROL_KIND)
-        .map_err(|err| format!("failed to decode horizon-sessiond's hello reply: {err}"))?;
-    match control {
-        SessionControl::Hello(hello) if hello.contract_version == CONTRACT_VERSION => Ok(hello),
-        SessionControl::Hello(hello) => Err(format!(
-            "horizon-sessiond contract version mismatch: horizon speaks v{CONTRACT_VERSION}, \
-             sessiond speaks v{} -- reload required",
-            hello.contract_version
-        )),
-        SessionControl::HandshakeRejected(reason) => {
-            Err(format!("horizon-sessiond rejected the handshake: {reason}"))
-        }
-        other => Err(format!(
-            "horizon-sessiond sent an unexpected reply to hello: {other:?}"
-        )),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,96 +131,5 @@ mod tests {
             value,
             Some(std::ffi::OsStr::new("/tmp/horizon-control-test.sock"))
         );
-    }
-
-    async fn fake_sessiond_reply(server_side: tokio::io::DuplexStream, reply: SessionControl) {
-        let (read_half, mut write_half) = tokio::io::split(server_side);
-        let mut reader = BufReader::new(read_half);
-        let hello = session_wire::read_envelope(&mut reader)
-            .await
-            .unwrap()
-            .expect("client should send a hello");
-        let control: SessionControl = hello.decode_payload(SESSION_CONTROL_KIND).unwrap();
-        assert!(matches!(
-            control,
-            SessionControl::Hello(Hello { binary_id, .. })
-                if binary_id == concat!("horizon/", env!("CARGO_PKG_VERSION"))
-        ));
-        let reply = session_wire::Envelope::session_control(&reply).unwrap();
-        session_wire::write_envelope(&mut write_half, &reply)
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn handshake_succeeds_when_the_peer_answers_with_a_matching_hello() {
-        let (client_side, server_side) = tokio::io::duplex(4096);
-        let server = tokio::spawn(fake_sessiond_reply(
-            server_side,
-            SessionControl::Hello(Hello {
-                contract_version: CONTRACT_VERSION,
-                binary_id: "test-sessiond".to_string(),
-            }),
-        ));
-
-        let hello = handshake(client_side)
-            .await
-            .expect("handshake should succeed");
-        server.await.unwrap();
-
-        assert_eq!(hello.binary_id, "test-sessiond");
-    }
-
-    #[tokio::test]
-    async fn handshake_surfaces_a_contract_version_mismatch_as_an_error_string() {
-        let (client_side, server_side) = tokio::io::duplex(4096);
-        let server = tokio::spawn(fake_sessiond_reply(
-            server_side,
-            SessionControl::Hello(Hello {
-                contract_version: CONTRACT_VERSION + 1,
-                binary_id: "stale-sessiond".to_string(),
-            }),
-        ));
-
-        let error = handshake(client_side).await.unwrap_err();
-        server.await.unwrap();
-
-        assert!(error.contains("reload required"), "error was: {error}");
-    }
-
-    #[tokio::test]
-    async fn handshake_surfaces_a_rejection_reason_as_an_error_string() {
-        let (client_side, server_side) = tokio::io::duplex(4096);
-        let server = tokio::spawn(fake_sessiond_reply(
-            server_side,
-            SessionControl::HandshakeRejected("nope".to_string()),
-        ));
-
-        let error = handshake(client_side).await.unwrap_err();
-        server.await.unwrap();
-
-        assert!(error.contains("nope"), "error was: {error}");
-    }
-
-    #[tokio::test]
-    async fn handshake_surfaces_a_connection_closed_before_reply_as_an_error_string() {
-        let (client_side, server_side) = tokio::io::duplex(4096);
-        // Reads the hello (so the client's write is guaranteed to succeed),
-        // then drops both split halves without replying -- deterministically
-        // exercising the "closed mid-handshake" path on the client's *read*,
-        // not a racy failure on its write.
-        let server = tokio::spawn(async move {
-            let (read_half, _write_half) = tokio::io::split(server_side);
-            let mut reader = BufReader::new(read_half);
-            session_wire::read_envelope(&mut reader)
-                .await
-                .unwrap()
-                .expect("client should send a hello");
-        });
-
-        let error = handshake(client_side).await.unwrap_err();
-        server.await.unwrap();
-
-        assert!(error.contains("closed"), "error was: {error}");
     }
 }

@@ -74,7 +74,7 @@ fn tool_output(execution: Execution) -> serde_json::Value {
     events
         .into_iter()
         .find_map(|event| match event {
-            Event::ToolCallFinished(result) => Some(result.output),
+            Event::ToolCallFinished(result) => Some(result.output.0),
             _ => None,
         })
         .expect("expected a ToolCallFinished event")
@@ -148,7 +148,7 @@ fn processing_preserves_provider_payload_on_original_event_only() {
             Event::ToolCallRequested(ToolCallRequest {
                 call_id: call_id.clone(),
                 tool_id: "workspace.snapshot".to_string(),
-                input: json!({}),
+                input: json!({}).into(),
             }),
             payload.clone(),
         ),
@@ -233,7 +233,7 @@ fn execute_agent_tool_dispatches_fs_read_through_auto_execution() {
     let request = ToolCallRequest {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "fs.read".to_string(),
-        input: json!({ "path": target.display().to_string() }),
+        input: json!({ "path": target.display().to_string() }).into(),
     };
 
     let output = tool_output(execute_agent_tool(
@@ -264,7 +264,7 @@ fn execute_agent_tool_reports_an_unknown_tool_as_an_error_tool_result() {
     let request = ToolCallRequest {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "write".to_string(),
-        input: json!({ "path": "/tmp/x", "content": "hi" }),
+        input: json!({ "path": "/tmp/x", "content": "hi" }).into(),
     };
 
     let Execution::Unknown(events) =
@@ -302,7 +302,7 @@ fn process_agent_provider_event_never_asks_approval_for_an_unknown_tool_and_cont
         Event::ToolCallRequested(ToolCallRequest {
             call_id: call_id.clone(),
             tool_id: "write".to_string(),
-            input: json!({}),
+            input: json!({}).into(),
         }),
     );
 
@@ -866,7 +866,7 @@ fn requested_frame(call_id: &ToolCallId, tool_id: &str, input: serde_json::Value
         .push(AgentFrameItem::ToolCallRequested(ToolCallRequest {
             call_id: call_id.clone(),
             tool_id: tool_id.to_string(),
-            input,
+            input: input.into(),
         }));
     frame
 }
@@ -1068,7 +1068,7 @@ fn resolve_approval_second_approve_is_noop() {
     let frame = live_state.extend_events([Event::ToolCallRequested(ToolCallRequest {
         call_id: call_id.clone(),
         tool_id: "fs.write".to_string(),
-        input: json!({ "path": target.display().to_string(), "content": "first" }),
+        input: json!({ "path": target.display().to_string(), "content": "first" }).into(),
     })]);
 
     let first = resolve_approval(
@@ -1118,7 +1118,8 @@ fn resolve_approval_deny_then_approve_is_noop() {
     let frame = live_state.extend_events([Event::ToolCallRequested(ToolCallRequest {
         call_id: call_id.clone(),
         tool_id: "fs.write".to_string(),
-        input: json!({ "path": target.display().to_string(), "content": "should never land" }),
+        input: json!({ "path": target.display().to_string(), "content": "should never land" })
+            .into(),
     })]);
 
     let denied = resolve_approval(
@@ -1180,7 +1181,7 @@ fn resolve_approval_executes_a_new_occurrence_of_a_reused_call_id() {
     let frame = live_state.extend_events([Event::ToolCallRequested(ToolCallRequest {
         call_id: call_id.clone(),
         tool_id: "fs.write".to_string(),
-        input: json!({ "path": target_a.display().to_string(), "content": "first" }),
+        input: json!({ "path": target_a.display().to_string(), "content": "first" }).into(),
     })]);
     let first = resolve_approval(
         &frame,
@@ -1200,7 +1201,7 @@ fn resolve_approval_executes_a_new_occurrence_of_a_reused_call_id() {
         live_state.extend_events([Event::ToolCallRequested(ToolCallRequest {
             call_id: call_id.clone(),
             tool_id: "fs.write".to_string(),
-            input: json!({ "path": target_b.display().to_string(), "content": "second" }),
+            input: json!({ "path": target_b.display().to_string(), "content": "second" }).into(),
         })]);
 
     let second = resolve_approval(
@@ -1228,7 +1229,7 @@ fn fs_write_auto_executes_in_an_isolated_session_with_the_audit_marker() {
     let request = ToolCallRequest {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "fs.write".to_string(),
-        input: json!({ "path": target.display().to_string(), "content": "hi" }),
+        input: json!({ "path": target.display().to_string(), "content": "hi" }).into(),
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
@@ -1241,7 +1242,7 @@ fn fs_write_auto_executes_in_an_isolated_session_with_the_audit_marker() {
     let output = events
         .into_iter()
         .find_map(|event| match event {
-            Event::ToolCallFinished(result) => Some(result.output),
+            Event::ToolCallFinished(result) => Some(result.output.0),
             _ => None,
         })
         .expect("expected a ToolCallFinished event");
@@ -1268,7 +1269,7 @@ fn fs_edit_auto_executes_in_an_isolated_session() {
     let request = ToolCallRequest {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "fs.edit".to_string(),
-        input: json!({ "path": target.display().to_string(), "old_string": "before", "new_string": "after" }),
+        input: json!({ "path": target.display().to_string(), "old_string": "before", "new_string": "after" }).into(),
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
@@ -1287,7 +1288,7 @@ fn fs_write_still_requires_approval_when_the_session_is_not_isolated() {
     let request = ToolCallRequest {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "fs.write".to_string(),
-        input: json!({ "path": target.display().to_string(), "content": "hi" }),
+        input: json!({ "path": target.display().to_string(), "content": "hi" }).into(),
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
@@ -1302,7 +1303,7 @@ fn horizon_events_for_provider_event_omits_the_approval_prompt_for_a_contained_f
         &Event::ToolCallRequested(ToolCallRequest {
             call_id: ToolCallId("call-1".to_string()),
             tool_id: "fs.write".to_string(),
-            input: json!({ "path": "/tmp/x", "content": "hi" }),
+            input: json!({ "path": "/tmp/x", "content": "hi" }).into(),
         }),
         &tool_state,
         SessionId::new(),
@@ -1327,7 +1328,7 @@ fn bash_auto_executes_sandboxed_in_an_isolated_session_with_an_engaged_sandbox()
     let request = ToolCallRequest {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "bash".to_string(),
-        input: json!({ "command": "echo hi" }),
+        input: json!({ "command": "echo hi" }).into(),
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
@@ -1369,7 +1370,7 @@ fn bash_auto_executes_sandboxed_and_is_killed_on_timeout() {
     let request = ToolCallRequest {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "bash".to_string(),
-        input: json!({ "command": "echo start; sleep 5", "timeout_secs": 1 }),
+        input: json!({ "command": "echo start; sleep 5", "timeout_secs": 1 }).into(),
     };
 
     let started = std::time::Instant::now();
@@ -1435,7 +1436,7 @@ fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
     let request = ToolCallRequest {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "bash".to_string(),
-        input: json!({ "command": format!("echo outside > {}", host_target.display()) }),
+        input: json!({ "command": format!("echo outside > {}", host_target.display()) }).into(),
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
@@ -1508,7 +1509,7 @@ fn bash_requires_approval_when_the_session_is_not_isolated() {
     let request = ToolCallRequest {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "bash".to_string(),
-        input: json!({ "command": "echo hi" }),
+        input: json!({ "command": "echo hi" }).into(),
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
@@ -1543,7 +1544,7 @@ fn resolve_approval_accepts_a_denial_retry_reissue_and_runs_it_unsandboxed() {
     live_state.extend_events([Event::ToolCallRequested(ToolCallRequest {
         call_id: call_id.clone(),
         tool_id: "bash".to_string(),
-        input: json!({ "command": "echo hi" }),
+        input: json!({ "command": "echo hi" }).into(),
     })]);
     let after_started = live_state.extend_events([Event::ToolCallStarted(call_id.clone())]);
     assert!(after_started.has_tool_call_started(&call_id));
@@ -1556,7 +1557,7 @@ fn resolve_approval_accepts_a_denial_retry_reissue_and_runs_it_unsandboxed() {
         Event::ToolCallRequested(ToolCallRequest {
             call_id: call_id.clone(),
             tool_id: "bash".to_string(),
-            input: json!({ "command": "echo hi" }),
+            input: json!({ "command": "echo hi" }).into(),
         }),
         Event::ApprovalRequested(crate::contract::ApprovalRequest {
             call_id: call_id.clone(),
@@ -1593,7 +1594,7 @@ fn domain_denial_retry_frame(
     live_state.extend_events([Event::ToolCallRequested(ToolCallRequest {
         call_id: call_id.clone(),
         tool_id: "bash".to_string(),
-        input: json!({ "command": "curl https://example.com" }),
+        input: json!({ "command": "curl https://example.com" }).into(),
     })]);
 
     let prior_result = ToolCallResult::new(
@@ -1700,7 +1701,7 @@ fn resolve_approval_starts_bash_on_approve_and_delivers_its_result() {
     let frame = live_state.extend_events([Event::ToolCallRequested(ToolCallRequest {
         call_id: call_id.clone(),
         tool_id: "bash".to_string(),
-        input: json!({ "command": "echo hi" }),
+        input: json!({ "command": "echo hi" }).into(),
     })]);
 
     let outcome = resolve_approval(
@@ -1742,7 +1743,7 @@ fn resolve_approval_denies_bash_without_running_it() {
     let frame = live_state.extend_events([Event::ToolCallRequested(ToolCallRequest {
         call_id: call_id.clone(),
         tool_id: "bash".to_string(),
-        input: json!({ "command": "echo should-never-run" }),
+        input: json!({ "command": "echo should-never-run" }).into(),
     })]);
 
     let outcome = resolve_approval(
@@ -1794,7 +1795,7 @@ fn resolve_approval_second_approve_of_a_still_running_bash_call_is_noop() {
     let frame = live_state.extend_events([Event::ToolCallRequested(ToolCallRequest {
         call_id: call_id.clone(),
         tool_id: "bash".to_string(),
-        input: json!({ "command": "echo first" }),
+        input: json!({ "command": "echo first" }).into(),
     })]);
 
     let first = resolve_approval(

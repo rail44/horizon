@@ -214,7 +214,7 @@ mod tests {
                     Event::ToolCallRequested(ToolCallRequest {
                         call_id: call_id.clone(),
                         tool_id: "workspace.snapshot".to_string(),
-                        input: serde_json::json!({}),
+                        input: serde_json::json!({}).into(),
                     }),
                     Event::ApprovalRequested(ApprovalRequest {
                         call_id: call_id.clone(),
@@ -253,7 +253,7 @@ mod tests {
                     Event::ToolCallRequested(ToolCallRequest {
                         call_id: call_id.clone(),
                         tool_id: "workspace.snapshot".to_string(),
-                        input: serde_json::json!({ "include": "tabs" }),
+                        input: serde_json::json!({ "include": "tabs" }).into(),
                     }),
                     Event::ApprovalRequested(ApprovalRequest {
                         call_id: call_id.clone(),
@@ -396,7 +396,7 @@ mod tests {
                         Event::ToolCallRequested(ToolCallRequest {
                             call_id: call_id.clone(),
                             tool_id: "workspace.snapshot".to_string(),
-                            input: serde_json::json!({}),
+                            input: serde_json::json!({}).into(),
                         }),
                         Event::ToolCallFinished(ToolCallResult::new(
                             call_id,
@@ -457,7 +457,7 @@ mod tests {
                         Event::ToolCallRequested(ToolCallRequest {
                             call_id: call_id.clone(),
                             tool_id: "workspace.snapshot".to_string(),
-                            input: serde_json::json!({}),
+                            input: serde_json::json!({}).into(),
                         }),
                         Event::ApprovalRequested(ApprovalRequest {
                             call_id: call_id.clone(),
@@ -526,7 +526,7 @@ mod tests {
                     Event::ToolCallRequested(ToolCallRequest {
                         call_id: call_id.clone(),
                         tool_id: "workspace.snapshot".to_string(),
-                        input: serde_json::json!({}),
+                        input: serde_json::json!({}).into(),
                     }),
                     Event::ApprovalRequested(ApprovalRequest {
                         call_id: call_id.clone(),
@@ -644,13 +644,13 @@ mod tests {
                 event_kind: event_kind(&Event::ToolCallRequested(ToolCallRequest {
                     call_id: call_id.clone(),
                     tool_id: "workspace.snapshot".to_string(),
-                    input: serde_json::json!({}),
+                    input: serde_json::json!({}).into(),
                 }))
                 .to_string(),
                 event: Event::ToolCallRequested(ToolCallRequest {
                     call_id: call_id.clone(),
                     tool_id: "workspace.snapshot".to_string(),
-                    input: serde_json::json!({}),
+                    input: serde_json::json!({}).into(),
                 }),
                 provider_payload: None,
                 created_at_unix_ms: 2,
@@ -1076,7 +1076,7 @@ mod tests {
                     Event::ToolCallRequested(ToolCallRequest {
                         call_id: ok_call.clone(),
                         tool_id: "fs.read".to_string(),
-                        input: serde_json::json!({}),
+                        input: serde_json::json!({}).into(),
                     }),
                     Event::ToolCallFinished(ToolCallResult::new(
                         ok_call,
@@ -1085,7 +1085,7 @@ mod tests {
                     Event::ToolCallRequested(ToolCallRequest {
                         call_id: err_call.clone(),
                         tool_id: "fs.read".to_string(),
-                        input: serde_json::json!({}),
+                        input: serde_json::json!({}).into(),
                     }),
                     Event::ToolCallFinished(ToolCallResult::new(
                         err_call,
@@ -1121,7 +1121,7 @@ mod tests {
                     Event::ToolCallRequested(ToolCallRequest {
                         call_id: call_id.clone(),
                         tool_id: "bash.exec".to_string(),
-                        input: serde_json::json!({}),
+                        input: serde_json::json!({}).into(),
                     }),
                     Event::ApprovalRequested(ApprovalRequest {
                         call_id: call_id.clone(),
@@ -1155,7 +1155,7 @@ mod tests {
                     Event::ToolCallRequested(ToolCallRequest {
                         call_id: call_id.clone(),
                         tool_id: "bash.exec".to_string(),
-                        input: serde_json::json!({}),
+                        input: serde_json::json!({}).into(),
                     }),
                     Event::ApprovalRequested(ApprovalRequest {
                         call_id: call_id.clone(),
@@ -1259,7 +1259,7 @@ mod tests {
                 Event::ToolCallRequested(ToolCallRequest {
                     call_id: call_id.clone(),
                     tool_id: "bash.exec".to_string(),
-                    input: serde_json::json!({}),
+                    input: serde_json::json!({}).into(),
                 }),
                 1,
             ),
@@ -1579,7 +1579,7 @@ mod tests {
             6 => Event::ToolCallRequested(ToolCallRequest {
                 call_id: ToolCallId(format!("call-{index}")),
                 tool_id: "workspace.snapshot".to_string(),
-                input: serde_json::json!({ "index": index }),
+                input: serde_json::json!({ "index": index }).into(),
             }),
             7 => Event::ApprovalRequested(ApprovalRequest {
                 call_id: ToolCallId(format!("call-{}", index - 1)),
