@@ -44,6 +44,52 @@ fn temp_workspace(label: &str) -> PathBuf {
     dir.canonicalize().expect("canonicalize temp workspace dir")
 }
 
+#[cfg(target_os = "linux")]
+fn run_fixture_git(cwd: &Path, args: &[&str]) -> std::process::Output {
+    let mut command = std::process::Command::new("git");
+    command.current_dir(cwd).args(args);
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("GIT_") {
+            command.env_remove(name);
+        }
+    }
+    let output = command.output().expect("run fixture git command");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
+#[cfg(target_os = "linux")]
+fn linked_git_worktree(label: &str) -> (PathBuf, PathBuf) {
+    let root = temp_workspace(label);
+    let main = root.join("main");
+    let worktree = root.join("agent-worktree");
+    fs::create_dir(&main).unwrap();
+    run_fixture_git(&main, &["init", "--initial-branch=main", "."]);
+    run_fixture_git(&main, &["config", "user.name", "Horizon Test"]);
+    run_fixture_git(
+        &main,
+        &["config", "user.email", "horizon-test@example.invalid"],
+    );
+    fs::write(main.join("seed.txt"), "seed\n").unwrap();
+    run_fixture_git(&main, &["add", "seed.txt"]);
+    run_fixture_git(&main, &["commit", "-m", "seed"]);
+    run_fixture_git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "agent-test",
+            worktree.to_str().unwrap(),
+        ],
+    );
+    (root, worktree.canonicalize().unwrap())
+}
+
 fn dummy_tool_state() -> ToolSessionState {
     ToolSessionState::new(std::env::temp_dir())
 }
@@ -1561,6 +1607,113 @@ fn bash_requires_approval_when_the_session_is_not_isolated() {
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
     assert_eq!(execution, Execution::RequiresApproval);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn approved_git_commit_writes_linked_metadata_once_and_stays_sandboxed() {
+    assert!(
+        horizon_sandbox::is_available(),
+        "the Linux Git containment test requires an engaged sandbox"
+    );
+    let (fixture_root, worktree) = linked_git_worktree("git-operation-approval");
+    fs::write(worktree.join("change.txt"), "approved change\n").unwrap();
+
+    let tool_state = ToolSessionState::new(worktree.clone()).with_isolated_worktree(true);
+    let session_id = SessionId::new();
+    let live_state = LiveState::new();
+    let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
+    register_session_runtime(
+        session_id,
+        tool_state.clone(),
+        live_state.clone(),
+        bash_results_tx,
+    );
+    let status_request = ToolCallRequest {
+        call_id: ToolCallId("sandboxed-git-status".to_string()),
+        tool_id: "bash".to_string(),
+        input: json!({ "command": "git status --short" }).into(),
+    };
+    assert!(matches!(
+        execute_agent_tool(&StubHostTools, &tool_state, session_id, &status_request),
+        Execution::Started(_)
+    ));
+    let status_result = expect_finished(
+        bash_results_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("sandboxed read-only Git completion"),
+    );
+    assert!(
+        !status_result.is_error,
+        "Git failed: {:?}",
+        status_result.output
+    );
+    assert_eq!(status_result.output["sandboxed"], true);
+
+    let call_id = ToolCallId("sandboxed-git-commit".to_string());
+    let request = ToolCallRequest {
+        call_id: call_id.clone(),
+        tool_id: "bash".to_string(),
+        input: json!({
+            "command": "git -c core.hooksPath=/dev/null add change.txt && \
+                        git -c core.hooksPath=/dev/null commit -m horizon-sandbox-test"
+        })
+        .into(),
+    };
+
+    assert_eq!(
+        execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
+        Execution::RequiresApproval
+    );
+    let events = crate::policy::horizon_events_for_provider_event(
+        &Event::ToolCallRequested(request),
+        &tool_state,
+        session_id,
+    );
+    let displayed_roots = events
+        .iter()
+        .find_map(|event| match event {
+            Event::ApprovalRequested(crate::contract::ApprovalRequest {
+                kind: crate::contract::ApprovalKind::GitOperation { writable_roots },
+                ..
+            }) => Some(writable_roots.clone()),
+            _ => None,
+        })
+        .expect("metadata-writing Git must request its command-scoped grant");
+    assert_eq!(displayed_roots.len(), 2, "worktree and common git dirs");
+    let frame = live_state.extend_events(events);
+
+    let outcome = resolve_approval(
+        &frame,
+        session_id,
+        call_id.clone(),
+        ApprovalDecision::Approve,
+    );
+    assert!(matches!(outcome, ApprovalOutcome::Started { .. }));
+    let result = expect_finished(
+        bash_results_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("sandboxed Git completion"),
+    );
+    assert!(!result.is_error, "Git failed: {:?}", result.output);
+    assert_eq!(result.output["sandboxed"], true);
+    assert_eq!(result.output["git_operation_approved"], true);
+    assert_eq!(
+        result.output["approved_git_metadata_roots"],
+        json!(displayed_roots)
+    );
+    assert!(
+        tool_state.filesystem_grants_snapshot().is_empty(),
+        "Git metadata grants must not persist in the session grant store"
+    );
+
+    let log = run_fixture_git(&worktree, &["log", "-1", "--format=%s"]);
+    assert_eq!(
+        String::from_utf8_lossy(&log.stdout).trim(),
+        "horizon-sandbox-test"
+    );
+    unregister_session_runtime(session_id);
+    fs::remove_dir_all(fixture_root).unwrap();
 }
 
 /// Historical event logs can still contain the pre-narrow-grant retry kind.

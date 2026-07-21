@@ -23,6 +23,7 @@
 //! future job that doesn't route through `run_job_body`.
 
 mod exec;
+mod git;
 mod output;
 mod registry;
 
@@ -30,16 +31,18 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crossbeam_channel::Sender;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::config::BashToolConfig;
 use crate::contract::{SessionId, ToolCallId, ToolCallResult};
 use crate::frame::AgentFrame;
 use crate::policy::{
     annotate_auto_approval, annotate_domain_approval, annotate_filesystem_approval,
-    annotate_sandboxed,
+    annotate_git_operation_approval, annotate_sandboxed,
 };
 use crate::tools::network::SessionNetworkProxy;
+
+pub(crate) use git::{approved_metadata_roots, metadata_writable_roots, requires_metadata_write};
 
 /// A bash call's outcome, delivered from the background thread that ran it
 /// back to the session loop. `crates/horizon-sessiond/src/session.rs`
@@ -107,6 +110,8 @@ pub(crate) enum SandboxedApprovalOrigin {
     ManualFilesystemRetry {
         grants: Vec<horizon_sandbox::FilesystemGrant>,
     },
+    /// A human approved the validated Git metadata roots for this call.
+    ManualGitOperation,
 }
 
 /// Kicks off a bash call and returns immediately; the UI thread must not
@@ -186,6 +191,7 @@ pub fn spawn_sandboxed(
     network: Option<Arc<SessionNetworkProxy>>,
     origin: SandboxedApprovalOrigin,
     filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
+    git_metadata_roots: Option<Vec<PathBuf>>,
     result_tx: Sender<BashCompletion>,
 ) {
     registry::enqueue(
@@ -204,15 +210,62 @@ pub fn spawn_sandboxed(
             // to observe. Same reasoning `run_job_body`'s own doc comment
             // already gives for why this closure shape is safe to assert.
             let work = std::panic::AssertUnwindSafe(move || {
-                let mut completion = exec::run_sandboxed(
-                    &run_call_id,
-                    &input,
-                    &cwd,
-                    &workspace_root,
-                    network.as_deref(),
-                    &filesystem_grants,
-                    &config,
-                );
+                let mut effective_grants = filesystem_grants;
+                let mut completion = match git_metadata_roots.as_deref() {
+                    Some(expected_roots) => {
+                        match git::validated_metadata_grants(&workspace_root, expected_roots) {
+                            Ok(grants) => {
+                                for grant in grants {
+                                    if !effective_grants.contains(&grant) {
+                                        effective_grants.push(grant);
+                                    }
+                                }
+                                exec::run_sandboxed(
+                                    &run_call_id,
+                                    &input,
+                                    &cwd,
+                                    &workspace_root,
+                                    network.as_deref(),
+                                    &effective_grants,
+                                    &config,
+                                )
+                            }
+                            Err(error) => {
+                                let mut output = json!({
+                                    "is_error": true,
+                                    "message": format!(
+                                        "Git metadata grant validation failed before execution: {error}"
+                                    ),
+                                });
+                                annotate_sandboxed(&mut output, false);
+                                BashCompletion::Finished(ToolCallResult::new(
+                                    run_call_id.clone(),
+                                    output,
+                                ))
+                            }
+                        }
+                    }
+                    None => exec::run_sandboxed(
+                        &run_call_id,
+                        &input,
+                        &cwd,
+                        &workspace_root,
+                        network.as_deref(),
+                        &effective_grants,
+                        &config,
+                    ),
+                };
+                if let (Some(expected_roots), Some(result)) = (
+                    git_metadata_roots.as_deref(),
+                    completion_result_mut(&mut completion),
+                ) {
+                    annotate_git_operation_approval(&mut result.output, expected_roots);
+                    result.is_error = result
+                        .output
+                        .get("is_error")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                }
                 // Audit marker on every finished result this path produces
                 // -- `DomainDenied`/`FilesystemDenied` outcomes are
                 // already annotated by `exec::run_sandboxed` itself (a
@@ -231,6 +284,7 @@ pub fn spawn_sandboxed(
                         SandboxedApprovalOrigin::ManualFilesystemRetry { grants } => {
                             annotate_filesystem_approval(&mut result.output, grants)
                         }
+                        SandboxedApprovalOrigin::ManualGitOperation => {}
                     }
                 }
                 completion
@@ -238,6 +292,15 @@ pub fn spawn_sandboxed(
             run_job_body(session_id, call_id, &result_tx, work);
         }),
     );
+}
+
+fn completion_result_mut(completion: &mut BashCompletion) -> Option<&mut ToolCallResult> {
+    match completion {
+        BashCompletion::Finished(result)
+        | BashCompletion::DomainDenied { result, .. }
+        | BashCompletion::FilesystemDenied { result, .. } => Some(result),
+        BashCompletion::DomainGrantRequired { .. } => None,
+    }
 }
 
 /// Runs `work` (in practice, `exec::run`/`exec::run_sandboxed`) and *always*

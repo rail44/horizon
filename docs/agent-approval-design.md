@@ -309,6 +309,18 @@ product-owned API. Decisions:
   compatibility and resolves fail-closed. This is an incident-complete open
   slice, not a claim that every Landlock-controlled filesystem syscall can be
   discovered. See `docs/containment-denial-narrow-grants-design.md`.
+- **Git metadata preflight** (2026-07-21): an isolated worktree's writable
+  content root does not include the linked worktree gitdir or shared common
+  gitdir, so `git add`/`git commit` cannot wait for generic post-hoc denial
+  discovery. Direct metadata-writing or unknown Git subcommands now produce a
+  `GitOperation` approval before execution. Horizon derives and displays the
+  roots from the session workspace, validates the `.git` pointer, backlink,
+  `commondir`, and `common/worktrees/*` relationship, then revalidates before
+  the queued spawn. Approve grants those roots only to that sandboxed command
+  and its chained retry; deny runs nothing. Read-only Git remains tier 1, and
+  complex spellings the classifier misses receive no proactive grant. Details
+  and the accepted common-gitdir breadth are in
+  `docs/containment-denial-narrow-grants-design.md`.
 - **Spike** (owner decision): build the thin API + per-OS composition
   directly from the start — no ai-jail stopgap (writing the thin layer
   is the spike). Deliverable: prototype + tests

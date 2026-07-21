@@ -223,7 +223,11 @@ lands:
   `io_uring_setup`. Real curl reaches the proxy without command-specific flags;
   hostname approval remains session-local and retries sandboxed. macOS
   structured filesystem-denial evidence and runtime verification remain
-  best-effort/pending real-Mac work.
+  best-effort/pending real-Mac work. **Issue 57's Git-only slice is also
+  delivered:** metadata-writing Git commands ask before execution, validate a
+  linked worktree's gitdir/common-dir relationship, and receive those roots
+  only for the approved sandboxed command; a real linked-worktree commit test
+  proves the grant works and does not persist session-wide.
 - **Agent web search** (backlog 18) **LANDED 2026-07-21.**
   Consultation 2026-07-19/20: **vendor = Exa** (owner decision;
   empirical probe + independent-benchmark evidence in

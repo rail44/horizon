@@ -172,6 +172,30 @@
             "DomainGrant"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A Git command that may mutate repository metadata in an isolated\nlinked worktree. The paths were derived and validated by Horizon\nbefore this request was displayed. Approval re-resolves them, grants\nthem only to this call (including any chained containment retry), and\nkeeps the command inside the sandbox.",
+          "properties": {
+            "GitOperation": {
+              "properties": {
+                "writable_roots": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "writable_roots"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "GitOperation"
+          ],
+          "type": "object"
         }
       ]
     },

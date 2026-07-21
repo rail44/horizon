@@ -11,6 +11,7 @@ mod state;
 pub(crate) mod web;
 
 pub use approval::{resolve_approval, ApprovalDecision, ApprovalOutcome};
+pub(crate) use bash::{metadata_writable_roots, requires_metadata_write};
 pub use bash::{should_fold_completion, BashCompletion, ToolCompletion};
 pub(crate) use catalog::{definitions, permission_for_tool, Definition};
 // `execute_agent_tool`/`Execution` are re-exported fully `pub` (not

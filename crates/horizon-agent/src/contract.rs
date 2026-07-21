@@ -621,6 +621,12 @@ pub enum ApprovalKind {
     /// not occurred. Approval adds only these domains and starts the same
     /// request; denial resolves it without network access.
     DomainGrant { domains: Vec<String> },
+    /// A Git command that may mutate repository metadata in an isolated
+    /// linked worktree. The paths were derived and validated by Horizon
+    /// before this request was displayed. Approval re-resolves them, grants
+    /// them only to this call (including any chained containment retry), and
+    /// keeps the command inside the sandbox.
+    GitOperation { writable_roots: Vec<PathBuf> },
     /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
     /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
     /// discarded there; under serde_json only *unit* variants degrade —

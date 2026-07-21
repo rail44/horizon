@@ -222,6 +222,7 @@ fn execute_tier1_bash(
         network,
         crate::tools::bash::SandboxedApprovalOrigin::Tier1Auto,
         tool_state.filesystem_grants_snapshot(),
+        None,
         runtime.async_results.clone(),
     );
 
