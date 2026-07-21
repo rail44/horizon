@@ -84,7 +84,7 @@ pub fn system_prompt(environment: &SessionEnvironment, extra_sections: &[String]
          - Be concise; don't restate what the transcript already shows.\n\
          - Report outcomes faithfully: state failures and partial results plainly rather than \
          presenting them as success.\n\
-         - Before reporting work as done, verify it — build, test, or observe the change — and \
+         - Before reporting work as done, verify it — build or test the change — and \
          say what you checked.\n\
          \n\
          Environment:\n\

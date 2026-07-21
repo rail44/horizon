@@ -252,7 +252,9 @@ impl WorkspaceShell {
 
     pub(super) fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.freeze_scrim_before_modal_exit();
-        self.workspace.exit_workspace_mode();
+        // Palette is a transient overlay: workspace mode itself stays active
+        // so cancelling it (Esc / click-outside) simply returns to the same
+        // cursor state. Only confirming a command exits the mode first.
         let entries = command_entries(self.command_state_with(cx));
         let list = cx.new(|cx| {
             let mut list =
@@ -266,12 +268,16 @@ impl WorkspaceShell {
             |shell, list, event: &ListEvent, window, cx| match event {
                 ListEvent::Confirm(index) => {
                     let entry = list.read(cx).delegate().entry_at(*index).cloned();
+                    // Confirming a palette command exits workspace mode:
+                    // creating commands dive, non-creating commands run in
+                    // normal mode. Cancel (Esc) keeps the mode instead.
+                    shell.workspace.exit_workspace_mode();
                     shell.close_palette(window, cx);
                     if let Some(entry) = entry.filter(|entry| entry.enabled) {
                         shell.execute(entry.spec.id, window, cx);
                     }
                 }
-                ListEvent::Cancel => shell.close_palette(window, cx),
+                ListEvent::Cancel => shell.cancel_palette(window, cx),
                 ListEvent::Select(_) => {}
             },
         );
@@ -286,6 +292,21 @@ impl WorkspaceShell {
         self._palette_subscription = None;
         self.scrim_freeze = None;
         self.focus_active(window, cx);
+        cx.notify();
+    }
+
+    /// Cancels the palette, leaving workspace mode active when it was
+    /// active before the palette opened. The modal's own focus is released
+    /// back to the shell root so mode keys keep dispatching.
+    pub(super) fn cancel_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.palette = None;
+        self._palette_subscription = None;
+        self.scrim_freeze = None;
+        if self.workspace.is_workspace_mode_active() {
+            window.focus(&self.focus_handle, cx);
+        } else {
+            self.focus_active(window, cx);
+        }
         cx.notify();
     }
 }
