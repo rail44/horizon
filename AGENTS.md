@@ -265,7 +265,7 @@ Development is organized as one **project session** (long-horizon
 milestones, application-wide decisions, integration) plus per-domain
 work sessions. If you are a domain or task session: implement on a
 branch, never commit to or push `main` directly, and hand your branch
-back through the review queue below. Subagent workers already follow
+back to the project session. Subagent workers already follow
 the same shape (worktree branch handoff, `.claude/agents/worker.md`);
 this section extends it to every session working in this repository.
 Codex sessions additionally follow `.codex/delegation-workflow.md` for
@@ -277,29 +277,21 @@ the collision this whole flow exists to prevent.
 
 Direction comes from `docs/roadmap.md`: a domain session picks an
 item there and makes the concrete design decisions with the owner
-in-session — there is no separate plans layer; **the review request is
-the scope record**. The project session does not relitigate in-session
-decisions at merge — its review covers the gate, cross-domain
+in-session — there is no separate plans layer; **the task brief and branch
+handoff are the scope record**. The project session does not relitigate
+in-session decisions at merge — its review covers the gate, cross-domain
 integration, and coherence with the roadmap and architecture docs,
 returning non-blocking concerns as notes — and reflects merges back
 into the roadmap. Live session state is deliberately not tracked in
 git.
 
-**Review queue** (`.claude/review-queue/`, untracked): when a branch
-is ready, write `<slug>.request.md` containing the branch name, commit
-ref, the roadmap item it implements, the key design decisions made
-in-session, a short summary, and the tail of your gate run. An
-optional `## Observations` section (same two categories as worker
-reports: out-of-scope findings, friction) is triaged at review time by
-the project session into the backlog or the roadmap; mid-work findings
-can also ride your branch as edits to `docs/tasks/backlog.md`. Don't
-wait synchronously — the project session is notified, reviews in an
-isolated worktree, merges and pushes on green, and writes
-`<slug>.result` (`merged <hash>` / `rejected: <reason>` + notes) next
-to your request. After writing a request, don't go idle blind: arm a
-background watcher on your own `<slug>.result` (e.g. an `until
-[ -e ... ]; do sleep 15; done` background task) so the verdict wakes
-you — the owner should never need to prod a session back to life.
+**Branch handoff:** when a branch is ready, report its name and commit ref,
+the roadmap item it implements, key design decisions, a short summary, and
+the tail of the gate run directly to the project session. Optional
+out-of-scope findings or friction belong in that report; durable findings can
+also ride the branch as edits to `docs/tasks/backlog.md`. The project session
+reviews and integrates the branch directly. There is no filesystem review
+queue or result watcher.
 
 ## Open Work
 
@@ -310,5 +302,5 @@ Owner-filed dogfooding issues ride a **separate, faster lifecycle** from
 the roadmap: they are written one-file-each under `docs/issues/` (see
 `docs/issues/README.md`) by an issue-filing session, and the project
 session triages them by priority and merge-conflict and dispatches the
-chosen ones to workers through the same review queue. Filing an issue is
-not a request to fix it now.
+chosen ones to workers through the same branch-handoff flow. Filing an issue
+is not a request to fix it now.

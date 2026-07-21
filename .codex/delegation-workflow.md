@@ -56,8 +56,8 @@ isolation, or root review.
 4. Run implementation workers in dedicated worktrees and branches. Never let
    concurrent workers edit the same files or overlapping contracts.
 5. Require each worker to run the repository gate, commit its result, and
-   submit the branch through `.claude/review-queue/` as specified in
-   `AGENTS.md`. The queue name is historical and is shared by all agent tools.
+   report the branch and commit directly to the root coordinator as specified
+   in `AGENTS.md` and `.claude/agents/worker.md`.
 6. Have the root review behavior, contract compatibility, gate results, and
    roadmap coherence before integration.
 7. Record durable design changes in `docs/`; do not preserve transient session
