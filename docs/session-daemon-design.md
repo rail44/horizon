@@ -8,6 +8,21 @@ the decisions and is the scope reference for the migration. Steps 0 and 1
 are implemented end to end; the Step 2A recovery boundary was approved on
 2026-07-12.
 
+**Amendment 2026-07-21 (remoc wire migration, protocol v11).** The
+UI ⇄ `sessiond` transport this document describes as a JSONL envelope with
+row-diff frame push has been replaced by remoc rtc
+(`docs/remoc-adoption-design.md`). Superseded here: decision 4's row-diff
+push + snapshot-on-attach baseline — frame delivery is now a
+snapshot-valued `rch::watch<TerminalFrame>` (a full frame per delivery, no
+per-connection baseline; the 16 ms rate control survives); the Step-1
+"neutral shared framing crate" note — `horizon-session-protocol` survives
+but the JSONL framing does not and its dependency direction inverted; and
+the Step-1 (2026-07-12) `TerminalUpdate::Snapshot`/`FrameDiff` /
+connection-local-baseline implementation notes. The sister-contract
+vocabularies, PTY ownership, cwd resolution, drain, discovery/adoption,
+and workspace restoration carry over unchanged. remoc-adoption-design.md
+§8 is the full supersession map.
+
 Motive: terminal sessions must outlive the UI process (a UI crash or
 restart must not kill the shell and its children), and delegated
 terminal sessions need the same daemon-hosted home that agent sessions

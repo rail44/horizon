@@ -94,18 +94,22 @@ lands:
   restart). Owner dogfooding of the whole flow is the remaining gate.
   Follow-up hardening same day: the worktree tests' GIT_DIR-leak
   hermeticity fix + canary (`771f5a2`, backlog 53).
-- **Session wire → remoc migration — adoption decided 2026-07-20**
-  (`docs/remoc-adoption-design.md`; measured spike in
+- **Session wire → remoc migration — LANDED 2026-07-21** (all four
+  staged PRs: #22 skew groundwork, #23 the v10 cutover, #25 the v11
+  frame path, and the phase-4 cleanup this entry ships with; design
+  `docs/remoc-adoption-design.md`, measured spike in
   `docs/research/remoc-spike-2026-07-20.md`, spike code on PR #19, not
   for merge). The JSONL envelope/kind-dispatch/correlation wire is
   replaced by a remoc rtc hub trait with channel-carrying attachments;
-  cutover is protocol v10, then range-negotiated tolerant evolution
+  cutover at protocol v10, then range-negotiated tolerant evolution
   (additive-only, `#[serde(other)]`, committed schema artifact with a
-  merge-base checker replacing the wire.rs pin tests). PR #18's legacy
-  JSONL drain prober is retained as the cross-generation recovery path.
-  One design fork awaits an owner call before implementation: frame
-  delivery as a full-frame `watch` signal (recommended — deletes the
-  diff/baseline machinery) vs keeping diffs on mpsc (design doc §5).
+  merge-base checker replacing the wire.rs pin tests). Frame delivery
+  landed as Option A (owner-ratified 2026-07-20): a full-frame
+  `rch::watch` signal at protocol v11, with the diff/baseline machinery
+  deleted and row-change detection moved client-side. PR #18's legacy
+  JSONL drain prober survives, quarantined in
+  `horizon-session-protocol`'s `legacy` module, as the only
+  cross-generation (v10 UI clears a v≤9 daemon) recovery path.
 - **Inter-agent messaging.** Sessions addressing sessions — the
   coordination substrate for project → domain → task teams. Designed
   on the same derivation tree as the relationship model; a

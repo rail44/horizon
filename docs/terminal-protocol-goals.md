@@ -5,6 +5,21 @@ Status: decided 2026-07-19 (project session with owner). Companion to
 made; this file records where the frame path (sessiond → GUI) is headed.
 It constrains direction; it schedules nothing. Self-contained by intent.
 
+**Amendment 2026-07-21 (remoc wire v11, `docs/remoc-adoption-design.md`
+§5 Option A).** The session wire's diff machinery this document names
+below — `TerminalFrameDiff.changed_rows`, `compute_frame_diff`, the
+daemon's connection-local frame baselines, and the `Snapshot`/`FrameDiff`
+wire split — was deleted in the remoc migration: frame delivery is now a
+snapshot-valued `rch::watch<TerminalFrame>`, every delivery a full frame.
+This supersedes goal 1's *letter* (declarative snapshot ⊕ row replacement)
+and goal 3's *wire half* (`changed_rows` reaching the view layer over the
+wire); their *intent* is unchanged and strengthened — every delivery is
+the O(1) resync anchor (goal 1), and row-change detection still drives
+cache invalidation but is re-derived client-side from consecutive frames
+at measured-negligible cost (goal 3). remoc-adoption-design.md §8 is the
+full supersession map. The rest of this document (goals 2, 4, 5; the
+cost model; the non-goals) stands.
+
 ## What prompted this
 
 A CPU profile of the running GUI (samply attached to the debug build,

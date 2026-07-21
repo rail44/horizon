@@ -6,7 +6,11 @@
 > `Reload Session Runtime` / `reload-session-runtime`. The implementation still
 > hosts agent sessions only at this point; terminal hosting is the next step.
 > Names below preserve the stages and symbols as they existed when each step
-> landed.
+> landed. The JSONL envelope wire of decision 4 (`wire::read_envelope`, the
+> `{v, kind, session_id?, payload}` framing) was retired 2026-07-21 for remoc
+> rtc (`docs/remoc-adoption-design.md`); the decisions it carried are mapped
+> onto the hub trait there. The record below is preserved as the shape at
+> landing.
 
 Decision record and implementation guide, agreed 2026-07-04. Motivation:
 change agent code without killing sessions (the daily-driver requirement),

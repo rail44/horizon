@@ -1,9 +1,10 @@
 # Session Wire — remoc Adoption Design
 
 Status: adoption decided 2026-07-20 (owner decision, following the IPC
-survey and the measured spike). This document records the decision, the
-target architecture, and the migration boundaries; implementation has not
-started. Measurements and skew experiments live in
+survey and the measured spike); **migration complete 2026-07-21** — all
+four staged PRs landed (§6) and the wire is remoc at protocol v11. This
+document records the decision, the target architecture, and the migration
+boundaries. Measurements and skew experiments live in
 `docs/research/remoc-spike-2026-07-20.md` (spike code preserved on the
 `remoc-spike` branch, PR #19, not for merge). Companions:
 `docs/session-daemon-design.md` (what the daemon split decided) and
@@ -11,9 +12,11 @@ started. Measurements and skew experiments live in
 lists exactly which of their decisions this document supersedes or
 inherits.
 
-One section requires an explicit owner call before implementation starts:
-**§5, frame delivery** (watch-of-full-frames vs mpsc-of-diffs). Everything
-else is settled by the adoption decision plus this document.
+One section required an explicit owner call before implementation:
+**§5, frame delivery** (watch-of-full-frames vs mpsc-of-diffs) — resolved
+2026-07-20 in favour of Option A (full-frame watch), shipped as protocol
+v11. Everything else was settled by the adoption decision plus this
+document.
 
 ## 1. Decision record
 
@@ -270,10 +273,12 @@ by accident. Rules, then enforcement:
      the string's length varint) — which is why retyping a wire field is
      a version-bump reshape, never an in-place change.
 
-## 5. Frame delivery — the one open owner decision
+## 5. Frame delivery — the owner decision (resolved 2026-07-20)
 
-The largest design fork the migration exposes, stated explicitly because
-it needs an owner call before implementation:
+The largest design fork the migration exposed, stated explicitly because
+it needed an owner call before implementation — resolved in favour of
+Option A (full-frame watch) and shipped as protocol v11 (§6 phase 3); the
+Decision note below records the call. The two options, for the record:
 
 **Option A — `rch::watch<TerminalFrame>`, every delivery a full frame.**
 The frame channel becomes a snapshot-valued signal. Consequences:
@@ -374,14 +379,14 @@ flow actually produces, is the auto-recovery path above).
 the wire (a daemon-local persistence concern), already carries its own
 forward-compatibility guard, and does not change in this migration.
 
-Staged PR sequence, each independently green:
+Staged PR sequence, each independently green — **all four landed 2026-07-21**:
 
-1. **Skew groundwork on the live JSONL wire (no v-bump).** Add
+1. **Skew groundwork on the live JSONL wire (no v-bump).** *(Landed — PR #22.)* Add
    `#[serde(other)] Unknown` variants and the `#[serde(default)]` audit
    across the wire vocabularies, `schemars` derives, the committed schema
    artifact, and the §4 checker (retiring the four pin tests). All
    additive on v9; lands value even before remoc does.
-2. **The cutover (v10).** The hub trait in `horizon-session-protocol`,
+2. **The cutover (v10).** *(Landed — PR #23.)* The hub trait in `horizon-session-protocol`,
    remoc pinned (exact version, explicit Postbag codec, default features
    off), daemon serves the hub, `src/sessiond/` client rebuilt on rtc
    calls + channel bridges, envelope/kind-dispatch/correlation code
@@ -390,11 +395,11 @@ Staged PR sequence, each independently green:
    semantics** here — Snapshot/FrameDiff updates travel verbatim over the
    attachment's mpsc channel — so this PR is a transport swap, reviewable
    as such. e2e suite ported (§7).
-3. **Frame path (Option A, ratified 2026-07-20).** Swap the frame channel to
+3. **Frame path (Option A, ratified 2026-07-20).** *(Landed — PR #25, protocol v11.)* Swap the frame channel to
    `rch::watch`, delete the diff/baseline machinery, move row-change
    detection client-side. Separated from PR 2 so the semantic change is
    reviewed on its own.
-4. **Cleanup.** JSONL reduced to the prober's legacy module, stale doc
+4. **Cleanup.** *(This PR.)* JSONL reduced to the prober's legacy module, stale doc
    sweep, roadmap update.
 
 ## 7. Test strategy
@@ -425,7 +430,7 @@ Staged PR sequence, each independently green:
 
 ## 8. Relation to prior decisions
 
-Superseded (by this document, or by §5 Option A if ratified):
+Superseded (by this document, or by §5 Option A, ratified 2026-07-20):
 
 - `docs/session-daemon-design.md` decision 4, "row-diff push; full
   snapshot on attach" — Option A replaces both halves with the
