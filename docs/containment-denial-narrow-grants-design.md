@@ -206,6 +206,11 @@ any revalidated session grants, with `ReadableScope::Full`
 (`crates/horizon-agent/src/tools/bash/exec.rs:555-559`). The tracked Cargo
 configuration places intermediate build state outside it, under
 `{cargo-cache-home}/horizon-build-dir` (`.cargo/config.toml:1-40`).
+The sandbox baseline also grants read-write access to the exact special file
+`/dev/null`: Git and ordinary shells open that standard discard/source endpoint
+even for read-only operations. The grant is deliberately file-scoped; `/dev`
+and every sibling device remain non-writable and non-grantable through the
+approval path.
 
 On Linux, the dedicated helper now installs the extracted `openat`/`openat2`
 notification listener after Landlock setup. The unsandboxed supervisor

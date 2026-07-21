@@ -58,6 +58,13 @@ const BASELINE_DIRS: [&str; 8] = [
     "/dev",
 ];
 
+/// Standard device files that ordinary command-line programs expect to open
+/// for both reading and writing. Keep these exact-file capabilities separate
+/// from `BASELINE_DIRS`: granting `/dev` read-write would expose every host
+/// device, while `/dev/null` is the portable discard/source endpoint used by
+/// Git and shells even for otherwise read-only operations.
+const BASELINE_READWRITE_FILES: [&str; 1] = ["/dev/null"];
+
 /// Builds the `CapabilitySet` for `policy`: readable scope, writable
 /// roots, network mode, and signal scoping. `SignalMode::AllowSameSandbox`
 /// scopes `kill(2)` to the sandbox's own process tree on both OS backends
@@ -86,6 +93,10 @@ pub(crate) fn build_with_grants(
                 caps = allow_dir(caps, root, AccessMode::Read)?;
             }
         }
+    }
+
+    for file in BASELINE_READWRITE_FILES {
+        caps = caps.allow_file(file, AccessMode::ReadWrite)?;
     }
 
     for root in &policy.writable_roots {
@@ -349,6 +360,20 @@ mod tests {
             .iter()
             .any(|cap| cap.resolved == dir.canonicalize().unwrap()
                 && cap.access == AccessMode::ReadWrite));
+    }
+
+    #[test]
+    fn dev_null_is_the_only_read_write_device_baseline() {
+        let caps = build(&policy(vec![], NetworkPolicy::Disabled)).unwrap();
+        let dev_null = Path::new("/dev/null").canonicalize().unwrap();
+        assert!(caps.fs_capabilities().iter().any(|cap| {
+            cap.resolved == dev_null && cap.is_file && cap.access == AccessMode::ReadWrite
+        }));
+        assert!(!caps.fs_capabilities().iter().any(|cap| {
+            cap.resolved.starts_with("/dev")
+                && cap.resolved != dev_null
+                && cap.access == AccessMode::ReadWrite
+        }));
     }
 
     #[test]

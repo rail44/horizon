@@ -167,6 +167,78 @@ fn directory_tree_grant_allows_creating_a_missing_suffix() {
 }
 
 #[test]
+fn standard_dev_null_is_read_write_but_other_devices_are_not() {
+    let root = test_dir("dev-null-baseline");
+    let marker = root.join("dev-null-worked");
+    let policy = horizon_sandbox::SandboxPolicy {
+        writable_roots: vec![root.clone()],
+        readable_scope: horizon_sandbox::ReadableScope::Full,
+        network: horizon_sandbox::NetworkPolicy::Disabled,
+    };
+    let mut command = Command::new("/bin/sh");
+    command.arg("-c").arg(format!(
+        "printf discarded > /dev/null && printf ok > {}; \
+         if printf forbidden > /dev/zero 2>/dev/null; then exit 24; fi",
+        shell_quote(&marker)
+    ));
+    let sandboxed =
+        horizon_sandbox::spawn(command, &policy, horizon_sandbox::SandboxStdio::inherit())
+            .expect("spawn device baseline probe");
+    let report = sandboxed.supervisor_report.expect("supervisor report");
+    let mut child = sandboxed.child;
+
+    assert_eq!(child.wait().expect("wait").code(), Some(0));
+    assert_eq!(std::fs::read_to_string(&marker).unwrap(), "ok");
+    let outcome = report.read().expect("read report");
+    assert!(outcome.approvals.iter().any(|approval| matches!(
+        &approval.request,
+        nono::ApprovalRequest::Capability { path, .. } if path == std::path::Path::new("/dev/zero")
+    )));
+    assert!(!outcome.approvals.iter().any(|approval| matches!(
+        &approval.request,
+        nono::ApprovalRequest::Capability { path, .. } if path == std::path::Path::new("/dev/null")
+    )));
+
+    std::fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn git_status_can_open_its_standard_dev_null_endpoint() {
+    let root = test_dir("git-dev-null");
+    let mut init = Command::new("git");
+    init.arg("init").arg("--quiet").arg(&root);
+    scrub_git_env(&mut init);
+    let init = init.status().expect("run host git init");
+    assert!(init.success(), "initialize test repository");
+
+    let policy = horizon_sandbox::SandboxPolicy {
+        writable_roots: vec![root.clone()],
+        readable_scope: horizon_sandbox::ReadableScope::Full,
+        network: horizon_sandbox::NetworkPolicy::Disabled,
+    };
+    let mut command = Command::new("git");
+    command.arg("status").arg("--short").current_dir(&root);
+    scrub_git_env(&mut command);
+    let sandboxed = horizon_sandbox::spawn(
+        command,
+        &policy,
+        horizon_sandbox::SandboxStdio::piped_output(),
+    )
+    .expect("spawn sandboxed git status");
+    let report = sandboxed.supervisor_report.expect("supervisor report");
+    let output = sandboxed.child.wait_with_output().expect("wait for git");
+
+    assert!(
+        output.status.success(),
+        "git status failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(report.read().expect("read report").approvals.is_empty());
+
+    std::fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
 fn proxy_policy_allows_only_the_exact_ipv4_tcp_endpoint() {
     let root = test_dir("proxy-exact");
     let proxy = TcpListener::bind("127.0.0.1:0").expect("bind proxy endpoint");
@@ -334,4 +406,12 @@ fn test_dir(label: &str) -> std::path::PathBuf {
 
 fn shell_quote(path: &std::path::Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+}
+
+fn scrub_git_env(command: &mut Command) {
+    for (key, _) in std::env::vars() {
+        if key.starts_with("GIT_") {
+            command.env_remove(key);
+        }
+    }
 }
