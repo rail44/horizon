@@ -1382,6 +1382,35 @@
             "SetColorScheme"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Client → daemon: request a scrollback *window* — a contiguous block of\nhistory `height` rows tall, positioned `anchor` rows above the live\nbottom (a hypothetical `display_offset`). The daemon answers on the\nevents channel with [`TerminalUpdate::ScrollWindow`], a self-describing\nwindow (`docs/terminal-scrollback-design.md` §3.2, §9 option ii): the\nreply carries its own `viewport_offset`/`above`/`below`, so no\ncorrelation id is needed. Serving it never moves the live\n`display_offset` (`TerminalCore::snapshot_window`), so the live-frame\nwatch keeps showing the tail throughout. Additive, appended before the\n`Unknown` catch-all; phase 1 wires this end-to-end daemon-side, the\nclient does not send it yet (§7 phase 2).",
+          "properties": {
+            "RequestScrollWindow": {
+              "properties": {
+                "anchor": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "height": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "anchor",
+                "height"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "RequestScrollWindow"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1476,6 +1505,11 @@
             "type": "array"
           },
           "type": "array"
+        },
+        "scrollback_available": {
+          "default": false,
+          "description": "Whether this session can currently serve a scrollback *window*\n(`TerminalCommand::RequestScrollWindow`): `true` on the primary\nscreen with no application-scroll mode active, `false` while\n`ALT_SCREEN` or `MOUSE_MODE` is set — the alt grid is built with\n`max_scroll_limit == 0` (no scrollback), and a mouse app's wheel is\napplication input, not a `display_offset` move\n(`docs/terminal-scrollback-design.md` §2.1, §2.3, §5). The client\nroutes wheel/PageUp to local windowing only while this is set, and\nkeeps today's passthrough round-trip otherwise. Additive since the\nscrollback windowing work (phase 1); `#[serde(default)]` so a peer\npredating it decodes to `false`, the conservative \"no windowing\"\ndefault.",
+          "type": "boolean"
         },
         "selection": {
           "anyOf": [
@@ -1591,6 +1625,43 @@
       "required": [
         "lines",
         "point"
+      ],
+      "type": "object"
+    },
+    "TerminalScrollWindow": {
+      "description": "A served scrollback window: a contiguous block of history rows read at an\narbitrary position **without disturbing the live viewport**\n(`TerminalCore::snapshot_window`, built by a `grid.iter_from` walk that\nnever moves `display_offset` — `docs/terminal-scrollback-design.md` §2.2,\n§3.2). The window is self-describing, so the client needs no\nrequest/response correlation id: `viewport_offset`/`above`/`below` locate\nit against the grid at service time. Carried back to the client as\n[`crate::TerminalUpdate::ScrollWindow`] on the events channel\n(§9 option ii). Reuses the frame's own [`TerminalLine`] vocabulary so the\nclient paints it with the identical renderer, and — being a struct, not a\nwire enum in element position — keeps the postbag positional discipline\n(§4 rule 5).",
+      "properties": {
+        "above": {
+          "description": "How many history rows remain above the block's top. `0` is the\ntrue-top signal (upward scrolling and prefetch clamp here).",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "below": {
+          "description": "How many rows remain below the block's bottom, down to the live tail.\n`0` is the live-edge signal (scrolling past it drops the window and\nresumes the live-frame watch).",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lines": {
+          "description": "The contiguous block of history rows, top to bottom. Clamped by\n`above`/`below`, so it may be shorter than the requested height near\nthe true top or the live edge.",
+          "items": {
+            "$ref": "#/$defs/TerminalLine"
+          },
+          "type": "array"
+        },
+        "viewport_offset": {
+          "description": "Index into [`lines`](Self::lines) of the row that is the top of the\nviewport at the requested anchor — where the client places the\nvisible window inside the block.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "lines",
+        "viewport_offset",
+        "above",
+        "below"
       ],
       "type": "object"
     },
@@ -1876,6 +1947,19 @@
           },
           "required": [
             "Error"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Daemon → client: a served scrollback window, the reply to\n[`TerminalCommand::RequestScrollWindow`]\n(`docs/terminal-scrollback-design.md` §3.2, §9 option ii — it rides\nthis existing events mpsc rather than a dedicated channel). The window\nis self-describing (`viewport_offset`/`above`/`below`), so it carries\nno correlation id, and its payload is a struct\n([`TerminalScrollWindow`]) — no wire enum in element position, keeping\nthe postbag positional discipline. Additive, appended before the\n`Unknown` catch-all; phase 1 produces it daemon-side, the client does\nnot consume it yet (§7 phase 2).",
+          "properties": {
+            "ScrollWindow": {
+              "$ref": "#/$defs/TerminalScrollWindow"
+            }
+          },
+          "required": [
+            "ScrollWindow"
           ],
           "type": "object"
         }

@@ -694,6 +694,233 @@ fn cursor_is_hidden_while_scrolled_and_correct_at_the_live_edge() {
     );
 }
 
+/// Seeds `count` numbered `lineNN` rows through a `rows`-tall viewport, so
+/// the bottom `rows` are the live screen and the rest is scrollback history
+/// (`history_size == count - rows`). Shared by the `snapshot_window` tests.
+fn numbered_history_core(rows: u16, count: usize) -> TerminalCore {
+    numbered_history_core_sized(20, rows, count)
+}
+
+/// [`numbered_history_core`] with an explicit column width — the height-clamp
+/// tests need a realistic width (the clamp is byte-budget-derived from the
+/// column count).
+fn numbered_history_core_sized(cols: u16, rows: u16, count: usize) -> TerminalCore {
+    let mut core = TerminalCore::new(TerminalSize::new(cols, rows));
+    let mut script = String::new();
+    for i in 0..count {
+        if i > 0 {
+            script.push_str("\r\n");
+        }
+        script.push_str(&format!("line{i:02}"));
+    }
+    core.write_vt(script.as_bytes());
+    core
+}
+
+/// The visible text of one window/frame row (spans concatenated; blank runs
+/// contribute their empty text).
+fn window_row_text(line: &TerminalLine) -> String {
+    line.spans.iter().map(|span| span.text.as_str()).collect()
+}
+
+/// Phase 1 headline: `snapshot_window(anchor, height)` returns the correct
+/// contiguous block for the requested position, with `viewport_offset`
+/// locating the viewport inside it and `above`/`below` reporting the rows
+/// that remain outside (`docs/terminal-scrollback-design.md` §3.2, §8). With
+/// 40 numbered lines through a 5-row viewport there are 35 history rows;
+/// anchoring at the live bottom (`anchor == 0`) with a 15-row height centers
+/// the 5-row viewport in a 10-row block clamped at the live edge.
+#[test]
+fn snapshot_window_returns_the_anchored_block_with_metadata() {
+    let core = numbered_history_core(5, 40); // history_size == 35
+
+    let window = core.snapshot_window(0, 15);
+
+    // margin = 15 - 5 = 10 (5 above, 5 below); the block clamps at the live
+    // edge below (below == 0), so it spans line30..=line39 (10 rows) with the
+    // live viewport (line35..) starting at offset 5.
+    assert_eq!(window.lines.len(), 10);
+    assert_eq!(window.viewport_offset, 5);
+    assert_eq!(window.above, 30, "line00..line29 remain above the block");
+    assert_eq!(window.below, 0, "the block's bottom is the live tail");
+    assert_eq!(window_row_text(&window.lines[0]), "line30");
+    assert_eq!(
+        window_row_text(&window.lines[window.viewport_offset]),
+        "line35",
+        "viewport_offset must point at the live viewport's top row"
+    );
+    assert_eq!(window_row_text(&window.lines[9]), "line39");
+}
+
+/// The invariant the whole design rests on: reading a window must **not**
+/// move the live `display_offset` (`docs/terminal-scrollback-design.md`
+/// §2.2, §8) — unlike the `scroll_display` round-trip, `snapshot_window` is a
+/// pure `iter_from` read. The live frame keeps showing the tail before and
+/// after, even when the window is anchored deep in history.
+#[test]
+fn snapshot_window_does_not_move_the_live_display_offset() {
+    let core = numbered_history_core(5, 40);
+    assert_eq!(core.display_offset(), 0);
+    let live_before = core.snapshot_frame();
+    assert!(live_before.text().contains("line39"));
+
+    // Anchor 20 rows above the live bottom: the returned block is centered on
+    // line15, nowhere near the live tail.
+    let window = core.snapshot_window(20, 15);
+    assert_eq!(
+        window_row_text(&window.lines[window.viewport_offset]),
+        "line15",
+        "the window must read history at the requested anchor"
+    );
+
+    // The read left the live viewport exactly where it was.
+    assert_eq!(
+        core.display_offset(),
+        0,
+        "snapshot_window must not move the live display_offset"
+    );
+    assert_eq!(
+        core.snapshot_frame(),
+        live_before,
+        "the live frame must be byte-identical after a window read"
+    );
+}
+
+/// `above == 0` is the true-top signal and `below == 0` the live-edge signal
+/// (`docs/terminal-scrollback-design.md` §3.2, §5, §8). Anchoring at the very
+/// top (`anchor == history_size`) clamps the block's top to the oldest row,
+/// so `above == 0` and `viewport_offset == 0`.
+#[test]
+fn snapshot_window_clamps_at_the_true_top() {
+    let core = numbered_history_core(5, 40); // history_size == 35
+
+    let window = core.snapshot_window(35, 15);
+
+    assert_eq!(window.above, 0, "the block's top is the oldest history row");
+    assert_eq!(window.viewport_offset, 0);
+    assert_eq!(window_row_text(&window.lines[0]), "line00");
+    // margin_below = 5 below the 5-row viewport (rows line00..line09).
+    assert_eq!(window.lines.len(), 10);
+    assert_eq!(window.below, 30);
+}
+
+/// When the scrollback is shorter than the requested height the window
+/// clamps at *both* edges and returns the whole buffer (`above == below ==
+/// 0`) — the boundary the design's §8 "true edges" and hard-case §5 call for.
+#[test]
+fn snapshot_window_smaller_than_height_returns_the_whole_buffer() {
+    // 6 lines through a 4-row viewport: history_size == 2, total == 6 rows.
+    let core = numbered_history_core(4, 6);
+
+    let window = core.snapshot_window(0, 40);
+
+    assert_eq!(window.above, 0);
+    assert_eq!(window.below, 0);
+    assert_eq!(window.lines.len(), 6, "the whole buffer, clamped both ends");
+    assert_eq!(
+        window.viewport_offset, 2,
+        "2 history rows above the viewport"
+    );
+    assert_eq!(window_row_text(&window.lines[0]), "line00");
+    assert_eq!(window_row_text(&window.lines[5]), "line05");
+}
+
+/// Review fix (High): `snapshot_window` **hard-clamps** the requested height
+/// to a safe row count, so a served window can never serialize past the
+/// events-channel item cap (`TERMINAL_EVENT_MAX_ITEM_BYTES`). An unbounded
+/// height would let a decorated full-scrollback window balloon to many
+/// megabytes as one `TerminalUpdate::ScrollWindow`, trip remoc's over-cap
+/// latch, tear down the shared events channel, and orphan the pane. Even
+/// `height == usize::MAX` yields a bounded block.
+#[test]
+fn snapshot_window_clamps_an_oversized_height() {
+    // 2000 lines through an 80x5 viewport: 1995 history rows, so a window
+    // requested mid-history is bounded by the height clamp, not the grid
+    // edges. max_window_rows(80, 5) = (4 MiB / 2 / (80 * 128)).max(5) = 204.
+    let core = numbered_history_core_sized(80, 5, 2000);
+
+    let window = core.snapshot_window(1000, usize::MAX);
+
+    assert_eq!(
+        window.lines.len(),
+        204,
+        "an oversized height must clamp to the safe row cap, not the buffer"
+    );
+    assert!(
+        window.lines.len() < 2000,
+        "the clamp must bite well below the full 2000-row buffer"
+    );
+}
+
+/// Review fix: the clamp keeps `above`/`below`/`viewport_offset` exact for the
+/// *clamped* block — `above + row_count + below` still accounts for every grid
+/// row, and the viewport still fits inside the returned block. The identity
+/// closes on the window actually served, not on the (larger) requested height.
+#[test]
+fn snapshot_window_metadata_identity_holds_under_clamp() {
+    let rows = 5usize;
+    let total = 2000usize; // history_size (1995) + screen_lines (5)
+    let core = numbered_history_core_sized(80, rows as u16, total);
+
+    let window = core.snapshot_window(1000, usize::MAX);
+
+    assert_eq!(
+        window.above + window.lines.len() + window.below,
+        total,
+        "above + row_count + below must still account for every grid row"
+    );
+    assert!(
+        window.viewport_offset + rows <= window.lines.len(),
+        "the viewport must fit inside the returned block after clamping"
+    );
+    assert!(
+        window.above > 0 && window.below > 0,
+        "an interior clamped window has real history on both sides"
+    );
+}
+
+/// The additive scrollback-availability flag (`docs/terminal-scrollback-design.md`
+/// §2.3, §5): `true` on the primary screen, `false` while the alternate
+/// screen is active (its grid has `max_scroll_limit == 0`, no scrollback),
+/// restored on exit.
+#[test]
+fn scrollback_available_flag_tracks_the_alternate_screen() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    assert!(
+        core.snapshot_frame().scrollback_available,
+        "a fresh primary-screen session can serve scrollback windows"
+    );
+
+    core.write_vt(b"\x1b[?1049h");
+    assert!(core.alternate_screen());
+    assert!(
+        !core.snapshot_frame().scrollback_available,
+        "the alternate screen has no scrollback (max_scroll_limit == 0)"
+    );
+
+    core.write_vt(b"\x1b[?1049l");
+    assert!(
+        core.snapshot_frame().scrollback_available,
+        "exiting the alternate screen restores scrollback availability"
+    );
+}
+
+/// The other half of §2.3: a mouse-tracking app owns the wheel (it becomes
+/// application input, not a `display_offset` move), so scrollback windowing
+/// is suspended while `MOUSE_MODE` is set.
+#[test]
+fn scrollback_available_flag_is_false_in_mouse_mode() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    core.write_vt(b"\x1b[?1000h");
+    assert!(
+        !core.snapshot_frame().scrollback_available,
+        "a mouse app's wheel is application input, not local scrollback"
+    );
+
+    core.write_vt(b"\x1b[?1000l");
+    assert!(core.snapshot_frame().scrollback_available);
+}
+
 #[test]
 fn scroll_in_alternate_screen_sends_application_input() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 3));
@@ -2127,6 +2354,7 @@ fn test_frame(rows: &[&str]) -> TerminalFrame {
         mouse_reporting: false,
         keys_as_escape_codes: false,
         palette_overrides: Vec::new(),
+        scrollback_available: false,
     }
 }
 
@@ -2179,6 +2407,10 @@ fn terminal_commands_and_selection_commands_round_trip_through_serde() {
         TerminalCommand::SelectionUpdate(point),
         TerminalCommand::CopySelection,
         TerminalCommand::Focus(true),
+        TerminalCommand::RequestScrollWindow {
+            anchor: 12,
+            height: 45,
+        },
         TerminalCommand::Shutdown,
     ];
     for command in commands {
@@ -2216,6 +2448,14 @@ fn terminal_updates_and_external_value_types_round_trip_through_serde() {
         },
         TerminalUpdate::Exited,
         TerminalUpdate::Error("error".into()),
+        TerminalUpdate::ScrollWindow(TerminalScrollWindow {
+            lines: vec![TerminalLine {
+                spans: vec![plain_span("history".into(), 7)],
+            }],
+            viewport_offset: 1,
+            above: 8,
+            below: 3,
+        }),
     ];
     for update in updates {
         assert_serde_round_trip(update);

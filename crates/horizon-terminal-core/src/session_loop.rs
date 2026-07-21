@@ -21,7 +21,9 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, Sender};
 use termwiz::input::{KeyCode, Modifiers};
 
-use crate::contract::{ClipboardDestination, SelectionCommand, TerminalCommand, TerminalUpdate};
+use crate::contract::{
+    ClipboardDestination, ScrollWindowRequest, SelectionCommand, TerminalCommand, TerminalUpdate,
+};
 use crate::core::{TerminalColorScheme, TerminalCore};
 use crate::types::{
     KeyEventKind, TerminalFrame, TerminalMouseReport, TerminalScroll, TerminalSize,
@@ -58,6 +60,12 @@ pub struct CoreReceivers {
     /// re-push of the host's color scheme into this already-running
     /// session (see that variant's doc comment).
     pub color_scheme_rx: Receiver<TerminalColorScheme>,
+    /// Demuxed `TerminalCommand::RequestScrollWindow` -- a client's request
+    /// for a scrollback window (`docs/terminal-scrollback-design.md` §7.1).
+    /// The loop answers by calling `TerminalCore::snapshot_window` and
+    /// putting the window on the events mpsc as
+    /// `TerminalUpdate::ScrollWindow`, never moving the live `display_offset`.
+    pub window_rx: Receiver<ScrollWindowRequest>,
 }
 
 pub struct CoreSenders {
@@ -69,6 +77,7 @@ pub struct CoreSenders {
     pub selection_tx: Sender<SelectionCommand>,
     pub focus_tx: Sender<bool>,
     pub color_scheme_tx: Sender<TerminalColorScheme>,
+    pub window_tx: Sender<ScrollWindowRequest>,
 }
 
 /// How long the session runtime waits before flushing a burst of core
@@ -150,6 +159,22 @@ fn send_selection_to_primary(core: &TerminalCore, update_tx: &Sender<TerminalUpd
     }
 }
 
+/// Collapse a burst of pending items to the most recent, starting from the
+/// one the `select!` arm already dequeued. Scroll-window requests are
+/// low-frequency, user-driven prefetches where a newer request supersedes an
+/// older one by self-location (`docs/terminal-scrollback-design.md` §3.4), so
+/// a rapid burst must cost a single `snapshot_window`, not one per request —
+/// otherwise a flooded `window_rx` would starve `pty_rx` and the frame path
+/// on this single-threaded loop and let the queue grow unbounded. Draining
+/// the backlog here bounds both.
+fn drain_to_latest<T>(first: T, rx: &Receiver<T>) -> T {
+    let mut latest = first;
+    while let Ok(newer) = rx.try_recv() {
+        latest = newer;
+    }
+    latest
+}
+
 /// Flush the latest dirty state once the coalescing timer fires.
 fn flush_snapshot(
     core: &TerminalCore,
@@ -186,6 +211,7 @@ pub fn run_terminal_core(
         selection_rx,
         focus_rx,
         color_scheme_rx,
+        window_rx,
     } = receivers;
     let mut core = TerminalCore::with_scrollback(size, options.scrollback_lines);
     core.set_color_scheme(options.color_scheme);
@@ -297,6 +323,26 @@ pub fn run_terminal_core(
                 // notify a snapshot for here.
                 core.set_color_scheme(scheme);
             }
+            recv(window_rx) -> request => {
+                let Ok(request) = request else {
+                    return;
+                };
+                // Coalesce a burst to its latest position before serving --
+                // one `snapshot_window` per burst keeps a flooded `window_rx`
+                // from starving `pty_rx`/frames on this single-threaded loop
+                // (see `drain_to_latest`).
+                let ScrollWindowRequest { anchor, height } =
+                    drain_to_latest(request, &window_rx);
+                // A pure read: `snapshot_window` walks `iter_from` and never
+                // moves the live `display_offset`, so there is no visible
+                // grid state to `notify_snapshot` for -- the live-frame watch
+                // keeps showing the tail. The window rides the events mpsc
+                // back to the client (`docs/terminal-scrollback-design.md`
+                // §9 option ii), reusing the same `update_tx` plumbing every
+                // other non-frame update already uses.
+                let window = core.snapshot_window(anchor, height);
+                let _ = update_tx.send(TerminalUpdate::ScrollWindow(window));
+            }
             recv(pty_rx) -> bytes => {
                 let Ok(bytes) = bytes else {
                     return;
@@ -358,6 +404,34 @@ pub fn run_terminal_core(
 mod tests {
     use super::*;
 
+    /// Review fix (Medium): the window arm coalesces a burst of pending
+    /// `window_rx` requests to the newest before serving, so a flood costs one
+    /// `snapshot_window` rather than one per request. `drain_to_latest` is that
+    /// coalescer: starting from the item the `select!` arm already dequeued, it
+    /// folds the whole backlog and returns the most recent, leaving the channel
+    /// empty.
+    #[test]
+    fn drain_to_latest_coalesces_a_backlog_to_the_newest_item() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        for n in 1..=5 {
+            tx.send(n).unwrap();
+        }
+
+        // The select arm dequeues the first; `drain_to_latest` folds the rest.
+        let first = rx.recv().unwrap();
+        assert_eq!(first, 1);
+        assert_eq!(drain_to_latest(first, &rx), 5);
+        assert!(
+            rx.try_recv().is_err(),
+            "the whole backlog must be drained, not just the front"
+        );
+
+        // With nothing queued behind it, the dequeued item passes through.
+        tx.send(42).unwrap();
+        let only = rx.recv().unwrap();
+        assert_eq!(drain_to_latest(only, &rx), 42);
+    }
+
     /// End-to-end regression test for the synchronized-update failsafe
     /// (`rearm_sync_flush`/`TerminalCore::flush_sync_update`): a PTY chunk
     /// that opens a BSU window and never sends the closing ESU must still
@@ -382,6 +456,7 @@ mod tests {
             selection_rx: crossbeam_channel::never(),
             focus_rx: crossbeam_channel::never(),
             color_scheme_rx: crossbeam_channel::never(),
+            window_rx: crossbeam_channel::never(),
         };
 
         std::thread::spawn(move || {
@@ -443,6 +518,7 @@ mod tests {
             selection_rx: crossbeam_channel::never(),
             focus_rx: crossbeam_channel::never(),
             color_scheme_rx: crossbeam_channel::never(),
+            window_rx: crossbeam_channel::never(),
         };
 
         std::thread::spawn(move || {
@@ -505,6 +581,7 @@ mod tests {
             selection_rx: crossbeam_channel::never(),
             focus_rx: crossbeam_channel::never(),
             color_scheme_rx: crossbeam_channel::never(),
+            window_rx: crossbeam_channel::never(),
         };
 
         std::thread::spawn(move || {
@@ -589,6 +666,7 @@ mod tests {
             selection_rx: crossbeam_channel::never(),
             focus_rx: crossbeam_channel::never(),
             color_scheme_rx: crossbeam_channel::never(),
+            window_rx: crossbeam_channel::never(),
         };
 
         std::thread::spawn(move || {
@@ -626,6 +704,108 @@ mod tests {
         assert_eq!(clipboard_text.as_deref(), Some("hello"));
     }
 
+    /// End-to-end coverage for the phase-1 window wiring
+    /// (`docs/terminal-scrollback-design.md` §7.1, §9 option ii): a
+    /// `ScrollWindowRequest` on `window_rx` is served by
+    /// `TerminalCore::snapshot_window` and comes back out as a
+    /// `TerminalUpdate::ScrollWindow` on the events mpsc — the same round-trip
+    /// the sessiond command/event plumbing carries. Crucially it must **not**
+    /// disturb the live frame watch: serving a window is a pure read, so no
+    /// new `TerminalFrame` is produced and the live viewport stays at the tail
+    /// (the no-side-effect invariant, §2.2).
+    #[test]
+    fn run_terminal_core_serves_a_scroll_window_without_touching_the_live_frame() {
+        let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
+        let (command_tx, _command_rx) = crossbeam_channel::unbounded();
+        let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
+        let (update_tx, update_rx) = crossbeam_channel::unbounded();
+        let (window_tx, window_rx) = crossbeam_channel::unbounded();
+        let receivers = CoreReceivers {
+            resize_rx: crossbeam_channel::never(),
+            scroll_rx: crossbeam_channel::never(),
+            mouse_rx: crossbeam_channel::never(),
+            paste_rx: crossbeam_channel::never(),
+            key_rx: crossbeam_channel::never(),
+            selection_rx: crossbeam_channel::never(),
+            focus_rx: crossbeam_channel::never(),
+            color_scheme_rx: crossbeam_channel::never(),
+            window_rx,
+        };
+
+        std::thread::spawn(move || {
+            run_terminal_core(
+                TerminalSize::new(20, 5),
+                TerminalCoreOptions::default(),
+                pty_rx,
+                receivers,
+                command_tx,
+                frame_tx,
+                update_tx,
+            );
+        });
+
+        // Seed 40 numbered lines through a 5-row viewport: 35 rows of history
+        // above the live tail (line35..line39).
+        let mut script = String::new();
+        for i in 0..40 {
+            if i > 0 {
+                script.push_str("\r\n");
+            }
+            script.push_str(&format!("line{i:02}"));
+        }
+        pty_tx.send(script.into_bytes()).unwrap();
+
+        // Drain frames until the live tail has landed, then drain any
+        // stragglers so the post-request "no new frame" assertion is clean.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut saw_tail = false;
+        while Instant::now() < deadline {
+            match frame_rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(frame) => saw_tail |= frame.text().contains("line39"),
+                Err(_) if saw_tail => break,
+                Err(_) => {}
+            }
+        }
+        assert!(
+            saw_tail,
+            "the live tail (line39) should reach the frame watch"
+        );
+
+        // Request a window at the live edge, three viewports tall.
+        window_tx
+            .send(ScrollWindowRequest {
+                anchor: 0,
+                height: 15,
+            })
+            .unwrap();
+
+        // The window comes back on the events mpsc, self-describing.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let window = loop {
+            assert!(
+                Instant::now() < deadline,
+                "never received the scroll window"
+            );
+            if let Ok(TerminalUpdate::ScrollWindow(window)) =
+                update_rx.recv_timeout(Duration::from_millis(50))
+            {
+                break window;
+            }
+        };
+        assert_eq!(window.below, 0, "anchor 0 sits at the live edge");
+        assert!(window.above > 0, "history remains above the served block");
+        let last = window.lines.last().expect("a non-empty window");
+        let last_text: String = last.spans.iter().map(|span| span.text.as_str()).collect();
+        assert_eq!(last_text, "line39", "the block's bottom is the live tail");
+
+        // The read must not have produced a new frame — the live viewport is
+        // untouched (no `display_offset` move, no re-snapshot).
+        assert!(
+            frame_rx.recv_timeout(Duration::from_millis(150)).is_err(),
+            "serving a scroll window must not push a new live frame"
+        );
+    }
+
     /// A word selection (`SelectionCommand::Start { kind: Word, .. }`)
     /// writes the selected text to the OS primary buffer automatically --
     /// distinct from the explicit-copy path above, which targets the system
@@ -648,6 +828,7 @@ mod tests {
             selection_rx,
             focus_rx: crossbeam_channel::never(),
             color_scheme_rx: crossbeam_channel::never(),
+            window_rx: crossbeam_channel::never(),
         };
 
         std::thread::spawn(move || {
@@ -719,6 +900,7 @@ mod tests {
             selection_rx: crossbeam_channel::never(),
             focus_rx,
             color_scheme_rx: crossbeam_channel::never(),
+            window_rx: crossbeam_channel::never(),
         };
 
         std::thread::spawn(move || {
@@ -797,6 +979,7 @@ mod tests {
             selection_rx: crossbeam_channel::never(),
             focus_rx: crossbeam_channel::never(),
             color_scheme_rx,
+            window_rx: crossbeam_channel::never(),
         };
 
         std::thread::spawn(move || {

@@ -233,6 +233,12 @@ impl TerminalSession {
                             }
                         }
                         Incoming::Event(TerminalUpdate::Title(_) | TerminalUpdate::Bell) => {}
+                        // Windowed overscan phase 1 wires window *retrieval*
+                        // daemon-side only; the client does not request
+                        // windows yet, so a served window has nothing to apply
+                        // here. Phase 2 consumes it to scroll locally
+                        // (`docs/terminal-scrollback-design.md` §7).
+                        Incoming::Event(TerminalUpdate::ScrollWindow(_)) => {}
                         // Skew catch-all (`TerminalUpdate::Unknown`'s
                         // doc): an event this build can't name is skipped;
                         // the stream stays attached.

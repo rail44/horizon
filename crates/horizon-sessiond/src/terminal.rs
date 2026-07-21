@@ -8,8 +8,9 @@ use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender};
 use horizon_terminal_core::{
-    run_terminal_core, CoreReceivers, CoreSenders, SelectionCommand, TerminalCommand,
-    TerminalCoreOptions, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
+    run_terminal_core, CoreReceivers, CoreSenders, ScrollWindowRequest, SelectionCommand,
+    TerminalCommand, TerminalCoreOptions, TerminalFrame, TerminalSpawnSpec, TerminalSummary,
+    TerminalUpdate,
 };
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
@@ -479,6 +480,7 @@ fn spawn_terminal(
     let (selection_tx, selection_rx) = crossbeam_channel::unbounded();
     let (focus_tx, focus_rx) = crossbeam_channel::unbounded();
     let (color_scheme_tx, color_scheme_rx) = crossbeam_channel::unbounded();
+    let (window_tx, window_rx) = crossbeam_channel::unbounded();
 
     let response_tx = command_tx.clone();
     let read_update_tx = update_tx.clone();
@@ -502,6 +504,7 @@ fn spawn_terminal(
                 selection_rx,
                 focus_rx,
                 color_scheme_rx,
+                window_rx,
             },
             response_tx,
             frame_tx,
@@ -524,6 +527,7 @@ fn spawn_terminal(
                 selection_tx,
                 focus_tx,
                 color_scheme_tx,
+                window_tx,
             },
         );
     });
@@ -578,6 +582,7 @@ fn run_writer(
         selection_tx,
         focus_tx,
         color_scheme_tx,
+        window_tx,
     } = senders;
     let mut last_size = None;
     while let Ok(command) = command_rx.recv() {
@@ -628,6 +633,9 @@ fn run_writer(
             }
             TerminalCommand::SetColorScheme(scheme) => {
                 let _ = color_scheme_tx.send(scheme);
+            }
+            TerminalCommand::RequestScrollWindow { anchor, height } => {
+                let _ = window_tx.send(ScrollWindowRequest { anchor, height });
             }
             TerminalCommand::Shutdown => {
                 let _ = killer.lock().unwrap().kill();
