@@ -412,6 +412,7 @@ pub fn render_agent_transcript(events: &[Event]) -> String {
 
     for event in events {
         match event {
+            Event::Unknown => lines.push("unknown event (skipped)".to_string()),
             Event::StateChanged(state) => lines.push(format!("state: {state:?}")),
             Event::ReasoningDelta(delta) => {
                 lines.push(format!("{}: {}", role_label(delta.role), delta.text));
@@ -434,7 +435,7 @@ pub fn render_agent_transcript(events: &[Event]) -> String {
             Event::ToolCallFinished(result) => {
                 lines.push(format!(
                     "tool finished: {} {}",
-                    result.call_id.0, result.output
+                    result.call_id.0, result.output.0
                 ));
             }
             Event::ApprovalRequested(request) => {
@@ -487,6 +488,10 @@ pub(crate) fn apply_agent_event_to_frame(
     turn: &mut TurnClock,
 ) {
     match event {
+        // Skew catch-all (`Event::Unknown`'s doc): an event this build
+        // can't name folds into no frame item at all -- the surrounding
+        // items still render, and nothing invents content for it.
+        Event::Unknown => {}
         Event::StateChanged(state) => frame.state = Some(*state),
         Event::ReasoningDelta(delta) => {
             if let Some(AgentFrameItem::ReasoningDelta(existing)) =
@@ -688,7 +693,9 @@ fn is_turn_boundary_item(item: &AgentFrameItem) -> bool {
 fn role_label(role: MessageRole) -> &'static str {
     match role {
         MessageRole::User => "user",
-        MessageRole::Assistant => "assistant",
+        // Unknown renders as assistant-authored -- see `MessageRole::
+        // Unknown`'s doc (never invent user words).
+        MessageRole::Assistant | MessageRole::Unknown => "assistant",
     }
 }
 

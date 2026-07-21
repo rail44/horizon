@@ -172,7 +172,7 @@ fn execute_tier1_bash(
     crate::tools::bash::spawn_sandboxed(
         session_id,
         call_id,
-        request.input.clone(),
+        request.input.0.clone(),
         tool_state.bash_cwd_handle(),
         tool_state.bash_config(),
         workspace_root.to_path_buf(),

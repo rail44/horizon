@@ -1,4 +1,12 @@
-//! Horizon's single eager client runtime for the shared session daemon.
+//! Horizon's single eager client runtime for the shared session daemon —
+//! since v10, a remoc `SessionHub` client (`docs/remoc-adoption-design.md`
+//! §2). The public shape is unchanged from the JSONL era: [`SessiondHandle`]
+//! is a sync API, started eagerly and non-blocking, backed by one dedicated
+//! current-thread tokio runtime on a background OS thread; internally the
+//! raw-envelope FIFO and the `Routes` correlation maps became typed
+//! [`connection::Op`]s (rtc calls return futures, so replies ride their own
+//! channels) and per-attachment channel bridges. The sync-world ⇄ tokio
+//! boundary did not move.
 
 mod connection;
 mod routing;
@@ -6,20 +14,25 @@ mod routing;
 use std::path::Path;
 use std::sync::Arc;
 
+use connection::Op;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use horizon_agent::contract::{self, Command, ProviderEvent};
-use horizon_agent::wire::{self, Control, Envelope, HostToolRequest, HostToolResponse};
-use horizon_session_protocol::{Envelope as RawEnvelope, SessionControl};
-use horizon_terminal_core::{
-    encode_terminal_command, encode_terminal_control, TerminalAttachResult, TerminalCommand,
-    TerminalControl, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
-};
+use horizon_agent::wire::{self, HostToolRequest, HostToolResponse};
+use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
 use routing::Routes;
 use uuid::Uuid;
 
+/// The sync world's overall budget for one queued list request: the op may
+/// legitimately wait out connection establishment (retries with backoff)
+/// plus the runtime's own per-call deadline (`connection::OP_TIMEOUT`,
+/// 30 s), so this sits above both. The old JSONL shape blocked forever
+/// here; a bounded wait turns a wedged runtime into an error the caller
+/// can render instead of a UI hang.
+const SYNC_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 #[derive(Clone)]
 pub(crate) struct SessiondHandle {
-    outgoing: tokio::sync::mpsc::UnboundedSender<RawEnvelope>,
+    ops: tokio::sync::mpsc::UnboundedSender<Op>,
     routes: Arc<Routes>,
     control: Arc<connection::RuntimeControl>,
     _lifetime: Arc<RuntimeLifetime>,
@@ -36,7 +49,7 @@ impl Drop for RuntimeLifetime {
 }
 
 pub(crate) struct SessiondResponder {
-    outgoing: tokio::sync::mpsc::WeakUnboundedSender<RawEnvelope>,
+    ops: tokio::sync::mpsc::WeakUnboundedSender<Op>,
 }
 
 /// A live view of `WorkspaceShell::sessiond`, threaded into panes that can
@@ -116,12 +129,8 @@ impl Drop for TerminalSessionHandle {
 
 impl SessiondResponder {
     pub(crate) fn respond_host_tool(&self, response: HostToolResponse) {
-        let envelope = Envelope::control(Control::HostToolResponse(response));
-        let Ok(raw) = wire::encode_envelope(&envelope) else {
-            return;
-        };
-        if let Some(outgoing) = self.outgoing.upgrade() {
-            let _ = outgoing.send(raw);
+        if let Some(ops) = self.ops.upgrade() {
+            let _ = ops.send(Op::HostToolResponse(response));
         }
     }
 }
@@ -131,8 +140,14 @@ impl SessiondHandle {
         Arc::ptr_eq(&self.routes, &other.routes)
     }
 
-    /// Starts the one process-wide socket runtime and returns before connect
-    /// or Hello completes. Typed requests enqueue onto one raw FIFO meanwhile.
+    /// Starts the one process-wide socket runtime and returns before the
+    /// connection (or the `hello` negotiation) completes. Typed requests
+    /// enqueue onto the op queue meanwhile; once the hub is live each op
+    /// is *dispatched* in queue order but *executed* on its own task, so
+    /// there is no cross-op completion-order guarantee — a slow
+    /// `create_terminal` does not delay a `terminal_list` behind it, and
+    /// two lists may complete in either order. Per-session ordering is
+    /// carried by each attachment's own channels, not the op queue.
     pub(crate) fn start(
         socket_path: &Path,
         control_socket: &Path,
@@ -141,13 +156,11 @@ impl SessiondHandle {
         Receiver<HostToolRequest>,
         Receiver<(contract::SessionId, wire::WorkspaceRootResolved)>,
     ) {
-        let (handle, host_tools, workspace_roots, outgoing) = Self::parts();
-        let weak_outgoing = handle.outgoing.downgrade();
+        let (handle, host_tools, workspace_roots, ops) = Self::parts();
         connection::spawn(
             socket_path.to_path_buf(),
             control_socket.to_path_buf(),
-            outgoing,
-            weak_outgoing,
+            ops,
             handle.routes.clone(),
             handle.control.clone(),
         );
@@ -159,9 +172,9 @@ impl SessiondHandle {
         Self,
         Receiver<HostToolRequest>,
         Receiver<(contract::SessionId, wire::WorkspaceRootResolved)>,
-        tokio::sync::mpsc::UnboundedReceiver<RawEnvelope>,
+        tokio::sync::mpsc::UnboundedReceiver<Op>,
     ) {
-        let (raw_tx, raw_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (ops_tx, ops_rx) = tokio::sync::mpsc::unbounded_channel();
         let (host_tool_tx, host_tool_rx) = unbounded();
         let (workspace_root_tx, workspace_root_rx) = unbounded();
         let routes = Arc::new(Routes::new(host_tool_tx, workspace_root_tx));
@@ -171,14 +184,14 @@ impl SessiondHandle {
         });
         (
             Self {
-                outgoing: raw_tx,
+                ops: ops_tx,
                 routes,
                 control,
                 _lifetime: lifetime,
             },
             host_tool_rx,
             workspace_root_rx,
-            raw_rx,
+            ops_rx,
         )
     }
 
@@ -191,17 +204,10 @@ impl SessiondHandle {
         Receiver<(contract::SessionId, wire::WorkspaceRootResolved)>,
     )
     where
-        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
     {
-        let (handle, host_tools, workspace_roots, outgoing) = Self::parts();
-        let weak_outgoing = handle.outgoing.downgrade();
-        connection::spawn_test_stream(
-            stream,
-            outgoing,
-            weak_outgoing,
-            handle.routes.clone(),
-            handle.control.clone(),
-        );
+        let (handle, host_tools, workspace_roots, ops) = Self::parts();
+        connection::spawn_test_stream(stream, ops, handle.routes.clone(), handle.control.clone());
         (handle, host_tools, workspace_roots)
     }
 
@@ -230,48 +236,62 @@ impl SessiondHandle {
         spawn_source_session_id: Option<contract::SessionId>,
         isolate: bool,
     ) -> AgentSessionHandle {
-        let handle = self.register_agent(session_id);
-        self.enqueue_agent(Envelope::control(Control::SessionNew(wire::SessionNew {
-            session_id,
-            provider_id,
-            role_id,
-            workspace_root,
-            spawn_source_session_id,
-            isolate,
-        })));
+        let (handle, commands) = self.register_agent(session_id);
+        let _ = self.ops.send(Op::NewAgent {
+            new: wire::SessionNew {
+                session_id,
+                provider_id,
+                role_id,
+                workspace_root,
+                spawn_source_session_id,
+                isolate,
+            },
+            commands,
+        });
         handle
     }
 
     pub(crate) fn attach_session(&self, session_id: contract::SessionId) -> AgentSessionHandle {
-        let handle = self.register_agent(session_id);
-        self.enqueue_agent(Envelope::control(Control::SessionLoad(wire::SessionLoad {
+        let (handle, commands) = self.register_agent(session_id);
+        let _ = self.ops.send(Op::AttachAgent {
             session_id,
-        })));
+            commands,
+        });
         handle
     }
 
-    fn register_agent(&self, session_id: contract::SessionId) -> AgentSessionHandle {
+    /// Registers the pane-facing channels for one agent session and starts
+    /// the bridge thread that carries its commands from the sync world
+    /// into the runtime (crossbeam → tokio unbounded; the runtime pumps
+    /// the tokio half into the attachment's remote channel once the rtc
+    /// call returns).
+    fn register_agent(
+        &self,
+        session_id: contract::SessionId,
+    ) -> (
+        AgentSessionHandle,
+        tokio::sync::mpsc::UnboundedReceiver<Command>,
+    ) {
         let (command_tx, command_rx) = unbounded::<Command>();
         let (event_tx, event_rx) = unbounded::<ProviderEvent>();
         self.routes.register_agent(session_id, event_tx);
 
-        let outgoing = self.outgoing.clone();
+        let (bridge_tx, bridge_rx) = tokio::sync::mpsc::unbounded_channel();
         std::thread::spawn(move || {
             while let Ok(command) = command_rx.recv() {
-                let envelope = Envelope::command(session_id, command);
-                let Ok(raw) = wire::encode_envelope(&envelope) else {
-                    continue;
-                };
-                if outgoing.send(raw).is_err() {
+                if bridge_tx.send(command).is_err() {
                     break;
                 }
             }
         });
-        AgentSessionHandle {
-            inner: contract::SessionHandle::new(command_tx, event_rx),
-            session_id,
-            routes: self.routes.clone(),
-        }
+        (
+            AgentSessionHandle {
+                inner: contract::SessionHandle::new(command_tx, event_rx),
+                session_id,
+                routes: self.routes.clone(),
+            },
+            bridge_rx,
+        )
     }
 
     pub(crate) fn start_terminal(
@@ -279,41 +299,49 @@ impl SessiondHandle {
         session_id: Uuid,
         spec: TerminalSpawnSpec,
     ) -> TerminalSessionHandle {
-        let handle = self.register_terminal(session_id);
-
-        match encode_terminal_control(Some(session_id), &TerminalControl::Create(Box::new(spec))) {
-            Ok(envelope) => {
-                let _ = self.outgoing.send(envelope);
-            }
-            Err(error) => eprintln!("failed to encode terminal create: {error}"),
-        }
-
+        let (handle, commands) = self.register_terminal(session_id);
+        let _ = self.ops.send(Op::CreateTerminal {
+            session_id,
+            spec: Box::new(spec),
+            commands,
+        });
         handle
     }
 
-    fn register_terminal(&self, session_id: Uuid) -> TerminalSessionHandle {
+    /// The terminal twin of [`Self::register_agent`]. The bridge's sending
+    /// half is also registered with [`Routes`] so a broadcast
+    /// ([`Self::broadcast_terminal_color_scheme`]) can inject commands
+    /// without a pane's handle.
+    fn register_terminal(
+        &self,
+        session_id: Uuid,
+    ) -> (
+        TerminalSessionHandle,
+        tokio::sync::mpsc::UnboundedReceiver<TerminalCommand>,
+    ) {
         let (command_tx, command_rx) = unbounded::<TerminalCommand>();
         let (update_tx, update_rx) = unbounded::<TerminalUpdate>();
-        self.routes.register_terminal(session_id, update_tx);
+        let (bridge_tx, bridge_rx) = tokio::sync::mpsc::unbounded_channel();
+        self.routes
+            .register_terminal(session_id, update_tx, bridge_tx.clone());
 
-        let outgoing = self.outgoing.clone();
         std::thread::spawn(move || {
             while let Ok(command) = command_rx.recv() {
-                let Ok(envelope) = encode_terminal_command(session_id, &command) else {
-                    continue;
-                };
-                if outgoing.send(envelope).is_err() {
+                if bridge_tx.send(command).is_err() {
                     break;
                 }
             }
         });
 
-        TerminalSessionHandle {
-            commands: command_tx,
-            updates: update_rx,
-            session_id,
-            routes: self.routes.clone(),
-        }
+        (
+            TerminalSessionHandle {
+                commands: command_tx,
+                updates: update_rx,
+                session_id,
+                routes: self.routes.clone(),
+            },
+            bridge_rx,
+        )
     }
 
     /// Re-pushes a live theme apply's color scheme
@@ -322,41 +350,31 @@ impl SessiondHandle {
     /// re-resolves OSC 10/11/12 query replies against it instead of its
     /// spawn-time snapshot (`TerminalCommand::SetColorScheme`'s doc
     /// comment). Fire-and-forget, same as every other per-session command
-    /// send here -- a session that has since exited just has its envelope
-    /// dropped daemon-side.
+    /// send -- a session that has since exited just has its command
+    /// dropped.
     pub(crate) fn broadcast_terminal_color_scheme(
         &self,
         scheme: horizon_terminal_core::TerminalColorScheme,
     ) {
-        for session_id in self.routes.terminal_session_ids() {
-            let command = TerminalCommand::SetColorScheme(scheme);
-            match encode_terminal_command(session_id, &command) {
-                Ok(envelope) => {
-                    let _ = self.outgoing.send(envelope);
-                }
-                Err(error) => eprintln!("failed to encode terminal color-scheme push: {error}"),
-            }
-        }
+        self.routes
+            .broadcast_terminal_command(TerminalCommand::SetColorScheme(scheme));
     }
 
     pub(crate) fn terminal_list(&self) -> Result<Vec<TerminalSummary>, String> {
-        let request_id = Uuid::new_v4();
         let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
-        self.routes.set_pending_terminal_list(request_id, reply_tx);
-        let envelope = match encode_terminal_control(None, &TerminalControl::List { request_id }) {
-            Ok(envelope) => envelope,
-            Err(error) => {
-                self.routes.cancel_pending_terminal_list(request_id);
-                return Err(error.to_string());
-            }
-        };
-        if self.outgoing.send(envelope).is_err() {
-            self.routes.cancel_pending_terminal_list(request_id);
+        if self.ops.send(Op::TerminalList { reply: reply_tx }).is_err() {
             return Err("session runtime stopped before terminal list was sent".to_string());
         }
         reply_rx
-            .recv()
-            .map_err(|_| "session runtime stopped before the terminal list completed".to_string())?
+            .recv_timeout(SYNC_REPLY_TIMEOUT)
+            .map_err(|err| match err {
+                crossbeam_channel::RecvTimeoutError::Timeout => {
+                    "the terminal list did not complete in time".to_string()
+                }
+                crossbeam_channel::RecvTimeoutError::Disconnected => {
+                    "session runtime stopped before the terminal list completed".to_string()
+                }
+            })?
     }
 
     pub(crate) fn attach_terminals(
@@ -365,50 +383,61 @@ impl SessiondHandle {
     ) -> Vec<(Uuid, TerminalSessionHandle)> {
         let mut pending = Vec::with_capacity(session_ids.len());
         for session_id in session_ids {
-            let request_id = Uuid::new_v4();
-            let handle = self.register_terminal(session_id);
+            let (handle, commands) = self.register_terminal(session_id);
             let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
-            self.routes
-                .set_pending_terminal_attach(request_id, session_id, reply_tx);
-            let control = TerminalControl::Attach { request_id };
-            let sent = encode_terminal_control(Some(session_id), &control)
-                .ok()
-                .is_some_and(|envelope| self.outgoing.send(envelope).is_ok());
+            let sent = self
+                .ops
+                .send(Op::AttachTerminal {
+                    session_id,
+                    commands,
+                    reply: reply_tx,
+                })
+                .is_ok();
             if sent {
                 pending.push((session_id, handle, reply_rx));
-            } else {
-                self.routes.cancel_pending_terminal_attach(request_id);
             }
         }
 
         pending
             .into_iter()
-            .filter_map(|(session_id, handle, reply)| match reply.recv() {
-                Ok(Ok(TerminalAttachResult::Attached)) => Some((session_id, handle)),
-                Ok(Ok(TerminalAttachResult::NotFound)) | Ok(Err(_)) | Err(_) => None,
+            .filter_map(|(session_id, handle, reply)| {
+                match reply.recv_timeout(SYNC_REPLY_TIMEOUT) {
+                    // Only an explicit successful attach may claim the
+                    // session -- not-found (or a failed/timed-out call)
+                    // drops the handle, whose Drop unregisters the routes
+                    // it claimed.
+                    Ok(true) => Some((session_id, handle)),
+                    Ok(false) | Err(_) => None,
+                }
             })
             .collect()
     }
 
     pub(crate) fn responder(&self) -> SessiondResponder {
         SessiondResponder {
-            outgoing: self.outgoing.downgrade(),
+            ops: self.ops.downgrade(),
         }
     }
 
     pub(crate) fn session_list(&self) -> Result<Vec<wire::SessionSummary>, String> {
         let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
-        self.routes.set_pending_session_list(reply_tx);
-        self.enqueue_agent(Envelope::control(Control::SessionList));
+        if self.ops.send(Op::SessionList { reply: reply_tx }).is_err() {
+            return Err("session runtime stopped before the agent list was sent".to_string());
+        }
         reply_rx
-            .recv()
-            .map_err(|_| "session runtime stopped before the agent list completed".to_string())?
+            .recv_timeout(SYNC_REPLY_TIMEOUT)
+            .map_err(|err| match err {
+                crossbeam_channel::RecvTimeoutError::Timeout => {
+                    "the agent list did not complete in time".to_string()
+                }
+                crossbeam_channel::RecvTimeoutError::Disconnected => {
+                    "session runtime stopped before the agent list completed".to_string()
+                }
+            })?
     }
 
     fn drain(&self) {
-        if let Ok(envelope) = RawEnvelope::session_control(&SessionControl::Drain) {
-            let _ = self.outgoing.send(envelope);
-        }
+        let _ = self.ops.send(Op::Drain);
     }
 
     pub(crate) fn begin_reload(&self) -> bool {
@@ -424,15 +453,6 @@ impl SessiondHandle {
     pub(crate) fn stop_and_wait(&self) {
         self.control.cancel();
         self.control.wait_stopped();
-    }
-
-    fn enqueue_agent(&self, envelope: Envelope) {
-        match wire::encode_envelope(&envelope) {
-            Ok(raw) => {
-                let _ = self.outgoing.send(raw);
-            }
-            Err(error) => eprintln!("failed to encode agent envelope: {error}"),
-        }
     }
 }
 

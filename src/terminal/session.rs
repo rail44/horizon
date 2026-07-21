@@ -207,8 +207,15 @@ impl TerminalSession {
                             ClipboardDestination::Primary => {
                                 write_to_primary(cx, text);
                             }
+                            // Skew catch-all: never write to an OS buffer
+                            // this build can't name.
+                            ClipboardDestination::Unknown => {}
                         },
                         TerminalUpdate::Title(_) | TerminalUpdate::Bell => {}
+                        // Skew catch-all (`TerminalUpdate::Unknown`'s
+                        // doc): an update this build can't name is
+                        // skipped; the stream stays attached.
+                        TerminalUpdate::Unknown => {}
                     }
                     cx.notify();
                 });

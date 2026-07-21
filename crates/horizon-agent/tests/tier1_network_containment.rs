@@ -140,7 +140,8 @@ fn curl_request(target: &str) -> ToolCallRequest {
         // does not depend on the shell's exit status.
         input: json!({
             "command": format!("curl --max-time 5 -sS http://{target} || true")
-        }),
+        })
+        .into(),
     }
 }
 
@@ -307,7 +308,7 @@ fn proxy_unaware_direct_connect_cannot_bypass_the_fixed_endpoint() {
     let request = ToolCallRequest {
         call_id: ToolCallId("direct-connect".to_string()),
         tool_id: "bash".to_string(),
-        input: json!({ "command": "exec 3<>/dev/tcp/127.0.0.2/80" }),
+        input: json!({ "command": "exec 3<>/dev/tcp/127.0.0.2/80" }).into(),
     };
     assert!(matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),

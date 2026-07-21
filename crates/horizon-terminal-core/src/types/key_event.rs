@@ -1,3 +1,4 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Classifies a key event per the Kitty keyboard protocol's "event types"
@@ -12,11 +13,19 @@ use serde::{Deserialize, Serialize};
 /// `terminal::protocol::kitty_keyboard`, which is the only place a
 /// non-`Press` kind changes the bytes actually sent — see that module's doc
 /// for how (and when) it does.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum KeyEventKind {
     Press,
     Repeat,
     Release,
+    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
+    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
+    /// discarded there; under serde_json only *unit* variants degrade —
+    /// a payload-carrying one is a per-item decode error instead). Keep last. Encoders
+    /// treat an unknown kind like [`KeyEventKind::Press`] (the only safe
+    /// reading: dropping a press loses input, repeating a release cannot).
+    #[serde(other)]
+    Unknown,
 }
 
 impl KeyEventKind {

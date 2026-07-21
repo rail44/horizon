@@ -10,3 +10,6 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 
 echo "pre-commit: cargo nextest run --workspace --locked"
 cargo nextest run --workspace --locked
+
+echo "pre-commit: scripts/check-wire-schema.sh"
+./scripts/check-wire-schema.sh

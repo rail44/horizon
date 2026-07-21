@@ -337,7 +337,7 @@ fn tool_call_progress_updates_in_place_then_is_superseded_by_the_real_request() 
         &agent::Event::ToolCallRequested(agent::ToolCallRequest {
             call_id: agent::ToolCallId("call-1".to_string()),
             tool_id: "fs.write".to_string(),
-            input: serde_json::json!({ "path": "/tmp/x" }),
+            input: serde_json::json!({ "path": "/tmp/x" }).into(),
         }),
         &mut TurnClock::new(),
     );
@@ -655,7 +655,7 @@ fn horizon_policy_adds_approval_for_requested_tool() {
         &agent::Event::ToolCallRequested(agent::ToolCallRequest {
             call_id: call_id.clone(),
             tool_id: "mock.approval_required".to_string(),
-            input: serde_json::json!({}),
+            input: serde_json::json!({}).into(),
         }),
         &tool_state,
         SessionId::new(),

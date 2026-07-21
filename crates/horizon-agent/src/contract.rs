@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use crate::config::AgentConfig;
 use crate::roles::RoleId;
+use schemars::JsonSchema;
 
 /// This crate's own session identifier: a UUID newtype that serializes as a
 /// bare UUID string (serde's transparent treatment of one-field tuple
@@ -16,7 +17,7 @@ use crate::roles::RoleId;
 /// this crate cannot depend on it (that's the whole point of the split), so
 /// the two are distinct types connected by `From` impls at the seam in
 /// Horizon's `agent` module.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct SessionId(Uuid);
 
 impl SessionId {
@@ -39,13 +40,13 @@ impl Default for SessionId {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ProviderId(pub String);
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct RequestId(pub String);
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ToolCallId(pub String);
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -69,13 +70,14 @@ pub struct StartSession {
     pub workspace_root: Option<PathBuf>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub enum Command {
     Initialize(Initialization),
     UserMessage {
         text: String,
     },
     Cancel {
+        #[serde(default)]
         request_id: Option<RequestId>,
     },
     ApproveToolCall {
@@ -83,6 +85,7 @@ pub enum Command {
     },
     DenyToolCall {
         call_id: ToolCallId,
+        #[serde(default)]
         reason: Option<String>,
     },
     ToolCallResult(ToolCallResult),
@@ -98,16 +101,24 @@ pub enum Command {
     /// bootstrap ever sends this on a session's behalf).
     ContinueTurn,
     Shutdown,
+    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
+    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
+    /// discarded there; under serde_json only *unit* variants degrade —
+    /// a payload-carrying one is a per-item decode error instead). Keep last. A receiver
+    /// logs and drops an unknown command; it never acks or executes it.
+    #[serde(other)]
+    Unknown,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct Initialization {
     pub session_id: SessionId,
     pub provider_id: ProviderId,
+    #[serde(default)]
     pub role_id: Option<RoleId>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub enum Event {
     StateChanged(SessionState),
     ReasoningDelta(MessageDelta),
@@ -153,6 +164,13 @@ pub enum Event {
     /// reducer-side wall clock, respectively), not carried on this event
     /// itself, so this variant's own wire shape stays unchanged.
     TurnEnded(TurnEndReason),
+    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
+    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
+    /// discarded there; under serde_json only *unit* variants degrade —
+    /// a payload-carrying one is a per-item decode error instead). Keep last. A receiver skips an
+    /// unknown event: it folds into no frame item and projects into no row.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Why a turn ended — see [`Event::TurnEnded`]. Named after the design doc's
@@ -167,7 +185,7 @@ pub enum Event {
 /// (`config::DEFAULT_ITERATION_CAP`/`DEFAULT_DOOM_LOOP_WINDOW`) rather than
 /// per-session config, the variant alone is enough for the UI to build
 /// that text without carrying a number on the wire.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub enum TurnEndReason {
     Completed,
     Cancelled,
@@ -186,6 +204,14 @@ pub enum TurnEndReason {
     /// detector stopped the turn (`TurnLoopGuard::record_fingerprint`).
     /// Same section of the design doc.
     HaltedByDoomLoop,
+    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
+    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
+    /// discarded there; under serde_json only *unit* variants degrade —
+    /// a payload-carrying one is a per-item decode error instead). Keep last. Rendered like the
+    /// legacy bare [`TurnEndReason::Halted`]: a calm "paused" receipt with
+    /// no guard-specific sentence.
+    #[serde(other)]
+    Unknown,
 }
 
 pub fn event_kind(event: &Event) -> &'static str {
@@ -204,6 +230,7 @@ pub fn event_kind(event: &Event) -> &'static str {
         Event::Error(_) => "error",
         Event::Exited(_) => "exited",
         Event::TurnEnded(_) => "turn_ended",
+        Event::Unknown => "unknown",
     }
 }
 
@@ -230,7 +257,7 @@ pub struct ProviderEvent {
     /// (`live::State::session_model`), and it's excluded from the persisted
     /// event log the same way (see `LiveState::extend_provider_events`).
     /// Sent once, session-scoped, by `horizon-sessiond` at session start or
-    /// (re)attach (`wire::Control::SessionModel`) -- see
+    /// (re)attach (`wire::AgentWireEvent::SessionModel`) -- see
     /// `docs/agent-output-ui-amendment.md`'s dated model-chip addendum.
     pub session_model: Option<String>,
 }
@@ -240,7 +267,7 @@ pub struct ProviderEvent {
 /// `StreamedAssistantContent::ToolCallDelta`). Purely a UI feedback signal:
 /// never folded into conversation history and never persisted — see
 /// [`ProviderEvent::tool_call_progress`].
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ToolCallProgress {
     /// Rig's `internal_call_id`: stable across every delta for one tool
     /// call from the very first chunk, unlike the provider's own tool-call
@@ -250,6 +277,7 @@ pub struct ToolCallProgress {
     pub key: String,
     /// The tool/function name, once a `ToolCallDeltaContent::Name` chunk
     /// has been observed for this call.
+    #[serde(default)]
     pub tool_id: Option<String>,
     /// Cumulative argument bytes streamed so far for this call.
     pub bytes: usize,
@@ -306,7 +334,7 @@ impl From<Event> for ProviderEvent {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub enum SessionState {
     Created,
     Running,
@@ -317,37 +345,165 @@ pub enum SessionState {
     Completed,
     Failed,
     Terminated,
+    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
+    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
+    /// discarded there; under serde_json only *unit* variants degrade —
+    /// a payload-carrying one is a per-item decode error instead). Keep last.
+    #[serde(other)]
+    Unknown,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct Message {
     pub role: MessageRole,
     pub text: String,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub enum MessageRole {
     User,
     Assistant,
+    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
+    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
+    /// discarded there; under serde_json only *unit* variants degrade —
+    /// a payload-carrying one is a per-item decode error instead). Keep last. Treated as
+    /// assistant-authored wherever a side must be picked (a transcript can
+    /// misattribute a skewed message; it must never invent user words).
+    #[serde(other)]
+    Unknown,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct MessageDelta {
     pub role: MessageRole,
     pub text: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+/// An arbitrary JSON payload on a wire vocabulary — a tool call's
+/// arguments ([`ToolCallRequest::input`]) or result
+/// ([`ToolCallResult::output`]), and the host-tool exchange's
+/// `input`/`output`. Wraps `serde_json::Value` with a format-aware serde
+/// encoding, keyed on serde's `is_human_readable`:
+///
+/// - **Human-readable formats** (serde_json — the event log's on-disk
+///   JSONL, test fixtures) see the value *transparently*: the encoded
+///   bytes are identical to a plain `serde_json::Value` field, so the
+///   persisted event-log format is unchanged by the v10 cutover
+///   (`docs/remoc-adoption-design.md` §6: on-disk format out of scope) and
+///   every pre-v10 log line still decodes.
+/// - **Binary formats** (the v10 Postbag wire) carry it as its JSON *text*
+///   in one string. `serde_json::Value`'s own `Deserialize` is built on
+///   serde's `deserialize_any`, which only a self-describing format can
+///   answer — Postbag rejects it outright (`DeserializeAnyUnsupported`),
+///   so a raw `Value` cannot cross the v10 wire at all. Tool I/O is
+///   control-plane traffic; the double encode is an accepted cost for
+///   keeping the single pinned Postbag codec (owner decision, 2026-07-20).
+///
+/// `Deref`s to the inner [`serde_json::Value`] (reads like `.get(..)` and
+/// indexing keep their shape); construct via `From<serde_json::Value>` /
+/// [`Self::new`], unwrap via [`Self::into_value`] or `.0`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct JsonValue(pub serde_json::Value);
+
+impl JsonValue {
+    pub fn new(value: serde_json::Value) -> Self {
+        Self(value)
+    }
+
+    pub fn into_value(self) -> serde_json::Value {
+        self.0
+    }
+}
+
+impl From<serde_json::Value> for JsonValue {
+    fn from(value: serde_json::Value) -> Self {
+        Self(value)
+    }
+}
+
+impl From<JsonValue> for serde_json::Value {
+    fn from(value: JsonValue) -> Self {
+        value.0
+    }
+}
+
+impl std::ops::Deref for JsonValue {
+    type Target = serde_json::Value;
+
+    fn deref(&self) -> &serde_json::Value {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for JsonValue {
+    fn deref_mut(&mut self) -> &mut serde_json::Value {
+        &mut self.0
+    }
+}
+
+impl<I: serde_json::value::Index> std::ops::Index<I> for JsonValue {
+    type Output = serde_json::Value;
+
+    fn index(&self, index: I) -> &serde_json::Value {
+        &self.0[index]
+    }
+}
+
+impl PartialEq<serde_json::Value> for JsonValue {
+    fn eq(&self, other: &serde_json::Value) -> bool {
+        &self.0 == other
+    }
+}
+
+impl Serialize for JsonValue {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if serializer.is_human_readable() {
+            self.0.serialize(serializer)
+        } else {
+            serializer.serialize_str(&self.0.to_string())
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for JsonValue {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        if deserializer.is_human_readable() {
+            serde_json::Value::deserialize(deserializer).map(Self)
+        } else {
+            let text = String::deserialize(deserializer)?;
+            serde_json::from_str(&text)
+                .map(Self)
+                .map_err(serde::de::Error::custom)
+        }
+    }
+}
+
+impl JsonSchema for JsonValue {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "JsonValue".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        // Any JSON value, like `serde_json::Value`'s own schema — with the
+        // wire-encoding note that distinguishes it.
+        schemars::json_schema!({
+            "$comment": "any JSON value; on the binary (Postbag) wire it travels as its JSON \
+                         text in one string"
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ToolCallRequest {
     pub call_id: ToolCallId,
     pub tool_id: String,
-    pub input: serde_json::Value,
+    pub input: JsonValue,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ToolCallResult {
     pub call_id: ToolCallId,
-    pub output: serde_json::Value,
+    pub output: JsonValue,
     /// Explicit success/failure outcome, lifted out of `output`'s
     /// `"is_error"` JSON convention (every tool in `tools::` already writes
     /// it on failure -- `docs/agent-feedback-design.md`'s decision 1;
@@ -384,7 +540,8 @@ impl ToolCallResult {
     /// constructor every production call site should go through, so the
     /// convention lives in one place rather than being re-checked (or
     /// forgotten) at each tool.
-    pub fn new(call_id: ToolCallId, output: serde_json::Value) -> Self {
+    pub fn new(call_id: ToolCallId, output: impl Into<JsonValue>) -> Self {
+        let output = output.into();
         let is_error = output
             .get("is_error")
             .and_then(serde_json::Value::as_bool)
@@ -401,7 +558,7 @@ impl ToolCallResult {
     /// field's own doc comment. Always `is_error: true` (a denial is
     /// definitionally a failure), regardless of what `output` itself
     /// carries.
-    pub fn denied(call_id: ToolCallId, output: serde_json::Value) -> Self {
+    pub fn denied(call_id: ToolCallId, output: impl Into<JsonValue>) -> Self {
         Self {
             denied: true,
             ..Self::new(call_id, output)
@@ -409,7 +566,7 @@ impl ToolCallResult {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ApprovalRequest {
     pub call_id: ToolCallId,
     pub reason: String,
@@ -429,7 +586,7 @@ pub struct ApprovalRequest {
 /// flow"). Also lets the UI render each kind with its own copy without
 /// having to sniff `ApprovalRequest::reason`'s free text (today it doesn't,
 /// but this keeps that door open).
-#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub enum ApprovalKind {
     /// An ordinary first-time approval request -- the only kind that
     /// existed before this leg.
@@ -458,13 +615,21 @@ pub enum ApprovalKind {
         denials: Vec<horizon_sandbox::FilesystemDenial>,
         prior_result: ToolCallResult,
     },
+    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
+    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
+    /// discarded there; under serde_json only *unit* variants degrade —
+    /// a payload-carrying one is a per-item decode error instead). Keep last.
+    /// Resolution fails closed because a newer approval kind may carry
+    /// narrower semantics that this build cannot safely reproduce.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Payload for [`Event::ProviderRequestSent`]: the model id the provider was
 /// asked to complete against, so the persisted event log doesn't depend on
 /// separately-stored config to answer "which model was this turn waiting
 /// on?".
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ProviderRequestSent {
     pub model: String,
 }
@@ -477,12 +642,12 @@ pub(crate) enum ToolPermission {
     Deny,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct Error {
     pub message: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct Exit {
     pub reason: String,
 }
@@ -618,5 +783,66 @@ impl ProviderRegistry {
         role_id: Option<&RoleId>,
     ) -> Option<String> {
         self.providers.get(provider_id)?.resolved_model(role_id)
+    }
+}
+
+#[cfg(test)]
+mod json_value_tests {
+    use super::*;
+
+    /// The load-bearing property of [`JsonValue`]'s human-readable path:
+    /// under serde_json the wrapper is *transparent* — byte-identical to a
+    /// plain `serde_json::Value` field — so the event log's on-disk JSONL
+    /// format is unchanged by the v10 cutover and pre-v10 log lines still
+    /// decode. (The binary-wire path is proven under the actual Postbag
+    /// codec in `horizon-session-protocol/tests/skew.rs`, where remoc is a
+    /// dependency.)
+    #[test]
+    fn json_value_is_transparent_under_serde_json() {
+        let inner = serde_json::json!({"path": "a.txt", "nested": [1, 2, {"k": true}]});
+        let wrapped = JsonValue::from(inner.clone());
+        assert_eq!(
+            serde_json::to_string(&wrapped).unwrap(),
+            serde_json::to_string(&inner).unwrap(),
+            "the wrapper must add no encoding of its own under JSON"
+        );
+        // The old on-disk shape (a raw JSON object, as a plain `Value`
+        // field wrote it) decodes into the wrapper unchanged.
+        let decoded: JsonValue = serde_json::from_str(&inner.to_string()).unwrap();
+        assert_eq!(decoded, inner);
+    }
+
+    /// A whole `ToolCallRequest` — the shape the event log actually
+    /// persists inside its records — serializes with `input` as the raw
+    /// JSON object, exactly as the pre-v10 `serde_json::Value` field did.
+    #[test]
+    fn tool_call_request_keeps_the_pre_v10_json_shape() {
+        let request = ToolCallRequest {
+            call_id: ToolCallId("call-1".to_string()),
+            tool_id: "fs.read".to_string(),
+            input: serde_json::json!({"path": "a.txt"}).into(),
+        };
+        let encoded = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            encoded,
+            serde_json::json!({
+                "call_id": "call-1",
+                "tool_id": "fs.read",
+                "input": {"path": "a.txt"},
+            })
+        );
+        let decoded: ToolCallRequest = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded, request);
+    }
+
+    /// `ToolCallResult::new`'s `is_error` convention still reads through
+    /// the wrapper.
+    #[test]
+    fn tool_call_result_new_reads_is_error_through_the_wrapper() {
+        let result = ToolCallResult::new(
+            ToolCallId("call-1".to_string()),
+            serde_json::json!({"is_error": true, "message": "boom"}),
+        );
+        assert!(result.is_error);
     }
 }

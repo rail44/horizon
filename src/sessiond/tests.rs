@@ -1,16 +1,31 @@
+//! Client-runtime tests against an in-process fake `SessionHub` daemon,
+//! served over the same remoc stack production uses (`Connect::io` +
+//! `SessionHubServerShared`, Postbag codec). The fake hub records every
+//! call (handing the test the *peer* halves of each attachment's channels,
+//! so tests drive updates and observe commands), which replaces the JSONL
+//! era's envelope scripting. Adoption condition 3 note: the client half of
+//! every stream here is polled by the runtime's own dedicated thread
+//! (`spawn`/`spawn_test_stream`), so serving the fake daemon from the
+//! test's runtime is already "both ends concurrently". The tests use a
+//! multi-thread flavor because the fake daemon's mux/serve tasks live on
+//! the test's own runtime, and the test bodies block it (crossbeam
+//! `recv_timeout`, thread joins) exactly like the production sync world
+//! does -- on a current-thread runtime that would freeze the daemon.
+
 use std::collections::HashMap;
+use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant};
 
 use horizon_agent::contract::{Event, ProviderId, SessionId, SessionState};
-use horizon_agent::wire::{
-    self as agent_wire, Control, Envelope, EnvelopeBody, WorkspaceRootResolved,
+use horizon_agent::wire::{AgentWireEvent, SessionNew, WorkspaceRootResolved};
+use horizon_session_protocol::{
+    AgentAttachment, ClientHello, HubError, HubHello, SessionHub, SessionHubClient,
+    SessionHubServerShared, TerminalAttachment, VersionRange, WireCodec, SESSION_PROTOCOL_VERSION,
 };
-use horizon_session_protocol::{self as session_wire, Hello, SESSION_PROTOCOL_VERSION};
-use horizon_terminal_core::{
-    decode_terminal_command, decode_terminal_control, encode_terminal_update, TerminalColorScheme,
-    TerminalFrame, TerminalSize,
-};
-use tokio::io::BufReader;
+use horizon_terminal_core::{TerminalColorScheme, TerminalFrame, TerminalSize};
+use remoc::rch;
+use remoc::rtc::{Client as _, ServerShared as _};
+use tokio::task::JoinHandle;
 
 use super::*;
 
@@ -28,84 +43,310 @@ fn spec() -> TerminalSpawnSpec {
     }
 }
 
-async fn receive_hello_and_reply<S>(
-    reader: &mut BufReader<S>,
-    writer: &mut (impl tokio::io::AsyncWrite + Unpin),
-) where
-    S: tokio::io::AsyncRead + Unpin,
-{
-    let hello = session_wire::read_envelope(reader)
-        .await
-        .unwrap()
-        .expect("client hello");
-    assert_eq!(hello.kind, horizon_session_protocol::SESSION_CONTROL_KIND);
-    let reply = RawEnvelope::session_control(&SessionControl::Hello(Hello {
-        contract_version: SESSION_PROTOCOL_VERSION,
-        binary_id: "test-sessiond".into(),
-    }))
-    .unwrap();
-    session_wire::write_envelope(writer, &reply).await.unwrap();
+/// The peer halves of a terminal attachment the fake hub handed out: the
+/// test sends updates and reads commands through these.
+struct TerminalPeer {
+    updates: rch::mpsc::Sender<TerminalUpdate, WireCodec>,
+    commands: rch::mpsc::Receiver<TerminalCommand, WireCodec>,
 }
 
-#[tokio::test]
-async fn start_returns_before_hello_and_queued_create_is_first_after_handshake() {
+/// The peer halves of an agent attachment.
+struct AgentPeer {
+    events: rch::mpsc::Sender<AgentWireEvent, WireCodec>,
+    #[allow(dead_code)]
+    commands: rch::mpsc::Receiver<Command, WireCodec>,
+}
+
+/// One recorded hub call, with whatever live halves the fake daemon kept.
+enum FakeCall {
+    Hello,
+    CreateTerminal {
+        session_id: Uuid,
+        spec: TerminalSpawnSpec,
+        peer: TerminalPeer,
+    },
+    AttachTerminal {
+        session_id: Uuid,
+        /// `None` when the fake reported `TerminalNotFound`.
+        peer: Option<TerminalPeer>,
+    },
+    NewAgent {
+        new: SessionNew,
+        peer: AgentPeer,
+    },
+    AttachAgent {
+        session_id: SessionId,
+        peer: AgentPeer,
+    },
+    ListTerminals,
+    ListAgents,
+    Drain,
+}
+
+impl std::fmt::Debug for FakeCall {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            FakeCall::Hello => "Hello",
+            FakeCall::CreateTerminal { .. } => "CreateTerminal",
+            FakeCall::AttachTerminal { .. } => "AttachTerminal",
+            FakeCall::NewAgent { .. } => "NewAgent",
+            FakeCall::AttachAgent { .. } => "AttachAgent",
+            FakeCall::ListTerminals => "ListTerminals",
+            FakeCall::ListAgents => "ListAgents",
+            FakeCall::Drain => "Drain",
+        };
+        f.write_str(name)
+    }
+}
+
+/// Scripted behavior for the fake hub.
+#[derive(Default)]
+struct FakeBehavior {
+    /// Reject `hello` with a version-range error.
+    reject_hello: bool,
+    /// Never answer `hello` (the call blocks forever) — for the
+    /// drop-during-hello test, which aborts the daemon while the call is
+    /// in flight.
+    hang_hello: bool,
+    /// Ids `attach_terminal` reports `TerminalNotFound` for.
+    missing_terminals: Vec<Uuid>,
+    /// Successive `list_terminals` replies, popped front-first; empty →
+    /// reply with an empty list.
+    terminal_lists: Vec<Vec<TerminalSummary>>,
+}
+
+struct FakeHub {
+    behavior: StdMutex<FakeBehavior>,
+    calls: tokio::sync::mpsc::UnboundedSender<FakeCall>,
+}
+
+impl FakeHub {
+    fn terminal_attachment(&self) -> (TerminalAttachment, TerminalPeer) {
+        let (update_tx, update_rx) = rch::mpsc::channel::<TerminalUpdate, WireCodec>(16);
+        let update_rx =
+            update_rx.set_max_item_size::<{ horizon_session_protocol::FRAME_MAX_ITEM_BYTES }>();
+        let (command_tx, command_rx) = rch::mpsc::channel::<TerminalCommand, WireCodec>(16);
+        (
+            TerminalAttachment {
+                updates: update_rx,
+                commands: command_tx,
+            },
+            TerminalPeer {
+                updates: update_tx,
+                commands: command_rx,
+            },
+        )
+    }
+
+    fn agent_attachment(&self) -> (AgentAttachment, AgentPeer) {
+        let (event_tx, event_rx) = rch::mpsc::channel::<AgentWireEvent, WireCodec>(16);
+        let event_rx =
+            event_rx.set_max_item_size::<{ horizon_session_protocol::TOOL_IO_MAX_ITEM_BYTES }>();
+        let (command_tx, command_rx) = rch::mpsc::channel::<Command, WireCodec>(16);
+        (
+            AgentAttachment {
+                events: event_rx,
+                commands: command_tx,
+            },
+            AgentPeer {
+                events: event_tx,
+                commands: command_rx,
+            },
+        )
+    }
+}
+
+impl SessionHub for FakeHub {
+    async fn hello(&self, _client: ClientHello) -> Result<HubHello, HubError> {
+        if self.behavior.lock().unwrap().hang_hello {
+            std::future::pending::<()>().await;
+        }
+        if self.behavior.lock().unwrap().reject_hello {
+            return Err(HubError::IncompatibleVersion {
+                client: VersionRange::ours(),
+                daemon: VersionRange {
+                    min_supported: SESSION_PROTOCOL_VERSION + 5,
+                    current: SESSION_PROTOCOL_VERSION + 5,
+                },
+            });
+        }
+        let _ = self.calls.send(FakeCall::Hello);
+        let (_request_tx, request_rx) = rch::mpsc::channel::<HostToolRequest, WireCodec>(4);
+        let request_rx =
+            request_rx.set_max_item_size::<{ horizon_session_protocol::TOOL_IO_MAX_ITEM_BYTES }>();
+        let (response_tx, _response_rx) = rch::mpsc::channel::<HostToolResponse, WireCodec>(4);
+        let (_skipped_tx, skipped_rx) = rch::mpsc::channel::<String, WireCodec>(1);
+        let skipped_rx =
+            skipped_rx.set_max_item_size::<{ horizon_session_protocol::CONTROL_MAX_ITEM_BYTES }>();
+        Ok(HubHello {
+            negotiated: SESSION_PROTOCOL_VERSION,
+            binary_id: "fake-sessiond".to_string(),
+            host_tools: request_rx,
+            host_tool_responses: response_tx,
+            skipped_lines: skipped_rx,
+        })
+    }
+
+    async fn list_terminals(&self) -> Result<Vec<TerminalSummary>, HubError> {
+        let _ = self.calls.send(FakeCall::ListTerminals);
+        let mut behavior = self.behavior.lock().unwrap();
+        if behavior.terminal_lists.is_empty() {
+            Ok(Vec::new())
+        } else {
+            Ok(behavior.terminal_lists.remove(0))
+        }
+    }
+
+    async fn create_terminal(
+        &self,
+        session_id: Uuid,
+        spec: TerminalSpawnSpec,
+    ) -> Result<TerminalAttachment, HubError> {
+        let (attachment, peer) = self.terminal_attachment();
+        let _ = self.calls.send(FakeCall::CreateTerminal {
+            session_id,
+            spec,
+            peer,
+        });
+        Ok(attachment)
+    }
+
+    async fn attach_terminal(&self, session_id: Uuid) -> Result<TerminalAttachment, HubError> {
+        if self
+            .behavior
+            .lock()
+            .unwrap()
+            .missing_terminals
+            .contains(&session_id)
+        {
+            let _ = self.calls.send(FakeCall::AttachTerminal {
+                session_id,
+                peer: None,
+            });
+            return Err(HubError::TerminalNotFound);
+        }
+        let (attachment, peer) = self.terminal_attachment();
+        let _ = self.calls.send(FakeCall::AttachTerminal {
+            session_id,
+            peer: Some(peer),
+        });
+        Ok(attachment)
+    }
+
+    async fn list_agents(&self) -> Result<Vec<wire::SessionSummary>, HubError> {
+        let _ = self.calls.send(FakeCall::ListAgents);
+        Ok(Vec::new())
+    }
+
+    async fn new_agent(&self, new: SessionNew) -> Result<AgentAttachment, HubError> {
+        let (attachment, peer) = self.agent_attachment();
+        let _ = self.calls.send(FakeCall::NewAgent { new, peer });
+        Ok(attachment)
+    }
+
+    async fn attach_agent(&self, session_id: SessionId) -> Result<AgentAttachment, HubError> {
+        let (attachment, peer) = self.agent_attachment();
+        let _ = self.calls.send(FakeCall::AttachAgent { session_id, peer });
+        Ok(attachment)
+    }
+
+    async fn drain(&self) -> Result<(), HubError> {
+        let _ = self.calls.send(FakeCall::Drain);
+        Ok(())
+    }
+}
+
+/// Serves a [`FakeHub`] over `stream`. Returns the recorded-call receiver
+/// plus the serve/mux task handles (abort them to simulate the daemon
+/// dying).
+async fn serve_fake_hub<S>(
+    stream: S,
+    behavior: FakeBehavior,
+) -> (
+    tokio::sync::mpsc::UnboundedReceiver<FakeCall>,
+    JoinHandle<()>,
+    JoinHandle<()>,
+)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
+{
+    let (read_half, write_half) = tokio::io::split(stream);
+    let (conn, mut base_tx, _base_rx) =
+        remoc::Connect::io::<_, _, SessionHubClient<WireCodec>, (), WireCodec>(
+            remoc::Cfg::default(),
+            read_half,
+            write_half,
+        )
+        .await
+        .expect("fake daemon remoc connect");
+    let conn_task = tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    let (calls_tx, calls_rx) = tokio::sync::mpsc::unbounded_channel();
+    let hub = FakeHub {
+        behavior: StdMutex::new(behavior),
+        calls: calls_tx,
+    };
+    let (server, mut client) =
+        SessionHubServerShared::<_, WireCodec>::new(std::sync::Arc::new(hub), 8);
+    // Mirror the real daemon's pre-transport rtc caps (main.rs) so the
+    // boundary tests exercise the same enforcement.
+    client.set_max_request_size(horizon_session_protocol::RTC_MAX_REQUEST_BYTES);
+    client.set_max_reply_size(horizon_session_protocol::RTC_MAX_REPLY_BYTES);
+    base_tx
+        .send(client)
+        .await
+        .expect("hand the hub client to the runtime");
+    let serve_task = tokio::spawn(async move {
+        let _ = server.serve(true).await;
+    });
+    (calls_rx, conn_task, serve_task)
+}
+
+async fn next_call(calls: &mut tokio::sync::mpsc::UnboundedReceiver<FakeCall>) -> FakeCall {
+    tokio::time::timeout(Duration::from_secs(5), calls.recv())
+        .await
+        .expect("timed out waiting for a hub call")
+        .expect("fake daemon stopped recording calls")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn start_returns_before_the_connection_and_a_queued_create_arrives_after() {
     let (client, server) = tokio::io::duplex(64 * 1024);
     let started = Instant::now();
     let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
     assert!(started.elapsed() < Duration::from_millis(50));
 
+    // Queued before the daemon has even completed a handshake.
     let terminal_id = Uuid::new_v4();
     let terminal = handle.start_terminal(terminal_id, spec());
-    let (read_half, mut writer) = tokio::io::split(server);
-    let mut reader = BufReader::new(read_half);
-    let hello = session_wire::read_envelope(&mut reader)
-        .await
-        .unwrap()
-        .expect("client hello");
-    assert_eq!(hello.kind, horizon_session_protocol::SESSION_CONTROL_KIND);
-    assert!(tokio::time::timeout(
-        Duration::from_millis(30),
-        session_wire::read_envelope(&mut reader)
-    )
-    .await
-    .is_err());
 
-    let reply = RawEnvelope::session_control(&SessionControl::Hello(Hello {
-        contract_version: SESSION_PROTOCOL_VERSION,
-        binary_id: "delayed-sessiond".into(),
-    }))
-    .unwrap();
-    session_wire::write_envelope(&mut writer, &reply)
-        .await
-        .unwrap();
-    let create = session_wire::read_envelope(&mut reader)
-        .await
-        .unwrap()
-        .expect("queued terminal create");
-    assert_eq!(create.session_id, Some(terminal_id));
-    assert!(matches!(
-        decode_terminal_control(&create).unwrap(),
-        TerminalControl::Create(_)
-    ));
+    let (mut calls, _conn, _serve) = serve_fake_hub(server, FakeBehavior::default()).await;
+    assert!(matches!(next_call(&mut calls).await, FakeCall::Hello));
+    let FakeCall::CreateTerminal {
+        session_id,
+        spec: received_spec,
+        peer,
+    } = next_call(&mut calls).await
+    else {
+        panic!("expected the queued create to arrive first after the handshake");
+    };
+    assert_eq!(session_id, terminal_id);
+    assert_eq!(received_spec, spec());
 
     let snapshot = TerminalUpdate::Snapshot(TerminalFrame::from_text("ready".into()));
-    session_wire::write_envelope(
-        &mut writer,
-        &encode_terminal_update(terminal_id, &snapshot).unwrap(),
-    )
-    .await
-    .unwrap();
+    peer.updates.send(snapshot.clone()).await.unwrap();
     assert_eq!(
         terminal
             .updates()
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(Duration::from_secs(5))
             .unwrap(),
         snapshot
     );
 }
 
-#[tokio::test]
-async fn incoming_shared_agent_and_terminal_messages_are_demultiplexed() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn agent_and_terminal_traffic_flows_through_their_own_attachments() {
     let (client, server) = tokio::io::duplex(64 * 1024);
     let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
     let terminal_id = Uuid::new_v4();
@@ -113,190 +354,132 @@ async fn incoming_shared_agent_and_terminal_messages_are_demultiplexed() {
     let agent_id = SessionId::new();
     let agent = handle.start_session(agent_id, ProviderId("mock".into()), None, None, None, false);
 
-    let (read_half, mut writer) = tokio::io::split(server);
-    let mut reader = BufReader::new(read_half);
-    receive_hello_and_reply(&mut reader, &mut writer).await;
+    let (mut calls, _conn, _serve) = serve_fake_hub(server, FakeBehavior::default()).await;
+    assert!(matches!(next_call(&mut calls).await, FakeCall::Hello));
+    let mut terminal_peer = None;
+    let mut agent_peer = None;
     for _ in 0..2 {
-        session_wire::read_envelope(&mut reader)
-            .await
-            .unwrap()
-            .expect("queued create");
+        match next_call(&mut calls).await {
+            FakeCall::CreateTerminal {
+                session_id, peer, ..
+            } => {
+                assert_eq!(session_id, terminal_id);
+                terminal_peer = Some(peer);
+            }
+            FakeCall::NewAgent { new, peer } => {
+                assert_eq!(new.session_id, agent_id);
+                agent_peer = Some(peer);
+            }
+            other => panic!("unexpected call: {other:?}"),
+        }
     }
+    let terminal_peer = terminal_peer.expect("terminal create call");
+    let agent_peer = agent_peer.expect("agent new call");
 
     let snapshot = TerminalUpdate::Snapshot(TerminalFrame::from_text("terminal".into()));
-    session_wire::write_envelope(
-        &mut writer,
-        &encode_terminal_update(terminal_id, &snapshot).unwrap(),
-    )
-    .await
-    .unwrap();
+    terminal_peer.updates.send(snapshot.clone()).await.unwrap();
     let event = Event::StateChanged(SessionState::WaitingForUser);
-    let raw = agent_wire::encode_envelope(&Envelope::event(agent_id, event.clone())).unwrap();
-    session_wire::write_envelope(&mut writer, &raw)
+    agent_peer
+        .events
+        .send(AgentWireEvent::Event(event.clone()))
         .await
         .unwrap();
     terminal
         .sender()
         .send(TerminalCommand::Input(b"fifo".to_vec()))
         .unwrap();
-    session_wire::write_envelope(
-        &mut writer,
-        &RawEnvelope::session_control(&SessionControl::Ping).unwrap(),
-    )
-    .await
-    .unwrap();
 
     assert_eq!(
         terminal
             .updates()
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(Duration::from_secs(5))
             .unwrap(),
         snapshot
     );
     assert_eq!(
         agent
             .events()
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(Duration::from_secs(5))
             .unwrap()
             .event,
         event
     );
-    let mut saw_command = false;
-    let mut saw_pong = false;
-    for _ in 0..2 {
-        let envelope = session_wire::read_envelope(&mut reader)
-            .await
-            .unwrap()
-            .expect("terminal command or pong");
-        if envelope.kind == horizon_terminal_core::TERMINAL_COMMAND_KIND {
-            assert_eq!(
-                decode_terminal_command(&envelope).unwrap(),
-                TerminalCommand::Input(b"fifo".to_vec())
-            );
-            assert!(!saw_command, "duplicate terminal command");
-            saw_command = true;
-        } else if envelope.kind == horizon_session_protocol::SESSION_CONTROL_KIND {
-            assert_eq!(
-                envelope
-                    .decode_payload::<SessionControl>(
-                        horizon_session_protocol::SESSION_CONTROL_KIND
-                    )
-                    .unwrap(),
-                SessionControl::Pong
-            );
-            assert!(!saw_pong, "duplicate pong");
-            saw_pong = true;
-        } else {
-            panic!("unexpected envelope kind: {}", envelope.kind);
-        }
-    }
-    assert!(saw_command && saw_pong);
+    let mut commands = terminal_peer.commands;
+    let command = tokio::time::timeout(Duration::from_secs(5), commands.recv())
+        .await
+        .expect("timed out waiting for the terminal command")
+        .unwrap()
+        .expect("terminal command");
+    assert_eq!(command, TerminalCommand::Input(b"fifo".to_vec()));
 }
 
-/// `Control::WorkspaceRootResolved` is a live daemon->shell announcement
-/// (`docs/session-relationship-design.md`'s "still eventual, not live" gap),
-/// not a `contract::ProviderEvent` any per-session route folds -- `Routes`
-/// sends it on its own `workspace_roots` channel instead (see
-/// `sessiond::routing::Routes::dispatch`). This is the wire-level
-/// counterpart of `WorkspaceShell::wire_workspace_root_updates`'s model-fold
-/// test: an incoming envelope must actually reach that channel, tagged with
-/// the right session id.
-#[tokio::test]
+/// `AgentWireEvent::WorkspaceRootResolved` is a live daemon->shell
+/// announcement (`docs/session-relationship-design.md`'s "still eventual,
+/// not live" gap), not a `contract::ProviderEvent` any per-session route
+/// folds -- `Routes` sends it on its own `workspace_roots` channel instead.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn incoming_workspace_root_resolved_reaches_its_own_channel() {
     let (client, server) = tokio::io::duplex(64 * 1024);
-    let (_handle, _host_tools, workspace_roots) = SessiondHandle::start_on_stream(client);
-    let (read_half, mut writer) = tokio::io::split(server);
-    let mut reader = BufReader::new(read_half);
-    receive_hello_and_reply(&mut reader, &mut writer).await;
-
+    let (handle, _host_tools, workspace_roots) = SessiondHandle::start_on_stream(client);
     let session_id = SessionId::new();
+    let _agent = handle.attach_session(session_id);
+
+    let (mut calls, _conn, _serve) = serve_fake_hub(server, FakeBehavior::default()).await;
+    assert!(matches!(next_call(&mut calls).await, FakeCall::Hello));
+    let FakeCall::AttachAgent {
+        session_id: attached_id,
+        peer,
+    } = next_call(&mut calls).await
+    else {
+        panic!("expected the attach call");
+    };
+    assert_eq!(attached_id, session_id);
+
     let parent_id = SessionId::new();
     let resolved = WorkspaceRootResolved {
         workspace_root: std::path::PathBuf::from("/tmp/repo/.horizon/worktrees/abcd1234"),
         parent_session_id: Some(parent_id),
     };
-    let raw = agent_wire::encode_envelope(&Envelope {
-        v: agent_wire::CONTRACT_VERSION,
-        session_id: Some(session_id),
-        body: EnvelopeBody::Control(Control::WorkspaceRootResolved(resolved.clone())),
-    })
-    .unwrap();
-    session_wire::write_envelope(&mut writer, &raw)
+    peer.events
+        .send(AgentWireEvent::WorkspaceRootResolved(resolved.clone()))
         .await
         .unwrap();
 
     let (received_session_id, received_resolved) = workspace_roots
-        .recv_timeout(Duration::from_secs(1))
-        .expect("the WorkspaceRootResolved control should reach its own channel");
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the WorkspaceRootResolved event should reach its own channel");
     assert_eq!(received_session_id, session_id);
     assert_eq!(received_resolved, resolved);
 }
 
-#[tokio::test]
-async fn concurrent_terminal_lists_are_correlated_by_request_id() {
+/// The JSONL wire needed a `request_id` correlation map to keep two
+/// in-flight terminal lists apart; rtc calls return futures, so the reply
+/// routing is structural now. Two concurrent lists must still each get
+/// their own answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_terminal_lists_each_get_their_own_reply() {
     let (client, server) = tokio::io::duplex(64 * 1024);
     let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
-    let (read_half, mut writer) = tokio::io::split(server);
-    let mut reader = BufReader::new(read_half);
-    receive_hello_and_reply(&mut reader, &mut writer).await;
+
+    let first_session = Uuid::new_v4();
+    let second_session = Uuid::new_v4();
+    let behavior = FakeBehavior {
+        terminal_lists: vec![
+            vec![TerminalSummary {
+                session_id: first_session,
+            }],
+            vec![TerminalSummary {
+                session_id: second_session,
+            }],
+        ],
+        ..FakeBehavior::default()
+    };
+    let (_calls, _conn, _serve) = serve_fake_hub(server, behavior).await;
 
     let first_handle = handle.clone();
     let first = std::thread::spawn(move || first_handle.terminal_list().unwrap());
     let second_handle = handle.clone();
     let second = std::thread::spawn(move || second_handle.terminal_list().unwrap());
-    let first_request = session_wire::read_envelope(&mut reader)
-        .await
-        .unwrap()
-        .expect("first terminal list request");
-    let second_request = session_wire::read_envelope(&mut reader)
-        .await
-        .unwrap()
-        .expect("second terminal list request");
-    let TerminalControl::List {
-        request_id: first_request_id,
-    } = decode_terminal_control(&first_request).unwrap()
-    else {
-        panic!("expected terminal list request");
-    };
-    let TerminalControl::List {
-        request_id: second_request_id,
-    } = decode_terminal_control(&second_request).unwrap()
-    else {
-        panic!("expected terminal list request");
-    };
-    let first_session = Uuid::new_v4();
-    let second_session = Uuid::new_v4();
-
-    session_wire::write_envelope(
-        &mut writer,
-        &encode_terminal_control(
-            None,
-            &TerminalControl::ListResult {
-                request_id: second_request_id,
-                sessions: vec![TerminalSummary {
-                    session_id: second_session,
-                }],
-            },
-        )
-        .unwrap(),
-    )
-    .await
-    .unwrap();
-    session_wire::write_envelope(
-        &mut writer,
-        &encode_terminal_control(
-            None,
-            &TerminalControl::ListResult {
-                request_id: first_request_id,
-                sessions: vec![TerminalSummary {
-                    session_id: first_session,
-                }],
-            },
-        )
-        .unwrap(),
-    )
-    .await
-    .unwrap();
 
     let mut returned = vec![
         first.join().unwrap()[0].session_id,
@@ -308,65 +491,39 @@ async fn concurrent_terminal_lists_are_correlated_by_request_id() {
     assert_eq!(returned, expected);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn terminal_batch_attach_keeps_attached_sessions_and_drops_not_found() {
     let (client, server) = tokio::io::duplex(64 * 1024);
     let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
-    let (read_half, mut writer) = tokio::io::split(server);
-    let mut reader = BufReader::new(read_half);
-    receive_hello_and_reply(&mut reader, &mut writer).await;
     let attached_id = Uuid::new_v4();
     let missing_id = Uuid::new_v4();
+
+    let behavior = FakeBehavior {
+        missing_terminals: vec![missing_id],
+        ..FakeBehavior::default()
+    };
+    let (mut calls, _conn, _serve) = serve_fake_hub(server, behavior).await;
+
     let attach_handle = handle.clone();
     let attached =
         std::thread::spawn(move || attach_handle.attach_terminals(vec![attached_id, missing_id]));
 
-    let mut requests = HashMap::new();
+    assert!(matches!(next_call(&mut calls).await, FakeCall::Hello));
+    let mut peers = HashMap::new();
     for _ in 0..2 {
-        let envelope = session_wire::read_envelope(&mut reader)
-            .await
-            .unwrap()
-            .expect("terminal attach request");
-        let TerminalControl::Attach { request_id } = decode_terminal_control(&envelope).unwrap()
-        else {
-            panic!("expected terminal attach request");
+        let FakeCall::AttachTerminal { session_id, peer } = next_call(&mut calls).await else {
+            panic!("expected an attach call");
         };
-        requests.insert(envelope.session_id.unwrap(), request_id);
+        peers.insert(session_id, peer);
     }
+    assert!(peers[&missing_id].is_none());
+    let peer = peers
+        .remove(&attached_id)
+        .flatten()
+        .expect("the attached session should have live channels");
 
-    session_wire::write_envelope(
-        &mut writer,
-        &encode_terminal_control(
-            Some(missing_id),
-            &TerminalControl::AttachResult {
-                request_id: requests[&missing_id],
-                result: TerminalAttachResult::NotFound,
-            },
-        )
-        .unwrap(),
-    )
-    .await
-    .unwrap();
-    session_wire::write_envelope(
-        &mut writer,
-        &encode_terminal_control(
-            Some(attached_id),
-            &TerminalControl::AttachResult {
-                request_id: requests[&attached_id],
-                result: TerminalAttachResult::Attached,
-            },
-        )
-        .unwrap(),
-    )
-    .await
-    .unwrap();
     let snapshot = TerminalUpdate::Snapshot(TerminalFrame::from_text("survived".into()));
-    session_wire::write_envelope(
-        &mut writer,
-        &encode_terminal_update(attached_id, &snapshot).unwrap(),
-    )
-    .await
-    .unwrap();
+    peer.updates.send(snapshot.clone()).await.unwrap();
 
     let mut sessions = attached.join().unwrap();
     assert_eq!(sessions.len(), 1);
@@ -375,94 +532,52 @@ async fn terminal_batch_attach_keeps_attached_sessions_and_drops_not_found() {
     assert_eq!(
         session
             .updates()
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(Duration::from_secs(5))
             .unwrap(),
         snapshot
     );
 }
 
-#[tokio::test]
-async fn terminal_attach_rejects_a_result_for_a_different_session() {
-    let (client, server) = tokio::io::duplex(64 * 1024);
-    let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
-    let (read_half, mut writer) = tokio::io::split(server);
-    let mut reader = BufReader::new(read_half);
-    receive_hello_and_reply(&mut reader, &mut writer).await;
-    let requested_id = Uuid::new_v4();
-    let attach_handle = handle.clone();
-    let attached = std::thread::spawn(move || attach_handle.attach_terminals(vec![requested_id]));
-    let request = session_wire::read_envelope(&mut reader)
-        .await
-        .unwrap()
-        .expect("terminal attach request");
-    let TerminalControl::Attach { request_id } = decode_terminal_control(&request).unwrap() else {
-        panic!("expected terminal attach request");
-    };
-
-    session_wire::write_envelope(
-        &mut writer,
-        &encode_terminal_control(
-            Some(Uuid::new_v4()),
-            &TerminalControl::AttachResult {
-                request_id,
-                result: TerminalAttachResult::Attached,
-            },
-        )
-        .unwrap(),
-    )
-    .await
-    .unwrap();
-
-    assert!(attached.join().unwrap().is_empty());
-}
-
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn dropping_the_runtime_does_not_send_drain() {
     let (client, server) = tokio::io::duplex(4096);
     let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
     let responder = handle.responder();
-    let (read_half, mut writer) = tokio::io::split(server);
-    let mut reader = BufReader::new(read_half);
-    receive_hello_and_reply(&mut reader, &mut writer).await;
+    let (mut calls, _conn, serve) = serve_fake_hub(server, FakeBehavior::default()).await;
+    assert!(matches!(next_call(&mut calls).await, FakeCall::Hello));
+
     drop(handle);
 
-    let next = tokio::time::timeout(
-        Duration::from_secs(1),
-        session_wire::read_envelope(&mut reader),
-    )
-    .await
-    .expect("runtime should close after its last handle drops")
-    .unwrap();
-    assert!(next.is_none());
-    drop(responder);
-}
-
-#[tokio::test]
-async fn dropping_before_hello_cancels_the_runtime_without_drain() {
-    let (client, server) = tokio::io::duplex(4096);
-    let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
-    let responder = handle.responder();
-    let (read_half, _write_half) = tokio::io::split(server);
-    let mut reader = BufReader::new(read_half);
-    let hello = session_wire::read_envelope(&mut reader)
+    // The serve loop ends because the client went away -- and the call log
+    // closes without ever recording a Drain.
+    tokio::time::timeout(Duration::from_secs(5), serve)
         .await
-        .unwrap()
-        .expect("client hello");
-    assert_eq!(hello.kind, horizon_session_protocol::SESSION_CONTROL_KIND);
-
-    drop(handle);
-    let next = tokio::time::timeout(
-        Duration::from_secs(1),
-        session_wire::read_envelope(&mut reader),
-    )
-    .await
-    .expect("pre-hello runtime should stop after its handle drops")
-    .unwrap();
-    assert!(next.is_none());
+        .expect("the fake daemon's serve loop should end after the runtime drops")
+        .unwrap();
+    let mut saw = Vec::new();
+    while let Ok(call) = calls.try_recv() {
+        saw.push(call);
+    }
+    assert!(
+        !saw.iter().any(|call| matches!(call, FakeCall::Drain)),
+        "dropping the runtime must not drain the daemon: {saw:?}"
+    );
     drop(responder);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stopping_before_the_daemon_answers_cancels_the_runtime() {
+    let (client, _server) = tokio::io::duplex(4096);
+    let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
+    // Nothing serves the daemon side, so the runtime is still trying to
+    // establish; stop_and_wait must cancel that and return promptly.
+    let stopped = std::thread::spawn(move || handle.stop_and_wait());
+    tokio::task::spawn_blocking(move || stopped.join().unwrap())
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn established_disconnect_reports_errors_without_reconnecting() {
     let (client, server) = tokio::io::duplex(64 * 1024);
     let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
@@ -471,69 +586,67 @@ async fn established_disconnect_reports_errors_without_reconnecting() {
     let agent_id = SessionId::new();
     let agent = handle.start_session(agent_id, ProviderId("mock".into()), None, None, None, false);
 
-    let (read_half, mut writer) = tokio::io::split(server);
-    let mut reader = BufReader::new(read_half);
-    receive_hello_and_reply(&mut reader, &mut writer).await;
+    let (mut calls, conn, serve) = serve_fake_hub(server, FakeBehavior::default()).await;
+    assert!(matches!(next_call(&mut calls).await, FakeCall::Hello));
     for _ in 0..2 {
-        session_wire::read_envelope(&mut reader)
-            .await
-            .unwrap()
-            .expect("queued create");
+        next_call(&mut calls).await;
     }
-    drop(reader);
-    drop(writer);
+
+    // The daemon dies: mux and serve loop torn down.
+    conn.abort();
+    serve.abort();
 
     let terminal_error = terminal
         .updates()
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(Duration::from_secs(5))
         .unwrap();
     assert!(matches!(terminal_error, TerminalUpdate::Error(_)));
-    let agent_error = agent.events().recv_timeout(Duration::from_secs(1)).unwrap();
+    let agent_error = agent.events().recv_timeout(Duration::from_secs(5)).unwrap();
     assert!(matches!(agent_error.event, Event::Error(_)));
 
-    assert!(handle.session_list().unwrap_err().contains("disconnected"));
+    assert!(handle
+        .session_list()
+        .unwrap_err()
+        .contains("runtime stopped"));
     let late_terminal = handle.start_terminal(Uuid::new_v4(), spec());
     assert!(matches!(
         late_terminal
             .updates()
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(Duration::from_secs(5))
             .unwrap(),
         TerminalUpdate::Error(_)
     ));
 }
 
-/// A version-mismatched hello reply on a test stream (no real socket to
-/// drain, no daemon to respawn) must surface as a terminal failure rather
-/// than being retried or recovered.
-#[tokio::test]
-async fn a_mismatched_hello_reply_on_a_test_stream_is_a_terminal_failure() {
+/// A version-range rejection on a test stream (no real socket to drain, no
+/// daemon to respawn) must surface as a terminal failure rather than being
+/// retried or recovered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_rejected_hello_on_a_test_stream_is_a_terminal_failure() {
     let (client, server) = tokio::io::duplex(4096);
     let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
-    let (read_half, mut writer) = tokio::io::split(server);
-    let mut reader = BufReader::new(read_half);
-    let hello = session_wire::read_envelope(&mut reader)
-        .await
-        .unwrap()
-        .expect("client hello");
-    assert_eq!(hello.kind, horizon_session_protocol::SESSION_CONTROL_KIND);
-
-    let stale_version = SESSION_PROTOCOL_VERSION - 1;
-    let reply = RawEnvelope::session_control_at(
-        &SessionControl::Hello(Hello {
-            contract_version: stale_version,
-            binary_id: "stale-sessiond".into(),
-        }),
-        stale_version,
-    )
-    .unwrap();
-    session_wire::write_envelope(&mut writer, &reply)
-        .await
-        .unwrap();
+    let behavior = FakeBehavior {
+        reject_hello: true,
+        ..FakeBehavior::default()
+    };
+    let (_calls, _conn, _serve) = serve_fake_hub(server, behavior).await;
 
     let error = handle.session_list().unwrap_err();
     assert!(
-        error.contains("contract version mismatch"),
-        "error was: {error}"
+        error.contains("runtime stopped"),
+        "the runtime should stop after a rejected hello; error was: {error}"
+    );
+    let late_terminal = handle.start_terminal(Uuid::new_v4(), spec());
+    let update = late_terminal
+        .updates()
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    let TerminalUpdate::Error(message) = update else {
+        panic!("expected the rejection to fan out as an error, got {update:?}");
+    };
+    assert!(
+        message.contains("rejected the handshake"),
+        "error was: {message}"
     );
 }
 
@@ -555,235 +668,146 @@ fn bind_stub_listener(path: &std::path::Path) -> tokio::net::UnixListener {
     tokio::net::UnixListener::bind(path).unwrap()
 }
 
-/// The full auto-recovery loop against a stale daemon that *announces* its
-/// version (a lenient v9+ daemon one version behind): mismatch detected ->
-/// a Drain aimed at exactly the announced version on a fresh connection ->
-/// the replacement daemon's current-version handshake completes and traffic
-/// flows.
-#[tokio::test]
-async fn a_version_mismatched_daemon_is_drained_and_the_respawned_daemon_is_adopted() {
-    let (socket_path, control_socket) = stub_socket_paths("mm");
-    let stale_version = SESSION_PROTOCOL_VERSION - 1;
-    let listener = bind_stub_listener(&socket_path);
-    let (handle, _host_tools, _workspace_roots) =
-        SessiondHandle::start(&socket_path, &control_socket);
-
-    // Connection 1: the stale daemon replies to our hello with its own,
-    // older version (session_control is version-stable, so both sides can
-    // decode across the skew).
-    let (stream, _) = listener.accept().await.unwrap();
-    let (read_half, mut writer) = stream.into_split();
-    let mut reader = BufReader::new(read_half);
-    let hello = session_wire::read_envelope(&mut reader)
-        .await
-        .unwrap()
-        .expect("client hello");
-    assert_eq!(hello.kind, horizon_session_protocol::SESSION_CONTROL_KIND);
-    let stale_reply = RawEnvelope::session_control_at(
-        &SessionControl::Hello(Hello {
-            contract_version: stale_version,
-            binary_id: "stale-sessiond".into(),
-        }),
-        stale_version,
-    )
-    .unwrap();
-    session_wire::write_envelope(&mut writer, &stale_reply)
-        .await
-        .unwrap();
-
-    // Connection 2: the recovery drain, stamped with the version the stale
-    // hello announced.
-    let (stream, _) = listener.accept().await.unwrap();
-    let (read_half, drain_writer) = stream.into_split();
-    let mut drain_reader = BufReader::new(read_half);
-    let drain = session_wire::read_envelope(&mut drain_reader)
-        .await
-        .unwrap()
-        .expect("recovery drain");
-    assert_eq!(drain.v, stale_version);
-    assert_eq!(
-        drain
-            .decode_payload::<SessionControl>(horizon_session_protocol::SESSION_CONTROL_KIND)
-            .unwrap(),
-        SessionControl::Drain
-    );
-
-    // "Exit" the stale daemon: stop accepting, leaving the socket file
-    // behind exactly like the real Drain handler's `std::process::exit(0)`.
-    // Hold the window open past the runtime's 50ms drain poll so the
-    // refusal is reliably observed, then bring up the "respawned" daemon.
-    drop(listener);
-    drop(drain_reader);
-    drop(drain_writer);
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let listener = bind_stub_listener(&socket_path);
-
-    let (stream, _) = listener.accept().await.unwrap();
-    let (read_half, mut writer) = stream.into_split();
-    let mut reader = BufReader::new(read_half);
-    receive_hello_and_reply(&mut reader, &mut writer).await;
-
-    // Prove the recovered connection is fully established: a daemon-side
-    // ping must round-trip to a pong.
-    session_wire::write_envelope(
-        &mut writer,
-        &RawEnvelope::session_control(&SessionControl::Ping).unwrap(),
-    )
-    .await
-    .unwrap();
-    let pong = session_wire::read_envelope(&mut reader)
-        .await
-        .unwrap()
-        .expect("pong from the recovered runtime");
-    assert_eq!(
-        pong.decode_payload::<SessionControl>(horizon_session_protocol::SESSION_CONTROL_KIND)
-            .unwrap(),
-        SessionControl::Pong
-    );
-
-    drop(handle);
-    let _ = std::fs::remove_file(&socket_path);
+/// Reads everything the client runtime wrote to a JSONL-generation stub
+/// until the connection closes, returning the raw bytes.
+async fn read_until_closed(stream: &mut tokio::net::UnixStream) -> Vec<u8> {
+    use tokio::io::AsyncReadExt;
+    let mut buffer = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    loop {
+        match tokio::time::timeout(Duration::from_secs(10), stream.read(&mut chunk)).await {
+            Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
+            Ok(Ok(read)) => buffer.extend_from_slice(&chunk[..read]),
+        }
+    }
+    buffer
 }
 
-/// The same recovery against a *silent* stale daemon (v8 and earlier
-/// close a foreign-versioned hello without replying, so the version is
-/// unknown): the runtime probes downward, and the first probe -- the
-/// newest plausible stale version -- must be aimed at
-/// `SESSION_PROTOCOL_VERSION - 1`.
-#[tokio::test]
-async fn a_silently_closing_stale_daemon_is_probed_and_drained() {
+/// Holds accepted stub connections open, silently reading — the measured
+/// presentation of a real v9 JSONL daemon (its pre-hello `read_line`
+/// blocks forever on chmux bytes, which contain no newline).
+fn hold_silently(stream: tokio::net::UnixStream) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        let mut stream = stream;
+        let mut chunk = [0_u8; 4096];
+        loop {
+            match stream.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+        }
+    })
+}
+
+/// The cross-generation recovery loop (`docs/remoc-adoption-design.md` §6,
+/// re-anchoring PR #18's scenarios on the new detection path): a v10
+/// runtime meets a still-running JSONL daemon — which blocks silently in
+/// its pre-hello `read_line`, the measured real-v9 presentation — sees
+/// `SILENCE_MISMATCH_THRESHOLD` consecutive bounded-timeout silences
+/// (single timeouts are transient and never consume the recovery budget),
+/// probes a legacy `Drain` at the newest JSONL version, and adopts the
+/// respawned (remoc) daemon.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_jsonl_generation_daemon_is_probed_drained_and_the_respawn_adopted() {
+    // Shrink the establish deadline so three consecutive silences take
+    // fractions of a second, not 15 s of wall clock.
+    std::env::set_var("HORIZON_TEST_ESTABLISH_TIMEOUT_MS", "300");
     let (socket_path, control_socket) = stub_socket_paths("probe");
     let listener = bind_stub_listener(&socket_path);
     let (handle, _host_tools, _workspace_roots) =
         SessiondHandle::start(&socket_path, &control_socket);
 
-    // Connection 1: a strict pre-v9 daemon reads our hello, cannot decode
-    // its envelope version, and closes without a word.
-    let (stream, _) = listener.accept().await.unwrap();
-    let (read_half, writer) = stream.into_split();
-    let mut reader = BufReader::new(read_half);
-    let _hello = session_wire::read_envelope(&mut reader)
-        .await
-        .unwrap()
-        .expect("client hello");
-    drop(reader);
-    drop(writer);
+    // Connections 1..3: the silent JSONL daemon, once per establish
+    // attempt (the runtime redials between timeouts).
+    let mut held = Vec::new();
+    for _ in 0..3 {
+        let (stream, _) = listener.accept().await.unwrap();
+        held.push(hold_silently(stream));
+    }
 
-    // Connection 2: the first drain probe.
-    let (stream, _) = listener.accept().await.unwrap();
-    let (read_half, probe_writer) = stream.into_split();
-    let mut probe_reader = BufReader::new(read_half);
-    let probe = session_wire::read_envelope(&mut probe_reader)
-        .await
-        .unwrap()
-        .expect("drain probe");
-    assert_eq!(probe.v, SESSION_PROTOCOL_VERSION - 1);
-    assert_eq!(
-        probe
-            .decode_payload::<SessionControl>(horizon_session_protocol::SESSION_CONTROL_KIND)
-            .unwrap(),
-        SessionControl::Drain
-    );
+    // Connection 4: the first drain probe — one newline-terminated JSONL
+    // envelope, stamped with the newest JSONL version.
+    {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let bytes = read_until_closed(&mut stream).await;
+        let line = String::from_utf8(bytes).expect("the drain probe is one JSON line");
+        assert_eq!(
+            line,
+            horizon_session_protocol::legacy::drain_line(
+                horizon_session_protocol::legacy::NEWEST_JSONL_VERSION
+            ),
+            "the first probe must be aimed at the newest JSONL version"
+        );
+    }
 
-    // The probe found its mark: "exit", then come back as the respawned
-    // current-version daemon (see the sibling test for the timing).
+    // The probe found its mark: "exit" (stop accepting, socket file left
+    // behind), then come back as the respawned remoc daemon.
     drop(listener);
-    drop(probe_reader);
-    drop(probe_writer);
     tokio::time::sleep(Duration::from_millis(300)).await;
     let listener = bind_stub_listener(&socket_path);
 
     let (stream, _) = listener.accept().await.unwrap();
-    let (read_half, mut writer) = stream.into_split();
-    let mut reader = BufReader::new(read_half);
-    receive_hello_and_reply(&mut reader, &mut writer).await;
+    let (mut calls, _conn, _serve) = serve_fake_hub(stream, FakeBehavior::default()).await;
+    assert!(matches!(next_call(&mut calls).await, FakeCall::Hello));
 
-    session_wire::write_envelope(
-        &mut writer,
-        &RawEnvelope::session_control(&SessionControl::Ping).unwrap(),
-    )
-    .await
-    .unwrap();
-    let pong = session_wire::read_envelope(&mut reader)
-        .await
-        .unwrap()
-        .expect("pong from the recovered runtime");
-    assert_eq!(
-        pong.decode_payload::<SessionControl>(horizon_session_protocol::SESSION_CONTROL_KIND)
-            .unwrap(),
-        SessionControl::Pong
-    );
+    // Prove the recovered connection is fully established with a round
+    // trip.
+    let list_handle = handle.clone();
+    let listed = tokio::task::spawn_blocking(move || list_handle.terminal_list()).await;
+    assert_eq!(listed.unwrap(), Ok(Vec::new()));
 
     drop(handle);
     let _ = std::fs::remove_file(&socket_path);
 }
 
 /// Recovery is attempted exactly once per runtime: if the replacement
-/// daemon still mismatches (a stale horizon-sessiond binary that a rebuild
-/// never touched), the runtime must fail loudly instead of drain-and-
-/// restarting forever.
-#[tokio::test]
-async fn a_second_mismatch_after_recovery_goes_fatal_instead_of_looping() {
+/// daemon still can't speak remoc (a stale horizon-sessiond binary that a
+/// rebuild never touched), the runtime must fail loudly instead of
+/// drain-and-restarting forever, with the rebuild hint in the error.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_second_generation_mismatch_after_recovery_goes_fatal_instead_of_looping() {
+    std::env::set_var("HORIZON_TEST_ESTABLISH_TIMEOUT_MS", "300");
     let (socket_path, control_socket) = stub_socket_paths("fatal");
-    let stale_version = SESSION_PROTOCOL_VERSION - 1;
     let listener = bind_stub_listener(&socket_path);
     let (handle, _host_tools, _workspace_roots) =
         SessiondHandle::start(&socket_path, &control_socket);
+    let terminal = handle.start_terminal(Uuid::new_v4(), spec());
 
-    let stale_reply = RawEnvelope::session_control_at(
-        &SessionControl::Hello(Hello {
-            contract_version: stale_version,
-            binary_id: "stale-sessiond".into(),
-        }),
-        stale_version,
-    )
-    .unwrap();
-
-    // Connection 1: stale hello reply -> recovery starts.
-    let (stream, _) = listener.accept().await.unwrap();
-    let (read_half, mut writer) = stream.into_split();
-    let mut reader = BufReader::new(read_half);
-    session_wire::read_envelope(&mut reader)
-        .await
-        .unwrap()
-        .expect("client hello");
-    session_wire::write_envelope(&mut writer, &stale_reply)
-        .await
-        .unwrap();
-
-    // Connection 2: the one drain this runtime is allowed.
-    let (stream, _) = listener.accept().await.unwrap();
-    let (read_half, drain_writer) = stream.into_split();
-    let mut drain_reader = BufReader::new(read_half);
-    let drain = session_wire::read_envelope(&mut drain_reader)
-        .await
-        .unwrap()
-        .expect("recovery drain");
-    assert_eq!(drain.v, stale_version);
-
+    // Connections 1..3: silent JSONL-generation daemon, up to the
+    // consecutive-silence threshold.
+    let mut held = Vec::new();
+    for _ in 0..3 {
+        let (stream, _) = listener.accept().await.unwrap();
+        held.push(hold_silently(stream));
+    }
+    // Connection 4: the one drain probe this runtime is allowed.
+    {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let _ = read_until_closed(&mut stream).await;
+    }
     drop(listener);
-    drop(drain_reader);
-    drop(drain_writer);
     tokio::time::sleep(Duration::from_millis(300)).await;
     let listener = bind_stub_listener(&socket_path);
 
-    // Connection 3: the "respawned" daemon is just as stale.
-    let (stream, _) = listener.accept().await.unwrap();
-    let (read_half, mut writer) = stream.into_split();
-    let mut reader = BufReader::new(read_half);
-    session_wire::read_envelope(&mut reader)
-        .await
-        .unwrap()
-        .expect("client hello");
-    session_wire::write_envelope(&mut writer, &stale_reply)
-        .await
-        .unwrap();
+    // Connections 5..7: the "respawned" daemon is just as stale (silent).
+    for _ in 0..3 {
+        let (stream, _) = listener.accept().await.unwrap();
+        held.push(hold_silently(stream));
+    }
 
-    // The runtime gives up rather than draining again.
-    let error = handle.session_list().unwrap_err();
+    // The runtime gives up rather than draining again, with the rebuild
+    // hint, fanned out to the registered routes.
+    let update = terminal
+        .updates()
+        .recv_timeout(Duration::from_secs(30))
+        .unwrap();
+    let TerminalUpdate::Error(message) = update else {
+        panic!("expected the fatal mismatch to fan out as an error, got {update:?}");
+    };
     assert!(
-        error.contains("contract version mismatch") && error.contains("already attempted"),
-        "error was: {error}"
+        message.contains("already attempted") && message.contains("rebuild"),
+        "error was: {message}"
     );
     let no_more_connections =
         tokio::time::timeout(Duration::from_millis(500), listener.accept()).await;
@@ -796,105 +820,225 @@ async fn a_second_mismatch_after_recovery_goes_fatal_instead_of_looping() {
     let _ = std::fs::remove_file(&socket_path);
 }
 
+/// A healthy *remoc* daemon whose hub rejects the version range is drained
+/// over a fresh hub connection (the rtc successor of the JSONL
+/// `HandshakeRejected` recovery) and the respawned daemon is adopted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_range_rejecting_remoc_daemon_is_drained_via_rtc_and_the_respawn_adopted() {
+    let (socket_path, control_socket) = stub_socket_paths("rej");
+    let listener = bind_stub_listener(&socket_path);
+    let (handle, _host_tools, _workspace_roots) =
+        SessiondHandle::start(&socket_path, &control_socket);
+
+    // Connection 1: hub answers hello with a range rejection.
+    let (stream, _) = listener.accept().await.unwrap();
+    let behavior = FakeBehavior {
+        reject_hello: true,
+        ..FakeBehavior::default()
+    };
+    let (_calls_1, _conn_1, _serve_1) = serve_fake_hub(stream, behavior).await;
+
+    // Connection 2: the recovery drain arrives as an rtc call.
+    let (stream, _) = listener.accept().await.unwrap();
+    let behavior = FakeBehavior {
+        reject_hello: true,
+        ..FakeBehavior::default()
+    };
+    let (mut drain_calls, _conn_2, _serve_2) = serve_fake_hub(stream, behavior).await;
+    let drain = next_call(&mut drain_calls).await;
+    assert!(matches!(drain, FakeCall::Drain), "got {drain:?}");
+
+    // "Exit", then come back as a compatible daemon.
+    drop(listener);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let listener = bind_stub_listener(&socket_path);
+    let (stream, _) = listener.accept().await.unwrap();
+    let (mut calls, _conn_3, _serve_3) = serve_fake_hub(stream, FakeBehavior::default()).await;
+    assert!(matches!(next_call(&mut calls).await, FakeCall::Hello));
+
+    let list_handle = handle.clone();
+    let listed = tokio::task::spawn_blocking(move || list_handle.terminal_list()).await;
+    assert_eq!(listed.unwrap(), Ok(Vec::new()));
+
+    drop(handle);
+    let _ = std::fs::remove_file(&socket_path);
+}
+
 /// Host-side coverage for `SessiondHandle::broadcast_terminal_color_scheme`
 /// (the live theme-apply re-push, and its adoption-path use in
 /// `spawn_workspace_restore`/`spawn_terminal_resume` -- both call it only
 /// after `attach_terminals` returns, exactly as reproduced here): it must
-/// emit a `TerminalCommand::SetColorScheme` envelope for every attached
-/// session and nothing for a session `attach_terminals` reported
-/// `NotFound` for (whose route is already dropped by the time the
+/// inject a `TerminalCommand::SetColorScheme` into every attached
+/// session's command stream and nothing for a session `attach_terminals`
+/// reported not-found for (whose route is already dropped by the time the
 /// broadcast runs, via `TerminalSessionHandle`'s `Drop`).
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn broadcast_terminal_color_scheme_targets_exactly_the_attached_sessions() {
     let (client, server) = tokio::io::duplex(64 * 1024);
     let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
-    let (read_half, mut writer) = tokio::io::split(server);
-    let mut reader = BufReader::new(read_half);
-    receive_hello_and_reply(&mut reader, &mut writer).await;
 
     let attached_a = Uuid::new_v4();
     let attached_b = Uuid::new_v4();
     let missing = Uuid::new_v4();
+    let behavior = FakeBehavior {
+        missing_terminals: vec![missing],
+        ..FakeBehavior::default()
+    };
+    let (mut calls, _conn, _serve) = serve_fake_hub(server, behavior).await;
+
     let attach_handle = handle.clone();
     let attached = std::thread::spawn(move || {
         attach_handle.attach_terminals(vec![attached_a, attached_b, missing])
     });
 
-    let mut requests = HashMap::new();
+    assert!(matches!(next_call(&mut calls).await, FakeCall::Hello));
+    let mut peers = HashMap::new();
     for _ in 0..3 {
-        let envelope = session_wire::read_envelope(&mut reader)
-            .await
-            .unwrap()
-            .expect("terminal attach request");
-        let TerminalControl::Attach { request_id } = decode_terminal_control(&envelope).unwrap()
-        else {
-            panic!("expected terminal attach request");
+        let FakeCall::AttachTerminal { session_id, peer } = next_call(&mut calls).await else {
+            panic!("expected an attach call");
         };
-        requests.insert(envelope.session_id.unwrap(), request_id);
+        peers.insert(session_id, peer);
     }
-    for (id, result) in [
-        (missing, TerminalAttachResult::NotFound),
-        (attached_a, TerminalAttachResult::Attached),
-        (attached_b, TerminalAttachResult::Attached),
-    ] {
-        session_wire::write_envelope(
-            &mut writer,
-            &encode_terminal_control(
-                Some(id),
-                &TerminalControl::AttachResult {
-                    request_id: requests[&id],
-                    result,
-                },
-            )
-            .unwrap(),
-        )
-        .await
-        .unwrap();
-    }
-
     let sessions = attached.join().unwrap();
     assert_eq!(
         sessions.len(),
         2,
-        "only the two Attached results should survive"
+        "only the two attached results should survive"
     );
 
     // Mirrors `spawn_workspace_restore`/`spawn_terminal_resume`'s own
     // sequencing: the re-push is sent only after `attach_terminals`
-    // returns -- by which point `missing`'s route has already been
-    // dropped (`TerminalSessionHandle::drop`, on its `NotFound` result
-    // above) and both `attached_a`/`attached_b`'s are confirmed live.
+    // returns -- by which point `missing`'s route has already been dropped
+    // (`TerminalSessionHandle::drop`, on its not-found result above) and
+    // both `attached_a`/`attached_b`'s are confirmed live.
     let scheme = TerminalColorScheme::default();
     handle.broadcast_terminal_color_scheme(scheme);
 
-    let mut targeted = Vec::new();
-    for _ in 0..2 {
-        let envelope = session_wire::read_envelope(&mut reader)
+    for id in [attached_a, attached_b] {
+        let mut peer = peers.remove(&id).flatten().expect("attached peer");
+        let command = tokio::time::timeout(Duration::from_secs(5), peer.commands.recv())
             .await
+            .expect("timed out waiting for the SetColorScheme command")
             .unwrap()
-            .expect("SetColorScheme envelope");
-        assert_eq!(envelope.kind, horizon_terminal_core::TERMINAL_COMMAND_KIND);
-        assert_eq!(
-            decode_terminal_command(&envelope).unwrap(),
-            TerminalCommand::SetColorScheme(scheme)
-        );
-        targeted.push(envelope.session_id.unwrap());
+            .expect("SetColorScheme command");
+        assert_eq!(command, TerminalCommand::SetColorScheme(scheme));
+        // Nothing further follows on this stream.
+        let extra = tokio::time::timeout(Duration::from_millis(100), peer.commands.recv()).await;
+        assert!(extra.is_err(), "unexpected extra command for {id}");
     }
-    targeted.sort_unstable();
-    let mut expected = vec![attached_a, attached_b];
-    expected.sort_unstable();
-    assert_eq!(
-        targeted, expected,
-        "the broadcast must target exactly the attached sessions"
+    // The never-attached session has no peer channels at all (its attach
+    // returned an error), which is the structural form of "must not
+    // receive a push".
+    assert!(peers.remove(&missing).flatten().is_none());
+}
+
+/// Review fix (establishment classification): transient failures —
+/// connections the daemon drops before/during the handshake — are retried
+/// with backoff and never consume the once-per-runtime recovery budget.
+/// Two immediate closes followed by a healthy daemon must end established,
+/// where the old classification would have burned the budget on close #1
+/// and gone fatal on close #2.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_transient_failures_do_not_consume_the_recovery_budget() {
+    let (socket_path, control_socket) = stub_socket_paths("transient");
+    let listener = bind_stub_listener(&socket_path);
+    let (handle, _host_tools, _workspace_roots) =
+        SessiondHandle::start(&socket_path, &control_socket);
+
+    // Connections 1 and 2: accepted and immediately dropped (a crashing
+    // daemon; `ChMux(StreamClosed)` on the runtime's side).
+    for _ in 0..2 {
+        let (stream, _) = listener.accept().await.unwrap();
+        drop(stream);
+    }
+
+    // Connection 3: a healthy daemon — must be adopted normally.
+    let (stream, _) = listener.accept().await.unwrap();
+    let (mut calls, _conn, _serve) = serve_fake_hub(stream, FakeBehavior::default()).await;
+    assert!(matches!(next_call(&mut calls).await, FakeCall::Hello));
+
+    let list_handle = handle.clone();
+    let listed = tokio::task::spawn_blocking(move || list_handle.terminal_list()).await;
+    assert_eq!(listed.unwrap(), Ok(Vec::new()));
+
+    drop(handle);
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+/// Review fix (establishment classification): a connection dropping while
+/// the `hello` call itself is in flight (`HubError::Call`) is a transient,
+/// retried like any other pre-hello drop — the old classification sent it
+/// straight to a fatal stop.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_connection_drop_during_hello_is_retried_not_fatal() {
+    let (socket_path, control_socket) = stub_socket_paths("hellodrop");
+    let listener = bind_stub_listener(&socket_path);
+    let (handle, _host_tools, _workspace_roots) =
+        SessiondHandle::start(&socket_path, &control_socket);
+
+    // Connection 1: a daemon that completes the handshake and hands over
+    // its hub, then dies while hello is pending.
+    let (stream, _) = listener.accept().await.unwrap();
+    let behavior = FakeBehavior {
+        hang_hello: true,
+        ..FakeBehavior::default()
+    };
+    let (_calls, conn, serve) = serve_fake_hub(stream, behavior).await;
+    // Give the runtime a moment to get its hello call in flight, then
+    // kill the daemon under it.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    conn.abort();
+    serve.abort();
+
+    // Connection 2: a healthy daemon — the runtime must have retried
+    // rather than stopped.
+    let (stream, _) = listener.accept().await.unwrap();
+    let (mut calls, _conn, _serve) = serve_fake_hub(stream, FakeBehavior::default()).await;
+    assert!(matches!(next_call(&mut calls).await, FakeCall::Hello));
+
+    let list_handle = handle.clone();
+    let listed = tokio::task::spawn_blocking(move || list_handle.terminal_list()).await;
+    assert_eq!(listed.unwrap(), Ok(Vec::new()));
+
+    drop(handle);
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+/// Review fix (size caps), pinning the *measured* oversized-request
+/// semantics: the daemon drops a request over `RTC_MAX_REQUEST_BYTES`
+/// per-item, so the op fails loudly (the pane gets an error, never a
+/// hang) — and because rch latches the remote-send error onto the
+/// transported request channel, the connection then tears down (the
+/// runtime stops with the failure fanned out). Deliberate bluntness:
+/// every rtc request is a small fixed-shape struct, so exceeding the cap
+/// is a bug, never data — see `RTC_MAX_REQUEST_BYTES`'s doc.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_oversized_rtc_request_fails_the_op_and_stops_the_runtime() {
+    let (client, server) = tokio::io::duplex(1024 * 1024);
+    let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
+    let (mut calls, _conn, _serve) = serve_fake_hub(server, FakeBehavior::default()).await;
+    assert!(matches!(next_call(&mut calls).await, FakeCall::Hello));
+
+    // A spawn spec far over the 64 KiB request cap.
+    let mut oversized = spec();
+    oversized.args = vec!["x".repeat(200 * 1024)];
+    let terminal = handle.start_terminal(Uuid::new_v4(), oversized);
+    let update = terminal
+        .updates()
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the oversized create must fail loudly, not hang");
+    assert!(
+        matches!(update, TerminalUpdate::Error(_)),
+        "expected a create failure, got {update:?}"
     );
 
-    assert!(
-        tokio::time::timeout(
-            Duration::from_millis(100),
-            session_wire::read_envelope(&mut reader)
-        )
-        .await
-        .is_err(),
-        "the never-attached (missing) session must not receive a color-scheme push"
-    );
+    // The latched request channel ends the connection; later panes get
+    // the failure rather than a hang.
+    let late = handle.start_terminal(Uuid::new_v4(), spec());
+    assert!(matches!(
+        late.updates()
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap(),
+        TerminalUpdate::Error(_)
+    ));
 }

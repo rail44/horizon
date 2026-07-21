@@ -245,6 +245,9 @@ impl AgentView {
             Some(SessionState::Completed) => "completed",
             Some(SessionState::Failed) => "failed",
             Some(SessionState::Terminated) => "terminated",
+            // Skew catch-all: a state this build can't name shows nothing
+            // rather than a wrong status.
+            Some(SessionState::Unknown) => "",
         };
         (text.to_string(), theme::text_muted())
     }

@@ -32,13 +32,23 @@ or use `Reload Session Runtime` from the command palette to retry after
 rebuilding.
 
 There is no CI. The local quality gate below is mandatory before finishing
-any work — run it yourself and make sure all three are clean:
+any work — run it yourself and make sure all four are clean:
 
 ```sh
 cargo fmt
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo nextest run --workspace --locked
+./scripts/check-wire-schema.sh
 ```
+
+The last step is the session-wire skew checker
+(`docs/remoc-adoption-design.md` §4): it diffs the committed wire-schema
+artifact (`crates/horizon-session-protocol/schema/session-wire.json`)
+against the merge-base's copy and fails on any non-additive change that
+doesn't bump `SESSION_PROTOCOL_VERSION` with it. If you changed a wire
+type, regenerate the artifact first:
+`HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-sessiond
+wire_schema` (a stale artifact is itself a red nextest test).
 
 `--workspace` is load-bearing: bare `cargo clippy`/`cargo nextest run`
 from the repo root silently skip the `horizon-sessiond`/`horizon-agent`

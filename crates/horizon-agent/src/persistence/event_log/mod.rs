@@ -39,6 +39,62 @@ pub struct Record {
     pub created_at_unix_ms: u64,
 }
 
+/// [`Record`] with the `event` payload left raw — the first stage of
+/// [`decode_record_tolerantly`]'s two-stage decode. Field-for-field the
+/// same envelope as [`Record`], so a line whose *envelope* is intact is
+/// never lost just because its `event` is from a newer build.
+#[derive(Deserialize)]
+struct RecordEnvelope {
+    schema: String,
+    version: u32,
+    event_id: String,
+    sequence: u64,
+    session_id: SessionId,
+    turn_id: Option<String>,
+    provider_id: Option<ProviderId>,
+    #[serde(default)]
+    role_id: Option<RoleId>,
+    event_kind: String,
+    #[allow(dead_code)]
+    event: serde_json::Value,
+    provider_payload: Option<serde_json::Value>,
+    created_at_unix_ms: u64,
+}
+
+/// Decodes one log line, degrading only as far as the damage goes:
+///
+/// 1. A fully decodable line is a plain [`Record`].
+/// 2. A line whose envelope (schema, `sequence`, session, ...) is intact
+///    but whose `event` this build can't decode — a payload-carrying
+///    variant appended by a newer build, which serde_json's
+///    `#[serde(other)]` cannot degrade on its own (it insists on unit
+///    content) — becomes a [`Record`] carrying [`Event::Unknown`]. The
+///    envelope is preserved, so `sequence` stays monotonic: the writer's
+///    `next_sequence` counts this line, and a later resume can never
+///    re-issue its sequence number (the rewind/duplication hazard the
+///    review found).
+/// 3. Only a line whose envelope itself is broken counts as corrupt.
+fn decode_record_tolerantly(line: &str) -> Option<Record> {
+    if let Ok(record) = serde_json::from_str::<Record>(line) {
+        return Some(record);
+    }
+    let envelope = serde_json::from_str::<RecordEnvelope>(line).ok()?;
+    Some(Record {
+        schema: envelope.schema,
+        version: envelope.version,
+        event_id: envelope.event_id,
+        sequence: envelope.sequence,
+        session_id: envelope.session_id,
+        turn_id: envelope.turn_id,
+        provider_id: envelope.provider_id,
+        role_id: envelope.role_id,
+        event_kind: envelope.event_kind,
+        event: Event::Unknown,
+        provider_payload: envelope.provider_payload,
+        created_at_unix_ms: envelope.created_at_unix_ms,
+    })
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ReadReport {
     pub records: Vec<Record>,
@@ -100,8 +156,8 @@ pub fn read(path: impl AsRef<Path>) -> Result<ReadReport> {
         if line.trim().is_empty() {
             continue;
         }
-        match serde_json::from_str::<Record>(line) {
-            Ok(record)
+        match decode_record_tolerantly(line) {
+            Some(record)
                 if record.schema == AGENT_EVENT_LOG_SCHEMA
                     && record.version == AGENT_EVENT_LOG_VERSION =>
             {
@@ -117,6 +173,111 @@ pub fn read(path: impl AsRef<Path>) -> Result<ReadReport> {
         corrupt_line_count,
         ignored_partial_line,
     })
+}
+
+#[cfg(test)]
+mod tolerant_read_tests {
+    use super::*;
+    use crate::contract::{Event, ProviderEvent, SessionState};
+    use uuid::Uuid;
+
+    /// A log line whose `event` names a variant this build doesn't know
+    /// (with a payload — the case serde_json's `#[serde(other)]` cannot
+    /// degrade by itself) must read back as a full record carrying
+    /// `Event::Unknown`, envelope preserved — never as a corrupt line.
+    #[test]
+    fn a_future_event_variant_reads_back_as_an_unknown_record_with_its_envelope() {
+        let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
+        let session_id = SessionId::new();
+        let line = serde_json::json!({
+            "schema": AGENT_EVENT_LOG_SCHEMA,
+            "version": AGENT_EVENT_LOG_VERSION,
+            "event_id": "evt-42",
+            "sequence": 42,
+            "session_id": session_id,
+            "turn_id": "turn-1",
+            "provider_id": "future.provider",
+            "event_kind": "future_variant",
+            "event": {"FutureVariant": {"x": 1}},
+            "provider_payload": null,
+            "created_at_unix_ms": 1,
+        });
+        std::fs::write(&path, format!("{line}\n")).unwrap();
+
+        let report = read(&path).unwrap();
+        assert_eq!(
+            report.corrupt_line_count, 0,
+            "an intact envelope must not count as corruption: {report:?}"
+        );
+        assert_eq!(report.records.len(), 1);
+        let record = &report.records[0];
+        assert_eq!(record.event, Event::Unknown);
+        assert_eq!(record.sequence, 42, "the envelope must be preserved");
+        assert_eq!(record.session_id, session_id);
+        assert_eq!(record.event_kind, "future_variant");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The writer's `next_sequence` counts an unknown-event line: appends
+    /// after it continue *past* its sequence instead of rewinding onto it
+    /// (the duplicate-sequence hazard the intolerant read had).
+    #[test]
+    fn next_sequence_counts_an_unknown_event_line() {
+        let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
+        let session_id = SessionId::new();
+        let line = serde_json::json!({
+            "schema": AGENT_EVENT_LOG_SCHEMA,
+            "version": AGENT_EVENT_LOG_VERSION,
+            "event_id": "evt-7",
+            "sequence": 7,
+            "session_id": session_id,
+            "turn_id": null,
+            "provider_id": null,
+            "event_kind": "future_variant",
+            "event": {"FutureVariant": {"x": 1}},
+            "provider_payload": null,
+            "created_at_unix_ms": 1,
+        });
+        std::fs::write(&path, format!("{line}\n")).unwrap();
+
+        let (writer, init_rx) = WriterHandle::open(&path);
+        match init_rx.recv().unwrap() {
+            WriterInit::Ready(report) => {
+                assert_eq!(report.records.len(), 1, "the unknown line must be read");
+            }
+            WriterInit::Failed(error) => panic!("writer startup failed: {error}"),
+        }
+        let mut appender = Appender::new(writer.clone(), session_id, None, None);
+        appender
+            .append_provider_events(vec![ProviderEvent::from(Event::StateChanged(
+                SessionState::Created,
+            ))])
+            .unwrap();
+        writer.flush().unwrap();
+
+        let report = read(&path).unwrap();
+        let sequences: Vec<u64> = report.records.iter().map(|r| r.sequence).collect();
+        assert_eq!(
+            sequences,
+            vec![7, 8],
+            "the fresh append must continue past the unknown line's sequence"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A line whose *envelope* is broken still counts as corrupt — the
+    /// tolerance is exactly one field deep.
+    #[test]
+    fn a_broken_envelope_still_counts_as_corrupt() {
+        let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
+        std::fs::write(&path, "not valid json\n").unwrap();
+        let report = read(&path).unwrap();
+        assert_eq!(report.corrupt_line_count, 1);
+        assert!(report.records.is_empty());
+        let _ = std::fs::remove_file(&path);
+    }
 }
 
 #[cfg(test)]

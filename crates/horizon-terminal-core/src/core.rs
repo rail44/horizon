@@ -404,6 +404,9 @@ impl TerminalCore {
             TerminalSelectionKind::Simple => SelectionType::Simple,
             TerminalSelectionKind::Word => SelectionType::Semantic,
             TerminalSelectionKind::Line => SelectionType::Lines,
+            // Skew catch-all: an unknown kind still selects, as the least
+            // surprising plain character selection.
+            TerminalSelectionKind::Unknown => SelectionType::Simple,
         };
         self.term.selection = Some(Selection::new(selection_type, point, Side::Left));
     }

@@ -3268,6 +3268,7 @@ dependencies = [
  "horizon-terminal-core",
  "horizon-winit-platform",
  "horizon-workspace",
+ "remoc",
  "serde_json",
  "termwiz",
  "tokio",
@@ -3288,13 +3289,13 @@ dependencies = [
  "globset",
  "horizon-sandbox",
  "horizon-sandbox-proxy",
- "horizon-session-protocol",
  "ignore",
  "libc",
  "regex",
  "reqwest 0.13.4",
  "rig-core",
  "rig-memory",
+ "schemars 1.2.1",
  "serde",
  "serde_json",
  "tokio",
@@ -3339,6 +3340,7 @@ dependencies = [
  "horizon-sandbox-runtime",
  "libc",
  "nono",
+ "schemars 1.2.1",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -3368,6 +3370,10 @@ dependencies = [
 name = "horizon-session-protocol"
 version = "0.1.0"
 dependencies = [
+ "horizon-agent",
+ "horizon-terminal-core",
+ "remoc",
+ "schemars 1.2.1",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -3387,6 +3393,8 @@ dependencies = [
  "horizon-session-protocol",
  "horizon-terminal-core",
  "portable-pty",
+ "remoc",
+ "schemars 1.2.1",
  "serde_json",
  "sysinfo 0.39.6",
  "tempfile",
@@ -3402,7 +3410,7 @@ dependencies = [
  "alacritty_terminal",
  "base64",
  "crossbeam-channel",
- "horizon-session-protocol",
+ "schemars 1.2.1",
  "serde",
  "serde_json",
  "termwiz",
@@ -5969,6 +5977,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "postbag"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d85e7a5aea2b673cecbe9371ab3e300dfe2185ca199be15c112b10405b7162cc"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "potential_utf"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6577,6 +6594,36 @@ checksum = "158a764437582235e3501f683b93a0a6f8d825d04a789dbe5ed30b8799b8908a"
 dependencies = [
  "hashbrown 0.16.1",
  "memchr",
+]
+
+[[package]]
+name = "remoc"
+version = "0.18.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0491961ac4bc1ac4191743aa58a2ce778f4725693d29743fae957b2cf45f77f0"
+dependencies = [
+ "byteorder",
+ "bytes",
+ "futures",
+ "postbag",
+ "rand 0.9.4",
+ "remoc_macro",
+ "serde",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "remoc_macro"
+version = "0.18.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89479d9d87f65ef573faf0167dd0a9f40d3a63fd95e7a2935d662fa57dbc30d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -7195,6 +7242,7 @@ dependencies = [
  "schemars_derive 1.2.1",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]

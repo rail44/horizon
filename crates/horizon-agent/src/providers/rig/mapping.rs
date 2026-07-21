@@ -106,7 +106,11 @@ pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message>
         .filter_map(|event| match event {
             Event::MessageCommitted(message) => match message.role {
                 MessageRole::User => Some(Message::user(message.text.clone())),
-                MessageRole::Assistant => Some(Message::assistant(message.text.clone())),
+                // Unknown replays as assistant-authored -- see
+                // `MessageRole::Unknown`'s doc (never invent user words).
+                MessageRole::Assistant | MessageRole::Unknown => {
+                    Some(Message::assistant(message.text.clone()))
+                }
             },
             Event::ToolCallRequested(request) => {
                 Some(Message::from(rig_tool_call_from_request(request)))
@@ -122,7 +126,8 @@ pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message>
             | Event::ProviderRequestFirstToken
             | Event::ProviderRequestFinished
             | Event::Exited(_)
-            | Event::TurnEnded(_) => None,
+            | Event::TurnEnded(_)
+            | Event::Unknown => None,
         })
         .collect()
 }
@@ -131,7 +136,7 @@ pub(super) fn rig_tool_call_request(call: ToolCall) -> ToolCallRequest {
     ToolCallRequest {
         call_id: ToolCallId(call.call_id.unwrap_or(call.id)),
         tool_id: call.function.name,
-        input: call.function.arguments,
+        input: call.function.arguments.into(),
     }
 }
 
@@ -157,7 +162,7 @@ pub(super) fn rig_tool_call_provider_payload(call: &ToolCall) -> serde_json::Val
 fn rig_tool_call_from_request(request: &ToolCallRequest) -> ToolCall {
     ToolCall::new(
         request.call_id.0.clone(),
-        ToolFunction::new(request.tool_id.clone(), request.input.clone()),
+        ToolFunction::new(request.tool_id.clone(), request.input.0.clone()),
     )
 }
 

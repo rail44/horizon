@@ -1,12 +1,14 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use unicode_width::UnicodeWidthChar;
 
 use super::color::{NamedColor, TerminalColor};
 use super::mouse::TerminalSelectionPoint;
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TerminalFrame {
     pub lines: Vec<TerminalLine>,
+    #[serde(default)]
     pub cursor: Option<TerminalCursor>,
     /// The live selection as semantic frame metadata (goal 2 of
     /// `docs/terminal-protocol-goals.md`): spans stay pure content, and the
@@ -16,6 +18,7 @@ pub struct TerminalFrame {
     /// selected *or* while the selection lies entirely outside the current
     /// viewport; a partially visible selection carries only its visible
     /// intersection.
+    #[serde(default)]
     pub selection: Option<TerminalSelection>,
     pub mouse_reporting: bool,
     /// Whether the attached app negotiated kitty's "report all keys as
@@ -39,12 +42,12 @@ pub struct TerminalFrame {
     pub palette_overrides: Vec<(u16, [u8; 3])>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TerminalLine {
     pub spans: Vec<TerminalSpan>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TerminalSpan {
     pub text: String,
     pub columns: usize,
@@ -64,6 +67,7 @@ pub struct TerminalSpan {
     /// with the span's own `fg`. Only ever `Some` while `underline` is not
     /// [`TerminalUnderline::None`] — a color set on a cell that is not
     /// underlined is presentation-dead and normalized away at frame build.
+    #[serde(default)]
     pub underline_color: Option<TerminalColor>,
 }
 
@@ -72,7 +76,7 @@ pub struct TerminalSpan {
 /// rationale). Maps 1:1 from `alacritty_terminal`'s cell flags
 /// (`UNDERLINE`/`DOUBLE_UNDERLINE`/`UNDERCURL`/`DOTTED_UNDERLINE`/
 /// `DASHED_UNDERLINE`).
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum TerminalUnderline {
     #[default]
     None,
@@ -81,9 +85,18 @@ pub enum TerminalUnderline {
     Curl,
     Dotted,
     Dashed,
+    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
+    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
+    /// discarded there; under serde_json only *unit* variants degrade —
+    /// a payload-carrying one is a per-item decode error instead). Keep last. A client
+    /// paints an unknown underline style as [`TerminalUnderline::Single`]
+    /// (better a wrong underline than none: the app asked for *some*
+    /// underline).
+    #[serde(other)]
+    Unknown,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TerminalCursor {
     pub row: usize,
     pub col: usize,
@@ -96,13 +109,20 @@ pub struct TerminalCursor {
 
 /// Mirrors `alacritty_terminal`'s `CursorShape` minus `Hidden` (a hidden
 /// cursor never reaches the wire — see [`TerminalCursor::shape`]).
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum TerminalCursorShape {
     #[default]
     Block,
     Underline,
     Beam,
     HollowBlock,
+    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
+    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
+    /// discarded there; under serde_json only *unit* variants degrade —
+    /// a payload-carrying one is a per-item decode error instead). Keep last. A client
+    /// paints an unknown shape as the default [`TerminalCursorShape::Block`].
+    #[serde(other)]
+    Unknown,
 }
 
 /// A selection's two inclusive endpoints in viewport coordinates — see
@@ -111,7 +131,7 @@ pub enum TerminalCursorShape {
 /// (`TerminalCommand::SelectionStart`/`SelectionUpdate`) already speaks.
 /// Full rows between `start.row` and `end.row` are entirely selected —
 /// there is no block-selection variant in this vocabulary.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TerminalSelection {
     pub start: TerminalSelectionPoint,
     pub end: TerminalSelectionPoint,
@@ -120,18 +140,23 @@ pub struct TerminalSelection {
 /// The rows and frame metadata that changed between two terminal snapshots.
 /// `cursor` is nested so `None` means unchanged and `Some(None)` means hidden;
 /// `selection` follows the same idiom (`Some(None)` = selection cleared).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TerminalFrameDiff {
     pub changed_rows: Vec<TerminalRowDiff>,
     pub row_count: usize,
+    #[serde(default)]
     pub cursor: Option<Option<TerminalCursor>>,
+    #[serde(default)]
     pub selection: Option<Option<TerminalSelection>>,
+    #[serde(default)]
     pub mouse_reporting: Option<bool>,
+    #[serde(default)]
     pub keys_as_escape_codes: Option<bool>,
+    #[serde(default)]
     pub palette_overrides: Option<Vec<(u16, [u8; 3])>>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TerminalRowDiff {
     pub index: usize,
     pub line: TerminalLine,

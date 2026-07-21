@@ -99,7 +99,9 @@ impl AgentView {
         match item {
             AgentFrameItem::Message(message) => Some(match message.role {
                 MessageRole::User => block("you", theme::accent(), message.text.clone()),
-                MessageRole::Assistant => markdown_block(
+                // Unknown renders as agent-authored -- see `MessageRole::
+                // Unknown`'s doc (never invent user words).
+                MessageRole::Assistant | MessageRole::Unknown => markdown_block(
                     "agent",
                     theme::info(),
                     ("agent-message", index),

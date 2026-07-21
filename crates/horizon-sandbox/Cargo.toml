@@ -16,6 +16,7 @@ thiserror = "2.0"
 # platform even though only the macOS backend actually serializes them.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+schemars = "1"
 
 [target.'cfg(unix)'.dependencies]
 # `denial.rs`'s SIGSYS-exit-code check wants `libc` on every Unix, not

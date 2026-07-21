@@ -336,7 +336,7 @@ fn search_hits_carry_is_error_and_turn_outcome_labels() {
             event: Event::ToolCallRequested(ToolCallRequest {
                 call_id: call_id.clone(),
                 tool_id: "fs.read".to_string(),
-                input: serde_json::json!({ "path": "widget.txt" }),
+                input: serde_json::json!({ "path": "widget.txt" }).into(),
             }),
             provider_payload: None,
         })
@@ -496,7 +496,7 @@ fn read_entries_carry_is_error_on_tool_results() {
                 Event::ToolCallRequested(ToolCallRequest {
                     call_id: call_id.clone(),
                     tool_id: "fs.read".to_string(),
-                    input: serde_json::json!({}),
+                    input: serde_json::json!({}).into(),
                 }),
                 Event::ToolCallFinished(ToolCallResult::new(
                     call_id,

@@ -3,27 +3,27 @@ use std::sync::Mutex;
 
 use crossbeam_channel::Sender;
 use horizon_agent::contract::{self, Event, ProviderEvent};
-use horizon_agent::wire::{self, Control, EnvelopeBody, HostToolRequest};
-use horizon_session_protocol::{Envelope as RawEnvelope, SessionControl, SESSION_CONTROL_KIND};
-use horizon_terminal_core::{
-    decode_terminal_control, decode_terminal_update, TerminalAttachResult, TerminalControl,
-    TerminalSummary, TerminalUpdate, TERMINAL_CONTROL_KIND, TERMINAL_UPDATE_KIND,
-};
+use horizon_agent::wire::{self, AgentWireEvent, HostToolRequest};
+use horizon_terminal_core::{TerminalCommand, TerminalUpdate};
 use uuid::Uuid;
 
-pub(super) enum Incoming {
-    Pong(RawEnvelope),
-    Handled,
-}
-
+/// The client-side fan-out table: which pane's channels receive a given
+/// session's events/updates. The v10 cutover deleted its other half — the
+/// `request_id` correlation maps (`pending_terminal_lists`/`attaches`,
+/// `pending_session_list`) are gone because rtc calls return futures, and
+/// envelope `kind` dispatch is gone because channel identity *is* the
+/// route. What remains is exactly the state that is genuinely the UI's:
+/// per-session crossbeam senders into panes, the process-wide host-tool /
+/// workspace-root channels, and the sticky failure that fans a terminal
+/// runtime error out to everything registered.
 pub(super) struct Routes {
     state: Mutex<RouteState>,
     host_tools: Sender<HostToolRequest>,
     /// The live-announcement counterpart of `host_tools` above: a
     /// process-wide channel (not the per-session `agent` map) since
-    /// `wire::Control::WorkspaceRootResolved` corrects the *workspace
-    /// model*, not a `contract::ProviderEvent` any per-session `AgentSession`
-    /// transcript would fold -- see `WorkspaceShell::
+    /// `wire::AgentWireEvent::WorkspaceRootResolved` corrects the
+    /// *workspace model*, not a `contract::ProviderEvent` any per-session
+    /// `AgentSession` transcript would fold -- see `WorkspaceShell::
     /// wire_workspace_root_updates`.
     workspace_roots: Sender<(contract::SessionId, wire::WorkspaceRootResolved)>,
 }
@@ -31,9 +31,11 @@ pub(super) struct Routes {
 struct RouteState {
     agent: HashMap<contract::SessionId, Sender<ProviderEvent>>,
     terminal: HashMap<Uuid, Sender<TerminalUpdate>>,
-    pending_session_list: Option<Sender<Result<Vec<wire::SessionSummary>, String>>>,
-    pending_terminal_lists: HashMap<Uuid, Sender<Result<Vec<TerminalSummary>, String>>>,
-    pending_terminal_attaches: HashMap<Uuid, (Uuid, Sender<Result<TerminalAttachResult, String>>)>,
+    /// The local (sync-sendable) half of each terminal's command bridge —
+    /// the same queue the handle's own forwarding thread feeds; registered
+    /// here so a broadcast (`SessiondHandle::broadcast_terminal_color_scheme`)
+    /// can inject a command without going through a pane's handle.
+    terminal_commands: HashMap<Uuid, tokio::sync::mpsc::UnboundedSender<TerminalCommand>>,
     failure: Option<String>,
 }
 
@@ -46,9 +48,7 @@ impl Routes {
             state: Mutex::new(RouteState {
                 agent: HashMap::new(),
                 terminal: HashMap::new(),
-                pending_session_list: None,
-                pending_terminal_lists: HashMap::new(),
-                pending_terminal_attaches: HashMap::new(),
+                terminal_commands: HashMap::new(),
                 failure: None,
             }),
             host_tools,
@@ -71,13 +71,19 @@ impl Routes {
         state.agent.insert(session_id, sender);
     }
 
-    pub(super) fn register_terminal(&self, session_id: Uuid, sender: Sender<TerminalUpdate>) {
+    pub(super) fn register_terminal(
+        &self,
+        session_id: Uuid,
+        updates: Sender<TerminalUpdate>,
+        commands: tokio::sync::mpsc::UnboundedSender<TerminalCommand>,
+    ) {
         let mut state = self.state.lock().unwrap();
         if let Some(message) = state.failure.clone() {
-            let _ = sender.send(TerminalUpdate::Error(message));
+            let _ = updates.send(TerminalUpdate::Error(message));
             return;
         }
-        state.terminal.insert(session_id, sender);
+        state.terminal.insert(session_id, updates);
+        state.terminal_commands.insert(session_id, commands);
     }
 
     pub(super) fn unregister_agent(&self, session_id: contract::SessionId) {
@@ -85,231 +91,47 @@ impl Routes {
     }
 
     pub(super) fn unregister_terminal(&self, session_id: Uuid) {
-        self.state.lock().unwrap().terminal.remove(&session_id);
+        let mut state = self.state.lock().unwrap();
+        state.terminal.remove(&session_id);
+        state.terminal_commands.remove(&session_id);
     }
 
-    /// Every terminal session this client currently has an update route
-    /// for -- i.e. every live, attached terminal session, regardless of
-    /// which pane (if any) is showing it. The broadcast target for a live
-    /// theme apply's color-scheme re-push (`SessiondHandle::
-    /// broadcast_terminal_color_scheme`).
-    pub(super) fn terminal_session_ids(&self) -> Vec<Uuid> {
-        self.state
-            .lock()
-            .unwrap()
+    /// Injects `command` into every registered terminal's command bridge —
+    /// the broadcast target for a live theme apply's color-scheme re-push
+    /// (`SessiondHandle::broadcast_terminal_color_scheme`). Fire-and-forget,
+    /// same as every per-session command send.
+    pub(super) fn broadcast_terminal_command(&self, command: TerminalCommand) {
+        let state = self.state.lock().unwrap();
+        for sender in state.terminal_commands.values() {
+            let _ = sender.send(command.clone());
+        }
+    }
+
+    /// One incoming update from a terminal attachment's channel, routed to
+    /// its pane. `Exited` also retires the route, exactly as the JSONL
+    /// dispatch did.
+    pub(super) fn route_terminal_update(&self, session_id: Uuid, update: TerminalUpdate) {
+        let exited = matches!(update, TerminalUpdate::Exited);
+        let mut state = self.state.lock().unwrap();
+        if state
             .terminal
-            .keys()
-            .copied()
-            .collect()
-    }
-
-    pub(super) fn set_pending_session_list(
-        &self,
-        sender: Sender<Result<Vec<wire::SessionSummary>, String>>,
-    ) {
-        let mut state = self.state.lock().unwrap();
-        if let Some(message) = state.failure.clone() {
-            let _ = sender.send(Err(message));
-            return;
-        }
-        state.pending_session_list = Some(sender);
-    }
-
-    pub(super) fn set_pending_terminal_list(
-        &self,
-        request_id: Uuid,
-        sender: Sender<Result<Vec<TerminalSummary>, String>>,
-    ) {
-        let mut state = self.state.lock().unwrap();
-        if let Some(message) = state.failure.clone() {
-            let _ = sender.send(Err(message));
-            return;
-        }
-        state.pending_terminal_lists.insert(request_id, sender);
-    }
-
-    pub(super) fn set_pending_terminal_attach(
-        &self,
-        request_id: Uuid,
-        session_id: Uuid,
-        sender: Sender<Result<TerminalAttachResult, String>>,
-    ) {
-        let mut state = self.state.lock().unwrap();
-        if let Some(message) = state.failure.clone() {
-            let _ = sender.send(Err(message));
-            return;
-        }
-        state
-            .pending_terminal_attaches
-            .insert(request_id, (session_id, sender));
-    }
-
-    pub(super) fn cancel_pending_terminal_list(&self, request_id: Uuid) {
-        self.state
-            .lock()
-            .unwrap()
-            .pending_terminal_lists
-            .remove(&request_id);
-    }
-
-    pub(super) fn cancel_pending_terminal_attach(&self, request_id: Uuid) {
-        self.state
-            .lock()
-            .unwrap()
-            .pending_terminal_attaches
-            .remove(&request_id);
-    }
-
-    pub(super) fn dispatch(&self, raw: RawEnvelope) -> Result<Incoming, String> {
-        if raw.kind == SESSION_CONTROL_KIND {
-            return match raw.decode_payload::<SessionControl>(SESSION_CONTROL_KIND) {
-                Ok(SessionControl::Ping) => RawEnvelope::session_control(&SessionControl::Pong)
-                    .map(Incoming::Pong)
-                    .map_err(|error| error.to_string()),
-                Ok(_) => Ok(Incoming::Handled),
-                Err(error) => Err(format!("malformed shared session control: {error}")),
-            };
-        }
-
-        if raw.kind == TERMINAL_UPDATE_KIND {
-            let session_id = raw
-                .session_id
-                .ok_or_else(|| "terminal update missing session_id".to_string())?;
-            let update = decode_terminal_update(&raw)
-                .map_err(|error| format!("malformed terminal update: {error}"))?;
-            let exited = matches!(update, TerminalUpdate::Exited);
-            let mut state = self.state.lock().unwrap();
-            if state
-                .terminal
-                .get(&session_id)
-                .is_some_and(|sender| sender.send(update).is_err())
-                || exited
-            {
-                state.terminal.remove(&session_id);
-            }
-            return Ok(Incoming::Handled);
-        }
-
-        if raw.kind == TERMINAL_CONTROL_KIND {
-            let control = decode_terminal_control(&raw)
-                .map_err(|error| format!("malformed terminal control: {error}"))?;
-            let mut state = self.state.lock().unwrap();
-            match control {
-                TerminalControl::ListResult {
-                    request_id,
-                    sessions,
-                } => {
-                    if let Some(reply) = state.pending_terminal_lists.remove(&request_id) {
-                        let _ = reply.send(Ok(sessions));
-                    }
-                }
-                TerminalControl::AttachResult { request_id, result } => {
-                    let session_id = raw
-                        .session_id
-                        .ok_or_else(|| "terminal attach result missing session_id".to_string())?;
-                    if let Some((expected_session_id, reply)) =
-                        state.pending_terminal_attaches.remove(&request_id)
-                    {
-                        if session_id != expected_session_id {
-                            let _ = reply.send(Err(format!(
-                                "terminal attach result session mismatch: expected {expected_session_id}, got {session_id}"
-                            )));
-                            return Err(
-                                "terminal attach result targeted the wrong session".to_string()
-                            );
-                        }
-                        let _ = reply.send(Ok(result));
-                    }
-                }
-                TerminalControl::List { .. }
-                | TerminalControl::Create(_)
-                | TerminalControl::Attach { .. } => {}
-            }
-            return Ok(Incoming::Handled);
-        }
-
-        let envelope = wire::decode_envelope(raw)
-            .map_err(|error| format!("unknown or malformed domain message: {error}"))?;
-        match envelope.body {
-            EnvelopeBody::Event(event) => {
-                if let Some(session_id) = envelope.session_id {
-                    self.send_agent(session_id, ProviderEvent::from(event));
-                }
-            }
-            EnvelopeBody::Control(Control::ToolCallProgress(progress)) => {
-                if let Some(session_id) = envelope.session_id {
-                    self.send_agent(session_id, ProviderEvent::tool_call_progress(progress));
-                }
-            }
-            EnvelopeBody::Control(Control::SessionModel(model)) => {
-                if let Some(session_id) = envelope.session_id {
-                    self.send_agent(session_id, ProviderEvent::session_model(model));
-                }
-            }
-            EnvelopeBody::Control(Control::HostToolRequest(request)) => {
-                let _ = self.host_tools.send(request);
-            }
-            EnvelopeBody::Control(Control::WorkspaceRootResolved(resolved)) => {
-                if let Some(session_id) = envelope.session_id {
-                    let _ = self.workspace_roots.send((session_id, resolved));
-                }
-            }
-            EnvelopeBody::Control(Control::SessionListResult(summaries)) => {
-                if let Some(reply) = self.state.lock().unwrap().pending_session_list.take() {
-                    let _ = reply.send(Ok(summaries));
-                }
-            }
-            EnvelopeBody::Control(_) | EnvelopeBody::Command(_) => {}
-        }
-        Ok(Incoming::Handled)
-    }
-
-    pub(super) fn connection_failed(&self, message: String) {
-        let (terminal_routes, agent_routes, pending, terminal_lists, terminal_attaches) = {
-            let mut state = self.state.lock().unwrap();
-            state.failure = Some(message.clone());
-            let terminal_routes = state.terminal.values().cloned().collect::<Vec<_>>();
-            let agent_routes = state.agent.values().cloned().collect::<Vec<_>>();
-            let pending = state.pending_session_list.take();
-            let terminal_lists = state
-                .pending_terminal_lists
-                .drain()
-                .map(|(_, sender)| sender)
-                .collect::<Vec<_>>();
-            let terminal_attaches = state
-                .pending_terminal_attaches
-                .drain()
-                .map(|(_, (_, sender))| sender)
-                .collect::<Vec<_>>();
-            (
-                terminal_routes,
-                agent_routes,
-                pending,
-                terminal_lists,
-                terminal_attaches,
-            )
-        };
-        for sender in terminal_routes {
-            let _ = sender.send(TerminalUpdate::Error(message.clone()));
-        }
-
-        for sender in agent_routes {
-            let _ = sender.send(ProviderEvent::from(Event::Error(contract::Error {
-                message: message.clone(),
-            })));
-        }
-        if let Some(reply) = pending {
-            let _ = reply.send(Err(message.clone()));
-        }
-        for reply in terminal_lists {
-            let _ = reply.send(Err(message.clone()));
-        }
-        for reply in terminal_attaches {
-            let _ = reply.send(Err(message.clone()));
+            .get(&session_id)
+            .is_some_and(|sender| sender.send(update).is_err())
+            || exited
+        {
+            state.terminal.remove(&session_id);
+            state.terminal_commands.remove(&session_id);
         }
     }
 
-    fn send_agent(&self, session_id: contract::SessionId, event: ProviderEvent) {
+    /// A terminal-scoped failure that concerns only one session — e.g. a
+    /// `create_terminal` call's spawn error, which the JSONL wire used to
+    /// deliver as a `TerminalUpdate::Error` on the update stream.
+    pub(super) fn terminal_failed(&self, session_id: Uuid, message: String) {
+        self.route_terminal_update(session_id, TerminalUpdate::Error(message));
+    }
+
+    pub(super) fn send_agent(&self, session_id: contract::SessionId, event: ProviderEvent) {
         let mut state = self.state.lock().unwrap();
         if state
             .agent
@@ -317,6 +139,60 @@ impl Routes {
             .is_some_and(|sender| sender.send(event).is_err())
         {
             state.agent.remove(&session_id);
+        }
+    }
+
+    /// One incoming event from an agent attachment's channel, fanned to
+    /// the pane (or the process-wide workspace-root channel).
+    pub(super) fn route_agent_event(&self, session_id: contract::SessionId, event: AgentWireEvent) {
+        match event {
+            AgentWireEvent::Event(event) => self.send_agent(session_id, ProviderEvent::from(event)),
+            AgentWireEvent::ToolCallProgress(progress) => {
+                self.send_agent(session_id, ProviderEvent::tool_call_progress(progress));
+            }
+            AgentWireEvent::SessionModel(model) => {
+                self.send_agent(session_id, ProviderEvent::session_model(model));
+            }
+            AgentWireEvent::WorkspaceRootResolved(resolved) => {
+                let _ = self.workspace_roots.send((session_id, resolved));
+            }
+            // Skew catch-all: an event this build can't name is skipped;
+            // the channel stays up (adoption condition 2).
+            AgentWireEvent::Unknown => {}
+        }
+    }
+
+    pub(super) fn host_tool_request(&self, request: HostToolRequest) {
+        let _ = self.host_tools.send(request);
+    }
+
+    /// An agent attach/spawn call failed outright — surfaced into the
+    /// session's own transcript channel as an error event, the same shape
+    /// a connection-wide failure takes.
+    pub(super) fn agent_failed(&self, session_id: contract::SessionId, message: String) {
+        self.send_agent(
+            session_id,
+            ProviderEvent::from(Event::Error(contract::Error { message })),
+        );
+    }
+
+    pub(super) fn connection_failed(&self, message: String) {
+        let (terminal_routes, agent_routes) = {
+            let mut state = self.state.lock().unwrap();
+            state.failure = Some(message.clone());
+            state.terminal_commands.clear();
+            (
+                state.terminal.values().cloned().collect::<Vec<_>>(),
+                state.agent.values().cloned().collect::<Vec<_>>(),
+            )
+        };
+        for sender in terminal_routes {
+            let _ = sender.send(TerminalUpdate::Error(message.clone()));
+        }
+        for sender in agent_routes {
+            let _ = sender.send(ProviderEvent::from(Event::Error(contract::Error {
+                message: message.clone(),
+            })));
         }
     }
 }

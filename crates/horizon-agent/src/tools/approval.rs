@@ -208,6 +208,15 @@ fn resolve_bash(
             }),
             false,
         ),
+        ApprovalKind::Unknown => synchronous_result(
+            runtime,
+            &request.call_id,
+            json!({
+                "is_error": true,
+                "message": "This approval kind is not supported by this Horizon build."
+            }),
+            false,
+        ),
         ApprovalKind::Standard => resolve_standard_bash(session_id, runtime, request, decision),
     }
 }
@@ -232,7 +241,7 @@ fn resolve_standard_bash(
             bash::spawn(
                 session_id,
                 call_id,
-                request.input.clone(),
+                request.input.0.clone(),
                 runtime.tool_state.bash_cwd_handle(),
                 runtime.tool_state.bash_config(),
                 runtime.bash_results.clone(),
@@ -300,7 +309,7 @@ fn resolve_filesystem_denial_retry(
     bash::spawn_sandboxed(
         session_id,
         call_id,
-        request.input.clone(),
+        request.input.0.clone(),
         runtime.tool_state.bash_cwd_handle(),
         runtime.tool_state.bash_config(),
         workspace_root.to_path_buf(),
@@ -383,7 +392,7 @@ fn resolve_domain_denial_retry(
             bash::spawn_sandboxed(
                 session_id,
                 call_id,
-                request.input.clone(),
+                request.input.0.clone(),
                 runtime.tool_state.bash_cwd_handle(),
                 runtime.tool_state.bash_config(),
                 workspace_root.to_path_buf(),

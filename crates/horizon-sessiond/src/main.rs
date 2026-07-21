@@ -56,6 +56,7 @@
 //! projecting every later append live instead of only at the next restart
 //! (`docs/agent-duckdb-state-design.md`'s "Runtime Boundary" addendum).
 
+mod hub;
 mod session;
 mod terminal;
 mod worktree;
@@ -69,25 +70,25 @@ use horizon_agent::contract::ProviderRegistry;
 use horizon_agent::persistence::event_log::{Record, WriterHandle, WriterInit};
 use horizon_agent::persistence::projection::duckdb::{DuckdbStoreHandle, SharedDuckdbStore};
 use horizon_agent::socket::default_socket_path;
-use horizon_agent::wire::{self as agent_wire, Control, Envelope, EnvelopeBody, CONTRACT_VERSION};
 use horizon_session_protocol::{
-    self as session_wire, Envelope as RawEnvelope, Hello, SessionControl, SESSION_CONTROL_KIND,
+    SessionHubClient, SessionHubServerShared, WireCodec, RTC_MAX_REPLY_BYTES, RTC_MAX_REQUEST_BYTES,
 };
-use horizon_terminal_core::{
-    decode_terminal_command, decode_terminal_control, TerminalControl, TERMINAL_COMMAND_KIND,
-    TERMINAL_CONTROL_KIND,
-};
+use hub::Hub;
+use remoc::rtc::{Client as _, ServerShared as _};
 use session::{Connection, SessiondState};
 use terminal::TerminalHost;
-use tokio::io::{AsyncWriteExt, BufReader};
-use tokio::net::{
-    unix::{OwnedReadHalf, OwnedWriteHalf},
-    UnixListener, UnixStream,
-};
+use tokio::net::{UnixListener, UnixStream};
 
-/// Reported in this binary's `hello` reply's `binary_id`. The semantic
-/// contract version is carried separately in the same [`Hello`].
+/// Reported in this binary's `hello` reply's `binary_id`. The negotiated
+/// protocol version is carried separately in the same `HubHello`.
 const BINARY_ID: &str = concat!("horizon-sessiond/", env!("CARGO_PKG_VERSION"));
+
+/// How long an accepted connection gets to complete the remoc (chmux)
+/// handshake before the daemon gives up on it. A v10 client completes it
+/// in milliseconds; what this bounds is a *JSONL-generation* (v<=9) peer —
+/// whose line-framed hello is chmux garbage — or a port scanner, neither
+/// of which may wedge the one-at-a-time accept loop for chmux's raw 60 s.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Test-only hook (`crates/horizon-sessiond/tests/e2e.rs`): when set to a
 /// number of milliseconds, [`spawn_resume_task`] sleeps that long before
@@ -309,341 +310,85 @@ async fn run(
 /// One connection at a time by construction: [`run`]'s accept loop awaits
 /// this to completion before accepting the next connection (multi-client
 /// support is explicitly out of scope -- see the design doc's "Out of scope
-/// here"). Two phases: a fully sequential handshake (identical to step 2 --
-/// must succeed before any concurrency starts, so a rejected/mismatched
-/// hello can reply deterministically without racing an independent writer
-/// task), then [`run_session_hosting_loop`], which needs genuine read/write
-/// concurrency since a hosted session can push events at any time, not just
-/// in reply to something Horizon sent.
-///
-/// A rejected hello no longer closes the connection (contract-mismatch
-/// auto-recovery, `docs/session-daemon-design.md`'s 2026-07-20 decisions):
-/// `session_control` is the version-stable shared vocabulary, so the one
-/// thing a version-mismatched client can still legitimately say is
-/// `Drain` -- "flush and exit so I can restart you at my version" -- and
-/// this loop keeps serving shared controls after the rejection so that
-/// request is honored. The client closing (EOF) still ends the connection,
-/// and any undecodable envelope still closes it via the `read_envelope`
-/// error arm.
+/// here"). The v10 shape: establish the remoc connection (bounded by
+/// [`CONNECT_TIMEOUT`] so a JSONL-generation peer's garbage can't wedge the
+/// accept loop), hand the client its `SessionHubClient` over the base
+/// channel, then serve the [`Hub`] with per-call task spawning until the
+/// client goes away. Version negotiation is no longer a transport-level
+/// concern at all -- it is the `hello` rtc call, answered by the hub
+/// (`docs/remoc-adoption-design.md` §3); a range-rejected client can still
+/// call `drain`, which is how the auto-recovery path restarts a stale
+/// daemon at the right version.
 async fn handle_connection(
     stream: UnixStream,
     state: Arc<SessiondState>,
     terminals: TerminalHost,
 ) -> anyhow::Result<()> {
-    let (read_half, mut writer) = stream.into_split();
-    let mut reader = BufReader::new(read_half);
-
-    loop {
-        let envelope = match session_wire::read_envelope(&mut reader).await {
-            Ok(Some(envelope)) => envelope,
-            Ok(None) => return Ok(()),
-            Err(err) => {
-                eprintln!("horizon-sessiond: malformed message, closing connection: {err}");
-                return Ok(());
-            }
-        };
-
-        if envelope.kind != SESSION_CONTROL_KIND {
-            eprintln!("horizon-sessiond: domain message received before hello, ignoring");
-            continue;
+    let (read_half, write_half) = stream.into_split();
+    let connect = remoc::Connect::io::<_, _, SessionHubClient<WireCodec>, (), WireCodec>(
+        remoc::Cfg::default(),
+        read_half,
+        write_half,
+    );
+    let (conn, mut base_tx, _base_rx) = match tokio::time::timeout(CONNECT_TIMEOUT, connect).await {
+        Ok(Ok(connected)) => connected,
+        Ok(Err(error)) => {
+            eprintln!(
+                "horizon-sessiond: dropping a connection that failed the remoc handshake \
+                 (a pre-v10 JSONL client, or not a Horizon client at all): {error}"
+            );
+            return Ok(());
         }
-        let control: SessionControl = match envelope.decode_payload(SESSION_CONTROL_KIND) {
-            Ok(control) => control,
-            Err(error) => {
-                eprintln!("horizon-sessiond: malformed shared control before hello: {error}");
-                return Ok(());
-            }
-        };
-
-        match control {
-            SessionControl::Hello(hello) => {
-                if hello.contract_version != CONTRACT_VERSION {
-                    let reason = format!(
-                        "contract version mismatch: horizon-sessiond speaks v{CONTRACT_VERSION}, \
-                         client sent v{} -- reload required",
-                        hello.contract_version
-                    );
-                    eprintln!("horizon-sessiond: rejecting handshake: {reason}");
-                    let rejected =
-                        RawEnvelope::session_control(&SessionControl::HandshakeRejected(reason))?;
-                    let _ = session_wire::write_envelope(&mut writer, &rejected).await;
-                    // Keep the connection open: a mismatched client's next
-                    // message is expected to be `Drain` (see this
-                    // function's doc comment), handled by this same loop.
-                    continue;
-                }
-                session_wire::write_envelope(&mut writer, &our_hello_envelope()?).await?;
-                break;
-            }
-            SessionControl::Ping => {
-                let pong = RawEnvelope::session_control(&SessionControl::Pong)?;
-                session_wire::write_envelope(&mut writer, &pong).await?;
-            }
-            SessionControl::Drain => {
-                let _ = writer.flush().await;
-                terminals.shutdown_all();
-                flush_event_log_before_exit(state.writer());
-                eprintln!("horizon-sessiond: drained, exiting");
-                std::process::exit(0);
-            }
-            other => eprintln!("horizon-sessiond: {other:?} received before hello, ignoring"),
+        Err(_elapsed) => {
+            eprintln!(
+                "horizon-sessiond: dropping a connection with no remoc handshake within \
+                 {CONNECT_TIMEOUT:?} (a pre-v10 JSONL client, or not a Horizon client at all)"
+            );
+            return Ok(());
         }
+    };
+    // The chmux multiplexer must be polled for the connection to make any
+    // progress (adoption condition 3) -- spawned, so it runs alongside the
+    // serve loop below.
+    let mut conn_task = tokio::spawn(conn);
+
+    let connection = Connection::new(state);
+    let hub = Hub::new(connection.clone(), terminals.clone(), BINARY_ID);
+    let (server, mut client) = SessionHubServerShared::<_, WireCodec>::new(Arc::new(hub), 16);
+    // Effective placement of the rtc size caps (see the `RTC_MAX_*`
+    // constants): the request cap must be set on the client *before* it
+    // is transported -- a transported mpsc sender carries its creator's
+    // cap as the daemon-side receive limit, so an oversized request is
+    // dropped per-item here and the call fails client-side when its
+    // reply channel closes. The reply cap travels per-request from the
+    // client's own setting; this one seeds the default.
+    client.set_max_request_size(RTC_MAX_REQUEST_BYTES);
+    client.set_max_reply_size(RTC_MAX_REPLY_BYTES);
+    if base_tx.send(client).await.is_err() {
+        conn_task.abort();
+        return Ok(());
     }
 
-    run_session_hosting_loop(reader, writer, state, terminals).await
-}
-
-/// The post-handshake phase: a writer task owns the socket's write half and
-/// drains an outgoing-envelope queue (fed by both this loop's own replies
-/// and every hosted session's thread -- see [`Connection`]), while this
-/// function keeps reading incoming envelopes and routing them. Splitting
-/// read and write this way is what lets a session push events (or a
-/// `host_tool_request`) to Horizon asynchronously, not just in response to
-/// something Horizon just sent.
-///
-/// The writer task is deliberately never awaited to completion here: on a
-/// normal disconnect, session threads spawned by [`Connection`] may still
-/// hold `outgoing` senders (sessions outlive the connection that created
-/// them within this process -- see `session`'s module doc), so the channel
-/// would never close and awaiting the writer task would hang this function
-/// forever, wedging the accept loop against ever serving a next connection.
-/// Letting it run detached means it simply keeps trying to write to a dead
-/// socket until its next send fails, at which point it exits on its own.
-async fn run_session_hosting_loop(
-    mut reader: BufReader<OwnedReadHalf>,
-    mut writer: OwnedWriteHalf,
-    state: Arc<SessiondState>,
-    terminals: TerminalHost,
-) -> anyhow::Result<()> {
-    let (raw_outgoing_tx, mut raw_outgoing_rx) =
-        tokio::sync::mpsc::unbounded_channel::<RawEnvelope>();
-    let (agent_outgoing_tx, mut agent_outgoing_rx) =
-        tokio::sync::mpsc::unbounded_channel::<Envelope>();
-    let connection = Connection::new(agent_outgoing_tx.clone(), state);
-    terminals.connect(raw_outgoing_tx.clone());
-
-    let raw_agent_tx = raw_outgoing_tx.clone();
-    tokio::spawn(async move {
-        while let Some(envelope) = agent_outgoing_rx.recv().await {
-            if let Ok(raw) = agent_wire::encode_envelope(&envelope) {
-                if raw_agent_tx.send(raw).is_err() {
-                    break;
-                }
+    // `serve` ends when the client (and every clone of it) is gone --
+    // dropped by the UI, or severed with the connection. Racing the mux
+    // task covers the pathological case where the mux dies without the
+    // serve loop noticing.
+    tokio::select! {
+        served = server.serve(true) => {
+            if let Err(error) = served {
+                eprintln!("horizon-sessiond: hub serve error: {error}");
             }
         }
-    });
-
-    tokio::spawn(async move {
-        while let Some(envelope) = raw_outgoing_rx.recv().await {
-            if session_wire::write_envelope(&mut writer, &envelope)
-                .await
-                .is_err()
-            {
-                break;
-            }
-        }
-    });
-
-    // Step-3 trim, restored: report this process's own startup event-log
-    // corruption diagnostics once for this connection, without blocking
-    // this function's own read loop (or `hello`, answered before this
-    // function ever runs) on the same readiness gate `SessionList`/
-    // `SessionLoad` already use -- see `SessiondState::skipped_lines_summary`'s
-    // doc comment and `docs/agent-runtime-split-design.md`'s step 3 notes.
-    {
-        let connection = connection.clone();
-        let outgoing_tx = agent_outgoing_tx.clone();
-        tokio::spawn(async move {
-            connection.wait_until_resume_ready().await;
-            if let Some(summary) = connection.skipped_lines_summary() {
-                let _ = outgoing_tx.send(Envelope::control(Control::SkippedLines(summary)));
-            }
-        });
+        _ = &mut conn_task => {}
     }
 
-    loop {
-        let raw = match session_wire::read_envelope(&mut reader).await {
-            Ok(Some(envelope)) => envelope,
-            Ok(None) => {
-                connection.disconnect();
-                terminals.disconnect();
-                return Ok(());
-            }
-            Err(err) => {
-                eprintln!("horizon-sessiond: malformed message, closing connection: {err}");
-                connection.disconnect();
-                terminals.disconnect();
-                return Ok(());
-            }
-        };
-
-        if raw.kind == SESSION_CONTROL_KIND {
-            match raw.decode_payload::<SessionControl>(SESSION_CONTROL_KIND) {
-                Ok(SessionControl::Ping) => {
-                    if let Ok(pong) = RawEnvelope::session_control(&SessionControl::Pong) {
-                        let _ = raw_outgoing_tx.send(pong);
-                    }
-                }
-                Ok(SessionControl::Drain) => {
-                    terminals.shutdown_all();
-                    flush_event_log_before_exit(connection.writer());
-                    eprintln!("horizon-sessiond: drained, exiting");
-                    std::process::exit(0);
-                }
-                Ok(other) => {
-                    eprintln!("horizon-sessiond: unexpected shared control: {other:?}");
-                }
-                Err(error) => eprintln!("horizon-sessiond: malformed shared control: {error}"),
-            }
-            continue;
-        }
-
-        if raw.kind == TERMINAL_CONTROL_KIND {
-            match decode_terminal_control(&raw) {
-                Ok(control @ TerminalControl::List { .. }) if raw.session_id.is_none() => {
-                    terminals.handle_control(None, control);
-                }
-                Ok(control @ (TerminalControl::Create(_) | TerminalControl::Attach { .. }))
-                    if raw.session_id.is_some() =>
-                {
-                    terminals.handle_control(raw.session_id, control);
-                }
-                Ok(control) => {
-                    eprintln!(
-                        "horizon-sessiond: terminal control has invalid scope or direction: \
-                         {control:?}"
-                    );
-                }
-                Err(error) => eprintln!("horizon-sessiond: malformed terminal control: {error}"),
-            }
-            continue;
-        }
-
-        if raw.kind == TERMINAL_COMMAND_KIND {
-            let Some(session_id) = raw.session_id else {
-                eprintln!("horizon-sessiond: terminal command missing session_id, ignoring");
-                continue;
-            };
-            match decode_terminal_command(&raw) {
-                Ok(command) => terminals.handle_command(session_id, command),
-                Err(error) => eprintln!("horizon-sessiond: malformed terminal command: {error}"),
-            }
-            continue;
-        }
-
-        let envelope = match agent_wire::decode_envelope(raw) {
-            Ok(envelope) => envelope,
-            Err(error) => {
-                eprintln!("horizon-sessiond: unknown or malformed domain message: {error}");
-                continue;
-            }
-        };
-
-        match envelope.body {
-            EnvelopeBody::Control(Control::SessionList) => {
-                // Bind-first fix: block until `resume_persisted_sessions`
-                // has finished, so a client that connects while it's still
-                // running doesn't see an incomplete (or empty) session
-                // list -- see the module doc and `SessiondState::
-                // wait_until_resume_ready`.
-                connection.wait_until_resume_ready().await;
-                let _ = agent_outgoing_tx.send(Envelope::control(Control::SessionListResult(
-                    connection.session_list(),
-                )));
-            }
-            EnvelopeBody::Control(Control::SessionNew(new)) => {
-                // Same readiness gate as `SessionList`/`SessionLoad` below,
-                // for a different reason: `run_session`'s persistence choice
-                // (`state.writer()` -- `LiveState::with_event_log_and_history`
-                // vs. `with_disabled_persistence`) is decided once, at spawn
-                // time. A `session_new` handled before `spawn_resume_task`
-                // finishes calling `SessiondState::set_writer` would silently
-                // spawn with persistence disabled for that session's entire
-                // lifetime -- unnoticeable over the wire (folding/forwarding
-                // happens either way) but permanently invisible to a later
-                // `kill -9`/respawn or `session_load`. This race was narrow
-                // enough to never trip in practice before `open_persistence`
-                // grew an unconditional DuckDB rebuild ahead of `set_writer`
-                // (the projection has no "disabled" state to opt into any
-                // more); a client issuing `session_new` immediately after
-                // connecting can now easily win it.
-                connection.wait_until_resume_ready().await;
-                connection.handle_session_new(new);
-            }
-            EnvelopeBody::Control(Control::SessionLoad(load)) => {
-                // Same readiness gate as `SessionList` above: a resumed
-                // session's thread may not exist yet while resume is still
-                // in flight, which would otherwise make this replay as
-                // "unknown session" (empty) instead of waiting for it.
-                connection.wait_until_resume_ready().await;
-                // Step 4's "v1 bootstrap": re-emit the fold-relevant
-                // committed events for this session so the (re)connecting
-                // client can rebuild its frame. Awaited inline (not spawned
-                // detached) so these arrive before whatever the client sends
-                // next for this session, keeping replay ordering simple.
-                let events = connection.replay_events(load.session_id).await;
-                for event in events {
-                    let _ = agent_outgoing_tx.send(Envelope::event(load.session_id, event));
-                }
-                // Re-announces the session's resolved model to this
-                // (re)attaching client -- it was already sent once, live, at
-                // spawn time (`spawn_session_thread`), which this client
-                // likely missed (it wasn't connected yet, e.g. a resumed
-                // session at daemon startup, or a later reconnect). See
-                // `docs/agent-output-ui-amendment.md`'s dated model-chip
-                // addendum.
-                if let Some(model) = connection.session_model(load.session_id) {
-                    let _ = agent_outgoing_tx.send(Envelope {
-                        v: CONTRACT_VERSION,
-                        session_id: Some(load.session_id),
-                        body: EnvelopeBody::Control(Control::SessionModel(model)),
-                    });
-                }
-            }
-            EnvelopeBody::Control(Control::HostToolResponse(response)) => {
-                connection.handle_host_tool_response(response);
-            }
-            EnvelopeBody::Command(command) => match envelope.session_id {
-                Some(session_id) => connection.route_command(session_id, command),
-                None => {
-                    eprintln!("horizon-sessiond: command envelope missing session_id, ignoring")
-                }
-            },
-            other => {
-                eprintln!("horizon-sessiond: unexpected message during session hosting: {other:?}");
-            }
-        }
-    }
-}
-
-/// Blocks until every event-log record enqueued so far has actually been
-/// written and flushed to disk (see [`WriterHandle::flush`]'s doc comment),
-/// then returns -- called right before `std::process::exit(0)` on a
-/// `SessionControl::Drain`. An `Appender::append_provider_events` call only
-/// enqueues onto the writer's own background thread (see `WriterHandle::
-/// open`'s "Ordering guarantee"); forwarding the resulting event to a
-/// connected client happens after that same enqueue, not after it becomes
-/// durable. Without this, a client observing a session's latest event over
-/// the wire and immediately draining could still race the writer's thread
-/// and lose it, or lose everything not yet drained -- indistinguishable
-/// from the `kill -9` case this binary has no signal handler for, except a
-/// graceful drain has every opportunity to just wait instead. A blocking
-/// call is safe here despite running on an async task: this is the last
-/// thing that happens before the process exits, so there is nothing else
-/// for the runtime to make progress on.
-fn flush_event_log_before_exit(writer: Option<WriterHandle>) {
-    if let Some(writer) = writer {
-        if let Err(error) = writer.flush() {
-            eprintln!("horizon-sessiond: failed to flush event log before draining: {error}");
-        }
-    }
-}
-
-fn our_hello_envelope() -> Result<RawEnvelope, session_wire::WireError> {
-    RawEnvelope::session_control(&SessionControl::Hello(Hello {
-        contract_version: CONTRACT_VERSION,
-        binary_id: BINARY_ID.to_string(),
-    }))
+    // Post-connection cleanup: sessions keep running (they are scoped to
+    // the process, not the connection), but their bridges to this
+    // connection are dead.
+    connection.disconnect();
+    terminals.clear_subscribers();
+    conn_task.abort();
+    Ok(())
 }
 
 /// Binds `path`, handling the stale-socket case: if a socket file already

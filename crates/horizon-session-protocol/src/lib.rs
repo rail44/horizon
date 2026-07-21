@@ -1,22 +1,161 @@
-//! Transport-neutral JSONL framing shared by Horizon's session-daemon
-//! domains. Agent and terminal commands remain sister vocabularies in their
-//! own crates; this crate owns only the envelope, handshake shape, and stream
-//! framing they share.
+//! The session-daemon wire, v10 onwards: one `#[rtc::remote]` hub trait
+//! ([`SessionHub`]) over a remoc connection, replacing the JSONL envelope
+//! protocol this crate used to own (`Envelope`, `kind` dispatch,
+//! `request_id` correlation, line framing — all deleted with the cutover;
+//! see `docs/remoc-adoption-design.md` §2's mapping table). The agent and
+//! terminal vocabularies remain sister crates that never reference each
+//! other; this crate is the one place that names both — the "thin shared
+//! layer" `docs/session-daemon-design.md` decision 3 allows — and the
+//! dependency direction is inverted accordingly (this crate depends on the
+//! vocabulary crates, never the reverse).
 //!
-//! One kind is special: `session_control` is the version-stable shared
-//! vocabulary. Domain payloads are only decoded after the version handshake
-//! succeeds, but the handshake itself (and contract-mismatch recovery --
-//! telling a stale daemon to [`SessionControl::Drain`] so it can be
-//! restarted at the right version) must work *across* a version skew, so
-//! [`read_envelope`] exempts `session_control` envelopes from the exact
-//! `v` check. In exchange, [`SessionControl`]'s existing variants may never
-//! change shape or meaning -- extend it additively only.
+//! Adoption conditions (binding, §1 of the design doc), as implemented
+//! here:
+//!
+//! 1. **The codec is pinned, never defaulted**: every channel field and
+//!    every server/client construction names [`WireCodec`] (Postbag, Full
+//!    configuration); the workspace disables remoc's `default-codec-*`
+//!    features so `codec::Default` fails to compile if anything names it.
+//!    Postbag is not self-describing, so the vocabularies' free-form JSON
+//!    payloads (tool inputs/outputs) travel as
+//!    `horizon_agent::contract::JsonValue` — their JSON text in one
+//!    string — rather than `serde_json::Value`, whose `Deserialize`
+//!    needs `deserialize_any`.
+//! 2. **Every wire enum carries a `#[serde(other)] Unknown` catch-all**,
+//!    and receive loops treat a non-final deserialization error as "skip
+//!    this item", never "tear down the channel".
+//! 3. **`Connect::io` is polled on both ends concurrently** — in-process
+//!    harnesses hosting both endpoints must `join!` the two handshakes
+//!    (sequentially awaiting one side deadlocks and presents as a 60 s
+//!    `ChMux(Timeout)`).
 
+use horizon_agent::contract::{Command, SessionId};
+use horizon_agent::wire::{
+    AgentWireEvent, HostToolRequest, HostToolResponse, SessionNew, SessionSummary,
+};
+use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
+use remoc::prelude::*;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 use uuid::Uuid;
 
-/// The shared session-daemon envelope and handshake version.
+pub mod legacy;
+pub mod schema_check;
+
+/// The one wire codec, named everywhere a codec parameter appears
+/// (adoption condition 1): Postbag in its Full configuration — the exact
+/// configuration the spike's perf/skew experiments validated
+/// (`docs/research/remoc-spike-2026-07-20.md` §§1–2). Never
+/// `remoc::codec::Default`: the workspace builds remoc with default
+/// features off, so the default-codec alias deliberately does not resolve
+/// to a usable codec and a remoc upgrade that changes its default cannot
+/// silently fork the wire.
+///
+/// Postbag is **not self-describing** (`deserialize_any` is rejected), so
+/// the vocabularies' free-form JSON payloads — tool call inputs/outputs —
+/// cross this wire as `horizon_agent::contract::JsonValue` (their JSON
+/// text in one string) instead of `serde_json::Value`; see that type's
+/// doc for the format-aware encoding that keeps the event log's on-disk
+/// JSONL format byte-identical.
+pub type WireCodec = remoc::codec::Postbag;
+
+// ---------------------------------------------------------------------------
+// Per-purpose wire size caps.
+//
+// remoc's own default (`rch::DEFAULT_MAX_ITEM_SIZE`, 16 MiB) is one
+// blanket limit for everything; these caps size each channel class to what
+// it actually carries, so a runaway (or corrupted) item fails as a
+// per-item error instead of buffering many megabytes. Enforcement follows
+// rch's transport model: the *creator* of a channel caps both directions —
+// a receiver's cap is its `MAX_ITEM_SIZE` const parameter (see
+// [`CappedReceiver`]), and a sender handed to the peer carries the cap the
+// creator set on it before the handover. Oversized/unserializable items
+// fail item-specifically (`MaxItemSizeExceeded`); the receive loops treat
+// that as a skip, never fatal to the channel.
+// ---------------------------------------------------------------------------
+
+/// Terminal frame/update channel items (`TerminalUpdate`). A full 200x50
+/// fully-styled snapshot measured ~50 KB under Postbag
+/// (`docs/research/remoc-spike-2026-07-20.md` §1a: 178,743 B under the
+/// *worst-case* all-rows-styled synthetic frame); 4 MiB leaves an order
+/// of magnitude of headroom for pathological scrollback/styling without
+/// admitting absurd buffers.
+pub const FRAME_MAX_ITEM_BYTES: usize = 4 * 1024 * 1024;
+
+/// Command-channel items (`TerminalCommand`, agent `Command`) and the
+/// JSON-payload-bearing tool exchanges (`AgentWireEvent`,
+/// `HostToolRequest`/`HostToolResponse`). Sized at 1 MiB rather than a
+/// tighter control-plane cap because these legitimately carry user-scaled
+/// data: a terminal `Paste`/`Input` is whatever the user pasted, and tool
+/// inputs/outputs (`JsonValue`) carry file contents.
+pub const COMMAND_MAX_ITEM_BYTES: usize = 1024 * 1024;
+
+/// See [`COMMAND_MAX_ITEM_BYTES`] — the tool-I/O alias, kept separate so
+/// the two classes can diverge without a wire-wide sweep.
+pub const TOOL_IO_MAX_ITEM_BYTES: usize = 1024 * 1024;
+
+/// Small control-plane strings (the `skipped_lines` startup diagnostic).
+pub const CONTROL_MAX_ITEM_BYTES: usize = 64 * 1024;
+
+/// One rtc request (`hello`, `create_terminal(spec)`, `new_agent(new)`,
+/// ...). Requests are small structured arguments — specs, ids, version
+/// ranges — never bulk data, so exceeding this is always a bug, and the
+/// consequence is deliberately blunt: the daemon drops the oversized
+/// request per-item, the call fails when its reply channel closes, and —
+/// because rch latches the remote-send error onto the transported
+/// request channel — the connection then tears down (measured; pinned by
+/// `an_oversized_rtc_request_fails_the_op_and_stops_the_runtime`). Bulk
+/// data has its own channels with their own caps.
+pub const RTC_MAX_REQUEST_BYTES: usize = 64 * 1024;
+
+/// One rtc reply (`HubHello`, attachments, `list_*` vectors). Larger than
+/// requests because `list_agents`/`list_terminals` scale with live
+/// session count.
+pub const RTC_MAX_REPLY_BYTES: usize = 1024 * 1024;
+
+/// A receiver whose per-item size cap is part of its type: rch enforces
+/// the receive-direction cap through the receiver's `MAX_ITEM_SIZE`
+/// const parameter (carried with the receiver when it is transported), so
+/// a capped channel field must *name* its cap — `channel()` +
+/// [`remoc::rch::mpsc::Receiver::set_max_item_size`] produce one. The
+/// send-direction caps, by contrast, are runtime state on the sender set
+/// by its creator *before* handing it over (a transported sender carries
+/// the creator's cap as the creator-side receive limit).
+pub type CappedReceiver<T, const MAX_ITEM_SIZE: usize> =
+    rch::mpsc::Receiver<T, WireCodec, { rch::DEFAULT_BUFFER }, MAX_ITEM_SIZE>;
+
+/// A rate-limited log for the receive/send loops' skip paths (adoption
+/// condition 2: a poisoned item is skipped, never fatal): logs the first
+/// occurrence, then only at powers of two and every 1000th, with the
+/// running count, so a peer stuck emitting undecodable items cannot
+/// flood stderr at channel throughput.
+pub struct DecodeSkipLog {
+    label: &'static str,
+    skipped: u64,
+}
+
+impl DecodeSkipLog {
+    pub const fn new(label: &'static str) -> Self {
+        Self { label, skipped: 0 }
+    }
+
+    /// Records one skipped item, logging at 1, 10, 100, 1000, ...
+    pub fn note(&mut self, error: &dyn std::fmt::Display) {
+        self.skipped += 1;
+        if self.skipped.is_power_of_two() || self.skipped.is_multiple_of(1000) {
+            eprintln!(
+                "{}: skipping an undecodable item (#{} so far): {error}",
+                self.label, self.skipped
+            );
+        }
+    }
+
+    pub fn skipped(&self) -> u64 {
+        self.skipped
+    }
+}
+
+/// The session-daemon protocol version this build speaks.
 ///
 /// Version 4 adds correlated terminal discovery and attach controls; attach
 /// changed shape, so older peers cannot safely decode the terminal vocabulary.
@@ -63,231 +202,404 @@ use uuid::Uuid;
 /// rebuild plus its share of every snapshot's wire weight; the derivation
 /// survives as the debug/test helper `TerminalFrame::text()`. Removing a
 /// field changes the wire shape, so a stale peer must fail the handshake.
-pub const SESSION_PROTOCOL_VERSION: u32 = 9;
+///
+/// Version 10: **the remoc cutover** (`docs/remoc-adoption-design.md`
+/// §§2–3, 6). The wire is no longer JSONL envelopes at all: v10's shape is
+/// the [`SessionHub`] rtc trait plus Postbag-encoded vocabularies over one
+/// remoc connection, with [`SessionHub::hello`] as the first call. The
+/// wire-enum catch-alls also change encoding with the codec: the JSONL
+/// era's trailing `#[serde(untagged)] Unknown(UnknownPayload)` variants
+/// relied on serde's `deserialize_any` buffering, which Postbag rejects
+/// outright (`DeserializeAnyUnsupported` — even *known* variants stop
+/// decoding), so every wire enum now carries the spike-validated
+/// `#[serde(other)] Unknown` unit variant instead. A v10 peer cannot talk
+/// to a v≤9 JSONL peer at all; that transition is detected by a bounded
+/// connect timeout and recovered by the [`legacy`] drain prober, not
+/// negotiated. From here on the version bumps only on a deliberate
+/// semantic break: additive evolution (new `#[serde(default)]` fields,
+/// new `Unknown`-guarded variants, new hub methods) ships with no version
+/// event, and [`SessionHub::hello`]'s `[min_supported, current]` range
+/// negotiation gates *behavior*, not decodability.
+pub const SESSION_PROTOCOL_VERSION: u32 = 10;
 
-pub const SESSION_CONTROL_KIND: &str = "session_control";
+/// The oldest protocol version this build is still willing to negotiate
+/// down to in [`SessionHub::hello`] — the low end of the advertised
+/// `[min_supported, current]` range. Rises only when carrying
+/// compatibility code for ancient peers stops being worth it
+/// (`docs/remoc-adoption-design.md` §3). v10 is the first remoc version,
+/// so there is nothing older to support yet.
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 10;
 
-/// The version-stable shared vocabulary (see the crate doc): decodable
-/// regardless of the envelope's `v`, because the handshake and
-/// contract-mismatch recovery are exactly the conversations that happen
-/// *between* versions. Existing variants must never change shape or
-/// meaning; extend additively only, and remember an older peer treats an
-/// unknown variant as malformed.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionControl {
-    Hello(Hello),
-    HandshakeRejected(String),
-    Ping,
-    Pong,
-    Drain,
+/// An inclusive protocol-version range one peer supports, as exchanged in
+/// [`SessionHub::hello`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct VersionRange {
+    pub min_supported: u32,
+    pub current: u32,
 }
 
-/// A domain-neutral session-daemon envelope. `kind` selects a sister
-/// vocabulary; `payload` is decoded by that domain only after the shared
-/// version check succeeds.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Envelope {
-    pub v: u32,
-    #[serde(default)]
-    pub session_id: Option<Uuid>,
-    pub kind: String,
-    pub payload: serde_json::Value,
-}
-
-impl Envelope {
-    pub fn from_typed<T: Serialize>(
-        kind: &str,
-        session_id: Option<Uuid>,
-        payload: &T,
-    ) -> Result<Self, WireError> {
-        Ok(Self {
-            v: SESSION_PROTOCOL_VERSION,
-            session_id,
-            kind: kind.to_string(),
-            payload: serde_json::to_value(payload)?,
-        })
-    }
-
-    pub fn decode_payload<T>(&self, expected_kind: &str) -> Result<T, WireError>
-    where
-        T: serde::de::DeserializeOwned,
-    {
-        if self.kind != expected_kind {
-            return Err(WireError::UnexpectedKind {
-                expected: expected_kind.to_string(),
-                found: self.kind.clone(),
-            });
+impl VersionRange {
+    /// The range this build advertises.
+    pub fn ours() -> Self {
+        Self {
+            min_supported: MIN_SUPPORTED_PROTOCOL_VERSION,
+            current: SESSION_PROTOCOL_VERSION,
         }
-        Ok(serde_json::from_value(self.payload.clone())?)
     }
 
-    pub fn session_control(control: &SessionControl) -> Result<Self, WireError> {
-        Self::from_typed(SESSION_CONTROL_KIND, None, control)
-    }
-
-    /// Same as [`Self::session_control`], but stamped with a *peer's*
-    /// envelope version instead of this build's own. Contract-mismatch
-    /// recovery needs this: `session_control` is version-stable (see the
-    /// crate doc), but a daemon built before the [`read_envelope`]
-    /// exemption landed (v8 and earlier) rejects any envelope whose `v`
-    /// differs from its own before ever looking at `kind` -- so a `Drain`
-    /// aimed at a stale daemon must travel at *that daemon's* version to be
-    /// decoded at all.
-    pub fn session_control_at(control: &SessionControl, v: u32) -> Result<Self, WireError> {
-        Ok(Self {
-            v,
-            session_id: None,
-            kind: SESSION_CONTROL_KIND.to_string(),
-            payload: serde_json::to_value(control)?,
-        })
+    /// The highest version both ranges support, if the ranges overlap.
+    pub fn negotiate(self, other: Self) -> Option<u32> {
+        let low = self.min_supported.max(other.min_supported);
+        let high = self.current.min(other.current);
+        (low <= high).then_some(high)
     }
 }
 
-/// Sent by either peer during the session-daemon handshake.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Hello {
-    pub contract_version: u32,
+impl std::fmt::Display for VersionRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[v{}, v{}]", self.min_supported, self.current)
+    }
+}
+
+/// The client half of the version negotiation, carried by the first rtc
+/// call on every connection ([`SessionHub::hello`]).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ClientHello {
+    pub supported: VersionRange,
     pub binary_id: String,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum WireError {
-    #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("malformed envelope json: {0}")]
-    Json(#[from] serde_json::Error),
-    #[error("unknown envelope kind: {0:?}")]
-    UnknownKind(String),
-    #[error("unexpected envelope kind: expected {expected:?}, found {found:?}")]
-    UnexpectedKind { expected: String, found: String },
-    #[error("torn line: connection closed mid-message")]
-    TornLine,
-    #[error("envelope wire version mismatch: this build speaks v{expected}, received v{found}")]
-    VersionMismatch { expected: u32, found: u32 },
+impl ClientHello {
+    pub fn new(binary_id: impl Into<String>) -> Self {
+        Self {
+            supported: VersionRange::ours(),
+            binary_id: binary_id.into(),
+        }
+    }
 }
 
-pub async fn write_envelope<W>(writer: &mut W, envelope: &Envelope) -> Result<(), WireError>
-where
-    W: AsyncWrite + Unpin,
-{
-    let mut line = serde_json::to_string(envelope)?;
-    line.push('\n');
-    writer.write_all(line.as_bytes()).await?;
-    writer.flush().await?;
-    Ok(())
+/// The daemon's `hello` reply: the negotiated version plus the
+/// connection-global channels (`docs/remoc-adoption-design.md` §2 — what
+/// used to be connection-global envelope kinds now rides channels handed
+/// over here; everything session-scoped rides the per-attachment channels
+/// instead).
+#[derive(Serialize, Deserialize, JsonSchema)]
+pub struct HubHello {
+    /// The highest mutually supported version — the version this
+    /// connection's *behavior* may rely on (§3: gates behavior, not
+    /// decodability).
+    pub negotiated: u32,
+    pub binary_id: String,
+    /// Daemon → client: a hosted session asking the client to run a
+    /// host-coupled tool (e.g. `workspace.snapshot`). Replaces the
+    /// connection-global `host_tool_request` envelopes.
+    #[schemars(schema_with = "channel_schema::<HostToolRequest>")]
+    pub host_tools: CappedReceiver<HostToolRequest, TOOL_IO_MAX_ITEM_BYTES>,
+    /// Client → daemon: the answers to `host_tools` requests, correlated by
+    /// `request_id` exactly as before (the one correlation map the cutover
+    /// keeps: the exchange is genuinely asynchronous on the daemon side,
+    /// where a session thread blocks on the matching response).
+    #[schemars(schema_with = "channel_schema::<HostToolResponse>")]
+    pub host_tool_responses: rch::mpsc::Sender<HostToolResponse, WireCodec>,
+    /// Daemon → client: the daemon's startup event-log corruption summary,
+    /// sent at most once per connection, after its resume finishes.
+    /// Replaces the `SkippedLines` control envelope.
+    #[schemars(schema_with = "channel_schema::<String>")]
+    pub skipped_lines: CappedReceiver<String, CONTROL_MAX_ITEM_BYTES>,
 }
 
-pub async fn read_envelope<R>(reader: &mut R) -> Result<Option<Envelope>, WireError>
-where
-    R: AsyncBufRead + Unpin,
-{
-    let mut line = String::new();
-    let bytes_read = reader.read_line(&mut line).await?;
-    if bytes_read == 0 {
-        return Ok(None);
-    }
-    if !line.ends_with('\n') {
-        return Err(WireError::TornLine);
-    }
+/// The schema stand-in for a remoc channel half: on the wire it is a chmux
+/// port reference, not data, so the artifact documents it as an opaque
+/// marker. What flows *through* each channel is documented separately by
+/// the artifact's `channels` section (see
+/// `crates/horizon-sessiond/tests/wire_schema.rs`).
+fn channel_schema<T: JsonSchema>(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let payload = generator.subschema_for::<T>();
+    schemars::json_schema!({
+        "$comment": "remoc rch channel half: a chmux port reference on the wire; the \
+                     x-channel-payload schema is what flows through it",
+        "x-channel-payload": payload,
+    })
+}
 
-    let envelope: Envelope = serde_json::from_str(line.trim_end_matches(['\n', '\r']))?;
-    // `session_control` is the version-stable shared vocabulary (see the
-    // crate doc): a foreign-versioned peer must still be able to say Hello
-    // (and be told why it's rejected), and a mismatch-recovering client
-    // must still be able to ask a stale daemon to Drain. Every other kind
-    // is a domain vocabulary that only decodes safely at an exact version
-    // match.
-    if envelope.v != SESSION_PROTOCOL_VERSION && envelope.kind != SESSION_CONTROL_KIND {
-        return Err(WireError::VersionMismatch {
-            expected: SESSION_PROTOCOL_VERSION,
-            found: envelope.v,
-        });
+/// What [`SessionHub::create_terminal`]/[`SessionHub::attach_terminal`]
+/// hand back: the session's live channel pair. Frame delivery semantics
+/// are deliberately unchanged in v10 (`docs/remoc-adoption-design.md`
+/// §6 step 2): `updates` carries the same `Snapshot`/`FrameDiff`/…
+/// vocabulary the JSONL wire carried, verbatim, over one mpsc channel —
+/// the watch-of-full-frames swap (§5 Option A) is the next, separately
+/// reviewed step.
+#[derive(Serialize, Deserialize, JsonSchema)]
+pub struct TerminalAttachment {
+    #[schemars(schema_with = "channel_schema::<TerminalUpdate>")]
+    pub updates: CappedReceiver<TerminalUpdate, FRAME_MAX_ITEM_BYTES>,
+    #[schemars(schema_with = "channel_schema::<TerminalCommand>")]
+    pub commands: rch::mpsc::Sender<TerminalCommand, WireCodec>,
+}
+
+/// What [`SessionHub::new_agent`]/[`SessionHub::attach_agent`] hand back.
+/// `events` carries both the session's provider events and the
+/// session-scoped announcements that used to be their own control
+/// envelopes (`SessionModel`, `ToolCallProgress`,
+/// `WorkspaceRootResolved`) — see
+/// [`horizon_agent::wire::AgentWireEvent`].
+#[derive(Serialize, Deserialize, JsonSchema)]
+pub struct AgentAttachment {
+    #[schemars(schema_with = "channel_schema::<AgentWireEvent>")]
+    pub events: CappedReceiver<AgentWireEvent, TOOL_IO_MAX_ITEM_BYTES>,
+    #[schemars(schema_with = "channel_schema::<Command>")]
+    pub commands: rch::mpsc::Sender<Command, WireCodec>,
+}
+
+/// The hub's error vocabulary. One enum for every method: domain errors
+/// and transport errors share it, per remoc's own rtc pattern (the
+/// `From<rtc::CallError>` impl is what lets a lost connection surface as
+/// an `Err` from any pending call).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, thiserror::Error)]
+pub enum HubError {
+    /// `hello`: the peers' version ranges do not overlap. Feeds the same
+    /// auto-drain recovery as the JSONL era's `HandshakeRejected`.
+    #[error("session protocol version ranges do not overlap: client {client}, daemon {daemon}")]
+    IncompatibleVersion {
+        client: VersionRange,
+        daemon: VersionRange,
+    },
+    /// `attach_terminal`: no live terminal session with that id.
+    #[error("no live terminal session with that id")]
+    TerminalNotFound,
+    /// `create_terminal`: the PTY spawn itself failed (bad shell,
+    /// permissions, or the bounded spawn retries were exhausted). What the
+    /// JSONL wire reported as a `TerminalUpdate::Error` on the update
+    /// stream is now the create call's own result.
+    #[error("terminal failed to start: {0}")]
+    TerminalSpawnFailed(String),
+    /// Transport failure of the rtc call itself, carried as its rendered
+    /// message (`rtc::CallError` itself is not `Eq`/`JsonSchema`; nothing
+    /// programmatic branches on its inner structure). Constructed
+    /// client-side by the `From<rtc::CallError>` impl below — a server
+    /// never sends it.
+    #[error("hub call failed: {0}")]
+    Call(String),
+    /// Any method other than `hello`/`drain` was called before a
+    /// successful `hello` on this connection. `hello` is contractually the
+    /// first call (§3), and the daemon enforces it rather than trusting
+    /// the client: a rejected or skipped negotiation must not grant access
+    /// to the negotiated-behavior surface. (`drain` stays reachable — it
+    /// is the version-stable recovery path a rejected client legitimately
+    /// uses.) Appended additively for v10.1 of the artifact's history —
+    /// an older client never triggers it (it always hellos first).
+    #[error("hello has not completed on this connection")]
+    HelloRequired,
+    /// Skew catch-all: an error variant from a newer peer. Keep last.
+    #[serde(other)]
+    #[error("unknown hub error from a newer peer")]
+    Unknown,
+}
+
+impl From<rtc::CallError> for HubError {
+    fn from(err: rtc::CallError) -> Self {
+        Self::Call(err.to_string())
     }
-    Ok(Some(envelope))
+}
+
+/// The session hub — the one `#[rtc::remote]` trait that replaces the
+/// envelope protocol (`docs/remoc-adoption-design.md` §2). The daemon
+/// serves it over the unix socket; [`hello`](Self::hello) must be the
+/// first call on every connection. `hello` and
+/// [`drain`](Self::drain) are the version-stable surface (the
+/// conversations that must keep working across future protocol versions,
+/// like the JSONL era's `session_control` kind); everything else may
+/// evolve additively under the §4 skew discipline.
+#[rtc::remote]
+pub trait SessionHub {
+    /// Version negotiation (`docs/remoc-adoption-design.md` §3): the first
+    /// call on every connection. Replaces the exact-match JSONL handshake
+    /// with `[min_supported, current]` range intersection.
+    async fn hello(&self, client: ClientHello) -> Result<HubHello, HubError>;
+
+    // -- terminal domain --
+
+    /// Every live terminal session, sorted by id. Replaces the
+    /// request-id-correlated `TerminalControl::List`/`ListResult` pair.
+    async fn list_terminals(&self) -> Result<Vec<TerminalSummary>, HubError>;
+
+    /// Spawns a PTY for `session_id` and attaches to it. The id is
+    /// caller-chosen (the workspace model owns pane identity), exactly as
+    /// the JSONL `Create` control's envelope `session_id` was.
+    async fn create_terminal(
+        &self,
+        session_id: Uuid,
+        spec: TerminalSpawnSpec,
+    ) -> Result<TerminalAttachment, HubError>;
+
+    /// Attaches to an already-running terminal session. The returned
+    /// attachment's `updates` channel is seeded with a full `Snapshot`
+    /// (the daemon-retained latest frame), which is also the new diff
+    /// baseline — the same attach contract the JSONL wire had.
+    async fn attach_terminal(&self, session_id: Uuid) -> Result<TerminalAttachment, HubError>;
+
+    // -- agent domain --
+
+    /// Every live agent session. Replaces
+    /// `Control::SessionList`/`SessionListResult`.
+    async fn list_agents(&self) -> Result<Vec<SessionSummary>, HubError>;
+
+    /// Spawns a fresh agent session (`Control::SessionNew`) and attaches
+    /// to it.
+    async fn new_agent(&self, new: SessionNew) -> Result<AgentAttachment, HubError>;
+
+    /// Attaches to an existing agent session (`Control::SessionLoad`): the
+    /// returned attachment's `events` channel replays the session's
+    /// committed events first (followed by its resolved model, if any),
+    /// then carries live events. An unknown session id succeeds with an
+    /// empty replay, exactly as `session_load` did.
+    async fn attach_agent(&self, session_id: SessionId) -> Result<AgentAttachment, HubError>;
+
+    // -- lifecycle --
+
+    /// Flush-and-exit, replacing `SessionControl::Drain`: the daemon
+    /// flushes its event log to disk, shuts its terminals down, and
+    /// exits. The call itself typically errors (the process is gone
+    /// before a reply can travel); callers observe completion as the
+    /// socket refusing connections, same as before.
+    async fn drain(&self) -> Result<(), HubError>;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::{AsyncWriteExt, BufReader};
 
-    #[tokio::test]
-    async fn round_trips_a_domain_neutral_envelope() {
-        let expected = Envelope {
-            v: SESSION_PROTOCOL_VERSION,
-            session_id: Some(Uuid::nil()),
-            kind: "agent_control".to_string(),
-            payload: serde_json::json!("ping"),
+    #[test]
+    fn version_ranges_negotiate_to_the_highest_shared_version() {
+        let ours = VersionRange {
+            min_supported: 10,
+            current: 12,
         };
-        let (mut client, server) = tokio::io::duplex(4096);
-        write_envelope(&mut client, &expected).await.unwrap();
-
-        let mut reader = BufReader::new(server);
-        assert_eq!(read_envelope(&mut reader).await.unwrap(), Some(expected));
-    }
-
-    #[tokio::test]
-    async fn rejects_a_torn_line() {
-        let (mut client, server) = tokio::io::duplex(4096);
-        client.write_all(b"{\"v\":3").await.unwrap();
-        client.shutdown().await.unwrap();
-
-        let result = read_envelope(&mut BufReader::new(server)).await;
-        assert!(matches!(result, Err(WireError::TornLine)));
-    }
-
-    #[tokio::test]
-    async fn rejects_a_different_version_before_domain_decoding() {
-        let (mut client, server) = tokio::io::duplex(4096);
-        client
-            .write_all(b"{\"v\":99,\"session_id\":null,\"kind\":\"future\",\"payload\":{}}\n")
-            .await
-            .unwrap();
-
-        let result = read_envelope(&mut BufReader::new(server)).await;
-        assert!(matches!(
-            result,
-            Err(WireError::VersionMismatch {
-                expected: SESSION_PROTOCOL_VERSION,
-                found: 99
-            })
-        ));
-    }
-
-    #[tokio::test]
-    async fn session_control_is_readable_at_a_foreign_version() {
-        let (mut client, server) = tokio::io::duplex(4096);
-        let sent =
-            Envelope::session_control_at(&SessionControl::Drain, SESSION_PROTOCOL_VERSION + 1)
-                .unwrap();
-        write_envelope(&mut client, &sent).await.unwrap();
-
-        let received = read_envelope(&mut BufReader::new(server))
-            .await
-            .unwrap()
-            .expect("a foreign-versioned session_control envelope should be readable");
-        assert_eq!(received.v, SESSION_PROTOCOL_VERSION + 1);
-        assert_eq!(
-            received
-                .decode_payload::<SessionControl>(SESSION_CONTROL_KIND)
-                .unwrap(),
-            SessionControl::Drain
-        );
+        let theirs = VersionRange {
+            min_supported: 11,
+            current: 14,
+        };
+        assert_eq!(ours.negotiate(theirs), Some(12));
+        assert_eq!(theirs.negotiate(ours), Some(12));
     }
 
     #[test]
-    fn typed_helpers_validate_kind_before_decoding() {
-        let envelope = Envelope::session_control(&SessionControl::Ping).unwrap();
+    fn disjoint_version_ranges_do_not_negotiate() {
+        let ours = VersionRange {
+            min_supported: 10,
+            current: 10,
+        };
+        let theirs = VersionRange {
+            min_supported: 11,
+            current: 14,
+        };
+        assert_eq!(ours.negotiate(theirs), None);
+        assert_eq!(theirs.negotiate(ours), None);
+    }
+
+    #[test]
+    fn our_range_negotiates_with_itself_at_the_current_version() {
         assert_eq!(
-            envelope
-                .decode_payload::<SessionControl>(SESSION_CONTROL_KIND)
-                .unwrap(),
-            SessionControl::Ping
+            VersionRange::ours().negotiate(VersionRange::ours()),
+            Some(SESSION_PROTOCOL_VERSION)
         );
-        assert!(matches!(
-            envelope.decode_payload::<SessionControl>("agent_control"),
-            Err(WireError::UnexpectedKind { .. })
-        ));
+    }
+
+    /// The hub *method surface*, snapshotted mechanically from the serde
+    /// shape of the rtc macro's generated request enum (`SessionHubReqRef`
+    /// — every `&self` method becomes one variant whose fields are the
+    /// method's arguments). The artifact's `hub` section is hand-written
+    /// prose; this test is the machine check behind it: renaming a
+    /// method or an argument changes these serde error strings and goes
+    /// red, so the artifact cannot silently drift from the real trait.
+    #[test]
+    fn hub_request_enum_matches_the_documented_method_surface() {
+        // Variant list = method list, from serde's unknown-variant error.
+        let variants =
+            match serde_json::from_str::<SessionHubReqRef<WireCodec>>("{\"__bogus\":null}") {
+                Ok(_) => panic!("a bogus variant must fail"),
+                Err(error) => error.to_string(),
+            };
+        assert_eq!(
+            variants,
+            "unknown variant `__bogus`, expected one of `Hello`, `ListTerminals`, \
+             `CreateTerminal`, `AttachTerminal`, `ListAgents`, `NewAgent`, `AttachAgent`, \
+             `Drain` at line 1 column 10",
+        );
+
+        // Argument names per method, from serde's missing-field errors.
+        // The macro declares its own reply channel (`__reply_tx`) as the
+        // variant's first field, so the probe satisfies it with the
+        // "closed sender" transported shape (`port: null` needs no
+        // connection context) — the next missing field serde reports is
+        // then the method's first argument.
+        let probe = |method: &str| {
+            let json = format!(
+                "{{\"{method}\": {{\"__reply_tx\": {{\"port\": null, \"data\": null, \
+                 \"codec\": null}}}}}}"
+            );
+            match serde_json::from_str::<SessionHubReqRef<WireCodec>>(&json) {
+                Ok(_) => format!("{method}: no further required fields"),
+                Err(error) => error.to_string(),
+            }
+        };
+        assert!(
+            probe("Hello").starts_with("missing field `client`"),
+            "{}",
+            probe("Hello")
+        );
+        assert!(
+            probe("CreateTerminal").starts_with("missing field `session_id`"),
+            "{}",
+            probe("CreateTerminal")
+        );
+        assert!(
+            probe("AttachTerminal").starts_with("missing field `session_id`"),
+            "{}",
+            probe("AttachTerminal")
+        );
+        assert!(
+            probe("NewAgent").starts_with("missing field `new`"),
+            "{}",
+            probe("NewAgent")
+        );
+        assert!(
+            probe("AttachAgent").starts_with("missing field `session_id`"),
+            "{}",
+            probe("AttachAgent")
+        );
+        // `create_terminal`'s second argument, past the first.
+        let spec_probe = "{\"CreateTerminal\": {\"__reply_tx\": {\"port\": null, \
+             \"data\": null, \"codec\": null}, \"session_id\": \
+             \"00000000-0000-0000-0000-000000000000\"}}";
+        match serde_json::from_str::<SessionHubReqRef<WireCodec>>(spec_probe) {
+            Ok(_) => panic!("spec must still be required"),
+            Err(error) => assert!(
+                error.to_string().starts_with("missing field `spec`"),
+                "{error}"
+            ),
+        }
+    }
+
+    /// An unknown `HubError` variant from a newer peer degrades to
+    /// `Unknown` under the wire codec (Postbag), instead of failing the
+    /// reply — the §4 catch-all, proven on the one enum this crate owns.
+    #[test]
+    fn unknown_hub_error_variant_degrades_to_unknown_under_postbag() {
+        #[derive(Serialize)]
+        enum FutureHubError {
+            SomethingNew { detail: String },
+        }
+        let mut bytes = Vec::new();
+        <WireCodec as remoc::codec::Codec>::serialize(
+            &mut bytes,
+            &FutureHubError::SomethingNew {
+                detail: "later".into(),
+            },
+        )
+        .unwrap();
+        let decoded: HubError =
+            <WireCodec as remoc::codec::Codec>::deserialize(&bytes[..]).unwrap();
+        assert_eq!(decoded, HubError::Unknown);
     }
 }

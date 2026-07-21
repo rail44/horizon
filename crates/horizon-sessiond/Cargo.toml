@@ -12,12 +12,15 @@ horizon-sandbox = { path = "../horizon-sandbox" }
 horizon-session-protocol = { path = "../horizon-session-protocol" }
 horizon-terminal-core = { path = "../horizon-terminal-core" }
 portable-pty = "0.9.0"
+remoc = { workspace = true }
 serde_json = "1.0"
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-util", "signal", "sync", "time"] }
 uuid = { version = "1.18", features = ["v4"] }
 
 [dev-dependencies]
+# The wire-schema artifact generator/drift test (`tests/wire_schema.rs`).
+schemars = { version = "1", features = ["uuid1"] }
 tempfile = "3"
 termwiz = { version = "0.23.3", features = ["use_serde"] }
 

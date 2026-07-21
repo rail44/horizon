@@ -3,6 +3,7 @@
 //! no backend-specific knob leaks in here (see
 //! `docs/agent-approval-design.md`'s "Sandbox architecture").
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -53,21 +54,21 @@ pub struct SandboxPolicy {
 }
 
 /// Access added by an approved, session-scoped containment grant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum FilesystemGrantAccess {
     Read,
     ReadWrite,
 }
 
 /// The actual enforcement scope shown to the approver.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum FilesystemGrantScope {
     File,
     DirectoryTree,
 }
 
 /// A canonical, enforceable filesystem grant for a fresh sandbox.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct FilesystemGrant {
     pub path: PathBuf,
     pub access: FilesystemGrantAccess,
@@ -75,7 +76,7 @@ pub struct FilesystemGrant {
 }
 
 /// A mediated attempt and the smallest enforceable grant that can satisfy it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct FilesystemDenial {
     pub attempted_path: PathBuf,
     pub grant: FilesystemGrant,

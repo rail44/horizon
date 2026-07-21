@@ -19,6 +19,7 @@
 
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::vte::ansi::{NamedColor, Rgb};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Crate-local mirror of the host's `ui::theme`-derived color roles
@@ -36,27 +37,59 @@ use serde::{Deserialize, Serialize};
 /// with the same values Horizon has always shipped. In the running app this
 /// default is only ever transiently observed (`TerminalSession::spawn`
 /// pushes the live theme immediately after construction).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TerminalColorScheme {
+    #[schemars(with = "RgbSchema")]
     pub foreground: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub background: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub cursor: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub black: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub red: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub green: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub yellow: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub blue: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub magenta: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub cyan: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub white: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub bright_black: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub bright_red: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub bright_green: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub bright_yellow: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub bright_blue: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub bright_magenta: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub bright_cyan: Rgb,
+    #[schemars(with = "RgbSchema")]
     pub bright_white: Rgb,
+}
+
+/// Schema stand-in for `alacritty_terminal::vte::ansi::Rgb`, which
+/// (de)serializes as a plain `{r, g, b}` u8 struct but is external and
+/// cannot derive `JsonSchema` itself. Kept byte-for-byte in sync with that
+/// serde shape; the wire-schema artifact sees this in its place.
+#[derive(JsonSchema)]
+#[schemars(rename = "Rgb")]
+#[allow(dead_code)]
+struct RgbSchema {
+    r: u8,
+    g: u8,
+    b: u8,
 }
 
 impl Default for TerminalColorScheme {
@@ -186,5 +219,36 @@ fn named_rgb(color: NamedColor, scheme: TerminalColorScheme) -> Rgb {
         // OSC 4/10/11/12 (index is always < 256, or exactly 256/257/258),
         // so this arm is defensive rather than load-bearing.
         _ => scheme.foreground,
+    }
+}
+
+#[cfg(test)]
+mod rgb_schema_tests {
+    use super::*;
+
+    /// [`RgbSchema`] claims to mirror `vte::ansi::Rgb`'s serde shape
+    /// byte-for-byte — pinned here against the *real* type's output, so a
+    /// vte/alacritty bump that changes `Rgb`'s encoding goes red instead
+    /// of silently making the wire-schema artifact describe a shape the
+    /// wire no longer carries (a review-found checker blind spot: `with =`
+    /// stand-ins are otherwise never validated against their subjects).
+    #[test]
+    fn rgb_schema_matches_the_real_rgb_serde_shape() {
+        let real = serde_json::to_value(Rgb { r: 1, g: 2, b: 3 }).unwrap();
+        assert_eq!(real, serde_json::json!({"r": 1, "g": 2, "b": 3}));
+
+        // And the stand-in's schema describes exactly those properties.
+        let schema = serde_json::to_value(schemars::schema_for!(RgbSchema)).unwrap();
+        let properties = schema["properties"]
+            .as_object()
+            .expect("RgbSchema must describe an object with properties");
+        let mut keys: Vec<&str> = properties.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["b", "g", "r"]);
+        assert_eq!(
+            schema["required"],
+            serde_json::json!(["r", "g", "b"]),
+            "every channel is required, like the real struct's fields"
+        );
     }
 }

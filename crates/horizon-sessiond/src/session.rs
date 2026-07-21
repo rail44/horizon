@@ -63,7 +63,7 @@ use horizon_agent::tools::{
     ApprovalOutcome, BashCompletion, HostTools, RecallContext, ToolSessionState,
 };
 use horizon_agent::wire::{
-    Control, Envelope, EnvelopeBody, HostToolRequest, HostToolResponse, SessionNew, SessionSummary,
+    AgentWireEvent, HostToolRequest, HostToolResponse, SessionNew, SessionSummary,
     WorkspaceRootResolved,
 };
 use tokio::sync::mpsc::UnboundedSender;
@@ -100,10 +100,16 @@ const HOST_TOOL_TIMEOUT: Duration = Duration::from_secs(15);
 /// `tests/e2e.rs` -- so this is sized with the same margin.)
 const REPLAY_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// The connection-swappable outgoing envelope queue every session thread
-/// sends through — see the module doc's "sessions are scoped to the
-/// process" note.
-type SharedOutgoing = Mutex<Option<UnboundedSender<Envelope>>>;
+/// The per-session event subscribers (one per live agent attachment,
+/// installed by the hub's `new_agent`/`attach_agent` and replaced by a
+/// re-attach) every session thread sends through — the v10 shape of the
+/// old connection-swappable outgoing envelope queue; see the module doc's
+/// "sessions are scoped to the process" note. The sender is the local
+/// (unbounded, sync-sendable) half of an attachment's event bridge; an
+/// async pump owned by the hub drains it into the attachment's remote
+/// channel. A send failing means that attachment's bridge is gone
+/// (client detached or connection died), so the entry is dropped lazily.
+type AgentSubscribers = Mutex<HashMap<SessionId, UnboundedSender<AgentWireEvent>>>;
 
 /// Process-lifetime state, built once in `main` and shared (via `Arc`) by
 /// every connection `horizon-sessiond` ever serves, and by every session
@@ -122,7 +128,12 @@ pub(crate) struct SessiondState {
     writer: Mutex<Option<WriterHandle>>,
     sessions: Mutex<HashMap<SessionId, SessionEntry>>,
     pending_host_tool_requests: Mutex<HashMap<String, Sender<HostToolResponse>>>,
-    outgoing: SharedOutgoing,
+    agent_subscribers: AgentSubscribers,
+    /// The current connection's host-tool request bridge (the local half of
+    /// `HubHello::host_tools`), installed by the hub's `hello` and cleared
+    /// when the connection ends — connection-global, unlike the
+    /// session-scoped subscribers above.
+    host_tools_outgoing: Mutex<Option<UnboundedSender<HostToolRequest>>>,
     /// Flips once (see [`Self::mark_resume_ready`]) after
     /// [`resume_persisted_sessions`] finishes populating `sessions` from the
     /// log. `session_list`/`session_load` must not answer while this is
@@ -175,7 +186,8 @@ impl SessiondState {
             writer: Mutex::new(writer),
             sessions: Mutex::new(HashMap::new()),
             pending_host_tool_requests: Mutex::new(HashMap::new()),
-            outgoing: Mutex::new(None),
+            agent_subscribers: Mutex::new(HashMap::new()),
+            host_tools_outgoing: Mutex::new(None),
             resume_ready: AtomicBool::new(false),
             resume_notify: Notify::new(),
             skipped_lines_summary: Mutex::new(None),
@@ -330,7 +342,7 @@ struct SessionEntry {
 /// (`SessiondHandle::start_session` registers the session's route before
 /// sending `SessionNew`), so it sees this immediately; a resumed session
 /// spawned at daemon startup usually has no connection yet
-/// ([`send_envelope`] silently drops it then) -- [`Connection::session_model`]
+/// ([`send_session_event`] silently drops it then) -- [`Connection::session_model`]
 /// re-announces the same value for that case, from `Control::SessionLoad`'s
 /// handler. See `docs/agent-output-ui-amendment.md`'s dated model-chip
 /// addendum.
@@ -342,13 +354,10 @@ fn resolve_and_announce_session_model(
 ) -> Option<String> {
     let model = state.providers.resolved_model(provider_id, role_id);
     if let Some(model) = &model {
-        send_envelope(
-            &state.outgoing,
-            Envelope {
-                v: horizon_agent::wire::CONTRACT_VERSION,
-                session_id: Some(session_id),
-                body: EnvelopeBody::Control(Control::SessionModel(model.clone())),
-            },
+        send_session_event(
+            state,
+            session_id,
+            AgentWireEvent::SessionModel(model.clone()),
         );
     }
     model
@@ -600,23 +609,50 @@ pub(crate) struct Connection {
 }
 
 impl Connection {
-    /// Installs `outgoing` as the shared target every session thread sends
-    /// through (see the module doc) — this is what makes a freshly accepted
-    /// connection immediately start receiving events from sessions that
-    /// were already running (resumed at startup, or left over from a prior
-    /// connection on this same process).
-    pub(crate) fn new(outgoing: UnboundedSender<Envelope>, state: Arc<SessiondState>) -> Self {
-        *state.outgoing.lock().unwrap() = Some(outgoing);
+    pub(crate) fn new(state: Arc<SessiondState>) -> Self {
         Self { state }
     }
 
-    /// Clears the shared outgoing target on disconnect, so a session thread
-    /// doesn't keep "successfully" enqueueing envelopes into a writer task
-    /// that already gave up on a dead socket (see `main::
-    /// run_session_hosting_loop`'s doc comment on the writer task's own
-    /// lifetime).
+    /// Installs the current connection's host-tool bridge (the local half
+    /// behind `HubHello::host_tools`) — the connection-global counterpart
+    /// of the per-attachment subscribers [`Self::subscribe_agent`] installs.
+    pub(crate) fn connect_host_tools(&self, outgoing: UnboundedSender<HostToolRequest>) {
+        *self.state.host_tools_outgoing.lock().unwrap() = Some(outgoing);
+    }
+
+    /// Clears the connection-global host-tool bridge on disconnect, so a
+    /// session thread's `execute_auto` fails fast instead of enqueueing
+    /// into a bridge whose pump already died with the connection. The
+    /// per-session subscribers are deliberately *not* swept here: each
+    /// attachment's bridge dies with its own pump, and
+    /// [`send_session_event`] already drops an entry lazily on its first
+    /// failed send (a fresh attach replaces it anyway).
     pub(crate) fn disconnect(&self) {
-        *self.state.outgoing.lock().unwrap() = None;
+        *self.state.host_tools_outgoing.lock().unwrap() = None;
+    }
+
+    /// Subscribes an attachment to `session_id`'s wire events, replacing
+    /// any previous attachment's subscription (one client connection at a
+    /// time; a re-attach supersedes). Returns the local receiving half the
+    /// hub pumps into the attachment's remote channel.
+    pub(crate) fn subscribe_agent(
+        &self,
+        session_id: SessionId,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<AgentWireEvent> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        self.state
+            .agent_subscribers
+            .lock()
+            .unwrap()
+            .insert(session_id, tx);
+        rx
+    }
+
+    /// Pushes a session-scoped wire event to the session's current
+    /// subscriber, if any — the hub's own send path (replay, model
+    /// re-announcement), same semantics as every session thread's sends.
+    pub(crate) fn send_session_event(&self, session_id: SessionId, event: AgentWireEvent) {
+        send_session_event(&self.state, session_id, event);
     }
 
     /// Spawns the session thread for a `Control::SessionNew`. Reuses the
@@ -768,29 +804,43 @@ impl Connection {
     }
 }
 
-/// Sends `envelope` through whichever connection currently owns `outgoing`,
-/// silently dropping it if none does (no client to see it right now -- see
-/// the module doc). Returns whether the send was actually attempted and
-/// accepted by the channel, for the one caller ([`SessiondHostTools::
-/// execute_auto`]) that needs to fail fast rather than wait out its full
-/// timeout when nothing is listening.
-fn send_envelope(outgoing: &SharedOutgoing, envelope: Envelope) -> bool {
-    match outgoing.lock().unwrap().as_ref() {
-        Some(tx) => tx.send(envelope).is_ok(),
+/// Sends a session-scoped wire event to whichever attachment is currently
+/// subscribed to `session_id`, silently dropping it if none is (no client
+/// attached right now -- see the module doc; committed events are replayed
+/// on the next attach anyway). A failed send means the subscriber's bridge
+/// is gone, so its entry is removed rather than kept as a dead letter box.
+fn send_session_event(state: &SessiondState, session_id: SessionId, event: AgentWireEvent) {
+    let mut subscribers = state.agent_subscribers.lock().unwrap();
+    if subscribers
+        .get(&session_id)
+        .is_some_and(|tx| tx.send(event).is_err())
+    {
+        subscribers.remove(&session_id);
+    }
+}
+
+/// Sends a host-tool request through the current connection's
+/// `HubHello::host_tools` bridge, if a connection is live. Returns whether
+/// the send was actually accepted, for the one caller
+/// ([`SessiondHostTools::execute_auto`]) that needs to fail fast rather
+/// than wait out its full timeout when nothing is listening.
+fn send_host_tool_request(state: &SessiondState, request: HostToolRequest) -> bool {
+    match state.host_tools_outgoing.lock().unwrap().as_ref() {
+        Some(tx) => tx.send(request).is_ok(),
         None => false,
     }
 }
 
 /// The agent (child) side of the host-tool channel (guardrail 4 in
 /// `docs/agent-runtime-split-design.md`): sends a `host_tool_request` over
-/// the current connection (if any -- see [`send_envelope`]) and blocks this
+/// the current connection (if any -- see [`send_host_tool_request`];
+/// connection-global, exactly as the JSONL envelope's receiver treated it) and blocks this
 /// session's dedicated thread on the matching `host_tool_response`. Only
 /// `workspace.snapshot` is ever routed here today (the same tool id
 /// Horizon's own `agent::host_tools::WorkspaceHostTools` answers
 /// in-process) -- everything else falls through to `None`, letting
 /// `execute_agent_tool` try the crate's own `tools::fs` auto tools next.
 struct SessiondHostTools {
-    session_id: SessionId,
     state: Arc<SessiondState>,
 }
 
@@ -808,16 +858,12 @@ impl HostTools for SessiondHostTools {
             .unwrap()
             .insert(request_id.clone(), reply_tx);
 
-        let envelope = Envelope {
-            v: horizon_agent::wire::CONTRACT_VERSION,
-            session_id: Some(self.session_id),
-            body: EnvelopeBody::Control(Control::HostToolRequest(HostToolRequest {
-                request_id: contract::RequestId(request_id.clone()),
-                tool_id: tool_id.to_string(),
-                input: input.clone(),
-            })),
+        let request = HostToolRequest {
+            request_id: contract::RequestId(request_id.clone()),
+            tool_id: tool_id.to_string(),
+            input: input.clone().into(),
         };
-        if !send_envelope(&self.state.outgoing, envelope) {
+        if !send_host_tool_request(&self.state, request) {
             self.state
                 .pending_host_tool_requests
                 .lock()
@@ -832,7 +878,7 @@ impl HostTools for SessiondHostTools {
             .lock()
             .unwrap()
             .remove(&request_id);
-        response.map(|response| response.output)
+        response.map(|response| response.output.0)
     }
 }
 
@@ -901,18 +947,13 @@ fn resolve_and_create_isolated_worktree(
         Ok(info) => {
             let root = info.path.clone();
             state.record_isolated_worktree(session_id, spawn_source_session_id, info);
-            send_envelope(
-                &state.outgoing,
-                Envelope {
-                    v: horizon_agent::wire::CONTRACT_VERSION,
-                    session_id: Some(session_id),
-                    body: EnvelopeBody::Control(Control::WorkspaceRootResolved(
-                        WorkspaceRootResolved {
-                            workspace_root: root.clone(),
-                            parent_session_id: spawn_source_session_id,
-                        },
-                    )),
-                },
+            send_session_event(
+                state,
+                session_id,
+                AgentWireEvent::WorkspaceRootResolved(WorkspaceRootResolved {
+                    workspace_root: root.clone(),
+                    parent_session_id: spawn_source_session_id,
+                }),
             );
             (Some(root), true)
         }
@@ -920,17 +961,15 @@ fn resolve_and_create_isolated_worktree(
             eprintln!(
                 "horizon-sessiond: failed to create isolated worktree for {session_id:?}: {error}"
             );
-            send_envelope(
-                &state.outgoing,
-                Envelope::event(
-                    session_id,
-                    Event::Error(AgentError {
-                        message: format!(
-                            "failed to create an isolated worktree ({error}); continuing without \
-                             isolation"
-                        ),
-                    }),
-                ),
+            send_session_event(
+                state,
+                session_id,
+                AgentWireEvent::Event(Event::Error(AgentError {
+                    message: format!(
+                        "failed to create an isolated worktree ({error}); continuing without \
+                         isolation"
+                    ),
+                })),
             );
             (workspace_root, false)
         }
@@ -1008,9 +1047,10 @@ fn run_session(
             }
             _ => format!("Unknown provider `{}`.", provider_id.0),
         };
-        send_envelope(
-            &state.outgoing,
-            Envelope::event(session_id, Event::Error(AgentError { message })),
+        send_session_event(
+            state,
+            session_id,
+            AgentWireEvent::Event(Event::Error(AgentError { message })),
         );
         return;
     };
@@ -1093,7 +1133,6 @@ fn run_session(
     );
 
     let host = SessiondHostTools {
-        session_id,
         state: state.clone(),
     };
 
@@ -1179,24 +1218,16 @@ fn handle_provider_event(
         let _ = commands_tx.send(command);
     }
 
-    let mut to_forward: Vec<Event> = Vec::new();
-    let mut progress_envelopes: Vec<Envelope> = Vec::new();
+    let mut to_forward: Vec<AgentWireEvent> = Vec::new();
     for event in &processing.horizon_events {
         match &event.tool_call_progress {
-            Some(progress) => progress_envelopes.push(Envelope {
-                v: horizon_agent::wire::CONTRACT_VERSION,
-                session_id: Some(session_id),
-                body: EnvelopeBody::Control(Control::ToolCallProgress(progress.clone())),
-            }),
-            None => to_forward.push(event.event.clone()),
+            Some(progress) => to_forward.push(AgentWireEvent::ToolCallProgress(progress.clone())),
+            None => to_forward.push(AgentWireEvent::Event(event.event.clone())),
         }
     }
     let _ = live_state.extend_provider_events(processing.horizon_events);
-    for envelope in progress_envelopes {
-        send_envelope(&state.outgoing, envelope);
-    }
     for event in to_forward {
-        send_envelope(&state.outgoing, Envelope::event(session_id, event));
+        send_session_event(state, session_id, event);
     }
 }
 
@@ -1292,7 +1323,7 @@ fn fold_finished_bash_result(
     ];
     let _ = live_state.extend_provider_events(events.clone().into_iter().map(Into::into));
     for event in events {
-        send_envelope(&state.outgoing, Envelope::event(session_id, event));
+        send_session_event(state, session_id, AgentWireEvent::Event(event));
     }
 
     let _ = commands_tx.send(Command::ToolCallResult(result));
@@ -1346,7 +1377,7 @@ fn fold_domain_denied(
     ];
     let _ = live_state.extend_provider_events(events.clone().into_iter().map(Into::into));
     for event in events {
-        send_envelope(&state.outgoing, Envelope::event(session_id, event));
+        send_session_event(state, session_id, AgentWireEvent::Event(event));
     }
 }
 
@@ -1400,7 +1431,7 @@ fn fold_filesystem_denied(
     ];
     let _ = live_state.extend_provider_events(events.clone().into_iter().map(Into::into));
     for event in events {
-        send_envelope(&state.outgoing, Envelope::event(session_id, event));
+        send_session_event(state, session_id, AgentWireEvent::Event(event));
     }
 }
 
@@ -1458,13 +1489,13 @@ fn resolve_and_forward(
             events, command, ..
         } => {
             for event in events {
-                send_envelope(&state.outgoing, Envelope::event(session_id, event));
+                send_session_event(state, session_id, AgentWireEvent::Event(event));
             }
             let _ = commands_tx.send(command);
         }
         ApprovalOutcome::Started { events, .. } => {
             for event in events {
-                send_envelope(&state.outgoing, Envelope::event(session_id, event));
+                send_session_event(state, session_id, AgentWireEvent::Event(event));
             }
         }
         ApprovalOutcome::Forward(command) => {
@@ -1582,10 +1613,10 @@ mod tests {
         assert_eq!(state.workspace_root(), Some(expected_root.as_path()));
     }
 
-    fn drain_events(rx: &mut tokio::sync::mpsc::UnboundedReceiver<Envelope>) -> Vec<Event> {
+    fn drain_events(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AgentWireEvent>) -> Vec<Event> {
         let mut events = Vec::new();
-        while let Ok(envelope) = rx.try_recv() {
-            if let EnvelopeBody::Event(event) = envelope.body {
+        while let Ok(wire_event) = rx.try_recv() {
+            if let AgentWireEvent::Event(event) = wire_event {
                 events.push(event);
             }
         }
@@ -1619,11 +1650,10 @@ mod tests {
             SharedDuckdbStore::unavailable(),
             None,
         ));
-        let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Envelope>();
-        *state.outgoing.lock().unwrap() = Some(outgoing_tx);
-
         let live_state = LiveState::with_disabled_persistence();
         let session_id = SessionId::new();
+        let connection = Connection::new(state.clone());
+        let mut outgoing_rx = connection.subscribe_agent(session_id);
         let call_a = ToolCallId("bash-a".to_string());
         let call_b = ToolCallId("bash-b".to_string());
 
@@ -1716,10 +1746,10 @@ mod tests {
             SharedDuckdbStore::unavailable(),
             None,
         ));
-        let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Envelope>();
-        *state.outgoing.lock().unwrap() = Some(outgoing_tx);
         let live_state = LiveState::with_disabled_persistence();
         let session_id = SessionId::new();
+        let connection = Connection::new(state.clone());
+        let mut outgoing_rx = connection.subscribe_agent(session_id);
         let call_id = ToolCallId("bash-filesystem-denied".to_string());
         let attempted = std::path::PathBuf::from("/outside/new.txt");
         let grant_path = std::path::PathBuf::from("/outside");
@@ -1728,7 +1758,7 @@ mod tests {
                 Event::ToolCallRequested(horizon_agent::contract::ToolCallRequest {
                     call_id: call_id.clone(),
                     tool_id: "bash".to_string(),
-                    input: serde_json::json!({ "command": "echo hi" }),
+                    input: serde_json::json!({ "command": "echo hi" }).into(),
                 }),
                 Event::StateChanged(SessionState::ToolRunning),
                 Event::ToolCallStarted(call_id.clone()),
@@ -1782,19 +1812,13 @@ mod tests {
     /// Builds a hermetic [`SessiondState`] with an explicit, env-independent
     /// `RigAgentConfig` (never `AgentConfig::from_env_and_provider`'s real
     /// env vars -- a developer's own `OPENAI_API_KEY` must never leak into
-    /// this test's expectations) and an installed `outgoing` channel to
-    /// observe what gets sent.
-    fn state_with_rig_config(
-        openai_enabled: bool,
-        model: &str,
-    ) -> (
-        Arc<SessiondState>,
-        tokio::sync::mpsc::UnboundedReceiver<Envelope>,
-    ) {
+    /// this test's expectations). Tests observing sends subscribe the
+    /// session id under test via [`Connection::subscribe_agent`].
+    fn state_with_rig_config(openai_enabled: bool, model: &str) -> Arc<SessiondState> {
         let mut agent_config = AgentConfig::from_env_and_provider(None, None);
         agent_config.rig.openai_enabled = openai_enabled;
         agent_config.rig.model = model.to_string();
-        let state = Arc::new(SessiondState::new(
+        Arc::new(SessiondState::new(
             ProviderRegistry::builtin_with_config(
                 agent_config.clone(),
                 SharedDuckdbStore::unavailable(),
@@ -1803,10 +1827,7 @@ mod tests {
             None,
             SharedDuckdbStore::unavailable(),
             None,
-        ));
-        let (outgoing_tx, outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Envelope>();
-        *state.outgoing.lock().unwrap() = Some(outgoing_tx);
-        (state, outgoing_rx)
+        ))
     }
 
     /// A resolvable model (rig provider, `openai_enabled: true`) is both
@@ -1816,8 +1837,9 @@ mod tests {
     /// model-chip addendum.
     #[test]
     fn resolve_and_announce_session_model_sends_and_returns_the_resolved_model() {
-        let (state, mut outgoing_rx) = state_with_rig_config(true, "test-model");
+        let state = state_with_rig_config(true, "test-model");
         let session_id = SessionId::new();
+        let mut outgoing_rx = Connection::new(state.clone()).subscribe_agent(session_id);
         let provider_id = ProviderId("builtin.agent.rig".to_string());
 
         let model = resolve_and_announce_session_model(&state, session_id, &provider_id, None);
@@ -1825,15 +1847,10 @@ mod tests {
         assert_eq!(model.as_deref(), Some("test-model"));
         let sent = outgoing_rx
             .try_recv()
-            .expect("a SessionModel control should have been sent");
-        assert_eq!(sent.session_id, Some(session_id));
+            .expect("a SessionModel event should have been sent");
         assert!(
-            matches!(
-                &sent.body,
-                EnvelopeBody::Control(Control::SessionModel(model)) if model == "test-model"
-            ),
-            "expected a session-scoped SessionModel control, got: {:?}",
-            sent.body
+            matches!(&sent, AgentWireEvent::SessionModel(model) if model == "test-model"),
+            "expected a SessionModel wire event, got: {sent:?}",
         );
     }
 
@@ -1843,8 +1860,9 @@ mod tests {
     /// `Control::SkippedLines`'s "omitted entirely" convention.
     #[test]
     fn resolve_and_announce_session_model_sends_nothing_in_deterministic_fallback_mode() {
-        let (state, mut outgoing_rx) = state_with_rig_config(false, "test-model");
+        let state = state_with_rig_config(false, "test-model");
         let session_id = SessionId::new();
+        let mut outgoing_rx = Connection::new(state.clone()).subscribe_agent(session_id);
         let provider_id = ProviderId("builtin.agent.rig".to_string());
 
         let model = resolve_and_announce_session_model(&state, session_id, &provider_id, None);
@@ -1862,7 +1880,7 @@ mod tests {
     /// path `Control::SessionLoad`'s handler uses.
     #[test]
     fn connection_session_model_reads_the_stored_value_for_a_known_session_only() {
-        let (state, _outgoing_rx) = state_with_rig_config(true, "test-model");
+        let state = state_with_rig_config(true, "test-model");
         let session_id = SessionId::new();
         let (inbound_tx, _inbound_rx) = unbounded::<Command>();
         let (replay_tx, _replay_rx) = unbounded::<Sender<Vec<Event>>>();
@@ -1896,7 +1914,7 @@ mod tests {
     /// `workspace_root`.
     #[test]
     fn session_directory_is_none_for_an_unknown_session() {
-        let (state, _outgoing_rx) = state_with_rig_config(true, "test-model");
+        let state = state_with_rig_config(true, "test-model");
         assert_eq!(state.session_directory(SessionId::new()), None);
     }
 
@@ -1905,7 +1923,7 @@ mod tests {
     /// would branch fresh-from-origin against.
     #[test]
     fn session_directory_reports_the_plain_workspace_root_when_not_isolated() {
-        let (state, _outgoing_rx) = state_with_rig_config(true, "test-model");
+        let state = state_with_rig_config(true, "test-model");
         let session_id = SessionId::new();
         let (inbound_tx, _inbound_rx) = unbounded::<Command>();
         let (replay_tx, _replay_rx) = unbounded::<Sender<Vec<Event>>>();
@@ -1933,7 +1951,7 @@ mod tests {
     /// the multi-level chaining decision 3 asks for.
     #[test]
     fn record_isolated_worktree_makes_the_session_report_as_an_owned_worktree() {
-        let (state, _outgoing_rx) = state_with_rig_config(true, "test-model");
+        let state = state_with_rig_config(true, "test-model");
         let session_id = SessionId::new();
         let parent_id = SessionId::new();
         let (inbound_tx, _inbound_rx) = unbounded::<Command>();
@@ -1978,7 +1996,7 @@ mod tests {
     /// `spawn_workspace_restore`).
     #[test]
     fn session_list_reports_the_entrys_workspace_root_and_parent() {
-        let (state, _outgoing_rx) = state_with_rig_config(true, "test-model");
+        let state = state_with_rig_config(true, "test-model");
         let session_id = SessionId::new();
         let parent_id = SessionId::new();
         let (inbound_tx, _inbound_rx) = unbounded::<Command>();
@@ -2058,14 +2076,31 @@ mod tests {
 
         fn init_repo(dir: &Path) {
             git(dir, &["init", "-q", "-b", "main"]);
-            git(dir, &["config", "user.email", "test@example.com"]);
-            git(dir, &["config", "user.name", "Test"]);
         }
 
+        /// Commits with a deterministic `Test` identity supplied *per
+        /// invocation* via `-c user.*` -- never written to any git config.
+        /// Backlog 53: persisting it with `git config user.*` meant that
+        /// under a leaked absolute `GIT_DIR` (see `scrub_git_env`) the write
+        /// landed in the *enclosing* repo's shared config and re-authored
+        /// every later commit; a `-c` override touches no config and still
+        /// stamps both author and committer. Mirrors `worktree.rs`.
         fn commit_file(dir: &Path, name: &str, contents: &str, message: &str) {
             std::fs::write(dir.join(name), contents).unwrap();
             git(dir, &["add", name]);
-            git(dir, &["commit", "-q", "-m", message]);
+            git(
+                dir,
+                &[
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.com",
+                    "commit",
+                    "-q",
+                    "-m",
+                    message,
+                ],
+            );
         }
 
         fn scratch_repo() -> tempfile::TempDir {
@@ -2080,6 +2115,13 @@ mod tests {
             bare: String,
             status: String,
             horizon_branches: String,
+            /// Backlog 53: catches a test's `Test <test@example.com>` identity
+            /// leaking into the enclosing repo's shared config (a `git config
+            /// user.*` write under a leaked `GIT_DIR`), which would silently
+            /// re-author every later commit. Empty when unset; merged config
+            /// (`--get`), so it reflects what commits would actually use.
+            user_name: String,
+            user_email: String,
         }
 
         fn enclosing_repo_root() -> PathBuf {
@@ -2113,6 +2155,8 @@ mod tests {
                     &["for-each-ref", "--format=%(refname)", "refs/heads/horizon"],
                 )
                 .unwrap_or_default(),
+                user_name: run_git(root, &["config", "--get", "user.name"]).unwrap_or_default(),
+                user_email: run_git(root, &["config", "--get", "user.email"]).unwrap_or_default(),
             }
         }
 
@@ -2173,9 +2217,10 @@ mod tests {
         #[test]
         fn resolve_and_create_isolated_worktree_announces_the_resolved_root_live() {
             let _canary = EnclosingRepoGuard::capture();
-            let (state, mut outgoing_rx) = state_with_rig_config(true, "test-model");
+            let state = state_with_rig_config(true, "test-model");
             let repo = scratch_repo();
             let session_id = SessionId::new();
+            let mut outgoing_rx = Connection::new(state.clone()).subscribe_agent(session_id);
             let parent_id = SessionId::new();
             let (inbound_tx, _inbound_rx) = unbounded::<Command>();
             let (replay_tx, _replay_rx) = unbounded::<Sender<Vec<Event>>>();
@@ -2202,14 +2247,13 @@ mod tests {
 
             let sent = outgoing_rx
                 .try_recv()
-                .expect("a WorkspaceRootResolved control should have been sent");
-            assert_eq!(sent.session_id, Some(session_id));
-            match sent.body {
-                EnvelopeBody::Control(Control::WorkspaceRootResolved(payload)) => {
+                .expect("a WorkspaceRootResolved event should have been sent");
+            match sent {
+                AgentWireEvent::WorkspaceRootResolved(payload) => {
                     assert_eq!(payload.workspace_root, root);
                     assert_eq!(payload.parent_session_id, Some(parent_id));
                 }
-                other => panic!("expected a WorkspaceRootResolved control, got: {other:?}"),
+                other => panic!("expected a WorkspaceRootResolved event, got: {other:?}"),
             }
         }
 
@@ -2222,9 +2266,10 @@ mod tests {
         #[test]
         fn resolve_and_create_isolated_worktree_sends_nothing_when_isolation_fails() {
             let _canary = EnclosingRepoGuard::capture();
-            let (state, mut outgoing_rx) = state_with_rig_config(true, "test-model");
+            let state = state_with_rig_config(true, "test-model");
             let not_a_repo = tempfile::tempdir().expect("create temp dir");
             let session_id = SessionId::new();
+            let mut outgoing_rx = Connection::new(state.clone()).subscribe_agent(session_id);
             let (inbound_tx, _inbound_rx) = unbounded::<Command>();
             let (replay_tx, _replay_rx) = unbounded::<Sender<Vec<Event>>>();
             state.sessions.lock().unwrap().insert(

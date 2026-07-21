@@ -1,5 +1,5 @@
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -7,16 +7,14 @@ use std::thread;
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender};
-use horizon_session_protocol::Envelope;
 use horizon_terminal_core::{
-    compute_frame_diff, encode_terminal_control, encode_terminal_update, run_terminal_core,
-    CoreReceivers, CoreSenders, SelectionCommand, TerminalAttachResult, TerminalCommand,
-    TerminalControl, TerminalCoreOptions, TerminalFrame, TerminalSpawnSpec, TerminalSummary,
+    compute_frame_diff, run_terminal_core, CoreReceivers, CoreSenders, SelectionCommand,
+    TerminalCommand, TerminalCoreOptions, TerminalFrame, TerminalSpawnSpec, TerminalSummary,
     TerminalUpdate,
 };
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use uuid::Uuid;
 
 /// How long [`TerminalHost::create`] waits for a PTY spawn before reporting
@@ -28,7 +26,13 @@ const TERMINAL_SPAWN_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Clone)]
 pub(crate) struct TerminalHost {
     sessions: Arc<Mutex<HashMap<Uuid, HostedTerminal>>>,
-    connection: Arc<Mutex<Option<TerminalConnection>>>,
+    /// One live subscriber per attached terminal session — installed by
+    /// the hub's `create_terminal`/`attach_terminal` (a re-attach
+    /// replaces), removed when the session exits or the subscriber's
+    /// bridge dies. Replaces the JSONL era's per-connection
+    /// `attached`/`baselines` maps: the baseline is per-*attachment* state
+    /// now, carried by the subscriber itself.
+    subscribers: Arc<Mutex<HashMap<Uuid, Subscriber>>>,
 }
 
 #[derive(Clone)]
@@ -39,47 +43,120 @@ struct HostedTerminal {
     killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
 }
 
-struct TerminalConnection {
-    outgoing: UnboundedSender<Envelope>,
-    attached: HashSet<Uuid>,
-    baselines: HashMap<Uuid, TerminalFrame>,
+/// The local half of one attachment's update bridge: an unbounded,
+/// sync-sendable queue the PTY-side threads push into; the hub's async
+/// pump drains it into the attachment's remote channel. `baseline` is the
+/// last frame delivered to *this* attachment — the diff base for the next
+/// one, established by the seeding `Snapshot`.
+struct Subscriber {
+    updates: UnboundedSender<TerminalUpdate>,
+    baseline: Option<TerminalFrame>,
 }
 
 impl TerminalHost {
     pub(crate) fn new() -> Self {
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
-            connection: Arc::new(Mutex::new(None)),
+            subscribers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    pub(crate) fn connect(&self, outgoing: UnboundedSender<Envelope>) {
-        *self.connection.lock().unwrap() = Some(TerminalConnection {
-            outgoing,
-            attached: HashSet::new(),
-            baselines: HashMap::new(),
-        });
+    /// Every live terminal session, sorted by id — the hub's
+    /// `list_terminals` body (the request-id correlation the JSONL `List`
+    /// control needed is gone; the rtc call returns this directly).
+    pub(crate) fn list(&self) -> Vec<TerminalSummary> {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap()
+            .keys()
+            .copied()
+            .map(|session_id| TerminalSummary { session_id })
+            .collect::<Vec<_>>();
+        sessions.sort_unstable_by_key(|summary| summary.session_id);
+        sessions
     }
 
-    pub(crate) fn disconnect(&self) {
-        *self.connection.lock().unwrap() = None;
+    /// [`Self::install_subscriber`] for the create path: no existence
+    /// requirement, because the hub subscribes *before* spawning the PTY
+    /// so the session's very first updates are never lost.
+    pub(crate) fn subscribe_for_create(
+        &self,
+        session_id: Uuid,
+    ) -> UnboundedReceiver<TerminalUpdate> {
+        self.install_subscriber(session_id).1
     }
 
-    pub(crate) fn handle_control(&self, session_id: Option<Uuid>, control: TerminalControl) {
-        match control {
-            TerminalControl::List { request_id } => self.list(request_id),
-            TerminalControl::Create(spec) => {
-                if let Some(session_id) = session_id {
-                    self.create(session_id, *spec);
-                }
-            }
-            TerminalControl::Attach { request_id } => {
-                if let Some(session_id) = session_id {
-                    self.attach(session_id, request_id);
-                }
-            }
-            TerminalControl::ListResult { .. } | TerminalControl::AttachResult { .. } => {}
+    /// [`Self::install_subscriber`] for the attach path: `None` when no
+    /// live session with this id exists — checked under the same lock the
+    /// install (and the `Exited` fan-out) takes, so "attached to a session
+    /// that just died" cannot happen: the exit either lands before the
+    /// check (→ `None`) or reaches the freshly installed subscriber.
+    pub(crate) fn attach_subscribe(
+        &self,
+        session_id: Uuid,
+    ) -> Option<UnboundedReceiver<TerminalUpdate>> {
+        let (exists, rx) = self.install_subscriber(session_id);
+        if exists {
+            Some(rx)
+        } else {
+            self.subscribers.lock().unwrap().remove(&session_id);
+            None
         }
+    }
+
+    /// Installs a fresh subscriber for `session_id` (replacing any
+    /// previous attachment's) and returns whether a live session existed
+    /// at install time, plus the local receiving half the hub pumps into
+    /// the attachment's remote channel. If the session already has a
+    /// retained latest frame, it is delivered immediately as the seeding
+    /// `Snapshot` and becomes the diff baseline — the same attach contract
+    /// the JSONL wire had (attach result, then snapshot, then diffs).
+    ///
+    /// The whole read-seed-insert sequence runs under the `subscribers`
+    /// lock (with the `sessions` lock taken *inside* it, an ordering
+    /// [`Self::forward_updates`] never inverts — it always releases
+    /// `sessions` before touching `subscribers`), and the `Exited`
+    /// fan-out removes the session from `sessions` *before* it takes
+    /// `subscribers` to deliver the exit. Together that closes the
+    /// stale-snapshot/TOCTOU window: an exit concurrent with an install
+    /// is either visible to the existence check here, or delivers
+    /// `Exited` to the subscriber this just installed.
+    fn install_subscriber(&self, session_id: Uuid) -> (bool, UnboundedReceiver<TerminalUpdate>) {
+        let (tx, rx) = unbounded_channel();
+        let mut subscribers = self.subscribers.lock().unwrap();
+        let (exists, latest) = {
+            let sessions = self.sessions.lock().unwrap();
+            match sessions.get(&session_id) {
+                Some(session) => (true, session.latest_frame.lock().unwrap().clone()),
+                None => (false, None),
+            }
+        };
+        let mut subscriber = Subscriber {
+            updates: tx,
+            baseline: None,
+        };
+        if let Some(frame) = latest {
+            let _ = subscriber
+                .updates
+                .send(TerminalUpdate::Snapshot(frame.clone()));
+            subscriber.baseline = Some(frame);
+        }
+        subscribers.insert(session_id, subscriber);
+        (exists, rx)
+    }
+
+    /// Removes `session_id`'s subscriber — the hub's cleanup when a
+    /// `create_terminal` fails after having subscribed optimistically.
+    pub(crate) fn unsubscribe(&self, session_id: Uuid) {
+        self.subscribers.lock().unwrap().remove(&session_id);
+    }
+
+    /// Drops every subscriber — called when the client connection ends, so
+    /// PTY-side threads stop paying for sends into bridges whose pumps are
+    /// gone (they would be lazily dropped on first failed send anyway).
+    pub(crate) fn clear_subscribers(&self) {
+        self.subscribers.lock().unwrap().clear();
     }
 
     pub(crate) fn handle_command(&self, session_id: Uuid, command: TerminalCommand) {
@@ -159,11 +236,13 @@ impl TerminalHost {
     /// still wins the (now-empty) entry and installs normally -- the pane
     /// saw an error, but the session is alive daemon-side and recoverable
     /// via Manage Sessions, which is an acceptable outcome.
-    fn create(&self, session_id: Uuid, spec: TerminalSpawnSpec) {
+    pub(crate) fn create(&self, session_id: Uuid, spec: TerminalSpawnSpec) -> Result<(), String> {
         if self.sessions.lock().unwrap().contains_key(&session_id) {
-            return;
+            // A create against an id that already runs degrades to attach
+            // semantics: the caller's `subscribe` (installed before this
+            // ran) already seeded the latest snapshot.
+            return Ok(());
         }
-        self.mark_attached(session_id);
         let cwd = self.resolve_cwd(&spec);
 
         const MAX_SPAWN_ATTEMPTS: u32 = 3;
@@ -193,13 +272,12 @@ impl TerminalHost {
             });
 
             match result_rx.recv_timeout(TERMINAL_SPAWN_TIMEOUT) {
-                Ok(Ok(())) => return,
-                Ok(Err(error)) => {
-                    // A real spawn error (bad shell, permissions, ...), not
-                    // a hang -- retrying won't help, report it immediately.
-                    self.send_update(session_id, TerminalUpdate::Error(error));
-                    return;
-                }
+                Ok(Ok(())) => return Ok(()),
+                // A real spawn error (bad shell, permissions, ...), not a
+                // hang -- retrying won't help, report it immediately. What
+                // the JSONL wire delivered as a `TerminalUpdate::Error` is
+                // the create call's own error result now.
+                Ok(Err(error)) => return Err(error),
                 Err(_timeout) => {
                     eprintln!(
                         "horizon-sessiond: terminal spawn attempt {attempt}/\
@@ -210,13 +288,10 @@ impl TerminalHost {
             }
         }
 
-        self.send_update(
-            session_id,
-            TerminalUpdate::Error(format!(
-                "terminal failed to start after {MAX_SPAWN_ATTEMPTS} attempts (this is rare; \
-                 retrying the command usually works)"
-            )),
-        );
+        Err(format!(
+            "terminal failed to start after {MAX_SPAWN_ATTEMPTS} attempts (this is rare; \
+             retrying the command usually works)"
+        ))
     }
 
     /// The first-wins decision [`Self::create`]'s spawn threads share: installs
@@ -251,64 +326,6 @@ impl TerminalHost {
         }
     }
 
-    fn list(&self, request_id: Uuid) {
-        let mut sessions = self
-            .sessions
-            .lock()
-            .unwrap()
-            .keys()
-            .copied()
-            .map(|session_id| TerminalSummary { session_id })
-            .collect::<Vec<_>>();
-        sessions.sort_unstable_by_key(|summary| summary.session_id);
-        self.send_control(
-            None,
-            TerminalControl::ListResult {
-                request_id,
-                sessions,
-            },
-        );
-    }
-
-    fn attach(&self, session_id: Uuid, request_id: Uuid) {
-        let sessions = self.sessions.lock().unwrap();
-        let Some(session) = sessions.get(&session_id) else {
-            drop(sessions);
-            self.send_control(
-                Some(session_id),
-                TerminalControl::AttachResult {
-                    request_id,
-                    result: TerminalAttachResult::NotFound,
-                },
-            );
-            return;
-        };
-        let latest = session.latest_frame.lock().unwrap();
-        let mut connection = self.connection.lock().unwrap();
-        let Some(connection) = connection.as_mut() else {
-            return;
-        };
-        connection.attached.insert(session_id);
-        connection.baselines.remove(&session_id);
-        if let Ok(envelope) = encode_terminal_control(
-            Some(session_id),
-            &TerminalControl::AttachResult {
-                request_id,
-                result: TerminalAttachResult::Attached,
-            },
-        ) {
-            let _ = connection.outgoing.send(envelope);
-        }
-        if let Some(frame) = latest.as_ref() {
-            if let Ok(envelope) =
-                encode_terminal_update(session_id, &TerminalUpdate::Snapshot(frame.clone()))
-            {
-                connection.baselines.insert(session_id, frame.clone());
-                let _ = connection.outgoing.send(envelope);
-            }
-        }
-    }
-
     fn resolve_cwd(&self, spec: &TerminalSpawnSpec) -> PathBuf {
         spec.spawn_source_session_id
             .and_then(|source| {
@@ -322,28 +339,15 @@ impl TerminalHost {
             .unwrap_or_else(|| spec.fallback_cwd.clone())
     }
 
-    fn mark_attached(&self, session_id: Uuid) {
-        if let Some(connection) = self.connection.lock().unwrap().as_mut() {
-            connection.attached.insert(session_id);
-            connection.baselines.remove(&session_id);
-        }
-    }
-
+    /// Pushes one non-frame update to `session_id`'s subscriber, if any,
+    /// dropping the subscriber entry when its bridge is gone.
     fn send_update(&self, session_id: Uuid, update: TerminalUpdate) {
-        if let Ok(envelope) = encode_terminal_update(session_id, &update) {
-            if let Some(connection) = self.connection.lock().unwrap().as_ref() {
-                if connection.attached.contains(&session_id) {
-                    let _ = connection.outgoing.send(envelope);
-                }
-            }
-        }
-    }
-
-    fn send_control(&self, session_id: Option<Uuid>, control: TerminalControl) {
-        if let Ok(envelope) = encode_terminal_control(session_id, &control) {
-            if let Some(connection) = self.connection.lock().unwrap().as_ref() {
-                let _ = connection.outgoing.send(envelope);
-            }
+        let mut subscribers = self.subscribers.lock().unwrap();
+        if subscribers
+            .get(&session_id)
+            .is_some_and(|subscriber| subscriber.updates.send(update).is_err())
+        {
+            subscribers.remove(&session_id);
         }
     }
 
@@ -356,29 +360,39 @@ impl TerminalHost {
                         if let Some(session) = host.sessions.lock().unwrap().get(&session_id) {
                             *session.latest_frame.lock().unwrap() = Some(frame.clone());
                         }
-                        let mut connection = host.connection.lock().unwrap();
-                        let Some(connection) = connection.as_mut() else {
+                        let mut subscribers = host.subscribers.lock().unwrap();
+                        let Some(subscriber) = subscribers.get_mut(&session_id) else {
                             continue;
                         };
-                        if !connection.attached.contains(&session_id) {
-                            continue;
-                        }
-                        let update = match connection.baselines.get(&session_id) {
-                            Some(old) => TerminalUpdate::FrameDiff(compute_frame_diff(old, &frame)),
+                        // v10 keeps the frame-delivery semantics unchanged
+                        // (docs/remoc-adoption-design.md par.6 step 2):
+                        // snapshot to a baseline-less attachment, diff
+                        // against the per-attachment baseline otherwise.
+                        let update = match subscriber.baseline.take() {
+                            Some(old) => {
+                                TerminalUpdate::FrameDiff(compute_frame_diff(&old, &frame))
+                            }
                             None => TerminalUpdate::Snapshot(frame.clone()),
                         };
-                        if let Ok(envelope) = encode_terminal_update(session_id, &update) {
-                            connection.baselines.insert(session_id, frame);
-                            let _ = connection.outgoing.send(envelope);
+                        if subscriber.updates.send(update).is_ok() {
+                            subscriber.baseline = Some(frame);
+                        } else {
+                            subscribers.remove(&session_id);
                         }
                     }
                     TerminalUpdate::FrameDiff(_) => {}
                     TerminalUpdate::Exited => {
-                        host.send_update(session_id, TerminalUpdate::Exited);
+                        // Ordering matters (see `install_subscriber`'s doc):
+                        // the session leaves `sessions` first, so a
+                        // concurrent attach either sees it gone or is
+                        // already installed when the exit is delivered —
+                        // and delivery + removal happen under one
+                        // `subscribers` guard so no install can slip
+                        // between them and lose the exit.
                         host.sessions.lock().unwrap().remove(&session_id);
-                        if let Some(connection) = host.connection.lock().unwrap().as_mut() {
-                            connection.attached.remove(&session_id);
-                            connection.baselines.remove(&session_id);
+                        let mut subscribers = host.subscribers.lock().unwrap();
+                        if let Some(subscriber) = subscribers.remove(&session_id) {
+                            let _ = subscriber.updates.send(TerminalUpdate::Exited);
                         }
                         return;
                     }
@@ -589,6 +603,12 @@ fn run_writer(
             TerminalCommand::Shutdown => {
                 let _ = killer.lock().unwrap().kill();
                 return;
+            }
+            // Skew catch-all (`TerminalCommand::Unknown`'s doc): a command
+            // this build can't name is logged and dropped -- never written
+            // to the PTY, never guessed at.
+            TerminalCommand::Unknown => {
+                eprintln!("horizon-sessiond: ignoring unknown terminal command from a newer peer");
             }
         }
     }
