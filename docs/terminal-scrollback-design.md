@@ -1,11 +1,11 @@
-# Terminal Scrollback — Client-Side Overscan Design
+# Terminal Scrollback — Windowed Overscan Design
 
-Status: proposed 2026-07-21 (owner-directed feasibility study + design;
-implementation not started). Companion to `docs/terminal-protocol-goals.md`
-(where the frame path is headed), `docs/session-daemon-design.md` (the
-daemon-owns-the-emulator split) and `docs/remoc-adoption-design.md` (the
-v11 wire and its §4 skew discipline). This document is design and
-feasibility only — it schedules a phased plan but lands no code.
+Status: proposed 2026-07-21, revised the same day to **windowed overscan**
+(owner direction) — the earlier draft's persistent cross-frame cache is
+dropped; see §2.2 for why. Design and feasibility only, no code. Companion
+to `docs/terminal-protocol-goals.md` (where the frame path is headed),
+`docs/session-daemon-design.md` (the daemon-owns-the-emulator split) and
+`docs/remoc-adoption-design.md` (the v11 wire and its §4 skew discipline).
 
 ## What prompted this
 
@@ -83,21 +83,23 @@ daemon to look at it is that the client does not have it. The cure is to
 give the client enough history to scroll *within*, locally, and only talk
 to the daemon to *widen* what it holds — never on the hot path of a gesture.
 
-### 1.4 Direction: client-side overscan
+### 1.4 Direction: windowed overscan
 
-The client holds a band of rows **wider than the viewport** (the viewport
-plus scrollback above it, "overscan"). In-band scrolling is a local
-`display_offset` applied to that band and a local repaint — zero IPC, frame
--rate-bound. As the local offset approaches the edge of the held band, the
-client **prefetches** more history from the daemon ahead of need. Because
-scrollback is immutable, a held row is safe to cache until a structural
-event (§5) invalidates it.
+When the user starts scrolling back, the daemon returns **one window**: a
+contiguous block of rows a couple of screens taller than the viewport,
+centred on where the user is looking. The client scrolls *within that
+window* locally — a local offset plus a local repaint, zero IPC — and
+**prefetches** the next window (recentred up or down) as the offset nears an
+edge, so the round-trip is hidden behind the margin. The window is a
+**self-contained snapshot**: it is complete in one message and the client
+holds only the current one. There is no persistent cache spanning frames,
+and — the point of §2.2 — no need for one.
 
 ## 2. Feasibility — the load-bearing findings
 
-This section is the reason the document exists: the architecture in §3
-stands or falls on what `alacritty_terminal` 0.26 (the pinned engine, `Cargo.lock`)
-can actually address. Three questions, answered against the source.
+The architecture stands or falls on what `alacritty_terminal` 0.26 (the
+pinned engine, `Cargo.lock`) can address. Three questions, answered against
+the source.
 
 ### 2.1 How Scroll is processed today (confirmed)
 
@@ -106,10 +108,10 @@ first checks `application_scroll_mode()` — `ALT_SCREEN | MOUSE_MODE`
 (`core.rs:441`). In that mode the scroll is **not** a `display_offset`
 move; it is translated to arrow-key / SGR-wheel bytes and written to the
 PTY (`core.rs:446`, `scroll_input`), so the *application* scrolls. This is
-the alt-screen / mouse-app case of §2.3 and it means overscan is a
-primary-screen-only concept.
+the alt-screen / mouse-app case of §2.3, and it means windowed overscan is a
+primary-screen-only concept — those modes keep today's passthrough.
 
-### 2.2 Line addressing — the crux (answer: no stable absolute id in the API; the daemon must synthesize one)
+### 2.2 Line addressing — why a window, not a cache
 
 **alacritty's coordinate system is screen-relative, not content-stable.**
 Grid lines are `Line(i32)` where `Line(0)` is the *top of the active
@@ -118,187 +120,147 @@ and history is **negative**, down to `topmost_line() = Line(-history_size)`
 (`grid/mod.rs:505`). `display_iter`, `iter_from`, `Point`, and the
 `point_to_viewport` / `viewport_to_point` helpers (`term/mod.rs:124`,`131`)
 all speak this system. Crucially, a given piece of committed text does
-**not** keep its `Line` number: every time a line scrolls off the top of
-the screen, everything shifts and that text's `Line` becomes one *more*
-negative. The coordinate names a screen position, not a row of content.
+**not** keep its `Line` number: every time a line scrolls off the top, that
+text's `Line` becomes one *more* negative. The coordinate names a screen
+position, not a row of content.
 
 **There is no monotonic line counter and no stable per-row id in the public
-API.** `history_size() = total_lines - screen_lines` (`grid/mod.rs:516`),
-and it *saturates* at `max_scroll_limit` (the configured
-`scrolling_history`, default `DEFAULT_SCROLLBACK_LINES = 10_000`,
-`core.rs`). Once the buffer is full, `history_size` stops growing while
-lines keep scrolling off, so it cannot even serve as a "lines ever
-produced" counter. Nothing else in `Grid`/`Term` exposes one.
+API.** `history_size() = total_lines - screen_lines` (`grid/mod.rs:516`)
+*saturates* at `max_scroll_limit` (the configured `scrolling_history`,
+default `DEFAULT_SCROLLBACK_LINES = 10_000`, `core.rs`): once the buffer is
+full, `history_size` stops growing while lines keep scrolling off, so it
+cannot even serve as a "lines ever produced" counter. Nothing else in
+`Grid`/`Term` exposes one.
 
-Consequence for the design: **a client cache cannot be keyed on any id the
-engine hands out** — every candidate (a `Line`, a `display_offset`) is
-remapped by ordinary output. Stable identity has to be **synthesized in the
-daemon**, which is the one place that sees every mutation. Two equivalent
-framings, and the owner decision between them (§9):
+**This finding is exactly why the design is windowed.** A *persistent*
+client cache — rows retained across frames and stitched together as the user
+scrolls — would need a stable key per history row. The engine gives none, so
+that approach would force the daemon to *synthesize* absolute row ids, carry
+an `epoch` to survive reflow, and invalidate the cache on every structural
+change: real, error-prone machinery, all in service of remembering history
+the daemon still holds anyway. A **self-contained window sidesteps all of
+it.** A window is a contiguous block, addressed *at service time* by a
+position relative to the live tail and returned atomically with its own
+internal coordinates (§3.2); the client never re-identifies a row across two
+windows, so no row ever needs a name that outlives its message. Absolute
+ids, epochs, and reflow-invalidation logic are **not needed and not built.**
 
-- **Absolute-id-within-epoch (recommended).** The daemon maintains a
-  monotonic `u64` — the absolute number of the current top-of-screen line —
-  and stamps every frame and scrollback chunk with the absolute id of its
-  top row plus an `epoch` (§2.3 / §5). The client caches rows keyed by
-  `(epoch, absolute_id)`. Within an epoch the key is stable *because
-  scrollback content is immutable*; across an epoch the whole cache is
-  dropped.
-- **Relative + rebase-delta.** Key on `display_offset`-relative positions
-  and have every message carry "N lines scrolled off since the last one" so
-  the client shifts its keys. Informationally identical; more error-prone at
-  the call sites.
+**Retrieval is feasible with no engine change.** Reading an arbitrary
+history range without disturbing the live viewport is a
+`grid.iter_from(Point::new(Line(-k), ..))` walk (`grid/mod.rs:412`) — it does
+**not** touch `display_offset`. The existing cell→span conversion in
+`render.rs` (`SpanStyle`, `push_styled_cell`) is row-agnostic and reusable
+as-is; a window snapshot is a sibling of `snapshot_frame` that iterates a
+caller-chosen `Line` range instead of `display_iter`.
 
-**Maintaining the counter.** Below the cap it is exact: per write batch,
-lines committed to history = the increase in `history_size()`. The subtle
-part is *while the user is scrolled back*, which is the only time overscan
-is active: when new output arrives with `display_offset > 0`, alacritty
-itself bumps `display_offset += positions` to keep the viewport pinned to
-the same content (`grid/mod.rs:267`) — so the daemon reads the rebase amount
-directly off the `display_offset` delta, no content diffing. The one
-unavoidable soft spot: scrolled to the *absolute top* of a *full* buffer
-while output floods, alacritty cannot pin (the top line is being evicted);
-this is defined as an accepted edge that resolves to a resync (§5.3). Both
-`display_offset` and `history_size` are already on `RenderableContent`, so
-publishing them costs nothing.
+### 2.3 Difficult cases — current behavior, and how windows dispatch them
 
-**Retrieval is feasible.** Reading an arbitrary history range without
-disturbing the live viewport is a `grid.iter_from(Point::new(Line(-k), ..))`
-walk (`grid/mod.rs:412`) — it does **not** touch `display_offset`. The
-existing cell→span conversion in `render.rs` (`SpanStyle`,
-`push_styled_cell`) is row-agnostic and reusable as-is; a scrollback
-snapshot is a sibling of `snapshot_frame` that iterates a caller-chosen
-`Line` range instead of `display_iter`. No engine change needed.
+With no cache to protect, the hard cases collapse to "fetch a fresh window":
 
-### 2.3 Difficult cases — current behavior (confirmed)
-
-**Reflow on resize invalidates all addressing.** A column resize re-wraps
-history: `grid/resize.rs` `grow_columns`/`shrink_columns` merge and split
-lines on the `WRAPLINE` flag, pulling cells across row boundaries and in/out
-of history. A row resize moves lines between screen and history
-(`grow_lines` pulls up from history, `shrink_lines` pushes "out the top",
-`resize.rs:43`,`78`). Either way line boundaries and the screen-top anchor
-change, so **any absolute numbering is void across a resize** — resize is an
-epoch bump and a full cache drop (§5.1). `display_offset` is merely clamped,
-not meaningfully preserved as an identity.
-
-**Alternate screen has no scrollback at all.** The alt grid is constructed
-with `max_scroll_limit = 0` (`term/mod.rs:416`), so `history_size` is always
-0 there — there is nothing to overscan. `swap_alt` (`term/mod.rs:714`)
-`mem::swap`s the primary grid (with its history *and* its `display_offset`)
-into `inactive_grid` and restores it intact on exit. So overscan must be
-**disabled while `ALT_SCREEN` is set** and seamlessly resumes on exit. The
-frame today carries `mouse_reporting` and `keys_as_escape_codes` but **not**
-an alt-screen / scrollback-availability flag — one must be added (additive,
-§4) so the client knows to suspend local scrolling.
-
-**New output while scrolled back keeps position, does not follow the tail.**
-Because of the `display_offset += positions` pinning above, the current
-behavior is *position-maintained*: the viewport stays on the same history
-content while the live tail grows below (confirmed by
-`scroll_snapshot_reproduces_history_content` and
-`cursor_is_hidden_while_scrolled_and_correct_at_the_live_edge`,
-`crates/horizon-terminal-core/src/tests.rs`; the cursor reads `None` while
-scrolled away). Overscan must preserve this: the daemon tells the client
-"the tail grew by N / your top row's absolute id is still X", the client
-holds its local position, and returning to the live edge (`display_offset
-== 0`) resumes following the watch.
-
-**Scrollback depth and eviction.** `scrolling_history` comes from host
-config (`TerminalSpawnSpec::scrollback_lines`, fed from
-`terminal::config`), default 10 000. Eviction is FIFO from the top (the ring
-buffer's `shrink_lines`). The client cache must respect this bound — a
-request for an evicted (below-`topmost_line`) row returns empty, and the
-client's cache ceiling should track the daemon's, never exceed it.
+- **Reflow on resize.** A column resize re-wraps history on the `WRAPLINE`
+  flag (`grid/resize.rs` `grow_columns`/`shrink_columns`); a row resize moves
+  lines between screen and history (`grow_lines`/`shrink_lines`,
+  `resize.rs:43`,`78`). This would void any absolute numbering — but a window
+  carries none, so the next window the client fetches simply reflects the new
+  layout. Nothing to invalidate.
+- **Alternate screen has no scrollback.** The alt grid is built with
+  `max_scroll_limit = 0` (`term/mod.rs:416`); `swap_alt` (`term/mod.rs:714`)
+  swaps the primary grid — history *and* `display_offset` — into
+  `inactive_grid` and restores it intact on exit. So windowed overscan is
+  suspended while `ALT_SCREEN` is set (wheel/PageUp keep today's passthrough,
+  §2.1) and resumes on exit against a fresh window. The frame carries
+  `mouse_reporting` and `keys_as_escape_codes` but no scrollback-availability
+  flag; one is added (additive, §4) so the client knows when to route
+  locally vs passthrough.
+- **New output while scrolled back.** Today alacritty pins the viewport to
+  the same content as the tail grows (`display_offset += positions`,
+  `grid/mod.rs:267`; confirmed by `scroll_snapshot_reproduces_history_content`
+  and `cursor_is_hidden_while_scrolled_and_correct_at_the_live_edge`,
+  `crates/horizon-terminal-core/src/tests.rs`). A window is a point-in-time
+  snapshot, so streaming output does not disturb the rows the client already
+  holds; the *next* prefetch returns a window re-anchored to the then-current
+  tail (its `above`/`below`, §3.2, re-locate it exactly). Minor anchor drift
+  if output floods mid-gesture — acceptable, and rare, since scrollback is
+  read on near-idle output.
+- **Scrollback depth and eviction.** `scrolling_history` comes from host
+  config (`TerminalSpawnSpec::scrollback_lines`, default 10 000); eviction is
+  FIFO from the top (`shrink_lines`). A window naturally clamps at the true
+  top (`above == 0`) and the live edge (`below == 0`); a request past the
+  evicted top just returns the oldest rows that survive.
 
 ## 3. Architecture
 
-### 3.1 The live frame stays a viewport — do not fatten it
+### 3.1 The live frame stays a viewport — untouched
 
-The `rch::watch<TerminalFrame>` frame path is unchanged in shape and cost:
-one full viewport per delivery, 16 ms coalesced, the O(1) resync anchor
-(`docs/terminal-protocol-goals.md` goal 1). Overscan does **not** widen the
-frame — a watch is latest-value and would ship the whole band on every
-keystroke echo, which is exactly the cost model §1.3 is trying to avoid.
-Scrollback rides a **separate, on-demand path**.
+The `rch::watch<TerminalFrame>` frame path keeps its shape and cost: one
+full viewport per delivery, 16 ms coalesced, the O(1) resync anchor
+(`docs/terminal-protocol-goals.md` goal 1), always following the live tail.
+Overscan **does not widen the frame** and adds **zero** cost to the live
+path — a watch is latest-value and would ship a taller band on every
+keystroke echo. The margin is paid **only on a scroll response** (§3.2).
 
-### 3.2 On-demand scrollback retrieval (a second channel)
+### 3.2 The scroll window
 
-A request/response pair, distinct from the frame watch and from the
-latency-sensitive `events` mpsc:
+When the client scrolls back, it asks the daemon for a window and the daemon
+answers with one message:
 
-- **Request** (client → daemon): `ScrollbackRequest { epoch, range }`, where
-  `range` is an absolute-id (or relative, per §9) span of history rows above
-  the live viewport that the client wants but does not hold.
-- **Response** (daemon → client): `ScrollbackChunk { epoch, top_id, lines:
-  Vec<TerminalLine> }` — immutable history rows, built by the §2.2 retrieval
-  path, reusing the frame's own `TerminalLine` vocabulary so the client
-  paints them with the identical renderer. `epoch` lets the client discard a
-  chunk that a resize/reset invalidated mid-flight.
+- **Request** (client → daemon): `RequestScrollWindow { anchor, height }`.
+  `anchor` names the desired scroll position as *lines above the live
+  bottom* — resolved against the grid at service time, so it needs no stable
+  id. `height` (or a daemon-fixed policy) is the total rows to return.
+- **Response** (daemon → client): a self-locating window —
+  - `lines: Vec<TerminalLine>` — the contiguous block, built by the §2.2
+    `iter_from` walk, reusing the frame's own `TerminalLine` vocabulary so
+    the client paints it with the identical renderer;
+  - `viewport_offset` — which row of `lines` is the top of the viewport at
+    the requested position (where to place the visible window inside the
+    block);
+  - `above` / `below` — how many history rows exist above the block's top and
+    how many rows down to the live tail below its bottom. These size and
+    position the scrollbar thumb, and their zeroes are the **true-top**
+    (`above == 0`) and **live-edge** (`below == 0`) signals.
 
 The request is served **inside the session loop** (it owns `TerminalCore`):
-add a `scrollback_rx` to `CoreReceivers` and a `scrollback_tx` output to
-`run_terminal_core`, with a new `TerminalCore::snapshot_scrollback(range)`
-that walks `iter_from` without moving `display_offset`. On the daemon this
-is a third per-subscriber bridge in `hub.rs` alongside frames and events.
+add a `window_rx` to `CoreReceivers` and a `window_tx` output from
+`run_terminal_core`, with a new `TerminalCore::snapshot_window(anchor,
+height)` that walks `iter_from` and **never moves the live `display_offset`**
+— the live frame keeps showing the tail throughout. Because the window is
+self-describing (`above`/`below`/`viewport_offset`), the client needs no
+request/response correlation id: a superseded prefetch is simply the
+not-latest self-located window, resolved by position.
 
-Transport shape — two options, §4 / §9:
+### 3.3 Client-local scrolling within the window
 
-- **(b, recommended) a new additive `SessionHub` method** returning a
-  dedicated `ScrollbackChannel { requests, chunks }` (the `AgentAttachment`
-  request/response pair, `lib.rs:435`, is the structural twin). A new rtc
-  method is additive under §4; it keeps bulk history off the hot
-  command/event paths; and it sidesteps the blocker under (a′) below. An old
-  daemon simply never offers the method and the client falls back to
-  round-trip scrolling.
-- **(a, minimal) two appended enum variants** — `TerminalCommand::
-  RequestScrollback` and `TerminalUpdate::ScrollbackChunk` — on the existing
-  `commands`/`events` channels. Zero new channels, maximally skew-trivial
-  (both enums already have `#[serde(other)] Unknown`). The
-  `TERMINAL_EVENT_MAX_ITEM_BYTES` cap is a comfortable 4 MiB (=
-  `FRAME_MAX_ITEM_BYTES`), so a chunk fits; the real cost is **head-of-line**
-  — bulk history shares the `events` mpsc with latency-sensitive
-  bell/title/clipboard and can delay them.
-- **(a′, avoid) a new field on `TerminalAttachment`.** Tempting, but a
-  transported remoc channel half has no obvious `Default`, and §4 requires a
-  new struct field to be non-newly-`required` (i.e. `#[serde(default)]`) to
-  stay additive. A new field would therefore read as a *reshape* to the
-  schema checker unless that default question is resolved — which is exactly
-  why (b)'s new-method route is preferred over widening the struct.
+The client owns a **local scroll offset** into the held window. A wheel or
+PageUp gesture moves the offset and triggers a **local repaint** from the
+window's rows — no IPC (`ScrollAccumulator` already yields the line delta
+locally, `src/terminal/mod.rs:317`). The live `display_offset` on the daemon
+stays at the tail; scrollback is composited entirely on the client from the
+one window it holds. Scrolling back down until `below`'s rows are exhausted
+returns to the live edge: the client drops the window and resumes rendering
+the live-frame watch.
 
-### 3.3 The client's immutable cache
+### 3.4 Prefetch
 
-A per-pane cache of `TerminalLine`s keyed by `(epoch, absolute_id)` (§2.2).
-Populated by `ScrollbackChunk`s; read by the local renderer. Immutable
-within an epoch — no invalidation on ordinary output, which is the whole
-point. Bounded (§5.4) and dropped wholesale on epoch change (§5.1).
+When the local offset comes within a threshold (proposal: ~1 viewport) of
+the top of the held window — and `above > 0` — the client issues a
+`RequestScrollWindow` recentred further up, so the next window arrives before
+the offset reaches the edge, hiding the round-trip. Symmetrically downward
+while `below > 0`. At most one prefetch outstanding; a newer request
+supersedes an older by self-location (§3.2). The very first scroll-back tick
+still costs one fetch (IPC was measured ~1.5 ms median, `docs/roadmap.md`
+terminal wave), optionally hidden by pre-warming a window on attach/focus.
 
-### 3.4 Client-owned local scroll offset + local repaint
+### 3.5 Tradeoffs (stated)
 
-Today the daemon is the sole owner of scroll position (`display_offset`
-lives in the grid). Overscan **splits** that ownership:
-
-- The client owns a **local scroll offset** into `[cache ∪ current frame]`.
-  A wheel/PageUp gesture moves it and triggers a **local repaint** from the
-  held rows — no IPC (`ScrollAccumulator` already produces the line delta
-  locally, `src/terminal/mod.rs:317`).
-- The daemon still owns the *live* `display_offset`, but for overscan it is
-  driven to the client's position only lazily / at rest, or kept at 0 (live
-  edge) with the client compositing scrollback purely from its cache. The
-  simplest coherent model: **while the client is scrolled within its band,
-  the daemon stays at the live edge and the client paints from cache; the
-  daemon's `display_offset` is only used for application-scroll-mode
-  passthrough and for the `null`-cache fallback.** (Owner decision §9: how
-  much scroll state, if any, mirrors to the daemon.)
-
-### 3.5 Prefetch policy
-
-The client prefetches when its local offset comes within a threshold
-(e.g. one viewport) of the top of its held band, requesting the next block
-(e.g. 1–2 viewports) above what it holds. Bounded outstanding requests; a
-gesture that outruns the cache degrades gracefully to a brief "catch-up"
-(worst case a momentary blank band or a one-shot synchronous fetch), never a
-per-tick round-trip. Seeding: on attach the client may pre-warm one
-viewport of scrollback so the first wheel tick is already local.
+- **Jump beyond the held window** — a scrollbar drag or "scroll to top" that
+  lands outside the current window — is a **round-trip** to fetch a window
+  there. Accepted: a deliberate jump tolerates one fetch; it is not the
+  judder-prone path.
+- **No instant revisit.** With no persistent cache, scrolling up, back to
+  live, then up again re-fetches. Accepted: the primary target — wheeling
+  gradually back through history — is smooth via in-window local scroll plus
+  prefetch, which is what actually judders today.
 
 ## 4. Protocol and versioning
 
@@ -307,75 +269,53 @@ Additive, under `docs/remoc-adoption-design.md` §4:
 - **`SESSION_PROTOCOL_VERSION` 11 → 12; `MIN_SUPPORTED_PROTOCOL_VERSION`
   stays 11.** Cross-version interop is a real requirement (owner). A v12
   client against a v11 daemon negotiates 11 and **falls back to today's
-  round-trip scrolling**; a v11 client against a v12 daemon never exercises
-  the new surface. The bump is a **feature-negotiation signal**, not a
-  compatibility barrier — the client gates "overscan available?" on the
-  negotiated version rather than probing.
+  round-trip scrolling** (the existing `Scroll` command); a v11 client
+  against a v12 daemon never exercises the new surface. The bump is a
+  **feature-negotiation signal**, not a compatibility barrier — the client
+  gates "windowing available?" on the negotiated version rather than probing.
 - The new surface is additive by the §4 classifier's own rules
-  (`crates/horizon-session-protocol/src/schema_check.rs`): a **new rtc
-  method** is additive; **appended enum variants** are additive provided
+  (`crates/horizon-session-protocol/src/schema_check.rs`): **appended enum
+  variants** (`RequestScrollWindow`, `ScrollWindow`) are additive provided
   they precede the trailing `#[serde(other)] Unknown` and nothing is
-  reordered/retyped; the new **frame flag** (§2.3 alt-screen /
-  scrollback-availability) is a new field carrying `#[serde(default)]`.
-  Every new wire type derives `JsonSchema`; the committed artifact
+  reordered/retyped; a **new rtc method** (delivery option i, §9) is
+  additive; the new **scrollback-availability frame flag** (§2.3) is a new
+  field carrying `#[serde(default)]`. Every new wire type derives
+  `JsonSchema`; the committed artifact
   (`crates/horizon-session-protocol/schema/session-wire.json`, which strips
-  the `Unknown` catch-alls and documents only what a peer may legally *send*)
+  `Unknown` catch-alls and documents only what a peer may legally *send*)
   regenerates in `crates/horizon-sessiond/tests/wire_schema.rs`
-  (`HORIZON_BLESS_WIRE_SCHEMA=1` to bless), and the change shows as
-  reviewable diff text — waved through by the `x-session-protocol-version`
-  bump. A new hub method also lands in the artifact's `hub` section; a new
-  streamed channel in its `channels` section (alongside `terminal_frames` /
-  `terminal_events` / `terminal_commands`).
-- **The method-surface pin test.** A new `SessionHub` method (option b) must
-  also update `hub_request_enum_matches_the_documented_method_surface`
-  (`crates/horizon-session-protocol/src/lib.rs:606`), which asserts the exact
-  method list and argument names by serde error string, in the same change.
-- **Postbag positional discipline** (§4 rule 5): `ScrollbackChunk.lines` is
-  a `Vec<TerminalLine>` — `TerminalLine`/`TerminalSpan` are structs (not
-  wire enums) so the "no enums in element position" rule is satisfied. Every
-  new wire enum keeps a trailing `Unknown`.
+  (`HORIZON_BLESS_WIRE_SCHEMA=1` to bless) and shows as reviewable diff text,
+  waved through by the `x-session-protocol-version` bump. A new hub method
+  would also land in the artifact's `hub` section (and must update the
+  method-surface pin test `hub_request_enum_matches_the_documented_method_surface`,
+  `crates/horizon-session-protocol/src/lib.rs:606`); a new streamed channel
+  in its `channels` section.
+- **Postbag positional discipline** (§4 rule 5): `ScrollWindow.lines` is a
+  `Vec<TerminalLine>` — `TerminalLine`/`TerminalSpan` are structs, not wire
+  enums, so the "no enums in element position" rule holds. Both new enum
+  variants keep the trailing `Unknown`.
 
 ## 5. Hard-case design
 
-### 5.1 Reflow on resize → epoch bump, full cache drop
+Each hard case reduces to fetching a fresh window (§2.3); there is no cache
+to invalidate:
 
-A resize (any change to rows or cols) reflows history (§2.3) and voids
-addressing. The daemon increments `epoch` on resize; the client, seeing a
-new `epoch` on the next frame, **drops its entire scrollback cache** and
-re-prefetches from the (new) live layout. No attempt is made to remap old
-rows across a reflow — it is not worth the complexity and the frame watch
-already delivers the correct new viewport as the resync anchor.
-
-### 5.2 Alternate screen → overscan disabled
-
-While the added scrollback-availability flag says "unavailable"
-(`ALT_SCREEN` set, or application scroll mode), the client **suspends local
-scrolling** entirely and forwards wheel/PageUp as it does today (the core
-already routes these to application input, §2.1). On exit, the primary
-grid — history and position — is restored intact by `swap_alt`, so the
-client resumes overscan against its still-valid cache (same epoch, unless a
-resize happened meanwhile).
-
-### 5.3 New output while scrolled back → "tail grew" / rebase, with an accepted edge
-
-The daemon publishes enough for the client to keep position (§2.2/§2.3):
-the top row's absolute id (or the rebase delta) and the live `history_size`.
-The client holds its local offset; the growing tail changes nothing it is
-looking at. **Accepted edge:** scrolled to the absolute top of a *full*
-buffer while output floods, alacritty itself evicts the top line and cannot
-pin — the client resyncs (snaps toward the live edge or re-requests the
-now-shifted top). This is rare and self-healing, and matches the engine's
-own limit rather than papering over it.
-
-### 5.4 Cache bound and eviction
-
-The client cache is bounded (rows, not bytes, to a small multiple of the
-viewport or a fixed ceiling ≤ the daemon's `scrolling_history`). Eviction is
-LRU-by-distance-from-viewport: drop the rows furthest from the current local
-offset first. A request for a row the daemon has itself evicted
-(below `topmost_line`) returns an empty chunk; the client renders blank and
-clamps its scroll there, exactly as the daemon clamps `display_offset` today
-(`scroll_clamps_at_both_edges`, `tests.rs`).
+- **Resize / reflow.** No epoch, no invalidation. The next window the client
+  requests reflects the reflowed layout; a mid-gesture resize just makes the
+  in-flight or next window the new truth, and the live-frame watch already
+  delivers the correct new viewport as the resync anchor.
+- **Alternate screen.** While the scrollback-availability flag says
+  "unavailable" (`ALT_SCREEN`, or application scroll mode), the client
+  suspends local windowing and forwards wheel/PageUp as today (the core
+  routes these to application input, §2.1). On exit the primary grid is
+  restored intact by `swap_alt`; the next scroll-back fetches a window
+  against it.
+- **New output while scrolled back.** The held window is unchanged; the next
+  prefetch's `above`/`below` re-anchor the client to the grown tail (§2.3).
+  No "tail grew" bookkeeping is required beyond re-reading a window.
+- **True top / live edge.** `above == 0` clamps upward scrolling and stops
+  upward prefetch; `below == 0` means the window's bottom is the live tail,
+  so scrolling past it drops the window and resumes the live watch.
 
 ## 6. Interim Option (A) — evaluate, likely skip
 
@@ -384,90 +324,103 @@ them promptly so a drag through history feels like v10 again, while leaving
 the round-trip in place. Cheap (a special-case in `notify_snapshot`'s
 cadence, or a non-coalesced side-channel for scroll-driven frames).
 
-**Assessment.** It buys back the v10 *feel* of history scrolling for a small
-change, but it (i) does not remove the round-trip — a fast gesture is still
-bounded by IPC + daemon render latency, (ii) fights the watch's whole
-latest-value premise (§1.3), and (iii) is thrown away entirely once §3
-lands, since local scrolling never produces a scroll-reply frame at all.
+**Assessment.** It buys back the v10 *feel* for a small change, but it
+(i) does not remove the round-trip — a fast gesture is still bounded by IPC +
+daemon render latency, (ii) fights the watch's whole latest-value premise
+(§1.3), and (iii) is thrown away once §3 lands, since local windowed
+scrolling never produces a scroll-reply frame at all.
 
-**Recommendation:** **skip Option A** unless the overscan work (B) is
-deferred past the owner's tolerance for the current judder. B is not a large
-project and A shares no code with it, so A is pure interim cost. Record it as
-the fallback if B slips; do not build both.
+**Recommendation: skip Option A.** The windowed work is now *smaller* than
+the earlier persistent-cache plan (no id/epoch/cache machinery, §7), so the
+interim is even harder to justify. Keep A on the shelf only as a fallback if
+the windowed work slips past the owner's tolerance for the current judder;
+do not build both.
 
 ## 7. Migration / phased plan
 
-Phased PRs, each independently landable and green:
+Fewer, smaller phases than the persistent-cache draft — the id/epoch/counter
+phase and the cache/eviction phase are gone entirely:
 
-1. **Daemon observability (no client change).** Publish `display_offset`,
-   `history_size`, absolute `top_id`, `epoch`, and the alt-screen /
-   scrollback-availability flag on the frame (additive, `#[serde(default)]`).
-   Bumps the schema; no behavior change. Establishes §2.2's counter and
-   §5's epoch machinery in isolation, with unit tests for the counter across
-   scroll-off, cap saturation, resize, and alt-toggle.
-2. **Scrollback retrieval path.** `TerminalCore::snapshot_scrollback`,
-   `scrollback_rx`/`scrollback_tx` in the session loop, the daemon bridge,
-   and the chosen transport (§3.2 / §9). Server-side testable end-to-end
+1. **Daemon window retrieval (no client behavior change).**
+   `TerminalCore::snapshot_window(anchor, height)` via `iter_from` (never
+   moves `display_offset`), returning `lines` + `viewport_offset` + `above` +
+   `below`; the `window_rx`/`window_tx` wiring in the session loop; and the
+   additive scrollback-availability frame flag. Server-testable end-to-end
    before any UI consumes it.
-3. **Client cache + local scroll + local repaint.** The `(epoch,
-   absolute_id)` cache, client-owned offset, local paint from
-   `[cache ∪ frame]`. This is the PR that removes the round-trip from the
-   gesture path. Inbound plumbing mirrors the frame path: a new receiver on
-   `TerminalSessionHandle` (`src/sessiond/mod.rs`), registered in
-   `register_terminal` (`src/sessiond/routing.rs`), drained in
-   `run_terminal_attachment`'s `select!` (`src/sessiond/connection.rs`) into
-   a new `Routes::route_*`, and merged into the pump as a new `Incoming`
-   variant (`src/terminal/session.rs`).
-4. **Prefetch + seeding + edge handling.** Threshold prefetch, attach-time
-   pre-warm, §5.3 rebase and §5.4 eviction, alt-screen suspend/resume.
-5. **`SESSION_PROTOCOL_VERSION` → 12** and the fallback gate (negotiate 11 ⇒
-   old round-trip path). Can fold into 1 or ride last, as long as the
-   feature is gated on the negotiated version throughout.
+2. **Client windowed local scroll.** On the first scroll-back tick, request a
+   window; own the local offset and repaint within it; return to the live
+   edge (`below` exhausted) drops the window and resumes the watch. This is
+   the PR that removes the round-trip from the gesture. Inbound plumbing
+   mirrors the frame path: a receiver on `TerminalSessionHandle`
+   (`src/sessiond/mod.rs`), registered in `register_terminal`
+   (`src/sessiond/routing.rs`), drained in `run_terminal_attachment`'s
+   `select!` (`src/sessiond/connection.rs`), merged into the pump as a new
+   `Incoming` variant (`src/terminal/session.rs`) — unless delivery rides the
+   existing `events` channel (§9 option ii), which reuses that plumbing
+   as-is.
+3. **Prefetch, edges, and passthrough.** Threshold prefetch (§3.4), true-top
+   / live-edge handling (§5), the scrollbar-jump round-trip (§3.5), and
+   alt-screen / mouse-mode passthrough gating on the availability flag.
+4. **`SESSION_PROTOCOL_VERSION` → 12** and the negotiation gate (negotiate 11
+   ⇒ today's round-trip `Scroll`). May fold into phase 1 or ride last, as
+   long as the feature is version-gated throughout.
 
 ## 8. Test strategy
 
-- **No-round-trip proof (the headline invariant).** With a warm cache, an
-  in-band wheel/PageUp gesture produces **zero** `ScrollbackRequest`/`Scroll`
-  traffic to the daemon and a local repaint — assert against the command
-  channel that nothing is sent while scrolling within the held band.
-- **Addressing stability.** Unit-test the daemon counter: absolute ids stay
-  fixed for a given history row across subsequent output (below cap and at
-  cap), and the `display_offset`-pinning rebase is exact while scrolled back.
-- **Epoch invalidation.** A resize bumps `epoch` and the client drops its
-  cache; a post-resize prefetch returns correctly-reflowed rows; no stale
-  row survives a reflow.
-- **Alt-screen.** Entering alt screen suspends local scroll and forwards
-  application input; exiting restores overscan against the same-epoch cache.
-- **Tail-grew.** New output while scrolled back leaves the viewed content
-  fixed; the accepted top-of-full-buffer edge resyncs rather than corrupts.
-- **Prefetch / eviction.** Approaching the band edge prefetches ahead of
-  need; a gesture outrunning the cache degrades to catch-up, not per-tick
-  round-trips; evicted-below-`topmost_line` requests clamp to blank.
-- **Cross-version.** A v12 client negotiating 11 uses the round-trip path
-  unchanged; a v11 client against a v12 daemon ignores the new surface
-  (both enums' `Unknown`, the new method simply unused).
+- **No-round-trip proof (headline invariant).** With a window held, an
+  in-window wheel/PageUp gesture produces **zero** command traffic to the
+  daemon and a local repaint — assert nothing is sent on the command channel
+  while scrolling within the window.
+- **Window contents.** `snapshot_window(anchor, height)` returns the correct
+  contiguous block with correct `viewport_offset`/`above`/`below`, and
+  **does not move the live `display_offset`** (the live-frame watch still
+  shows the tail after a window is served).
+- **Prefetch.** Nearing a window edge with `above`/`below` > 0 issues one
+  recentred `RequestScrollWindow` ahead of need; reaching the edge finds the
+  next window already present. A gesture that outruns prefetch degrades to a
+  brief catch-up, never per-tick round-trips.
+- **Re-fetch on structure change.** After a resize/reflow or alt-screen exit,
+  the next window reflects the new layout; no stale rows exist because
+  nothing is cached.
+- **True edges.** `above == 0` clamps and stops upward prefetch; `below == 0`
+  drops the window and resumes the live watch.
+- **Scrollbar jump.** A jump beyond the held window issues exactly one window
+  fetch (not per-tick), landing at the requested position.
+- **Cross-version.** A v12 client negotiating 11 uses the round-trip `Scroll`
+  path unchanged; a v11 client against a v12 daemon ignores
+  `RequestScrollWindow`/`ScrollWindow` (both decode to `Unknown`).
 
 ## 9. Owner decisions (branches this design leaves open)
 
-1. **Addressing model:** absolute-id-within-epoch (§2.2, recommended) vs
-   relative + rebase-delta. Equivalent; picks the cache-key shape.
-2. **Transport:** new `SessionHub` method with a dedicated scrollback
-   channel (§3.2 b, recommended) vs two appended enum variants on the
-   existing channels (§3.2 a, minimal but bulk-on-events).
-3. **Scroll-state ownership:** does *any* client scroll position mirror to
-   the daemon's `display_offset` (§3.4), or does the daemon stay at the live
-   edge with the client compositing scrollback entirely from cache? The
-   latter is simpler and is the recommendation.
-4. **Interim Option A:** build it as a bridge, or go straight to B (§6,
-   recommendation: straight to B).
-5. **Prefetch sizing / cache ceiling** (§3.5, §5.4): concrete thresholds are
-   left to measurement during phase 3–4, not fixed here.
+1. **Window delivery path** (§3.2). (i) a dedicated `SessionHub` method +
+   request/response channel; (ii) **ride the existing channels** —
+   `TerminalCommand::RequestScrollWindow` out, `TerminalUpdate::ScrollWindow`
+   back on the `events` mpsc; (iii) reinterpret the existing `Scroll` command
+   to reply with a window. **Recommendation: (ii).** Windows are low-frequency
+   and user-driven (a gesture, then a prefetch — not a stream), the 4 MiB
+   `events` cap holds a multi-screen window comfortably, and the window is
+   self-describing so no correlation id is needed. Its only cost —
+   head-of-line-blocking a bell/title behind a window send — is bounded by
+   that low frequency. (i) is the clean escape hatch if windows ever grow
+   large or frequent enough that the shared event path bites; (iii)
+   conflates the passthrough `Scroll` with a new response shape and is not
+   recommended.
+2. **Window height and prefetch threshold** (§3.2, §3.4) — left to
+   measurement, with proposed initial values: window ≈ 3 viewports tall
+   (viewport ± ~1 screen of margin each side), prefetch when the local offset
+   is within ~1 viewport of an edge. Tune against the measured ~1.5 ms IPC and
+   the 16 ms frame coalescing so the margin reliably covers one round-trip's
+   worth of gesture.
+3. **Scrollback-availability signal** (§2.3) — an explicit additive frame
+   flag (recommended, so the client cleanly routes wheel to passthrough in
+   alt/mouse mode) vs inferring availability from a served window's
+   `above`/`below`. The flag avoids a speculative fetch just to learn there
+   is nothing to scroll.
 
 ## References
 
 - `docs/terminal-protocol-goals.md` — frame path direction; goal 1 (O(1)
-  resync), the viewport-only frame, the "scroll context as a designed tier"
-  note.
+  resync), the viewport-only frame, "scroll context as a designed tier".
 - `docs/session-daemon-design.md` — decision 1 (daemon owns the emulator),
   decision 9 (the session loop, config-fed `scrolling_history`).
 - `docs/remoc-adoption-design.md` — §3 version negotiation, §4 skew
@@ -477,18 +430,15 @@ Phased PRs, each independently landable and green:
   `session_loop.rs`, `types/frame.rs` — the emulator core, the viewport
   snapshot, the loop, the frame vocabulary.
 - `crates/horizon-sessiond/src/hub.rs`, `terminal.rs` — the per-subscriber
-  channel bridges (`terminal_attachment`, `forward_updates`, `run_writer`
-  demux, `spawn_terminal` channel creation) and the command demux.
+  channel bridges and the command demux.
 - `crates/horizon-session-protocol/src/lib.rs`, `schema_check.rs`,
   `crates/horizon-sessiond/tests/wire_schema.rs`,
   `crates/horizon-session-protocol/schema/session-wire.json` — the attachment
-  shape, version constants, the additive classifier, and the committed wire
-  artifact.
+  shape, version constants, the additive classifier, the committed artifact.
 - `src/terminal/mod.rs`, `session.rs`, `input.rs` — the client scroll path,
   the notify pump, and `ScrollAccumulator`.
 - `src/sessiond/mod.rs`, `connection.rs`, `routing.rs` — the client-side
-  attachment runner and per-session channel routing the inbound scrollback
-  path extends.
+  attachment runner and per-session channel routing.
 - `alacritty_terminal` 0.26 `src/grid/mod.rs`, `grid/resize.rs`,
-  `term/mod.rs` — the coordinate system, reflow, alt-screen swap that §2 is
-  grounded in.
+  `term/mod.rs` — the coordinate system, `iter_from`, reflow, alt-screen
+  swap that §2 is grounded in.
