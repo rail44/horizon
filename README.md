@@ -42,8 +42,6 @@ Agent provider access reads `OPENAI_API_KEY` from the environment. The
 Horizon-owned `web_search` tool additionally needs environment-only
 `EXA_API_KEY`; neither secret belongs in `config.toml`. `web_fetch` has no
 vendor key and asks before contacting each exact destination host.
-`public_code_search` also needs no key; it performs bounded, best-effort
-searches over indexed public GitHub code through a fixed Sourcegraph endpoint.
 
 After `cargo run`, press `ctrl+'` to enter workspace mode, then `:` to open
 the control surface (see `docs/workspace-mode-design.md`) — a Commands-only

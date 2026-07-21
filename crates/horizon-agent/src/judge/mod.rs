@@ -618,33 +618,4 @@ mod tests {
         assert_eq!(*calls.lock().unwrap(), 1);
         let _ = std::fs::remove_file(path);
     }
-
-    #[test]
-    fn public_code_search_has_no_human_prompt_and_fires_the_shadow_judge_once() {
-        let path = temp_event_log("public-code-search");
-        let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
-        let calls = Arc::new(Mutex::new(0usize));
-        let client: Arc<dyn ModelClient> = Arc::new(CountingClient {
-            calls: Arc::clone(&calls),
-        });
-        let judge = JudgeHandle::for_test("test-judge-model", client, writer);
-        let tool_state = ToolSessionState::new(std::env::temp_dir()).with_judge(Some(judge));
-
-        let events = crate::policy::horizon_events_for_provider_event(
-            &tool_call_requested_with_input(
-                "public_code_search",
-                serde_json::json!({ "query": "VecDeque lang:rust" }),
-            ),
-            &tool_state,
-            SessionId::new(),
-        );
-
-        assert!(!events
-            .iter()
-            .any(|event| matches!(event, crate::contract::Event::ApprovalRequested(_))));
-        wait_until(|| *calls.lock().unwrap() == 1);
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        assert_eq!(*calls.lock().unwrap(), 1);
-        let _ = std::fs::remove_file(path);
-    }
 }

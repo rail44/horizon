@@ -144,10 +144,6 @@ fn fs_read_glob_grep_are_auto_allow_read_and_write_edit_require_approval() {
 #[test]
 fn web_tools_enter_call_level_boundary_policy() {
     assert_eq!(
-        permission_for_tool("public_code_search"),
-        Some(ToolPermission::RequireApproval)
-    );
-    assert_eq!(
         permission_for_tool("web_search"),
         Some(ToolPermission::RequireApproval)
     );
@@ -1353,34 +1349,6 @@ fn invalid_web_fetch_finishes_as_an_auto_boundary_error_without_network() {
         results_rx
             .recv_timeout(Duration::from_secs(5))
             .expect("invalid fetch completion"),
-    );
-    assert_eq!(result.call_id, request.call_id);
-    assert_eq!(result.output["is_error"], true);
-    assert_eq!(result.output["auto_approved"], true);
-    assert_eq!(result.output["policy_tier"], "boundary_crossing");
-    unregister_session_runtime(session_id);
-}
-
-#[test]
-fn invalid_public_code_search_finishes_as_an_auto_boundary_error_without_network() {
-    let tool_state = ToolSessionState::new(std::env::temp_dir());
-    let session_id = SessionId::new();
-    let (results_tx, results_rx) = crossbeam_channel::unbounded();
-    register_session_runtime(session_id, tool_state.clone(), LiveState::new(), results_tx);
-    let request = ToolCallRequest {
-        call_id: ToolCallId("public-code-search-invalid".to_string()),
-        tool_id: "public_code_search".to_string(),
-        input: json!({ "query": "VecDeque count:all" }).into(),
-    };
-
-    assert!(matches!(
-        execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
-        Execution::Started(_)
-    ));
-    let result = expect_finished(
-        results_rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("invalid public code search completion"),
     );
     assert_eq!(result.call_id, request.call_id);
     assert_eq!(result.output["is_error"], true);

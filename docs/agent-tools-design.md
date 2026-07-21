@@ -28,7 +28,6 @@ plugin-provided tools, running agent commands inside terminal sessions.
 | bash  | require approval | Fresh process per command (below)                  |
 | web_search | boundary: auto | Fixed Exa endpoint; shadow-judged             |
 | web_fetch | boundary: exact-host grant | Bounded SSRF-safe fetch           |
-| public_code_search | boundary: auto | Fixed public Sourcegraph stream     |
 
 All tools require **absolute paths**; relative paths are rejected with an
 actionable error (models measurably mishandle relative paths — SWE-bench-era
@@ -98,8 +97,7 @@ in-flight bash call.
 
 ## Web Tools
 
-`web_search`, `web_fetch`, and `public_code_search` are asynchronous
-Horizon-owned tools. Web search
+`web_search` and `web_fetch` are asynchronous Horizon-owned tools. Search
 uses a fixed HTTPS Exa adapter, an environment-only `EXA_API_KEY`, bounded
 inputs/responses, and a vendor-neutral result shape. It is auto-approved as
 the narrow fixed-vendor boundary crossing while the shadow judge records
@@ -114,18 +112,6 @@ targets, permits only standard HTTP(S) ports, disables ambient proxies, and
 caps redirects, total time, body bytes, DOM work, metadata, and returned
 content. HTML is reduced to Markdown with `dom_smoothie`; supported text is
 passed through and binary or encoded bodies are rejected.
-
-Public-code search is a separate, vendor-neutral tool over Sourcegraph.com's
-anonymous Streaming Search API. Horizon fixes the HTTPS endpoint and the
-public-GitHub/file-only scope, owns result-count and timeout filters, disables
-ambient proxies and redirects, and caps concurrency, time, raw SSE bytes,
-event fields, snippets, and normalized output. Results retain repository,
-path, and commit attribution. The anonymous service has no published quota or
-SLA, so the adapter permits one process-wide request at a time with a minimum
-start interval and 403/429 cooldown, never retries automatically, and reports
-contention or stream failures as ordinary tool errors. LSP-backed local symbol
-navigation remains a separate lifecycle feature rather than an adapter hidden
-behind this tool.
 
 ## Error Model and Loop Guards
 

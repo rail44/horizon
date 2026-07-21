@@ -948,3 +948,13 @@ full resolution/closing records.
     `sgr_text_styles_reach_the_span`/`sgr_58_underline_color_reaches_
     the_span`/`style_attributes_are_part_of_the_span_merge_key` in
     `crates/horizon-terminal-core/src/tests.rs`.
+
+19. *(closed 2026-07-21)* **Public-code / symbol search.** This item came
+    from a comparative survey of crush's Sourcegraph and LSP tools, not an
+    owner request. `public_code_search` was subsequently implemented against
+    Sourcegraph.com's anonymous Streaming Search API without an explicit
+    product decision, then removed once that provenance gap was identified.
+    The survey remains under `docs/research/` as reference material, but
+    neither a public-code SaaS dependency nor LSP lifecycle work is planned.
+    Reintroduction requires a fresh owner decision on the capability and its
+    provider rather than treating this closed survey finding as direction.

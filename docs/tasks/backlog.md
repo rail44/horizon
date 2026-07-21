@@ -5,16 +5,6 @@ up. Numbering is stable and shared with the archive: resolved and closed
 entries live in `backlog-resolved.md` keeping their original numbers
 (split 2026-07-18).
 
-19. **[PARTIALLY RESOLVED 2026-07-21] Public-code / symbol search.** The
-    public-code half landed as `public_code_search` over Sourcegraph.com's
-    anonymous Streaming Search API, replacing the old GraphQL assumption with
-    the currently documented integration route. It is a fixed-endpoint,
-    bounded, best-effort BoundaryCrossing tool sharing the web runtime and
-    shadow judge. Still open: `lsp_references`/local semantic navigation.
-    Language-server discovery, process lifetime, per-workspace ownership,
-    document synchronization, and viewer integration are a larger independent
-    commitment; do not hide them behind the remote-search adapter. Originally
-    recorded 2026-07-07; split 2026-07-21.
 28. **[PARTIALLY RESOLVED 5c3f725, e478e6e] `horizon-sessiond` socket e2e
     flakes under the full parallel nextest run** — `terminal_create_diff_
     reconnect_attach_and_shutdown_over_the_real_socket` (`crates/
