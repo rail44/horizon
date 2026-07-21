@@ -294,6 +294,25 @@ lands:
   ad-hoc additions, and ecosystem code ports only at the pure-function
   level.
 
+- **Terminal scrollback — windowed overscan** (proposed 2026-07-21,
+  `docs/terminal-scrollback-design.md`). History scrolling judders: it is a
+  daemon round-trip with no local paint, worsened by v11's latest-value
+  frame watch dropping intermediate scroll positions. Direction (owner):
+  delete the round-trip from the gesture — on scroll-back the daemon returns
+  one **self-contained window** (a few screens tall, centred on the user),
+  the client scrolls *within it* locally and prefetches the next window near
+  an edge. Feasibility settled: alacritty 0.26 has **no stable absolute line
+  id** (screen-relative coordinates) — which is precisely why the design is
+  windowed rather than a persistent cache: a window needs no stable id, so
+  absolute-id synthesis, epochs, and reflow cache-invalidation are all
+  dropped. Retrieval via `iter_from` needs no engine change; alt-screen has
+  no scrollback (primary-screen-only, passthrough elsewhere). Additive wire
+  (v12, `MIN_SUPPORTED` stays 11 → old peers fall back to round-trip).
+  Tradeoffs accepted: scrollbar jump beyond the window is a round-trip; no
+  instant revisit of already-seen history. Open owner calls in doc §9 (window
+  delivery path — lean: ride the `events` channel; margin/prefetch sizing);
+  interim "smooth the reply cadence" fix assessed as symptomatic, skip.
+
 ## External gates
 
 - **winit on macOS/Windows** — the platform layer shipped
