@@ -530,16 +530,11 @@ pub(super) fn run_sandboxed(
     // Same wrapper shape as the unsandboxed path (`wrapped_script`): merges
     // the command's own stdout+stderr, and reports the final `$PWD` on the
     // wrapper's own stderr afterward so cwd tracking keeps working across
-    // sandboxed calls too. The command's own stderr (and so any denial
-    // text -- bwrap/the shell write it to fd 2) ends up in this wrapper's
-    // *stdout* via that merge, which is exactly what `raw_stdout` below is
-    // classified against.
+    // sandboxed calls too. The command's own stderr ends up in this
+    // wrapper's stdout via that merge and remains visible in the result.
     let script = wrapped_script(command);
     let mut cmd = std::process::Command::new("bash");
     cmd.arg("-c").arg(&script).current_dir(&cwd);
-    // Force English error text regardless of the host's locale -- denial
-    // classification is substring-based (see `horizon_sandbox::denial`).
-    cmd.env("LC_ALL", "C");
 
     let network_policy = match network.map(SessionNetworkProxy::proxy_addr) {
         Some(proxy_addr) => horizon_sandbox::NetworkPolicy::Proxied { proxy_addr },

@@ -33,7 +33,6 @@ pub enum ReadableScope {
 /// become direct egress.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NetworkPolicy {
-    Enabled,
     Disabled,
     Proxied { proxy_addr: SocketAddr },
 }

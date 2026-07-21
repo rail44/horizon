@@ -43,8 +43,6 @@
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod caps;
-#[cfg(test)]
-mod denial;
 mod error;
 mod grant;
 #[cfg(any(target_os = "macos", all(target_os = "linux", not(test))))]
@@ -66,7 +64,7 @@ pub use policy::{
 };
 
 #[cfg(target_os = "linux")]
-pub use linux::{NonoReport, SupervisorReport};
+pub use linux::SupervisorReport;
 
 #[cfg(target_os = "linux")]
 pub use horizon_sandbox_runtime::ReportError as SupervisorReportError;
@@ -93,24 +91,9 @@ pub const SCRATCH_DIR_NAME: &str = ".horizon-sandbox-tmp";
 #[doc(hidden)]
 pub const HELPER_PROTOCOL_MARKER: &str = "HORIZON_SANDBOX_HELPER_PROTOCOL_V1_SUPERVISED_LINUX";
 
-/// A spawned sandboxed process, plus whatever per-backend containment
-/// report is available.
-///
-/// `nono` is only ever `Some` on Linux; other backends carry no equivalent.
-/// macOS's `nono::Sandbox::apply_auto` returns no comparable diagnostic --
-/// unlike Linux's Landlock, Seatbelt has no ABI-gradient/seccomp-fallback
-/// concept to report on, it's simply present or not (`macos::is_available`).
-/// Unlike the old backend's `LandlockReport` (a diagnostic negotiated on a
-/// throwaway thread, decoupled from what actually protected the spawned
-/// bwrap child -- Landlock and bwrap could not share a thread), this
-/// report reflects the containment that is genuinely live around `child`:
-/// nono's `Sandbox::apply_auto` *is* what restricts the thread that then
-/// spawns it (Linux) -- or the helper process that execs into it (macOS,
-/// though there's no report to carry back for that case).
+/// A spawned sandboxed process and its authoritative supervisor report.
 pub struct SandboxedChild {
     pub child: Child,
-    #[cfg(target_os = "linux")]
-    pub nono: Option<NonoReport>,
     #[cfg(target_os = "linux")]
     pub supervisor_report: Option<SupervisorReport>,
 }

@@ -393,7 +393,7 @@ entries live in `backlog-resolved.md` keeping their original numbers
 59. **Resolved for proxy-domain and Linux `openat`/`openat2` denials
     2026-07-21; other syscall families remain.** Tier-1's former "denial ->
     retry without sandbox" flow (`docs/agent-approval-design.md`'s historical
-    "Denial UX", `horizon_sandbox::is_likely_sandbox_denied`)
+    "Denial UX", the now-removed `horizon_sandbox::is_likely_sandbox_denied`)
     classifies against the wrapped command's own exit code and merged
     output. A piped command masks both: `curl ... | head -n 1` under
     network-off observed empty output with exit 0 (`head`'s own success

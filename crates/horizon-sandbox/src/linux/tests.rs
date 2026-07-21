@@ -15,7 +15,6 @@
 //! proof of that).
 
 use super::*;
-use crate::denial::is_likely_sandbox_denied;
 use crate::policy::{NetworkPolicy, ReadableScope, SandboxPolicy, SandboxStdio};
 use std::io::Read;
 use std::time::{Duration, Instant};
@@ -77,11 +76,7 @@ fn wait_with_timeout(mut child: std::process::Child, timeout: Duration) -> i32 {
 fn shell(program: &str, script: &str) -> std::process::Command {
     let mut cmd = std::process::Command::new(program);
     cmd.arg("-c").arg(script);
-    // Force English error text regardless of the host's locale -- both
-    // this test's own keyword assertions and the real
-    // `is_likely_sandbox_denied` keyword list assume it (a real,
-    // locale-dependent weakness of substring-based denial classification,
-    // worth noting but not this spike's to fix).
+    // Keep diagnostic output stable when an assertion includes stderr.
     cmd.env("LC_ALL", "C");
     cmd
 }
@@ -150,14 +145,8 @@ fn writes_outside_writable_root_are_denied() {
     );
     let sandboxed = spawn(cmd, &policy, SandboxStdio::inherit()).expect("spawn should succeed");
     let code = wait_with_timeout(sandboxed.child, TEST_TIMEOUT);
-    let stderr = read_log(&log);
-
     assert_ne!(code, 0, "write outside the writable root should fail");
     assert!(!target.exists());
-    assert!(
-        is_likely_sandbox_denied(true, code, &stderr),
-        "expected a denial-shaped failure, got exit {code} stderr {stderr:?}"
-    );
 
     cleanup(writable);
     cleanup(outside);
@@ -209,16 +198,10 @@ fn literal_tmp_write_is_denied_without_a_matching_writable_root() {
     );
     let sandboxed = spawn(cmd, &policy, SandboxStdio::inherit()).expect("spawn should succeed");
     let code = wait_with_timeout(sandboxed.child, TEST_TIMEOUT);
-    let stderr = read_log(&log);
-
     assert_ne!(code, 0, "a literal /tmp write should be denied");
     assert!(
         !host_target.exists(),
         "the write must never actually land on the host's real /tmp"
-    );
-    assert!(
-        is_likely_sandbox_denied(true, code, &stderr),
-        "expected a denial-shaped failure, got exit {code} stderr {stderr:?}"
     );
 
     cleanup(workspace);
@@ -323,43 +306,6 @@ fn network_off_fails_a_tcp_connect() {
     cleanup(dir);
 }
 
-#[test]
-fn network_on_allows_reaching_the_kernel_network_stack() {
-    // We don't assert the connect *succeeds* (this test must stay
-    // hermetic and not depend on outbound connectivity in whatever
-    // environment runs it) -- only that it isn't rejected by our own
-    // containment before even reaching the network stack. A sandbox-level
-    // rejection would show up as "network is unreachable" (no route: our
-    // own containment, not the kernel, said no); a real "connection
-    // refused" on a closed port is the kernel's network stack actually
-    // being reached and answering.
-    let dir = tempdir("network-on");
-    let log = dir.join("stderr.log");
-    let policy = SandboxPolicy {
-        writable_roots: vec![dir.clone()],
-        readable_scope: ReadableScope::Full,
-        network: NetworkPolicy::Enabled,
-    };
-    // Port 1 on loopback: nothing listens there, so this fails fast with
-    // "connection refused" from the kernel rather than depending on any
-    // real network path being up.
-    let cmd = shell(
-        "/bin/bash",
-        &format!("exec 2>{}; exec 3<>/dev/tcp/127.0.0.1/1", shell_quote(&log)),
-    );
-    let sandboxed = spawn(cmd, &policy, SandboxStdio::inherit()).expect("spawn should succeed");
-    let code = wait_with_timeout(sandboxed.child, TEST_TIMEOUT);
-    let stderr = read_log(&log);
-
-    assert_ne!(code, 0, "nothing listens on loopback port 1");
-    assert!(
-        !stderr.to_lowercase().contains("network is unreachable"),
-        "expected the socket layer to be reachable (refused, not unreachable): {stderr:?}"
-    );
-
-    cleanup(dir);
-}
-
 /// Signal scoping (`SignalMode::AllowSameSandbox`) is a new containment
 /// win over the old bwrap+seccompiler backend, which had no equivalent at
 /// all (`docs/roadmap.md`'s backlog-60 entry). A same-uid process outside
@@ -388,15 +334,9 @@ fn external_signal_is_denied_and_the_decoy_survives() {
     );
     let sandboxed = spawn(cmd, &policy, SandboxStdio::inherit()).expect("spawn should succeed");
     let code = wait_with_timeout(sandboxed.child, TEST_TIMEOUT);
-    let stderr = read_log(&log);
-
     assert_ne!(
         code, 0,
         "signaling an external same-uid process should be denied"
-    );
-    assert!(
-        is_likely_sandbox_denied(true, code, &stderr),
-        "expected a denial-shaped failure, got exit {code} stderr {stderr:?}"
     );
 
     // The definitive check: the decoy actually never received the
@@ -449,32 +389,6 @@ fn sandboxed_process_can_still_signal_its_own_child() {
         128 + libc::SIGTERM,
         "the sandboxed process should be able to SIGTERM its own child, stderr: {}",
         read_log(&log)
-    );
-
-    cleanup(dir);
-}
-
-#[test]
-fn nono_report_reflects_the_detected_abi() {
-    let dir = tempdir("nono-report");
-    let policy = SandboxPolicy {
-        writable_roots: vec![dir.clone()],
-        readable_scope: ReadableScope::Full,
-        network: NetworkPolicy::Disabled,
-    };
-    let cmd = std::process::Command::new("/bin/true");
-    let sandboxed = spawn(cmd, &policy, SandboxStdio::inherit()).expect("spawn should succeed");
-    let code = wait_with_timeout(sandboxed.child, TEST_TIMEOUT);
-    assert_eq!(code, 0);
-
-    let report = sandboxed
-        .nono
-        .expect("a nono report should be present on Linux");
-    let abi = nono::Sandbox::detect_abi().expect("Landlock must be available on this dev host");
-    assert_eq!(report.abi, abi.version_string());
-    println!(
-        "nono report: abi={} network_fallback={}",
-        report.abi, report.network_fallback
     );
 
     cleanup(dir);

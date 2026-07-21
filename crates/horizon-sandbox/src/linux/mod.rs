@@ -55,25 +55,6 @@ pub fn execute_supervised_helper(
     Ok(exit_code)
 }
 
-/// Diagnostic summary of what nono actually applied for a spawned child.
-/// Repurposes the old backend's `LandlockReport`'s diagnostic role
-/// (`docs/roadmap.md`'s backlog-60 entry): unlike that report, this
-/// reflects containment that is genuinely live around `SandboxedChild`,
-/// since nono's `Sandbox::apply_auto` *is* the primary containment now,
-/// not a separate probe decoupled from bwrap's own mechanism.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NonoReport {
-    /// The Landlock ABI version nono detected on this kernel (e.g. `"V6"`).
-    pub abi: &'static str,
-    /// Debug-formatted `nono::Sandbox::apply_auto`'s seccomp-fallback
-    /// outcome -- whether Landlock alone enforced the policy's network
-    /// mode, or a seccomp filter was additionally installed because the
-    /// detected ABI lacks network support (< V4). The concrete type
-    /// (`nono`'s private `SeccompNetFallback`) isn't part of nono's public
-    /// API surface, so this carries its `Debug` rendering instead.
-    pub network_fallback: String,
-}
-
 /// Authenticated structured result from the dedicated Linux helper.
 #[derive(Debug)]
 pub struct SupervisorReport {
@@ -182,24 +163,16 @@ pub(crate) fn spawn_with_grants(
         .stderr(stdio.stderr);
 
     // `CapabilitySet`, `DetectedAbi`, and `Command` are all `Send +
-    // 'static`, so this thread can own everything it needs and hand back
-    // the spawned child plus a diagnostic summary.
-    let handle = std::thread::spawn(
-        move || -> Result<(std::process::Child, String), SandboxError> {
-            let fallback = nono::Sandbox::apply_auto_with_abi(&caps, &abi)?;
-            let child = wrapped.spawn()?;
-            Ok((child, format!("{fallback:?}")))
-        },
-    );
+    // 'static`, so this thread can own everything it needs.
+    let handle = std::thread::spawn(move || -> Result<std::process::Child, SandboxError> {
+        nono::Sandbox::apply_auto_with_abi(&caps, &abi)?;
+        Ok(wrapped.spawn()?)
+    });
 
-    let (child, network_fallback) = handle.join().map_err(|_| SandboxError::ThreadPanicked)??;
+    let child = handle.join().map_err(|_| SandboxError::ThreadPanicked)??;
 
     Ok(SandboxedChild {
         child,
-        nono: Some(NonoReport {
-            abi: abi.version_string(),
-            network_fallback,
-        }),
         supervisor_report: None,
     })
 }
@@ -214,7 +187,6 @@ pub(crate) fn spawn_with_grants(
     filesystem_grants: &[crate::FilesystemGrant],
     stdio: SandboxStdio,
 ) -> Result<SandboxedChild, SandboxError> {
-    let abi = nono::Sandbox::detect_abi()?;
     // Validate the policy and every declared root before launching the helper.
     // The helper rebuilds this same set in its own single-threaded process.
     let _ = crate::caps::build_with_grants(policy, filesystem_grants)?;
@@ -283,10 +255,6 @@ pub(crate) fn spawn_with_grants(
     drop(report_writer);
     Ok(SandboxedChild {
         child,
-        nono: Some(NonoReport {
-            abi: abi.version_string(),
-            network_fallback: "applied inside supervised child".to_string(),
-        }),
         supervisor_report: Some(SupervisorReport {
             reader: report_reader,
             helper_pid,

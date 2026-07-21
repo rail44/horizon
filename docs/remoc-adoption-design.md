@@ -329,7 +329,7 @@ made explicit. The recorded reopening conditions stand: a remote-domain
 goal or measured multi-pane aggregate encode cost would revisit this in
 Option B's favor.
 
-**This document recommends Option A.** The daemon keeps its retained
+**The delivered design uses Option A.** The daemon keeps its retained
 latest frame (it seeds the watch and serves attach) and the 16 ms
 coalescing (which bounds full-frame production rate); everything else in
 the diff pipeline is deleted. If bandwidth ever becomes real — a remote
@@ -342,7 +342,7 @@ for span data (investigated as an optimization seed; same quarantine).
 Postbag Full's numeric-field-id rename (`_0`…) is the milder middle step
 for codec CPU. None of these are v10 scope.
 
-## 6. Migration plan
+## 6. Migration plan (completed)
 
 Hard cutover, no dual-stack daemon: this is a pre-release, single-owner
 project (the same posture as the `agentd`→`sessiond` rename — 
@@ -411,9 +411,9 @@ Staged PR sequence, each independently green — **all four landed 2026-07-21**:
   resolution, and drain. The `Connect::io` both-ends rule (adoption
   condition 3) applies to any in-process harness.
 - **Cross-version skew tests become permanent residents.** The spike's
-  V1/V2 type-pair method (`spike/remoc/tests/skew.rs`: a frozen copy of
+  V1/V2 type-pair method (`remoc-spike:spike/remoc/tests/skew.rs`: a frozen copy of
   a vocabulary type beside its evolved twin, exercised through live
-  channels in both directions) is promoted from spike code to a standing
+  channels in both directions) was promoted from spike code to a standing
   test module in `horizon-session-protocol`: every rule in §4 gets a
   pair proving it (field added, field missing with default, unknown
   variant to `Unknown`, one poisoned item not killing the channel). The
@@ -473,11 +473,11 @@ Inherited unchanged:
   (PR #19).
 - `docs/session-daemon-design.md`, `docs/terminal-protocol-goals.md` — 
   the decisions §8 maps.
-- `crates/horizon-session-protocol/src/lib.rs` (v9 envelope/handshake),
-  `src/sessiond/` (client runtime being rebuilt),
-  `crates/horizon-sessiond/src/terminal.rs` (baseline map §5 deletes),
-  `crates/horizon-terminal-core/src/types/frame.rs` (frame/diff types),
-  `crates/horizon-agent/src/wire.rs` (agent vocabulary, pin tests).
+- `crates/horizon-session-protocol/src/lib.rs` (remoc hub and wire policy),
+  `src/sessiond/` (remoc client runtime),
+  `crates/horizon-sessiond/src/terminal.rs` (full-frame watch publisher),
+  `crates/horizon-terminal-core/src/types/frame.rs` (snapshot type),
+  `crates/horizon-agent/src/wire.rs` (agent vocabulary).
 - remoc CHANGELOG (chmux v2→v3 compatibility note; 0.18.0 default-codec
   change), postcard-rpc's `Key` schema-hash design (§4's reference
   implementation).

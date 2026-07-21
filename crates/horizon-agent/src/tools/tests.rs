@@ -1359,7 +1359,7 @@ fn invalid_web_fetch_finishes_as_an_auto_boundary_error_without_network() {
 
 /// The real thing this whole leg exists for: a `bash` call in an isolated
 /// session, on a host where `horizon_sandbox::is_available()` is genuinely
-/// true (this dev machine has bwrap -- see AGENTS.md), auto-executes
+/// true on this development host, auto-executes
 /// *sandboxed* on the background thread, and its eventual result carries
 /// both audit markers (`sandboxed`, `auto_approved`/tier/reason).
 #[test]
@@ -1401,7 +1401,7 @@ fn bash_auto_executes_sandboxed_in_an_isolated_session_with_an_engaged_sandbox()
 
 /// A sandboxed tier-1 call that overruns its timeout must still be killed
 /// and report promptly -- proving `wait_child_with_timeout`'s pid-based
-/// kill actually tears down a real bwrap-contained child, not just the
+/// kill actually tears down a real sandboxed child, not just the
 /// unsandboxed process-group path `timeout_kills_the_process_and_reports_
 /// captured_partial_output` (`bash::tests`) already covers.
 #[test]
@@ -1537,26 +1537,18 @@ fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
 
 // --- tier-1 bash containment: network proxy (leg 4a) -----------------------
 //
-// The two containment tests that used to live here (empty-allowlist decoy
-// refusal, direct-egress-under-Proxied) moved to
-// `tests/tier1_network_containment.rs`, an integration test: they need
-// `env!("CARGO_BIN_EXE_bridge_probe")`, which Cargo only bakes in for
-// integration-test/bench/example compilation units, never a crate's own lib
-// unit tests (confirmed the hard way -- a runtime-resolved fallback path
-// passed locally against a build that happened to already have the binary,
-// then failed deterministically on a clean `cargo clean -p horizon-agent &&
-// cargo nextest run`, since nothing guarantees `[[bin]]` targets are built
-// before lib unit tests run). `execute_agent_tool`/`Execution` are
-// re-exported `pub` from `tools::mod` (narrowly, just those two) so that
-// external test can still drive the real tier-1 dispatch path.
+// Network containment lives in `tests/tier1_network_containment.rs` because
+// it drives the public tier-1 dispatch path as a real-process integration
+// test. `execute_agent_tool`/`Execution` are re-exported `pub` narrowly so
+// that test can exercise the production boundary.
 
 /// Never-silently-degrade: even on a host where the sandbox genuinely
 /// engages, a *non-isolated* session's `bash` call still goes through the
 /// ordinary approval gate -- isolation is load-bearing, not cosmetic. The
 /// complementary "isolated but no engaged sandbox" case is
 /// `policy::tests::bash_is_contained_only_when_isolated_and_sandboxed`,
-/// exercised directly against the pure predicate since this dev machine
-/// can't be made to lack bwrap for an integration-level test.
+/// exercised directly against the pure predicate since an engaged sandbox
+/// cannot also model an unavailable backend in the same integration test.
 #[test]
 fn bash_requires_approval_when_the_session_is_not_isolated() {
     let root = temp_workspace("tier1-bash-not-isolated");

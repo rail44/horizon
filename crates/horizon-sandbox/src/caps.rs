@@ -121,7 +121,6 @@ pub(crate) fn build_with_grants(
     }
 
     caps = match &policy.network {
-        NetworkPolicy::Enabled => caps.set_network_mode(NetworkMode::AllowAll),
         NetworkPolicy::Disabled => caps.set_network_mode(NetworkMode::Blocked),
         NetworkPolicy::Proxied { proxy_addr } => caps.set_network_mode(NetworkMode::ProxyOnly {
             port: validated_proxy_port(*proxy_addr)?,
@@ -234,12 +233,6 @@ mod tests {
     fn network_disabled_blocks_network() {
         let caps = build(&policy(vec![], NetworkPolicy::Disabled)).unwrap();
         assert_eq!(*caps.network_mode(), NetworkMode::Blocked);
-    }
-
-    #[test]
-    fn network_enabled_allows_all() {
-        let caps = build(&policy(vec![], NetworkPolicy::Enabled)).unwrap();
-        assert_eq!(*caps.network_mode(), NetworkMode::AllowAll);
     }
 
     #[test]

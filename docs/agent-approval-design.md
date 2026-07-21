@@ -110,6 +110,10 @@ product-owned API. Decisions:
   maintained, purpose-built MITM/CONNECT toolkit); the allowlist
   policy layer is ours. A request to a domain outside the allowlist
   surfaces as a boundary crossing (tier 2/3), one-time-approvable.
+  **Historical implementation record (superseded):** the following
+  leg-by-leg account through “Correction discovered 2026-07-20” preserves
+  how the UDS bridge design evolved; it does not describe the current code.
+  The current mechanism starts at “Network correction delivered 2026-07-21.”
   **Spike landed 2026-07-19 (`crates/horizon-sandbox-proxy`), reachability
   proven, not the documented-fallback shape**: a sibling crate to
   `horizon-sandbox` (kept separate because it's inherently async/
