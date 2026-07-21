@@ -294,6 +294,21 @@ lands:
   ad-hoc additions, and ecosystem code ports only at the pure-function
   level.
 
+- **Terminal scrollback — client-side overscan** (proposed 2026-07-21,
+  `docs/terminal-scrollback-design.md`). History scrolling judders: it is a
+  daemon round-trip with no local paint, worsened by v11's latest-value
+  frame watch dropping intermediate scroll positions. Direction (owner):
+  delete the round-trip — the client holds a band wider than the viewport,
+  scrolls locally, and prefetches history on-demand; immutable scrollback
+  makes the cache safe. Feasibility settled: alacritty 0.26 has **no stable
+  absolute line id** (coordinates are screen-relative), so the daemon
+  synthesizes absolute-within-epoch ids, bumping the epoch on
+  reflow/alt-toggle/reset; retrieval via `iter_from` needs no engine change;
+  alt-screen has no scrollback (overscan primary-screen-only). Additive wire
+  (v12, `MIN_SUPPORTED` stays 11 → old peers fall back to round-trip). Open
+  owner calls in the doc §9; interim "smooth the reply cadence" fix assessed
+  as symptomatic and recommended skipped.
+
 ## External gates
 
 - **winit on macOS/Windows** — the platform layer shipped
