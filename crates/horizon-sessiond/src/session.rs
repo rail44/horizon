@@ -2078,14 +2078,31 @@ mod tests {
 
         fn init_repo(dir: &Path) {
             git(dir, &["init", "-q", "-b", "main"]);
-            git(dir, &["config", "user.email", "test@example.com"]);
-            git(dir, &["config", "user.name", "Test"]);
         }
 
+        /// Commits with a deterministic `Test` identity supplied *per
+        /// invocation* via `-c user.*` -- never written to any git config.
+        /// Backlog 53: persisting it with `git config user.*` meant that
+        /// under a leaked absolute `GIT_DIR` (see `scrub_git_env`) the write
+        /// landed in the *enclosing* repo's shared config and re-authored
+        /// every later commit; a `-c` override touches no config and still
+        /// stamps both author and committer. Mirrors `worktree.rs`.
         fn commit_file(dir: &Path, name: &str, contents: &str, message: &str) {
             std::fs::write(dir.join(name), contents).unwrap();
             git(dir, &["add", name]);
-            git(dir, &["commit", "-q", "-m", message]);
+            git(
+                dir,
+                &[
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.com",
+                    "commit",
+                    "-q",
+                    "-m",
+                    message,
+                ],
+            );
         }
 
         fn scratch_repo() -> tempfile::TempDir {
@@ -2100,6 +2117,13 @@ mod tests {
             bare: String,
             status: String,
             horizon_branches: String,
+            /// Backlog 53: catches a test's `Test <test@example.com>` identity
+            /// leaking into the enclosing repo's shared config (a `git config
+            /// user.*` write under a leaked `GIT_DIR`), which would silently
+            /// re-author every later commit. Empty when unset; merged config
+            /// (`--get`), so it reflects what commits would actually use.
+            user_name: String,
+            user_email: String,
         }
 
         fn enclosing_repo_root() -> PathBuf {
@@ -2133,6 +2157,8 @@ mod tests {
                     &["for-each-ref", "--format=%(refname)", "refs/heads/horizon"],
                 )
                 .unwrap_or_default(),
+                user_name: run_git(root, &["config", "--get", "user.name"]).unwrap_or_default(),
+                user_email: run_git(root, &["config", "--get", "user.email"]).unwrap_or_default(),
             }
         }
 
