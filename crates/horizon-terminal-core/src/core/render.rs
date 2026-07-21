@@ -58,18 +58,65 @@ pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> Term
     }
 }
 
+/// The session-daemon events-channel item cap a served scroll window must
+/// stay under — a mirror of `horizon_session_protocol::
+/// TERMINAL_EVENT_MAX_ITEM_BYTES` (4 MiB), duplicated as a local constant
+/// because this crate sits *below* `horizon-session-protocol` in the
+/// dependency graph and cannot name it. A window rides that mpsc as one
+/// `TerminalUpdate::ScrollWindow`; exceeding the cap trips remoc's over-cap
+/// latch and tears the shared events channel down (pinned by that crate's
+/// `tests/limits.rs`), dropping the pane's `Exited`/`Error`/`Bell` on the
+/// floor and orphaning it — the hazard `max_window_rows` closes.
+const EVENTS_ITEM_CAP_BYTES: usize = 4 * 1024 * 1024;
+
+/// A conservative upper bound on the wire bytes one grid cell costs under the
+/// Postbag codec at *worst-case* decoration. The genuine worst case is not
+/// the spike's all-rows-styled frame (~18 B/cell, where a row of one style
+/// merges into a single span) but a distinct fully-styled span *per cell*
+/// (rainbow truecolor text, which `styled_rows` cannot merge): the sibling
+/// test `a_worst_case_scroll_window_stays_under_the_events_cap`
+/// (`horizon-session-protocol/tests/limits.rs`) measures that at ~107 B/cell.
+/// 128 rounds it up with headroom. (Combining-char pathology — an app packing
+/// unbounded zero-width chars into one cell — is deliberately *not* bounded
+/// here: it inflates a single span without limit and afflicts the live-frame
+/// watch identically, so it is the frame path's own out-of-scope envelope,
+/// not a windowing regression.)
+const WORST_CASE_BYTES_PER_CELL: usize = 128;
+
+/// The largest window, in rows, [`snapshot_window`] will serve, sized so even
+/// worst-case per-cell decoration keeps the serialized window under **half**
+/// the events cap (the other half is headroom for the enum/struct framing and
+/// the per-row span vectors). Byte-budget-derived rather than a fixed row
+/// multiple precisely because it must also bound *wide* terminals, where one
+/// row is many more cells. For realistic widths it stays well above the
+/// ~3-viewport window phase-3 prefetch will request
+/// (`docs/terminal-scrollback-design.md` §3.4) — e.g. ~204 rows at 80 cols —
+/// so the clamp never bites a legitimate request; only adversarial decoration
+/// on very wide terminals sees a shorter (but always deliverable) window,
+/// which phase-3 prefetch tolerates. Floored at `screen_lines` so the visible
+/// viewport always fits: a single screen already rides the live-frame watch
+/// at the same worst case, so that floor is no less safe than the live frame.
+fn max_window_rows(columns: usize, screen_lines: usize) -> usize {
+    let budget = EVENTS_ITEM_CAP_BYTES / 2;
+    let bytes_per_row = columns.max(1) * WORST_CASE_BYTES_PER_CELL;
+    (budget / bytes_per_row).max(screen_lines)
+}
+
 /// Read a `height`-row scrollback window positioned `anchor` rows above the
 /// live bottom, **without moving `display_offset`** -- the live-frame watch
 /// keeps showing the tail throughout (`docs/terminal-scrollback-design.md`
 /// §2.2, §3.2). `anchor` is a hypothetical `display_offset`: the viewport at
 /// `anchor` shows grid lines from `Line(-anchor)` down, clamped to
-/// `0..=history_size`. The block extends a centered margin above and below
-/// that viewport, clamped to the true top (`topmost_line`) and the live edge
-/// (`bottommost_line`). `above`/`below` report the rows that remain outside
-/// the block (their zeroes are the true-top / live-edge signals), and
-/// `viewport_offset` locates the viewport's top row within it. Built by a
-/// `grid.iter_from` walk that reuses [`styled_rows`] -- no engine change, no
-/// side effect on the live viewport.
+/// `0..=history_size`. `height` is clamped to [`max_window_rows`] so a served
+/// window can never overflow the events-channel item cap. The block extends a
+/// centered margin above and below that viewport, clamped to the true top
+/// (`topmost_line`) and the live edge (`bottommost_line`). `above`/`below`
+/// report the rows that remain outside the block (their zeroes are the
+/// true-top / live-edge signals) and are derived from the *clamped* block, so
+/// they stay exact for whatever window is actually returned; `viewport_offset`
+/// locates the viewport's top row within it. Built by a `grid.iter_from` walk
+/// that reuses [`styled_rows`] -- no engine change, no side effect on the live
+/// viewport.
 pub(super) fn snapshot_window(
     term: &Term<EventSink>,
     anchor: usize,
@@ -81,9 +128,22 @@ pub(super) fn snapshot_window(
 
     // `anchor` == "rows above the live bottom" == a hypothetical
     // `display_offset`, so it reaches at most `history_size` (viewport top ==
-    // topmost history line). A request past the evicted top clamps here and
-    // returns the oldest surviving rows.
-    let anchor = (anchor as i32).clamp(0, history_size);
+    // topmost history line). Saturating: a request field wider than i32 (a
+    // corrupt or hostile peer) saturates to `i32::MAX` rather than wrapping
+    // to a nonsense negative line, so a huge anchor clamps to the true top,
+    // not silently back to the live edge.
+    let anchor = i32::try_from(anchor)
+        .unwrap_or(i32::MAX)
+        .clamp(0, history_size);
+
+    // Hard-clamp the requested height to a safe row count *before* the block
+    // math (see `max_window_rows`): an unbounded height would let a decorated
+    // full-scrollback window balloon past the events cap and collapse the
+    // attachment. The clamp is transparent to the client, which already
+    // tolerates a window narrower than requested (§3.2), and `above`/`below`
+    // stay exact because they are read off the clamped block below.
+    let max_rows = max_window_rows(grid.columns(), grid.screen_lines());
+    let height = i32::try_from(height.min(max_rows)).unwrap_or(i32::MAX);
 
     // The viewport at this anchor: top row `Line(-anchor)`, `screen_lines`
     // tall (mirrors `display_offset == anchor`).
@@ -92,7 +152,7 @@ pub(super) fn snapshot_window(
 
     // Distribute the margin (rows beyond the viewport) above and below,
     // centering the viewport in the block.
-    let margin = (height as i32).saturating_sub(screen_lines).max(0);
+    let margin = height.saturating_sub(screen_lines).max(0);
     let margin_above = margin / 2;
     let margin_below = margin - margin_above;
 

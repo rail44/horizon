@@ -159,6 +159,22 @@ fn send_selection_to_primary(core: &TerminalCore, update_tx: &Sender<TerminalUpd
     }
 }
 
+/// Collapse a burst of pending items to the most recent, starting from the
+/// one the `select!` arm already dequeued. Scroll-window requests are
+/// low-frequency, user-driven prefetches where a newer request supersedes an
+/// older one by self-location (`docs/terminal-scrollback-design.md` §3.4), so
+/// a rapid burst must cost a single `snapshot_window`, not one per request —
+/// otherwise a flooded `window_rx` would starve `pty_rx` and the frame path
+/// on this single-threaded loop and let the queue grow unbounded. Draining
+/// the backlog here bounds both.
+fn drain_to_latest<T>(first: T, rx: &Receiver<T>) -> T {
+    let mut latest = first;
+    while let Ok(newer) = rx.try_recv() {
+        latest = newer;
+    }
+    latest
+}
+
 /// Flush the latest dirty state once the coalescing timer fires.
 fn flush_snapshot(
     core: &TerminalCore,
@@ -308,9 +324,15 @@ pub fn run_terminal_core(
                 core.set_color_scheme(scheme);
             }
             recv(window_rx) -> request => {
-                let Ok(ScrollWindowRequest { anchor, height }) = request else {
+                let Ok(request) = request else {
                     return;
                 };
+                // Coalesce a burst to its latest position before serving --
+                // one `snapshot_window` per burst keeps a flooded `window_rx`
+                // from starving `pty_rx`/frames on this single-threaded loop
+                // (see `drain_to_latest`).
+                let ScrollWindowRequest { anchor, height } =
+                    drain_to_latest(request, &window_rx);
                 // A pure read: `snapshot_window` walks `iter_from` and never
                 // moves the live `display_offset`, so there is no visible
                 // grid state to `notify_snapshot` for -- the live-frame watch
@@ -381,6 +403,34 @@ pub fn run_terminal_core(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review fix (Medium): the window arm coalesces a burst of pending
+    /// `window_rx` requests to the newest before serving, so a flood costs one
+    /// `snapshot_window` rather than one per request. `drain_to_latest` is that
+    /// coalescer: starting from the item the `select!` arm already dequeued, it
+    /// folds the whole backlog and returns the most recent, leaving the channel
+    /// empty.
+    #[test]
+    fn drain_to_latest_coalesces_a_backlog_to_the_newest_item() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        for n in 1..=5 {
+            tx.send(n).unwrap();
+        }
+
+        // The select arm dequeues the first; `drain_to_latest` folds the rest.
+        let first = rx.recv().unwrap();
+        assert_eq!(first, 1);
+        assert_eq!(drain_to_latest(first, &rx), 5);
+        assert!(
+            rx.try_recv().is_err(),
+            "the whole backlog must be drained, not just the front"
+        );
+
+        // With nothing queued behind it, the dequeued item passes through.
+        tx.send(42).unwrap();
+        let only = rx.recv().unwrap();
+        assert_eq!(drain_to_latest(only, &rx), 42);
+    }
 
     /// End-to-end regression test for the synchronized-update failsafe
     /// (`rearm_sync_flush`/`TerminalCore::flush_sync_update`): a PTY chunk

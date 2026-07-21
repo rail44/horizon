@@ -698,7 +698,14 @@ fn cursor_is_hidden_while_scrolled_and_correct_at_the_live_edge() {
 /// the bottom `rows` are the live screen and the rest is scrollback history
 /// (`history_size == count - rows`). Shared by the `snapshot_window` tests.
 fn numbered_history_core(rows: u16, count: usize) -> TerminalCore {
-    let mut core = TerminalCore::new(TerminalSize::new(20, rows));
+    numbered_history_core_sized(20, rows, count)
+}
+
+/// [`numbered_history_core`] with an explicit column width — the height-clamp
+/// tests need a realistic width (the clamp is byte-budget-derived from the
+/// column count).
+fn numbered_history_core_sized(cols: u16, rows: u16, count: usize) -> TerminalCore {
+    let mut core = TerminalCore::new(TerminalSize::new(cols, rows));
     let mut script = String::new();
     for i in 0..count {
         if i > 0 {
@@ -816,6 +823,60 @@ fn snapshot_window_smaller_than_height_returns_the_whole_buffer() {
     );
     assert_eq!(window_row_text(&window.lines[0]), "line00");
     assert_eq!(window_row_text(&window.lines[5]), "line05");
+}
+
+/// Review fix (High): `snapshot_window` **hard-clamps** the requested height
+/// to a safe row count, so a served window can never serialize past the
+/// events-channel item cap (`TERMINAL_EVENT_MAX_ITEM_BYTES`). An unbounded
+/// height would let a decorated full-scrollback window balloon to many
+/// megabytes as one `TerminalUpdate::ScrollWindow`, trip remoc's over-cap
+/// latch, tear down the shared events channel, and orphan the pane. Even
+/// `height == usize::MAX` yields a bounded block.
+#[test]
+fn snapshot_window_clamps_an_oversized_height() {
+    // 2000 lines through an 80x5 viewport: 1995 history rows, so a window
+    // requested mid-history is bounded by the height clamp, not the grid
+    // edges. max_window_rows(80, 5) = (4 MiB / 2 / (80 * 128)).max(5) = 204.
+    let core = numbered_history_core_sized(80, 5, 2000);
+
+    let window = core.snapshot_window(1000, usize::MAX);
+
+    assert_eq!(
+        window.lines.len(),
+        204,
+        "an oversized height must clamp to the safe row cap, not the buffer"
+    );
+    assert!(
+        window.lines.len() < 2000,
+        "the clamp must bite well below the full 2000-row buffer"
+    );
+}
+
+/// Review fix: the clamp keeps `above`/`below`/`viewport_offset` exact for the
+/// *clamped* block — `above + row_count + below` still accounts for every grid
+/// row, and the viewport still fits inside the returned block. The identity
+/// closes on the window actually served, not on the (larger) requested height.
+#[test]
+fn snapshot_window_metadata_identity_holds_under_clamp() {
+    let rows = 5usize;
+    let total = 2000usize; // history_size (1995) + screen_lines (5)
+    let core = numbered_history_core_sized(80, rows as u16, total);
+
+    let window = core.snapshot_window(1000, usize::MAX);
+
+    assert_eq!(
+        window.above + window.lines.len() + window.below,
+        total,
+        "above + row_count + below must still account for every grid row"
+    );
+    assert!(
+        window.viewport_offset + rows <= window.lines.len(),
+        "the viewport must fit inside the returned block after clamping"
+    );
+    assert!(
+        window.above > 0 && window.below > 0,
+        "an interior clamped window has real history on both sides"
+    );
 }
 
 /// The additive scrollback-availability flag (`docs/terminal-scrollback-design.md`
