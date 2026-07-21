@@ -112,8 +112,8 @@ const XDG_DATA_HOME_VAR: &str = "XDG_DATA_HOME";
 // `cfg(test)` so the existing cap-tripping tests keep exercising the cap
 // without creating tens of thousands of files, while the *_PRODUCTION_DEFAULT
 // constants stay the real numbers regardless of `cfg(test)`.
-pub(crate) const DEFAULT_BASH_TIMEOUT_DEFAULT_SECS: u64 = 120;
-pub(crate) const DEFAULT_BASH_TIMEOUT_MAX_SECS: u64 = 600;
+pub(crate) const DEFAULT_BASH_TIMEOUT_DEFAULT_SECS: u64 = 300;
+pub(crate) const DEFAULT_BASH_TIMEOUT_MAX_SECS: u64 = 1_800;
 pub(crate) const DEFAULT_BASH_OUTPUT_CAP_CHARS: usize = 30_000;
 pub(crate) const DEFAULT_BASH_DRAIN_GRACE_SECS: u64 = 2;
 pub(crate) const DEFAULT_FS_READ_LINE_CAP: usize = 2000;

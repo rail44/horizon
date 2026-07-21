@@ -191,8 +191,15 @@ pub fn definitions() -> Vec<Definition> {
                     "timeout_secs": {
                         "type": "integer",
                         "minimum": 1,
-                        "maximum": 600,
-                        "description": "Wall-clock timeout in seconds. Defaults to 120, capped at 600.",
+                        "maximum": crate::config::DEFAULT_BASH_TIMEOUT_MAX_SECS,
+                        "description": format!(
+                            "Optional wall-clock timeout in seconds. Omit this normally: the \
+                             default is {} seconds and the hard cap is {}. Use a shorter value \
+                             only when deliberately bounding a known quick probe; builds, tests, \
+                             hooks, and Git operations commonly exceed 60 seconds.",
+                            crate::config::DEFAULT_BASH_TIMEOUT_DEFAULT_SECS,
+                            crate::config::DEFAULT_BASH_TIMEOUT_MAX_SECS,
+                        ),
                     },
                 }
             }),

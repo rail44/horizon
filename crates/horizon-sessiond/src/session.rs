@@ -36,7 +36,7 @@
 //! silently dropping events when it's `None` (no client to see them).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -53,7 +53,9 @@ use horizon_agent::contract::{
 use horizon_agent::frame::{agent_frame_from_events, AgentFrame, AgentFrameItem};
 use horizon_agent::judge::JudgeHandle;
 use horizon_agent::live::LiveState;
-use horizon_agent::persistence::event_log::{Appender, Record, WriterHandle};
+use horizon_agent::persistence::event_log::{
+    Appender, PersistedSessionContext, Record, WriterHandle,
+};
 use horizon_agent::persistence::projection::duckdb::{DuckdbStoreHandle, SharedDuckdbStore};
 use horizon_agent::roles::RoleId;
 use horizon_agent::skills::SkillRegistry;
@@ -368,15 +370,10 @@ fn resolve_and_announce_session_model(
 /// both a fresh `Control::SessionNew` ([`Connection::handle_session_new`])
 /// and a session resumed from the persisted log at startup
 /// ([`resume_persisted_sessions`]); `history` is empty for the former,
-/// already-committed events for the latter. `workspace_root` is `Some` only
-/// from a fresh `SessionNew` that carried one — resumed sessions don't
-/// persist it (out of scope here), so they always pass `None` and fall back
-/// to `run_session`'s process-cwd default, same as before this field
-/// existed. `spawn_source_session_id`/`isolate` are resumed sessions'
-/// `None`/`false` too, for the same reason: lineage lives in this process's
-/// in-memory `SessiondState` (see `SessionEntry::parent_session_id`'s doc
-/// comment), not the event log, so it doesn't survive a `horizon-sessiond`
-/// restart either.
+/// already-committed events for the latter. A resumed isolated session passes
+/// `restored_worktree` only after [`worktree::adopt_isolated_worktree`]
+/// recomputes and validates its Git/path relationships; it never asks the
+/// fresh-spawn `isolate` path to create a second worktree.
 #[allow(clippy::too_many_arguments)]
 fn spawn_session_thread(
     state: Arc<SessiondState>,
@@ -386,12 +383,17 @@ fn spawn_session_thread(
     workspace_root: Option<PathBuf>,
     spawn_source_session_id: Option<SessionId>,
     isolate: bool,
+    restored_worktree: Option<WorktreeInfo>,
     history: Vec<Event>,
 ) {
     let (inbound_tx, inbound_rx) = unbounded::<Command>();
     let (replay_tx, replay_rx) = unbounded::<Sender<Vec<Event>>>();
     let model =
         resolve_and_announce_session_model(&state, session_id, &provider_id, role_id.as_ref());
+    let restored_root = restored_worktree
+        .as_ref()
+        .map(|worktree| worktree.path.clone())
+        .or_else(|| workspace_root.clone());
     state.sessions.lock().unwrap().insert(
         session_id,
         SessionEntry {
@@ -400,9 +402,9 @@ fn spawn_session_thread(
             model,
             inbound: inbound_tx,
             replay: replay_tx,
-            parent_session_id: None,
-            workspace_root: workspace_root.clone(),
-            worktree: None,
+            parent_session_id: restored_worktree.as_ref().and(spawn_source_session_id),
+            workspace_root: restored_root,
+            worktree: restored_worktree.clone(),
         },
     );
 
@@ -415,6 +417,7 @@ fn spawn_session_thread(
             workspace_root,
             spawn_source_session_id,
             isolate,
+            restored_worktree,
             &thread_state,
             inbound_rx,
             replay_rx,
@@ -495,6 +498,42 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<SessiondState>, records: Vec
             .iter()
             .rev()
             .find_map(|record| record.role_id.clone());
+        let persisted_context = session_records
+            .iter()
+            .rev()
+            .find_map(|record| record.session_context.clone());
+        let (workspace_root, parent_session_id, restored_worktree) =
+            match persisted_context.as_ref() {
+                Some(context) if context.isolated_worktree => {
+                    let Some(root) = context.workspace_root.as_deref() else {
+                        eprintln!(
+                            "horizon-sessiond: refusing to resume isolated session {session_id:?}: \
+                             persisted context has no workspace root"
+                        );
+                        continue;
+                    };
+                    match worktree::adopt_isolated_worktree(root, session_id.as_uuid()) {
+                        Ok(worktree) => (
+                            Some(worktree.path.clone()),
+                            context.parent_session_id,
+                            Some(worktree),
+                        ),
+                        Err(error) => {
+                            eprintln!(
+                                "horizon-sessiond: refusing to resume isolated session \
+                                 {session_id:?}: {error}"
+                            );
+                            continue;
+                        }
+                    }
+                }
+                Some(context) => (context.workspace_root.clone(), None, None),
+                // Compatibility for records written before `session_context`
+                // existed. They retain the old process-cwd, non-isolated
+                // resume behavior; the first new record upgrades them with
+                // an explicit context for the following restart.
+                None => (None, None, None),
+            };
         let mut events: Vec<Event> = session_records
             .into_iter()
             .map(|record| record.event)
@@ -526,6 +565,9 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<SessiondState>, records: Vec
                 Some(provider_id.clone()),
                 role_id.clone(),
             );
+            if let Some(context) = persisted_context.clone() {
+                appender = appender.with_session_context(context);
+            }
             match appender
                 .append_provider_events(closing.iter().cloned().map(ProviderEvent::from).collect())
             {
@@ -546,9 +588,10 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<SessiondState>, records: Vec
             session_id,
             provider_id,
             role_id,
-            None,
-            None,
+            workspace_root,
+            parent_session_id,
             false,
+            restored_worktree,
             events,
         );
     }
@@ -669,6 +712,7 @@ impl Connection {
             new.workspace_root,
             new.spawn_source_session_id,
             new.isolate,
+            None,
             Vec::new(),
         );
     }
@@ -887,9 +931,8 @@ impl HostTools for SessiondHostTools {
 /// ToolSessionState::workspace_root`): an explicit `workspace_root` --
 /// carried by a fresh `wire::SessionNew`, when the caller supplied one --
 /// takes precedence over `ToolSessionState::for_current_dir`'s default of
-/// this process's own cwd (the only behavior before this field existed, and
-/// still the only behavior for a resumed session, which never has one --
-/// see [`spawn_session_thread`]'s doc comment). Pulled out of
+/// this process's own cwd. Resumed sessions also carry the validated root
+/// recovered from their event-log context. Pulled out of
 /// [`run_session`] as its own function purely so this Some/None dispatch is
 /// unit-testable without spinning up a whole session thread.
 fn tool_session_state_for(
@@ -995,6 +1038,7 @@ fn run_session(
     workspace_root: Option<PathBuf>,
     spawn_source_session_id: Option<SessionId>,
     isolate: bool,
+    restored_worktree: Option<WorktreeInfo>,
     state: &Arc<SessiondState>,
     inbound_rx: Receiver<Command>,
     replay_rx: Receiver<Sender<Vec<Event>>>,
@@ -1018,7 +1062,9 @@ fn run_session(
     // immediate teardown; `spawn_session_thread`'s post-`run_session`
     // cleanup removes it regardless of how this function returns, so
     // nothing is leaked.
-    let (workspace_root, isolated) = if isolate {
+    let (workspace_root, isolated) = if let Some(worktree) = restored_worktree {
+        (Some(worktree.path), true)
+    } else if isolate {
         resolve_and_create_isolated_worktree(
             state,
             session_id,
@@ -1117,12 +1163,18 @@ fn run_session(
         .with_domain_policy(domains)
         .with_network_proxy(network)
         .with_judge(judge);
+    let persisted_context = PersistedSessionContext {
+        workspace_root: tool_state.workspace_root().map(Path::to_path_buf),
+        isolated_worktree: isolated,
+        parent_session_id: isolated.then_some(spawn_source_session_id).flatten(),
+    };
     let live_state = match state.writer() {
-        Some(writer) => LiveState::with_event_log_and_history(
+        Some(writer) => LiveState::with_event_log_context_and_history(
             session_id,
             Some(provider_id.clone()),
             role_id.clone(),
             writer,
+            Some(persisted_context),
             history,
         ),
         None => LiveState::with_disabled_persistence(),

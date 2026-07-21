@@ -140,10 +140,8 @@ mechanism to read from yet (the pid-sampling cwd inheritance in
 `horizon-sessiond::terminal::resolve_cwd` is spawn-time-only and keyed by
 *terminal* session id, not exposed to the shell), so a terminal active
 session simply disables the command rather than fabricating an
-approximate answer; (2) it's not persisted -- a session resumed via
-`Reload Session Runtime` or a workspace restore goes back to
-`workspace_root: None` until it's recreated, since only the
-brand-new-agent-session path in `reconcile` ever calls the setter.
+approximate answer. The original second limitation (no persistence across a
+session-runtime restart) is closed by the 2026-07-21 resume hardening below.
 Per-row "open its directory" on an arbitrary session (decision 4b) landed
 alongside the lineage view itself -- see below.
 
@@ -151,9 +149,7 @@ Decisions 1-3 and 5's core landed: the lineage tree lives daemon-side, in
 `horizon-sessiond`'s in-memory `SessionEntry` (`parent_session_id`/
 `workspace_root`/`worktree`) -- additive over the wire as `SessionSummary.
 parent_session_id`/`workspace_root` and `SessionNew.spawn_source_session_id`/
-`isolate` (no `CONTRACT_VERSION` bump; `SessionEntry`'s lineage doesn't
-survive a `horizon-sessiond` process restart, the same accepted gap
-`workspace_root` already had). An isolated spawn gets a real git worktree
+`isolate` (no `CONTRACT_VERSION` bump). An isolated spawn gets a real git worktree
 at `<repo_root>/.horizon/worktrees/<slug>` on branch `horizon/<slug>`
 (`.horizon` ignored via that repo's own `.git/info/exclude`, never its
 tracked `.gitignore`); base ref is fresh from `origin/<default-branch>`
@@ -202,6 +198,19 @@ just at the next resume/reload sweep -- the sweeps remain the catch-up
 path for a daemon restart or UI restart, where no live connection existed
 to push over in the first place.
 
+2026-07-21 restart hardening closes the remaining daemon-restart gap. Every
+new event-log record carries host-authored `session_context` containing the
+authoritative root, whether the session owns an isolated worktree, and its
+isolated parent edge. On resume, a shared session restores its root directly;
+an isolated session is re-adopted only after Git and canonical-path checks
+prove it is a linked worktree at the exact session-id-derived
+`<repo>/.horizon/worktrees/<slug>` path and its gitdir belongs to that repo's
+common worktree directory. Missing or inconsistent isolated context fails
+closed by leaving the session unresumed, never by silently downgrading it to
+the daemon cwd without containment. Logs predating the additive field retain
+the old non-isolated fallback for compatibility and are upgraded when the
+resumed session next appends a record.
+
 Decision 4b's UI slice landed: the session manager modal
 (`src/session_manager.rs`) renders the derivation tree instead of a flat
 list. `WorkspaceSession`/`SessionSummary` grew an additive
@@ -209,9 +218,8 @@ list. `WorkspaceSession`/`SessionSummary` grew an additive
 (`Workspace::set_session_parent`, following `workspace_root`'s own
 mirror), populated in the same two adoption/resume sweeps
 (`spawn_agent_resume`/`spawn_workspace_restore` in
-`src/workspace/session_lifecycle.rs`) and carrying the same "not
-persisted, eventual not live within one run" caveats `workspace_root`
-already has. `order_as_lineage_tree` (pure, unit-tested) turns the flat
+`src/workspace/session_lifecycle.rs`). `order_as_lineage_tree` (pure,
+unit-tested) turns the flat
 summary list into rows -- roots first, each followed immediately by its
 own descendants, indented one level per generation (list-with-
 indentation, no custom tree widget); a parent missing from the current

@@ -44,7 +44,10 @@ research doc).
    `workspace_root` by `tools/state.rs`; isolation makes that root a
    disposable copy.) `bash` runs without approval when the OS sandbox
    below contains it. Reversibility + containment + visibility replace
-   consent.
+   consent. The isolation predicate and authoritative root are persisted in
+   each event-log record; a daemon restart validates and re-adopts the same
+   linked worktree before restoring tier-1 eligibility, and refuses an
+   inconsistent isolated session rather than resuming it uncontained.
 2. **Judge at the boundary.** Actions that cross the containment
    boundary — network egress beyond the allowlist, future MCP/external
    tools, outside-worktree operations — go to a two-stage model

@@ -111,6 +111,7 @@ fn append(writer: &WriterHandle, session_id: SessionId, payload: serde_json::Val
         turn_id: None,
         provider_id: None,
         role_id: None,
+        session_context: None,
         event_kind: SHADOW_VERDICT_EVENT_KIND.to_string(),
         event: Event::ProviderRequestFinished,
         provider_payload: Some(payload),

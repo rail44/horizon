@@ -53,7 +53,10 @@ enforcement (Claude Code, Gemini CLI, OpenHands, goose, Cline):
 
 - Fresh process per command; the harness tracks the working directory across
   calls (`cd` persists via tracking, not via a live shell).
-- Wall-clock timeout, default 120s, per-call override up to a hard max.
+- Wall-clock timeout, default 300s, per-call override up to a hard 1800s
+  maximum. The catalog tells the model to omit the override normally and to
+  use a shorter value only for an intentional quick probe; builds, tests,
+  hooks, and Git commands commonly outlive the old 60/120-second budgets.
 - Output capped in-context (~30k chars, head+tail preserved); the full output
   spills to a temp file whose path is included in the result so the agent can
   re-read selectively. (Truncate-in-context + spill-to-file is the shipping

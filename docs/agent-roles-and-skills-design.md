@@ -367,3 +367,16 @@ Content is sourced from `crates/horizon-cli/src/cli.rs` (the real parser),
 `docs/cli-control-plane-design.md`, and `AGENTS.md`'s own command list —
 not re-derived from memory, so it can't drift from the actual subcommand
 surface at the point it was written.
+
+### `github-pr`: authenticated publication workflow
+
+Dogfooding on 2026-07-21 showed a generic agent following a browser-oriented
+`/pull/new/...` URL with `web_fetch`, mistaking GitHub's login page for an
+unavailable PR workflow, even though the authenticated `gh` CLI was present.
+The remedy is procedural knowledge, not a new capability or a permanent
+system-prompt rule, so it ships as the embedded `github-pr` skill. Its trigger
+covers committing, pushing, and opening/inspecting/updating a GitHub PR; its
+body directs the agent to use local Git plus `gh pr create`/`gh pr view`, keep
+unrelated changes out of the commit, and leave enough time for repository
+hooks. Role-less sessions discover it through the existing v2 registry and
+load the body only when the task matches.

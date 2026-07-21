@@ -88,12 +88,17 @@ lands:
   clean-only worktree cleanup on terminate, the open-directory command
   (palette + CLI + session-manager row action), the session-manager
   derivation-tree view with explicit subtree-terminate, and
-  authoritative workspace_root report-back on summaries. Known v1
-  gaps in the design doc's Delivery section (mid-run root correction
-  is sweep-consistent, not live; lineage does not survive a daemon
-  restart). Owner dogfooding of the whole flow is the remaining gate.
+  authoritative workspace_root report-back on summaries. The original
+  mid-run correction gap was closed by live `WorkspaceRootResolved`
+  delivery; 2026-07-21 dogfood hardening now persists the authoritative
+  root/isolation/parent context, validates and re-adopts isolated worktrees
+  after a daemon restart, and fails closed instead of silently resuming
+  without containment.
   Follow-up hardening same day: the worktree tests' GIT_DIR-leak
-  hermeticity fix + canary (`771f5a2`, backlog 53).
+  hermeticity fix + canary (`771f5a2`, backlog 53), longer global bash
+  budgets (300s default / 1800s maximum), verification guidance scoped to
+  actual modifications, and an embedded `github-pr` skill for authenticated
+  `gh`-based publication.
 - **Session wire → remoc migration — LANDED 2026-07-21** (all four
   staged PRs: #22 skew groundwork, #23 the v10 cutover, #25 the v11
   frame path, and the phase-4 cleanup this entry ships with; design

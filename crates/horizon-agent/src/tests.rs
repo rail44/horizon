@@ -1007,7 +1007,7 @@ fn system_prompt_stays_within_line_budget() {
 #[test]
 fn system_prompt_carries_communication_and_verification_norms() {
     // The 2026-07-07 owner decision: model-agnostic behavior norms only
-    // (conciseness, faithful reporting, verify-before-done, session
+    // (conciseness, faithful reporting, verify-after-change, session
     // persistence) -- see prompt.rs's module doc. This pins their presence
     // without pinning wording.
     let prompt = system_prompt(
@@ -1022,7 +1022,8 @@ fn system_prompt_carries_communication_and_verification_norms() {
     let lower = prompt.to_ascii_lowercase();
     assert!(lower.contains("be concise"));
     assert!(lower.contains("report outcomes faithfully"));
-    assert!(lower.contains("before reporting work as done, verify"));
+    assert!(lower.contains("after modifying code or files, verify"));
+    assert!(lower.contains("read-only investigation does not require a build or test"));
     assert!(lower.contains("survives application restarts"));
 }
 

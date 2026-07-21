@@ -1,4 +1,8 @@
-use std::{fs::File, io::Read, path::Path};
+use std::{
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -17,6 +21,19 @@ pub use writer::{WriterHandle, WriterInit};
 pub const AGENT_EVENT_LOG_SCHEMA: &str = "horizon.agent.event_log";
 pub const AGENT_EVENT_LOG_VERSION: u32 = 1;
 
+/// Host-resolved session placement needed to restore the same confinement
+/// after `horizon-sessiond` restarts. This is deliberately event-log
+/// metadata rather than a conversational [`Event`]: every newly appended
+/// record carries the latest authoritative value, while old records decode
+/// with `Record::session_context == None` and retain their legacy resume
+/// behavior.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct PersistedSessionContext {
+    pub workspace_root: Option<PathBuf>,
+    pub isolated_worktree: bool,
+    pub parent_session_id: Option<SessionId>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Record {
     pub schema: String,
@@ -33,6 +50,11 @@ pub struct Record {
     /// `None` -- a resumed pre-existing session simply resumes role-less.
     #[serde(default)]
     pub role_id: Option<RoleId>,
+    /// Added without changing the JSONL schema version: old records simply
+    /// lack the host-only confinement metadata and resume through the legacy
+    /// compatibility path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_context: Option<PersistedSessionContext>,
     pub event_kind: String,
     pub event: Event,
     pub provider_payload: Option<serde_json::Value>,
@@ -54,6 +76,8 @@ struct RecordEnvelope {
     provider_id: Option<ProviderId>,
     #[serde(default)]
     role_id: Option<RoleId>,
+    #[serde(default)]
+    session_context: Option<PersistedSessionContext>,
     event_kind: String,
     #[allow(dead_code)]
     event: serde_json::Value,
@@ -88,6 +112,7 @@ fn decode_record_tolerantly(line: &str) -> Option<Record> {
         turn_id: envelope.turn_id,
         provider_id: envelope.provider_id,
         role_id: envelope.role_id,
+        session_context: envelope.session_context,
         event_kind: envelope.event_kind,
         event: Event::Unknown,
         provider_payload: envelope.provider_payload,
@@ -189,6 +214,7 @@ mod tolerant_read_tests {
     fn a_future_event_variant_reads_back_as_an_unknown_record_with_its_envelope() {
         let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
         let session_id = SessionId::new();
+        let parent_session_id = SessionId::new();
         let line = serde_json::json!({
             "schema": AGENT_EVENT_LOG_SCHEMA,
             "version": AGENT_EVENT_LOG_VERSION,
@@ -197,6 +223,11 @@ mod tolerant_read_tests {
             "session_id": session_id,
             "turn_id": "turn-1",
             "provider_id": "future.provider",
+            "session_context": {
+                "workspace_root": "/tmp/future-worktree",
+                "isolated_worktree": true,
+                "parent_session_id": parent_session_id,
+            },
             "event_kind": "future_variant",
             "event": {"FutureVariant": {"x": 1}},
             "provider_payload": null,
@@ -215,6 +246,15 @@ mod tolerant_read_tests {
         assert_eq!(record.sequence, 42, "the envelope must be preserved");
         assert_eq!(record.session_id, session_id);
         assert_eq!(record.event_kind, "future_variant");
+        assert_eq!(
+            record.session_context,
+            Some(PersistedSessionContext {
+                workspace_root: Some(PathBuf::from("/tmp/future-worktree")),
+                isolated_worktree: true,
+                parent_session_id: Some(parent_session_id),
+            }),
+            "tolerant event decoding must preserve host placement metadata"
+        );
 
         let _ = std::fs::remove_file(&path);
     }
@@ -245,6 +285,10 @@ mod tolerant_read_tests {
         match init_rx.recv().unwrap() {
             WriterInit::Ready(report) => {
                 assert_eq!(report.records.len(), 1, "the unknown line must be read");
+                assert_eq!(
+                    report.records[0].session_context, None,
+                    "records predating session_context must keep decoding"
+                );
             }
             WriterInit::Failed(error) => panic!("writer startup failed: {error}"),
         }
@@ -293,12 +337,18 @@ mod tests {
         let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
         let session_id = SessionId::new();
         let (writer, _init_rx) = WriterHandle::open(&path);
+        let session_context = PersistedSessionContext {
+            workspace_root: Some(PathBuf::from("/tmp/session-worktree")),
+            isolated_worktree: true,
+            parent_session_id: Some(SessionId::new()),
+        };
         let mut appender = Appender::new(
             writer.clone(),
             session_id,
             Some(ProviderId("test.provider".to_string())),
             None,
-        );
+        )
+        .with_session_context(session_context.clone());
 
         appender
             .append_provider_events(vec![ProviderEvent::with_provider_payload(
@@ -323,6 +373,11 @@ mod tests {
         assert_eq!(
             report.records[0].provider_payload,
             Some(serde_json::json!({ "provider": true }))
+        );
+        assert_eq!(
+            report.records[0].session_context,
+            Some(session_context),
+            "host-authored placement metadata must survive the JSONL round trip"
         );
 
         let _ = std::fs::remove_file(path);
@@ -412,6 +467,7 @@ mod tests {
             turn_id: None,
             provider_id: None,
             role_id: None,
+            session_context: None,
             event_kind: "state_changed".to_string(),
             event: Event::StateChanged(SessionState::Running),
             provider_payload: None,
@@ -483,6 +539,7 @@ mod tests {
             turn_id: None,
             provider_id: None,
             role_id: None,
+            session_context: None,
             event_kind: "state_changed".to_string(),
             event: Event::StateChanged(SessionState::Running),
             provider_payload: None,

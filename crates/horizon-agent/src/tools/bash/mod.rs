@@ -2,7 +2,7 @@
 //! `bash -c` process per call, with the working directory tracked by the
 //! harness across calls (not a persistent shell). Unlike `fs.write`/
 //! `fs.edit` — the other `RequireApproval` tools Horizon executes app-side —
-//! a bash command can run for up to its timeout (120s default, 600s hard
+//! a bash command can run for up to its timeout (300s default, 1800s hard
 //! cap), so it can never run synchronously on the UI thread the way those
 //! do. See `agent::tools::approval::ApprovalOutcome::Started` for the split
 //! this forces: approval folds a "running" frame immediately and kicks off

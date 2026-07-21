@@ -84,8 +84,9 @@ pub fn system_prompt(environment: &SessionEnvironment, extra_sections: &[String]
          - Be concise; don't restate what the transcript already shows.\n\
          - Report outcomes faithfully: state failures and partial results plainly rather than \
          presenting them as success.\n\
-         - Before reporting work as done, verify it — build or test the change — and \
-         say what you checked.\n\
+         - After modifying code or files, verify the change with an appropriate build or test \
+         before reporting it done, and say what you checked. Read-only investigation does not \
+         require a build or test unless it is needed to validate a specific claim.\n\
          \n\
          Environment:\n\
          - Working directory: {cwd}\n\
