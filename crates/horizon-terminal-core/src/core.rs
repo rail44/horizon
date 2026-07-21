@@ -16,7 +16,7 @@ use self::input::{arrow_scroll_input, sgr_mouse_input, sgr_mouse_wheel_input};
 use crate::protocol::kitty_keyboard;
 use crate::types::{
     KeyEventKind, TerminalFrame, TerminalMouseKind, TerminalMouseReport, TerminalScroll,
-    TerminalSelectionKind, TerminalSelectionPoint, TerminalSize,
+    TerminalScrollWindow, TerminalSelectionKind, TerminalSelectionPoint, TerminalSize,
 };
 
 mod color;
@@ -322,6 +322,19 @@ impl TerminalCore {
 
     pub fn snapshot_frame(&self) -> TerminalFrame {
         render::snapshot_frame(&self.term, self.size)
+    }
+
+    /// Read a scrollback window `height` rows tall, positioned `anchor` rows
+    /// above the live bottom, **without moving the live `display_offset`** --
+    /// the whole point of windowed overscan (`docs/terminal-scrollback-design.md`
+    /// §2.2, §3.2): the live-frame watch keeps following the tail while the
+    /// client scrolls within the returned block locally. Unlike
+    /// [`Self::handle_scroll`]'s `scroll_display` round-trip, this has no side
+    /// effect on the terminal at all -- it is a pure `iter_from` read (see
+    /// `render::snapshot_window`). Served from the session loop's `window_rx`
+    /// arm and returned as [`crate::TerminalUpdate::ScrollWindow`].
+    pub fn snapshot_window(&self, anchor: usize, height: usize) -> TerminalScrollWindow {
+        render::snapshot_window(&self.term, anchor, height)
     }
 
     pub fn encode_key(&self, key: KeyCode, mods: Modifiers, event: KeyEventKind) -> String {

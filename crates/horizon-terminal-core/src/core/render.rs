@@ -1,5 +1,7 @@
+use alacritty_terminal::grid::{Dimensions, Indexed};
+use alacritty_terminal::index::{Line, Point};
 use alacritty_terminal::selection::SelectionRange;
-use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte::ansi::{
     Color as AnsiColor, CursorShape as AnsiCursorShape, NamedColor as AnsiNamedColor,
@@ -10,33 +12,141 @@ use unicode_width::UnicodeWidthChar;
 use crate::core::events::EventSink;
 use crate::types::{
     NamedColor, TerminalColor, TerminalCursor, TerminalCursorShape, TerminalFrame, TerminalLine,
-    TerminalSelection, TerminalSelectionPoint, TerminalSize, TerminalSpan, TerminalUnderline,
+    TerminalScrollWindow, TerminalSelection, TerminalSelectionPoint, TerminalSize, TerminalSpan,
+    TerminalUnderline,
 };
 
 pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> TerminalFrame {
-    let mut styled_rows = vec![TerminalLine { spans: Vec::new() }; size.rows as usize];
     let content = term.renderable_content();
-    // `indexed.point.line` (below) and `content.cursor.point.line` (at the
-    // bottom of this function) are both in `Term`'s absolute coordinate
-    // system: line 0 is the top of the *live* screen, and negative lines
-    // are scrollback history above it. `Grid::display_iter` already walks
-    // only the window the current `display_offset` makes visible, but it
-    // still yields lines in that same absolute system rather than
-    // viewport-relative ones -- e.g. with `display_offset == 10` on a
-    // 5-row viewport, every visible line is -10..=-6, i.e. entirely
-    // negative. Adding `display_offset` back converts an absolute line
-    // into "row from the top of what's actually on screen right now",
-    // which is what `styled_rows` is indexed by. Skipping that shift (the
-    // pre-fix behavior) silently dropped every cell once scrolled past one
-    // viewport's worth of history -- reported as scrolling up leaving the
-    // top of the pane pinned while lines vanish from the bottom (the
-    // fraction of rows whose shifted line still lands in range, drawn at
-    // the wrong row) or the whole frame going blank (once no row's shifted
-    // line is in range at all).
+    // `content.display_iter` and `content.cursor.point.line` (below) are
+    // both in `Term`'s absolute coordinate system: line 0 is the top of the
+    // *live* screen, and negative lines are scrollback history above it.
+    // `Grid::display_iter` walks only the window the current `display_offset`
+    // makes visible, but still yields lines in that absolute system -- e.g.
+    // with `display_offset == 10` on a 5-row viewport, every visible line is
+    // -10..=-6, entirely negative. Adding `display_offset` back converts an
+    // absolute line into "row from the top of what's actually on screen right
+    // now", the row index the returned `lines` is keyed by. (Skipping that
+    // shift silently dropped every cell once scrolled past one viewport's
+    // worth of history -- see this fix's regression tests.)
     let display_offset = content.display_offset as i32;
+    let lines = styled_rows(content.display_iter, size.rows as usize, |line| {
+        line + display_offset
+    });
 
-    for indexed in content.display_iter {
-        let row = indexed.point.line.0 + display_offset;
+    TerminalFrame {
+        lines,
+        cursor: cursor_position(
+            content.cursor.shape,
+            content.cursor.point.line.0 + display_offset,
+            content.cursor.point.column.0,
+            size.rows as usize,
+        ),
+        selection: selection_in_viewport(content.selection, display_offset, size),
+        mouse_reporting: term.mode().intersects(TermMode::MOUSE_MODE)
+            && term.mode().contains(TermMode::SGR_MOUSE),
+        keys_as_escape_codes: term.mode().contains(TermMode::REPORT_ALL_KEYS_AS_ESC),
+        palette_overrides: palette_overrides(term),
+        // Windowed overscan is a primary-screen concept: the alt grid has no
+        // scrollback (`max_scroll_limit == 0`) and a mouse app owns the
+        // wheel, so both suspend it (mirrors `TerminalCore::
+        // application_scroll_mode`; `docs/terminal-scrollback-design.md`
+        // §2.1, §2.3).
+        scrollback_available: !term
+            .mode()
+            .intersects(TermMode::ALT_SCREEN | TermMode::MOUSE_MODE),
+    }
+}
+
+/// Read a `height`-row scrollback window positioned `anchor` rows above the
+/// live bottom, **without moving `display_offset`** -- the live-frame watch
+/// keeps showing the tail throughout (`docs/terminal-scrollback-design.md`
+/// §2.2, §3.2). `anchor` is a hypothetical `display_offset`: the viewport at
+/// `anchor` shows grid lines from `Line(-anchor)` down, clamped to
+/// `0..=history_size`. The block extends a centered margin above and below
+/// that viewport, clamped to the true top (`topmost_line`) and the live edge
+/// (`bottommost_line`). `above`/`below` report the rows that remain outside
+/// the block (their zeroes are the true-top / live-edge signals), and
+/// `viewport_offset` locates the viewport's top row within it. Built by a
+/// `grid.iter_from` walk that reuses [`styled_rows`] -- no engine change, no
+/// side effect on the live viewport.
+pub(super) fn snapshot_window(
+    term: &Term<EventSink>,
+    anchor: usize,
+    height: usize,
+) -> TerminalScrollWindow {
+    let grid = term.grid();
+    let screen_lines = grid.screen_lines() as i32;
+    let history_size = grid.history_size() as i32;
+
+    // `anchor` == "rows above the live bottom" == a hypothetical
+    // `display_offset`, so it reaches at most `history_size` (viewport top ==
+    // topmost history line). A request past the evicted top clamps here and
+    // returns the oldest surviving rows.
+    let anchor = (anchor as i32).clamp(0, history_size);
+
+    // The viewport at this anchor: top row `Line(-anchor)`, `screen_lines`
+    // tall (mirrors `display_offset == anchor`).
+    let viewport_top = -anchor;
+    let viewport_bottom = viewport_top + screen_lines - 1;
+
+    // Distribute the margin (rows beyond the viewport) above and below,
+    // centering the viewport in the block.
+    let margin = (height as i32).saturating_sub(screen_lines).max(0);
+    let margin_above = margin / 2;
+    let margin_below = margin - margin_above;
+
+    let topmost = -history_size;
+    let bottommost = screen_lines - 1;
+    let block_top = (viewport_top - margin_above).max(topmost);
+    let block_bottom = (viewport_bottom + margin_below).min(bottommost);
+
+    let above = (block_top - topmost) as usize;
+    let below = (bottommost - block_bottom) as usize;
+    let viewport_offset = (viewport_top - block_top) as usize;
+    let row_count = (block_bottom - block_top + 1) as usize;
+
+    // `iter_from` yields the cell *after* its start point (its first `next`
+    // advances before reading -- see `Grid::display_iter`'s own `-1,
+    // last_column` seed), so seed one line above the block's top at the last
+    // column to make the first yielded cell `(block_top, col 0)`. Walk to the
+    // block's bottom row and stop (`iter_from` otherwise runs to the live
+    // tail). The seed point itself is never indexed -- the iterator advances
+    // past it before reading -- so seeding one line above `topmost` is safe.
+    let last_column = grid.last_column();
+    let start = Point::new(Line(block_top - 1), last_column);
+    let cells = grid
+        .iter_from(start)
+        .take_while(|indexed| indexed.point.line.0 <= block_bottom);
+    let lines = styled_rows(cells, row_count, |line| line - block_top);
+
+    TerminalScrollWindow {
+        lines,
+        viewport_offset,
+        above,
+        below,
+    }
+}
+
+/// Build the per-row styled spans for a band of the grid, shared by the
+/// live-viewport snapshot ([`snapshot_frame`]) and the scrollback window
+/// ([`snapshot_window`]). `cells` walks the band in row-major order (either
+/// `display_iter` or an `iter_from` range); `line_to_row` maps a cell's
+/// absolute `Line` (line 0 = top of the live screen, negatives = history) to
+/// its 0-based index in the returned `Vec`, and a cell whose row falls
+/// outside `0..row_count` is dropped. `snapshot_frame` folds `display_offset`
+/// in (`line + display_offset`); `snapshot_window` subtracts the block's top
+/// line. The cell->span conversion (wide chars, zero-width combiners, SGR 8
+/// conceal, BCE blank runs) is identical for both callers.
+fn styled_rows<'a>(
+    cells: impl Iterator<Item = Indexed<&'a Cell>>,
+    row_count: usize,
+    line_to_row: impl Fn(i32) -> i32,
+) -> Vec<TerminalLine> {
+    let mut styled_rows = vec![TerminalLine { spans: Vec::new() }; row_count];
+
+    for indexed in cells {
+        let row = line_to_row(indexed.point.line.0);
         if row < 0 {
             continue;
         }
@@ -51,23 +161,21 @@ pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> Term
             continue;
         }
 
-        // Selection deliberately does *not* touch fg/bg here anymore: it
-        // rides the frame as semantic metadata (`TerminalFrame::selection`,
-        // built below from `content.selection`), so spans stay pure content
-        // and dragging a selection changes no rows -- goal 2 of
-        // `docs/terminal-protocol-goals.md`.
+        // Selection deliberately does *not* touch fg/bg here: it rides the
+        // frame as semantic metadata (`TerminalFrame::selection`), so spans
+        // stay pure content and dragging a selection changes no rows -- goal
+        // 2 of `docs/terminal-protocol-goals.md`.
         let style = SpanStyle::from_cell(cell.fg, cell.bg, cell.flags, cell.underline_color());
         let columns = cell_width(cell.c, cell.flags);
         if cell.flags.contains(Flags::HIDDEN) {
-            // SGR 8 (conceal) hides the glyph but the cell still occupies
-            // its column in the grid -- unlike `WIDE_CHAR_SPACER`, whose
-            // partner cell already counts both columns' width, a
-            // concealed cell has no such partner. Emit it as a blank span
-            // (the same vocabulary `push_styled_cell` already uses for
-            // BCE-erased/space-padding runs) so the row's running column
-            // offset stays correct for whatever comes after it, instead of
-            // silently dropping the column and shifting later spans left
-            // (backlog 45).
+            // SGR 8 (conceal) hides the glyph but the cell still occupies its
+            // column in the grid -- unlike `WIDE_CHAR_SPACER`, whose partner
+            // cell already counts both columns' width, a concealed cell has
+            // no such partner. Emit it as a blank span (the same vocabulary
+            // `push_styled_cell` uses for BCE-erased/space-padding runs) so
+            // the row's running column offset stays correct for whatever
+            // comes after it, instead of silently dropping the column and
+            // shifting later spans left (backlog 45).
             push_styled_cell(&mut styled_rows[row], ' ', columns, style);
             continue;
         }
@@ -79,12 +187,12 @@ pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> Term
             // A printable cell carrying zero-width combining chars gets a
             // span of its own instead of joining the neighboring run: the
             // extra chars break the `columns == chars` equality the GUI's
-            // grid snapping keys on (see `push_styled_cell`), so merging
-            // them in would drop the *whole* run to natural shaping.
-            // Isolated, any shaping drift stays confined to this one cell
-            // -- exactly the pre-merge rendering. The trailing zero-width
-            // chars also fence the next cell out of this span
-            // (`push_styled_cell`'s ends-in-zero-width test).
+            // grid snapping keys on (see `push_styled_cell`), so merging them
+            // in would drop the *whole* run to natural shaping. Isolated, any
+            // shaping drift stays confined to this one cell -- exactly the
+            // pre-merge rendering. The trailing zero-width chars also fence
+            // the next cell out of this span (`push_styled_cell`'s
+            // ends-in-zero-width test).
             line.spans.push(style.span(cell.c.to_string(), columns));
         }
         for ch in zerowidth {
@@ -92,20 +200,7 @@ pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> Term
         }
     }
 
-    TerminalFrame {
-        lines: styled_rows,
-        cursor: cursor_position(
-            content.cursor.shape,
-            content.cursor.point.line.0 + display_offset,
-            content.cursor.point.column.0,
-            size.rows as usize,
-        ),
-        selection: selection_in_viewport(content.selection, display_offset, size),
-        mouse_reporting: term.mode().intersects(TermMode::MOUSE_MODE)
-            && term.mode().contains(TermMode::SGR_MOUSE),
-        keys_as_escape_codes: term.mode().contains(TermMode::REPORT_ALL_KEYS_AS_ESC),
-        palette_overrides: palette_overrides(term),
-    }
+    styled_rows
 }
 
 /// This session's live OSC 4/10/11/12 palette overrides

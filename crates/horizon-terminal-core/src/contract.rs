@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::core::TerminalColorScheme;
 use crate::types::{
-    KeyEventKind, TerminalMouseReport, TerminalScroll, TerminalSelectionKind,
+    KeyEventKind, TerminalMouseReport, TerminalScroll, TerminalScrollWindow, TerminalSelectionKind,
     TerminalSelectionPoint, TerminalSize,
 };
 
@@ -82,6 +82,21 @@ pub enum TerminalCommand {
     /// over the spawn-time scheme -- see `core::color::resolve_query_color`.
     SetColorScheme(TerminalColorScheme),
     Shutdown,
+    /// Client → daemon: request a scrollback *window* — a contiguous block of
+    /// history `height` rows tall, positioned `anchor` rows above the live
+    /// bottom (a hypothetical `display_offset`). The daemon answers on the
+    /// events channel with [`TerminalUpdate::ScrollWindow`], a self-describing
+    /// window (`docs/terminal-scrollback-design.md` §3.2, §9 option ii): the
+    /// reply carries its own `viewport_offset`/`above`/`below`, so no
+    /// correlation id is needed. Serving it never moves the live
+    /// `display_offset` (`TerminalCore::snapshot_window`), so the live-frame
+    /// watch keeps showing the tail throughout. Additive, appended before the
+    /// `Unknown` catch-all; phase 1 wires this end-to-end daemon-side, the
+    /// client does not send it yet (§7 phase 2).
+    RequestScrollWindow {
+        anchor: usize,
+        height: usize,
+    },
     /// Skew catch-all — `#[serde(other)]`: a command this build can't name
     /// decodes to `Unknown` (its payload, if any, is discarded — "an
     /// unknown command is ignored" is the intended semantic). Keep last.
@@ -106,6 +121,17 @@ pub enum TerminalUpdate {
     },
     Exited,
     Error(String),
+    /// Daemon → client: a served scrollback window, the reply to
+    /// [`TerminalCommand::RequestScrollWindow`]
+    /// (`docs/terminal-scrollback-design.md` §3.2, §9 option ii — it rides
+    /// this existing events mpsc rather than a dedicated channel). The window
+    /// is self-describing (`viewport_offset`/`above`/`below`), so it carries
+    /// no correlation id, and its payload is a struct
+    /// ([`TerminalScrollWindow`]) — no wire enum in element position, keeping
+    /// the postbag positional discipline. Additive, appended before the
+    /// `Unknown` catch-all; phase 1 produces it daemon-side, the client does
+    /// not consume it yet (§7 phase 2).
+    ScrollWindow(TerminalScrollWindow),
     /// Skew catch-all — `#[serde(other)]`: an update this build can't name
     /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
     /// discarded there; under serde_json only *unit* variants degrade —
@@ -144,4 +170,19 @@ pub enum SelectionCommand {
     },
     Update(TerminalSelectionPoint),
     Copy,
+}
+
+/// A demuxed [`TerminalCommand::RequestScrollWindow`], routed onto the
+/// session loop's own `window_rx` channel by the host's PTY writer thread
+/// (`run_writer`, `horizon-sessiond`) — see [`crate::CoreReceivers`]. The
+/// loop answers by calling `TerminalCore::snapshot_window(anchor, height)`
+/// and putting the resulting window on the events mpsc as
+/// [`TerminalUpdate::ScrollWindow`] (`docs/terminal-scrollback-design.md`
+/// §7.1, §9 option ii). Process-local (crossbeam channels only, never on the
+/// wire), so — like [`SelectionCommand`] — it is deliberately outside the
+/// wire-schema artifact and carries no `Unknown` skew catch-all.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ScrollWindowRequest {
+    pub anchor: usize,
+    pub height: usize,
 }
