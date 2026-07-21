@@ -9,8 +9,7 @@ Problems the owner hits while actually using Horizon live here, on a
 - The **project session** (roadmap owner, integration) triages them by
   priority and by whether the fix would conflict with in-flight work
   (a conflict is fine if the merge is still smooth), then dispatches the
-  chosen ones to workers and merges the branches back through the review
-  queue.
+  chosen ones to workers and integrates their branch handoffs directly.
 
 Filing an issue is not a request to fix it now — the project session
 decides when and in what order, the same way it does for the roadmap.
@@ -48,26 +47,23 @@ expected). Root-cause analysis and design are added later, by triage.
 ## Lifecycle
 
 `open` → the project session adds a **## Triage** section (priority
-decision, conflict/merge assessment, and — once dispatched — the branch /
-review-queue slug) and sets `status: triaged` then `in-progress`. On
+decision, conflict/merge assessment, and — once dispatched — the branch and
+commit ref) and sets `status: triaged` then `in-progress`. On
 merge it sets `status: resolved` and records the commit. `wont-fix` /
 `duplicate` are terminal too, with a one-line reason.
 
-The issue file is the durable record; the branch handoff still goes
-through `.claude/review-queue/` (untracked) exactly as roadmap work does.
+The issue file is the durable record; branch handoff follows `AGENTS.md` and
+is reported directly to the project session. There is no filesystem queue or
+result watcher.
 
 ## Handoff — how a filed issue reaches the project session
 
-Issues are handed off **exactly like a normal feature branch**, because
-that is the one channel the project session already watches. Writing an
-issue file on a branch is not enough on its own — the project session works
-from `origin/main` and will not see an un-handed-off branch. So the filing
-session:
+Issues are handed off **exactly like a normal feature branch**. Writing an
+issue file on a branch is not enough on its own, so the filing session:
 
-1. commits the `docs/issues/NNN-*.md` file(s) on its branch and pushes it;
-2. drops a `.claude/review-queue/<slug>.request.md` pointing at the branch
-   (the same request other work uses), which is what actually notifies the
-   project session.
+1. commits the `docs/issues/NNN-*.md` file(s) on its branch;
+2. reports the branch name and commit ref directly to the project session,
+   with the same concise handoff information required by `AGENTS.md`.
 
 The project session then reviews and **merges the branch like any other**
 (issue files are additive and low-conflict, usually a clean fast-forward),
@@ -78,9 +74,7 @@ triageable. Triage (the `## Triage` section + `status: triaged`) happens on
 **Worker dispatch timing is owner-directed.** Triage does not
 automatically launch a fix worker. The project session triages and waits;
 the owner says when (and in what order) a triaged issue is dispatched to a
-worker. (Decided 2026-07-10, after issues 001/002 were filed on a branch
-with no review-queue request and so went undetected — the missing step this
-section now records.)
+worker.
 
 ## Relationship to the other rails
 
@@ -89,5 +83,5 @@ section now records.)
 - **`docs/tasks/backlog.md`** — small findings noticed *in code* during
   foundation work (out-of-scope observations from workers/reviews). Not
   the owner's live-use issues; those belong here.
-- **`.claude/review-queue/`** — branch review/merge handoff, shared by all
-  work regardless of which rail it came from.
+- **Branch handoff** — reported directly to the project session using the
+  repository-wide format in `AGENTS.md`.

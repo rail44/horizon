@@ -946,6 +946,19 @@ fn tool_session_state_for(
     }
 }
 
+/// Returns the directory repository-local skills must be discovered from.
+/// This deliberately mirrors `SessionEnvironment::for_workspace_root`: an
+/// explicit, host-resolved session root wins, otherwise both the prompt and
+/// `skill.read` fall back to the daemon's current directory (and finally
+/// `/`). Keeping the fallback in a named helper makes the two production
+/// skill registries' common root directly testable.
+fn skill_discovery_root(workspace_root: Option<&Path>) -> PathBuf {
+    workspace_root
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("/"))
+}
+
 /// Resolves and creates this session's isolated worktree (`docs/
 /// session-relationship-design.md` decisions 2-3), returning the directory
 /// its file tools should actually be confined to, plus whether isolation
@@ -1111,16 +1124,11 @@ fn run_session(
         session_id: Some(session_id),
         store: state.wait_for_duckdb_store(),
     };
-    // Discovered from this process's own cwd, deliberately independent of
-    // the resolved `workspace_root` above -- this registry feeds the
-    // `skill.read` tool (`ToolSessionState::skill_registry`), a separate
-    // seam from the prompt's own skills listing (now built from
-    // `workspace_root`, see the comment on this function's first block).
-    // Left as process cwd rather than fixed in the same pass: unlike the
-    // prompt, a wrong root here doesn't misdirect the model into acting on
-    // the wrong directory, only what `skill.read` can see -- out of this
-    // fix's reported scope.
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
+    // Use the same resolved root as the provider's prompt-side skill
+    // listing. Otherwise an isolated session can be told that a repository
+    // skill exists and then have `skill.read` look for its body in the
+    // daemon's checkout instead of the session's worktree (backlog 58).
+    let skill_root = skill_discovery_root(workspace_root.as_deref());
     // Leg 4b (`docs/agent-approval-design.md`): the network proxy is now
     // `horizon-agent`'s own responsibility, started per session (never one
     // shared daemon-wide instance -- see `tools::network::
@@ -1158,7 +1166,7 @@ fn run_session(
 
     let tool_state = tool_session_state_for(workspace_root, state.agent_config.tools, recall)
         .with_isolated_worktree(isolated)
-        .with_skills(SkillRegistry::discover(&cwd))
+        .with_skills(SkillRegistry::discover(&skill_root))
         .with_config_path(state.config_path.clone())
         .with_domain_policy(domains)
         .with_network_proxy(network)
@@ -1721,6 +1729,24 @@ mod tests {
         let state =
             tool_session_state_for(None, AgentToolsConfig::default(), RecallContext::default());
         assert_eq!(state.workspace_root(), Some(expected_root.as_path()));
+    }
+
+    /// The tool-side skill registry must prefer the session's resolved root
+    /// over the daemon cwd, matching the provider's prompt-side registry.
+    #[test]
+    fn skill_discovery_root_uses_the_session_workspace_when_present() {
+        let session_root = PathBuf::from("/session-specific-workspace");
+        assert_eq!(
+            skill_discovery_root(Some(&session_root)),
+            session_root,
+            "skill.read must not discover from the daemon cwd"
+        );
+    }
+
+    #[test]
+    fn skill_discovery_root_falls_back_to_the_process_cwd() {
+        let expected = std::env::current_dir().expect("read process cwd");
+        assert_eq!(skill_discovery_root(None), expected);
     }
 
     fn drain_events(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AgentWireEvent>) -> Vec<Event> {

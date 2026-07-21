@@ -247,7 +247,7 @@ Concrete mappings:
   deliberately: virtualized-List transcript (measure first — revisit
   if long transcripts lag).
 
-Each of M1–M4 is a review-queue-sized unit; M0 rides with M1.
+Each of M1–M4 is a branch-sized unit; M0 rides with M1.
 
 ## GUI verification rebuild
 

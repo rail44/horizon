@@ -379,17 +379,6 @@ entries live in `backlog-resolved.md` keeping their original numbers
     spawns interleave. Echoing the created id in the invoke response
     closes the loop cleanly. Small, additive. Recorded 2026-07-19.
 
-58. **`skill.read`'s registry still discovers from the daemon's cwd.**
-    The 2026-07-19 prompt-cwd fix (`cb8e41f`) routed the session's
-    workspace_root into prompt assembly and the prompt-side skill
-    listing, but `horizon-sessiond`'s own `SkillRegistry::discover(&cwd)`
-    (feeding the `skill.read` tool, `run_session` in
-    crates/horizon-sessiond/src/session.rs) still walks from the daemon
-    process's cwd — an isolated session reading skills sees the
-    daemon's repo, not its own worktree (usually the same repo today,
-    but wrong once sessions span repositories). Same-shape fix: thread
-    the session root in. Recorded 2026-07-19 from the fix's review.
-
 59. **Resolved for proxy-domain and Linux `openat`/`openat2` denials
     2026-07-21; other syscall families remain.** Tier-1's former "denial ->
     retry without sandbox" flow (`docs/agent-approval-design.md`'s historical
@@ -527,7 +516,7 @@ entries live in `backlog-resolved.md` keeping their original numbers
     macOS backend migration (2026-07-19); the old SBPL backend's
     "compile-only" bar was met instead via an API-faithful local stub of
     nono patched in with `[patch.crates-io]`, checked, then fully
-    reverted (see `.claude/review-queue/nono-macos-backend.request.md`).
+    reverted (recorded with the macOS-backend branch handoff).
     Options if this bar needs to be routine (e.g. on nono bumps): keep
     the stub as a checked-in dev tool, set up osxcross, or accept
     review-only for darwin paths. Real-mac runtime verification of the
@@ -556,26 +545,6 @@ entries live in `backlog-resolved.md` keeping their original numbers
     horizon-side nibble meanwhile: pass `.featured_colors(...)`
     explicitly to skip the per-render 12-color rebuild from
     `cx.theme()`.
-
-63. **Process gap: the GitHub merge button bypasses the quality gate
-    (no CI exists), and same-evening branches can silently share a
-    protocol version number.** Incident record, 2026-07-19 evening:
-    PR #16 (`123b6a0`) bumped `SESSION_PROTOCOL_VERSION` 7→8 for
-    `TerminalCommand::SetColorScheme` and landed via the GitHub merge
-    button — which runs neither the local pre-commit gate nor any CI —
-    leaving main red for about an hour (horizon-agent's `wire.rs`
-    contract-version pins still asserted 7). The in-flight
-    `frame-text-removal` branch had independently claimed the same v8
-    for removing `TerminalFrame.text`; because both bumps were the
-    identical one-line change, git would have merged them clean with
-    no conflict, letting two different vocabulary changes share v8
-    (the handshake is an equality check — mixed builds would pass
-    version negotiation, then fail at deserialization). Both halves
-    resolved the same evening: the frame-text session renumbered its
-    bump to v9 and fixed the pins in its merge commit (`422b2a7`,
-    landed as PR #15). Left open: whether merges should go back
-    through the review-queue flow (gate runs locally) instead of the
-    GitHub button, or a CI gate should exist — owner call.
 
 64. **[LANDED 4816d3c] Agent history budget + tool-result-aware
     eviction.** Root-caused from the dispatched-agent incident where a
