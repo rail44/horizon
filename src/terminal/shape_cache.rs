@@ -37,12 +37,12 @@ use gpui::{Hsla, ShapedLine};
 use horizon_terminal_core::TerminalColorScheme;
 
 /// The out-of-band stamp for a row the generation table doesn't cover
-/// (structurally impossible while `apply_frame_update` keeps the table in
-/// lockstep with the frame, but the paint loop maps a missing entry here
-/// rather than panicking). Real stamps are always ≥ 1 — `RowGenerations`
-/// starts at 0 and bumps before stamping — and [`ShapedLineCache::
-/// get_or_shape`] never reports a hit for this value, so such a row is
-/// simply re-shaped every frame.
+/// (structurally impossible while the pump's `RowGenerations::apply_frame`
+/// keeps the table in lockstep with the frame, but the paint loop maps a
+/// missing entry here rather than panicking). Real stamps are always ≥ 1 —
+/// `RowGenerations` starts at 0 and bumps before stamping — and
+/// [`ShapedLineCache::get_or_shape`] never reports a hit for this value, so
+/// such a row is simply re-shaped every frame.
 pub(super) const NO_GENERATION: u64 = 0;
 
 /// The frame-level invalidation axes: a change to either means every

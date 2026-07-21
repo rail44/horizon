@@ -31,7 +31,6 @@ use horizon_terminal_core::{
     TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
 };
 use remoc::rch;
-use remoc::rch::watch::WatchExt as _;
 use tokio::sync::mpsc::UnboundedReceiver;
 use uuid::Uuid;
 
@@ -97,12 +96,14 @@ impl Hub {
             events: mut local_events,
         } = channels;
 
-        // Frames: a watch seeded with the retained latest frame. The
-        // creator caps both directions (`FRAME_MAX_ITEM_BYTES`) — the
-        // receiver's const parameter travels with it when transported, the
-        // sender's runtime limit gates serialization.
-        let (frame_tx, frame_rx) = rch::watch::channel::<TerminalFrame, WireCodec>(seed)
-            .with_max_item_size::<FRAME_MAX_ITEM_BYTES>();
+        // Frames: a watch seeded with the retained latest frame. Only the
+        // receiver's `MAX_ITEM_SIZE` const is set (`FRAME_MAX_ITEM_BYTES`):
+        // we transport the receiver and keep the sender, so that const is
+        // the effective cap in both directions (the receiver's serializer
+        // drives forwarding). The sender's runtime limit is never consulted
+        // here — see `FRAME_MAX_ITEM_BYTES`/`CappedWatchReceiver`.
+        let (frame_tx, frame_rx) = rch::watch::channel::<TerminalFrame, WireCodec>(seed);
+        let frame_rx = frame_rx.set_max_item_size::<FRAME_MAX_ITEM_BYTES>();
         tokio::spawn(async move {
             while let Some(frame) = local_frames.recv().await {
                 // `rch::watch::Sender::send` is synchronous and only errors
