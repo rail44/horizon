@@ -156,6 +156,7 @@ async fn rig_openai_turn_streaming(
         .messages(history)
         .tools(rig_tool_definitions(config.allowed_tool_ids.as_deref()))
         .preamble(system_prompt(environment, extra_sections))
+        .additional_params(openai_turn_additional_params())
         .stream()
         .await?;
 
@@ -301,6 +302,15 @@ async fn rig_openai_turn_streaming(
             failed: false,
         },
     ))
+}
+
+/// OpenAI defaults this to true, but Horizon also supports configurable
+/// OpenAI-compatible endpoints. Sending the flag explicitly makes the
+/// intended contract stable across those backends: one assistant response
+/// may request several independent tools, while `session::fold_batched_tool_result`
+/// still waits for every result before the next completion.
+pub(super) fn openai_turn_additional_params() -> serde_json::Value {
+    serde_json::json!({ "parallel_tool_calls": true })
 }
 
 /// Builds the memory policy applied to the outgoing history just before it

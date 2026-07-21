@@ -34,6 +34,17 @@ pub enum ToolCallKind {
     },
 }
 
+/// One filesystem path affected by a successful mutation. A separate list
+/// is necessary because `fs.patch` has one receipt row but may change many
+/// files; its display target alone cannot preserve that cardinality.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileEffect {
+    pub path: String,
+    pub added: u32,
+    pub removed: u32,
+    pub created: bool,
+}
+
 /// One tool call's view-model, shared by the running card's per-row
 /// rendering (full `verb + target + result summary` line, one row per
 /// call) and the completed-turn receipt's chip rendering (terser, keyed
@@ -52,6 +63,7 @@ pub struct ToolCallView {
     /// result to summarize yet.
     pub result_summary: Option<String>,
     pub kind: ToolCallKind,
+    pub affected_files: Vec<FileEffect>,
     pub finished: bool,
     pub is_error: bool,
     /// This call's approval lifecycle (owner feedback 2026-07-13, round
@@ -219,6 +231,7 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
         .map(|entry| {
             let output = entry.result.map(|result| &result.output.0);
             let (verb, target, result_summary, kind) = classify(entry.tool_id, entry.input, output);
+            let affected_files = affected_files(entry.tool_id, entry.input, output);
             ToolCallView {
                 call_id: entry.call_id,
                 tool_id: entry.tool_id.to_string(),
@@ -230,6 +243,7 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
                     None
                 },
                 kind,
+                affected_files,
                 finished: entry.result.is_some(),
                 is_error: entry.result.map(|result| result.is_error).unwrap_or(false),
                 approval: derive_approval_state(
@@ -343,6 +357,22 @@ pub fn classify(
                 },
             )
         }
+        "fs.patch" => {
+            let paths = str_field(input, "patch")
+                .map(patch_paths)
+                .unwrap_or_default();
+            let target = match paths.as_slice() {
+                [] => None,
+                [path] => Some(path.clone()),
+                _ => Some(format!("{} files", paths.len())),
+            };
+            let summary = output.and_then(|output| {
+                let added = output.get("added")?.as_u64()?;
+                let removed = output.get("removed")?.as_u64()?;
+                Some(format!("+{added} -{removed}"))
+            });
+            ("Patch".to_string(), target, summary, ToolCallKind::Generic)
+        }
         "bash" => {
             let command = str_field(input, "command").unwrap_or_default();
             let head = command_head(command);
@@ -417,6 +447,81 @@ pub fn classify(
         }
         other => (other.to_string(), None, None, ToolCallKind::Generic),
     }
+}
+
+fn affected_files(tool_id: &str, input: &Value, output: Option<&Value>) -> Vec<FileEffect> {
+    match tool_id {
+        "fs.edit" => {
+            let Some(path) = str_field(input, "path") else {
+                return Vec::new();
+            };
+            let old = str_field(input, "old_string").unwrap_or_default();
+            let new = str_field(input, "new_string").unwrap_or_default();
+            let (added, removed) = line_diffstat(old, new);
+            vec![FileEffect {
+                path: path.to_string(),
+                added,
+                removed,
+                created: false,
+            }]
+        }
+        "fs.write" => {
+            let Some(output) = output else {
+                return Vec::new();
+            };
+            let Some(path) = str_field(input, "path") else {
+                return Vec::new();
+            };
+            vec![FileEffect {
+                path: path.to_string(),
+                added: 0,
+                removed: 0,
+                created: output.get("created").and_then(Value::as_bool) == Some(true),
+            }]
+        }
+        "fs.patch" => output
+            .and_then(|output| output.get("files"))
+            .and_then(Value::as_array)
+            .map(|files| {
+                files
+                    .iter()
+                    .filter_map(|file| {
+                        Some(FileEffect {
+                            path: file.get("target_path")?.as_str()?.to_string(),
+                            added: file.get("added").and_then(Value::as_u64).unwrap_or(0) as u32,
+                            removed: file.get("removed").and_then(Value::as_u64).unwrap_or(0)
+                                as u32,
+                            created: file.get("operation").and_then(Value::as_str) == Some("added"),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+fn patch_paths(patch: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    for line in patch.lines() {
+        let path = [
+            "*** Add File:",
+            "*** Update File:",
+            "*** Delete File:",
+            "*** Move to:",
+        ]
+        .iter()
+        .find_map(|header| line.strip_prefix(header))
+        .map(str::trim)
+        .filter(|path| !path.is_empty());
+        if let Some(path) = path {
+            let path = path.to_string();
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+    }
+    paths
 }
 
 /// Reads a string field out of a tool's input/output JSON. Public so
@@ -746,6 +851,38 @@ mod tests {
             ToolCallKind::File { diffstat, .. } => assert_eq!(*diffstat, None),
             other => panic!("expected a File chip, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn fs_patch_preserves_each_affected_file_behind_one_call() {
+        let items = vec![
+            tool_requested(
+                "a",
+                "fs.patch",
+                json!({
+                    "patch": "*** Begin Patch\n*** Update File: /w/a.rs\n@@\n-old\n+new\n*** Add File: /w/b.rs\n+new\n*** End Patch"
+                }),
+            ),
+            tool_finished(
+                "a",
+                json!({
+                    "applied": true,
+                    "file_count": 2,
+                    "added": 2,
+                    "removed": 1,
+                    "files": [
+                        {"path": "/w/a.rs", "target_path": "/w/a.rs", "operation": "updated", "added": 1, "removed": 1},
+                        {"path": "/w/b.rs", "target_path": "/w/b.rs", "operation": "added", "added": 1, "removed": 0}
+                    ]
+                }),
+            ),
+        ];
+        let views = build_tool_call_views(&items);
+        assert_eq!(views[0].verb, "Patch");
+        assert_eq!(views[0].target.as_deref(), Some("2 files"));
+        assert_eq!(views[0].result_summary.as_deref(), Some("+2 -1"));
+        assert_eq!(views[0].affected_files.len(), 2);
+        assert!(views[0].affected_files[1].created);
     }
 
     #[test]

@@ -185,6 +185,10 @@ fn fs_read_glob_grep_are_auto_allow_read_and_write_edit_require_approval() {
         permission_for_tool("fs.edit"),
         Some(ToolPermission::RequireApproval)
     );
+    assert_eq!(
+        permission_for_tool("fs.patch"),
+        Some(ToolPermission::RequireApproval)
+    );
 }
 
 #[test]
@@ -634,6 +638,96 @@ fn fs_edit_stale_after_external_modification_is_error() {
         .as_str()
         .unwrap()
         .contains("changed on disk"));
+}
+
+// --- fs.patch --------------------------------------------------------------
+
+#[test]
+fn fs_patch_applies_multiple_chunks_and_files_in_one_call() {
+    let root = temp_workspace("patch-multiple");
+    let first = root.join("first.txt");
+    let second = root.join("second.txt");
+    let added = root.join("added.txt");
+    fs::write(&first, "one\ntwo\nthree\n").unwrap();
+    fs::write(&second, "before\n").unwrap();
+    let tool_state = ToolSessionState::new(root);
+    for path in [&first, &second] {
+        fs_tools::execute_auto(
+            &tool_state,
+            "fs.read",
+            &json!({ "path": path.display().to_string() }),
+        );
+    }
+
+    let patch = format!(
+        "*** Begin Patch\n*** Update File: {}\n@@\n-one\n+ONE\n@@\n-three\n+THREE\n*** Update File: {}\n@@\n-before\n+after\n*** Add File: {}\n+new file\n*** End Patch",
+        first.display(),
+        second.display(),
+        added.display(),
+    );
+    let output = fs_tools::execute_approved(&tool_state, "fs.patch", &json!({ "patch": patch }));
+
+    assert!(!is_error(&output), "{output}");
+    assert_eq!(output["file_count"], 3);
+    assert_eq!(fs::read_to_string(first).unwrap(), "ONE\ntwo\nTHREE\n");
+    assert_eq!(fs::read_to_string(second).unwrap(), "after\n");
+    assert_eq!(fs::read_to_string(added).unwrap(), "new file\n");
+}
+
+#[test]
+fn fs_patch_validates_every_file_before_writing_any_content() {
+    let root = temp_workspace("patch-prevalidate");
+    let readable = root.join("readable.txt");
+    let unread = root.join("unread.txt");
+    fs::write(&readable, "before\n").unwrap();
+    fs::write(&unread, "before\n").unwrap();
+    let tool_state = ToolSessionState::new(root);
+    fs_tools::execute_auto(
+        &tool_state,
+        "fs.read",
+        &json!({ "path": readable.display().to_string() }),
+    );
+
+    let patch = format!(
+        "*** Begin Patch\n*** Update File: {}\n@@\n-before\n+after\n*** Update File: {}\n@@\n-before\n+after\n*** End Patch",
+        readable.display(),
+        unread.display(),
+    );
+    let output = fs_tools::execute_approved(&tool_state, "fs.patch", &json!({ "patch": patch }));
+
+    assert!(is_error(&output));
+    assert!(output["message"]
+        .as_str()
+        .unwrap()
+        .contains("has not been read"));
+    assert_eq!(fs::read_to_string(readable).unwrap(), "before\n");
+    assert_eq!(fs::read_to_string(unread).unwrap(), "before\n");
+}
+
+#[test]
+fn fs_patch_rejects_a_path_outside_the_workspace_before_writing() {
+    let root = temp_workspace("patch-confined");
+    let inside = root.join("inside.txt");
+    fs::write(&inside, "before\n").unwrap();
+    let tool_state = ToolSessionState::new(root);
+    fs_tools::execute_auto(
+        &tool_state,
+        "fs.read",
+        &json!({ "path": inside.display().to_string() }),
+    );
+    let outside = temp_workspace("patch-outside").join("outside.txt");
+
+    let patch = format!(
+        "*** Begin Patch\n*** Update File: {}\n@@\n-before\n+after\n*** Add File: {}\n+escaped\n*** End Patch",
+        inside.display(),
+        outside.display(),
+    );
+    let output = fs_tools::execute_approved(&tool_state, "fs.patch", &json!({ "patch": patch }));
+
+    assert!(is_error(&output));
+    assert!(output["message"].as_str().unwrap().contains("escapes"));
+    assert_eq!(fs::read_to_string(inside).unwrap(), "before\n");
+    assert!(!outside.exists());
 }
 
 // --- fs.glob / fs.grep ------------------------------------------------

@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use super::completion::{
-    history_token_window_policy, partial_assistant_message, rig_tool_definitions,
-    windowed_history_for_request, TurnCompletion, MULTI_TOOL_TEST_BATCH_SIZE,
+    history_token_window_policy, openai_turn_additional_params, partial_assistant_message,
+    rig_tool_definitions, windowed_history_for_request, TurnCompletion, MULTI_TOOL_TEST_BATCH_SIZE,
 };
 use super::mapping::{
     horizon_events_from_rig_message, horizon_provider_events_from_rig_message,
@@ -44,6 +44,14 @@ use rig_memory::{HeuristicTokenCounter, MemoryError, MemoryPolicy, TokenWindowMe
 fn recv(rx: &crossbeam_channel::Receiver<ProviderEvent>) -> ProviderEvent {
     rx.recv_timeout(std::time::Duration::from_secs(1))
         .expect("expected a provider event within timeout")
+}
+
+#[test]
+fn openai_turns_explicitly_enable_parallel_tool_calls() {
+    assert_eq!(
+        openai_turn_additional_params()["parallel_tool_calls"],
+        serde_json::Value::Bool(true)
+    );
 }
 
 #[test]

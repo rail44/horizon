@@ -68,7 +68,7 @@ pub(crate) fn classify_call(
     sandbox_available: bool,
 ) -> Classification {
     match tool_id {
-        "fs.write" | "fs.edit" => {
+        "fs.write" | "fs.edit" | "fs.patch" => {
             if session_isolated {
                 Classification::Contained
             } else {
@@ -424,9 +424,9 @@ mod tests {
     // --- classify_call: the trust predicate's classification table --------
 
     #[test]
-    fn fs_write_and_edit_are_contained_only_when_isolated() {
+    fn fs_mutations_are_contained_only_when_isolated() {
         let input = serde_json::json!({});
-        for tool_id in ["fs.write", "fs.edit"] {
+        for tool_id in ["fs.write", "fs.edit", "fs.patch"] {
             assert_eq!(
                 classify_call(tool_id, &input, true, false),
                 Classification::Contained,

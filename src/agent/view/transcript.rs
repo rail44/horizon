@@ -547,7 +547,7 @@ impl AgentView {
     /// `individual_calls` -- any failed call, of any class, plus the
     /// defensive never-finished case: a bash chip (command head + mark)
     /// for a failed bash call, a file chip (name + mark -- no diffstat
-    /// once failed, see below) for a failed fs.edit/fs.write, and a
+    /// once failed, see below) for a failed fs.edit/fs.write/fs.patch, and a
     /// plain verb + mark for everything else.
     fn render_receipt_chip(&self, call: &turns::ToolCallView) -> AnyElement {
         let (mark, mark_color) = if !call.finished {

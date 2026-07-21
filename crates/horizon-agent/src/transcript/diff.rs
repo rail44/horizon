@@ -1,13 +1,13 @@
 //! Reconstructed line diffs (`fs.edit`'s body/chip diffstat) and the
-//! session-wide file-change aggregation built from them. The changes
-//! overview's own summary *text* stayed in the `horizon` binary crate's
+//! session-wide file-change aggregation built from every file mutation.
+//! The changes overview's own summary *text* stayed in the `horizon` binary crate's
 //! `src/agent/turns` (see `transcript`'s module doc).
 
 use super::receipt::CallClass;
-use super::tool_call::{ToolCallKind, ToolCallView};
+use super::tool_call::ToolCallView;
 use super::{classify_call, file_name};
 
-/// One file's cumulative edit/write activity across the *whole session*
+/// One file's cumulative edit/write/patch activity across the *whole session*
 /// (every turn, not just whichever receipt/burst is currently rendering)
 /// -- feeds the pane's collapsible "Changes overview"
 /// (`docs/agent-output-ui-design.md` decision 9, never ported from the
@@ -29,7 +29,7 @@ pub struct FileChange {
     pub created: bool,
 }
 
-/// Aggregates every successful, finished `fs.edit`/`fs.write` call in
+/// Aggregates every successful, finished `fs.edit`/`fs.write`/`fs.patch` call in
 /// `tool_calls` -- the *whole session's* [`super::build_tool_call_views`]
 /// output, not one turn/burst's -- into one [`FileChange`] per distinct
 /// path, ordered by each path's first touch. A failed call (`is_error`) or
@@ -38,47 +38,36 @@ pub struct FileChange {
 /// to a plain skip, since this overview has no per-call chip fallback to
 /// fall back to.
 ///
-/// **Honest limitation**: multiple edits to the same file have their
+/// **Honest limitation**: multiple mutations to the same file have their
 /// diffstats *summed*, not combined into a net diff across the file's
 /// whole session history -- two edits that each touch 3 lines report `+6
 /// −6` here even if the second fully reverted the first's changes.
-/// [`ToolCallKind::File::diffstat`] is itself only a per-call
-/// reconstruction ([`reconstruct_line_diff`]'s common-prefix/common-suffix
-/// approximation against that one call's own `old_string`/`new_string`),
-/// and this aggregation has no access to the file's real end-to-end
-/// content to diff against instead.
+/// Each contribution is only a per-call reconstruction for `fs.edit`, or
+/// the patch's explicit line counts, and this aggregation has no access to
+/// the file's real end-to-end content to diff against instead.
 pub fn aggregate_changes(tool_calls: &[ToolCallView]) -> Vec<FileChange> {
     let mut changes: Vec<FileChange> = Vec::new();
     for call in tool_calls {
         if call.is_error || !call.finished || classify_call(&call.tool_id) != CallClass::Edit {
             continue;
         }
-        let Some(path) = &call.target else {
-            continue;
-        };
-        let entry = match changes.iter_mut().find(|change| &change.path == path) {
-            Some(entry) => entry,
-            None => {
-                changes.push(FileChange {
-                    path: path.clone(),
-                    file_name: file_name(path),
-                    added: 0,
-                    removed: 0,
-                    created: false,
-                });
-                changes.last_mut().expect("just pushed")
-            }
-        };
-        if let ToolCallKind::File {
-            diffstat: Some((added, removed)),
-            ..
-        } = &call.kind
-        {
-            entry.added += added;
-            entry.removed += removed;
-        }
-        if call.tool_id == "fs.write" && call.result_summary.as_deref() == Some("created") {
-            entry.created = true;
+        for file in &call.affected_files {
+            let entry = match changes.iter_mut().find(|change| change.path == file.path) {
+                Some(entry) => entry,
+                None => {
+                    changes.push(FileChange {
+                        path: file.path.clone(),
+                        file_name: file_name(&file.path),
+                        added: 0,
+                        removed: 0,
+                        created: false,
+                    });
+                    changes.last_mut().expect("just pushed")
+                }
+            };
+            entry.added += file.added;
+            entry.removed += file.removed;
+            entry.created |= file.created;
         }
     }
     changes

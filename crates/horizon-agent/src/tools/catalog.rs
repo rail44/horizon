@@ -170,6 +170,30 @@ pub fn definitions() -> Vec<Definition> {
             permission: ToolPermission::RequireApproval,
         },
         Definition {
+            id: "fs.patch".to_string(),
+            title: "Apply File Patch".to_string(),
+            description: "Apply one validated patch containing multiple changes to one or more \
+                files. Use this instead of repeated fs.edit calls when the complete change set \
+                is already known. Every existing file must have been read in this session and \
+                remain unchanged. All paths and hunks are validated before any file content is \
+                written. Patch file paths must be absolute."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["patch"],
+                "properties": {
+                    "patch": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1048576,
+                        "description": "A patch delimited by `*** Begin Patch` and `*** End Patch`, with `*** Add File:`, `*** Update File:`, or `*** Delete File:` sections. Update sections contain one or more `@@` chunks whose lines begin with space, `+`, or `-`.",
+                    },
+                }
+            }),
+            permission: ToolPermission::RequireApproval,
+        },
+        Definition {
             id: "bash".to_string(),
             title: "Run Shell Command".to_string(),
             description: "Run a shell command via `bash -c` in a fresh subprocess — not a \

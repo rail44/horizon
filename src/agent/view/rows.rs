@@ -168,7 +168,7 @@ impl AgentView {
     }
 
     /// Renders one [`turns::ToolCallBody`] -- the reusable per-tool body
-    /// machinery decision 3 asks for (fs.edit diff, fs.write preview,
+    /// machinery decision 3 asks for (fs.edit/fs.patch diff, fs.write preview,
     /// bash command+output, terse summaries, raw-JSON fallback), kept
     /// independent of the expansion-toggle wiring above so any other
     /// caller can call it directly: the failure-row log (stage F), the
@@ -516,7 +516,7 @@ impl AgentView {
 
     /// A `Waiting` row's proposal body (decision 4, row-centric v2): the
     /// same [`turns::ToolCallBody`] the failure-row log and receipt
-    /// expansion already reuse (fs.edit's diff, fs.write's content
+    /// expansion already reuse (fs.edit/fs.patch diffs, fs.write's content
     /// preview, bash's full command -- never the row's own 32-char
     /// `command_head` -- and the terse/raw fallbacks for everything
     /// else), labeled with a small muted tag so it reads as informational

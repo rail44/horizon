@@ -44,7 +44,7 @@ pub struct RecallContext {
 }
 
 /// Per-session file-tool state: the workspace root every absolute path is
-/// confined to, the mtimes recorded by `fs.read`/`fs.write`/`fs.edit` for
+/// confined to, the mtimes recorded by `fs.read`/`fs.write`/`fs.edit`/`fs.patch` for
 /// the staleness gate (`docs/agent-tools-design.md`, "Edit Semantics"), and
 /// the resolved `[agent]` tool tuning (`agent::config::AgentToolsConfig`).
 /// v1 confines every session to a single root: the process's current
@@ -420,6 +420,10 @@ impl ToolSessionState {
         self.inner.recorded_mtimes.borrow().get(path).copied()
     }
 
+    pub(crate) fn forget_mtime(&self, path: &Path) {
+        self.inner.recorded_mtimes.borrow_mut().remove(path);
+    }
+
     /// Clones out the shared handle to bash's tracked cwd, so the
     /// background thread that actually runs a bash call (`tools::bash::
     /// exec`) can read and update it without touching anything else on this
@@ -440,7 +444,7 @@ impl ToolSessionState {
 
 /// The per-session runtime the approval UI needs: the tool state above, a
 /// handle to the session's live frame/event-log sink so a Horizon-executed
-/// approval (`fs.write`/`fs.edit`/`bash`) can fold its result in exactly the
+/// approval (`fs.write`/`fs.edit`/`fs.patch`/`bash`) can fold its result in exactly the
 /// way an auto-allowed tool call does (see `agent::tools::approval`), and
 /// the sender side of the channel a `bash` call's eventual result is
 /// delivered back to the UI thread on (see `tools::bash::BashCompletion`).

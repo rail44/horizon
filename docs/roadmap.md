@@ -233,6 +233,12 @@ lands:
   linked worktree's gitdir/common-dir relationship, and receive those roots
   only for the approved sandboxed command; a real linked-worktree commit test
   proves the grant works and does not persist session-wide.
+- **Agent file-tool batching — shipped 2026-07-22**
+  (`docs/agent-tools-design.md`): `fs.patch` applies a prevalidated
+  multi-hunk/multi-file change set in one approved call, while process-wide
+  path locks serialize only overlapping filesystem mutations. OpenAI-compatible
+  turns explicitly enable native parallel tool calls; independent calls may
+  overlap, same-path writes serialize, and bash retains its per-session FIFO.
 - **Agent web search** (backlog 18) **LANDED 2026-07-21.**
   Consultation 2026-07-19/20: **vendor = Exa** (owner decision;
   empirical probe + independent-benchmark evidence in

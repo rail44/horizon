@@ -82,6 +82,7 @@ fn is_known_tool_id(tool_id: &str) -> bool {
         tool_id,
         "fs.edit"
             | "fs.write"
+            | "fs.patch"
             | "bash"
             | "fs.read"
             | "fs.grep"
@@ -181,6 +182,38 @@ pub(crate) fn build_tool_call_body(
             let old = str_field(input, "old_string").unwrap_or_default();
             let new = str_field(input, "new_string").unwrap_or_default();
             let (lines, omitted) = cap_lines_head(reconstruct_line_diff(old, new), MAX_DIFF_LINES);
+            ToolCallBody::Diff { lines, omitted }
+        }
+        "fs.patch" => {
+            let patch = str_field(input, "patch").unwrap_or_default();
+            let lines = patch
+                .lines()
+                .filter_map(|line| {
+                    if line.starts_with("***") || line.starts_with("@@") {
+                        Some(horizon_agent::transcript::DiffLine {
+                            kind: horizon_agent::transcript::DiffLineKind::Context,
+                            text: line.to_string(),
+                        })
+                    } else if let Some(line) = line.strip_prefix('+') {
+                        Some(horizon_agent::transcript::DiffLine {
+                            kind: horizon_agent::transcript::DiffLineKind::Added,
+                            text: line.to_string(),
+                        })
+                    } else if let Some(line) = line.strip_prefix('-') {
+                        Some(horizon_agent::transcript::DiffLine {
+                            kind: horizon_agent::transcript::DiffLineKind::Removed,
+                            text: line.to_string(),
+                        })
+                    } else {
+                        line.strip_prefix(' ')
+                            .map(|line| horizon_agent::transcript::DiffLine {
+                                kind: horizon_agent::transcript::DiffLineKind::Context,
+                                text: line.to_string(),
+                            })
+                    }
+                })
+                .collect();
+            let (lines, omitted) = cap_lines_head(lines, MAX_DIFF_LINES);
             ToolCallBody::Diff { lines, omitted }
         }
         "fs.write" => {
@@ -325,6 +358,27 @@ mod tests {
             ToolCallBody::ContentPreview { label, .. } => assert_eq!(label, "overwritten"),
             other => panic!("expected a ContentPreview body, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn build_tool_call_body_renders_fs_patch_as_a_diff() {
+        let body = build_tool_call_body(
+            "fs.patch",
+            &json!({
+                "patch": "*** Begin Patch\n*** Update File: /w/a.rs\n@@\n-old\n+new\n*** End Patch"
+            }),
+            None,
+        );
+        let ToolCallBody::Diff { lines, omitted } = body else {
+            panic!("expected patch diff body");
+        };
+        assert_eq!(omitted, 0);
+        assert!(lines.iter().any(|line| {
+            line.kind == horizon_agent::transcript::DiffLineKind::Removed && line.text == "old"
+        }));
+        assert!(lines.iter().any(|line| {
+            line.kind == horizon_agent::transcript::DiffLineKind::Added && line.text == "new"
+        }));
     }
 
     #[test]

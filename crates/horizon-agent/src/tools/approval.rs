@@ -82,7 +82,7 @@ pub enum ApprovalOutcome {
 fn is_horizon_executed_tool(tool_id: &str) -> bool {
     matches!(
         tool_id,
-        "fs.write" | "fs.edit" | "bash" | "config.write" | "web_fetch"
+        "fs.write" | "fs.edit" | "fs.patch" | "bash" | "config.write" | "web_fetch"
     )
 }
 
@@ -217,7 +217,7 @@ fn resolve_web_fetch(
     ApprovalOutcome::Started { events, frame }
 }
 
-/// `fs.write`/`fs.edit`/`config.write`: all run to completion synchronously,
+/// `fs.write`/`fs.edit`/`fs.patch`/`config.write`: all run to completion synchronously,
 /// so their approve/deny always resolves to `Executed`. Dispatches through
 /// `tools::execute_approved`, which picks the owning module by tool id.
 fn resolve_synchronous_tool(
