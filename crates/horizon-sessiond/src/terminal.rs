@@ -8,9 +8,8 @@ use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender};
 use horizon_terminal_core::{
-    compute_frame_diff, run_terminal_core, CoreReceivers, CoreSenders, SelectionCommand,
-    TerminalCommand, TerminalCoreOptions, TerminalFrame, TerminalSpawnSpec, TerminalSummary,
-    TerminalUpdate,
+    run_terminal_core, CoreReceivers, CoreSenders, SelectionCommand, TerminalCommand,
+    TerminalCoreOptions, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
 };
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
@@ -29,9 +28,10 @@ pub(crate) struct TerminalHost {
     /// One live subscriber per attached terminal session — installed by
     /// the hub's `create_terminal`/`attach_terminal` (a re-attach
     /// replaces), removed when the session exits or the subscriber's
-    /// bridge dies. Replaces the JSONL era's per-connection
-    /// `attached`/`baselines` maps: the baseline is per-*attachment* state
-    /// now, carried by the subscriber itself.
+    /// bridge dies. Since wire v11 (`docs/remoc-adoption-design.md` §5
+    /// Option A) there is no per-attachment baseline: the frame path is a
+    /// watch, so resync is structural (the retained latest frame seeds the
+    /// watch) and the subscriber just forwards full frames and events.
     subscribers: Arc<Mutex<HashMap<Uuid, Subscriber>>>,
 }
 
@@ -43,14 +43,26 @@ struct HostedTerminal {
     killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
 }
 
-/// The local half of one attachment's update bridge: an unbounded,
-/// sync-sendable queue the PTY-side threads push into; the hub's async
-/// pump drains it into the attachment's remote channel. `baseline` is the
-/// last frame delivered to *this* attachment — the diff base for the next
-/// one, established by the seeding `Snapshot`.
+/// The local (sync-sendable, unbounded) halves of one attachment's two
+/// bridges: the PTY-side threads push into these; the hub's async pumps
+/// drain them into the attachment's remote channels. `frames` carries full
+/// [`TerminalFrame`]s onto the `rch::watch` (latest-value); `events`
+/// carries the non-frame [`TerminalUpdate`]s onto the events mpsc. No
+/// baseline: since wire v11 the frame path is a snapshot-valued signal, so
+/// there is nothing per-attachment to diff against.
 struct Subscriber {
-    updates: UnboundedSender<TerminalUpdate>,
-    baseline: Option<TerminalFrame>,
+    frames: UnboundedSender<TerminalFrame>,
+    events: UnboundedSender<TerminalUpdate>,
+}
+
+/// What [`TerminalHost::install_subscriber`] hands the hub: the watch seed
+/// (the daemon-retained latest frame, or an empty frame for a
+/// freshly-created session) plus the local receiving halves the hub pumps
+/// into the attachment's remote `frames` watch and `events` mpsc.
+pub(crate) struct SubscriberChannels {
+    pub(crate) seed: TerminalFrame,
+    pub(crate) frames: UnboundedReceiver<TerminalFrame>,
+    pub(crate) events: UnboundedReceiver<TerminalUpdate>,
 }
 
 impl TerminalHost {
@@ -79,11 +91,8 @@ impl TerminalHost {
 
     /// [`Self::install_subscriber`] for the create path: no existence
     /// requirement, because the hub subscribes *before* spawning the PTY
-    /// so the session's very first updates are never lost.
-    pub(crate) fn subscribe_for_create(
-        &self,
-        session_id: Uuid,
-    ) -> UnboundedReceiver<TerminalUpdate> {
+    /// so the session's very first frames are never lost.
+    pub(crate) fn subscribe_for_create(&self, session_id: Uuid) -> SubscriberChannels {
         self.install_subscriber(session_id).1
     }
 
@@ -92,13 +101,10 @@ impl TerminalHost {
     /// install (and the `Exited` fan-out) takes, so "attached to a session
     /// that just died" cannot happen: the exit either lands before the
     /// check (→ `None`) or reaches the freshly installed subscriber.
-    pub(crate) fn attach_subscribe(
-        &self,
-        session_id: Uuid,
-    ) -> Option<UnboundedReceiver<TerminalUpdate>> {
-        let (exists, rx) = self.install_subscriber(session_id);
+    pub(crate) fn attach_subscribe(&self, session_id: Uuid) -> Option<SubscriberChannels> {
+        let (exists, channels) = self.install_subscriber(session_id);
         if exists {
-            Some(rx)
+            Some(channels)
         } else {
             self.subscribers.lock().unwrap().remove(&session_id);
             None
@@ -107,11 +113,12 @@ impl TerminalHost {
 
     /// Installs a fresh subscriber for `session_id` (replacing any
     /// previous attachment's) and returns whether a live session existed
-    /// at install time, plus the local receiving half the hub pumps into
-    /// the attachment's remote channel. If the session already has a
-    /// retained latest frame, it is delivered immediately as the seeding
-    /// `Snapshot` and becomes the diff baseline — the same attach contract
-    /// the JSONL wire had (attach result, then snapshot, then diffs).
+    /// at install time, plus the [`SubscriberChannels`] the hub uses to
+    /// wire the attachment. The session's retained latest frame (or an
+    /// empty frame, for a freshly created session) becomes the watch
+    /// *seed*: since wire v11 the frame path is a snapshot-valued signal,
+    /// so the resync anchor is the watch's current value rather than a
+    /// pushed `Snapshot`-then-baseline dance.
     ///
     /// The whole read-seed-insert sequence runs under the `subscribers`
     /// lock (with the `sessions` lock taken *inside* it, an ordering
@@ -119,11 +126,12 @@ impl TerminalHost {
     /// `sessions` before touching `subscribers`), and the `Exited`
     /// fan-out removes the session from `sessions` *before* it takes
     /// `subscribers` to deliver the exit. Together that closes the
-    /// stale-snapshot/TOCTOU window: an exit concurrent with an install
-    /// is either visible to the existence check here, or delivers
-    /// `Exited` to the subscriber this just installed.
-    fn install_subscriber(&self, session_id: Uuid) -> (bool, UnboundedReceiver<TerminalUpdate>) {
-        let (tx, rx) = unbounded_channel();
+    /// stale-seed/TOCTOU window: an exit concurrent with an install is
+    /// either visible to the existence check here, or delivers `Exited` to
+    /// the subscriber this just installed.
+    fn install_subscriber(&self, session_id: Uuid) -> (bool, SubscriberChannels) {
+        let (frame_tx, frame_rx) = unbounded_channel();
+        let (event_tx, event_rx) = unbounded_channel();
         let mut subscribers = self.subscribers.lock().unwrap();
         let (exists, latest) = {
             let sessions = self.sessions.lock().unwrap();
@@ -132,18 +140,21 @@ impl TerminalHost {
                 None => (false, None),
             }
         };
-        let mut subscriber = Subscriber {
-            updates: tx,
-            baseline: None,
-        };
-        if let Some(frame) = latest {
-            let _ = subscriber
-                .updates
-                .send(TerminalUpdate::Snapshot(frame.clone()));
-            subscriber.baseline = Some(frame);
-        }
-        subscribers.insert(session_id, subscriber);
-        (exists, rx)
+        subscribers.insert(
+            session_id,
+            Subscriber {
+                frames: frame_tx,
+                events: event_tx,
+            },
+        );
+        (
+            exists,
+            SubscriberChannels {
+                seed: latest.unwrap_or_else(TerminalFrame::empty),
+                frames: frame_rx,
+                events: event_rx,
+            },
+        )
     }
 
     /// Removes `session_id`'s subscriber — the hub's cleanup when a
@@ -253,10 +264,10 @@ impl TerminalHost {
             let (result_tx, result_rx) = crossbeam_channel::bounded(1);
             thread::spawn(move || {
                 match spawn_terminal(session_id, &spec_for_thread, &cwd_for_thread) {
-                    Ok((session, update_rx)) => {
+                    Ok((session, frame_rx, update_rx)) => {
                         if host.install_if_vacant(session_id, session) {
                             let _ = result_tx.send(Ok(()));
-                            host.forward_updates(session_id, update_rx);
+                            host.forward_updates(session_id, frame_rx, update_rx);
                         }
                         // Occupied: a different attempt (an earlier one that
                         // timed out here but finished late, or a fresh
@@ -339,64 +350,75 @@ impl TerminalHost {
             .unwrap_or_else(|| spec.fallback_cwd.clone())
     }
 
-    /// Pushes one non-frame update to `session_id`'s subscriber, if any,
+    /// Pushes one non-frame event to `session_id`'s subscriber, if any,
     /// dropping the subscriber entry when its bridge is gone.
-    fn send_update(&self, session_id: Uuid, update: TerminalUpdate) {
+    fn send_event(&self, session_id: Uuid, event: TerminalUpdate) {
         let mut subscribers = self.subscribers.lock().unwrap();
         if subscribers
             .get(&session_id)
-            .is_some_and(|subscriber| subscriber.updates.send(update).is_err())
+            .is_some_and(|subscriber| subscriber.events.send(event).is_err())
         {
             subscribers.remove(&session_id);
         }
     }
 
-    fn forward_updates(&self, session_id: Uuid, update_rx: Receiver<TerminalUpdate>) {
+    /// Fans the session loop's two output channels out to the current
+    /// subscriber: full frames onto its `frames` bridge (and the retained
+    /// latest frame), non-frame events onto its `events` bridge. Since wire
+    /// v11 there is no per-attachment diffing — the frame path is a watch,
+    /// so a full frame goes straight through.
+    fn forward_updates(
+        &self,
+        session_id: Uuid,
+        frame_rx: Receiver<TerminalFrame>,
+        update_rx: Receiver<TerminalUpdate>,
+    ) {
         let host = self.clone();
         thread::spawn(move || {
-            while let Ok(update) = update_rx.recv() {
-                match update {
-                    TerminalUpdate::Snapshot(frame) => {
-                        if let Some(session) = host.sessions.lock().unwrap().get(&session_id) {
-                            *session.latest_frame.lock().unwrap() = Some(frame.clone());
-                        }
-                        let mut subscribers = host.subscribers.lock().unwrap();
-                        let Some(subscriber) = subscribers.get_mut(&session_id) else {
-                            continue;
-                        };
-                        // v10 keeps the frame-delivery semantics unchanged
-                        // (docs/remoc-adoption-design.md par.6 step 2):
-                        // snapshot to a baseline-less attachment, diff
-                        // against the per-attachment baseline otherwise.
-                        let update = match subscriber.baseline.take() {
-                            Some(old) => {
-                                TerminalUpdate::FrameDiff(compute_frame_diff(&old, &frame))
+            // Once a channel closes, park it on a `never()` receiver so the
+            // select keeps servicing the other; the forwarder ends when the
+            // events channel closes or delivers `Exited`.
+            let mut frame_rx = frame_rx;
+            loop {
+                crossbeam_channel::select! {
+                    recv(frame_rx) -> frame => match frame {
+                        Ok(frame) => {
+                            if let Some(session) = host.sessions.lock().unwrap().get(&session_id) {
+                                *session.latest_frame.lock().unwrap() = Some(frame.clone());
                             }
-                            None => TerminalUpdate::Snapshot(frame.clone()),
+                            let mut subscribers = host.subscribers.lock().unwrap();
+                            if subscribers
+                                .get(&session_id)
+                                .is_some_and(|subscriber| subscriber.frames.send(frame).is_err())
+                            {
+                                subscribers.remove(&session_id);
+                            }
+                        }
+                        Err(_) => frame_rx = crossbeam_channel::never(),
+                    },
+                    recv(update_rx) -> update => {
+                        let Ok(update) = update else {
+                            return;
                         };
-                        if subscriber.updates.send(update).is_ok() {
-                            subscriber.baseline = Some(frame);
-                        } else {
-                            subscribers.remove(&session_id);
+                        match update {
+                            TerminalUpdate::Exited => {
+                                // Ordering matters (see `install_subscriber`'s
+                                // doc): the session leaves `sessions` first,
+                                // so a concurrent attach either sees it gone
+                                // or is already installed when the exit is
+                                // delivered — and delivery + removal happen
+                                // under one `subscribers` guard so no install
+                                // can slip between them and lose the exit.
+                                host.sessions.lock().unwrap().remove(&session_id);
+                                let mut subscribers = host.subscribers.lock().unwrap();
+                                if let Some(subscriber) = subscribers.remove(&session_id) {
+                                    let _ = subscriber.events.send(TerminalUpdate::Exited);
+                                }
+                                return;
+                            }
+                            other => host.send_event(session_id, other),
                         }
                     }
-                    TerminalUpdate::FrameDiff(_) => {}
-                    TerminalUpdate::Exited => {
-                        // Ordering matters (see `install_subscriber`'s doc):
-                        // the session leaves `sessions` first, so a
-                        // concurrent attach either sees it gone or is
-                        // already installed when the exit is delivered —
-                        // and delivery + removal happen under one
-                        // `subscribers` guard so no install can slip
-                        // between them and lose the exit.
-                        host.sessions.lock().unwrap().remove(&session_id);
-                        let mut subscribers = host.subscribers.lock().unwrap();
-                        if let Some(subscriber) = subscribers.remove(&session_id) {
-                            let _ = subscriber.updates.send(TerminalUpdate::Exited);
-                        }
-                        return;
-                    }
-                    other => host.send_update(session_id, other),
                 }
             }
         });
@@ -407,7 +429,11 @@ fn spawn_terminal(
     session_id: Uuid,
     spec: &TerminalSpawnSpec,
     cwd: &Path,
-) -> anyhow::Result<(HostedTerminal, Receiver<TerminalUpdate>)> {
+) -> anyhow::Result<(
+    HostedTerminal,
+    Receiver<TerminalFrame>,
+    Receiver<TerminalUpdate>,
+)> {
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(PtySize {
         rows: spec.initial_size.rows,
@@ -442,6 +468,7 @@ fn spawn_terminal(
     let master = pair.master;
 
     let (command_tx, command_rx) = crossbeam_channel::unbounded();
+    let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
     let (update_tx, update_rx) = crossbeam_channel::unbounded();
     let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
     let (resize_tx, resize_rx) = crossbeam_channel::unbounded();
@@ -477,6 +504,7 @@ fn spawn_terminal(
                 color_scheme_rx,
             },
             response_tx,
+            frame_tx,
             update_tx,
         );
     });
@@ -507,6 +535,7 @@ fn spawn_terminal(
             pid,
             killer,
         },
+        frame_rx,
         update_rx,
     ))
 }

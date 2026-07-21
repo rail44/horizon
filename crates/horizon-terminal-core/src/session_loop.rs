@@ -1,11 +1,20 @@
 //! The terminal session's byte-driven brain loop: coalesces PTY bytes and
 //! UI-originated commands into `TerminalCore` mutations, and turns those
-//! into rate-controlled `TerminalUpdate::Snapshot` sends.
-//! `docs/session-daemon-design.md` decision 9 names this "the session loop"
-//! — extracted here, driven purely by channels, with no `portable-pty`
-//! dependency: the PTY reader/writer threads that feed and drain these
-//! channels stay in the `horizon` binary (`terminal::session::runtime`),
-//! since PTY ownership is a host/process concern.
+//! into rate-controlled full-frame sends. `docs/session-daemon-design.md`
+//! decision 9 names this "the session loop" — extracted here, driven purely
+//! by channels, with no `portable-pty` dependency: the PTY reader/writer
+//! threads that feed and drain these channels stay in the `horizon` binary
+//! (`terminal::session::runtime`), since PTY ownership is a host/process
+//! concern.
+//!
+//! Since wire v11 (`docs/remoc-adoption-design.md` §5 Option A) the loop
+//! emits on two channels: `frame_tx` carries every rate-controlled
+//! [`TerminalFrame`] snapshot (the daemon forwards these onto the
+//! attachment's `rch::watch<TerminalFrame>`), and `update_tx` carries the
+//! non-frame [`TerminalUpdate`] events (bell, title, clipboard). The 16 ms
+//! coalescing that bounds frame-production rate is unchanged; only the
+//! frame *transport* changed — full frames on a snapshot-valued signal, no
+//! wire diffing.
 
 use std::time::{Duration, Instant};
 
@@ -14,7 +23,9 @@ use termwiz::input::{KeyCode, Modifiers};
 
 use crate::contract::{ClipboardDestination, SelectionCommand, TerminalCommand, TerminalUpdate};
 use crate::core::{TerminalColorScheme, TerminalCore};
-use crate::types::{KeyEventKind, TerminalMouseReport, TerminalScroll, TerminalSize};
+use crate::types::{
+    KeyEventKind, TerminalFrame, TerminalMouseReport, TerminalScroll, TerminalSize,
+};
 
 /// Construction-time options a real session feeds into `TerminalCore`,
 /// mirroring host-config-derived values the crate itself has no way to read
@@ -78,7 +89,7 @@ const COALESCE_WINDOW: Duration = Duration::from_millis(16);
 /// not leak into the UI layer.
 fn notify_snapshot(
     core: &TerminalCore,
-    update_tx: &Sender<TerminalUpdate>,
+    frame_tx: &Sender<TerminalFrame>,
     last_sent: &mut Instant,
     dirty: &mut bool,
     flush_armed: &mut bool,
@@ -87,7 +98,7 @@ fn notify_snapshot(
     let now = Instant::now();
     let elapsed = now.saturating_duration_since(*last_sent);
     if elapsed >= COALESCE_WINDOW {
-        let _ = update_tx.send(TerminalUpdate::Snapshot(core.snapshot_frame()));
+        let _ = frame_tx.send(core.snapshot_frame());
         *last_sent = now;
         *dirty = false;
         // A timer armed against the old `last_sent` is now stale (its
@@ -142,7 +153,7 @@ fn send_selection_to_primary(core: &TerminalCore, update_tx: &Sender<TerminalUpd
 /// Flush the latest dirty state once the coalescing timer fires.
 fn flush_snapshot(
     core: &TerminalCore,
-    update_tx: &Sender<TerminalUpdate>,
+    frame_tx: &Sender<TerminalFrame>,
     last_sent: &mut Instant,
     dirty: &mut bool,
     flush_armed: &mut bool,
@@ -151,7 +162,7 @@ fn flush_snapshot(
     *flush_armed = false;
     *flush_rx = crossbeam_channel::never();
     if *dirty {
-        let _ = update_tx.send(TerminalUpdate::Snapshot(core.snapshot_frame()));
+        let _ = frame_tx.send(core.snapshot_frame());
         *last_sent = Instant::now();
         *dirty = false;
     }
@@ -163,6 +174,7 @@ pub fn run_terminal_core(
     pty_rx: Receiver<Vec<u8>>,
     receivers: CoreReceivers,
     command_tx: Sender<TerminalCommand>,
+    frame_tx: Sender<TerminalFrame>,
     update_tx: Sender<TerminalUpdate>,
 ) {
     let CoreReceivers {
@@ -177,7 +189,7 @@ pub fn run_terminal_core(
     } = receivers;
     let mut core = TerminalCore::with_scrollback(size, options.scrollback_lines);
     core.set_color_scheme(options.color_scheme);
-    let _ = update_tx.send(TerminalUpdate::Snapshot(core.snapshot_frame()));
+    let _ = frame_tx.send(core.snapshot_frame());
 
     // Session-side frame coalescing state (see `notify_snapshot`). Backdate
     // `last_sent` so the very first mutation always sends immediately.
@@ -200,7 +212,7 @@ pub fn run_terminal_core(
                     return;
                 };
                 core.resize(size);
-                notify_snapshot(&core, &update_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
+                notify_snapshot(&core, &frame_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
             }
             recv(scroll_rx) -> scroll => {
                 let Ok(scroll) = scroll else {
@@ -209,7 +221,7 @@ pub fn run_terminal_core(
                 if let Some(input) = core.handle_scroll(scroll) {
                     let _ = command_tx.send(TerminalCommand::Input(input));
                 }
-                notify_snapshot(&core, &update_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
+                notify_snapshot(&core, &frame_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
             }
             recv(mouse_rx) -> report => {
                 let Ok(report) = report else {
@@ -218,14 +230,14 @@ pub fn run_terminal_core(
                 if let Some(input) = core.handle_mouse_report(report) {
                     let _ = command_tx.send(TerminalCommand::Input(input));
                 }
-                notify_snapshot(&core, &update_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
+                notify_snapshot(&core, &frame_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
             }
             recv(paste_rx) -> text => {
                 let Ok(text) = text else {
                     return;
                 };
                 let _ = command_tx.send(TerminalCommand::Input(core.paste_input(&text)));
-                notify_snapshot(&core, &update_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
+                notify_snapshot(&core, &frame_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
             }
             recv(key_rx) -> key => {
                 let Ok((key, modifiers, event)) = key else {
@@ -249,12 +261,12 @@ pub fn run_terminal_core(
                     SelectionCommand::Start { point, kind } => {
                         core.start_selection(point, kind);
                         send_selection_to_primary(&core, &update_tx);
-                        notify_snapshot(&core, &update_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
+                        notify_snapshot(&core, &frame_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
                     }
                     SelectionCommand::Update(point) => {
                         core.update_selection(point);
                         send_selection_to_primary(&core, &update_tx);
-                        notify_snapshot(&core, &update_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
+                        notify_snapshot(&core, &frame_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
                     }
                     SelectionCommand::Copy => {
                         if let Some(text) = core.selected_text() {
@@ -312,11 +324,11 @@ pub fn run_terminal_core(
                 // nothing flushed yet) must not steal it from the real
                 // content that flushes later. See `TerminalCore::write_vt`.
                 if events.visible_dirty {
-                    notify_snapshot(&core, &update_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
+                    notify_snapshot(&core, &frame_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
                 }
             }
             recv(flush_rx) -> _ => {
-                flush_snapshot(&core, &update_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
+                flush_snapshot(&core, &frame_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
             }
             recv(sync_flush_rx) -> _ => {
                 let events = core.flush_sync_update();
@@ -336,7 +348,7 @@ pub fn run_terminal_core(
                     });
                 }
                 rearm_sync_flush(&core, &mut sync_flush_rx);
-                notify_snapshot(&core, &update_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
+                notify_snapshot(&core, &frame_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
             }
         }
     }
@@ -359,7 +371,8 @@ mod tests {
     fn sync_update_failsafe_flushes_a_stuck_window_after_the_deadline() {
         let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
         let (command_tx, _command_rx) = crossbeam_channel::unbounded();
-        let (update_tx, update_rx) = crossbeam_channel::unbounded();
+        let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
+        let (update_tx, _update_rx) = crossbeam_channel::unbounded();
         let receivers = CoreReceivers {
             resize_rx: crossbeam_channel::never(),
             scroll_rx: crossbeam_channel::never(),
@@ -378,6 +391,7 @@ mod tests {
                 pty_rx,
                 receivers,
                 command_tx,
+                frame_tx,
                 update_tx,
             );
         });
@@ -390,8 +404,8 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         let mut healed = false;
         while Instant::now() < deadline {
-            match update_rx.recv_timeout(Duration::from_millis(50)) {
-                Ok(TerminalUpdate::Snapshot(frame)) if !frame.text().contains("STALE") => {
+            match frame_rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(frame) if !frame.text().contains("STALE") => {
                     healed = true;
                     break;
                 }
@@ -417,7 +431,8 @@ mod tests {
     fn key_input_alone_never_triggers_a_snapshot_notification() {
         let (_pty_tx, pty_rx) = crossbeam_channel::unbounded();
         let (command_tx, command_rx) = crossbeam_channel::unbounded();
-        let (update_tx, update_rx) = crossbeam_channel::unbounded();
+        let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
+        let (update_tx, _update_rx) = crossbeam_channel::unbounded();
         let (key_tx, key_rx) = crossbeam_channel::unbounded();
         let receivers = CoreReceivers {
             resize_rx: crossbeam_channel::never(),
@@ -437,13 +452,14 @@ mod tests {
                 pty_rx,
                 receivers,
                 command_tx,
+                frame_tx,
                 update_tx,
             );
         });
 
         // Drain the one snapshot every session always sends right after
         // construction (unconditional, not gated on `visible_dirty`).
-        update_rx
+        frame_rx
             .recv_timeout(Duration::from_millis(500))
             .expect("startup snapshot");
 
@@ -460,7 +476,7 @@ mod tests {
         assert!(matches!(encoded, TerminalCommand::Input(bytes) if !bytes.is_empty()));
 
         assert!(
-            update_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            frame_rx.recv_timeout(Duration::from_millis(100)).is_err(),
             "a key press with no PTY echo must not produce a snapshot notification"
         );
     }
@@ -478,7 +494,8 @@ mod tests {
     fn mid_sync_buffering_chunk_does_not_trigger_a_snapshot_notification() {
         let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
         let (command_tx, _command_rx) = crossbeam_channel::unbounded();
-        let (update_tx, update_rx) = crossbeam_channel::unbounded();
+        let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
+        let (update_tx, _update_rx) = crossbeam_channel::unbounded();
         let receivers = CoreReceivers {
             resize_rx: crossbeam_channel::never(),
             scroll_rx: crossbeam_channel::never(),
@@ -497,26 +514,27 @@ mod tests {
                 pty_rx,
                 receivers,
                 command_tx,
+                frame_tx,
                 update_tx,
             );
         });
 
         // Drain the startup snapshot.
-        update_rx
+        frame_rx
             .recv_timeout(Duration::from_millis(500))
             .expect("startup snapshot");
 
         // Seed a marker at the cursor's home position, and drain the
         // snapshot that follows.
         pty_tx.send(b"STALE".to_vec()).unwrap();
-        update_rx
+        frame_rx
             .recv_timeout(Duration::from_millis(500))
             .expect("snapshot after seeding STALE");
 
         // Open a synchronized-update window (a mode toggle only -- no grid
         // content in this chunk) and drain the snapshot it produces.
         pty_tx.send(b"\x1b[?2026h".to_vec()).unwrap();
-        update_rx
+        frame_rx
             .recv_timeout(Duration::from_millis(500))
             .expect("snapshot after opening the window");
 
@@ -525,7 +543,7 @@ mod tests {
         // buffer, nothing reaches the grid yet.
         pty_tx.send(b"\x1b[H\x1b[K".to_vec()).unwrap();
         assert!(
-            update_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            frame_rx.recv_timeout(Duration::from_millis(100)).is_err(),
             "a chunk fully buffered inside an open sync window must not notify"
         );
 
@@ -535,9 +553,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         let mut flushed = false;
         while Instant::now() < deadline {
-            if let Ok(TerminalUpdate::Snapshot(frame)) =
-                update_rx.recv_timeout(Duration::from_millis(50))
-            {
+            if let Ok(frame) = frame_rx.recv_timeout(Duration::from_millis(50)) {
                 assert!(
                     !frame.text().contains("STALE"),
                     "the flush must apply the buffered erase"
@@ -562,6 +578,7 @@ mod tests {
     fn run_terminal_core_forwards_osc52_clipboard_writes_as_updates() {
         let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
         let (command_tx, _command_rx) = crossbeam_channel::unbounded();
+        let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
         let (update_tx, update_rx) = crossbeam_channel::unbounded();
         let receivers = CoreReceivers {
             resize_rx: crossbeam_channel::never(),
@@ -581,9 +598,15 @@ mod tests {
                 pty_rx,
                 receivers,
                 command_tx,
+                frame_tx,
                 update_tx,
             );
         });
+
+        // Drain the startup frame every session emits on construction.
+        frame_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("startup frame");
 
         // base64("hello") == "aGVsbG8="
         pty_tx.send(b"\x1b]52;c;aGVsbG8=\x07".to_vec()).unwrap();
@@ -613,6 +636,7 @@ mod tests {
     fn run_terminal_core_writes_selection_to_primary_on_start() {
         let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
         let (command_tx, _command_rx) = crossbeam_channel::unbounded();
+        let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
         let (update_tx, update_rx) = crossbeam_channel::unbounded();
         let (selection_tx, selection_rx) = crossbeam_channel::unbounded();
         let receivers = CoreReceivers {
@@ -633,6 +657,7 @@ mod tests {
                 pty_rx,
                 receivers,
                 command_tx,
+                frame_tx,
                 update_tx,
             );
         });
@@ -643,9 +668,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             assert!(Instant::now() < deadline, "never saw the PTY text land");
-            if let Ok(TerminalUpdate::Snapshot(frame)) =
-                update_rx.recv_timeout(Duration::from_millis(50))
-            {
+            if let Ok(frame) = frame_rx.recv_timeout(Duration::from_millis(50)) {
                 if frame.text().contains("hello") {
                     break;
                 }
@@ -684,7 +707,8 @@ mod tests {
     fn run_terminal_core_reports_focus_only_once_mode_1004_is_enabled() {
         let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
         let (command_tx, command_rx) = crossbeam_channel::unbounded();
-        let (update_tx, update_rx) = crossbeam_channel::unbounded();
+        let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
+        let (update_tx, _update_rx) = crossbeam_channel::unbounded();
         let (focus_tx, focus_rx) = crossbeam_channel::unbounded();
         let receivers = CoreReceivers {
             resize_rx: crossbeam_channel::never(),
@@ -704,6 +728,7 @@ mod tests {
                 pty_rx,
                 receivers,
                 command_tx,
+                frame_tx,
                 update_tx,
             );
         });
@@ -722,7 +747,7 @@ mod tests {
         // proof the mode-1004 write has already been applied before the
         // focus transition below is sent, with no arbitrary sleep needed.
         pty_tx.send(b"\x1b[?1004h".to_vec()).unwrap();
-        update_rx
+        frame_rx
             .recv_timeout(Duration::from_millis(500))
             .expect("a snapshot should follow the mode-1004 write");
 
@@ -760,7 +785,8 @@ mod tests {
 
         let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
         let (command_tx, command_rx) = crossbeam_channel::unbounded();
-        let (update_tx, update_rx) = crossbeam_channel::unbounded();
+        let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
+        let (update_tx, _update_rx) = crossbeam_channel::unbounded();
         let (color_scheme_tx, color_scheme_rx) = crossbeam_channel::unbounded();
         let receivers = CoreReceivers {
             resize_rx: crossbeam_channel::never(),
@@ -780,12 +806,13 @@ mod tests {
                 pty_rx,
                 receivers,
                 command_tx,
+                frame_tx,
                 update_tx,
             );
         });
 
         // Drain the startup snapshot.
-        update_rx
+        frame_rx
             .recv_timeout(Duration::from_millis(500))
             .expect("startup snapshot");
 

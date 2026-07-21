@@ -33,7 +33,9 @@ use horizon_agent::contract::{Command, SessionId};
 use horizon_agent::wire::{
     AgentWireEvent, HostToolRequest, HostToolResponse, SessionNew, SessionSummary,
 };
-use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
+use horizon_terminal_core::{
+    TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
+};
 use remoc::prelude::*;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -74,13 +76,26 @@ pub type WireCodec = remoc::codec::Postbag;
 // that as a skip, never fatal to the channel.
 // ---------------------------------------------------------------------------
 
-/// Terminal frame/update channel items (`TerminalUpdate`). A full 200x50
-/// fully-styled snapshot measured ~50 KB under Postbag
-/// (`docs/research/remoc-spike-2026-07-20.md` §1a: 178,743 B under the
-/// *worst-case* all-rows-styled synthetic frame); 4 MiB leaves an order
-/// of magnitude of headroom for pathological scrollback/styling without
-/// admitting absurd buffers.
+/// Terminal frame channel items (`TerminalFrame`). Since wire v11 the
+/// frame path is an `rch::watch<TerminalFrame>` snapshot-valued signal
+/// (`docs/remoc-adoption-design.md` §5 Option A), so this caps every full
+/// frame the daemon publishes (the watch keeps only the latest; slow
+/// readers converge). A full 200x50 fully-styled snapshot measured ~50 KB
+/// under Postbag (`docs/research/remoc-spike-2026-07-20.md` §1a: 178,743 B
+/// under the *worst-case* all-rows-styled synthetic frame); 4 MiB leaves an
+/// order of magnitude of headroom for pathological scrollback/styling
+/// without admitting absurd buffers. The cap is enforced on the watch
+/// receiver's `MAX_ITEM_SIZE` const parameter (carried with it when
+/// transported) and mirrored on the sender's runtime limit — see
+/// [`CappedWatchReceiver`].
 pub const FRAME_MAX_ITEM_BYTES: usize = 4 * 1024 * 1024;
+
+/// Terminal *event* channel items (`TerminalUpdate`: title, bell, clipboard,
+/// exit, error — everything the frame watch does not carry). Sized like the
+/// command class rather than a tight control cap because `Clipboard` is
+/// user-scaled: an OSC 52 copy of a full-screen selection is whatever the
+/// attached app wrote.
+pub const TERMINAL_EVENT_MAX_ITEM_BYTES: usize = 1024 * 1024;
 
 /// Command-channel items (`TerminalCommand`, agent `Command`) and the
 /// JSON-payload-bearing tool exchanges (`AgentWireEvent`,
@@ -123,6 +138,20 @@ pub const RTC_MAX_REPLY_BYTES: usize = 1024 * 1024;
 /// the creator's cap as the creator-side receive limit).
 pub type CappedReceiver<T, const MAX_ITEM_SIZE: usize> =
     rch::mpsc::Receiver<T, WireCodec, { rch::DEFAULT_BUFFER }, MAX_ITEM_SIZE>;
+
+/// The `rch::watch` counterpart of [`CappedReceiver`] — a watch receiver
+/// whose per-item size cap is its `MAX_ITEM_SIZE` const parameter (carried
+/// with it when transported, exactly as for mpsc). The frame path
+/// (`docs/remoc-adoption-design.md` §5 Option A) is the one channel class
+/// that uses it: a snapshot-valued signal where the current value is always
+/// the latest full frame, a slow reader observes a skipping sequence that
+/// converges on the final value, and there is no queue to bound — only the
+/// per-frame item size, which [`FRAME_MAX_ITEM_BYTES`] sets. The creator
+/// caps both directions via
+/// [`WatchExt::with_max_item_size`](remoc::rch::watch::WatchExt): the
+/// sender's runtime limit and this receiver's const parameter.
+pub type CappedWatchReceiver<T, const MAX_ITEM_SIZE: usize> =
+    rch::watch::Receiver<T, WireCodec, MAX_ITEM_SIZE>;
 
 /// A rate-limited log for the receive/send loops' skip paths (adoption
 /// condition 2: a poisoned item is skipped, never fatal): logs the first
@@ -220,15 +249,33 @@ impl DecodeSkipLog {
 /// new `Unknown`-guarded variants, new hub methods) ships with no version
 /// event, and [`SessionHub::hello`]'s `[min_supported, current]` range
 /// negotiation gates *behavior*, not decodability.
-pub const SESSION_PROTOCOL_VERSION: u32 = 10;
+///
+/// Version 11: **the frame path becomes a snapshot-valued signal**
+/// (`docs/remoc-adoption-design.md` §5 Option A, ratified 2026-07-20). The
+/// terminal attachment's single `updates` mpsc channel splits into a
+/// `frames: rch::watch<TerminalFrame>` (every delivery a full frame; a slow
+/// reader skips to the latest) and an `events: rch::mpsc<TerminalUpdate>`
+/// (the non-frame updates). The wire diff machinery is deleted wholesale:
+/// `TerminalFrameDiff`/`TerminalRowDiff`, `compute_frame_diff`/
+/// `apply_frame_diff`, the daemon's per-connection baseline, and the
+/// `TerminalUpdate::Snapshot`/`FrameDiff` variants all go — row-change
+/// detection (the ShapedLine cache's invalidation signal) moves to the
+/// client as a `TerminalLine` comparison of consecutive frames. A breaking
+/// reshape of the terminal channel vocabulary, hence the bump; the schema
+/// artifact carries it as `x-session-protocol-version`.
+pub const SESSION_PROTOCOL_VERSION: u32 = 11;
 
 /// The oldest protocol version this build is still willing to negotiate
 /// down to in [`SessionHub::hello`] — the low end of the advertised
-/// `[min_supported, current]` range. Rises only when carrying
-/// compatibility code for ancient peers stops being worth it
-/// (`docs/remoc-adoption-design.md` §3). v10 is the first remoc version,
-/// so there is nothing older to support yet.
-pub const MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 10;
+/// `[min_supported, current]` range. Rises when a version carries a
+/// breaking wire reshape that leaves no compatibility code behind
+/// (`docs/remoc-adoption-design.md` §3). v11's frame-path reshape (§5
+/// Option A) is exactly that: the v11 `TerminalAttachment` shape (a
+/// `watch<TerminalFrame>` + an events mpsc) is structurally undecodable to
+/// a v10 peer and vice-versa, so this build cannot honor a negotiated v10.
+/// A v10↔v11 pairing therefore has no overlapping range and `hello` rejects
+/// it — recovered by the auto-drain-and-respawn path (§6), not negotiated.
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 11;
 
 /// An inclusive protocol-version range one peer supports, as exchanged in
 /// [`SessionHub::hello`].
@@ -323,16 +370,26 @@ fn channel_schema<T: JsonSchema>(generator: &mut schemars::SchemaGenerator) -> s
 }
 
 /// What [`SessionHub::create_terminal`]/[`SessionHub::attach_terminal`]
-/// hand back: the session's live channel pair. Frame delivery semantics
-/// are deliberately unchanged in v10 (`docs/remoc-adoption-design.md`
-/// §6 step 2): `updates` carries the same `Snapshot`/`FrameDiff`/…
-/// vocabulary the JSONL wire carried, verbatim, over one mpsc channel —
-/// the watch-of-full-frames swap (§5 Option A) is the next, separately
-/// reviewed step.
+/// hand back: the session's live channels. Since wire v11
+/// (`docs/remoc-adoption-design.md` §5 Option A) frame delivery is a
+/// snapshot-valued signal — `frames` is an `rch::watch<TerminalFrame>`
+/// whose current value *is* the latest frame at every moment, seeded on
+/// attach with the daemon-retained latest frame. The wire diff machinery is
+/// gone: no `Snapshot`/`FrameDiff` split, no per-connection baseline, and
+/// row-change detection moved to the client (a `TerminalLine` comparison of
+/// consecutive frames). `events` carries everything that is *not* a frame
+/// (`TerminalUpdate`: title, bell, clipboard, exit, error).
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct TerminalAttachment {
+    /// The snapshot-valued frame signal: every observation is a full
+    /// [`TerminalFrame`]; a slow reader skips intermediate frames and
+    /// converges on the latest (§5 Option A, spike §1c). Seeded with the
+    /// daemon-retained latest frame on attach (the structural resync
+    /// anchor), or an empty frame for a freshly created session.
+    #[schemars(schema_with = "channel_schema::<TerminalFrame>")]
+    pub frames: CappedWatchReceiver<TerminalFrame, FRAME_MAX_ITEM_BYTES>,
     #[schemars(schema_with = "channel_schema::<TerminalUpdate>")]
-    pub updates: CappedReceiver<TerminalUpdate, FRAME_MAX_ITEM_BYTES>,
+    pub events: CappedReceiver<TerminalUpdate, TERMINAL_EVENT_MAX_ITEM_BYTES>,
     #[schemars(schema_with = "channel_schema::<TerminalCommand>")]
     pub commands: rch::mpsc::Sender<TerminalCommand, WireCodec>,
 }
@@ -433,9 +490,10 @@ pub trait SessionHub {
     ) -> Result<TerminalAttachment, HubError>;
 
     /// Attaches to an already-running terminal session. The returned
-    /// attachment's `updates` channel is seeded with a full `Snapshot`
-    /// (the daemon-retained latest frame), which is also the new diff
-    /// baseline — the same attach contract the JSONL wire had.
+    /// attachment's `frames` watch is seeded with the daemon-retained latest
+    /// frame — the structural resync anchor: since v11 the watch's current
+    /// value *is* the latest frame, so there is no baseline to establish and
+    /// no snapshot-then-diffs dance.
     async fn attach_terminal(&self, session_id: Uuid) -> Result<TerminalAttachment, HubError>;
 
     // -- agent domain --

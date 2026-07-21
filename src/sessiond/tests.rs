@@ -24,6 +24,7 @@ use horizon_session_protocol::{
 };
 use horizon_terminal_core::{TerminalColorScheme, TerminalFrame, TerminalSize};
 use remoc::rch;
+use remoc::rch::watch::WatchExt as _;
 use remoc::rtc::{Client as _, ServerShared as _};
 use tokio::task::JoinHandle;
 
@@ -44,9 +45,14 @@ fn spec() -> TerminalSpawnSpec {
 }
 
 /// The peer halves of a terminal attachment the fake hub handed out: the
-/// test sends updates and reads commands through these.
+/// test publishes frames on the `frames` watch, sends non-frame events on
+/// `events`, and reads commands through `commands`.
 struct TerminalPeer {
-    updates: rch::mpsc::Sender<TerminalUpdate, WireCodec>,
+    frames: rch::watch::Sender<TerminalFrame, WireCodec>,
+    /// Kept for symmetry with the wire (a test could push a non-frame
+    /// event); no current test drives it, so allow it dead.
+    #[allow(dead_code)]
+    events: rch::mpsc::Sender<TerminalUpdate, WireCodec>,
     commands: rch::mpsc::Receiver<TerminalCommand, WireCodec>,
 }
 
@@ -63,12 +69,14 @@ enum FakeCall {
     CreateTerminal {
         session_id: Uuid,
         spec: TerminalSpawnSpec,
-        peer: TerminalPeer,
+        // Boxed: `TerminalPeer` carries a watch sender, which makes it the
+        // enum's fat variant otherwise (`clippy::large_enum_variant`).
+        peer: Box<TerminalPeer>,
     },
     AttachTerminal {
         session_id: Uuid,
         /// `None` when the fake reported `TerminalNotFound`.
-        peer: Option<TerminalPeer>,
+        peer: Option<Box<TerminalPeer>>,
     },
     NewAgent {
         new: SessionNew,
@@ -122,17 +130,22 @@ struct FakeHub {
 
 impl FakeHub {
     fn terminal_attachment(&self) -> (TerminalAttachment, TerminalPeer) {
-        let (update_tx, update_rx) = rch::mpsc::channel::<TerminalUpdate, WireCodec>(16);
-        let update_rx =
-            update_rx.set_max_item_size::<{ horizon_session_protocol::FRAME_MAX_ITEM_BYTES }>();
+        let (frame_tx, frame_rx) =
+            rch::watch::channel::<TerminalFrame, WireCodec>(TerminalFrame::empty())
+                .with_max_item_size::<{ horizon_session_protocol::FRAME_MAX_ITEM_BYTES }>();
+        let (event_tx, event_rx) = rch::mpsc::channel::<TerminalUpdate, WireCodec>(16);
+        let event_rx = event_rx
+            .set_max_item_size::<{ horizon_session_protocol::TERMINAL_EVENT_MAX_ITEM_BYTES }>();
         let (command_tx, command_rx) = rch::mpsc::channel::<TerminalCommand, WireCodec>(16);
         (
             TerminalAttachment {
-                updates: update_rx,
+                frames: frame_rx,
+                events: event_rx,
                 commands: command_tx,
             },
             TerminalPeer {
-                updates: update_tx,
+                frames: frame_tx,
+                events: event_tx,
                 commands: command_rx,
             },
         )
@@ -206,7 +219,7 @@ impl SessionHub for FakeHub {
         let _ = self.calls.send(FakeCall::CreateTerminal {
             session_id,
             spec,
-            peer,
+            peer: Box::new(peer),
         });
         Ok(attachment)
     }
@@ -228,7 +241,7 @@ impl SessionHub for FakeHub {
         let (attachment, peer) = self.terminal_attachment();
         let _ = self.calls.send(FakeCall::AttachTerminal {
             session_id,
-            peer: Some(peer),
+            peer: Some(Box::new(peer)),
         });
         Ok(attachment)
     }
@@ -310,6 +323,24 @@ async fn next_call(calls: &mut tokio::sync::mpsc::UnboundedReceiver<FakeCall>) -
         .expect("fake daemon stopped recording calls")
 }
 
+/// Reads frames off a terminal handle's `frames()` stream until one whose
+/// text matches `text` arrives, skipping the empty seed frame the watch
+/// always delivers first (wire v11).
+fn recv_frame(rx: &crossbeam_channel::Receiver<TerminalFrame>, text: &str) -> TerminalFrame {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .expect("timed out waiting for the expected terminal frame");
+        let frame = rx
+            .recv_timeout(remaining)
+            .expect("frame channel closed before the expected frame arrived");
+        if frame.text() == text {
+            return frame;
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn start_returns_before_the_connection_and_a_queued_create_arrives_after() {
     let (client, server) = tokio::io::duplex(64 * 1024);
@@ -334,15 +365,9 @@ async fn start_returns_before_the_connection_and_a_queued_create_arrives_after()
     assert_eq!(session_id, terminal_id);
     assert_eq!(received_spec, spec());
 
-    let snapshot = TerminalUpdate::Snapshot(TerminalFrame::from_text("ready".into()));
-    peer.updates.send(snapshot.clone()).await.unwrap();
-    assert_eq!(
-        terminal
-            .updates()
-            .recv_timeout(Duration::from_secs(5))
-            .unwrap(),
-        snapshot
-    );
+    let frame = TerminalFrame::from_text("ready".into());
+    peer.frames.send(frame.clone()).unwrap();
+    assert_eq!(recv_frame(&terminal.frames(), "ready"), frame);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -376,8 +401,8 @@ async fn agent_and_terminal_traffic_flows_through_their_own_attachments() {
     let terminal_peer = terminal_peer.expect("terminal create call");
     let agent_peer = agent_peer.expect("agent new call");
 
-    let snapshot = TerminalUpdate::Snapshot(TerminalFrame::from_text("terminal".into()));
-    terminal_peer.updates.send(snapshot.clone()).await.unwrap();
+    let frame = TerminalFrame::from_text("terminal".into());
+    terminal_peer.frames.send(frame.clone()).unwrap();
     let event = Event::StateChanged(SessionState::WaitingForUser);
     agent_peer
         .events
@@ -389,13 +414,7 @@ async fn agent_and_terminal_traffic_flows_through_their_own_attachments() {
         .send(TerminalCommand::Input(b"fifo".to_vec()))
         .unwrap();
 
-    assert_eq!(
-        terminal
-            .updates()
-            .recv_timeout(Duration::from_secs(5))
-            .unwrap(),
-        snapshot
-    );
+    assert_eq!(recv_frame(&terminal.frames(), "terminal"), frame);
     assert_eq!(
         agent
             .events()
@@ -522,20 +541,14 @@ async fn terminal_batch_attach_keeps_attached_sessions_and_drops_not_found() {
         .flatten()
         .expect("the attached session should have live channels");
 
-    let snapshot = TerminalUpdate::Snapshot(TerminalFrame::from_text("survived".into()));
-    peer.updates.send(snapshot.clone()).await.unwrap();
+    let frame = TerminalFrame::from_text("survived".into());
+    peer.frames.send(frame.clone()).unwrap();
 
     let mut sessions = attached.join().unwrap();
     assert_eq!(sessions.len(), 1);
     let (session_id, session) = sessions.pop().unwrap();
     assert_eq!(session_id, attached_id);
-    assert_eq!(
-        session
-            .updates()
-            .recv_timeout(Duration::from_secs(5))
-            .unwrap(),
-        snapshot
-    );
+    assert_eq!(recv_frame(&session.frames(), "survived"), frame);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -597,7 +610,7 @@ async fn established_disconnect_reports_errors_without_reconnecting() {
     serve.abort();
 
     let terminal_error = terminal
-        .updates()
+        .events()
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
     assert!(matches!(terminal_error, TerminalUpdate::Error(_)));
@@ -611,7 +624,7 @@ async fn established_disconnect_reports_errors_without_reconnecting() {
     let late_terminal = handle.start_terminal(Uuid::new_v4(), spec());
     assert!(matches!(
         late_terminal
-            .updates()
+            .events()
             .recv_timeout(Duration::from_secs(5))
             .unwrap(),
         TerminalUpdate::Error(_)
@@ -638,7 +651,7 @@ async fn a_rejected_hello_on_a_test_stream_is_a_terminal_failure() {
     );
     let late_terminal = handle.start_terminal(Uuid::new_v4(), spec());
     let update = late_terminal
-        .updates()
+        .events()
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
     let TerminalUpdate::Error(message) = update else {
@@ -799,7 +812,7 @@ async fn a_second_generation_mismatch_after_recovery_goes_fatal_instead_of_loopi
     // The runtime gives up rather than draining again, with the rebuild
     // hint, fanned out to the registered routes.
     let update = terminal
-        .updates()
+        .events()
         .recv_timeout(Duration::from_secs(30))
         .unwrap();
     let TerminalUpdate::Error(message) = update else {
@@ -1024,7 +1037,7 @@ async fn an_oversized_rtc_request_fails_the_op_and_stops_the_runtime() {
     oversized.args = vec!["x".repeat(200 * 1024)];
     let terminal = handle.start_terminal(Uuid::new_v4(), oversized);
     let update = terminal
-        .updates()
+        .events()
         .recv_timeout(Duration::from_secs(10))
         .expect("the oversized create must fail loudly, not hang");
     assert!(
@@ -1036,9 +1049,7 @@ async fn an_oversized_rtc_request_fails_the_op_and_stops_the_runtime() {
     // the failure rather than a hang.
     let late = handle.start_terminal(Uuid::new_v4(), spec());
     assert!(matches!(
-        late.updates()
-            .recv_timeout(Duration::from_secs(10))
-            .unwrap(),
+        late.events().recv_timeout(Duration::from_secs(10)).unwrap(),
         TerminalUpdate::Error(_)
     ));
 }

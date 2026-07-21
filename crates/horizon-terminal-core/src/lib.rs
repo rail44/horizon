@@ -27,11 +27,10 @@ pub use contract::{
 pub use core::{TerminalColorScheme, DEFAULT_SCROLLBACK_LINES};
 pub use session_loop::{run_terminal_core, CoreReceivers, CoreSenders, TerminalCoreOptions};
 pub use types::{
-    apply_frame_diff, compute_frame_diff, KeyEventKind, NamedColor, TerminalColor, TerminalCursor,
-    TerminalCursorShape, TerminalFrame, TerminalFrameDiff, TerminalLine, TerminalMouseButton,
-    TerminalMouseKind, TerminalMouseModifiers, TerminalMouseReport, TerminalRowDiff,
-    TerminalScroll, TerminalSelection, TerminalSelectionKind, TerminalSelectionPoint, TerminalSize,
-    TerminalSpan, TerminalUnderline,
+    KeyEventKind, NamedColor, TerminalColor, TerminalCursor, TerminalCursorShape, TerminalFrame,
+    TerminalLine, TerminalMouseButton, TerminalMouseKind, TerminalMouseModifiers,
+    TerminalMouseReport, TerminalScroll, TerminalSelection, TerminalSelectionKind,
+    TerminalSelectionPoint, TerminalSize, TerminalSpan, TerminalUnderline,
 };
 
 #[cfg(test)]

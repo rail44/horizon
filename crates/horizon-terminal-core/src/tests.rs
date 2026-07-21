@@ -593,22 +593,17 @@ fn scroll_clamps_at_both_history_edges() {
     assert_eq!(core.snapshot_text(), live_frame);
 }
 
-/// End-to-end regression for the diff pipeline `horizon-sessiond` actually
-/// runs in production (`TerminalHost::forward_updates`): every
-/// `TerminalCore::snapshot_frame` after the first is diffed against the
-/// previous frame sent to the client (`compute_frame_diff`), and the
-/// client reconstructs its view by `apply_frame_diff`-ing onto its own
-/// last frame (`terminal::session::apply_frame_update`). This exact
-/// round-trip, under a real scroll, had never been asserted against row
-/// *content* before (2026-07-18 dogfooding report: scrolling up appeared
-/// to leave the top pinned while the bottom rows went blank). Seeds forty
+/// Regression for the scroll-into-history frame content the wire delivers
+/// (2026-07-18 dogfooding report: scrolling up appeared to leave the top
+/// pinned while the bottom rows went blank). Since wire v11
+/// (`docs/remoc-adoption-design.md` §5 Option A) every delivery is a full
+/// `TerminalCore::snapshot_frame` on the `rch::watch<TerminalFrame>` signal
+/// — no diff round-trip to reconstruct — so this asserts the post-scroll
+/// snapshot itself carries real history text in every row. Seeds forty
 /// numbered lines through a five-row viewport so a ten-line scroll shifts
-/// every visible row to genuinely different content (ruling out a
-/// coincidental pass where an unchanged row happens to diff to nothing),
-/// and asserts the diff-reconstructed frame is byte-for-byte the same as
-/// the daemon's own post-scroll snapshot, with no row silently left blank.
+/// every visible row to genuinely different content.
 #[test]
-fn scroll_frame_diff_reconstructs_history_content_end_to_end() {
+fn scroll_snapshot_reproduces_history_content() {
     let rows = 5;
     let mut core = TerminalCore::new(TerminalSize::new(20, rows));
     let mut script = String::new();
@@ -620,9 +615,8 @@ fn scroll_frame_diff_reconstructs_history_content_end_to_end() {
     }
     core.write_vt(script.as_bytes());
 
-    // Baseline: the live (unscrolled) viewport -- what `TerminalHost::
-    // attach` sends as the client's first frame, and what the daemon's
-    // `baselines` map holds just before the scroll below.
+    // Baseline: the live (unscrolled) viewport -- what an attach seeds the
+    // client's frame watch with.
     let live_frame = core.snapshot_frame();
     assert_eq!(core.display_offset(), 0);
     assert!(live_frame.text().contains("line39"));
@@ -638,29 +632,18 @@ fn scroll_frame_diff_reconstructs_history_content_end_to_end() {
         "the scrolled snapshot must actually differ from the live one"
     );
 
-    // The daemon-side diff against the previous snapshot it sent...
-    let diff = compute_frame_diff(&live_frame, &scrolled_frame);
-    // ...and the client-side reconstruction starting from the last frame
-    // it had.
-    let reconstructed = apply_frame_diff(&live_frame, &diff);
-
-    assert_eq!(
-        reconstructed, scrolled_frame,
-        "diff-applied client frame must exactly match the daemon's real scrolled snapshot"
-    );
-
-    // Content assertions, not just structural equality: every row must
+    // Content assertions: every row of the full scrolled snapshot must
     // carry real history text -- no row silently reverted to blank.
-    for (index, line) in reconstructed.lines.iter().enumerate() {
+    for (index, line) in scrolled_frame.lines.iter().enumerate() {
         let text: String = line.spans.iter().map(|span| span.text.as_str()).collect();
         assert!(
             text.starts_with("line"),
             "row {index} should show scrollback content, got {text:?} (full frame: {:?})",
-            reconstructed.text()
+            scrolled_frame.text()
         );
     }
     assert!(
-        !reconstructed.text().contains("line39"),
+        !scrolled_frame.text().contains("line39"),
         "a scroll toward history must leave the live tail behind"
     );
 }
@@ -2216,11 +2199,10 @@ fn terminal_commands_and_selection_commands_round_trip_through_serde() {
 
 #[test]
 fn terminal_updates_and_external_value_types_round_trip_through_serde() {
-    let old_frame = test_frame(&["old"]);
-    let new_frame = test_frame(&["new"]);
+    // Since wire v11 the full frame rides its own `rch::watch<TerminalFrame>`
+    // channel, not a `TerminalUpdate` variant -- round-trip it on its own.
+    assert_serde_round_trip(test_frame(&["one", "two"]));
     let updates = vec![
-        TerminalUpdate::Snapshot(test_frame(&["one", "two"])),
-        TerminalUpdate::FrameDiff(compute_frame_diff(&old_frame, &new_frame)),
         TerminalUpdate::Title(Some("title".into())),
         TerminalUpdate::Title(None),
         TerminalUpdate::Bell,
@@ -2268,153 +2250,7 @@ fn terminal_wire_vocabulary_round_trips() {
     assert_serde_round_trip(TerminalSummary { session_id });
 
     assert_serde_round_trip(TerminalCommand::Input(b"echo wire\n".to_vec()));
-    assert_serde_round_trip(TerminalUpdate::FrameDiff(compute_frame_diff(
-        &test_frame(&["before"]),
-        &test_frame(&["after"]),
-    )));
-}
-
-#[test]
-fn frame_diff_no_op_has_no_changes() {
-    let frame = test_frame(&["one", "two"]);
-    let diff = compute_frame_diff(&frame, &frame);
-
-    assert!(diff.changed_rows.is_empty());
-    assert_eq!(diff.row_count, 2);
-    assert_eq!(diff.cursor, None);
-    assert_eq!(diff.selection, None);
-    assert_eq!(diff.mouse_reporting, None);
-    assert_eq!(diff.keys_as_escape_codes, None);
-    assert_eq!(diff.palette_overrides, None);
-    assert_eq!(apply_frame_diff(&frame, &diff), frame);
-}
-
-#[test]
-fn frame_diff_changes_only_replaced_rows() {
-    let old = test_frame(&["one", "two", "three"]);
-    let new = test_frame(&["one", "changed", "three"]);
-    let diff = compute_frame_diff(&old, &new);
-
-    assert_eq!(diff.changed_rows.len(), 1);
-    assert_eq!(diff.changed_rows[0].index, 1);
-    assert_eq!(apply_frame_diff(&old, &diff), new);
-}
-
-#[test]
-fn frame_diff_grows_and_shrinks_rows() {
-    let short = test_frame(&["one"]);
-    let long = test_frame(&["one", "two", "three"]);
-
-    let grow = compute_frame_diff(&short, &long);
-    assert_eq!(grow.row_count, 3);
-    assert_eq!(grow.changed_rows.len(), 2);
-    assert_eq!(apply_frame_diff(&short, &grow), long);
-
-    let shrink = compute_frame_diff(&long, &short);
-    assert_eq!(shrink.row_count, 1);
-    assert!(shrink.changed_rows.is_empty());
-    assert_eq!(apply_frame_diff(&long, &shrink), short);
-}
-
-#[test]
-fn frame_diff_tracks_each_metadata_change_without_rows() {
-    let old = test_frame(&["same"]);
-    let mut cursor = old.clone();
-    cursor.cursor = Some(TerminalCursor {
-        row: 0,
-        col: 2,
-        shape: TerminalCursorShape::Block,
-    });
-    let mut selection = old.clone();
-    selection.selection = Some(TerminalSelection {
-        start: TerminalSelectionPoint { row: 0, col: 1 },
-        end: TerminalSelectionPoint { row: 0, col: 3 },
-    });
-    let mut mouse = old.clone();
-    mouse.mouse_reporting = true;
-    let mut keys = old.clone();
-    keys.keys_as_escape_codes = true;
-    let mut palette = old.clone();
-    palette.palette_overrides = vec![(3, [10, 20, 30])];
-
-    for expected in [cursor, selection, mouse, keys, palette] {
-        let diff = compute_frame_diff(&old, &expected);
-        assert!(diff.changed_rows.is_empty());
-        assert_eq!(apply_frame_diff(&old, &diff), expected);
-    }
-}
-
-/// The wire-level half of goal 2 (`docs/terminal-protocol-goals.md`):
-/// dragging a selection changes no row content, so the diff between two
-/// frames differing only in selection is `changed_rows`-empty and carries
-/// the transition in the `selection` field alone -- including the
-/// `Some(None)` "selection cleared" transition, the cursor idiom.
-#[test]
-fn selection_only_change_diffs_without_rows() {
-    let unselected = test_frame(&["one", "two"]);
-    let mut selected = unselected.clone();
-    let selection = TerminalSelection {
-        start: TerminalSelectionPoint { row: 0, col: 0 },
-        end: TerminalSelectionPoint { row: 1, col: 2 },
-    };
-    selected.selection = Some(selection);
-
-    let select = compute_frame_diff(&unselected, &selected);
-    assert!(select.changed_rows.is_empty());
-    assert_eq!(select.selection, Some(Some(selection)));
-    assert_eq!(apply_frame_diff(&unselected, &select), selected);
-
-    let clear = compute_frame_diff(&selected, &unselected);
-    assert!(clear.changed_rows.is_empty());
-    assert_eq!(clear.selection, Some(None));
-    assert_eq!(apply_frame_diff(&selected, &clear), unselected);
-
-    let unchanged = compute_frame_diff(&selected, &selected);
-    assert_eq!(unchanged.selection, None);
-    assert_eq!(apply_frame_diff(&selected, &unchanged), selected);
-}
-
-#[test]
-fn frame_diff_apply_reconstructs_styled_rows_and_text_derivation_matches() {
-    let old = test_frame(&["old"]);
-    let mut new = test_frame(&["placeholder", "wide"]);
-    new.lines[0].spans = vec![
-        plain_span(String::new(), 2),
-        TerminalSpan {
-            text: "value".into(),
-            columns: 5,
-            fg: TerminalColor::Indexed(12),
-            bg: TerminalColor::Rgb([4, 5, 6]),
-            italic: true,
-            strikethrough: true,
-            underline: TerminalUnderline::Curl,
-            underline_color: Some(TerminalColor::Rgb([250, 60, 60])),
-        },
-    ];
-    new.lines[1].spans = vec![plain_span("界".into(), 2)];
-    // Blank-run padding plus the wide char exercise the `text()` derivation.
-    assert_eq!(new.text(), "  value\n界");
-    new.cursor = Some(TerminalCursor {
-        row: 1,
-        col: 2,
-        shape: TerminalCursorShape::Beam,
-    });
-    new.selection = Some(TerminalSelection {
-        start: TerminalSelectionPoint { row: 0, col: 2 },
-        end: TerminalSelectionPoint { row: 1, col: 1 },
-    });
-    new.mouse_reporting = true;
-    new.keys_as_escape_codes = true;
-    new.palette_overrides = vec![(256, [7, 8, 9])];
-
-    let diff = compute_frame_diff(&old, &new);
-    assert_serde_round_trip(diff.clone());
-    assert_eq!(apply_frame_diff(&old, &diff), new);
-
-    let hidden = test_frame(&["  value", "界"]);
-    let hide_diff = compute_frame_diff(&new, &hidden);
-    assert_eq!(hide_diff.cursor, Some(None));
-    assert_eq!(apply_frame_diff(&new, &hide_diff), hidden);
+    assert_serde_round_trip(test_frame(&["before"]));
 }
 
 /// The §4 skew catch-alls on this crate's own vocabularies
@@ -2449,18 +2285,14 @@ fn serializing_the_unknown_catch_all_writes_its_literal_tag() {
 
 /// A frame whose span carries an unknown *unit* color still decodes as a
 /// frame -- the degradation is per-cell (`TerminalColor::Unknown`), not
-/// per-update, and it self-heals on the next full snapshot. The
+/// per-frame, and it self-heals on the next full frame. The
 /// payload-carrying-unknown-color case is proven under the wire codec in
 /// `horizon-session-protocol/tests/skew.rs`.
 #[test]
 fn a_span_with_an_unknown_color_still_decodes_as_a_frame() {
-    let mut frame = serde_json::to_value(TerminalFrame::from_text("hi".to_string())).unwrap();
-    frame["lines"][0]["spans"][0]["fg"] = serde_json::json!("Oklch");
-    let update: TerminalUpdate =
-        serde_json::from_value(serde_json::json!({"Snapshot": frame})).unwrap();
-    let TerminalUpdate::Snapshot(frame) = update else {
-        panic!("expected a snapshot, got {update:?}");
-    };
+    let mut value = serde_json::to_value(TerminalFrame::from_text("hi".to_string())).unwrap();
+    value["lines"][0]["spans"][0]["fg"] = serde_json::json!("Oklch");
+    let frame: TerminalFrame = serde_json::from_value(value).unwrap();
     assert!(matches!(frame.lines[0].spans[0].fg, TerminalColor::Unknown));
     assert_eq!(frame.text(), "hi");
 }

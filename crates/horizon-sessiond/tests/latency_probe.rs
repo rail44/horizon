@@ -31,12 +31,12 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use horizon_session_protocol::{
-    CappedReceiver, ClientHello, SessionHub as _, SessionHubClient, TerminalAttachment, WireCodec,
-    FRAME_MAX_ITEM_BYTES,
+    CappedWatchReceiver, ClientHello, SessionHub as _, SessionHubClient, TerminalAttachment,
+    WireCodec, FRAME_MAX_ITEM_BYTES,
 };
 use horizon_terminal_core::{
-    apply_frame_diff, KeyEventKind, TerminalColorScheme, TerminalCommand, TerminalSize,
-    TerminalSpawnSpec, TerminalUpdate,
+    KeyEventKind, TerminalColorScheme, TerminalCommand, TerminalFrame, TerminalSize,
+    TerminalSpawnSpec,
 };
 use remoc::rch;
 use termwiz::input::{KeyCode, Modifiers};
@@ -191,17 +191,28 @@ async fn write_key(commands: &rch::mpsc::Sender<TerminalCommand, WireCodec>, ch:
         .expect("send key");
 }
 
-/// Reads the next terminal update off an attachment's channel with its
-/// arrival `Instant`.
-async fn read_terminal_update_timed(
-    updates: &mut CappedReceiver<TerminalUpdate, FRAME_MAX_ITEM_BYTES>,
-) -> (TerminalUpdate, Instant) {
-    let update = tokio::time::timeout(Duration::from_secs(5), updates.recv())
+/// The attachment's current frame (the watch seed, or newest published).
+fn current_frame(
+    frames: &CappedWatchReceiver<TerminalFrame, FRAME_MAX_ITEM_BYTES>,
+) -> TerminalFrame {
+    frames.borrow().expect("frame watch error").clone()
+}
+
+/// Awaits the next published frame and its arrival `Instant`. The watch
+/// keeps only the latest value, so a slow reader observes a skipping
+/// sequence that converges on the newest frame.
+async fn next_frame_timed(
+    frames: &mut CappedWatchReceiver<TerminalFrame, FRAME_MAX_ITEM_BYTES>,
+) -> (TerminalFrame, Instant) {
+    tokio::time::timeout(Duration::from_secs(5), frames.changed())
         .await
-        .expect("timed out waiting for a terminal update")
-        .expect("update channel error")
-        .expect("the daemon should keep the terminal attachment open");
-    (update, Instant::now())
+        .expect("timed out waiting for a terminal frame")
+        .expect("the frame watch closed");
+    let frame = frames
+        .borrow_and_update()
+        .expect("frame watch error")
+        .clone();
+    (frame, Instant::now())
 }
 
 fn terminal_spec(shell: &str, args: Vec<String>, cols: u16, rows: u16) -> TerminalSpawnSpec {
@@ -265,20 +276,16 @@ fn report(label: &str, mut samples_ms: Vec<f64>) {
 ///   module doc / the investigation report for the numbers this
 ///   produces.
 async fn wait_for_marker(
-    updates: &mut CappedReceiver<TerminalUpdate, FRAME_MAX_ITEM_BYTES>,
+    frames: &mut CappedWatchReceiver<TerminalFrame, FRAME_MAX_ITEM_BYTES>,
     frame: &mut horizon_terminal_core::TerminalFrame,
     matches: impl Fn(&str) -> bool,
     since: Instant,
 ) -> (f64, usize, usize) {
     let mut spurious = 0;
     for reads in 1..=50 {
-        let (update, arrived) = read_terminal_update_timed(updates).await;
+        let (next, arrived) = next_frame_timed(frames).await;
         let before = frame.text();
-        match update {
-            TerminalUpdate::Snapshot(snap) => *frame = snap,
-            TerminalUpdate::FrameDiff(diff) => *frame = apply_frame_diff(frame, &diff),
-            _ => continue,
-        }
+        *frame = next;
         if frame.text() == before {
             spurious += 1;
         }
@@ -308,27 +315,17 @@ async fn probe_baseline_shell_echo() {
     let client = connect_hub(&sessiond.socket_path).await;
 
     let TerminalAttachment {
-        mut updates,
+        mut frames,
+        events: _,
         commands,
     } = create_terminal(&client, terminal_spec("/bin/sh", vec!["-i".into()], 80, 24)).await;
-    let (TerminalUpdate::Snapshot(mut frame), _) = read_terminal_update_timed(&mut updates).await
-    else {
-        panic!("expected an initial snapshot");
-    };
+    let mut frame = current_frame(&frames);
     // Drain the shell's own startup prompt noise before timing.
     tokio::time::sleep(Duration::from_millis(300)).await;
-    loop {
-        match tokio::time::timeout(
-            Duration::from_millis(50),
-            read_terminal_update_timed(&mut updates),
-        )
-        .await
-        {
-            Ok((TerminalUpdate::Snapshot(snap), _)) => frame = snap,
-            Ok((TerminalUpdate::FrameDiff(diff), _)) => frame = apply_frame_diff(&frame, &diff),
-            Ok(_) => {}
-            Err(_) => break,
-        }
+    while let Ok((snap, _)) =
+        tokio::time::timeout(Duration::from_millis(50), next_frame_timed(&mut frames)).await
+    {
+        frame = snap;
     }
 
     let mut round_trip_ms = Vec::new();
@@ -342,7 +339,7 @@ async fn probe_baseline_shell_echo() {
         let sent = Instant::now();
         write_key(&commands, ch).await;
         let (ms, reads, spurious) = wait_for_marker(
-            &mut updates,
+            &mut frames,
             &mut frame,
             |text| text.trim_end().ends_with(ch),
             sent,
@@ -453,7 +450,8 @@ async fn run_sync_tui_scenario(label: &str, mode: &str, iterations: usize, gap: 
     let client = connect_hub(&sessiond.socket_path).await;
 
     let TerminalAttachment {
-        mut updates,
+        mut frames,
+        events: _,
         commands,
     } = create_terminal(
         &client,
@@ -465,10 +463,7 @@ async fn run_sync_tui_scenario(label: &str, mode: &str, iterations: usize, gap: 
         ),
     )
     .await;
-    let (TerminalUpdate::Snapshot(mut frame), _) = read_terminal_update_timed(&mut updates).await
-    else {
-        panic!("expected an initial snapshot");
-    };
+    let mut frame = current_frame(&frames);
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let mut content_ms = Vec::new();
@@ -477,7 +472,7 @@ async fn run_sync_tui_scenario(label: &str, mode: &str, iterations: usize, gap: 
         let sent = Instant::now();
         write_key(&commands, 'x').await;
         let (ms, reads, spurious) =
-            wait_for_marker(&mut updates, &mut frame, |t| t.contains(&marker), sent).await;
+            wait_for_marker(&mut frames, &mut frame, |t| t.contains(&marker), sent).await;
         println!(
             "[latency-probe]   keystroke {i}: {ms:.3}ms after {reads} update(s), {spurious} spurious"
         );
@@ -541,7 +536,8 @@ async fn probe_synthetic_sync_output_delayed_esu() {
     let client = connect_hub(&sessiond.socket_path).await;
 
     let TerminalAttachment {
-        mut updates,
+        mut frames,
+        events: _,
         commands,
     } = create_terminal(
         &client,
@@ -557,10 +553,7 @@ async fn probe_synthetic_sync_output_delayed_esu() {
         ),
     )
     .await;
-    let (TerminalUpdate::Snapshot(mut frame), _) = read_terminal_update_timed(&mut updates).await
-    else {
-        panic!("expected an initial snapshot");
-    };
+    let mut frame = current_frame(&frames);
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     for i in 1..=3 {
@@ -568,7 +561,7 @@ async fn probe_synthetic_sync_output_delayed_esu() {
         let sent = Instant::now();
         write_key(&commands, 'x').await;
         let (ms, reads, spurious) =
-            wait_for_marker(&mut updates, &mut frame, |t| t.contains(&marker), sent).await;
+            wait_for_marker(&mut frames, &mut frame, |t| t.contains(&marker), sent).await;
         println!(
             "[latency-probe] delayed-esu keystroke {i}: real content landed at {ms:.3}ms \
              (after {reads} update(s), {spurious} spurious)"
@@ -592,7 +585,8 @@ async fn probe_synthetic_sync_output_malformed() {
     let client = connect_hub(&sessiond.socket_path).await;
 
     let TerminalAttachment {
-        mut updates,
+        mut frames,
+        events: _,
         commands,
     } = create_terminal(
         &client,
@@ -608,16 +602,13 @@ async fn probe_synthetic_sync_output_malformed() {
         ),
     )
     .await;
-    let (TerminalUpdate::Snapshot(mut frame), _) = read_terminal_update_timed(&mut updates).await
-    else {
-        panic!("expected an initial snapshot");
-    };
+    let mut frame = current_frame(&frames);
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let sent = Instant::now();
     write_key(&commands, 'x').await;
     let (ms, reads, spurious) =
-        wait_for_marker(&mut updates, &mut frame, |t| t.contains("tag=1 "), sent).await;
+        wait_for_marker(&mut frames, &mut frame, |t| t.contains("tag=1 "), sent).await;
     println!(
         "[latency-probe] malformed (never-closed) sync window: real content healed at {ms:.3}ms \
          (after {reads} update(s), {spurious} spurious)"
@@ -688,7 +679,8 @@ async fn probe_decrqm_negotiation_bare_query() {
     let client = connect_hub(&sessiond.socket_path).await;
 
     let TerminalAttachment {
-        mut updates,
+        mut frames,
+        events: _,
         commands: _commands,
     } = create_terminal(
         &client,
@@ -700,24 +692,15 @@ async fn probe_decrqm_negotiation_bare_query() {
         ),
     )
     .await;
-    let (TerminalUpdate::Snapshot(mut frame), _) = read_terminal_update_timed(&mut updates).await
-    else {
-        panic!("expected an initial snapshot");
-    };
+    let mut frame = current_frame(&frames);
 
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut found = None;
     while Instant::now() < deadline {
-        match tokio::time::timeout(
-            Duration::from_millis(200),
-            read_terminal_update_timed(&mut updates),
-        )
-        .await
+        if let Ok((snap, _)) =
+            tokio::time::timeout(Duration::from_millis(200), next_frame_timed(&mut frames)).await
         {
-            Ok((TerminalUpdate::Snapshot(snap), _)) => frame = snap,
-            Ok((TerminalUpdate::FrameDiff(diff), _)) => frame = apply_frame_diff(&frame, &diff),
-            Ok(_) => {}
-            Err(_) => {}
+            frame = snap;
         }
         let text = frame.text();
         if let Some(start) = text.find("DECRQM-REPLY:") {
@@ -765,26 +748,19 @@ async fn probe_real_claude_composer_typing() {
     let client = connect_hub(&sessiond.socket_path).await;
 
     let TerminalAttachment {
-        mut updates,
+        mut frames,
+        events: _,
         commands,
     } = create_terminal(&client, terminal_spec(&claude_path, vec![], 120, 40)).await;
-    let (TerminalUpdate::Snapshot(mut frame), _) = read_terminal_update_timed(&mut updates).await
-    else {
-        panic!("expected an initial snapshot");
-    };
+    let mut frame = current_frame(&frames);
 
     // Drain the splash/trust screen for up to 5s, then accept it.
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
-        match tokio::time::timeout(
-            Duration::from_millis(300),
-            read_terminal_update_timed(&mut updates),
-        )
-        .await
+        match tokio::time::timeout(Duration::from_millis(300), next_frame_timed(&mut frames)).await
         {
-            Ok((TerminalUpdate::FrameDiff(diff), _)) => frame = apply_frame_diff(&frame, &diff),
-            Ok((TerminalUpdate::Snapshot(snap), _)) => frame = snap,
-            _ => break,
+            Ok((snap, _)) => frame = snap,
+            Err(_) => break,
         }
     }
     // Enter isn't a printable char via KeyCode::Char -- send the literal
@@ -799,15 +775,9 @@ async fn probe_real_claude_composer_typing() {
     // there's no reliable content marker to wait on across CLI versions).
     let settle_deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < settle_deadline {
-        match tokio::time::timeout(
-            Duration::from_millis(200),
-            read_terminal_update_timed(&mut updates),
-        )
-        .await
+        match tokio::time::timeout(Duration::from_millis(200), next_frame_timed(&mut frames)).await
         {
-            Ok((TerminalUpdate::FrameDiff(diff), _)) => frame = apply_frame_diff(&frame, &diff),
-            Ok((TerminalUpdate::Snapshot(snap), _)) => frame = snap,
-            Ok(_) => {}
+            Ok((snap, _)) => frame = snap,
             Err(_) => break,
         }
     }
@@ -822,7 +792,7 @@ async fn probe_real_claude_composer_typing() {
         let sent = Instant::now();
         write_key(&commands, ch).await;
         let (ms, reads, spurious) = wait_for_marker(
-            &mut updates,
+            &mut frames,
             &mut frame,
             |text| text.contains(&expect_prefix),
             sent,

@@ -835,8 +835,9 @@ async fn with_deadline<T>(
     }
 }
 
-/// One live terminal attachment: forwards handle commands to the daemon
-/// and routes daemon updates to the pane, until either side goes away.
+/// One live terminal attachment: forwards handle commands to the daemon,
+/// routes full frames (from the `watch<TerminalFrame>`, wire v11) and
+/// non-frame events to the pane, until either side goes away.
 async fn run_terminal_attachment(
     routes: Arc<Routes>,
     session_id: Uuid,
@@ -844,11 +845,26 @@ async fn run_terminal_attachment(
     mut commands: UnboundedReceiver<TerminalCommand>,
 ) {
     let TerminalAttachment {
-        mut updates,
+        mut frames,
+        mut events,
         commands: remote_commands,
     } = attachment;
-    let mut update_skips = DecodeSkipLog::new("terminal updates");
+    let mut event_skips = DecodeSkipLog::new("terminal events");
     let mut command_skips = DecodeSkipLog::new("terminal commands");
+
+    // Deliver the seed frame first: the watch receiver's initial value (the
+    // daemon-retained latest frame on attach, or the empty create-time seed)
+    // is read with `borrow`, not `changed` — `changed` only fires for
+    // genuinely newer values, so without this an idle reattach would show a
+    // blank grid forever.
+    match frames.borrow_and_update() {
+        Ok(seed) => routes.route_terminal_frame(session_id, seed.clone()),
+        // The frame channel is already gone; the event/command loop will
+        // observe the disconnect and end the attachment.
+        Err(err) if err.is_final() => return,
+        Err(_) => {}
+    }
+
     loop {
         tokio::select! {
             command = commands.recv() => match command {
@@ -867,7 +883,19 @@ async fn run_terminal_attachment(
                 // The pane's handle (and its bridge thread) are gone.
                 None => break,
             },
-            update = updates.recv() => match update {
+            changed = frames.changed() => match changed {
+                // A new frame is available. The watch keeps only the latest,
+                // so a slow UI skips intermediate frames and converges on the
+                // final value here (§5 Option A / spike §1c) — the client's
+                // own row-comparison then invalidates just the changed rows.
+                Ok(()) => match frames.borrow_and_update() {
+                    Ok(frame) => routes.route_terminal_frame(session_id, frame.clone()),
+                    Err(_) => break,
+                },
+                // The watch (sender or connection) is gone.
+                Err(_closed) => break,
+            },
+            event = events.recv() => match event {
                 Ok(Some(update)) => {
                     let exited = matches!(update, TerminalUpdate::Exited);
                     routes.route_terminal_update(session_id, update);
@@ -877,10 +905,9 @@ async fn run_terminal_attachment(
                 }
                 Ok(None) => break,
                 Err(err) if err.is_final() => break,
-                // Adoption condition 2: one undecodable update is skipped;
-                // the channel survives. A degraded frame lasts until the
-                // next one replaces it.
-                Err(err) => update_skips.note(&err),
+                // Adoption condition 2: one undecodable event is skipped;
+                // the channel survives.
+                Err(err) => event_skips.note(&err),
             },
         }
     }
