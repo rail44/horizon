@@ -1099,7 +1099,7 @@ impl Render for WorkspaceShell {
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(|shell, _, window, cx| {
-                                        shell.close_palette(window, cx);
+                                        shell.cancel_palette(window, cx);
                                     }),
                                 )
                                 .child(
