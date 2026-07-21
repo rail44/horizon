@@ -365,7 +365,12 @@ mod tests {
     // compile-time constant immune to any runtime env/cwd leak) and
     // re-asserts it unchanged on drop, so any future escape fails loudly
     // right at the offending test instead of surfacing as unrelated damage
-    // discovered later.
+    // discovered later. The snapshot covers `core.bare`, working-tree
+    // status, `horizon/*` branches, and the committer identity
+    // (`user.name`/`user.email`) -- the last of these specifically catches
+    // backlog 53's identity-config pollution, where a test writing
+    // `git config user.*` under a leaked `GIT_DIR` landed in the enclosing
+    // repo's shared config and silently re-authored every subsequent commit.
 
     #[derive(Debug, PartialEq, Eq)]
     struct EnclosingRepoState {
@@ -379,6 +384,14 @@ mod tests {
         /// Catches a stray `horizon/<slug>` branch landing in the
         /// enclosing repo instead of a scratch repo.
         horizon_branches: String,
+        /// Backlog 53: catches a test's `Test <test@example.com>` identity
+        /// leaking into the enclosing repo's shared config (via a `git config
+        /// user.*` write under a leaked `GIT_DIR`), which would silently
+        /// re-author every later commit made from any worktree of this repo.
+        /// Empty when unset. Merged config (`--get`), so it reflects exactly
+        /// the identity commits would actually use.
+        user_name: String,
+        user_email: String,
     }
 
     fn enclosing_repo_root() -> PathBuf {
@@ -412,6 +425,8 @@ mod tests {
                 &["for-each-ref", "--format=%(refname)", "refs/heads/horizon"],
             )
             .unwrap_or_default(),
+            user_name: run_git(root, &["config", "--get", "user.name"]).unwrap_or_default(),
+            user_email: run_git(root, &["config", "--get", "user.email"]).unwrap_or_default(),
         }
     }
 
@@ -449,14 +464,33 @@ mod tests {
 
     fn init_repo(dir: &Path) {
         git(dir, &["init", "-q", "-b", "main"]);
-        git(dir, &["config", "user.email", "test@example.com"]);
-        git(dir, &["config", "user.name", "Test"]);
     }
 
+    /// Commits `name` in `dir` with a deterministic `Test` identity supplied
+    /// *per invocation* via `-c user.name`/`-c user.email` -- never written
+    /// into any git config. Backlog 53: persisting that identity with `git
+    /// config user.*` (as this used to) meant that under a leaked absolute
+    /// `GIT_DIR` (see `scrub_git_env`) the write landed in the *enclosing*
+    /// real repository's shared config, silently re-authoring every later
+    /// commit as `Test <test@example.com>`. A `-c` override touches no config
+    /// and still stamps both the author and committer, so a CI box with no
+    /// global identity commits fine and nothing leaks even if `-C` is bypassed.
     fn commit_file(dir: &Path, name: &str, contents: &str, message: &str) {
         std::fs::write(dir.join(name), contents).unwrap();
         git(dir, &["add", name]);
-        git(dir, &["commit", "-q", "-m", message]);
+        git(
+            dir,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-q",
+                "-m",
+                message,
+            ],
+        );
     }
 
     /// The base "no origin remote" shape every other real-git test builds
@@ -466,6 +500,57 @@ mod tests {
         init_repo(dir.path());
         commit_file(dir.path(), "README.md", "root\n", "root commit");
         dir
+    }
+
+    /// Backlog 53 root cause + fix, exercised end to end: `commit_file` must
+    /// stamp a deterministic `Test` author (so tests commit fine on a CI box
+    /// with no global git identity) *purely* via a per-invocation `-c
+    /// user.*` override -- writing nothing to any git config, so that even
+    /// under a leaked absolute `GIT_DIR` (which makes `-C <dir>` operate on
+    /// the enclosing repo) no identity can land in the enclosing repo's
+    /// shared config and re-author its future commits. Proves both halves:
+    /// the temp commit carries the `Test` identity, `init_repo` left no
+    /// identity in the temp repo's own config (so it came from the override),
+    /// and the enclosing repo's `user.name`/`user.email` are untouched. The
+    /// `EnclosingRepoGuard` now also asserts the identity half on drop for
+    /// every real-git test; this test additionally proves the override works.
+    #[test]
+    fn commit_file_stamps_the_test_identity_without_writing_git_config() {
+        let _canary = EnclosingRepoGuard::capture();
+        let enclosing = enclosing_repo_root();
+        let before_name =
+            run_git(&enclosing, &["config", "--get", "user.name"]).unwrap_or_default();
+        let before_email =
+            run_git(&enclosing, &["config", "--get", "user.email"]).unwrap_or_default();
+
+        // scratch_repo() calls init_repo + commit_file for the root commit.
+        let repo = scratch_repo();
+
+        assert_eq!(
+            run_git(repo.path(), &["log", "-1", "--format=%an"]).expect("HEAD author name"),
+            "Test",
+            "the per-commit -c override must stamp the author name"
+        );
+        assert_eq!(
+            run_git(repo.path(), &["log", "-1", "--format=%ae"]).expect("HEAD author email"),
+            "test@example.com",
+            "the per-commit -c override must stamp the author email"
+        );
+        assert!(
+            run_git(repo.path(), &["config", "--local", "--get", "user.name"]).is_err(),
+            "init_repo must not persist an identity in the temp repo's own config"
+        );
+
+        assert_eq!(
+            run_git(&enclosing, &["config", "--get", "user.name"]).unwrap_or_default(),
+            before_name,
+            "the enclosing repo's user.name must be unchanged by a temp-repo commit"
+        );
+        assert_eq!(
+            run_git(&enclosing, &["config", "--get", "user.email"]).unwrap_or_default(),
+            before_email,
+            "the enclosing repo's user.email must be unchanged by a temp-repo commit"
+        );
     }
 
     #[test]
