@@ -68,6 +68,7 @@ pub(super) fn write_verdict(
         "judge_confidence": verdict.confidence,
         "latency_ms": latency_ms,
         "requested_filesystem_grants": input.requested_filesystem_grants,
+        "requested_domains": input.requested_domains,
     });
     append(writer, session_id, payload);
 }
@@ -88,6 +89,7 @@ pub(super) fn write_skipped(
         "judge_model": model,
         "skipped_reason": reason,
         "requested_filesystem_grants": input.requested_filesystem_grants,
+        "requested_domains": input.requested_domains,
     });
     append(writer, session_id, payload);
 }
@@ -150,6 +152,7 @@ mod tests {
             tool_description: None,
             prior_user_messages: Vec::new(),
             requested_filesystem_grants: Vec::new(),
+            requested_domains: Vec::new(),
         }
     }
 

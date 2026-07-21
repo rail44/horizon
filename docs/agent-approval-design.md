@@ -286,6 +286,14 @@ product-owned API. Decisions:
   combined FS/network report, ordinary curl denial despite shell exit 0, and
   real session-scoped domain approval. macOS keeps nono's exact Seatbelt
   `ProxyOnly` profile and still requires standing real-Mac runtime verification.
+- **Domain-store ownership reconciled 2026-07-21:** every agent session now
+  owns an always-present `SessionDomainPolicy`, including sessions that do
+  not start an OS-sandbox proxy. Its `Arc<Allowlist>` is shared with the
+  optional per-session `SessionNetworkProxy` when tier-1 bash containment is
+  available, and is also consulted by host-side `web_fetch`. Grants match one
+  normalized host exactly: approving `example.com` does not approve
+  `api.example.com`. Thus bash proxy denials and host fetch prompts mutate one
+  session-scoped policy without making the proxy the policy owner.
 - **Denial UX** (corrected 2026-07-21): a containment denial never authorizes
   removing containment. Linux `openat`/`openat2` crossings come from the
   authenticated supervisor report, not exit status or stderr, and become
@@ -319,7 +327,7 @@ product-owned API. Decisions:
   is emitted. The judge gates that emission: auto-approve → the
   existing approve/execute path; escalate → today's flow unchanged.
   Non-blocking via a new `select!` arm on the session thread,
-  mirroring the `bash_results` channel shape (blocking inline would
+  mirroring the generalized async `ToolCompletion` channel shape (blocking inline would
   stall `Cancel` handling for the round-trip).
 - **Input restriction (the injection defense)**: the judge sees only
   prior user messages plus the raw tool-call arguments — no tool
@@ -394,7 +402,7 @@ product-owned API. Decisions:
   drift → calibration + observability (log every verdict, measure
   FNR/FPR against a human-labeled set), not a runtime counter.
 
-## Web tools: the first real boundary crossers (2026-07-20)
+## Web tools: the first real boundary crossers (landed 2026-07-21)
 
 Owner-decided design for the `web_search`/`web_fetch` tools (backlog
 18; vendor decision and evidence in
@@ -417,9 +425,10 @@ content inward, and mutate nothing.
   (`EXA_API_KEY`) is environment-only, per the config rule that
   secrets never come from the file; without it the tool reports
   unconfigured rather than failing cryptically.
-- **`web_fetch` (own implementation): per-domain session allowlist,
-  sharing leg 4b's store.** First fetch of a domain asks a human;
-  approval adds the domain to the same per-session allowlist the
+- **`web_fetch` (own implementation): exact-host session allowlist,
+  sharing leg 4b's store.** First fetch of a host asks a human before
+  contact; approval adds that host (not its subdomains) to the same
+  per-session allowlist the
   sandbox network proxy consults, so the owner sees one model —
   "which domains may this session talk to" — regardless of whether
   bash-curl or `web_fetch` initiated contact. Arbitrary URLs are the
@@ -432,14 +441,23 @@ content inward, and mutate nothing.
   `BoundaryCrossing` carries a per-tool disposition: search = auto +
   shadow verdict; fetch = allowlist check → human on miss + shadow
   verdict.
-- **Implementation shape** (sized 2026-07-20, ~1k lines with tests):
+- **Approval and retry shape.** `BoundaryCrossing` has independent
+  `Auto`/`Human` disposition: both fire the shadow judge, while only Human
+  emits a prompt. Pre-contact fetch approval is the additive
+  `ApprovalKind::DomainGrant`, distinct from bash's post-attempt
+  `DomainDenialRetry`. An unseen redirect host produces a structured async
+  `DomainGrantRequired`; sessiond reissues the original call, approval adds
+  only that host, and execution restarts from the original URL. Bash and web
+  tasks share the generalized per-session `ToolCompletion` channel.
+- **Implementation shape** (landed 2026-07-21):
   thin Horizon-owned tool schemas over swappable vendor adapters.
   Search: Exa REST (`numResults`/`maxCharacters`-style caller-side
   token budget). Fetch: reqwest + `dom_smoothie` (maintained Rust
   port of Mozilla readability with built-in markdown output), plus a
-  mandatory **SSRF guard** (reject private/link-local/localhost and
-  cloud-metadata targets — the agent must not be steerable into its
-  own control socket or sessiond), size/time caps, and content-type
+  mandatory **SSRF guard** (custom connection-path resolver rejects mixed
+  public/private answers, private/link-local/localhost, cloud metadata, and
+  IPv6 transition targets; redirects are manual and rechecked before each
+  contact), standard-port-only requests, size/time caps, and content-type
   branching (HTML → readability; text/JSON → capped pass-through;
   binary → reject).
 - **Deferred, recorded**: a crush-`agentic_fetch`-style throwaway
@@ -549,18 +567,12 @@ refactoring wave folds into this item.
      way `agent-inspect` reads any other free-form payload column;
      confirmed a no-op on frame fold, rig-history replay, and DB
      projection by inspection, not assumed.
-   - **No real tool is classified `BoundaryCrossing` yet.** MCP/external
-     tools (this classification's canonical case, per the "Classification
-     is a structural predicate" bullet above) don't exist in this crate
-     yet, so `classify_call`'s real branches (`fs.write`/`fs.edit`/`bash`)
-     are untouched -- reclassifying their non-isolated/non-sandboxed
-     branches from `AlwaysAsk` to `BoundaryCrossing` was considered and
-     rejected, since this section's own "Non-isolated sessions ... keep
-     today's per-action gate unchanged" line pins those as tier-3, not
-     tier-2. A test-only fixture tool id, `mock.boundary_crossing`
-     (mirroring the existing `mock.approval_required` fixture), is what
-     exercises the wiring until a real boundary-crossing tool lands --
-     the judge is dead code in production until then, by design.
+   - **Production calibration traffic began with web tools.** `web_search`
+     and `web_fetch` are the first real `BoundaryCrossing` classifications;
+     the former auto-runs against one fixed vendor and the latter supplies
+     human labels on exact-host misses. `mock.boundary_crossing` remains only
+     as a transport-free fixture. Non-isolated fs/bash calls remain
+     `AlwaysAsk`, as pinned above.
    - **Judge model config**: `syn:small:text` (this section's pin) is a
      Rust constant (`config::DEFAULT_JUDGE_MODEL`), overridable via
      `HORIZON_AGENT_JUDGE_MODEL` -- env-only, mirroring

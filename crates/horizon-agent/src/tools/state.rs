@@ -14,8 +14,8 @@ use crate::judge::JudgeHandle;
 use crate::live::LiveState;
 use crate::persistence::projection::duckdb::DuckdbStoreHandle;
 use crate::skills::SkillRegistry;
-use crate::tools::bash::BashCompletion;
-use crate::tools::network::SessionNetworkProxy;
+use crate::tools::bash::ToolCompletion;
+use crate::tools::network::{SessionDomainPolicy, SessionNetworkProxy};
 
 /// Where this session's persisted history lives, for the recall tools
 /// (`tools::recall`) to search/read it: the session's own id (the tools'
@@ -140,6 +140,10 @@ struct Inner {
     /// place that knows whether this session is isolated with an engaged
     /// sandbox, the precondition for starting one at all.
     network: Option<Arc<SessionNetworkProxy>>,
+    /// One domain-grant store shared by sandboxed proxy traffic and
+    /// host-side web tools. It exists even when this session cannot start a
+    /// sandbox proxy, so `web_fetch` never needs a separate policy model.
+    domains: SessionDomainPolicy,
     /// This session's shadow-mode judge handle (`docs/agent-approval-
     /// design.md`'s "Judge design", implemented in shadow mode only --
     /// `crate::judge`'s module doc), if one could be built for it. `None`
@@ -198,6 +202,7 @@ impl ToolSessionState {
                 config_path: None,
                 isolated_worktree: false,
                 network: None,
+                domains: SessionDomainPolicy::default(),
                 judge: None,
             }),
         }
@@ -257,6 +262,27 @@ impl ToolSessionState {
             inner.network = network;
         }
         self
+    }
+
+    /// Installs the domain store also passed to
+    /// [`SessionNetworkProxy::start_with_policy`] by sessiond.
+    pub fn with_domain_policy(mut self, domains: SessionDomainPolicy) -> Self {
+        if let Some(inner) = Rc::get_mut(&mut self.inner) {
+            inner.domains = domains;
+        }
+        self
+    }
+
+    pub(crate) fn allow_domain(&self, domain: impl Into<String>) {
+        self.inner.domains.allow(domain);
+    }
+
+    pub(crate) fn is_domain_allowed(&self, domain: &str) -> bool {
+        self.inner.domains.is_allowed(domain)
+    }
+
+    pub(crate) fn domain_allowlist(&self) -> Arc<horizon_sandbox_proxy::Allowlist> {
+        self.inner.domains.shared()
     }
 
     /// This session's own network-proxy pair, if one is running -- see
@@ -422,7 +448,7 @@ impl ToolSessionState {
 pub struct SessionRuntime {
     pub tool_state: ToolSessionState,
     pub live_state: LiveState,
-    pub bash_results: crossbeam_channel::Sender<BashCompletion>,
+    pub async_results: crossbeam_channel::Sender<ToolCompletion>,
 }
 
 thread_local! {
@@ -440,7 +466,7 @@ pub fn register_session_runtime(
     session_id: SessionId,
     tool_state: ToolSessionState,
     live_state: LiveState,
-    bash_results: crossbeam_channel::Sender<BashCompletion>,
+    async_results: crossbeam_channel::Sender<ToolCompletion>,
 ) {
     SESSION_RUNTIMES.with(|runtimes| {
         runtimes.borrow_mut().insert(
@@ -448,7 +474,7 @@ pub fn register_session_runtime(
             SessionRuntime {
                 tool_state,
                 live_state,
-                bash_results,
+                async_results,
             },
         );
     });
@@ -473,6 +499,7 @@ pub(crate) fn live_frame_for_session(session_id: SessionId) -> Option<AgentFrame
 /// find anything to execute against. Safe no-op for unknown ids (e.g.
 /// terminal sessions, which never register).
 pub fn unregister_session_runtime(session_id: SessionId) {
+    crate::tools::web::cancel_session(session_id);
     SESSION_RUNTIMES.with(|runtimes| {
         runtimes.borrow_mut().remove(&session_id);
     });

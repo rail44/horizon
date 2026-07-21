@@ -4,7 +4,10 @@ use crate::contract::{
     Error, Event, Message, MessageRole, SessionId, SessionState, ToolCallId, ToolCallRequest,
     ToolCallResult, ToolPermission,
 };
-use crate::policy::{annotate_auto_approval, classify_call, Classification};
+use crate::policy::{
+    annotate_auto_approval, boundary_disposition, classify_call, BoundaryDisposition,
+    Classification,
+};
 use crate::tools::config;
 use crate::tools::fs;
 use crate::tools::recall;
@@ -31,13 +34,13 @@ pub trait HostTools {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Execution {
     Auto(Vec<Event>),
-    /// A tier-1-contained call that had to move to a background thread
-    /// (`bash`, via `horizon_sandbox`) instead of finishing synchronously
+    /// A call that moved to background execution (`bash` via
+    /// `horizon_sandbox`, or a host-side web request) instead of finishing synchronously
     /// like [`Execution::Auto`] -- mirrors `tools::approval::
     /// ApprovalOutcome::Started`'s split for the same reason (a command can
     /// run for up to its timeout). `events` are the `ToolRunning`/
     /// `ToolCallStarted` pair already folded by the caller; the eventual
-    /// result arrives later on the session's `bash_results` channel exactly
+    /// result arrives later on the session's `async_results` channel exactly
     /// like a manually approved bash call's does.
     Started(Vec<Event>),
     RequiresApproval,
@@ -64,9 +67,16 @@ pub fn execute_agent_tool(
             );
             match classification {
                 Classification::Contained => execute_tier1(tool_state, session_id, request),
-                Classification::BoundaryCrossing | Classification::AlwaysAsk => {
-                    Execution::RequiresApproval
+                Classification::BoundaryCrossing => {
+                    if boundary_disposition(tool_state, &request.tool_id, &request.input)
+                        == BoundaryDisposition::Auto
+                    {
+                        execute_boundary_tool(tool_state, session_id, request)
+                    } else {
+                        Execution::RequiresApproval
+                    }
                 }
+                Classification::AlwaysAsk => Execution::RequiresApproval,
             }
         }
         Some(ToolPermission::Deny) => Execution::Denied(vec![Event::Error(Error {
@@ -86,6 +96,39 @@ pub fn execute_agent_tool(
             unknown_tool_output(&request.tool_id),
         ))]),
     }
+}
+
+fn execute_boundary_tool(
+    tool_state: &ToolSessionState,
+    session_id: SessionId,
+    request: &ToolCallRequest,
+) -> Execution {
+    if !matches!(request.tool_id.as_str(), "web_search" | "web_fetch") {
+        return Execution::RequiresApproval;
+    }
+    let Some(runtime) = session_runtime(session_id) else {
+        return Execution::Auto(vec![Event::ToolCallFinished(ToolCallResult::new(
+            request.call_id.clone(),
+            json!({
+                "is_error": true,
+                "message": format!("{} has no registered session runtime", request.tool_id),
+            }),
+        ))]);
+    };
+    let events = vec![
+        Event::StateChanged(SessionState::ToolRunning),
+        Event::ToolCallStarted(request.call_id.clone()),
+    ];
+    crate::tools::web::spawn(
+        session_id,
+        request.call_id.clone(),
+        &request.tool_id,
+        request.input.0.clone(),
+        tool_state.domain_allowlist(),
+        crate::tools::web::WebApprovalOrigin::Auto,
+        runtime.async_results,
+    );
+    Execution::Started(events)
 }
 
 fn unknown_tool_output(tool_id: &str) -> serde_json::Value {
@@ -179,7 +222,7 @@ fn execute_tier1_bash(
         network,
         crate::tools::bash::SandboxedApprovalOrigin::Tier1Auto,
         tool_state.filesystem_grants_snapshot(),
-        runtime.bash_results.clone(),
+        runtime.async_results.clone(),
     );
 
     Execution::Started(events)

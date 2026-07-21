@@ -42,13 +42,20 @@ impl AllowlistProxy {
     /// the proxy on a spawned task. Requires a Tokio runtime context
     /// (`tokio::spawn`).
     pub async fn spawn(allowlist: Allowlist) -> Result<Self, ProxyError> {
+        Self::spawn_shared(Arc::new(allowlist)).await
+    }
+
+    /// Starts a proxy backed by an allowlist shared with its owning agent
+    /// session. Host-side network tools and sandboxed clients then consult
+    /// one session-scoped domain policy rather than maintaining parallel
+    /// grant stores.
+    pub async fn spawn_shared(allowlist: Arc<Allowlist>) -> Result<Self, ProxyError> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .await
             .map_err(ProxyError::Bind)?;
         let addr = listener.local_addr().map_err(ProxyError::Bind)?;
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let allowlist = Arc::new(allowlist);
         let denial_log = Arc::new(DenialLog::default());
         let handler = AllowlistHandler::new(Arc::clone(&allowlist), Arc::clone(&denial_log));
 
@@ -96,6 +103,13 @@ impl AllowlistProxy {
     /// other session's own instance.
     pub fn allow(&self, domain: impl Into<String>) {
         self.allowlist.allow(domain);
+    }
+
+    /// Reads the same live policy the request handler consults. This is
+    /// primarily useful to verify that two owners were wired to the same
+    /// session-scoped store rather than to parallel snapshots.
+    pub fn is_allowed(&self, host: &str) -> bool {
+        self.allowlist.is_allowed(host)
     }
 
     /// Drains every host this proxy has refused since the last drain (or

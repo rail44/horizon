@@ -37,6 +37,10 @@ fn expect_finished(completion: BashCompletion) -> ToolCallResult {
             "expected a finished bash completion, got a filesystem-denied request for \
              {call_id:?} ({denials:?})"
         ),
+        BashCompletion::DomainGrantRequired { call_id, domains } => panic!(
+            "expected a finished bash completion, got a host-side domain grant for \
+             {call_id:?} ({domains:?})"
+        ),
     }
 }
 

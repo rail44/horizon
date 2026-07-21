@@ -41,14 +41,14 @@ pub enum ApprovalOutcome {
         command: Command,
     },
     /// Horizon started executing the tool app-side, but off the UI thread —
-    /// currently just `bash` on approve, since a command can run for up to
-    /// its timeout (`docs/agent-tools-design.md`, "Bash Semantics"). `events`/
+    /// `bash` and `web_fetch` on approve, since their I/O must not block the
+    /// session loop. `events`/
     /// `frame` are the running-state events (`ToolRunning`/`ToolCallStarted`)
     /// already folded in — see `Executed`'s doc comment for why both are
     /// exposed — but there is no `command` yet. The eventual result arrives
-    /// later on the per-session `bash_results` channel registered by
+    /// later on the per-session `async_results` channel registered by
     /// `register_session_runtime` and is folded (and forwarded to the
-    /// provider) by `fold_bash_completion` in `horizon-sessiond`'s session
+    /// provider) by `fold_tool_completion` in `horizon-sessiond`'s session
     /// loop (`crates/horizon-sessiond/src/session.rs`), not by this call.
     Started {
         events: Vec<Event>,
@@ -80,7 +80,10 @@ pub enum ApprovalOutcome {
 /// same "runs to completion synchronously" shape -- see
 /// [`resolve_synchronous_tool`].
 fn is_horizon_executed_tool(tool_id: &str) -> bool {
-    matches!(tool_id, "fs.write" | "fs.edit" | "bash" | "config.write")
+    matches!(
+        tool_id,
+        "fs.write" | "fs.edit" | "bash" | "config.write" | "web_fetch"
+    )
 }
 
 /// Resolves a user's approve/deny decision for the tool call pending in
@@ -134,9 +137,84 @@ fn try_execute(
         // of truth.
         let kind = frame.approval_kind(call_id).unwrap_or_default();
         resolve_bash(session_id, &runtime, request, decision, kind)
+    } else if request.tool_id == "web_fetch" {
+        let kind = frame.approval_kind(call_id).unwrap_or_default();
+        resolve_web_fetch(session_id, &runtime, request, decision, kind)
     } else {
         resolve_synchronous_tool(&runtime, request, decision)
     })
+}
+
+fn resolve_web_fetch(
+    session_id: SessionId,
+    runtime: &SessionRuntime,
+    request: &ToolCallRequest,
+    decision: &ApprovalDecision,
+    kind: ApprovalKind,
+) -> ApprovalOutcome {
+    if matches!(decision, ApprovalDecision::Deny { .. }) {
+        crate::tools::web::clear_approved_domains(session_id, &request.call_id);
+        return synchronous_result(runtime, &request.call_id, denied_output(), false);
+    }
+    let ApprovalKind::DomainGrant { domains } = kind else {
+        crate::tools::web::clear_approved_domains(session_id, &request.call_id);
+        return synchronous_result(
+            runtime,
+            &request.call_id,
+            json!({
+                "is_error": true,
+                "message": "web_fetch approval did not carry a supported domain grant"
+            }),
+            false,
+        );
+    };
+    if domains.is_empty() {
+        crate::tools::web::clear_approved_domains(session_id, &request.call_id);
+        return synchronous_result(
+            runtime,
+            &request.call_id,
+            json!({ "is_error": true, "message": "web_fetch domain grant was empty" }),
+            false,
+        );
+    }
+    let validated = domains
+        .iter()
+        .map(|domain| crate::tools::web::validate_domain_grant(domain))
+        .collect::<Result<Vec<_>, _>>();
+    let Ok(validated) = validated else {
+        crate::tools::web::clear_approved_domains(session_id, &request.call_id);
+        return synchronous_result(
+            runtime,
+            &request.call_id,
+            json!({ "is_error": true, "message": "web_fetch domain grant failed revalidation" }),
+            false,
+        );
+    };
+    for domain in &validated {
+        runtime.tool_state.allow_domain(domain.clone());
+    }
+    let approved_domains =
+        crate::tools::web::record_approved_domains(session_id, &request.call_id, &validated);
+
+    let events = vec![
+        Event::StateChanged(SessionState::ToolRunning),
+        Event::ToolCallStarted(request.call_id.clone()),
+    ];
+    let frame = runtime
+        .live_state
+        .extend_provider_events(events.clone().into_iter().map(Into::into));
+    crate::tools::web::spawn(
+        session_id,
+        request.call_id.clone(),
+        &request.tool_id,
+        request.input.0.clone(),
+        runtime.tool_state.domain_allowlist(),
+        crate::tools::web::WebApprovalOrigin::ManualDomainGrant {
+            domains: approved_domains,
+        },
+        runtime.async_results.clone(),
+    );
+    ApprovalOutcome::Started { events, frame }
 }
 
 /// `fs.write`/`fs.edit`/`config.write`: all run to completion synchronously,
@@ -217,6 +295,15 @@ fn resolve_bash(
             }),
             false,
         ),
+        ApprovalKind::DomainGrant { .. } => synchronous_result(
+            runtime,
+            &request.call_id,
+            json!({
+                "is_error": true,
+                "message": "A host-side domain grant cannot authorize a bash command."
+            }),
+            false,
+        ),
         ApprovalKind::Standard => resolve_standard_bash(session_id, runtime, request, decision),
     }
 }
@@ -244,7 +331,7 @@ fn resolve_standard_bash(
                 request.input.0.clone(),
                 runtime.tool_state.bash_cwd_handle(),
                 runtime.tool_state.bash_config(),
-                runtime.bash_results.clone(),
+                runtime.async_results.clone(),
             );
 
             ApprovalOutcome::Started { events, frame }
@@ -318,7 +405,7 @@ fn resolve_filesystem_denial_retry(
             grants: approved_grants,
         },
         runtime.tool_state.filesystem_grants_snapshot(),
-        runtime.bash_results.clone(),
+        runtime.async_results.clone(),
     );
     ApprovalOutcome::Started { events, frame }
 }
@@ -399,7 +486,7 @@ fn resolve_domain_denial_retry(
                 Some(network),
                 SandboxedApprovalOrigin::ManualDomainRetry { domains },
                 runtime.tool_state.filesystem_grants_snapshot(),
-                runtime.bash_results.clone(),
+                runtime.async_results.clone(),
             );
 
             ApprovalOutcome::Started { events, frame }

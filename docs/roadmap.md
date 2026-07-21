@@ -160,15 +160,11 @@ lands:
   (merge `d890b43`): the two-stage boundary-crossing classifier
   (`syn:small:text`, Plan-B parse, fire-and-forget) runs and logs a
   `call_id`-keyed calibration record but changes NO approval outcome.
-  **Important limitation surfaced at merge:** nothing in today's catalog
-  is classified `BoundaryCrossing` — everything is contained→auto or
-  irreversible→ask, and network has its own leg-4b path — so the judge
-  is dormant, exercised only by the `mock.boundary_crossing` fixture. It
-  will not accumulate real calibration data (and the enforcing flip
-  cannot be calibrated) until the first real boundary-crossing tool
-  exists: MCP/external tools, or agent web search (backlog 18/19). The
-  judge is now ready infrastructure waiting on that. Two legs remain but
-  are gated on real boundary-crossing traffic: calibration, then the
+  **Production calibration traffic began 2026-07-21:** Horizon-owned
+  `web_search` and `web_fetch` are the first real `BoundaryCrossing` tools.
+  Search auto-runs against a fixed Exa endpoint while recording a shadow
+  verdict; fetch supplies human labels on exact-host grant misses. Two legs
+  remain and are gated on enough real traffic: calibration, then the
   enforcing flip (a `select!` gate at the `BoundaryCrossing` arm).
   **Sandbox backend decided 2026-07-19: migrate `horizon-sandbox`
   from the self-built bwrap+seccompiler+landlock stack to depend on
@@ -224,7 +220,7 @@ lands:
   hostname approval remains session-local and retries sandboxed. macOS
   structured filesystem-denial evidence and runtime verification remain
   best-effort/pending real-Mac work.
-- **Agent web search / public-code search** (backlog 18/19).
+- **Agent web search** (backlog 18) **LANDED 2026-07-21.**
   Consultation 2026-07-19/20: **vendor = Exa** (owner decision;
   empirical probe + independent-benchmark evidence in
   `docs/research/agent-web-search-api-2026-07-19.md`, 2026-07-20
@@ -234,9 +230,14 @@ lands:
   (`docs/agent-approval-design.md` "Web tools" section): both tools
   classified `BoundaryCrossing` — the judge's first real customers,
   ending its dormancy — with search auto-approved + shadow-judged and
-  fetch per-domain-allowlisted (store shared with leg 4b); Exa via
-  REST + env-only `EXA_API_KEY`. Implementation dispatched to a
-  Horizon agent session (dogfooding) 2026-07-20.
+  fetch exact-host-allowlisted (store shared with leg 4b); Exa via
+  REST + env-only `EXA_API_KEY`. The two async tools, typed pre-contact
+  grant/retry flow, bounded readability fetch, SSRF-safe resolver,
+  cancellation, and trusted shadow-judge inputs are implemented with
+  hermetic tests. macOS network runtime verification remains part of the
+  already-recorded real-Mac follow-up.
+- **Public-code / symbol search** (backlog 19) remains open. Sourcegraph and
+  LSP lifecycle work are separate from the landed general web tools.
 - **Agent history budget + tool-result-aware eviction** (backlog 64).
   Surfaced when a dispatched worker's first turn read ~99k tokens and
   evicted its own task instruction (fixed-60k history budget on a 256k

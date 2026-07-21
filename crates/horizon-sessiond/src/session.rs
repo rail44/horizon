@@ -60,7 +60,8 @@ use horizon_agent::skills::SkillRegistry;
 use horizon_agent::tools::{
     cancelled_tool_call_result, process_agent_provider_event, register_session_runtime,
     resolve_approval, should_fold_completion, unregister_session_runtime, ApprovalDecision,
-    ApprovalOutcome, BashCompletion, HostTools, RecallContext, ToolSessionState,
+    ApprovalOutcome, HostTools, RecallContext, SessionDomainPolicy, ToolCompletion,
+    ToolSessionState,
 };
 use horizon_agent::wire::{
     AgentWireEvent, HostToolRequest, HostToolResponse, SessionNew, SessionSummary,
@@ -1085,8 +1086,9 @@ fn run_session(
     // proxy it will never use. A bind failure is non-fatal: this session
     // just falls back to `NetworkPolicy::Disabled` for tier-1 sandboxed
     // `bash`, exactly the pre-leg-4a behavior.
+    let domains = SessionDomainPolicy::default();
     let network = if isolated && horizon_sandbox::is_available() {
-        match horizon_agent::tools::SessionNetworkProxy::start() {
+        match horizon_agent::tools::SessionNetworkProxy::start_with_policy(&domains) {
             Ok(proxy) => Some(Arc::new(proxy)),
             Err(error) => {
                 eprintln!(
@@ -1112,6 +1114,7 @@ fn run_session(
         .with_isolated_worktree(isolated)
         .with_skills(SkillRegistry::discover(&cwd))
         .with_config_path(state.config_path.clone())
+        .with_domain_policy(domains)
         .with_network_proxy(network)
         .with_judge(judge);
     let live_state = match state.writer() {
@@ -1124,12 +1127,12 @@ fn run_session(
         ),
         None => LiveState::with_disabled_persistence(),
     };
-    let (bash_results_tx, bash_results_rx) = unbounded::<BashCompletion>();
+    let (async_results_tx, async_results_rx) = unbounded::<ToolCompletion>();
     register_session_runtime(
         session_id,
         tool_state.clone(),
         live_state.clone(),
-        bash_results_tx,
+        async_results_tx,
     );
 
     let host = SessiondHostTools {
@@ -1159,9 +1162,9 @@ fn run_session(
                 ),
                 Err(_) => break,
             },
-            recv(bash_results_rx) -> message => {
+            recv(async_results_rx) -> message => {
                 if let Ok(completion) = message {
-                    fold_bash_completion(state, &live_state, &commands_tx, session_id, completion);
+                    fold_tool_completion(state, &live_state, &commands_tx, session_id, completion);
                 }
             },
             recv(inbound_rx) -> message => match message {
@@ -1232,41 +1235,54 @@ fn handle_provider_event(
 }
 
 /// The async-execution analogue of [`handle_provider_event`]'s fold, for a
-/// `bash` call approved earlier (`ApprovalOutcome::Started` below) whose
-/// result has now arrived on its own channel -- the same shape the deleted
+/// bash or host-side web call whose result has now arrived on its own
+/// channel -- the same shape the deleted
 /// in-process agent runtime's `fold_bash_completion` used to have,
 /// forwarding the same events over the wire instead of updating a local
 /// `Frames` signal, except the trailing `StateChanged` is no longer
 /// unconditional (see below).
 ///
-/// `bash` is the only tool whose completion arrives asynchronously like
-/// this -- `fs.write`/`fs.edit`/`config.write` all resolve synchronously
+/// Bash and web tools complete asynchronously here; fs/config tools resolve synchronously
 /// inside `agent::tools::approval::resolve_synchronous_tool` (folded
 /// straight into `dispatch_inbound_command`'s `resolve_and_forward`) -- so
 /// this is the one place a completion can land after *other* tool-call
 /// approvals from the same turn are still outstanding.
-fn fold_bash_completion(
+fn fold_tool_completion(
     state: &Arc<SessiondState>,
     live_state: &LiveState,
     commands_tx: &Sender<Command>,
     session_id: SessionId,
-    completion: BashCompletion,
+    completion: ToolCompletion,
 ) {
     match completion {
-        BashCompletion::Finished(result) => {
+        ToolCompletion::Finished(result) => {
             fold_finished_bash_result(state, live_state, commands_tx, session_id, result)
         }
-        BashCompletion::DomainDenied {
+        ToolCompletion::DomainDenied {
             call_id,
             domains,
             result,
         } => fold_domain_denied(state, live_state, session_id, call_id, domains, result),
-        BashCompletion::FilesystemDenied {
+        ToolCompletion::DomainGrantRequired { call_id, domains } => {
+            fold_domain_grant_required(state, live_state, session_id, call_id, domains)
+        }
+        ToolCompletion::FilesystemDenied {
             call_id,
             denials,
             result,
         } => fold_filesystem_denied(state, live_state, session_id, call_id, denials, result),
     }
+}
+
+#[cfg(test)]
+fn fold_bash_completion(
+    state: &Arc<SessiondState>,
+    live_state: &LiveState,
+    commands_tx: &Sender<Command>,
+    session_id: SessionId,
+    completion: ToolCompletion,
+) {
+    fold_tool_completion(state, live_state, commands_tx, session_id, completion);
 }
 
 /// The ordinary case: a bash call actually finished (successfully or not).
@@ -1359,8 +1375,9 @@ fn fold_domain_denied(
 
     let domain_list = domains.join(", ");
     let reason = format!(
-        "`bash` tried to reach {domain_list} while running this command, but it isn't allowed \
+        "`{}` tried to reach {domain_list}, but it isn't allowed \
          for this session yet. Allow {} for this session and retry?",
+        original_request.tool_id,
         if domains.len() == 1 { "it" } else { "them" }
     );
     let events = vec![
@@ -1372,6 +1389,47 @@ fn fold_domain_denied(
                 domains,
                 prior_result: result,
             },
+        }),
+        Event::StateChanged(SessionState::WaitingForApproval),
+    ];
+    let _ = live_state.extend_provider_events(events.clone().into_iter().map(Into::into));
+    for event in events {
+        send_session_event(state, session_id, AgentWireEvent::Event(event));
+    }
+}
+
+fn fold_domain_grant_required(
+    state: &Arc<SessiondState>,
+    live_state: &LiveState,
+    session_id: SessionId,
+    call_id: ToolCallId,
+    domains: Vec<String>,
+) {
+    let frame = live_state.frame();
+    if !should_fold_completion(&frame, &call_id) {
+        return;
+    }
+    let Some(original_request) = frame.tool_call_request(&call_id).cloned() else {
+        return;
+    };
+    horizon_agent::tools::maybe_fire_shadow_domain_judge(
+        session_id,
+        &original_request,
+        domains.clone(),
+    );
+    let domain_list = domains.join(", ");
+    let reason = format!(
+        "`{}` needs to contact {domain_list}, but no request was sent to that domain. Allow {} \
+         for this session and retry from the original URL?",
+        original_request.tool_id,
+        if domains.len() == 1 { "it" } else { "them" }
+    );
+    let events = vec![
+        Event::ToolCallRequested(original_request),
+        Event::ApprovalRequested(ApprovalRequest {
+            call_id,
+            reason,
+            kind: ApprovalKind::DomainGrant { domains },
         }),
         Event::StateChanged(SessionState::WaitingForApproval),
     ];
@@ -1684,7 +1742,7 @@ mod tests {
             &live_state,
             &commands_tx,
             session_id,
-            BashCompletion::Finished(ToolCallResult::new(
+            ToolCompletion::Finished(ToolCallResult::new(
                 call_a.clone(),
                 serde_json::json!({ "exit_code": 0 }),
             )),
@@ -1718,7 +1776,7 @@ mod tests {
             &live_state,
             &commands_tx,
             session_id,
-            BashCompletion::Finished(ToolCallResult::new(
+            ToolCompletion::Finished(ToolCallResult::new(
                 call_b.clone(),
                 serde_json::json!({ "exit_code": 0 }),
             )),
@@ -1781,7 +1839,7 @@ mod tests {
             &live_state,
             &commands_tx,
             session_id,
-            BashCompletion::FilesystemDenied {
+            ToolCompletion::FilesystemDenied {
                 call_id: call_id.clone(),
                 denials: vec![denial.clone()],
                 result: ToolCallResult::new(call_id.clone(), serde_json::json!({ "exit_code": 0 })),
@@ -1802,6 +1860,70 @@ mod tests {
             &approval.kind,
             ApprovalKind::FilesystemDenialRetry { denials, .. } if denials == &vec![denial]
         ));
+        assert_eq!(
+            forwarded.last(),
+            Some(&Event::StateChanged(SessionState::WaitingForApproval))
+        );
+        assert!(commands_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn fold_domain_grant_required_reissues_the_fetch_without_contacting_the_provider() {
+        let agent_config = AgentConfig::from_env_and_provider(None, None);
+        let state = Arc::new(SessiondState::new(
+            ProviderRegistry::builtin_with_config(
+                agent_config.clone(),
+                SharedDuckdbStore::unavailable(),
+            ),
+            agent_config,
+            None,
+            SharedDuckdbStore::unavailable(),
+            None,
+        ));
+        let live_state = LiveState::with_disabled_persistence();
+        let session_id = SessionId::new();
+        let connection = Connection::new(state.clone());
+        let mut outgoing_rx = connection.subscribe_agent(session_id);
+        let call_id = ToolCallId("web-fetch-redirect-domain".to_string());
+        let original_request = horizon_agent::contract::ToolCallRequest {
+            call_id: call_id.clone(),
+            tool_id: "web_fetch".to_string(),
+            input: serde_json::json!({ "url": "https://example.com/start" }).into(),
+        };
+        live_state.extend_provider_events(
+            vec![
+                Event::ToolCallRequested(original_request.clone()),
+                Event::StateChanged(SessionState::ToolRunning),
+                Event::ToolCallStarted(call_id.clone()),
+            ]
+            .into_iter()
+            .map(Into::into),
+        );
+        let (commands_tx, commands_rx) = unbounded::<Command>();
+
+        fold_tool_completion(
+            &state,
+            &live_state,
+            &commands_tx,
+            session_id,
+            ToolCompletion::DomainGrantRequired {
+                call_id: call_id.clone(),
+                domains: vec!["redirect.example".to_string()],
+            },
+        );
+
+        let forwarded = drain_events(&mut outgoing_rx);
+        assert!(forwarded.iter().any(
+            |event| matches!(event, Event::ToolCallRequested(request) if request == &original_request)
+        ));
+        assert!(forwarded.iter().any(|event| matches!(
+            event,
+            Event::ApprovalRequested(ApprovalRequest {
+                call_id: approval_call_id,
+                kind: ApprovalKind::DomainGrant { domains },
+                ..
+            }) if approval_call_id == &call_id && domains == &["redirect.example".to_string()]
+        )));
         assert_eq!(
             forwarded.last(),
             Some(&Event::StateChanged(SessionState::WaitingForApproval))

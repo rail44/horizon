@@ -5,29 +5,6 @@ up. Numbering is stable and shared with the archive: resolved and closed
 entries live in `backlog-resolved.md` keeping their original numbers
 (split 2026-07-18).
 
-18. **Web search tool** — give the agent outward web search (the "search
-    tool" the owner originally meant, 2026-07-07). Consultation
-    2026-07-19/20 settled most of it (owner decisions, evidence and
-    rationale in `docs/research/agent-web-search-api-2026-07-19.md`,
-    esp. its 2026-07-20 addendum): **vendor = Exa** (probe 12/12 +
-    independent tech-docs benchmark; Parallel's counter-case is
-    self-published only); shape = two thin Horizon-owned tools
-    (`web_search`/`web_fetch`) over swappable vendor adapters; fetch =
-    own plain-HTTP extraction, no JS rendering initially; DuckDuckGo
-    scraping excluded; Brave recorded as second-adapter candidate.
-    Approval design decided 2026-07-20 (recorded in
-    `docs/agent-approval-design.md` "Web tools" section): both tools =
-    `BoundaryCrossing` (the judge's first real customers);
-    `web_search` auto-approved + shadow-judged (industry-standard
-    disposition), `web_fetch` per-domain session allowlist shared with
-    leg 4b's store; Exa route = REST + `EXA_API_KEY` (env-only);
-    fetch = own reqwest + dom_smoothie with SSRF guard;
-    `agentic_fetch`-style delegation deferred until judge calibration.
-    Implementation dispatched 2026-07-20 to a Horizon agent session
-    (dogfooding) via `horizon new-agent`.
-    Background: `docs/research/crush-opencode-tools-2026-07-07.md`
-    (recovered from the session transcript 2026-07-19; also covers item
-    19's sourcegraph/LSP details).
 19. **Public-code / symbol search** — crush exposes `sourcegraph`
     (public GitHub via Sourcegraph GraphQL, no API key) and
     `lsp_references` (LSP-backed symbol references); opencode has an

@@ -102,6 +102,10 @@ fn expect_finished(completion: BashCompletion) -> ToolCallResult {
             "expected a finished bash completion, got a filesystem-denied request for \
              {call_id:?} ({denials:?})"
         ),
+        BashCompletion::DomainGrantRequired { call_id, domains } => panic!(
+            "expected a finished bash completion, got a host-side domain grant for \
+             {call_id:?} ({domains:?})"
+        ),
     }
 }
 
@@ -133,6 +137,18 @@ fn fs_read_glob_grep_are_auto_allow_read_and_write_edit_require_approval() {
     );
     assert_eq!(
         permission_for_tool("fs.edit"),
+        Some(ToolPermission::RequireApproval)
+    );
+}
+
+#[test]
+fn web_tools_enter_call_level_boundary_policy() {
+    assert_eq!(
+        permission_for_tool("web_search"),
+        Some(ToolPermission::RequireApproval)
+    );
+    assert_eq!(
+        permission_for_tool("web_fetch"),
         Some(ToolPermission::RequireApproval)
     );
 }
@@ -1313,6 +1329,34 @@ fn horizon_events_for_provider_event_omits_the_approval_prompt_for_a_contained_f
     assert_eq!(events.len(), 1, "no approval prompt expected: {events:?}");
 }
 
+#[test]
+fn invalid_web_fetch_finishes_as_an_auto_boundary_error_without_network() {
+    let tool_state = ToolSessionState::new(std::env::temp_dir());
+    let session_id = SessionId::new();
+    let (results_tx, results_rx) = crossbeam_channel::unbounded();
+    register_session_runtime(session_id, tool_state.clone(), LiveState::new(), results_tx);
+    let request = ToolCallRequest {
+        call_id: ToolCallId("web-fetch-invalid".to_string()),
+        tool_id: "web_fetch".to_string(),
+        input: json!({ "url": "file:///etc/passwd" }).into(),
+    };
+
+    assert!(matches!(
+        execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
+        Execution::Started(_)
+    ));
+    let result = expect_finished(
+        results_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("invalid fetch completion"),
+    );
+    assert_eq!(result.call_id, request.call_id);
+    assert_eq!(result.output["is_error"], true);
+    assert_eq!(result.output["auto_approved"], true);
+    assert_eq!(result.output["policy_tier"], "boundary_crossing");
+    unregister_session_runtime(session_id);
+}
+
 /// The real thing this whole leg exists for: a `bash` call in an isolated
 /// session, on a host where `horizon_sandbox::is_available()` is genuinely
 /// true (this dev machine has bwrap -- see AGENTS.md), auto-executes
@@ -1472,6 +1516,12 @@ fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
                     .iter()
                     .any(|denial| denial.attempted_path == host_target),
                 "expected the structured denial to name {host_target:?}: {denials:?}"
+            );
+        }
+        BashCompletion::DomainGrantRequired { call_id, domains } => {
+            panic!(
+                "expected the literal /tmp write to be denied by the sandbox, got a host-side \
+                 domain grant instead for {call_id:?} ({domains:?})"
             );
         }
     }
@@ -1728,6 +1778,77 @@ fn domain_denial_retry_frame(
             },
         })]);
     (frame, prior_result)
+}
+
+fn domain_grant_frame(live_state: &LiveState, call_id: &ToolCallId, domain: &str) -> AgentFrame {
+    live_state.extend_events([Event::ToolCallRequested(ToolCallRequest {
+        call_id: call_id.clone(),
+        tool_id: "web_fetch".to_string(),
+        input: json!({ "url": format!("https://{domain}/") }).into(),
+    })]);
+    live_state.extend_events([Event::ApprovalRequested(crate::contract::ApprovalRequest {
+        call_id: call_id.clone(),
+        reason: format!("allow {domain} for this session?"),
+        kind: crate::contract::ApprovalKind::DomainGrant {
+            domains: vec![domain.to_string()],
+        },
+    })])
+}
+
+#[test]
+fn resolve_approval_web_fetch_deny_does_not_mutate_the_domain_policy() {
+    let tool_state = dummy_tool_state();
+    let session_id = SessionId::new();
+    let live_state = LiveState::new();
+    register_session_runtime(
+        session_id,
+        tool_state.clone(),
+        live_state.clone(),
+        dummy_bash_results(),
+    );
+    let call_id = ToolCallId("web-fetch-domain-deny".to_string());
+    let frame = domain_grant_frame(&live_state, &call_id, "example.com");
+
+    let outcome = resolve_approval(
+        &frame,
+        session_id,
+        call_id,
+        ApprovalDecision::Deny { reason: None },
+    );
+
+    assert!(matches!(outcome, ApprovalOutcome::Executed { .. }));
+    assert!(!tool_state.is_domain_allowed("example.com"));
+    unregister_session_runtime(session_id);
+}
+
+#[test]
+fn resolve_approval_web_fetch_approve_adds_only_the_exact_session_grant() {
+    let approved_state = dummy_tool_state();
+    let other_state = dummy_tool_state();
+    let session_id = SessionId::new();
+    let live_state = LiveState::new();
+    register_session_runtime(
+        session_id,
+        approved_state.clone(),
+        live_state.clone(),
+        dummy_bash_results(),
+    );
+    let call_id = ToolCallId("web-fetch-domain-approve".to_string());
+    let frame = domain_grant_frame(&live_state, &call_id, "example.com");
+
+    let outcome = resolve_approval(
+        &frame,
+        session_id,
+        call_id.clone(),
+        ApprovalDecision::Approve,
+    );
+
+    assert!(matches!(outcome, ApprovalOutcome::Started { .. }));
+    assert!(approved_state.is_domain_allowed("example.com"));
+    assert!(!approved_state.is_domain_allowed("www.example.com"));
+    assert!(!other_state.is_domain_allowed("example.com"));
+    crate::tools::web::cancel_if_running(session_id, &call_id);
+    unregister_session_runtime(session_id);
 }
 
 /// The domain-denial-retry flow's deny path (`docs/agent-approval-

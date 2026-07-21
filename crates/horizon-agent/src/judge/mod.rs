@@ -95,6 +95,9 @@ pub(crate) struct JudgeInput {
     /// Horizon-authored mediation output, kept outside the untrusted tool
     /// argument region in the prompt.
     pub(crate) requested_filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
+    /// Canonical Horizon-derived hosts kept outside the untrusted argument
+    /// region. Empty for calls that do not request or use a domain grant.
+    pub(crate) requested_domains: Vec<String>,
 }
 
 /// "Small but not 1" (the research doc's Plan B recommendation for stage
@@ -173,7 +176,20 @@ pub(crate) fn maybe_fire_shadow_judge(
     let prior_user_messages = crate::tools::live_frame_for_session(session_id)
         .map(|frame| prior_user_messages_from_frame(&frame))
         .unwrap_or_default();
-    judge.maybe_fire(session_id, request, prior_user_messages, Vec::new());
+    let requested_domains = if request.tool_id == "web_fetch" {
+        crate::tools::web::domain_grant_from_input(&request.input)
+            .into_iter()
+            .collect()
+    } else {
+        Vec::new()
+    };
+    judge.maybe_fire(
+        session_id,
+        request,
+        prior_user_messages,
+        Vec::new(),
+        requested_domains,
+    );
 }
 
 pub(crate) fn maybe_fire_shadow_filesystem_judge(
@@ -193,6 +209,28 @@ pub(crate) fn maybe_fire_shadow_filesystem_judge(
         request,
         prior_user_messages,
         denials.iter().map(|denial| denial.grant.clone()).collect(),
+        Vec::new(),
+    );
+}
+
+pub(crate) fn maybe_fire_shadow_domain_judge(
+    tool_state: &ToolSessionState,
+    session_id: SessionId,
+    request: &ToolCallRequest,
+    domains: Vec<String>,
+) {
+    let Some(judge) = tool_state.judge_handle() else {
+        return;
+    };
+    let prior_user_messages = crate::tools::live_frame_for_session(session_id)
+        .map(|frame| prior_user_messages_from_frame(&frame))
+        .unwrap_or_default();
+    judge.maybe_fire(
+        session_id,
+        request,
+        prior_user_messages,
+        Vec::new(),
+        domains,
     );
 }
 
@@ -280,6 +318,7 @@ mod tests {
             tool_description: Some("Run a shell command.".to_string()),
             prior_user_messages: vec!["please check the logs".to_string()],
             requested_filesystem_grants: Vec::new(),
+            requested_domains: Vec::new(),
         }
     }
 
@@ -446,10 +485,17 @@ mod tests {
     }
 
     fn tool_call_requested(tool_id: &str) -> crate::contract::Event {
+        tool_call_requested_with_input(tool_id, serde_json::json!({}))
+    }
+
+    fn tool_call_requested_with_input(
+        tool_id: &str,
+        input: serde_json::Value,
+    ) -> crate::contract::Event {
         crate::contract::Event::ToolCallRequested(crate::contract::ToolCallRequest {
             call_id: crate::contract::ToolCallId("call-1".to_string()),
             tool_id: tool_id.to_string(),
-            input: serde_json::json!({}).into(),
+            input: input.into(),
         })
     }
 
@@ -541,6 +587,35 @@ mod tests {
 
         assert_eq!(events_with_judge, events_without_judge);
 
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn web_search_has_no_human_prompt_and_fires_the_shadow_judge_once() {
+        let path = temp_event_log("web-search");
+        let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
+        let calls = Arc::new(Mutex::new(0usize));
+        let client: Arc<dyn ModelClient> = Arc::new(CountingClient {
+            calls: Arc::clone(&calls),
+        });
+        let judge = JudgeHandle::for_test("test-judge-model", client, writer);
+        let tool_state = ToolSessionState::new(std::env::temp_dir()).with_judge(Some(judge));
+
+        let events = crate::policy::horizon_events_for_provider_event(
+            &tool_call_requested_with_input(
+                "web_search",
+                serde_json::json!({ "query": "rust agents" }),
+            ),
+            &tool_state,
+            SessionId::new(),
+        );
+
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, crate::contract::Event::ApprovalRequested(_))));
+        wait_until(|| *calls.lock().unwrap() == 1);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(*calls.lock().unwrap(), 1);
         let _ = std::fs::remove_file(path);
     }
 }

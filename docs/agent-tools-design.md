@@ -12,8 +12,8 @@ industry diverges, the choice and rationale are noted explicitly.
 - File tools, command execution, turn interruption, a thin system prompt, and
   minimal provider config — enough for one agent to do real work in Horizon.
 
-Non-goals for this baseline (deferred; see the last section): web tools,
-context compaction, MCP, OS sandboxing, persistent shell sessions,
+Non-goals for this baseline (deferred; see the last section): context
+compaction, MCP, persistent shell sessions,
 plugin-provided tools, running agent commands inside terminal sessions.
 
 ## Tool Set
@@ -26,6 +26,8 @@ plugin-provided tools, running agent commands inside terminal sessions.
 | write | require approval | Creates parents; overwrite requires prior read     |
 | edit  | require approval | Exact string replacement (below)                   |
 | bash  | require approval | Fresh process per command (below)                  |
+| web_search | boundary: auto | Fixed Exa endpoint; shadow-judged             |
+| web_fetch | boundary: exact-host grant | Bounded SSRF-safe fetch           |
 
 All tools require **absolute paths**; relative paths are rejected with an
 actionable error (models measurably mishandle relative paths — SWE-bench-era
@@ -92,6 +94,24 @@ Neither measure caps memory directly (niceness affects CPU scheduling, not
 memory), so they don't replace the idempotence fix — they reduce the blast
 radius of any future bug that lets a session accumulate more than one
 in-flight bash call.
+
+## Web Tools
+
+`web_search` and `web_fetch` are asynchronous Horizon-owned tools. Search
+uses a fixed HTTPS Exa adapter, an environment-only `EXA_API_KEY`, bounded
+inputs/responses, and a vendor-neutral result shape. It is auto-approved as
+the narrow fixed-vendor boundary crossing while the shadow judge records
+every call.
+
+Fetch asks before contacting an unapproved exact host. Approval adds only
+that normalized host to the session's shared domain policy; it does not
+cover subdomains. Redirects are followed manually, and an unseen redirect
+host stops before contact for another `DomainGrant`. The request path uses
+a pinned safe resolver, rejects local/private/metadata and IPv6 transition
+targets, permits only standard HTTP(S) ports, disables ambient proxies, and
+caps redirects, total time, body bytes, DOM work, metadata, and returned
+content. HTML is reduced to Markdown with `dom_smoothie`; supported text is
+passed through and binary or encoded bodies are rejected.
 
 ## Error Model and Loop Guards
 
@@ -162,8 +182,8 @@ This changes:
   in flight (async loop with `select!`, or turn spawned as a task; the
   command channel becomes async-capable).
 - A `tokio_util::sync::CancellationToken` scopes each turn; the streaming
-  loop and tool execution `select!` against it; bash children are killed on
-  cancel.
+  loop and tool execution `select!` against it; bash children are killed and
+  host-side web requests are cancelled on turn/session teardown.
 - **Cancellation is a stop reason, not an error** (borrowed from the Agent
   Client Protocol): text already streamed is kept and the turn is committed
   as cancelled; pending approval requests belonging to the cancelled turn are
@@ -194,7 +214,7 @@ official advice) is out of scope regardless of its evidence.
 Provider/model selection and base URL flow through Horizon's single TOML
 config file plus environment variables (env wins) — see `AGENTS.md`'s
 "Configuration" section and `config.example.toml` for the full precedence.
-The API key stays environment-only. No configuration UI. The bash/fs tool
+Provider and Exa API keys stay environment-only. No configuration UI. The bash/fs tool
 tuning and turn-loop guard values on this page are *not* config-file knobs:
 as of the 2026-07-18 config-narrowing wave (the "Error Model and Loop
 Guards" revision above, extended to the rest of the former `[agent]`
@@ -215,7 +235,6 @@ section), every one of them is a fixed built-in constant in
 
 ## Deferred, With Reasons
 
-- **web_search / web_fetch** — `curl` via bash covers development use.
 - **Compaction / context editing** — a long-horizon concern; not needed to
   make one agent useful.
 - **MCP** — the industry's extension slot has converged on MCP, but

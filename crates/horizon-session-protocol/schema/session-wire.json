@@ -148,6 +148,30 @@
             "FilesystemDenialRetry"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One or more Horizon-derived public domains must be added to this\nsession before a host-side web request may contact them. Unlike\n`DomainDenialRetry`, no denied tool result exists yet: contact has\nnot occurred. Approval adds only these domains and starts the same\nrequest; denial resolves it without network access.",
+          "properties": {
+            "DomainGrant": {
+              "properties": {
+                "domains": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "domains"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "DomainGrant"
+          ],
+          "type": "object"
         }
       ]
     },

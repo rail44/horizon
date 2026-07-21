@@ -118,7 +118,7 @@ heavy artifacts (only the now-small per-worktree `target/` benefits).
 Horizon reads one optional TOML file: `$XDG_CONFIG_HOME/horizon/config.toml`
 (falling back to `~/.config/horizon/config.toml`), overridable via
 `HORIZON_CONFIG`. Precedence is env var > config file > built-in default;
-existing env vars keep winning. Secrets (`OPENAI_API_KEY`) are
+existing env vars keep winning. Secrets (`OPENAI_API_KEY`, `EXA_API_KEY`) are
 environment-only and never read from the file.
 
 As of the 2026-07-18 config-narrowing wave (owner decision), the surface is

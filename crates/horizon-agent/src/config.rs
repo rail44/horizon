@@ -37,6 +37,7 @@ use rig_core::providers::openai;
 /// front whether to attempt the OpenAI path at all or fall back to a
 /// deterministic in-process responder (useful offline and in tests).
 pub(crate) const OPENAI_API_KEY_VAR: &str = "OPENAI_API_KEY";
+pub(crate) const EXA_API_KEY_VAR: &str = "EXA_API_KEY";
 
 /// Overrides the rig completion model id. Falls back to the config file's
 /// `[provider].model`, then [`openai::GPT_4O_MINI`].

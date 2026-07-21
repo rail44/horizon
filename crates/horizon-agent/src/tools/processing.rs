@@ -34,15 +34,16 @@ pub fn process_agent_provider_event(
 
     // A provider-originated `ToolCallFinished` is the turn-cancellation (or
     // loop-guard-halt) signal for any call still pending on the provider's
-    // side, `bash` included (see `docs/agent-tools-design.md`, "Bash
+    // side, including bash and host-side web calls (see
+    // `docs/agent-tools-design.md`, "Bash
     // Semantics": "Cancelling a turn kills the process group of any
     // in-flight command"). This never fires for `bash`'s own genuine
-    // completion — that's delivered straight to the UI thread over
-    // `SessionRuntime::bash_results`, bypassing this function entirely — so
-    // it only ever needs to kill a call that's still actually running.
-    // A miss (not a bash call, or already finished) is a harmless no-op.
+    // completion — those arrive over `SessionRuntime::async_results`,
+    // bypassing this function. A miss or already-finished call is a harmless
+    // no-op.
     if let Event::ToolCallFinished(result) = &event {
         bash::kill_if_running(&result.call_id);
+        crate::tools::web::cancel_if_running(session_id, &result.call_id);
     }
 
     let mut horizon_events = horizon_events_for_provider_event(&event, tool_state, session_id)
@@ -84,14 +85,11 @@ pub fn process_agent_provider_event(
                 horizon_events.extend(events.into_iter().map(ProviderEvent::from));
             }
             Execution::Started(events) => {
-                // A tier-1-contained `bash` call moved to the background
-                // thread (`horizon_sandbox`) -- no `Command::ToolCallResult`
-                // yet, exactly like a manually approved bash call's
-                // `ApprovalOutcome::Started`. The eventual result (or a
-                // retry-without-sandbox prompt) arrives later on the
-                // session's `bash_results` channel and is folded by
-                // `fold_bash_completion` in `horizon-sessiond`'s session
-                // loop.
+                // A bash or host-side web call moved to background
+                // execution: no `Command::ToolCallResult` exists yet. The
+                // eventual result or structured narrow-grant request arrives
+                // over the session's async completion channel and is folded
+                // by `fold_tool_completion` in sessiond.
                 horizon_events.extend(events.into_iter().map(ProviderEvent::from));
             }
             Execution::RequiresApproval => {}

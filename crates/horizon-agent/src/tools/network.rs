@@ -48,6 +48,7 @@
 //! needed here the way leg 4a's process-lifetime `Runtime` required.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use anyhow::Context;
 use horizon_sandbox_proxy::{Allowlist, AllowlistProxy};
@@ -77,6 +78,27 @@ pub struct SessionNetworkProxy {
     proxy: AllowlistProxy,
 }
 
+/// The always-present per-session domain policy shared by host-side web
+/// tools and the optional sandbox proxy bridge.
+#[derive(Clone, Default)]
+pub struct SessionDomainPolicy {
+    allowlist: Arc<Allowlist>,
+}
+
+impl SessionDomainPolicy {
+    pub(crate) fn allow(&self, domain: impl Into<String>) {
+        self.allowlist.allow(domain);
+    }
+
+    pub(crate) fn is_allowed(&self, domain: &str) -> bool {
+        self.allowlist.is_allowed(domain)
+    }
+
+    pub(crate) fn shared(&self) -> Arc<Allowlist> {
+        Arc::clone(&self.allowlist)
+    }
+}
+
 impl SessionNetworkProxy {
     /// Binds a fresh loopback `AllowlistProxy` (empty allowlist -- nothing
     /// is approved yet) on the shared [`network_runtime`]. Fallible: a bind
@@ -98,11 +120,18 @@ impl SessionNetworkProxy {
     /// Blocks the caller briefly while the loopback listener is bound, then
     /// receives that thread's result over a plain channel.
     pub fn start() -> anyhow::Result<Self> {
+        Self::start_with_policy(&SessionDomainPolicy::default())
+    }
+
+    /// Starts the sandbox proxy with the same session-scoped domain store
+    /// host-side web tools consult.
+    pub fn start_with_policy(policy: &SessionDomainPolicy) -> anyhow::Result<Self> {
+        let allowlist = policy.shared();
         let (result_tx, result_rx) = std::sync::mpsc::channel();
         std::thread::Builder::new()
             .name("horizon-agent-network-proxy-init".to_string())
             .spawn(move || {
-                let result = Self::build();
+                let result = Self::build(allowlist);
                 let _ = result_tx.send(result);
             })
             .context("failed to spawn the session network-proxy init thread")?;
@@ -111,10 +140,9 @@ impl SessionNetworkProxy {
             .context("session network-proxy init thread exited without reporting a result")?
     }
 
-    fn build() -> anyhow::Result<Self> {
-        let proxy = network_runtime().block_on(async {
-            AllowlistProxy::spawn(Allowlist::new(Vec::<String>::new())).await
-        })?;
+    fn build(allowlist: Arc<Allowlist>) -> anyhow::Result<Self> {
+        let proxy =
+            network_runtime().block_on(async { AllowlistProxy::spawn_shared(allowlist).await })?;
         Ok(Self { proxy })
     }
 
@@ -137,6 +165,11 @@ impl SessionNetworkProxy {
         self.proxy.allow(domain);
     }
 
+    #[cfg(test)]
+    fn is_domain_allowed(&self, domain: &str) -> bool {
+        self.proxy.is_allowed(domain)
+    }
+
     /// Drains every host this session's proxy has refused since the last
     /// drain -- `tools::bash::exec::run_sandboxed` calls this right after a
     /// sandboxed child exits, so a call that hit the allowlist can be
@@ -145,5 +178,26 @@ impl SessionNetworkProxy {
     /// even though the network call itself was refused).
     pub fn drain_denied_hosts(&self) -> Vec<String> {
         self.proxy.drain_denied_hosts()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_tools_and_the_optional_proxy_share_one_exact_session_policy() {
+        let policy = SessionDomainPolicy::default();
+        let other_session = SessionDomainPolicy::default();
+        let proxy = SessionNetworkProxy::start_with_policy(&policy).unwrap();
+
+        policy.allow("fetch.example");
+        assert!(proxy.is_domain_allowed("fetch.example"));
+        assert!(!proxy.is_domain_allowed("sub.fetch.example"));
+
+        proxy.allow_domain("bash.example");
+        assert!(policy.is_allowed("bash.example"));
+        assert!(!other_session.is_allowed("fetch.example"));
+        assert!(!other_session.is_allowed("bash.example"));
     }
 }

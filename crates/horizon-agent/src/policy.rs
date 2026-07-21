@@ -38,6 +38,15 @@ pub(crate) enum Classification {
     AlwaysAsk,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BoundaryDisposition {
+    /// The call crosses the host boundary but the owner-selected policy
+    /// permits it without stopping; the shadow judge still records it.
+    Auto,
+    /// The call must wait for a human decision before contact occurs.
+    Human,
+}
+
 /// The per-call trust predicate: pure, conservative, and explicit. `tool_id`
 /// and `_input` are the call being classified (`_input` -- the raw call
 /// arguments -- is reserved for a future per-argument boundary-crossing rule,
@@ -75,12 +84,28 @@ pub(crate) fn classify_call(
         // comment. Not sensitive to `session_isolated`/`sandbox_available`:
         // a boundary crossing is defined by running outside the containment
         // perimeter regardless of this session's own isolation.
-        "mock.boundary_crossing" => Classification::BoundaryCrossing,
+        "web_search" | "web_fetch" | "mock.boundary_crossing" => Classification::BoundaryCrossing,
         // `config.write`, `mock.approval_required`, and anything else this
         // crate ever catalogs as `RequireApproval` in the future: always
         // ask unless explicitly classified above -- the conservative
         // default the design doc asks for.
         _ => Classification::AlwaysAsk,
+    }
+}
+
+pub(crate) fn boundary_disposition(
+    tool_state: &ToolSessionState,
+    tool_id: &str,
+    input: &Value,
+) -> BoundaryDisposition {
+    match tool_id {
+        "web_search" => BoundaryDisposition::Auto,
+        "web_fetch" => match crate::tools::web::fetch_gate(tool_state, input) {
+            crate::tools::web::FetchGate::NeedsApproval { .. } => BoundaryDisposition::Human,
+            crate::tools::web::FetchGate::Invalid
+            | crate::tools::web::FetchGate::Allowed { .. } => BoundaryDisposition::Auto,
+        },
+        _ => BoundaryDisposition::Human,
     }
 }
 
@@ -230,7 +255,50 @@ pub fn horizon_events_for_provider_event(
                     // own (separately computed, same predicate) classify
                     // call drives the actual auto-execution.
                     Classification::Contained => {}
-                    Classification::BoundaryCrossing | Classification::AlwaysAsk => {
+                    Classification::BoundaryCrossing => {
+                        let disposition =
+                            boundary_disposition(tool_state, &request.tool_id, &request.input);
+                        if disposition == BoundaryDisposition::Human {
+                            let reason = if request.tool_id == "web_fetch" {
+                                crate::tools::web::domain_grant_from_input(&request.input)
+                                    .map_or_else(
+                                        || {
+                                            "`web_fetch` requested an invalid or unavailable domain."
+                                                .to_string()
+                                        },
+                                        |domain| {
+                                            format!(
+                                                "Allow `{domain}` for this session and fetch the requested URL?"
+                                            )
+                                        },
+                                    )
+                            } else {
+                                format!(
+                                    "`{}` requested Horizon approval for this tool call.",
+                                    request.tool_id
+                                )
+                            };
+                            let kind = if request.tool_id == "web_fetch" {
+                                ApprovalKind::DomainGrant {
+                                    domains: crate::tools::web::domain_grant_from_input(
+                                        &request.input,
+                                    )
+                                    .into_iter()
+                                    .collect(),
+                                }
+                            } else {
+                                ApprovalKind::Standard
+                            };
+                            events.push(Event::ApprovalRequested(ApprovalRequest {
+                                call_id: request.call_id.clone(),
+                                reason,
+                                kind,
+                            }));
+                            events.push(Event::StateChanged(SessionState::WaitingForApproval));
+                        }
+                        crate::judge::maybe_fire_shadow_judge(tool_state, session_id, request);
+                    }
+                    Classification::AlwaysAsk => {
                         events.push(Event::ApprovalRequested(ApprovalRequest {
                             call_id: request.call_id.clone(),
                             reason: format!(
@@ -251,9 +319,6 @@ pub fn horizon_events_for_provider_event(
                         // construction (leg 4b's `DomainDenialRetry` approval
                         // is emitted from an entirely separate seam in
                         // `horizon-sessiond`, never through this function).
-                        if let Classification::BoundaryCrossing = classification {
-                            crate::judge::maybe_fire_shadow_judge(tool_state, session_id, request);
-                        }
                     }
                 }
             }
@@ -381,14 +446,103 @@ mod tests {
         }
     }
 
+    #[test]
+    fn web_tools_are_boundary_crossings_with_per_call_dispositions() {
+        let tool_state = ToolSessionState::new(std::env::temp_dir());
+        assert_eq!(
+            classify_call("web_search", &serde_json::json!({}), false, false),
+            Classification::BoundaryCrossing
+        );
+        assert_eq!(
+            boundary_disposition(&tool_state, "web_search", &serde_json::json!({})),
+            BoundaryDisposition::Auto
+        );
+        let fetch = serde_json::json!({ "url": "https://example.com/docs" });
+        assert_eq!(
+            boundary_disposition(&tool_state, "web_fetch", &fetch),
+            BoundaryDisposition::Human
+        );
+        tool_state.allow_domain("example.com");
+        assert_eq!(
+            boundary_disposition(&tool_state, "web_fetch", &fetch),
+            BoundaryDisposition::Auto
+        );
+    }
+
     // --- horizon_events_for_provider_event ---------------------------------
 
     fn requested(tool_id: &str) -> Event {
+        requested_with_input(tool_id, serde_json::json!({}))
+    }
+
+    fn requested_with_input(tool_id: &str, input: Value) -> Event {
         Event::ToolCallRequested(crate::contract::ToolCallRequest {
             call_id: crate::contract::ToolCallId("call-1".to_string()),
             tool_id: tool_id.to_string(),
-            input: serde_json::json!({}).into(),
+            input: input.into(),
         })
+    }
+
+    #[test]
+    fn web_search_auto_crosses_without_a_human_prompt() {
+        let tool_state = ToolSessionState::new(std::env::temp_dir());
+        let events = horizon_events_for_provider_event(
+            &requested_with_input("web_search", serde_json::json!({ "query": "rust" })),
+            &tool_state,
+            SessionId::new(),
+        );
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, Event::ApprovalRequested(_))));
+    }
+
+    #[test]
+    fn web_fetch_prompts_for_exact_domain_then_reuses_the_session_grant() {
+        let tool_state = ToolSessionState::new(std::env::temp_dir());
+        let request = requested_with_input(
+            "web_fetch",
+            serde_json::json!({ "url": "https://Docs.Example.com/page" }),
+        );
+        let events = horizon_events_for_provider_event(&request, &tool_state, SessionId::new());
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Event::ApprovalRequested(ApprovalRequest {
+                kind: ApprovalKind::DomainGrant { domains },
+                ..
+            }) if domains == &["docs.example.com".to_string()]
+        )));
+
+        tool_state.allow_domain("example.com");
+        let events = horizon_events_for_provider_event(&request, &tool_state, SessionId::new());
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Event::ApprovalRequested(ApprovalRequest {
+                kind: ApprovalKind::DomainGrant { domains },
+                ..
+            }) if domains == &["docs.example.com".to_string()]
+        )));
+
+        tool_state.allow_domain("docs.example.com");
+        let events = horizon_events_for_provider_event(&request, &tool_state, SessionId::new());
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, Event::ApprovalRequested(_))));
+    }
+
+    #[test]
+    fn invalid_web_fetch_input_fails_without_a_meaningless_human_prompt() {
+        let tool_state = ToolSessionState::new(std::env::temp_dir());
+        let events = horizon_events_for_provider_event(
+            &requested_with_input(
+                "web_fetch",
+                serde_json::json!({ "url": "file:///etc/passwd" }),
+            ),
+            &tool_state,
+            SessionId::new(),
+        );
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, Event::ApprovalRequested(_))));
     }
 
     #[test]

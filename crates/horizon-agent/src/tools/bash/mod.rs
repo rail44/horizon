@@ -48,7 +48,7 @@ use crate::tools::network::SessionNetworkProxy;
 /// folding a received completion into the session's `LiveState`/`Frames`
 /// via `fold_bash_completion`.
 #[derive(Clone, Debug)]
-pub enum BashCompletion {
+pub enum ToolCompletion {
     /// The call actually finished (successfully or not) -- fold
     /// `ToolCallFinished` and forward the result to the provider, exactly
     /// what every bash call did before this type grew a second variant.
@@ -69,12 +69,25 @@ pub enum BashCompletion {
         domains: Vec<String>,
         result: ToolCallResult,
     },
+    /// A host-side web request discovered a valid next hop whose domain has
+    /// not been granted to this session. No contact with that domain has
+    /// occurred. Sessiond turns this into `ApprovalKind::DomainGrant`, and
+    /// an approval retries the same tool call from its original URL.
+    DomainGrantRequired {
+        call_id: ToolCallId,
+        domains: Vec<String>,
+    },
     FilesystemDenied {
         call_id: ToolCallId,
         denials: Vec<horizon_sandbox::FilesystemDenial>,
         result: ToolCallResult,
     },
 }
+
+/// Compatibility name for the bash module's existing callers. New async
+/// Horizon-owned tools use [`ToolCompletion`] directly; both names refer to
+/// the same per-session completion channel.
+pub type BashCompletion = ToolCompletion;
 
 /// What a [`spawn_sandboxed`] run's eventual `Finished` completion should be
 /// annotated with, once it lands -- distinguishes a genuine tier-1

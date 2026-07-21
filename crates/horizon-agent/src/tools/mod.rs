@@ -8,9 +8,10 @@ mod network;
 mod processing;
 mod recall;
 mod state;
+pub(crate) mod web;
 
 pub use approval::{resolve_approval, ApprovalDecision, ApprovalOutcome};
-pub use bash::{should_fold_completion, BashCompletion};
+pub use bash::{should_fold_completion, BashCompletion, ToolCompletion};
 pub(crate) use catalog::{definitions, permission_for_tool, Definition};
 // `execute_agent_tool`/`Execution` are re-exported fully `pub` (not
 // `pub(crate)`) specifically so `tests/tier1_network_containment.rs` --
@@ -25,7 +26,7 @@ pub use execution::{cancelled_tool_call_result, execute_agent_tool, Execution, H
 // `tests/tier1_network_containment.rs` construct one directly to wire up a
 // real per-session proxy the same way `horizon-sessiond`'s
 // `session::run_session` does.
-pub use network::SessionNetworkProxy;
+pub use network::{SessionDomainPolicy, SessionNetworkProxy};
 pub use processing::process_agent_provider_event;
 pub use state::{
     register_session_runtime, unregister_session_runtime, RecallContext, ToolSessionState,
@@ -52,6 +53,17 @@ pub fn maybe_fire_shadow_filesystem_judge(
         request,
         denials,
     );
+}
+
+pub fn maybe_fire_shadow_domain_judge(
+    session_id: crate::contract::SessionId,
+    request: &crate::contract::ToolCallRequest,
+    domains: Vec<String>,
+) {
+    let Some(runtime) = state::session_runtime(session_id) else {
+        return;
+    };
+    crate::judge::maybe_fire_shadow_domain_judge(&runtime.tool_state, session_id, request, domains);
 }
 
 /// Executes a Horizon-approved (`RequireApproval`) tool once the user has

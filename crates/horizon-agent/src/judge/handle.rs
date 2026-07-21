@@ -78,6 +78,7 @@ impl JudgeHandle {
         request: &ToolCallRequest,
         prior_user_messages: Vec<String>,
         requested_filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
+        requested_domains: Vec<String>,
     ) {
         let input = JudgeInput {
             call_id: request.call_id.0.clone(),
@@ -86,6 +87,7 @@ impl JudgeHandle {
             tool_description: super::builtin_tool_description(&request.tool_id),
             prior_user_messages,
             requested_filesystem_grants,
+            requested_domains,
         };
         if !self.limiter.try_acquire() {
             record::write_skipped(

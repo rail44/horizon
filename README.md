@@ -38,6 +38,11 @@ workspace and launches the freshly built binary directly (bypassing `cargo
 run`'s environment leakage into Horizon and sessiond); pass CLI subcommand
 arguments after it, e.g. `just dev sessions`.
 
+Agent provider access reads `OPENAI_API_KEY` from the environment. The
+Horizon-owned `web_search` tool additionally needs environment-only
+`EXA_API_KEY`; neither secret belongs in `config.toml`. `web_fetch` has no
+vendor key and asks before contacting each exact destination host.
+
 After `cargo run`, press `ctrl+'` to enter workspace mode, then `:` to open
 the control surface (see `docs/workspace-mode-design.md`) — a Commands-only
 palette now that session management has its own modal (see below). With

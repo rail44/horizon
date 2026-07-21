@@ -1,5 +1,5 @@
 //! The allowlist policy input (`docs/agent-approval-design.md`: "a plain
-//! constructor-provided allowlist (Vec of domains, exact + subdomain match)
+//! constructor-provided allowlist
 //! is the spike surface"). Leg 4b (per-session domain approval, `horizon-
 //! agent`'s `tools::network::SessionNetworkProxy`) needs it to grow at
 //! runtime too -- a session's allowlist starts empty and gains entries as
@@ -10,8 +10,8 @@
 use std::collections::HashSet;
 use std::sync::RwLock;
 
-/// A set of allowed hosts, matched by exact name or as a subdomain,
-/// case-insensitively. An empty allowlist allows nothing -- the default
+/// A set of allowed hosts, matched exactly and case-insensitively. An empty
+/// allowlist allows nothing -- the default
 /// posture the design doc calls for until a domain is explicitly approved
 /// (`docs/agent-approval-design.md`: "Default allowlist is EMPTY").
 #[derive(Debug, Default)]
@@ -30,18 +30,16 @@ impl Allowlist {
         }
     }
 
-    /// Whether `host` is covered by this allowlist: an exact match against
-    /// one of the configured domains, or a subdomain of one (`api.example.
-    /// com` matches an `example.com` entry; `notexample.com` does not).
+    /// Whether `host` is an exact match for an allowed host. A grant for
+    /// `example.com` deliberately does not cover `api.example.com`: every
+    /// distinct destination must be observed and approved independently.
     pub fn is_allowed(&self, host: &str) -> bool {
         let host = normalize(host);
         let domains = self
             .domains
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        domains
-            .iter()
-            .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+        domains.contains(&host)
     }
 
     /// Adds `domain` to this allowlist at runtime -- the per-session
@@ -87,17 +85,17 @@ mod tests {
     }
 
     #[test]
-    fn subdomain_is_allowed() {
+    fn subdomain_requires_its_own_exact_grant() {
         let allowlist = Allowlist::new(["example.com"]);
-        assert!(allowlist.is_allowed("api.example.com"));
-        assert!(allowlist.is_allowed("deep.nested.example.com"));
+        assert!(!allowlist.is_allowed("api.example.com"));
+        assert!(!allowlist.is_allowed("deep.nested.example.com"));
     }
 
     #[test]
     fn match_is_case_insensitive() {
         let allowlist = Allowlist::new(["Example.COM"]);
         assert!(allowlist.is_allowed("EXAMPLE.com"));
-        assert!(allowlist.is_allowed("api.example.COM"));
+        assert!(!allowlist.is_allowed("api.example.COM"));
     }
 
     #[test]

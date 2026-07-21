@@ -130,6 +130,14 @@ pub(super) fn user_content(input: &JudgeInput) -> String {
         content.push('\n');
     }
 
+    if !input.requested_domains.is_empty() {
+        content.push_str("[REQUESTED DOMAINS — trusted Horizon derivation]\n");
+        for domain in &input.requested_domains {
+            content.push_str(&format!("- {domain}\n"));
+        }
+        content.push('\n');
+    }
+
     let open_marker = format!("<<<UNTRUSTED_ARGS_{}>>>", input.call_id);
     let close_marker = format!("<<<END_UNTRUSTED_ARGS_{}>>>", input.call_id);
     content.push_str(&open_marker);
@@ -158,6 +166,7 @@ mod tests {
             tool_description: Some("Run a shell command.".to_string()),
             prior_user_messages: vec!["please list the files".to_string()],
             requested_filesystem_grants: Vec::new(),
+            requested_domains: Vec::new(),
         }
     }
 
@@ -193,6 +202,22 @@ mod tests {
         let close = content.find("<<<END_UNTRUSTED_ARGS_call-xyz>>>").unwrap();
         let args_index = content.find("echo hi").unwrap();
         assert!(open < args_index && args_index < close);
+    }
+
+    #[test]
+    fn requested_domains_are_rendered_in_the_trusted_mediation_region() {
+        let mut input = input(
+            "call-domain",
+            serde_json::json!({ "url": "https://redirect.example/path" }),
+        );
+        input.requested_domains = vec!["redirect.example".to_string()];
+        let content = user_content(&input);
+        let trusted = content
+            .find("[REQUESTED DOMAINS — trusted Horizon derivation]")
+            .unwrap();
+        let domain = content.find("- redirect.example").unwrap();
+        let untrusted = content.find("<<<UNTRUSTED_ARGS_call-domain>>>").unwrap();
+        assert!(trusted < domain && domain < untrusted);
     }
 
     #[test]

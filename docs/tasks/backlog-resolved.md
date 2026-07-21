@@ -267,6 +267,22 @@ full resolution/closing records.
     environment quirk, unrelated to the placement-first change (fails
     identically standalone); distinct from the backlog-14 Xvfb family.
     Reported by application-ui (2026-07-07).
+18. *(resolved 2026-07-21)* **Web search tool** — landed two asynchronous,
+    Horizon-owned `web_search`/`web_fetch` tools. Search uses the fixed Exa
+    HTTPS adapter with environment-only `EXA_API_KEY`, bounded requests and
+    vendor-neutral results; it auto-runs as a boundary crossing and fires the
+    shadow judge. Fetch uses the same always-present per-session exact-host
+    policy as the optional sandbox proxy, requests a typed `DomainGrant`
+    before first contact (and again for unseen redirect hosts), and retries
+    from the original URL without dropping containment. Its connection-path
+    resolver rejects mixed/private/metadata and IPv6-transition targets;
+    redirects, ports, time, bytes, DOM work, metadata, output, and content
+    types are bounded. Async completion/cancellation is session-scoped and
+    stale generations cannot finish replacement calls. Decision evidence is
+    in `docs/research/agent-web-search-api-2026-07-19.md`; the current trust
+    model and runtime shape are in `docs/agent-approval-design.md` and
+    `docs/agent-tools-design.md`. macOS runtime verification remains deferred
+    with the broader real-Mac containment follow-up.
 20. *(closed 2026-07-18 — owner decision: heavy independent capability;
     the motivating need, UI-crash survival, is already met by the
     sessiond process split)*

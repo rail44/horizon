@@ -615,6 +615,12 @@ pub enum ApprovalKind {
         denials: Vec<horizon_sandbox::FilesystemDenial>,
         prior_result: ToolCallResult,
     },
+    /// One or more Horizon-derived public domains must be added to this
+    /// session before a host-side web request may contact them. Unlike
+    /// `DomainDenialRetry`, no denied tool result exists yet: contact has
+    /// not occurred. Approval adds only these domains and starts the same
+    /// request; denial resolves it without network access.
+    DomainGrant { domains: Vec<String> },
     /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
     /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
     /// discarded there; under serde_json only *unit* variants degrade —
@@ -844,5 +850,19 @@ mod json_value_tests {
             serde_json::json!({"is_error": true, "message": "boom"}),
         );
         assert!(result.is_error);
+    }
+
+    #[test]
+    fn domain_grant_approval_round_trips_with_its_exact_hosts() {
+        let request = ApprovalRequest {
+            call_id: ToolCallId("fetch-1".to_string()),
+            reason: "allow exact host".to_string(),
+            kind: ApprovalKind::DomainGrant {
+                domains: vec!["docs.example.com".to_string()],
+            },
+        };
+        let encoded = serde_json::to_value(&request).unwrap();
+        let decoded: ApprovalRequest = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded, request);
     }
 }

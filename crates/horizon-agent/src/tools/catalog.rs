@@ -199,6 +199,67 @@ pub fn definitions() -> Vec<Definition> {
             permission: ToolPermission::RequireApproval,
         },
         Definition {
+            id: "web_search".to_string(),
+            title: "Search the Web".to_string(),
+            description: "Search the public web through Horizon's fixed Exa adapter. Returns a \
+                bounded list of titles, URLs, publication metadata, and relevant excerpts. \
+                Requires EXA_API_KEY in Horizon's environment."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["query"],
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2048,
+                        "description": "Natural-language web search query.",
+                    },
+                    "num_results": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "Number of results. Defaults to 5.",
+                    },
+                    "max_characters": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 4000,
+                        "description": "Maximum excerpt characters per result. Defaults to 2000.",
+                    },
+                }
+            }),
+            permission: ToolPermission::RequireApproval,
+        },
+        Definition {
+            id: "web_fetch".to_string(),
+            title: "Fetch a Web Page".to_string(),
+            description: "Fetch one public HTTP(S) URL with SSRF protection and bounded \
+                redirects/body size. HTML is reduced to readable Markdown; text and JSON pass \
+                through. A session must approve each exact destination host before contact."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["url"],
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "maxLength": 8192,
+                        "description": "Public http:// or https:// URL on the standard port to fetch.",
+                    },
+                    "max_characters": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50000,
+                        "description": "Maximum returned content characters. Defaults to 20000.",
+                    },
+                }
+            }),
+            permission: ToolPermission::RequireApproval,
+        },
+        Definition {
             id: "mock.approval_required".to_string(),
             title: "Mock Approval Required".to_string(),
             description: "Test tool that exercises the approval flow.".to_string(),
@@ -208,11 +269,9 @@ pub fn definitions() -> Vec<Definition> {
             }),
             permission: ToolPermission::RequireApproval,
         },
-        // Test-only, mirroring `mock.approval_required` above: no current
-        // real tool is ever classified `Classification::BoundaryCrossing`
-        // (MCP/non-sandboxed tools don't exist in this crate yet -- see
-        // `policy::classify_call`'s doc comment), so this is the fixture
-        // that exercises the judge's shadow-mode wiring
+        // Test-only, mirroring `mock.approval_required` above: this fixture
+        // exercises the judge's human-gated boundary path independently of
+        // the production web tools and their transport setup
         // (`judge::maybe_fire_shadow_judge`) at the
         // `policy::horizon_events_for_provider_event` seam.
         Definition {
