@@ -260,6 +260,40 @@ pub fn definitions() -> Vec<Definition> {
             permission: ToolPermission::RequireApproval,
         },
         Definition {
+            id: "public_code_search".to_string(),
+            title: "Search Public Code".to_string(),
+            description: "Search indexed public GitHub code through Horizon's fixed, bounded \
+                code-search adapter. Returns repository, path, commit, language, and matching \
+                snippets. This is best-effort and does not search private repositories."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["query"],
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2048,
+                        "description": "Simple public-code search query. Repository, language, and file filters are supported; Boolean grouping and result-control filters are Horizon-owned.",
+                    },
+                    "num_results": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                        "description": "Maximum number of code matches. Defaults to 10.",
+                    },
+                    "context_lines": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 5,
+                        "description": "Context lines around each match. Defaults to 2.",
+                    },
+                }
+            }),
+            permission: ToolPermission::RequireApproval,
+        },
+        Definition {
             id: "mock.approval_required".to_string(),
             title: "Mock Approval Required".to_string(),
             description: "Test tool that exercises the approval flow.".to_string(),

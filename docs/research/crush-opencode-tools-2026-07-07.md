@@ -214,3 +214,27 @@ Horizon が真似する理由は薄い。差分は 2 点のみ:
 3. 公開コード検索（Sourcegraph 型）や LSP シンボル検索 → また別物。
 
 この整理が backlog 18（= 2）と 19（= 3）になった。
+
+## 2026-07-21 addendum: Sourcegraph integration route
+
+上記の crush 調査時点では Sourcegraph GraphQL を実装例として記録したが、現行の
+Sourcegraph 7 公式文書は GraphQL を互換保証のない内部 debug API と位置づける。
+外部のコード検索統合向けに現在案内されているのは
+`GET https://sourcegraph.com/.api/search/stream` の Streaming Search API で、
+Sourcegraph.com の公開コードは認証なしで検索できる。匿名の quota/SLA は公開
+されていないため、Horizon はこれを唯一の保証 backend ではなく、固定 endpoint・
+上限付き・自動 retry なしの best-effort adapter として採用する。
+
+Horizon の `public_code_search` は model 入力から件数・timeout・visibility・type を
+上書きさせず、boolean/grouping も v1 では拒否したうえで、括った検索式に public
+GitHub/file search の trusted constraints を AND 適用する。SSE の raw bytes、
+event/field/snippet、normalized output、全体時間、同時実行数と開始間隔を再制限し、
+repository・path・commit の帰属情報を保持する。LSP references は remote public
+search と異なり、language-server の発見・起動・workspace ownership・document sync
+を必要とするため別 backlog のまま残す。
+
+Primary references:
+
+- <https://sourcegraph.com/docs/api>
+- <https://sourcegraph.com/docs/api/stream-api>
+- <https://sourcegraph.com/docs/code-search/queries>

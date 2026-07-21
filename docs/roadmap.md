@@ -236,8 +236,15 @@ lands:
   cancellation, and trusted shadow-judge inputs are implemented with
   hermetic tests. macOS network runtime verification remains part of the
   already-recorded real-Mac follow-up.
-- **Public-code / symbol search** (backlog 19) remains open. Sourcegraph and
-  LSP lifecycle work are separate from the landed general web tools.
+- **Public-code search** (backlog 19) **LANDED 2026-07-21; LSP symbol search
+  remains open.** `public_code_search` uses Sourcegraph.com's anonymous
+  Streaming Search API (the old GraphQL route is now explicitly an internal,
+  compatibility-unstable debug API), with a fixed endpoint and trusted
+  public-GitHub/file/count/timeout constraints. The best-effort adapter has no
+  key or new dependency, shares the existing async web runtime, cancellation,
+  completion, and shadow-judge path, and bounds concurrency, time, SSE bytes,
+  snippets, and normalized output. Language-server process ownership and
+  workspace lifecycle are intentionally a separate future slice.
 - **Agent history budget + tool-result-aware eviction** (backlog 64).
   Surfaced when a dispatched worker's first turn read ~99k tokens and
   evicted its own task instruction (fixed-60k history budget on a 256k

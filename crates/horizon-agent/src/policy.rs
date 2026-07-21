@@ -84,7 +84,9 @@ pub(crate) fn classify_call(
         // comment. Not sensitive to `session_isolated`/`sandbox_available`:
         // a boundary crossing is defined by running outside the containment
         // perimeter regardless of this session's own isolation.
-        "web_search" | "web_fetch" | "mock.boundary_crossing" => Classification::BoundaryCrossing,
+        "public_code_search" | "web_search" | "web_fetch" | "mock.boundary_crossing" => {
+            Classification::BoundaryCrossing
+        }
         // `config.write`, `mock.approval_required`, and anything else this
         // crate ever catalogs as `RequireApproval` in the future: always
         // ask unless explicitly classified above -- the conservative
@@ -99,7 +101,7 @@ pub(crate) fn boundary_disposition(
     input: &Value,
 ) -> BoundaryDisposition {
     match tool_id {
-        "web_search" => BoundaryDisposition::Auto,
+        "public_code_search" | "web_search" => BoundaryDisposition::Auto,
         "web_fetch" => match crate::tools::web::fetch_gate(tool_state, input) {
             crate::tools::web::FetchGate::NeedsApproval { .. } => BoundaryDisposition::Human,
             crate::tools::web::FetchGate::Invalid
@@ -450,6 +452,14 @@ mod tests {
     fn web_tools_are_boundary_crossings_with_per_call_dispositions() {
         let tool_state = ToolSessionState::new(std::env::temp_dir());
         assert_eq!(
+            classify_call("public_code_search", &serde_json::json!({}), false, false),
+            Classification::BoundaryCrossing
+        );
+        assert_eq!(
+            boundary_disposition(&tool_state, "public_code_search", &serde_json::json!({})),
+            BoundaryDisposition::Auto
+        );
+        assert_eq!(
             classify_call("web_search", &serde_json::json!({}), false, false),
             Classification::BoundaryCrossing
         );
@@ -488,6 +498,22 @@ mod tests {
         let tool_state = ToolSessionState::new(std::env::temp_dir());
         let events = horizon_events_for_provider_event(
             &requested_with_input("web_search", serde_json::json!({ "query": "rust" })),
+            &tool_state,
+            SessionId::new(),
+        );
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, Event::ApprovalRequested(_))));
+    }
+
+    #[test]
+    fn public_code_search_auto_crosses_without_a_human_prompt() {
+        let tool_state = ToolSessionState::new(std::env::temp_dir());
+        let events = horizon_events_for_provider_event(
+            &requested_with_input(
+                "public_code_search",
+                serde_json::json!({ "query": "VecDeque lang:rust" }),
+            ),
             &tool_state,
             SessionId::new(),
         );

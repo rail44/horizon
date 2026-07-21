@@ -1,3 +1,4 @@
+mod code_search;
 mod fetch;
 mod search;
 mod ssrf;
@@ -133,6 +134,7 @@ async fn run(
     origin: &WebApprovalOrigin,
 ) -> ToolCompletion {
     let outcome = match tool_id {
+        "public_code_search" => WebOutcome::Finished(code_search::execute(input).await),
         "web_search" => WebOutcome::Finished(search::execute(input).await),
         "web_fetch" => match fetch::execute(input, domains).await {
             fetch::FetchOutcome::Finished(output) => WebOutcome::Finished(output),
@@ -162,15 +164,14 @@ fn with_call_id(
     match outcome {
         WebOutcome::Finished(mut output) => {
             match origin {
-                WebApprovalOrigin::Auto => annotate_auto_approval(
-                    &mut output,
-                    "boundary_crossing",
-                    if tool_id == "web_search" {
-                        "fixed Exa search endpoint"
-                    } else {
-                        "session host was already approved"
-                    },
-                ),
+                WebApprovalOrigin::Auto => {
+                    let reason = match tool_id {
+                        "public_code_search" => "fixed public-code search endpoint",
+                        "web_search" => "fixed Exa search endpoint",
+                        _ => "session host was already approved",
+                    };
+                    annotate_auto_approval(&mut output, "boundary_crossing", reason);
+                }
                 WebApprovalOrigin::ManualDomainGrant { domains } => {
                     annotate_domain_approval(&mut output, domains)
                 }

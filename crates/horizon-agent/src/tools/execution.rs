@@ -103,7 +103,10 @@ fn execute_boundary_tool(
     session_id: SessionId,
     request: &ToolCallRequest,
 ) -> Execution {
-    if !matches!(request.tool_id.as_str(), "web_search" | "web_fetch") {
+    if !matches!(
+        request.tool_id.as_str(),
+        "public_code_search" | "web_search" | "web_fetch"
+    ) {
         return Execution::RequiresApproval;
     }
     let Some(runtime) = session_runtime(session_id) else {

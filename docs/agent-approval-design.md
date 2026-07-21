@@ -402,7 +402,7 @@ product-owned API. Decisions:
   drift → calibration + observability (log every verdict, measure
   FNR/FPR against a human-labeled set), not a runtime counter.
 
-## Web tools: the first real boundary crossers (landed 2026-07-21)
+## Network tools: the first real boundary crossers (landed 2026-07-21)
 
 Owner-decided design for the `web_search`/`web_fetch` tools (backlog
 18; vendor decision and evidence in
@@ -436,6 +436,16 @@ content inward, and mutate nothing.
   surveyed product that gates anything here (Claude Code's per-domain
   fetch prompt). These human decisions are the judge's calibration
   pairs.
+- **`public_code_search` (Sourcegraph Streaming Search adapter):
+  auto-approved with a shadow verdict.** Like `web_search`, it sends one
+  bounded query to one fixed HTTPS service and therefore uses the narrow
+  fixed-vendor disposition rather than an arbitrary-domain grant. Horizon
+  appends and owns public-GitHub, file-only, count, and timeout constraints;
+  result-control filters in model input are rejected. Returned code is
+  untrusted prompt content, while repository/path/commit attribution is kept
+  in every normalized result. The anonymous endpoint is best-effort: bounded
+  403/429 and incomplete-stream failures return tool errors and are never
+  retried automatically.
 - **After the enforcing flip**, the judge takes over both dispositions
   (including new-domain fetch decisions). Until then
   `BoundaryCrossing` carries a per-tool disposition: search = auto +
@@ -451,8 +461,11 @@ content inward, and mutate nothing.
   tasks share the generalized per-session `ToolCompletion` channel.
 - **Implementation shape** (landed 2026-07-21):
   thin Horizon-owned tool schemas over swappable vendor adapters.
-  Search: Exa REST (`numResults`/`maxCharacters`-style caller-side
-  token budget). Fetch: reqwest + `dom_smoothie` (maintained Rust
+  Web search: Exa REST (`numResults`/`maxCharacters`-style caller-side
+  token budget). Public-code search: Sourcegraph Streaming Search SSE with a
+  dedicated parser and normalized code-location results; it deliberately does
+  not use the compatibility-unstable GraphQL debug API. Fetch: reqwest +
+  `dom_smoothie` (maintained Rust
   port of Mozilla readability with built-in markdown output), plus a
   mandatory **SSRF guard** (custom connection-path resolver rejects mixed
   public/private answers, private/link-local/localhost, cloud metadata, and
