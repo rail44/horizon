@@ -156,9 +156,9 @@ pub fn spawn(
 /// completion variants while containment remains enabled.
 ///
 /// `network` (`docs/agent-approval-design.md` leg 4b) is this session's own
-/// `SessionNetworkProxy`, if one is running -- `Some` gets the sandbox
-/// `NetworkPolicy::Proxied` against that session's own bridge, `None` falls
-/// back to `NetworkPolicy::Disabled` (see `exec::run_sandboxed`). `origin`
+/// `SessionNetworkProxy`, if one is running -- `Some` gives the sandbox its
+/// exact loopback TCP proxy endpoint, `None` falls back to
+/// `NetworkPolicy::Disabled` (see `exec::run_sandboxed`). `origin`
 /// says whether this run is a tier-1 auto-approval or a human's
 /// domain-denial-retry approve -- see [`SandboxedApprovalOrigin`] -- so the
 /// eventual `Finished` result is annotated honestly either way.

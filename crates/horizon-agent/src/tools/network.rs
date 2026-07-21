@@ -1,8 +1,8 @@
 //! Owns the network-proxy leg of the agent approval trust model
 //! (`docs/agent-approval-design.md`'s "Staging" leg 4b): a per-session
-//! `horizon_sandbox_proxy::AllowlistProxy` + `UdsBridge` pair, so a tier-1
-//! sandboxed `bash` call's `NetworkPolicy::Proxied { bridge_socket }`
-//! reaches a proxy this crate itself owns, rather than one threaded in as a
+//! `horizon_sandbox_proxy::AllowlistProxy`, so a tier-1 sandboxed `bash`
+//! call's `NetworkPolicy::Proxied { proxy_addr }` names a proxy this crate
+//! itself owns, rather than one threaded in as a
 //! start-session argument from `horizon-sessiond` (leg 4a's shape --
 //! `horizon-sessiond`'s own `network.rs` is gone).
 //!
@@ -18,22 +18,20 @@
 //! per-daemon proxy had one shared, empty allowlist -- fine for "refuse
 //! everything" (the only posture that existed then), but leg 4b needs a
 //! *distinct* allowlist per isolated session (approving a domain for one
-//! session must never leak to another's), and nono's per-session bridge
-//! socket path is trivially available (no bind-mount constraint to route
-//! around, unlike the old bwrap backend) -- see [`SessionNetworkProxy::
-//! start`]. A dedicated `AllowlistProxy`/`UdsBridge` pair per session is the
-//! natural per-session attribution unit: mutating one session's allowlist
+//! session must never leak to another's) -- see [`SessionNetworkProxy::
+//! start`]. A dedicated `AllowlistProxy` per session is the natural
+//! attribution unit: mutating one session's allowlist
 //! (`SessionNetworkProxy::allow_domain`) touches only that instance's own
 //! state, with zero shared mutable state across sessions to accidentally
 //! leak through.
 //!
 //! **A shared runtime, not a thread per session.** Every session's own
-//! `AllowlistProxy`/`UdsBridge` pair is still cheap (a couple of tokio
-//! tasks each), so rather than spin up a dedicated OS thread + tokio runtime
+//! `AllowlistProxy` is still cheap, so rather than spin up a dedicated OS
+//! thread + tokio runtime
 //! per session (wasteful under many concurrent isolated sessions), this
 //! module lazily starts *one* dedicated multi-thread runtime for the whole
 //! process the first time any session needs it, and hosts every session's
-//! proxy/bridge tasks on that one runtime -- mirroring leg 4a's "own
+//! proxy tasks on that one runtime -- mirroring leg 4a's "own
 //! runtime, never the per-session `rig` runtime" rule (`providers::rig::
 //! session`'s own current-thread runtime is busy running that session's
 //! turn loop; a nested `tokio::spawn` from inside it would compete with
@@ -44,18 +42,18 @@
 //! `horizon-sessiond`'s now-deleted `network.rs` already accepted for the
 //! abrupt `Control::Drain`/`std::process::exit(0)` paths. A session's own
 //! `SessionNetworkProxy`, by contrast, *is* torn down on that session's own
-//! `Drop` (via `AllowlistProxy`/`UdsBridge`'s own `Drop` impls) -- both are
-//! safe to drop from any thread (`JoinHandle::abort`/`oneshot::Sender::send`
+//! `Drop` (via `AllowlistProxy`'s own `Drop` impl) and is safe to drop from
+//! any thread (`JoinHandle::abort`/`oneshot::Sender::send`
 //! need no "current runtime" context), so no explicit shutdown dance is
 //! needed here the way leg 4a's process-lifetime `Runtime` required.
 
-use std::path::Path;
+use std::net::SocketAddr;
 
 use anyhow::Context;
-use horizon_sandbox_proxy::{Allowlist, AllowlistProxy, UdsBridge};
+use horizon_sandbox_proxy::{Allowlist, AllowlistProxy};
 
-/// The dedicated runtime every session's `AllowlistProxy`/`UdsBridge` pair
-/// is spawned onto -- see the module doc's "A shared runtime" section.
+/// The dedicated runtime every session's `AllowlistProxy` is spawned onto --
+/// see the module doc's "A shared runtime" section.
 /// Built lazily on first use rather than at process startup: most sessions
 /// are never isolated+sandboxed at all (non-isolated sessions never reach
 /// tier 1), so a process that never starts one pays nothing.
@@ -71,20 +69,18 @@ fn network_runtime() -> &'static tokio::runtime::Runtime {
     })
 }
 
-/// One session's own allowlist proxy + UNIX-socket bridge pair (`docs/
-/// agent-approval-design.md` leg 4b). `Send + Sync`: crossed onto the bash
+/// One session's own allowlist proxy (`docs/agent-approval-design.md` leg
+/// 4b). `Send + Sync`: crossed onto the bash
 /// background thread (`tools::bash::exec::run_sandboxed`) the same way
 /// `ToolSessionState`'s other `Send`-able handles are (see `bash_cwd_handle`).
 pub struct SessionNetworkProxy {
     proxy: AllowlistProxy,
-    bridge: UdsBridge,
 }
 
 impl SessionNetworkProxy {
-    /// Binds a fresh `AllowlistProxy` (empty allowlist -- nothing is
-    /// approved yet) and its `UdsBridge` at a fresh, process-unique socket
-    /// path under the host's temp directory, both on the shared [`network_runtime`].
-    /// Fallible: a bind failure (e.g. the temp directory isn't writable) is
+    /// Binds a fresh loopback `AllowlistProxy` (empty allowlist -- nothing
+    /// is approved yet) on the shared [`network_runtime`]. Fallible: a bind
+    /// failure is
     /// reported to the caller rather than panicking -- the caller
     /// (`horizon-sessiond`'s `session::run_session`) degrades to no network
     /// proxy for the session, the same `NetworkPolicy::Disabled` fallback
@@ -99,8 +95,8 @@ impl SessionNetworkProxy {
     /// `block_on` a *different* runtime from such a thread. A bare OS
     /// thread has no such context, so it can safely drive `network_runtime()`
     /// via `block_on` regardless of what context the caller is running in.
-    /// Blocks the caller (briefly -- binding two loopback/UNIX listeners)
-    /// on that thread's result via a plain channel.
+    /// Blocks the caller briefly while the loopback listener is bound, then
+    /// receives that thread's result over a plain channel.
     pub fn start() -> anyhow::Result<Self> {
         let (result_tx, result_rx) = std::sync::mpsc::channel();
         std::thread::Builder::new()
@@ -116,22 +112,20 @@ impl SessionNetworkProxy {
     }
 
     fn build() -> anyhow::Result<Self> {
-        let bridge_socket = std::env::temp_dir().join(format!(
-            "horizon-agent-sandbox-proxy-{}.sock",
-            uuid::Uuid::new_v4()
-        ));
-        let (proxy, bridge) = network_runtime().block_on(async {
-            let proxy = AllowlistProxy::spawn(Allowlist::new(Vec::<String>::new())).await?;
-            let bridge = UdsBridge::spawn(bridge_socket, proxy.addr()).await?;
-            Ok::<_, horizon_sandbox_proxy::ProxyError>((proxy, bridge))
+        let proxy = network_runtime().block_on(async {
+            AllowlistProxy::spawn(Allowlist::new(Vec::<String>::new())).await
         })?;
-        Ok(Self { proxy, bridge })
+        Ok(Self { proxy })
     }
 
-    /// The path a sandboxed `bash` call's `NetworkPolicy::Proxied` should
-    /// carry -- see `tools::bash::exec::run_sandboxed`.
-    pub fn bridge_socket(&self) -> &Path {
-        self.bridge.socket_path()
+    /// The exact loopback TCP endpoint allowed by the sandbox policy.
+    pub fn proxy_addr(&self) -> SocketAddr {
+        self.proxy.addr()
+    }
+
+    /// Standard HTTP proxy URL injected into sandboxed command environments.
+    pub fn proxy_url(&self) -> String {
+        format!("http://{}", self.proxy.addr())
     }
 
     /// Adds `domain` to this session's own allowlist -- called once the

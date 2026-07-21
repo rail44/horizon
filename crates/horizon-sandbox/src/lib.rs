@@ -60,8 +60,9 @@ mod tmpdir;
 pub use error::SandboxError;
 pub use grant::revalidate_denial as revalidate_filesystem_denial;
 pub use policy::{
-    FilesystemDenial, FilesystemGrant, FilesystemGrantAccess, FilesystemGrantScope, HelperPolicy,
-    NetworkPolicy, ReadableScope, SandboxPolicy, SandboxStdio,
+    ContainmentDenials, FilesystemDenial, FilesystemGrant, FilesystemGrantAccess,
+    FilesystemGrantScope, HelperPolicy, NetworkDenial, NetworkPolicy, ReadableScope, SandboxPolicy,
+    SandboxStdio,
 };
 
 #[cfg(target_os = "linux")]

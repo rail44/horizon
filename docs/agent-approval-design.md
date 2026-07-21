@@ -269,6 +269,23 @@ product-owned API. Decisions:
   network approval for ordinary `cargo`/`curl`/`git` clients, and the phrase
   "direct egress is cut" above should be read as its historical TCP-tested
   claim rather than an all-protocol invariant.
+- **Network correction delivered 2026-07-21:** the UDS bridge has been removed
+  from the active egress path. Each session now exposes its allowlist proxy's
+  exact IPv4 loopback TCP endpoint through `NetworkPolicy::Proxied`, which
+  maps to nono `ProxyOnly`; tier-1 bash injects the standard HTTP/HTTPS and
+  Cargo proxy environment. On Linux, the extracted helper installs one
+  combined seccomp user-notification filter for `openat`/`openat2` and network
+  syscalls. It emulates an allowed `connect` on a duplicated child socket
+  against the trusted fixed endpoint, and records/denies same-port alternate
+  addresses, direct TCP, UDP, named/abstract UDS, and `io_uring_setup` without
+  relying on exit status. Proxy-side hostname refusal still produces
+  `DomainDenialRetry`; approval mutates one session allowlist and retries the
+  same call sandboxed. Kernel-side bypass records are diagnostic,
+  non-grantable containment failures: they never become direct-IP grants.
+  Real-process tests cover the exact endpoint, same-port decoy, UDP, UDS, a
+  combined FS/network report, ordinary curl denial despite shell exit 0, and
+  real session-scoped domain approval. macOS keeps nono's exact Seatbelt
+  `ProxyOnly` profile and still requires standing real-Mac runtime verification.
 - **Denial UX** (corrected 2026-07-21): a containment denial never authorizes
   removing containment. Linux `openat`/`openat2` crossings come from the
   authenticated supervisor report, not exit status or stderr, and become
@@ -489,8 +506,15 @@ refactoring wave folds into this item.
    *Filesystem containment-denial correction landed 2026-07-21: the reduced
    nono-derived Linux helper records `openat`/`openat2` denials regardless of
    command exit status; exact session grants are human-approved, shadow-judged
-   as trusted mediation data, revalidated, and retried sandboxed. Network
-   ProxyOnly/ordinary-client enforcement remains the next correction leg.*
+   as trusted mediation data, revalidated, and retried sandboxed.*
+   *Network containment correction landed 2026-07-21: active egress now uses
+   the session's exact TCP allowlist-proxy endpoint, ordinary HTTP clients get
+   standard proxy environment, and Linux runs combined filesystem/network
+   seccomp supervision that closes the port-only, UDP, named-UDS, and
+   child-pointer-race gaps. `DomainDenialRetry` remains the narrow hostname
+   grant and always retries sandboxed; direct-route denials are structured but
+   deliberately non-grantable. Persistent allowlists and real-Mac runtime
+   verification remain out of scope.*
 5. **Judge**: the inline classifier at the policy seam, judge-model
    config key, audit field. Folds in backlog 47 (turn_id-null tracker
    flaw — fix so approval analytics can measure the judge's effect)

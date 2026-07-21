@@ -165,6 +165,32 @@ pub(crate) fn annotate_filesystem_denials(
     }
 }
 
+pub(crate) fn annotate_network_denials(
+    output: &mut Value,
+    denials: &[horizon_sandbox::NetworkDenial],
+) {
+    if denials.is_empty() {
+        return;
+    }
+    if let Some(map) = output.as_object_mut() {
+        map.insert(
+            "denied_network_routes".to_string(),
+            Value::Array(
+                denials
+                    .iter()
+                    .map(|denial| {
+                        serde_json::json!({
+                            "target": denial.target,
+                            "operation": denial.operation,
+                            "reason": denial.reason,
+                        })
+                    })
+                    .collect(),
+            ),
+        );
+    }
+}
+
 pub(crate) fn annotate_filesystem_approval(
     output: &mut Value,
     grants: &[horizon_sandbox::FilesystemGrant],

@@ -3348,7 +3348,6 @@ dependencies = [
 name = "horizon-sandbox-proxy"
 version = "0.1.0"
 dependencies = [
- "horizon-sandbox",
  "hudsucker",
  "thiserror 2.0.18",
  "tokio",

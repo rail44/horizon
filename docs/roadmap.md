@@ -183,17 +183,18 @@ lands:
   proxy relocation into horizon-agent) is re-dispatched
   on the nono foundation -- its policy layer is backend-agnostic (spike-
   confirmed), so only the spawn wiring rebases.
-  **Containment-denial correction / redesign shaped 2026-07-20/21**
+  **Containment-denial correction / redesign shaped and delivered
+  2026-07-20/21**
   (`docs/containment-denial-narrow-grants-design.md`): dogfooding showed that
   ordinary HTTP clients never reach the UDS bridge and filesystem denials can
   disappear behind exit 0. Source audit plus real throwaway probes found a
-  deeper Linux prerequisite: nono's `Blocked`/Landlock path is TCP-only and
+  deeper Linux prerequisite: nono's former `Blocked`/Landlock path was TCP-only and
   `ReadableScope::Full` permits arbitrary pathname UDS. The owner direction is
   to replace unsandboxed denial retry with structured, session-scoped narrow
-  grants and sandboxed retry for network and FS. Proposed first leg is a TCP
-  proxy endpoint using nono `ProxyOnly` plus always-on Linux seccomp mediation
-  (bare Landlock is only port-exact and leaves UDP/UDS holes), followed by the
-  generic grant contract and FS discovery. Owner narrowed the implementation
+  grants and sandboxed retry for network and FS. The network leg uses the
+  session's exact TCP proxy endpoint with nono `ProxyOnly`, ordinary HTTP proxy
+  environment, and always-on Linux seccomp mediation (bare Landlock is only
+  port-exact and leaves UDP/UDS holes). Owner narrowed the implementation
   boundary on 2026-07-21: copy the minimum nono-cli v0.68.0 supervised-runtime
   machinery into a provenance-pinned local `horizon-sandbox-runtime` crate
   instead of owning a new supervisor design. **The Linux filesystem-open leg
@@ -203,12 +204,14 @@ lands:
   exact-file/nearest-existing-parent grants. Approval is session-local,
   revalidated, and always retries sandboxed; the old unsandboxed retry producer
   is removed and its serialized approval kind fails closed. Existing-file and
-  missing-leaf enforcement tests prove sibling paths remain denied. The next
-  leg is still the network replacement (`ProxyOnly` TCP endpoint, ordinary
-  client proxy environment, and combined all-protocol seccomp mediation);
-  current leg 4b must not be treated as a complete ordinary-client or
-  all-protocol egress boundary meanwhile. macOS structured filesystem-denial
-  evidence also remains best-effort pending real-Mac work.
+  missing-leaf enforcement tests prove sibling paths remain denied. **The
+  Linux network leg also landed 2026-07-21:** the helper now owns one combined
+  filesystem/network listener, emulates the one trusted fixed-endpoint connect,
+  and records/denies direct TCP, UDP, named/abstract UDS, same-port decoys, and
+  `io_uring_setup`. Real curl reaches the proxy without command-specific flags;
+  hostname approval remains session-local and retries sandboxed. macOS
+  structured filesystem-denial evidence and runtime verification remain
+  best-effort/pending real-Mac work.
 - **Agent web search / public-code search** (backlog 18/19).
   Consultation 2026-07-19/20: **vendor = Exa** (owner decision;
   empirical probe + independent-benchmark evidence in

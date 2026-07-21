@@ -1,8 +1,6 @@
 //! The allowlist proxy itself: a loopback-only hudsucker `Proxy` wrapping
-//! [`crate::handler::AllowlistHandler`]. Bound to `127.0.0.1:0` (an
-//! ephemeral port, loopback-only) -- a sandboxed process never talks to
-//! this directly (seccomp denies it AF_INET entirely, see `horizon-sandbox`
-//! `linux::seccomp`); the only way in is [`crate::bridge::UdsBridge`].
+//! [`crate::handler::AllowlistHandler`]. Bound to `127.0.0.1:0`; the sandbox
+//! permits only this exact TCP endpoint.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -21,7 +19,7 @@ use crate::handler::{AllowlistHandler, NeverInterceptCa};
 /// A running allowlist proxy. Dropping it aborts the background task and
 /// releases the listener. As of leg 4b (`docs/agent-approval-design.md`),
 /// ownership is per-session (`horizon-agent`'s `tools::network::
-/// SessionNetworkProxy` holds one alongside its own `UdsBridge`) rather than
+/// SessionNetworkProxy` holds one) rather than
 /// one long-lived instance per `horizon-sessiond` process -- but nothing
 /// here assumes a particular owner or lifetime; this crate's own tests
 /// still create and drop one per test.
@@ -82,8 +80,7 @@ impl AllowlistProxy {
         })
     }
 
-    /// The loopback address the proxy is actually listening on --
-    /// [`crate::bridge::UdsBridge`]'s relay target.
+    /// The exact loopback address the sandboxed client may reach.
     pub fn addr(&self) -> SocketAddr {
         self.addr
     }

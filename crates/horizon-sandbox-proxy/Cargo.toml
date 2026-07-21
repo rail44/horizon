@@ -1,10 +1,9 @@
 # Network-proxy leg of the agent approval trust model
 # (`docs/agent-approval-design.md`, "Sandbox architecture" / "Staging" leg
-# 4): a domain-allowlist HTTP/HTTPS CONNECT proxy (built on `hudsucker`)
-# plus the UNIX-domain-socket bridge that is the only way a `horizon-sandbox`
-# container ever reaches it. Kept as a sibling crate to `horizon-sandbox`
+# 4): a loopback-only domain-allowlist HTTP/HTTPS CONNECT proxy (built on
+# `hudsucker`). Kept as a sibling crate to `horizon-sandbox`
 # rather than a module inside it: this crate is inherently async
-# (tokio/hyper-based, one long-lived proxy per `horizon-sessiond` process),
+# (tokio/hyper-based, one long-lived proxy per isolated agent session),
 # while `horizon-sandbox` is a deliberately synchronous, dependency-light
 # per-OS process-containment layer -- see the crate root doc for the split
 # rationale.
@@ -25,7 +24,6 @@ thiserror = "2.0"
 tokio = { version = "1.52", features = ["rt", "net", "io-util", "sync", "macros"] }
 
 [dev-dependencies]
-horizon-sandbox = { path = "../horizon-sandbox" }
 tokio = { version = "1.52", features = ["rt-multi-thread", "net", "io-util", "sync", "macros", "time"] }
 
 [lints.clippy]

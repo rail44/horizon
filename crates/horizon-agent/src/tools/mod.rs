@@ -23,7 +23,7 @@ pub use execution::{cancelled_tool_call_result, execute_agent_tool, Execution, H
 // `SessionNetworkProxy` is `pub` (not `pub(crate)`) for the same reason as
 // `execute_agent_tool`/`Execution` above: the leg 4b containment tests in
 // `tests/tier1_network_containment.rs` construct one directly to wire up a
-// real per-session proxy/bridge pair the same way `horizon-sessiond`'s
+// real per-session proxy the same way `horizon-sessiond`'s
 // `session::run_session` does.
 pub use network::SessionNetworkProxy;
 pub use processing::process_agent_provider_event;

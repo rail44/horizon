@@ -561,8 +561,8 @@ entries live in `backlog-resolved.md` keeping their original numbers
     Options if this bar needs to be routine (e.g. on nono bumps): keep
     the stub as a checked-in dev tool, set up osxcross, or accept
     review-only for darwin paths. Real-mac runtime verification of the
-    whole macOS backend (helper exec handoff, profile application,
-    Proxied bridge grant, baseline dirs) is the standing open follow-up.
+    whole macOS backend (helper exec handoff, profile application, exact
+    `ProxyOnly` endpoint, baseline dirs) is the standing open follow-up.
 
 62. **gpui-component's `ColorPicker` builds its palette panel every render
     even while closed.** Upstream (rev `0775df3`,

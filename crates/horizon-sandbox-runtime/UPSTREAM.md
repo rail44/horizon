@@ -9,6 +9,8 @@ from [nolabs-ai/nono](https://github.com/nolabs-ai/nono):
 - source files:
   - `crates/nono-cli/src/exec_strategy.rs`
   - `crates/nono-cli/src/exec_strategy/supervisor_linux.rs`
+  - `crates/nono/src/sandbox/linux.rs` (seccomp filter and notification
+    protocol reference)
 
 The upstream `supervised_runtime.rs` is deliberately not copied. It is CLI
 orchestration coupled to nono's terminal, session, rollback, trust, audit,
@@ -24,10 +26,18 @@ The extraction retains only:
   lifecycle;
 - the cross-platform distinction between live Linux evidence and best-effort
   macOS diagnostics;
-- nono-cli's Linux `SeccompPolicy` predicates and token-bucket behavior.
+- nono-cli's Linux `SeccompPolicy` predicates and token-bucket behavior;
 - the single-thread validation, subreaper/fork ownership, initial-capability
   fast path, notification-id validation, and reduced recording-deny
-  `openat`/`openat2` event loop.
+  `openat`/`openat2` event loop;
+- one combined filesystem/network user-notification filter derived from
+  nono's separate filters. Linux permits only one listener ownership boundary
+  here, so Horizon dispatches both syscall families through the same fd;
+- exact IPv4 `127.0.0.1:PORT` proxy enforcement. This deliberately tightens
+  nono's port-only Landlock rule and its `is_loopback && port` notification
+  decision. An allowed `connect` is executed through a supervisor-duplicated
+  child socket against a trusted fixed sockaddr, rather than returning
+  `CONTINUE` after inspecting child-owned pointer memory.
 
 It runs only inside Horizon's dedicated single-threaded helper process;
 running it directly in multi-threaded `horizon-sessiond` would violate the
@@ -36,13 +46,17 @@ credential-authenticated report socket is a local addition. Live fd injection,
 PTY, rollback, trust interception, URL opening, profile saving, tool
 sandboxing, resource cgroups, and CLI session management remain excluded.
 
-The Linux filesystem scope matches the selected upstream slice: live mediation of
-`openat` and `openat2`, not every Landlock-controlled filesystem operation.
-macOS Seatbelt unified-log recovery remains explicitly best-effort.
+The Linux filesystem scope matches the selected upstream slice: live mediation
+of `openat` and `openat2`, not every Landlock-controlled filesystem operation.
+Network mediation covers socket creation, connect/bind, destination-bearing
+send syscalls, and `io_uring_setup`; local unnamed Unix stream/seqpacket IPC
+remains available, while remote IP routes and named/abstract Unix sockets are
+recorded and denied. macOS Seatbelt unified-log recovery remains explicitly
+best-effort.
 
 ## Update procedure
 
-1. Diff the two source files above against the pinned commit.
+1. Diff the three source files above against the pinned commit.
 2. Review changes to seccomp filter installation, notification validation,
    child-memory reads, descriptor injection, and fork safety.
 3. Port only behavior exercised by Horizon's helper tests.

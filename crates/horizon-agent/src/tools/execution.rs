@@ -145,11 +145,11 @@ fn execute_tier1_fs(tool_state: &ToolSessionState, request: &ToolCallRequest) ->
 /// returned `Contained`, but this stays defensive rather than panicking.
 ///
 /// Network (`docs/agent-approval-design.md` leg 4b): when this session has
-/// its own running network-proxy pair (`tool_state.network_proxy()`), the
-/// sandbox gets `NetworkPolicy::Proxied { bridge_socket }` instead of
+/// its own running network proxy (`tool_state.network_proxy()`), the sandbox
+/// gets `NetworkPolicy::Proxied` for that exact TCP endpoint instead of
 /// `NetworkPolicy::Disabled` -- see `bash::exec::run_sandboxed`'s doc
-/// comment for the denial-attribution this enables. `None` (no proxy
-/// available for this session) falls back to `Disabled`.
+/// comment for the denial attribution this enables. `None` falls back to
+/// `Disabled`.
 fn execute_tier1_bash(
     tool_state: &ToolSessionState,
     session_id: SessionId,

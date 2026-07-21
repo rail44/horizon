@@ -7,9 +7,13 @@
 
 use std::time::Instant;
 
+mod filter;
+mod network;
 mod open;
 
-pub(crate) use open::{handle_open_notification, InitialCapability};
+pub(crate) use filter::install as install_combined_filter;
+pub(crate) use network::{handle_network_notification, NetworkEnforcement};
+pub(crate) use open::{handle_open_notification, InitialCapability, OpenNotificationContext};
 
 /// Describes which seccomp-notify mechanisms a helper must install.
 ///

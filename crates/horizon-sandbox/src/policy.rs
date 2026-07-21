@@ -4,6 +4,7 @@
 //! `docs/agent-approval-design.md`'s "Sandbox architecture").
 
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::Stdio;
 
@@ -25,21 +26,15 @@ pub enum ReadableScope {
 
 /// Network posture.
 ///
-/// `Proxied` is the network-proxy leg (`docs/agent-approval-design.md`,
-/// "Sandbox architecture" / "Staging" leg 4): direct egress stays fully cut
-/// (same network-blocked posture as `Disabled` -- see `crate::caps::build`,
-/// the mapping shared by both OS backends), and the *only* path out is a
-/// UNIX domain socket at `bridge_socket`, which the caller has already
-/// wired to bridge into a long-lived `horizon-sandbox-proxy` allowlist
-/// proxy (see that crate's `UdsBridge`). This crate only carries the path
-/// and performs the capability-grant plumbing -- it has no notion of
-/// allowlists or proxying itself, keeping the OS-containment layer
-/// decoupled from the network-policy layer.
+/// `Proxied` permits only the exact loopback TCP endpoint owned by the
+/// session's allowlist proxy. The client still has to speak HTTP proxy
+/// protocol; this policy enforces that ignoring proxy configuration cannot
+/// become direct egress.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NetworkPolicy {
     Enabled,
     Disabled,
-    Proxied { bridge_socket: PathBuf },
+    Proxied { proxy_addr: SocketAddr },
 }
 
 /// A command's sandbox policy: writable roots, readable scope, network
@@ -84,6 +79,22 @@ pub struct FilesystemGrant {
 pub struct FilesystemDenial {
     pub attempted_path: PathBuf,
     pub grant: FilesystemGrant,
+}
+
+/// A kernel-mediated network or IPC route refusal. It is structured
+/// diagnostic evidence, not a grant proposal: hostname grants come only from
+/// the HTTP proxy after it parses a request authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetworkDenial {
+    pub target: String,
+    pub operation: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainmentDenials {
+    pub filesystem: Vec<FilesystemDenial>,
+    pub network: Vec<NetworkDenial>,
 }
 
 /// Private helper wire envelope. Kept public only for this package's bin target.

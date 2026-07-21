@@ -467,12 +467,11 @@ fn error_output(message: &str, partial_output: Option<Vec<u8>>, config: &BashToo
 /// supervisor report rather than output or exit-code heuristics.
 ///
 /// Network (`docs/agent-approval-design.md` leg 4b): `Some(network)` gets
-/// `NetworkPolicy::Proxied { bridge_socket }` against that session's own
-/// bridge -- the same seccomp/namespace network-syscall cut as `Disabled`,
-/// plus one UNIX socket that reaches this session's own `AllowlistProxy`
-/// (`horizon_sandbox_proxy`, owned by `tools::network::SessionNetworkProxy`).
-/// `None` (no proxy running for this session) falls back to plain
-/// `NetworkPolicy::Disabled`.
+/// `NetworkPolicy::Proxied { proxy_addr }` for that session's exact loopback
+/// TCP endpoint. Standard HTTP proxy variables make ordinary clients use it;
+/// the Linux supervisor independently refuses every other remote endpoint,
+/// so those variables are compatibility plumbing rather than the security
+/// boundary. `None` falls back to plain `NetworkPolicy::Disabled`.
 ///
 /// A denied domain is detected proxy-side, never from the child's own exit
 /// code (backlog 59: a piped command like `curl ... | head` can exit `0`
@@ -542,12 +541,13 @@ pub(super) fn run_sandboxed(
     // classification is substring-based (see `horizon_sandbox::denial`).
     cmd.env("LC_ALL", "C");
 
-    let network_policy = match network.map(SessionNetworkProxy::bridge_socket) {
-        Some(bridge_socket) => horizon_sandbox::NetworkPolicy::Proxied {
-            bridge_socket: bridge_socket.to_path_buf(),
-        },
+    let network_policy = match network.map(SessionNetworkProxy::proxy_addr) {
+        Some(proxy_addr) => horizon_sandbox::NetworkPolicy::Proxied { proxy_addr },
         None => horizon_sandbox::NetworkPolicy::Disabled,
     };
+    if let Some(network) = network {
+        configure_proxy_environment(&mut cmd, &network.proxy_url());
+    }
     let policy = horizon_sandbox::SandboxPolicy {
         writable_roots: vec![workspace_root.to_path_buf()],
         readable_scope: horizon_sandbox::ReadableScope::Full,
@@ -576,7 +576,7 @@ pub(super) fn run_sandboxed(
     let supervisor_report = sandboxed
         .supervisor_report
         .take()
-        .map(|report| std::thread::spawn(move || report.filesystem_denials()));
+        .map(|report| std::thread::spawn(move || report.containment_denials()));
     let mut child = sandboxed.child;
 
     let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
@@ -615,8 +615,11 @@ pub(super) fn run_sandboxed(
     let raw_stderr = take(&stderr_buf);
 
     #[cfg(target_os = "linux")]
-    let filesystem_denials = if killed {
-        Vec::new()
+    let containment_denials = if killed {
+        horizon_sandbox::ContainmentDenials {
+            filesystem: Vec::new(),
+            network: Vec::new(),
+        }
     } else {
         match supervisor_report {
             Some(handle) => match handle.join() {
@@ -652,7 +655,12 @@ pub(super) fn run_sandboxed(
         }
     };
     #[cfg(not(target_os = "linux"))]
-    let filesystem_denials: Vec<horizon_sandbox::FilesystemDenial> = Vec::new();
+    let containment_denials = horizon_sandbox::ContainmentDenials {
+        filesystem: Vec::new(),
+        network: Vec::new(),
+    };
+    let filesystem_denials = containment_denials.filesystem;
+    let network_denials = containment_denials.network;
 
     // Drained once the child has fully exited, so no further request can
     // still be in flight against the proxy -- see this function's own doc
@@ -665,6 +673,7 @@ pub(super) fn run_sandboxed(
     if killed {
         let mut value = timeout_output(timeout, raw_stdout, config);
         annotate_sandboxed(&mut value, true);
+        crate::policy::annotate_network_denials(&mut value, &network_denials);
         if !drained {
             note_undrained(&mut value, config);
         }
@@ -682,6 +691,7 @@ pub(super) fn run_sandboxed(
             config,
         );
         annotate_sandboxed(&mut value, true);
+        crate::policy::annotate_network_denials(&mut value, &network_denials);
         if !denied_domains.is_empty() {
             annotate_denied_domains(&mut value, &denied_domains);
             return domain_denied(call_id, denied_domains, value);
@@ -693,6 +703,7 @@ pub(super) fn run_sandboxed(
         let mut value = status_output(status, raw_stdout, raw_stderr, cwd_handle, config);
         annotate_sandboxed(&mut value, true);
         crate::policy::annotate_filesystem_denials(&mut value, &filesystem_denials);
+        crate::policy::annotate_network_denials(&mut value, &network_denials);
         if !denied_domains.is_empty() {
             annotate_denied_domains(&mut value, &denied_domains);
         }
@@ -712,6 +723,7 @@ pub(super) fn run_sandboxed(
     if !denied_domains.is_empty() {
         let mut value = status_output(status, raw_stdout, raw_stderr, cwd_handle, config);
         annotate_sandboxed(&mut value, true);
+        crate::policy::annotate_network_denials(&mut value, &network_denials);
         annotate_denied_domains(&mut value, &denied_domains);
         if !drained {
             note_undrained(&mut value, config);
@@ -721,10 +733,30 @@ pub(super) fn run_sandboxed(
 
     let mut value = status_output(status, raw_stdout, raw_stderr, cwd_handle, config);
     annotate_sandboxed(&mut value, true);
+    crate::policy::annotate_network_denials(&mut value, &network_denials);
     if !drained {
         note_undrained(&mut value, config);
     }
     finished(call_id, value)
+}
+
+fn configure_proxy_environment(command: &mut std::process::Command, proxy_url: &str) {
+    for key in [
+        "http_proxy",
+        "https_proxy",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "CARGO_HTTP_PROXY",
+    ] {
+        command.env(key, proxy_url);
+    }
+    // An inherited bypass list would send matching hosts to a route the
+    // kernel deliberately refuses. Empty values are understood by the common
+    // clients and make the session proxy the only configured HTTP route.
+    command.env("no_proxy", "").env("NO_PROXY", "");
+    // Do not claim arbitrary-protocol proxy compatibility. The allowlist
+    // proxy is HTTP/CONNECT; scheme-specific variables above cover web tools.
+    command.env_remove("all_proxy").env_remove("ALL_PROXY");
 }
 
 /// Builds the ordinary (non-timeout, non-wait-failure) result value from a
@@ -882,3 +914,43 @@ fn kill_pid(pid: u32) {
 
 #[cfg(not(unix))]
 fn kill_pid(_pid: u32) {}
+
+#[cfg(test)]
+mod proxy_environment_tests {
+    use std::collections::BTreeMap;
+    use std::ffi::OsStr;
+
+    use super::configure_proxy_environment;
+
+    #[test]
+    fn standard_http_clients_are_routed_without_configuring_unrelated_protocols() {
+        let mut command = std::process::Command::new("true");
+        configure_proxy_environment(&mut command, "http://127.0.0.1:43210");
+        let env = command
+            .get_envs()
+            .map(|(key, value)| (key.to_owned(), value.map(OsStr::to_owned)))
+            .collect::<BTreeMap<_, _>>();
+
+        for key in [
+            "http_proxy",
+            "https_proxy",
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "CARGO_HTTP_PROXY",
+        ] {
+            assert_eq!(
+                env.get(OsStr::new(key)).and_then(Option::as_deref),
+                Some(OsStr::new("http://127.0.0.1:43210"))
+            );
+        }
+        for key in ["no_proxy", "NO_PROXY"] {
+            assert_eq!(
+                env.get(OsStr::new(key)).and_then(Option::as_deref),
+                Some(OsStr::new(""))
+            );
+        }
+        for key in ["all_proxy", "ALL_PROXY"] {
+            assert!(matches!(env.get(OsStr::new(key)), Some(None)));
+        }
+    }
+}

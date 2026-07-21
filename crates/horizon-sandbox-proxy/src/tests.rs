@@ -1,8 +1,6 @@
 //! Wire-level tests against a real running [`AllowlistProxy`]: a plain TCP
-//! client (not the UNIX-socket bridge -- that end-to-end containment proof
-//! is `tests/containment.rs`'s job, since it needs a real
-//! `horizon-sandbox` process) connects directly to `proxy.addr()` and
-//! speaks raw HTTP/1.1. This exercises the real wiring end-to-end
+//! client connects directly to `proxy.addr()` and speaks raw HTTP/1.1. This
+//! exercises the real wiring end-to-end
 //! (hudsucker's CONNECT parsing, `HttpContext` construction from a real
 //! accepted connection, `handler::AllowlistHandler`'s allow/deny/refusal
 //! shape) -- see `handler.rs`'s own test module for why a handler-only

@@ -9,7 +9,8 @@ use super::RateLimiter;
 use crate::RecordingDenyBackend;
 use nono::sandbox::{
     classify_access_from_flags, continue_notif, deny_notif, notif_id_valid, read_notif_path,
-    read_open_how, recv_notif, resolve_notif_path, validate_openat2_size, SYS_OPENAT, SYS_OPENAT2,
+    read_open_how, resolve_notif_path, validate_openat2_size, SeccompNotif, SYS_OPENAT,
+    SYS_OPENAT2,
 };
 use nono::{
     try_canonicalize, AccessMode, ApprovalBackend, ApprovalRequest, DenialReason, DenialRecord,
@@ -34,16 +35,20 @@ enum InitialCapabilityMatch<'a> {
     None,
 }
 
+pub(crate) struct OpenNotificationContext<'a> {
+    pub(crate) child_pid: u32,
+    pub(crate) session_id: &'a str,
+    pub(crate) initial_caps: &'a [InitialCapability],
+    pub(crate) backend: &'a RecordingDenyBackend,
+    pub(crate) rate_limiter: &'a mut RateLimiter,
+    pub(crate) denials: &'a mut Vec<DenialRecord>,
+}
+
 pub(crate) fn handle_open_notification(
     notify_fd: RawFd,
-    child_pid: u32,
-    session_id: &str,
-    initial_caps: &[InitialCapability],
-    backend: &RecordingDenyBackend,
-    rate_limiter: &mut RateLimiter,
-    denials: &mut Vec<DenialRecord>,
+    notification: SeccompNotif,
+    context: OpenNotificationContext<'_>,
 ) -> nono::Result<()> {
-    let notification = recv_notif(notify_fd)?;
     let path = match read_notif_path(notification.pid, notification.data.args[1])
         .and_then(|raw| resolve_notif_path(notification.pid, notification.data.args[0], &raw))
     {
@@ -81,7 +86,7 @@ pub(crate) fn handle_open_notification(
     let access = classify_access_from_flags(raw_flags);
     let canonicalized = try_canonicalize(&path);
 
-    match match_initial_capability(&canonicalized, access, initial_caps) {
+    match match_initial_capability(&canonicalized, access, context.initial_caps) {
         InitialCapabilityMatch::Sufficient => {
             // This is not a runtime expansion. Landlock remains authoritative
             // and re-checks the actual syscall arguments after continuation.
@@ -93,7 +98,7 @@ pub(crate) fn handle_open_notification(
         InitialCapabilityMatch::Insufficient(capability) => {
             let _ = &capability.path;
             record_denial(
-                denials,
+                context.denials,
                 canonicalized.clone(),
                 access,
                 DenialReason::InsufficientAccess,
@@ -112,8 +117,13 @@ pub(crate) fn handle_open_notification(
         return Ok(());
     }
 
-    if !rate_limiter.try_acquire() {
-        record_denial(denials, canonicalized, access, DenialReason::RateLimited);
+    if !context.rate_limiter.try_acquire() {
+        record_denial(
+            context.denials,
+            canonicalized,
+            access,
+            DenialReason::RateLimited,
+        );
         let _ = deny_notif(notify_fd, notification.id);
         return Ok(());
     }
@@ -130,12 +140,12 @@ pub(crate) fn handle_open_notification(
         path: canonicalized.clone(),
         access,
         reason: Some("sandbox intercepted an openat/openat2 boundary crossing".to_string()),
-        child_pid,
-        session_id: session_id.to_string(),
+        child_pid: context.child_pid,
+        session_id: context.session_id.to_string(),
     };
-    let decision = backend.request_approval(&request)?;
+    let decision = context.backend.request_approval(&request)?;
     record_denial(
-        denials,
+        context.denials,
         canonicalized,
         access,
         if decision.is_denied() {

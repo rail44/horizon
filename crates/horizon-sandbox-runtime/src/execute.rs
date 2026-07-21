@@ -5,12 +5,16 @@
 //! `horizon-sessiond` host. Seccomp notification handling will be added to the
 //! parent side of this fork without changing that ownership boundary.
 
-use crate::linux::{handle_open_notification, InitialCapability, RateLimiter};
+use crate::linux::{
+    handle_network_notification, handle_open_notification, install_combined_filter,
+    InitialCapability, NetworkEnforcement, OpenNotificationContext, RateLimiter,
+};
 use crate::RecordingDenyBackend;
 use crate::SupervisedOutcome;
-use nono::CapabilitySet;
 use nono::SupervisorSocket;
-use std::os::fd::{AsRawFd, RawFd};
+use nono::{CapabilitySet, NetworkMode};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
@@ -51,6 +55,13 @@ pub fn execute(
     arm_parent_death_signal(helper_parent)?;
     let helper_pid = unsafe { libc::getpid() };
     let (supervisor_socket, child_socket) = SupervisorSocket::pair()?;
+    let network_enforcement = match capabilities.network_mode() {
+        NetworkMode::AllowAll => None,
+        NetworkMode::Blocked => Some(NetworkEnforcement::Blocked),
+        NetworkMode::ProxyOnly { port, .. } => Some(NetworkEnforcement::ProxyOnly(SocketAddr::V4(
+            SocketAddrV4::new(Ipv4Addr::LOCALHOST, *port),
+        ))),
+    };
 
     // SAFETY: this function rejects a multi-threaded helper before forking.
     // The child owns its copy of `command` and `capabilities`, applies only
@@ -79,22 +90,24 @@ pub fn execute(
 
         capabilities.remap_procfs_self_references(std::process::id(), None);
         capabilities.widen_procfs_self_to_proc();
-        if let Err(error) = nono::Sandbox::apply_auto(&capabilities) {
+        if let Err(error) =
+            nono::Sandbox::apply_seccomp(&capabilities, nono::sandbox::SeccompOpts::external_tcp())
+        {
             child_error_and_exit("failed to apply sandbox", &error.to_string(), 126);
         }
 
         // Install only after Landlock setup. CapabilitySet construction and
         // Landlock application open their rule paths; trapping those setup
         // opens before the parent owns the listener would deadlock the child.
-        let notify_fd = match nono::sandbox::install_seccomp_notify() {
+        let notify_fd = match install_combined_filter(network_enforcement.is_some()) {
             Ok(fd) => fd,
             Err(error) => child_error_and_exit(
-                "failed to install openat seccomp listener",
+                "failed to install combined seccomp listener",
                 &error.to_string(),
                 126,
             ),
         };
-        if let Err(error) = child_socket.send_fd(notify_fd.as_raw_fd()) {
+        if let Err(error) = publish_listener_and_wait(&child_socket, notify_fd.as_raw_fd()) {
             child_error_and_exit(
                 "failed to transfer seccomp listener",
                 &error.to_string(),
@@ -110,13 +123,18 @@ pub fn execute(
 
     drop(child_socket);
     harden_supervisor_parent()?;
-    let notify_fd = match supervisor_socket.recv_fd() {
+    let notify_fd = match receive_listener(&supervisor_socket, child_pid) {
         Ok(fd) => fd,
         Err(error) => {
+            let _ = signal_listener_acquired(&supervisor_socket);
+            unsafe {
+                libc::kill(child_pid, libc::SIGKILL);
+            }
             let _ = wait_for_direct_child(child_pid);
             return Err(error.into());
         }
     };
+    signal_listener_acquired(&supervisor_socket)?;
     drop(supervisor_socket);
 
     let mut supervisor_caps = capabilities;
@@ -130,7 +148,91 @@ pub fn execute(
             is_file: capability.is_file,
         })
         .collect::<Vec<_>>();
-    supervise_process_tree(child_pid, notify_fd.as_raw_fd(), &initial_caps)
+    supervise_process_tree(
+        child_pid,
+        notify_fd.as_raw_fd(),
+        &initial_caps,
+        network_enforcement,
+    )
+}
+
+fn publish_listener_and_wait(socket: &SupervisorSocket, listener_fd: RawFd) -> nono::Result<()> {
+    let bytes = listener_fd.to_ne_bytes();
+    write_all_raw(socket.as_raw_fd(), &bytes).map_err(|error| {
+        nono::NonoError::SandboxInit(format!("failed to publish listener fd number: {error}"))
+    })?;
+    let mut ack = [0_u8; 1];
+    read_exact_raw(socket.as_raw_fd(), &mut ack).map_err(|error| {
+        nono::NonoError::SandboxInit(format!("failed to receive listener ack: {error}"))
+    })?;
+    if ack == [1] {
+        Ok(())
+    } else {
+        Err(nono::NonoError::SandboxInit(
+            "supervisor returned an invalid listener ack".to_string(),
+        ))
+    }
+}
+
+fn receive_listener(socket: &SupervisorSocket, child_pid: libc::pid_t) -> nono::Result<OwnedFd> {
+    let child_fd = socket.recv_raw_fd_number()?;
+    let pidfd_raw = unsafe { libc::syscall(libc::SYS_pidfd_open, child_pid, 0_u32) };
+    if pidfd_raw < 0 {
+        return Err(nono::NonoError::SandboxInit(format!(
+            "pidfd_open failed for sandbox child {child_pid}: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    let pidfd = unsafe { OwnedFd::from_raw_fd(pidfd_raw as RawFd) };
+    let listener =
+        unsafe { libc::syscall(libc::SYS_pidfd_getfd, pidfd.as_raw_fd(), child_fd, 0_u32) };
+    if listener < 0 {
+        return Err(nono::NonoError::SandboxInit(format!(
+            "pidfd_getfd failed for sandbox listener fd {child_fd}: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(listener as RawFd) })
+}
+
+fn signal_listener_acquired(socket: &SupervisorSocket) -> nono::Result<()> {
+    write_all_raw(socket.as_raw_fd(), &[1]).map_err(|error| {
+        nono::NonoError::SandboxInit(format!("failed to acknowledge listener fd: {error}"))
+    })
+}
+
+fn write_all_raw(fd: RawFd, mut bytes: &[u8]) -> std::io::Result<()> {
+    while !bytes.is_empty() {
+        let written = unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) };
+        if written < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+        bytes = &bytes[written as usize..];
+    }
+    Ok(())
+}
+
+fn read_exact_raw(fd: RawFd, mut bytes: &mut [u8]) -> std::io::Result<()> {
+    while !bytes.is_empty() {
+        let read = unsafe { libc::read(fd, bytes.as_mut_ptr().cast(), bytes.len()) };
+        if read == 0 {
+            return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+        }
+        if read < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+        let (_, rest) = std::mem::take(&mut bytes).split_at_mut(read as usize);
+        bytes = rest;
+    }
+    Ok(())
 }
 
 fn require_single_threaded() -> Result<(), ExecuteError> {
@@ -200,10 +302,12 @@ fn supervise_process_tree(
     direct_child: libc::pid_t,
     notify_fd: RawFd,
     initial_caps: &[InitialCapability],
+    network_enforcement: Option<NetworkEnforcement>,
 ) -> Result<SupervisedOutcome, ExecuteError> {
     let backend = RecordingDenyBackend::default();
     let mut limiter = RateLimiter::new(10, 5);
     let mut denials = Vec::new();
+    let mut ipc_denials = Vec::new();
     let mut direct_status = None;
 
     loop {
@@ -220,15 +324,32 @@ fn supervise_process_tree(
                 return Err(ExecuteError::Wait(error));
             }
         } else if polled > 0 && pollfd.revents & libc::POLLIN != 0 {
-            handle_open_notification(
-                notify_fd,
-                direct_child as u32,
-                "horizon-sandbox-helper",
-                initial_caps,
-                &backend,
-                &mut limiter,
-                &mut denials,
-            )?;
+            let notification = nono::sandbox::recv_notif(notify_fd)?;
+            match notification.data.nr {
+                nono::sandbox::SYS_OPENAT | nono::sandbox::SYS_OPENAT2 => {
+                    handle_open_notification(
+                        notify_fd,
+                        notification,
+                        OpenNotificationContext {
+                            child_pid: direct_child as u32,
+                            session_id: "horizon-sandbox-helper",
+                            initial_caps,
+                            backend: &backend,
+                            rate_limiter: &mut limiter,
+                            denials: &mut denials,
+                        },
+                    )?;
+                }
+                _ => match network_enforcement {
+                    Some(enforcement) => handle_network_notification(
+                        notify_fd,
+                        notification,
+                        enforcement,
+                        &mut ipc_denials,
+                    )?,
+                    None => nono::sandbox::deny_notif(notify_fd, notification.id)?,
+                },
+            }
         }
 
         loop {
@@ -255,7 +376,7 @@ fn supervise_process_tree(
                 return Ok(SupervisedOutcome {
                     exit_code,
                     denials,
-                    ipc_denials: Vec::new(),
+                    ipc_denials,
                     approvals: backend.drain(),
                 });
             }

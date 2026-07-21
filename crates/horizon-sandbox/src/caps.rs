@@ -21,9 +21,8 @@ use crate::policy::{
     FilesystemGrant, FilesystemGrantAccess, FilesystemGrantScope, NetworkPolicy, ReadableScope,
     SandboxPolicy,
 };
-#[cfg(target_os = "macos")]
-use nono::UnixSocketMode;
 use nono::{AccessMode, CapabilitySet, NetworkMode, SignalMode};
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::Path;
 
 /// Directories every command needs read (or, for `/proc`/`/dev`, read)
@@ -124,10 +123,10 @@ pub(crate) fn build_with_grants(
     caps = match &policy.network {
         NetworkPolicy::Enabled => caps.set_network_mode(NetworkMode::AllowAll),
         NetworkPolicy::Disabled => caps.set_network_mode(NetworkMode::Blocked),
-        NetworkPolicy::Proxied { bridge_socket } => {
-            let caps = caps.set_network_mode(NetworkMode::Blocked);
-            grant_proxy_bridge_socket(caps, bridge_socket)?
-        }
+        NetworkPolicy::Proxied { proxy_addr } => caps.set_network_mode(NetworkMode::ProxyOnly {
+            port: validated_proxy_port(*proxy_addr)?,
+            bind_ports: Vec::new(),
+        }),
     };
 
     Ok(caps.set_signal_mode(SignalMode::AllowSameSandbox))
@@ -176,48 +175,13 @@ pub(crate) fn validate_grant(grant: &FilesystemGrant) -> Result<(), SandboxError
     Ok(())
 }
 
-/// Grants the sandboxed command's only egress path under `Proxied`: the
-/// bridge socket to the allowlist proxy. Best-effort (silently skipped if
-/// the socket's parent directory doesn't exist yet -- some callers build
-/// the policy before creating the proxy socket); `Full` scope already
-/// covers it either way.
-///
-/// Directory Read access is enough on Linux (spike-confirmed,
-/// `experiments/nono-spike`'s Q2) -- nono's `allow_unix_socket*` API is
-/// inert on the Landlock path there, so a generic filesystem grant is
-/// what actually permits `connect(2)`.
-#[cfg(target_os = "linux")]
-fn grant_proxy_bridge_socket(
-    caps: CapabilitySet,
-    bridge_socket: &Path,
-) -> Result<CapabilitySet, SandboxError> {
-    match bridge_socket.parent() {
-        Some(parent) => allow_dir_if_present(caps, parent, AccessMode::Read),
-        None => Ok(caps),
+fn validated_proxy_port(proxy_addr: SocketAddr) -> Result<u16, SandboxError> {
+    match proxy_addr {
+        SocketAddr::V4(addr) if *addr.ip() == Ipv4Addr::LOCALHOST && addr.port() != 0 => {
+            Ok(addr.port())
+        }
+        _ => Err(SandboxError::InvalidProxyEndpoint(proxy_addr)),
     }
-}
-
-/// macOS needs the opposite of Linux's grant here: nono's Seatbelt backend
-/// treats a generic `FsCapability` as granting no network access at all
-/// (`emit_unix_socket_rules` in `nono-0.68.0/src/sandbox/macos.rs` only
-/// emits `network-outbound`/`network-bind` rules for explicit
-/// `UnixSocketCapability` grants -- upstream issue #696). A directory-scoped
-/// `Connect`-mode grant on the socket's parent mirrors Linux's
-/// "parent-directory, best-effort" shape without requiring the socket file
-/// to already exist at policy-build time (a `File`-scoped `Connect` grant
-/// would, per nono's own `UnixSocketCapability::new_file` doc).
-#[cfg(target_os = "macos")]
-fn grant_proxy_bridge_socket(
-    caps: CapabilitySet,
-    bridge_socket: &Path,
-) -> Result<CapabilitySet, SandboxError> {
-    let Some(parent) = bridge_socket.parent() else {
-        return Ok(caps);
-    };
-    if std::fs::metadata(parent).is_err() {
-        return Ok(caps);
-    }
-    Ok(caps.allow_unix_socket_dir(parent, UnixSocketMode::Connect)?)
 }
 
 /// Grants `mode` on an explicit, caller-specified policy path (a
@@ -303,62 +267,32 @@ mod tests {
     }
 
     #[test]
-    fn network_proxied_blocks_network() {
+    fn network_proxied_allows_only_the_proxy_port() {
         let caps = build(&policy(
             vec![],
             NetworkPolicy::Proxied {
-                bridge_socket: std::env::temp_dir().join("bridge.sock"),
+                proxy_addr: "127.0.0.1:43123".parse().unwrap(),
             },
         ))
         .unwrap();
-        assert_eq!(*caps.network_mode(), NetworkMode::Blocked);
-    }
-
-    /// Linux-specific expectation: the bridge socket's parent directory is
-    /// granted as a plain filesystem Read capability (see
-    /// `grant_proxy_bridge_socket`'s Linux arm doc).
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn network_proxied_grants_bridge_dir_read_on_linux() {
-        let socket_dir = std::env::temp_dir();
-        let policy = policy(
-            vec![],
-            NetworkPolicy::Proxied {
-                bridge_socket: socket_dir.join("bridge.sock"),
-            },
-        );
-        let caps = build(&policy).unwrap();
-        assert!(
-            caps.fs_capabilities()
-                .iter()
-                .any(|cap| cap.resolved == socket_dir.canonicalize().unwrap()),
-            "the bridge socket's parent directory should be granted Read"
+        assert_eq!(
+            *caps.network_mode(),
+            NetworkMode::ProxyOnly {
+                port: 43123,
+                bind_ports: Vec::new(),
+            }
         );
     }
 
-    /// macOS-specific expectation: the bridge socket's parent directory is
-    /// granted as a directory-scoped `UnixSocketCapability` in `Connect`
-    /// mode (see `grant_proxy_bridge_socket`'s macOS arm doc). Cannot run
-    /// on this (Linux) development host -- compile-checked only via
-    /// `cargo check --target x86_64-apple-darwin --tests`.
-    #[cfg(target_os = "macos")]
     #[test]
-    fn network_proxied_grants_bridge_dir_as_unix_socket_connect_on_macos() {
-        let socket_dir = std::env::temp_dir();
-        let policy = policy(
-            vec![],
-            NetworkPolicy::Proxied {
-                bridge_socket: socket_dir.join("bridge.sock"),
-            },
-        );
-        let caps = build(&policy).unwrap();
-        assert!(
-            caps.unix_socket_capabilities().iter().any(|cap| {
-                cap.resolved == socket_dir.canonicalize().unwrap()
-                    && cap.mode == UnixSocketMode::Connect
-            }),
-            "the bridge socket's parent directory should be granted a Connect-mode unix socket capability"
-        );
+    fn network_proxied_rejects_non_exact_loopback_endpoints() {
+        for addr in ["127.0.0.2:43123", "[::1]:43123", "127.0.0.1:0"] {
+            let addr = addr.parse().unwrap();
+            assert!(matches!(
+                build(&policy(vec![], NetworkPolicy::Proxied { proxy_addr: addr })),
+                Err(SandboxError::InvalidProxyEndpoint(rejected)) if rejected == addr
+            ));
+        }
     }
 
     #[test]

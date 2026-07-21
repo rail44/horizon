@@ -1,4 +1,5 @@
 use crate::FilesystemGrantScope;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 /// Errors from preparing or spawning a sandboxed command. Every "the
@@ -60,6 +61,9 @@ pub enum SandboxError {
 
     #[error("denied filesystem path {0} cannot be represented as a narrow grant")]
     UnsupportedGrantTarget(PathBuf),
+
+    #[error("proxied network endpoint must be 127.0.0.1 with a non-zero port, got {0}")]
+    InvalidProxyEndpoint(SocketAddr),
 
     #[error("filesystem grant proposal for {attempted} changed before approval")]
     GrantProposalChanged { attempted: PathBuf },

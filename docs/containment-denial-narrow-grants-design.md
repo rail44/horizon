@@ -1,9 +1,12 @@
 # Containment Denials and Narrow-Grant Retries
 
 Status: network direction accepted 2026-07-20; runtime ownership narrowed
-2026-07-21. The Linux helper, recording-deny `openat`/`openat2` mediation,
+2026-07-21. The Linux helper now has one combined filesystem/network seccomp
+listener, exact per-session proxy-endpoint enforcement, structured bypass
+records, ordinary HTTP client proxy configuration, and the existing
+domain-denial narrow-grant retry. Recording-deny `openat`/`openat2` mediation,
 structured filesystem approval, session grant store, sandboxed retry, and
-shadow-judge input are implemented. The missing-leaf policy is the nearest
+shadow-judge input are also implemented. The missing-leaf policy is the nearest
 existing parent directory, displayed honestly as a recursive tree grant.
 The owner has decided that containment denials become
 boundary-grant decisions, approval never removes the sandbox, and the local
@@ -11,8 +14,8 @@ cross-platform network baseline is a proxy-aware compatibility layer backed
 by OS enforcement rather than transparent redirection. Horizon will first
 extract the smallest relevant nono-cli v0.68.0 supervised-runtime slice into
 a local workspace crate instead of designing a new kernel-facing runtime from
-scratch. Network transport/enforcement replacement and macOS filesystem-denial
-recovery remain subsequent delivery legs.
+scratch. macOS runtime verification and filesystem-denial recovery remain
+subsequent delivery legs.
 
 This document corrects assumptions in `docs/agent-approval-design.md` as of
 commit `f82da5b`. It covers tier-1 sandboxed `bash`; host-side web tools retain
@@ -125,11 +128,12 @@ path emits `RetryWithoutSandbox`.
 7. **Audit:** the original denial, decision source (judge or human), exact
    grant, and retry result remain attributable to the original call id.
 
-## Current wiring, verified
+## Pre-correction wiring and verified findings
 
 ### Network
 
-`NetworkPolicy::Proxied` does **not** use nono's `ProxyOnly`. Horizon maps it
+Before the correction in this change, `NetworkPolicy::Proxied` did **not** use
+nono's `ProxyOnly`. Horizon mapped it
 to `NetworkMode::Blocked` and grants filesystem access to the UDS bridge
 (`crates/horizon-sandbox/src/caps.rs:88-118`). On Linux that grant is the
 bridge parent directory, not the socket file. Tier-1 bash builds that policy
@@ -170,7 +174,7 @@ There are three corrections to the former "only bridge egress" assumption:
    stricter seccomp proxy filter can inspect loopback address, TCP/UDP
    destinations, and pathname UDS, but `apply_auto_with_abi` explicitly does
    not install it on this path (`linux.rs:918-929, 2062-2083, 2381-2420`).
-3. Landlock network access handles TCP only. Under Horizon's current
+3. Landlock network access handles TCP only. Under Horizon's former
    `NetworkMode::Blocked` mapping, UDP and pathname UDS are not cut on a
    Landlock V4+ host. `ReadableScope::Full` also grants filesystem reach to
    every pathname UDS on the Linux path.
@@ -185,9 +189,9 @@ after each run:
   connected to a pathname UDS outside its writable root. It exited 0 and the
   listener received the payload.
 
-These must become permanent regression tests in the enforcement change. The
-present TCP-only test (`crates/horizon-sandbox/src/linux/tests.rs`,
-`network_off_fails_a_tcp_connect`) does not cover either route.
+These are now permanent regression tests in
+`crates/horizon-sandbox/tests/linux_supervised_helper.rs`, alongside an exact
+same-port loopback-address test and a combined filesystem/network report test.
 
 macOS is different: nono emits Seatbelt `deny network*` followed by an exact
 `(remote tcp "localhost:PORT")` exception for `ProxyOnly`, and generic
@@ -364,27 +368,25 @@ region. The existing judge rate limit, fail-to-human rule, and audit record
 remain unchanged. While the judge is shadow-only, humans still decide these
 requests.
 
-## Network implementation
+## Delivered network implementation
 
-Recommended shape:
+Delivered shape:
 
 1. Remove the UDS relay from the bash egress path. Keep the existing
    per-session `AllowlistProxy`, expose its loopback `SocketAddr`, and carry
    that endpoint in `NetworkPolicy::Proxied`.
-2. Map `Proxied` to nono `NetworkMode::ProxyOnly { port, bind_ports: [] }`.
-   On Linux, run the reduced nono-cli-derived helper and install a combined
-   user-notify filter containing nono's proxy-filter rules for every proxied
-   spawn, not only nono's pre-V4 fallback. It permits only IPv4/
-   IPv6 loopback at that exact proxy port, denies UDP destinations, and denies
-   pathname/abstract UDS except explicit capabilities. The same listener can
-   later carry filesystem-open notifications. Do not copy the upstream
-   separate-listener installation blindly: composition must be proved by the
-   integration test or replaced by one combined filter. This closes both
-   locally reproduced holes and the Landlock destination-IP gap.
-3. For `NetworkPolicy::Disabled`, install a full AF_INET/AF_INET6 block even
+2. `Proxied` maps to nono `NetworkMode::ProxyOnly { port, bind_ports: [] }`.
+   On Linux, the reduced nono-cli-derived helper installs a combined
+   user-notify filter derived from nono's proxy-filter rules for every proxied
+   spawn, not only nono's pre-V4 fallback. It permits only the exact IPv4
+   `127.0.0.1:PORT` endpoint, denies UDP destinations, and denies
+   pathname/abstract UDS. The same listener carries filesystem-open
+   notifications. This closes both locally reproduced holes and the Landlock
+   destination-IP gap.
+3. For `NetworkPolicy::Disabled`, the helper installs a full AF_INET/AF_INET6 block even
    on Landlock V4+, plus pathname-UDS mediation. Do not rely on Landlock's TCP
    rules as an all-protocol network boundary.
-4. Inject at least `http_proxy`, `https_proxy`, `HTTP_PROXY`, `HTTPS_PROXY`,
+4. Tier-1 bash injects `http_proxy`, `https_proxy`, `HTTP_PROXY`, `HTTPS_PROXY`,
    and `CARGO_HTTP_PROXY` with the per-session loopback URL. Clear/override
    inherited `NO_PROXY`/`no_proxy`; otherwise clients can intentionally skip
    the only permitted route. Cargo documents `CARGO_HTTP_PROXY`,
@@ -392,7 +394,8 @@ Recommended shape:
    specifically requires lowercase `http_proxy`. See the
    [Cargo configuration reference](https://doc.rust-lang.org/cargo/reference/config.html#httpproxy)
    and [curl proxy-environment reference](https://everything.curl.dev/usingcurl/proxies/env.html).
-   Exact variables get compatibility tests rather than an assumption.
+   `all_proxy`/`ALL_PROXY` are removed because the proxy does not claim
+   arbitrary-protocol support. The exact environment contract has a unit test.
 5. Keep the proxy-side allowlist and denial log. A proxy denial supplies the
    canonical grantable domain and is independent of the shell's exit code.
    A kernel-side direct-connect denial is structured but not domain-grantable:
@@ -408,14 +411,12 @@ binaries proxy-aware, and creates a second platform-specific networking
 stack. Kernel denial plus standard HTTP proxy configuration has the smaller
 trusted surface.
 
-One attribution follow-up is required. The current per-session
-`drain_denied_hosts` assumes the just-finished foreground call caused every
-denial. A background descendant can outlive its shell and issue a later
-request. The new ledger must at minimum use per-attempt epochs and never
-attach a pre-attempt record to a later call; a fully exact late-background
-association needs a per-call proxy credential or process identity channel.
-Until that exists, late records should be audited as unassigned rather than
-misattributed to the next call.
+Attribution remains per session and per serialized bash attempt. The bash FIFO
+prevents overlapping attempts, while the Linux helper is a child subreaper and
+does not publish its final report until the supervised process tree is gone;
+the proxy log is drained at completion. A future proxy shared across concurrent
+calls would need per-attempt credentials or epochs, but the current ownership
+and lifecycle do not permit that overlap.
 
 ## Filesystem implementation boundary
 
@@ -438,8 +439,8 @@ in `horizon-agent` or sessiond:
   policy, record disallowed requests, and return `EACCES`. This covers Cargo's
   lock/build-file case and ordinary read/create/truncate opens, independent of
   the final process exit code. It does not cover every filesystem syscall.
-  The network leg must replace this with one combined listener rather than
-  trying to install a second `NEW_LISTENER` filter.
+  The delivered network leg replaced this with one combined listener rather
+  than trying to install a second `NEW_LISTENER` filter.
 - **Linux complete slice:** extend the mediation filter and secure path
   decoding to all Landlock-controlled path-mutating syscall families. This is
   backend work, preferably contributed upstream to nono rather than maintained
@@ -460,15 +461,20 @@ captured.
 0. **Establish the extraction boundary.** Add the pinned local runtime crate,
    fail-closed recording backend, evidence-strength vocabulary, source
    provenance, and license. This step changes no sandbox behavior.
-1. **Restore the network invariant through the helper.** Permanent real-process tests prove:
+1. **Restore the network invariant through the helper — delivered
+   2026-07-21.** Permanent real-process tests prove:
    UDP cannot reach an outer listener; an arbitrary pathname UDS cannot reach
    an outer listener; direct TCP cannot reach a same-port decoy; configured
    proxy TCP can reach the proxy on loopback; macOS has equivalent
    profile/runtime coverage.
-2. **Make ordinary clients reach the proxy.** Real sandboxed `curl`, Cargo,
-   and git-over-HTTPS probes hit the proxy without per-command flags; an empty
-   allowlist yields a named denial even if shell exit is 0.
-3. **Generalize the grant contract.** Domain approve/deny behavior remains
+2. **Make ordinary clients reach the proxy — delivered for the standard
+   environment contract and real curl path 2026-07-21.** Real sandboxed curl
+   hits the proxy without per-command flags; an empty allowlist yields a named
+   denial even if shell exit is 0. Cargo uses the asserted
+   `CARGO_HTTP_PROXY`/HTTP proxy environment contract; a network-dependent
+   Cargo fixture is intentionally not part of the offline repository gate.
+3. **Generalize the grant contract — network and filesystem retry shapes
+   delivered separately.** Domain approve/deny behavior remains
    session-local and always retries sandboxed; audit fields identify the
    denial source and decision source.
 4. **Add filesystem session grants and the chosen discovery slice — delivered
@@ -507,10 +513,7 @@ Accepted on 2026-07-21:
   dedicated helper process; never call the upstream supervised `fork()` path
   directly inside multi-threaded sessiond.
 
-One filesystem delivery decision remains:
-
-1. Choose filesystem delivery scope:
-   - land the Linux `openat`/`openat2` incident-complete slice first, with
-     explicit residual limitations; or
-   - hold the filesystem feature until comprehensive Linux mediation and a
-     real-Mac denial source are both proven.
+The filesystem delivery decision was resolved in favor of the Linux
+`openat`/`openat2` incident-complete slice first, with explicit residual
+limitations. Comprehensive syscall mediation and real-Mac denial evidence
+remain follow-ups rather than prerequisites for that bounded claim.

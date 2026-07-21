@@ -90,9 +90,9 @@ impl SupervisorReport {
         self.reader.read(self.helper_pid)
     }
 
-    /// Returns the authoritative filesystem attempts with their smallest
-    /// currently enforceable static grants.
-    pub fn filesystem_denials(self) -> Result<Vec<crate::FilesystemDenial>, SandboxError> {
+    /// Returns authoritative grantable filesystem attempts plus structured,
+    /// non-grantable network/IPC bypass attempts.
+    pub fn containment_denials(self) -> Result<crate::ContainmentDenials, SandboxError> {
         let outcome = self
             .reader
             .read(self.helper_pid)
@@ -113,7 +113,21 @@ impl SupervisorReport {
                 }
             }
         }
-        Ok(denials)
+        let mut network = Vec::new();
+        for record in outcome.ipc_denials {
+            let denial = crate::NetworkDenial {
+                target: record.target,
+                operation: record.operation,
+                reason: record.reason,
+            };
+            if !network.contains(&denial) {
+                network.push(denial);
+            }
+        }
+        Ok(crate::ContainmentDenials {
+            filesystem: denials,
+            network,
+        })
     }
 }
 
