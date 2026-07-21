@@ -5,10 +5,16 @@
       "description": "What [`SessionHub::new_agent`]/[`SessionHub::attach_agent`] hand back.\n`events` carries both the session's provider events and the\nsession-scoped announcements that used to be their own control\nenvelopes (`SessionModel`, `ToolCallProgress`,\n`WorkspaceRootResolved`) — see\n[`horizon_agent::wire::AgentWireEvent`].",
       "properties": {
         "commands": {
-          "$comment": "remoc rch channel half: a chmux port reference on the wire"
+          "$comment": "remoc rch channel half: a chmux port reference on the wire; the x-channel-payload schema is what flows through it",
+          "x-channel-payload": {
+            "$ref": "#/$defs/Command"
+          }
         },
         "events": {
-          "$comment": "remoc rch channel half: a chmux port reference on the wire"
+          "$comment": "remoc rch channel half: a chmux port reference on the wire; the x-channel-payload schema is what flows through it",
+          "x-channel-payload": {
+            "$ref": "#/$defs/AgentWireEvent"
+          }
         }
       },
       "required": [
@@ -571,6 +577,11 @@
             "Call"
           ],
           "type": "object"
+        },
+        {
+          "const": "HelloRequired",
+          "description": "Any method other than `hello`/`drain` was called before a\nsuccessful `hello` on this connection. `hello` is contractually the\nfirst call (§3), and the daemon enforces it rather than trusting\nthe client: a rejected or skipped negotiation must not grant access\nto the negotiated-behavior surface. (`drain` stays reachable — it\nis the version-stable recovery path a rejected client legitimately\nuses.) Appended additively for v10.1 of the artifact's history —\nan older client never triggers it (it always hellos first).",
+          "type": "string"
         }
       ]
     },
@@ -581,12 +592,18 @@
           "type": "string"
         },
         "host_tool_responses": {
-          "$comment": "remoc rch channel half: a chmux port reference on the wire",
-          "description": "Client → daemon: the answers to `host_tools` requests, correlated by\n`request_id` exactly as before (the one correlation map the cutover\nkeeps: the exchange is genuinely asynchronous on the daemon side,\nwhere a session thread blocks on the matching response)."
+          "$comment": "remoc rch channel half: a chmux port reference on the wire; the x-channel-payload schema is what flows through it",
+          "description": "Client → daemon: the answers to `host_tools` requests, correlated by\n`request_id` exactly as before (the one correlation map the cutover\nkeeps: the exchange is genuinely asynchronous on the daemon side,\nwhere a session thread blocks on the matching response).",
+          "x-channel-payload": {
+            "$ref": "#/$defs/HostToolResponse"
+          }
         },
         "host_tools": {
-          "$comment": "remoc rch channel half: a chmux port reference on the wire",
-          "description": "Daemon → client: a hosted session asking the client to run a\nhost-coupled tool (e.g. `workspace.snapshot`). Replaces the\nconnection-global `host_tool_request` envelopes."
+          "$comment": "remoc rch channel half: a chmux port reference on the wire; the x-channel-payload schema is what flows through it",
+          "description": "Daemon → client: a hosted session asking the client to run a\nhost-coupled tool (e.g. `workspace.snapshot`). Replaces the\nconnection-global `host_tool_request` envelopes.",
+          "x-channel-payload": {
+            "$ref": "#/$defs/HostToolRequest"
+          }
         },
         "negotiated": {
           "description": "The highest mutually supported version — the version this\nconnection's *behavior* may rely on (§3: gates behavior, not\ndecodability).",
@@ -595,8 +612,11 @@
           "type": "integer"
         },
         "skipped_lines": {
-          "$comment": "remoc rch channel half: a chmux port reference on the wire",
-          "description": "Daemon → client: the daemon's startup event-log corruption summary,\nsent at most once per connection, after its resume finishes.\nReplaces the `SkippedLines` control envelope."
+          "$comment": "remoc rch channel half: a chmux port reference on the wire; the x-channel-payload schema is what flows through it",
+          "description": "Daemon → client: the daemon's startup event-log corruption summary,\nsent at most once per connection, after its resume finishes.\nReplaces the `SkippedLines` control envelope.",
+          "x-channel-payload": {
+            "type": "string"
+          }
         }
       },
       "required": [
@@ -908,10 +928,16 @@
       "description": "What [`SessionHub::create_terminal`]/[`SessionHub::attach_terminal`]\nhand back: the session's live channel pair. Frame delivery semantics\nare deliberately unchanged in v10 (`docs/remoc-adoption-design.md`\n§6 step 2): `updates` carries the same `Snapshot`/`FrameDiff`/…\nvocabulary the JSONL wire carried, verbatim, over one mpsc channel —\nthe watch-of-full-frames swap (§5 Option A) is the next, separately\nreviewed step.",
       "properties": {
         "commands": {
-          "$comment": "remoc rch channel half: a chmux port reference on the wire"
+          "$comment": "remoc rch channel half: a chmux port reference on the wire; the x-channel-payload schema is what flows through it",
+          "x-channel-payload": {
+            "$ref": "#/$defs/TerminalCommand"
+          }
         },
         "updates": {
-          "$comment": "remoc rch channel half: a chmux port reference on the wire"
+          "$comment": "remoc rch channel half: a chmux port reference on the wire; the x-channel-payload schema is what flows through it",
+          "x-channel-payload": {
+            "$ref": "#/$defs/TerminalUpdate"
+          }
         }
       },
       "required": [
@@ -2011,6 +2037,9 @@
     },
     "host_tool_responses": {
       "$ref": "#/$defs/HostToolResponse"
+    },
+    "skipped_lines": {
+      "type": "string"
     },
     "terminal_commands": {
       "$ref": "#/$defs/TerminalCommand"

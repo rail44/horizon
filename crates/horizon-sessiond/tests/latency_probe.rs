@@ -31,7 +31,8 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use horizon_session_protocol::{
-    ClientHello, SessionHub as _, SessionHubClient, TerminalAttachment, WireCodec,
+    CappedReceiver, ClientHello, SessionHub as _, SessionHubClient, TerminalAttachment, WireCodec,
+    FRAME_MAX_ITEM_BYTES,
 };
 use horizon_terminal_core::{
     apply_frame_diff, KeyEventKind, TerminalColorScheme, TerminalCommand, TerminalSize,
@@ -193,7 +194,7 @@ async fn write_key(commands: &rch::mpsc::Sender<TerminalCommand, WireCodec>, ch:
 /// Reads the next terminal update off an attachment's channel with its
 /// arrival `Instant`.
 async fn read_terminal_update_timed(
-    updates: &mut rch::mpsc::Receiver<TerminalUpdate, WireCodec>,
+    updates: &mut CappedReceiver<TerminalUpdate, FRAME_MAX_ITEM_BYTES>,
 ) -> (TerminalUpdate, Instant) {
     let update = tokio::time::timeout(Duration::from_secs(5), updates.recv())
         .await
@@ -264,7 +265,7 @@ fn report(label: &str, mut samples_ms: Vec<f64>) {
 ///   module doc / the investigation report for the numbers this
 ///   produces.
 async fn wait_for_marker(
-    updates: &mut rch::mpsc::Receiver<TerminalUpdate, WireCodec>,
+    updates: &mut CappedReceiver<TerminalUpdate, FRAME_MAX_ITEM_BYTES>,
     frame: &mut horizon_terminal_core::TerminalFrame,
     matches: impl Fn(&str) -> bool,
     since: Instant,

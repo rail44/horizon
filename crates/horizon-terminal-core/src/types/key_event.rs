@@ -19,7 +19,9 @@ pub enum KeyEventKind {
     Repeat,
     Release,
     /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
-    /// decodes to `Unknown` (its payload, if any, is discarded). Keep last. Encoders
+    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
+    /// discarded there; under serde_json only *unit* variants degrade —
+    /// a payload-carrying one is a per-item decode error instead). Keep last. Encoders
     /// treat an unknown kind like [`KeyEventKind::Press`] (the only safe
     /// reading: dropping a press loses input, repeating a release cannot).
     #[serde(other)]

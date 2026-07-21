@@ -1,3 +1,4 @@
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -6,8 +7,9 @@ use std::time::Duration;
 use horizon_agent::contract::{self, Command};
 use horizon_agent::wire::{self, HostToolResponse};
 use horizon_session_protocol::{
-    legacy, ClientHello, HubError, HubHello, SessionHub as _, SessionHubClient, TerminalAttachment,
-    WireCodec, SESSION_PROTOCOL_VERSION,
+    legacy, CappedReceiver, ClientHello, DecodeSkipLog, HubError, HubHello, SessionHub as _,
+    SessionHubClient, TerminalAttachment, WireCodec, CONTROL_MAX_ITEM_BYTES, RTC_MAX_REPLY_BYTES,
+    RTC_MAX_REQUEST_BYTES, SESSION_PROTOCOL_VERSION, TOOL_IO_MAX_ITEM_BYTES,
 };
 use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
 use remoc::rch;
@@ -25,10 +27,49 @@ use super::routing::Routes;
 /// completes it in milliseconds (its accept loop serves the hub before it
 /// even opens its event log); what this bounds is the *cross-generation*
 /// case (`docs/remoc-adoption-design.md` §6): a still-running JSONL
-/// daemon reads our chmux hello as a torn JSON line and either closes
-/// (fast transport error) or keeps waiting for a newline that never comes
-/// (this timeout) — never chmux's own raw 60 s `ChMux(Timeout)`.
+/// daemon blocks in `read_line` waiting for a newline our chmux hello
+/// never contains (measured — the v9 pre-hello loop is *silent* against
+/// chmux bytes), so it presents as this timeout — never chmux's own raw
+/// 60 s `ChMux(Timeout)`.
 const ESTABLISH_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Test-only override for [`ESTABLISH_TIMEOUT`]
+/// (`HORIZON_TEST_ESTABLISH_TIMEOUT_MS`): the silence-escalation tests
+/// below would otherwise take `SILENCE_MISMATCH_THRESHOLD × 5 s` of real
+/// wall clock per stale daemon. Never set in production.
+fn establish_timeout() -> Duration {
+    std::env::var("HORIZON_TEST_ESTABLISH_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(ESTABLISH_TIMEOUT)
+}
+
+/// How many *consecutive* silent establish timeouts equal "a JSONL
+/// generation daemon holds the socket" (`docs/remoc-adoption-design.md`
+/// §6's bounded-timeout detection). One timeout is not evidence — a
+/// healthy daemon can be transiently unresponsive (its one-at-a-time
+/// accept loop busy, host under load) and the once-per-runtime recovery
+/// budget must not be burned on that — but a *v9 daemon is silent every
+/// time* (measured: its pre-hello `read_line` never completes on chmux
+/// bytes), so persistence is the signal.
+const SILENCE_MISMATCH_THRESHOLD: u32 = 3;
+
+/// Deadline for one established-phase rtc call (`list_terminals`,
+/// `list_agents`, `attach_terminal`, `attach_agent`, `new_agent`). Not
+/// tight on purpose: `list_agents`/`new_agent`/`attach_agent` legitimately
+/// block on the daemon's resume-readiness gate (a large event log takes
+/// real seconds to resume), so a short deadline would misreport a healthy
+/// startup as a failure. A timeout fails only that op — the runtime and
+/// connection survive.
+const OP_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// [`OP_TIMEOUT`]'s sibling for `create_terminal`, which is bounded
+/// daemon-side by up to 3 × 10 s PTY spawn attempts (see
+/// `TerminalHost::create`'s watchdog) — the client deadline must sit
+/// above that whole budget or it would give up on a spawn the daemon is
+/// still legitimately retrying.
+const CREATE_TERMINAL_TIMEOUT: Duration = Duration::from_secs(45);
 
 pub(super) struct RuntimeControl {
     cancelled: AtomicBool,
@@ -140,6 +181,11 @@ pub(super) fn spawn(
         };
         runtime.block_on(async {
             let mut mismatch_recovery_attempted = false;
+            // The transient-retry backoff (the JSONL era's
+            // `hello_retry_delay`, restored) and the consecutive-silence
+            // counter behind `SILENCE_MISMATCH_THRESHOLD`.
+            let mut retry_delay = Duration::from_millis(50);
+            let mut consecutive_silences: u32 = 0;
             loop {
                 let stream = tokio::select! {
                     result = horizon_agent::client::connect_or_spawn_retrying(
@@ -157,49 +203,80 @@ pub(super) fn spawn(
                 };
 
                 match run_stream(stream, &mut ops, routes.clone(), control.clone()).await {
-                    StreamEnd::GenerationMismatch { message } => {
-                        // Auto-recovery across the transport generation
-                        // (docs/remoc-adoption-design.md §6, extending PR
-                        // #18's decisions): drain the stale JSONL daemon at
-                        // *its own* envelope version via the quarantined
-                        // legacy encoder, then let the next iteration's
-                        // connect_or_spawn_retrying start a fresh binary.
-                        // Attempted exactly once per runtime: if the
-                        // respawned daemon still can't speak remoc (a stale
-                        // horizon-sessiond binary -- `cargo run` rebuilds
-                        // only the horizon binary), restarting it again
-                        // would loop forever, so give up loudly instead.
-                        if mismatch_recovery_attempted {
-                            let error = format!(
-                                "{message} -- automatic drain-and-restart was already attempted \
-                                 once; rebuild horizon-sessiond (`cargo build --workspace`) and \
-                                 run `Reload Session Runtime`"
-                            );
-                            eprintln!("horizon-sessiond connection stopped: {error}");
-                            routes.connection_failed(error);
-                            break;
-                        }
-                        mismatch_recovery_attempted = true;
-                        eprintln!(
-                            "a horizon-sessiond that does not speak the v{SESSION_PROTOCOL_VERSION} \
-                             remoc wire detected ({message}); draining and restarting it"
-                        );
-                        let drained = tokio::select! {
-                            drained = drain_stale_sessiond(&socket_path) => drained,
+                    StreamEnd::PreHelloTransport { message } => {
+                        // Transient: retry with backoff, never consuming the
+                        // recovery budget. A differently-shaped failure also
+                        // breaks any "persistent silence" pattern.
+                        consecutive_silences = 0;
+                        eprintln!("horizon-sessiond hello transport failed, retrying: {message}");
+                        tokio::select! {
+                            _ = tokio::time::sleep(retry_delay) => {}
                             _ = control.cancelled() => {
                                 routes.connection_failed("sessiond runtime stopped".to_string());
                                 break;
                             }
-                        };
-                        if let Err(error) = drained {
-                            let error =
-                                format!("{message} -- and the automatic drain failed: {error}");
-                            eprintln!("horizon-sessiond connection stopped: {error}");
-                            routes.connection_failed(error);
+                        }
+                        retry_delay = (retry_delay * 2).min(Duration::from_secs(1));
+                        continue;
+                    }
+                    StreamEnd::Silence { message } => {
+                        consecutive_silences += 1;
+                        if consecutive_silences < SILENCE_MISMATCH_THRESHOLD {
+                            // One silent deadline is not generation
+                            // evidence (a busy daemon/host) -- retry.
+                            eprintln!(
+                                "horizon-sessiond did not answer within the establish deadline \
+                                 ({consecutive_silences}/{SILENCE_MISMATCH_THRESHOLD} before \
+                                 mismatch recovery): {message}"
+                            );
+                            tokio::select! {
+                                _ = tokio::time::sleep(retry_delay) => {}
+                                _ = control.cancelled() => {
+                                    routes.connection_failed(
+                                        "sessiond runtime stopped".to_string(),
+                                    );
+                                    break;
+                                }
+                            }
+                            retry_delay = (retry_delay * 2).min(Duration::from_secs(1));
+                            continue;
+                        }
+                        // Persistent silence IS how a real JSONL daemon
+                        // presents (docs/remoc-adoption-design.md par.6's
+                        // bounded-timeout detection): fall through to the
+                        // recovery arm below.
+                        consecutive_silences = 0;
+                        if let ControlFlow::Break(()) = recover_generation_mismatch(
+                            &message,
+                            &mut mismatch_recovery_attempted,
+                            &socket_path,
+                            &routes,
+                            &control,
+                        )
+                        .await
+                        {
+                            break;
+                        }
+                    }
+                    StreamEnd::GenerationMismatch { message } => {
+                        // Positive garbage evidence goes straight to the
+                        // recovery arm -- no healthy remoc daemon can send
+                        // non-chmux bytes.
+                        consecutive_silences = 0;
+                        if let ControlFlow::Break(()) = recover_generation_mismatch(
+                            &message,
+                            &mut mismatch_recovery_attempted,
+                            &socket_path,
+                            &routes,
+                            &control,
+                        )
+                        .await
+                        {
                             break;
                         }
                     }
                     StreamEnd::VersionRejected { message } => {
+                        consecutive_silences = 0;
                         // A healthy remoc daemon whose negotiated range
                         // doesn't overlap ours -- the successor of the JSONL
                         // `HandshakeRejected` recovery: ask it to drain over
@@ -248,6 +325,56 @@ pub(super) fn spawn(
     });
 }
 
+/// The once-per-runtime JSONL-generation recovery
+/// (`docs/remoc-adoption-design.md` §6, extending PR #18's decisions):
+/// drain the stale daemon at *its own* envelope version via the
+/// quarantined legacy encoder, then let the caller's next
+/// `connect_or_spawn_retrying` start a fresh binary. `Break` means the
+/// runtime must stop (budget already spent, drain failed, or cancelled)
+/// -- `connection_failed` has already been fanned out then; `Continue`
+/// means recovery succeeded and the caller should reconnect.
+async fn recover_generation_mismatch(
+    message: &str,
+    mismatch_recovery_attempted: &mut bool,
+    socket_path: &Path,
+    routes: &Arc<Routes>,
+    control: &Arc<RuntimeControl>,
+) -> ControlFlow<()> {
+    if *mismatch_recovery_attempted {
+        // If the respawned daemon still can't speak remoc (a stale
+        // horizon-sessiond binary -- `cargo run` rebuilds only the horizon
+        // binary), restarting it again would loop forever, so give up
+        // loudly instead.
+        let error = format!(
+            "{message} -- automatic drain-and-restart was already attempted \
+             once; rebuild horizon-sessiond (`cargo build --workspace`) and \
+             run `Reload Session Runtime`"
+        );
+        eprintln!("horizon-sessiond connection stopped: {error}");
+        routes.connection_failed(error);
+        return ControlFlow::Break(());
+    }
+    *mismatch_recovery_attempted = true;
+    eprintln!(
+        "a horizon-sessiond that does not speak the v{SESSION_PROTOCOL_VERSION} \
+         remoc wire detected ({message}); draining and restarting it"
+    );
+    let drained = tokio::select! {
+        drained = drain_stale_sessiond(socket_path) => drained,
+        _ = control.cancelled() => {
+            routes.connection_failed("sessiond runtime stopped".to_string());
+            return ControlFlow::Break(());
+        }
+    };
+    if let Err(error) = drained {
+        let error = format!("{message} -- and the automatic drain failed: {error}");
+        eprintln!("horizon-sessiond connection stopped: {error}");
+        routes.connection_failed(error);
+        return ControlFlow::Break(());
+    }
+    ControlFlow::Continue(())
+}
+
 #[cfg(test)]
 pub(super) fn spawn_test_stream<S>(
     stream: S,
@@ -278,27 +405,50 @@ pub(super) fn spawn_test_stream<S>(
             StreamEnd::GenerationMismatch { message } | StreamEnd::VersionRejected { message } => {
                 routes.connection_failed(message)
             }
-            StreamEnd::Cancelled | StreamEnd::Dropped => {}
+            // A test stream cannot be re-dialed either, so a transient or
+            // silent end just stops the runtime (like the JSONL era's
+            // test-stream handling of `PreHelloTransport`).
+            StreamEnd::PreHelloTransport { .. }
+            | StreamEnd::Silence { .. }
+            | StreamEnd::Cancelled
+            | StreamEnd::Dropped => {}
         }
         control.mark_stopped();
     });
 }
 
 enum StreamEnd {
-    /// The peer on the socket never completed a remoc handshake + hello:
-    /// either the transport failed during it, or [`ESTABLISH_TIMEOUT`]
-    /// elapsed. This is how a still-running JSONL-generation (v≤9) daemon
-    /// presents -- it cannot decode chmux at all, so it can neither answer
-    /// nor say which version it speaks. A daemon that genuinely died in
-    /// this window looks the same, but the recovery path is harmless there
-    /// (its socket already refuses connections, so the drain is a no-op
-    /// and the respawn is exactly what a dead daemon needs). Recoverable:
-    /// see `spawn`'s probe-drain-restart arm.
+    /// A transient pre-hello failure — connection drop, IO error, base
+    /// channel EOF, or the `hello` call's own transport failure
+    /// (`HubError::Call`). Retried with backoff, exactly like the JSONL
+    /// era's `PreHelloTransport`; **never** consumes the once-per-runtime
+    /// mismatch-recovery budget (a daemon crash or a busy host must not
+    /// eat the one automatic drain-and-restart this runtime gets).
+    PreHelloTransport {
+        message: String,
+    },
+    /// The peer stayed silent for the whole establish deadline. One
+    /// occurrence is treated like a transient (retried); only
+    /// [`SILENCE_MISMATCH_THRESHOLD`] *consecutive* silences escalate to
+    /// the generation-mismatch recovery, because persistent silence is
+    /// exactly how a real v9 JSONL daemon presents (measured: its
+    /// pre-hello `read_line` blocks forever on chmux bytes) while a
+    /// healthy remoc daemon answers in milliseconds.
+    Silence {
+        message: String,
+    },
+    /// Positive garbage evidence: the peer *sent bytes that are not
+    /// chmux* (a length-prefix/framing violation — e.g. JSONL text reads
+    /// as an absurd frame length — or a chmux protocol error). No healthy
+    /// remoc daemon can produce this, so it consumes the recovery budget
+    /// immediately. A daemon that died mid-handshake does **not** land
+    /// here (that is [`Self::PreHelloTransport`]).
     GenerationMismatch {
         message: String,
     },
     /// The daemon speaks remoc and answered `hello` with an explicit
-    /// version-range rejection. Recoverable via an rtc `drain`.
+    /// version-range rejection. Recoverable via an rtc `drain`; consumes
+    /// the recovery budget.
     VersionRejected {
         message: String,
     },
@@ -330,9 +480,9 @@ where
     };
     let (hub, hello, conn_task) = match established {
         Ok(established) => established,
-        Err(EstablishError::NoRemocPeer(message)) => {
-            return StreamEnd::GenerationMismatch { message }
-        }
+        Err(EstablishError::Transient(message)) => return StreamEnd::PreHelloTransport { message },
+        Err(EstablishError::Silence(message)) => return StreamEnd::Silence { message },
+        Err(EstablishError::Garbage(message)) => return StreamEnd::GenerationMismatch { message },
         Err(EstablishError::Rejected(message)) => return StreamEnd::VersionRejected { message },
         Err(EstablishError::Fatal(message)) => return StreamEnd::Fatal(message),
     };
@@ -380,12 +530,42 @@ where
 }
 
 enum EstablishError {
-    /// No remoc endpoint on the other side (transport error, closed, or
-    /// timed out mid-handshake) — the generation-mismatch signal.
-    NoRemocPeer(String),
+    /// See [`StreamEnd::PreHelloTransport`].
+    Transient(String),
+    /// See [`StreamEnd::Silence`].
+    Silence(String),
+    /// See [`StreamEnd::GenerationMismatch`] — received non-chmux bytes.
+    Garbage(String),
     /// The daemon's hub rejected our version range.
     Rejected(String),
     Fatal(String),
+}
+
+/// Classifies a failed `Connect::io`: framing/protocol violations are
+/// positive "the peer is not speaking chmux" evidence (measured: a JSONL
+/// line read as a chmux length prefix fails instantly with a
+/// `LengthDelimitedCodecError` under `ErrorKind::InvalidData`; a decodable
+/// frame with an invalid multiplex message is `ChMuxError::Protocol`);
+/// everything else — closes, resets, plain IO errors — is transient.
+fn classify_connect_error(
+    error: &remoc::ConnectError<std::io::Error, std::io::Error>,
+) -> EstablishError {
+    use remoc::chmux::ChMuxError;
+    let garbage = match error {
+        remoc::ConnectError::ChMux(ChMuxError::Protocol(_)) => true,
+        remoc::ConnectError::ChMux(ChMuxError::StreamError(io_error)) => {
+            io_error.kind() == std::io::ErrorKind::InvalidData
+        }
+        _ => false,
+    };
+    if garbage {
+        EstablishError::Garbage(format!(
+            "sessiond sent bytes that are not remoc/chmux (likely a stale pre-v10 JSONL \
+             daemon): {error}"
+        ))
+    } else {
+        EstablishError::Transient(format!("remoc connect to sessiond failed: {error}"))
+    }
 }
 
 type EstablishedParts = (
@@ -404,7 +584,8 @@ async fn establish<S>(stream: S) -> Result<EstablishedParts, EstablishError>
 where
     S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static,
 {
-    let deadline = tokio::time::Instant::now() + ESTABLISH_TIMEOUT;
+    let timeout = establish_timeout();
+    let deadline = tokio::time::Instant::now() + timeout;
     let (read_half, write_half) = tokio::io::split(stream);
 
     let connect = remoc::Connect::io::<_, _, (), SessionHubClient<WireCodec>, WireCodec>(
@@ -414,36 +595,43 @@ where
     );
     let (conn, _base_tx, mut base_rx) = match tokio::time::timeout_at(deadline, connect).await {
         Ok(Ok(connected)) => connected,
-        Ok(Err(error)) => {
-            return Err(EstablishError::NoRemocPeer(format!(
-                "sessiond did not complete a remoc handshake (likely a stale pre-v10 JSONL \
-                 daemon): {error}"
-            )))
-        }
+        Ok(Err(error)) => return Err(classify_connect_error(&error)),
         Err(_elapsed) => {
-            return Err(EstablishError::NoRemocPeer(format!(
-                "sessiond sent no remoc handshake within {ESTABLISH_TIMEOUT:?} (likely a stale \
-                 pre-v10 JSONL daemon)"
+            return Err(EstablishError::Silence(format!(
+                "sessiond sent no remoc handshake within {timeout:?}"
             )))
         }
     };
     let conn_task = tokio::spawn(conn);
 
-    let hub = match tokio::time::timeout_at(deadline, base_rx.recv()).await {
+    let mut hub = match tokio::time::timeout_at(deadline, base_rx.recv()).await {
         Ok(Ok(Some(hub))) => hub,
+        // Base-channel EOF/errors: the chmux handshake *did* complete, so
+        // the peer speaks remoc — a drop here is a dying daemon, not a
+        // generation signal. Transient.
         Ok(Ok(None)) | Ok(Err(_)) => {
             conn_task.abort();
-            return Err(EstablishError::NoRemocPeer(
+            return Err(EstablishError::Transient(
                 "sessiond closed the connection before handing over its hub client".to_string(),
             ));
         }
         Err(_elapsed) => {
             conn_task.abort();
-            return Err(EstablishError::NoRemocPeer(format!(
-                "sessiond handed over no hub client within {ESTABLISH_TIMEOUT:?}"
+            return Err(EstablishError::Silence(format!(
+                "sessiond handed over no hub client within {timeout:?}"
             )));
         }
     };
+
+    // The reply cap travels with each request (the macro caps the
+    // per-call reply channel from this value), so setting it here is the
+    // effective knob for what this client will accept per reply. The
+    // request cap, by contrast, is enforced daemon-side from the value
+    // the daemon set before transporting this client — the local set
+    // below only re-documents the intended bound (a transported sender's
+    // local cap is not re-checked).
+    hub.set_max_request_size(RTC_MAX_REQUEST_BYTES);
+    hub.set_max_reply_size(RTC_MAX_REPLY_BYTES);
 
     let client_hello = ClientHello::new(concat!("horizon/", env!("CARGO_PKG_VERSION")));
     match tokio::time::timeout_at(deadline, hub.hello(client_hello)).await {
@@ -454,6 +642,15 @@ where
                 "sessiond rejected the handshake: {error}"
             )))
         }
+        // The hello call's own transport failure — a connection drop
+        // mid-call. Transient, like every other pre-hello drop (this used
+        // to go fatal; the review fixed that regression).
+        Ok(Err(error @ HubError::Call(_))) => {
+            conn_task.abort();
+            Err(EstablishError::Transient(format!(
+                "the connection dropped during hello: {error}"
+            )))
+        }
         Ok(Err(error)) => {
             conn_task.abort();
             Err(EstablishError::Fatal(format!(
@@ -462,18 +659,19 @@ where
         }
         Err(_elapsed) => {
             conn_task.abort();
-            Err(EstablishError::NoRemocPeer(format!(
-                "sessiond did not answer hello within {ESTABLISH_TIMEOUT:?}"
+            Err(EstablishError::Silence(format!(
+                "sessiond did not answer hello within {timeout:?}"
             )))
         }
     }
 }
 
 fn spawn_host_tool_pump(
-    mut host_tools: rch::mpsc::Receiver<wire::HostToolRequest, WireCodec>,
+    mut host_tools: CappedReceiver<wire::HostToolRequest, TOOL_IO_MAX_ITEM_BYTES>,
     routes: Arc<Routes>,
 ) {
     tokio::spawn(async move {
+        let mut skips = DecodeSkipLog::new("host-tool requests");
         loop {
             match host_tools.recv().await {
                 Ok(Some(request)) => routes.host_tool_request(request),
@@ -481,15 +679,13 @@ fn spawn_host_tool_pump(
                 Err(err) if err.is_final() => break,
                 // Adoption condition 2: skip the poisoned item, keep the
                 // channel.
-                Err(err) => {
-                    eprintln!("horizon-sessiond sent an undecodable host-tool request: {err}")
-                }
+                Err(err) => skips.note(&err),
             }
         }
     });
 }
 
-fn spawn_skipped_lines_pump(mut skipped_lines: rch::mpsc::Receiver<String, WireCodec>) {
+fn spawn_skipped_lines_pump(mut skipped_lines: CappedReceiver<String, CONTROL_MAX_ITEM_BYTES>) {
     tokio::spawn(async move {
         while let Ok(Some(summary)) = skipped_lines.recv().await {
             // No pane consumes this today (parity with the JSONL wire,
@@ -511,7 +707,7 @@ fn handle_op(op: Op, live: &Live) {
             let routes = live.routes.clone();
             tokio::spawn(async move {
                 let session_id = new.session_id;
-                match hub.new_agent(new).await {
+                match with_deadline(OP_TIMEOUT, "new_agent", hub.new_agent(new)).await {
                     Ok(attachment) => {
                         run_agent_attachment(routes, session_id, attachment, commands).await
                     }
@@ -529,7 +725,8 @@ fn handle_op(op: Op, live: &Live) {
             let hub = live.hub.clone();
             let routes = live.routes.clone();
             tokio::spawn(async move {
-                match hub.attach_agent(session_id).await {
+                match with_deadline(OP_TIMEOUT, "attach_agent", hub.attach_agent(session_id)).await
+                {
                     Ok(attachment) => {
                         run_agent_attachment(routes, session_id, attachment, commands).await
                     }
@@ -548,13 +745,19 @@ fn handle_op(op: Op, live: &Live) {
             let hub = live.hub.clone();
             let routes = live.routes.clone();
             tokio::spawn(async move {
-                match hub.create_terminal(session_id, *spec).await {
+                match with_deadline(
+                    CREATE_TERMINAL_TIMEOUT,
+                    "create_terminal",
+                    hub.create_terminal(session_id, *spec),
+                )
+                .await
+                {
                     Ok(attachment) => {
                         run_terminal_attachment(routes, session_id, attachment, commands).await
                     }
                     // What the JSONL wire delivered as a
                     // `TerminalUpdate::Error` on the update stream.
-                    Err(error) => routes.terminal_failed(session_id, error.to_string()),
+                    Err(error) => routes.terminal_failed(session_id, error),
                 }
             });
         }
@@ -566,7 +769,13 @@ fn handle_op(op: Op, live: &Live) {
             let hub = live.hub.clone();
             let routes = live.routes.clone();
             tokio::spawn(async move {
-                match hub.attach_terminal(session_id).await {
+                match with_deadline(
+                    OP_TIMEOUT,
+                    "attach_terminal",
+                    hub.attach_terminal(session_id),
+                )
+                .await
+                {
                     Ok(attachment) => {
                         let _ = reply.send(true);
                         run_terminal_attachment(routes, session_id, attachment, commands).await;
@@ -580,20 +789,14 @@ fn handle_op(op: Op, live: &Live) {
         Op::TerminalList { reply } => {
             let hub = live.hub.clone();
             tokio::spawn(async move {
-                let result = hub
-                    .list_terminals()
-                    .await
-                    .map_err(|error| format!("terminal list failed: {error}"));
+                let result = with_deadline(OP_TIMEOUT, "terminal list", hub.list_terminals()).await;
                 let _ = reply.send(result);
             });
         }
         Op::SessionList { reply } => {
             let hub = live.hub.clone();
             tokio::spawn(async move {
-                let result = hub
-                    .list_agents()
-                    .await
-                    .map_err(|error| format!("agent list failed: {error}"));
+                let result = with_deadline(OP_TIMEOUT, "agent list", hub.list_agents()).await;
                 let _ = reply.send(result);
             });
         }
@@ -608,10 +811,27 @@ fn handle_op(op: Op, live: &Live) {
             tokio::spawn(async move {
                 // The daemon exits inside this call, so the reply usually
                 // never arrives; completion is observed by the caller as
-                // the socket refusing connections (`wait_for_drain`).
-                let _ = hub.drain().await;
+                // the socket refusing connections (`wait_for_drain`) --
+                // bounded so an unresponsive daemon can't pin this task.
+                let _ = tokio::time::timeout(establish_timeout(), hub.drain()).await;
             });
         }
+    }
+}
+
+/// Bounds one established-phase rtc call. A deadline expiry fails only
+/// that call (the reply channel gets an error, or the routes get a
+/// per-session failure) — the runtime and the connection stay up, because
+/// a wedged single call must not take down every other live attachment.
+async fn with_deadline<T>(
+    deadline: Duration,
+    what: &str,
+    call: impl std::future::Future<Output = Result<T, HubError>>,
+) -> Result<T, String> {
+    match tokio::time::timeout(deadline, call).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(error)) => Err(format!("{what} failed: {error}")),
+        Err(_elapsed) => Err(format!("{what} did not answer within {deadline:?}")),
     }
 }
 
@@ -627,11 +847,20 @@ async fn run_terminal_attachment(
         mut updates,
         commands: remote_commands,
     } = attachment;
+    let mut update_skips = DecodeSkipLog::new("terminal updates");
+    let mut command_skips = DecodeSkipLog::new("terminal commands");
     loop {
         tokio::select! {
             command = commands.recv() => match command {
                 Some(command) => {
-                    if remote_commands.send(command).await.is_err() {
+                    if let Err(err) = remote_commands.send(command).await {
+                        // rch latches remote-send errors on the sender
+                        // (one failure means every later send fails too),
+                        // so any send error ends the attachment rather
+                        // than skip-looping. Oversized commands are
+                        // enforced daemon-side as per-item *receive*
+                        // skips, so they never surface here.
+                        command_skips.note(&err);
                         break;
                     }
                 }
@@ -651,9 +880,7 @@ async fn run_terminal_attachment(
                 // Adoption condition 2: one undecodable update is skipped;
                 // the channel survives. A degraded frame lasts until the
                 // next one replaces it.
-                Err(err) => {
-                    eprintln!("skipping an undecodable terminal update for {session_id}: {err}")
-                }
+                Err(err) => update_skips.note(&err),
             },
         }
     }
@@ -671,11 +898,15 @@ async fn run_agent_attachment(
         mut events,
         commands: remote_commands,
     } = attachment;
+    let mut event_skips = DecodeSkipLog::new("agent events");
+    let mut command_skips = DecodeSkipLog::new("agent commands");
     loop {
         tokio::select! {
             command = commands.recv() => match command {
                 Some(command) => {
-                    if remote_commands.send(command).await.is_err() {
+                    if let Err(err) = remote_commands.send(command).await {
+                        // See the terminal runner: send errors latch.
+                        command_skips.note(&err);
                         break;
                     }
                 }
@@ -685,9 +916,7 @@ async fn run_agent_attachment(
                 Ok(Some(event)) => routes.route_agent_event(session_id, event),
                 Ok(None) => break,
                 Err(err) if err.is_final() => break,
-                Err(err) => {
-                    eprintln!("skipping an undecodable agent event for {session_id:?}: {err}")
-                }
+                Err(err) => event_skips.note(&err),
             },
         }
     }
@@ -752,7 +981,10 @@ async fn drain_incompatible_remoc_sessiond(socket_path: &Path) -> Result<(), Str
     };
     match establish_for_drain(stream).await {
         Ok((hub, conn_task)) => {
-            let _ = hub.drain().await;
+            // Bounded like every establish leg: an incompatible daemon that
+            // accepts the connection but never answers must not pin the
+            // recovery path.
+            let _ = tokio::time::timeout(establish_timeout(), hub.drain()).await;
             conn_task.abort();
         }
         Err(error) => {
@@ -781,7 +1013,7 @@ async fn establish_for_drain(
     ),
     String,
 > {
-    let deadline = tokio::time::Instant::now() + ESTABLISH_TIMEOUT;
+    let deadline = tokio::time::Instant::now() + establish_timeout();
     let (read_half, write_half) = stream.into_split();
     let connect = remoc::Connect::io::<_, _, (), SessionHubClient<WireCodec>, WireCodec>(
         remoc::Cfg::default(),

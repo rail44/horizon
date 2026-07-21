@@ -39,8 +39,9 @@ use horizon_agent::wire::{
     AgentWireEvent, HostToolRequest, HostToolResponse, SessionNew, SessionSummary,
 };
 use horizon_session_protocol::{
-    ClientHello, HubError, SessionHub as _, SessionHubClient, VersionRange, WireCodec,
-    MIN_SUPPORTED_PROTOCOL_VERSION, SESSION_PROTOCOL_VERSION,
+    CappedReceiver, ClientHello, HubError, SessionHub as _, SessionHubClient, VersionRange,
+    WireCodec, CONTROL_MAX_ITEM_BYTES, FRAME_MAX_ITEM_BYTES, MIN_SUPPORTED_PROTOCOL_VERSION,
+    SESSION_PROTOCOL_VERSION, TOOL_IO_MAX_ITEM_BYTES,
 };
 use horizon_terminal_core::{
     apply_frame_diff, TerminalColorScheme, TerminalCommand, TerminalFrame, TerminalSize,
@@ -474,9 +475,9 @@ struct HubTestClient {
     hub: SessionHubClient<WireCodec>,
     negotiated: u32,
     binary_id: String,
-    host_tools: rch::mpsc::Receiver<HostToolRequest, WireCodec>,
+    host_tools: CappedReceiver<HostToolRequest, TOOL_IO_MAX_ITEM_BYTES>,
     host_tool_responses: rch::mpsc::Sender<HostToolResponse, WireCodec>,
-    skipped_lines: rch::mpsc::Receiver<String, WireCodec>,
+    skipped_lines: CappedReceiver<String, CONTROL_MAX_ITEM_BYTES>,
     conn_task: tokio::task::JoinHandle<()>,
 }
 
@@ -559,7 +560,7 @@ const TERMINAL_UPDATE_TIMEOUT: Duration = Duration::from_secs(120);
 /// Reads the next update from an attachment's channel, or panics on
 /// timeout/disconnect.
 async fn read_terminal_update(
-    updates: &mut rch::mpsc::Receiver<TerminalUpdate, WireCodec>,
+    updates: &mut CappedReceiver<TerminalUpdate, FRAME_MAX_ITEM_BYTES>,
 ) -> TerminalUpdate {
     tokio::time::timeout(TERMINAL_UPDATE_TIMEOUT, updates.recv())
         .await
@@ -599,7 +600,7 @@ fn terminal_spec(
 /// contains `needle`; returns the accumulated frame and whether any diff
 /// (not just snapshots) was observed along the way.
 async fn collect_terminal_frame_until(
-    updates: &mut rch::mpsc::Receiver<TerminalUpdate, WireCodec>,
+    updates: &mut CappedReceiver<TerminalUpdate, FRAME_MAX_ITEM_BYTES>,
     mut frame: TerminalFrame,
     needle: &str,
 ) -> (TerminalFrame, bool) {
@@ -636,7 +637,7 @@ async fn collect_terminal_frame_until(
 /// (`ToolCallProgress`, `SessionModel`, `WorkspaceRootResolved`) that share
 /// the channel. Panics after a generous number of reads.
 async fn collect_events_until(
-    events: &mut rch::mpsc::Receiver<AgentWireEvent, WireCodec>,
+    events: &mut CappedReceiver<AgentWireEvent, TOOL_IO_MAX_ITEM_BYTES>,
     mut predicate: impl FnMut(&Event) -> bool,
 ) -> Vec<Event> {
     let mut collected = Vec::new();
@@ -664,7 +665,7 @@ async fn collect_events_until(
 /// `replay_events` can take real time under contention), then a short
 /// quiescence window once the burst starts.
 async fn collect_replayed_events(
-    events: &mut rch::mpsc::Receiver<AgentWireEvent, WireCodec>,
+    events: &mut CappedReceiver<AgentWireEvent, TOOL_IO_MAX_ITEM_BYTES>,
 ) -> Vec<Event> {
     const REPLAY_FIRST_EVENT_TIMEOUT: Duration = Duration::from_secs(120);
     const REPLAY_QUIESCENCE_WINDOW: Duration = Duration::from_millis(500);

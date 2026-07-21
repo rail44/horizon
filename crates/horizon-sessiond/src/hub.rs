@@ -15,14 +15,17 @@
 //! error`](remoc::rch::mpsc::RecvError::is_final) never tears the channel
 //! down) and stop on final errors.
 
-use horizon_agent::contract::{Command, SessionId};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use horizon_agent::contract::{Command, Event, SessionId};
 use horizon_agent::persistence::event_log::WriterHandle;
 use horizon_agent::wire::{
     AgentWireEvent, HostToolRequest, HostToolResponse, SessionNew, SessionSummary,
 };
 use horizon_session_protocol::{
-    AgentAttachment, ClientHello, HubError, HubHello, SessionHub, TerminalAttachment, VersionRange,
-    WireCodec,
+    AgentAttachment, ClientHello, DecodeSkipLog, HubError, HubHello, SessionHub,
+    TerminalAttachment, VersionRange, WireCodec, COMMAND_MAX_ITEM_BYTES, CONTROL_MAX_ITEM_BYTES,
+    FRAME_MAX_ITEM_BYTES, TOOL_IO_MAX_ITEM_BYTES,
 };
 use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
 use remoc::rch;
@@ -41,6 +44,10 @@ pub(crate) struct Hub {
     connection: Connection,
     terminals: TerminalHost,
     binary_id: &'static str,
+    /// Whether this connection's `hello` has completed successfully — the
+    /// enforcement half of "`hello` is the first call on every connection"
+    /// (§3). See [`Self::require_hello`].
+    hello_completed: AtomicBool,
 }
 
 impl Hub {
@@ -53,6 +60,19 @@ impl Hub {
             connection,
             terminals,
             binary_id,
+            hello_completed: AtomicBool::new(false),
+        }
+    }
+
+    /// The hello gate: every method except `hello` itself and `drain` (the
+    /// version-stable recovery surface a *rejected* client legitimately
+    /// calls) refuses to run before a successful negotiation, rather than
+    /// trusting the client to call in order.
+    fn require_hello(&self) -> Result<(), HubError> {
+        if self.hello_completed.load(Ordering::Acquire) {
+            Ok(())
+        } else {
+            Err(HubError::HelloRequired)
         }
     }
 
@@ -65,22 +85,35 @@ impl Hub {
     ) -> TerminalAttachment {
         let (update_tx, update_rx) =
             rch::mpsc::channel::<TerminalUpdate, WireCodec>(CHANNEL_BUFFER);
+        // Frame-path size cap: a receiver's cap is its const type
+        // parameter, fixed here before the receiver is transported -- see
+        // `FRAME_MAX_ITEM_BYTES`'s doc.
+        let update_rx = update_rx.set_max_item_size::<FRAME_MAX_ITEM_BYTES>();
         tokio::spawn(async move {
             while let Some(update) = local_updates.recv().await {
-                if update_tx.send(update).await.is_err() {
-                    // The attachment's remote side is gone (detach or dead
-                    // connection); dropping `local_updates` makes the
-                    // host's next send fail, which lazily removes the
-                    // subscriber entry.
+                if let Err(err) = update_tx.send(update).await {
+                    // Any send failure ends the attachment: a dead remote
+                    // obviously, but also an item over the cap — rch
+                    // *latches* a remote-send error on the local sender
+                    // (measured: every later send fails too), so
+                    // skip-and-continue would error forever. Dropping
+                    // `local_updates` makes the host's next send fail,
+                    // which lazily removes the subscriber; the client
+                    // re-attaches for a fresh channel.
+                    eprintln!("horizon-sessiond: closing a terminal update attachment: {err}");
                     break;
                 }
             }
         });
 
-        let (command_tx, mut command_rx) =
+        let (mut command_tx, mut command_rx) =
             rch::mpsc::channel::<TerminalCommand, WireCodec>(CHANNEL_BUFFER);
+        // A transported sender carries the cap its creator set: this is
+        // the daemon-side receive limit for the UI's commands.
+        command_tx.set_max_item_size(COMMAND_MAX_ITEM_BYTES);
         let terminals = self.terminals.clone();
         tokio::spawn(async move {
+            let mut skips = DecodeSkipLog::new("horizon-sessiond terminal commands");
             loop {
                 match command_rx.recv().await {
                     Ok(Some(command)) => terminals.handle_command(session_id, command),
@@ -88,9 +121,7 @@ impl Hub {
                     Err(err) if err.is_final() => break,
                     // Adoption condition 2: one undecodable command is
                     // skipped; the channel survives.
-                    Err(err) => eprintln!(
-                        "horizon-sessiond: skipping an undecodable terminal command: {err}"
-                    ),
+                    Err(err) => skips.note(&err),
                 }
             }
         });
@@ -110,25 +141,32 @@ impl Hub {
         mut local_events: UnboundedReceiver<AgentWireEvent>,
     ) -> AgentAttachment {
         let (event_tx, event_rx) = rch::mpsc::channel::<AgentWireEvent, WireCodec>(CHANNEL_BUFFER);
+        // Tool I/O size cap (events carry `JsonValue` payloads) -- see
+        // `TOOL_IO_MAX_ITEM_BYTES`'s doc.
+        let event_rx = event_rx.set_max_item_size::<TOOL_IO_MAX_ITEM_BYTES>();
         tokio::spawn(async move {
             while let Some(event) = local_events.recv().await {
-                if event_tx.send(event).await.is_err() {
+                if let Err(err) = event_tx.send(event).await {
+                    // See the terminal-update pump: send errors latch, so
+                    // the attachment ends rather than skip-looping.
+                    eprintln!("horizon-sessiond: closing an agent event attachment: {err}");
                     break;
                 }
             }
         });
 
-        let (command_tx, mut command_rx) = rch::mpsc::channel::<Command, WireCodec>(CHANNEL_BUFFER);
+        let (mut command_tx, mut command_rx) =
+            rch::mpsc::channel::<Command, WireCodec>(CHANNEL_BUFFER);
+        command_tx.set_max_item_size(COMMAND_MAX_ITEM_BYTES);
         let connection = self.connection.clone();
         tokio::spawn(async move {
+            let mut skips = DecodeSkipLog::new("horizon-sessiond agent commands");
             loop {
                 match command_rx.recv().await {
                     Ok(Some(command)) => connection.route_command(session_id, command),
                     Ok(None) => break,
                     Err(err) if err.is_final() => break,
-                    Err(err) => {
-                        eprintln!("horizon-sessiond: skipping an undecodable agent command: {err}")
-                    }
+                    Err(err) => skips.note(&err),
                 }
             }
         });
@@ -163,11 +201,15 @@ impl SessionHub for Hub {
         // local bridge; this pump forwards them to the client.
         let (request_tx, request_rx) =
             rch::mpsc::channel::<HostToolRequest, WireCodec>(CHANNEL_BUFFER);
+        let request_rx = request_rx.set_max_item_size::<TOOL_IO_MAX_ITEM_BYTES>();
         let (local_tx, mut local_rx) = tokio::sync::mpsc::unbounded_channel();
         self.connection.connect_host_tools(local_tx);
         tokio::spawn(async move {
             while let Some(request) = local_rx.recv().await {
-                if request_tx.send(request).await.is_err() {
+                if let Err(err) = request_tx.send(request).await {
+                    // See the terminal-update pump: send errors latch, so
+                    // the channel ends rather than skip-looping.
+                    eprintln!("horizon-sessiond: closing the host-tool request channel: {err}");
                     break;
                 }
             }
@@ -175,18 +217,18 @@ impl SessionHub for Hub {
 
         // Host-tool responses: routed to whichever session thread blocks
         // on the matching request id.
-        let (response_tx, mut response_rx) =
+        let (mut response_tx, mut response_rx) =
             rch::mpsc::channel::<HostToolResponse, WireCodec>(CHANNEL_BUFFER);
+        response_tx.set_max_item_size(TOOL_IO_MAX_ITEM_BYTES);
         let connection = self.connection.clone();
         tokio::spawn(async move {
+            let mut skips = DecodeSkipLog::new("horizon-sessiond host-tool responses");
             loop {
                 match response_rx.recv().await {
                     Ok(Some(response)) => connection.handle_host_tool_response(response),
                     Ok(None) => break,
                     Err(err) if err.is_final() => break,
-                    Err(err) => eprintln!(
-                        "horizon-sessiond: skipping an undecodable host-tool response: {err}"
-                    ),
+                    Err(err) => skips.note(&err),
                 }
             }
         });
@@ -194,6 +236,7 @@ impl SessionHub for Hub {
         // Startup skipped-lines diagnostics: at most one message, after
         // the resume finishes — never blocking hello's own reply.
         let (skipped_tx, skipped_rx) = rch::mpsc::channel::<String, WireCodec>(1);
+        let skipped_rx = skipped_rx.set_max_item_size::<CONTROL_MAX_ITEM_BYTES>();
         let connection = self.connection.clone();
         tokio::spawn(async move {
             connection.wait_until_resume_ready().await;
@@ -202,6 +245,7 @@ impl SessionHub for Hub {
             }
         });
 
+        self.hello_completed.store(true, Ordering::Release);
         Ok(HubHello {
             negotiated,
             binary_id: self.binary_id.to_string(),
@@ -212,6 +256,7 @@ impl SessionHub for Hub {
     }
 
     async fn list_terminals(&self) -> Result<Vec<TerminalSummary>, HubError> {
+        self.require_hello()?;
         Ok(self.terminals.list())
     }
 
@@ -220,11 +265,12 @@ impl SessionHub for Hub {
         session_id: Uuid,
         spec: TerminalSpawnSpec,
     ) -> Result<TerminalAttachment, HubError> {
+        self.require_hello()?;
         // Subscribe before spawning so the session's very first updates
         // (and the seeding snapshot, once the core emits one) are never
         // lost — the JSONL flow's `mark_attached`-before-create, made
         // structural.
-        let local_updates = self.terminals.subscribe(session_id);
+        let local_updates = self.terminals.subscribe_for_create(session_id);
         // `TerminalHost::create` blocks (bounded spawn attempts with a
         // watchdog timeout each — see its doc comment on the suspected
         // portable-pty fork hazard); `serve(true)` runs this call on its
@@ -246,10 +292,15 @@ impl SessionHub for Hub {
     }
 
     async fn attach_terminal(&self, session_id: Uuid) -> Result<TerminalAttachment, HubError> {
-        if !self.terminals.has_session(session_id) {
+        self.require_hello()?;
+        // Existence check and subscriber install happen under one lock
+        // (`TerminalHost::attach_subscribe`), so a session exiting
+        // concurrently either turns this into `TerminalNotFound` or
+        // delivers `Exited` through the fresh subscriber — never a live
+        // attachment onto a dead session.
+        let Some(local_updates) = self.terminals.attach_subscribe(session_id) else {
             return Err(HubError::TerminalNotFound);
-        }
-        let local_updates = self.terminals.subscribe(session_id);
+        };
         Ok(self.terminal_attachment(session_id, local_updates))
     }
 
@@ -257,6 +308,7 @@ impl SessionHub for Hub {
     /// fix in `main`): a client connecting while the startup resume is
     /// still running must not see a partial view.
     async fn list_agents(&self) -> Result<Vec<SessionSummary>, HubError> {
+        self.require_hello()?;
         self.connection.wait_until_resume_ready().await;
         Ok(self.connection.session_list())
     }
@@ -267,6 +319,7 @@ impl SessionHub for Hub {
     /// for its whole lifetime (see the old `Control::SessionNew` arm's
     /// comment, preserved by this gate).
     async fn new_agent(&self, new: SessionNew) -> Result<AgentAttachment, HubError> {
+        self.require_hello()?;
         self.connection.wait_until_resume_ready().await;
         let session_id = new.session_id;
         let local_events = self.connection.subscribe_agent(session_id);
@@ -279,11 +332,24 @@ impl SessionHub for Hub {
     /// flow — all in order through the same bridge. An unknown session id
     /// succeeds with an empty replay, as before.
     async fn attach_agent(&self, session_id: SessionId) -> Result<AgentAttachment, HubError> {
+        self.require_hello()?;
         self.connection.wait_until_resume_ready().await;
         let local_events = self.connection.subscribe_agent(session_id);
+        let mut skipped_unknown = 0_u64;
         for event in self.connection.replay_events(session_id).await {
+            if !replayable(&event) {
+                skipped_unknown += 1;
+                continue;
+            }
             self.connection
                 .send_session_event(session_id, AgentWireEvent::Event(event));
+        }
+        if skipped_unknown > 0 {
+            eprintln!(
+                "horizon-sessiond: withheld {skipped_unknown} unknown event(s) from \
+                 {session_id:?}'s replay (log lines written by a newer build; see \
+                 `replayable`)"
+            );
         }
         if let Some(model) = self.connection.session_model(session_id) {
             self.connection
@@ -319,5 +385,93 @@ fn flush_event_log_before_exit(writer: Option<WriterHandle>) {
         if let Err(error) = writer.flush() {
             eprintln!("horizon-sessiond: failed to flush event log before draining: {error}");
         }
+    }
+}
+
+/// Whether a log-replayed event may be forwarded onto the wire.
+/// `Event::Unknown` is a *received* degradation — a log line written by a
+/// newer build that this one can only read as "something happened" — and
+/// re-serializing it would put the literal `Unknown` tag on the wire,
+/// which no peer is ever supposed to see (the §4 catch-alls exist for
+/// *receiving*, not sending). The live path can never produce one (a
+/// session thread only emits events this build constructed); replay is
+/// the one seam where log-borne `Unknown`s could leak out, so they are
+/// withheld here and counted in the caller's log line.
+fn replayable(event: &Event) -> bool {
+    !matches!(event, Event::Unknown)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::SessiondState;
+    use horizon_agent::config::AgentConfig;
+    use horizon_agent::contract::ProviderRegistry;
+    use horizon_agent::persistence::projection::duckdb::SharedDuckdbStore;
+    use horizon_session_protocol::VersionRange;
+    use std::sync::Arc;
+
+    fn test_hub() -> Hub {
+        let agent_config = AgentConfig::from_env_and_provider(None, None);
+        let state = Arc::new(SessiondState::new(
+            ProviderRegistry::builtin_with_config(
+                agent_config.clone(),
+                SharedDuckdbStore::unavailable(),
+            ),
+            agent_config,
+            None,
+            SharedDuckdbStore::unavailable(),
+            None,
+        ));
+        Hub::new(Connection::new(state), TerminalHost::new(), "test-sessiond")
+    }
+
+    /// The hello gate (review item): a method called before `hello` — or
+    /// after a *rejected* hello — is refused with `HelloRequired`; a
+    /// successful negotiation opens the gate. (`drain` is deliberately
+    /// exempt: it is the version-stable recovery surface a rejected
+    /// client legitimately calls — enforced by it taking no
+    /// `require_hello`, which this test cannot exercise directly since
+    /// `drain` exits the process.)
+    #[tokio::test]
+    async fn non_hello_methods_are_refused_until_hello_succeeds() {
+        let hub = test_hub();
+
+        // Before any hello.
+        assert!(matches!(
+            hub.list_terminals().await,
+            Err(HubError::HelloRequired)
+        ));
+
+        // A rejected hello leaves the gate closed.
+        let disjoint = ClientHello {
+            supported: VersionRange {
+                min_supported: u32::MAX,
+                current: u32::MAX,
+            },
+            binary_id: "future-client".to_string(),
+        };
+        assert!(matches!(
+            hub.hello(disjoint).await,
+            Err(HubError::IncompatibleVersion { .. })
+        ));
+        assert!(matches!(
+            hub.list_terminals().await,
+            Err(HubError::HelloRequired)
+        ));
+        assert!(matches!(
+            hub.list_agents().await,
+            Err(HubError::HelloRequired)
+        ));
+        assert!(matches!(
+            hub.attach_terminal(uuid::Uuid::new_v4()).await,
+            Err(HubError::HelloRequired)
+        ));
+
+        // A successful negotiation opens it.
+        hub.hello(ClientHello::new("test-client"))
+            .await
+            .expect("a matching range must negotiate");
+        assert_eq!(hub.list_terminals().await.unwrap(), Vec::new());
     }
 }

@@ -56,8 +56,8 @@ pub enum AgentWireEvent {
     /// "the edge exists only via isolation").
     WorkspaceRootResolved(WorkspaceRootResolved),
     /// Skew catch-all — `#[serde(other)]`: an event this build can't name
-    /// decodes to `Unknown` (its payload, if any, is discarded; the
-    /// receiver skips it). Keep last.
+    /// decodes to `Unknown` on the Postbag wire, payload discarded (the
+    /// receiver skips it; under serde_json only unit variants degrade). Keep last.
     #[serde(other)]
     Unknown,
 }

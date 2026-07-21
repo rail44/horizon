@@ -59,6 +59,102 @@ pub mod schema_check;
 /// JSONL format byte-identical.
 pub type WireCodec = remoc::codec::Postbag;
 
+// ---------------------------------------------------------------------------
+// Per-purpose wire size caps.
+//
+// remoc's own default (`rch::DEFAULT_MAX_ITEM_SIZE`, 16 MiB) is one
+// blanket limit for everything; these caps size each channel class to what
+// it actually carries, so a runaway (or corrupted) item fails as a
+// per-item error instead of buffering many megabytes. Enforcement follows
+// rch's transport model: the *creator* of a channel caps both directions —
+// a receiver's cap is its `MAX_ITEM_SIZE` const parameter (see
+// [`CappedReceiver`]), and a sender handed to the peer carries the cap the
+// creator set on it before the handover. Oversized/unserializable items
+// fail item-specifically (`MaxItemSizeExceeded`); the receive loops treat
+// that as a skip, never fatal to the channel.
+// ---------------------------------------------------------------------------
+
+/// Terminal frame/update channel items (`TerminalUpdate`). A full 200x50
+/// fully-styled snapshot measured ~50 KB under Postbag
+/// (`docs/research/remoc-spike-2026-07-20.md` §1a: 178,743 B under the
+/// *worst-case* all-rows-styled synthetic frame); 4 MiB leaves an order
+/// of magnitude of headroom for pathological scrollback/styling without
+/// admitting absurd buffers.
+pub const FRAME_MAX_ITEM_BYTES: usize = 4 * 1024 * 1024;
+
+/// Command-channel items (`TerminalCommand`, agent `Command`) and the
+/// JSON-payload-bearing tool exchanges (`AgentWireEvent`,
+/// `HostToolRequest`/`HostToolResponse`). Sized at 1 MiB rather than a
+/// tighter control-plane cap because these legitimately carry user-scaled
+/// data: a terminal `Paste`/`Input` is whatever the user pasted, and tool
+/// inputs/outputs (`JsonValue`) carry file contents.
+pub const COMMAND_MAX_ITEM_BYTES: usize = 1024 * 1024;
+
+/// See [`COMMAND_MAX_ITEM_BYTES`] — the tool-I/O alias, kept separate so
+/// the two classes can diverge without a wire-wide sweep.
+pub const TOOL_IO_MAX_ITEM_BYTES: usize = 1024 * 1024;
+
+/// Small control-plane strings (the `skipped_lines` startup diagnostic).
+pub const CONTROL_MAX_ITEM_BYTES: usize = 64 * 1024;
+
+/// One rtc request (`hello`, `create_terminal(spec)`, `new_agent(new)`,
+/// ...). Requests are small structured arguments — specs, ids, version
+/// ranges — never bulk data, so exceeding this is always a bug, and the
+/// consequence is deliberately blunt: the daemon drops the oversized
+/// request per-item, the call fails when its reply channel closes, and —
+/// because rch latches the remote-send error onto the transported
+/// request channel — the connection then tears down (measured; pinned by
+/// `an_oversized_rtc_request_fails_the_op_and_stops_the_runtime`). Bulk
+/// data has its own channels with their own caps.
+pub const RTC_MAX_REQUEST_BYTES: usize = 64 * 1024;
+
+/// One rtc reply (`HubHello`, attachments, `list_*` vectors). Larger than
+/// requests because `list_agents`/`list_terminals` scale with live
+/// session count.
+pub const RTC_MAX_REPLY_BYTES: usize = 1024 * 1024;
+
+/// A receiver whose per-item size cap is part of its type: rch enforces
+/// the receive-direction cap through the receiver's `MAX_ITEM_SIZE`
+/// const parameter (carried with the receiver when it is transported), so
+/// a capped channel field must *name* its cap — `channel()` +
+/// [`remoc::rch::mpsc::Receiver::set_max_item_size`] produce one. The
+/// send-direction caps, by contrast, are runtime state on the sender set
+/// by its creator *before* handing it over (a transported sender carries
+/// the creator's cap as the creator-side receive limit).
+pub type CappedReceiver<T, const MAX_ITEM_SIZE: usize> =
+    rch::mpsc::Receiver<T, WireCodec, { rch::DEFAULT_BUFFER }, MAX_ITEM_SIZE>;
+
+/// A rate-limited log for the receive/send loops' skip paths (adoption
+/// condition 2: a poisoned item is skipped, never fatal): logs the first
+/// occurrence, then only at powers of two and every 1000th, with the
+/// running count, so a peer stuck emitting undecodable items cannot
+/// flood stderr at channel throughput.
+pub struct DecodeSkipLog {
+    label: &'static str,
+    skipped: u64,
+}
+
+impl DecodeSkipLog {
+    pub const fn new(label: &'static str) -> Self {
+        Self { label, skipped: 0 }
+    }
+
+    /// Records one skipped item, logging at 1, 10, 100, 1000, ...
+    pub fn note(&mut self, error: &dyn std::fmt::Display) {
+        self.skipped += 1;
+        if self.skipped.is_power_of_two() || self.skipped.is_multiple_of(1000) {
+            eprintln!(
+                "{}: skipping an undecodable item (#{} so far): {error}",
+                self.label, self.skipped
+            );
+        }
+    }
+
+    pub fn skipped(&self) -> u64 {
+        self.skipped
+    }
+}
+
 /// The session-daemon protocol version this build speaks.
 ///
 /// Version 4 adds correlated terminal discovery and attach controls; attach
@@ -197,19 +293,19 @@ pub struct HubHello {
     /// Daemon → client: a hosted session asking the client to run a
     /// host-coupled tool (e.g. `workspace.snapshot`). Replaces the
     /// connection-global `host_tool_request` envelopes.
-    #[schemars(schema_with = "channel_schema")]
-    pub host_tools: rch::mpsc::Receiver<HostToolRequest, WireCodec>,
+    #[schemars(schema_with = "channel_schema::<HostToolRequest>")]
+    pub host_tools: CappedReceiver<HostToolRequest, TOOL_IO_MAX_ITEM_BYTES>,
     /// Client → daemon: the answers to `host_tools` requests, correlated by
     /// `request_id` exactly as before (the one correlation map the cutover
     /// keeps: the exchange is genuinely asynchronous on the daemon side,
     /// where a session thread blocks on the matching response).
-    #[schemars(schema_with = "channel_schema")]
+    #[schemars(schema_with = "channel_schema::<HostToolResponse>")]
     pub host_tool_responses: rch::mpsc::Sender<HostToolResponse, WireCodec>,
     /// Daemon → client: the daemon's startup event-log corruption summary,
     /// sent at most once per connection, after its resume finishes.
     /// Replaces the `SkippedLines` control envelope.
-    #[schemars(schema_with = "channel_schema")]
-    pub skipped_lines: rch::mpsc::Receiver<String, WireCodec>,
+    #[schemars(schema_with = "channel_schema::<String>")]
+    pub skipped_lines: CappedReceiver<String, CONTROL_MAX_ITEM_BYTES>,
 }
 
 /// The schema stand-in for a remoc channel half: on the wire it is a chmux
@@ -217,9 +313,12 @@ pub struct HubHello {
 /// marker. What flows *through* each channel is documented separately by
 /// the artifact's `channels` section (see
 /// `crates/horizon-sessiond/tests/wire_schema.rs`).
-fn channel_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+fn channel_schema<T: JsonSchema>(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let payload = generator.subschema_for::<T>();
     schemars::json_schema!({
-        "$comment": "remoc rch channel half: a chmux port reference on the wire"
+        "$comment": "remoc rch channel half: a chmux port reference on the wire; the \
+                     x-channel-payload schema is what flows through it",
+        "x-channel-payload": payload,
     })
 }
 
@@ -232,9 +331,9 @@ fn channel_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schem
 /// reviewed step.
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct TerminalAttachment {
-    #[schemars(schema_with = "channel_schema")]
-    pub updates: rch::mpsc::Receiver<TerminalUpdate, WireCodec>,
-    #[schemars(schema_with = "channel_schema")]
+    #[schemars(schema_with = "channel_schema::<TerminalUpdate>")]
+    pub updates: CappedReceiver<TerminalUpdate, FRAME_MAX_ITEM_BYTES>,
+    #[schemars(schema_with = "channel_schema::<TerminalCommand>")]
     pub commands: rch::mpsc::Sender<TerminalCommand, WireCodec>,
 }
 
@@ -246,9 +345,9 @@ pub struct TerminalAttachment {
 /// [`horizon_agent::wire::AgentWireEvent`].
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct AgentAttachment {
-    #[schemars(schema_with = "channel_schema")]
-    pub events: rch::mpsc::Receiver<AgentWireEvent, WireCodec>,
-    #[schemars(schema_with = "channel_schema")]
+    #[schemars(schema_with = "channel_schema::<AgentWireEvent>")]
+    pub events: CappedReceiver<AgentWireEvent, TOOL_IO_MAX_ITEM_BYTES>,
+    #[schemars(schema_with = "channel_schema::<Command>")]
     pub commands: rch::mpsc::Sender<Command, WireCodec>,
 }
 
@@ -281,6 +380,16 @@ pub enum HubError {
     /// never sends it.
     #[error("hub call failed: {0}")]
     Call(String),
+    /// Any method other than `hello`/`drain` was called before a
+    /// successful `hello` on this connection. `hello` is contractually the
+    /// first call (§3), and the daemon enforces it rather than trusting
+    /// the client: a rejected or skipped negotiation must not grant access
+    /// to the negotiated-behavior surface. (`drain` stays reachable — it
+    /// is the version-stable recovery path a rejected client legitimately
+    /// uses.) Appended additively for v10.1 of the artifact's history —
+    /// an older client never triggers it (it always hellos first).
+    #[error("hello has not completed on this connection")]
+    HelloRequired,
     /// Skew catch-all: an error variant from a newer peer. Keep last.
     #[serde(other)]
     #[error("unknown hub error from a newer peer")]
@@ -394,6 +503,82 @@ mod tests {
             VersionRange::ours().negotiate(VersionRange::ours()),
             Some(SESSION_PROTOCOL_VERSION)
         );
+    }
+
+    /// The hub *method surface*, snapshotted mechanically from the serde
+    /// shape of the rtc macro's generated request enum (`SessionHubReqRef`
+    /// — every `&self` method becomes one variant whose fields are the
+    /// method's arguments). The artifact's `hub` section is hand-written
+    /// prose; this test is the machine check behind it: renaming a
+    /// method or an argument changes these serde error strings and goes
+    /// red, so the artifact cannot silently drift from the real trait.
+    #[test]
+    fn hub_request_enum_matches_the_documented_method_surface() {
+        // Variant list = method list, from serde's unknown-variant error.
+        let variants =
+            match serde_json::from_str::<SessionHubReqRef<WireCodec>>("{\"__bogus\":null}") {
+                Ok(_) => panic!("a bogus variant must fail"),
+                Err(error) => error.to_string(),
+            };
+        assert_eq!(
+            variants,
+            "unknown variant `__bogus`, expected one of `Hello`, `ListTerminals`, \
+             `CreateTerminal`, `AttachTerminal`, `ListAgents`, `NewAgent`, `AttachAgent`, \
+             `Drain` at line 1 column 10",
+        );
+
+        // Argument names per method, from serde's missing-field errors.
+        // The macro declares its own reply channel (`__reply_tx`) as the
+        // variant's first field, so the probe satisfies it with the
+        // "closed sender" transported shape (`port: null` needs no
+        // connection context) — the next missing field serde reports is
+        // then the method's first argument.
+        let probe = |method: &str| {
+            let json = format!(
+                "{{\"{method}\": {{\"__reply_tx\": {{\"port\": null, \"data\": null, \
+                 \"codec\": null}}}}}}"
+            );
+            match serde_json::from_str::<SessionHubReqRef<WireCodec>>(&json) {
+                Ok(_) => format!("{method}: no further required fields"),
+                Err(error) => error.to_string(),
+            }
+        };
+        assert!(
+            probe("Hello").starts_with("missing field `client`"),
+            "{}",
+            probe("Hello")
+        );
+        assert!(
+            probe("CreateTerminal").starts_with("missing field `session_id`"),
+            "{}",
+            probe("CreateTerminal")
+        );
+        assert!(
+            probe("AttachTerminal").starts_with("missing field `session_id`"),
+            "{}",
+            probe("AttachTerminal")
+        );
+        assert!(
+            probe("NewAgent").starts_with("missing field `new`"),
+            "{}",
+            probe("NewAgent")
+        );
+        assert!(
+            probe("AttachAgent").starts_with("missing field `session_id`"),
+            "{}",
+            probe("AttachAgent")
+        );
+        // `create_terminal`'s second argument, past the first.
+        let spec_probe = "{\"CreateTerminal\": {\"__reply_tx\": {\"port\": null, \
+             \"data\": null, \"codec\": null}, \"session_id\": \
+             \"00000000-0000-0000-0000-000000000000\"}}";
+        match serde_json::from_str::<SessionHubReqRef<WireCodec>>(spec_probe) {
+            Ok(_) => panic!("spec must still be required"),
+            Err(error) => assert!(
+                error.to_string().starts_with("missing field `spec`"),
+                "{error}"
+            ),
+        }
     }
 
     /// An unknown `HubError` variant from a newer peer degrades to

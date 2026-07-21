@@ -102,7 +102,9 @@ pub enum TerminalUpdate {
     Exited,
     Error(String),
     /// Skew catch-all — `#[serde(other)]`: an update this build can't name
-    /// decodes to `Unknown` (its payload, if any, is discarded). Keep last.
+    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
+    /// discarded there; under serde_json only *unit* variants degrade —
+    /// a payload-carrying one is a per-item decode error instead). Keep last.
     #[serde(other)]
     Unknown,
 }

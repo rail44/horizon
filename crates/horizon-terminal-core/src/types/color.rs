@@ -31,7 +31,9 @@ pub enum TerminalColor {
     Indexed(u8),
     Rgb([u8; 3]),
     /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
-    /// decodes to `Unknown` (its payload, if any, is discarded). Keep last. A client
+    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
+    /// discarded there; under serde_json only *unit* variants degrade —
+    /// a payload-carrying one is a per-item decode error instead). Keep last. A client
     /// resolves an unknown color like the default foreground role
     /// (`theme::resolve` in `src/theme/ansi.rs`), losing only that cell's
     /// hue until the next frame replaces it.
@@ -88,7 +90,9 @@ pub enum NamedColor {
     BrightForeground,
     DimForeground,
     /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
-    /// decodes to `Unknown` (its payload, if any, is discarded). Keep last. Resolved
+    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
+    /// discarded there; under serde_json only *unit* variants degrade —
+    /// a payload-carrying one is a per-item decode error instead). Keep last. Resolved
     /// like [`NamedColor::Foreground`] wherever an RGB answer is needed;
     /// it has no palette-override slot.
     #[serde(other)]

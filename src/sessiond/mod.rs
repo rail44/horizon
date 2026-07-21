@@ -22,6 +22,14 @@ use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary,
 use routing::Routes;
 use uuid::Uuid;
 
+/// The sync world's overall budget for one queued list request: the op may
+/// legitimately wait out connection establishment (retries with backoff)
+/// plus the runtime's own per-call deadline (`connection::OP_TIMEOUT`,
+/// 30 s), so this sits above both. The old JSONL shape blocked forever
+/// here; a bounded wait turns a wedged runtime into an error the caller
+/// can render instead of a UI hang.
+const SYNC_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 #[derive(Clone)]
 pub(crate) struct SessiondHandle {
     ops: tokio::sync::mpsc::UnboundedSender<Op>,
@@ -134,8 +142,12 @@ impl SessiondHandle {
 
     /// Starts the one process-wide socket runtime and returns before the
     /// connection (or the `hello` negotiation) completes. Typed requests
-    /// enqueue onto the op queue meanwhile and are served in order once
-    /// the hub is live.
+    /// enqueue onto the op queue meanwhile; once the hub is live each op
+    /// is *dispatched* in queue order but *executed* on its own task, so
+    /// there is no cross-op completion-order guarantee — a slow
+    /// `create_terminal` does not delay a `terminal_list` behind it, and
+    /// two lists may complete in either order. Per-session ordering is
+    /// carried by each attachment's own channels, not the op queue.
     pub(crate) fn start(
         socket_path: &Path,
         control_socket: &Path,
@@ -354,8 +366,15 @@ impl SessiondHandle {
             return Err("session runtime stopped before terminal list was sent".to_string());
         }
         reply_rx
-            .recv()
-            .map_err(|_| "session runtime stopped before the terminal list completed".to_string())?
+            .recv_timeout(SYNC_REPLY_TIMEOUT)
+            .map_err(|err| match err {
+                crossbeam_channel::RecvTimeoutError::Timeout => {
+                    "the terminal list did not complete in time".to_string()
+                }
+                crossbeam_channel::RecvTimeoutError::Disconnected => {
+                    "session runtime stopped before the terminal list completed".to_string()
+                }
+            })?
     }
 
     pub(crate) fn attach_terminals(
@@ -381,12 +400,15 @@ impl SessiondHandle {
 
         pending
             .into_iter()
-            .filter_map(|(session_id, handle, reply)| match reply.recv() {
-                // Only an explicit successful attach may claim the session
-                // -- not-found (or a failed call) drops the handle, whose
-                // Drop unregisters the routes it claimed.
-                Ok(true) => Some((session_id, handle)),
-                Ok(false) | Err(_) => None,
+            .filter_map(|(session_id, handle, reply)| {
+                match reply.recv_timeout(SYNC_REPLY_TIMEOUT) {
+                    // Only an explicit successful attach may claim the
+                    // session -- not-found (or a failed/timed-out call)
+                    // drops the handle, whose Drop unregisters the routes
+                    // it claimed.
+                    Ok(true) => Some((session_id, handle)),
+                    Ok(false) | Err(_) => None,
+                }
             })
             .collect()
     }
@@ -403,8 +425,15 @@ impl SessiondHandle {
             return Err("session runtime stopped before the agent list was sent".to_string());
         }
         reply_rx
-            .recv()
-            .map_err(|_| "session runtime stopped before the agent list completed".to_string())?
+            .recv_timeout(SYNC_REPLY_TIMEOUT)
+            .map_err(|err| match err {
+                crossbeam_channel::RecvTimeoutError::Timeout => {
+                    "the agent list did not complete in time".to_string()
+                }
+                crossbeam_channel::RecvTimeoutError::Disconnected => {
+                    "session runtime stopped before the agent list completed".to_string()
+                }
+            })?
     }
 
     fn drain(&self) {

@@ -70,9 +70,11 @@ use horizon_agent::contract::ProviderRegistry;
 use horizon_agent::persistence::event_log::{Record, WriterHandle, WriterInit};
 use horizon_agent::persistence::projection::duckdb::{DuckdbStoreHandle, SharedDuckdbStore};
 use horizon_agent::socket::default_socket_path;
-use horizon_session_protocol::{SessionHubClient, SessionHubServerShared, WireCodec};
+use horizon_session_protocol::{
+    SessionHubClient, SessionHubServerShared, WireCodec, RTC_MAX_REPLY_BYTES, RTC_MAX_REQUEST_BYTES,
+};
 use hub::Hub;
-use remoc::rtc::ServerShared as _;
+use remoc::rtc::{Client as _, ServerShared as _};
 use session::{Connection, SessiondState};
 use terminal::TerminalHost;
 use tokio::net::{UnixListener, UnixStream};
@@ -352,7 +354,16 @@ async fn handle_connection(
 
     let connection = Connection::new(state);
     let hub = Hub::new(connection.clone(), terminals.clone(), BINARY_ID);
-    let (server, client) = SessionHubServerShared::<_, WireCodec>::new(Arc::new(hub), 16);
+    let (server, mut client) = SessionHubServerShared::<_, WireCodec>::new(Arc::new(hub), 16);
+    // Effective placement of the rtc size caps (see the `RTC_MAX_*`
+    // constants): the request cap must be set on the client *before* it
+    // is transported -- a transported mpsc sender carries its creator's
+    // cap as the daemon-side receive limit, so an oversized request is
+    // dropped per-item here and the call fails client-side when its
+    // reply channel closes. The reply cap travels per-request from the
+    // client's own setting; this one seeds the default.
+    client.set_max_request_size(RTC_MAX_REQUEST_BYTES);
+    client.set_max_reply_size(RTC_MAX_REPLY_BYTES);
     if base_tx.send(client).await.is_err() {
         conn_task.abort();
         return Ok(());

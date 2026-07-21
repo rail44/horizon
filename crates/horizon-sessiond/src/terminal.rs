@@ -61,12 +61,6 @@ impl TerminalHost {
         }
     }
 
-    /// Whether a live terminal session with this id exists — the hub's
-    /// `attach_terminal` not-found check.
-    pub(crate) fn has_session(&self, session_id: Uuid) -> bool {
-        self.sessions.lock().unwrap().contains_key(&session_id)
-    }
-
     /// Every live terminal session, sorted by id — the hub's
     /// `list_terminals` body (the request-id correlation the JSONL `List`
     /// control needed is gone; the rtc call returns this directly).
@@ -83,22 +77,61 @@ impl TerminalHost {
         sessions
     }
 
+    /// [`Self::install_subscriber`] for the create path: no existence
+    /// requirement, because the hub subscribes *before* spawning the PTY
+    /// so the session's very first updates are never lost.
+    pub(crate) fn subscribe_for_create(
+        &self,
+        session_id: Uuid,
+    ) -> UnboundedReceiver<TerminalUpdate> {
+        self.install_subscriber(session_id).1
+    }
+
+    /// [`Self::install_subscriber`] for the attach path: `None` when no
+    /// live session with this id exists — checked under the same lock the
+    /// install (and the `Exited` fan-out) takes, so "attached to a session
+    /// that just died" cannot happen: the exit either lands before the
+    /// check (→ `None`) or reaches the freshly installed subscriber.
+    pub(crate) fn attach_subscribe(
+        &self,
+        session_id: Uuid,
+    ) -> Option<UnboundedReceiver<TerminalUpdate>> {
+        let (exists, rx) = self.install_subscriber(session_id);
+        if exists {
+            Some(rx)
+        } else {
+            self.subscribers.lock().unwrap().remove(&session_id);
+            None
+        }
+    }
+
     /// Installs a fresh subscriber for `session_id` (replacing any
-    /// previous attachment's) and returns the local receiving half the hub
-    /// pumps into the attachment's remote channel. If the session already
-    /// has a retained latest frame, it is delivered immediately as the
-    /// seeding `Snapshot` and becomes the diff baseline — the same attach
-    /// contract the JSONL wire had (attach result, then snapshot, then
-    /// diffs).
-    pub(crate) fn subscribe(&self, session_id: Uuid) -> UnboundedReceiver<TerminalUpdate> {
+    /// previous attachment's) and returns whether a live session existed
+    /// at install time, plus the local receiving half the hub pumps into
+    /// the attachment's remote channel. If the session already has a
+    /// retained latest frame, it is delivered immediately as the seeding
+    /// `Snapshot` and becomes the diff baseline — the same attach contract
+    /// the JSONL wire had (attach result, then snapshot, then diffs).
+    ///
+    /// The whole read-seed-insert sequence runs under the `subscribers`
+    /// lock (with the `sessions` lock taken *inside* it, an ordering
+    /// [`Self::forward_updates`] never inverts — it always releases
+    /// `sessions` before touching `subscribers`), and the `Exited`
+    /// fan-out removes the session from `sessions` *before* it takes
+    /// `subscribers` to deliver the exit. Together that closes the
+    /// stale-snapshot/TOCTOU window: an exit concurrent with an install
+    /// is either visible to the existence check here, or delivers
+    /// `Exited` to the subscriber this just installed.
+    fn install_subscriber(&self, session_id: Uuid) -> (bool, UnboundedReceiver<TerminalUpdate>) {
         let (tx, rx) = unbounded_channel();
-        let latest = self
-            .sessions
-            .lock()
-            .unwrap()
-            .get(&session_id)
-            .map(|session| session.latest_frame.clone());
-        let latest = latest.and_then(|frame| frame.lock().unwrap().clone());
+        let mut subscribers = self.subscribers.lock().unwrap();
+        let (exists, latest) = {
+            let sessions = self.sessions.lock().unwrap();
+            match sessions.get(&session_id) {
+                Some(session) => (true, session.latest_frame.lock().unwrap().clone()),
+                None => (false, None),
+            }
+        };
         let mut subscriber = Subscriber {
             updates: tx,
             baseline: None,
@@ -109,11 +142,8 @@ impl TerminalHost {
                 .send(TerminalUpdate::Snapshot(frame.clone()));
             subscriber.baseline = Some(frame);
         }
-        self.subscribers
-            .lock()
-            .unwrap()
-            .insert(session_id, subscriber);
-        rx
+        subscribers.insert(session_id, subscriber);
+        (exists, rx)
     }
 
     /// Removes `session_id`'s subscriber — the hub's cleanup when a
@@ -352,9 +382,18 @@ impl TerminalHost {
                     }
                     TerminalUpdate::FrameDiff(_) => {}
                     TerminalUpdate::Exited => {
-                        host.send_update(session_id, TerminalUpdate::Exited);
+                        // Ordering matters (see `install_subscriber`'s doc):
+                        // the session leaves `sessions` first, so a
+                        // concurrent attach either sees it gone or is
+                        // already installed when the exit is delivered —
+                        // and delivery + removal happen under one
+                        // `subscribers` guard so no install can slip
+                        // between them and lose the exit.
                         host.sessions.lock().unwrap().remove(&session_id);
-                        host.subscribers.lock().unwrap().remove(&session_id);
+                        let mut subscribers = host.subscribers.lock().unwrap();
+                        if let Some(subscriber) = subscribers.remove(&session_id) {
+                            let _ = subscriber.updates.send(TerminalUpdate::Exited);
+                        }
                         return;
                     }
                     other => host.send_update(session_id, other),

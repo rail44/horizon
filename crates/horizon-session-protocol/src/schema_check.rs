@@ -75,14 +75,61 @@ impl Classification {
 /// change carries its version-bump marker and passes wholesale.
 pub fn classify_schema_change(old: &Value, new: &Value) -> Classification {
     let mut result = Classification::default();
-    if old.get(PROTOCOL_VERSION_KEY) != new.get(PROTOCOL_VERSION_KEY) {
-        result.additive.push(format!(
-            "{PROTOCOL_VERSION_KEY} changed ({} -> {}): version-bump marker present, \
-             reshapes are the owner's call in review",
-            old.get(PROTOCOL_VERSION_KEY).unwrap_or(&Value::Null),
-            new.get(PROTOCOL_VERSION_KEY).unwrap_or(&Value::Null),
-        ));
-        return result;
+    let old_raw = old.get(PROTOCOL_VERSION_KEY);
+    let new_raw = new.get(PROTOCOL_VERSION_KEY);
+    match (old_raw, new_raw) {
+        // Neither side carries a marker (pre-marker schemas, unit-test
+        // fixtures): an ordinary diff, classified below.
+        (None, None) => {}
+        (Some(old_raw), Some(new_raw)) => {
+            match (old_raw.as_u64(), new_raw.as_u64()) {
+                // The one legitimate escape hatch: a strictly increasing
+                // numeric version on both sides.
+                (Some(old_version), Some(new_version)) if new_version > old_version => {
+                    result.additive.push(format!(
+                        "{PROTOCOL_VERSION_KEY} bumped ({old_version} -> {new_version}): \
+                         version-bump marker present, reshapes are the owner's call in review"
+                    ));
+                    return result;
+                }
+                // Equal: an ordinary diff, classified below.
+                (Some(old_version), Some(new_version)) if new_version == old_version => {}
+                (Some(old_version), Some(new_version)) => {
+                    result.violations.push(format!(
+                        "{PROTOCOL_VERSION_KEY} went backwards ({old_version} -> \
+                         {new_version}) (reshape; the marker only ever increases)"
+                    ));
+                    return result;
+                }
+                // Present but not a number on at least one side: a marker
+                // that cannot be compared must never wave a diff through
+                // -- the checker's own escape hatch was a blind spot
+                // otherwise.
+                _ => {
+                    result.violations.push(format!(
+                        "{PROTOCOL_VERSION_KEY} must be a number on both sides \
+                         ({old_raw} -> {new_raw}) (reshape)"
+                    ));
+                    return result;
+                }
+            }
+        }
+        // The marker vanishing (or appearing from nothing) is itself a
+        // reshape, not a legitimization.
+        (Some(old_raw), None) => {
+            result.violations.push(format!(
+                "{PROTOCOL_VERSION_KEY} removed (was {old_raw}) (reshape; the marker never \
+                 disappears)"
+            ));
+            return result;
+        }
+        (None, Some(new_raw)) => {
+            result.violations.push(format!(
+                "{PROTOCOL_VERSION_KEY} appeared ({new_raw}) without a predecessor (reshape; \
+                 a marker appearing out of nowhere legitimizes nothing)"
+            ));
+            return result;
+        }
     }
     diff_value("#", old, new, &mut result);
     result
@@ -368,6 +415,31 @@ mod tests {
         assert_additive(
             json!({"$defs": {"S": {"description": "old words", "type": "string"}}}),
             json!({"$defs": {"S": {"description": "new words", "type": "string"}}}),
+        );
+    }
+
+    #[test]
+    fn the_version_marker_only_counts_when_numeric_on_both_sides_and_increasing() {
+        // Some -> None: the marker vanishing is itself a reshape.
+        assert_reshape(
+            json!({"x-session-protocol-version": 10, "$defs": {}}),
+            json!({"$defs": {}}),
+        );
+        // None -> Some: a marker appearing out of nowhere legitimizes
+        // nothing.
+        assert_reshape(
+            json!({"$defs": {}}),
+            json!({"x-session-protocol-version": 10, "$defs": {}}),
+        );
+        // Decrease: the marker only ever increases.
+        assert_reshape(
+            json!({"x-session-protocol-version": 10, "$defs": {"S": {"type": "string"}}}),
+            json!({"x-session-protocol-version": 9, "$defs": {"S": {"type": "integer"}}}),
+        );
+        // Non-numeric marker on either side.
+        assert_reshape(
+            json!({"x-session-protocol-version": "10", "$defs": {}}),
+            json!({"x-session-protocol-version": 11, "$defs": {}}),
         );
     }
 

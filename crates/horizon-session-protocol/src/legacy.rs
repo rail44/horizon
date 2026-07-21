@@ -62,4 +62,59 @@ mod tests {
         assert_eq!(value["kind"], "session_control");
         assert_eq!(value["payload"], "drain");
     }
+
+    /// Byte-for-byte fixtures of the real pre-v10 wire, recorded by
+    /// *executing the actual v9 encoder* (`horizon-session-protocol` at
+    /// commit `f82da5b`, the last JSONL generation:
+    /// `Envelope::session_control_at(&SessionControl::Drain, v)` through
+    /// `write_envelope`) — not derived from this module's own output, so
+    /// this test can only pass while `drain_line` matches what v3–v9
+    /// daemons genuinely decoded.
+    #[test]
+    fn drain_line_matches_the_recorded_v9_wire_bytes() {
+        const RECORDED_V9: &str =
+            "{\"v\":9,\"session_id\":null,\"kind\":\"session_control\",\"payload\":\"drain\"}\n";
+        const RECORDED_V5: &str =
+            "{\"v\":5,\"session_id\":null,\"kind\":\"session_control\",\"payload\":\"drain\"}\n";
+        const RECORDED_V3: &str =
+            "{\"v\":3,\"session_id\":null,\"kind\":\"session_control\",\"payload\":\"drain\"}\n";
+        assert_eq!(drain_line(9), RECORDED_V9);
+        assert_eq!(drain_line(5), RECORDED_V5);
+        assert_eq!(drain_line(3), RECORDED_V3);
+    }
+
+    /// The old decoder's exact acceptance path, frozen: a field-for-field
+    /// mirror of the retired `Envelope` struct (same declaration, same
+    /// serde derives — archaeology, not a re-import) must decode the
+    /// probe, and its `payload` must decode as the old externally-tagged
+    /// `SessionControl::Drain` (the unit variant's `"drain"` string).
+    #[test]
+    fn drain_line_decodes_through_a_frozen_copy_of_the_old_envelope() {
+        /// Frozen mirror of the deleted v9 `Envelope`.
+        #[derive(serde::Deserialize)]
+        struct FrozenEnvelope {
+            v: u32,
+            session_id: Option<uuid::Uuid>,
+            kind: String,
+            payload: serde_json::Value,
+        }
+        /// Frozen mirror of the deleted `SessionControl`, drain arm only.
+        #[derive(Debug, PartialEq, serde::Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum FrozenSessionControl {
+            Drain,
+        }
+
+        for version in [OLDEST_DRAINABLE_VERSION, 7, NEWEST_JSONL_VERSION] {
+            let line = drain_line(version);
+            let envelope: FrozenEnvelope = serde_json::from_str(line.trim_end())
+                .expect("a v3-v9 daemon must be able to decode the probe");
+            assert_eq!(envelope.v, version);
+            assert_eq!(envelope.session_id, None);
+            assert_eq!(envelope.kind, "session_control");
+            let control: FrozenSessionControl = serde_json::from_value(envelope.payload)
+                .expect("the payload must decode as the old SessionControl");
+            assert_eq!(control, FrozenSessionControl::Drain);
+        }
+    }
 }

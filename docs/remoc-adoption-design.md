@@ -252,6 +252,23 @@ by accident. Rules, then enforcement:
    forcing a human decision on every wire-shape change — is exactly what
    the artifact diff does, with structure instead of a hand-maintained
    integer assertion.
+5. **Postbag positional discipline** (added 2026-07-21, from the v10
+   review's measurements). Postbag is not self-describing, which makes
+   enum placement wire-meaningful:
+   - Wire enums may appear only in **struct-field, top-level, or newtype
+     positions** — never as `Vec`/tuple/array *element* types. In element
+     position a skewed peer's unknown variant cannot be skipped
+     item-by-item (the whole collection is one item), and a misaligned
+     read can silently misdecode neighbouring elements.
+   - The degrade-vs-error boundary is exactly the **variant identifier
+     byte(s)**: an unknown identifier degrades to the `#[serde(other)]`
+     catch-all (payload read and discarded); a *known* identifier with a
+     structurally broken payload (missing required field) is a per-item
+     decode error the receive loops skip. **Corruption detection must not
+     be expected beyond that**: a type-level mismatch can silently
+     misdecode (measured: a `String` payload read into a `u16` field as
+     the string's length varint) — which is why retyping a wire field is
+     a version-bump reshape, never an in-place change.
 
 ## 5. Frame delivery — the one open owner decision
 
@@ -343,6 +360,15 @@ envelope + line framing) survives, quarantined in one module whose only
 caller is the prober. A wrong-generation probe hitting a healthy remoc
 daemon costs one garbage connection, which chmux drops — the same
 "wrong probe is harmless" property #18 established.
+
+**The reverse direction does not auto-recover.** A *v≤9 (JSONL) UI*
+meeting a *v10 daemon* cannot clear it automatically: the old UI's
+recovery only knows JSONL probes, which the remoc daemon reads as chmux
+garbage (its length-prefix decode fails instantly) and drops, so the old
+UI retries until its own budget goes fatal. The user kills the stale
+process manually and restarts — accepted as a one-time migration cost
+(added 2026-07-21; the forward direction, which is the one the upgrade
+flow actually produces, is the auto-recovery path above).
 
 **Out of scope: the event log's on-disk format.** It is independent of
 the wire (a daemon-local persistence concern), already carries its own

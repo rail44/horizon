@@ -124,6 +124,10 @@ fn generate_wire_schema() -> Value {
         "agent_event_payload": generator.subschema_for::<Event>().to_value(),
         "host_tool_requests": generator.subschema_for::<HostToolRequest>().to_value(),
         "host_tool_responses": generator.subschema_for::<HostToolResponse>().to_value(),
+        // `HubHello.skipped_lines` -- the startup event-log diagnostic
+        // channel (a review-found omission: every channel's payload
+        // vocabulary belongs here).
+        "skipped_lines": generator.subschema_for::<String>().to_value(),
     });
 
     let mut defs = Value::Object(generator.take_definitions(true));

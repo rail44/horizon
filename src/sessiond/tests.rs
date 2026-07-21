@@ -24,7 +24,7 @@ use horizon_session_protocol::{
 };
 use horizon_terminal_core::{TerminalColorScheme, TerminalFrame, TerminalSize};
 use remoc::rch;
-use remoc::rtc::ServerShared as _;
+use remoc::rtc::{Client as _, ServerShared as _};
 use tokio::task::JoinHandle;
 
 use super::*;
@@ -104,6 +104,10 @@ impl std::fmt::Debug for FakeCall {
 struct FakeBehavior {
     /// Reject `hello` with a version-range error.
     reject_hello: bool,
+    /// Never answer `hello` (the call blocks forever) — for the
+    /// drop-during-hello test, which aborts the daemon while the call is
+    /// in flight.
+    hang_hello: bool,
     /// Ids `attach_terminal` reports `TerminalNotFound` for.
     missing_terminals: Vec<Uuid>,
     /// Successive `list_terminals` replies, popped front-first; empty →
@@ -119,6 +123,8 @@ struct FakeHub {
 impl FakeHub {
     fn terminal_attachment(&self) -> (TerminalAttachment, TerminalPeer) {
         let (update_tx, update_rx) = rch::mpsc::channel::<TerminalUpdate, WireCodec>(16);
+        let update_rx =
+            update_rx.set_max_item_size::<{ horizon_session_protocol::FRAME_MAX_ITEM_BYTES }>();
         let (command_tx, command_rx) = rch::mpsc::channel::<TerminalCommand, WireCodec>(16);
         (
             TerminalAttachment {
@@ -134,6 +140,8 @@ impl FakeHub {
 
     fn agent_attachment(&self) -> (AgentAttachment, AgentPeer) {
         let (event_tx, event_rx) = rch::mpsc::channel::<AgentWireEvent, WireCodec>(16);
+        let event_rx =
+            event_rx.set_max_item_size::<{ horizon_session_protocol::TOOL_IO_MAX_ITEM_BYTES }>();
         let (command_tx, command_rx) = rch::mpsc::channel::<Command, WireCodec>(16);
         (
             AgentAttachment {
@@ -150,6 +158,9 @@ impl FakeHub {
 
 impl SessionHub for FakeHub {
     async fn hello(&self, _client: ClientHello) -> Result<HubHello, HubError> {
+        if self.behavior.lock().unwrap().hang_hello {
+            std::future::pending::<()>().await;
+        }
         if self.behavior.lock().unwrap().reject_hello {
             return Err(HubError::IncompatibleVersion {
                 client: VersionRange::ours(),
@@ -161,8 +172,12 @@ impl SessionHub for FakeHub {
         }
         let _ = self.calls.send(FakeCall::Hello);
         let (_request_tx, request_rx) = rch::mpsc::channel::<HostToolRequest, WireCodec>(4);
+        let request_rx =
+            request_rx.set_max_item_size::<{ horizon_session_protocol::TOOL_IO_MAX_ITEM_BYTES }>();
         let (response_tx, _response_rx) = rch::mpsc::channel::<HostToolResponse, WireCodec>(4);
         let (_skipped_tx, skipped_rx) = rch::mpsc::channel::<String, WireCodec>(1);
+        let skipped_rx =
+            skipped_rx.set_max_item_size::<{ horizon_session_protocol::CONTROL_MAX_ITEM_BYTES }>();
         Ok(HubHello {
             negotiated: SESSION_PROTOCOL_VERSION,
             binary_id: "fake-sessiond".to_string(),
@@ -272,7 +287,12 @@ where
         behavior: StdMutex::new(behavior),
         calls: calls_tx,
     };
-    let (server, client) = SessionHubServerShared::<_, WireCodec>::new(std::sync::Arc::new(hub), 8);
+    let (server, mut client) =
+        SessionHubServerShared::<_, WireCodec>::new(std::sync::Arc::new(hub), 8);
+    // Mirror the real daemon's pre-transport rtc caps (main.rs) so the
+    // boundary tests exercise the same enforcement.
+    client.set_max_request_size(horizon_session_protocol::RTC_MAX_REQUEST_BYTES);
+    client.set_max_reply_size(horizon_session_protocol::RTC_MAX_REPLY_BYTES);
     base_tx
         .send(client)
         .await
@@ -663,33 +683,50 @@ async fn read_until_closed(stream: &mut tokio::net::UnixStream) -> Vec<u8> {
     buffer
 }
 
+/// Holds accepted stub connections open, silently reading — the measured
+/// presentation of a real v9 JSONL daemon (its pre-hello `read_line`
+/// blocks forever on chmux bytes, which contain no newline).
+fn hold_silently(stream: tokio::net::UnixStream) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        let mut stream = stream;
+        let mut chunk = [0_u8; 4096];
+        loop {
+            match stream.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+        }
+    })
+}
+
 /// The cross-generation recovery loop (`docs/remoc-adoption-design.md` §6,
 /// re-anchoring PR #18's scenarios on the new detection path): a v10
-/// runtime meets a still-running JSONL daemon — which reads our chmux
-/// hello as garbage and closes without a word — detects the generation
-/// mismatch via the bounded connect timeout, probes a legacy `Drain` at
-/// the newest JSONL version, and adopts the respawned (remoc) daemon.
+/// runtime meets a still-running JSONL daemon — which blocks silently in
+/// its pre-hello `read_line`, the measured real-v9 presentation — sees
+/// `SILENCE_MISMATCH_THRESHOLD` consecutive bounded-timeout silences
+/// (single timeouts are transient and never consume the recovery budget),
+/// probes a legacy `Drain` at the newest JSONL version, and adopts the
+/// respawned (remoc) daemon.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_jsonl_generation_daemon_is_probed_drained_and_the_respawn_adopted() {
+    // Shrink the establish deadline so three consecutive silences take
+    // fractions of a second, not 15 s of wall clock.
+    std::env::set_var("HORIZON_TEST_ESTABLISH_TIMEOUT_MS", "300");
     let (socket_path, control_socket) = stub_socket_paths("probe");
     let listener = bind_stub_listener(&socket_path);
     let (handle, _host_tools, _workspace_roots) =
         SessiondHandle::start(&socket_path, &control_socket);
 
-    // Connection 1: the JSONL daemon reads a chunk of chmux bytes it can't
-    // parse and slams the connection, exactly like read_envelope's error
-    // arm did.
-    {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        use tokio::io::AsyncReadExt;
-        let mut chunk = [0_u8; 4096];
-        let _ = tokio::time::timeout(Duration::from_secs(10), stream.read(&mut chunk))
-            .await
-            .expect("the runtime should send its chmux hello");
-        drop(stream);
+    // Connections 1..3: the silent JSONL daemon, once per establish
+    // attempt (the runtime redials between timeouts).
+    let mut held = Vec::new();
+    for _ in 0..3 {
+        let (stream, _) = listener.accept().await.unwrap();
+        held.push(hold_silently(stream));
     }
 
-    // Connection 2: the first drain probe — one newline-terminated JSONL
+    // Connection 4: the first drain probe — one newline-terminated JSONL
     // envelope, stamped with the newest JSONL version.
     {
         let (mut stream, _) = listener.accept().await.unwrap();
@@ -730,23 +767,21 @@ async fn a_jsonl_generation_daemon_is_probed_drained_and_the_respawn_adopted() {
 /// drain-and-restarting forever, with the rebuild hint in the error.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_second_generation_mismatch_after_recovery_goes_fatal_instead_of_looping() {
+    std::env::set_var("HORIZON_TEST_ESTABLISH_TIMEOUT_MS", "300");
     let (socket_path, control_socket) = stub_socket_paths("fatal");
     let listener = bind_stub_listener(&socket_path);
     let (handle, _host_tools, _workspace_roots) =
         SessiondHandle::start(&socket_path, &control_socket);
     let terminal = handle.start_terminal(Uuid::new_v4(), spec());
 
-    // Connection 1: silent JSONL-generation daemon.
-    {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        use tokio::io::AsyncReadExt;
-        let mut chunk = [0_u8; 4096];
-        let _ = tokio::time::timeout(Duration::from_secs(10), stream.read(&mut chunk))
-            .await
-            .expect("the runtime should send its chmux hello");
-        drop(stream);
+    // Connections 1..3: silent JSONL-generation daemon, up to the
+    // consecutive-silence threshold.
+    let mut held = Vec::new();
+    for _ in 0..3 {
+        let (stream, _) = listener.accept().await.unwrap();
+        held.push(hold_silently(stream));
     }
-    // Connection 2: the one drain probe this runtime is allowed.
+    // Connection 4: the one drain probe this runtime is allowed.
     {
         let (mut stream, _) = listener.accept().await.unwrap();
         let _ = read_until_closed(&mut stream).await;
@@ -755,15 +790,10 @@ async fn a_second_generation_mismatch_after_recovery_goes_fatal_instead_of_loopi
     tokio::time::sleep(Duration::from_millis(300)).await;
     let listener = bind_stub_listener(&socket_path);
 
-    // Connection 3: the "respawned" daemon is just as stale.
-    {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        use tokio::io::AsyncReadExt;
-        let mut chunk = [0_u8; 4096];
-        let _ = tokio::time::timeout(Duration::from_secs(10), stream.read(&mut chunk))
-            .await
-            .expect("the runtime should retry its chmux hello");
-        drop(stream);
+    // Connections 5..7: the "respawned" daemon is just as stale (silent).
+    for _ in 0..3 {
+        let (stream, _) = listener.accept().await.unwrap();
+        held.push(hold_silently(stream));
     }
 
     // The runtime gives up rather than draining again, with the rebuild
@@ -900,4 +930,115 @@ async fn broadcast_terminal_color_scheme_targets_exactly_the_attached_sessions()
     // returned an error), which is the structural form of "must not
     // receive a push".
     assert!(peers.remove(&missing).flatten().is_none());
+}
+
+/// Review fix (establishment classification): transient failures —
+/// connections the daemon drops before/during the handshake — are retried
+/// with backoff and never consume the once-per-runtime recovery budget.
+/// Two immediate closes followed by a healthy daemon must end established,
+/// where the old classification would have burned the budget on close #1
+/// and gone fatal on close #2.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_transient_failures_do_not_consume_the_recovery_budget() {
+    let (socket_path, control_socket) = stub_socket_paths("transient");
+    let listener = bind_stub_listener(&socket_path);
+    let (handle, _host_tools, _workspace_roots) =
+        SessiondHandle::start(&socket_path, &control_socket);
+
+    // Connections 1 and 2: accepted and immediately dropped (a crashing
+    // daemon; `ChMux(StreamClosed)` on the runtime's side).
+    for _ in 0..2 {
+        let (stream, _) = listener.accept().await.unwrap();
+        drop(stream);
+    }
+
+    // Connection 3: a healthy daemon — must be adopted normally.
+    let (stream, _) = listener.accept().await.unwrap();
+    let (mut calls, _conn, _serve) = serve_fake_hub(stream, FakeBehavior::default()).await;
+    assert!(matches!(next_call(&mut calls).await, FakeCall::Hello));
+
+    let list_handle = handle.clone();
+    let listed = tokio::task::spawn_blocking(move || list_handle.terminal_list()).await;
+    assert_eq!(listed.unwrap(), Ok(Vec::new()));
+
+    drop(handle);
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+/// Review fix (establishment classification): a connection dropping while
+/// the `hello` call itself is in flight (`HubError::Call`) is a transient,
+/// retried like any other pre-hello drop — the old classification sent it
+/// straight to a fatal stop.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_connection_drop_during_hello_is_retried_not_fatal() {
+    let (socket_path, control_socket) = stub_socket_paths("hellodrop");
+    let listener = bind_stub_listener(&socket_path);
+    let (handle, _host_tools, _workspace_roots) =
+        SessiondHandle::start(&socket_path, &control_socket);
+
+    // Connection 1: a daemon that completes the handshake and hands over
+    // its hub, then dies while hello is pending.
+    let (stream, _) = listener.accept().await.unwrap();
+    let behavior = FakeBehavior {
+        hang_hello: true,
+        ..FakeBehavior::default()
+    };
+    let (_calls, conn, serve) = serve_fake_hub(stream, behavior).await;
+    // Give the runtime a moment to get its hello call in flight, then
+    // kill the daemon under it.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    conn.abort();
+    serve.abort();
+
+    // Connection 2: a healthy daemon — the runtime must have retried
+    // rather than stopped.
+    let (stream, _) = listener.accept().await.unwrap();
+    let (mut calls, _conn, _serve) = serve_fake_hub(stream, FakeBehavior::default()).await;
+    assert!(matches!(next_call(&mut calls).await, FakeCall::Hello));
+
+    let list_handle = handle.clone();
+    let listed = tokio::task::spawn_blocking(move || list_handle.terminal_list()).await;
+    assert_eq!(listed.unwrap(), Ok(Vec::new()));
+
+    drop(handle);
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+/// Review fix (size caps), pinning the *measured* oversized-request
+/// semantics: the daemon drops a request over `RTC_MAX_REQUEST_BYTES`
+/// per-item, so the op fails loudly (the pane gets an error, never a
+/// hang) — and because rch latches the remote-send error onto the
+/// transported request channel, the connection then tears down (the
+/// runtime stops with the failure fanned out). Deliberate bluntness:
+/// every rtc request is a small fixed-shape struct, so exceeding the cap
+/// is a bug, never data — see `RTC_MAX_REQUEST_BYTES`'s doc.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_oversized_rtc_request_fails_the_op_and_stops_the_runtime() {
+    let (client, server) = tokio::io::duplex(1024 * 1024);
+    let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
+    let (mut calls, _conn, _serve) = serve_fake_hub(server, FakeBehavior::default()).await;
+    assert!(matches!(next_call(&mut calls).await, FakeCall::Hello));
+
+    // A spawn spec far over the 64 KiB request cap.
+    let mut oversized = spec();
+    oversized.args = vec!["x".repeat(200 * 1024)];
+    let terminal = handle.start_terminal(Uuid::new_v4(), oversized);
+    let update = terminal
+        .updates()
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the oversized create must fail loudly, not hang");
+    assert!(
+        matches!(update, TerminalUpdate::Error(_)),
+        "expected a create failure, got {update:?}"
+    );
+
+    // The latched request channel ends the connection; later panes get
+    // the failure rather than a hang.
+    let late = handle.start_terminal(Uuid::new_v4(), spec());
+    assert!(matches!(
+        late.updates()
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap(),
+        TerminalUpdate::Error(_)
+    ));
 }

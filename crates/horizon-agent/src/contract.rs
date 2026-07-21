@@ -102,7 +102,9 @@ pub enum Command {
     ContinueTurn,
     Shutdown,
     /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
-    /// decodes to `Unknown` (its payload, if any, is discarded). Keep last. A receiver
+    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
+    /// discarded there; under serde_json only *unit* variants degrade —
+    /// a payload-carrying one is a per-item decode error instead). Keep last. A receiver
     /// logs and drops an unknown command; it never acks or executes it.
     #[serde(other)]
     Unknown,
@@ -163,7 +165,9 @@ pub enum Event {
     /// itself, so this variant's own wire shape stays unchanged.
     TurnEnded(TurnEndReason),
     /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
-    /// decodes to `Unknown` (its payload, if any, is discarded). Keep last. A receiver skips an
+    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
+    /// discarded there; under serde_json only *unit* variants degrade —
+    /// a payload-carrying one is a per-item decode error instead). Keep last. A receiver skips an
     /// unknown event: it folds into no frame item and projects into no row.
     #[serde(other)]
     Unknown,
@@ -201,7 +205,9 @@ pub enum TurnEndReason {
     /// Same section of the design doc.
     HaltedByDoomLoop,
     /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
-    /// decodes to `Unknown` (its payload, if any, is discarded). Keep last. Rendered like the
+    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
+    /// discarded there; under serde_json only *unit* variants degrade —
+    /// a payload-carrying one is a per-item decode error instead). Keep last. Rendered like the
     /// legacy bare [`TurnEndReason::Halted`]: a calm "paused" receipt with
     /// no guard-specific sentence.
     #[serde(other)]
@@ -340,7 +346,9 @@ pub enum SessionState {
     Failed,
     Terminated,
     /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
-    /// decodes to `Unknown` (its payload, if any, is discarded). Keep last.
+    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
+    /// discarded there; under serde_json only *unit* variants degrade —
+    /// a payload-carrying one is a per-item decode error instead). Keep last.
     #[serde(other)]
     Unknown,
 }
@@ -356,7 +364,9 @@ pub enum MessageRole {
     User,
     Assistant,
     /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
-    /// decodes to `Unknown` (its payload, if any, is discarded). Keep last. Treated as
+    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
+    /// discarded there; under serde_json only *unit* variants degrade —
+    /// a payload-carrying one is a per-item decode error instead). Keep last. Treated as
     /// assistant-authored wherever a side must be picked (a transcript can
     /// misattribute a skewed message; it must never invent user words).
     #[serde(other)]
@@ -601,7 +611,9 @@ pub enum ApprovalKind {
         prior_result: ToolCallResult,
     },
     /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
-    /// decodes to `Unknown` (its payload, if any, is discarded). Keep last. Resolved like
+    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
+    /// discarded there; under serde_json only *unit* variants degrade —
+    /// a payload-carrying one is a per-item decode error instead). Keep last. Resolved like
     /// [`ApprovalKind::Standard`] (plain approve/deny, no retry semantics).
     #[serde(other)]
     Unknown,
