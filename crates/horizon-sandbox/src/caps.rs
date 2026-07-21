@@ -2,13 +2,10 @@
 //! (`docs/agent-approval-design.md`'s "Sandbox architecture"). Pure
 //! capability-set construction -- no process spawning or sandbox
 //! application here. Shared verbatim between both OS backends
-//! (`docs/roadmap.md`'s backlog-60 entry): `linux::spawn` applies the
-//! built set directly to its spawning thread; the macOS backend applies
-//! the same mapping inside a tiny exec helper (`src/bin/
-//! horizon-sandbox-helper.rs`), since nono's macOS `Sandbox::apply_auto`
-//! restricts the *whole calling process* rather than a single thread (see
-//! `macos/mod.rs`'s module doc for why that forces a separate-process
-//! design there).
+//! (`docs/roadmap.md`'s backlog-60 entry): both production backends rebuild
+//! and apply the same mapping inside `horizon-sandbox-helper`; Linux retains
+//! an unsandboxed supervisor parent while macOS self-applies Seatbelt and
+//! execs directly.
 //!
 //! nono grants nothing implicitly on either OS: every path a sandboxed
 //! command needs, including the baseline system directories required
@@ -20,7 +17,10 @@
 //! `/` grant already subsumes all of it.
 
 use crate::error::SandboxError;
-use crate::policy::{NetworkPolicy, ReadableScope, SandboxPolicy};
+use crate::policy::{
+    FilesystemGrant, FilesystemGrantAccess, FilesystemGrantScope, NetworkPolicy, ReadableScope,
+    SandboxPolicy,
+};
 #[cfg(target_os = "macos")]
 use nono::UnixSocketMode;
 use nono::{AccessMode, CapabilitySet, NetworkMode, SignalMode};
@@ -64,7 +64,15 @@ const BASELINE_DIRS: [&str; 8] = [
 /// scopes `kill(2)` to the sandbox's own process tree on both OS backends
 /// (`docs/roadmap.md`'s backlog-60 entry), denying a sandboxed command
 /// from signaling an external same-uid process.
+#[cfg(test)]
 pub(crate) fn build(policy: &SandboxPolicy) -> Result<CapabilitySet, SandboxError> {
+    build_with_grants(policy, &[])
+}
+
+pub(crate) fn build_with_grants(
+    policy: &SandboxPolicy,
+    filesystem_grants: &[FilesystemGrant],
+) -> Result<CapabilitySet, SandboxError> {
     let mut caps = CapabilitySet::new();
 
     match &policy.readable_scope {
@@ -85,6 +93,34 @@ pub(crate) fn build(policy: &SandboxPolicy) -> Result<CapabilitySet, SandboxErro
         caps = allow_dir(caps, root, AccessMode::ReadWrite)?;
     }
 
+    for grant in filesystem_grants {
+        validate_grant(grant)?;
+        let access = match grant.access {
+            FilesystemGrantAccess::Read => AccessMode::Read,
+            FilesystemGrantAccess::ReadWrite => AccessMode::ReadWrite,
+        };
+        caps = match grant.scope {
+            FilesystemGrantScope::File => caps.allow_file(&grant.path, access)?,
+            FilesystemGrantScope::DirectoryTree => caps.allow_path(&grant.path, access)?,
+        };
+        let applied = caps
+            .fs_capabilities()
+            .last()
+            .expect("adding a filesystem capability must append one entry");
+        if applied.resolved != grant.path || applied.access != access {
+            return Err(SandboxError::GrantChanged {
+                approved: grant.path.clone(),
+                resolved: applied.resolved.clone(),
+            });
+        }
+        if applied.is_file != (grant.scope == FilesystemGrantScope::File) {
+            return Err(SandboxError::GrantTypeChanged {
+                path: grant.path.clone(),
+                scope: grant.scope,
+            });
+        }
+    }
+
     caps = match &policy.network {
         NetworkPolicy::Enabled => caps.set_network_mode(NetworkMode::AllowAll),
         NetworkPolicy::Disabled => caps.set_network_mode(NetworkMode::Blocked),
@@ -95,6 +131,49 @@ pub(crate) fn build(policy: &SandboxPolicy) -> Result<CapabilitySet, SandboxErro
     };
 
     Ok(caps.set_signal_mode(SignalMode::AllowSameSandbox))
+}
+
+pub(crate) fn validate_grant(grant: &FilesystemGrant) -> Result<(), SandboxError> {
+    if crate::grant::is_protected(&grant.path)
+        || (grant.access == FilesystemGrantAccess::ReadWrite
+            && grant.scope == FilesystemGrantScope::DirectoryTree
+            && grant.path == Path::new("/"))
+    {
+        return Err(SandboxError::UnsupportedGrantTarget(grant.path.clone()));
+    }
+    let resolved = grant
+        .path
+        .canonicalize()
+        .map_err(|source| SandboxError::InvalidRoot {
+            path: grant.path.clone(),
+            source,
+        })?;
+    if resolved != grant.path {
+        return Err(SandboxError::GrantChanged {
+            approved: grant.path.clone(),
+            resolved,
+        });
+    }
+    if crate::grant::is_protected(&resolved) {
+        return Err(SandboxError::UnsupportedGrantTarget(grant.path.clone()));
+    }
+    let metadata = resolved
+        .metadata()
+        .map_err(|source| SandboxError::InvalidRoot {
+            path: grant.path.clone(),
+            source,
+        })?;
+    let type_matches = match grant.scope {
+        FilesystemGrantScope::File => metadata.is_file(),
+        FilesystemGrantScope::DirectoryTree => metadata.is_dir(),
+    };
+    if !type_matches {
+        return Err(SandboxError::GrantTypeChanged {
+            path: grant.path.clone(),
+            scope: grant.scope,
+        });
+    }
+    Ok(())
 }
 
 /// Grants the sandboxed command's only egress path under `Proxied`: the
@@ -197,6 +276,30 @@ mod tests {
     fn network_enabled_allows_all() {
         let caps = build(&policy(vec![], NetworkPolicy::Enabled)).unwrap();
         assert_eq!(*caps.network_mode(), NetworkMode::AllowAll);
+    }
+
+    #[test]
+    fn approved_grants_cannot_bypass_protected_or_root_write_rules() {
+        let base = policy(vec![], NetworkPolicy::Disabled);
+        let protected = FilesystemGrant {
+            path: Path::new("/proc").to_path_buf(),
+            access: FilesystemGrantAccess::Read,
+            scope: FilesystemGrantScope::DirectoryTree,
+        };
+        assert!(matches!(
+            build_with_grants(&base, &[protected]),
+            Err(SandboxError::UnsupportedGrantTarget(path)) if path == Path::new("/proc")
+        ));
+
+        let root_write = FilesystemGrant {
+            path: Path::new("/").to_path_buf(),
+            access: FilesystemGrantAccess::ReadWrite,
+            scope: FilesystemGrantScope::DirectoryTree,
+        };
+        assert!(matches!(
+            build_with_grants(&base, &[root_write]),
+            Err(SandboxError::UnsupportedGrantTarget(path)) if path == Path::new("/")
+        ));
     }
 
     #[test]

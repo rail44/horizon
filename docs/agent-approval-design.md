@@ -216,17 +216,13 @@ product-owned API. Decisions:
   `Finished` — `result` is a genuine, already-computed outcome (the call
   ran; it just couldn't reach some host), annotated with `denied_domains`
   and a forced `is_error: true` regardless of the wrapped shell's own exit
-  code. `horizon-sessiond`'s `fold_domain_denied` (mirroring the existing
-  `fold_bash_retry_without_sandbox` shape) reissues a fresh
+  code. `horizon-sessiond`'s `fold_domain_denied` reissues a fresh
   `ToolCallRequested` + a differently-**kinded** `ApprovalRequested`
   (`contract::ApprovalKind::DomainDenialRetry { domains, prior_result }`,
-  alongside a new `SandboxDenialRetry` kind now given to the pre-existing
-  sandbox-denial retry, and the default `Standard` for every other
-  approval) — the kind is what lets `tools::approval::resolve_bash` tell
-  the three apart and route each one's Approve/Deny correctly: a domain
+  alongside the default `Standard` for ordinary approvals) — the kind lets
+  `tools::approval::resolve_bash` route Approve/Deny correctly: a domain
   approve calls `SessionNetworkProxy::allow_domain` for this session only,
-  then reruns the SAME call still sandboxed (`bash::spawn_sandboxed`, not
-  the plain unsandboxed retry a `SandboxDenialRetry` approve uses); a deny
+  then reruns the SAME call still sandboxed (`bash::spawn_sandboxed`); a deny
   simply forwards `prior_result` as-is (the real attempt already
   happened). Audit: `policy::annotate_domain_approval` marks
   `domain_approved`/`approved_domains` on the eventual retry's result,
@@ -273,16 +269,17 @@ product-owned API. Decisions:
   network approval for ordinary `cargo`/`curl`/`git` clients, and the phrase
   "direct egress is cut" above should be read as its historical TCP-tested
   claim rather than an all-protocol invariant.
-- **Denial UX** (converged pattern): detect the sandbox denial
-  (exit-code/stderr signature), then surface "retry without sandbox?"
-  through the normal approval flow — never silently block or bypass.
-  Two integration notes from the spike for the wiring leg: denial
-  classification is substring-based and locale-sensitive — run
-  sandboxed commands with `LC_ALL=C`; and `horizon_sandbox::spawn`
-  cannot carry the caller's stdio configuration
-  (`std::process::Command` exposes no getter), so the bash tool's
-  piped-output integration needs the API to grow explicit stdio
-  handling first (known limitation recorded in the crate's `lib.rs`).
+- **Denial UX** (corrected 2026-07-21): a containment denial never authorizes
+  removing containment. Linux `openat`/`openat2` crossings come from the
+  authenticated supervisor report, not exit status or stderr, and become
+  `FilesystemDenialRetry` requests carrying the attempted path plus the real
+  exact-file or recursive-directory grant. Approve revalidates and adds only
+  that session grant, then reruns the same call through `spawn_sandboxed`;
+  deny forwards the prior result. `RetryWithoutSandbox` is removed. The old
+  serialized `SandboxDenialRetry` kind remains readable only for event-log
+  compatibility and resolves fail-closed. This is an incident-complete open
+  slice, not a claim that every Landlock-controlled filesystem syscall can be
+  discovered. See `docs/containment-denial-narrow-grants-design.md`.
 - **Spike** (owner decision): build the thin API + per-OS composition
   directly from the start — no ai-jail stopgap (writing the thin layer
   is the spike). Deliverable: prototype + tests
@@ -489,6 +486,11 @@ refactoring wave folds into this item.
    "Leg 4b" note for the full shape. A persistent, config-file allowlist
    remains out of scope (this leg's allowlist lives only for the
    session's lifetime); the judge leg is the only remainder.*
+   *Filesystem containment-denial correction landed 2026-07-21: the reduced
+   nono-derived Linux helper records `openat`/`openat2` denials regardless of
+   command exit status; exact session grants are human-approved, shadow-judged
+   as trusted mediation data, revalidated, and retried sandboxed. Network
+   ProxyOnly/ordinary-client enforcement remains the next correction leg.*
 5. **Judge**: the inline classifier at the policy seam, judge-model
    config key, audit field. Folds in backlog 47 (turn_id-null tracker
    flaw — fix so approval analytics can measure the judge's effect)

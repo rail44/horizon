@@ -1225,14 +1225,16 @@ fn fold_bash_completion(
         BashCompletion::Finished(result) => {
             fold_finished_bash_result(state, live_state, commands_tx, session_id, result)
         }
-        BashCompletion::RetryWithoutSandbox { call_id, reason } => {
-            fold_bash_retry_without_sandbox(state, live_state, session_id, call_id, reason)
-        }
         BashCompletion::DomainDenied {
             call_id,
             domains,
             result,
         } => fold_domain_denied(state, live_state, session_id, call_id, domains, result),
+        BashCompletion::FilesystemDenied {
+            call_id,
+            denials,
+            result,
+        } => fold_filesystem_denied(state, live_state, session_id, call_id, denials, result),
     }
 }
 
@@ -1296,62 +1298,13 @@ fn fold_finished_bash_result(
     let _ = commands_tx.send(Command::ToolCallResult(result));
 }
 
-/// A sandboxed tier-1 attempt looked denied by the sandbox itself
-/// (`horizon_sandbox::is_likely_sandbox_denied`) -- surface the normal
-/// approval flow for a retry of the same call without the sandbox
-/// (`docs/agent-approval-design.md`'s "Denial UX"), instead of reporting a
-/// raw failure straight to the provider. Reissues a fresh `ToolCallRequested`
-/// for the same `call_id` right before the `ApprovalRequested`: `AgentFrame::
-/// has_tool_call_started`/`has_tool_call_finished` are scoped to items
-/// *since the latest* `ToolCallRequested` occurrence for a call_id (see
-/// their doc comments -- the same mechanism already supports a provider
-/// reusing a call_id for a genuinely new call), so this moves that scope
-/// boundary past the first (sandboxed) attempt's own `ToolCallStarted`;
-/// without it, the user's eventual Approve of this retry would be
-/// misclassified as `AlreadyResolved` by `tools::approval::try_execute`.
-/// Not forwarded to the provider: the original call is still open from its
-/// point of view, exactly as if it hadn't been auto-approved yet at all.
-fn fold_bash_retry_without_sandbox(
-    state: &Arc<SessiondState>,
-    live_state: &LiveState,
-    session_id: SessionId,
-    call_id: ToolCallId,
-    reason: String,
-) {
-    let frame = live_state.frame();
-    if !should_fold_completion(&frame, &call_id) {
-        return;
-    }
-    let Some(original_request) = frame.tool_call_request(&call_id).cloned() else {
-        // Should be unreachable (this call_id was necessarily requested to
-        // have gotten this far) -- nothing sane to reissue against.
-        return;
-    };
-
-    let events = vec![
-        Event::ToolCallRequested(original_request),
-        Event::ApprovalRequested(ApprovalRequest {
-            call_id,
-            reason,
-            kind: ApprovalKind::SandboxDenialRetry,
-        }),
-        Event::StateChanged(SessionState::WaitingForApproval),
-    ];
-    let _ = live_state.extend_provider_events(events.clone().into_iter().map(Into::into));
-    for event in events {
-        send_envelope(&state.outgoing, Envelope::event(session_id, event));
-    }
-}
-
 /// A tier-1 sandboxed `bash` call's network egress was refused for one or
 /// more `domains` (`docs/agent-approval-design.md` leg 4b) -- surface a
 /// fresh, differently-named approval offer ("allow domain X for this
 /// session and retry") instead of handing `result` straight to the
-/// provider. Same reissue mechanic as [`fold_bash_retry_without_sandbox`]
-/// (a fresh `ToolCallRequested` right before the `ApprovalRequested`, so the
-/// eventual Approve/Deny isn't misclassified as `AlreadyResolved`) -- but
-/// unlike that sibling, `result` is a genuine, already-computed outcome
-/// (the call ran to completion, it just couldn't reach some host), carried
+/// provider. It folds a fresh `ToolCallRequested` right before the
+/// `ApprovalRequested`, so the eventual Approve/Deny is not misclassified
+/// as `AlreadyResolved`. `result` is the genuine completed outcome, carried
 /// on the pending request's own [`ApprovalKind::DomainDenialRetry`] so a
 /// later deny can forward it as-is (`tools::approval::
 /// resolve_domain_denial_retry`).
@@ -1386,6 +1339,60 @@ fn fold_domain_denied(
             reason,
             kind: ApprovalKind::DomainDenialRetry {
                 domains,
+                prior_result: result,
+            },
+        }),
+        Event::StateChanged(SessionState::WaitingForApproval),
+    ];
+    let _ = live_state.extend_provider_events(events.clone().into_iter().map(Into::into));
+    for event in events {
+        send_envelope(&state.outgoing, Envelope::event(session_id, event));
+    }
+}
+
+fn fold_filesystem_denied(
+    state: &Arc<SessiondState>,
+    live_state: &LiveState,
+    session_id: SessionId,
+    call_id: ToolCallId,
+    denials: Vec<horizon_sandbox::FilesystemDenial>,
+    result: ToolCallResult,
+) {
+    let frame = live_state.frame();
+    if !should_fold_completion(&frame, &call_id) {
+        return;
+    }
+    let Some(original_request) = frame.tool_call_request(&call_id).cloned() else {
+        return;
+    };
+    horizon_agent::tools::maybe_fire_shadow_filesystem_judge(
+        session_id,
+        &original_request,
+        &denials,
+    );
+    let reason = denials
+        .iter()
+        .map(|denial| {
+            format!(
+                "attempted {}; allow {:?} {:?} access to {}",
+                denial.attempted_path.display(),
+                denial.grant.access,
+                denial.grant.scope,
+                denial.grant.path.display()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let events = vec![
+        Event::ToolCallRequested(original_request),
+        Event::ApprovalRequested(ApprovalRequest {
+            call_id,
+            reason: format!(
+                "`bash` crossed the filesystem sandbox boundary: {reason}. \
+                 Add only these session-scoped grants and retry inside the sandbox?"
+            ),
+            kind: ApprovalKind::FilesystemDenialRetry {
+                denials,
                 prior_result: result,
             },
         }),
@@ -1696,14 +1703,8 @@ mod tests {
         );
     }
 
-    /// The denial-retry flow's session-loop half
-    /// (`docs/agent-approval-design.md`'s "Denial UX"): a `BashCompletion::
-    /// RetryWithoutSandbox` must fold a fresh `ToolCallRequested` +
-    /// `ApprovalRequested` + `WaitingForApproval` for the same call_id --
-    /// never a `ToolCallResult` to the provider, since the original call is
-    /// still open from its point of view.
     #[test]
-    fn fold_bash_completion_turns_a_sandbox_denial_into_a_fresh_approval_request() {
+    fn fold_filesystem_denial_requests_the_displayed_narrow_grant() {
         let agent_config = AgentConfig::from_env_and_provider(None, None);
         let state = Arc::new(SessiondState::new(
             ProviderRegistry::builtin_with_config(
@@ -1717,11 +1718,11 @@ mod tests {
         ));
         let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Envelope>();
         *state.outgoing.lock().unwrap() = Some(outgoing_tx);
-
         let live_state = LiveState::with_disabled_persistence();
         let session_id = SessionId::new();
-        let call_id = ToolCallId("bash-denied".to_string());
-
+        let call_id = ToolCallId("bash-filesystem-denied".to_string());
+        let attempted = std::path::PathBuf::from("/outside/new.txt");
+        let grant_path = std::path::PathBuf::from("/outside");
         live_state.extend_provider_events(
             vec![
                 Event::ToolCallRequested(horizon_agent::contract::ToolCallRequest {
@@ -1735,7 +1736,14 @@ mod tests {
             .into_iter()
             .map(Into::into),
         );
-
+        let denial = horizon_sandbox::FilesystemDenial {
+            attempted_path: attempted.clone(),
+            grant: horizon_sandbox::FilesystemGrant {
+                path: grant_path.clone(),
+                access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+                scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+            },
+        };
         let (commands_tx, commands_rx) = unbounded::<Command>();
 
         fold_bash_completion(
@@ -1743,43 +1751,32 @@ mod tests {
             &live_state,
             &commands_tx,
             session_id,
-            BashCompletion::RetryWithoutSandbox {
+            BashCompletion::FilesystemDenied {
                 call_id: call_id.clone(),
-                reason: "looked sandbox-denied".to_string(),
+                denials: vec![denial.clone()],
+                result: ToolCallResult::new(call_id.clone(), serde_json::json!({ "exit_code": 0 })),
             },
         );
 
         let forwarded = drain_events(&mut outgoing_rx);
-        assert!(
-            forwarded.iter().any(|event| matches!(
-                event,
-                Event::ToolCallRequested(request) if request.call_id == call_id
-            )),
-            "expected a reissued ToolCallRequested for the same call_id: {forwarded:?}"
-        );
-        assert!(
-            forwarded.iter().any(|event| matches!(
-                event,
-                Event::ApprovalRequested(request) if request.call_id == call_id
-            )),
-            "expected a fresh ApprovalRequested: {forwarded:?}"
-        );
+        let approval = forwarded
+            .iter()
+            .find_map(|event| match event {
+                Event::ApprovalRequested(request) => Some(request),
+                _ => None,
+            })
+            .expect("filesystem approval request");
+        assert!(approval.reason.contains(&attempted.display().to_string()));
+        assert!(approval.reason.contains(&grant_path.display().to_string()));
+        assert!(matches!(
+            &approval.kind,
+            ApprovalKind::FilesystemDenialRetry { denials, .. } if denials == &vec![denial]
+        ));
         assert_eq!(
             forwarded.last(),
             Some(&Event::StateChanged(SessionState::WaitingForApproval))
         );
-        assert!(
-            commands_rx.try_recv().is_err(),
-            "the original call is still open from the provider's point of view -- \
-             nothing should be forwarded to it yet"
-        );
-
-        let frame = live_state.frame();
-        assert!(
-            !frame.has_tool_call_started(&call_id),
-            "the reissue must move the started/finished scope boundary past the \
-             first (sandboxed) attempt's own ToolCallStarted"
-        );
+        assert!(commands_rx.try_recv().is_err());
     }
 
     /// Builds a hermetic [`SessiondState`] with an explicit, env-independent

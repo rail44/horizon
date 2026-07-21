@@ -29,12 +29,11 @@
 //!
 //! ## Stdio: the caller must state it explicitly
 //!
-//! `spawn` rebuilds a fresh `Command` around the caller's `command` (on
-//! Linux the program/args are run directly, with nono's capabilities
-//! applied to the spawning thread beforehand -- see `linux::spawn`; on
-//! macOS it execs a tiny helper binary that self-applies the same
-//! capabilities before exec'ing the real program -- see `macos::spawn`),
-//! copying over the program, arguments, working directory, and explicit
+//! `spawn` rebuilds a fresh `Command` around the caller's `command` through
+//! `horizon-sandbox-helper` on both OSes: Linux keeps a reduced supervisor,
+//! while macOS self-applies Seatbelt before exec -- see
+//! `linux::spawn`/`macos::spawn`. It preserves the program, arguments,
+//! working directory, and explicit
 //! environment overrides -- all things `std::process::Command` exposes
 //! getters for (`get_program`/`get_args`/`get_current_dir`/`get_envs`). It
 //! cannot also copy whatever `stdin`/`stdout`/`stderr` the caller
@@ -44,8 +43,12 @@
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod caps;
+#[cfg(test)]
 mod denial;
 mod error;
+mod grant;
+#[cfg(any(target_os = "macos", all(target_os = "linux", not(test))))]
+mod helper;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -54,12 +57,22 @@ mod policy;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod tmpdir;
 
-pub use denial::is_likely_sandbox_denied;
 pub use error::SandboxError;
-pub use policy::{NetworkPolicy, ReadableScope, SandboxPolicy, SandboxStdio};
+pub use grant::revalidate_denial as revalidate_filesystem_denial;
+pub use policy::{
+    FilesystemDenial, FilesystemGrant, FilesystemGrantAccess, FilesystemGrantScope, HelperPolicy,
+    NetworkPolicy, ReadableScope, SandboxPolicy, SandboxStdio,
+};
 
 #[cfg(target_os = "linux")]
-pub use linux::NonoReport;
+pub use linux::{NonoReport, SupervisorReport};
+
+#[cfg(target_os = "linux")]
+pub use horizon_sandbox_runtime::ReportError as SupervisorReportError;
+
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub use linux::execute_supervised_helper;
 
 #[cfg(target_os = "macos")]
 pub use macos::apply_seatbelt_to_self;
@@ -73,6 +86,11 @@ use std::process::{Child, Command};
 /// `horizon-sessiond`'s isolated-worktree cleanup) can special-case this
 /// specific directory without duplicating the literal.
 pub const SCRATCH_DIR_NAME: &str = ".horizon-sandbox-tmp";
+
+/// Embedded in the real helper entry point so Cargo unit-test executables
+/// can distinguish it from the helper target's own test harness artifact.
+#[doc(hidden)]
+pub const HELPER_PROTOCOL_MARKER: &str = "HORIZON_SANDBOX_HELPER_PROTOCOL_V1_SUPERVISED_LINUX";
 
 /// A spawned sandboxed process, plus whatever per-backend containment
 /// report is available.
@@ -92,14 +110,16 @@ pub struct SandboxedChild {
     pub child: Child,
     #[cfg(target_os = "linux")]
     pub nono: Option<NonoReport>,
+    #[cfg(target_os = "linux")]
+    pub supervisor_report: Option<SupervisorReport>,
 }
 
 /// Prepares `command` to run under `policy` and spawns it, dispatching to
 /// the current OS's backend. `command`'s program, arguments, working
 /// directory, and explicit environment overrides are preserved; the
-/// backend rebuilds the actual spawn around them (directly on Linux, with
-/// nono applied to the spawning thread; via the `horizon-sandbox-helper`
-/// exec helper on macOS -- see `linux::spawn`/`macos::spawn`). `stdio` is
+/// backend rebuilds the actual spawn around them via
+/// `horizon-sandbox-helper` on both OSes -- see
+/// `linux::spawn`/`macos::spawn`. `stdio` is
 /// applied to the rebuilt command explicitly -- see the crate root doc's
 /// "Stdio" section for why `spawn` can't infer it from `command` itself.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -108,13 +128,25 @@ pub fn spawn(
     policy: &SandboxPolicy,
     stdio: SandboxStdio,
 ) -> Result<SandboxedChild, SandboxError> {
+    spawn_with_filesystem_grants(command, policy, &[], stdio)
+}
+
+/// Spawns with additional approved filesystem capabilities while preserving
+/// the base policy and containment mechanism.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub fn spawn_with_filesystem_grants(
+    command: Command,
+    policy: &SandboxPolicy,
+    filesystem_grants: &[FilesystemGrant],
+    stdio: SandboxStdio,
+) -> Result<SandboxedChild, SandboxError> {
     #[cfg(target_os = "linux")]
     {
-        linux::spawn(command, policy, stdio)
+        linux::spawn_with_grants(command, policy, filesystem_grants, stdio)
     }
     #[cfg(target_os = "macos")]
     {
-        macos::spawn(command, policy, stdio)
+        macos::spawn_with_grants(command, policy, filesystem_grants, stdio)
     }
 }
 
@@ -124,6 +156,16 @@ pub fn spawn(
 pub fn spawn(
     _command: Command,
     _policy: &SandboxPolicy,
+    _stdio: SandboxStdio,
+) -> Result<SandboxedChild, SandboxError> {
+    Err(SandboxError::UnsupportedPlatform)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn spawn_with_filesystem_grants(
+    _command: Command,
+    _policy: &SandboxPolicy,
+    _filesystem_grants: &[FilesystemGrant],
     _stdio: SandboxStdio,
 ) -> Result<SandboxedChild, SandboxError> {
     Err(SandboxError::UnsupportedPlatform)

@@ -435,22 +435,27 @@ pub enum ApprovalKind {
     /// existed before this leg.
     #[default]
     Standard,
-    /// A tier-1 sandboxed `bash` call looked denied by the sandbox itself
-    /// (`horizon_sandbox::is_likely_sandbox_denied`) -- approving reruns the
-    /// same call with the sandbox off (`bash::BashCompletion::
-    /// RetryWithoutSandbox`, `docs/agent-approval-design.md`'s "Denial UX").
+    /// Legacy event-log compatibility for containment denials which did not
+    /// name a narrow grant. New execution never emits this kind, and an old
+    /// pending request fails closed instead of retrying without containment.
     SandboxDenialRetry,
     /// A tier-1 sandboxed `bash` call's network egress was refused by the
     /// allowlist proxy for one or more domains (`bash::BashCompletion::
     /// DomainDenied`, `docs/agent-approval-design.md` leg 4b). Approving
     /// adds `domains` to this session's own allowlist and reruns the SAME
     /// call, still sandboxed; denying forwards `prior_result` as-is -- the
-    /// call already ran to completion (unlike `SandboxDenialRetry`, there is
-    /// a genuine result, not just a denial-shaped reason string), so a deny
+    /// call already ran to completion, so a deny
     /// leaves that real, already-failed-on-its-own-terms outcome as the
     /// final one rather than synthesizing a fresh "denied by user" marker.
     DomainDenialRetry {
         domains: Vec<String>,
+        prior_result: ToolCallResult,
+    },
+    /// A Linux supervisor observed one or more trusted filesystem boundary
+    /// crossings. Approving adds exactly these displayed session grants and
+    /// reruns the same command while containment stays enabled.
+    FilesystemDenialRetry {
+        denials: Vec<horizon_sandbox::FilesystemDenial>,
         prior_result: ToolCallResult,
     },
 }

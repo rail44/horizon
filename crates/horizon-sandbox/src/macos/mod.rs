@@ -36,12 +36,7 @@
 use crate::error::SandboxError;
 use crate::policy::{SandboxPolicy, SandboxStdio};
 use crate::SandboxedChild;
-use std::path::PathBuf;
 use std::process::Command;
-
-/// Name of the exec-helper binary `spawn` looks for -- see
-/// [`resolve_helper`].
-const HELPER_BIN_NAME: &str = "horizon-sandbox-helper";
 
 /// Applies `policy` to the calling process via nono's Seatbelt backend.
 /// Called only from within the `horizon-sandbox-helper` binary, after it
@@ -53,8 +48,8 @@ const HELPER_BIN_NAME: &str = "horizon-sandbox-helper";
 /// bin targets can't see `pub(crate)` items from the package's lib target.
 /// Not intended as public API for other consumers of this library.
 #[doc(hidden)]
-pub fn apply_seatbelt_to_self(policy: &SandboxPolicy) -> Result<(), SandboxError> {
-    let caps = crate::caps::build(policy)?;
+pub fn apply_seatbelt_to_self(policy: &crate::HelperPolicy) -> Result<(), SandboxError> {
+    let caps = crate::caps::build_with_grants(&policy.sandbox, &policy.filesystem_grants)?;
     nono::Sandbox::apply_auto(&caps)?;
     Ok(())
 }
@@ -79,38 +74,22 @@ pub(crate) fn is_available() -> bool {
 /// binary, adapted here since the helper is one of Horizon's own binaries
 /// rather than a fixed system path. A missing helper is a clean, typed
 /// error, never a panic.
-fn resolve_helper() -> Result<PathBuf, SandboxError> {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join(HELPER_BIN_NAME);
-            if candidate.is_file() {
-                return Ok(candidate);
-            }
-        }
-    }
-    if let Some(path_var) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&path_var) {
-            let candidate = dir.join(HELPER_BIN_NAME);
-            if candidate.is_file() {
-                return Ok(candidate);
-            }
-        }
-    }
-    Err(SandboxError::HelperNotFound)
-}
-
 /// Prepares and spawns `command` under `policy` via the exec helper:
 /// `horizon-sandbox-helper <policy-json> <program> [args...]`. The helper
 /// builds the same `CapabilitySet` this process would have (`crate::
 /// caps::build`), self-applies it, then `exec()`s into `program`/`args` --
 /// see the module doc for why this indirection is necessary on macOS.
-pub(crate) fn spawn(
+pub(crate) fn spawn_with_grants(
     command: Command,
     policy: &SandboxPolicy,
+    filesystem_grants: &[crate::FilesystemGrant],
     stdio: SandboxStdio,
 ) -> Result<SandboxedChild, SandboxError> {
-    let helper = resolve_helper()?;
-    let policy_json = serde_json::to_string(policy)?;
+    let helper = crate::helper::resolve()?;
+    let policy_json = serde_json::to_string(&crate::HelperPolicy {
+        sandbox: policy.clone(),
+        filesystem_grants: filesystem_grants.to_vec(),
+    })?;
 
     let program = command.get_program().to_os_string();
     let args: Vec<_> = command.get_args().map(|a| a.to_os_string()).collect();

@@ -14,6 +14,7 @@ use std::time::{Instant, SystemTime};
 
 const BACKEND_NAME: &str = "horizon-recording-deny";
 const DEFAULT_REASON: &str = "deferred to Horizon's sandboxed retry approval flow";
+const MAX_RECORDED_REQUESTS: usize = 128;
 
 /// A fail-closed approval backend that preserves every structured request.
 ///
@@ -71,10 +72,13 @@ impl ApprovalBackend for RecordingDenyBackend {
             backend: BACKEND_NAME.to_string(),
             duration_ms: started.elapsed().as_millis() as u64,
         };
-        self.entries
+        let mut entries = self
+            .entries
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(entry);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if entries.len() < MAX_RECORDED_REQUESTS {
+            entries.push(entry);
+        }
         Ok(decision)
     }
 
@@ -128,5 +132,17 @@ mod tests {
             .request_approval(&request("request-2"))
             .expect("second denial");
         assert_eq!(backend.snapshot()[0].request.request_id(), "request-2");
+    }
+
+    #[test]
+    fn request_flood_is_bounded_but_remains_fail_closed() {
+        let backend = RecordingDenyBackend::default();
+        for index in 0..(MAX_RECORDED_REQUESTS + 10) {
+            let decision = backend
+                .request_approval(&request(&format!("request-{index}")))
+                .expect("recording backend remains available");
+            assert!(decision.is_denied());
+        }
+        assert_eq!(backend.snapshot().len(), MAX_RECORDED_REQUESTS);
     }
 }

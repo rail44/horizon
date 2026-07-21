@@ -20,20 +20,22 @@ fn config() -> BashToolConfig {
 
 /// Unwraps a completion expected to be finished (the overwhelming majority
 /// of this module's tests, which exercise the plain unsandboxed path that
-/// never produces a retry-without-sandbox prompt) -- panics with a useful
+/// never produces a structured containment prompt) -- panics with a useful
 /// message otherwise, rather than every call site pattern-matching by hand.
 fn expect_finished(completion: BashCompletion) -> ToolCallResult {
     match completion {
         BashCompletion::Finished(result) => result,
-        BashCompletion::RetryWithoutSandbox { call_id, reason } => panic!(
-            "expected a finished bash completion, got a retry-without-sandbox \
-             request for {call_id:?}: {reason}"
-        ),
         BashCompletion::DomainDenied {
             call_id, domains, ..
         } => panic!(
             "expected a finished bash completion, got a domain-denied request for \
              {call_id:?} ({domains:?})"
+        ),
+        BashCompletion::FilesystemDenied {
+            call_id, denials, ..
+        } => panic!(
+            "expected a finished bash completion, got a filesystem-denied request for \
+             {call_id:?} ({denials:?})"
         ),
     }
 }

@@ -178,6 +178,7 @@ fn execute_tier1_bash(
         workspace_root.to_path_buf(),
         network,
         crate::tools::bash::SandboxedApprovalOrigin::Tier1Auto,
+        tool_state.filesystem_grants_snapshot(),
         runtime.bash_results.clone(),
     );
 

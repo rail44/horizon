@@ -35,7 +35,10 @@ use serde_json::Value;
 use crate::config::BashToolConfig;
 use crate::contract::{SessionId, ToolCallId, ToolCallResult};
 use crate::frame::AgentFrame;
-use crate::policy::{annotate_auto_approval, annotate_domain_approval, annotate_sandboxed};
+use crate::policy::{
+    annotate_auto_approval, annotate_domain_approval, annotate_filesystem_approval,
+    annotate_sandboxed,
+};
 use crate::tools::network::SessionNetworkProxy;
 
 /// A bash call's outcome, delivered from the background thread that ran it
@@ -50,20 +53,11 @@ pub enum BashCompletion {
     /// `ToolCallFinished` and forward the result to the provider, exactly
     /// what every bash call did before this type grew a second variant.
     Finished(ToolCallResult),
-    /// A sandboxed attempt (`spawn_sandboxed`, tier 1) looked denied by the
-    /// sandbox itself (`horizon_sandbox::is_likely_sandbox_denied`) --
-    /// surface the normal `ApprovalRequested` flow for a retry of the same
-    /// call without the sandbox, instead of reporting a raw failure the
-    /// model has no way to act on (`docs/agent-approval-design.md`'s
-    /// "Denial UX"). Never produced by the plain (unsandboxed) [`spawn`]
-    /// path -- only a sandboxed run can be sandbox-denied.
-    RetryWithoutSandbox { call_id: ToolCallId, reason: String },
     /// A sandboxed attempt's network egress was refused by the allowlist
     /// proxy for one or more domains (`docs/agent-approval-design.md` leg
-    /// 4b) -- distinct from [`Self::RetryWithoutSandbox`]: the call
-    /// actually ran to completion (`result` is a genuine, already-computed
-    /// outcome, not just a denial-shaped reason string), it just couldn't
-    /// reach some host(s). Detected proxy-side (`SessionNetworkProxy::
+    /// 4b). The call actually ran to completion (`result` is a genuine,
+    /// already-computed outcome), but could not reach some host(s). Detected
+    /// proxy-side (`SessionNetworkProxy::
     /// drain_denied_hosts`), independent of the sandboxed child's own exit
     /// code -- see `exec::run_sandboxed`'s doc comment for why that matters
     /// (backlog 59). Surfaced as a fresh, differently-named approval offer
@@ -75,16 +69,20 @@ pub enum BashCompletion {
         domains: Vec<String>,
         result: ToolCallResult,
     },
+    FilesystemDenied {
+        call_id: ToolCallId,
+        denials: Vec<horizon_sandbox::FilesystemDenial>,
+        result: ToolCallResult,
+    },
 }
 
 /// What a [`spawn_sandboxed`] run's eventual `Finished` completion should be
 /// annotated with, once it lands -- distinguishes a genuine tier-1
 /// auto-approval from a human's domain-denial-retry approval (`docs/
 /// agent-approval-design.md` leg 4b), so the audit trail never claims a
-/// human decision was auto-approved. Never consulted for a `RetryWithout
-/// Sandbox`/`DomainDenied` completion -- both are annotated by `exec::
-/// run_sandboxed` itself before this ever applies (see [`spawn_sandboxed`]'s
-/// call site below).
+/// human decision was auto-approved. Never consulted for a
+/// `DomainDenied`/`FilesystemDenied` completion -- both are annotated by
+/// `exec::run_sandboxed` itself before this ever applies.
 #[derive(Clone, Debug)]
 pub(crate) enum SandboxedApprovalOrigin {
     /// `tools::execution::execute_tier1_bash`'s auto-approval path.
@@ -93,6 +91,9 @@ pub(crate) enum SandboxedApprovalOrigin {
     /// decision, carrying the domain(s) they just approved for this
     /// session.
     ManualDomainRetry { domains: Vec<String> },
+    ManualFilesystemRetry {
+        grants: Vec<horizon_sandbox::FilesystemGrant>,
+    },
 }
 
 /// Kicks off a bash call and returns immediately; the UI thread must not
@@ -150,10 +151,9 @@ pub fn spawn(
 /// pipe, never from inside the sandboxed child -- it needs no writable-root
 /// grant at all. Still goes through the same per-session FIFO
 /// (`registry::enqueue`) as [`spawn`] -- a session's bash calls never run
-/// concurrently with each other regardless of which path started them. If
-/// the run looks sandbox-denied, the completion sent is
-/// [`BashCompletion::RetryWithoutSandbox`] instead of a finished result --
-/// see that variant's doc comment.
+/// concurrently with each other regardless of which path started them.
+/// Structured network/filesystem denials are returned as their dedicated
+/// completion variants while containment remains enabled.
 ///
 /// `network` (`docs/agent-approval-design.md` leg 4b) is this session's own
 /// `SessionNetworkProxy`, if one is running -- `Some` gets the sandbox
@@ -172,6 +172,7 @@ pub fn spawn_sandboxed(
     workspace_root: PathBuf,
     network: Option<Arc<SessionNetworkProxy>>,
     origin: SandboxedApprovalOrigin,
+    filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
     result_tx: Sender<BashCompletion>,
 ) {
     registry::enqueue(
@@ -196,10 +197,11 @@ pub fn spawn_sandboxed(
                     &cwd,
                     &workspace_root,
                     network.as_deref(),
+                    &filesystem_grants,
                     &config,
                 );
                 // Audit marker on every finished result this path produces
-                // -- `RetryWithoutSandbox`/`DomainDenied` outcomes are
+                // -- `DomainDenied`/`FilesystemDenied` outcomes are
                 // already annotated by `exec::run_sandboxed` itself (a
                 // `DomainDenied` result already carries `denied_domains`;
                 // there is nothing left for `origin` to add there).
@@ -212,6 +214,9 @@ pub fn spawn_sandboxed(
                         ),
                         SandboxedApprovalOrigin::ManualDomainRetry { domains } => {
                             annotate_domain_approval(&mut result.output, domains)
+                        }
+                        SandboxedApprovalOrigin::ManualFilesystemRetry { grants } => {
+                            annotate_filesystem_approval(&mut result.output, grants)
                         }
                     }
                 }

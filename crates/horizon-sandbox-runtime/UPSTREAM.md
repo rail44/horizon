@@ -17,7 +17,7 @@ in the two files listed above.
 
 ## Local deviations
 
-The initial extraction retains only:
+The extraction retains only:
 
 - the `ApprovalBackend` request/decision/audit boundary, implemented as a
   fail-closed recording backend suitable for Horizon's approve-then-retry
@@ -25,15 +25,18 @@ The initial extraction retains only:
 - the cross-platform distinction between live Linux evidence and best-effort
   macOS diagnostics;
 - nono-cli's Linux `SeccompPolicy` predicates and token-bucket behavior.
+- the single-thread validation, subreaper/fork ownership, initial-capability
+  fast path, notification-id validation, and reduced recording-deny
+  `openat`/`openat2` event loop.
 
-It does not yet copy or claim to provide process execution. The next slice
-will place the reduced fork/seccomp event loop in a dedicated helper process.
-Running it directly in multi-threaded `horizon-sessiond` would violate the
-upstream implementation's pre-fork single-thread requirement. PTY, rollback,
-trust interception, URL opening, profile saving, tool sandboxing, and CLI
-session management remain excluded.
+It runs only inside Horizon's dedicated single-threaded helper process;
+running it directly in multi-threaded `horizon-sessiond` would violate the
+upstream implementation's pre-fork requirement. Horizon's bounded,
+credential-authenticated report socket is a local addition. Live fd injection,
+PTY, rollback, trust interception, URL opening, profile saving, tool
+sandboxing, resource cgroups, and CLI session management remain excluded.
 
-The Linux filesystem scope will initially match upstream: live mediation of
+The Linux filesystem scope matches the selected upstream slice: live mediation of
 `openat` and `openat2`, not every Landlock-controlled filesystem operation.
 macOS Seatbelt unified-log recovery remains explicitly best-effort.
 

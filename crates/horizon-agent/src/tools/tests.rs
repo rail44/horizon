@@ -86,19 +86,21 @@ fn is_error(output: &serde_json::Value) -> bool {
 
 /// Unwraps a completion expected to be finished -- every bash test in this
 /// module exercises the plain (unsandboxed) manual-approval path, which
-/// never produces a retry-without-sandbox prompt.
+/// never produces a structured containment prompt.
 fn expect_finished(completion: BashCompletion) -> ToolCallResult {
     match completion {
         BashCompletion::Finished(result) => result,
-        BashCompletion::RetryWithoutSandbox { call_id, reason } => panic!(
-            "expected a finished bash completion, got a retry-without-sandbox \
-             request for {call_id:?}: {reason}"
-        ),
         BashCompletion::DomainDenied {
             call_id, domains, ..
         } => panic!(
             "expected a finished bash completion, got a domain-denied request for \
              {call_id:?} ({domains:?})"
+        ),
+        BashCompletion::FilesystemDenied {
+            call_id, denials, ..
+        } => panic!(
+            "expected a finished bash completion, got a filesystem-denied request for \
+             {call_id:?} ({denials:?})"
         ),
     }
 }
@@ -1412,10 +1414,9 @@ fn bash_auto_executes_sandboxed_and_is_killed_on_timeout() {
 /// there is no private tmpfs for a literal `/tmp` write to land in (a
 /// deliberate, accepted behavior change -- see `horizon_sandbox::linux::
 /// spawn`'s TMPDIR-parity comment). The write is now denied outright
-/// (`is_likely_sandbox_denied` classifies it as sandbox-denied), so this
-/// tier-1 call surfaces `BashCompletion::RetryWithoutSandbox` instead of
-/// finishing successfully -- still never landing on the host's real `/tmp`,
-/// just via denial rather than a silently-redirected private overlay.
+/// and the Linux supervisor reports the attempted path structurally,
+/// independent of the shell's exit status. It still never lands on the
+/// host's real `/tmp`.
 #[test]
 fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
     let root = temp_workspace("tier1-bash-sandboxed-tmp-leak");
@@ -1446,13 +1447,6 @@ fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
         .expect("the sandboxed bash call should finish");
 
     match completion {
-        BashCompletion::RetryWithoutSandbox { call_id, reason } => {
-            assert_eq!(call_id, request.call_id);
-            assert!(
-                reason.contains("denied"),
-                "expected a sandbox-denial reason: {reason}"
-            );
-        }
         BashCompletion::Finished(result) => {
             panic!(
                 "expected the literal /tmp write to be denied by the sandbox \
@@ -1466,6 +1460,17 @@ fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
             panic!(
                 "expected the literal /tmp write to be denied by the sandbox, got a \
                  domain-denied request instead for {call_id:?} ({domains:?})"
+            );
+        }
+        BashCompletion::FilesystemDenied {
+            call_id, denials, ..
+        } => {
+            assert_eq!(call_id, request.call_id);
+            assert!(
+                denials
+                    .iter()
+                    .any(|denial| denial.attempted_path == host_target),
+                "expected the structured denial to name {host_target:?}: {denials:?}"
             );
         }
     }
@@ -1515,17 +1520,11 @@ fn bash_requires_approval_when_the_session_is_not_isolated() {
     assert_eq!(execution, Execution::RequiresApproval);
 }
 
-/// The denial-retry flow's frame-level mechanic
-/// (`docs/agent-approval-design.md`'s "Denial UX"): `horizon-sessiond`'s
-/// `fold_bash_retry_without_sandbox` reissues a fresh `ToolCallRequested`
-/// for the same `call_id` right before a fresh `ApprovalRequested`, after a
-/// first (sandboxed) attempt already folded `ToolCallStarted` but never
-/// `ToolCallFinished`. This proves that reissue is what makes the retry's
-/// own eventual Approve resolve normally (`Started`), instead of being
-/// misclassified as `AlreadyResolved` by `tools::approval::try_execute`'s
-/// idempotence guard -- without needing the real sandboxed exec plumbing.
+/// Historical event logs can still contain the pre-narrow-grant retry kind.
+/// It must remain deserializable but can never turn an approval into an
+/// unsandboxed execution.
 #[test]
-fn resolve_approval_accepts_a_denial_retry_reissue_and_runs_it_unsandboxed() {
+fn resolve_approval_rejects_a_legacy_sandbox_denial_retry_fail_closed() {
     let tool_state = dummy_tool_state();
     let session_id = SessionId::new();
     let live_state = LiveState::new();
@@ -1576,11 +1575,128 @@ fn resolve_approval_accepts_a_denial_retry_reissue_and_runs_it_unsandboxed() {
         call_id,
         ApprovalDecision::Approve,
     );
-    assert!(
-        matches!(outcome, ApprovalOutcome::Started { .. }),
-        "the retry's approve must actually start the call, not be dropped \
-         as AlreadyResolved: {outcome:?}"
+    let ApprovalOutcome::Executed { command, .. } = outcome else {
+        panic!("legacy retry must resolve synchronously and fail closed: {outcome:?}");
+    };
+    let Command::ToolCallResult(result) = command else {
+        panic!("expected a ToolCallResult");
+    };
+    assert_eq!(result.output["is_error"], true);
+    assert!(result.output["message"]
+        .as_str()
+        .unwrap()
+        .contains("retrying without the sandbox is disabled"));
+}
+
+// --- approval wiring: filesystem-denial retry ----------------------------
+
+#[cfg(target_os = "linux")]
+#[test]
+fn resolve_approval_filesystem_retry_adds_exact_grant_and_stays_sandboxed() {
+    let workspace = temp_workspace("filesystem-retry-workspace");
+    let outside = temp_workspace("filesystem-retry-outside");
+    let target = outside.join("approved.txt");
+    let sibling = outside.join("sibling.txt");
+    fs::write(&target, "before").unwrap();
+    let denial = horizon_sandbox::FilesystemDenial {
+        attempted_path: target.clone(),
+        grant: horizon_sandbox::FilesystemGrant {
+            path: target.canonicalize().unwrap(),
+            access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+            scope: horizon_sandbox::FilesystemGrantScope::File,
+        },
+    };
+    let tool_state = ToolSessionState::new(workspace);
+    let session_id = SessionId::new();
+    let live_state = LiveState::new();
+    let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
+    register_session_runtime(
+        session_id,
+        tool_state.clone(),
+        live_state.clone(),
+        bash_results_tx,
     );
+    let call_id = ToolCallId("bash-filesystem-retry".to_string());
+    live_state.extend_events([Event::ToolCallRequested(ToolCallRequest {
+        call_id: call_id.clone(),
+        tool_id: "bash".to_string(),
+        input: json!({
+            "command": format!(
+                "printf approved > {}; printf blocked > {} || true",
+                target.display(),
+                sibling.display()
+            )
+        }),
+    })]);
+    let prior_result = ToolCallResult::new(
+        call_id.clone(),
+        json!({ "is_error": true, "filesystem_denied": true }),
+    );
+    let frame =
+        live_state.extend_events([Event::ApprovalRequested(crate::contract::ApprovalRequest {
+            call_id: call_id.clone(),
+            reason: "allow exact file and retry".to_string(),
+            kind: crate::contract::ApprovalKind::FilesystemDenialRetry {
+                denials: vec![denial],
+                prior_result,
+            },
+        })]);
+
+    let outcome = resolve_approval(
+        &frame,
+        session_id,
+        call_id.clone(),
+        ApprovalDecision::Approve,
+    );
+    assert!(matches!(outcome, ApprovalOutcome::Started { .. }));
+    let completion = bash_results_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("sandboxed retry completion");
+
+    match completion {
+        BashCompletion::FilesystemDenied { denials, .. } => {
+            assert!(denials.iter().any(|item| item.attempted_path == sibling));
+        }
+        other => panic!("sibling must remain denied after an exact-file grant: {other:?}"),
+    }
+    assert_eq!(fs::read_to_string(&target).unwrap(), "approved");
+    assert!(!sibling.exists());
+    assert_eq!(tool_state.filesystem_grants_snapshot().len(), 1);
+    unregister_session_runtime(session_id);
+    fs::remove_dir_all(outside).unwrap();
+}
+
+#[test]
+fn filesystem_grant_snapshot_drops_a_retargeted_symlink() {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_workspace("filesystem-grant-retarget");
+        let first = root.join("first.txt");
+        let second = root.join("second.txt");
+        let link = root.join("current.txt");
+        fs::write(&first, "first").unwrap();
+        fs::write(&second, "second").unwrap();
+        symlink(&first, &link).unwrap();
+        let tool_state = ToolSessionState::new(root.clone());
+        let denial = horizon_sandbox::FilesystemDenial {
+            attempted_path: link.clone(),
+            grant: horizon_sandbox::FilesystemGrant {
+                path: first.canonicalize().unwrap(),
+                access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+                scope: horizon_sandbox::FilesystemGrantScope::File,
+            },
+        };
+        tool_state.approve_filesystem_denials(&[denial]).unwrap();
+        assert_eq!(tool_state.filesystem_grants_snapshot().len(), 1);
+
+        fs::remove_file(&link).unwrap();
+        symlink(&second, &link).unwrap();
+
+        assert!(tool_state.filesystem_grants_snapshot().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 // --- approval wiring: domain-denial retry (leg 4b) -------------------------

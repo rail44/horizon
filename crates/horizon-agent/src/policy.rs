@@ -147,6 +147,42 @@ pub(crate) fn annotate_domain_approval(output: &mut Value, domains: &[String]) {
     }
 }
 
+pub(crate) fn annotate_filesystem_denials(
+    output: &mut Value,
+    denials: &[horizon_sandbox::FilesystemDenial],
+) {
+    if let Some(map) = output.as_object_mut() {
+        map.insert(
+            "denied_filesystem_paths".to_string(),
+            Value::Array(
+                denials
+                    .iter()
+                    .map(|denial| Value::String(denial.attempted_path.display().to_string()))
+                    .collect(),
+            ),
+        );
+        map.insert("is_error".to_string(), Value::Bool(true));
+    }
+}
+
+pub(crate) fn annotate_filesystem_approval(
+    output: &mut Value,
+    grants: &[horizon_sandbox::FilesystemGrant],
+) {
+    if let Some(map) = output.as_object_mut() {
+        map.insert("filesystem_approved".to_string(), Value::Bool(true));
+        map.insert(
+            "approved_filesystem_paths".to_string(),
+            Value::Array(
+                grants
+                    .iter()
+                    .map(|grant| Value::String(grant.path.display().to_string()))
+                    .collect(),
+            ),
+        );
+    }
+}
+
 pub fn horizon_events_for_provider_event(
     event: &Event,
     tool_state: &ToolSessionState,

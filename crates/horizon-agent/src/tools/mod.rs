@@ -35,6 +35,25 @@ pub use state::{
 // `pub(crate)` rather than exposing `SessionRuntime` itself.
 pub(crate) use state::live_frame_for_session;
 
+/// Fires the existing shadow judge for a trusted, supervisor-derived
+/// filesystem grant request. It remains diagnostic only; the human approval
+/// path is unchanged.
+pub fn maybe_fire_shadow_filesystem_judge(
+    session_id: crate::contract::SessionId,
+    request: &crate::contract::ToolCallRequest,
+    denials: &[horizon_sandbox::FilesystemDenial],
+) {
+    let Some(runtime) = state::session_runtime(session_id) else {
+        return;
+    };
+    crate::judge::maybe_fire_shadow_filesystem_judge(
+        &runtime.tool_state,
+        session_id,
+        request,
+        denials,
+    );
+}
+
 /// Executes a Horizon-approved (`RequireApproval`) tool once the user has
 /// approved it -- `tools::approval`'s single entry point for the tools this
 /// crate itself executes (as opposed to `bash`, which runs on its own

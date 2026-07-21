@@ -34,5 +34,8 @@ libc = "0.2"
 # `macos/mod.rs`'s module doc).
 nono = "0.68"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+horizon-sandbox-runtime = { path = "../horizon-sandbox-runtime" }
+
 [lints.clippy]
 all = { level = "warn", priority = -1 }

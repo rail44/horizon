@@ -141,7 +141,7 @@ lands:
   tiers landed later the same day (`207392c`): per-call trust
   predicate, fs/bash tier-1 auto-approval inside isolated worktrees
   (bash only when the sandbox actually engages — never silent
-  degradation), sandbox-denial retry as a fresh approval, audit
+  degradation), the historical sandbox-denial retry, audit
   markers on output JSON (follow-ups: backlog 55 double-row artifact,
   56 niceness gap). Owner tier-1 dogfooding is the current gate.
   Network layer (leg 4b) LANDED. **Judge (leg 5) LANDED in SHADOW MODE**
@@ -196,11 +196,19 @@ lands:
   generic grant contract and FS discovery. Owner narrowed the implementation
   boundary on 2026-07-21: copy the minimum nono-cli v0.68.0 supervised-runtime
   machinery into a provenance-pinned local `horizon-sandbox-runtime` crate
-  instead of owning a new supervisor design. The behavior-neutral extraction
-  scaffold is in flight; the later cutover uses a dedicated helper because
-  sessiond is multi-threaded and preserves macOS Seatbelt log evidence as
-  explicitly best-effort. Current leg 4b must not be treated as a complete
-  ordinary-client or all-protocol egress boundary meanwhile.
+  instead of owning a new supervisor design. **The Linux filesystem-open leg
+  landed 2026-07-21:** a dedicated single-threaded helper applies Landlock,
+  records `openat`/`openat2` denials through seccomp-notify even when the child
+  exits 0, authenticates a bounded report, and drives human + shadow-judge
+  exact-file/nearest-existing-parent grants. Approval is session-local,
+  revalidated, and always retries sandboxed; the old unsandboxed retry producer
+  is removed and its serialized approval kind fails closed. Existing-file and
+  missing-leaf enforcement tests prove sibling paths remain denied. The next
+  leg is still the network replacement (`ProxyOnly` TCP endpoint, ordinary
+  client proxy environment, and combined all-protocol seccomp mediation);
+  current leg 4b must not be treated as a complete ordinary-client or
+  all-protocol egress boundary meanwhile. macOS structured filesystem-denial
+  evidence also remains best-effort pending real-Mac work.
 - **Agent web search / public-code search** (backlog 18/19).
   Consultation 2026-07-19/20: **vendor = Exa** (owner decision;
   empirical probe + independent-benchmark evidence in

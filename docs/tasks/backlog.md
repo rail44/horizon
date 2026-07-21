@@ -420,15 +420,18 @@ entries live in `backlog-resolved.md` keeping their original numbers
     but wrong once sessions span repositories). Same-shape fix: thread
     the session root in. Recorded 2026-07-19 from the fix's review.
 
-59. **Denial detection is blind behind a pipeline.** Tier-1's "denial ->
-    surface a retry-without-sandbox prompt" flow (`docs/agent-approval-
-    design.md`'s "Denial UX", `horizon_sandbox::is_likely_sandbox_denied`)
+59. **Resolved for proxy-domain and Linux `openat`/`openat2` denials
+    2026-07-21; other syscall families remain.** Tier-1's former "denial ->
+    retry without sandbox" flow (`docs/agent-approval-design.md`'s historical
+    "Denial UX", `horizon_sandbox::is_likely_sandbox_denied`)
     classifies against the wrapped command's own exit code and merged
     output. A piped command masks both: `curl ... | head -n 1` under
     network-off observed empty output with exit 0 (`head`'s own success
     code is what `$?` reports, even though `curl` failed) — no denial
     classification, no retry-without-sandbox offer, the model just sees
-    silence. Two options recorded, neither implemented: (a) `set -o
+    silence. Domain denials are now proxy-recorded and Linux filesystem-open
+    denials are supervisor-recorded independently of exit status; neither can
+    produce an unsandboxed retry. The original weaker options were: (a) `set -o
     pipefail` in the bash tool's wrapper script
     (`tools::bash::exec::wrapped_script`) — reports the last *failing*
     stage's exit code instead of the last stage's, but changes the

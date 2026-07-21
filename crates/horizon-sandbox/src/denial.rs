@@ -4,11 +4,10 @@
 //! `is_likely_sandbox_denied` (Apache-2.0,
 //! `codex-rs/sandboxing/src/denial.rs` at
 //! github.com/openai/codex, fetched 2026-07-19): a finished command's exit
-//! code and stderr get pattern-matched against the keywords real sandboxes
-//! actually emit, so a caller can offer a "retry without sandbox?" prompt
-//! (the industry-converged denial UX, see
-//! `docs/agent-approval-design.md`) instead of surfacing a raw failure the
-//! model has no way to distinguish from its own bug.
+//! code and stderr get pattern-matched against keywords real sandboxes emit.
+//! This is retained as crate-internal diagnostic/test evidence only. It is
+//! not authoritative enough to name a resource, request a grant, or trigger
+//! a retry; current denial UX requires a proxy/supervisor record.
 
 /// Substrings that show up in sandbox-denial stderr across both OS
 /// backends -- Linux (nono/Landlock, migrated from

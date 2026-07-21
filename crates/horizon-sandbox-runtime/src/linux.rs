@@ -7,6 +7,10 @@
 
 use std::time::Instant;
 
+mod open;
+
+pub(crate) use open::{handle_open_notification, InitialCapability};
+
 /// Describes which seccomp-notify mechanisms a helper must install.
 ///
 /// This mirrors nono-cli v0.68.0's policy shape. The future helper must fail
@@ -49,7 +53,6 @@ impl SeccompPolicy {
 /// It is crate-local until the helper event loop lands; keeping it here pins
 /// the upstream request-flood behavior without making it Horizon policy API.
 #[derive(Debug)]
-#[allow(dead_code)] // Consumed by the helper event loop in the next extraction slice.
 pub(crate) struct RateLimiter {
     capacity: u32,
     tokens: u32,
@@ -57,7 +60,6 @@ pub(crate) struct RateLimiter {
     last_refill: Instant,
 }
 
-#[allow(dead_code)] // Consumed by the helper event loop in the next extraction slice.
 impl RateLimiter {
     pub(crate) fn new(rate: u32, burst: u32) -> Self {
         Self {

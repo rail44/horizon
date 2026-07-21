@@ -42,7 +42,7 @@ use crate::persistence::event_log::{
     Record, WriterHandle, AGENT_EVENT_LOG_SCHEMA, AGENT_EVENT_LOG_VERSION,
 };
 
-use super::{JudgeDecision, JudgeVerdict};
+use super::{JudgeDecision, JudgeInput, JudgeVerdict};
 
 /// The `agent_events.event_kind` label every shadow-judge record (verdict or
 /// skipped) carries -- e.g. `SELECT * FROM agent_events WHERE event_kind =
@@ -54,20 +54,20 @@ pub const SHADOW_VERDICT_EVENT_KIND: &str = "judge_shadow_verdict";
 pub(super) fn write_verdict(
     writer: &WriterHandle,
     session_id: SessionId,
-    call_id: &str,
-    tool_id: &str,
+    input: &JudgeInput,
     model: &str,
     verdict: JudgeVerdict,
     latency_ms: u64,
 ) {
     let payload = serde_json::json!({
-        "call_id": call_id,
-        "tool_id": tool_id,
+        "call_id": input.call_id,
+        "tool_id": input.tool_id,
         "judge_model": model,
         "judge_decision": decision_label(verdict.decision),
         "judge_stage": verdict.stage,
         "judge_confidence": verdict.confidence,
         "latency_ms": latency_ms,
+        "requested_filesystem_grants": input.requested_filesystem_grants,
     });
     append(writer, session_id, payload);
 }
@@ -78,16 +78,16 @@ pub(super) fn write_verdict(
 pub(super) fn write_skipped(
     writer: &WriterHandle,
     session_id: SessionId,
-    call_id: &str,
-    tool_id: &str,
+    input: &JudgeInput,
     model: &str,
     reason: &str,
 ) {
     let payload = serde_json::json!({
-        "call_id": call_id,
-        "tool_id": tool_id,
+        "call_id": input.call_id,
+        "tool_id": input.tool_id,
         "judge_model": model,
         "skipped_reason": reason,
+        "requested_filesystem_grants": input.requested_filesystem_grants,
     });
     append(writer, session_id, payload);
 }
@@ -142,17 +142,28 @@ mod tests {
         ))
     }
 
+    fn judge_input(call_id: &str) -> JudgeInput {
+        JudgeInput {
+            call_id: call_id.to_string(),
+            tool_id: "mock.boundary_crossing".to_string(),
+            args: serde_json::json!({}),
+            tool_description: None,
+            prior_user_messages: Vec::new(),
+            requested_filesystem_grants: Vec::new(),
+        }
+    }
+
     #[test]
     fn write_verdict_lands_as_a_json_extract_queryable_provider_payload() {
         let path = temp_log_path("verdict");
         let (writer, _init_rx) = WriterHandle::open(&path);
         let session_id = SessionId::new();
+        let input = judge_input("call-1");
 
         write_verdict(
             &writer,
             session_id,
-            "call-1",
-            "mock.boundary_crossing",
+            &input,
             "syn:small:text",
             JudgeVerdict {
                 decision: JudgeDecision::Escalate,
@@ -183,12 +194,12 @@ mod tests {
         let path = temp_log_path("skipped");
         let (writer, _init_rx) = WriterHandle::open(&path);
         let session_id = SessionId::new();
+        let input = judge_input("call-2");
 
         write_skipped(
             &writer,
             session_id,
-            "call-2",
-            "mock.boundary_crossing",
+            &input,
             "syn:small:text",
             "rate_limited",
         );

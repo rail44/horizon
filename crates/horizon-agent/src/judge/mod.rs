@@ -92,6 +92,9 @@ pub(crate) struct JudgeInput {
     pub(crate) args: serde_json::Value,
     pub(crate) tool_description: Option<String>,
     pub(crate) prior_user_messages: Vec<String>,
+    /// Horizon-authored mediation output, kept outside the untrusted tool
+    /// argument region in the prompt.
+    pub(crate) requested_filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
 }
 
 /// "Small but not 1" (the research doc's Plan B recommendation for stage
@@ -170,7 +173,27 @@ pub(crate) fn maybe_fire_shadow_judge(
     let prior_user_messages = crate::tools::live_frame_for_session(session_id)
         .map(|frame| prior_user_messages_from_frame(&frame))
         .unwrap_or_default();
-    judge.maybe_fire(session_id, request, prior_user_messages);
+    judge.maybe_fire(session_id, request, prior_user_messages, Vec::new());
+}
+
+pub(crate) fn maybe_fire_shadow_filesystem_judge(
+    tool_state: &ToolSessionState,
+    session_id: SessionId,
+    request: &ToolCallRequest,
+    denials: &[horizon_sandbox::FilesystemDenial],
+) {
+    let Some(judge) = tool_state.judge_handle() else {
+        return;
+    };
+    let prior_user_messages = crate::tools::live_frame_for_session(session_id)
+        .map(|frame| prior_user_messages_from_frame(&frame))
+        .unwrap_or_default();
+    judge.maybe_fire(
+        session_id,
+        request,
+        prior_user_messages,
+        denials.iter().map(|denial| denial.grant.clone()).collect(),
+    );
 }
 
 /// Prior user messages, oldest first, from a session's live frame -- the
@@ -256,6 +279,7 @@ mod tests {
             args: serde_json::json!({ "command": "echo hi" }),
             tool_description: Some("Run a shell command.".to_string()),
             prior_user_messages: vec!["please check the logs".to_string()],
+            requested_filesystem_grants: Vec::new(),
         }
     }
 

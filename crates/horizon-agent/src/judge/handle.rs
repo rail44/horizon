@@ -77,26 +77,27 @@ impl JudgeHandle {
         session_id: SessionId,
         request: &ToolCallRequest,
         prior_user_messages: Vec<String>,
+        requested_filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
     ) {
-        if !self.limiter.try_acquire() {
-            record::write_skipped(
-                &self.writer,
-                session_id,
-                &request.call_id.0,
-                &request.tool_id,
-                &self.model,
-                "rate_limited",
-            );
-            return;
-        }
-
         let input = JudgeInput {
             call_id: request.call_id.0.clone(),
             tool_id: request.tool_id.clone(),
             args: request.input.clone(),
             tool_description: super::builtin_tool_description(&request.tool_id),
             prior_user_messages,
+            requested_filesystem_grants,
         };
+        if !self.limiter.try_acquire() {
+            record::write_skipped(
+                &self.writer,
+                session_id,
+                &input,
+                &self.model,
+                "rate_limited",
+            );
+            return;
+        }
+
         let handle = Arc::clone(self);
         super::runtime::runtime().spawn(async move {
             let started_at = Instant::now();
@@ -105,8 +106,7 @@ impl JudgeHandle {
             record::write_verdict(
                 &handle.writer,
                 session_id,
-                &input.call_id,
-                &input.tool_id,
+                &input,
                 &handle.model,
                 verdict,
                 latency_ms,

@@ -6,16 +6,12 @@
 //! backlog-60 entry, "option C"), de-risked in `experiments/nono-spike/`
 //! (branch `worktree-agent-afb6d8b9e874320c8`, commit `533554b`).
 //!
-//! `nono::Sandbox::apply_auto` is a plain blocking call that restricts
-//! the *calling thread* (inherited by that thread's future `fork`/`exec`
-//! descendants only) -- no `pre_exec` needed. This drops into the exact
-//! dedicated-thread shape the old backend already used for its seccomp
-//! filter: apply on a throwaway `std::thread::spawn`, spawn the child
-//! from that same thread, `join` to hand it back. Every other thread of a
-//! multi-threaded host (e.g. `horizon-sessiond`) stays fully
-//! unrestricted -- verified in the spike's Q1 probe. macOS's `apply_auto`
-//! has no equivalent thread-scoping (see `macos/mod.rs`'s module doc for
-//! why that backend needs a separate exec helper instead).
+//! Production uses a dedicated single-threaded helper process. It forks the
+//! target, applies nono Landlock in that child, and retains an unsandboxed
+//! parent to answer seccomp notifications and publish an authenticated report.
+//! `horizon-sessiond` therefore never forks or self-applies containment. The
+//! direct dedicated-thread path remains only for this crate's legacy backend
+//! unit tests, where no structured supervisor report is required.
 //!
 //! **Accepted regression (backlog 60):** nono has no mount or PID
 //! namespace, unlike bwrap. A sandboxed child can see the host's full
@@ -27,7 +23,37 @@ use crate::error::SandboxError;
 use crate::policy::{SandboxPolicy, SandboxStdio};
 use crate::SandboxedChild;
 use std::ffi::OsString;
+#[cfg(not(test))]
+use std::os::unix::process::CommandExt;
 use std::process::Command;
+
+/// Runs inside the dedicated Linux helper binary, never in sessiond.
+///
+/// Public only because Cargo's bin target is a separate crate from this
+/// package's library target.
+#[doc(hidden)]
+pub fn execute_supervised_helper(
+    helper_policy: &crate::HelperPolicy,
+    program: &std::ffi::OsStr,
+    args: Vec<OsString>,
+    report_fd: std::os::fd::RawFd,
+) -> Result<i32, SandboxError> {
+    let caps =
+        crate::caps::build_with_grants(&helper_policy.sandbox, &helper_policy.filesystem_grants)?;
+    let mut command = Command::new(program);
+    command.args(args);
+
+    // SAFETY: the helper receives ownership of this descriptor across exec;
+    // no other Rust owner for it exists in the helper process.
+    let writer = unsafe { horizon_sandbox_runtime::ReportWriter::from_raw_fd(report_fd) };
+    let outcome = horizon_sandbox_runtime::execute(command, caps, &[writer.as_raw_fd()])
+        .map_err(SandboxError::SupervisedRuntime)?;
+    let exit_code = outcome.exit_code;
+    writer
+        .write(outcome)
+        .map_err(SandboxError::SupervisorReport)?;
+    Ok(exit_code)
+}
 
 /// Diagnostic summary of what nono actually applied for a spawned child.
 /// Repurposes the old backend's `LandlockReport`'s diagnostic role
@@ -48,6 +74,49 @@ pub struct NonoReport {
     pub network_fallback: String,
 }
 
+/// Authenticated structured result from the dedicated Linux helper.
+#[derive(Debug)]
+pub struct SupervisorReport {
+    reader: horizon_sandbox_runtime::ReportReader,
+    helper_pid: u32,
+}
+
+impl SupervisorReport {
+    /// Receives the helper's one bounded report and verifies its sender PID.
+    pub fn read(
+        self,
+    ) -> Result<horizon_sandbox_runtime::SupervisedOutcome, horizon_sandbox_runtime::ReportError>
+    {
+        self.reader.read(self.helper_pid)
+    }
+
+    /// Returns the authoritative filesystem attempts with their smallest
+    /// currently enforceable static grants.
+    pub fn filesystem_denials(self) -> Result<Vec<crate::FilesystemDenial>, SandboxError> {
+        let outcome = self
+            .reader
+            .read(self.helper_pid)
+            .map_err(SandboxError::SupervisorReport)?;
+        let mut denials = Vec::new();
+        for entry in outcome.approvals {
+            if let nono::ApprovalRequest::Capability { path, access, .. } = entry.request {
+                let access = match access {
+                    nono::AccessMode::Read => crate::FilesystemGrantAccess::Read,
+                    nono::AccessMode::Write | nono::AccessMode::ReadWrite => {
+                        crate::FilesystemGrantAccess::ReadWrite
+                    }
+                };
+                match crate::grant::resolve_denial(path, access) {
+                    Ok(denial) if !denials.contains(&denial) => denials.push(denial),
+                    Ok(_) | Err(SandboxError::UnsupportedGrantTarget(_)) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        Ok(denials)
+    }
+}
+
 /// Cheap capability probe backing [`crate::is_available`]: whether
 /// Landlock is available on this kernel at all (nono's own
 /// `Sandbox::detect_abi`, internally cached after the first call), with
@@ -56,20 +125,16 @@ pub(crate) fn is_available() -> bool {
     nono::Sandbox::detect_abi().is_ok()
 }
 
-/// Prepares and spawns `command` under `policy`. Builds a `nono::
-/// CapabilitySet` from `policy` (`crate::caps::build`, shared with the
-/// macOS backend), then applies it via `Sandbox::apply_auto` on a
-/// dedicated thread that also spawns the child -- see the module doc for
-/// why that thread shape matters. Unlike the old bwrap backend,
-/// `command`'s program/args are run directly: nono has no wrapper binary
-/// on Linux, so there is no argv to rebuild around.
-pub(crate) fn spawn(
+/// Test-only direct spawn retained for the backend's low-level unit tests.
+#[cfg(test)]
+pub(crate) fn spawn_with_grants(
     command: Command,
     policy: &SandboxPolicy,
+    filesystem_grants: &[crate::FilesystemGrant],
     stdio: SandboxStdio,
 ) -> Result<SandboxedChild, SandboxError> {
     let abi = nono::Sandbox::detect_abi()?;
-    let caps = crate::caps::build(policy)?;
+    let caps = crate::caps::build_with_grants(policy, filesystem_grants)?;
 
     let program = command.get_program().to_os_string();
     let args: Vec<OsString> = command.get_args().map(|a| a.to_os_string()).collect();
@@ -121,7 +186,107 @@ pub(crate) fn spawn(
             abi: abi.version_string(),
             network_fallback,
         }),
+        supervisor_report: None,
     })
+}
+
+/// Production Linux path: spawn a single-threaded trusted helper which owns
+/// the only fork and the seccomp notification listener. `horizon-sessiond`
+/// never calls `fork()` itself.
+#[cfg(not(test))]
+pub(crate) fn spawn_with_grants(
+    command: Command,
+    policy: &SandboxPolicy,
+    filesystem_grants: &[crate::FilesystemGrant],
+    stdio: SandboxStdio,
+) -> Result<SandboxedChild, SandboxError> {
+    let abi = nono::Sandbox::detect_abi()?;
+    // Validate the policy and every declared root before launching the helper.
+    // The helper rebuilds this same set in its own single-threaded process.
+    let _ = crate::caps::build_with_grants(policy, filesystem_grants)?;
+    let helper = crate::helper::resolve()?;
+    let policy_json = serde_json::to_string(&crate::HelperPolicy {
+        sandbox: policy.clone(),
+        filesystem_grants: filesystem_grants.to_vec(),
+    })?;
+    let (report_reader, report_writer) = horizon_sandbox_runtime::report_channel()?;
+    let report_fd = report_writer.as_raw_fd();
+
+    let program = command.get_program().to_os_string();
+    let args = command
+        .get_args()
+        .map(|argument| argument.to_os_string())
+        .collect::<Vec<_>>();
+    let mut wrapped = Command::new(helper);
+    wrapped
+        .arg("--supervised-linux")
+        .arg(report_fd.to_string())
+        .arg(policy_json)
+        .arg(&program)
+        .args(&args)
+        .process_group(0);
+    if let Some(cwd) = command.get_current_dir() {
+        wrapped.current_dir(cwd);
+    }
+    for (key, value) in command.get_envs() {
+        match value {
+            Some(value) => {
+                wrapped.env(key, value);
+            }
+            None => {
+                wrapped.env_remove(key);
+            }
+        }
+    }
+    crate::tmpdir::provision(policy, &command, &mut wrapped)?;
+    wrapped
+        .stdin(stdio.stdin)
+        .stdout(stdio.stdout)
+        .stderr(stdio.stderr);
+
+    let expected_parent = std::process::id() as libc::pid_t;
+    // SAFETY: only async-signal-safe scalar syscalls run between fork and
+    // helper exec. CLOEXEC is cleared in the child copy only, avoiding an
+    // inheritable-fd window in multi-threaded sessiond.
+    unsafe {
+        wrapped.pre_exec(move || {
+            let flags = libc::fcntl(report_fd, libc::F_GETFD);
+            if flags < 0 || libc::fcntl(report_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::getppid() != expected_parent {
+                return Err(std::io::Error::from(std::io::ErrorKind::NotFound));
+            }
+            Ok(())
+        });
+    }
+
+    let child = wrapped.spawn()?;
+    let helper_pid = child.id();
+    drop(report_writer);
+    Ok(SandboxedChild {
+        child,
+        nono: Some(NonoReport {
+            abi: abi.version_string(),
+            network_fallback: "applied inside supervised child".to_string(),
+        }),
+        supervisor_report: Some(SupervisorReport {
+            reader: report_reader,
+            helper_pid,
+        }),
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn spawn(
+    command: Command,
+    policy: &SandboxPolicy,
+    stdio: SandboxStdio,
+) -> Result<SandboxedChild, SandboxError> {
+    spawn_with_grants(command, policy, &[], stdio)
 }
 
 #[cfg(test)]

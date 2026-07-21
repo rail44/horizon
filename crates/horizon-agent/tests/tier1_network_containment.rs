@@ -239,8 +239,7 @@ fn run_bridge_probe(
 
 /// Repeatedly runs [`run_bridge_probe`] against `target` until it reports a
 /// definitive [`BashCompletion::DomainDenied`] naming `target`'s host,
-/// tolerating transient emptiness/timeouts/`RetryWithoutSandbox`
-/// classifications (bounded backoff) -- but a genuine reach of
+/// tolerating transient emptiness/timeouts (bounded backoff) -- but a genuine reach of
 /// `forbidden_marker` (a `Finished` *or* `DomainDenied` result whose output
 /// contains it) is an immediate, unconditional failure on *any* attempt,
 /// and exhausting every attempt without ever seeing an explicit
@@ -296,8 +295,8 @@ fn expect_domain_denied(
                 );
                 last_note = format!("finished (not domain-denied): {:?}", result.output);
             }
-            Some(BashCompletion::RetryWithoutSandbox { reason, .. }) => {
-                last_note = format!("looked sandbox-denied, not a domain denial: {reason}");
+            Some(BashCompletion::FilesystemDenied { denials, .. }) => {
+                last_note = format!("unexpected filesystem denial: {denials:?}");
             }
             None => last_note = "timed out waiting for the bash call to finish".to_string(),
         }
@@ -348,8 +347,8 @@ fn expect_reaches(
             Some(BashCompletion::DomainDenied { domains, .. }) => {
                 last_note = format!("still domain-denied: {domains:?}");
             }
-            Some(BashCompletion::RetryWithoutSandbox { reason, .. }) => {
-                last_note = format!("looked sandbox-denied: {reason}");
+            Some(BashCompletion::FilesystemDenied { denials, .. }) => {
+                last_note = format!("unexpected filesystem denial: {denials:?}");
             }
             None => last_note = "timed out waiting for the bash call to finish".to_string(),
         }
@@ -559,12 +558,9 @@ fn approving_one_domain_does_not_unlock_a_different_domain() {
 /// `run_sandboxed`) instead of raw `horizon_sandbox::spawn`: a direct,
 /// unbridged TCP connect attempt from inside the sandbox must stay exactly
 /// as blocked under `Proxied` as it is under `Disabled` today -- the
-/// seccomp/Landlock network cut is unconditional for both. Accepts either
-/// of the two ways `run_sandboxed` can report that: the denial can look
-/// sandbox-shaped enough that `horizon_sandbox::is_likely_sandbox_denied`
-/// classifies it as a retry-without-sandbox prompt, or (if the exact
-/// wording doesn't match its keyword list) a plain finished result with a
-/// non-zero exit and a denial-shaped message. Never a `DomainDenied` --
+/// seccomp/Landlock network cut is unconditional for both. A direct-connect
+/// refusal is a plain finished result with a non-zero exit and a
+/// denial-shaped message, never a `DomainDenied` --
 /// direct egress never reaches the proxy at all, so nothing is ever
 /// recorded to drain. Either way, a genuine escape (exit 0, a real
 /// response) is the only outcome that must never happen.
@@ -608,15 +604,6 @@ fn tier1_sandboxed_bash_direct_egress_stays_blocked_under_proxied() {
     // would instead see a plain "network is unreachable" at the routing
     // step.
     match completion {
-        BashCompletion::RetryWithoutSandbox { reason, .. } => {
-            let lower = reason.to_lowercase();
-            assert!(
-                lower.contains("network")
-                    || lower.contains("operation not permitted")
-                    || lower.contains("permission denied"),
-                "expected a sandbox-denial-shaped reason: {reason}"
-            );
-        }
         BashCompletion::Finished(result) => {
             assert_ne!(
                 result.output["exit_code"], 0,
@@ -640,6 +627,9 @@ fn tier1_sandboxed_bash_direct_egress_stays_blocked_under_proxied() {
                 "direct egress must never reach the proxy at all, so nothing should ever be \
                  recorded to drain: {domains:?}"
             );
+        }
+        BashCompletion::FilesystemDenied { denials, .. } => {
+            panic!("direct network probe unexpectedly hit a filesystem denial: {denials:?}");
         }
     }
 

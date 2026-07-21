@@ -3336,6 +3336,7 @@ dependencies = [
 name = "horizon-sandbox"
 version = "0.1.0"
 dependencies = [
+ "horizon-sandbox-runtime",
  "libc",
  "nono",
  "serde",
@@ -3357,7 +3358,11 @@ dependencies = [
 name = "horizon-sandbox-runtime"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "nono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

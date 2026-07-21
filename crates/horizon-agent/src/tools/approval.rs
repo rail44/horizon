@@ -166,11 +166,9 @@ fn resolve_synchronous_tool(
 /// but an approve only *starts* the command — see `ApprovalOutcome::
 /// Started`. A `kind` of [`ApprovalKind::DomainDenialRetry`] resolves
 /// entirely differently (see [`resolve_domain_denial_retry`]) -- both
-/// [`ApprovalKind::Standard`] and [`ApprovalKind::SandboxDenialRetry`] reach
-/// this ordinary path unchanged: an approve always reruns the call
-/// unsandboxed (`bash::spawn`), whether it's a first-time approval or a
-/// retry after a sandbox-denial (`docs/agent-approval-design.md`'s "Denial
-/// UX").
+/// [`ApprovalKind::Standard`] takes the ordinary explicit-approval path.
+/// The legacy [`ApprovalKind::SandboxDenialRetry`] is rejected fail-closed;
+/// new containment denials name a structured narrow grant instead.
 fn resolve_bash(
     session_id: SessionId,
     runtime: &SessionRuntime,
@@ -178,21 +176,48 @@ fn resolve_bash(
     decision: &ApprovalDecision,
     kind: ApprovalKind,
 ) -> ApprovalOutcome {
-    if let ApprovalKind::DomainDenialRetry {
-        domains,
-        prior_result,
-    } = kind
-    {
-        return resolve_domain_denial_retry(
+    match kind {
+        ApprovalKind::DomainDenialRetry {
+            domains,
+            prior_result,
+        } => resolve_domain_denial_retry(
             session_id,
             runtime,
             request,
             decision,
             domains,
             prior_result,
-        );
+        ),
+        ApprovalKind::FilesystemDenialRetry {
+            denials,
+            prior_result,
+        } => resolve_filesystem_denial_retry(
+            session_id,
+            runtime,
+            request,
+            decision,
+            denials,
+            prior_result,
+        ),
+        ApprovalKind::SandboxDenialRetry => synchronous_result(
+            runtime,
+            &request.call_id,
+            json!({
+                "is_error": true,
+                "message": "This containment denial does not name a safe narrow grant; retrying without the sandbox is disabled."
+            }),
+            false,
+        ),
+        ApprovalKind::Standard => resolve_standard_bash(session_id, runtime, request, decision),
     }
+}
 
+fn resolve_standard_bash(
+    session_id: SessionId,
+    runtime: &SessionRuntime,
+    request: &ToolCallRequest,
+    decision: &ApprovalDecision,
+) -> ApprovalOutcome {
     match decision {
         ApprovalDecision::Approve => {
             let call_id = request.call_id.clone();
@@ -219,6 +244,74 @@ fn resolve_bash(
             synchronous_result(runtime, &request.call_id, denied_output(), false)
         }
     }
+}
+
+fn resolve_filesystem_denial_retry(
+    session_id: SessionId,
+    runtime: &SessionRuntime,
+    request: &ToolCallRequest,
+    decision: &ApprovalDecision,
+    denials: Vec<horizon_sandbox::FilesystemDenial>,
+    prior_result: ToolCallResult,
+) -> ApprovalOutcome {
+    if matches!(decision, ApprovalDecision::Deny { .. }) {
+        let events = vec![Event::ToolCallFinished(prior_result.clone())];
+        let frame = runtime
+            .live_state
+            .extend_provider_events(events.clone().into_iter().map(Into::into));
+        return ApprovalOutcome::Executed {
+            events,
+            frame,
+            command: Command::ToolCallResult(prior_result),
+        };
+    }
+
+    let Some(workspace_root) = runtime.tool_state.workspace_root() else {
+        let events = vec![Event::ToolCallFinished(prior_result.clone())];
+        let frame = runtime
+            .live_state
+            .extend_provider_events(events.clone().into_iter().map(Into::into));
+        return ApprovalOutcome::Executed {
+            events,
+            frame,
+            command: Command::ToolCallResult(prior_result),
+        };
+    };
+
+    let approved_grants = if runtime
+        .tool_state
+        .approve_filesystem_denials(&denials)
+        .is_ok()
+    {
+        denials.iter().map(|denial| denial.grant.clone()).collect()
+    } else {
+        // The proposal changed after display. Apply nothing and rerun under
+        // the current sandbox so the mediator can produce a fresh proposal.
+        Vec::new()
+    };
+    let call_id = request.call_id.clone();
+    let events = vec![
+        Event::StateChanged(SessionState::ToolRunning),
+        Event::ToolCallStarted(call_id.clone()),
+    ];
+    let frame = runtime
+        .live_state
+        .extend_provider_events(events.clone().into_iter().map(Into::into));
+    bash::spawn_sandboxed(
+        session_id,
+        call_id,
+        request.input.clone(),
+        runtime.tool_state.bash_cwd_handle(),
+        runtime.tool_state.bash_config(),
+        workspace_root.to_path_buf(),
+        runtime.tool_state.network_proxy(),
+        SandboxedApprovalOrigin::ManualFilesystemRetry {
+            grants: approved_grants,
+        },
+        runtime.tool_state.filesystem_grants_snapshot(),
+        runtime.bash_results.clone(),
+    );
+    ApprovalOutcome::Started { events, frame }
 }
 
 /// A tier-1 sandboxed `bash` call's network egress was refused for
@@ -296,6 +389,7 @@ fn resolve_domain_denial_retry(
                 workspace_root.to_path_buf(),
                 Some(network),
                 SandboxedApprovalOrigin::ManualDomainRetry { domains },
+                runtime.tool_state.filesystem_grants_snapshot(),
                 runtime.bash_results.clone(),
             );
 

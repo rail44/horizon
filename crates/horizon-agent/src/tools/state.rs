@@ -60,6 +60,9 @@ struct Inner {
     /// back to an over-broad root that would confine nothing.
     workspace_root: Option<PathBuf>,
     recorded_mtimes: RefCell<HashMap<PathBuf, SystemTime>>,
+    /// Additive, session-local filesystem grants approved after structured
+    /// containment denials. Snapshotted before each bash job is queued.
+    filesystem_denials: RefCell<Vec<horizon_sandbox::FilesystemDenial>>,
     /// The `bash` tool's tracked working directory
     /// (`docs/agent-tools-design.md`, "Bash Semantics"): a fresh process per
     /// call, with `cd` persisted across calls by the harness rather than a
@@ -187,6 +190,7 @@ impl ToolSessionState {
             inner: Rc::new(Inner {
                 workspace_root,
                 recorded_mtimes: RefCell::new(HashMap::new()),
+                filesystem_denials: RefCell::new(Vec::new()),
                 bash_cwd: Arc::new(Mutex::new(bash_cwd)),
                 tools,
                 recall,
@@ -322,6 +326,32 @@ impl ToolSessionState {
 
     pub fn workspace_root(&self) -> Option<&Path> {
         self.inner.workspace_root.as_deref()
+    }
+
+    pub(crate) fn filesystem_grants_snapshot(&self) -> Vec<horizon_sandbox::FilesystemGrant> {
+        self.inner
+            .filesystem_denials
+            .borrow()
+            .iter()
+            .filter(|denial| horizon_sandbox::revalidate_filesystem_denial(denial).is_ok())
+            .map(|denial| denial.grant.clone())
+            .collect()
+    }
+
+    pub(crate) fn approve_filesystem_denials(
+        &self,
+        denials: &[horizon_sandbox::FilesystemDenial],
+    ) -> Result<(), horizon_sandbox::SandboxError> {
+        for denial in denials {
+            horizon_sandbox::revalidate_filesystem_denial(denial)?;
+        }
+        let mut approved = self.inner.filesystem_denials.borrow_mut();
+        for denial in denials {
+            if !approved.contains(denial) {
+                approved.push(denial.clone());
+            }
+        }
+        Ok(())
     }
 
     /// The resolved `[agent]` tool tuning for this session (bash + fs

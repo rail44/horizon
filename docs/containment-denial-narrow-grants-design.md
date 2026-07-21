@@ -1,14 +1,18 @@
 # Containment Denials and Narrow-Grant Retries
 
 Status: network direction accepted 2026-07-20; runtime ownership narrowed
-2026-07-21. The owner has decided that containment denials become
+2026-07-21. The Linux helper, recording-deny `openat`/`openat2` mediation,
+structured filesystem approval, session grant store, sandboxed retry, and
+shadow-judge input are implemented. The missing-leaf policy is the nearest
+existing parent directory, displayed honestly as a recursive tree grant.
+The owner has decided that containment denials become
 boundary-grant decisions, approval never removes the sandbox, and the local
 cross-platform network baseline is a proxy-aware compatibility layer backed
 by OS enforcement rather than transparent redirection. Horizon will first
 extract the smallest relevant nono-cli v0.68.0 supervised-runtime slice into
 a local workspace crate instead of designing a new kernel-facing runtime from
-scratch. The filesystem discovery delivery scope below still needs a separate
-owner decision before that half is connected.
+scratch. Network transport/enforcement replacement and macOS filesystem-denial
+recovery remain subsequent delivery legs.
 
 This document corrects assumptions in `docs/agent-approval-design.md` as of
 commit `f82da5b`. It covers tier-1 sandboxed `bash`; host-side web tools retain
@@ -66,8 +70,11 @@ spread across `exec_strategy.rs` and `exec_strategy/supervisor_linux.rs`.
 Copying the wrapper wholesale would import product policy that Horizon does
 not use. The reduced extraction therefore keeps nono's public
 `ApprovalRequest -> ApprovalBackend -> ApprovalDecision -> AuditEntry`
-contract. Its next slice will port only the fork, notification validation, fd
-injection, rate-limit, and event-loop code exercised by Horizon.
+contract. The implemented reduction keeps only the dedicated fork,
+initial-capability fast path, notification validation, rate limit, and
+recording-deny event loop exercised by Horizon. It deliberately omits live fd
+injection: the blocked syscall is denied and any approval applies to a fresh
+sandboxed retry.
 
 `horizon-sessiond` is multi-threaded, whereas nono-cli validates a
 single-threaded process before its supervised `fork()`. The extracted runner
@@ -80,11 +87,24 @@ adds a session-scoped static grant, and starts a fresh sandboxed retry. This
 preserves Horizon's existing event model without blocking sessiond on a live
 UI decision.
 
-The local crate's first scaffold deliberately does not change runtime
-behavior. It establishes the pinned approval/audit contract, evidence-strength
-vocabulary, and Linux seccomp policy/rate-limit primitives before the helper
-cutover. This is an integration seam, not a claim that structured denial
-collection has already landed.
+The Linux helper cutover now runs the real command under a single-threaded
+supervisor child of `horizon-sandbox-helper`; sessiond itself never forks.
+Helper and target share a process group, parent death is armed on both hops,
+and the target closes the report endpoint before exec. The helper returns one
+bounded, versioned `SOCK_SEQPACKET` report whose `SCM_CREDENTIALS` PID must
+match the spawned helper. A real integration test proves that an `O_CREAT`
+outside the writable root produces a structured `ApprovalRequest` even when
+the shell absorbs `EPERM` and exits 0.
+
+`horizon-agent` now consumes that authenticated report independently of child
+exit status, resolves each supported attempt to a displayed static grant,
+and emits `FilesystemDenialRetry`. Approve revalidates the original attempted
+path, stores the grant in that session only, rebuilds a fresh sandbox, and
+retries the same call. Stored proposals are revalidated before every later
+spawn; a changed symlink or missing suffix drops the stale grant. Deny forwards
+the already-computed result. The legacy `SandboxDenialRetry` remains
+deserializable for event-log compatibility but fails closed, and no execution
+path emits `RetryWithoutSandbox`.
 
 ## Required invariants
 
@@ -175,22 +195,29 @@ filesystem grants do not imply pathname-UDS network grants
 (`nono-0.68.0/src/sandbox/macos.rs:718-800`). That path is still only
 compile-checked in Horizon and needs the standing real-Mac verification.
 
-### Filesystem and current denial retry
+### Filesystem and implemented denial retry
 
-Every tier-1 spawn currently has exactly one writable root, the isolated
-worktree, with `ReadableScope::Full`
+Every tier-1 spawn has the isolated worktree as its base writable root, plus
+any revalidated session grants, with `ReadableScope::Full`
 (`crates/horizon-agent/src/tools/bash/exec.rs:555-559`). The tracked Cargo
 configuration places intermediate build state outside it, under
 `{cargo-cache-home}/horizon-build-dir` (`.cargo/config.toml:1-40`).
 
-Filesystem denial classification is a text heuristic. It requires a nonzero
-exit and a keyword such as `permission denied`
-(`crates/horizon-sandbox/src/denial.rs:30-84`). An exit-0 pipeline or a tool
-that reports and absorbs an `EACCES` bypasses it. A matching failure produces
-`BashCompletion::RetryWithoutSandbox`; approval then falls through the normal
-bash approval arm and calls unsandboxed `bash::spawn`
-(`crates/horizon-agent/src/tools/approval.rs:165-216`). This is precisely the
-behavior the new direction rejects.
+On Linux, the dedicated helper now installs the extracted `openat`/`openat2`
+notification listener after Landlock setup. The unsandboxed supervisor
+resolves the attempted path, records the request, returns `EPERM` immediately,
+and later publishes one bounded authenticated report. `run_sandboxed` reads
+that report even when the command exits 0. Output classification remains only
+test-side diagnostic code and cannot name a grant or produce an unsandboxed
+retry.
+
+Existing regular files produce exact-file grants. Existing directories
+produce recursive tree grants. A missing path produces a recursive grant for
+its nearest existing parent; `..` components, `/proc`, `/sys`, `/dev`, special
+files, and a read-write `/` proposal are non-grantable. Proposal resolution is
+repeated at display/approval, at approval application, and before every queued
+spawn. The final nono `FsCapability` is also checked against the approved
+canonical path, access, and file-vs-tree scope.
 
 ## Answers to the four investigation questions
 
@@ -268,15 +295,21 @@ a nonexistent path necessarily grants an existing ancestor directory, so the
 approval must display that wider real scope rather than pretending it grants
 one nonexistent leaf.
 
+The owner selected the nearest existing parent for a missing leaf. It is the
+smallest enforceable static grant and requires no command-specific inference;
+a build may consequently ask again for sibling directories. Horizon does not
+infer a broader Cargo or package-manager root from the command text.
+
 ### 4. What does `SandboxDenialRetry` do today?
 
-It removes the sandbox. `fold_bash_retry_without_sandbox` emits
-`ApprovalKind::SandboxDenialRetry`, but `resolve_bash` handles that kind like a
-standard approval and calls `bash::spawn`, not `bash::spawn_sandboxed`. Only
-`DomainDenialRetry` currently preserves containment. The former path should be
-deleted after structured grant retries cover the supported cases.
+It is compatibility-only and fails closed. New Linux open denials emit
+`FilesystemDenialRetry`, and domain denials continue to emit
+`DomainDenialRetry`; both approve paths call `bash::spawn_sandboxed`.
+`RetryWithoutSandbox` and its sessiond fold were removed. Ordinary
+`ApprovalKind::Standard` remains the explicit initial human approval path and
+is not a containment-denial retry.
 
-## Proposed contract
+## Delivered filesystem contract and future generalization
 
 The core types should describe boundary resources rather than proxy- or
 stderr-specific accidents:
@@ -299,15 +332,17 @@ struct ContainmentDenial {
 }
 ```
 
-`ApprovalKind::ContainmentGrantRetry { denial }` replaces
-`DomainDenialRetry` and `SandboxDenialRetry`. A separate non-grantable
-`ContainmentFailure` covers events that do not map to a safe narrow grant
-(for example, a client trying direct TCP rather than the configured proxy, an
-unsupported syscall, or ambiguous filesystem evidence).
+The current delivery uses `FilesystemDenialRetry { denials, prior_result }`
+beside the existing `DomainDenialRetry`; the two can later converge on
+`ContainmentGrantRetry { denial }` when network transport is replaced. A
+separate non-grantable `ContainmentFailure` should cover events that do not
+map to a safe narrow grant (for example, a client trying direct TCP rather
+than the configured proxy, an unsupported syscall, or ambiguous filesystem
+evidence).
 
-The session owns an interior-mutable `SessionContainmentGrants` beside its
-network proxy. It contains normalized/deduplicated domain, read-path, and
-read-write-path sets. `run_sandboxed` snapshots those sets before each spawn.
+The session currently owns an interior-mutable list of approved filesystem
+denials beside its network proxy. `run_sandboxed` snapshots revalidated grants
+before each spawn.
 Grant mutation and retry stay in `tools::approval`, where the current
 domain-only implementation already demonstrates the right ownership.
 
@@ -384,7 +419,7 @@ misattributed to the next call.
 
 ## Filesystem implementation boundary
 
-The storage/retry half is straightforward:
+The storage/retry half is implemented:
 
 - add session read and read-write grants;
 - merge them into every fresh `SandboxPolicy`;
@@ -392,17 +427,19 @@ The storage/retry half is straightforward:
 - normalize paths host-side and display file-vs-directory scope;
 - on approval rerun the same call with `spawn_sandboxed`;
 - on denial forward the prior result;
-- remove `RetryWithoutSandbox`.
+- remove `RetryWithoutSandbox` (done; legacy serialized approval kind fails closed).
 
-The discovery half needs an explicit scope decision. Its Linux implementation
-belongs in the reduced helper rather than in `horizon-agent` or sessiond:
+The selected Linux discovery slice belongs in the reduced helper rather than
+in `horizon-agent` or sessiond:
 
 - **Linux incident-complete slice:** supervise `openat`/`openat2` using nono's
-  public notification primitives through the same combined listener as the
-  network mediator, compare the resolved path/access with the declared
+  public notification primitives through the current open listener, compare
+  the resolved path/access with the declared
   policy, record disallowed requests, and return `EACCES`. This covers Cargo's
   lock/build-file case and ordinary read/create/truncate opens, independent of
   the final process exit code. It does not cover every filesystem syscall.
+  The network leg must replace this with one combined listener rather than
+  trying to install a second `NEW_LISTENER` filter.
 - **Linux complete slice:** extend the mediation filter and secure path
   decoding to all Landlock-controlled path-mutating syscall families. This is
   backend work, preferably contributed upstream to nono rather than maintained
@@ -434,7 +471,8 @@ captured.
 3. **Generalize the grant contract.** Domain approve/deny behavior remains
    session-local and always retries sandboxed; audit fields identify the
    denial source and decision source.
-4. **Add filesystem session grants and the chosen discovery slice.** At
+4. **Add filesystem session grants and the chosen discovery slice — delivered
+   2026-07-21.** At
    minimum reproduce the shared Cargo build-dir incident: the denied canonical
    path is named despite exit 0, approval adds only the displayed root, retry
    succeeds sandboxed, and a sibling path remains denied.

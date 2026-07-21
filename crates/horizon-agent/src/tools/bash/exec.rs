@@ -454,20 +454,17 @@ fn error_output(message: &str, partial_output: Option<Vec<u8>>, config: &BashToo
 // -- see its own crate doc), so this is a fully synchronous, thread-based
 // implementation rather than reusing `run_async`'s tokio machinery: a
 // watcher thread bounds the wait with `timeout` (killing by pid on
-// expiry -- see `wait_child_with_timeout`'s doc comment for why a plain,
-// non-negated pid kill is enough here, unlike the unsandboxed path's
-// process-group kill), and two more threads blocking-pump stdout/stderr
+// expiry -- see `wait_child_with_timeout`'s doc comment), and two more
+// threads blocking-pump stdout/stderr
 // into shared buffers, bounded by `drain_grace` the same way `run_async`
 // bounds its own tokio pumps. This already runs on its own dedicated
 // background thread (`bash::spawn_sandboxed` -> `registry::enqueue`), so
 // there is no UI-thread-blocking concern in doing this synchronously.
 
-/// Runs one *sandboxed* bash call to completion (or until it times out, or
-/// looks sandbox-denied). `workspace_root` is the sandbox's *only* writable
-/// root. Returns [`BashCompletion::RetryWithoutSandbox`] instead of a
-/// finished result when the run looks sandbox-denied (`horizon_sandbox::
-/// is_likely_sandbox_denied`) -- see that variant's doc comment for why. Run
-/// with `LC_ALL=C`: denial classification is locale-sensitive.
+/// Runs one *sandboxed* bash call to completion (or until it times out).
+/// `workspace_root` is the base writable root; explicitly approved session
+/// grants are additive. Filesystem denials come from the authenticated Linux
+/// supervisor report rather than output or exit-code heuristics.
 ///
 /// Network (`docs/agent-approval-design.md` leg 4b): `Some(network)` gets
 /// `NetworkPolicy::Proxied { bridge_socket }` against that session's own
@@ -484,10 +481,8 @@ fn error_output(message: &str, partial_output: Option<Vec<u8>>, config: &BashToo
 /// (`SessionNetworkProxy::drain_denied_hosts`) and, if any were recorded,
 /// returns [`BashCompletion::DomainDenied`] instead of a plain `Finished`
 /// result, regardless of what the child's own exit status/output would
-/// otherwise suggest. Checked *before*, and independent of, the
-/// `is_likely_sandbox_denied` heuristic below: the proxy's own structured
-/// record is strictly better evidence than a substring guess on stdout, so
-/// a real domain denial always wins that classification.
+/// otherwise suggest. The proxy record is authoritative; output text is not
+/// used to infer a grant.
 ///
 /// Containment fix (2026-07-19 dogfooding, backlog): this policy used to add
 /// `std::env::temp_dir()` (the *host's* real temp dir) as a second writable
@@ -511,6 +506,7 @@ pub(super) fn run_sandboxed(
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     workspace_root: &Path,
     network: Option<&SessionNetworkProxy>,
+    filesystem_grants: &[horizon_sandbox::FilesystemGrant],
     config: &BashToolConfig,
 ) -> BashCompletion {
     let Some(command) = input.get("command").and_then(Value::as_str) else {
@@ -558,24 +554,33 @@ pub(super) fn run_sandboxed(
         network: network_policy,
     };
 
-    let sandboxed =
-        match horizon_sandbox::spawn(cmd, &policy, horizon_sandbox::SandboxStdio::piped_output()) {
-            Ok(sandboxed) => sandboxed,
-            Err(error) => {
-                return finished(
-                    call_id,
-                    error_output(
-                        &format!("failed to start sandboxed bash: {error}"),
-                        None,
-                        config,
-                    ),
-                );
-            }
-        };
+    let mut sandboxed = match horizon_sandbox::spawn_with_filesystem_grants(
+        cmd,
+        &policy,
+        filesystem_grants,
+        horizon_sandbox::SandboxStdio::piped_output(),
+    ) {
+        Ok(sandboxed) => sandboxed,
+        Err(error) => {
+            return finished(
+                call_id,
+                error_output(
+                    &format!("failed to start sandboxed bash: {error}"),
+                    None,
+                    config,
+                ),
+            );
+        }
+    };
+    #[cfg(target_os = "linux")]
+    let supervisor_report = sandboxed
+        .supervisor_report
+        .take()
+        .map(|report| std::thread::spawn(move || report.filesystem_denials()));
     let mut child = sandboxed.child;
 
     let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
-        let _ = child.kill();
+        kill_pid(child.id());
         let _ = child.wait();
         return finished(
             call_id,
@@ -608,6 +613,46 @@ pub(super) fn run_sandboxed(
 
     let raw_stdout = take(&stdout_buf);
     let raw_stderr = take(&stderr_buf);
+
+    #[cfg(target_os = "linux")]
+    let filesystem_denials = if killed {
+        Vec::new()
+    } else {
+        match supervisor_report {
+            Some(handle) => match handle.join() {
+                Ok(Ok(denials)) => denials,
+                Ok(Err(error)) => {
+                    let mut value = error_output(
+                        &format!("sandbox supervisor report failed: {error}"),
+                        Some(raw_stdout),
+                        config,
+                    );
+                    annotate_sandboxed(&mut value, true);
+                    return finished(call_id, value);
+                }
+                Err(_) => {
+                    let mut value = error_output(
+                        "sandbox supervisor report reader panicked",
+                        Some(raw_stdout),
+                        config,
+                    );
+                    annotate_sandboxed(&mut value, true);
+                    return finished(call_id, value);
+                }
+            },
+            None => {
+                let mut value = error_output(
+                    "sandbox supervisor did not provide a structured report channel",
+                    Some(raw_stdout),
+                    config,
+                );
+                annotate_sandboxed(&mut value, true);
+                return finished(call_id, value);
+            }
+        }
+    };
+    #[cfg(not(target_os = "linux"))]
+    let filesystem_denials: Vec<horizon_sandbox::FilesystemDenial> = Vec::new();
 
     // Drained once the child has fully exited, so no further request can
     // still be in flight against the proxy -- see this function's own doc
@@ -644,11 +689,26 @@ pub(super) fn run_sandboxed(
         return finished(call_id, value);
     };
 
+    if !filesystem_denials.is_empty() {
+        let mut value = status_output(status, raw_stdout, raw_stderr, cwd_handle, config);
+        annotate_sandboxed(&mut value, true);
+        crate::policy::annotate_filesystem_denials(&mut value, &filesystem_denials);
+        if !denied_domains.is_empty() {
+            annotate_denied_domains(&mut value, &denied_domains);
+        }
+        if !drained {
+            note_undrained(&mut value, config);
+        }
+        return BashCompletion::FilesystemDenied {
+            call_id: call_id.clone(),
+            denials: filesystem_denials,
+            result: ToolCallResult::new(call_id.clone(), value),
+        };
+    }
+
     // Authoritative regardless of the wrapped shell pipeline's own exit
-    // code -- see this function's own doc comment (backlog 59). Skips the
-    // exit-code-based `is_likely_sandbox_denied` heuristic below entirely
-    // when it fires: there is nothing that heuristic could tell us that the
-    // proxy's own record doesn't already answer better.
+    // code -- see this function's own doc comment (backlog 59). Output text
+    // never names or authorizes a domain grant.
     if !denied_domains.is_empty() {
         let mut value = status_output(status, raw_stdout, raw_stderr, cwd_handle, config);
         annotate_sandboxed(&mut value, true);
@@ -657,24 +717,6 @@ pub(super) fn run_sandboxed(
             note_undrained(&mut value, config);
         }
         return domain_denied(call_id, denied_domains, value);
-    }
-
-    // Classify against the merged stdout (see the wrapper-shape comment
-    // above), not `raw_stderr` (which, on success, is only ever the cwd
-    // report) -- this is the crate's own denial heuristic, sandboxed and
-    // exited with a real code being prerequisites it already checks.
-    if let Some(exit_code) = status.code() {
-        let merged = String::from_utf8_lossy(&raw_stdout);
-        if horizon_sandbox::is_likely_sandbox_denied(true, exit_code, &merged) {
-            let reason = format!(
-                "the sandboxed run looked denied by containment (exit {exit_code}): {}",
-                merged.trim()
-            );
-            return BashCompletion::RetryWithoutSandbox {
-                call_id: call_id.clone(),
-                reason,
-            };
-        }
     }
 
     let mut value = status_output(status, raw_stdout, raw_stderr, cwd_handle, config);
@@ -828,15 +870,13 @@ fn wait_child_with_timeout(
 
 #[cfg(unix)]
 fn kill_pid(pid: u32) {
-    // SAFETY: plain single-argument `kill(2)` on a pid this process owns
-    // (our own sandboxed child); no memory unsafety. A single, non-negated
-    // pid rather than a process-group kill: bwrap's own `--unshare-all`
-    // puts the sandboxed command in its own pid namespace, so killing the
-    // namespace's init-equivalent process tears down every descendant with
-    // it -- no process-group dance needed the way the unsandboxed path's
-    // `process_group(0)` requires.
+    // The Linux sandbox child is the dedicated helper and process-group
+    // leader; its real target and every descendant inherit that group. Kill
+    // the whole group so timeout and early setup failures cannot orphan a
+    // grandchild after the helper disappears.
+    // SAFETY: `pid` belongs to the child we spawned with process_group(0).
     unsafe {
-        libc::kill(pid as libc::pid_t, libc::SIGKILL);
+        libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
     }
 }
 

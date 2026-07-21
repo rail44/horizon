@@ -45,10 +45,9 @@ pub enum NetworkPolicy {
 /// A command's sandbox policy: writable roots, readable scope, network
 /// posture. Constructed by the caller (the future tool-call spawn site in
 /// `horizon-sessiond`); this crate only ever consumes it. `Serialize`/
-/// `Deserialize` back the macOS backend's exec-helper handoff (the policy
-/// crosses a process boundary as JSON -- see `macos::spawn` and
-/// `src/bin/horizon-sandbox-helper.rs`); the Linux backend never
-/// serializes it.
+/// `Deserialize` back both backends' exec-helper handoff (the policy crosses
+/// a process boundary as JSON -- see `linux::spawn`, `macos::spawn`, and
+/// `src/bin/horizon-sandbox-helper.rs`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SandboxPolicy {
     /// Paths the sandboxed command may create, modify, or delete inside.
@@ -56,6 +55,44 @@ pub struct SandboxPolicy {
     pub writable_roots: Vec<PathBuf>,
     pub readable_scope: ReadableScope,
     pub network: NetworkPolicy,
+}
+
+/// Access added by an approved, session-scoped containment grant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum FilesystemGrantAccess {
+    Read,
+    ReadWrite,
+}
+
+/// The actual enforcement scope shown to the approver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum FilesystemGrantScope {
+    File,
+    DirectoryTree,
+}
+
+/// A canonical, enforceable filesystem grant for a fresh sandbox.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct FilesystemGrant {
+    pub path: PathBuf,
+    pub access: FilesystemGrantAccess,
+    pub scope: FilesystemGrantScope,
+}
+
+/// A mediated attempt and the smallest enforceable grant that can satisfy it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FilesystemDenial {
+    pub attempted_path: PathBuf,
+    pub grant: FilesystemGrant,
+}
+
+/// Private helper wire envelope. Kept public only for this package's bin target.
+#[doc(hidden)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HelperPolicy {
+    pub sandbox: SandboxPolicy,
+    #[serde(default)]
+    pub filesystem_grants: Vec<FilesystemGrant>,
 }
 
 /// Explicit stdio configuration for a sandboxed spawn. `std::process::
