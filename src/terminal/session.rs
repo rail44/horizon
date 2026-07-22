@@ -360,6 +360,57 @@ impl Scrollback {
             Scrollback::Live | Scrollback::Requesting { .. } => None,
         }
     }
+
+    /// Follow a newly applied live frame, and report whether the view must
+    /// repaint for it. Two jobs, both from the review's "windowed state must
+    /// track availability, not cling to a stale window until a wheel tick":
+    ///
+    /// - **Availability gate (blocker fix).** When the frame says the app owns
+    ///   the screen (`scrollback_available == false` — alt-screen / mouse mode,
+    ///   e.g. launching `vim`/`less` while scrolled back), abandon any held or
+    ///   awaited window so the app's screen is not stuck behind stale history,
+    ///   and repaint. This is the only path that drops a window on a frame —
+    ///   crucially **not** every frame.
+    /// - **No output-driven reshape.** While a window is held with the app
+    ///   *still* on the primary screen (`available == true`), new live output
+    ///   leaves the window exactly where it is (`docs/terminal-scrollback-design.md`
+    ///   §5 — position is maintained while scrolled back), so this returns
+    ///   `false`: **skip the repaint**, so a `tail -f` scrolled back does not
+    ///   reshape the whole viewport every frame (the phase-2 approach (a) — no
+    ///   notify rather than a window-content shape cache; simpler, and it keeps
+    ///   the held window a pure snapshot). `Live`/`Requesting` paint the live
+    ///   frame (cache-backed), so they repaint normally.
+    fn on_live_frame(&mut self, available: bool) -> bool {
+        if !available {
+            self.abandon();
+            return true;
+        }
+        !matches!(self, Scrollback::Windowed { .. })
+    }
+
+    /// Drop any held/awaited window and return to following the live tail,
+    /// reporting whether that changed anything (so a caller can repaint). The
+    /// review's shared "stop clinging to a stale window" primitive: a resize
+    /// (its geometry no longer matches the served window), a selection gesture
+    /// (handed to the daemon-owned live viewport so cursor/selection render as
+    /// on `main`), and a runtime going unreachable (so a dead pane never freezes
+    /// on a stale window + `refetching` latch) all route through it.
+    fn abandon(&mut self) -> bool {
+        let changed = !matches!(self, Scrollback::Live);
+        *self = Scrollback::Live;
+        changed
+    }
+}
+
+/// Whether a connection's `negotiated` version supports the scrollback
+/// windowing surface (`docs/terminal-scrollback-design.md` §4). Free function
+/// so the gate — the `>=` comparison, the `SCROLLBACK_WINDOW_MIN_VERSION`
+/// constant, and the `None`-means-no-connection handling — is unit-testable
+/// directly, not only through `on_wheel`'s translated `bool`. `None` (no
+/// connection yet) and any older version both gate windowing off.
+fn version_supports_windowing(negotiated: Option<u32>) -> bool {
+    negotiated
+        .is_some_and(|version| version >= horizon_session_protocol::SCROLLBACK_WINDOW_MIN_VERSION)
 }
 
 /// Whether the `TerminalCommand` channel to `horizon-sessiond` is known dead.
@@ -494,7 +545,13 @@ impl TerminalSession {
                     session
                         .runtime
                         .set(session.runtime.get().after_event_received());
-                    match incoming {
+                    // Whether this item needs a repaint. Every arm notifies as
+                    // before, except a live frame arriving while a window is
+                    // held: that leaves the window untouched (§5) and must
+                    // *not* reshape the viewport every frame — `on_live_frame`
+                    // decides (and also drops the window if the app just took
+                    // the screen).
+                    let notify = match incoming {
                         Incoming::Frame(frame) => {
                             // Client-side row-change detection: compare the
                             // new full frame against the previously held one
@@ -502,19 +559,29 @@ impl TerminalSession {
                             // rows (§5 Option A moved this off the wire).
                             let old = session.frame.take();
                             session.row_generations.apply_frame(old.as_ref(), &frame);
+                            let available = frame.scrollback_available;
                             session.frame = Some(frame);
                             if let Some(path) = &dump_path {
                                 let frame = session.frame.as_ref().unwrap();
                                 let _ = std::fs::write(path, super::dump_frame(frame));
                             }
+                            // Follow availability and gate output-driven
+                            // repaints (review fixes ①/②).
+                            session.scrollback.borrow_mut().on_live_frame(available)
                         }
                         Incoming::Event(TerminalUpdate::Exited) => {
                             session.exited.set(true);
                             let _ = session.exit_tx.unbounded_send(session.session_id);
+                            true
                         }
                         Incoming::Event(TerminalUpdate::Error(error)) => {
                             session.error.replace(Some(error));
                             session.runtime.set(RuntimeReachability(true));
+                            // A dead runtime never answers an outstanding window
+                            // request: drop it so the pane doesn't freeze on a
+                            // stale window + `refetching` latch (review fix ⑤).
+                            session.scrollback.borrow_mut().abandon();
+                            true
                         }
                         // OSC 52 writes, CopySelection results, and
                         // automatic selection-to-primary writes all arrive
@@ -532,24 +599,28 @@ impl TerminalSession {
                                 // this build can't name.
                                 ClipboardDestination::Unknown => {}
                             }
+                            true
                         }
-                        Incoming::Event(TerminalUpdate::Title(_) | TerminalUpdate::Bell) => {}
+                        Incoming::Event(TerminalUpdate::Title(_) | TerminalUpdate::Bell) => true,
                         // A served scrollback window: install it into the
                         // scrollback state machine (phase 2 — the client now
                         // scrolls within it locally). Only lands if a request
                         // is outstanding (initial fetch or edge re-fetch); a
-                        // late/superseded window is dropped. The `cx.notify()`
-                        // below repaints the pane onto the freshly held window
+                        // late/superseded window is dropped. Notifying repaints
+                        // the pane onto the freshly held window
                         // (`docs/terminal-scrollback-design.md` §3.3, §7).
                         Incoming::Event(TerminalUpdate::ScrollWindow(window)) => {
                             session.scrollback.borrow_mut().install_window(window);
+                            true
                         }
                         // Skew catch-all (`TerminalUpdate::Unknown`'s
                         // doc): an event this build can't name is skipped;
                         // the stream stays attached.
-                        Incoming::Event(TerminalUpdate::Unknown) => {}
+                        Incoming::Event(TerminalUpdate::Unknown) => false,
+                    };
+                    if notify {
+                        cx.notify();
                     }
-                    cx.notify();
                 });
                 if apply.is_err() {
                     return;
@@ -564,6 +635,10 @@ impl TerminalSession {
                         .replace(Some("terminal runtime disconnected".to_string()));
                     session.runtime.set(RuntimeReachability(true));
                 }
+                // Drop any held/awaited window: a disconnected runtime never
+                // serves one, so a dead pane must not freeze scrolled back
+                // (review fix ⑤).
+                session.scrollback.borrow_mut().abandon();
                 cx.notify();
             });
         })
@@ -628,6 +703,14 @@ impl TerminalSession {
         let failed = self.tx.send(command).is_err();
         let (next, should_wake) = self.runtime.get().after_send(failed);
         self.runtime.set(next);
+        if failed {
+            // The command channel just died (this is the first failure — the
+            // guard above short-circuits every later send). A dead runtime
+            // never answers an outstanding window request, so drop any held /
+            // awaited window rather than freeze scrolled back on a `refetching`
+            // latch (review fix ⑤). The `should_wake` notify below repaints.
+            self.scrollback.borrow_mut().abandon();
+        }
         if should_wake {
             let _ = self.wake_notify.unbounded_send(());
         }
@@ -655,6 +738,7 @@ impl TerminalSession {
         point: horizon_terminal_core::TerminalSelectionPoint,
         kind: horizon_terminal_core::TerminalSelectionKind,
     ) {
+        self.exit_scrollback_for_selection();
         self.dispatch(TerminalCommand::SelectionStart { point, kind });
     }
 
@@ -662,7 +746,37 @@ impl TerminalSession {
         &self,
         point: horizon_terminal_core::TerminalSelectionPoint,
     ) {
+        // A drag past the start of a selection: the window was already dropped
+        // on the initial `SelectionStart` (or the selection never began in a
+        // window); this idempotent call keeps a stray drag from painting over
+        // a held window.
+        self.exit_scrollback_for_selection();
         self.dispatch(TerminalCommand::SelectionUpdate(point));
+    }
+
+    /// Hand a selection gesture to the daemon-owned live viewport (review fix
+    /// ③, owner-approved). Windowed paint deliberately omits cursor / selection
+    /// / IME (history-only), and — decisively — the daemon maps a viewport
+    /// selection point against its *live* `display_offset`, which stays at the
+    /// tail while the client scrolls locally, so a selection started in the
+    /// window would anchor at the wrong content. So a selection gesture drops
+    /// the held window and returns to the live tail (`Live`): the daemon then
+    /// owns the viewport and renders cursor + selection exactly as on `main`
+    /// and the v11 round-trip fallback. Returns whether a window was dropped,
+    /// so the view can repaint immediately (a bare click starting a zero-width
+    /// selection may otherwise produce no frame to trigger the switch).
+    ///
+    /// This is the race-free half of the two options the review left open:
+    /// preserving the scrolled position would mean round-tripping a `Scroll`
+    /// to the anchor *before* the selection, but the daemon demuxes `Scroll`
+    /// and `SelectionStart` onto separate channels with no cross-channel
+    /// ordering (`horizon-sessiond` `run_writer` → the session loop's
+    /// `select!`), so the selection could anchor before the scroll lands.
+    /// Returning to the live edge avoids that race; preserving the position is
+    /// left to phase 3 (ordered scroll+select, or a client-owned selection
+    /// model over the window).
+    fn exit_scrollback_for_selection(&self) -> bool {
+        self.scrollback.borrow_mut().abandon()
     }
 
     pub(crate) fn send_scroll(
@@ -681,9 +795,7 @@ impl TerminalSession {
     /// windowing surface (`SCROLLBACK_WINDOW_MIN_VERSION`). `None` (no
     /// connection yet) and any older version both gate it off.
     fn windowing_supported(&self) -> bool {
-        self.wire.negotiated_version().is_some_and(|version| {
-            version >= horizon_session_protocol::SCROLLBACK_WINDOW_MIN_VERSION
-        })
+        version_supports_windowing(self.wire.negotiated_version())
     }
 
     /// One wheel gesture's worth of scroll (`lines`, already whole-line via
@@ -745,6 +857,13 @@ impl TerminalSession {
     }
 
     pub(crate) fn send_resize(&self, size: TerminalSize) {
+        // A resize reflows history and invalidates the held window's geometry
+        // (its rows were served for the old height); drop it so the next
+        // scroll re-enters with the correct geometry, rather than painting a
+        // short window's stale rows under the resized viewport (review fix ④).
+        // The in-progress paint reads the scrollback state *after* this, so it
+        // falls straight through to the live frame — no separate notify.
+        self.scrollback.borrow_mut().abandon();
         self.dispatch(TerminalCommand::Resize(size));
     }
 
@@ -776,7 +895,9 @@ fn write_to_primary(_cx: &mut Context<TerminalSession>, _text: String) {}
 // otherwise shadow the standard `#[test]` attribute in this module.
 #[cfg(test)]
 mod tests {
-    use super::{RowGenerations, RuntimeReachability, ScrollIpc, Scrollback};
+    use super::{
+        version_supports_windowing, RowGenerations, RuntimeReachability, ScrollIpc, Scrollback,
+    };
     use horizon_terminal_core::{
         TerminalFrame, TerminalScrollWindow, TerminalSelection, TerminalSelectionPoint,
     };
@@ -1243,6 +1364,134 @@ mod tests {
                 .visible_lines(VR)
                 .is_none(),
             "a pending first fetch still shows the live frame"
+        );
+    }
+
+    // --- Review fixes: windowed state follows availability / output / resize /
+    // reachability instead of clinging to a stale window (unified root cause) --
+
+    /// Review fix ① blocker + §5 regression guard. A live frame arriving while
+    /// a window is held with the app *still* on the primary screen
+    /// (`scrollback_available == true`, e.g. `tail -f` output) must leave the
+    /// window exactly where it is — position is maintained while scrolled back.
+    /// It must **not** drop the window every frame.
+    #[test]
+    fn an_available_live_frame_keeps_the_window_put() {
+        let mut state = windowed_mid();
+        let before = state.clone();
+        let notify = state.on_live_frame(true);
+        assert_eq!(
+            state, before,
+            "new output does not move or drop the window (§5)"
+        );
+        assert!(!notify, "and it does not repaint");
+    }
+
+    /// Review fix ② (approach (a)): the paired half of the invariant above —
+    /// while windowed, an ordinary output frame returns `notify == false`, so
+    /// the pane does not reshape the whole viewport every frame during
+    /// scrolled-back output. `Live`/`Requesting` paint the live frame
+    /// (cache-backed) and repaint normally.
+    #[test]
+    fn output_frames_do_not_repaint_while_windowed() {
+        assert!(
+            !windowed_mid().on_live_frame(true),
+            "a held window skips the per-frame repaint (no reshape)"
+        );
+        assert!(
+            Scrollback::Live.on_live_frame(true),
+            "the live tail repaints"
+        );
+        assert!(
+            Scrollback::Requesting { viewport_rows: VR }.on_live_frame(true),
+            "a pending fetch paints the live frame, so it repaints"
+        );
+    }
+
+    /// Review fix ① blocker: a frame that says the app took the screen
+    /// (`scrollback_available == false` — alt-screen / mouse mode, e.g.
+    /// launching vim/less while scrolled back) drops the held window and
+    /// repaints, so the app is not stuck behind stale history. Also drops a
+    /// first fetch still in flight.
+    #[test]
+    fn an_unavailable_frame_drops_the_window_and_repaints() {
+        let mut windowed = windowed_mid();
+        assert!(
+            windowed.on_live_frame(false),
+            "switching to the app repaints"
+        );
+        assert_eq!(windowed, Scrollback::Live, "the stale window is dropped");
+
+        let mut requesting = Scrollback::Requesting { viewport_rows: VR };
+        assert!(requesting.on_live_frame(false));
+        assert_eq!(
+            requesting,
+            Scrollback::Live,
+            "an in-flight fetch is abandoned"
+        );
+    }
+
+    /// Review fixes ③ (selection), ④ (resize), and ⑤ (unreachable) share one
+    /// primitive: `abandon` returns to the live tail from any held/awaited
+    /// window (clearing a `refetching` latch too) and reports whether that
+    /// changed anything. After it, the paint follows the live frame — the
+    /// daemon-owned viewport that renders cursor/selection as on `main`.
+    #[test]
+    fn abandon_returns_to_live_from_any_scrolled_state() {
+        // A plain held window (the resize / selection cases).
+        let mut windowed = windowed_mid();
+        assert!(windowed.abandon(), "dropping a held window is a change");
+        assert_eq!(windowed, Scrollback::Live);
+        assert!(
+            windowed.visible_lines(VR).is_none(),
+            "the paint now follows the live frame"
+        );
+
+        // A window with a re-fetch outstanding (the unreachable / dead-pane
+        // latch the review flagged): abandon clears it too.
+        let mut refetching = Scrollback::Windowed {
+            window: window(15, 0, 10, 15),
+            offset: 0,
+            viewport_rows: VR,
+            refetching: true,
+        };
+        assert!(refetching.abandon());
+        assert_eq!(refetching, Scrollback::Live);
+
+        // A first fetch in flight (Requesting) is likewise abandoned.
+        let mut requesting = Scrollback::Requesting { viewport_rows: VR };
+        assert!(requesting.abandon());
+        assert_eq!(requesting, Scrollback::Live);
+
+        // Already live: nothing to drop, no change reported.
+        let mut live = Scrollback::Live;
+        assert!(!live.abandon());
+        assert_eq!(live, Scrollback::Live);
+    }
+
+    /// Low-priority review item: pin the negotiated-version gate at the
+    /// translation boundary the wheel path relies on — the `>=` comparison,
+    /// the `SCROLLBACK_WINDOW_MIN_VERSION` constant, and `None` (no connection)
+    /// meaning "off" — so a later refactor (e.g. `>=` → `>`) can't silently
+    /// regress the gate without tripping a test.
+    #[test]
+    fn version_supports_windowing_gates_at_the_min_version() {
+        let min = horizon_session_protocol::SCROLLBACK_WINDOW_MIN_VERSION;
+        assert!(
+            !version_supports_windowing(None),
+            "no connection: gated off"
+        );
+        assert!(
+            !version_supports_windowing(Some(min - 1)),
+            "an older peer is gated off"
+        );
+        assert!(
+            version_supports_windowing(Some(min)),
+            "the min version is in"
+        );
+        assert!(
+            version_supports_windowing(Some(min + 1)),
+            "a newer peer stays in"
         );
     }
 }

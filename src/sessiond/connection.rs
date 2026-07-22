@@ -74,15 +74,19 @@ const CREATE_TERMINAL_TIMEOUT: Duration = Duration::from_secs(45);
 pub(super) struct RuntimeControl {
     cancelled: AtomicBool,
     established: AtomicBool,
-    /// The version `hello` negotiated for the *current* connection, or `0`
-    /// while none is established (pre-hello, or between a drain and the next
-    /// establishment). Read live by terminal panes to gate the v12 scrollback
-    /// windowing surface (`docs/terminal-scrollback-design.md` §4): a pane
-    /// only sends `RequestScrollWindow` when this is ≥ 12, otherwise it keeps
-    /// today's round-trip `Scroll`. Set once per establishment alongside
-    /// `mark_established`, so a `Reload Session Runtime` that re-establishes
-    /// against a different daemon version is reflected without recreating any
-    /// pane handle.
+    /// The version `hello` negotiated, or `0` before the first establishment.
+    /// Read live by terminal panes to gate the v12 scrollback windowing
+    /// surface (`docs/terminal-scrollback-design.md` §4): a pane only sends
+    /// `RequestScrollWindow` when this is ≥ 12, otherwise it keeps today's
+    /// round-trip `Scroll`. Set once per establishment (alongside
+    /// `mark_established`) and **not cleared on disconnect** — it holds the
+    /// most recently negotiated version until the next establishment
+    /// overwrites it. A dead connection is surfaced through reachability (the
+    /// per-pane `RuntimeReachability`, plus the pane dropping its window when
+    /// the channels close), not by zeroing this. This is the runtime
+    /// instance's own control, replaced wholesale on `Reload Session Runtime`,
+    /// so a reload against a different daemon version simply reads the fresh
+    /// control.
     negotiated: AtomicU32,
     notify: Notify,
     stopped: (Mutex<bool>, Condvar),
@@ -99,8 +103,8 @@ impl RuntimeControl {
         }
     }
 
-    /// The negotiated protocol version of the current connection, or `None`
-    /// while none is established. `None` and any value below 12 both gate the
+    /// The most recently negotiated protocol version, or `None` before the
+    /// first establishment. `None` and any value below 12 both gate the
     /// scrollback windowing surface off (conservative: never send a window
     /// request a peer might not answer).
     pub(super) fn negotiated(&self) -> Option<u32> {

@@ -225,7 +225,7 @@ impl TerminalView {
         ))
     }
 
-    fn handle_mouse_down(&mut self, event: &MouseDownEvent, cx: &App) {
+    fn handle_mouse_down(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
         let Some(point) = self.cell_at(event.position) else {
             return;
         };
@@ -243,7 +243,13 @@ impl TerminalView {
         } else if event.button == MouseButton::Left {
             self.selecting = true;
             let kind = selection_kind_from_clicks(event.click_count);
+            // `send_selection_start` drops any held scrollback window (review
+            // fix ③): a selection is handed to the daemon-owned live viewport.
+            // Notify so a bare click that starts a zero-width selection — which
+            // may produce no frame — still switches the paint off the window
+            // and onto the live frame immediately.
             self.session.read(cx).send_selection_start(point, kind);
+            cx.notify();
         } else if event.button == MouseButton::Middle {
             self.paste_from_primary(cx);
         }
