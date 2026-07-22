@@ -22,6 +22,7 @@
 //! guard prevents the second independently, as defense in depth for any
 //! future job that doesn't route through `run_job_body`.
 
+mod cargo;
 mod exec;
 mod git;
 mod output;

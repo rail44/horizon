@@ -51,7 +51,7 @@ const READ_ONLY_SUBCOMMANDS: &[&str] = &[
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum ShellToken {
+pub(super) enum ShellToken {
     Word(String),
     Boundary,
 }
@@ -138,6 +138,19 @@ fn segment_requires_metadata_write(words: &[String]) -> bool {
 }
 
 fn git_executable_index(words: &[String]) -> Option<usize> {
+    let index = executable_index(words)?;
+    let executable = words.get(index)?;
+    (Path::new(executable)
+        .file_name()
+        .and_then(|name| name.to_str())
+        == Some("git"))
+    .then_some(index)
+}
+
+/// Finds a directly invoked command after the small set of shell prefixes
+/// understood by Horizon's proactive command classifiers. This is not a
+/// security parser: unsupported shell syntax falls through to containment.
+pub(super) fn executable_index(words: &[String]) -> Option<usize> {
     let mut index = 0;
     while words.get(index).is_some_and(|word| is_assignment(word)) {
         index += 1;
@@ -187,12 +200,7 @@ fn git_executable_index(words: &[String]) -> Option<usize> {
             _ => break,
         }
     }
-    let executable = words.get(index)?;
-    (Path::new(executable)
-        .file_name()
-        .and_then(|name| name.to_str())
-        == Some("git"))
-    .then_some(index)
+    words.get(index).map(|_| index)
 }
 
 fn is_assignment(word: &str) -> bool {
@@ -210,7 +218,7 @@ fn is_assignment(word: &str) -> bool {
 /// quoted words and command boundaries without trying to execute expansions.
 /// Unsupported shell constructs can only cause the generic sandbox-denial
 /// fallback; they never widen access.
-fn tokenize(command: &str) -> Vec<ShellToken> {
+pub(super) fn tokenize(command: &str) -> Vec<ShellToken> {
     let mut tokens = Vec::new();
     let mut word = String::new();
     let mut chars = command.chars().peekable();

@@ -520,6 +520,9 @@ pub(super) fn run_sandboxed(
             error_output("bash requires a non-empty `command` string", None, config),
         );
     }
+    if let Some(message) = super::cargo::shared_cache_clean_refusal(command, workspace_root) {
+        return finished(call_id, error_output(message, None, config));
+    }
 
     let timeout = resolve_timeout(input, config);
     let cwd = cwd_handle

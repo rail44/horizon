@@ -128,8 +128,18 @@ otherwise piling up:
   `pre_exec` guarantees the niceness is in place before bash (and every
   descendant it later forks, since nice is inherited across fork/exec)
   starts running, regardless of process-group shape.
+- **Shared Cargo-cache guard.** In an isolated workspace whose tracked
+  Cargo config places `build.build-dir` under `{cargo-cache-home}`, the
+  sandboxed path refuses a directly recognizable `cargo clean` unless it
+  carries `-p`/`--package`. A filesystem grant that lets Cargo build in the
+  shared directory necessarily also lets Cargo remove files there; one
+  unscoped clean otherwise makes every worktree rebuild the full dependency
+  graph. Package-scoped stale-crate recovery remains available, as does an
+  explicitly worktree-local `CARGO_BUILD_BUILD_DIR` for a truly isolated
+  full rebuild. This is a proactive resource/UX guard, not a shell security
+  parser or part of the containment boundary.
 
-Neither measure caps memory directly (niceness affects CPU scheduling, not
+These measures do not cap memory directly (niceness affects CPU scheduling, not
 memory), so they don't replace the idempotence fix — they reduce the blast
 radius of any future bug that lets a session accumulate more than one
 in-flight bash call.
