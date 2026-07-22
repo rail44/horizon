@@ -5,13 +5,15 @@
 //! the close-vs-terminate invariant (docs/ux-principles.md) in GPUI terms.
 
 use std::cell::{Cell, RefCell};
+use std::ops::Range;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use gpui::*;
 use horizon_terminal_core::{
-    ClipboardDestination, KeyEventKind, TerminalCommand, TerminalFrame, TerminalLine,
-    TerminalMouseReport, TerminalScroll, TerminalScrollWindow, TerminalSize, TerminalUpdate,
+    ClipboardDestination, KeyEventKind, TerminalCommand, TerminalFrame, TerminalMouseReport,
+    TerminalScroll, TerminalScrollWindow, TerminalSize, TerminalUpdate,
 };
 use horizon_workspace::SessionId;
 
@@ -151,7 +153,11 @@ enum Scrollback {
     /// `refetching` is set while an edge re-fetch is outstanding, suppressing
     /// per-tick re-requests (the offset stays clamped at the edge meanwhile).
     Windowed {
-        window: TerminalScrollWindow,
+        // Shared with the paint path so every wheel frame clones one Arc,
+        // not a viewport's worth of strings/spans. The window remains an
+        // immutable, self-contained snapshot and is replaced atomically on
+        // the next fetch.
+        window: Arc<TerminalScrollWindow>,
         /// Index into `window.lines` of the row at the top of the viewport.
         offset: usize,
         /// The viewport height the window was served for — the basis for the
@@ -314,18 +320,19 @@ impl Scrollback {
     /// window arriving in any other state is a superseded/late reply and is
     /// dropped — windows are self-locating, so the client needs no correlation
     /// id (`docs/terminal-scrollback-design.md` §3.2).
-    fn install_window(&mut self, window: TerminalScrollWindow) {
+    fn install_window(&mut self, window: TerminalScrollWindow) -> bool {
         match self {
             Scrollback::Requesting { viewport_rows } => {
                 let viewport_rows = *viewport_rows;
                 let offset =
                     clamp_offset(window.viewport_offset, window.lines.len(), viewport_rows);
                 *self = Scrollback::Windowed {
-                    window,
+                    window: Arc::new(window),
                     offset,
                     viewport_rows,
                     refetching: false,
                 };
+                true
             }
             Scrollback::Windowed {
                 window: held,
@@ -336,15 +343,17 @@ impl Scrollback {
                 if *refetching {
                     let off =
                         clamp_offset(window.viewport_offset, window.lines.len(), *viewport_rows);
-                    *held = window;
+                    *held = Arc::new(window);
                     *offset = off;
                     *refetching = false;
+                    true
+                } else {
+                    // Not awaiting a window: a late/stray reply.
+                    false
                 }
-                // Not awaiting a window (refetching == false): a late/stray
-                // reply; drop it.
             }
             // Live or Requesting-superseded: nothing to install into.
-            Scrollback::Live => {}
+            Scrollback::Live => false,
         }
     }
 
@@ -352,12 +361,15 @@ impl Scrollback {
     /// live tail (the caller then paints the live frame). `viewport_rows` is
     /// the current paint height, so a resize since the window was served still
     /// paints the right count.
-    fn visible_lines(&self, viewport_rows: usize) -> Option<Vec<TerminalLine>> {
+    fn visible_lines(
+        &self,
+        viewport_rows: usize,
+    ) -> Option<(Arc<TerminalScrollWindow>, Range<usize>)> {
         match self {
             Scrollback::Windowed { window, offset, .. } => {
                 let start = (*offset).min(window.lines.len());
                 let end = start.saturating_add(viewport_rows).min(window.lines.len());
-                Some(window.lines[start..end].to_vec())
+                Some((window.clone(), start..end))
             }
             Scrollback::Live | Scrollback::Requesting { .. } => None,
         }
@@ -495,6 +507,15 @@ impl TrafficTraceStats {
     }
 }
 
+/// Borrow-free paint snapshot for the currently visible part of a held
+/// scrollback window. Cloning this value is constant-time: row storage stays
+/// behind the Arc and `range` selects the viewport inside it.
+pub(super) struct VisibleScrollback {
+    pub(super) window: Arc<TerminalScrollWindow>,
+    pub(super) range: Range<usize>,
+    pub(super) generation: u64,
+}
+
 pub(crate) struct TerminalSession {
     tx: crossbeam_channel::Sender<TerminalCommand>,
     pub(crate) frame: Option<TerminalFrame>,
@@ -527,6 +548,10 @@ pub(crate) struct TerminalSession {
     /// ([`Self::handle_scroll`], `&self`) and the async event pump
     /// (installing a served `ScrollWindow`) mutate it, and the paint reads it.
     scrollback: RefCell<Scrollback>,
+    /// Monotonic identity of the held scroll window for the paint-side row
+    /// shaping cache. It advances only when a requested window is actually
+    /// installed; late replies do not invalidate a still-current cache.
+    scrollback_generation: u64,
     /// The daemon handle, kept for its Drop (unregister) and read for the
     /// connection's negotiated protocol version, which gates the windowing
     /// surface (`TerminalSessionHandle::negotiated_version`).
@@ -647,6 +672,7 @@ impl TerminalSession {
             wake_notify: wake_tx,
             exit_tx,
             scrollback: RefCell::new(Scrollback::Live),
+            scrollback_generation: 0,
             wire: handle,
         }
     }
@@ -709,7 +735,10 @@ impl TerminalSession {
             }
             Incoming::Event(TerminalUpdate::Title(_) | TerminalUpdate::Bell) => true,
             Incoming::Event(TerminalUpdate::ScrollWindow(window)) => {
-                self.scrollback.borrow_mut().install_window(window);
+                let installed = self.scrollback.borrow_mut().install_window(window);
+                if installed {
+                    self.scrollback_generation = self.scrollback_generation.wrapping_add(1).max(1);
+                }
                 true
             }
             Incoming::Event(TerminalUpdate::Unknown) => false,
@@ -887,8 +916,13 @@ impl TerminalSession {
     /// The scrollback window slice to paint, or `None` while following the
     /// live tail (the caller paints the live frame instead). See
     /// [`Scrollback::visible_lines`].
-    pub(crate) fn visible_scrollback(&self, viewport_rows: usize) -> Option<Vec<TerminalLine>> {
-        self.scrollback.borrow().visible_lines(viewport_rows)
+    pub(super) fn visible_scrollback(&self, viewport_rows: usize) -> Option<VisibleScrollback> {
+        let (window, range) = self.scrollback.borrow().visible_lines(viewport_rows)?;
+        Some(VisibleScrollback {
+            window,
+            range,
+            generation: self.scrollback_generation,
+        })
     }
 
     pub(crate) fn send_input(&self, bytes: Vec<u8>) {
@@ -1153,7 +1187,7 @@ mod tests {
     /// A held window with margin above and below the viewport, offset centered.
     fn windowed_mid() -> Scrollback {
         Scrollback::Windowed {
-            window: window(15, 5, 10, 15),
+            window: window(15, 5, 10, 15).into(),
             offset: 5,
             viewport_rows: VR,
             refetching: false,
@@ -1253,7 +1287,7 @@ mod tests {
     fn scrolling_back_to_the_live_edge_drops_the_window() {
         // below == 0, offset already at the bottom viewport (max_top == 5).
         let mut state = Scrollback::Windowed {
-            window: window(10, 5, 30, 0),
+            window: window(10, 5, 30, 0).into(),
             offset: 5,
             viewport_rows: VR,
             refetching: false,
@@ -1275,7 +1309,7 @@ mod tests {
     #[test]
     fn a_block_edge_with_more_history_refetches_once() {
         let mut state = Scrollback::Windowed {
-            window: window(15, 1, 10, 15),
+            window: window(15, 1, 10, 15).into(),
             offset: 1,
             viewport_rows: VR,
             refetching: false,
@@ -1314,7 +1348,7 @@ mod tests {
     #[test]
     fn the_true_top_clamps_without_ipc() {
         let mut state = Scrollback::Windowed {
-            window: window(10, 2, 0, 30),
+            window: window(10, 2, 0, 30).into(),
             offset: 2,
             viewport_rows: VR,
             refetching: false,
@@ -1370,7 +1404,7 @@ mod tests {
     #[test]
     fn install_window_swaps_in_an_edge_refetch() {
         let mut state = Scrollback::Windowed {
-            window: window(15, 0, 10, 15),
+            window: window(15, 0, 10, 15).into(),
             offset: 0,
             viewport_rows: VR,
             refetching: true,
@@ -1396,8 +1430,8 @@ mod tests {
     #[test]
     fn visible_lines_slices_the_window_at_the_offset() {
         let state = windowed_mid(); // offset 5, 15 rows row00..row14
-        let lines = state.visible_lines(VR).expect("windowed paints a slice");
-        let texts: Vec<String> = lines.iter().map(row_text).collect();
+        let (window, range) = state.visible_lines(VR).expect("windowed paints a slice");
+        let texts: Vec<String> = window.lines[range].iter().map(row_text).collect();
         assert_eq!(texts, ["row05", "row06", "row07", "row08", "row09"]);
 
         assert!(
@@ -1495,7 +1529,7 @@ mod tests {
         // A window with a re-fetch outstanding (the unreachable / dead-pane
         // latch the review flagged): abandon clears it too.
         let mut refetching = Scrollback::Windowed {
-            window: window(15, 0, 10, 15),
+            window: window(15, 0, 10, 15).into(),
             offset: 0,
             viewport_rows: VR,
             refetching: true,

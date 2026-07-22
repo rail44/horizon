@@ -134,6 +134,11 @@ struct PaintMetrics {
     line_height: Pixels,
 }
 
+struct PaintCaches {
+    live: RefCell<ShapedLineCache>,
+    scrollback: RefCell<ShapedLineCache>,
+}
+
 pub(crate) struct TerminalView {
     // The pane's session — owned by the shell's session store, not this
     // view, so a closed pane detaches rather than terminates.
@@ -143,10 +148,11 @@ pub(crate) struct TerminalView {
     // entity) so bounds-driven resize can be deduped without an update.
     last_size: Rc<Cell<TerminalSize>>,
     metrics: Rc<Cell<Option<PaintMetrics>>>,
-    // Row-keyed memo of shaped lines (see `shape_cache`), shared with the
-    // paint closure the same way as `last_size`/`metrics`; `RefCell`
-    // because the cache is a real struct, not a `Copy` value.
-    shape_cache: Rc<RefCell<ShapedLineCache>>,
+    // Row-keyed memos of shaped lines (see `shape_cache`), shared with the
+    // paint closure the same way as `last_size`/`metrics`. Live rows use
+    // viewport generations; the held scrollback window uses its immutable
+    // window-row indices, so moving by one row shapes only the exposed edge.
+    paint_caches: Rc<PaintCaches>,
     // IME preedit — client-side only, never sent to the PTY. The commit
     // path (replace_text_in_range) writes raw UTF-8 bytes instead.
     ime_marked_text: Option<String>,
@@ -193,7 +199,10 @@ impl TerminalView {
                 pixel_height: 0,
             })),
             metrics: Rc::new(Cell::new(None)),
-            shape_cache: Rc::new(RefCell::new(ShapedLineCache::new())),
+            paint_caches: Rc::new(PaintCaches {
+                live: RefCell::new(ShapedLineCache::new()),
+                scrollback: RefCell::new(ShapedLineCache::new()),
+            }),
             ime_marked_text: None,
             ime_commit_guard: ImeCommitGuard::default(),
             key_text_dedup: KeyTextDedup::default(),
@@ -756,7 +765,7 @@ impl Render for TerminalView {
         let entity = cx.entity();
         let last_size = self.last_size.clone();
         let metrics = self.metrics.clone();
-        let shape_cache = self.shape_cache.clone();
+        let paint_caches = self.paint_caches.clone();
         let focus_handle = self.focus_handle.clone();
         let (status, status_color) = self.status_line(cx);
         fn on_down(
@@ -814,7 +823,7 @@ impl Render for TerminalView {
                                 &entity,
                                 &last_size,
                                 &metrics,
-                                &shape_cache,
+                                &paint_caches,
                                 window,
                                 cx,
                             );
@@ -848,11 +857,14 @@ impl Render for TerminalView {
 /// scrolled-back history view does not carry. Shaping is fresh per row rather
 /// than through the row-keyed cache: that cache is keyed by viewport row plus
 /// live-frame generation, neither of which tracks window content, and a scroll
-/// gesture is user-paced, so reshaping one viewport per tick is well within
-/// budget — exactly an all-rows-changed live frame's cost.
+/// row index is stable for the lifetime of one held window, so its shaped
+/// artifacts are cached exactly like live rows. A one-row scroll normally
+/// hits for every overlapping row and shapes only the newly exposed edge.
 #[allow(clippy::too_many_arguments)]
 fn paint_scrollback_window(
     lines: &[horizon_terminal_core::TerminalLine],
+    first_window_row: usize,
+    generation: u64,
     bounds: Bounds<Pixels>,
     rows: usize,
     palette_overrides: &[(u16, [u8; 3])],
@@ -862,6 +874,7 @@ fn paint_scrollback_window(
     cell_width: Pixels,
     line_height: Pixels,
     text_system: &WindowTextSystem,
+    shape_cache: &mut ShapedLineCache,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -890,15 +903,18 @@ fn paint_scrollback_window(
             }
         }
 
-        let items = shape_row_items(
-            line,
-            palette_overrides,
-            font,
-            font_size,
-            cell_width,
-            text_system,
-        );
-        paint_row_items(&items, row_origin, cell_width, window, cx);
+        let window_row = first_window_row + row;
+        let items = shape_cache.get_or_shape(window_row, generation, || {
+            shape_row_items(
+                line,
+                palette_overrides,
+                font,
+                font_size,
+                cell_width,
+                text_system,
+            )
+        });
+        paint_row_items(items, row_origin, cell_width, window, cx);
     }
 }
 
@@ -907,7 +923,7 @@ fn paint_terminal(
     entity: &Entity<TerminalView>,
     last_size: &Rc<Cell<TerminalSize>>,
     metrics: &Rc<Cell<Option<PaintMetrics>>>,
-    shape_cache: &RefCell<ShapedLineCache>,
+    paint_caches: &PaintCaches,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -965,11 +981,23 @@ fn paint_terminal(
     // window and repaints from it with zero IPC. History only — no cursor,
     // selection, or IME preedit (all live-viewport concepts; alacritty hides
     // the cursor while scrolled back too). The live-frame row-generation shape
-    // cache does not apply (its keys track the live frame, not window content),
-    // so `paint_scrollback_window` shapes fresh — cheap at gesture cadence.
-    if let Some(lines) = scrollback_lines {
+    // The held window is immutable and Arc-backed. Its own cache is indexed
+    // by row in that window (not viewport row), so scrolling shifts paint
+    // origins without invalidating overlapping shaped rows.
+    if let Some(scrollback) = scrollback_lines {
+        let mut cache = paint_caches.scrollback.borrow_mut();
+        cache.begin_frame(
+            CacheEpoch {
+                theme: theme::terminal_color_scheme(),
+                palette_overrides: frame.palette_overrides.clone(),
+            },
+            scrollback.window.lines.len(),
+        );
+        let lines = &scrollback.window.lines[scrollback.range.clone()];
         paint_scrollback_window(
-            &lines,
+            lines,
+            scrollback.range.start,
+            scrollback.generation,
             bounds,
             size.rows as usize,
             &frame.palette_overrides,
@@ -979,9 +1007,13 @@ fn paint_terminal(
             cell_width,
             line_height,
             &text_system,
+            &mut cache,
             window,
             cx,
         );
+        if let Some(trace) = cache.trace_line() {
+            input_trace!("scrollback-{trace}");
+        }
         return;
     }
 
@@ -991,7 +1023,7 @@ fn paint_terminal(
     // only changed rows walk their spans and shape again. The epoch
     // compare clears everything when resolved colors moved out from under
     // the cached runs (theme reload, OSC palette override).
-    let mut cache = shape_cache.borrow_mut();
+    let mut cache = paint_caches.live.borrow_mut();
     cache.begin_frame(
         CacheEpoch {
             theme: theme::terminal_color_scheme(),

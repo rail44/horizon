@@ -234,6 +234,25 @@ mod tests {
     }
 
     #[test]
+    fn stable_window_indices_reuse_overlapping_rows_after_a_scroll() {
+        let mut cache = ShapedLineCache::new();
+        cache.begin_frame(epoch(), 6);
+
+        // First viewport: window rows 1, 2, 3.
+        for row in 1..4 {
+            cache.get_or_shape(row, 11, || items(row));
+        }
+        assert_eq!((cache.hits, cache.misses), (0, 3));
+
+        // Scroll down by one: rows 2 and 3 retain their window identity;
+        // only the newly exposed row 4 needs shaping.
+        for row in 2..5 {
+            cache.get_or_shape(row, 11, || items(row));
+        }
+        assert_eq!((cache.hits, cache.misses), (2, 4));
+    }
+
+    #[test]
     fn an_unchanged_row_beside_a_changed_one_still_hits() {
         let mut cache = ShapedLineCache::new();
         cache.begin_frame(epoch(), 2);

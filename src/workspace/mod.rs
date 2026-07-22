@@ -36,6 +36,7 @@ use std::collections::HashMap;
 
 use gpui::*;
 use gpui_component::list::ListState;
+use gpui_component::StyledExt as _;
 use horizon_workspace::commands::CommandId;
 use horizon_workspace::{PaneId, PaneKind, SessionId, Workspace, WORKSPACE_STATE_VERSION};
 
@@ -196,10 +197,18 @@ impl PaneView {
     }
 
     fn element(&self) -> AnyElement {
+        // A pane has definite bounds from the layout tree, so make that
+        // boundary explicit to GPUI. Without `cached`, rebuilding one pane's
+        // frame (terminal scroll, agent streaming, cursor blink, ...) walks
+        // every sibling pane's Render tree as part of the same window frame.
+        // This is the same boundary Zed's pane group uses: a pane rerenders
+        // when its own entity is notified or its assigned bounds/text style
+        // changes, not merely because a sibling made the window dirty.
+        let style = || StyleRefinement::default().v_flex().size_full();
         match self {
-            PaneView::Terminal(view) => view.clone().into_any_element(),
-            PaneView::Agent(view) => view.clone().into_any_element(),
-            PaneView::ThemeSettings(view) => view.clone().into_any_element(),
+            PaneView::Terminal(view) => view.clone().cached(style()).into_any_element(),
+            PaneView::Agent(view) => view.clone().cached(style()).into_any_element(),
+            PaneView::ThemeSettings(view) => view.clone().cached(style()).into_any_element(),
         }
     }
 }
