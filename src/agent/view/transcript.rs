@@ -1,9 +1,11 @@
 //! The transcript body: per-item rendering (`render_item`, its orphan
-//! tool-call fallback), the turn/burst walk (`render_turn`), the
+//! tool-call fallback), virtual transcript-row projection, the
 //! receipt line and its expanded per-call chip (`render_receipt`,
 //! `render_receipt_chip`), the in-progress burst's running card
 //! (`render_running_card`), and the session-wide Changes overview bar
 //! (`render_changes_bar`, `render_changes_list`).
+
+use std::ops::Range;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -21,12 +23,202 @@ use crate::workspace::RunCommand;
 
 use super::AgentView;
 
+/// One independently measured transcript row. Keeping only frame indices and
+/// owned presentation metadata lets GPUI's variable-height list construct the
+/// visible rows on demand without cloning the full frame or building every old
+/// turn during a scroll frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum TranscriptRow {
+    Item {
+        turn: Range<usize>,
+        index: usize,
+    },
+    Burst {
+        items: Range<usize>,
+        receipt_key: usize,
+        presentation: BurstPresentation,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum BurstPresentation {
+    Running,
+    Intermediate,
+    Final(turns::TurnEnd),
+}
+
+/// Project the append-oriented frame into visual rows. This is the descriptor
+/// twin of the former eager `render_turn` walk: burst folding and item
+/// visibility are identical, but no GPUI elements are constructed here.
+pub(super) fn build_transcript_rows(
+    items: &[AgentFrameItem],
+) -> (Vec<TranscriptRow>, Option<usize>) {
+    let mut rows = Vec::new();
+    let mut latest_user_row = None;
+
+    for span in turns::group_into_turns(items) {
+        let turn_items = &items[span.start..span.end];
+        let first_row = rows.len();
+        let bursts = turns::segment_bursts(turn_items);
+        let last_burst_index = bursts.len().checked_sub(1);
+        let mut burst_cursor = 0usize;
+        let mut index = 0usize;
+
+        while index < turn_items.len() {
+            if let Some(burst) = bursts.get(burst_cursor) {
+                if burst.start == index {
+                    let is_final = Some(burst_cursor) == last_burst_index;
+                    let presentation = match (&span.ended, is_final, burst.closed) {
+                        (Some(end), true, _) => BurstPresentation::Final(end.clone()),
+                        (_, _, true) => BurstPresentation::Intermediate,
+                        _ => BurstPresentation::Running,
+                    };
+                    rows.push(TranscriptRow::Burst {
+                        items: span.start + burst.start..span.start + burst.end,
+                        receipt_key: span.start + burst.start,
+                        presentation,
+                    });
+                    index = burst.end;
+                    burst_cursor += 1;
+                    continue;
+                }
+            }
+
+            let item = &turn_items[index];
+            let visible = matches!(
+                item,
+                AgentFrameItem::Message(_)
+                    | AgentFrameItem::AssistantTextDelta(_)
+                    | AgentFrameItem::Error(_)
+                    | AgentFrameItem::Exited(_)
+            ) || matches!(item, AgentFrameItem::ReasoningDelta(_) if span.ended.is_none())
+                || matches!(
+                    item,
+                    AgentFrameItem::ApprovalRequested(request)
+                        if span.ended.is_some()
+                            && turns::is_approval_still_pending(turn_items, &request.call_id)
+                );
+            if visible {
+                rows.push(TranscriptRow::Item {
+                    turn: span.start..span.end,
+                    index: span.start + index,
+                });
+            }
+            index += 1;
+        }
+
+        if turns::contains_user_message(turn_items) && rows.len() > first_row {
+            // Keep the prior affordance's turn-level anchor for a user
+            // interjection absorbed inside a tool burst.
+            latest_user_row = Some(first_row);
+        }
+    }
+
+    (rows, latest_user_row)
+}
+
 impl AgentView {
+    /// Reconcile the intrusive variable-height list with the latest folded
+    /// frame. Stable prefix rows retain their measured heights; only the
+    /// changed append tail is spliced. A descriptor-stable streaming update
+    /// remeasures the last row because its Markdown/tool content may have
+    /// grown in place.
+    pub(super) fn sync_transcript_rows(&mut self, cx: &mut Context<Self>) {
+        let (next_rows, latest_user_row) = {
+            let session = self.session.read(cx);
+            let rows = build_transcript_rows(&session.frame.items);
+            let calls = turns::build_tool_call_views(&session.frame.items);
+            self.session_changes = turns::aggregate_changes(&calls);
+            rows
+        };
+        let stable_prefix = self
+            .transcript_rows
+            .iter()
+            .zip(&next_rows)
+            .take_while(|(old, new)| old == new)
+            .count();
+
+        if stable_prefix < self.transcript_rows.len() || stable_prefix < next_rows.len() {
+            self.transcript_list.splice(
+                stable_prefix..self.transcript_rows.len(),
+                next_rows.len() - stable_prefix,
+            );
+        } else if !next_rows.is_empty() {
+            let last = next_rows.len() - 1;
+            self.transcript_list.remeasure_items(last..last + 1);
+        }
+
+        self.transcript_rows = next_rows;
+        self.latest_user_row = latest_user_row;
+    }
+
+    /// Construct one visible list row on demand. The session frame stays in
+    /// the model entity; only the selected descriptor and its referenced
+    /// slices participate in this frame's Markdown/tool rendering.
+    pub(super) fn render_transcript_row(
+        &mut self,
+        row_index: usize,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(row) = self.transcript_rows.get(row_index).cloned() else {
+            return Empty.into_any_element();
+        };
+        let element = match row {
+            TranscriptRow::Item { turn, index } => {
+                let turn_start = turn.start;
+                let turn_items = {
+                    let session = self.session.read(cx);
+                    session.frame.items.get(turn).map(<[_]>::to_vec)
+                };
+                let Some(turn_items) = turn_items else {
+                    return Empty.into_any_element();
+                };
+                let Some(item) = turn_items.get(index.saturating_sub(turn_start)) else {
+                    return Empty.into_any_element();
+                };
+                self.render_item(&turn_items, index, item, cx)
+                    .unwrap_or_else(|| Empty.into_any_element())
+            }
+            TranscriptRow::Burst {
+                items,
+                receipt_key,
+                presentation,
+            } => {
+                let items = {
+                    let session = self.session.read(cx);
+                    session.frame.items.get(items).map(<[_]>::to_vec)
+                };
+                let Some(items) = items else {
+                    return Empty.into_any_element();
+                };
+                match presentation {
+                    BurstPresentation::Running => self.render_running_card(&items, cx),
+                    BurstPresentation::Intermediate => self.render_receipt(
+                        receipt_key,
+                        &items,
+                        turns::ReceiptTail::Intermediate,
+                        cx,
+                    ),
+                    BurstPresentation::Final(end) => self.render_receipt(
+                        receipt_key,
+                        &items,
+                        turns::ReceiptTail::Final(&end),
+                        cx,
+                    ),
+                }
+            }
+        };
+
+        div().px_2().pb_2().child(element).into_any_element()
+    }
+
     /// Toggles a completed turn's receipt expansion (decision 3's `▸`/`▾`).
     fn toggle_receipt(&mut self, receipt_key: usize, cx: &mut Context<Self>) {
         if !self.expanded_receipts.remove(&receipt_key) {
             self.expanded_receipts.insert(receipt_key);
         }
+        self.transcript_list.remeasure();
         cx.notify();
     }
 
@@ -37,7 +229,7 @@ impl AgentView {
     }
 
     /// Renders one item outside its normal turn/burst/receipt grouping --
-    /// either as part of `render_turn`'s per-item walk (`Message`/
+    /// either as one projected virtual row (`Message`/
     /// `AssistantTextDelta`/`Error`/`Exited`, plus the defensive
     /// already-ended-turn-with-a-dangling-approval case), or, defensively,
     /// an item that has genuinely ended up outside every turn span at all
@@ -290,144 +482,6 @@ impl AgentView {
         }
     }
 
-    /// Renders one turn segment as a chronological walk over its items
-    /// (round 5, owner decision 2026-07-13, "monotone burst splitting" --
-    /// see `docs/agent-output-ui-amendment.md`'s post-review note):
-    /// `turns::segment_bursts` splits the turn's tool activity into
-    /// [`turns::Burst`]s, and this walk renders each burst's own
-    /// receipt/card in place of its item range, with every other item
-    /// (the opening user message, any text between bursts, an
-    /// interjected message, `Error`/`Exited`) rendered individually via
-    /// the existing per-item dispatch -- so the visible order is exactly
-    /// chronological: user message, burst 1's receipt, the text that
-    /// followed it, burst 2's receipt (if any), and so on. A burst
-    /// renders as the running card only while it's the turn's *last* one
-    /// and still open (unfinished tools, or no closing text yet) --
-    /// every other burst, including a since-closed last one on a
-    /// still-running turn, renders as a receipt: once closed, a burst
-    /// never reopens into a card again, eliminating round 2's
-    /// provisional-receipt flip-back entirely. Only the turn's actual
-    /// final burst (the last one, once `TurnEnded` folds) carries the
-    /// end status/elapsed/model; every other receipt is `Intermediate`
-    /// (prose + failed-call chips only -- the contract has no per-burst
-    /// timing).
-    pub(super) fn render_turn(
-        &self,
-        base_index: usize,
-        items: &[AgentFrameItem],
-        ended: Option<&turns::TurnEnd>,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let bursts = turns::segment_bursts(items);
-        let last_burst_index = bursts.len().checked_sub(1);
-
-        let mut blocks: Vec<AnyElement> = Vec::new();
-        let mut burst_cursor = 0usize;
-        let mut index = 0usize;
-        while index < items.len() {
-            if let Some(burst) = bursts.get(burst_cursor) {
-                if burst.start == index {
-                    let burst_items = &items[burst.start..burst.end];
-                    // Extends the existing `span.start` keying
-                    // convention (`group_into_turns`): a burst's own
-                    // start index is stable across re-renders the same
-                    // way a turn's is, so keying off it here carries
-                    // expansion state the same way.
-                    let receipt_key = base_index + burst.start;
-                    let is_final_burst = Some(burst_cursor) == last_burst_index;
-                    match (ended, is_final_burst) {
-                        (Some(end), true) => blocks.push(self.render_receipt(
-                            receipt_key,
-                            burst_items,
-                            turns::ReceiptTail::Final(end),
-                            cx,
-                        )),
-                        _ if burst.closed => blocks.push(self.render_receipt(
-                            receipt_key,
-                            burst_items,
-                            turns::ReceiptTail::Intermediate,
-                            cx,
-                        )),
-                        _ => blocks.push(self.render_running_card(burst_items, cx)),
-                    }
-                    index = burst.end;
-                    burst_cursor += 1;
-                    continue;
-                }
-            }
-            let item = &items[index];
-            match item {
-                AgentFrameItem::Message(_)
-                | AgentFrameItem::AssistantTextDelta(_)
-                | AgentFrameItem::Error(_)
-                | AgentFrameItem::Exited(_) => {
-                    if let Some(el) = self.render_item(items, base_index + index, item, cx) {
-                        blocks.push(el);
-                    }
-                }
-                // Closes the un-instructed deviation from base decision 5
-                // (owner requirement 2026-07-13): a `ReasoningDelta` that
-                // falls outside every burst's own absorbed range (before
-                // the first burst, between two of them, after the last
-                // one, or in an all-prose turn with no bursts at all)
-                // renders in its actual chronological position -- exactly
-                // where this per-item walk encounters it, so it naturally
-                // lands before/after the neighboring burst's receipt the
-                // same way `Message`/`AssistantTextDelta` already do --
-                // for as long as the turn is still running
-                // (`turns::thinking_visible_outside_burst`). A reasoning
-                // item that instead falls *inside* a burst's range (a
-                // "stray reasoning delta" between two tool-related items,
-                // per `segment_bursts`'s own doc comment) never reaches
-                // this arm at all -- it's structurally absorbed into that
-                // burst's `render_running_card`/`render_receipt` call and
-                // stays invisible, unchanged. Once the turn ends, this
-                // arm stops firing and the item goes back to invisible
-                // too -- decision 1's "thinking folds into the receipt on
-                // completion", the same fold the burst-absorbed case
-                // already has.
-                AgentFrameItem::ReasoningDelta(_)
-                    if turns::thinking_visible_outside_burst(ended) =>
-                {
-                    if let Some(el) = self.render_item(items, base_index + index, item, cx) {
-                        blocks.push(el);
-                    }
-                }
-                // The running turn renders its approval block as its own
-                // row inside the card (`render_running_card`). A completed
-                // turn's own approvals have all resolved by the time
-                // `TurnEnded` folds (in the normal case) -- their resolved
-                // tool call already shows up as a receipt chip, so
-                // re-rendering the answered box here would leave it
-                // visible forever (the owner-reported fold bug). Only the
-                // shouldn't-happen case -- a turn that ended (`Halted`/
-                // `Cancelled`) with a request still genuinely unresolved --
-                // still renders it (`turns::is_approval_still_pending`).
-                // In practice every `ApprovalRequested` item is
-                // tool-related, so it's always inside some burst's own
-                // range above -- this arm is kept as the same defensive
-                // fallback it always was, not something the burst walk
-                // is expected to reach.
-                AgentFrameItem::ApprovalRequested(request)
-                    if ended.is_some()
-                        && turns::is_approval_still_pending(items, &request.call_id) =>
-                {
-                    if let Some(el) = self.render_item(items, base_index + index, item, cx) {
-                        blocks.push(el);
-                    }
-                }
-                _ => {}
-            }
-            index += 1;
-        }
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .children(blocks)
-            .into_any_element()
-    }
-
     /// One burst's one-line receipt (decision 1, aggregated per owner
     /// feedback 2026-07-13 -- see `docs/agent-output-ui-amendment.md`'s
     /// post-review note): the `▸`/`▾` expansion affordance
@@ -446,7 +500,7 @@ impl AgentView {
     /// row list (decision 3) renders beneath, each row individually
     /// expandable in turn (`render_expandable_tool_call_row`) --
     /// unaggregated, exactly as built for stage D.
-    fn render_receipt(
+    pub(super) fn render_receipt(
         &self,
         receipt_key: usize,
         items: &[AgentFrameItem],
@@ -652,7 +706,7 @@ impl AgentView {
     /// The in-progress *burst*'s card (decision 2; mock 2a/3b/7a's "live
     /// card"; round 5 owner decision 2026-07-13 scopes this to one
     /// `turns::Burst`'s own item range rather than the whole turn's --
-    /// see `render_turn`'s doc comment): a thin accent-tinted border
+    /// see [`build_transcript_rows`]): a thin accent-tinted border
     /// around the whole card (the mock's border is a muted echo of the
     /// accent hue, not a full-saturation perimeter — see `accent_tint`),
     /// a faint accent-tinted fill scoped to the header strip only, and a
@@ -676,7 +730,11 @@ impl AgentView {
     /// with over a dozen stacked yellow boxes and no visible link back to
     /// the call that requested each one). There is no longer any
     /// `ApprovalRequested` rendering path inside the running card at all.
-    fn render_running_card(&self, items: &[AgentFrameItem], cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_running_card(
+        &self,
+        items: &[AgentFrameItem],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let tool_calls = turns::build_tool_call_views(items);
         let (finished, total) = turns::progress(&tool_calls);
         let elapsed = self
@@ -774,12 +832,10 @@ impl AgentView {
     /// call's receipt is a possible future hook, not built here.
     pub(super) fn render_changes_bar(
         &self,
-        frame_items: &[AgentFrameItem],
+        changes: &[turns::FileChange],
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let tool_calls = turns::build_tool_call_views(frame_items);
-        let changes = turns::aggregate_changes(&tool_calls);
-        let summary = turns::changes_summary_text(&changes)?;
+        let summary = turns::changes_summary_text(changes)?;
 
         let expanded = self.changes_expanded;
         let arrow = if expanded { "▾" } else { "▸" };
@@ -812,7 +868,7 @@ impl AgentView {
             .px_2()
             .child(row.into_any_element());
         if expanded {
-            wrapper = wrapper.child(self.render_changes_list(&changes));
+            wrapper = wrapper.child(self.render_changes_list(changes));
         }
         Some(wrapper.into_any_element())
     }
@@ -1004,5 +1060,67 @@ fn running_state_label(state: SessionState) -> &'static str {
         SessionState::ToolRunning => "tool running…",
         SessionState::WaitingForApproval => "waiting for approval",
         _ => "running…",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use horizon_agent::contract::TurnEndReason;
+    use horizon_agent::frame::AgentFrameItem;
+
+    use super::super::super::turns::test_support::{
+        assistant_delta, tool_finished, tool_requested, tool_started, user_message,
+    };
+    use super::{build_transcript_rows, BurstPresentation, TranscriptRow};
+
+    fn turn_end() -> AgentFrameItem {
+        AgentFrameItem::TurnEnded {
+            reason: TurnEndReason::Completed,
+            model: Some("test-model".to_string()),
+            elapsed: Duration::from_secs(2),
+        }
+    }
+
+    #[test]
+    fn projection_preserves_message_burst_receipt_and_prose_order() {
+        let items = vec![
+            user_message("fix it"),
+            tool_requested("a", "fs.read", serde_json::json!({"path":"a.rs"})),
+            tool_started("a"),
+            tool_finished("a", serde_json::json!({"contents":"..."})),
+            assistant_delta("done"),
+            turn_end(),
+            user_message("thanks"),
+            assistant_delta("welcome"),
+            turn_end(),
+        ];
+
+        let (rows, latest_user) = build_transcript_rows(&items);
+        assert_eq!(latest_user, Some(3));
+        assert!(matches!(&rows[0], TranscriptRow::Item { index: 0, .. }));
+        assert!(matches!(
+            &rows[1],
+            TranscriptRow::Burst {
+                items,
+                receipt_key: 1,
+                presentation: BurstPresentation::Final(_),
+            } if items == &(1..4)
+        ));
+        assert!(matches!(&rows[2], TranscriptRow::Item { index: 4, .. }));
+        assert!(matches!(&rows[3], TranscriptRow::Item { index: 6, .. }));
+        assert!(matches!(&rows[4], TranscriptRow::Item { index: 7, .. }));
+        assert_eq!(rows.len(), 5, "TurnEnded markers are not visual rows");
+    }
+
+    #[test]
+    fn streaming_text_keeps_its_descriptor_stable_for_targeted_remeasurement() {
+        let before = vec![user_message("q"), assistant_delta("a")];
+        let after = vec![user_message("q"), assistant_delta("a longer answer")];
+        assert_eq!(
+            build_transcript_rows(&before).0,
+            build_transcript_rows(&after).0
+        );
     }
 }

@@ -13,6 +13,21 @@
 > `profile` query returned "unknown query" — and the motive for
 > reimplementing it (measuring Floem's reactive over-tracking) is moot
 > now that the Floem shell is gone. Removed rather than rebuilt.
+>
+> **2026-07-22 GPUI correction:** retiring Floem removed its fine-grained
+> over-tracking mechanism, but not the broader invariant that work must be
+> bounded by what is visible. GPUI re-renders an entity when it is notified;
+> Horizon's Agent entity eagerly cloned the full frame and constructed every
+> historical transcript element on each scroll frame. The replacement projects
+> the frame on session updates into compact message/burst/receipt descriptors
+> and feeds GPUI's variable-height `ListState`; scrolling now constructs only
+> viewport-plus-overdraw rows. Stable descriptor prefixes retain measurements,
+> streaming remeasures only the mutable tail, and the session-wide Changes
+> aggregate moved off `render` onto session updates. A fixed-bounds
+> `Entity::cached` boundary at every pane also prevents one pane's notification
+> from rebuilding its split siblings. The old Floem-specific signal bridge and
+> lint remain superseded; the enduring architectural backstop is the virtual
+> row boundary plus projection tests, not a reactive-graph rule.
 
 # Agent UI Performance — Design
 

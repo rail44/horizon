@@ -860,6 +860,20 @@ deviation rather than asking for a mock update):
   doc's "Known limitation: window-trim scroll drift" is moot in GPUI, as
   expected — there is no 200-block trailing window here at all (the
   GPUI shell renders every item; see this doc's own current-state note).
+- **Variable-height transcript list supersedes the eager scroll container
+  (2026-07-22).** The explicit `FollowState`/`ScrollHandle` implementation
+  above is retained as history but no longer exists in source. The transcript
+  is now projected into one descriptor per independently visible message,
+  reasoning row, tool burst, or receipt and rendered by GPUI's variable-height
+  `ListState` with tail-follow enabled. User scroll naturally disengages
+  follow; returning to the end, the pill, and composer send re-engage it through
+  the list API. Session updates splice only the changed descriptor tail (or
+  remeasure the last descriptor for in-place streaming), while a scroll frame
+  builds only viewport-plus-overdraw rows. This also makes “↑ latest you” a
+  direct list-row anchor instead of the former whole-turn approximation.
+  Session-wide Changes aggregation is cached on session updates, and composer
+  placeholder updates cross the child-entity boundary only when in-flight state
+  changes, eliminating two remaining whole-render side effects.
 - **Changes overview shipped (2026-07-13, base decision 9 / old slice
   5 — never ported from the Floem shell).** `turns::aggregate_changes`
   walks the *whole session's* `build_tool_call_views` output (every

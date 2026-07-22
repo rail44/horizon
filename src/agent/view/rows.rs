@@ -23,6 +23,7 @@ impl AgentView {
         if !self.expanded_rows.remove(&call_id) {
             self.expanded_rows.insert(call_id);
         }
+        self.transcript_list.remeasure();
         cx.notify();
     }
 

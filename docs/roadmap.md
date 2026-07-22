@@ -343,6 +343,11 @@ lands:
 
 ## Shipped (index — details in the named docs and git history)
 
+- 2026-07-22 Pane/scroll performance boundary: cached fixed-bounds pane
+  entities, terminal scroll-window row sharing/shaping cache plus directional
+  prefetch, and variable-height Agent transcript virtualization
+  (`docs/agent-ui-performance-design.md`,
+  `docs/terminal-scrollback-design.md`)
 - 2026-07-22 Native GPUI platform restored on every OS; custom winit platform
   retired so event-loop, IME, renderer presentation, and frame scheduling stay
   under one maintained backend (`docs/native-gpui-platform-design.md`)

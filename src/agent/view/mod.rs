@@ -11,7 +11,9 @@
 //! accent-bordered card (mock 2a/3b/7a) for that burst in place of a
 //! receipt. Assistant text renders through gpui-component's `TextView`
 //! Markdown element (reuse over port), other items stay plain text. The
-//! virtualized-List upgrade is recorded for the M5 polish pass.
+//! The transcript is projected into independently measured visual rows and
+//! rendered through GPUI's variable-height list, so scrolling work is bounded
+//! by the viewport rather than accumulated session history.
 //!
 //! Split by responsibility, mirroring `src/theme/` and `src/agent/turns/`:
 //! `composer` (composer interaction), `scroll` (follow/scroll
@@ -35,12 +37,11 @@ use gpui_component::input::{InputEvent, InputState};
 use horizon_agent::contract::{SessionState, ToolCallId};
 use horizon_agent::frame::state_indicates_turn_in_flight;
 
-use super::follow::FollowState;
 use super::session::AgentSession;
 use super::turns;
 use crate::theme;
 use scroll::RunningTurnClock;
-use transcript::render_stop_button;
+use transcript::{build_transcript_rows, render_stop_button, TranscriptRow};
 
 /// Row cap for the composer's auto-grow input (`InputState::auto_grow`):
 /// one text row when empty (owner feedback 2026-07-16 -- see
@@ -53,15 +54,15 @@ pub(crate) struct AgentView {
     session: Entity<AgentSession>,
     composer: Entity<InputState>,
     focus_handle: FocusHandle,
-    transcript_scroll: ScrollHandle,
-    /// Follow-scroll state machine (`docs/agent-output-ui-design.md`
-    /// decision 7; see `follow`'s module doc for the detection signal
-    /// and why the two edges are decided together). Synced from the
-    /// transcript's own `on_scroll_wheel` handler
-    /// (`Self::on_transcript_wheel_scroll`); read by the session-change
-    /// observer to decide whether to auto-snap, and by `Render::render`
-    /// to decide whether the return pill shows at all.
-    follow: FollowState,
+    transcript_list: ListState,
+    transcript_rows: Vec<TranscriptRow>,
+    latest_user_row: Option<usize>,
+    session_changes: Vec<turns::FileChange>,
+    /// Last placeholder state applied to the child input entity. Calling
+    /// `set_placeholder` unconditionally from `render` notifies that entity
+    /// and can schedule another window render, so only transitions cross the
+    /// entity boundary.
+    composer_turn_in_flight: bool,
     running_turn_clock: Option<RunningTurnClock>,
     /// Stage D: which turns' receipts are expanded, keyed by the turn's
     /// own start index (`TurnSpan::start`, stable for the turn's whole
@@ -118,16 +119,18 @@ impl AgentView {
                 .auto_grow(1, COMPOSER_MAX_ROWS)
                 .submit_on_enter(true)
         });
-        // Follow-scroll (`docs/agent-output-ui-design.md` decision 7, the
-        // Floem shell's `follow_scroll` parity, rebuilt as an explicit
-        // `FollowState` machine -- see `follow`'s module doc): while
-        // `Sticky`, new content keeps the view pinned to the bottom; once
-        // `Detached` (via `on_transcript_wheel_scroll`), updates leave the
-        // user alone. This check runs *before* the re-render, on the
-        // pre-update geometry -- `scroll_to_bottom` only needs to fire
-        // once per content growth while `Sticky`, not be recomputed from
-        // post-growth geometry (which would need the *old* max-offset to
-        // judge "was this already at the bottom", not the new one).
+        let (initial_rows, latest_user_row, session_changes) = {
+            let session = session.read(cx);
+            let (rows, latest_user) = build_transcript_rows(&session.frame.items);
+            let calls = turns::build_tool_call_views(&session.frame.items);
+            (rows, latest_user, turns::aggregate_changes(&calls))
+        };
+        let transcript_list = ListState::new(initial_rows.len(), ListAlignment::Top, px(1024.0));
+        transcript_list.set_follow_mode(FollowMode::Tail);
+
+        // The list owns measured-height and follow-tail state. Session
+        // changes only reconcile compact row descriptors; GPUI constructs
+        // visible elements later through `render_transcript_row`.
         let mut subscriptions = vec![cx.observe(&session, |view: &mut AgentView, _, cx| {
             view.sync_running_turn_clock(cx);
             // Stage E, decision 4's "smoothly advance": any approval
@@ -135,9 +138,7 @@ impl AgentView {
             // requested is a frame change, so re-syncing here covers all
             // three non-composer paths alongside the composer's own.
             view.sync_composer_mode(cx);
-            if view.follow == FollowState::Sticky {
-                view.transcript_scroll.scroll_to_bottom();
-            }
+            view.sync_transcript_rows(cx);
             cx.notify();
         })];
         subscriptions.push(cx.subscribe_in(
@@ -211,8 +212,11 @@ impl AgentView {
             session,
             composer,
             focus_handle,
-            transcript_scroll: ScrollHandle::new(),
-            follow: FollowState::default(),
+            transcript_list,
+            transcript_rows: initial_rows,
+            latest_user_row,
+            session_changes,
+            composer_turn_in_flight: false,
             running_turn_clock: None,
             expanded_receipts: HashSet::new(),
             expanded_rows: HashSet::new(),
@@ -263,7 +267,6 @@ impl Focusable for AgentView {
 
 impl Render for AgentView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let frame_items = self.session.read(cx).frame.items.clone();
         let turn_in_flight = state_indicates_turn_in_flight(self.session.read(cx).frame.state);
         // Decision 6's placeholder note: sending from the composer is
         // always next-turn delivery, so the placeholder says so
@@ -272,66 +275,16 @@ impl Render for AgentView {
         // pure text decision, this just applies it to the live
         // `InputState` -- kept minimal since stage E owns the composer's
         // own approval-mode behavior.
-        let placeholder = turns::composer_placeholder(turn_in_flight);
-        self.composer.update(cx, |composer, cx| {
-            composer.set_placeholder(placeholder, window, cx);
-        });
-        let turn_spans = turns::group_into_turns(&frame_items);
-
-        let mut blocks: Vec<AnyElement> = Vec::new();
-        // Decision 7, requirement 3: the rendered block (index into
-        // `blocks`, one element per turn span -- see
-        // `jump_to_latest_user_message`'s doc comment) containing the
-        // latest user message so far, updated in lockstep with `blocks`
-        // itself rather than resolved after the fact, so it stays correct
-        // even across the rare orphan-item fallback path below (which can
-        // desync a turn-span index from a `blocks` index).
-        let mut latest_user_message_block: Option<usize> = None;
-        let mut turn_cursor = 0usize;
-        let mut index = 0usize;
-        while index < frame_items.len() {
-            if let Some(span) = turn_spans.get(turn_cursor) {
-                if span.start == index {
-                    let items = &frame_items[span.start..span.end];
-                    if turns::contains_user_message(items) {
-                        latest_user_message_block = Some(blocks.len());
-                    }
-                    // A dangling span (`ended: None`) always renders
-                    // through `render_turn`, the same as a closed one --
-                    // never gated on the live `turn_in_flight` reading.
-                    // Root-caused 2026-07-13 (see `turns::group_into_turns`'s
-                    // invariant 2 note): the daemon-reported session
-                    // state can genuinely read a non-in-flight value
-                    // (`WaitingForUser`) for an extended real span of
-                    // time while a batch of concurrent tool calls is
-                    // still resolving and a sibling approval is still
-                    // pending -- well before the span's own `TurnEnded`
-                    // arrives. By `group_into_turns`'s invariants, a
-                    // dangling span is always the turn genuinely still
-                    // in progress, so its rendering vocabulary must
-                    // never depend on that live, driftable signal.
-                    blocks.push(self.render_turn(span.start, items, span.ended.as_ref(), cx));
-                    index = span.end;
-                    turn_cursor += 1;
-                    continue;
-                }
-            }
-            // Items outside any turn span -- shouldn't happen for any
-            // legitimate sequence now (`turns::group_into_turns`'s
-            // invariants: every item opens or extends a span), kept as a
-            // last-resort defensive walk for a genuinely unknown future
-            // shape. Render individually, unchanged.
-            if turns::contains_user_message(std::slice::from_ref(&frame_items[index])) {
-                latest_user_message_block = Some(blocks.len());
-            }
-            if let Some(el) = self.render_item(&frame_items, index, &frame_items[index], cx) {
-                blocks.push(el);
-            }
-            index += 1;
+        if turn_in_flight != self.composer_turn_in_flight {
+            let placeholder = turns::composer_placeholder(turn_in_flight);
+            self.composer.update(cx, |composer, cx| {
+                composer.set_placeholder(placeholder, window, cx);
+            });
+            self.composer_turn_in_flight = turn_in_flight;
         }
 
         let (status, status_color) = self.status_line(cx);
-        let follow = self.follow;
+        let detached = !self.transcript_list.is_following_tail();
         // Decision 9's Changes overview: between the transcript and the
         // composer, not nested inside either -- a session-wide aggregate
         // (every file ever edited/written, not just what's visible in the
@@ -341,7 +294,7 @@ impl Render for AgentView {
         // comment). Computed before the status line's `turn_in_flight`
         // row so both slot between the transcript and the composer in
         // top-to-bottom reading order.
-        let changes_bar = self.render_changes_bar(&frame_items, cx);
+        let changes_bar = self.render_changes_bar(&self.session_changes, cx);
 
         div()
             .size_full()
@@ -355,24 +308,15 @@ impl Render for AgentView {
                     .flex_1()
                     .min_h_0()
                     .child(
-                        div()
-                            .id("agent-transcript")
-                            .track_scroll(&self.transcript_scroll)
-                            .on_scroll_wheel(cx.listener(
-                                |view, event: &ScrollWheelEvent, window, cx| {
-                                    view.on_transcript_wheel_scroll(event, window, cx);
-                                },
-                            ))
-                            .size_full()
-                            .overflow_y_scroll()
-                            .p_2()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .children(blocks),
+                        list(
+                            self.transcript_list.clone(),
+                            cx.processor(Self::render_transcript_row),
+                        )
+                        .size_full()
+                        .pt_2(),
                     )
-                    .when(follow == FollowState::Detached, |this| {
-                        this.child(self.render_follow_pill(latest_user_message_block, cx))
+                    .when(detached, |this| {
+                        this.child(self.render_follow_pill(self.latest_user_row, cx))
                     }),
             )
             .when_some(changes_bar, |this, bar| this.child(bar))

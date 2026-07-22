@@ -7,7 +7,6 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Escape, Input};
 
-use super::super::follow::FollowState;
 use super::super::turns;
 use crate::theme;
 
@@ -56,8 +55,8 @@ impl AgentView {
     /// through `AgentSession::send_user_message`, clears the composer, and
     /// re-pins the transcript to the bottom (sending always re-pins,
     /// wherever the user had scrolled to -- requirement 4 of decision 7's
-    /// GPUI port: composer send always re-enters `Sticky`, explicitly,
-    /// not by way of `follow::on_wheel_scroll`). Shared by the
+    /// GPUI port: composer send always re-enters list tail-follow explicitly.
+    /// Shared by the
     /// `PressEnter` subscription above and the composer's send button
     /// (`render_send_button`, the mock's circular `↑`) -- exactly one send
     /// path, so an empty-composer Enter and an empty-composer button click
@@ -70,8 +69,8 @@ impl AgentView {
         self.session.read(cx).send_user_message(text);
         self.composer
             .update(cx, |composer, cx| composer.set_value("", window, cx));
-        self.follow = FollowState::Sticky;
-        self.transcript_scroll.scroll_to_bottom();
+        self.transcript_list.set_follow_mode(FollowMode::Tail);
+        self.transcript_list.scroll_to_end();
     }
 
     /// The composer area: Horizon's own bordered, rounded container

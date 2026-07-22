@@ -1,6 +1,5 @@
-//! Follow/scroll orchestration: the near-bottom detection
-//! (`at_transcript_bottom`), the transcript's own wheel-scroll signal
-//! (`on_transcript_wheel_scroll`), the return pill's two jump actions
+//! Follow/scroll orchestration: the virtual list's tail-follow state,
+//! the return pill's two jump actions
 //! (`return_to_sticky`, `jump_to_latest_user_message`), the return pill's
 //! own rendering (`render_follow_pill`), and the running-turn elapsed
 //! clock (`RunningTurnClock`, `sync_running_turn_clock`).
@@ -10,7 +9,6 @@ use std::time::Instant;
 use gpui::*;
 use horizon_agent::frame::state_indicates_turn_in_flight;
 
-use super::super::follow::{self, FollowState};
 use super::super::turns;
 use crate::theme;
 
@@ -29,79 +27,24 @@ pub(super) struct RunningTurnClock {
 }
 
 impl AgentView {
-    /// Whether the transcript is scrolled (near) to the bottom — offsets
-    /// grow negative as the view scrolls down, so "at bottom" is an
-    /// offset within a few pixels of `-max_offset`.
-    fn at_transcript_bottom(&self) -> bool {
-        let max = self.transcript_scroll.max_offset().y;
-        max <= px(0.0) || self.transcript_scroll.offset().y <= -(max - px(8.0))
-    }
-
-    /// The transcript's one genuine user-scroll signal (`follow`'s module
-    /// doc explains why a wheel event is the chosen detection signal):
-    /// feeds this gesture's direction, plus the current near-bottom
-    /// reading, to `follow::on_wheel_scroll`.
-    ///
-    /// Ordering note (confirmed against the vendored gpui source,
-    /// `crates/gpui/src/elements/div.rs`): this handler and the div's
-    /// own built-in overflow-scroll listener are both registered as
-    /// Bubble-phase `window.on_mouse_event` closures on the same
-    /// element — ours via `Interactivity::paint_mouse_listeners`, the
-    /// built-in one right after via `paint_scroll_listener` — and
-    /// `Window::dispatch_mouse_event` runs Bubble-phase listeners in
-    /// *reverse* registration order, so the built-in one (registered
-    /// second) actually fires *first* for a live event. By the time this
-    /// closure runs, `at_transcript_bottom()` already reflects this
-    /// exact gesture's own applied offset delta, not a stale pre-scroll
-    /// reading.
-    pub(super) fn on_transcript_wheel_scroll(
-        &mut self,
-        event: &ScrollWheelEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let delta_y = event.delta.pixel_delta(window.line_height()).y;
-        let scrolled_toward_top = delta_y > px(0.0);
-        let at_bottom = self.at_transcript_bottom();
-        let next = follow::on_wheel_scroll(self.follow, scrolled_toward_top, at_bottom);
-        if next != self.follow {
-            self.follow = next;
-            cx.notify();
-        }
-    }
-
-    /// The return pill's "↓ latest" segment (decision 7): re-enters
-    /// `Sticky` explicitly and snaps to the bottom, the same explicit
-    /// re-pin `send_composer_message` performs.
+    /// The return pill's "↓ latest" segment (decision 7): re-enters list
+    /// tail-follow and snaps to the bottom, the same explicit re-pin
+    /// `send_composer_message` performs.
     fn return_to_sticky(&mut self, cx: &mut Context<Self>) {
-        self.follow = FollowState::Sticky;
-        self.transcript_scroll.scroll_to_bottom();
+        self.transcript_list.set_follow_mode(FollowMode::Tail);
+        self.transcript_list.scroll_to_end();
         cx.notify();
     }
 
     /// The return pill's "jump to latest user message" segment (decision
-    /// 7, requirement 3): scrolls `block_index` — the rendered transcript
-    /// block (`Render::render`'s `blocks`, one element per turn span)
-    /// containing the latest user message — to the top of the viewport,
-    /// and leaves `follow` `Detached` (the pill's own affordance, not a
-    /// snap-to-bottom, so re-entering `Sticky` here would immediately
-    /// undo the jump the moment any content changes).
-    ///
-    /// Approximation note: GPUI's `ScrollHandle::scroll_to_top_of_item`
-    /// only anchors to a *direct child* of the tracked scroll container —
-    /// here, a whole turn's rendered block, not a single message element
-    /// — so there is no finer-grained item-anchored scrolling available
-    /// (the Floem shell's `scroll_to_view(ViewId)`, keyed per-block in
-    /// `docs/agent-output-ui-design.md`'s "Known limitation" note, has no
-    /// GPUI equivalent below block granularity). This lands at the top of
-    /// the turn *containing* the latest user message, which is that
-    /// turn's own opening item in the common case — the exception is a
-    /// mid-turn interjection (`turns::group_into_turns`'s invariant 1),
-    /// where this lands one turn-block short of the exact line but still
-    /// at the right turn.
-    fn jump_to_latest_user_message(&mut self, block_index: usize, cx: &mut Context<Self>) {
-        self.transcript_scroll.scroll_to_top_of_item(block_index);
-        self.follow = FollowState::Detached;
+    /// 7, requirement 3): scrolls the row containing the latest user
+    /// message to the viewport top. Scrolling to an in-range item disengages
+    /// GPUI's tail-follow until the user returns to the end.
+    fn jump_to_latest_user_message(&mut self, row_index: usize, cx: &mut Context<Self>) {
+        self.transcript_list.scroll_to(ListOffset {
+            item_ix: row_index,
+            offset_in_item: px(0.0),
+        });
         cx.notify();
     }
 
@@ -153,13 +96,13 @@ impl AgentView {
     /// `render_receipt`'s row uses (subtle border + hover fill, built on
     /// `theme::text_subtle()`) so it reads as an unobtrusive affordance,
     /// not an alert: "↓ latest" always shows (`Self::return_to_sticky`);
-    /// "↑ latest you" only shows when `latest_user_message_block` is
+    /// "↑ latest you" only shows when `latest_user_row` is
     /// `Some` (`Self::jump_to_latest_user_message`) -- there may be no
     /// user message at all yet in a freshly resumed or very short
     /// session.
     pub(super) fn render_follow_pill(
         &self,
-        latest_user_message_block: Option<usize>,
+        latest_user_row: Option<usize>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         // The whole pill sits on `surface_panel` (below), so its label
@@ -199,7 +142,7 @@ impl AgentView {
                     },
                 )),
             );
-        if let Some(block_index) = latest_user_message_block {
+        if let Some(row_index) = latest_user_row {
             pill = pill
                 .child(
                     div()
@@ -210,7 +153,7 @@ impl AgentView {
                 .child(
                     segment("follow-pill-jump", "↑ latest you").on_click(cx.listener(
                         move |view, _, _, cx| {
-                            view.jump_to_latest_user_message(block_index, cx);
+                            view.jump_to_latest_user_message(row_index, cx);
                         },
                     )),
                 );

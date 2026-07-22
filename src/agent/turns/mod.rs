@@ -40,6 +40,7 @@ pub(crate) use tool_call::*;
 // call site elsewhere in the crate (`view.rs`, `session.rs`) keeps
 // working unchanged -- the structural reading itself now lives in
 // `horizon_agent::transcript` (see this module's own doc comment).
+pub(crate) use horizon_agent::transcript::segment_bursts;
 pub(crate) use horizon_agent::transcript::{
     aggregate_changes, aggregate_receipt, build_tool_call_views, cap_lines_head, cap_lines_tail,
     cap_thinking_text, classify, contains_user_message, group_into_turns,
@@ -47,7 +48,6 @@ pub(crate) use horizon_agent::transcript::{
     running_row_expandable, str_field, ApprovalState, DiffLine, DiffLineKind, FileChange,
     ReceiptAggregate, ToolCallKind, ToolCallView, TurnEnd, THINKING_TAIL_LINES,
 };
-pub(crate) use horizon_agent::transcript::{segment_bursts, thinking_visible_outside_burst};
 
 /// `1 {singular}` / `{count} {plural}`. Shared by `receipt::receipt_prose`
 /// and `diff::changes_summary_text` -- kept here rather than in either
