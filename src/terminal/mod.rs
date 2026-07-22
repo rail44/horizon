@@ -28,17 +28,18 @@ pub(crate) use session::TerminalSession;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use horizon_terminal_core::{
     KeyEventKind, TerminalFrame, TerminalMouseButton, TerminalMouseKind, TerminalMouseReport,
-    TerminalSize,
+    TerminalScrollWindow, TerminalSize,
 };
 
 use self::input::{
     cell_from_position, selection_kind_from_clicks, term_key_code, term_modifiers,
-    terminal_mouse_button, terminal_mouse_modifiers, viewport_row_delta, ScrollAccumulator,
+    terminal_mouse_button, terminal_mouse_modifiers, viewport_pixel_delta, ScrollAccumulator,
 };
 use self::shape_cache::{CacheEpoch, RowItem, ShapedLineCache, NO_GENERATION};
 use crate::input_trace::input_trace;
@@ -177,11 +178,14 @@ pub(crate) struct TerminalView {
     // this accumulator preserves terminal-protocol whole-line semantics only
     // where the frontend does not own the viewport.
     scroll_accum: ScrollAccumulator,
-    // GPUI owns history's display position, including the pixel offset within
-    // the first visible terminal row. TerminalSession mirrors it only to
-    // decide when the daemon-backed row window needs replenishing.
+    // GPUI is the sole owner of history's display position, including the
+    // pixel offset within the first visible terminal row.
     scrollback_list: ListState,
     scrollback_generation: u64,
+    scrollback_window: Option<Arc<TerminalScrollWindow>>,
+    // The first native GPUI wheel distance, retained only while the daemon row
+    // window is in flight and then applied to the List once.
+    pending_scroll_pixels: f32,
     _session_observation: Subscription,
 }
 
@@ -210,7 +214,7 @@ impl TerminalView {
             let last_size = last_size.clone();
             scrollback_list.set_scroll_handler(move |_, _, cx| {
                 let top = list.logical_scroll_top();
-                session.read(cx).sync_frontend_scroll_position(
+                session.read(cx).maintain_scrollback_window(
                     top.item_ix,
                     f32::from(top.offset_in_item) / line_height(),
                     last_size.get().rows as usize,
@@ -234,6 +238,8 @@ impl TerminalView {
             scroll_accum: ScrollAccumulator::default(),
             scrollback_list,
             scrollback_generation: 0,
+            scrollback_window: None,
+            pending_scroll_pixels: 0.0,
             _session_observation: observation,
         }
     }
@@ -250,18 +256,54 @@ impl TerminalView {
         let surface = self.session.read(cx).scrollback_surface();
         let Some(surface) = surface else {
             self.scrollback_generation = 0;
+            self.scrollback_window = None;
             return None;
         };
         if surface.generation != self.scrollback_generation {
+            let viewport_rows = self.last_size.get().rows as usize;
+            let position = if let Some(old_window) = self.scrollback_window.as_ref() {
+                let top = self.scrollback_list.logical_scroll_top();
+                let old_position =
+                    top.item_ix as f32 + f32::from(top.offset_in_item) / line_height();
+                let anchor = session::scrollback_anchor(old_window, viewport_rows, old_position);
+                session::scrollback_position(&surface.window, viewport_rows, anchor)
+            } else {
+                surface.window.viewport_offset as f32
+            };
+            let max_top = surface.window.lines.len().saturating_sub(viewport_rows);
+            let (item_ix, fractional_row) = session::split_scrollback_position(position, max_top);
             self.scrollback_list
                 .reset_with_uniform_height(surface.window.lines.len(), px(line_height()));
             self.scrollback_list.scroll_to(ListOffset {
-                item_ix: surface.offset,
-                offset_in_item: px(surface.fractional_row * line_height()),
+                item_ix,
+                offset_in_item: px(fractional_row * line_height()),
             });
             self.scrollback_generation = surface.generation;
+            self.scrollback_window = Some(surface.window.clone());
+
+            if self.pending_scroll_pixels.abs() > f32::EPSILON {
+                let pixels = std::mem::take(&mut self.pending_scroll_pixels);
+                self.apply_scrollback_pixels(pixels, cx);
+            }
         }
         Some(surface)
+    }
+
+    fn maintain_scrollback_window(&self, cx: &App) {
+        let top = self.scrollback_list.logical_scroll_top();
+        self.session.read(cx).maintain_scrollback_window(
+            top.item_ix,
+            f32::from(top.offset_in_item) / line_height(),
+            self.last_size.get().rows as usize,
+        );
+    }
+
+    fn apply_scrollback_pixels(&mut self, pixels: f32, cx: &App) {
+        if !pixels.is_finite() || pixels.abs() <= f32::EPSILON {
+            return;
+        }
+        self.scrollback_list.scroll_by(px(pixels));
+        self.maintain_scrollback_window(cx);
     }
 
     fn cell_at(
@@ -384,16 +426,21 @@ impl TerminalView {
             // flight. Once installed, GPUI's List handles every subsequent
             // event directly.
             self.scroll_accum.reset();
-            let rows = viewport_row_delta(event.delta, line_height());
-            if rows.abs() <= f32::EPSILON {
+            let pixels = viewport_pixel_delta(event.delta);
+            if pixels.abs() <= f32::EPSILON {
                 return;
             }
             let viewport_rows = self.last_size.get().rows as usize;
-            let repaint = self
-                .session
-                .read(cx)
-                .handle_scroll(rows, None, point, viewport_rows);
-            if repaint {
+            let waiting = self.session.read(cx).scrollback_window_pending();
+            let accepted = (pixels > 0.0
+                && (self
+                    .session
+                    .read(cx)
+                    .request_scrollback_window(viewport_rows)
+                    || waiting))
+                || (pixels < 0.0 && waiting);
+            if accepted {
+                self.pending_scroll_pixels = (self.pending_scroll_pixels - pixels).min(0.0);
                 cx.notify();
             }
             return;
@@ -405,12 +452,7 @@ impl TerminalView {
             self.scroll_accum
                 .consume(event.delta, event.touch_phase, line_height())
         {
-            self.session.read(cx).handle_scroll(
-                lines as f32,
-                Some(lines),
-                point,
-                self.last_size.get().rows as usize,
-            );
+            self.session.read(cx).send_scroll(lines, point);
         }
     }
 
@@ -825,6 +867,11 @@ impl Focusable for TerminalView {
 
 impl Render for TerminalView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.sync_scrollback_list(cx).is_none()
+            && !self.session.read(cx).scrollback_window_pending()
+        {
+            self.pending_scroll_pixels = 0.0;
+        }
         let scrollback_surface = self.sync_scrollback_list(cx);
         let history_visible = scrollback_surface.is_some();
         let scrollback_palette = self
@@ -937,8 +984,8 @@ impl Render for TerminalView {
     }
 }
 
-/// Build the terminal history as an ordinary GPUI list. The list owns wheel
-/// handling and the exact pixel offset within its first visible row; the
+/// Build the terminal history as an ordinary GPUI list. The list owns the exact
+/// pixel offset within its first visible row; the
 /// terminal-specific code supplies immutable rows and paints each fixed-height
 /// item with the same cached grid renderer as the live canvas.
 fn scrollback_list_element(

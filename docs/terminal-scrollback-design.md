@@ -13,13 +13,15 @@ to `docs/terminal-protocol-goals.md` (where the frame path is headed),
 row-based, but the frontend viewport is an ordinary GPUI `ListState`. The list
 is the sole display-position owner and retains its native `item_ix +
 offset_in_item` pixel position, so a terminal row may stop partially clipped;
-there is no row snap and no terminal-specific animation clock. The first wheel
-event requests the live-tail window and retains its exact pixel-derived target
-while that reply is in flight. Once installed, both coarse `Lines` input and
-precise `Pixels` input take GPUI's same list path used by the Agent transcript.
-The terminal session mirrors the list position only to decide when to prefetch
-and how to rebase a replacement data window. Alternate-screen and
-mouse-reporting applications still receive discrete terminal wheel input.
+there is no row snap. Once history is visible, the bare GPUI List consumes both
+`Lines` and `Pixels` through the same native handler as the Agent transcript;
+the terminal adds no wheel handler, delta branching, or animation clock. The
+first wheel event requests the live-tail window and its distance is applied
+once when the list appears. The terminal session does not retain a second
+position: it observes GPUI's current value only to choose a prefetch anchor,
+and the view uses that same value once to rebase a replacement data window.
+Alternate-screen and mouse-reporting applications still receive discrete
+terminal wheel input.
 
 ## What prompted this
 
@@ -257,10 +259,10 @@ it holds. Scrolling back down until `below`'s rows are exhausted returns to the
 live edge: the client drops the list and resumes rendering the live-frame
 canvas.
 
-The row-addressed session state mirrors GPUI's position only as a data-provider
-cursor: it chooses prefetch anchors and seeds/rebases the list when a new
-immutable window arrives. It never handles an in-window wheel event or decides
-the painted pixel offset. The live canvas remains viewport-sized for PTY resize
+The row-addressed session state observes GPUI's position only when choosing a
+prefetch anchor; it does not retain a data-provider cursor. When a new immutable
+window arrives, the view maps GPUI's current live-tail-relative anchor into the
+new rows once. The live canvas remains viewport-sized for PTY resize
 and input geometry. Old peers and screens where the terminal application owns
 the wheel retain the pre-existing whole-line accumulator and
 `TerminalCommand::Scroll` path.

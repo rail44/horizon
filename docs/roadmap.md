@@ -334,8 +334,11 @@ lands:
   `ListState` the sole viewport owner: fixed-height terminal rows retain
   GPUI's native pixel offset within the first item, both `Lines` and `Pixels`
   follow the same path as other views, and replacement daemon windows rebase
-  that list without snapping. The session's row offset is only a mirrored
-  data-prefetch cursor; the superseded custom wheel animation is deleted.
+  that list without snapping. The session retains no second row offset: it
+  observes GPUI's current position only when choosing a prefetch anchor, and
+  the view rebases a replacement once from the same value. Once history is
+  visible, the bare GPUI List consumes both `Lines` and `Pixels` exactly as the
+  Agent transcript does; the terminal owns no wheel handler or timing helper.
   Margin sizing remains intentionally tuneable;
   interim "smooth the reply cadence" fix assessed as symptomatic, skip.
 

@@ -30,8 +30,7 @@ pub(crate) fn cell_from_position(
 
 /// Fixed lines-per-tick for terminal-protocol passthrough
 /// (`ScrollDelta::Lines`, e.g. a physical mouse wheel). The primary-screen
-/// frontend instead uses [`viewport_row_delta`] for both precise and
-/// imprecise events so its displacement matches GPUI lists.
+/// frontend instead scrolls GPUI's list by pixels.
 const WHEEL_TICK_LINES: i32 = 3;
 
 /// GPUI's `List` converts imprecise line deltas with a 20px logical line
@@ -47,21 +46,6 @@ pub(crate) fn viewport_pixel_delta(delta: ScrollDelta) -> f32 {
     let pixels = f32::from(delta.pixel_delta(GPUI_SCROLL_LINE_HEIGHT).y);
     if pixels.is_finite() {
         pixels
-    } else {
-        0.0
-    }
-}
-
-/// Convert a GPUI wheel event into continuous terminal-row units for local
-/// presentation. Unlike [`ScrollAccumulator`], this never truncates a precise
-/// delta: the fractional row is painted by the frontend canvas.
-pub(crate) fn viewport_row_delta(delta: ScrollDelta, terminal_line_height: f32) -> f32 {
-    if !terminal_line_height.is_finite() || terminal_line_height <= 0.0 {
-        return 0.0;
-    }
-    let rows = viewport_pixel_delta(delta) / terminal_line_height;
-    if rows.is_finite() {
-        rows
     } else {
         0.0
     }
@@ -260,26 +244,12 @@ mod tests {
     }
 
     #[test]
-    fn precise_delta_reaches_the_viewport_without_line_truncation() {
-        assert_eq!(viewport_row_delta(pixels_delta(7.5), LINE_HEIGHT), 0.375);
-    }
-
-    #[test]
     fn imprecise_delta_uses_the_same_twenty_pixel_unit_as_gpui_list() {
-        assert_eq!(
-            viewport_row_delta(ScrollDelta::Lines(point(0.0, 1.0)), LINE_HEIGHT),
-            1.0
-        );
         assert_eq!(
             viewport_pixel_delta(ScrollDelta::Lines(point(0.0, 3.0))),
             60.0,
             "one ordinary Linux wheel notch is three GPUI lines"
         );
-    }
-
-    #[test]
-    fn invalid_terminal_line_height_produces_no_viewport_motion() {
-        assert_eq!(viewport_row_delta(pixels_delta(7.5), 0.0), 0.0);
     }
 
     #[test]
