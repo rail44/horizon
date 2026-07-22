@@ -309,7 +309,8 @@ lands:
   ad-hoc additions, and ecosystem code ports only at the pure-function
   level.
 
-- **Terminal scrollback — windowed overscan** (proposed 2026-07-21,
+- **Terminal scrollback — windowed overscan** (implemented through phase 3
+  on 2026-07-22,
   `docs/terminal-scrollback-design.md`). History scrolling judders: it is a
   daemon round-trip with no local paint, worsened by v11's latest-value
   frame watch dropping intermediate scroll positions. Direction (owner):
@@ -324,8 +325,12 @@ lands:
   no scrollback (primary-screen-only, passthrough elsewhere). Additive wire
   (v12, `MIN_SUPPORTED` stays 11 → old peers fall back to round-trip).
   Tradeoffs accepted: scrollbar jump beyond the window is a round-trip; no
-  instant revisit of already-seen history. Open owner calls in doc §9 (window
-  delivery path — lean: ride the `events` channel; margin/prefetch sizing);
+  instant revisit of already-seen history. Delivery rides the existing
+  `events` channel; the initial policy is a three-viewport immutable window
+  with a one-viewport directional prefetch margin. Painting shares that
+  window by `Arc`, caches shaping by stable window-row index, and preserves
+  the latest local anchor when a prefetch lands. Margin sizing remains
+  intentionally tuneable;
   interim "smooth the reply cadence" fix assessed as symptomatic, skip.
 
 ## External gates

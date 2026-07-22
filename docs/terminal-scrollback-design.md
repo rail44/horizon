@@ -1,8 +1,10 @@
 # Terminal Scrollback — Windowed Overscan Design
 
-Status: proposed 2026-07-21, revised the same day to **windowed overscan**
-(owner direction) — the earlier draft's persistent cross-frame cache is
-dropped; see §2.2 for why. Design and feasibility only, no code. Companion
+Status: implemented through phase 3 on 2026-07-22 as **windowed overscan**
+(owner direction) — the earlier draft's persistent cross-frame cache was
+dropped; see §2.2 for why. The client now holds a shared immutable window,
+caches shaped rows by stable window index, and prefetches one viewport ahead
+without freezing local scrolling while the reply is in flight. Companion
 to `docs/terminal-protocol-goals.md` (where the frame path is headed),
 `docs/session-daemon-design.md` (the daemon-owns-the-emulator split) and
 `docs/remoc-adoption-design.md` (the v11 wire and its §4 skew discipline).
@@ -358,7 +360,7 @@ phase and the cache/eviction phase are gone entirely:
    `Incoming` variant (`src/terminal/session.rs`) — unless delivery rides the
    existing `events` channel (§9 option ii), which reuses that plumbing
    as-is.
-3. **Prefetch, edges, and passthrough.** Threshold prefetch (§3.4), true-top
+3. **Prefetch, edges, and passthrough.** **Implemented.** Threshold prefetch (§3.4), true-top
    / live-edge handling (§5), the scrollbar-jump round-trip (§3.5), and
    alt-screen / mouse-mode passthrough gating on the availability flag.
 4. **`SESSION_PROTOCOL_VERSION` → 12** and the negotiation gate (negotiate 11

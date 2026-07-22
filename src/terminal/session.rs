@@ -82,6 +82,10 @@ impl RowGenerations {
 /// window just means more local scrolling before an edge re-fetch.
 const WINDOW_VIEWPORTS: usize = 3;
 
+/// Start replenishing the held window while one viewport of overscan remains.
+/// This leaves the normal command/event round-trip off the gesture's edge.
+const PREFETCH_VIEWPORTS: usize = 1;
+
 fn requested_window_height(viewport_rows: usize) -> usize {
     viewport_rows.saturating_mul(WINDOW_VIEWPORTS).max(1)
 }
@@ -101,12 +105,33 @@ fn edge_anchor(len: usize, below: usize, viewport_rows: usize, off: i64) -> usiz
     anchor.max(0) as usize
 }
 
+/// Locate a live-tail-relative `anchor` inside a newly served window. This is
+/// the inverse of [`edge_anchor`] for an in-range viewport.
+fn offset_for_anchor(len: usize, below: usize, viewport_rows: usize, anchor: usize) -> usize {
+    let offset = len as i64 + below as i64 - viewport_rows as i64 - anchor as i64;
+    clamp_offset(offset.max(0) as usize, len, viewport_rows)
+}
+
 /// Clamp a viewport-top offset into `[0, len - viewport_rows]` so the visible
 /// slice stays inside the held window even when a served `viewport_offset`
 /// sits closer to the bottom than a full viewport (a short window near the
 /// true top).
 fn clamp_offset(offset: usize, len: usize, viewport_rows: usize) -> usize {
     offset.min(len.saturating_sub(viewport_rows))
+}
+
+fn prefetch_threshold(viewport_rows: usize) -> usize {
+    viewport_rows.saturating_mul(PREFETCH_VIEWPORTS)
+}
+
+/// Why the one outstanding replacement window was requested. An edge fetch
+/// deliberately lands at the server's requested `viewport_offset`; a prefetch
+/// instead preserves whatever viewport the user has reached while the reply
+/// was in flight.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowFetch {
+    Edge,
+    Prefetch,
 }
 
 /// The IPC a wheel gesture calls for, decided by [`Scrollback::on_wheel`].
@@ -150,8 +175,8 @@ enum Scrollback {
     /// against the height the request was sized for.
     Requesting { viewport_rows: usize },
     /// Holding a window; paint `window.lines[offset..offset + viewport_rows]`.
-    /// `refetching` is set while an edge re-fetch is outstanding, suppressing
-    /// per-tick re-requests (the offset stays clamped at the edge meanwhile).
+    /// At most one replacement window is in flight. A prefetch does not freeze
+    /// local movement: the user keeps scrolling through the remaining margin.
     Windowed {
         // Shared with the paint path so every wheel frame clones one Arc,
         // not a viewport's worth of strings/spans. The window remains an
@@ -164,7 +189,7 @@ enum Scrollback {
         /// edge-anchor arithmetic. The live paint slices with the *current*
         /// paint height instead, so a resize still paints the right count.
         viewport_rows: usize,
-        refetching: bool,
+        fetch: Option<WindowFetch>,
     },
 }
 
@@ -228,11 +253,12 @@ impl Scrollback {
                 window,
                 offset,
                 viewport_rows: vr,
-                refetching,
+                fetch,
             } => {
-                // An edge re-fetch is outstanding: hold at the clamped edge and
-                // swallow ticks until the new window installs (no per-tick IPC).
-                if *refetching {
+                // An edge fetch has no remaining overscan to move through. A
+                // prefetch is different: keep consuming the held window while
+                // the replacement travels over IPC.
+                if matches!(fetch, Some(WindowFetch::Edge)) {
                     return ScrollDecision {
                         ipc: ScrollIpc::None,
                         repaint: false,
@@ -247,15 +273,24 @@ impl Scrollback {
                     // Past the block's top (scrolling up).
                     if window.above > 0 {
                         // More history above: re-fetch a window recentred up.
-                        let anchor = edge_anchor(len, window.below, vr, new_offset);
                         *offset = 0;
-                        *refetching = true;
-                        ScrollDecision {
-                            ipc: ScrollIpc::Request {
-                                anchor,
-                                height: requested_window_height(vr),
-                            },
-                            repaint: true,
+                        if fetch.is_some() {
+                            // The proactive replacement is already on its way.
+                            // Clamp briefly rather than fan out a second request.
+                            ScrollDecision {
+                                ipc: ScrollIpc::None,
+                                repaint: true,
+                            }
+                        } else {
+                            let anchor = edge_anchor(len, window.below, vr, new_offset);
+                            *fetch = Some(WindowFetch::Edge);
+                            ScrollDecision {
+                                ipc: ScrollIpc::Request {
+                                    anchor,
+                                    height: requested_window_height(vr),
+                                },
+                                repaint: true,
+                            }
                         }
                     } else if *offset == 0 {
                         // True top, already pinned there: nothing changes.
@@ -283,15 +318,22 @@ impl Scrollback {
                         }
                     } else {
                         // More rows below: re-fetch a window recentred down.
-                        let anchor = edge_anchor(len, window.below, vr, new_offset);
                         *offset = max_top as usize;
-                        *refetching = true;
-                        ScrollDecision {
-                            ipc: ScrollIpc::Request {
-                                anchor,
-                                height: requested_window_height(vr),
-                            },
-                            repaint: true,
+                        if fetch.is_some() {
+                            ScrollDecision {
+                                ipc: ScrollIpc::None,
+                                repaint: true,
+                            }
+                        } else {
+                            let anchor = edge_anchor(len, window.below, vr, new_offset);
+                            *fetch = Some(WindowFetch::Edge);
+                            ScrollDecision {
+                                ipc: ScrollIpc::Request {
+                                    anchor,
+                                    height: requested_window_height(vr),
+                                },
+                                repaint: true,
+                            }
                         }
                     }
                 } else if new_offset as usize == *offset {
@@ -302,12 +344,35 @@ impl Scrollback {
                     }
                 } else {
                     // The common case: a local move within the held window.
-                    // Zero IPC — the whole point of windowed overscan.
                     *offset = new_offset as usize;
-                    ScrollDecision {
-                        ipc: ScrollIpc::None,
-                        repaint: true,
-                    }
+                    let distance_to_top = *offset;
+                    let distance_to_bottom = max_top as usize - *offset;
+                    let near_top =
+                        lines > 0 && window.above > 0 && distance_to_top <= prefetch_threshold(vr);
+                    let near_bottom = lines < 0
+                        && window.below > 0
+                        && distance_to_bottom <= prefetch_threshold(vr);
+                    let ipc = if fetch.is_none() && (near_top || near_bottom) {
+                        // Centre the replacement one margin ahead in the
+                        // gesture direction. Once installed, the current
+                        // viewport sits at the opposite side of its overscan,
+                        // avoiding a replacement on every individual tick.
+                        let current_anchor = edge_anchor(len, window.below, vr, *offset as i64);
+                        let margin = prefetch_threshold(vr);
+                        let anchor = if near_top {
+                            current_anchor.saturating_add(margin)
+                        } else {
+                            current_anchor.saturating_sub(margin)
+                        };
+                        *fetch = Some(WindowFetch::Prefetch);
+                        ScrollIpc::Request {
+                            anchor,
+                            height: requested_window_height(vr),
+                        }
+                    } else {
+                        ScrollIpc::None
+                    };
+                    ScrollDecision { ipc, repaint: true }
                 }
             }
         }
@@ -316,7 +381,7 @@ impl Scrollback {
     /// Install a served window (a `TerminalUpdate::ScrollWindow` reply). Takes
     /// effect only when a request is outstanding: the initial fetch
     /// ([`Scrollback::Requesting`]) enters windowed mode, and an edge re-fetch
-    /// ([`Scrollback::Windowed`] with `refetching`) swaps in the new block. A
+    /// ([`Scrollback::Windowed`] with `fetch`) swaps in the new block. A
     /// window arriving in any other state is a superseded/late reply and is
     /// dropped — windows are self-locating, so the client needs no correlation
     /// id (`docs/terminal-scrollback-design.md` §3.2).
@@ -330,7 +395,7 @@ impl Scrollback {
                     window: Arc::new(window),
                     offset,
                     viewport_rows,
-                    refetching: false,
+                    fetch: None,
                 };
                 true
             }
@@ -338,14 +403,34 @@ impl Scrollback {
                 window: held,
                 offset,
                 viewport_rows,
-                refetching,
+                fetch,
             } => {
-                if *refetching {
-                    let off =
-                        clamp_offset(window.viewport_offset, window.lines.len(), *viewport_rows);
+                if let Some(fetch_kind) = fetch.take() {
+                    let off = match fetch_kind {
+                        WindowFetch::Edge => {
+                            clamp_offset(window.viewport_offset, window.lines.len(), *viewport_rows)
+                        }
+                        WindowFetch::Prefetch => {
+                            // Wheel ticks can move locally after the prefetch
+                            // starts. Locate that current viewport in the new
+                            // self-describing window instead of jumping back to
+                            // the request-time position.
+                            let anchor = edge_anchor(
+                                held.lines.len(),
+                                held.below,
+                                *viewport_rows,
+                                *offset as i64,
+                            );
+                            offset_for_anchor(
+                                window.lines.len(),
+                                window.below,
+                                *viewport_rows,
+                                anchor,
+                            )
+                        }
+                    };
                     *held = Arc::new(window);
                     *offset = off;
-                    *refetching = false;
                     true
                 } else {
                     // Not awaiting a window: a late/stray reply.
@@ -408,7 +493,7 @@ impl Scrollback {
     /// (its geometry no longer matches the served window), a selection gesture
     /// (handed to the daemon-owned live viewport so cursor/selection render as
     /// on `main`), and a runtime going unreachable (so a dead pane never freezes
-    /// on a stale window + `refetching` latch) all route through it.
+    /// on a stale window + pending-fetch latch) all route through it.
     fn abandon(&mut self) -> bool {
         let changed = !matches!(self, Scrollback::Live);
         *self = Scrollback::Live;
@@ -783,8 +868,8 @@ impl TerminalSession {
             // The command channel just died (this is the first failure — the
             // guard above short-circuits every later send). A dead runtime
             // never answers an outstanding window request, so drop any held /
-            // awaited window rather than freeze scrolled back on a `refetching`
-            // latch (review fix ⑤). The `should_wake` notify below repaints.
+            // awaited window rather than freeze scrolled back on a pending
+            // fetch (review fix ⑤). The `should_wake` notify below repaints.
             self.scrollback.borrow_mut().abandon();
         }
         if should_wake {
@@ -976,6 +1061,7 @@ fn write_to_primary(_cx: &mut Context<TerminalSession>, _text: String) {}
 mod tests {
     use super::{
         version_supports_windowing, RowGenerations, RuntimeReachability, ScrollIpc, Scrollback,
+        WindowFetch,
     };
     use horizon_terminal_core::{
         TerminalFrame, TerminalScrollWindow, TerminalSelection, TerminalSelectionPoint,
@@ -1187,10 +1273,10 @@ mod tests {
     /// A held window with margin above and below the viewport, offset centered.
     fn windowed_mid() -> Scrollback {
         Scrollback::Windowed {
-            window: window(15, 5, 10, 15).into(),
-            offset: 5,
+            window: window(25, 10, 10, 15).into(),
+            offset: 10,
             viewport_rows: VR,
-            refetching: false,
+            fetch: None,
         }
     }
 
@@ -1202,7 +1288,7 @@ mod tests {
     fn an_in_window_gesture_is_all_local_repaints_and_no_ipc() {
         let mut state = windowed_mid();
         // A mixed up/down gesture that stays inside the block's edges.
-        for (lines, expect_offset) in [(1, 4), (1, 3), (1, 2), (-1, 3), (-2, 5), (2, 3)] {
+        for (lines, expect_offset) in [(1, 9), (1, 8), (1, 7), (-1, 8), (-2, 10), (2, 8)] {
             let decision = state.on_wheel(lines, VR, true, true);
             assert_eq!(
                 decision.ipc,
@@ -1215,6 +1301,58 @@ mod tests {
                 other => panic!("stayed windowed, got {other:?}"),
             }
         }
+    }
+
+    /// Entering the one-viewport margin starts one proactive replacement,
+    /// while later ticks continue moving locally. Installing its reply keeps
+    /// the viewport reached during that round-trip instead of jumping back to
+    /// the request-time position.
+    #[test]
+    fn near_edge_prefetch_keeps_scrolling_and_preserves_the_latest_anchor() {
+        let mut state = Scrollback::Windowed {
+            window: window(15, 6, 10, 15).into(),
+            offset: 6,
+            viewport_rows: VR,
+            fetch: None,
+        };
+
+        let first = state.on_wheel(1, VR, true, true);
+        assert_eq!(
+            first.ipc,
+            ScrollIpc::Request {
+                // Current anchor is 20; prefetch centres one viewport ahead.
+                anchor: 25,
+                height: VR * super::WINDOW_VIEWPORTS,
+            }
+        );
+        assert!(matches!(
+            state,
+            Scrollback::Windowed {
+                offset: 5,
+                fetch: Some(WindowFetch::Prefetch),
+                ..
+            }
+        ));
+
+        let second = state.on_wheel(2, VR, true, true);
+        assert_eq!(second.ipc, ScrollIpc::None, "only one fetch is in flight");
+        assert!(
+            second.repaint,
+            "the held overscan remains locally scrollable"
+        );
+        assert!(matches!(state, Scrollback::Windowed { offset: 3, .. }));
+
+        // The current old-window anchor is now 22. In the replacement whose
+        // bottom has 20 rows below it, that same anchor lives at offset 8.
+        assert!(state.install_window(window(15, 5, 12, 20)));
+        assert!(matches!(
+            state,
+            Scrollback::Windowed {
+                offset: 8,
+                fetch: None,
+                ..
+            }
+        ));
     }
 
     /// The first scroll-back tick at the live edge requests a window `lines`
@@ -1290,7 +1428,7 @@ mod tests {
             window: window(10, 5, 30, 0).into(),
             offset: 5,
             viewport_rows: VR,
-            refetching: false,
+            fetch: None,
         };
         let decision = state.on_wheel(-1, VR, true, true);
         assert_eq!(decision.ipc, ScrollIpc::None);
@@ -1312,7 +1450,7 @@ mod tests {
             window: window(15, 1, 10, 15).into(),
             offset: 1,
             viewport_rows: VR,
-            refetching: false,
+            fetch: None,
         };
         // Overshoot the top (offset 1, scroll up 3 → -2); above > 0 → re-fetch.
         let decision = state.on_wheel(3, VR, true, true);
@@ -1327,7 +1465,7 @@ mod tests {
                 state,
                 Scrollback::Windowed {
                     offset: 0,
-                    refetching: true,
+                    fetch: Some(WindowFetch::Edge),
                     ..
                 }
             ),
@@ -1351,7 +1489,7 @@ mod tests {
             window: window(10, 2, 0, 30).into(),
             offset: 2,
             viewport_rows: VR,
-            refetching: false,
+            fetch: None,
         };
         // Overshoot the top with above == 0: clamp to 0, repaint, no IPC.
         let decision = state.on_wheel(5, VR, true, true);
@@ -1375,7 +1513,7 @@ mod tests {
             state,
             Scrollback::Windowed {
                 offset: 5,
-                refetching: false,
+                fetch: None,
                 ..
             }
         ));
@@ -1399,26 +1537,26 @@ mod tests {
         );
     }
 
-    /// An edge re-fetch's reply swaps in the new block and clears the
-    /// re-fetch flag, re-centering the viewport at the new `viewport_offset`.
+    /// An edge re-fetch's reply swaps in the new block and clears the pending
+    /// fetch, re-centering the viewport at the new `viewport_offset`.
     #[test]
     fn install_window_swaps_in_an_edge_refetch() {
         let mut state = Scrollback::Windowed {
             window: window(15, 0, 10, 15).into(),
             offset: 0,
             viewport_rows: VR,
-            refetching: true,
+            fetch: Some(WindowFetch::Edge),
         };
         state.install_window(window(20, 7, 4, 15));
         match &state {
             Scrollback::Windowed {
                 window,
                 offset,
-                refetching,
+                fetch,
                 ..
             } => {
                 assert_eq!(*offset, 7);
-                assert!(!refetching);
+                assert_eq!(*fetch, None);
                 assert_eq!(window.lines.len(), 20);
             }
             other => panic!("expected windowed, got {other:?}"),
@@ -1429,10 +1567,10 @@ mod tests {
     /// `None` while following the live tail (the paint then uses the frame).
     #[test]
     fn visible_lines_slices_the_window_at_the_offset() {
-        let state = windowed_mid(); // offset 5, 15 rows row00..row14
+        let state = windowed_mid(); // offset 10, 25 rows row00..row24
         let (window, range) = state.visible_lines(VR).expect("windowed paints a slice");
         let texts: Vec<String> = window.lines[range].iter().map(row_text).collect();
-        assert_eq!(texts, ["row05", "row06", "row07", "row08", "row09"]);
+        assert_eq!(texts, ["row10", "row11", "row12", "row13", "row14"]);
 
         assert!(
             Scrollback::Live.visible_lines(VR).is_none(),
@@ -1512,7 +1650,7 @@ mod tests {
 
     /// Review fixes ③ (selection), ④ (resize), and ⑤ (unreachable) share one
     /// primitive: `abandon` returns to the live tail from any held/awaited
-    /// window (clearing a `refetching` latch too) and reports whether that
+    /// window (clearing a pending fetch too) and reports whether that
     /// changed anything. After it, the paint follows the live frame — the
     /// daemon-owned viewport that renders cursor/selection as on `main`.
     #[test]
@@ -1528,14 +1666,14 @@ mod tests {
 
         // A window with a re-fetch outstanding (the unreachable / dead-pane
         // latch the review flagged): abandon clears it too.
-        let mut refetching = Scrollback::Windowed {
+        let mut fetching = Scrollback::Windowed {
             window: window(15, 0, 10, 15).into(),
             offset: 0,
             viewport_rows: VR,
-            refetching: true,
+            fetch: Some(WindowFetch::Edge),
         };
-        assert!(refetching.abandon());
-        assert_eq!(refetching, Scrollback::Live);
+        assert!(fetching.abandon());
+        assert_eq!(fetching, Scrollback::Live);
 
         // A first fetch in flight (Requesting) is likewise abandoned.
         let mut requesting = Scrollback::Requesting { viewport_rows: VR };
