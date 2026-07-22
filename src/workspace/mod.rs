@@ -182,38 +182,85 @@ fn ensure_workspace_has_pane(workspace: &mut Workspace) -> Option<SessionId> {
 /// session at all.
 #[derive(Clone)]
 enum PaneView {
+    Cached(CachedPaneLeaf),
+    Composite(CompositePane),
+}
+
+/// A pane whose domain entity fills definite layout-tree bounds. Keeping
+/// these variants behind one type makes cached rendering the only element
+/// conversion available to fixed-size leaves.
+#[derive(Clone)]
+enum CachedPaneLeaf {
     Terminal(Entity<TerminalView>),
-    Agent(Entity<AgentView>),
     ThemeSettings(Entity<ThemeSettingsView>),
 }
 
-impl PaneView {
+/// A pane that owns narrower cache boundaries internally. Composite panes must
+/// remain ordinary entities: wrapping them in another cached ancestor would
+/// disable descendant reuse whenever that ancestor misses.
+#[derive(Clone)]
+enum CompositePane {
+    Agent(Entity<AgentView>),
+}
+
+impl CachedPaneLeaf {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         match self {
-            PaneView::Terminal(view) => view.focus_handle(cx),
-            PaneView::Agent(view) => view.focus_handle(cx),
-            PaneView::ThemeSettings(view) => view.focus_handle(cx),
+            Self::Terminal(view) => view.focus_handle(cx),
+            Self::ThemeSettings(view) => view.focus_handle(cx),
         }
     }
 
     fn element(&self) -> AnyElement {
-        // The exhaustive match is the cache-topology boundary: every new pane
-        // kind must be classified as either a fixed-size leaf or a composite.
-        // Terminal and ThemeSettings are leaves with definite bounds from the
-        // layout tree, so their entity render/layout/paint can be reused until
-        // that entity is notified or its bounds/text style change.
-        //
-        // Agent is a composite whose transcript owns a narrower cached
-        // surface. GPUI sets its internal `refreshing` flag while rebuilding a
-        // cached ancestor after a miss, and nested cached views cannot reuse
-        // their layout/paint while that flag is set. Caching Agent here would
-        // therefore make every Agent notification force a miss in the nested
-        // transcript cache, defeating the more selective boundary.
         let style = || StyleRefinement::default().v_flex().size_full();
         match self {
-            PaneView::Terminal(view) => view.clone().cached(style()).into_any_element(),
-            PaneView::Agent(view) => view.clone().into_any_element(),
-            PaneView::ThemeSettings(view) => view.clone().cached(style()).into_any_element(),
+            Self::Terminal(view) => view.clone().cached(style()).into_any_element(),
+            Self::ThemeSettings(view) => view.clone().cached(style()).into_any_element(),
+        }
+    }
+}
+
+impl CompositePane {
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        match self {
+            Self::Agent(view) => view.focus_handle(cx),
+        }
+    }
+
+    fn element(&self) -> AnyElement {
+        match self {
+            Self::Agent(view) => view.clone().into_any_element(),
+        }
+    }
+}
+
+impl PaneView {
+    fn terminal(view: Entity<TerminalView>) -> Self {
+        Self::Cached(CachedPaneLeaf::Terminal(view))
+    }
+
+    fn agent(view: Entity<AgentView>) -> Self {
+        Self::Composite(CompositePane::Agent(view))
+    }
+
+    fn theme_settings(view: Entity<ThemeSettingsView>) -> Self {
+        Self::Cached(CachedPaneLeaf::ThemeSettings(view))
+    }
+
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        match self {
+            Self::Cached(view) => view.focus_handle(cx),
+            Self::Composite(view) => view.focus_handle(cx),
+        }
+    }
+
+    fn element(&self) -> AnyElement {
+        // This exhaustive type split is the cache-topology decision point for
+        // every future pane kind. Callers cannot render a fixed leaf without
+        // its cache or wrap a composite in an outer cache.
+        match self {
+            Self::Cached(view) => view.element(),
+            Self::Composite(view) => view.element(),
         }
     }
 }

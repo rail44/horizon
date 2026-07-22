@@ -216,7 +216,7 @@ impl WorkspaceShell {
             {
                 self.panes.insert(
                     pane_id,
-                    PaneView::Terminal(cx.new(|cx| TerminalView::new(session.clone(), window, cx))),
+                    PaneView::terminal(cx.new(|cx| TerminalView::new(session.clone(), window, cx))),
                 );
             } else if let Some(session) = self
                 .workspace
@@ -225,7 +225,7 @@ impl WorkspaceShell {
             {
                 self.panes.insert(
                     pane_id,
-                    PaneView::Agent(cx.new(|cx| AgentView::new(session.clone(), window, cx))),
+                    PaneView::agent(cx.new(|cx| AgentView::new(session.clone(), window, cx))),
                 );
             } else if matches!(
                 self.workspace.pane_kind(pane_id),
@@ -234,7 +234,7 @@ impl WorkspaceShell {
                 let sessiond = self.sessiond_slot.clone();
                 self.panes.insert(
                     pane_id,
-                    PaneView::ThemeSettings(
+                    PaneView::theme_settings(
                         cx.new(|cx| ThemeSettingsView::new(sessiond, window, cx)),
                     ),
                 );

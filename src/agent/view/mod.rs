@@ -145,10 +145,29 @@ impl Render for AgentTranscript {
     }
 }
 
+/// The fixed-bounds transcript cache. The backing entity is private so the
+/// agent layout can only embed it through the cached conversion below.
+struct TranscriptSurface {
+    view: Entity<AgentTranscript>,
+}
+
+impl TranscriptSurface {
+    fn new(view: Entity<AgentTranscript>) -> Self {
+        Self { view }
+    }
+
+    fn element(&self) -> AnyElement {
+        self.view
+            .clone()
+            .cached(StyleRefinement::default().v_flex().size_full())
+            .into_any_element()
+    }
+}
+
 /// Uncached pane composite. It deliberately owns no session entity or session
 /// subscription, so rendering the shell cannot clone/read a live agent frame.
 pub(crate) struct AgentView {
-    transcript: Entity<AgentTranscript>,
+    transcript: TranscriptSurface,
     status: Entity<AgentStatus>,
     composer: Entity<AgentComposer>,
     focus_handle: FocusHandle,
@@ -173,7 +192,7 @@ impl AgentView {
         let focus_handle = composer.read(cx).focus_handle(cx);
 
         Self {
-            transcript,
+            transcript: TranscriptSurface::new(transcript),
             status,
             composer,
             focus_handle,
@@ -199,11 +218,12 @@ impl Render for AgentView {
             // transcript then fills those exact bounds. Auto-grow composer and
             // status remain outside the cache and keep intrinsic sizing.
             .child(
-                div().relative().w_full().flex_1().min_h_0().child(
-                    self.transcript
-                        .clone()
-                        .cached(StyleRefinement::default().v_flex().size_full()),
-                ),
+                div()
+                    .relative()
+                    .w_full()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.transcript.element()),
             )
             .child(self.status.clone())
             .child(self.composer.clone())
