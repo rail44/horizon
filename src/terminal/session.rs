@@ -167,10 +167,6 @@ enum ScrollIpc {
     /// No IPC: a local in-window move, a clamp at the true top, a return to
     /// the live tail, or a tick swallowed while a request is outstanding.
     None,
-    /// Round-trip the `Scroll` command as today — windowing is unavailable
-    /// (an old peer, or alt-screen / mouse mode where `scrollback_available`
-    /// is false and the app owns the scroll).
-    RoundTrip,
     /// Request a scrollback window at `anchor` rows above the live bottom.
     Request { anchor: usize, height: usize },
 }
@@ -277,27 +273,10 @@ fn served_anchor(window: &TerminalScrollWindow, viewport_rows: usize) -> f32 {
 impl Scrollback {
     /// Decide a continuous frontend scroll. `rows > 0` moves toward history,
     /// `< 0` toward the live tail. Precise GPUI deltas remain fractional here;
-    /// only the held-window address and prefetch requests are row-based.
-    /// `available` is false when an alternate-screen or mouse-reporting app
-    /// owns the wheel, and `windowing` is the negotiated protocol feature.
-    fn on_wheel(
-        &mut self,
-        rows: f32,
-        viewport_rows: usize,
-        available: bool,
-        windowing: bool,
-    ) -> ScrollDecision {
-        // Passthrough: no windowing surface, or the app owns the scroll
-        // (alt-screen / mouse mode). Abandon any held window and round-trip,
-        // exactly as before the windowing work — this is the negotiated-11
-        // fallback and the alt-screen gate in one branch.
-        if !windowing || !available {
-            *self = Scrollback::Live;
-            return ScrollDecision {
-                ipc: ScrollIpc::RoundTrip,
-                repaint: false,
-            };
-        }
+    /// only the held-window address and prefetch requests are row-based. The
+    /// caller routes old peers and application-owned scrolling around this
+    /// local-only state machine.
+    fn on_wheel(&mut self, rows: f32, viewport_rows: usize) -> ScrollDecision {
         if !rows.is_finite() || rows.abs() <= FRACTION_EPSILON {
             return ScrollDecision {
                 ipc: ScrollIpc::None,
@@ -1132,9 +1111,9 @@ impl TerminalSession {
     /// window would anchor at the wrong content. So a selection gesture drops
     /// the held window and returns to the live tail (`Live`): the daemon then
     /// owns the viewport and renders cursor + selection exactly as on `main`
-    /// and the v11 round-trip fallback. Returns whether a window was dropped,
-    /// so the view can repaint immediately (a bare click starting a zero-width
-    /// selection may otherwise produce no frame to trigger the switch).
+    /// and the v11 round-trip fallback. The view repaints immediately after
+    /// starting a selection because a bare zero-width selection may produce no
+    /// frame to trigger the switch.
     ///
     /// This is the race-free half of the two options the review left open:
     /// preserving the scrolled position would mean round-tripping a `Scroll`
@@ -1145,8 +1124,8 @@ impl TerminalSession {
     /// Returning to the live edge avoids that race; preserving the position is
     /// left to phase 3 (ordered scroll+select, or a client-owned selection
     /// model over the window).
-    fn exit_scrollback_for_selection(&self) -> bool {
-        self.scrollback.borrow_mut().abandon()
+    fn exit_scrollback_for_selection(&self) {
+        self.scrollback.borrow_mut().abandon();
     }
 
     pub(crate) fn send_scroll(
@@ -1185,13 +1164,19 @@ impl TerminalSession {
         &self,
         pixels: f32,
         line_height: f32,
-        point: horizon_terminal_core::TerminalSelectionPoint,
         viewport_rows: usize,
     ) -> bool {
         if !pixels.is_finite() || !line_height.is_finite() || line_height <= 0.0 {
             return false;
         }
-        self.handle_scroll_rows(pixels / line_height, None, point, viewport_rows)
+        let decision = self
+            .scrollback
+            .borrow_mut()
+            .on_wheel(pixels / line_height, viewport_rows);
+        if let ScrollIpc::Request { anchor, height } = decision.ipc {
+            self.send_request_scroll_window(anchor, height);
+        }
+        decision.repaint
     }
 
     /// Route terminal-protocol scrolling for an old peer or an application
@@ -1201,53 +1186,9 @@ impl TerminalSession {
         &self,
         lines: i32,
         point: horizon_terminal_core::TerminalSelectionPoint,
-        viewport_rows: usize,
-    ) -> bool {
-        self.handle_scroll_rows(lines as f32, Some(lines), point, viewport_rows)
-    }
-
-    /// One wheel gesture in the row-addressed provider's continuous coordinate.
-    /// Precise pixel deltas remain fractional in [`Scrollback::on_wheel`];
-    /// `fallback_lines` exists only for the separate protocol path above.
-    ///
-    /// - windowing unavailable (a v11 peer, or `scrollback_available == false`
-    ///   in alt-screen / mouse mode) → today's round-trip `Scroll`;
-    /// - the first scroll-back tick → a `RequestScrollWindow`;
-    /// - within a held window → **nothing on the wire**, just a local repaint
-    ///   (the round-trip elimination this PR exists for);
-    /// - a block edge with more history → one recentred `RequestScrollWindow`;
-    /// - back to the live tail → drop the window, resume the watch.
-    ///
-    /// Returns `true` when the view must repaint locally now (the local paint
-    /// that no longer waits on a daemon reply); the caller notifies.
-    fn handle_scroll_rows(
-        &self,
-        rows: f32,
-        fallback_lines: Option<i32>,
-        point: horizon_terminal_core::TerminalSelectionPoint,
-        viewport_rows: usize,
-    ) -> bool {
-        let available = self
-            .frame
-            .as_ref()
-            .is_some_and(|frame| frame.scrollback_available);
-        let windowing = self.windowing_supported();
-        let decision =
-            self.scrollback
-                .borrow_mut()
-                .on_wheel(rows, viewport_rows, available, windowing);
-        match decision.ipc {
-            ScrollIpc::None => {}
-            ScrollIpc::RoundTrip => {
-                if let Some(lines) = fallback_lines {
-                    self.send_scroll(lines, point);
-                }
-            }
-            ScrollIpc::Request { anchor, height } => {
-                self.send_request_scroll_window(anchor, height)
-            }
-        }
-        decision.repaint
+    ) {
+        self.scrollback.borrow_mut().abandon();
+        self.send_scroll(lines, point);
     }
 
     /// The scrollback window slice to paint, or `None` while following the
@@ -1558,7 +1499,7 @@ mod tests {
             (-2.0, 10),
             (2.0, 8),
         ] {
-            let decision = state.on_wheel(rows, VR, true, true);
+            let decision = state.on_wheel(rows, VR);
             assert_eq!(
                 decision.ipc,
                 ScrollIpc::None,
@@ -1575,7 +1516,7 @@ mod tests {
     #[test]
     fn a_subrow_gesture_repaints_locally_and_exposes_one_context_row() {
         let mut state = windowed_mid();
-        let decision = state.on_wheel(0.25, VR, true, true);
+        let decision = state.on_wheel(0.25, VR);
         assert_eq!(decision.ipc, ScrollIpc::None);
         assert!(decision.repaint);
         assert!(matches!(
@@ -1595,7 +1536,7 @@ mod tests {
     #[test]
     fn fractional_row_crossings_and_reversal_are_continuous() {
         let mut state = windowed_mid();
-        state.on_wheel(0.95, VR, true, true);
+        state.on_wheel(0.95, VR);
         assert!(matches!(
             state,
             Scrollback::Windowed {
@@ -1605,7 +1546,7 @@ mod tests {
             } if (fractional_row - 0.05).abs() < 0.0001
         ));
 
-        state.on_wheel(0.10, VR, true, true);
+        state.on_wheel(0.10, VR);
         assert!(matches!(
             state,
             Scrollback::Windowed {
@@ -1615,7 +1556,7 @@ mod tests {
             } if (fractional_row - 0.95).abs() < 0.0001
         ));
 
-        state.on_wheel(-1.05, VR, true, true);
+        state.on_wheel(-1.05, VR);
         assert!(matches!(
             state,
             Scrollback::Windowed {
@@ -1640,7 +1581,7 @@ mod tests {
             fetch: None,
         };
 
-        let first = state.on_wheel(1.0, VR, true, true);
+        let first = state.on_wheel(1.0, VR);
         assert_eq!(
             first.ipc,
             ScrollIpc::Request {
@@ -1658,7 +1599,7 @@ mod tests {
             }
         ));
 
-        let second = state.on_wheel(2.0, VR, true, true);
+        let second = state.on_wheel(2.0, VR);
         assert_eq!(second.ipc, ScrollIpc::None, "only one fetch is in flight");
         assert!(
             second.repaint,
@@ -1686,7 +1627,7 @@ mod tests {
     #[test]
     fn first_scrollback_tick_requests_a_window() {
         let mut state = Scrollback::Live;
-        let decision = state.on_wheel(3.0, VR, true, true);
+        let decision = state.on_wheel(3.0, VR);
         assert_eq!(
             decision.ipc,
             ScrollIpc::Request {
@@ -1708,14 +1649,14 @@ mod tests {
     fn first_window_wait_preserves_net_fractional_movement() {
         let mut state = Scrollback::Live;
         assert_eq!(
-            state.on_wheel(0.25, VR, true, true).ipc,
+            state.on_wheel(0.25, VR).ipc,
             ScrollIpc::Request {
                 anchor: 1,
                 height: VR * super::WINDOW_VIEWPORTS,
             }
         );
-        assert_eq!(state.on_wheel(0.50, VR, true, true).ipc, ScrollIpc::None);
-        state.on_wheel(-0.10, VR, true, true);
+        assert_eq!(state.on_wheel(0.50, VR).ipc, ScrollIpc::None);
+        state.on_wheel(-0.10, VR);
         assert!(matches!(
             state,
             Scrollback::Requesting { pending_rows, .. }
@@ -1797,8 +1738,8 @@ mod tests {
     #[test]
     fn reversing_to_live_before_the_first_reply_rejects_the_late_window() {
         let mut state = Scrollback::Live;
-        state.on_wheel(0.25, VR, true, true);
-        state.on_wheel(-0.50, VR, true, true);
+        state.on_wheel(0.25, VR);
+        state.on_wheel(-0.50, VR);
         assert_eq!(state, Scrollback::Live);
         assert!(!state.install_window(window(15, 5, 10, 0)).installed);
     }
@@ -1812,7 +1753,7 @@ mod tests {
             viewport_rows: VR,
             fetch: None,
         };
-        let decision = state.on_wheel(1.0, VR, true, true);
+        let decision = state.on_wheel(1.0, VR);
         assert!(matches!(decision.ipc, ScrollIpc::Request { .. }));
         let expected_anchor = match &state {
             Scrollback::Windowed {
@@ -1854,51 +1795,6 @@ mod tests {
         }
     }
 
-    /// The gate (§4, §8 cross-version): a negotiated-11 peer (`windowing ==
-    /// false`) never sends a window request — it round-trips the `Scroll`
-    /// command exactly as today, even scrolling back at the live edge.
-    #[test]
-    fn negotiated_eleven_falls_back_to_round_trip() {
-        let mut state = Scrollback::Live;
-        let decision = state.on_wheel(3.0, VR, true, false);
-        assert_eq!(decision.ipc, ScrollIpc::RoundTrip);
-        assert!(!decision.repaint);
-        assert_eq!(
-            state,
-            Scrollback::Live,
-            "no window is entered on an old peer"
-        );
-    }
-
-    /// A negotiated-12 peer uses the window surface: the same live-edge tick
-    /// that round-trips on v11 instead requests a window on v12. The paired
-    /// half of the gate test.
-    #[test]
-    fn negotiated_twelve_uses_the_window_surface() {
-        let mut state = Scrollback::Live;
-        let decision = state.on_wheel(3.0, VR, true, true);
-        assert!(matches!(decision.ipc, ScrollIpc::Request { .. }));
-    }
-
-    /// `scrollback_available == false` (alt-screen / mouse mode, §5) routes to
-    /// passthrough even on a v12 peer, and abandons any held window so the
-    /// app's own scroll takes over cleanly.
-    #[test]
-    fn alt_screen_unavailable_passes_through_and_drops_the_window() {
-        // From the live tail: straight passthrough, no window entered.
-        let mut live = Scrollback::Live;
-        let decision = live.on_wheel(3.0, VR, false, true);
-        assert_eq!(decision.ipc, ScrollIpc::RoundTrip);
-        assert_eq!(live, Scrollback::Live);
-
-        // Entering alt-screen while windowed: the next tick drops the window
-        // and round-trips.
-        let mut state = windowed_mid();
-        let decision = state.on_wheel(1.0, VR, false, true);
-        assert_eq!(decision.ipc, ScrollIpc::RoundTrip);
-        assert_eq!(state, Scrollback::Live, "the held window is abandoned");
-    }
-
     /// Scrolling down past the block bottom when it is the live tail
     /// (`below == 0`) drops the window and resumes the live watch (§5 live
     /// edge) — with no IPC, just a repaint of the (already-live) frame.
@@ -1912,7 +1808,7 @@ mod tests {
             viewport_rows: VR,
             fetch: None,
         };
-        let decision = state.on_wheel(-1.0, VR, true, true);
+        let decision = state.on_wheel(-1.0, VR);
         assert_eq!(decision.ipc, ScrollIpc::None);
         assert!(decision.repaint);
         assert_eq!(
@@ -1932,7 +1828,7 @@ mod tests {
             fetch: None,
         };
 
-        let decision = state.on_wheel(-0.5, VR, true, true);
+        let decision = state.on_wheel(-0.5, VR);
         assert_eq!(decision.ipc, ScrollIpc::None);
         assert!(decision.repaint);
         assert_eq!(state, Scrollback::Live);
@@ -1952,7 +1848,7 @@ mod tests {
             fetch: None,
         };
         // Overshoot the top (offset 1, scroll up 3 → -2); above > 0 → re-fetch.
-        let decision = state.on_wheel(3.0, VR, true, true);
+        let decision = state.on_wheel(3.0, VR);
         match decision.ipc {
             // edge_anchor(15, 15, 5, -2) == 15 + 15 - 5 - (-2) == 27.
             ScrollIpc::Request { anchor, .. } => assert_eq!(anchor, 27),
@@ -1972,7 +1868,7 @@ mod tests {
         );
 
         // A further tick while the re-fetch is in flight sends nothing.
-        let decision = state.on_wheel(3.0, VR, true, true);
+        let decision = state.on_wheel(3.0, VR);
         assert_eq!(
             decision.ipc,
             ScrollIpc::None,
@@ -1990,7 +1886,7 @@ mod tests {
             fetch: None,
         };
 
-        let first = state.on_wheel(0.5, VR, true, true);
+        let first = state.on_wheel(0.5, VR);
         assert_eq!(
             first.ipc,
             ScrollIpc::Request {
@@ -2008,7 +1904,7 @@ mod tests {
 
         // Input continues while the replacement is in flight. It sends no
         // second request, but the eventual reply must land at this new target.
-        let second = state.on_wheel(0.4, VR, true, true);
+        let second = state.on_wheel(0.4, VR);
         assert_eq!(second.ipc, ScrollIpc::None);
         let install = state.install_window(window(15, 5, 10, 20));
         assert!(install.installed);
@@ -2034,7 +1930,7 @@ mod tests {
             fetch: None,
         };
 
-        let decision = state.on_wheel(-0.5, VR, true, true);
+        let decision = state.on_wheel(-0.5, VR);
         assert_eq!(
             decision.ipc,
             ScrollIpc::Request {
@@ -2066,7 +1962,7 @@ mod tests {
             fetch: None,
         };
 
-        let decision = state.on_wheel(-10.0, VR, true, true);
+        let decision = state.on_wheel(-10.0, VR);
         assert_eq!(decision.ipc, ScrollIpc::None);
         assert!(decision.repaint);
         assert_eq!(state, Scrollback::Live);
@@ -2084,13 +1980,13 @@ mod tests {
             fetch: None,
         };
         // Overshoot the top with above == 0: clamp to 0, repaint, no IPC.
-        let decision = state.on_wheel(5.0, VR, true, true);
+        let decision = state.on_wheel(5.0, VR);
         assert_eq!(decision.ipc, ScrollIpc::None);
         assert!(decision.repaint);
         assert!(matches!(state, Scrollback::Windowed { offset: 0, .. }));
 
         // Already at the top: the next up-tick changes nothing.
-        let decision = state.on_wheel(1.0, VR, true, true);
+        let decision = state.on_wheel(1.0, VR);
         assert_eq!(decision.ipc, ScrollIpc::None);
         assert!(!decision.repaint);
     }

@@ -190,16 +190,15 @@ impl TerminalView {
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
 
-        let initial_size = TerminalSize {
-            cols: 80,
-            rows: 24,
-            pixel_width: 0,
-            pixel_height: 0,
-        };
         Self {
             session,
             focus_handle,
-            last_size: Rc::new(Cell::new(initial_size)),
+            last_size: Rc::new(Cell::new(TerminalSize {
+                cols: 80,
+                rows: 24,
+                pixel_width: 0,
+                pixel_height: 0,
+            })),
             metrics: Rc::new(Cell::new(None)),
             paint_caches: Rc::new(PaintCaches {
                 live: RefCell::new(ShapedLineCache::new()),
@@ -327,15 +326,7 @@ impl TerminalView {
     }
 
     fn handle_scroll_wheel(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
-        let Some(point) = self.cell_at(event.position) else {
-            return;
-        };
         let local_scrollback = self.session.read(cx).local_scrollback_available();
-        input_trace!(
-            "scroll-wheel delta={:?} phase={:?} local_scrollback={local_scrollback}",
-            event.delta,
-            event.touch_phase
-        );
         if local_scrollback {
             // Passthrough debt is unrelated to the visible fractional
             // position and must not leak across a primary/alternate-screen
@@ -353,7 +344,7 @@ impl TerminalView {
             let repaint =
                 self.session
                     .read(cx)
-                    .scroll_viewport(pixels, line_height(), point, viewport_rows);
+                    .scroll_viewport(pixels, line_height(), viewport_rows);
             if repaint {
                 cx.notify();
             }
@@ -362,13 +353,14 @@ impl TerminalView {
 
         // The terminal application or an old peer owns this wheel. Preserve
         // the existing discrete protocol path.
+        let Some(point) = self.cell_at(event.position) else {
+            return;
+        };
         if let Some(lines) =
             self.scroll_accum
                 .consume(event.delta, event.touch_phase, line_height())
         {
-            self.session
-                .read(cx)
-                .scroll_protocol(lines, point, self.last_size.get().rows as usize);
+            self.session.read(cx).scroll_protocol(lines, point);
         }
     }
 
@@ -875,12 +867,9 @@ impl Render for TerminalView {
 /// `TerminalScrollWindow` rather than the live `watch<TerminalFrame>`. Painting
 /// mirrors the live row loop (background quads then shaped text) minus the
 /// cursor/selection/IME overlays, which are live-viewport concepts a
-/// scrolled-back history view does not carry. Shaping is fresh per row rather
-/// than through the row-keyed cache: that cache is keyed by viewport row plus
-/// live-frame generation, neither of which tracks window content, and a scroll
-/// row index is stable for the lifetime of one held window, so its shaped
-/// artifacts are cached exactly like live rows. A one-row scroll normally
-/// hits for every overlapping row and shapes only the newly exposed edge.
+/// scrolled-back history view does not carry. Its cache is keyed by stable row
+/// index within the held window plus window generation, so scrolling reuses
+/// every overlapping shaped row and shapes only a newly exposed edge.
 #[allow(clippy::too_many_arguments)]
 fn paint_scrollback_window(
     lines: &[horizon_terminal_core::TerminalLine],
@@ -888,7 +877,6 @@ fn paint_scrollback_window(
     fractional_row: f32,
     generation: u64,
     bounds: Bounds<Pixels>,
-    rows: usize,
     palette_overrides: &[(u16, [u8; 3])],
     default_bg: Hsla,
     font: &Font,
@@ -903,9 +891,6 @@ fn paint_scrollback_window(
     let y_offset = -(line_height * fractional_row);
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         for (row, line) in lines.iter().enumerate() {
-            if row > rows {
-                break;
-            }
             let row_origin = bounds.origin + point(px(0.0), y_offset + line_height * row as f32);
 
             // Background quads, identical to the live path
@@ -1006,8 +991,8 @@ fn paint_terminal(
     // Scrollback windowed local paint: the client owns the offset into a held
     // window and repaints from it with zero IPC. History only — no cursor,
     // selection, or IME preedit (all live-viewport concepts; alacritty hides
-    // the cursor while scrolled back too). The live-frame row-generation shape
-    // The held window is immutable and Arc-backed. Its own cache is indexed
+    // the cursor while scrolled back too). The held window is immutable and
+    // Arc-backed. Its own cache is indexed
     // by row in that window (not viewport row), so scrolling shifts paint
     // origins without invalidating overlapping shaped rows.
     if let Some(scrollback) = scrollback_lines {
@@ -1026,7 +1011,6 @@ fn paint_terminal(
             scrollback.fractional_row,
             scrollback.generation,
             bounds,
-            size.rows as usize,
             &frame.palette_overrides,
             default_bg,
             &font,

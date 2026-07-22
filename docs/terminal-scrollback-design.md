@@ -306,6 +306,9 @@ Additive, under `docs/remoc-adoption-design.md` §4:
   against a v12 daemon never exercises the new surface. The bump is a
   **feature-negotiation signal**, not a compatibility barrier — the client
   gates "windowing available?" on the negotiated version rather than probing.
+  This gate routes at the view/session boundary: local continuous scrolling
+  and terminal-protocol whole-line forwarding are separate entry points, so
+  the local window state machine carries no legacy fallback mode.
 - The new surface is additive by the §4 classifier's own rules
   (`crates/horizon-session-protocol/src/schema_check.rs`): **appended enum
   variants** (`RequestScrollWindow`, `ScrollWindow`) are additive provided
