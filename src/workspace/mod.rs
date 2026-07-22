@@ -260,18 +260,6 @@ pub(crate) struct WorkspaceShell {
     _view_chooser_subscription: Option<Subscription>,
     // The placement the open view chooser will apply on confirm.
     pending_placement: Option<Placement>,
-    // Snapshot of workspace mode's dim/cursor pattern (the cursor pane, if
-    // the mode was active), taken by `freeze_scrim_before_modal_exit`
-    // right before a modal-opening handler calls
-    // `Workspace::exit_workspace_mode`. `render_node`
-    // (`effective_scrim_pattern`) substitutes this for the (now-inactive)
-    // live mode state while any control-surface modal is open, for both
-    // the scrim and the cursor-pane border (2026-07-15 round 3: modal-open
-    // is fully chrome-neutral, not just scrim-neutral) -- see
-    // `effective_scrim_pattern`'s doc comment and `docs/theme-design.md`'s
-    // scrim section. `None` means the mode wasn't active when the modal
-    // opened (or no modal is open).
-    scrim_freeze: Option<PaneId>,
     // Live state for an in-progress split-handle drag (`render_node`'s
     // `LayoutNode::Split` arm) -- set on a handle's `on_mouse_down`,
     // updated on the split container's `on_mouse_move` (live reflow),
@@ -326,7 +314,6 @@ impl WorkspaceShell {
             view_chooser: None,
             _view_chooser_subscription: None,
             pending_placement: None,
-            scrim_freeze: None,
             active_split_drag: None,
             last_focused_terminal: None,
             terminal_exit_tx,
