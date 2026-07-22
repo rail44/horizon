@@ -109,6 +109,48 @@ impl WorkspaceShell {
         cx.notify();
     }
 
+    pub(super) fn open_markdown_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.freeze_scrim_before_modal_exit();
+        self.workspace.exit_workspace_mode();
+        let list = cx.new(|cx| {
+            let mut list = ListState::new(
+                crate::markdown_viewer::open::MarkdownOpenDelegate::new(),
+                window,
+                cx,
+            )
+            .searchable(true);
+            select_first_row_on_open(&mut list, window, cx);
+            list
+        });
+        let subscription = cx.subscribe_in(
+            &list,
+            window,
+            |shell, list, event: &ListEvent, window, cx| match event {
+                ListEvent::Confirm(_) => {
+                    let query = list.read(cx).delegate().query().trim().to_string();
+                    shell.close_markdown_modal(window, cx);
+                    if !query.is_empty() {
+                        shell.open_markdown_file(query.into(), window, cx);
+                    }
+                }
+                ListEvent::Cancel => shell.close_markdown_modal(window, cx),
+                ListEvent::Select(_) => {}
+            },
+        );
+        window.focus(&list.focus_handle(cx), cx);
+        self.markdown_open = Some(list);
+        self._markdown_open_subscription = Some(subscription);
+        cx.notify();
+    }
+
+    pub(super) fn close_markdown_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.markdown_open = None;
+        self._markdown_open_subscription = None;
+        self.scrim_freeze = None;
+        self.focus_active(window, cx);
+        cx.notify();
+    }
+
     pub(super) fn open_session_manager(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.freeze_scrim_before_modal_exit();
         self.workspace.exit_workspace_mode();

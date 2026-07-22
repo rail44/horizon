@@ -83,11 +83,29 @@ pub struct WorkspaceSession {
     pub parent_session_id: Option<SessionId>,
 }
 
+/// First-party view instance state attached to a pane, analogous to
+/// `session_id` for session-backed panes. Lives on [`Pane`] rather than
+/// inside [`ViewKind`] so the view-kind enum stays a pure type
+/// discriminator (`docs/markdown-viewer-design.md` decision 1).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ViewState {
+    Markdown { path: PathBuf },
+}
+
+impl ViewState {
+    pub fn markdown_path(&self) -> Option<&PathBuf> {
+        match self {
+            Self::Markdown { path } => Some(path),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Pane {
     pub id: PaneId,
     pub kind: PaneKind,
     pub session_id: Option<SessionId>,
+    pub view_state: Option<ViewState>,
 }
 
 impl WorkspaceSession {
@@ -105,10 +123,19 @@ impl WorkspaceSession {
 
 impl Pane {
     pub fn new(kind: PaneKind, session_id: Option<SessionId>) -> Self {
+        Self::new_with_view_state(kind, session_id, None)
+    }
+
+    pub fn new_with_view_state(
+        kind: PaneKind,
+        session_id: Option<SessionId>,
+        view_state: Option<ViewState>,
+    ) -> Self {
         Self {
             id: PaneId::new(),
             kind,
             session_id,
+            view_state,
         }
     }
 

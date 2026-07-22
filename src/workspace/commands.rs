@@ -133,6 +133,9 @@ impl WorkspaceShell {
                     self.open_terminal_in_directory(workspace_root, window, cx);
                 }
             }
+            CommandId::OpenMarkdownFile => {
+                self.open_markdown_modal(window, cx);
+            }
             CommandId::ReloadSessionRuntime => {
                 if self.reload_in_progress {
                     return;

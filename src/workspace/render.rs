@@ -382,7 +382,10 @@ impl WorkspaceShell {
     /// scrim/border freeze logic (`effective_scrim_pattern`), both of
     /// which must treat "a modal is open" identically.
     fn any_modal_open(&self) -> bool {
-        self.palette.is_some() || self.view_chooser.is_some() || self.session_manager.is_some()
+        self.palette.is_some()
+            || self.view_chooser.is_some()
+            || self.session_manager.is_some()
+            || self.markdown_open.is_some()
     }
 
     fn toggle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1146,6 +1149,38 @@ impl Render for WorkspaceShell {
                                         .rounded_md()
                                         .overflow_hidden()
                                         .child(List::new(&chooser)),
+                                ),
+                        )
+                    })
+                    .when_some(self.markdown_open.clone(), |this, markdown_open| {
+                        this.child(
+                            div()
+                                .id("markdown-open-backdrop")
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .size_full()
+                                .flex()
+                                .justify_center()
+                                .items_start()
+                                .pt(px(64.0))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|shell, _, window, cx| {
+                                        shell.close_markdown_modal(window, cx);
+                                    }),
+                                )
+                                .child(
+                                    div()
+                                        .w(px(560.0))
+                                        .h(px(120.0))
+                                        .bg(rgb(theme::background()))
+                                        .border_1()
+                                        .border_color(theme::border())
+                                        .shadow(theme::overlay_shadow())
+                                        .rounded_md()
+                                        .overflow_hidden()
+                                        .child(List::new(&markdown_open)),
                                 ),
                         )
                     })

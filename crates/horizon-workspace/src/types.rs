@@ -4,7 +4,7 @@ mod kind;
 mod summary;
 mod tree;
 
-pub use entity::{Pane, Tab, Workspace, WorkspaceSession};
+pub use entity::{Pane, Tab, ViewState, Workspace, WorkspaceSession};
 pub use id::{PaneId, TabId};
 pub use kind::{PaneKind, SessionKind, ViewKind};
 pub use summary::{PaneSummary, SessionSummary, TabSummary};

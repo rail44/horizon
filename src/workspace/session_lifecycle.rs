@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 use super::{ensure_workspace_has_pane, PaneView, WorkspaceShell};
 use crate::agent::{AgentSession, AgentView};
+use crate::markdown_viewer::MarkdownViewer;
 use crate::sessiond::{wait_for_drain, SessiondHandle, SessiondResponder};
 use crate::terminal::{TerminalSession, TerminalView};
 use crate::theme;
@@ -238,6 +239,21 @@ impl WorkspaceShell {
                         cx.new(|cx| ThemeSettingsView::new(sessiond, window, cx)),
                     ),
                 );
+            } else if matches!(
+                self.workspace.pane_kind(pane_id),
+                Some(PaneKind::View(ViewKind::Markdown))
+            ) {
+                if let Some(path) = self
+                    .workspace
+                    .pane_view_state(pane_id)
+                    .and_then(|state| state.markdown_path())
+                {
+                    let path = path.clone();
+                    self.panes.insert(
+                        pane_id,
+                        PaneView::Markdown(cx.new(|cx| MarkdownViewer::new(path, window, cx))),
+                    );
+                }
             }
         }
         self.persist_workspace();
@@ -931,10 +947,11 @@ impl WorkspaceShell {
             // A session-less first-party view: no session id to create,
             // no sessiond spawn, and no `pending_terminal_spawns`/
             // `pending_roles` bookkeeping -- those exist only for the
-            // session-backed kinds handled below.
+            // session-backed kinds handled below. `Markdown` is not created
+            // through this path; it uses `open_markdown_file` instead.
             match placement {
                 Placement::NewTab => {
-                    self.workspace.open_tab(kind, None);
+                    self.workspace.open_view_tab(view_kind, None);
                 }
                 Placement::SplitRight | Placement::SplitDown => {
                     let axis = if placement == Placement::SplitRight {
@@ -942,7 +959,8 @@ impl WorkspaceShell {
                     } else {
                         SplitAxis::Vertical
                     };
-                    self.workspace.split_active_tab_with_view(view_kind, axis);
+                    self.workspace
+                        .split_active_tab_with_view(view_kind, None, axis);
                 }
             }
             self.reconcile(window, cx);
@@ -999,6 +1017,24 @@ impl WorkspaceShell {
     /// `SessionId` re-lookup) since v1 targets only the active session --
     /// per-row "open its directory" on an arbitrary session is a later
     /// slice (see the design doc's decision 4b).
+    pub(super) fn open_markdown_file(
+        &mut self,
+        path: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.restoring_workspace {
+            return;
+        }
+        self.workspace.exit_workspace_mode();
+        self.workspace.open_view_tab(
+            ViewKind::Markdown,
+            Some(horizon_workspace::ViewState::Markdown { path }),
+        );
+        self.reconcile(window, cx);
+        self.focus_active(window, cx);
+    }
+
     pub(super) fn open_terminal_in_directory(
         &mut self,
         workspace_root: std::path::PathBuf,

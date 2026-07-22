@@ -28,8 +28,25 @@ impl Workspace {
     }
 
     pub fn open_tab(&mut self, kind: PaneKind, session_id: Option<SessionId>) -> PaneId {
+        self.open_tab_with_view_state(kind, session_id, None)
+    }
+
+    pub fn open_view_tab(
+        &mut self,
+        kind: ViewKind,
+        view_state: Option<crate::types::ViewState>,
+    ) -> PaneId {
+        self.open_tab_with_view_state(PaneKind::View(kind), None, view_state)
+    }
+
+    fn open_tab_with_view_state(
+        &mut self,
+        kind: PaneKind,
+        session_id: Option<SessionId>,
+        view_state: Option<crate::types::ViewState>,
+    ) -> PaneId {
         self.ensure_session(kind, session_id);
-        let pane = Pane::new(kind, session_id);
+        let pane = Pane::new_with_view_state(kind, session_id, view_state);
         let pane_id = pane.id;
         let tab = Tab {
             id: TabId::new(),
@@ -122,8 +139,30 @@ impl Workspace {
         activate: bool,
         axis: SplitAxis,
     ) -> PaneId {
+        self.split_pane_in_tab_with_view_state(
+            tab_id,
+            target_pane_id,
+            kind,
+            session_id,
+            None,
+            activate,
+            axis,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn split_pane_in_tab_with_view_state(
+        &mut self,
+        tab_id: TabId,
+        target_pane_id: Option<PaneId>,
+        kind: PaneKind,
+        session_id: Option<SessionId>,
+        view_state: Option<crate::types::ViewState>,
+        activate: bool,
+        axis: SplitAxis,
+    ) -> PaneId {
         self.ensure_session(kind, session_id);
-        let pane = Pane::new(kind, session_id);
+        let pane = Pane::new_with_view_state(kind, session_id, view_state);
         let pane_id = pane.id;
         if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) {
             let target = target_pane_id.unwrap_or(tab.active);
@@ -211,8 +250,21 @@ impl Workspace {
     /// active tab's own focus directly; that's equivalent in practice since
     /// the shell calls this immediately after the chooser closes, with
     /// nothing else able to move focus meanwhile.
-    pub fn split_active_tab_with_view(&mut self, kind: ViewKind, axis: SplitAxis) -> PaneId {
-        self.split_tab(self.active_tab, PaneKind::View(kind), None, true, axis)
+    pub fn split_active_tab_with_view(
+        &mut self,
+        kind: ViewKind,
+        view_state: Option<crate::types::ViewState>,
+        axis: SplitAxis,
+    ) -> PaneId {
+        self.split_pane_in_tab_with_view_state(
+            self.active_tab,
+            None,
+            PaneKind::View(kind),
+            None,
+            view_state,
+            true,
+            axis,
+        )
     }
 
     /// Attaches a detached `session_id` as a split in the active tab,

@@ -64,7 +64,7 @@ fn split_active_tab_with_view_adds_a_session_less_pane_beside_the_focus() {
     let session_count_before = workspace.session_count();
 
     let view_pane =
-        workspace.split_active_tab_with_view(ViewKind::ThemeSettings, SplitAxis::Horizontal);
+        workspace.split_active_tab_with_view(ViewKind::ThemeSettings, None, SplitAxis::Horizontal);
 
     assert_eq!(workspace.visible_pane_ids(), vec![terminal_pane, view_pane]);
     assert_eq!(
@@ -81,11 +81,33 @@ fn closing_a_view_pane_detaches_no_session() {
     let mut workspace = Workspace::mvp();
     let terminal_pane = workspace.visible_pane_id(0).expect("terminal pane");
     let view_pane =
-        workspace.split_active_tab_with_view(ViewKind::ThemeSettings, SplitAxis::Horizontal);
+        workspace.split_active_tab_with_view(ViewKind::ThemeSettings, None, SplitAxis::Horizontal);
 
     // Trivially destructive: nothing to detach, since there is no session.
     assert_eq!(workspace.close_pane(view_pane), None);
     assert_eq!(workspace.visible_pane_ids(), vec![terminal_pane]);
+}
+
+#[test]
+fn markdown_view_pane_carries_its_path_as_view_state() {
+    let mut workspace = Workspace::mvp();
+    let path = std::path::PathBuf::from("/tmp/notes.md");
+    let markdown_pane = workspace.split_active_tab_with_view(
+        ViewKind::Markdown,
+        Some(ViewState::Markdown { path: path.clone() }),
+        SplitAxis::Horizontal,
+    );
+
+    assert_eq!(
+        workspace.pane_kind(markdown_pane),
+        Some(PaneKind::View(ViewKind::Markdown))
+    );
+    let pane = workspace
+        .panes
+        .iter()
+        .find(|pane| pane.id == markdown_pane)
+        .expect("markdown pane");
+    assert_eq!(pane.view_state, Some(ViewState::Markdown { path }));
 }
 
 #[test]

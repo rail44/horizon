@@ -40,6 +40,7 @@ use horizon_workspace::commands::CommandId;
 use horizon_workspace::{PaneId, PaneKind, SessionId, Workspace, WORKSPACE_STATE_VERSION};
 
 use crate::agent::{AgentSession, AgentView};
+use crate::markdown_viewer::MarkdownViewer;
 use crate::palette::PaletteDelegate;
 use crate::session_manager::SessionManagerDelegate;
 use crate::sessiond::{SessiondHandle, SessiondSlot};
@@ -184,6 +185,7 @@ enum PaneView {
     Terminal(Entity<TerminalView>),
     Agent(Entity<AgentView>),
     ThemeSettings(Entity<ThemeSettingsView>),
+    Markdown(Entity<MarkdownViewer>),
 }
 
 impl PaneView {
@@ -192,6 +194,7 @@ impl PaneView {
             PaneView::Terminal(view) => view.focus_handle(cx),
             PaneView::Agent(view) => view.focus_handle(cx),
             PaneView::ThemeSettings(view) => view.focus_handle(cx),
+            PaneView::Markdown(view) => view.focus_handle(cx),
         }
     }
 
@@ -200,6 +203,7 @@ impl PaneView {
             PaneView::Terminal(view) => view.clone().into_any_element(),
             PaneView::Agent(view) => view.clone().into_any_element(),
             PaneView::ThemeSettings(view) => view.clone().into_any_element(),
+            PaneView::Markdown(view) => view.clone().into_any_element(),
         }
     }
 }
@@ -258,6 +262,8 @@ pub(crate) struct WorkspaceShell {
     _session_manager_subscription: Option<Subscription>,
     view_chooser: Option<Entity<ListState<ViewChooserDelegate>>>,
     _view_chooser_subscription: Option<Subscription>,
+    markdown_open: Option<Entity<ListState<crate::markdown_viewer::open::MarkdownOpenDelegate>>>,
+    _markdown_open_subscription: Option<Subscription>,
     // The placement the open view chooser will apply on confirm.
     pending_placement: Option<Placement>,
     // Snapshot of workspace mode's dim/cursor pattern (the cursor pane, if
@@ -325,6 +331,8 @@ impl WorkspaceShell {
             _session_manager_subscription: None,
             view_chooser: None,
             _view_chooser_subscription: None,
+            markdown_open: None,
+            _markdown_open_subscription: None,
             pending_placement: None,
             scrim_freeze: None,
             active_split_drag: None,

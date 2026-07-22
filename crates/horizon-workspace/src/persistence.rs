@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{
     LayoutChild, LayoutNode, Pane, PaneId, PaneKind, SessionKind, SplitAxis, Tab, TabId, ViewKind,
-    Workspace, WorkspaceSession,
+    ViewState, Workspace, WorkspaceSession,
 };
 use crate::SessionId;
 
@@ -107,6 +107,8 @@ struct PaneState {
     id: PaneId,
     kind: PaneKindState,
     session_id: Option<SessionId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    view_state: Option<ViewStateState>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -151,6 +153,16 @@ enum PaneKindState {
 #[serde(rename_all = "snake_case")]
 enum ViewKindState {
     ThemeSettings,
+    Markdown,
+}
+
+/// Persisted counterpart of [`ViewState`]. Kept separate from [`ViewKindState`]
+/// so future view-specific payloads extend this enum without touching the
+/// view-kind discriminator (`docs/markdown-viewer-design.md` decision 1).
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum ViewStateState {
+    Markdown { path: String },
 }
 
 impl PaneKindState {
@@ -162,6 +174,16 @@ impl PaneKindState {
             Self::Terminal => Some(SessionKind::Terminal),
             Self::Agent => Some(SessionKind::Agent),
             Self::View(_) => None,
+        }
+    }
+
+    /// The view kind this pane's `view_state` must correspond to, when it is
+    /// a view pane. `ThemeSettings` carries no state; `Markdown` requires a
+    /// `ViewStateState::Markdown`. Non-view panes must have no `view_state`.
+    fn expected_view_kind_state(self) -> Option<ViewKindState> {
+        match self {
+            Self::Terminal | Self::Agent => None,
+            Self::View(view_kind) => Some(view_kind),
         }
     }
 }
@@ -435,8 +457,41 @@ impl WorkspaceState {
                                 pane.id
                             )));
                         }
+                        let expected_view = pane.kind.expected_view_kind_state();
+                        match (&expected_view, &pane.view_state) {
+                            (Some(ViewKindState::ThemeSettings), Some(_)) => {
+                                return Err(state_error(format!(
+                                    "theme-settings pane {:?} must not carry view state",
+                                    pane.id
+                                )));
+                            }
+                            (Some(ViewKindState::Markdown), None) => {
+                                return Err(state_error(format!(
+                                    "markdown pane {:?} is missing its path",
+                                    pane.id
+                                )));
+                            }
+                            (
+                                Some(ViewKindState::Markdown),
+                                Some(ViewStateState::Markdown { .. }),
+                            )
+                            | (None, None)
+                            | (Some(ViewKindState::ThemeSettings), None) => {}
+                            _ => {
+                                return Err(state_error(format!(
+                                    "pane {:?} has view state inconsistent with its kind",
+                                    pane.id
+                                )));
+                            }
+                        }
                     }
                     Some(expected_kind) => {
+                        if pane.view_state.is_some() {
+                            return Err(state_error(format!(
+                                "session-backed pane {:?} must not carry view state",
+                                pane.id
+                            )));
+                        }
                         let Some(session_id) = pane.session_id else {
                             return Err(state_error(format!(
                                 "pane {:?} has no session attachment",
@@ -526,6 +581,7 @@ impl LayoutState {
                         id: pane.id,
                         kind: PaneKindState::from(pane.kind),
                         session_id: pane.session_id,
+                        view_state: pane.view_state.clone().map(ViewStateState::from),
                     },
                 }
             }
@@ -579,6 +635,7 @@ impl LayoutState {
                     id,
                     kind: PaneKind::from(pane.kind),
                     session_id: pane.session_id,
+                    view_state: pane.view_state.map(ViewState::from),
                 });
                 LayoutNode::Pane(id)
             }
@@ -638,6 +695,7 @@ impl From<ViewKind> for ViewKindState {
     fn from(kind: ViewKind) -> Self {
         match kind {
             ViewKind::ThemeSettings => Self::ThemeSettings,
+            ViewKind::Markdown => Self::Markdown,
         }
     }
 }
@@ -646,6 +704,25 @@ impl From<ViewKindState> for ViewKind {
     fn from(kind: ViewKindState) -> Self {
         match kind {
             ViewKindState::ThemeSettings => Self::ThemeSettings,
+            ViewKindState::Markdown => Self::Markdown,
+        }
+    }
+}
+
+impl From<ViewState> for ViewStateState {
+    fn from(state: ViewState) -> Self {
+        match state {
+            ViewState::Markdown { path } => Self::Markdown {
+                path: path.to_string_lossy().into_owned(),
+            },
+        }
+    }
+}
+
+impl From<ViewStateState> for ViewState {
+    fn from(state: ViewStateState) -> Self {
+        match state {
+            ViewStateState::Markdown { path } => Self::Markdown { path: path.into() },
         }
     }
 }
@@ -758,8 +835,11 @@ mod tests {
     fn state_round_trip_preserves_a_view_pane_without_a_session() {
         let mut workspace = Workspace::mvp();
         let terminal_pane = workspace.visible_pane_id(0).expect("terminal pane");
-        let view_pane =
-            workspace.split_active_tab_with_view(ViewKind::ThemeSettings, SplitAxis::Horizontal);
+        let view_pane = workspace.split_active_tab_with_view(
+            ViewKind::ThemeSettings,
+            None,
+            SplitAxis::Horizontal,
+        );
 
         let json = workspace.to_persisted_json().expect("serialize");
         // The persisted shape for a view pane's kind (no session-backed
@@ -873,7 +953,7 @@ mod tests {
     #[test]
     fn validation_rejects_a_view_pane_with_a_session_attachment() {
         let mut workspace = Workspace::mvp();
-        workspace.split_active_tab_with_view(ViewKind::ThemeSettings, SplitAxis::Horizontal);
+        workspace.split_active_tab_with_view(ViewKind::ThemeSettings, None, SplitAxis::Horizontal);
         let mut value = json_value(&workspace);
         // Any session id is rejected here regardless of whether it's
         // known -- a view pane must have none at all.
@@ -946,6 +1026,62 @@ mod tests {
             .expect_err("duplicate must fail");
         assert!(error.to_string().contains("more than once"));
         assert_eq!(workspace.to_persisted_json().expect("serialize"), before);
+    }
+
+    #[test]
+    fn state_round_trip_preserves_a_markdown_view_pane_path() {
+        let mut workspace = Workspace::mvp();
+        let path = std::path::PathBuf::from("/home/owner/notes.md");
+        let markdown_pane = workspace.split_active_tab_with_view(
+            ViewKind::Markdown,
+            Some(ViewState::Markdown { path: path.clone() }),
+            SplitAxis::Horizontal,
+        );
+
+        let json = workspace.to_persisted_json().expect("serialize");
+        let value: Value = serde_json::from_str(&json).expect("json");
+        assert_eq!(
+            value["tabs"][0]["root"]["children"][1]["node"]["pane"]["kind"],
+            json!({"view": "markdown"})
+        );
+        assert_eq!(
+            value["tabs"][0]["root"]["children"][1]["node"]["pane"]["view_state"],
+            json!({"type": "markdown", "path": "/home/owner/notes.md"})
+        );
+
+        let restored = Workspace::from_persisted_json(&json).expect("restore");
+        assert_eq!(
+            restored.pane_kind(markdown_pane),
+            Some(PaneKind::View(ViewKind::Markdown))
+        );
+        let restored_pane = restored
+            .panes
+            .iter()
+            .find(|pane| pane.id == markdown_pane)
+            .expect("markdown pane");
+        assert_eq!(restored_pane.view_state, Some(ViewState::Markdown { path }));
+        assert_eq!(restored.to_persisted_json().expect("serialize again"), json);
+    }
+
+    #[test]
+    fn validation_rejects_a_markdown_pane_without_a_path() {
+        let mut workspace = Workspace::mvp();
+        workspace.split_active_tab_with_view(
+            ViewKind::Markdown,
+            Some(ViewState::Markdown {
+                path: "/tmp/x.md".into(),
+            }),
+            SplitAxis::Horizontal,
+        );
+        let mut value = json_value(&workspace);
+        value["tabs"][0]["root"]["children"][1]["node"]["pane"]["view_state"] = Value::Null;
+        assert_invalid(value, "missing its path");
+
+        let mut value = json_value(&workspace);
+        value["tabs"][0]["root"]["children"][1]["node"]["pane"]["kind"] = json!("terminal");
+        value["tabs"][0]["root"]["children"][1]["node"]["pane"]["session_id"] =
+            value["sessions"][0]["id"].clone();
+        assert_invalid(value, "session-backed pane");
     }
 
     fn state_value() -> Value {

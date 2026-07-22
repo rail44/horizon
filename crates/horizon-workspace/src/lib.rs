@@ -23,7 +23,7 @@ pub use persistence::{
     WORKSPACE_STATE_VERSION,
 };
 pub use session_id::SessionId;
-pub use types::{PaneId, PaneKind, SessionKind, SplitAxis, ViewKind, Workspace};
+pub use types::{Pane, PaneId, PaneKind, SessionKind, SplitAxis, ViewKind, ViewState, Workspace};
 
 #[cfg(test)]
 mod tests;

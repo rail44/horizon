@@ -23,12 +23,14 @@ pub enum SessionKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum ViewKind {
     ThemeSettings,
+    Markdown,
 }
 
 impl ViewKind {
     pub fn title(self) -> &'static str {
         match self {
             Self::ThemeSettings => "Theme Settings",
+            Self::Markdown => "Markdown",
         }
     }
 }

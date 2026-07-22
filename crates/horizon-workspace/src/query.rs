@@ -1,5 +1,5 @@
 use super::types::{
-    Pane, PaneId, PaneKind, PaneSummary, SessionSummary, Tab, TabSummary, Workspace,
+    Pane, PaneId, PaneKind, PaneSummary, SessionSummary, Tab, TabSummary, ViewState, Workspace,
     WorkspaceSession,
 };
 use crate::SessionId;
@@ -21,6 +21,13 @@ impl Workspace {
             .iter()
             .find(|pane| pane.id == pane_id)
             .map(|pane| pane.kind)
+    }
+
+    pub fn pane_view_state(&self, pane_id: PaneId) -> Option<&ViewState> {
+        self.panes
+            .iter()
+            .find(|pane| pane.id == pane_id)
+            .and_then(|pane| pane.view_state.as_ref())
     }
 
     pub fn terminal_session_id(&self, pane_id: PaneId) -> Option<SessionId> {

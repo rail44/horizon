@@ -20,6 +20,9 @@ pub enum CommandId {
     /// 4a) -- v1's "hunt down the agent's worktree and cd there" fix,
     /// scoped to the active session only.
     OpenTerminalInSessionDirectory,
+    /// Opens a local Markdown file in a new session-less view pane
+    /// (`docs/markdown-viewer-design.md`).
+    OpenMarkdownFile,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -190,6 +193,13 @@ pub fn core_commands() -> Vec<CommandSpec> {
                 "Open a new terminal whose working directory is the active session's directory.",
             destructive: false,
         },
+        CommandSpec {
+            id: CommandId::OpenMarkdownFile,
+            title: "Open Markdown File…",
+            category: CommandCategory::Workspace,
+            description: "Open a local Markdown file in a read-only view pane.",
+            destructive: false,
+        },
     ]
 }
 
@@ -206,7 +216,8 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
         | CommandId::FocusNextPane
         | CommandId::ReloadSessionRuntime
         | CommandId::OpenSessionManager
-        | CommandId::ReloadConfig => true,
+        | CommandId::ReloadConfig
+        | CommandId::OpenMarkdownFile => true,
         CommandId::CloseActivePane => state.visible_pane_count > 1,
         // Unlike `CloseActivePane` (closing a tab's last pane must go
         // through closing the tab itself instead), closing the
@@ -262,7 +273,7 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 16);
+        assert_eq!(commands.len(), 17);
         assert_eq!(commands[0].id, CommandId::SplitRight);
         assert_eq!(commands[0].title, "Split Right…");
         assert_eq!(commands[1].id, CommandId::SplitDown);
@@ -283,6 +294,8 @@ mod tests {
         assert_eq!(commands[14].title, "Reload Config");
         assert_eq!(commands[15].id, CommandId::OpenTerminalInSessionDirectory);
         assert_eq!(commands[15].title, "Open Terminal in Session Directory");
+        assert_eq!(commands[16].id, CommandId::OpenMarkdownFile);
+        assert_eq!(commands[16].title, "Open Markdown File…");
     }
 
     #[test]

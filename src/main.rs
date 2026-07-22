@@ -16,6 +16,7 @@ mod agent;
 mod control_plane;
 mod input_trace;
 mod keymap;
+mod markdown_viewer;
 mod palette;
 mod session_manager;
 mod sessiond;
