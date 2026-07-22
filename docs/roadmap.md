@@ -329,8 +329,12 @@ lands:
   `events` channel; the initial policy is a three-viewport immutable window
   with a one-viewport directional prefetch margin. Painting shares that
   window by `Arc`, caches shaping by stable window-row index, and preserves
-  the latest local anchor when a prefetch lands. Margin sizing remains
-  intentionally tuneable;
+  the latest local anchor when a prefetch lands. The 2026-07-22 presentation
+  follow-up keeps that address/wire row-based but makes the GPUI viewport
+  continuous: precise pixel deltas retain a fractional row, paint one clipped
+  context row, and survive first-window and edge-fetch rebasing. GPUI's generic
+  scroll handle is deliberately not a second scroll authority. Margin sizing
+  remains intentionally tuneable;
   interim "smooth the reply cadence" fix assessed as symptomatic, skip.
 
 ## External gates
@@ -346,7 +350,8 @@ lands:
 - 2026-07-22 Pane/scroll performance boundary: cached fixed-bounds Terminal
   and ThemeSettings leaves with an uncached composite Agent around its nested
   transcript cache, terminal scroll-window row sharing/shaping cache plus
-  directional prefetch, and variable-height Agent transcript virtualization
+  directional prefetch and continuous pixel viewport, and variable-height
+  Agent transcript virtualization
   (`docs/agent-ui-performance-design.md`,
   `docs/terminal-scrollback-design.md`)
 - 2026-07-22 Native GPUI platform restored on every OS; custom winit platform

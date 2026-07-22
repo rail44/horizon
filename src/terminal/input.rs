@@ -6,7 +6,7 @@
 //! through Key too would double-feed every keypress. M1 revisits this
 //! with kitty-flags-on-frame mode routing (docs/gpui-migration-design.md).
 
-use gpui::{Keystroke, Modifiers, MouseButton, Pixels, Point, ScrollDelta, TouchPhase};
+use gpui::{px, Keystroke, Modifiers, MouseButton, Pixels, Point, ScrollDelta, TouchPhase};
 use horizon_terminal_core::{
     TerminalMouseButton, TerminalMouseModifiers, TerminalSelectionKind, TerminalSelectionPoint,
 };
@@ -28,27 +28,53 @@ pub(crate) fn cell_from_position(
     TerminalSelectionPoint { row, col }
 }
 
-/// Fixed lines-per-tick for imprecise wheel events (`ScrollDelta::Lines`,
-/// e.g. a physical mouse wheel with no pixel magnitude to accumulate) --
-/// the old fixed-step behavior, kept for exactly this case. Trackpad
-/// (`ScrollDelta::Pixels`) events go through [`ScrollAccumulator`] instead.
+/// Fixed lines-per-tick for terminal-protocol passthrough
+/// (`ScrollDelta::Lines`, e.g. a physical mouse wheel). The primary-screen
+/// frontend instead uses [`viewport_row_delta`] for both precise and
+/// imprecise events so its displacement matches GPUI lists.
 const WHEEL_TICK_LINES: i32 = 3;
 
-/// Pixel-delta scroll accumulator (root-caused in
+/// GPUI's `List` converts imprecise line deltas with a 20px logical line
+/// height. Use the same conversion for the terminal's frontend viewport so a
+/// wheel gesture has the same physical displacement in Agent and Terminal;
+/// precise trackpad deltas already carry their exact pixel distance.
+const GPUI_SCROLL_LINE_HEIGHT: Pixels = px(20.0);
+
+/// Convert a GPUI wheel event into continuous terminal-row units for local
+/// presentation. Unlike [`ScrollAccumulator`], this never truncates a precise
+/// delta: the fractional row is painted by the frontend canvas.
+pub(crate) fn viewport_row_delta(delta: ScrollDelta, terminal_line_height: f32) -> f32 {
+    if !terminal_line_height.is_finite() || terminal_line_height <= 0.0 {
+        return 0.0;
+    }
+    let rows = f32::from(delta.pixel_delta(GPUI_SCROLL_LINE_HEIGHT).y) / terminal_line_height;
+    if rows.is_finite() {
+        rows
+    } else {
+        0.0
+    }
+}
+
+/// Pixel-delta fallback accumulator (root-caused in
 /// docs/research/gpui-terminal-presentation-2026-07-18.md, "Touchpad
 /// scrolling"): a naive per-event `pixels / line_height` truncation drops
 /// most trackpad deltas (each event is usually a fraction of one line), so
 /// fractional lines are banked across events and only whole-line multiples
-/// are consumed -- the convergent pattern among surveyed peers (termy's
-/// `scroll_debt`, tty7's trunc/bank). Reset on `TouchPhase::Started` so a
-/// new gesture doesn't inherit leftover fractional lines from an earlier,
-/// unrelated one.
+/// are consumed when the wheel must be encoded for an old peer or a terminal
+/// application (termy's `scroll_debt`, tty7's trunc/bank). Local scrollback
+/// does not use this debt: it paints the fraction directly. Reset on
+/// `TouchPhase::Started` so a new passthrough gesture doesn't inherit an old
+/// remainder.
 #[derive(Debug, Default)]
 pub(crate) struct ScrollAccumulator {
     fractional_lines: f32,
 }
 
 impl ScrollAccumulator {
+    pub(crate) fn reset(&mut self) {
+        self.fractional_lines = 0.0;
+    }
+
     /// Consumes one wheel event, returning the whole-line scroll step due
     /// (if any) and banking the remainder. `line_height` is the pixel
     /// height of one terminal row; `phase` resets the accumulator on a
@@ -62,7 +88,7 @@ impl ScrollAccumulator {
         line_height: f32,
     ) -> Option<i32> {
         if matches!(phase, TouchPhase::Started) {
-            self.fractional_lines = 0.0;
+            self.reset();
         }
         match delta {
             ScrollDelta::Lines(lines) => {
@@ -222,6 +248,24 @@ mod tests {
     }
 
     #[test]
+    fn precise_delta_reaches_the_viewport_without_line_truncation() {
+        assert_eq!(viewport_row_delta(pixels_delta(7.5), LINE_HEIGHT), 0.375);
+    }
+
+    #[test]
+    fn imprecise_delta_uses_the_same_twenty_pixel_unit_as_gpui_list() {
+        assert_eq!(
+            viewport_row_delta(ScrollDelta::Lines(point(0.0, 1.0)), LINE_HEIGHT),
+            1.0
+        );
+    }
+
+    #[test]
+    fn invalid_terminal_line_height_produces_no_viewport_motion() {
+        assert_eq!(viewport_row_delta(pixels_delta(7.5), 0.0), 0.0);
+    }
+
+    #[test]
     fn a_delta_under_one_line_banks_the_remainder_and_reports_no_line_yet() {
         let mut accum = ScrollAccumulator::default();
         let step = accum.consume(pixels_delta(15.0), TouchPhase::Moved, LINE_HEIGHT);
@@ -287,6 +331,20 @@ mod tests {
         // line; with the reset, this is a fresh 0.75 and stays banked.
         assert_eq!(
             accum.consume(pixels_delta(15.0), TouchPhase::Moved, LINE_HEIGHT),
+            None
+        );
+    }
+
+    #[test]
+    fn explicit_reset_prevents_passthrough_debt_from_leaking_between_modes() {
+        let mut accum = ScrollAccumulator::default();
+        assert_eq!(
+            accum.consume(pixels_delta(15.0), TouchPhase::Moved, LINE_HEIGHT),
+            None
+        );
+        accum.reset();
+        assert_eq!(
+            accum.consume(pixels_delta(10.0), TouchPhase::Moved, LINE_HEIGHT),
             None
         );
     }

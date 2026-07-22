@@ -9,6 +9,16 @@ to `docs/terminal-protocol-goals.md` (where the frame path is headed),
 `docs/session-daemon-design.md` (the daemon-owns-the-emulator split) and
 `docs/remoc-adoption-design.md` (the v11 wire and its §4 skew discipline).
 
+**Pixel presentation follow-up (2026-07-22):** the window address and wire
+remain row-based, but the frontend viewport is continuous. Precise GPUI wheel
+deltas update a fractional row position, the canvas paints one clipped context
+row, and only window prefetch crosses back into integer row coordinates. A
+first sub-row gesture requests the live-tail window immediately and retains
+all movement while the reply is in flight. This deliberately does not use a
+second `ScrollHandle`: Horizon's held-window offset is the one scroll authority,
+while GPUI supplies native pixel deltas and clipping. Alternate-screen and
+mouse-reporting applications still receive discrete terminal wheel input.
+
 ## What prompted this
 
 Scrolling *back* through history — wheel or PageUp into the scrollback
@@ -39,10 +49,12 @@ cannot know what is one row above the top of the frame it holds.
 
 The full path of one scroll tick today:
 
-1. `TerminalView::handle_scroll_wheel` (`src/terminal/mod.rs:313`) turns a
-   pixel/line delta into whole lines via `ScrollAccumulator`
-   (`src/terminal/input.rs`) — this part is already client-local — and
-   calls `session.send_scroll(lines, point)`.
+1. Before the pixel-presentation follow-up above,
+   `TerminalView::handle_scroll_wheel` turned a pixel/line delta into whole
+   lines via `ScrollAccumulator` (`src/terminal/input.rs`) and called
+   `session.send_scroll(lines, point)`. The round-trip diagnosis below records
+   that original path; the implemented local path now preserves precise GPUI
+   pixels as described in §3.3.
 2. `send_scroll` (`src/terminal/session.rs:356`) dispatches
    `TerminalCommand::Scroll(TerminalScroll { lines, point })` onto the
    attachment's `commands` mpsc sender.
@@ -233,14 +245,25 @@ not-latest self-located window, resolved by position.
 
 ### 3.3 Client-local scrolling within the window
 
-The client owns a **local scroll offset** into the held window. A wheel or
-PageUp gesture moves the offset and triggers a **local repaint** from the
-window's rows — no IPC (`ScrollAccumulator` already yields the line delta
-locally, `src/terminal/mod.rs:317`). The live `display_offset` on the daemon
-stays at the tail; scrollback is composited entirely on the client from the
-one window it holds. Scrolling back down until `below`'s rows are exhausted
-returns to the live edge: the client drops the window and resumes rendering
-the live-frame watch.
+The client owns a **continuous local scroll position** into the held window:
+an integer row offset plus a normalized fractional row. Precise wheel events
+move that position by their exact GPUI pixel delta and trigger a local repaint
+with one extra row clipped above or below the viewport. The shaped-row cache
+keeps integer window-row keys, so crossing a row boundary normally reuses every
+overlapping artifact and shapes only the exposed edge. No IPC occurs inside
+the window. The live `display_offset` on the daemon stays at the tail;
+scrollback is composited entirely on the client from the one window it holds.
+Scrolling back down until `below`'s rows are exhausted returns to the live
+edge: the client drops the window and resumes rendering the live-frame watch.
+
+GPUI's generic scroll container is not the state owner here. Its content-size
+clamping would require an oversized canvas, duplicate the held-window offset,
+and need a second rebase whenever prefetch replaces the window. The terminal
+keeps its viewport-sized canvas (and therefore correct PTY resize/input
+geometry), consumes `ScrollDelta::pixel_delta` directly, and clips fractional
+painting to that canvas. Old peers and screens where the terminal application
+owns the wheel retain the pre-existing whole-line accumulator and
+`TerminalCommand::Scroll` path.
 
 ### 3.4 Prefetch
 

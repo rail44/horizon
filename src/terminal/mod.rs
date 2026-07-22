@@ -38,7 +38,7 @@ use horizon_terminal_core::{
 
 use self::input::{
     cell_from_position, selection_kind_from_clicks, term_key_code, term_modifiers,
-    terminal_mouse_button, terminal_mouse_modifiers, ScrollAccumulator,
+    terminal_mouse_button, terminal_mouse_modifiers, viewport_row_delta, ScrollAccumulator,
 };
 use self::shape_cache::{CacheEpoch, RowItem, ShapedLineCache, NO_GENERATION};
 use crate::input_trace::input_trace;
@@ -172,9 +172,10 @@ pub(crate) struct TerminalView {
     // The button held while the app has mouse reporting on, so drags and
     // the release report the same button the press did.
     reporting_button: Option<TerminalMouseButton>,
-    // Pixel-delta scroll accumulator (see `input::ScrollAccumulator`'s
-    // doc): banks fractional lines across wheel events, per-view state
-    // since each pane scrolls independently.
+    // Discrete-scroll fallback for alt-screen/mouse-reporting apps and old
+    // peers. Primary-screen windowing consumes exact GPUI pixel deltas instead;
+    // this accumulator preserves terminal-protocol whole-line semantics only
+    // where the frontend does not own the viewport.
     scroll_accum: ScrollAccumulator,
     _session_observation: Subscription,
 }
@@ -328,26 +329,31 @@ impl TerminalView {
         let Some(point) = self.cell_at(event.position) else {
             return;
         };
-        if let Some(lines) =
+        let rows = viewport_row_delta(event.delta, line_height());
+        let local_scrollback = self.session.read(cx).local_scrollback_available();
+        let fallback_lines = if local_scrollback {
+            // Passthrough debt is unrelated to the visible fractional
+            // position and must not leak across a primary/alternate-screen
+            // transition.
+            self.scroll_accum.reset();
+            None
+        } else {
             self.scroll_accum
                 .consume(event.delta, event.touch_phase, line_height())
-        {
-            // The viewport height in rows, from the last painted size — the
-            // basis for the window request height and the local edge
-            // arithmetic (`Scrollback`). Falls back to the seed size before
-            // the first paint.
-            let viewport_rows = self.last_size.get().rows as usize;
-            // The session routes this through the scrollback state machine:
-            // a local in-window move repaints with zero IPC, everything else
-            // (round-trip fallback, window request, return to live) does its
-            // own IO. A `true` return means paint the new local position now.
-            let repaint = self
-                .session
+        };
+        if rows.abs() <= f32::EPSILON && fallback_lines.is_none() {
+            return;
+        }
+        // The primary-screen window consumes the exact GPUI displacement;
+        // alt-screen/mouse-mode and old peers use fallback_lines to preserve
+        // terminal-protocol wheel semantics.
+        let viewport_rows = self.last_size.get().rows as usize;
+        let repaint =
+            self.session
                 .read(cx)
-                .handle_scroll(lines, point, viewport_rows);
-            if repaint {
-                cx.notify();
-            }
+                .handle_scroll(rows, fallback_lines, point, viewport_rows);
+        if repaint {
+            cx.notify();
         }
     }
 
@@ -809,7 +815,7 @@ impl Render for TerminalView {
                 view.handle_scroll_wheel(event, cx);
             }))
             .child(
-                div().flex_1().min_h_0().child(
+                div().flex_1().min_h_0().overflow_hidden().child(
                     canvas(
                         |_, _, _| {},
                         move |bounds, _, window, cx| {
@@ -864,6 +870,7 @@ impl Render for TerminalView {
 fn paint_scrollback_window(
     lines: &[horizon_terminal_core::TerminalLine],
     first_window_row: usize,
+    fractional_row: f32,
     generation: u64,
     bounds: Bounds<Pixels>,
     rows: usize,
@@ -878,44 +885,48 @@ fn paint_scrollback_window(
     window: &mut Window,
     cx: &mut App,
 ) {
-    for (row, line) in lines.iter().enumerate() {
-        if row >= rows {
-            break;
-        }
-        let row_origin = bounds.origin + point(px(0.0), line_height * row as f32);
-
-        // Background quads, identical to the live path (`paint_terminal`): a
-        // blank run carrying only `columns`/`bg` still fills its background,
-        // so BCE-erased regions and bg-colored padding survive in history too.
-        let mut col = 0_usize;
-        for span in &line.spans {
-            let x = cell_width * col as f32;
-            col += span.columns;
-            let bg = theme::to_hsla(theme::resolve(span.bg, palette_overrides));
-            if bg != default_bg {
-                window.paint_quad(fill(
-                    Bounds::new(
-                        row_origin + point(x, px(0.0)),
-                        gpui::size(cell_width * span.columns as f32, line_height),
-                    ),
-                    bg,
-                ));
+    let y_offset = -(line_height * fractional_row);
+    window.with_content_mask(Some(ContentMask { bounds }), |window| {
+        for (row, line) in lines.iter().enumerate() {
+            if row > rows {
+                break;
             }
-        }
+            let row_origin = bounds.origin + point(px(0.0), y_offset + line_height * row as f32);
 
-        let window_row = first_window_row + row;
-        let items = shape_cache.get_or_shape(window_row, generation, || {
-            shape_row_items(
-                line,
-                palette_overrides,
-                font,
-                font_size,
-                cell_width,
-                text_system,
-            )
-        });
-        paint_row_items(items, row_origin, cell_width, window, cx);
-    }
+            // Background quads, identical to the live path
+            // (`paint_terminal`): a blank run carrying only `columns`/`bg`
+            // still fills its background, so BCE-erased regions and
+            // bg-colored padding survive in history too.
+            let mut col = 0_usize;
+            for span in &line.spans {
+                let x = cell_width * col as f32;
+                col += span.columns;
+                let bg = theme::to_hsla(theme::resolve(span.bg, palette_overrides));
+                if bg != default_bg {
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            row_origin + point(x, px(0.0)),
+                            gpui::size(cell_width * span.columns as f32, line_height),
+                        ),
+                        bg,
+                    ));
+                }
+            }
+
+            let window_row = first_window_row + row;
+            let items = shape_cache.get_or_shape(window_row, generation, || {
+                shape_row_items(
+                    line,
+                    palette_overrides,
+                    font,
+                    font_size,
+                    cell_width,
+                    text_system,
+                )
+            });
+            paint_row_items(items, row_origin, cell_width, window, cx);
+        }
+    });
 }
 
 fn paint_terminal(
@@ -997,6 +1008,7 @@ fn paint_terminal(
         paint_scrollback_window(
             lines,
             scrollback.range.start,
+            scrollback.fractional_row,
             scrollback.generation,
             bounds,
             size.rows as usize,
