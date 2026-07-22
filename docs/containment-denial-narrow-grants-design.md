@@ -8,6 +8,9 @@ domain-denial narrow-grant retry. Recording-deny `openat`/`openat2` mediation,
 structured filesystem approval, session grant store, sandboxed retry, and
 shadow-judge input are also implemented. The missing-leaf policy is the nearest
 existing parent directory, displayed honestly as a recursive tree grant.
+Metadata-writing Git commands now have a bounded preflight path: Horizon asks
+before the first attempt, validates the isolated worktree's Git indirection,
+and grants its metadata roots only to that sandboxed command.
 The owner has decided that containment denials become
 boundary-grant decisions, approval never removes the sandbox, and the local
 cross-platform network baseline is a proxy-aware compatibility layer backed
@@ -35,9 +38,11 @@ mechanism's structured denial records.
   proxy. Direct TCP, UDP, and unapproved local IPC that could provide an
   alternate egress route remain denied. A client may ignore proxy
   configuration, but such a client must remain unable to connect directly.
-- A domain or filesystem grant is session-scoped, additive, and applied to a
-  fresh sandbox policy on retry. It is never global and never changes an
-  already-running Landlock/Seatbelt domain.
+- A generic domain or filesystem denial grant is session-scoped, additive, and
+  applied to a fresh sandbox policy on retry. It is never global and never
+  changes an already-running Landlock/Seatbelt domain. The Git preflight below
+  is deliberately narrower: its metadata roots live only for one approved
+  command and any chained retry of that same command.
 - Exit status and process output are diagnostic evidence only. They are not an
   authority for naming or granting a resource.
 - The existing judge should receive the same structured grant request as the
@@ -58,6 +63,56 @@ runtime, backed by a real integration test. The filesystem grant store and
 sandboxed retry are implementable now. Complete, trustworthy automatic
 discovery of every filesystem denial is **not** provided by nono's current
 `Sandbox::apply_auto` API; the exact limitation is described below.
+
+## Git-operation preflight
+
+Issue 57 is narrower than general filesystem-denial discovery. Horizon creates
+the isolated worktree itself, so it can establish the Git metadata relationship
+before executing a command. A linked worktree needs both its worktree-specific
+gitdir (index, HEAD, lock files) and the shared common gitdir (objects and refs),
+which normally sit outside the writable worktree.
+
+The implementation follows the useful common shape in contemporary agents:
+[Gemini CLI documents](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/sandbox.md)
+proactive per-run sandbox expansion and native worktree support, while
+[Codex's Linux sandbox](https://github.com/openai/codex/blob/main/codex-rs/linux-sandbox/README.md)
+represents writable roots separately from the workspace and keeps Git metadata
+protected by default. Horizon adopts the small reusable mechanism rather than
+either product's complete sandbox stack:
+
+1. A conservative shell recognizer finds direct `git` invocations. Known
+   read-only subcommands such as `status`, `diff`, and `log` remain ordinary
+   contained tier-1 calls; sandboxed bash sets `GIT_OPTIONAL_LOCKS=0` so Git
+   does not refresh the index as an optional optimization. Metadata-writing
+   and unknown subcommands request approval before their first execution.
+   Missing a complex shell spelling grants nothing; the normal sandbox denial
+   path remains the backstop.
+2. Command text decides only whether to ask. It is never trusted to name a
+   filesystem grant. Horizon resolves the session workspace's `.git` directory
+   or pointer on the host, canonicalizes it, checks the linked gitdir's
+   `gitdir` backlink, resolves `commondir`, verifies the expected
+   `common/worktrees/*` layout, and displays the resulting roots. Sandboxed
+   bash removes ambient repository-routing variables such as `GIT_DIR`,
+   `GIT_WORK_TREE`, and `GIT_INDEX_FILE`, so the executed Git process cannot
+   silently select a different repository than the one Horizon validated.
+3. Approval adds read-write directory-tree grants for those exact roots to a
+   fresh sandbox policy. The roots are checked again in the approval resolver
+   and immediately before the queued process spawns. A changed pointer or
+   backlink fails closed without running the command.
+4. The roots are command-scoped, not stored in the session filesystem-grant
+   list. If that same attempt later needs a domain or structured filesystem
+   grant, host-authored audit fields carry the validated roots into the retry;
+   unrelated later commands cannot inherit them.
+
+The shared common gitdir is necessarily broader than one ref or object file,
+and the grant applies to the whole approved bash command, not to Git's PID
+alone. That breadth is shown in the approval prompt and accepted for this cheap
+Git-only slice. Building a ref/object transaction broker is outside Horizon's
+product focus. A real Linux test creates a linked worktree, runs read-only
+`git status` without expansion, approves `git add && git commit`, proves the
+commit succeeds inside containment, and proves the grant did not persist in
+the session store. macOS uses the same policy inputs, but its real-runtime
+verification remains in the existing real-Mac follow-up.
 
 ## Runtime ownership and extraction boundary
 
@@ -206,6 +261,11 @@ any revalidated session grants, with `ReadableScope::Full`
 (`crates/horizon-agent/src/tools/bash/exec.rs:555-559`). The tracked Cargo
 configuration places intermediate build state outside it, under
 `{cargo-cache-home}/horizon-build-dir` (`.cargo/config.toml:1-40`).
+The sandbox baseline also grants read-write access to the exact special file
+`/dev/null`: Git and ordinary shells open that standard discard/source endpoint
+even for read-only operations. The grant is deliberately file-scoped; `/dev`
+and every sibling device remain non-writable and non-grantable through the
+approval path.
 
 On Linux, the dedicated helper now installs the extracted `openat`/`openat2`
 notification listener after Landlock setup. The unsandboxed supervisor

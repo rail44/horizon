@@ -154,13 +154,13 @@ fn execute_tier1(
     request: &ToolCallRequest,
 ) -> Execution {
     match request.tool_id.as_str() {
-        "fs.write" | "fs.edit" => execute_tier1_fs(tool_state, request),
+        "fs.write" | "fs.edit" | "fs.patch" => execute_tier1_fs(tool_state, request),
         "bash" => execute_tier1_bash(tool_state, session_id, request),
         _ => Execution::RequiresApproval,
     }
 }
 
-/// `fs.write`/`fs.edit`: run to completion synchronously right now, reusing
+/// `fs.write`/`fs.edit`/`fs.patch`: run to completion synchronously right now, reusing
 /// the exact same execution path a manual approval would (`tools::
 /// execute_approved`), just skipping the approval round trip. The audit
 /// marker (tier + reason) is added to the result the same way a real
@@ -222,6 +222,7 @@ fn execute_tier1_bash(
         network,
         crate::tools::bash::SandboxedApprovalOrigin::Tier1Auto,
         tool_state.filesystem_grants_snapshot(),
+        None,
         runtime.async_results.clone(),
     );
 

@@ -21,16 +21,16 @@ mod session_loop;
 mod types;
 
 pub use contract::{
-    ClipboardDestination, SelectionCommand, TerminalCommand, TerminalSpawnSpec, TerminalSummary,
-    TerminalUpdate,
+    ClipboardDestination, ScrollWindowRequest, SelectionCommand, TerminalCommand,
+    TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
 };
 pub use core::{TerminalColorScheme, DEFAULT_SCROLLBACK_LINES};
 pub use session_loop::{run_terminal_core, CoreReceivers, CoreSenders, TerminalCoreOptions};
 pub use types::{
     KeyEventKind, NamedColor, TerminalColor, TerminalCursor, TerminalCursorShape, TerminalFrame,
     TerminalLine, TerminalMouseButton, TerminalMouseKind, TerminalMouseModifiers,
-    TerminalMouseReport, TerminalScroll, TerminalSelection, TerminalSelectionKind,
-    TerminalSelectionPoint, TerminalSize, TerminalSpan, TerminalUnderline,
+    TerminalMouseReport, TerminalScroll, TerminalScrollWindow, TerminalSelection,
+    TerminalSelectionKind, TerminalSelectionPoint, TerminalSize, TerminalSpan, TerminalUnderline,
 };
 
 #[cfg(test)]

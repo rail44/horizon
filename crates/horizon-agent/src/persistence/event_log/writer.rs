@@ -645,6 +645,7 @@ mod tests {
             turn_id: None,
             provider_id: None,
             role_id: None,
+            session_context: None,
             event_kind: "state_changed".to_string(),
             event: Event::StateChanged(SessionState::Running),
             provider_payload: None,

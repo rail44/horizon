@@ -6,13 +6,17 @@ use uuid::Uuid;
 use crate::contract::{event_kind, ProviderEvent, ProviderId, SessionId};
 use crate::roles::RoleId;
 
-use super::{Record, TurnTracker, WriterHandle, AGENT_EVENT_LOG_SCHEMA, AGENT_EVENT_LOG_VERSION};
+use super::{
+    PersistedSessionContext, Record, TurnTracker, WriterHandle, AGENT_EVENT_LOG_SCHEMA,
+    AGENT_EVENT_LOG_VERSION,
+};
 
 pub struct Appender {
     writer: WriterHandle,
     session_id: SessionId,
     provider_id: Option<ProviderId>,
     role_id: Option<RoleId>,
+    session_context: Option<PersistedSessionContext>,
     turn_tracker: TurnTracker,
 }
 
@@ -28,8 +32,17 @@ impl Appender {
             session_id,
             provider_id,
             role_id,
+            session_context: None,
             turn_tracker: TurnTracker::new(),
         }
+    }
+
+    /// Stamps the same host-authored placement metadata onto every later
+    /// record. Callers which do not know a context (legacy fixtures and
+    /// compatibility tests) keep emitting the pre-field envelope.
+    pub fn with_session_context(mut self, session_context: PersistedSessionContext) -> Self {
+        self.session_context = Some(session_context);
+        self
     }
 
     pub fn append_provider_events(&mut self, events: Vec<ProviderEvent>) -> Result<()> {
@@ -44,6 +57,7 @@ impl Appender {
                 turn_id,
                 provider_id: self.provider_id.clone(),
                 role_id: self.role_id.clone(),
+                session_context: self.session_context.clone(),
                 event_kind: event_kind(&event.event).to_string(),
                 event: event.event,
                 provider_payload: event.provider_payload,

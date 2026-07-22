@@ -295,7 +295,25 @@ impl DecodeSkipLog {
 /// client as a `TerminalLine` comparison of consecutive frames. A breaking
 /// reshape of the terminal channel vocabulary, hence the bump; the schema
 /// artifact carries it as `x-session-protocol-version`.
-pub const SESSION_PROTOCOL_VERSION: u32 = 11;
+///
+/// Version 12: **scrollback windowed overscan is negotiable**
+/// (`docs/terminal-scrollback-design.md` §4, §7 phase 4). The wire surface
+/// itself is *additive* and landed in v11 without a bump — the
+/// `RequestScrollWindow`/`ScrollWindow` enum variants (both before their
+/// `#[serde(other)] Unknown`), the `TerminalScrollWindow` payload, and the
+/// `scrollback_available` `#[serde(default)]` frame flag all decode cleanly
+/// on a v11 peer. This bump carries **no type change**; it is purely a
+/// *feature-negotiation signal* (§3 "gates behavior, not decodability"). The
+/// client sends `RequestScrollWindow` and scrolls within the served window
+/// locally only when the negotiated version is ≥ 12; a v12 client that
+/// negotiates 11 against an older daemon falls back to today's round-trip
+/// `Scroll` command, so a v11 daemon that never serves a window can't leave
+/// the client waiting on one. Because the surface is additive,
+/// [`MIN_SUPPORTED_PROTOCOL_VERSION`] stays 11: v12↔v11 negotiate 11 and
+/// interoperate (tolerant evolution), rather than being rejected. The schema
+/// artifact carries the bump as `x-session-protocol-version` even though no
+/// wire type moved.
+pub const SESSION_PROTOCOL_VERSION: u32 = 12;
 
 /// The oldest protocol version this build is still willing to negotiate
 /// down to in [`SessionHub::hello`] — the low end of the advertised
@@ -307,7 +325,22 @@ pub const SESSION_PROTOCOL_VERSION: u32 = 11;
 /// a v10 peer and vice-versa, so this build cannot honor a negotiated v10.
 /// A v10↔v11 pairing therefore has no overlapping range and `hello` rejects
 /// it — recovered by the auto-drain-and-respawn path (§6), not negotiated.
+/// v12 (scrollback windowing) is *additive*, not a reshape, so it does **not**
+/// raise this floor: a v12 peer negotiates 11 with a v11 peer and falls back
+/// to round-trip scrolling (`SESSION_PROTOCOL_VERSION`'s v12 note), which is
+/// exactly the cross-version interop the owner requires.
 pub const MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 11;
+
+/// The first negotiated version at which the daemon answers
+/// `TerminalCommand::RequestScrollWindow` with a served window
+/// (`docs/terminal-scrollback-design.md` §4). The client sends window
+/// requests — and scrolls locally within the reply — only when the
+/// connection's negotiated version is at least this; below it (a v11 daemon
+/// that never serves a window) it falls back to the round-trip `Scroll`
+/// command. Deliberately a distinct constant from
+/// [`SESSION_PROTOCOL_VERSION`] so a later, unrelated version bump cannot
+/// silently move the feature gate.
+pub const SCROLLBACK_WINDOW_MIN_VERSION: u32 = 12;
 
 /// An inclusive protocol-version range one peer supports, as exchanged in
 /// [`SessionHub::hello`].

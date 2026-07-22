@@ -77,45 +77,23 @@ const SCRIM_DIM_ALPHA: f32 = 0.5;
 /// "is a scrim applied at all" stays independently documented and
 /// testable if the composition ever grows again.
 ///
-/// `mode_active` describes the dim *pattern*, not necessarily workspace
-/// mode's own live state at render time: while a control-surface modal
-/// (palette / view chooser / session manager) is open, the caller passes
-/// the pattern frozen at modal-open time (see [`effective_scrim_pattern`])
-/// instead of the live `is_workspace_mode_active()`.
+/// `mode_active` describes the dim *pattern*, which is now always the live
+/// workspace-mode state (workspace mode is no longer exited when a modal
+/// opens as of 2026-07-21).
 fn pane_scrim_alpha(mode_active: bool) -> Option<f32> {
     mode_active.then_some(SCRIM_DIM_ALPHA)
 }
 
-/// The workspace-mode dim/cursor pattern currently in effect, for both the
-/// scrim and the cursor-pane border: the live pattern normally, or --
-/// while a control-surface modal is open -- the pattern frozen at the
-/// moment the modal opened (`scrim_freeze`) instead. Pure and
-/// unit-tested so the freeze substitution itself is covered without a
-/// GPUI render.
-///
-/// Freezing is necessary because every modal-opening handler
-/// (`open_palette`/`open_view_chooser`/`open_session_manager`) calls
-/// `Workspace::exit_workspace_mode` immediately -- so the mode's own
-/// hjkl/Enter/Escape key bindings don't hijack the modal's typed
-/// search/confirm keys -- which would otherwise erase
-/// `is_workspace_mode_active()`/`cursor_pane_id()`'s live values the
-/// instant the modal renders. Substituting the frozen pattern instead
-/// keeps opening a modal fully chrome-neutral: neither the scrim nor the
-/// cursor-pane accent border changes when it opens (2026-07-15 round-3
-/// feedback, `docs/theme-design.md`'s scrim section) -- direct `ctrl+p`
-/// from outside workspace mode freezes "inactive", so nothing dims and no
-/// pane gets the cursor border.
+/// The workspace-mode dim/cursor pattern currently in effect, for both
+/// the scrim and the cursor-pane border. Since 2026-07-21 workspace mode
+/// is no longer exited when a control-surface modal opens, so the live
+/// pattern is used even while a modal is open. Kept as a small named seam
+/// so the "use live values" decision stays documented and testable.
 fn effective_scrim_pattern(
-    modal_open: bool,
-    scrim_freeze: Option<PaneId>,
     live_mode_active: bool,
     live_cursor_pane: Option<PaneId>,
 ) -> (bool, Option<PaneId>) {
-    if modal_open {
-        (scrim_freeze.is_some(), scrim_freeze)
-    } else {
-        (live_mode_active, live_cursor_pane)
-    }
+    (live_mode_active, live_cursor_pane)
 }
 
 /// Which color role a pane's border resolves to. Pure and unit-tested so
@@ -361,26 +339,19 @@ fn workspace_mode_blocked_by_restore(restoring: bool, failed: bool) -> bool {
 /// mode was explicitly toggled on, or, unconditionally, because the
 /// workspace has zero tabs (see that method's doc comment for the
 /// 2026-07-19 "empty workspace is an implicit command surface" decision).
-/// `modal_open` suppresses it regardless: a control-surface modal already
-/// exits workspace mode for a non-empty workspace (every modal-opening
-/// handler calls `Workspace::exit_workspace_mode` first), but the
-/// zero-tab bypass would otherwise survive that exit and keep reporting
-/// active -- letting the mode's own fixed hjkl/Enter/Escape bindings
-/// compete with the modal's typed search/confirm keys instead of
-/// reaching the modal's own `List` context. Same hazard
-/// `effective_scrim_pattern` already freezes against on the scrim/border
-/// side; this is the key-dispatch-side counterpart. Pure and unit-tested
-/// so the combination is covered without a GPUI render.
+/// `modal_open` suppresses it regardless: while a control-surface modal is
+/// open the modal's own `List` must receive typed search/confirm keys, not
+/// workspace mode's fixed hjkl/Enter/Escape bindings. Workspace mode itself
+/// is no longer exited on modal open (2026-07-21), so suppression here is
+/// the key-dispatch seam that keeps the two contexts from competing.
 fn mode_key_context_active(is_workspace_mode_active: bool, modal_open: bool) -> bool {
     is_workspace_mode_active && !modal_open
 }
 
 impl WorkspaceShell {
     /// Whether any control-surface modal (palette, view chooser, session
-    /// manager) currently has the shell's attention -- shared by
-    /// [`mode_key_context_active`]'s caller below and `render_node`'s
-    /// scrim/border freeze logic (`effective_scrim_pattern`), both of
-    /// which must treat "a modal is open" identically.
+    /// manager) currently has the shell's attention -- the same predicate
+    /// used to suppress workspace-mode key dispatch while a modal is open.
     fn any_modal_open(&self) -> bool {
         self.palette.is_some()
             || self.view_chooser.is_some()
@@ -548,18 +519,11 @@ impl WorkspaceShell {
             LayoutNode::Pane(pane_id) => {
                 let pane_id = *pane_id;
                 // The workspace-mode dim/cursor pattern: the live state
-                // normally, but while a control-surface modal is open
-                // that state has already gone inactive (every
-                // modal-opening handler exits the mode first -- see
-                // `effective_scrim_pattern`'s doc comment) -- substitute
-                // the pattern frozen at modal-open time instead, so both
-                // the scrim and the cursor-pane border stay exactly what
-                // they were right before the modal opened (2026-07-15
-                // round 3: modal-open is fully chrome-neutral, not just
-                // scrim-neutral).
+                // is used even while a control-surface modal is open
+                // (workspace mode is no longer exited on modal open as of
+                // 2026-07-21), so the dim/cursor simply follow the live
+                // model.
                 let (mode_active, cursor_pane) = effective_scrim_pattern(
-                    self.any_modal_open(),
-                    self.scrim_freeze,
                     self.workspace.is_workspace_mode_active(),
                     self.workspace.cursor_pane_id(),
                 );
@@ -1102,7 +1066,7 @@ impl Render for WorkspaceShell {
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(|shell, _, window, cx| {
-                                        shell.close_palette(window, cx);
+                                        shell.cancel_palette(window, cx);
                                     }),
                                 )
                                 .child(
@@ -1135,7 +1099,7 @@ impl Render for WorkspaceShell {
                                     MouseButton::Left,
                                     cx.listener(|shell, _, window, cx| {
                                         shell.pending_placement = None;
-                                        shell.close_view_chooser(window, cx);
+                                        shell.cancel_view_chooser(window, cx);
                                     }),
                                 )
                                 .child(
@@ -1210,7 +1174,7 @@ impl Render for WorkspaceShell {
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(|shell, _, window, cx| {
-                                        shell.close_session_manager(window, cx);
+                                        shell.cancel_session_manager(window, cx);
                                     }),
                                 )
                                 .child(
@@ -1361,42 +1325,13 @@ mod tests {
     }
 
     #[test]
-    fn effective_scrim_pattern_uses_the_live_state_when_no_modal_is_open() {
+    fn effective_scrim_pattern_uses_the_live_state() {
         let cursor = PaneId::new();
         assert_eq!(
-            effective_scrim_pattern(false, None, true, Some(cursor)),
+            effective_scrim_pattern(true, Some(cursor)),
             (true, Some(cursor))
         );
-        // A stale freeze left over from an already-closed modal must be
-        // ignored once no modal is open.
-        assert_eq!(
-            effective_scrim_pattern(false, Some(PaneId::new()), false, None),
-            (false, None)
-        );
-    }
-
-    #[test]
-    fn effective_scrim_pattern_substitutes_the_freeze_while_a_modal_is_open() {
-        let frozen_cursor = PaneId::new();
-        // The live state has already gone inactive by the time this
-        // renders (every modal-opening handler exits workspace mode
-        // first), so it must be ignored in favor of the freeze.
-        assert_eq!(
-            effective_scrim_pattern(true, Some(frozen_cursor), false, None),
-            (true, Some(frozen_cursor))
-        );
-    }
-
-    #[test]
-    fn effective_scrim_pattern_is_inactive_when_the_modal_opened_outside_workspace_mode() {
-        // Direct `ctrl+p` from outside workspace mode: the freeze is
-        // `None` (nothing was active when the modal opened), so the
-        // pattern stays inactive regardless of what the live state
-        // happens to read.
-        assert_eq!(
-            effective_scrim_pattern(true, None, true, Some(PaneId::new())),
-            (false, None)
-        );
+        assert_eq!(effective_scrim_pattern(false, None), (false, None));
     }
 
     #[test]
@@ -1429,13 +1364,9 @@ mod tests {
 
     #[test]
     fn mode_key_context_is_suppressed_while_a_modal_is_open() {
-        // The hazard this guards against: an empty workspace's
-        // `is_workspace_mode_active()` stays `true` even after a
-        // modal-opening handler calls `Workspace::exit_workspace_mode`
-        // (the zero-tab bypass doesn't care about the raw field) -- so
-        // without this suppression, the mode's fixed hjkl/Enter/Escape
-        // bindings would keep competing with the modal's own typed
-        // search/confirm keys.
+        // A modal's own `List` must receive typed search/confirm keys,
+        // so workspace-mode key dispatch is suppressed while any modal is
+        // open regardless of whether the mode itself is active.
         assert!(!mode_key_context_active(true, true));
         assert!(!mode_key_context_active(false, true));
     }

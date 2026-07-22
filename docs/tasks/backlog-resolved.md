@@ -958,3 +958,30 @@ full resolution/closing records.
     neither a public-code SaaS dependency nor LSP lifecycle work is planned.
     Reintroduction requires a fresh owner decision on the capability and its
     provider rather than treating this closed survey finding as direction.
+
+58. *(resolved 2026-07-21)* **`skill.read` now discovers from the session's
+    resolved workspace.** The 2026-07-19 prompt-cwd fix (`cb8e41f`) routed
+    `workspace_root` into prompt assembly and the prompt-side skill listing,
+    but `horizon-sessiond`'s registry feeding `skill.read` still walked from
+    the daemon process's cwd. An isolated session could therefore be shown a
+    repository skill from its worktree and then read the daemon checkout's
+    version instead (usually the same repository today, but incorrect once
+    sessions span repositories). The tool-side registry now uses the same
+    explicit workspace root as the prompt-side registry, with matching
+    process-cwd and `/` fallbacks when a session root is unavailable.
+
+63. *(resolved 2026-07-21)* **Branch integration no longer depends on a
+    filesystem review queue.** Incident record, 2026-07-19 evening: PR #16
+    (`123b6a0`) bumped `SESSION_PROTOCOL_VERSION` 7→8 for
+    `TerminalCommand::SetColorScheme` and landed via the GitHub merge button,
+    which ran neither the local pre-commit gate nor CI, leaving main red for
+    about an hour because horizon-agent's contract-version pins still asserted
+    7. The in-flight `frame-text-removal` branch had independently claimed the
+    same v8 for removing `TerminalFrame.text`; the identical version-line edit
+    would have merged cleanly and allowed two vocabularies to share v8. That
+    branch renumbered its change to v9 and fixed the pins in `422b2a7` (PR
+    #15). The owner subsequently chose direct branch/commit handoff to the
+    project session rather than restoring a filesystem watcher. The local
+    quality gate and protocol-skew check remain mandatory, and the project
+    session reviews and integrates the reported ref directly; the GitHub merge
+    button is not a substitute for that gate.

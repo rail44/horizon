@@ -572,13 +572,19 @@ reversal, not the original plan.
      the palette's `Cancel Agent Turn` enablement already uses, rather than
      re-deriving "was a turn open" from `persistence::event_log::turn`'s
      `TurnTracker` state machine a second time.
-  2. If a turn is in flight, synthesizes and durably appends (via a fresh
+  2. Restores the latest host-authored `session_context` from the record
+     envelope. Shared sessions regain their authoritative workspace root.
+     Isolated sessions are re-adopted only after the existing linked
+     worktree's Git/common-dir and session-id-derived path all validate; an
+     invalid isolated context skips resume rather than dropping containment.
+     Records written before this additive field retain the legacy fallback.
+  3. If a turn is in flight, synthesizes and durably appends (via a fresh
      `Appender` for that session) a `ToolCallFinished(cancelled)` for every
      still-outstanding tool call (mirroring what a live `Command::Cancel`
      does — without this, an interrupted `WaitingForApproval` call kept
      reading as pending forever, since nothing else ever resolves it),
      followed by `TurnEnded(Cancelled)` and `StateChanged(WaitingForUser)`.
-  3. Spawns the session's thread exactly as `Control::SessionNew` would
+  4. Spawns the session's thread exactly as `Control::SessionNew` would
      (`spawn_session_thread`, now shared by both call sites), seeded with
      the full (possibly just-extended) event history.
   - **Turn-id continuity is not preserved for the synthesized cancellation.**

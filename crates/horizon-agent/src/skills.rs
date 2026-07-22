@@ -104,6 +104,7 @@ impl Skill {
 const HORIZON_CONFIG_SKILL_SOURCE: &str = include_str!("../skills/horizon-config/SKILL.md");
 const HORIZON_CLI_SKILL_SOURCE: &str = include_str!("../skills/horizon-cli/SKILL.md");
 const HORIZON_DISTILL_SKILL_SOURCE: &str = include_str!("../skills/horizon-distill/SKILL.md");
+const GITHUB_PR_SKILL_SOURCE: &str = include_str!("../skills/github-pr/SKILL.md");
 
 /// Every skill this build embeds, parsed once and cached for the process's
 /// lifetime -- the input [`SkillRegistry::discover`] starts every session's
@@ -115,6 +116,7 @@ fn embedded_skills() -> &'static [Skill] {
             HORIZON_CONFIG_SKILL_SOURCE,
             HORIZON_CLI_SKILL_SOURCE,
             HORIZON_DISTILL_SKILL_SOURCE,
+            GITHUB_PR_SKILL_SOURCE,
         ]
         .into_iter()
         .map(|source| {
@@ -416,6 +418,12 @@ mod tests {
             .expect("horizon-distill must be registered");
         assert!(!distill_skill.description.is_empty());
         assert!(distill_skill.body().contains("recall.search"));
+
+        let github_pr_skill = registry
+            .get("github-pr")
+            .expect("github-pr must be registered");
+        assert!(!github_pr_skill.description.is_empty());
+        assert!(github_pr_skill.body().contains("gh pr create"));
     }
 
     #[test]
@@ -444,6 +452,7 @@ mod tests {
             .expect("must build a section");
         assert!(section.contains("horizon-config"));
         assert!(section.contains("horizon-cli"));
+        assert!(section.contains("github-pr"));
         assert!(section.contains("skill.read"));
     }
 

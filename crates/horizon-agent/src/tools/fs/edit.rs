@@ -3,6 +3,7 @@ use std::fs;
 use serde_json::{json, Value};
 
 use super::error_output;
+use super::locks::FileLocks;
 use super::safety::resolve_path;
 use super::staleness::check_staleness;
 use crate::tools::state::ToolSessionState;
@@ -28,6 +29,8 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
         Ok(path) => path,
         Err(error) => return error,
     };
+    let locks = FileLocks::acquire([resolved.clone()]);
+    let _guards = locks.hold();
 
     if !resolved.is_file() {
         return error_output(format!(

@@ -168,11 +168,34 @@ impl LiveState {
         writer: event_log::WriterHandle,
         history: Vec<Event>,
     ) -> Self {
+        Self::with_event_log_context_and_history(
+            session_id,
+            provider_id,
+            role_id,
+            writer,
+            None,
+            history,
+        )
+    }
+
+    /// Production counterpart to [`Self::with_event_log_and_history`]: the
+    /// session host supplies its authoritative placement so every new
+    /// record can restore the same confinement after a daemon restart.
+    pub fn with_event_log_context_and_history(
+        session_id: SessionId,
+        provider_id: Option<ProviderId>,
+        role_id: Option<RoleId>,
+        writer: event_log::WriterHandle,
+        session_context: Option<event_log::PersistedSessionContext>,
+        history: Vec<Event>,
+    ) -> Self {
+        let mut appender = event_log::Appender::new(writer, session_id, provider_id, role_id);
+        if let Some(session_context) = session_context {
+            appender = appender.with_session_context(session_context);
+        }
         Self {
             inner: Rc::new(RefCell::new(State::from_history(history))),
-            persistence: Some(Rc::new(Persistence::EventLog(RefCell::new(
-                event_log::Appender::new(writer, session_id, provider_id, role_id),
-            )))),
+            persistence: Some(Rc::new(Persistence::EventLog(RefCell::new(appender)))),
         }
     }
 

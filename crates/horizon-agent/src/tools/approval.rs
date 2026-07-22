@@ -82,7 +82,7 @@ pub enum ApprovalOutcome {
 fn is_horizon_executed_tool(tool_id: &str) -> bool {
     matches!(
         tool_id,
-        "fs.write" | "fs.edit" | "bash" | "config.write" | "web_fetch"
+        "fs.write" | "fs.edit" | "fs.patch" | "bash" | "config.write" | "web_fetch"
     )
 }
 
@@ -217,7 +217,7 @@ fn resolve_web_fetch(
     ApprovalOutcome::Started { events, frame }
 }
 
-/// `fs.write`/`fs.edit`/`config.write`: all run to completion synchronously,
+/// `fs.write`/`fs.edit`/`fs.patch`/`config.write`: all run to completion synchronously,
 /// so their approve/deny always resolves to `Executed`. Dispatches through
 /// `tools::execute_approved`, which picks the owning module by tool id.
 fn resolve_synchronous_tool(
@@ -242,8 +242,8 @@ fn resolve_synchronous_tool(
 
 /// `bash`: a deny short-circuits synchronously exactly like the fs tools,
 /// but an approve only *starts* the command — see `ApprovalOutcome::
-/// Started`. A `kind` of [`ApprovalKind::DomainDenialRetry`] resolves
-/// entirely differently (see [`resolve_domain_denial_retry`]) -- both
+/// Started`. Domain/filesystem denial retries and the pre-execution
+/// [`ApprovalKind::GitOperation`] grant each keep the rerun sandboxed;
 /// [`ApprovalKind::Standard`] takes the ordinary explicit-approval path.
 /// The legacy [`ApprovalKind::SandboxDenialRetry`] is rejected fail-closed;
 /// new containment denials name a structured narrow grant instead.
@@ -277,6 +277,9 @@ fn resolve_bash(
             denials,
             prior_result,
         ),
+        ApprovalKind::GitOperation { writable_roots } => {
+            resolve_git_operation(session_id, runtime, request, decision, writable_roots)
+        }
         ApprovalKind::SandboxDenialRetry => synchronous_result(
             runtime,
             &request.call_id,
@@ -306,6 +309,72 @@ fn resolve_bash(
         ),
         ApprovalKind::Standard => resolve_standard_bash(session_id, runtime, request, decision),
     }
+}
+
+fn resolve_git_operation(
+    session_id: SessionId,
+    runtime: &SessionRuntime,
+    request: &ToolCallRequest,
+    decision: &ApprovalDecision,
+    writable_roots: Vec<std::path::PathBuf>,
+) -> ApprovalOutcome {
+    if matches!(decision, ApprovalDecision::Deny { .. }) {
+        return synchronous_result(runtime, &request.call_id, denied_output(), false);
+    }
+    if !bash::requires_metadata_write(&request.input) {
+        return unstarted_error(
+            runtime,
+            &request.call_id,
+            "Git operation approval no longer matches a metadata-writing Git command",
+        );
+    }
+    let Some(workspace_root) = runtime.tool_state.workspace_root() else {
+        return unstarted_error(
+            runtime,
+            &request.call_id,
+            "Git operation approval has no isolated workspace root",
+        );
+    };
+    match bash::metadata_writable_roots(workspace_root) {
+        Ok(current) if !writable_roots.is_empty() && current == writable_roots => {}
+        Ok(_) => {
+            return unstarted_error(
+                runtime,
+                &request.call_id,
+                "Git metadata roots changed after the approval was displayed",
+            )
+        }
+        Err(error) => {
+            return unstarted_error(
+                runtime,
+                &request.call_id,
+                &format!("Git metadata roots could not be revalidated: {error}"),
+            )
+        }
+    }
+
+    let call_id = request.call_id.clone();
+    let events = vec![
+        Event::StateChanged(SessionState::ToolRunning),
+        Event::ToolCallStarted(call_id.clone()),
+    ];
+    let frame = runtime
+        .live_state
+        .extend_provider_events(events.clone().into_iter().map(Into::into));
+    bash::spawn_sandboxed(
+        session_id,
+        call_id,
+        request.input.0.clone(),
+        runtime.tool_state.bash_cwd_handle(),
+        runtime.tool_state.bash_config(),
+        workspace_root.to_path_buf(),
+        runtime.tool_state.network_proxy(),
+        SandboxedApprovalOrigin::ManualGitOperation,
+        runtime.tool_state.filesystem_grants_snapshot(),
+        Some(writable_roots),
+        runtime.async_results.clone(),
+    );
+    ApprovalOutcome::Started { events, frame }
 }
 
 fn resolve_standard_bash(
@@ -350,6 +419,7 @@ fn resolve_filesystem_denial_retry(
     denials: Vec<horizon_sandbox::FilesystemDenial>,
     prior_result: ToolCallResult,
 ) -> ApprovalOutcome {
+    let git_metadata_roots = bash::approved_metadata_roots(&prior_result.output);
     if matches!(decision, ApprovalDecision::Deny { .. }) {
         let events = vec![Event::ToolCallFinished(prior_result.clone())];
         let frame = runtime
@@ -405,6 +475,7 @@ fn resolve_filesystem_denial_retry(
             grants: approved_grants,
         },
         runtime.tool_state.filesystem_grants_snapshot(),
+        git_metadata_roots,
         runtime.async_results.clone(),
     );
     ApprovalOutcome::Started { events, frame }
@@ -431,6 +502,7 @@ fn resolve_domain_denial_retry(
     domains: Vec<String>,
     prior_result: ToolCallResult,
 ) -> ApprovalOutcome {
+    let git_metadata_roots = bash::approved_metadata_roots(&prior_result.output);
     match decision {
         ApprovalDecision::Deny { .. } => {
             let events = vec![Event::ToolCallFinished(prior_result.clone())];
@@ -486,11 +558,32 @@ fn resolve_domain_denial_retry(
                 Some(network),
                 SandboxedApprovalOrigin::ManualDomainRetry { domains },
                 runtime.tool_state.filesystem_grants_snapshot(),
+                git_metadata_roots,
                 runtime.async_results.clone(),
             );
 
             ApprovalOutcome::Started { events, frame }
         }
+    }
+}
+
+fn unstarted_error(
+    runtime: &SessionRuntime,
+    call_id: &ToolCallId,
+    message: &str,
+) -> ApprovalOutcome {
+    let result = ToolCallResult::new(
+        call_id.clone(),
+        json!({ "is_error": true, "message": message }),
+    );
+    let events = vec![Event::ToolCallFinished(result.clone())];
+    let frame = runtime
+        .live_state
+        .extend_provider_events(events.clone().into_iter().map(Into::into));
+    ApprovalOutcome::Executed {
+        events,
+        frame,
+        command: Command::ToolCallResult(result),
     }
 }
 

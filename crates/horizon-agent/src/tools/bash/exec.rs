@@ -535,6 +535,35 @@ pub(super) fn run_sandboxed(
     let script = wrapped_script(command);
     let mut cmd = std::process::Command::new("bash");
     cmd.arg("-c").arg(&script).current_dir(&cwd);
+    // A parent Git process (notably this repository's pre-commit hook) can
+    // export repository-routing variables. They must not redirect the
+    // sandboxed command away from the workspace whose metadata roots Horizon
+    // validated and displayed for approval.
+    for key in [
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_CONFIG",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_DIR",
+        "GIT_GRAFT_FILE",
+        "GIT_IMPLICIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_INTERNAL_SUPER_PREFIX",
+        "GIT_NO_REPLACE_OBJECTS",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_PREFIX",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_SHALLOW_FILE",
+        "GIT_WORK_TREE",
+    ] {
+        cmd.env_remove(key);
+    }
+    // Read-only Git commands such as `status` may otherwise refresh the
+    // index as a performance optimization. The metadata classifier keeps
+    // those commands in tier 1, so suppress optional locks/writes while
+    // leaving locks required by approved mutating operations intact.
+    cmd.env("GIT_OPTIONAL_LOCKS", "0");
 
     let network_policy = match network.map(SessionNetworkProxy::proxy_addr) {
         Some(proxy_addr) => horizon_sandbox::NetworkPolicy::Proxied { proxy_addr },

@@ -225,7 +225,7 @@ impl TerminalView {
         ))
     }
 
-    fn handle_mouse_down(&mut self, event: &MouseDownEvent, cx: &App) {
+    fn handle_mouse_down(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
         let Some(point) = self.cell_at(event.position) else {
             return;
         };
@@ -243,7 +243,13 @@ impl TerminalView {
         } else if event.button == MouseButton::Left {
             self.selecting = true;
             let kind = selection_kind_from_clicks(event.click_count);
+            // `send_selection_start` drops any held scrollback window (review
+            // fix ③): a selection is handed to the daemon-owned live viewport.
+            // Notify so a bare click that starts a zero-width selection — which
+            // may produce no frame — still switches the paint off the window
+            // and onto the live frame immediately.
             self.session.read(cx).send_selection_start(point, kind);
+            cx.notify();
         } else if event.button == MouseButton::Middle {
             self.paste_from_primary(cx);
         }
@@ -310,7 +316,7 @@ impl TerminalView {
         }
     }
 
-    fn handle_scroll_wheel(&mut self, event: &ScrollWheelEvent, cx: &App) {
+    fn handle_scroll_wheel(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
         let Some(point) = self.cell_at(event.position) else {
             return;
         };
@@ -318,7 +324,22 @@ impl TerminalView {
             self.scroll_accum
                 .consume(event.delta, event.touch_phase, line_height())
         {
-            self.session.read(cx).send_scroll(lines, point);
+            // The viewport height in rows, from the last painted size — the
+            // basis for the window request height and the local edge
+            // arithmetic (`Scrollback`). Falls back to the seed size before
+            // the first paint.
+            let viewport_rows = self.last_size.get().rows as usize;
+            // The session routes this through the scrollback state machine:
+            // a local in-window move repaints with zero IPC, everything else
+            // (round-trip fallback, window request, return to live) does its
+            // own IO. A `true` return means paint the new local position now.
+            let repaint = self
+                .session
+                .read(cx)
+                .handle_scroll(lines, point, viewport_rows);
+            if repaint {
+                cx.notify();
+            }
         }
     }
 
@@ -821,6 +842,69 @@ impl Render for TerminalView {
     }
 }
 
+/// Paint a held scrollback window's visible slice
+/// (`docs/terminal-scrollback-design.md` §3.3). The client scrolls within the
+/// window locally, so these rows come straight from the held
+/// `TerminalScrollWindow` rather than the live `watch<TerminalFrame>`. Painting
+/// mirrors the live row loop (background quads then shaped text) minus the
+/// cursor/selection/IME overlays, which are live-viewport concepts a
+/// scrolled-back history view does not carry. Shaping is fresh per row rather
+/// than through the row-keyed cache: that cache is keyed by viewport row plus
+/// live-frame generation, neither of which tracks window content, and a scroll
+/// gesture is user-paced, so reshaping one viewport per tick is well within
+/// budget — exactly an all-rows-changed live frame's cost.
+#[allow(clippy::too_many_arguments)]
+fn paint_scrollback_window(
+    lines: &[horizon_terminal_core::TerminalLine],
+    bounds: Bounds<Pixels>,
+    rows: usize,
+    palette_overrides: &[(u16, [u8; 3])],
+    default_bg: Hsla,
+    font: &Font,
+    font_size: Pixels,
+    cell_width: Pixels,
+    line_height: Pixels,
+    text_system: &WindowTextSystem,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    for (row, line) in lines.iter().enumerate() {
+        if row >= rows {
+            break;
+        }
+        let row_origin = bounds.origin + point(px(0.0), line_height * row as f32);
+
+        // Background quads, identical to the live path (`paint_terminal`): a
+        // blank run carrying only `columns`/`bg` still fills its background,
+        // so BCE-erased regions and bg-colored padding survive in history too.
+        let mut col = 0_usize;
+        for span in &line.spans {
+            let x = cell_width * col as f32;
+            col += span.columns;
+            let bg = theme::to_hsla(theme::resolve(span.bg, palette_overrides));
+            if bg != default_bg {
+                window.paint_quad(fill(
+                    Bounds::new(
+                        row_origin + point(x, px(0.0)),
+                        gpui::size(cell_width * span.columns as f32, line_height),
+                    ),
+                    bg,
+                ));
+            }
+        }
+
+        let items = shape_row_items(
+            line,
+            palette_overrides,
+            font,
+            font_size,
+            cell_width,
+            text_system,
+        );
+        paint_row_items(&items, row_origin, cell_width, window, cx);
+    }
+}
+
 fn paint_terminal(
     bounds: Bounds<Pixels>,
     entity: &Entity<TerminalView>,
@@ -863,18 +947,46 @@ fn paint_terminal(
         let view = entity.read(cx);
         (view.session.clone(), view.ime_marked_text.clone())
     };
-    let (frame, row_generations) = {
+    let (frame, row_generations, scrollback_lines) = {
         let session = session.read(cx);
         let Some(frame) = session.frame.clone() else {
             return;
         };
-        (frame, session.row_generations().to_vec())
+        // While scrolled back the client paints a held window slice locally
+        // instead of the live frame (`docs/terminal-scrollback-design.md`
+        // §3.3); `None` means follow the live tail.
+        let scrollback_lines = session.visible_scrollback(size.rows as usize);
+        (frame, session.row_generations().to_vec(), scrollback_lines)
     };
 
     let default_bg = theme::to_hsla(theme::resolve(
         horizon_terminal_core::TerminalColor::Named(horizon_terminal_core::NamedColor::Background),
         &frame.palette_overrides,
     ));
+
+    // Scrollback windowed local paint: the client owns the offset into a held
+    // window and repaints from it with zero IPC. History only — no cursor,
+    // selection, or IME preedit (all live-viewport concepts; alacritty hides
+    // the cursor while scrolled back too). The live-frame row-generation shape
+    // cache does not apply (its keys track the live frame, not window content),
+    // so `paint_scrollback_window` shapes fresh — cheap at gesture cadence.
+    if let Some(lines) = scrollback_lines {
+        paint_scrollback_window(
+            &lines,
+            bounds,
+            size.rows as usize,
+            &frame.palette_overrides,
+            default_bg,
+            &font,
+            font_size,
+            cell_width,
+            line_height,
+            &text_system,
+            window,
+            cx,
+        );
+        return;
+    }
 
     // Row-keyed shaping memo (goal 3/4 of docs/terminal-protocol-goals.md,
     // see `shape_cache`): a row whose generation stamp is unchanged since

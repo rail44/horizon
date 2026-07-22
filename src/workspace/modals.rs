@@ -39,30 +39,12 @@ fn select_first_row_on_open<D: ListDelegate>(
 }
 
 impl WorkspaceShell {
-    /// Snapshots workspace mode's dim/cursor pattern into `scrim_freeze`
-    /// right before a modal-opening handler exits the mode -- see
-    /// `render::effective_scrim_pattern`'s doc comment for why this is
-    /// necessary (the mode's own key bindings must detach before the
-    /// modal's `List` takes focus, which erases `cursor_pane_id`'s
-    /// target). `render::render_node` consumes this for both the scrim
-    /// and the cursor-pane border while a modal is open. Must be called
-    /// before `Workspace::exit_workspace_mode`, not after.
-    fn freeze_scrim_before_modal_exit(&mut self) {
-        self.scrim_freeze = if self.workspace.is_workspace_mode_active() {
-            self.workspace.cursor_pane_id()
-        } else {
-            None
-        };
-    }
-
     pub(super) fn open_view_chooser(
         &mut self,
         placement: Placement,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.freeze_scrim_before_modal_exit();
-        self.workspace.exit_workspace_mode();
         self.pending_placement = Some(placement);
         let list = cx.new(|cx| {
             let mut list = ListState::new(ViewChooserDelegate::new(), window, cx).searchable(true);
@@ -90,7 +72,7 @@ impl WorkspaceShell {
                 }
                 ListEvent::Cancel => {
                     shell.pending_placement = None;
-                    shell.close_view_chooser(window, cx);
+                    shell.cancel_view_chooser(window, cx);
                 }
                 ListEvent::Select(_) => {}
             },
@@ -104,13 +86,24 @@ impl WorkspaceShell {
     pub(super) fn close_view_chooser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.view_chooser = None;
         self._view_chooser_subscription = None;
-        self.scrim_freeze = None;
         self.focus_active(window, cx);
         cx.notify();
     }
 
+    /// Cancels the view chooser, leaving workspace mode active when it was
+    /// active before the chooser opened.
+    pub(super) fn cancel_view_chooser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.view_chooser = None;
+        self._view_chooser_subscription = None;
+        if self.workspace.is_workspace_mode_active() {
+            window.focus(&self.focus_handle, cx);
+        } else {
+            self.focus_active(window, cx);
+        }
+        cx.notify();
+    }
+
     pub(super) fn open_markdown_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.freeze_scrim_before_modal_exit();
         self.workspace.exit_workspace_mode();
         let list = cx.new(|cx| {
             let mut list = ListState::new(
@@ -146,14 +139,15 @@ impl WorkspaceShell {
     pub(super) fn close_markdown_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.markdown_open = None;
         self._markdown_open_subscription = None;
-        self.scrim_freeze = None;
-        self.focus_active(window, cx);
+        if self.workspace.is_workspace_mode_active() {
+            window.focus(&self.focus_handle, cx);
+        } else {
+            self.focus_active(window, cx);
+        }
         cx.notify();
     }
 
     pub(super) fn open_session_manager(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.freeze_scrim_before_modal_exit();
-        self.workspace.exit_workspace_mode();
         let summaries = self.workspace.session_summaries();
         let list = cx.new(|cx| {
             let mut list =
@@ -204,7 +198,7 @@ impl WorkspaceShell {
                     shell.reconcile(window, cx);
                     shell.focus_active(window, cx);
                 }
-                ListEvent::Cancel => shell.close_session_manager(window, cx),
+                ListEvent::Cancel => shell.cancel_session_manager(window, cx),
                 ListEvent::Select(_) => {}
             },
         );
@@ -217,8 +211,20 @@ impl WorkspaceShell {
     pub(super) fn close_session_manager(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.session_manager = None;
         self._session_manager_subscription = None;
-        self.scrim_freeze = None;
         self.focus_active(window, cx);
+        cx.notify();
+    }
+
+    /// Cancels the session manager, leaving workspace mode active when it
+    /// was active before the manager opened.
+    pub(super) fn cancel_session_manager(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.session_manager = None;
+        self._session_manager_subscription = None;
+        if self.workspace.is_workspace_mode_active() {
+            window.focus(&self.focus_handle, cx);
+        } else {
+            self.focus_active(window, cx);
+        }
         cx.notify();
     }
 
@@ -293,8 +299,9 @@ impl WorkspaceShell {
     }
 
     pub(super) fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.freeze_scrim_before_modal_exit();
-        self.workspace.exit_workspace_mode();
+        // Palette is a transient overlay: workspace mode itself stays active
+        // so cancelling it (Esc / click-outside) simply returns to the same
+        // cursor state. Only confirming a command exits the mode first.
         let entries = command_entries(self.command_state_with(cx));
         let list = cx.new(|cx| {
             let mut list =
@@ -308,12 +315,16 @@ impl WorkspaceShell {
             |shell, list, event: &ListEvent, window, cx| match event {
                 ListEvent::Confirm(index) => {
                     let entry = list.read(cx).delegate().entry_at(*index).cloned();
+                    // Confirming a palette command exits workspace mode:
+                    // creating commands dive, non-creating commands run in
+                    // normal mode. Cancel (Esc) keeps the mode instead.
+                    shell.workspace.exit_workspace_mode();
                     shell.close_palette(window, cx);
                     if let Some(entry) = entry.filter(|entry| entry.enabled) {
                         shell.execute(entry.spec.id, window, cx);
                     }
                 }
-                ListEvent::Cancel => shell.close_palette(window, cx),
+                ListEvent::Cancel => shell.cancel_palette(window, cx),
                 ListEvent::Select(_) => {}
             },
         );
@@ -326,8 +337,21 @@ impl WorkspaceShell {
     pub(super) fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette = None;
         self._palette_subscription = None;
-        self.scrim_freeze = None;
         self.focus_active(window, cx);
+        cx.notify();
+    }
+
+    /// Cancels the palette, leaving workspace mode active when it was
+    /// active before the palette opened. The modal's own focus is released
+    /// back to the shell root so mode keys keep dispatching.
+    pub(super) fn cancel_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.palette = None;
+        self._palette_subscription = None;
+        if self.workspace.is_workspace_mode_active() {
+            window.focus(&self.focus_handle, cx);
+        } else {
+            self.focus_active(window, cx);
+        }
         cx.notify();
     }
 }

@@ -88,13 +88,10 @@ pub struct SessionSummary {
     /// branched from the source session's directory) -- a shared-directory
     /// spawn creates no edge, so this stays `None` even if a spawn source
     /// was given. `#[serde(default)]`, purely additive like `SessionNew.
-    /// workspace_root` below -- no version bump. A resumed session
-    /// (`session::resume_persisted_sessions`) always reports `None` here
-    /// today: lineage lives in `horizon-sessiond`'s in-memory
-    /// `SessiondState`, not the event log, so it doesn't survive a
-    /// `horizon-sessiond` process restart -- the same accepted gap
-    /// `SessionNew.workspace_root` already has (see that field's doc
-    /// comment).
+    /// workspace_root` below -- no version bump. New event-log records
+    /// persist this edge with the authoritative root/isolation context, so
+    /// a resumed isolated session reports it again after its linked
+    /// worktree has been revalidated.
     #[serde(default)]
     pub parent_session_id: Option<SessionId>,
     /// This session's *actual* confinement directory, as `horizon-sessiond`
@@ -106,14 +103,9 @@ pub struct SessionSummary {
     /// `new_agent` already returned -- see
     /// `session::resolve_and_create_isolated_worktree`). Additive, like
     /// `parent_session_id` above; populated from the same `SessionEntry.
-    /// workspace_root` a resumed session's summary reads too, so this
-    /// *does* survive a `horizon-sessiond` restart even though `parent_
-    /// session_id` doesn't -- a resumed session's `SessionEntry.
-    /// workspace_root` is `None` today regardless (see `SessionNew.
-    /// workspace_root`'s "resumed sessions don't persist it" note), so in
-    /// practice this is `None` for a resumed session too, but for a
-    /// different, narrower reason (no persisted value to resume from, not
-    /// "lineage doesn't survive a restart"). Read by `WorkspaceShell::
+    /// workspace_root` a resumed session's summary reads too. New event-log
+    /// records persist this authoritative value, and isolated roots are
+    /// revalidated against Git before resume. Read by `WorkspaceShell::
     /// spawn_agent_resume`/`spawn_workspace_restore` to correct the
     /// workspace model's stored root for a session it adopts.
     #[serde(default)]

@@ -12,12 +12,12 @@ history).
 One **project session** owns this roadmap, long-horizon decisions, and
 integration (see AGENTS.md "Branch and Integration Flow"). **Domain
 sessions take items directly from this roadmap**, make concrete design
-decisions with the owner in-session, and hand branches back through
-the review queue citing the item they implement. There is no separate
-plans layer. Owner-filed dogfooding issues ride their own faster
-lifecycle in `docs/issues/`; small in-code findings ride
-`docs/tasks/backlog.md` (resolved/closed entries are archived in
-`backlog-resolved.md`).
+decisions with the owner in-session, and report their branch and commit
+directly to the project session, citing the item they implement. There is no
+separate plans layer or filesystem handoff queue. Owner-filed dogfooding
+issues ride their own faster lifecycle in `docs/issues/`; small in-code
+findings ride `docs/tasks/backlog.md` (resolved/closed entries are archived
+in `backlog-resolved.md`).
 
 ## Current position (orientation only — the repo is the truth)
 
@@ -88,12 +88,17 @@ lands:
   clean-only worktree cleanup on terminate, the open-directory command
   (palette + CLI + session-manager row action), the session-manager
   derivation-tree view with explicit subtree-terminate, and
-  authoritative workspace_root report-back on summaries. Known v1
-  gaps in the design doc's Delivery section (mid-run root correction
-  is sweep-consistent, not live; lineage does not survive a daemon
-  restart). Owner dogfooding of the whole flow is the remaining gate.
+  authoritative workspace_root report-back on summaries. The original
+  mid-run correction gap was closed by live `WorkspaceRootResolved`
+  delivery; 2026-07-21 dogfood hardening now persists the authoritative
+  root/isolation/parent context, validates and re-adopts isolated worktrees
+  after a daemon restart, and fails closed instead of silently resuming
+  without containment.
   Follow-up hardening same day: the worktree tests' GIT_DIR-leak
-  hermeticity fix + canary (`771f5a2`, backlog 53).
+  hermeticity fix + canary (`771f5a2`, backlog 53), longer global bash
+  budgets (300s default / 1800s maximum), verification guidance scoped to
+  actual modifications, and an embedded `github-pr` skill for authenticated
+  `gh`-based publication.
 - **Session wire → remoc migration — LANDED 2026-07-21** (all four
   staged PRs: #22 skew groundwork, #23 the v10 cutover, #25 the v11
   frame path, and the phase-4 cleanup this entry ships with; design
@@ -223,7 +228,17 @@ lands:
   `io_uring_setup`. Real curl reaches the proxy without command-specific flags;
   hostname approval remains session-local and retries sandboxed. macOS
   structured filesystem-denial evidence and runtime verification remain
-  best-effort/pending real-Mac work.
+  best-effort/pending real-Mac work. **Issue 57's Git-only slice is also
+  delivered:** metadata-writing Git commands ask before execution, validate a
+  linked worktree's gitdir/common-dir relationship, and receive those roots
+  only for the approved sandboxed command; a real linked-worktree commit test
+  proves the grant works and does not persist session-wide.
+- **Agent file-tool batching — shipped 2026-07-22**
+  (`docs/agent-tools-design.md`): `fs.patch` applies a prevalidated
+  multi-hunk/multi-file change set in one approved call, while process-wide
+  path locks serialize only overlapping filesystem mutations. OpenAI-compatible
+  turns explicitly enable native parallel tool calls; independent calls may
+  overlap, same-path writes serialize, and bash retains its per-session FIFO.
 - **Agent web search** (backlog 18) **LANDED 2026-07-21.**
   Consultation 2026-07-19/20: **vendor = Exa** (owner decision;
   empirical probe + independent-benchmark evidence in
@@ -293,6 +308,25 @@ lands:
   scroll context) are designed tiers of the frame/command contract, not
   ad-hoc additions, and ecosystem code ports only at the pure-function
   level.
+
+- **Terminal scrollback — windowed overscan** (proposed 2026-07-21,
+  `docs/terminal-scrollback-design.md`). History scrolling judders: it is a
+  daemon round-trip with no local paint, worsened by v11's latest-value
+  frame watch dropping intermediate scroll positions. Direction (owner):
+  delete the round-trip from the gesture — on scroll-back the daemon returns
+  one **self-contained window** (a few screens tall, centred on the user),
+  the client scrolls *within it* locally and prefetches the next window near
+  an edge. Feasibility settled: alacritty 0.26 has **no stable absolute line
+  id** (screen-relative coordinates) — which is precisely why the design is
+  windowed rather than a persistent cache: a window needs no stable id, so
+  absolute-id synthesis, epochs, and reflow cache-invalidation are all
+  dropped. Retrieval via `iter_from` needs no engine change; alt-screen has
+  no scrollback (primary-screen-only, passthrough elsewhere). Additive wire
+  (v12, `MIN_SUPPORTED` stays 11 → old peers fall back to round-trip).
+  Tradeoffs accepted: scrollbar jump beyond the window is a round-trip; no
+  instant revisit of already-seen history. Open owner calls in doc §9 (window
+  delivery path — lean: ride the `events` channel; margin/prefetch sizing);
+  interim "smooth the reply cadence" fix assessed as symptomatic, skip.
 
 ## External gates
 

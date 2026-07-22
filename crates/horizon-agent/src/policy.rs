@@ -6,6 +6,8 @@
 //! `ToolPermission::RequireApproval` ("bash always asks") with "this
 //! particular call is contained, or it must ask".
 
+use std::path::PathBuf;
+
 use serde_json::Value;
 
 use crate::contract::{
@@ -48,10 +50,10 @@ pub(crate) enum BoundaryDisposition {
 }
 
 /// The per-call trust predicate: pure, conservative, and explicit. `tool_id`
-/// and `_input` are the call being classified (`_input` -- the raw call
-/// arguments -- is reserved for a future per-argument boundary-crossing rule,
-/// e.g. a network tool's target domain; no tool classified here needs it
-/// yet); `session_isolated` is whether this call's session runs in a
+/// and `input` are the call being classified. Bash input is inspected only
+/// to identify direct Git commands that may write repository metadata;
+/// anything the small recognizer misses remains subject to the sandbox's
+/// normal denial path. `session_isolated` is whether this call's session runs in a
 /// daemon-created isolated worktree; `sandbox_available` is whether this
 /// host can actually engage `horizon-sandbox`'s containment (checked, not
 /// assumed -- see `horizon_sandbox::is_available`).
@@ -61,12 +63,12 @@ pub(crate) enum BoundaryDisposition {
 /// worktree isolation buys it nothing.
 pub(crate) fn classify_call(
     tool_id: &str,
-    _input: &Value,
+    input: &Value,
     session_isolated: bool,
     sandbox_available: bool,
 ) -> Classification {
     match tool_id {
-        "fs.write" | "fs.edit" => {
+        "fs.write" | "fs.edit" | "fs.patch" => {
             if session_isolated {
                 Classification::Contained
             } else {
@@ -75,7 +77,11 @@ pub(crate) fn classify_call(
         }
         "bash" => {
             if session_isolated && sandbox_available {
-                Classification::Contained
+                if crate::tools::requires_metadata_write(input) {
+                    Classification::AlwaysAsk
+                } else {
+                    Classification::Contained
+                }
             } else {
                 Classification::AlwaysAsk
             }
@@ -234,6 +240,21 @@ pub(crate) fn annotate_filesystem_approval(
     }
 }
 
+pub(crate) fn annotate_git_operation_approval(output: &mut Value, writable_roots: &[PathBuf]) {
+    if let Some(map) = output.as_object_mut() {
+        map.insert("git_operation_approved".to_string(), Value::Bool(true));
+        map.insert(
+            "approved_git_metadata_roots".to_string(),
+            Value::Array(
+                writable_roots
+                    .iter()
+                    .map(|path| Value::String(path.display().to_string()))
+                    .collect(),
+            ),
+        );
+    }
+}
+
 pub fn horizon_events_for_provider_event(
     event: &Event,
     tool_state: &ToolSessionState,
@@ -299,13 +320,20 @@ pub fn horizon_events_for_provider_event(
                         crate::judge::maybe_fire_shadow_judge(tool_state, session_id, request);
                     }
                     Classification::AlwaysAsk => {
+                        let (reason, kind) = git_operation_approval(tool_state, request)
+                            .unwrap_or_else(|| {
+                                (
+                                    format!(
+                                        "`{}` requested Horizon approval for this tool call.",
+                                        request.tool_id
+                                    ),
+                                    ApprovalKind::Standard,
+                                )
+                            });
                         events.push(Event::ApprovalRequested(ApprovalRequest {
                             call_id: request.call_id.clone(),
-                            reason: format!(
-                                "`{}` requested Horizon approval for this tool call.",
-                                request.tool_id
-                            ),
-                            kind: ApprovalKind::Standard,
+                            reason,
+                            kind,
                         }));
                         events.push(Event::StateChanged(SessionState::WaitingForApproval));
                         // Shadow-mode judge (`docs/agent-approval-design.md`'s
@@ -347,6 +375,48 @@ pub fn horizon_events_for_provider_event(
     events
 }
 
+fn git_operation_approval(
+    tool_state: &ToolSessionState,
+    request: &crate::contract::ToolCallRequest,
+) -> Option<(String, ApprovalKind)> {
+    if request.tool_id != "bash"
+        || !tool_state.is_isolated_worktree()
+        || !horizon_sandbox::is_available()
+        || !crate::tools::requires_metadata_write(&request.input)
+    {
+        return None;
+    }
+    let roots = tool_state
+        .workspace_root()
+        .ok_or_else(|| "the session has no workspace root".to_string())
+        .and_then(crate::tools::metadata_writable_roots);
+    Some(match roots {
+        Ok(writable_roots) => {
+            let displayed = writable_roots
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            (
+                format!(
+                    "`bash` requested a Git operation that may update shared repository metadata. \
+                     Allow write access to {displayed} for this call and run it inside the sandbox?"
+                ),
+                ApprovalKind::GitOperation { writable_roots },
+            )
+        }
+        Err(error) => (
+            format!(
+                "`bash` requested a Git operation, but Horizon could not derive a safe metadata \
+                 grant ({error}). Approval will fail closed."
+            ),
+            ApprovalKind::GitOperation {
+                writable_roots: Vec::new(),
+            },
+        ),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,9 +424,9 @@ mod tests {
     // --- classify_call: the trust predicate's classification table --------
 
     #[test]
-    fn fs_write_and_edit_are_contained_only_when_isolated() {
+    fn fs_mutations_are_contained_only_when_isolated() {
         let input = serde_json::json!({});
-        for tool_id in ["fs.write", "fs.edit"] {
+        for tool_id in ["fs.write", "fs.edit", "fs.patch"] {
             assert_eq!(
                 classify_call(tool_id, &input, true, false),
                 Classification::Contained,
@@ -399,6 +469,28 @@ mod tests {
         assert_eq!(
             classify_call("bash", &input, false, false),
             Classification::AlwaysAsk
+        );
+    }
+
+    #[test]
+    fn metadata_writing_git_asks_up_front_while_read_only_git_stays_contained() {
+        assert_eq!(
+            classify_call(
+                "bash",
+                &serde_json::json!({ "command": "git add src/lib.rs && git commit -m change" }),
+                true,
+                true,
+            ),
+            Classification::AlwaysAsk
+        );
+        assert_eq!(
+            classify_call(
+                "bash",
+                &serde_json::json!({ "command": "git status --short && git diff --stat" }),
+                true,
+                true,
+            ),
+            Classification::Contained
         );
     }
 

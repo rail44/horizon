@@ -244,7 +244,7 @@ impl AgentFrame {
     /// Whether `call_id`'s *most recent* `ToolCallRequested` occurrence
     /// already has a `ToolCallStarted` in the frame — true from the
     /// instant Horizon began executing it, not just once it finished. For
-    /// `fs.write`/`fs.edit` this is equivalent to
+    /// For `fs.write`/`fs.edit`/`fs.patch`, this is equivalent to
     /// [`Self::has_tool_call_finished`] (both events are folded together,
     /// synchronously, by `agent::tools::approval::synchronous_result`), but
     /// `bash`'s approve path folds `ToolCallStarted` immediately and only

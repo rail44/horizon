@@ -737,6 +737,46 @@ fn session_new_with_role(session_id: SessionId, role_id: RoleId) -> SessionNew {
     }
 }
 
+fn run_fixture_git(dir: &Path, args: &[&str]) {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(dir).args(args);
+    for (key, _) in std::env::vars() {
+        if key.starts_with("GIT_") {
+            command.env_remove(key);
+        }
+    }
+    let output = command
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run git {args:?}: {error}"));
+    assert!(
+        output.status.success(),
+        "git {args:?} failed in {}: {}",
+        dir.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn isolated_session_fixture() -> tempfile::TempDir {
+    let repo = tempfile::tempdir().expect("create isolated-session fixture repo");
+    run_fixture_git(repo.path(), &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.path().join("README.md"), "fixture\n").unwrap();
+    run_fixture_git(repo.path(), &["add", "README.md"]);
+    run_fixture_git(
+        repo.path(),
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-q",
+            "-m",
+            "fixture",
+        ],
+    );
+    repo
+}
+
 /// Writes a fixture event log directly at `path`, one session per
 /// `(SessionId, Vec<Event>)` pair, via the same `WriterHandle`/`Appender`
 /// machinery `horizon-agent`'s own event-log tests use -- for tests below
@@ -1512,7 +1552,7 @@ async fn killed_sessiond_respawns_and_replays_transcript_with_open_turn_cancelle
             provider_id: mock_provider_id(),
             role_id: None,
             parent_session_id: None,
-            workspace_root: None,
+            workspace_root: Some(std::env::current_dir().expect("test cwd should be readable")),
         }],
         "the resumed session must be listed as live again"
     );
@@ -1614,9 +1654,115 @@ async fn resume_restores_the_sessions_role_after_a_crash_and_respawn() {
             provider_id: mock_provider_id(),
             role_id: Some(RoleId("config".to_string())),
             parent_session_id: None,
-            workspace_root: None,
+            workspace_root: Some(std::env::current_dir().expect("test cwd should be readable")),
         }],
         "resume must restore the session's role, not just its provider"
+    );
+}
+
+/// A daemon restart must preserve an isolated session's authoritative root
+/// and tier-1 eligibility. The regression this pins down downgraded every
+/// resumed session to the daemon cwd with `isolated=false`, so later bash
+/// calls escaped the per-command sandbox and requested manual approval.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_re_adopts_an_isolated_worktree_and_keeps_bash_contained() {
+    let repo = isolated_session_fixture();
+    let sessiond = SessiondProcess::spawn();
+    let socket_path = sessiond.socket_path.clone();
+    let event_log_path = sessiond.event_log_path.clone();
+    let client = connect_hub(&socket_path).await;
+    let session_id = SessionId::new();
+    let mut new = session_new(session_id);
+    new.workspace_root = Some(repo.path().to_path_buf());
+    new.isolate = true;
+    let attachment = client.hub.new_agent(new).await.unwrap();
+
+    let mut isolated_root = None;
+    for _ in 0..200 {
+        let summaries = client.hub.list_agents().await.unwrap();
+        if let Some(root) = summaries
+            .iter()
+            .find(|summary| summary.session_id == session_id)
+            .and_then(|summary| summary.workspace_root.clone())
+            .filter(|root| root != repo.path())
+        {
+            isolated_root = Some(root);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let isolated_root = isolated_root.expect("isolated worktree resolution timed out");
+    assert!(
+        isolated_root.starts_with(repo.path().join(".horizon/worktrees")),
+        "resolved root should be the session-owned worktree: {}",
+        isolated_root.display()
+    );
+
+    wait_for_persisted_event(&event_log_path, session_id, |event| {
+        matches!(event, Event::StateChanged(SessionState::WaitingForUser))
+    })
+    .await;
+    let report = horizon_agent::persistence::event_log::read(&event_log_path)
+        .expect("the session context should be readable before restart");
+    assert!(report.records.iter().any(|record| {
+        record.session_id == session_id
+            && record.session_context.as_ref().is_some_and(|context| {
+                context.workspace_root.as_ref() == Some(&isolated_root) && context.isolated_worktree
+            })
+    }));
+
+    drop(attachment);
+    drop(client);
+    sessiond.kill_and_wait();
+
+    let respawned = SessiondProcess::spawn_at(socket_path, event_log_path);
+    let client = connect_hub(&respawned.socket_path).await;
+    let summaries = client.hub.list_agents().await.unwrap();
+    let resumed = summaries
+        .iter()
+        .find(|summary| summary.session_id == session_id)
+        .expect("the isolated session should resume live");
+    assert_eq!(resumed.workspace_root.as_ref(), Some(&isolated_root));
+
+    let mut attachment = client.hub.attach_agent(session_id).await.unwrap();
+    let _ = collect_replayed_events(&mut attachment.events).await;
+    if !horizon_sandbox::is_available() {
+        return;
+    }
+
+    attachment
+        .commands
+        .send(AgentCommand::UserMessage {
+            text: "please run bash".to_string(),
+        })
+        .await
+        .unwrap();
+    let events = collect_events_until(&mut attachment.events, |event| {
+        matches!(event, Event::ToolCallFinished(result) if result.call_id.0 == "mock-bash-1")
+    })
+    .await;
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::ApprovalRequested(_))),
+        "a resumed isolated session should retain tier-1 auto execution: {events:?}"
+    );
+    let result = events
+        .iter()
+        .find_map(|event| match event {
+            Event::ToolCallFinished(result) if result.call_id.0 == "mock-bash-1" => Some(result),
+            _ => None,
+        })
+        .expect("bash should finish without manual approval");
+    assert_eq!(
+        result.output["auto_approved"], true,
+        "resumed call should retain the contained classification: {:?}",
+        result.output
+    );
+    assert_eq!(
+        result.output["policy_tier"], "contained",
+        "resumed call should retain tier-1 eligibility: {:?}",
+        result.output
     );
 }
 
@@ -1710,7 +1856,7 @@ async fn drained_sessiond_respawns_and_preserves_a_completed_session() {
             provider_id: mock_provider_id(),
             role_id: None,
             parent_session_id: None,
-            workspace_root: None,
+            workspace_root: Some(std::env::current_dir().expect("test cwd should be readable")),
         }],
         "a gracefully drained session must resume too, not just a crashed one"
     );

@@ -40,6 +40,51 @@ pub struct TerminalFrame {
     /// `Cursor`). Consulted by the host's `theme::resolve`
     /// (`src/theme/ansi.rs`) before falling back to the per-client theme.
     pub palette_overrides: Vec<(u16, [u8; 3])>,
+    /// Whether this session can currently serve a scrollback *window*
+    /// (`TerminalCommand::RequestScrollWindow`): `true` on the primary
+    /// screen with no application-scroll mode active, `false` while
+    /// `ALT_SCREEN` or `MOUSE_MODE` is set — the alt grid is built with
+    /// `max_scroll_limit == 0` (no scrollback), and a mouse app's wheel is
+    /// application input, not a `display_offset` move
+    /// (`docs/terminal-scrollback-design.md` §2.1, §2.3, §5). The client
+    /// routes wheel/PageUp to local windowing only while this is set, and
+    /// keeps today's passthrough round-trip otherwise. Additive since the
+    /// scrollback windowing work (phase 1); `#[serde(default)]` so a peer
+    /// predating it decodes to `false`, the conservative "no windowing"
+    /// default.
+    #[serde(default)]
+    pub scrollback_available: bool,
+}
+
+/// A served scrollback window: a contiguous block of history rows read at an
+/// arbitrary position **without disturbing the live viewport**
+/// (`TerminalCore::snapshot_window`, built by a `grid.iter_from` walk that
+/// never moves `display_offset` — `docs/terminal-scrollback-design.md` §2.2,
+/// §3.2). The window is self-describing, so the client needs no
+/// request/response correlation id: `viewport_offset`/`above`/`below` locate
+/// it against the grid at service time. Carried back to the client as
+/// [`crate::TerminalUpdate::ScrollWindow`] on the events channel
+/// (§9 option ii). Reuses the frame's own [`TerminalLine`] vocabulary so the
+/// client paints it with the identical renderer, and — being a struct, not a
+/// wire enum in element position — keeps the postbag positional discipline
+/// (§4 rule 5).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct TerminalScrollWindow {
+    /// The contiguous block of history rows, top to bottom. Clamped by
+    /// `above`/`below`, so it may be shorter than the requested height near
+    /// the true top or the live edge.
+    pub lines: Vec<TerminalLine>,
+    /// Index into [`lines`](Self::lines) of the row that is the top of the
+    /// viewport at the requested anchor — where the client places the
+    /// visible window inside the block.
+    pub viewport_offset: usize,
+    /// How many history rows remain above the block's top. `0` is the
+    /// true-top signal (upward scrolling and prefetch clamp here).
+    pub above: usize,
+    /// How many rows remain below the block's bottom, down to the live tail.
+    /// `0` is the live-edge signal (scrolling past it drops the window and
+    /// resumes the live-frame watch).
+    pub below: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -153,6 +198,7 @@ impl TerminalFrame {
             mouse_reporting: false,
             keys_as_escape_codes: false,
             palette_overrides: Vec::new(),
+            scrollback_available: false,
         }
     }
 
@@ -203,6 +249,7 @@ impl TerminalFrame {
             mouse_reporting: false,
             keys_as_escape_codes: false,
             palette_overrides: Vec::new(),
+            scrollback_available: false,
         }
     }
 }

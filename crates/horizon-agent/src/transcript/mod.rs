@@ -72,12 +72,12 @@ pub use receipt::{aggregate_receipt, CallClass, ReceiptAggregate};
 pub use tool_call::{
     build_tool_call_views, cap_lines_head, cap_lines_tail, cap_thinking_text, classify,
     is_approval_still_pending, progress, running_row_expandable, str_field, ApprovalState,
-    ToolCallKind, ToolCallView, THINKING_TAIL_LINES,
+    FileEffect, ToolCallKind, ToolCallView, THINKING_TAIL_LINES,
 };
 
 use std::path::Path;
 
-/// `fs.edit`/`fs.write` are `Edit`, `bash` is `Bash`, and everything
+/// `fs.edit`/`fs.write`/`fs.patch` are `Edit`, `bash` is `Bash`, and everything
 /// else -- `fs.read`/`fs.grep`/`fs.glob`/`recall.*`/`workspace.snapshot`/
 /// `skill.read`/any future tool id this crate doesn't otherwise
 /// recognize -- is `Query` (the "read-only, low-signal" bucket the
@@ -86,7 +86,7 @@ use std::path::Path;
 /// `diff::aggregate_changes`.
 fn classify_call(tool_id: &str) -> CallClass {
     match tool_id {
-        "fs.edit" | "fs.write" => CallClass::Edit,
+        "fs.edit" | "fs.write" | "fs.patch" => CallClass::Edit,
         "bash" => CallClass::Bash,
         _ => CallClass::Query,
     }

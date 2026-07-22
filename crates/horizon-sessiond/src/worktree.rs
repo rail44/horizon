@@ -257,6 +257,81 @@ pub(crate) fn create_isolated_worktree(
     })
 }
 
+/// Re-adopts the existing worktree owned by a resumed session without
+/// creating or checking out anything. Every relationship is recomputed from
+/// Git and canonical paths; persisted text alone never grants an arbitrary
+/// directory isolated-session trust.
+pub(crate) fn adopt_isolated_worktree(
+    worktree_path: &Path,
+    session_id: Uuid,
+) -> Result<WorktreeInfo, String> {
+    let canonical_path = std::fs::canonicalize(worktree_path).map_err(|error| {
+        format!(
+            "could not canonicalize persisted worktree {}: {error}",
+            worktree_path.display()
+        )
+    })?;
+    if !canonical_path.join(".git").is_file() {
+        return Err(format!(
+            "persisted worktree {} has no linked-worktree .git file",
+            canonical_path.display()
+        ));
+    }
+
+    let reported_root = PathBuf::from(run_git(
+        &canonical_path,
+        &["rev-parse", "--path-format=absolute", "--show-toplevel"],
+    )?);
+    let reported_root = std::fs::canonicalize(&reported_root).map_err(|error| {
+        format!(
+            "could not canonicalize Git toplevel {}: {error}",
+            reported_root.display()
+        )
+    })?;
+    if reported_root != canonical_path {
+        return Err(format!(
+            "persisted worktree {} reports a different Git toplevel {}",
+            canonical_path.display(),
+            reported_root.display()
+        ));
+    }
+
+    let common_dir = std::fs::canonicalize(git_common_dir(&canonical_path)?)
+        .map_err(|error| format!("could not canonicalize persisted Git common dir: {error}"))?;
+    let repo_root = std::fs::canonicalize(repo_root_from_common_dir(&common_dir)?)
+        .map_err(|error| format!("could not canonicalize persisted repository root: {error}"))?;
+    let slug = short_slug(session_id);
+    let expected_path = repo_root.join(".horizon").join("worktrees").join(&slug);
+    if canonical_path != expected_path {
+        return Err(format!(
+            "persisted worktree {} is not the expected path {} for session {session_id}",
+            canonical_path.display(),
+            expected_path.display()
+        ));
+    }
+
+    let git_dir = PathBuf::from(run_git(
+        &canonical_path,
+        &["rev-parse", "--path-format=absolute", "--git-dir"],
+    )?);
+    let git_dir = std::fs::canonicalize(&git_dir)
+        .map_err(|error| format!("could not canonicalize persisted worktree gitdir: {error}"))?;
+    if !git_dir.starts_with(common_dir.join("worktrees")) {
+        return Err(format!(
+            "persisted worktree gitdir {} is outside {}",
+            git_dir.display(),
+            common_dir.join("worktrees").display()
+        ));
+    }
+
+    let branch = run_git(&canonical_path, &["branch", "--show-current"])?;
+    Ok(WorktreeInfo {
+        repo_root,
+        path: canonical_path,
+        branch,
+    })
+}
+
 /// Decision 5's terminate-cleanup rule: removes `info`'s worktree if it's
 /// clean, keeps it (returns `false`) if it has any uncommitted or untracked
 /// changes -- `git worktree remove` already refuses a dirty worktree on its
@@ -577,6 +652,51 @@ mod tests {
         let current_branch =
             run_git(&info.path, &["branch", "--show-current"]).expect("branch --show-current");
         assert_eq!(current_branch, info.branch);
+    }
+
+    #[test]
+    fn adopt_isolated_worktree_reconstructs_a_valid_session_worktree() {
+        let _canary = EnclosingRepoGuard::capture();
+        let repo = scratch_repo();
+        let session_id = Uuid::new_v4();
+        let created = create_isolated_worktree(repo.path(), false, session_id)
+            .expect("worktree creation should succeed");
+
+        let adopted = adopt_isolated_worktree(&created.path, session_id)
+            .expect("the owning session should be able to re-adopt its worktree");
+
+        assert_eq!(adopted, created);
+    }
+
+    #[test]
+    fn adopt_isolated_worktree_rejects_another_sessions_worktree() {
+        let _canary = EnclosingRepoGuard::capture();
+        let repo = scratch_repo();
+        let owner_session_id = Uuid::new_v4();
+        let created = create_isolated_worktree(repo.path(), false, owner_session_id)
+            .expect("worktree creation should succeed");
+
+        let error = adopt_isolated_worktree(&created.path, Uuid::new_v4())
+            .expect_err("a different session id must not adopt this worktree");
+
+        assert!(
+            error.contains("is not the expected path"),
+            "unexpected rejection: {error}"
+        );
+    }
+
+    #[test]
+    fn adopt_isolated_worktree_rejects_an_ordinary_checkout() {
+        let _canary = EnclosingRepoGuard::capture();
+        let repo = scratch_repo();
+
+        let error = adopt_isolated_worktree(repo.path(), Uuid::new_v4())
+            .expect_err("an ordinary checkout is not an owned linked worktree");
+
+        assert!(
+            error.contains("has no linked-worktree .git file"),
+            "unexpected rejection: {error}"
+        );
     }
 
     #[test]

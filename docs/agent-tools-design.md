@@ -25,6 +25,7 @@ plugin-provided tools, running agent commands inside terminal sessions.
 | grep  | auto-allow read  | Dedicated tool, not shell                          |
 | write | require approval | Creates parents; overwrite requires prior read     |
 | edit  | require approval | Exact string replacement (below)                   |
+| patch | require approval | Validated multi-hunk/multi-file change set (below) |
 | bash  | require approval | Fresh process per command (below)                  |
 | web_search | boundary: auto | Fixed Exa endpoint; shadow-judged             |
 | web_fetch | boundary: exact-host grant | Bounded SSRF-safe fetch           |
@@ -49,11 +50,49 @@ enforcement (Claude Code, Gemini CLI, OpenHands, goose, Cline):
   Claude Code deliberately ships none. Start strict, collect failure data,
   add leniency only if the data demands it.
 
+## Patch Semantics
+
+`fs.patch` complements rather than replaces `fs.edit`. Its marker-based
+format follows the production `apply_patch` shape used by OpenCode/Codex
+(`*** Begin Patch`, per-file add/update/delete headers, and `@@` update
+chunks), while retaining Horizon's `fs.*` naming and absolute-path rule.
+One call may carry several chunks for one file or changes to several files,
+which avoids the edit/result/completion round trip for every independent
+replacement.
+
+- Every path is confined to the session workspace. Existing update/delete
+  sources must pass the same read-before-write mtime gate as `fs.edit`.
+- The complete patch is parsed and every path and hunk is validated against
+  one in-memory snapshot per file before any file content is written. A bad
+  later hunk therefore cannot leave an earlier validated hunk applied.
+- Application begins only after validation. There is no portable
+  cross-file filesystem transaction: an I/O failure during the final write
+  phase can still leave a partial multi-file change, and the result reports
+  that failure plainly.
+- A process-wide per-path lock serializes `fs.write`, `fs.edit`, and
+  `fs.patch` mutations that target the same file, including calls from
+  different sessions. Multi-path lock acquisition uses lexical order to
+  avoid deadlocks.
+
+## Parallel Tool Calls
+
+Horizon explicitly enables OpenAI-compatible `parallel_tool_calls`. A model
+may issue several independent calls in one assistant response; the provider
+session retains the whole batch and runs exactly one follow-up completion
+after every result has arrived. Tool semantics still decide execution
+ordering: independent asynchronous web calls may overlap, filesystem writes
+to the same path serialize through the path lock, and bash preserves its
+per-session FIFO. Parallelism is a request/execution property, not a generic
+user-visible `batch` tool.
+
 ## Bash Semantics
 
 - Fresh process per command; the harness tracks the working directory across
   calls (`cd` persists via tracking, not via a live shell).
-- Wall-clock timeout, default 120s, per-call override up to a hard max.
+- Wall-clock timeout, default 300s, per-call override up to a hard 1800s
+  maximum. The catalog tells the model to omit the override normally and to
+  use a shorter value only for an intentional quick probe; builds, tests,
+  hooks, and Git commands commonly outlive the old 60/120-second budgets.
 - Output capped in-context (~30k chars, head+tail preserved); the full output
   spills to a temp file whose path is included in the result so the agent can
   re-read selectively. (Truncate-in-context + spill-to-file is the shipping
@@ -257,7 +296,8 @@ section), every one of them is a fixed built-in constant in
   Engineering for AI Agents; How We Contain Claude; Claude Code docs
   (tools reference, sandboxing).
 - SWE-agent: Yang et al., arXiv:2405.15793 (agent-computer interfaces).
-- Codex CLI source (exec/unified_exec, apply_patch); Gemini CLI source
+- Codex CLI and OpenCode source (apply_patch, per-file edit locks, parallel
+  call batching); Gemini CLI source
   (edit.ts match cascade); goose source (developer extension).
 - Agent Client Protocol (agentclientprotocol.com) — cancellation and
   permission-request semantics.

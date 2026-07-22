@@ -44,7 +44,10 @@ research doc).
    `workspace_root` by `tools/state.rs`; isolation makes that root a
    disposable copy.) `bash` runs without approval when the OS sandbox
    below contains it. Reversibility + containment + visibility replace
-   consent.
+   consent. The isolation predicate and authoritative root are persisted in
+   each event-log record; a daemon restart validates and re-adopts the same
+   linked worktree before restoring tier-1 eligibility, and refuses an
+   inconsistent isolated session rather than resuming it uncontained.
 2. **Judge at the boundary.** Actions that cross the containment
    boundary — network egress beyond the allowlist, future MCP/external
    tools, outside-worktree operations — go to a two-stage model
@@ -309,6 +312,18 @@ product-owned API. Decisions:
   compatibility and resolves fail-closed. This is an incident-complete open
   slice, not a claim that every Landlock-controlled filesystem syscall can be
   discovered. See `docs/containment-denial-narrow-grants-design.md`.
+- **Git metadata preflight** (2026-07-21): an isolated worktree's writable
+  content root does not include the linked worktree gitdir or shared common
+  gitdir, so `git add`/`git commit` cannot wait for generic post-hoc denial
+  discovery. Direct metadata-writing or unknown Git subcommands now produce a
+  `GitOperation` approval before execution. Horizon derives and displays the
+  roots from the session workspace, validates the `.git` pointer, backlink,
+  `commondir`, and `common/worktrees/*` relationship, then revalidates before
+  the queued spawn. Approve grants those roots only to that sandboxed command
+  and its chained retry; deny runs nothing. Read-only Git remains tier 1, and
+  complex spellings the classifier misses receive no proactive grant. Details
+  and the accepted common-gitdir breadth are in
+  `docs/containment-denial-narrow-grants-design.md`.
 - **Spike** (owner decision): build the thin API + per-OS composition
   directly from the start — no ai-jail stopgap (writing the thin layer
   is the spike). Deliverable: prototype + tests

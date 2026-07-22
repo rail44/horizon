@@ -5,9 +5,10 @@ use serde_json::Value;
 use super::error_output;
 use crate::tools::state::ToolSessionState;
 
-/// Enforces the read-before-write/edit gate: `path` must have a recorded
-/// mtime from an earlier `fs.read` (or a prior `fs.write`/`fs.edit` in this
-/// session — both record the mtime they leave behind) that still matches
+/// Enforces the read-before-mutation gate: `path` must have a recorded
+/// mtime from an earlier `fs.read` (or a prior
+/// `fs.write`/`fs.edit`/`fs.patch` in this session — each records the mtime
+/// it leaves behind) that still matches
 /// what's on disk. See `docs/agent-tools-design.md`, "Edit Semantics".
 pub(super) fn check_staleness(
     tool_state: &ToolSessionState,

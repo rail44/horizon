@@ -68,8 +68,8 @@ pub fn aggregate_receipt(tool_calls: &[ToolCallView]) -> ReceiptAggregate {
         }
         match classify_call(&call.tool_id) {
             CallClass::Edit => {
-                if let Some(path) = &call.target {
-                    edited_paths.insert(path.clone());
+                for file in &call.affected_files {
+                    edited_paths.insert(file.path.clone());
                 }
             }
             CallClass::Bash => aggregate.bash_count += 1,
@@ -99,6 +99,7 @@ mod tests {
     fn classify_call_sorts_every_tool_id_into_its_class() {
         assert_eq!(classify_call("fs.edit"), CallClass::Edit);
         assert_eq!(classify_call("fs.write"), CallClass::Edit);
+        assert_eq!(classify_call("fs.patch"), CallClass::Edit);
         assert_eq!(classify_call("bash"), CallClass::Bash);
         for tool_id in [
             "fs.read",
