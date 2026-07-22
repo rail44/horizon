@@ -5,7 +5,6 @@
 //! the close-vs-terminate invariant (docs/ux-principles.md) in GPUI terms.
 
 use std::cell::{Cell, RefCell};
-use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -184,13 +183,13 @@ struct ScrollDecision {
     repaint: bool,
 }
 
-/// The client's scrollback presentation mode (`docs/terminal-scrollback-design.md`
-/// §3.3, §7 phase 2). The terminal is either following the live tail (painting
-/// the `watch<TerminalFrame>`), waiting for the first window after a
-/// scroll-back gesture, or holding one served window and scrolling within it
-/// **locally** — the state that removes the per-tick daemon round-trip that
-/// judders today. Free-standing and GPUI-free, like [`RowGenerations`], so its
-/// transitions are unit-testable without a `Context`.
+/// The client's scrollback data-provider mode
+/// (`docs/terminal-scrollback-design.md` §3.3, §7 phase 2). GPUI owns the
+/// painted pixel position; this state follows the live tail, waits for the
+/// first window, or holds one served window plus a row-based mirror used for
+/// prefetch/rebase arithmetic. Free-standing and GPUI-free, like
+/// [`RowGenerations`], so its transitions are unit-testable without a
+/// `Context`.
 #[derive(Debug, Clone, PartialEq, Default)]
 enum Scrollback {
     /// Following the live tail; paint the watch frame. No window held.
@@ -208,20 +207,19 @@ enum Scrollback {
         /// snapping to an integer cell once the window arrives.
         pending_rows: f32,
     },
-    /// Holding a window; paint `window.lines[offset..offset + viewport_rows]`.
-    /// At most one replacement window is in flight. A prefetch does not freeze
-    /// local movement: the user keeps scrolling through the remaining margin.
+    /// Holding a window that GPUI presents as a fixed-height list. At most one
+    /// replacement window is in flight. A prefetch does not freeze local
+    /// movement: the list keeps scrolling through the remaining margin.
     Windowed {
         // Shared with the paint path so every wheel frame clones one Arc,
         // not a viewport's worth of strings/spans. The window remains an
         // immutable, self-contained snapshot and is replaced atomically on
         // the next fetch.
         window: Arc<TerminalScrollWindow>,
-        /// Index into `window.lines` of the row at the top of the viewport.
+        /// Row component of GPUI's mirrored list position.
         offset: usize,
-        /// How far the viewport top sits inside `offset`, in terminal-row
-        /// units (`0.0..1.0`). Paint translates the held canvas by this
-        /// fraction, while window addressing and prefetch remain row-based.
+        /// Pixel-within-item position normalized into terminal-row units
+        /// (`0.0..1.0`) for daemon-window addressing and rebasing only.
         fractional_row: f32,
         /// The viewport height the window was served for — the basis for the
         /// edge-anchor arithmetic. The live paint slices with the *current*
@@ -233,10 +231,9 @@ enum Scrollback {
 
 const FRACTION_EPSILON: f32 = 0.0001;
 
-/// Split a continuous row position into the stable row key used by the shape
-/// cache and its presentation-only fractional displacement. Keeping the
-/// fraction normalized makes repeated trackpad deltas converge back to an
-/// exactly aligned row instead of accumulating near-one float residue.
+/// Split GPUI's continuous position into the row-addressed mirror used for
+/// daemon-window math. Keeping the fraction normalized avoids near-one float
+/// residue when a replacement window seeds GPUI's next `ListOffset`.
 fn split_row_position(position: f32, max_top: usize) -> (usize, f32) {
     let position = position.clamp(0.0, max_top as f32);
     let mut offset = position.floor() as usize;
@@ -275,9 +272,38 @@ fn served_anchor(window: &TerminalScrollWindow, viewport_rows: usize) -> f32 {
 }
 
 impl Scrollback {
-    /// Decide a continuous frontend scroll. `rows > 0` moves toward history,
-    /// `< 0` toward the live tail. Precise GPUI deltas remain fractional here;
-    /// only the held-window address and prefetch requests are row-based.
+    fn windowed_position(&self) -> Option<f32> {
+        match self {
+            Self::Windowed {
+                offset,
+                fractional_row,
+                ..
+            } => Some(*offset as f32 + *fractional_row),
+            Self::Live | Self::Requesting { .. } => None,
+        }
+    }
+
+    fn surface(&self, generation: u64) -> Option<ScrollbackSurface> {
+        match self {
+            Self::Windowed {
+                window,
+                offset,
+                fractional_row,
+                ..
+            } => Some(ScrollbackSurface {
+                window: window.clone(),
+                offset: *offset,
+                fractional_row: *fractional_row,
+                generation,
+            }),
+            Self::Live | Self::Requesting { .. } => None,
+        }
+    }
+
+    /// Decide the first live-canvas scroll or mirror a GPUI list position.
+    /// `rows > 0` moves toward history, `< 0` toward the live tail. GPUI's
+    /// pixel offset remains fractional here only for held-window addressing
+    /// and prefetch rebasing.
     /// `available` is false when an alternate-screen or mouse-reporting app
     /// owns the wheel, and `windowing` is the negotiated protocol feature.
     fn on_wheel(
@@ -625,34 +651,6 @@ impl Scrollback {
         }
     }
 
-    /// The rows to paint while scrolled back, or `None` while following the
-    /// live tail. A fractional viewport includes one context row below the
-    /// nominal height; the canvas translates and clips it. `viewport_rows` is
-    /// the current paint height, so a resize since the window was served still
-    /// paints the right count.
-    fn visible_lines(
-        &self,
-        viewport_rows: usize,
-    ) -> Option<(Arc<TerminalScrollWindow>, Range<usize>, f32)> {
-        match self {
-            Scrollback::Windowed {
-                window,
-                offset,
-                fractional_row,
-                ..
-            } => {
-                let start = (*offset).min(window.lines.len());
-                let extra_row = usize::from(*fractional_row > FRACTION_EPSILON);
-                let end = start
-                    .saturating_add(viewport_rows)
-                    .saturating_add(extra_row)
-                    .min(window.lines.len());
-                Some((window.clone(), start..end, *fractional_row))
-            }
-            Scrollback::Live | Scrollback::Requesting { .. } => None,
-        }
-    }
-
     /// Follow a newly applied live frame, and report whether the view must
     /// repaint for it. Two jobs, both from the review's "windowed state must
     /// track availability, not cling to a stale window until a wheel tick":
@@ -785,12 +783,13 @@ impl TrafficTraceStats {
     }
 }
 
-/// Borrow-free paint snapshot for the currently visible part of a held
-/// scrollback window. Cloning this value is constant-time: row storage stays
-/// behind the Arc and `range` selects the viewport inside it.
-pub(super) struct VisibleScrollback {
+/// Borrow-free data source for the GPUI-owned history list. Cloning this value
+/// is constant-time: row storage stays behind the Arc, while `offset` and
+/// `fractional_row` are used only to seed/rebase GPUI's pixel scroll position
+/// when a new daemon window arrives.
+pub(super) struct ScrollbackSurface {
     pub(super) window: Arc<TerminalScrollWindow>,
-    pub(super) range: Range<usize>,
+    pub(super) offset: usize,
     pub(super) fractional_row: f32,
     pub(super) generation: u64,
 }
@@ -822,10 +821,10 @@ pub(crate) struct TerminalSession {
     /// pane.
     exit_tx: futures::channel::mpsc::UnboundedSender<SessionId>,
     /// Scrollback windowing state (`docs/terminal-scrollback-design.md` §3.3):
-    /// `Live` while following the tail, or a held window scrolled within
-    /// locally. Interior-mutable because both the sync scroll handler
-    /// ([`Self::handle_scroll`], `&self`) and the async event pump
-    /// (installing a served `ScrollWindow`) mutate it, and the paint reads it.
+    /// `Live` while following the tail, or a held row window feeding GPUI's
+    /// list. Interior-mutable because both the list-position mirror and the
+    /// async event pump (installing a served `ScrollWindow`) mutate it, while
+    /// render snapshots its immutable data surface.
     scrollback: RefCell<Scrollback>,
     /// Monotonic identity of the held scroll window for the paint-side row
     /// shaping cache. It advances only when a requested window is actually
@@ -1166,16 +1165,17 @@ impl TerminalSession {
                 .is_some_and(|frame| frame.scrollback_available)
     }
 
-    /// One wheel gesture's frontend displacement in terminal-row units.
-    /// Precise deltas stay fractional in [`Scrollback::on_wheel`];
-    /// `fallback_lines` is used only when an old peer or a terminal app owns
-    /// the wheel and needs the traditional discrete `TerminalScroll` input.
+    /// The first live-canvas wheel gesture's displacement in terminal-row
+    /// units. It requests the initial history window and retains a fractional
+    /// seed while that reply travels. Once installed, GPUI's list handles
+    /// in-window wheel input directly. `fallback_lines` is used only when an
+    /// old peer or terminal app owns the wheel and needs traditional discrete
+    /// `TerminalScroll` input.
     ///
     /// - windowing unavailable (a v11 peer, or `scrollback_available == false`
     ///   in alt-screen / mouse mode) → today's round-trip `Scroll`;
     /// - the first scroll-back tick → a `RequestScrollWindow`;
-    /// - within a held window → **nothing on the wire**, just a local repaint
-    ///   (the round-trip elimination this PR exists for);
+    /// - within a held window → handled by GPUI's list, not this method;
     /// - a block edge with more history → one recentred `RequestScrollWindow`;
     /// - back to the live tail → drop the window, resume the watch.
     ///
@@ -1211,18 +1211,42 @@ impl TerminalSession {
         decision.repaint
     }
 
-    /// The scrollback window slice to paint, or `None` while following the
-    /// live tail (the caller paints the live frame instead). See
-    /// [`Scrollback::visible_lines`].
-    pub(super) fn visible_scrollback(&self, viewport_rows: usize) -> Option<VisibleScrollback> {
-        let (window, range, fractional_row) =
-            self.scrollback.borrow().visible_lines(viewport_rows)?;
-        Some(VisibleScrollback {
-            window,
-            range,
-            fractional_row,
-            generation: self.scrollback_generation,
-        })
+    /// The held history data presented by GPUI's list, or `None` while the
+    /// live terminal canvas owns the pane. GPUI is the display-position
+    /// authority; this snapshot's offset is consulted only when a newly
+    /// installed daemon window must seed or rebase that list.
+    pub(super) fn scrollback_surface(&self) -> Option<ScrollbackSurface> {
+        self.scrollback.borrow().surface(self.scrollback_generation)
+    }
+
+    /// Mirror GPUI's current pixel list position into the row-addressed
+    /// scrollback state used solely for edge prefetch and daemon-window
+    /// rebasing. The list remains authoritative for what is painted.
+    pub(crate) fn sync_frontend_scroll_position(
+        &self,
+        item_ix: usize,
+        offset_in_item: f32,
+        viewport_rows: usize,
+    ) {
+        if !offset_in_item.is_finite() {
+            return;
+        }
+        let target = item_ix as f32 + offset_in_item.clamp(0.0, 1.0);
+        let available = self
+            .frame
+            .as_ref()
+            .is_some_and(|frame| frame.scrollback_available);
+        let windowing = self.windowing_supported();
+        let decision = {
+            let mut scrollback = self.scrollback.borrow_mut();
+            let Some(current) = scrollback.windowed_position() else {
+                return;
+            };
+            scrollback.on_wheel(current - target, viewport_rows, available, windowing)
+        };
+        if let ScrollIpc::Request { anchor, height } = decision.ipc {
+            self.send_request_scroll_window(anchor, height);
+        }
     }
 
     pub(crate) fn send_input(&self, bytes: Vec<u8>) {
@@ -1461,7 +1485,7 @@ mod tests {
 
     const VR: usize = 5;
 
-    /// A window whose rows read `row00`, `row01`, … so `visible_lines` slices
+    /// A window whose rows read `row00`, `row01`, … so data-surface contents
     /// are identifiable, sized/positioned by the given metadata.
     fn window(
         len: usize,
@@ -1534,7 +1558,7 @@ mod tests {
     }
 
     #[test]
-    fn a_subrow_gesture_repaints_locally_and_exposes_one_context_row() {
+    fn a_subrow_gesture_is_preserved_for_the_gpui_position_mirror() {
         let mut state = windowed_mid();
         let decision = state.on_wheel(0.25, VR, true, true);
         assert_eq!(decision.ipc, ScrollIpc::None);
@@ -1548,9 +1572,7 @@ mod tests {
             } if (fractional_row - 0.75).abs() < 0.0001
         ));
 
-        let (_, range, fractional_row) = state.visible_lines(VR).unwrap();
-        assert_eq!(range, 9..15, "one clipped context row is painted");
-        assert_fraction(fractional_row, 0.75);
+        assert_fraction(state.windowed_position().unwrap().fract(), 0.75);
     }
 
     #[test]
@@ -2106,27 +2128,29 @@ mod tests {
         }
     }
 
-    /// `visible_lines` slices the held window at the local offset, and returns
-    /// `None` while following the live tail (the paint then uses the frame).
+    /// GPUI receives the whole immutable row window plus the exact seed
+    /// position. It, rather than this row-addressed model, chooses the visible
+    /// slice and pixel clipping.
     #[test]
-    fn visible_lines_slices_the_window_at_the_offset() {
+    fn surface_exposes_the_window_and_gpui_seed_position() {
         let state = windowed_mid(); // offset 10, 25 rows row00..row24
-        let (window, range, fractional_row) =
-            state.visible_lines(VR).expect("windowed paints a slice");
-        assert_eq!(fractional_row, 0.0);
-        let texts: Vec<String> = window.lines[range].iter().map(row_text).collect();
-        assert_eq!(texts, ["row10", "row11", "row12", "row13", "row14"]);
+        let surface = state.surface(7).expect("windowed exposes list data");
+        assert_eq!(surface.generation, 7);
+        assert_eq!(surface.offset, 10);
+        assert_eq!(surface.fractional_row, 0.0);
+        assert_eq!(row_text(&surface.window.lines[10]), "row10");
+        assert_eq!(surface.window.lines.len(), 25);
 
         assert!(
-            Scrollback::Live.visible_lines(VR).is_none(),
-            "the live tail paints the frame, not a window slice"
+            Scrollback::Live.surface(7).is_none(),
+            "the live tail paints the frame, not a history list"
         );
         assert!(
             Scrollback::Requesting {
                 viewport_rows: VR,
                 pending_rows: 0.0,
             }
-            .visible_lines(VR)
+            .surface(7)
             .is_none(),
             "a pending first fetch still shows the live frame"
         );
@@ -2215,7 +2239,7 @@ mod tests {
         assert!(windowed.abandon(), "dropping a held window is a change");
         assert_eq!(windowed, Scrollback::Live);
         assert!(
-            windowed.visible_lines(VR).is_none(),
+            windowed.surface(1).is_none(),
             "the paint now follows the live frame"
         );
 

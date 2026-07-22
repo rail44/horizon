@@ -9,28 +9,17 @@ to `docs/terminal-protocol-goals.md` (where the frame path is headed),
 `docs/session-daemon-design.md` (the daemon-owns-the-emulator split) and
 `docs/remoc-adoption-design.md` (the v11 wire and its §4 skew discipline).
 
-**Pixel presentation follow-up (2026-07-22):** the window address and wire
-remain row-based, but the frontend viewport is continuous. Precise GPUI wheel
-deltas update a fractional row position, the canvas paints one clipped context
-row, and only window prefetch crosses back into integer row coordinates. A
-first sub-row gesture requests the live-tail window immediately and retains
-all movement while the reply is in flight. This deliberately does not use a
-second `ScrollHandle`: Horizon's held-window offset is the one scroll authority,
-while GPUI supplies native pixel deltas and clipping. Alternate-screen and
+**GPUI viewport follow-up (2026-07-23):** the window address and wire remain
+row-based, but the frontend viewport is an ordinary GPUI `ListState`. The list
+is the sole display-position owner and retains its native `item_ix +
+offset_in_item` pixel position, so a terminal row may stop partially clipped;
+there is no row snap and no terminal-specific animation clock. The first wheel
+event requests the live-tail window and retains its exact pixel-derived target
+while that reply is in flight. Once installed, both coarse `Lines` input and
+precise `Pixels` input take GPUI's same list path used by the Agent transcript.
+The terminal session mirrors the list position only to decide when to prefetch
+and how to rebase a replacement data window. Alternate-screen and
 mouse-reporting applications still receive discrete terminal wheel input.
-
-The follow-up also distinguishes event precision from presentation cadence.
-Exact `ScrollDelta::Pixels` input (Wayland/macOS finger motion and the
-platform's kinetic tail) is applied immediately. An ordinary mouse wheel is
-reported as coarse `ScrollDelta::Lines` — three lines, hence 60 logical pixels
-under GPUI's `List` convention — and moving a terminal grid that whole distance
-in one frame still looks row-stepped even though the stored position is
-fractional. Horizon therefore keeps the same 60px intent but converges to it
-over animation frames (40ms half-life, hard-settled within 140ms). New notches
-and reversals compose into the remaining distance. Each emitted step is folded
-straight into the existing scrollback state; the animation owns no viewport,
-stops scheduling frames when empty, and resets on resize, selection, runtime
-loss, or application-owned scrolling.
 
 ## What prompted this
 
@@ -258,26 +247,23 @@ not-latest self-located window, resolved by position.
 
 ### 3.3 Client-local scrolling within the window
 
-The client owns a **continuous local scroll position** into the held window:
-an integer row offset plus a normalized fractional row. Precise wheel events
-move that position by their exact GPUI pixel delta and trigger a local repaint
-with one extra row clipped above or below the viewport. The shaped-row cache
-keeps integer window-row keys, so crossing a row boundary normally reuses every
-overlapping artifact and shapes only the exposed edge. No IPC occurs inside
-the window. The live `display_offset` on the daemon stays at the tail;
-scrollback is composited entirely on the client from the one window it holds.
-Scrolling back down until `below`'s rows are exhausted returns to the live
-edge: the client drops the window and resumes rendering the live-frame watch.
+GPUI owns the **continuous local scroll position** into the held window. Each
+fixed-height terminal row is one `ListState` item, painted through the existing
+row shape cache. `ListOffset::offset_in_item` is a pixel value, so crossing or
+stopping inside a row needs no terminal-specific fractional-paint branch. No
+IPC occurs inside the window. The live `display_offset` on the daemon stays at
+the tail; scrollback is composited entirely on the client from the one window
+it holds. Scrolling back down until `below`'s rows are exhausted returns to the
+live edge: the client drops the list and resumes rendering the live-frame
+canvas.
 
-GPUI's generic scroll container is not the state owner here. Its content-size
-clamping would require an oversized canvas, duplicate the held-window offset,
-and need a second rebase whenever prefetch replaces the window. The terminal
-keeps its viewport-sized canvas (and therefore correct PTY resize/input
-geometry), consumes `ScrollDelta::pixel_delta` directly, and clips fractional
-painting to that canvas. Coarse `Lines` input is time-smoothed before entering
-that same continuous state, while precise `Pixels` input stays direct. Old
-peers and screens where the terminal application owns the wheel retain the
-pre-existing whole-line accumulator and `TerminalCommand::Scroll` path.
+The row-addressed session state mirrors GPUI's position only as a data-provider
+cursor: it chooses prefetch anchors and seeds/rebases the list when a new
+immutable window arrives. It never handles an in-window wheel event or decides
+the painted pixel offset. The live canvas remains viewport-sized for PTY resize
+and input geometry. Old peers and screens where the terminal application owns
+the wheel retain the pre-existing whole-line accumulator and
+`TerminalCommand::Scroll` path.
 
 ### 3.4 Prefetch
 

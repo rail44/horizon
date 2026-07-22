@@ -329,14 +329,14 @@ lands:
   `events` channel; the initial policy is a three-viewport immutable window
   with a one-viewport directional prefetch margin. Painting shares that
   window by `Arc`, caches shaping by stable window-row index, and preserves
-  the latest local anchor when a prefetch lands. The 2026-07-22 presentation
-  follow-up keeps that address/wire row-based but makes the GPUI viewport
-  continuous: precise pixel deltas retain a fractional row, paint one clipped
-  context row, and survive first-window and edge-fetch rebasing. Coarse wheel
-  `Lines` events retain GPUI's physical distance but converge over bounded
-  animation frames; exact touchpad `Pixels` remain direct. GPUI's generic
-  scroll handle is deliberately not a second scroll authority. Margin sizing
-  remains intentionally tuneable;
+  the latest local anchor when a prefetch lands. The 2026-07-23 presentation
+  follow-up keeps that address/wire row-based but makes an ordinary GPUI
+  `ListState` the sole viewport owner: fixed-height terminal rows retain
+  GPUI's native pixel offset within the first item, both `Lines` and `Pixels`
+  follow the same path as other views, and replacement daemon windows rebase
+  that list without snapping. The session's row offset is only a mirrored
+  data-prefetch cursor; the superseded custom wheel animation is deleted.
+  Margin sizing remains intentionally tuneable;
   interim "smooth the reply cadence" fix assessed as symptomatic, skip.
 
 ## External gates
