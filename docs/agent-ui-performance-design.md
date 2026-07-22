@@ -23,11 +23,16 @@
 > and feeds GPUI's variable-height `ListState`; scrolling now constructs only
 > viewport-plus-overdraw rows. Stable descriptor prefixes retain measurements,
 > streaming remeasures only the mutable tail, and the session-wide Changes
-> aggregate moved off `render` onto session updates. A fixed-bounds
-> `Entity::cached` boundary at every pane also prevents one pane's notification
-> from rebuilding its split siblings. The old Floem-specific signal bridge and
-> lint remain superseded; the enduring architectural backstop is the virtual
-> row boundary plus projection tests, not a reactive-graph rule.
+> aggregate moved off `render` onto session updates. The cache topology follows
+> the view structure rather than applying one boundary uniformly: fixed-size
+> Terminal and ThemeSettings leaf entities are cached directly by `PaneView`,
+> while the composite Agent entity is deliberately uncached there and its
+> transcript surface owns the narrower cache. GPUI rebuilds descendants in
+> refresh mode after a cached ancestor misses, disabling reuse by nested cached
+> views; caching Agent at the pane boundary would therefore make every Agent
+> notification defeat the transcript cache. The old Floem-specific signal
+> bridge and lint remain superseded; the enduring architectural backstop is the
+> virtual row boundary plus projection tests, not a reactive-graph rule.
 
 # Agent UI Performance — Design
 

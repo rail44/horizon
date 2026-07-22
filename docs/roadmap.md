@@ -343,9 +343,10 @@ lands:
 
 ## Shipped (index — details in the named docs and git history)
 
-- 2026-07-22 Pane/scroll performance boundary: cached fixed-bounds pane
-  entities, terminal scroll-window row sharing/shaping cache plus directional
-  prefetch, and variable-height Agent transcript virtualization
+- 2026-07-22 Pane/scroll performance boundary: cached fixed-bounds Terminal
+  and ThemeSettings leaves with an uncached composite Agent around its nested
+  transcript cache, terminal scroll-window row sharing/shaping cache plus
+  directional prefetch, and variable-height Agent transcript virtualization
   (`docs/agent-ui-performance-design.md`,
   `docs/terminal-scrollback-design.md`)
 - 2026-07-22 Native GPUI platform restored on every OS; custom winit platform

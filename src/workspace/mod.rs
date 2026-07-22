@@ -197,17 +197,22 @@ impl PaneView {
     }
 
     fn element(&self) -> AnyElement {
-        // A pane has definite bounds from the layout tree, so make that
-        // boundary explicit to GPUI. Without `cached`, rebuilding one pane's
-        // frame (terminal scroll, agent streaming, cursor blink, ...) walks
-        // every sibling pane's Render tree as part of the same window frame.
-        // This is the same boundary Zed's pane group uses: a pane rerenders
-        // when its own entity is notified or its assigned bounds/text style
-        // changes, not merely because a sibling made the window dirty.
+        // The exhaustive match is the cache-topology boundary: every new pane
+        // kind must be classified as either a fixed-size leaf or a composite.
+        // Terminal and ThemeSettings are leaves with definite bounds from the
+        // layout tree, so their entity render/layout/paint can be reused until
+        // that entity is notified or its bounds/text style change.
+        //
+        // Agent is a composite whose transcript owns a narrower cached
+        // surface. GPUI sets its internal `refreshing` flag while rebuilding a
+        // cached ancestor after a miss, and nested cached views cannot reuse
+        // their layout/paint while that flag is set. Caching Agent here would
+        // therefore make every Agent notification force a miss in the nested
+        // transcript cache, defeating the more selective boundary.
         let style = || StyleRefinement::default().v_flex().size_full();
         match self {
             PaneView::Terminal(view) => view.clone().cached(style()).into_any_element(),
-            PaneView::Agent(view) => view.clone().cached(style()).into_any_element(),
+            PaneView::Agent(view) => view.clone().into_any_element(),
             PaneView::ThemeSettings(view) => view.clone().cached(style()).into_any_element(),
         }
     }
