@@ -6,6 +6,8 @@
 //! through Key too would double-feed every keypress. M1 revisits this
 //! with kitty-flags-on-frame mode routing (docs/gpui-migration-design.md).
 
+use std::time::{Duration, Instant};
+
 use gpui::{px, Keystroke, Modifiers, MouseButton, Pixels, Point, ScrollDelta, TouchPhase};
 use horizon_terminal_core::{
     TerminalMouseButton, TerminalMouseModifiers, TerminalSelectionKind, TerminalSelectionPoint,
@@ -40,6 +42,29 @@ const WHEEL_TICK_LINES: i32 = 3;
 /// precise trackpad deltas already carry their exact pixel distance.
 const GPUI_SCROLL_LINE_HEIGHT: Pixels = px(20.0);
 
+/// Time-domain presentation for imprecise wheel events. GPUI's Linux backend
+/// reports one ordinary wheel notch as `ScrollDelta::Lines(3)`, and `List`
+/// maps that to 60 logical pixels in one frame. That is unobtrusive for a
+/// variable-height transcript but visibly jumps several rows on a terminal
+/// grid. Keep the same distance while converging to it across animation
+/// frames. Exact `Pixels` input (touchpad/finger plus platform kinetic scroll)
+/// bypasses this state entirely.
+const DISCRETE_SCROLL_HALF_LIFE: Duration = Duration::from_millis(40);
+const DISCRETE_SCROLL_MAX_DURATION: Duration = Duration::from_millis(140);
+const DISCRETE_SCROLL_SETTLE_PIXELS: f32 = 0.5;
+
+/// The frontend pixel distance represented by one GPUI wheel event. Kept
+/// separate from terminal-row conversion so discrete events can be animated
+/// in physical presentation space before reaching the row-addressed window.
+pub(crate) fn viewport_pixel_delta(delta: ScrollDelta) -> f32 {
+    let pixels = f32::from(delta.pixel_delta(GPUI_SCROLL_LINE_HEIGHT).y);
+    if pixels.is_finite() {
+        pixels
+    } else {
+        0.0
+    }
+}
+
 /// Convert a GPUI wheel event into continuous terminal-row units for local
 /// presentation. Unlike [`ScrollAccumulator`], this never truncates a precise
 /// delta: the fractional row is painted by the frontend canvas.
@@ -47,11 +72,79 @@ pub(crate) fn viewport_row_delta(delta: ScrollDelta, terminal_line_height: f32) 
     if !terminal_line_height.is_finite() || terminal_line_height <= 0.0 {
         return 0.0;
     }
-    let rows = f32::from(delta.pixel_delta(GPUI_SCROLL_LINE_HEIGHT).y) / terminal_line_height;
+    let rows = viewport_pixel_delta(delta) / terminal_line_height;
     if rows.is_finite() {
         rows
     } else {
         0.0
+    }
+}
+
+/// Frame-driven smoothing state for `ScrollDelta::Lines`. `remaining_pixels`
+/// is unapplied intent, not a second viewport position: every emitted step is
+/// immediately folded into `TerminalSession`'s existing continuous scrollback
+/// state, which remains the sole scroll authority.
+#[derive(Debug, Default)]
+pub(crate) struct DiscreteScrollAnimation {
+    remaining_pixels: f32,
+    last_input_at: Option<Instant>,
+    last_tick_at: Option<Instant>,
+}
+
+impl DiscreteScrollAnimation {
+    pub(crate) fn push(&mut self, pixels: f32, now: Instant) {
+        if !pixels.is_finite() || pixels.abs() <= f32::EPSILON {
+            return;
+        }
+        if !self.is_active() {
+            self.last_tick_at = Some(now);
+        }
+        self.remaining_pixels += pixels;
+        self.last_input_at = Some(now);
+        if self.remaining_pixels.abs() <= f32::EPSILON {
+            self.reset();
+        }
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
+        self.remaining_pixels.abs() > f32::EPSILON
+    }
+
+    pub(crate) fn reset(&mut self) {
+        self.remaining_pixels = 0.0;
+        self.last_input_at = None;
+        self.last_tick_at = None;
+    }
+
+    /// Advance to `now`, returning the pixels to apply on this frame. An
+    /// exponential approach composes naturally when more notches arrive or
+    /// direction reverses; the hard duration bound consumes the small tail so
+    /// input never leaves latent motion behind.
+    pub(crate) fn advance(&mut self, now: Instant) -> Option<f32> {
+        if !self.is_active() {
+            return None;
+        }
+        let last_tick = self.last_tick_at.unwrap_or(now);
+        let last_input = self.last_input_at.unwrap_or(now);
+        let elapsed = now.saturating_duration_since(last_tick);
+        self.last_tick_at = Some(now);
+
+        if self.remaining_pixels.abs() <= DISCRETE_SCROLL_SETTLE_PIXELS
+            || now.saturating_duration_since(last_input) >= DISCRETE_SCROLL_MAX_DURATION
+        {
+            let step = self.remaining_pixels;
+            self.reset();
+            return Some(step);
+        }
+        if elapsed.is_zero() {
+            return Some(0.0);
+        }
+
+        let half_lives = elapsed.as_secs_f32() / DISCRETE_SCROLL_HALF_LIFE.as_secs_f32();
+        let progress = 1.0 - 0.5_f32.powf(half_lives);
+        let step = self.remaining_pixels * progress;
+        self.remaining_pixels -= step;
+        Some(step)
     }
 }
 
@@ -258,11 +351,68 @@ mod tests {
             viewport_row_delta(ScrollDelta::Lines(point(0.0, 1.0)), LINE_HEIGHT),
             1.0
         );
+        assert_eq!(
+            viewport_pixel_delta(ScrollDelta::Lines(point(0.0, 3.0))),
+            60.0,
+            "one ordinary Linux wheel notch is three GPUI lines"
+        );
     }
 
     #[test]
     fn invalid_terminal_line_height_produces_no_viewport_motion() {
         assert_eq!(viewport_row_delta(pixels_delta(7.5), 0.0), 0.0);
+    }
+
+    #[test]
+    fn a_discrete_notch_is_spread_across_animation_frames_without_losing_distance() {
+        let start = Instant::now();
+        let mut animation = DiscreteScrollAnimation::default();
+        animation.push(60.0, start);
+
+        let first = animation
+            .advance(start + Duration::from_millis(16))
+            .unwrap();
+        assert!(
+            (0.0..LINE_HEIGHT).contains(&first),
+            "the first frame should move less than one terminal row, got {first}px"
+        );
+
+        let mut applied = first;
+        for elapsed_ms in [32, 48, 64, 80, 96, 112, 128, 140] {
+            applied += animation
+                .advance(start + Duration::from_millis(elapsed_ms))
+                .unwrap();
+        }
+        assert!((applied - 60.0).abs() < 0.001);
+        assert!(!animation.is_active());
+    }
+
+    #[test]
+    fn reversing_a_discrete_animation_composes_with_already_applied_motion() {
+        let start = Instant::now();
+        let mut animation = DiscreteScrollAnimation::default();
+        animation.push(60.0, start);
+        let first = animation
+            .advance(start + Duration::from_millis(16))
+            .unwrap();
+
+        animation.push(-60.0, start + Duration::from_millis(16));
+        let reverse = animation
+            .advance(start + Duration::from_millis(32))
+            .unwrap();
+        assert!(reverse < 0.0, "the next frame should reverse direction");
+
+        let mut applied = first + reverse;
+        for elapsed_ms in [48, 64, 80, 96, 112, 128, 144, 156] {
+            applied += animation
+                .advance(start + Duration::from_millis(elapsed_ms))
+                .unwrap();
+        }
+        assert!(
+            applied.abs() < 0.001,
+            "equal opposite notches should return to the starting position"
+        );
+        assert!(!animation.is_active());
     }
 
     #[test]

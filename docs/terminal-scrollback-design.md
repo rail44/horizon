@@ -19,6 +19,19 @@ second `ScrollHandle`: Horizon's held-window offset is the one scroll authority,
 while GPUI supplies native pixel deltas and clipping. Alternate-screen and
 mouse-reporting applications still receive discrete terminal wheel input.
 
+The follow-up also distinguishes event precision from presentation cadence.
+Exact `ScrollDelta::Pixels` input (Wayland/macOS finger motion and the
+platform's kinetic tail) is applied immediately. An ordinary mouse wheel is
+reported as coarse `ScrollDelta::Lines` — three lines, hence 60 logical pixels
+under GPUI's `List` convention — and moving a terminal grid that whole distance
+in one frame still looks row-stepped even though the stored position is
+fractional. Horizon therefore keeps the same 60px intent but converges to it
+over animation frames (40ms half-life, hard-settled within 140ms). New notches
+and reversals compose into the remaining distance. Each emitted step is folded
+straight into the existing scrollback state; the animation owns no viewport,
+stops scheduling frames when empty, and resets on resize, selection, runtime
+loss, or application-owned scrolling.
+
 ## What prompted this
 
 Scrolling *back* through history — wheel or PageUp into the scrollback
@@ -261,9 +274,10 @@ clamping would require an oversized canvas, duplicate the held-window offset,
 and need a second rebase whenever prefetch replaces the window. The terminal
 keeps its viewport-sized canvas (and therefore correct PTY resize/input
 geometry), consumes `ScrollDelta::pixel_delta` directly, and clips fractional
-painting to that canvas. Old peers and screens where the terminal application
-owns the wheel retain the pre-existing whole-line accumulator and
-`TerminalCommand::Scroll` path.
+painting to that canvas. Coarse `Lines` input is time-smoothed before entering
+that same continuous state, while precise `Pixels` input stays direct. Old
+peers and screens where the terminal application owns the wheel retain the
+pre-existing whole-line accumulator and `TerminalCommand::Scroll` path.
 
 ### 3.4 Prefetch
 

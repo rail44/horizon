@@ -28,17 +28,19 @@ pub(crate) use session::TerminalSession;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::time::Instant;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use horizon_terminal_core::{
     KeyEventKind, TerminalFrame, TerminalMouseButton, TerminalMouseKind, TerminalMouseReport,
-    TerminalSize,
+    TerminalSelectionPoint, TerminalSize,
 };
 
 use self::input::{
     cell_from_position, selection_kind_from_clicks, term_key_code, term_modifiers,
-    terminal_mouse_button, terminal_mouse_modifiers, viewport_row_delta, ScrollAccumulator,
+    terminal_mouse_button, terminal_mouse_modifiers, viewport_pixel_delta, viewport_row_delta,
+    DiscreteScrollAnimation, ScrollAccumulator,
 };
 use self::shape_cache::{CacheEpoch, RowItem, ShapedLineCache, NO_GENERATION};
 use crate::input_trace::input_trace;
@@ -177,6 +179,13 @@ pub(crate) struct TerminalView {
     // this accumulator preserves terminal-protocol whole-line semantics only
     // where the frontend does not own the viewport.
     scroll_accum: ScrollAccumulator,
+    // Ordinary mouse-wheel input arrives as coarse `Lines(3)` events. Animate
+    // that distance in presentation pixels across GPUI frames; exact trackpad
+    // `Pixels` events bypass it. TerminalSession remains the sole owner of the
+    // resulting continuous viewport position.
+    discrete_scroll: DiscreteScrollAnimation,
+    discrete_scroll_size: TerminalSize,
+    discrete_scroll_point: TerminalSelectionPoint,
     _session_observation: Subscription,
 }
 
@@ -190,15 +199,16 @@ impl TerminalView {
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
 
+        let initial_size = TerminalSize {
+            cols: 80,
+            rows: 24,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
         Self {
             session,
             focus_handle,
-            last_size: Rc::new(Cell::new(TerminalSize {
-                cols: 80,
-                rows: 24,
-                pixel_width: 0,
-                pixel_height: 0,
-            })),
+            last_size: Rc::new(Cell::new(initial_size)),
             metrics: Rc::new(Cell::new(None)),
             paint_caches: Rc::new(PaintCaches {
                 live: RefCell::new(ShapedLineCache::new()),
@@ -210,6 +220,9 @@ impl TerminalView {
             selecting: false,
             reporting_button: None,
             scroll_accum: ScrollAccumulator::default(),
+            discrete_scroll: DiscreteScrollAnimation::default(),
+            discrete_scroll_size: initial_size,
+            discrete_scroll_point: TerminalSelectionPoint { row: 0, col: 0 },
             _session_observation: observation,
         }
     }
@@ -251,6 +264,7 @@ impl TerminalView {
                 modifiers: terminal_mouse_modifiers(&event.modifiers),
             });
         } else if event.button == MouseButton::Left {
+            self.discrete_scroll.reset();
             self.selecting = true;
             let kind = selection_kind_from_clicks(event.click_count);
             // `send_selection_start` drops any held scrollback window (review
@@ -329,31 +343,96 @@ impl TerminalView {
         let Some(point) = self.cell_at(event.position) else {
             return;
         };
-        let rows = viewport_row_delta(event.delta, line_height());
         let local_scrollback = self.session.read(cx).local_scrollback_available();
-        let fallback_lines = if local_scrollback {
+        input_trace!(
+            "scroll-wheel delta={:?} phase={:?} local_scrollback={local_scrollback}",
+            event.delta,
+            event.touch_phase
+        );
+        if local_scrollback {
             // Passthrough debt is unrelated to the visible fractional
             // position and must not leak across a primary/alternate-screen
             // transition.
             self.scroll_accum.reset();
-            None
-        } else {
-            self.scroll_accum
-                .consume(event.delta, event.touch_phase, line_height())
-        };
-        if rows.abs() <= f32::EPSILON && fallback_lines.is_none() {
+            if matches!(event.delta, ScrollDelta::Lines(_)) {
+                self.discrete_scroll
+                    .push(viewport_pixel_delta(event.delta), Instant::now());
+                self.discrete_scroll_size = self.last_size.get();
+                self.discrete_scroll_point = point;
+                if self.discrete_scroll.is_active() {
+                    cx.notify();
+                }
+                return;
+            }
+
+            // Precise touchpad/finger input already has the platform's native
+            // cadence and kinetic tail. Apply it directly with no artificial
+            // latency; any earlier wheel animation remains composable.
+            let rows = viewport_row_delta(event.delta, line_height());
+            if rows.abs() <= f32::EPSILON {
+                return;
+            }
+            let viewport_rows = self.last_size.get().rows as usize;
+            let repaint = self
+                .session
+                .read(cx)
+                .handle_scroll(rows, None, point, viewport_rows);
+            if repaint {
+                cx.notify();
+            }
             return;
         }
-        // The primary-screen window consumes the exact GPUI displacement;
-        // alt-screen/mouse-mode and old peers use fallback_lines to preserve
-        // terminal-protocol wheel semantics.
-        let viewport_rows = self.last_size.get().rows as usize;
-        let repaint =
-            self.session
-                .read(cx)
-                .handle_scroll(rows, fallback_lines, point, viewport_rows);
-        if repaint {
-            cx.notify();
+
+        // The terminal application or an old peer owns this wheel. Drop any
+        // frontend animation and preserve the existing discrete protocol path.
+        self.discrete_scroll.reset();
+        if let Some(lines) =
+            self.scroll_accum
+                .consume(event.delta, event.touch_phase, line_height())
+        {
+            self.session.read(cx).handle_scroll(
+                lines as f32,
+                Some(lines),
+                point,
+                self.last_size.get().rows as usize,
+            );
+        }
+    }
+
+    /// Fold one time-smoothed wheel step into the existing continuous
+    /// scrollback state before this frame paints it. Rendering owns the clock:
+    /// `request_animation_frame` re-enters this method only while unapplied
+    /// distance remains, so idle terminals stay idle.
+    fn advance_discrete_scroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.discrete_scroll.is_active() {
+            return;
+        }
+        let size = self.last_size.get();
+        let can_animate = {
+            let session = self.session.read(cx);
+            session.local_scrollback_available() && !session.runtime_unreachable()
+        };
+        if !can_animate || size != self.discrete_scroll_size {
+            self.discrete_scroll.reset();
+            return;
+        }
+
+        if let Some(pixels) = self.discrete_scroll.advance(Instant::now()) {
+            if pixels.abs() > f32::EPSILON {
+                input_trace!(
+                    "scroll-animation step_px={pixels:.3} active_after={}",
+                    self.discrete_scroll.is_active()
+                );
+                self.session.read(cx).handle_scroll(
+                    pixels / line_height(),
+                    None,
+                    self.discrete_scroll_point,
+                    size.rows as usize,
+                );
+            }
+        }
+        if self.discrete_scroll.is_active() {
+            window.request_animation_frame();
         }
     }
 
@@ -767,7 +846,8 @@ impl Focusable for TerminalView {
 }
 
 impl Render for TerminalView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.advance_discrete_scroll(window, cx);
         let entity = cx.entity();
         let last_size = self.last_size.clone();
         let metrics = self.metrics.clone();

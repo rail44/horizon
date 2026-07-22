@@ -332,7 +332,9 @@ lands:
   the latest local anchor when a prefetch lands. The 2026-07-22 presentation
   follow-up keeps that address/wire row-based but makes the GPUI viewport
   continuous: precise pixel deltas retain a fractional row, paint one clipped
-  context row, and survive first-window and edge-fetch rebasing. GPUI's generic
+  context row, and survive first-window and edge-fetch rebasing. Coarse wheel
+  `Lines` events retain GPUI's physical distance but converge over bounded
+  animation frames; exact touchpad `Pixels` remain direct. GPUI's generic
   scroll handle is deliberately not a second scroll authority. Margin sizing
   remains intentionally tuneable;
   interim "smooth the reply cadence" fix assessed as symptomatic, skip.
