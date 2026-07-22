@@ -9,19 +9,25 @@ to `docs/terminal-protocol-goals.md` (where the frame path is headed),
 `docs/session-daemon-design.md` (the daemon-owns-the-emulator split) and
 `docs/remoc-adoption-design.md` (the v11 wire and its §4 skew discipline).
 
-**GPUI viewport follow-up (2026-07-23):** the window address and wire remain
-row-based, but the frontend viewport is an ordinary GPUI `ListState`. The list
-is the sole display-position owner and retains its native `item_ix +
-offset_in_item` pixel position, so a terminal row may stop partially clipped;
-there is no row snap. Once history is visible, the bare GPUI List consumes both
-`Lines` and `Pixels` through the same native handler as the Agent transcript;
-the terminal adds no wheel handler, delta branching, or animation clock. The
-first wheel event requests the live-tail window and its distance is applied
-once when the list appears. The terminal session does not retain a second
-position: it observes GPUI's current value only to choose a prefetch anchor,
-and the view uses that same value once to rebase a replacement data window.
-Alternate-screen and mouse-reporting applications still receive discrete
-terminal wheel input.
+**GPUI surface follow-up (2026-07-23):** the window address and wire remain
+row-based, but rows are terminal data rather than GPUI child elements. Live and
+history both paint through one fixed-bounds, viewport-sized canvas. The local
+position is continuous: precise input retains its exact pixel distance, the
+canvas translates all row origins by the fractional remainder, and one context
+row is clipped at the viewport edge. The integer part selects rows from the
+held window and drives prefetch; it does not snap the presentation. A first
+sub-row gesture requests the live-tail window immediately and retains all
+movement while the reply is in flight.
+
+This is the terminal-native representation: a TUI may update any grid cell, so
+the grid is one retained surface with per-row generations and shape-cache keys,
+not a list whose item boundaries encode terminal rows. Arbitrary live changes
+bump only affected row generations; scrolling only changes their paint origin.
+GPUI's generic scroll handle is deliberately not a second position authority:
+it derives range from child layout and would require an oversized synthetic
+canvas, while the terminal already owns the row-addressed window and edge
+prefetch. Alternate-screen and mouse-reporting applications use the same live
+surface but continue to receive discrete terminal-protocol wheel input.
 
 ## What prompted this
 
@@ -249,23 +255,23 @@ not-latest self-located window, resolved by position.
 
 ### 3.3 Client-local scrolling within the window
 
-GPUI owns the **continuous local scroll position** into the held window. Each
-fixed-height terminal row is one `ListState` item, painted through the existing
-row shape cache. `ListOffset::offset_in_item` is a pixel value, so crossing or
-stopping inside a row needs no terminal-specific fractional-paint branch. No
-IPC occurs inside the window. The live `display_offset` on the daemon stays at
-the tail; scrollback is composited entirely on the client from the one window
-it holds. Scrolling back down until `below`'s rows are exhausted returns to the
-live edge: the client drops the list and resumes rendering the live-frame
-canvas.
+The client owns a **continuous local scroll position** into the held window: an
+integer row address plus a normalized fractional displacement. The integer
+part selects the first source row; the fractional part translates the single
+canvas in presentation pixels. One extra context row is painted and clipped
+when needed. The existing row shape cache keeps immutable window-row keys, so
+crossing a row boundary normally reuses every overlapping artifact and shapes
+only the newly exposed edge. No IPC occurs inside the window.
 
-The row-addressed session state observes GPUI's position only when choosing a
-prefetch anchor; it does not retain a data-provider cursor. When a new immutable
-window arrives, the view maps GPUI's current live-tail-relative anchor into the
-new rows once. The live canvas remains viewport-sized for PTY resize
-and input geometry. Old peers and screens where the terminal application owns
-the wheel retain the pre-existing whole-line accumulator and
-`TerminalCommand::Scroll` path.
+The live `display_offset` on the daemon stays at the tail; scrollback is
+composited entirely on the client from the one window it holds. Replacement
+windows rebase the same continuous live-tail-relative anchor, including its
+fractional component. Scrolling down until `below` is exhausted drops the held
+window and the same canvas resumes painting the live frame. Its bounds never
+change, so PTY resize, pointer hit testing, and IME geometry remain viewport
+relative. Old peers and screens where the terminal application owns the wheel
+retain the pre-existing whole-line accumulator and `TerminalCommand::Scroll`
+path.
 
 ### 3.4 Prefetch
 

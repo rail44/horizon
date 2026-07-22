@@ -30,20 +30,21 @@ pub(crate) fn cell_from_position(
 
 /// Fixed lines-per-tick for terminal-protocol passthrough
 /// (`ScrollDelta::Lines`, e.g. a physical mouse wheel). The primary-screen
-/// frontend instead scrolls GPUI's list by pixels.
+/// frontend instead normalizes input to presentation pixels before it reaches
+/// the row-addressed data provider.
 const WHEEL_TICK_LINES: i32 = 3;
 
-/// GPUI's `List` converts imprecise line deltas with a 20px logical line
-/// height. Use the same conversion for the terminal's frontend viewport so a
-/// wheel gesture has the same physical displacement in Agent and Terminal;
-/// precise trackpad deltas already carry their exact pixel distance.
-const GPUI_SCROLL_LINE_HEIGHT: Pixels = px(20.0);
+/// GPUI's standard scroll elements normalize imprecise line deltas with a
+/// 20px logical unit. Use the same presentation-space conversion at the
+/// terminal surface boundary; precise trackpad deltas already carry their
+/// exact pixel distance.
+const GPUI_IMPRECISE_SCROLL_UNIT: Pixels = px(20.0);
 
 /// The frontend pixel distance represented by one GPUI wheel event. Kept
-/// separate from terminal-row conversion because GPUI's history list owns the
-/// physical presentation position while the daemon window remains row-addressed.
+/// separate from terminal-row conversion so the canvas can preserve the
+/// exact presentation position while the row provider remains row-addressed.
 pub(crate) fn viewport_pixel_delta(delta: ScrollDelta) -> f32 {
-    let pixels = f32::from(delta.pixel_delta(GPUI_SCROLL_LINE_HEIGHT).y);
+    let pixels = f32::from(delta.pixel_delta(GPUI_IMPRECISE_SCROLL_UNIT).y);
     if pixels.is_finite() {
         pixels
     } else {
@@ -244,7 +245,12 @@ mod tests {
     }
 
     #[test]
-    fn imprecise_delta_uses_the_same_twenty_pixel_unit_as_gpui_list() {
+    fn precise_delta_reaches_the_viewport_without_conversion() {
+        assert_eq!(viewport_pixel_delta(pixels_delta(7.5)), 7.5);
+    }
+
+    #[test]
+    fn imprecise_delta_is_normalized_once_in_presentation_pixels() {
         assert_eq!(
             viewport_pixel_delta(ScrollDelta::Lines(point(0.0, 3.0))),
             60.0,

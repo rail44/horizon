@@ -28,13 +28,12 @@ pub(crate) use session::TerminalSession;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use horizon_terminal_core::{
     KeyEventKind, TerminalFrame, TerminalMouseButton, TerminalMouseKind, TerminalMouseReport,
-    TerminalScrollWindow, TerminalSize,
+    TerminalSize,
 };
 
 use self::input::{
@@ -178,14 +177,6 @@ pub(crate) struct TerminalView {
     // this accumulator preserves terminal-protocol whole-line semantics only
     // where the frontend does not own the viewport.
     scroll_accum: ScrollAccumulator,
-    // GPUI is the sole owner of history's display position, including the
-    // pixel offset within the first visible terminal row.
-    scrollback_list: ListState,
-    scrollback_generation: u64,
-    scrollback_window: Option<Arc<TerminalScrollWindow>>,
-    // The first native GPUI wheel distance, retained only while the daemon row
-    // window is in flight and then applied to the List once.
-    pending_scroll_pixels: f32,
     _session_observation: Subscription,
 }
 
@@ -205,26 +196,10 @@ impl TerminalView {
             pixel_width: 0,
             pixel_height: 0,
         };
-        let last_size = Rc::new(Cell::new(initial_size));
-        let scrollback_list = ListState::new(0, ListAlignment::Top, px(256.0))
-            .with_uniform_item_height(px(line_height()));
-        {
-            let list = scrollback_list.clone();
-            let session = session.clone();
-            let last_size = last_size.clone();
-            scrollback_list.set_scroll_handler(move |_, _, cx| {
-                let top = list.logical_scroll_top();
-                session.read(cx).maintain_scrollback_window(
-                    top.item_ix,
-                    f32::from(top.offset_in_item) / line_height(),
-                    last_size.get().rows as usize,
-                );
-            });
-        }
         Self {
             session,
             focus_handle,
-            last_size,
+            last_size: Rc::new(Cell::new(initial_size)),
             metrics: Rc::new(Cell::new(None)),
             paint_caches: Rc::new(PaintCaches {
                 live: RefCell::new(ShapedLineCache::new()),
@@ -236,10 +211,6 @@ impl TerminalView {
             selecting: false,
             reporting_button: None,
             scroll_accum: ScrollAccumulator::default(),
-            scrollback_list,
-            scrollback_generation: 0,
-            scrollback_window: None,
-            pending_scroll_pixels: 0.0,
             _session_observation: observation,
         }
     }
@@ -250,60 +221,6 @@ impl TerminalView {
             .frame
             .as_ref()
             .is_some_and(|frame| frame.mouse_reporting)
-    }
-
-    fn sync_scrollback_list(&mut self, cx: &App) -> Option<session::ScrollbackSurface> {
-        let surface = self.session.read(cx).scrollback_surface();
-        let Some(surface) = surface else {
-            self.scrollback_generation = 0;
-            self.scrollback_window = None;
-            return None;
-        };
-        if surface.generation != self.scrollback_generation {
-            let viewport_rows = self.last_size.get().rows as usize;
-            let position = if let Some(old_window) = self.scrollback_window.as_ref() {
-                let top = self.scrollback_list.logical_scroll_top();
-                let old_position =
-                    top.item_ix as f32 + f32::from(top.offset_in_item) / line_height();
-                let anchor = session::scrollback_anchor(old_window, viewport_rows, old_position);
-                session::scrollback_position(&surface.window, viewport_rows, anchor)
-            } else {
-                surface.window.viewport_offset as f32
-            };
-            let max_top = surface.window.lines.len().saturating_sub(viewport_rows);
-            let (item_ix, fractional_row) = session::split_scrollback_position(position, max_top);
-            self.scrollback_list
-                .reset_with_uniform_height(surface.window.lines.len(), px(line_height()));
-            self.scrollback_list.scroll_to(ListOffset {
-                item_ix,
-                offset_in_item: px(fractional_row * line_height()),
-            });
-            self.scrollback_generation = surface.generation;
-            self.scrollback_window = Some(surface.window.clone());
-
-            if self.pending_scroll_pixels.abs() > f32::EPSILON {
-                let pixels = std::mem::take(&mut self.pending_scroll_pixels);
-                self.apply_scrollback_pixels(pixels, cx);
-            }
-        }
-        Some(surface)
-    }
-
-    fn maintain_scrollback_window(&self, cx: &App) {
-        let top = self.scrollback_list.logical_scroll_top();
-        self.session.read(cx).maintain_scrollback_window(
-            top.item_ix,
-            f32::from(top.offset_in_item) / line_height(),
-            self.last_size.get().rows as usize,
-        );
-    }
-
-    fn apply_scrollback_pixels(&mut self, pixels: f32, cx: &App) {
-        if !pixels.is_finite() || pixels.abs() <= f32::EPSILON {
-            return;
-        }
-        self.scrollback_list.scroll_by(px(pixels));
-        self.maintain_scrollback_window(cx);
     }
 
     fn cell_at(
@@ -420,27 +337,24 @@ impl TerminalView {
             event.touch_phase
         );
         if local_scrollback {
-            // This handler exists only while the live canvas is visible. Its
-            // first wheel event requests a history data window and retains
-            // the exact pixel-derived position while that short IPC is in
-            // flight. Once installed, GPUI's List handles every subsequent
-            // event directly.
+            // Passthrough debt is unrelated to the visible fractional
+            // position and must not leak across a primary/alternate-screen
+            // transition.
             self.scroll_accum.reset();
+            // The presentation surface owns one continuous pixel position.
+            // Precise input keeps its exact distance; imprecise wheel input is
+            // normalized once at this boundary and is never interpreted as a
+            // terminal-row UI operation.
             let pixels = viewport_pixel_delta(event.delta);
             if pixels.abs() <= f32::EPSILON {
                 return;
             }
             let viewport_rows = self.last_size.get().rows as usize;
-            let waiting = self.session.read(cx).scrollback_window_pending();
-            let accepted = (pixels > 0.0
-                && (self
-                    .session
+            let repaint =
+                self.session
                     .read(cx)
-                    .request_scrollback_window(viewport_rows)
-                    || waiting))
-                || (pixels < 0.0 && waiting);
-            if accepted {
-                self.pending_scroll_pixels = (self.pending_scroll_pixels - pixels).min(0.0);
+                    .scroll_viewport(pixels, line_height(), point, viewport_rows);
+            if repaint {
                 cx.notify();
             }
             return;
@@ -452,7 +366,9 @@ impl TerminalView {
             self.scroll_accum
                 .consume(event.delta, event.touch_phase, line_height())
         {
-            self.session.read(cx).send_scroll(lines, point);
+            self.session
+                .read(cx)
+                .scroll_protocol(lines, point, self.last_size.get().rows as usize);
         }
     }
 
@@ -867,20 +783,6 @@ impl Focusable for TerminalView {
 
 impl Render for TerminalView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.sync_scrollback_list(cx).is_none()
-            && !self.session.read(cx).scrollback_window_pending()
-        {
-            self.pending_scroll_pixels = 0.0;
-        }
-        let scrollback_surface = self.sync_scrollback_list(cx);
-        let history_visible = scrollback_surface.is_some();
-        let scrollback_palette = self
-            .session
-            .read(cx)
-            .frame
-            .as_ref()
-            .map(|frame| frame.palette_overrides.clone())
-            .unwrap_or_default();
         let entity = cx.entity();
         let last_size = self.last_size.clone();
         let metrics = self.metrics.clone();
@@ -924,49 +826,32 @@ impl Render for TerminalView {
             .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _window, cx| {
                 view.handle_mouse_move(event, cx);
             }))
-            .when(!history_visible, |this| {
-                this.on_scroll_wheel(cx.listener(|view, event: &ScrollWheelEvent, _window, cx| {
-                    view.handle_scroll_wheel(event, cx);
-                }))
-            })
+            .on_scroll_wheel(cx.listener(|view, event: &ScrollWheelEvent, _window, cx| {
+                view.handle_scroll_wheel(event, cx);
+            }))
             .child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_hidden()
-                    .child(
-                        canvas(
-                            |_, _, _| {},
-                            move |bounds, _, window, cx| {
-                                window.handle_input(
-                                    &focus_handle,
-                                    ElementInputHandler::new(bounds, entity.clone()),
-                                    cx,
-                                );
-                                paint_terminal(
-                                    bounds,
-                                    &entity,
-                                    &last_size,
-                                    &metrics,
-                                    &paint_caches,
-                                    window,
-                                    cx,
-                                );
-                            },
-                        )
-                        .size_full(),
+                div().flex_1().min_h_0().overflow_hidden().child(
+                    canvas(
+                        |_, _, _| {},
+                        move |bounds, _, window, cx| {
+                            window.handle_input(
+                                &focus_handle,
+                                ElementInputHandler::new(bounds, entity.clone()),
+                                cx,
+                            );
+                            paint_terminal(
+                                bounds,
+                                &entity,
+                                &last_size,
+                                &metrics,
+                                &paint_caches,
+                                window,
+                                cx,
+                            );
+                        },
                     )
-                    .when_some(scrollback_surface, |this, surface| {
-                        this.child(scrollback_list_element(
-                            self.scrollback_list.clone(),
-                            surface,
-                            scrollback_palette,
-                            self.metrics.clone(),
-                            self.paint_caches.clone(),
-                            self.last_size.get().rows as usize,
-                        ))
-                    }),
+                    .size_full(),
+                ),
             )
             // Status row (backlog #35 parity with `AgentView::status_line`):
             // rendered only when there's something to say, so an ordinary,
@@ -984,96 +869,26 @@ impl Render for TerminalView {
     }
 }
 
-/// Build the terminal history as an ordinary GPUI list. The list owns the exact
-/// pixel offset within its first visible row; the
-/// terminal-specific code supplies immutable rows and paints each fixed-height
-/// item with the same cached grid renderer as the live canvas.
-fn scrollback_list_element(
-    state: ListState,
-    surface: session::ScrollbackSurface,
-    palette_overrides: Vec<(u16, [u8; 3])>,
-    metrics: Rc<Cell<Option<PaintMetrics>>>,
-    paint_caches: Rc<PaintCaches>,
-    viewport_rows: usize,
-) -> impl IntoElement {
-    let default_bg = theme::to_hsla(theme::resolve(
-        horizon_terminal_core::TerminalColor::Named(horizon_terminal_core::NamedColor::Background),
-        &palette_overrides,
-    ));
-    paint_caches.scrollback.borrow_mut().begin_frame(
-        CacheEpoch {
-            theme: theme::terminal_color_scheme(),
-            palette_overrides: palette_overrides.clone(),
-        },
-        surface.window.lines.len(),
-    );
-
-    let rows = surface.window;
-    let generation = surface.generation;
-    let palette_overrides = Rc::new(palette_overrides);
-    list(state, move |row, _, _| {
-        let rows = rows.clone();
-        let palette_overrides = palette_overrides.clone();
-        let metrics = metrics.clone();
-        let paint_caches = paint_caches.clone();
-        div()
-            .w_full()
-            .h(px(line_height()))
-            .flex_none()
-            .child(
-                canvas(
-                    |_, _, _| {},
-                    move |bounds, _, window, cx| {
-                        let Some(line) = rows.lines.get(row) else {
-                            return;
-                        };
-                        let cell_width = metrics
-                            .get()
-                            .map(|metrics| metrics.cell_width)
-                            .unwrap_or(px(8.0));
-                        let text_system = window.text_system().clone();
-                        let font = resolved_font();
-                        let font_size = px(font_size());
-                        let mut cache = paint_caches.scrollback.borrow_mut();
-                        paint_scrollback_row(
-                            line,
-                            row,
-                            generation,
-                            bounds,
-                            &palette_overrides,
-                            default_bg,
-                            &font,
-                            font_size,
-                            cell_width,
-                            px(line_height()),
-                            &text_system,
-                            &mut cache,
-                            window,
-                            cx,
-                        );
-                        if let Some(trace) = cache.trace_line() {
-                            input_trace!("scrollback-{trace}");
-                        }
-                    },
-                )
-                .size_full(),
-            )
-            .into_any_element()
-    })
-    .absolute()
-    .top_0()
-    .left_0()
-    .right_0()
-    .h(px(line_height() * viewport_rows as f32))
-    .bg(default_bg)
-}
-
+/// Paint a held scrollback window's visible slice
+/// (`docs/terminal-scrollback-design.md` §3.3). The client scrolls within the
+/// window locally, so these rows come straight from the held
+/// `TerminalScrollWindow` rather than the live `watch<TerminalFrame>`. Painting
+/// mirrors the live row loop (background quads then shaped text) minus the
+/// cursor/selection/IME overlays, which are live-viewport concepts a
+/// scrolled-back history view does not carry. Shaping is fresh per row rather
+/// than through the row-keyed cache: that cache is keyed by viewport row plus
+/// live-frame generation, neither of which tracks window content, and a scroll
+/// row index is stable for the lifetime of one held window, so its shaped
+/// artifacts are cached exactly like live rows. A one-row scroll normally
+/// hits for every overlapping row and shapes only the newly exposed edge.
 #[allow(clippy::too_many_arguments)]
-fn paint_scrollback_row(
-    line: &horizon_terminal_core::TerminalLine,
-    window_row: usize,
+fn paint_scrollback_window(
+    lines: &[horizon_terminal_core::TerminalLine],
+    first_window_row: usize,
+    fractional_row: f32,
     generation: u64,
     bounds: Bounds<Pixels>,
+    rows: usize,
     palette_overrides: &[(u16, [u8; 3])],
     default_bg: Hsla,
     font: &Font,
@@ -1085,35 +900,47 @@ fn paint_scrollback_row(
     window: &mut Window,
     cx: &mut App,
 ) {
+    let y_offset = -(line_height * fractional_row);
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
-        let row_origin = bounds.origin;
-        let mut col = 0_usize;
-        for span in &line.spans {
-            let x = cell_width * col as f32;
-            col += span.columns;
-            let bg = theme::to_hsla(theme::resolve(span.bg, palette_overrides));
-            if bg != default_bg {
-                window.paint_quad(fill(
-                    Bounds::new(
-                        row_origin + point(x, px(0.0)),
-                        gpui::size(cell_width * span.columns as f32, line_height),
-                    ),
-                    bg,
-                ));
+        for (row, line) in lines.iter().enumerate() {
+            if row > rows {
+                break;
             }
-        }
+            let row_origin = bounds.origin + point(px(0.0), y_offset + line_height * row as f32);
 
-        let items = shape_cache.get_or_shape(window_row, generation, || {
-            shape_row_items(
-                line,
-                palette_overrides,
-                font,
-                font_size,
-                cell_width,
-                text_system,
-            )
-        });
-        paint_row_items(items, row_origin, cell_width, window, cx);
+            // Background quads, identical to the live path
+            // (`paint_terminal`): a blank run carrying only `columns`/`bg`
+            // still fills its background, so BCE-erased regions and
+            // bg-colored padding survive in history too.
+            let mut col = 0_usize;
+            for span in &line.spans {
+                let x = cell_width * col as f32;
+                col += span.columns;
+                let bg = theme::to_hsla(theme::resolve(span.bg, palette_overrides));
+                if bg != default_bg {
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            row_origin + point(x, px(0.0)),
+                            gpui::size(cell_width * span.columns as f32, line_height),
+                        ),
+                        bg,
+                    ));
+                }
+            }
+
+            let window_row = first_window_row + row;
+            let items = shape_cache.get_or_shape(window_row, generation, || {
+                shape_row_items(
+                    line,
+                    palette_overrides,
+                    font,
+                    font_size,
+                    cell_width,
+                    text_system,
+                )
+            });
+            paint_row_items(items, row_origin, cell_width, window, cx);
+        }
     });
 }
 
@@ -1154,32 +981,68 @@ fn paint_terminal(
         let view = entity.read(cx);
         view.session.read(cx).send_resize(size);
     }
-    if entity
-        .read(cx)
-        .session
-        .read(cx)
-        .scrollback_surface()
-        .is_some()
-    {
-        return;
-    }
 
     let (session, marked_text) = {
         let view = entity.read(cx);
         (view.session.clone(), view.ime_marked_text.clone())
     };
-    let (frame, row_generations) = {
+    let (frame, row_generations, scrollback_lines) = {
         let session = session.read(cx);
         let Some(frame) = session.frame.clone() else {
             return;
         };
-        (frame, session.row_generations().to_vec())
+        // While scrolled back the client paints a held window slice locally
+        // instead of the live frame (`docs/terminal-scrollback-design.md`
+        // §3.3); `None` means follow the live tail.
+        let scrollback_lines = session.visible_scrollback(size.rows as usize);
+        (frame, session.row_generations().to_vec(), scrollback_lines)
     };
 
     let default_bg = theme::to_hsla(theme::resolve(
         horizon_terminal_core::TerminalColor::Named(horizon_terminal_core::NamedColor::Background),
         &frame.palette_overrides,
     ));
+
+    // Scrollback windowed local paint: the client owns the offset into a held
+    // window and repaints from it with zero IPC. History only — no cursor,
+    // selection, or IME preedit (all live-viewport concepts; alacritty hides
+    // the cursor while scrolled back too). The live-frame row-generation shape
+    // The held window is immutable and Arc-backed. Its own cache is indexed
+    // by row in that window (not viewport row), so scrolling shifts paint
+    // origins without invalidating overlapping shaped rows.
+    if let Some(scrollback) = scrollback_lines {
+        let mut cache = paint_caches.scrollback.borrow_mut();
+        cache.begin_frame(
+            CacheEpoch {
+                theme: theme::terminal_color_scheme(),
+                palette_overrides: frame.palette_overrides.clone(),
+            },
+            scrollback.window.lines.len(),
+        );
+        let lines = &scrollback.window.lines[scrollback.range.clone()];
+        paint_scrollback_window(
+            lines,
+            scrollback.range.start,
+            scrollback.fractional_row,
+            scrollback.generation,
+            bounds,
+            size.rows as usize,
+            &frame.palette_overrides,
+            default_bg,
+            &font,
+            font_size,
+            cell_width,
+            line_height,
+            &text_system,
+            &mut cache,
+            window,
+            cx,
+        );
+        if let Some(trace) = cache.trace_line() {
+            input_trace!("scrollback-{trace}");
+        }
+        return;
+    }
 
     // Row-keyed shaping memo (goal 3/4 of docs/terminal-protocol-goals.md,
     // see `shape_cache`): a row whose generation stamp is unchanged since

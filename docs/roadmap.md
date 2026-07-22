@@ -330,15 +330,15 @@ lands:
   with a one-viewport directional prefetch margin. Painting shares that
   window by `Arc`, caches shaping by stable window-row index, and preserves
   the latest local anchor when a prefetch lands. The 2026-07-23 presentation
-  follow-up keeps that address/wire row-based but makes an ordinary GPUI
-  `ListState` the sole viewport owner: fixed-height terminal rows retain
-  GPUI's native pixel offset within the first item, both `Lines` and `Pixels`
-  follow the same path as other views, and replacement daemon windows rebase
-  that list without snapping. The session retains no second row offset: it
-  observes GPUI's current position only when choosing a prefetch anchor, and
-  the view rebases a replacement once from the same value. Once history is
-  visible, the bare GPUI List consumes both `Lines` and `Pixels` exactly as the
-  Agent transcript does; the terminal owns no wheel handler or timing helper.
+  follow-up keeps that address/wire row-based but treats rows as grid data, not
+  GPUI list items: live and history share one fixed-bounds terminal canvas,
+  precise input retains its pixel remainder, and the painter translates one
+  clipped context row without snapping. Arbitrary TUI updates bump only the
+  affected live-row generations; scrolling changes paint origins while reusing
+  shaped rows. Replacement windows preserve the continuous anchor. The generic
+  GPUI scroll handle is not a second authority because its child-layout range
+  would require an oversized synthetic canvas; alt/mouse modes keep the
+  terminal-protocol passthrough path.
   Margin sizing remains intentionally tuneable;
   interim "smooth the reply cadence" fix assessed as symptomatic, skip.
 
