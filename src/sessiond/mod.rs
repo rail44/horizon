@@ -98,6 +98,10 @@ pub(crate) struct TerminalSessionHandle {
     events: Receiver<TerminalUpdate>,
     session_id: Uuid,
     routes: Arc<Routes>,
+    /// The runtime's connection control, read only for its live negotiated
+    /// protocol version — the pane gates the v12 scrollback windowing surface
+    /// on it (`TerminalSessionHandle::negotiated_version`).
+    control: Arc<connection::RuntimeControl>,
 }
 
 impl AgentSessionHandle {
@@ -127,6 +131,17 @@ impl TerminalSessionHandle {
 
     pub(crate) fn events(&self) -> Receiver<TerminalUpdate> {
         self.events.clone()
+    }
+
+    /// The protocol version this connection negotiated, or `None` while none
+    /// is established. The terminal pane sends `RequestScrollWindow` (and
+    /// scrolls locally within the served window) only when this is ≥ 12,
+    /// otherwise it keeps today's round-trip `Scroll`
+    /// (`docs/terminal-scrollback-design.md` §4). Read live so a
+    /// `Reload Session Runtime` against a different daemon version is honored
+    /// without recreating the handle.
+    pub(crate) fn negotiated_version(&self) -> Option<u32> {
+        self.control.negotiated()
     }
 }
 
@@ -350,6 +365,7 @@ impl SessiondHandle {
                 events: event_rx,
                 session_id,
                 routes: self.routes.clone(),
+                control: self.control.clone(),
             },
             bridge_rx,
         )

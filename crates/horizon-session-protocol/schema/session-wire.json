@@ -2226,5 +2226,5 @@
     }
   },
   "title": "horizon-session-wire",
-  "x-session-protocol-version": 11
+  "x-session-protocol-version": 12
 }

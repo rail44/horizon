@@ -1,6 +1,6 @@
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -74,6 +74,20 @@ const CREATE_TERMINAL_TIMEOUT: Duration = Duration::from_secs(45);
 pub(super) struct RuntimeControl {
     cancelled: AtomicBool,
     established: AtomicBool,
+    /// The version `hello` negotiated, or `0` before the first establishment.
+    /// Read live by terminal panes to gate the v12 scrollback windowing
+    /// surface (`docs/terminal-scrollback-design.md` §4): a pane only sends
+    /// `RequestScrollWindow` when this is ≥ 12, otherwise it keeps today's
+    /// round-trip `Scroll`. Set once per establishment (alongside
+    /// `mark_established`) and **not cleared on disconnect** — it holds the
+    /// most recently negotiated version until the next establishment
+    /// overwrites it. A dead connection is surfaced through reachability (the
+    /// per-pane `RuntimeReachability`, plus the pane dropping its window when
+    /// the channels close), not by zeroing this. This is the runtime
+    /// instance's own control, replaced wholesale on `Reload Session Runtime`,
+    /// so a reload against a different daemon version simply reads the fresh
+    /// control.
+    negotiated: AtomicU32,
     notify: Notify,
     stopped: (Mutex<bool>, Condvar),
 }
@@ -83,9 +97,25 @@ impl RuntimeControl {
         Self {
             cancelled: AtomicBool::new(false),
             established: AtomicBool::new(false),
+            negotiated: AtomicU32::new(0),
             notify: Notify::new(),
             stopped: (Mutex::new(false), Condvar::new()),
         }
+    }
+
+    /// The most recently negotiated protocol version, or `None` before the
+    /// first establishment. `None` and any value below 12 both gate the
+    /// scrollback windowing surface off (conservative: never send a window
+    /// request a peer might not answer).
+    pub(super) fn negotiated(&self) -> Option<u32> {
+        match self.negotiated.load(Ordering::Acquire) {
+            0 => None,
+            version => Some(version),
+        }
+    }
+
+    fn set_negotiated(&self, version: u32) {
+        self.negotiated.store(version, Ordering::Release);
     }
 
     pub(super) fn cancel(&self) {
@@ -489,12 +519,17 @@ where
     control.mark_established();
 
     let HubHello {
-        negotiated: _,
+        negotiated,
         binary_id: _,
         host_tools,
         host_tool_responses,
         skipped_lines,
     } = hello;
+    // Publish the negotiated version for the sync world's terminal panes to
+    // gate the v12 scrollback windowing surface on (see `RuntimeControl::
+    // negotiated`). Set after `mark_established` so a pane observing
+    // establishment also sees the version.
+    control.set_negotiated(negotiated);
 
     // Connection-global inbound pumps.
     spawn_host_tool_pump(host_tools, routes.clone());
