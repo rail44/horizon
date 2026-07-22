@@ -49,7 +49,9 @@ state did not change. Its GPUI entity-cache topology must follow the view tree:
 renders the composite Agent entity uncached so the Agent transcript's narrower
 cache remains reusable. A cached ancestor miss puts descendant rendering into
 GPUI refresh mode, in which nested cached views cannot reuse prior layout and
-paint. It must not add an application-owned redraw scheduler or infer
+paint. `CachedPaneLeaf`/`CompositePane` and the Agent's private
+`TranscriptSurface` encode those roles; cache placement is not left to each
+render call. It must not add an application-owned redraw scheduler or infer
 presentation demand from view renders. Frame callback and presentation policy
 stay in `gpui_platform`.
 

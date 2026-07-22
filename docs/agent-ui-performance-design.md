@@ -33,6 +33,14 @@
 > notification defeat the transcript cache. The old Floem-specific signal
 > bridge and lint remain superseded; the enduring architectural backstop is the
 > virtual row boundary plus projection tests, not a reactive-graph rule.
+>
+> The topology is encoded by private types rather than a call-site convention:
+> `PaneView` contains either `CachedPaneLeaf` or `CompositePane`, and only the
+> former exposes cached element conversion. Inside Agent, `TranscriptSurface`
+> privately owns the transcript entity and only exposes its cached element;
+> status and the auto-growing composer remain ordinary entities. Adding a pane
+> kind therefore requires choosing its cache role in the type tree, while
+> ordinary rendering code cannot omit or add the boundary accidentally.
 
 # Agent UI Performance — Design
 
