@@ -1024,12 +1024,11 @@ pub(crate) const KITTY_COMPLIANCE: &[FeatureEntry] = &[
         key_class: "Shift+digit, Shift+punctuation (e.g. Shift+1 -> '!')",
         verdict: Verdict::Deviation(
             "reports the actual shifted codepoint (e.g. 33 for '!') instead of the spec's \
-             mandated base/unshifted one (49 for '1'): the base isn't recoverable from winit's \
-             already-shifted `Key::Character` text without OS keyboard-layout support \
-             (`key_without_modifiers`, exposed by winit but unreachable here as of the last \
-             check -- whether it stays unreachable under today's winit/gpui platform layer \
-             (`horizon-winit-platform`, `src/keymap.rs`) deserves re-verification rather than \
-             being assumed). ASCII letters (Shift+a -> reports 97, not 65) ARE inverted correctly \
+             mandated base/unshifted one (49 for '1'): the base isn't recoverable from GPUI's \
+             already-shifted keystroke text without OS keyboard-layout support. Whether it \
+             becomes available under today's native GPUI platform layer \
+             (`gpui_platform`, `src/keymap.rs`) deserves re-verification rather than \
+             being assumed. ASCII letters (Shift+a -> reports 97, not 65) ARE inverted correctly \
              since case-folding needs no layout knowledge — see `encode_text_key`/`csi_u_text_key`.",
         ),
         tests: &["csi_u_text_key_truth_table"],

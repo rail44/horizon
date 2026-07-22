@@ -8,6 +8,12 @@ area: terminal
 
 ## Resolution (2026-07-19)
 
+Historical note (2026-07-22): the custom platform and its platform-side
+regression tests named below were subsequently retired with the move back to
+`gpui_platform`; those paths now live only in git history. Horizon's
+`ime_marked_text_for` contract tests remain. Native preedit delivery is again
+owned by GPUI's maintained per-OS backend.
+
 Root cause was on the winit event-mapping side, not the terminal's
 overlay state: `crates/horizon-winit-platform/src/window.rs`'s
 `handle_ime` special-cased an empty `Ime::Preedit` by skipping the call

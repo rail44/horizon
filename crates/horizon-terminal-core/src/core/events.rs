@@ -36,8 +36,8 @@ pub(crate) struct TerminalEvents {
     /// `EventSink::send_event`. Both OSC 52 targets alacritty_terminal
     /// parses (`c` clipboard, `p`/`s` selection) land here uniformly:
     /// Horizon exposes a single system clipboard (`src/terminal/session.rs`
-    /// applies the write via gpui's `cx.write_to_clipboard`, backed by
-    /// `horizon-winit-platform`'s arboard clipboard), not a separate
+    /// applies the write via gpui's `cx.write_to_clipboard`, backed by the
+    /// current OS's native GPUI platform), not a separate
     /// primary-selection buffer, so there is nothing to
     /// distinguish between them. OSC 52 *read* (`Event::ClipboardLoad`)
     /// never reaches here at all -- `TerminalCore::new` configures

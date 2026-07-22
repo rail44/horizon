@@ -161,7 +161,7 @@ fn enter_after_the_window_passes_through_a_mouse_click_commit() {
 // at a time -- "あいう" -> "あい" -> "あ" -> "" -- with no Commit in
 // between (composition continues, awaiting more kana). `ime_marked_text_for`
 // is the pure state update behind `TerminalView::replace_and_mark_text_in_range`;
-// the actual bug lived upstream (`crates/horizon-winit-platform`'s
+// the actual bug lived upstream (the retired custom platform's
 // `handle_ime` never called it at all for an empty preedit update), but
 // this pins the overlay's own contract -- it always mirrors the current
 // preedit exactly, including the final empty step -- so a future change

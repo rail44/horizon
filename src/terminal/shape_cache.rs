@@ -88,7 +88,7 @@ struct CachedRow {
 }
 
 /// How often [`ShapedLineCache::trace_line`] emits a snapshot (mirrors
-/// `FrameLoopStats`' one-second cadence in `horizon-winit-platform`).
+/// the former platform frame-loop counter's one-second cadence).
 const TRACE_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(super) struct ShapedLineCache {

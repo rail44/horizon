@@ -9,7 +9,6 @@ members = [
     "crates/horizon-terminal-core",
     "crates/horizon-config",
     "crates/horizon-workspace",
-    "crates/horizon-winit-platform",
     "crates/horizon-sandbox",
     "crates/horizon-sandbox-runtime",
     "crates/horizon-sandbox-proxy",
@@ -39,9 +38,9 @@ edition = "2021"
 alacritty_terminal = "0.26.0"
 crossbeam-channel = "0.5"
 futures = "0.3"
-# gpui is deliberately left unpinned here: gpui-component's own Cargo.toml
-# depends on gpui without a `rev` too, and adding one only to *our* edge
-# splits the graph into two incompatible `gpui` instances ("multiple
+# gpui/gpui_platform are deliberately left unpinned here: gpui-component's
+# own Cargo.toml depends on them without a `rev` too, and adding one only to
+# *our* edge splits the graph into two incompatible `gpui` instances ("multiple
 # different versions of crate `gpui`" compile errors) since Cargo treats a
 # rev-pinned git source and a floating one as different SourceIds even
 # when they currently resolve to the same commit. A `[patch]` override was
@@ -56,6 +55,11 @@ futures = "0.3"
 # any such drift fails the gate loudly instead of silently re-resolving
 # (see AGENTS.md / hooks/pre-commit).
 gpui = { git = "https://github.com/zed-industries/zed" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = [
+    "font-kit",
+    "wayland",
+    "x11",
+] }
 # gpui-component/gpui-component-assets have no such conflict (nothing
 # else in the graph depends on them), so they carry an explicit pin.
 # Bump deliberately: update the rev below, then
@@ -71,17 +75,6 @@ horizon-control = { path = "crates/horizon-control" }
 horizon-session-protocol = { path = "crates/horizon-session-protocol" }
 horizon-terminal-core = { path = "crates/horizon-terminal-core" }
 horizon-workspace = { path = "crates/horizon-workspace" }
-# `horizon-winit-platform` (see docs/winit-backend-design.md) is the only
-# windowing backend Horizon uses on every OS — a plain dependency, not
-# target-gated. Removing our own `gpui_platform` dependency (see the
-# now-deleted `[target.'cfg(not(target_os = "linux"))'.dependencies]`
-# block this replaced) actually drops it from the build graph entirely:
-# `gpui-component`'s *workspace* root depends on `gpui_platform` (its own
-# demo/story binary), but the `gpui-component` library crate Horizon
-# depends on does not — confirmed by `gpui_linux`/`gpui_macos`/
-# `gpui_platform`/`gpui_web`/`gpui_windows` all disappearing from
-# Cargo.lock once this crate's dependency on `gpui_platform` was removed.
-horizon-winit-platform = { path = "crates/horizon-winit-platform" }
 remoc = { workspace = true }
 serde_json = "1.0"
 termwiz = "0.23.3"

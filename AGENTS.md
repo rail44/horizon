@@ -163,10 +163,10 @@ first session shortly after startup), and `scripts/check-gpui-terminal.sh`
 drives them as a one-shot check (marker text plus 256-color and truecolor
 span assertions). Details live in the `gui-verify` skill
 (`.claude/skills/gui-verify/SKILL.md`). `HORIZON_INPUT_TRACE=1` (or a file
-path) traces every hop of the real winit→gpui→PTY key/IME pipeline —
+path) traces the GPUI→PTY key/IME pipeline —
 distinct from `HORIZON_GPUI_DRIVE`, which bypasses that pipeline entirely
 — key names and event kinds only, never typed text (see
-`src/input_trace.rs`/`crates/horizon-winit-platform/src/input_trace.rs`).
+`src/input_trace.rs`).
 
 `scripts/check-workspace-restore.sh` is the isolated UI-restart recovery
 check: it creates two terminal tabs plus a split, restarts the UI against the

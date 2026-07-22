@@ -1,8 +1,6 @@
-//! Permanent, env-gated diagnostic trace for the input pipeline — the
-//! gpui-side half; `crates/horizon-winit-platform/src/input_trace.rs`
-//! carries the winit-side half (identical facility, duplicated rather
-//! than shared since the two crates have no other reason to depend on
-//! each other). Sibling to `HORIZON_GPUI_DUMP`/`HORIZON_GPUI_DRIVE`
+//! Permanent, env-gated diagnostic trace for Horizon's GPUI-side input
+//! pipeline. Native event and IME delivery belongs to GPUI's maintained
+//! per-OS platform backend. Sibling to `HORIZON_GPUI_DUMP`/`HORIZON_GPUI_DRIVE`
 //! (`src/terminal/session.rs`) — see AGENTS.md's GUI Verification
 //! section.
 //!
@@ -10,7 +8,7 @@
 //! there instead. Unset (the default) costs one `OnceLock` read per call
 //! site and nothing else — no formatting, no I/O, no allocation. Every
 //! emitted line is prefixed `input-trace:` so `grep` finds the whole
-//! chain for one keystroke across both crates' output.
+//! Horizon-side chain for one keystroke.
 //!
 //! Traces hop *metadata* only — key names, event kinds, lengths, verdicts
 //! — never the user's actual typed/committed text; see `describe_text`.
@@ -28,10 +26,7 @@ pub(crate) enum Sink {
 // keystroke-latency investigation): lets a trace attribute the input
 // pipeline's own hop latency, not just its event sequence. Anchored at
 // first use (early in process startup, well before any real keystroke),
-// so cross-crate comparison against `horizon-winit-platform::input_trace`'s
-// own independent epoch (same process, same clock source, both anchored
-// within microseconds of each other at startup) stays accurate for
-// events happening later.
+// so successive Horizon-side hops can be compared on one clock.
 static EPOCH: OnceLock<Instant> = OnceLock::new();
 
 fn epoch() -> Instant {

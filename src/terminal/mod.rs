@@ -258,8 +258,7 @@ impl TerminalView {
     /// Middle-click paste from the OS primary selection buffer (X11/
     /// Wayland's middle-click-paste convention, only while mouse reporting
     /// is off -- see `handle_mouse_down`). No-op off Linux/FreeBSD,
-    /// mirroring `horizon-winit-platform`'s own cfg gate on
-    /// `Platform::read_from_primary`.
+    /// matching GPUI's native platform support for primary selection.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn paste_from_primary(&self, cx: &App) {
         if let Some(text) = cx
@@ -495,11 +494,9 @@ fn utf16_len(text: &str) -> usize {
 /// overlay, same as `unmark_text` would) — see
 /// docs/issues/004-ime-preedit-backspace-ghost-head-char.md. Pulled out
 /// as a pure function so the exact backspace-to-empty repro is testable
-/// without a live gpui `Context`; the actual bug this issue described was
-/// upstream, in `crates/horizon-winit-platform`'s `handle_ime` never
-/// calling `replace_and_mark_text_in_range` at all for an empty preedit
-/// update, leaving whatever this function last returned stranded as a
-/// paint-time "ghost" until the next non-empty update overwrote it.
+/// without a live gpui `Context`; the original custom-platform bug failed
+/// to deliver an empty preedit update, leaving whatever this function last
+/// returned stranded as a paint-time "ghost" until the next update.
 fn ime_marked_text_for(new_text: &str) -> Option<String> {
     if new_text.is_empty() {
         None

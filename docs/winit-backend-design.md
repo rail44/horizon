@@ -1,4 +1,21 @@
-# winit windowing backend — production crate
+# winit windowing backend — retired implementation record
+
+**Retired 2026-07-22.** Horizon again uses Zed's maintained
+`gpui_platform::application()` on every OS. The complete custom
+`crates/horizon-winit-platform` crate was deleted rather than left as a
+second backend. This document is retained as the implementation and incident
+record for that retired path; paths below refer to git history, not the
+current tree. The current decision and verification boundary are recorded in
+`docs/native-gpui-platform-design.md`.
+
+The deciding issue was ownership, not whether the custom backend could be
+made correct one bug at a time. GPUI's platform implementations couple the OS
+event loop, IME, window state, renderer presentation, and frame callbacks.
+Recreating only that platform layer over winit made Horizon responsible for
+reconstructing private scheduling semantics and repeatedly produced idle,
+scroll, and IME redraw regressions. winit's cross-platform window creation did
+not preserve the native backend's frame-scheduling behavior, so there was no
+small hybrid that kept both benefits.
 
 Adoption step of the roadmap's "winit windowing backend" item, following
 the spike (`spikes/gpui-winit/`, retired; lives in git history — legs 1+2,

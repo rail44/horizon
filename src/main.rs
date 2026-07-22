@@ -31,7 +31,7 @@ use std::io::{self, IsTerminal as _};
 use std::process::ExitCode;
 
 use gpui::*;
-use gpui_component::Root;
+use gpui_component::{Root, TitleBar};
 
 use crate::workspace::WorkspaceShell;
 
@@ -65,24 +65,17 @@ fn run_client(args: &[String]) -> ExitCode {
 
 actions!(horizon, [Quit]);
 
-/// Builds the `Application` — always `horizon-winit-platform` (real native
-/// window chrome on every OS: sctk-adwaita CSD on Linux, native decorations
-/// on macOS/Windows — see docs/winit-backend-design.md). Horizon no longer
-/// draws its own title bar (see `WorkspaceShell::render`); the platform's
-/// own chrome is the only chrome.
+/// Builds the application with GPUI's maintained native backend for the
+/// current OS. The backend owns its event loop, renderer, IME integration,
+/// and frame scheduling as one unit.
 fn build_application() -> Application {
-    Application::with_platform(horizon_winit_platform::platform())
+    gpui_platform::application()
 }
 
 fn run_gui() {
     let application = build_application();
-    // `.with_assets` registers gpui-component's bundled SVGs (icon set) as
-    // the window's asset source. Horizon no longer renders gpui-component's
-    // `TitleBar` (whose window-control glyphs were the original reason for
-    // this call), but `List`/`Button`/`TextView` — all still in active use
-    // (palette.rs, session_manager.rs, view_chooser.rs, agent/view.rs) —
-    // resolve their own bundled icons through the same asset source, so
-    // this stays.
+    // `.with_assets` registers gpui-component's bundled SVGs, including the
+    // client-side titlebar's window-control glyphs.
     application
         .with_assets(gpui_component_assets::Assets)
         .run(move |cx| {
@@ -93,9 +86,8 @@ fn run_gui() {
             // so the previous app's menu (and name) would linger even with
             // this window focused — installing a minimal menu is what makes
             // Horizon show up as the active application. Activation at launch
-            // still needs the explicit activate(true). `horizon-winit-platform`
-            // implements both via `muda` on macOS and documented no-ops
-            // elsewhere (see that crate's platform.rs/macos_menu.rs).
+            // still needs the explicit activate(true). GPUI's native platform
+            // implements these operations for the current OS.
             cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
             cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
             cx.set_menus(vec![Menu {
@@ -113,18 +105,11 @@ fn run_gui() {
                 let size = size(px(1100.0), px(720.0));
                 let options = cx.update(|cx| WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size, cx))),
-                    // `horizon-winit-platform` always draws complete native
-                    // chrome itself (see the module doc above) and only reads
-                    // `titlebar.title` for the OS window title — the rest of
-                    // `TitlebarOptions` (transparency, traffic-light inset)
-                    // was gpui-component's own hand-drawn-titlebar concept
-                    // and no longer applies now that Horizon renders no
-                    // title bar of its own.
-                    titlebar: Some(TitlebarOptions {
-                        title: Some("Horizon".into()),
-                        appears_transparent: false,
-                        traffic_light_position: None,
-                    }),
+                    // gpui-component renders the matching client-side chrome.
+                    // Explicit client decorations avoid a second server-side
+                    // titlebar on compositors that support xdg-decoration.
+                    titlebar: Some(TitleBar::title_bar_options()),
+                    window_decorations: Some(WindowDecorations::Client),
                     ..Default::default()
                 });
                 cx.open_window(options, |window, cx| {

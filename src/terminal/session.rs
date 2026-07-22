@@ -925,10 +925,8 @@ impl TerminalSession {
 }
 
 /// Writes to the OS primary-selection buffer (X11/Wayland's middle-click-
-/// paste buffer). No-op off Linux/FreeBSD, mirroring
-/// `horizon-winit-platform`'s own cfg gate on `Platform::write_to_primary`
-/// (crates/horizon-winit-platform/src/platform.rs) -- the OS concept simply
-/// doesn't exist elsewhere.
+/// paste buffer). No-op off Linux/FreeBSD, matching GPUI's native platform
+/// support -- the OS concept simply doesn't exist elsewhere.
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn write_to_primary(cx: &mut Context<TerminalSession>, text: String) {
     cx.write_to_primary(ClipboardItem::new_string(text));

@@ -269,6 +269,12 @@ are still open.
 
 ## Window chrome on Linux (post-retirement, 2026-07-12)
 
+**Current again as of 2026-07-22.** Horizon returned to `gpui_platform` and
+restored the client-side `gpui-component::TitleBar` described below. The
+2026-07-12 supersession paragraph is retained as the intermediate history;
+`docs/native-gpui-platform-design.md` records why the custom winit backend was
+subsequently retired.
+
 **Superseded 2026-07-12, same day**: this section describes the interim
 `gpui_platform` + hand-drawn `TitleBar` chrome. `horizon-winit-platform`
 later replaced it on Linux, then was unified onto every OS —

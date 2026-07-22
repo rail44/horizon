@@ -330,13 +330,17 @@ lands:
 
 ## External gates
 
-- **winit on macOS/Windows** — the platform layer shipped
-  cross-platform 2026-07-12 but is unbuilt on those hosts; the
-  owner's next macOS build is the verification gate
-  (`docs/winit-backend-design.md`, "Verification limits").
+- **Restored native GPUI path on macOS** — Linux build and isolated terminal
+  smoke are green; the owner's next macOS run verifies the restored
+  gpui-component titlebar, native menu/activation, IME, and clipboard. The
+  backend itself is Zed's maintained `gpui_macos`, which Horizon used before
+  the now-retired custom winit layer (`docs/native-gpui-platform-design.md`).
 
 ## Shipped (index — details in the named docs and git history)
 
+- 2026-07-22 Native GPUI platform restored on every OS; custom winit platform
+  retired so event-loop, IME, renderer presentation, and frame scheduling stay
+  under one maintained backend (`docs/native-gpui-platform-design.md`)
 - 2026-07-17 Theme settings view: first session-less first-party pane,
   seed editing with live apply (`docs/theme-settings-view-design.md`)
 - 2026-07-15..16 Theme seed + derivation in OKLCH, contrast-audit
@@ -345,7 +349,8 @@ lands:
   folding, row-centric approval, follow-scroll state machine, Changes
   overview (`docs/agent-output-ui-design.md` + amendment)
 - 2026-07-12 winit windowing backend on every OS: native decorations,
-  IME, hand-rolled macOS menu (`docs/winit-backend-design.md`)
+  IME, hand-rolled macOS menu (retired 2026-07-22;
+  `docs/winit-backend-design.md`)
 - 2026-07-12 Session daemon steps 1–2B: `horizon-sessiond` hosts
   terminal PTYs and retained frames, correlated discovery/adoption,
   workspace persistence with restore
