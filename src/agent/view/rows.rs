@@ -15,9 +15,9 @@ use horizon_agent::frame::AgentFrameItem;
 use super::super::turns;
 use crate::theme;
 
-use super::AgentView;
+use super::AgentTranscript;
 
-impl AgentView {
+impl AgentTranscript {
     /// Toggles one expanded-receipt row's own body expansion.
     fn toggle_row(&mut self, call_id: ToolCallId, cx: &mut Context<Self>) {
         if !self.expanded_rows.remove(&call_id) {

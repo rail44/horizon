@@ -12,7 +12,7 @@ use horizon_agent::frame::state_indicates_turn_in_flight;
 use super::super::turns;
 use crate::theme;
 
-use super::AgentView;
+use super::AgentTranscript;
 
 /// View-local tracking of the currently running turn's start, so the
 /// running card's elapsed-seconds header keeps ticking across renders
@@ -26,10 +26,10 @@ pub(super) struct RunningTurnClock {
     pub(super) started_at: Instant,
 }
 
-impl AgentView {
+impl AgentTranscript {
     /// The return pill's "↓ latest" segment (decision 7): re-enters list
     /// tail-follow and snaps to the bottom, the same explicit re-pin
-    /// `send_composer_message` performs.
+    /// the composer's send path performs through its weak transcript handle.
     fn return_to_sticky(&mut self, cx: &mut Context<Self>) {
         self.transcript_list.set_follow_mode(FollowMode::Tail);
         self.transcript_list.scroll_to_end();
@@ -83,7 +83,7 @@ impl AgentView {
 
     /// The follow-scroll return affordance (decision 7, requirements 2-3):
     /// floats over the transcript's bottom-right corner, only while
-    /// `Detached` (`Render::render`'s own `.when` gate) -- shown
+    /// `Detached` (`AgentTranscript::render`'s own `.when` gate) -- shown
     /// unconditionally while `Detached`, not gated on "new content has
     /// arrived since detaching": the transcript is append-only, so a
     /// reader who scrolled away almost always has *something* new below

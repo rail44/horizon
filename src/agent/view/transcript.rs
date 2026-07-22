@@ -21,7 +21,7 @@ use super::super::turns;
 use crate::theme;
 use crate::workspace::RunCommand;
 
-use super::AgentView;
+use super::AgentTranscript;
 
 /// One independently measured transcript row. Keeping only frame indices and
 /// owned presentation metadata lets GPUI's variable-height list construct the
@@ -117,7 +117,7 @@ pub(super) fn build_transcript_rows(
     (rows, latest_user_row)
 }
 
-impl AgentView {
+impl AgentTranscript {
     /// Reconcile the intrusive variable-height list with the latest folded
     /// frame. Stable prefix rows retain their measured heights; only the
     /// changed append tail is spliced. A descriptor-stable streaming update
@@ -233,7 +233,8 @@ impl AgentView {
     /// `AssistantTextDelta`/`Error`/`Exited`, plus the defensive
     /// already-ended-turn-with-a-dangling-approval case), or, defensively,
     /// an item that has genuinely ended up outside every turn span at all
-    /// (`Render::render`'s own item walk -- see `turns::group_into_turns`'s
+    /// (`AgentTranscript::render`'s own item walk -- see
+    /// `turns::group_into_turns`'s
     /// invariant notes for why that should be unreachable for any
     /// legitimate sequence now). `all_items` is whatever superset of
     /// `item` the caller has in scope (a turn's own slice, or the whole
@@ -426,7 +427,7 @@ impl AgentView {
             AgentFrameItem::ToolCallStarted(_) => None,
             // Consumed by turn grouping (`turns::group_into_turns`) into
             // the turn's receipt line; never reaches this per-item path in
-            // practice (see `Render::render`'s span walk), kept only as a
+            // practice (see `AgentTranscript::render`'s span walk), kept only as a
             // defensive no-op.
             AgentFrameItem::TurnEnded { .. } => None,
         }
@@ -954,7 +955,7 @@ impl AgentView {
 }
 
 /// The `ToolCallId` `item` references, if any -- used by
-/// [`AgentView::render_orphan_tool_row`] to correlate a possibly-orphaned
+/// [`AgentTranscript::render_orphan_tool_row`] to correlate a possibly-orphaned
 /// item back to its call's other items anywhere in a wider item slice,
 /// and to de-duplicate against an earlier item for the same call.
 fn item_call_id(item: &AgentFrameItem) -> Option<&ToolCallId> {
@@ -982,7 +983,7 @@ fn item_call_id(item: &AgentFrameItem) -> Option<&ToolCallId> {
 /// card, one status line), so no per-call disambiguation is needed. A
 /// free function (no `&self`/`Context` needed) since the click handler is
 /// entirely stateless -- it only dispatches an action, it never touches
-/// `AgentView`'s own fields -- so it works identically from the running
+/// `AgentTranscript`'s own fields -- so it works identically from the running
 /// card's header and the status line (the latter needs its own copy since
 /// the running card's *last burst* can close, folding into a receipt,
 /// before `TurnEnded` arrives to end the turn -- round 5's "burst-fold
