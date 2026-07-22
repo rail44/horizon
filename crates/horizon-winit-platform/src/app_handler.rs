@@ -38,9 +38,9 @@ use crate::input::{
     winit_key_event_to_keystroke, winit_modifiers_to_gpui, winit_mouse_button_to_gpui,
     winit_scroll_delta_to_gpui, winit_touch_phase_to_gpui,
 };
-use crate::input_trace::input_trace;
+use crate::input_trace::{input_trace, sink as input_trace_sink};
 use crate::platform::WinitPlatform;
-use crate::window::WinitWindowInner;
+use crate::window::{RedrawCause, RedrawMarks, WinitWindowInner};
 
 #[derive(Debug, Clone)]
 pub(crate) enum WinitUserEvent {
@@ -67,6 +67,9 @@ pub(crate) enum WinitUserEvent {
 struct FrameLoopStats {
     window_start: std::time::Instant,
     window_count: u64,
+    draw_count: u64,
+    empty_count: u64,
+    redraw_marks: RedrawMarks,
     total_count: u64,
     process_start: std::time::Instant,
 }
@@ -77,13 +80,21 @@ impl FrameLoopStats {
         Self {
             window_start: now,
             window_count: 0,
+            draw_count: 0,
+            empty_count: 0,
+            redraw_marks: RedrawMarks::default(),
             total_count: 0,
             process_start: now,
         }
     }
 
-    fn record_redraw_requested(&mut self) {
-        if let Some(line) = self.record_redraw_requested_at(std::time::Instant::now()) {
+    fn record_redraw_requested(&mut self, drew: bool, redraw_marks: RedrawMarks) {
+        if input_trace_sink().is_none() {
+            return;
+        }
+        if let Some(line) =
+            self.record_redraw_requested_at(std::time::Instant::now(), drew, redraw_marks)
+        {
             input_trace!("{line}");
         }
     }
@@ -94,8 +105,19 @@ impl FrameLoopStats {
     /// `window.rs`). Returns the trace line iff a full second-plus has
     /// elapsed since the last snapshot; `None` otherwise (the common case —
     /// most calls just tally into the running window).
-    fn record_redraw_requested_at(&mut self, now: std::time::Instant) -> Option<String> {
+    fn record_redraw_requested_at(
+        &mut self,
+        now: std::time::Instant,
+        drew: bool,
+        redraw_marks: RedrawMarks,
+    ) -> Option<String> {
         self.window_count += 1;
+        if drew {
+            self.draw_count += 1;
+        } else {
+            self.empty_count += 1;
+        }
+        self.redraw_marks.add(redraw_marks);
         self.total_count += 1;
         let elapsed = now.duration_since(self.window_start);
         if elapsed < std::time::Duration::from_secs(1) {
@@ -103,12 +125,25 @@ impl FrameLoopStats {
         }
         let fps = self.window_count as f64 / elapsed.as_secs_f64();
         let line = format!(
-            "frame-loop: redraw_requested_per_sec={:.1} total={} since_start={:.1}s",
+            "frame-loop: redraw_requested_per_sec={:.1} draws={} empty={} \
+             marks[wake={},input={},resize={},focus={},ime={},animation_rearm={}] \
+             total={} since_start={:.1}s",
             fps,
+            self.draw_count,
+            self.empty_count,
+            self.redraw_marks.wake,
+            self.redraw_marks.input,
+            self.redraw_marks.resize,
+            self.redraw_marks.focus,
+            self.redraw_marks.ime,
+            self.redraw_marks.animation_rearm,
             self.total_count,
             now.duration_since(self.process_start).as_secs_f64()
         );
         self.window_count = 0;
+        self.draw_count = 0;
+        self.empty_count = 0;
+        self.redraw_marks = RedrawMarks::default();
         self.window_start = now;
         Some(line)
     }
@@ -172,7 +207,7 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
                 // notify-driven update sitting unpainted until some
                 // unrelated `WindowEvent` happens to nudge the loop.
                 for inner in self.platform.windows.borrow().iter() {
-                    inner.mark_needs_redraw();
+                    inner.mark_needs_redraw(RedrawCause::Wake);
                 }
             }
             #[cfg(target_os = "macos")]
@@ -230,7 +265,7 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
                 if let Some(resize) = inner.callbacks.borrow_mut().resize.as_mut() {
                     resize(new_size, scale_factor as f32);
                 }
-                inner.mark_needs_redraw();
+                inner.mark_needs_redraw(RedrawCause::Resize);
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 // winit fires this ahead of any `Resized` the OS also sends
@@ -257,14 +292,14 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
                 if let Some(resize) = inner.callbacks.borrow_mut().resize.as_mut() {
                     resize(new_size, scale_factor as f32);
                 }
-                inner.mark_needs_redraw();
+                inner.mark_needs_redraw(RedrawCause::Resize);
             }
             WindowEvent::Focused(is_focused) => {
                 inner.state.borrow_mut().is_active = is_focused;
                 if let Some(callback) = inner.callbacks.borrow_mut().active_status_change.as_mut() {
                     callback(is_focused);
                 }
-                inner.mark_needs_redraw();
+                inner.mark_needs_redraw(RedrawCause::Focus);
             }
             WindowEvent::ModifiersChanged(modifiers) => {
                 let modifiers = winit_modifiers_to_gpui(modifiers.state());
@@ -276,7 +311,7 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
                         capslock: gpui::Capslock::default(),
                     }),
                 );
-                inner.mark_needs_redraw();
+                inner.mark_needs_redraw(RedrawCause::Input);
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 input_trace!(
@@ -306,7 +341,7 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
                     if pressed {
                         inner.maybe_feed_unhandled_key_as_text(&keystroke, result.propagate);
                     }
-                    inner.mark_needs_redraw();
+                    inner.mark_needs_redraw(RedrawCause::Input);
                 }
             }
             WindowEvent::Ime(ime) => {
@@ -334,7 +369,7 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
                 // motion previously relied entirely on the
                 // unconditionally-looping `RedrawRequested` to eventually
                 // reflect it, which no longer runs while idle.
-                inner.mark_needs_redraw();
+                inner.mark_needs_redraw(RedrawCause::Input);
             }
             WindowEvent::CursorLeft { .. } => {
                 let (position, modifiers, pressed_button) = {
@@ -349,7 +384,7 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
                         modifiers,
                     }),
                 );
-                inner.mark_needs_redraw();
+                inner.mark_needs_redraw(RedrawCause::Input);
             }
             WindowEvent::CursorEntered { .. } => {}
             WindowEvent::MouseInput { state, button, .. } => {
@@ -395,7 +430,7 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
                         );
                     }
                 }
-                inner.mark_needs_redraw();
+                inner.mark_needs_redraw(RedrawCause::Input);
             }
             WindowEvent::MouseWheel { delta, phase, .. } => {
                 let (position, modifiers) = {
@@ -411,10 +446,10 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
                         touch_phase: winit_touch_phase_to_gpui(phase),
                     }),
                 );
-                inner.mark_needs_redraw();
+                inner.mark_needs_redraw(RedrawCause::Input);
             }
             WindowEvent::RedrawRequested => {
-                self.frame_loop_stats.record_redraw_requested();
+                let redraw_marks = inner.take_redraw_marks();
                 inner.drew_this_cycle.set(false);
                 let callback = inner.callbacks.borrow_mut().request_frame.take();
                 if let Some(mut callback) = callback {
@@ -458,8 +493,10 @@ impl<'a> ApplicationHandler<WinitUserEvent> for WinitAppHandler<'a> {
                     input_trace!(
                         "winit animation-frame rearm: drew this cycle, requesting one more redraw"
                     );
-                    inner.mark_needs_redraw();
+                    inner.mark_needs_redraw(RedrawCause::AnimationRearm);
                 }
+                self.frame_loop_stats
+                    .record_redraw_requested(inner.drew_this_cycle.get(), redraw_marks);
             }
             _ => {}
         }
@@ -515,7 +552,12 @@ fn should_rearm_for_next_frame(drew_this_cycle: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{should_rearm_for_next_frame, FrameLoopStats};
+    use crate::window::RedrawMarks;
     use std::time::Duration;
+
+    fn record(stats: &mut FrameLoopStats, now: std::time::Instant) -> Option<String> {
+        stats.record_redraw_requested_at(now, true, RedrawMarks::default())
+    }
 
     // `should_rearm_for_next_frame`'s three scenarios from the task brief:
     // pending animation re-arms, an idle cycle doesn't, and a completed
@@ -570,11 +612,8 @@ mod tests {
         let t0 = stats.window_start;
         // A burst of redraws well inside the first second must not emit
         // anything yet -- just tally.
-        assert_eq!(stats.record_redraw_requested_at(t0), None);
-        assert_eq!(
-            stats.record_redraw_requested_at(t0 + Duration::from_millis(500)),
-            None
-        );
+        assert_eq!(record(&mut stats, t0), None);
+        assert_eq!(record(&mut stats, t0 + Duration::from_millis(500)), None);
         assert_eq!(stats.total_count, 2);
     }
 
@@ -582,16 +621,28 @@ mod tests {
     fn snapshot_fires_once_a_second_elapses_and_resets_the_window() {
         let mut stats = FrameLoopStats::new();
         let t0 = stats.window_start;
-        stats.record_redraw_requested_at(t0);
+        record(&mut stats, t0);
         let line = stats
-            .record_redraw_requested_at(t0 + Duration::from_secs(1))
+            .record_redraw_requested_at(
+                t0 + Duration::from_secs(1),
+                false,
+                RedrawMarks {
+                    wake: 1,
+                    animation_rearm: 1,
+                    ..RedrawMarks::default()
+                },
+            )
             .expect("a full second elapsed, a snapshot line was expected");
         assert!(line.starts_with("frame-loop: redraw_requested_per_sec="));
+        assert!(line.contains("draws=1 empty=1"));
+        assert!(line.contains("wake=1"));
+        assert!(line.contains("animation_rearm=1"));
         assert!(line.contains("total=2"));
         // The window resets: the very next call, even a moment later,
         // shouldn't immediately re-fire.
         assert_eq!(
-            stats.record_redraw_requested_at(
+            record(
+                &mut stats,
                 t0 + Duration::from_secs(1) + Duration::from_millis(10)
             ),
             None
@@ -604,7 +655,7 @@ mod tests {
         let t0 = stats.window_start;
         // Five redraws spread across the first second...
         for i in 0..5 {
-            stats.record_redraw_requested_at(t0 + Duration::from_millis(i * 100));
+            record(&mut stats, t0 + Duration::from_millis(i * 100));
         }
         // ...then the sixth crosses the 1s boundary and reports ~6fps for
         // this window (6 redraws / ~1.0s), not some unrelated constant --
@@ -612,7 +663,7 @@ mod tests {
         // which is what first showed the pre-fix loop pinned at 60fps
         // even fully idle.
         let line = stats
-            .record_redraw_requested_at(t0 + Duration::from_secs(1))
+            .record_redraw_requested_at(t0 + Duration::from_secs(1), true, RedrawMarks::default())
             .expect("a full second elapsed");
         assert!(
             line.contains("redraw_requested_per_sec=6.0"),

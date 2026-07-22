@@ -342,6 +342,26 @@ for span data (investigated as an optimization seed; same quarantine).
 Postbag Full's numeric-field-id rename (`_0`…) is the milder middle step
 for codec CPU. None of these are v10 scope.
 
+**The latest-only property must survive the local UI boundary.** A
+2026-07-22 split-pane profile found that the remoc watch was immediately
+copied into two unbounded FIFO channels inside the client runtime. A busy
+terminal therefore stopped producing frames promptly, but the GPUI thread
+continued replaying obsolete snapshots for several seconds while also
+rendering the adjacent agent transcript. The local runtime-to-GPUI frame
+route now remains `tokio::sync::watch<TerminalFrame>` and the GPUI task
+borrows only its latest changed value. Non-frame `TerminalUpdate`s retain
+their ordered FIFO route: exit, clipboard, title, and scroll-window events
+are events rather than replaceable snapshots. This is part of Option A's
+backpressure contract, not a UI-only optimization.
+
+Live verification on the corrected split-pane build showed terminal traffic
+ending at 140.1 seconds after startup and the frame loop falling from the
+preceding 20-plus draws per second to its ordinary 2-3 periodic redraws per
+second by 144.6 seconds. The pre-fix capture had continued replaying terminal
+work for roughly eight seconds after output stopped. The remaining periodic
+redraws are separately attributed wake/animation activity rather than queued
+terminal frames.
+
 ## 6. Migration plan (completed)
 
 Hard cutover, no dual-stack daemon: this is a pre-release, single-owner

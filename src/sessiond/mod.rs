@@ -92,8 +92,11 @@ pub(crate) struct AgentSessionHandle {
 
 pub(crate) struct TerminalSessionHandle {
     commands: Sender<TerminalCommand>,
-    /// Full frames from the daemon's `watch<TerminalFrame>` (wire v11).
-    frames: Receiver<TerminalFrame>,
+    /// Full frames from the daemon's `watch<TerminalFrame>` (wire v11), kept
+    /// latest-only across the local runtime -> UI boundary as well. Using a
+    /// second watch here is load-bearing: an unbounded FIFO makes a slow UI
+    /// replay obsolete frames for seconds after a PTY burst has stopped.
+    frames: tokio::sync::watch::Receiver<TerminalFrame>,
     /// The non-frame events (title/bell/clipboard/exit/error).
     events: Receiver<TerminalUpdate>,
     session_id: Uuid,
@@ -125,7 +128,7 @@ impl TerminalSessionHandle {
         self.commands.clone()
     }
 
-    pub(crate) fn frames(&self) -> Receiver<TerminalFrame> {
+    pub(crate) fn frames(&self) -> tokio::sync::watch::Receiver<TerminalFrame> {
         self.frames.clone()
     }
 
@@ -344,7 +347,7 @@ impl SessiondHandle {
         tokio::sync::mpsc::UnboundedReceiver<TerminalCommand>,
     ) {
         let (command_tx, command_rx) = unbounded::<TerminalCommand>();
-        let (frame_tx, frame_rx) = unbounded::<TerminalFrame>();
+        let (frame_tx, frame_rx) = tokio::sync::watch::channel(TerminalFrame::empty());
         let (event_tx, event_rx) = unbounded::<TerminalUpdate>();
         let (bridge_tx, bridge_rx) = tokio::sync::mpsc::unbounded_channel();
         self.routes

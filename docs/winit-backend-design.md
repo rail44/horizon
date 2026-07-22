@@ -1139,6 +1139,40 @@ still shows doubling in either pane, the `HORIZON_INPUT_TRACE`
 `empty Preedit: not unmarking` line appears immediately before it — are
 the first thing to check.
 
+### Repeated unchanged IME preedit caused redraw spikes (fixed 2026-07-22)
+
+A later CPU profile found that the desktop IME can emit the same non-empty
+`Ime::Preedit` value roughly 30 times per second while composition is
+stationary. Horizon forwarded every copy, repositioned the candidate
+window, and marked the whole GPUI scene dirty; the cost was especially
+visible beside a large agent transcript in a split pane.
+
+`handle_ime` now remembers the last preedit text it forwarded and drops an
+identical repeat before touching the input handler or redraw state. A
+changed preedit still replaces the marked text normally, including the
+empty preedit that precedes a commit. `Enabled`, `Commit`, and `Disabled`
+reset the remembered value so a new composition can begin with the same
+text. This deliberately compares only text: Horizon already follows
+gpui_linux in ignoring winit's preedit cursor range, so a cursor-range-only
+change has no observable state to forward. The pure duplicate decision has
+a colocated unit test; live verification uses `HORIZON_INPUT_TRACE` to
+compare raw winit preedit arrivals with redraw-cause counts.
+
+Live verification on the corrected build captured 24 raw preedit arrivals
+during one Japanese composition; 11 unchanged repeats were dropped. During
+an approximately five-second pause with composition text held steady, the
+per-second frame-loop records reported `ime=0`. Changing the conversion
+candidate resumed one IME redraw, and the final empty-preedit → commit →
+empty-preedit sequence still passed through, confirming that lifecycle
+boundaries were not collapsed with stationary repeats.
+
+The added `frame-loop` diagnostic calls its field `draws`, but this means
+calls to this backend's `PlatformWindow::draw`, not necessarily a fresh full
+layout: gpui may also invoke that method for its documented
+presentation-sustain path during heavy input. The counter remains useful for
+correlating causes and observing idle termination; it is not a scene-layout
+profiler.
+
 ### macOS bring-up: first build and runtime verification (2026-07-14)
 
 The verification gate the 2026-07-12 unification deliberately deferred

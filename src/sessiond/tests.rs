@@ -334,19 +334,50 @@ async fn next_call(calls: &mut tokio::sync::mpsc::UnboundedReceiver<FakeCall>) -
 /// Reads frames off a terminal handle's `frames()` stream until one whose
 /// text matches `text` arrives, skipping the empty seed frame the watch
 /// always delivers first (wire v11).
-fn recv_frame(rx: &crossbeam_channel::Receiver<TerminalFrame>, text: &str) -> TerminalFrame {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let remaining = deadline
-            .checked_duration_since(Instant::now())
-            .expect("timed out waiting for the expected terminal frame");
-        let frame = rx
-            .recv_timeout(remaining)
-            .expect("frame channel closed before the expected frame arrived");
-        if frame.text() == text {
-            return frame;
+async fn recv_frame(
+    mut rx: tokio::sync::watch::Receiver<TerminalFrame>,
+    text: &str,
+) -> TerminalFrame {
+    tokio::time::timeout(Duration::from_secs(5), async move {
+        // A handle cloned after the route published already starts at the
+        // current snapshot; `changed()` would otherwise wait for a newer
+        // frame and miss the value this helper was asked to observe.
+        let current = rx.borrow_and_update().clone();
+        if current.text() == text {
+            return current;
         }
+        loop {
+            rx.changed()
+                .await
+                .expect("frame watch closed before the expected frame arrived");
+            let frame = rx.borrow_and_update().clone();
+            if frame.text() == text {
+                return frame;
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for the expected terminal frame")
+}
+
+#[test]
+fn local_terminal_frame_route_collapses_a_burst_to_its_latest_snapshot() {
+    let (host_tools, _host_tools_rx) = unbounded();
+    let (workspace_roots, _workspace_roots_rx) = unbounded();
+    let routes = Routes::new(host_tools, workspace_roots);
+    let session_id = Uuid::new_v4();
+    let (frame_tx, mut frame_rx) = tokio::sync::watch::channel(TerminalFrame::empty());
+    let (event_tx, _event_rx) = unbounded();
+    let (command_tx, _command_rx) = tokio::sync::mpsc::unbounded_channel();
+    routes.register_terminal(session_id, frame_tx, event_tx, command_tx);
+
+    for text in ["obsolete-1", "obsolete-2", "latest"] {
+        routes.route_terminal_frame(session_id, TerminalFrame::from_text(text.into()));
     }
+
+    assert!(frame_rx.has_changed().unwrap());
+    assert_eq!(frame_rx.borrow_and_update().text(), "latest");
+    assert!(!frame_rx.has_changed().unwrap());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -375,7 +406,7 @@ async fn start_returns_before_the_connection_and_a_queued_create_arrives_after()
 
     let frame = TerminalFrame::from_text("ready".into());
     peer.frames.send(frame.clone()).unwrap();
-    assert_eq!(recv_frame(&terminal.frames(), "ready"), frame);
+    assert_eq!(recv_frame(terminal.frames(), "ready").await, frame);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -422,7 +453,7 @@ async fn agent_and_terminal_traffic_flows_through_their_own_attachments() {
         .send(TerminalCommand::Input(b"fifo".to_vec()))
         .unwrap();
 
-    assert_eq!(recv_frame(&terminal.frames(), "terminal"), frame);
+    assert_eq!(recv_frame(terminal.frames(), "terminal").await, frame);
     assert_eq!(
         agent
             .events()
@@ -556,7 +587,7 @@ async fn terminal_batch_attach_keeps_attached_sessions_and_drops_not_found() {
     assert_eq!(sessions.len(), 1);
     let (session_id, session) = sessions.pop().unwrap();
     assert_eq!(session_id, attached_id);
-    assert_eq!(recv_frame(&session.frames(), "survived"), frame);
+    assert_eq!(recv_frame(session.frames(), "survived").await, frame);
 }
 
 /// Review fix 2: a clean shell exit must retire the pane even when the
@@ -629,7 +660,7 @@ async fn attach_reseeds_a_large_retained_frame_within_the_reply_cap() {
     let sessions = attached.join().unwrap();
     assert_eq!(sessions.len(), 1, "the large-frame attach must be claimed");
     let (_, session) = &sessions[0];
-    assert_eq!(recv_frame(&session.frames(), &big.text()), big);
+    assert_eq!(recv_frame(session.frames(), &big.text()).await, big);
 }
 
 /// Review fix 5: a `Clipboard` event larger than the old 1 MiB events cap

@@ -125,6 +125,15 @@ fn preedit_forward(text: &str) -> PreeditForward<'_> {
     }
 }
 
+/// Whether an incoming preedit is identical to the last value forwarded to
+/// GPUI. Some Linux IME stacks repeat the unchanged preedit at roughly 30 Hz
+/// while the user pauses mid-composition. GPUI ignores winit's cursor range,
+/// so text equality is the complete observable state and duplicates can be
+/// dropped without losing a caret/selection update.
+fn duplicate_preedit(previous: Option<&str>, next: &str) -> bool {
+    previous == Some(next)
+}
+
 // `PlatformWindow`'s callback setters take these exact closure shapes
 // (mirroring gpui_web/gpui_linux's own window callback structs, which have
 // the same complexity); factoring each into a named `type` would only
@@ -166,6 +175,11 @@ pub(crate) struct WinitWindowState {
     /// input handler as literal text — the composed result already
     /// arrives via `Ime::Commit` when composition ends.
     pub(crate) ime_composing: bool,
+    /// Last preedit text actually forwarded to the active GPUI input handler.
+    /// Used to collapse unchanged repeats from the platform IME. Cleared at
+    /// every commit/enable/disable boundary so a new composition always gets
+    /// an initial update, even when its text matches the previous one.
+    pub(crate) last_ime_preedit: Option<String>,
 }
 
 /// Shared with the winit `ApplicationHandler`, which drives `state` and
@@ -186,10 +200,18 @@ pub(crate) struct WinitWindowInner {
     /// `resumed` — see docs/winit-backend-design.md's "idle CPU" section
     /// for why `RedrawRequested` no longer re-arms itself unconditionally.
     pub(crate) needs_redraw: Cell<bool>,
-    /// Set by `WinitPlatformWindow::draw` whenever gpui actually draws a
-    /// frame during the `request_frame` callback `app_handler.rs`'s
-    /// `RedrawRequested` handler just invoked; reset to `false` right
-    /// before that invocation. This is the animation-frame re-arm signal —
+    /// Env-gated redraw diagnostics consume these marks once per
+    /// `RedrawRequested` cycle. Counting at the mark site (rather than
+    /// inferring from the resulting frame) preserves coalesced causes: a
+    /// wake and a resize in the same event-loop turn still appear as both.
+    pub(crate) redraw_marks: Cell<RedrawMarks>,
+    /// Set whenever gpui calls `WinitPlatformWindow::draw` during the
+    /// `request_frame` callback `app_handler.rs`'s `RedrawRequested` handler
+    /// just invoked; reset to `false` right before that invocation. A call
+    /// normally represents dirty scene work, but gpui may also call it for
+    /// its documented presentation-sustain path under heavy input, so the
+    /// diagnostic counter must not be read as a layout-only count. This is
+    /// the animation-frame re-arm signal —
     /// see docs/winit-backend-design.md's "Animation frame continuity"
     /// section for the full derivation, summarized here: a `with_animation`
     /// element still in progress calls `Window::request_animation_frame`
@@ -211,11 +233,66 @@ pub(crate) struct WinitWindowInner {
     pub(crate) drew_this_cycle: Cell<bool>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum RedrawCause {
+    Wake,
+    Input,
+    Resize,
+    Focus,
+    Ime,
+    AnimationRearm,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RedrawMarks {
+    pub(crate) wake: u64,
+    pub(crate) input: u64,
+    pub(crate) resize: u64,
+    pub(crate) focus: u64,
+    pub(crate) ime: u64,
+    pub(crate) animation_rearm: u64,
+}
+
+impl RedrawMarks {
+    fn record(&mut self, cause: RedrawCause) {
+        let count = match cause {
+            RedrawCause::Wake => &mut self.wake,
+            RedrawCause::Input => &mut self.input,
+            RedrawCause::Resize => &mut self.resize,
+            RedrawCause::Focus => &mut self.focus,
+            RedrawCause::Ime => &mut self.ime,
+            RedrawCause::AnimationRearm => &mut self.animation_rearm,
+        };
+        // Causes are a per-redraw bit set. A keyboard fallback and its
+        // enclosing KeyboardInput handler can both mark Input in one event
+        // loop turn, but that is still one input-driven redraw.
+        *count = 1;
+    }
+
+    pub(crate) fn add(&mut self, other: Self) {
+        self.wake = self.wake.saturating_add(other.wake);
+        self.input = self.input.saturating_add(other.input);
+        self.resize = self.resize.saturating_add(other.resize);
+        self.focus = self.focus.saturating_add(other.focus);
+        self.ime = self.ime.saturating_add(other.ime);
+        self.animation_rearm = self.animation_rearm.saturating_add(other.animation_rearm);
+    }
+}
+
 impl WinitWindowInner {
     /// Marks this window as owing a repaint on the next event-loop
     /// iteration — see the field doc on [`WinitWindowInner::needs_redraw`].
-    pub(crate) fn mark_needs_redraw(&self) {
+    pub(crate) fn mark_needs_redraw(&self, cause: RedrawCause) {
+        if crate::input_trace::sink().is_some() {
+            let mut marks = self.redraw_marks.get();
+            marks.record(cause);
+            self.redraw_marks.set(marks);
+        }
         self.needs_redraw.set(true);
+    }
+
+    pub(crate) fn take_redraw_marks(&self) -> RedrawMarks {
+        self.redraw_marks.take()
     }
 
     /// Drives a winit `Ime` event into gpui's `EntityInputHandler` pipeline
@@ -246,6 +323,23 @@ impl WinitWindowInner {
     pub(crate) fn handle_ime(&self, ime: winit::event::Ime) {
         input_trace!("winit Ime {}", describe_ime(&ime));
         let mut state = self.state.borrow_mut();
+        match &ime {
+            winit::event::Ime::Preedit(text, _) => {
+                if duplicate_preedit(state.last_ime_preedit.as_deref(), text) {
+                    input_trace!("winit Ime Preedit deduped");
+                    return;
+                }
+            }
+            winit::event::Ime::Enabled => {
+                state.last_ime_preedit = None;
+            }
+            winit::event::Ime::Commit(_) | winit::event::Ime::Disabled => {
+                // Keep lifecycle state correct even when GPUI temporarily has
+                // no active input handler for this window.
+                state.ime_composing = false;
+                state.last_ime_preedit = None;
+            }
+        }
         let Some(mut input_handler) = state.input_handler.take() else {
             // No logger is initialized in production, so `log::warn!` is
             // normally silent here — if this is where events die, the
@@ -269,7 +363,11 @@ impl WinitWindowInner {
                 // `new_selected_range` goes to `None`, same as gpui_linux)
                 // rather than inventing a richer contract gpui's Linux
                 // backend doesn't itself provide.
-                self.state.borrow_mut().ime_composing = !text.is_empty();
+                {
+                    let mut state = self.state.borrow_mut();
+                    state.ime_composing = !text.is_empty();
+                    state.last_ime_preedit = Some(text.clone());
+                }
                 // Forwarded unconditionally, including empty `text` — see
                 // `preedit_forward`'s doc for why. An earlier version
                 // skipped this call entirely for empty `text`, reasoning
@@ -313,11 +411,9 @@ impl WinitWindowInner {
                 reposition_candidate_window = forward.reposition_candidate_window;
             }
             winit::event::Ime::Commit(text) => {
-                self.state.borrow_mut().ime_composing = false;
                 input_handler.replace_text_in_range(None, &text);
             }
             winit::event::Ime::Disabled => {
-                self.state.borrow_mut().ime_composing = false;
                 if let Some(marked) = input_handler.marked_text_range() {
                     input_handler.replace_text_in_range(Some(marked), "");
                 }
@@ -332,7 +428,7 @@ impl WinitWindowInner {
         }
 
         self.state.borrow_mut().input_handler = Some(input_handler);
-        self.mark_needs_redraw();
+        self.mark_needs_redraw(RedrawCause::Ime);
     }
 
     /// Mirrors gpui_linux's own text-input fallback — wayland's
@@ -390,7 +486,7 @@ impl WinitWindowInner {
         );
         input_handler.replace_text_in_range(None, key_char);
         self.state.borrow_mut().input_handler = Some(input_handler);
-        self.mark_needs_redraw();
+        self.mark_needs_redraw(RedrawCause::Input);
     }
 
     /// Shared by `handle_ime` (while composing) and
@@ -508,6 +604,7 @@ impl WinitPlatformWindow {
             pressed_button: None,
             click_tracker: ClickTracker::new(),
             ime_composing: false,
+            last_ime_preedit: None,
         };
 
         let inner = Rc::new(WinitWindowInner {
@@ -515,6 +612,7 @@ impl WinitPlatformWindow {
             state: RefCell::new(state),
             callbacks: RefCell::new(WinitWindowCallbacks::default()),
             needs_redraw: Cell::new(false),
+            redraw_marks: Cell::new(RedrawMarks::default()),
             drew_this_cycle: Cell::new(false),
         });
 
@@ -920,7 +1018,7 @@ mod tests {
     // always forwarded (never dropped for being empty) and candidate-window
     // repositioning stays gated on non-empty text.
 
-    use super::preedit_forward;
+    use super::{duplicate_preedit, preedit_forward};
 
     #[test]
     fn preedit_forward_never_drops_the_shrink_to_empty_step() {
@@ -933,5 +1031,13 @@ mod tests {
     fn preedit_forward_repositions_only_for_nonempty_text() {
         assert!(preedit_forward("あ").reposition_candidate_window);
         assert!(!preedit_forward("").reposition_candidate_window);
+    }
+
+    #[test]
+    fn unchanged_preedit_is_deduped_but_a_changed_or_reset_value_is_forwarded() {
+        assert!(duplicate_preedit(Some("入力中"), "入力中"));
+        assert!(!duplicate_preedit(Some("入力"), "入力中"));
+        assert!(!duplicate_preedit(None, "入力中"));
+        assert!(duplicate_preedit(Some(""), ""));
     }
 }

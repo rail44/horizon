@@ -33,7 +33,7 @@ struct RouteState {
     /// The pane-facing frame stream: since wire v11 the frame path is a
     /// `watch<TerminalFrame>`, so the transport delivers full frames here
     /// (separate from `terminal_events`).
-    terminal_frames: HashMap<Uuid, Sender<TerminalFrame>>,
+    terminal_frames: HashMap<Uuid, tokio::sync::watch::Sender<TerminalFrame>>,
     /// The pane-facing non-frame events (title/bell/clipboard/exit/error).
     terminal_events: HashMap<Uuid, Sender<TerminalUpdate>>,
     /// The local (sync-sendable) half of each terminal's command bridge —
@@ -80,7 +80,7 @@ impl Routes {
     pub(super) fn register_terminal(
         &self,
         session_id: Uuid,
-        frames: Sender<TerminalFrame>,
+        frames: tokio::sync::watch::Sender<TerminalFrame>,
         events: Sender<TerminalUpdate>,
         commands: tokio::sync::mpsc::UnboundedSender<TerminalCommand>,
     ) {

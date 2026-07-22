@@ -5,6 +5,7 @@
 //! the close-vs-terminate invariant (docs/ux-principles.md) in GPUI terms.
 
 use std::cell::{Cell, RefCell};
+use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use gpui::*;
@@ -14,6 +15,7 @@ use horizon_terminal_core::{
 };
 use horizon_workspace::SessionId;
 
+use crate::input_trace::{input_trace, sink as input_trace_sink};
 use crate::sessiond::TerminalSessionHandle;
 
 /// Per-row content generations for the visible grid — the surviving form
@@ -441,12 +443,56 @@ impl RuntimeReachability {
     }
 }
 
-/// One item merged off the attachment's two streams (wire v11): a full
-/// frame from the `watch<TerminalFrame>`, or a non-frame event. The pump
-/// task applies them in arrival order.
+/// One item from the attachment's two streams (wire v11): a full frame from
+/// the latest-only `watch<TerminalFrame>`, or an ordered non-frame event.
 enum Incoming {
     Frame(TerminalFrame),
     Event(TerminalUpdate),
+}
+
+const TRAFFIC_TRACE_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Per-session runtime traffic counter for the env-gated input trace. An
+/// idle terminal emits nothing; a producer keeping the UI dirty produces a
+/// once-per-second `terminal-traffic` line that can be compared directly
+/// with the platform's `frame-loop` line.
+struct TrafficTraceStats {
+    window_start: Instant,
+    frames: u64,
+    events: u64,
+}
+
+impl TrafficTraceStats {
+    fn new() -> Self {
+        Self {
+            window_start: Instant::now(),
+            frames: 0,
+            events: 0,
+        }
+    }
+
+    fn record(&mut self, is_frame: bool) -> Option<String> {
+        if is_frame {
+            self.frames = self.frames.saturating_add(1);
+        } else {
+            self.events = self.events.saturating_add(1);
+        }
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.window_start);
+        if elapsed < TRAFFIC_TRACE_INTERVAL {
+            return None;
+        }
+        let line = format!(
+            "terminal-traffic: frames={} events={} elapsed={:.3}s",
+            self.frames,
+            self.events,
+            elapsed.as_secs_f64()
+        );
+        self.window_start = now;
+        self.frames = 0;
+        self.events = 0;
+        Some(line)
+    }
 }
 
 pub(crate) struct TerminalSession {
@@ -466,6 +512,7 @@ pub(crate) struct TerminalSession {
     error: RefCell<Option<String>>,
     /// Whether the command channel to sessiond is known dead.
     runtime: Cell<RuntimeReachability>,
+    traffic_trace: TrafficTraceStats,
     /// Wakes the tiny notify pump spawned in `spawn` so a `dispatch`
     /// failure -- synchronous, `&self`-only, no `Context` in hand -- still
     /// reaches `cx.notify()` promptly.
@@ -493,7 +540,7 @@ impl TerminalSession {
         exit_tx: futures::channel::mpsc::UnboundedSender<SessionId>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let frames_rx = handle.frames();
+        let mut frames_rx = handle.frames();
         let events_rx = handle.events();
 
         // Headless test driver: type HORIZON_GPUI_DRIVE's bytes into the
@@ -515,119 +562,50 @@ impl TerminalSession {
             });
         }
 
-        // Bridge the two blocking crossbeam receivers (full frames on the
-        // v11 watch, non-frame events) onto GPUI's async world, merged into
-        // one stream so the single pump task below applies them in the order
-        // they arrive. The pump is owned by this entity: it ends when the
-        // entity drops (terminate) or both channels close (PTY exit).
-        let (async_tx, mut async_rx) = futures::channel::mpsc::unbounded();
-        let frame_tx = async_tx.clone();
-        std::thread::spawn(move || {
-            while let Ok(frame) = frames_rx.recv() {
-                if frame_tx.unbounded_send(Incoming::Frame(frame)).is_err() {
-                    return;
-                }
-            }
-        });
+        // Keep the daemon's snapshot-valued frame signal latest-only all the
+        // way into GPUI. The former bridge converted it to two unbounded
+        // FIFOs (crossbeam, then futures mpsc), so a UI made slow by a split
+        // replayed every obsolete frame for seconds after PTY output stopped.
+        // `watch::changed` collapses that backlog: after each main-thread
+        // update completes, the next borrow observes only the newest frame.
+        let (event_tx, mut event_rx) = futures::channel::mpsc::unbounded();
         std::thread::spawn(move || {
             while let Ok(event) = events_rx.recv() {
-                if async_tx.unbounded_send(Incoming::Event(event)).is_err() {
+                if event_tx.unbounded_send(event).is_err() {
                     return;
                 }
             }
         });
         let dump_path = std::env::var_os("HORIZON_GPUI_DUMP").map(std::path::PathBuf::from);
         cx.spawn(async move |this, cx| {
-            while let Some(incoming) = async_rx.next().await {
-                let apply = this.update(cx, |session: &mut TerminalSession, cx| {
-                    // Any traffic from the runtime means it is reachable
-                    // again (stale-death recovery, parity with AgentSession).
-                    session
-                        .runtime
-                        .set(session.runtime.get().after_event_received());
-                    // Whether this item needs a repaint. Every arm notifies as
-                    // before, except a live frame arriving while a window is
-                    // held: that leaves the window untouched (§5) and must
-                    // *not* reshape the viewport every frame — `on_live_frame`
-                    // decides (and also drops the window if the app just took
-                    // the screen).
-                    let notify = match incoming {
-                        Incoming::Frame(frame) => {
-                            // Client-side row-change detection: compare the
-                            // new full frame against the previously held one
-                            // so the shape cache invalidates just the changed
-                            // rows (§5 Option A moved this off the wire).
-                            let old = session.frame.take();
-                            session.row_generations.apply_frame(old.as_ref(), &frame);
-                            let available = frame.scrollback_available;
-                            session.frame = Some(frame);
-                            if let Some(path) = &dump_path {
-                                let frame = session.frame.as_ref().unwrap();
-                                let _ = std::fs::write(path, super::dump_frame(frame));
-                            }
-                            // Follow availability and gate output-driven
-                            // repaints (review fixes ①/②).
-                            session.scrollback.borrow_mut().on_live_frame(available)
-                        }
-                        Incoming::Event(TerminalUpdate::Exited) => {
-                            session.exited.set(true);
-                            let _ = session.exit_tx.unbounded_send(session.session_id);
-                            true
-                        }
-                        Incoming::Event(TerminalUpdate::Error(error)) => {
-                            session.error.replace(Some(error));
-                            session.runtime.set(RuntimeReachability(true));
-                            // A dead runtime never answers an outstanding window
-                            // request: drop it so the pane doesn't freeze on a
-                            // stale window + `refetching` latch (review fix ⑤).
-                            session.scrollback.borrow_mut().abandon();
-                            true
-                        }
-                        // OSC 52 writes, CopySelection results, and
-                        // automatic selection-to-primary writes all arrive
-                        // here; `destination` says which OS buffer the
-                        // daemon meant, the host just applies it.
-                        Incoming::Event(TerminalUpdate::Clipboard { text, destination }) => {
-                            match destination {
-                                ClipboardDestination::Clipboard => {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(text));
-                                }
-                                ClipboardDestination::Primary => {
-                                    write_to_primary(cx, text);
-                                }
-                                // Skew catch-all: never write to an OS buffer
-                                // this build can't name.
-                                ClipboardDestination::Unknown => {}
-                            }
-                            true
-                        }
-                        Incoming::Event(TerminalUpdate::Title(_) | TerminalUpdate::Bell) => true,
-                        // A served scrollback window: install it into the
-                        // scrollback state machine (phase 2 — the client now
-                        // scrolls within it locally). Only lands if a request
-                        // is outstanding (initial fetch or edge re-fetch); a
-                        // late/superseded window is dropped. Notifying repaints
-                        // the pane onto the freshly held window
-                        // (`docs/terminal-scrollback-design.md` §3.3, §7).
-                        Incoming::Event(TerminalUpdate::ScrollWindow(window)) => {
-                            session.scrollback.borrow_mut().install_window(window);
-                            true
-                        }
-                        // Skew catch-all (`TerminalUpdate::Unknown`'s
-                        // doc): an event this build can't name is skipped;
-                        // the stream stays attached.
-                        Incoming::Event(TerminalUpdate::Unknown) => false,
-                    };
-                    if notify {
-                        cx.notify();
-                    }
+            while frames_rx.changed().await.is_ok() {
+                let frame = frames_rx.borrow_and_update().clone();
+                if this
+                    .update(cx, |session, cx| {
+                        session.apply_incoming(Incoming::Frame(frame), dump_path.as_deref(), cx);
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        })
+        .detach();
+
+        // Non-frame events retain FIFO semantics: clipboard writes, exit,
+        // errors, bells and scroll-window replies must not be collapsed.
+        cx.spawn(async move |this, cx| {
+            while let Some(event) = event_rx.next().await {
+                let apply = this.update(cx, |session, cx| {
+                    session.apply_incoming(Incoming::Event(event), None, cx);
                 });
                 if apply.is_err() {
                     return;
                 }
             }
-            // Both channels closed without an explicit Exited event: the
-            // runtime went away unexpectedly.
+            // The ordered event stream closed without an explicit Exited
+            // event: the runtime went away unexpectedly. A frames-watch
+            // close alone is not fatal because it can race a final Exited.
             let _ = this.update(cx, |session, cx| {
                 if !session.exited.get() {
                     session
@@ -665,10 +643,79 @@ impl TerminalSession {
             exited: Cell::new(false),
             error: RefCell::new(None),
             runtime: Cell::new(RuntimeReachability::default()),
+            traffic_trace: TrafficTraceStats::new(),
             wake_notify: wake_tx,
             exit_tx,
             scrollback: RefCell::new(Scrollback::Live),
             wire: handle,
+        }
+    }
+
+    fn apply_incoming(
+        &mut self,
+        incoming: Incoming,
+        dump_path: Option<&std::path::Path>,
+        cx: &mut Context<Self>,
+    ) {
+        if input_trace_sink().is_some() {
+            if let Some(line) = self
+                .traffic_trace
+                .record(matches!(&incoming, Incoming::Frame(_)))
+            {
+                input_trace!("{line}");
+            }
+        }
+        // Any traffic from the runtime means it is reachable again
+        // (stale-death recovery, parity with AgentSession).
+        self.runtime.set(self.runtime.get().after_event_received());
+        // Whether this item needs a repaint. Every arm notifies as before,
+        // except a live frame arriving while a scrollback window is held.
+        let notify = match incoming {
+            Incoming::Frame(frame) => {
+                // Client-side row-change detection: compare the newest full
+                // frame against the held one. Intermediate watch values are
+                // intentionally absent; a snapshot comparison needs only the
+                // final state to invalidate every row that actually changed.
+                let old = self.frame.take();
+                self.row_generations.apply_frame(old.as_ref(), &frame);
+                let available = frame.scrollback_available;
+                self.frame = Some(frame);
+                if let Some(path) = dump_path {
+                    let frame = self.frame.as_ref().unwrap();
+                    let _ = std::fs::write(path, super::dump_frame(frame));
+                }
+                self.scrollback.borrow_mut().on_live_frame(available)
+            }
+            Incoming::Event(TerminalUpdate::Exited) => {
+                self.exited.set(true);
+                let _ = self.exit_tx.unbounded_send(self.session_id);
+                true
+            }
+            Incoming::Event(TerminalUpdate::Error(error)) => {
+                self.error.replace(Some(error));
+                self.runtime.set(RuntimeReachability(true));
+                self.scrollback.borrow_mut().abandon();
+                true
+            }
+            Incoming::Event(TerminalUpdate::Clipboard { text, destination }) => {
+                match destination {
+                    ClipboardDestination::Clipboard => {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    }
+                    ClipboardDestination::Primary => write_to_primary(cx, text),
+                    ClipboardDestination::Unknown => {}
+                }
+                true
+            }
+            Incoming::Event(TerminalUpdate::Title(_) | TerminalUpdate::Bell) => true,
+            Incoming::Event(TerminalUpdate::ScrollWindow(window)) => {
+                self.scrollback.borrow_mut().install_window(window);
+                true
+            }
+            Incoming::Event(TerminalUpdate::Unknown) => false,
+        };
+        if notify {
+            cx.notify();
         }
     }
 
