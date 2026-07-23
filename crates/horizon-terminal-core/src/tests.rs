@@ -2655,14 +2655,15 @@ fn a_span_with_an_unknown_color_still_decodes_as_a_frame() {
     assert_eq!(frame.text(), "hi");
 }
 
-/// Associated text is emitted only when both REPORT_EVENT_TYPES and
-/// REPORT_ASSOCIATED_TEXT are negotiated, only for press/repeat, and only
+/// Associated text is emitted only when both REPORT_ALL_KEYS_AS_ESCAPE_CODES
+/// and REPORT_ASSOCIATED_TEXT are negotiated, only for press/repeat, and only
 /// for text that contains no control characters.
 #[test]
 fn csi_u_associated_text_truth_table() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 4));
-    // report-all-keys (8) + report-event-types (2) + report-associated-text (16)
-    core.write_vt(b"\x1b[>26u");
+    // report-all-keys (8) + report-associated-text (16). Report-event-types
+    // (2) is deliberately absent: it is independent of associated text.
+    core.write_vt(b"\x1b[>24u");
 
     // Press with text: key code 97, modifier field 1, text 97.
     assert_eq!(
@@ -2675,7 +2676,8 @@ fn csi_u_associated_text_truth_table() {
         b"\x1b[97;1;97u".to_vec()
     );
 
-    // Repeat with text: event-type subfield 2 precedes the text subfield.
+    // Without report-event-types, repeat has the same encoding as press but
+    // still carries associated text.
     assert_eq!(
         core.key_input(
             KeyCode::Char('a'),
@@ -2683,12 +2685,36 @@ fn csi_u_associated_text_truth_table() {
             KeyEventKind::Repeat,
             Some("a")
         ),
-        b"\x1b[97;1:2;97u".to_vec()
+        b"\x1b[97;1;97u".to_vec()
     );
 
-    // Release never carries associated text.
+    // Non-ASCII and multi-codepoint text use decimal scalar values separated
+    // by colons.
     assert_eq!(
         core.key_input(
+            KeyCode::Char('a'),
+            Modifiers::NONE,
+            KeyEventKind::Press,
+            Some("日")
+        ),
+        b"\x1b[97;1;26085u".to_vec()
+    );
+    assert_eq!(
+        core.key_input(
+            KeyCode::Char('a'),
+            Modifiers::NONE,
+            KeyEventKind::Press,
+            Some("a\u{301}")
+        ),
+        b"\x1b[97;1;97:769u".to_vec()
+    );
+
+    // Release is representable when report-event-types is also active, but
+    // never carries associated text.
+    let mut event_core = TerminalCore::new(TerminalSize::new(20, 4));
+    event_core.write_vt(b"\x1b[>26u");
+    assert_eq!(
+        event_core.key_input(
             KeyCode::Char('a'),
             Modifiers::NONE,
             KeyEventKind::Release,
@@ -2698,8 +2724,8 @@ fn csi_u_associated_text_truth_table() {
     );
 
     // Shift+letter with text: shift modifier 2, text 65. REPORT_ALTERNATE_KEYS
-    // is not part of the negotiated flags (26 == event types + all keys +
-    // associated text), so no alternate-key subfield is emitted.
+    // is not part of the negotiated flags, so no alternate-key subfield is
+    // emitted.
     assert_eq!(
         core.key_input(
             KeyCode::Char('a'),
@@ -2721,6 +2747,17 @@ fn csi_u_associated_text_truth_table() {
         b"\x1b[97u".to_vec()
     );
 
+    // C1 controls are rejected just like C0 controls.
+    assert_eq!(
+        core.key_input(
+            KeyCode::Char('a'),
+            Modifiers::NONE,
+            KeyEventKind::Press,
+            Some("a\u{85}")
+        ),
+        b"\x1b[97u".to_vec()
+    );
+
     // Empty text behaves like no text.
     assert_eq!(
         core.key_input(
@@ -2732,18 +2769,38 @@ fn csi_u_associated_text_truth_table() {
         b"\x1b[97u".to_vec()
     );
 
-    // Without REPORT_ASSOCIATED_TEXT the text is omitted even if supplied.
-    let mut core2 = TerminalCore::new(TerminalSize::new(20, 4));
-    core2.write_vt(b"\x1b[>10u"); // report-all-keys (8) + report-event-types (2)
-    assert_eq!(
-        core2.key_input(
+    // Exhaust every progressive-enhancement combination: adding text may
+    // change the bytes exactly when flags 8 and 16 are both active. This
+    // guards against confusing the independent event-types flag (2) with
+    // report-all-keys again.
+    for flags in 0u8..32 {
+        let mut combination = TerminalCore::new(TerminalSize::new(20, 4));
+        combination.write_vt(format!("\x1b[>{flags}u").as_bytes());
+        let without_text = combination.key_input(
             KeyCode::Char('a'),
             Modifiers::NONE,
             KeyEventKind::Press,
-            Some("a")
-        ),
-        b"\x1b[97u".to_vec()
-    );
+            None,
+        );
+        let with_text = combination.key_input(
+            KeyCode::Char('a'),
+            Modifiers::NONE,
+            KeyEventKind::Press,
+            Some("x"),
+        );
+        let should_report = flags & 0b1_1000 == 0b1_1000;
+        assert_eq!(
+            with_text != without_text,
+            should_report,
+            "unexpected associated-text behavior for flags {flags}"
+        );
+        if should_report {
+            assert!(
+                with_text.ends_with(b";120u"),
+                "missing associated text for flags {flags}: {with_text:?}"
+            );
+        }
+    }
 }
 
 /// Committed text for which there is no key event encodes as a keyless CSI-u

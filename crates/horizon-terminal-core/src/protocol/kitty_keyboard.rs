@@ -253,9 +253,10 @@ fn kitty_override(
 }
 
 /// The associated-text subfield: decimal codepoints, colon-separated, only
-/// emitted when `REPORT_EVENT_TYPES` and `REPORT_ASSOCIATED_TEXT` are both
-/// negotiated and the event is a press or repeat with non-empty, non-control
-/// text. Returns `None` for any other case, so callers simply skip the field.
+/// emitted when `REPORT_ALL_KEYS_AS_ESCAPE_CODES` and
+/// `REPORT_ASSOCIATED_TEXT` are both negotiated and the event is a press or
+/// repeat with non-empty, non-control text. Returns `None` for any other case,
+/// so callers simply skip the field.
 fn associated_text_subfield(
     text: Option<&str>,
     flags: KittyKeyboardFlags,
@@ -265,7 +266,7 @@ fn associated_text_subfield(
     if !event.is_down() {
         return None;
     }
-    if !flags.contains(KittyKeyboardFlags::REPORT_EVENT_TYPES)
+    if !flags.contains(KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES)
         || !flags.contains(KittyKeyboardFlags::REPORT_ASSOCIATED_TEXT)
     {
         return None;
