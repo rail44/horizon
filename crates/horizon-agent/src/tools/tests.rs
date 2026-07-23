@@ -287,12 +287,83 @@ fn fs_read_windows_lines_and_reports_truncation_notice() {
     assert_eq!(output["end_line"], 3);
     assert_eq!(output["total_lines"], 10);
     assert_eq!(output["truncated"], true);
+    assert_eq!(output["next_offset"], 4);
     assert!(output["notice"]
         .as_str()
         .unwrap()
         .contains("Showing lines 1-3 of 10"));
     assert!(output["content"].as_str().unwrap().contains("line 1"));
     assert!(!output["content"].as_str().unwrap().contains("line 4"));
+}
+
+#[test]
+fn fs_read_uses_a_smaller_default_but_allows_an_explicit_larger_window() {
+    let root = temp_workspace("read-default-window");
+    let file = root.join("lines.txt");
+    let content = (1..=2100)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&file, content).unwrap();
+    let tool_state = ToolSessionState::new(root);
+
+    let default_output = fs_tools::execute_auto(
+        &tool_state,
+        "fs.read",
+        &json!({ "path": file.display().to_string() }),
+    )
+    .expect("fs.read is auto-executed");
+    assert_eq!(default_output["end_line"], 500);
+    assert_eq!(default_output["next_offset"], 501);
+
+    let explicit_output = fs_tools::execute_auto(
+        &tool_state,
+        "fs.read",
+        &json!({ "path": file.display().to_string(), "limit": 5000 }),
+    )
+    .expect("fs.read is auto-executed");
+    assert_eq!(explicit_output["end_line"], 2000);
+    assert_eq!(explicit_output["next_offset"], 2001);
+    assert!(explicit_output["notice"]
+        .as_str()
+        .unwrap()
+        .contains("maximum of 2000"));
+}
+
+#[test]
+fn fs_read_caps_total_content_at_a_line_boundary_and_returns_next_offset() {
+    let root = temp_workspace("read-character-cap");
+    let file = root.join("wide.txt");
+    let content = (1..=100)
+        .map(|line| format!("{line}:{}", "x".repeat(1000)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&file, content).unwrap();
+    let tool_state = ToolSessionState::new(root);
+
+    let output = fs_tools::execute_auto(
+        &tool_state,
+        "fs.read",
+        &json!({ "path": file.display().to_string(), "limit": 100 }),
+    )
+    .expect("fs.read is auto-executed");
+
+    let content = output["content"].as_str().unwrap();
+    assert!(content.chars().count() <= 50_000);
+    assert_eq!(
+        output["content_chars"].as_u64().unwrap() as usize,
+        content.chars().count()
+    );
+    assert!(output["end_line"].as_u64().unwrap() < 100);
+    assert_eq!(
+        output["next_offset"].as_u64().unwrap(),
+        output["end_line"].as_u64().unwrap() + 1
+    );
+    assert!(output["notice"]
+        .as_str()
+        .unwrap()
+        .contains("50000-character cap"));
+    assert!(output["content_version"].is_string());
 }
 
 #[test]
@@ -795,6 +866,105 @@ fn fs_grep_rejects_invalid_regex() {
     .expect("fs.grep is auto-executed");
 
     assert!(is_error(&output));
+}
+
+#[test]
+fn fs_grep_searches_one_file_and_returns_requested_context() {
+    let root = temp_workspace("grep-one-file-context");
+    let file = root.join("target.txt");
+    fs::write(
+        &file,
+        "unrelated\nbefore\nTODO: change this\nafter\nunrelated",
+    )
+    .unwrap();
+    let tool_state = ToolSessionState::new(root);
+
+    let output = fs_tools::execute_auto(
+        &tool_state,
+        "fs.grep",
+        &json!({
+            "base_path": file.display().to_string(),
+            "pattern": "TODO",
+            "context": 1
+        }),
+    )
+    .expect("fs.grep is auto-executed");
+
+    assert!(!is_error(&output));
+    assert_eq!(output["total_matches"], 1);
+    assert_eq!(output["matches"][0]["path"], file.display().to_string());
+    assert_eq!(output["matches"][0]["line_number"], 3);
+    assert_eq!(output["matches"][0]["context_before"][0]["line_number"], 2);
+    assert_eq!(output["matches"][0]["context_before"][0]["line"], "before");
+    assert_eq!(output["matches"][0]["context_after"][0]["line_number"], 4);
+    assert_eq!(output["matches"][0]["context_after"][0]["line"], "after");
+}
+
+#[test]
+fn fs_grep_truncates_wide_match_and_context_lines() {
+    let root = temp_workspace("grep-line-cap");
+    let file = root.join("wide.txt");
+    fs::write(
+        &file,
+        format!(
+            "{}\nTODO:{}\n{}",
+            "b".repeat(2500),
+            "m".repeat(2500),
+            "a".repeat(2500)
+        ),
+    )
+    .unwrap();
+    let tool_state = ToolSessionState::new(root);
+
+    let output = fs_tools::execute_auto(
+        &tool_state,
+        "fs.grep",
+        &json!({
+            "base_path": file.display().to_string(),
+            "pattern": "TODO",
+            "context": 1
+        }),
+    )
+    .expect("fs.grep is auto-executed");
+
+    for value in [
+        &output["matches"][0]["line"],
+        &output["matches"][0]["context_before"][0]["line"],
+        &output["matches"][0]["context_after"][0]["line"],
+    ] {
+        let line = value.as_str().unwrap();
+        assert!(line.contains("[line truncated]"));
+        assert!(line.chars().count() < 2100);
+    }
+}
+
+#[test]
+fn fs_grep_caps_the_complete_tool_result() {
+    let root = temp_workspace("grep-output-cap");
+    let file = root.join("many-wide-matches.txt");
+    let content = (1..=100)
+        .map(|line| format!("TODO {line} {}", "x".repeat(2100)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&file, content).unwrap();
+    let tool_state = ToolSessionState::new(root);
+
+    let output = fs_tools::execute_auto(
+        &tool_state,
+        "fs.grep",
+        &json!({
+            "base_path": file.display().to_string(),
+            "pattern": "TODO",
+            "limit": 100
+        }),
+    )
+    .expect("fs.grep is auto-executed");
+
+    assert!(output.to_string().chars().count() <= 50_000);
+    assert_eq!(output["total_matches"], 100);
+    assert!(output["returned_count"].as_u64().unwrap() < 100);
+    assert_eq!(output["truncated"], true);
+    assert!(output["note"].as_str().unwrap().contains("output cap"));
 }
 
 /// Populates `root` with one visible file and one file each under `.git`,

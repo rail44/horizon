@@ -28,9 +28,12 @@ pub fn definitions() -> Vec<Definition> {
         Definition {
             id: "fs.read".to_string(),
             title: "Read File".to_string(),
-            description: "Read a text file from disk, windowed by line. Requires an absolute \
-                path; large files are capped by default (pass offset/limit to page through \
-                them)."
+            description: "Read a known text file or a relevant line window, with line numbers. \
+                Requires an absolute path. Use fs.grep to locate specific content before \
+                reading a large file, and fs.glob when the file path is unknown. Pass \
+                offset/limit to continue through a file; the result stops at 50,000 content \
+                characters and returns next_offset. Read independent known files in parallel, \
+                and prefer one useful window over many tiny adjacent slices."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
@@ -49,7 +52,8 @@ pub fn definitions() -> Vec<Definition> {
                     "limit": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": "Maximum number of lines to return. Defaults to 2000.",
+                        "maximum": 2000,
+                        "description": "Maximum number of lines to return. Defaults to 500; maximum 2000.",
                     },
                 }
             }),
@@ -87,9 +91,11 @@ pub fn definitions() -> Vec<Definition> {
         Definition {
             id: "fs.grep".to_string(),
             title: "Search File Contents".to_string(),
-            description: "Search file contents under a directory with a regular expression, \
-                optionally restricted to files matching a glob. Requires an absolute base \
-                path; results are capped, with the total match count reported."
+            description: "Locate specific text before reading a file. Search one file or all \
+                files under a directory with a regular expression, optionally restricted by \
+                glob. Requires an absolute base path; results are capped, with the total \
+                match count reported. Request a small context window when matching lines alone \
+                are insufficient."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
@@ -98,7 +104,7 @@ pub fn definitions() -> Vec<Definition> {
                 "properties": {
                     "base_path": {
                         "type": "string",
-                        "description": "Absolute directory to search under.",
+                        "description": "Absolute file to search or directory to search under.",
                     },
                     "pattern": {
                         "type": "string",
@@ -112,6 +118,12 @@ pub fn definitions() -> Vec<Definition> {
                         "type": "integer",
                         "minimum": 1,
                         "description": "Maximum number of matches to return. Defaults to 100.",
+                    },
+                    "context": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 10,
+                        "description": "Context lines to return before and after each match. Defaults to 0; maximum 10.",
                     },
                 }
             }),

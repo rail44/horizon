@@ -34,6 +34,33 @@ All tools require **absolute paths**; relative paths are rejected with an
 actionable error (models measurably mishandle relative paths — SWE-bench-era
 finding restated in Anthropic's agent guidance).
 
+## Read and Search Semantics
+
+`fs.read` is for a known file or a relevant line window, not content
+discovery. Its catalog routes specific-content questions to `fs.grep`,
+unknown paths to `fs.glob`, and independent known files to parallel reads.
+The default window is 500 lines; an explicit request may reach 2,000 lines.
+The rendered content also stops at 50,000 characters on a line boundary and
+returns `next_offset`, so a continuation is explicit rather than an
+accidental whole-file response. Each result carries a version derived from
+the file mtime and size.
+
+`fs.grep` accepts either one file or a directory and can return up to ten
+lines of context on each side. Individual lines are capped at 2,000
+characters and the complete serialized result at 50,000 characters. These
+are harness invariants rather than prompt-only conventions.
+
+Before building a provider request, exact duplicate reads of the same
+path/window/version are reduced to a reference while retaining the newest
+copy. Old tool-result bodies are also soft-pruned as one batch once at least
+8,000 estimated tokens are reclaimable, outside a protected recent 8,000
+token region. The batch threshold avoids frequent small prompt mutations
+that work against provider caching. Both transformations affect only the
+provider projection: canonical session history and persisted event/DuckDB
+records retain the returned tool result and remain available through recall.
+The measurement and prior-art basis is recorded in
+`research/agent-tool-output-and-read-routing-2026-07-24.md`.
+
 ## Edit Semantics
 
 The industry has converged on exact-string replacement with uniqueness

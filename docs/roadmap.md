@@ -285,6 +285,14 @@ lands:
   total, and cached input) beside `ProviderRequestFinished`, queryable through
   the generic JSONL/DuckDB records; the thin tool policy directs temporary
   files to `$TMPDIR`.
+- **Agent #61 token-efficiency slice — implemented 2026-07-24.**
+  Grounded in `docs/research/agent-tool-output-and-read-routing-2026-07-24.md`:
+  read now defaults to 500 lines with explicit 2,000-line and 50k-character
+  bounds, continuation/version metadata, and prompt routing through grep/glob;
+  grep accepts a single file and bounded context. The provider projection
+  removes exact duplicate read windows and batch-prunes worthwhile old tool
+  output outside the protected recent region while canonical history and
+  persisted records remain intact for recall.
 - **portable-pty fork-safety root fix** (backlog 28/31).
   Bounded-retry mitigation shipped. Bounded investigation 2026-07-19:
   hypothesis CONFIRMED at source level (heap-allocating

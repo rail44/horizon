@@ -11,8 +11,12 @@
 //! this caused). This policy instead prefers to shrink bulky tool-result
 //! *content* before it ever drops a whole message:
 //!
-//! 1. If the whole history already fits the budget, return it unchanged.
-//! 2. Otherwise, replace the content of old tool-result messages (oldest
+//! 1. Independently of overflow, collapse exact duplicate `fs.read` results
+//!    and, once enough reclaimable old tool output has accumulated, replace
+//!    that old output in one batch. This reduces cumulative resend cost while
+//!    keeping the canonical session history untouched.
+//! 2. If the remaining history exceeds the hard budget, replace the content
+//!    of old tool-result messages (oldest
 //!    first) with a short reference placeholder -- keeping the message
 //!    itself (and its `id`/`call_id`, so tool-call/tool-result pairing
 //!    never breaks) -- until the budget is met or every eligible tool
@@ -35,13 +39,20 @@
 //! only the cloned view `windowed_history_for_request` sends to the
 //! provider for one turn (see that function's doc comment).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use rig_core::completion::message::{ToolResult, ToolResultContent, UserContent};
 use rig_core::completion::{AssistantContent, Message};
 use rig_core::OneOrMany;
 use rig_memory::{MemoryError, MemoryPolicy, TokenCounter};
+
+/// Avoid cache-hostile tiny edits: early pruning happens only when one batch
+/// can reclaim at least this much estimated context. This is Horizon's scaled
+/// counterpart to OpenCode's 20k-token minimum, sized for Horizon's 60k
+/// fallback history budget while still making a single very large read
+/// eligible once it has left the protected recent window.
+const SOFT_PRUNE_MINIMUM_TOKENS: usize = 8_000;
 
 /// A [`MemoryPolicy`] that prunes bulky old tool-result *content* to a short
 /// placeholder before ever dropping a whole message -- see the module doc.
@@ -78,6 +89,26 @@ impl MemoryPolicy for ToolResultPruningMemory {
         &self,
         messages: Vec<Message>,
     ) -> Result<(Vec<Message>, Vec<Message>), MemoryError> {
+        let lookup = build_tool_call_lookup(&messages);
+        // Exact duplicate reads are pure resend cost even when the history is
+        // comfortably below the context ceiling. Keep the newest copy (the
+        // one most useful to the model) and reduce older copies before the
+        // ordinary over-budget policy runs. The read result carries the
+        // file's mtime-derived content version, so a same-range read after an
+        // edit is never mistaken for a duplicate.
+        let mut messages = elide_duplicate_read_results(messages, &lookup);
+        let boundary = protected_boundary(
+            &messages,
+            self.counter.as_ref(),
+            self.protected_recent_tokens,
+        );
+        messages = soft_prune_old_tool_results(
+            messages,
+            &lookup,
+            boundary,
+            self.counter.as_ref(),
+            SOFT_PRUNE_MINIMUM_TOKENS,
+        );
         let total: usize = messages.iter().map(|m| self.counter.count(m)).sum();
         if total <= self.max_tokens {
             return Ok((messages, Vec::new()));
@@ -86,14 +117,6 @@ impl MemoryPolicy for ToolResultPruningMemory {
         // Step 2: elide old tool-result content to a placeholder, oldest
         // first, stopping as soon as the budget is met or every eligible
         // (unprotected) tool result has been elided.
-        let lookup = build_tool_call_lookup(&messages);
-        let boundary = protected_boundary(
-            &messages,
-            self.counter.as_ref(),
-            self.protected_recent_tokens,
-        );
-
-        let mut messages = messages;
         let mut current_total = total;
         for message in messages.iter_mut().take(boundary) {
             if current_total <= self.max_tokens {
@@ -105,6 +128,9 @@ impl MemoryPolicy for ToolResultPruningMemory {
             let old_cost = self.counter.count(message);
             let placeholder = elide_tool_result_message(message, &lookup);
             let new_cost = self.counter.count(&placeholder);
+            if new_cost >= old_cost {
+                continue;
+            }
             *message = placeholder;
             current_total = current_total
                 .saturating_sub(old_cost)
@@ -146,6 +172,14 @@ fn is_tool_result_message(message: &Message) -> bool {
 struct ToolCallSummary {
     tool_id: String,
     args_summary: String,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct ReadResultIdentity {
+    path: String,
+    start_line: u64,
+    end_line: u64,
+    content_version: String,
 }
 
 /// Indexes every tool call across `messages` by its pairing key (`call_id`
@@ -201,6 +235,94 @@ fn placeholder_text(result_id: &str, lookup: &HashMap<String, ToolCallSummary>) 
     }
 }
 
+fn soft_placeholder_text(result_id: &str, lookup: &HashMap<String, ToolCallSummary>) -> String {
+    match lookup.get(result_id) {
+        Some(summary) => format!(
+            "[old tool result cleared after use -- call {} with args {}; use recall or re-run if needed]",
+            summary.tool_id, summary.args_summary
+        ),
+        None => "[old tool result cleared after use; use recall or re-run if needed]".to_string(),
+    }
+}
+
+fn soft_prune_old_tool_results(
+    mut messages: Vec<Message>,
+    lookup: &HashMap<String, ToolCallSummary>,
+    boundary: usize,
+    counter: &dyn TokenCounter,
+    minimum_savings: usize,
+) -> Vec<Message> {
+    let replacements = messages
+        .iter()
+        .take(boundary)
+        .enumerate()
+        .filter(|(_, message)| is_tool_result_message(message))
+        .filter_map(|(index, message)| {
+            let replacement = replace_tool_result_text(message, |result_id| {
+                soft_placeholder_text(result_id, lookup)
+            });
+            let old_cost = counter.count(message);
+            let new_cost = counter.count(&replacement);
+            (new_cost < old_cost).then_some((index, replacement, old_cost - new_cost))
+        })
+        .collect::<Vec<_>>();
+    let savings = replacements
+        .iter()
+        .map(|(_, _, savings)| savings)
+        .sum::<usize>();
+    if savings < minimum_savings {
+        return messages;
+    }
+    for (index, replacement, _) in replacements {
+        messages[index] = replacement;
+    }
+    messages
+}
+
+fn read_result_identity(
+    message: &Message,
+    lookup: &HashMap<String, ToolCallSummary>,
+) -> Option<ReadResultIdentity> {
+    let Message::User { content } = message else {
+        return None;
+    };
+    let UserContent::ToolResult(result) = content.first_ref() else {
+        return None;
+    };
+    if lookup.get(&result.id)?.tool_id != "fs.read" {
+        return None;
+    }
+    let ToolResultContent::Text(text) = result.content.first_ref() else {
+        return None;
+    };
+    let output: serde_json::Value = serde_json::from_str(&text.text).ok()?;
+    Some(ReadResultIdentity {
+        path: output.get("path")?.as_str()?.to_string(),
+        start_line: output.get("start_line")?.as_u64()?,
+        end_line: output.get("end_line")?.as_u64()?,
+        content_version: output.get("content_version")?.as_str()?.to_string(),
+    })
+}
+
+fn elide_duplicate_read_results(
+    mut messages: Vec<Message>,
+    lookup: &HashMap<String, ToolCallSummary>,
+) -> Vec<Message> {
+    let mut seen = HashSet::new();
+    for message in messages.iter_mut().rev() {
+        let Some(identity) = read_result_identity(message, lookup) else {
+            continue;
+        };
+        if !seen.insert(identity) {
+            *message = replace_tool_result_text(message, |_| {
+                "[duplicate fs.read result cleared; unchanged content is retained in a later identical read]"
+                    .to_string()
+            });
+        }
+    }
+    messages
+}
+
 /// Replaces every `UserContent::ToolResult` item in `message` with a short
 /// placeholder, preserving that item's `id`/`call_id` exactly (the pairing
 /// key the provider checks) and any non-tool-result items unchanged. Given
@@ -212,6 +334,10 @@ fn elide_tool_result_message(
     message: &Message,
     lookup: &HashMap<String, ToolCallSummary>,
 ) -> Message {
+    replace_tool_result_text(message, |result_id| placeholder_text(result_id, lookup))
+}
+
+fn replace_tool_result_text(message: &Message, replacement: impl Fn(&str) -> String) -> Message {
     let Message::User { content } = message else {
         return message.clone();
     };
@@ -219,7 +345,7 @@ fn elide_tool_result_message(
         .iter()
         .map(|item| match item {
             UserContent::ToolResult(result) => {
-                let text = placeholder_text(&result.id, lookup);
+                let text = replacement(&result.id);
                 UserContent::ToolResult(ToolResult {
                     id: result.id.clone(),
                     call_id: result.call_id.clone(),
@@ -246,15 +372,31 @@ fn protected_boundary(
     counter: &dyn TokenCounter,
     protected_tokens: usize,
 ) -> usize {
+    if protected_tokens == 0 {
+        return messages.len();
+    }
     let mut budget = protected_tokens;
     let mut boundary = messages.len();
+    let mut protected_tool_result = false;
     for (idx, msg) in messages.iter().enumerate().rev() {
+        if budget == 0 {
+            break;
+        }
         let cost = counter.count(msg);
         if cost > budget {
+            // Protect one whole recent tool result even when that result
+            // alone exceeds the floor. Once the suffix already contains a
+            // protected tool result, the older crossing result remains
+            // eligible; otherwise every large old result would expand the
+            // protected zone without bound.
+            if !protected_tool_result && is_tool_result_message(msg) {
+                boundary = idx;
+            }
             break;
         }
         budget -= cost;
         boundary = idx;
+        protected_tool_result |= is_tool_result_message(msg);
     }
     boundary
 }
@@ -372,11 +514,40 @@ mod tests {
         Message::tool_result(id.to_string(), text.to_string())
     }
 
+    fn read_result(
+        id: &str,
+        path: &str,
+        start_line: u64,
+        end_line: u64,
+        content_version: &str,
+        content: &str,
+    ) -> Message {
+        tool_result(
+            id,
+            &serde_json::json!({
+                "path": path,
+                "start_line": start_line,
+                "end_line": end_line,
+                "content_version": content_version,
+                "content": content,
+            })
+            .to_string(),
+        )
+    }
+
     fn is_placeholder(message: &Message) -> bool {
         matches!(message, Message::User { content }
             if matches!(content.first_ref(), UserContent::ToolResult(result)
                 if matches!(result.content.first_ref(), ToolResultContent::Text(text)
                     if text.text.starts_with("[tool result cleared"))))
+    }
+
+    fn is_duplicate_placeholder(message: &Message) -> bool {
+        tool_result_text(message).starts_with("[duplicate fs.read result cleared")
+    }
+
+    fn is_soft_placeholder(message: &Message) -> bool {
+        tool_result_text(message).starts_with("[old tool result cleared after use")
     }
 
     fn tool_result_text(message: &Message) -> &str {
@@ -405,6 +576,114 @@ mod tests {
         let windowed = policy.apply(history.clone()).expect("apply never fails");
 
         assert_eq!(windowed, history);
+    }
+
+    #[test]
+    fn within_budget_elides_an_older_exact_duplicate_read_result() {
+        let history = vec![
+            user_text("inspect it"),
+            tool_call(
+                "call-1",
+                "fs.read",
+                serde_json::json!({ "path": "/a", "offset": 1, "limit": 50 }),
+            ),
+            read_result("call-1", "/a", 1, 50, "10.000000001", "old copy"),
+            assistant_text("checking again"),
+            tool_call(
+                "call-2",
+                "fs.read",
+                serde_json::json!({ "path": "/a", "offset": 1, "limit": 50 }),
+            ),
+            read_result("call-2", "/a", 1, 50, "10.000000001", "newest copy"),
+        ];
+        let policy = ToolResultPruningMemory::new(100_000, 100_000, exact_byte_counter());
+
+        let windowed = policy.apply(history.clone()).expect("apply never fails");
+
+        assert!(is_duplicate_placeholder(&windowed[2]));
+        assert_eq!(
+            windowed[5], history[5],
+            "the newest identical result remains available"
+        );
+        assert_eq!(
+            windowed.len(),
+            history.len(),
+            "deduplication must preserve tool-call/result pairing"
+        );
+    }
+
+    #[test]
+    fn duplicate_read_elision_keeps_changed_or_different_windows() {
+        let history = vec![
+            tool_call("call-1", "fs.read", serde_json::json!({ "path": "/a" })),
+            read_result("call-1", "/a", 1, 50, "10.000000001", "first"),
+            tool_call("call-2", "fs.read", serde_json::json!({ "path": "/a" })),
+            read_result("call-2", "/a", 1, 50, "11.000000001", "changed"),
+            tool_call("call-3", "fs.read", serde_json::json!({ "path": "/a" })),
+            read_result("call-3", "/a", 51, 100, "11.000000001", "next window"),
+        ];
+        let policy = ToolResultPruningMemory::new(100_000, 100_000, exact_byte_counter());
+
+        let windowed = policy.apply(history.clone()).expect("apply never fails");
+
+        assert_eq!(windowed, history);
+    }
+
+    #[test]
+    fn under_budget_soft_prune_clears_a_worthwhile_old_tool_result_batch() {
+        let history = vec![
+            user_text("inspect"),
+            tool_call("call-old", "fs.read", serde_json::json!({ "path": "/old" })),
+            tool_result("call-old", &"O".repeat(10_000)),
+            tool_call("call-new", "fs.read", serde_json::json!({ "path": "/new" })),
+            tool_result("call-new", &"N".repeat(1_000)),
+            assistant_text("continuing"),
+        ];
+        let policy = ToolResultPruningMemory::new(100_000, 1_500, exact_byte_counter());
+
+        let windowed = policy.apply(history.clone()).expect("apply never fails");
+
+        assert!(
+            is_soft_placeholder(&windowed[2]),
+            "a batch saving more than the soft-prune minimum should clear early"
+        );
+        assert_eq!(
+            windowed[4], history[4],
+            "the recent protected result remains verbatim"
+        );
+    }
+
+    #[test]
+    fn under_budget_soft_prune_waits_until_the_minimum_savings_is_reached() {
+        let history = vec![
+            tool_call("call-old", "fs.read", serde_json::json!({ "path": "/old" })),
+            tool_result("call-old", &"O".repeat(4_000)),
+            assistant_text("done"),
+        ];
+        let policy = ToolResultPruningMemory::new(100_000, 1, exact_byte_counter());
+
+        let windowed = policy.apply(history.clone()).expect("apply never fails");
+
+        assert_eq!(windowed, history);
+    }
+
+    #[test]
+    fn protected_floor_keeps_a_whole_recent_result_that_exceeds_the_floor() {
+        let history = vec![
+            tool_call("call-old", "fs.read", serde_json::json!({ "path": "/old" })),
+            tool_result("call-old", &"O".repeat(10_000)),
+            tool_call("call-new", "fs.read", serde_json::json!({ "path": "/new" })),
+            tool_result("call-new", &"N".repeat(12_000)),
+        ];
+        let policy = ToolResultPruningMemory::new(100_000, 8_000, exact_byte_counter());
+
+        let windowed = policy.apply(history.clone()).expect("apply never fails");
+
+        assert!(is_soft_placeholder(&windowed[1]));
+        assert_eq!(
+            windowed[3], history[3],
+            "the newest result crosses the floor and must be protected whole"
+        );
     }
 
     #[test]

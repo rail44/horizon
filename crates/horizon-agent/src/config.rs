@@ -116,7 +116,10 @@ pub(crate) const DEFAULT_BASH_TIMEOUT_DEFAULT_SECS: u64 = 300;
 pub(crate) const DEFAULT_BASH_TIMEOUT_MAX_SECS: u64 = 1_800;
 pub(crate) const DEFAULT_BASH_OUTPUT_CAP_CHARS: usize = 30_000;
 pub(crate) const DEFAULT_BASH_DRAIN_GRACE_SECS: u64 = 2;
-pub(crate) const DEFAULT_FS_READ_LINE_CAP: usize = 2000;
+/// Default `fs.read` window when the caller does not choose one. The tool
+/// accepts an explicit window up to 2,000 lines, but the smaller default keeps
+/// an exploratory read from turning into a whole-file context dump.
+pub(crate) const DEFAULT_FS_READ_LINE_CAP: usize = 500;
 /// Default number of matches `fs.grep` returns when a call doesn't pass its
 /// own `limit`. Was `fs::grep`'s `DEFAULT_LIMIT`.
 pub(crate) const DEFAULT_FS_GREP_RESULT_LIMIT: usize = 100;
