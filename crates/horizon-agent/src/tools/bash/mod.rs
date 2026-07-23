@@ -53,6 +53,8 @@ pub(crate) use git::{approved_metadata_roots, metadata_writable_roots, requires_
 /// via `fold_bash_completion`.
 #[derive(Clone, Debug)]
 pub enum ToolCompletion {
+    /// An enforcing judge finished evaluating an approval candidate.
+    ApprovalJudged(crate::judge::ApprovalJudgment),
     /// The call actually finished (successfully or not) -- fold
     /// `ToolCallFinished` and forward the result to the provider, exactly
     /// what every bash call did before this type grew a second variant.
@@ -297,6 +299,7 @@ pub fn spawn_sandboxed(
 
 fn completion_result_mut(completion: &mut BashCompletion) -> Option<&mut ToolCallResult> {
     match completion {
+        BashCompletion::ApprovalJudged(_) => None,
         BashCompletion::Finished(result)
         | BashCompletion::DomainDenied { result, .. }
         | BashCompletion::FilesystemDenied { result, .. } => Some(result),

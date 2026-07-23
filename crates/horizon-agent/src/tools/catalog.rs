@@ -303,12 +303,12 @@ pub fn definitions() -> Vec<Definition> {
         // Test-only, mirroring `mock.approval_required` above: this fixture
         // exercises the judge's human-gated boundary path independently of
         // the production web tools and their transport setup
-        // (`judge::maybe_fire_shadow_judge`) at the
+        // approval gate at the
         // `policy::horizon_events_for_provider_event` seam.
         Definition {
             id: "mock.boundary_crossing".to_string(),
             title: "Mock Boundary Crossing".to_string(),
-            description: "Test tool that exercises the judge's shadow-mode boundary-crossing \
+            description: "Test tool that exercises the judge's boundary-crossing \
                 path."
                 .to_string(),
             input_schema: json!({

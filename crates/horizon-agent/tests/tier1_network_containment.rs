@@ -160,6 +160,9 @@ fn expect_domain_denied(
     forbidden_marker: &str,
 ) -> ToolCallResult {
     match run_curl(tool_state, session_id, results, target) {
+        BashCompletion::ApprovalJudged(judgment) => {
+            panic!("unexpected approval judgment: {judgment:?}")
+        }
         BashCompletion::DomainDenied {
             domains, result, ..
         } => {
@@ -276,6 +279,9 @@ fn domain_approval_is_session_scoped_and_host_narrow() {
         .recv_timeout(Duration::from_secs(30))
         .expect("approved retry completion")
     {
+        BashCompletion::ApprovalJudged(judgment) => {
+            panic!("unexpected approval judgment: {judgment:?}")
+        }
         BashCompletion::Finished(result) => {
             assert!(result.output["output"]
                 .as_str()
@@ -321,6 +327,9 @@ fn proxy_unaware_direct_connect_cannot_bypass_the_fixed_endpoint() {
         .recv_timeout(Duration::from_secs(30))
         .expect("completion")
     {
+        BashCompletion::ApprovalJudged(judgment) => {
+            panic!("unexpected approval judgment: {judgment:?}")
+        }
         BashCompletion::Finished(result) => {
             assert_ne!(result.output["exit_code"], 0);
             assert!(result.output["denied_network_routes"].is_array());

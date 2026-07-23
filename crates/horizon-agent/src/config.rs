@@ -62,7 +62,7 @@ const EVENT_LOG_PATH_VAR: &str = "HORIZON_AGENT_EVENT_LOG";
 /// `~/` is expanded against `$HOME`, same as `event_log_path` above.
 const STATE_DB_PATH_VAR: &str = "HORIZON_AGENT_STATE_DB";
 
-/// Overrides the shadow-mode judge's model id (`crate::judge`,
+/// Overrides the enforcing judge's model id (`crate::judge`,
 /// `docs/agent-approval-design.md`'s "Judge design"). Falls back to
 /// [`DEFAULT_JUDGE_MODEL`]. Env-only, mirroring `HORIZON_AGENT_EVENT_LOG`/
 /// `HORIZON_AGENT_STATE_DB`'s no-file-key treatment above -- the config

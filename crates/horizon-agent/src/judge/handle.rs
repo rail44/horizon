@@ -1,26 +1,32 @@
-//! [`JudgeHandle`]: the per-session-installed bundle the policy seam fires
+//! [`JudgeHandle`]: the per-session-installed bundle the approval gate fires
 //! through -- model id, pooled client, rate limiter, and the event-log
-//! writer the calibration record rides. Constructed once per session
+//! writer the verdict record rides. Constructed once per session
 //! (`horizon-sessiond`'s `session::run_session`, mirroring how
 //! `tools::SessionNetworkProxy` is constructed there) and threaded onto
 //! `ToolSessionState` via `with_judge`, exactly like the network proxy.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::config;
-use crate::contract::{SessionId, ToolCallRequest};
+use crate::contract::SessionId;
 use crate::persistence::event_log::WriterHandle;
 
 use super::client::{ModelClient, RigModelClient};
 use super::ratelimit::RateLimiter;
-use super::{record, run_judge, JudgeInput};
+use super::{
+    record, run_judge, ApprovalCandidate, ApprovalJudgment, JudgeDecision, JudgeFallbackReason,
+    JudgeInput,
+};
+
+const JUDGE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub struct JudgeHandle {
     model: String,
     client: Arc<dyn ModelClient>,
     limiter: RateLimiter,
     writer: WriterHandle,
+    timeout: Duration,
 }
 
 impl JudgeHandle {
@@ -41,6 +47,7 @@ impl JudgeHandle {
             client: Arc::new(RigModelClient::new(base_url)),
             limiter: RateLimiter::judge_default(),
             writer,
+            timeout: JUDGE_TIMEOUT,
         }))
     }
 
@@ -62,24 +69,41 @@ impl JudgeHandle {
             client,
             limiter: RateLimiter::judge_default(),
             writer,
+            timeout: JUDGE_TIMEOUT,
         })
     }
 
-    /// Fires the shadow judge for one boundary-crossing call: fire-and-
-    /// forget, spawned onto the dedicated judge runtime
-    /// (`judge::runtime::runtime`) so this never blocks the caller -- the
-    /// human still sees `ApprovalRequested` immediately and unchanged (see
-    /// `policy::horizon_events_for_provider_event`'s doc comment). A
-    /// rate-limited call never reaches the model at all; both outcomes
-    /// (judged or skipped) are recorded via `judge::record`.
-    pub(crate) fn maybe_fire(
+    #[cfg(test)]
+    pub(super) fn for_test_with_limits(
+        model: impl Into<String>,
+        client: Arc<dyn ModelClient>,
+        writer: WriterHandle,
+        timeout: Duration,
+        rate_per_sec: f64,
+        burst: f64,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            model: model.into(),
+            client,
+            limiter: RateLimiter::new(rate_per_sec, burst),
+            writer,
+            timeout,
+        })
+    }
+
+    /// Starts one judgment on the dedicated runtime and returns immediately.
+    /// `false` means the rate limiter declined the work and the caller must
+    /// preserve the human approval path.
+    pub(crate) fn start(
         self: &Arc<Self>,
         session_id: SessionId,
-        request: &ToolCallRequest,
+        candidate: ApprovalCandidate,
         prior_user_messages: Vec<String>,
         requested_filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
         requested_domains: Vec<String>,
-    ) {
+        result_tx: crossbeam_channel::Sender<crate::tools::ToolCompletion>,
+    ) -> bool {
+        let request = &candidate.request;
         let input = JudgeInput {
             call_id: request.call_id.0.clone(),
             tool_id: request.tool_id.clone(),
@@ -97,13 +121,26 @@ impl JudgeHandle {
                 &self.model,
                 "rate_limited",
             );
-            return;
+            return false;
         }
 
         let handle = Arc::clone(self);
         super::runtime::runtime().spawn(async move {
             let started_at = Instant::now();
-            let verdict = run_judge(&handle.model, handle.client.as_ref(), &input).await;
+            let verdict = match tokio::time::timeout(
+                handle.timeout,
+                run_judge(&handle.model, handle.client.as_ref(), &input),
+            )
+            .await
+            {
+                Ok(verdict) => verdict,
+                Err(_) => super::JudgeVerdict {
+                    decision: JudgeDecision::Escalate,
+                    stage: 0,
+                    confidence: None,
+                    fallback_reason: Some(JudgeFallbackReason::Timeout),
+                },
+            };
             let latency_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
             record::write_verdict(
                 &handle.writer,
@@ -113,6 +150,13 @@ impl JudgeHandle {
                 verdict,
                 latency_ms,
             );
+            let _ = result_tx.send(crate::tools::ToolCompletion::ApprovalJudged(
+                ApprovalJudgment {
+                    candidate,
+                    decision: verdict.decision,
+                },
+            ));
         });
+        true
     }
 }

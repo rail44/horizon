@@ -166,16 +166,13 @@ lands:
   degradation), the historical sandbox-denial retry, audit
   markers on output JSON (follow-ups: backlog 55 double-row artifact,
   56 niceness gap). Owner tier-1 dogfooding is the current gate.
-  Network layer (leg 4b) LANDED. **Judge (leg 5) LANDED in SHADOW MODE**
-  (merge `d890b43`): the two-stage boundary-crossing classifier
-  (`syn:small:text`, Plan-B parse, fire-and-forget) runs and logs a
-  `call_id`-keyed calibration record but changes NO approval outcome.
-  **Production calibration traffic began 2026-07-21:** Horizon-owned
-  `web_search` and `web_fetch` are the first real `BoundaryCrossing` tools.
-  Search auto-runs against a fixed Exa endpoint while recording a shadow
-  verdict; fetch supplies human labels on exact-host grant misses. Two legs
-  remain and are gated on enough real traffic: calibration, then the
-  enforcing flip (a `select!` gate at the `BoundaryCrossing` arm).
+  Network layer (leg 4b) LANDED. **Judge (leg 5) LANDED IN ENFORCING MODE
+  2026-07-23**: every Standard, Git, filesystem-retry, and domain-grant/retry
+  candidate is held behind the asynchronous two-stage classifier.
+  Auto-approve enters the existing approved path without a synthetic prompt;
+  escalation, error, timeout, rate limiting, and unparseable output fail
+  closed to the human flow. Durable `judge_verdict` audit records retain
+  compatibility with historical `judge_shadow_verdict` data.
   **Sandbox backend decided 2026-07-19: migrate `horizon-sandbox`
   from the self-built bwrap+seccompiler+landlock stack to depend on
   nono (`nono` 0.68, Apache-2.0) -- full adoption, both OSes
@@ -218,7 +215,7 @@ lands:
   instead of owning a new supervisor design. **The Linux filesystem-open leg
   landed 2026-07-21:** a dedicated single-threaded helper applies Landlock,
   records `openat`/`openat2` denials through seccomp-notify even when the child
-  exits 0, authenticates a bounded report, and drives human + shadow-judge
+  exits 0, authenticates a bounded report, and drives judge-gated human
   exact-file/nearest-existing-parent grants. Approval is session-local,
   revalidated, and always retries sandboxed; the old unsandboxed retry producer
   is removed and its serialized approval kind fails closed. Existing-file and
@@ -248,12 +245,11 @@ lands:
   over swappable adapters, own plain-HTTP fetch/extraction (no JS
   rendering initially). Approval design decided 2026-07-20
   (`docs/agent-approval-design.md` "Web tools" section): both tools
-  classified `BoundaryCrossing` — the judge's first real customers,
-  ending its dormancy — with search auto-approved + shadow-judged and
+  classified `BoundaryCrossing`; search remains policy-auto-approved and
   fetch exact-host-allowlisted (store shared with leg 4b); Exa via
   REST + env-only `EXA_API_KEY`. The two async tools, typed pre-contact
   grant/retry flow, bounded readability fetch, SSRF-safe resolver,
-  cancellation, and trusted shadow-judge inputs are implemented with
+  cancellation, and trusted judge inputs are implemented with
   hermetic tests. macOS network runtime verification remains part of the
   already-recorded real-Mac follow-up.
 - **Public-code / symbol search is not planned.** The Sourcegraph-backed

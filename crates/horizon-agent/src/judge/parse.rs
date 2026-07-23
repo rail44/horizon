@@ -14,16 +14,22 @@ use super::JudgeDecision;
 /// character, uppercase-compare against `Y`/`N`. Anything else -- empty
 /// output, a stray leading token, an unrecognized character -- defaults to
 /// [`JudgeDecision::Escalate`].
-pub(super) fn parse_stage1(text: &str) -> JudgeDecision {
+pub(super) fn parse_stage1_result(text: &str) -> Option<JudgeDecision> {
     match text
         .trim()
         .chars()
         .find(|ch| ch.is_ascii_alphabetic())
         .map(|ch| ch.to_ascii_uppercase())
     {
-        Some('N') => JudgeDecision::AutoApprove,
-        _ => JudgeDecision::Escalate,
+        Some('N') => Some(JudgeDecision::AutoApprove),
+        Some('Y') => Some(JudgeDecision::Escalate),
+        _ => None,
     }
+}
+
+#[cfg(test)]
+pub(super) fn parse_stage1(text: &str) -> JudgeDecision {
+    parse_stage1_result(text).unwrap_or(JudgeDecision::Escalate)
 }
 
 /// Extracts a 0-1 confidence value from a stage-1 response's raw `logprobs`
@@ -51,14 +57,19 @@ pub(super) fn confidence_from_logprobs(logprobs: &serde_json::Value) -> Option<f
 /// `output_schema` at all (the configured provider's structured-output
 /// support wasn't verified for the judge model), so both parse paths must
 /// work against plain, unconstrained text.
-pub(super) fn parse_stage2(text: &str) -> JudgeDecision {
+pub(super) fn parse_stage2_result(text: &str) -> Option<JudgeDecision> {
     if let Some(decision) = parse_stage2_json(text) {
-        return decision;
+        return Some(decision);
     }
     if let Some(decision) = parse_stage2_verdict_line(text) {
-        return decision;
+        return Some(decision);
     }
-    JudgeDecision::Escalate
+    None
+}
+
+#[cfg(test)]
+pub(super) fn parse_stage2(text: &str) -> JudgeDecision {
+    parse_stage2_result(text).unwrap_or(JudgeDecision::Escalate)
 }
 
 fn parse_stage2_json(text: &str) -> Option<JudgeDecision> {

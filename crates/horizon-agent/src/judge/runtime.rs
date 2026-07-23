@@ -1,10 +1,9 @@
-//! The dedicated tokio runtime every shadow-judge call is spawned onto.
+//! The dedicated tokio runtime every enforcing-judge call is spawned onto.
 //!
-//! The policy seam that fires the judge
-//! (`policy::horizon_events_for_provider_event`) runs on `horizon-sessiond`'s
-//! plain `crossbeam_channel`-driven session thread -- not itself async, and
-//! never allowed to block waiting on the judge's round trip (the human must
-//! see `ApprovalRequested` immediately and unchanged). `Runtime::spawn`
+//! Sessiond starts the gate after deriving a typed approval candidate on its
+//! plain `crossbeam_channel`-driven session thread. That thread must remain
+//! free to handle cancellation while the prompt is held, so completion is
+//! sent back through the session's `ToolCompletion` channel. `Runtime::spawn`
 //! (unlike `block_on`) works from any calling thread regardless of whether
 //! that thread is already inside some *other* tokio runtime's context, so a
 //! plain lazily-started shared runtime is all this needs -- mirroring

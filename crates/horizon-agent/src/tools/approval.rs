@@ -5,6 +5,7 @@ use crate::contract::{
     ApprovalKind, Command, Event, SessionState, ToolCallId, ToolCallRequest, ToolCallResult,
 };
 use crate::frame::AgentFrame;
+use crate::judge::ApprovalCandidate;
 use crate::tools::bash;
 use crate::tools::bash::SandboxedApprovalOrigin;
 use crate::tools::state::{session_runtime, SessionRuntime};
@@ -102,6 +103,57 @@ pub fn resolve_approval(
         ApprovalDecision::Approve => Command::ApproveToolCall { call_id },
         ApprovalDecision::Deny { reason } => Command::DenyToolCall { call_id, reason },
     })
+}
+
+/// Resolves a judge-approved candidate through the same execution/retry path
+/// as a human approval, without requiring a synthetic `ApprovalRequested`
+/// event in the frame. The original request must still be the live,
+/// unresolved occurrence; stale completions are ignored.
+pub fn resolve_auto_approval(
+    frame: &AgentFrame,
+    session_id: SessionId,
+    candidate: &ApprovalCandidate,
+) -> ApprovalOutcome {
+    let call_id = &candidate.request.call_id;
+    let Some(request) = frame.tool_call_request(call_id) else {
+        return ApprovalOutcome::AlreadyResolved;
+    };
+    if request != &candidate.request
+        || frame.has_tool_call_finished(call_id)
+        || frame.has_tool_call_started(call_id)
+    {
+        return ApprovalOutcome::AlreadyResolved;
+    }
+    if !is_horizon_executed_tool(&request.tool_id) {
+        return ApprovalOutcome::Forward(Command::ApproveToolCall {
+            call_id: call_id.clone(),
+        });
+    }
+    let Some(runtime) = session_runtime(session_id) else {
+        return ApprovalOutcome::Forward(Command::ApproveToolCall {
+            call_id: call_id.clone(),
+        });
+    };
+
+    if request.tool_id == "bash" {
+        resolve_bash(
+            session_id,
+            &runtime,
+            request,
+            &ApprovalDecision::Approve,
+            candidate.approval.kind.clone(),
+        )
+    } else if request.tool_id == "web_fetch" {
+        resolve_web_fetch(
+            session_id,
+            &runtime,
+            request,
+            &ApprovalDecision::Approve,
+            candidate.approval.kind.clone(),
+        )
+    } else {
+        resolve_synchronous_tool(&runtime, request, &ApprovalDecision::Approve)
+    }
 }
 
 fn try_execute(

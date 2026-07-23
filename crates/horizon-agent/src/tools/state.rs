@@ -144,11 +144,10 @@ struct Inner {
     /// host-side web tools. It exists even when this session cannot start a
     /// sandbox proxy, so `web_fetch` never needs a separate policy model.
     domains: SessionDomainPolicy,
-    /// This session's shadow-mode judge handle (`docs/agent-approval-
-    /// design.md`'s "Judge design", implemented in shadow mode only --
-    /// `crate::judge`'s module doc), if one could be built for it. `None`
-    /// means the judge never fires for this session's boundary-crossing
-    /// calls (no `OPENAI_API_KEY`, no event-log writer, or -- every
+    /// This session's enforcing judge handle (`docs/agent-approval-
+    /// design.md`'s "Judge design"), if one could be built for it. `None`
+    /// means approval candidates go directly to the human (no
+    /// `OPENAI_API_KEY`, no event-log writer, or -- every
     /// construction site in this crate's own tests except where a test
     /// explicitly installs one via [`Self::with_judge`]) -- see
     /// `JudgeHandle::new`. Injected post-construction the same way
@@ -294,7 +293,7 @@ impl ToolSessionState {
         self.inner.network.clone()
     }
 
-    /// Installs this session's shadow-mode judge handle after construction
+    /// Installs this session's enforcing judge handle after construction
     /// -- see [`Inner::judge`]'s doc comment. Same construction-time-only
     /// safety contract as [`Self::with_skills`]/[`Self::with_config_path`]/
     /// [`Self::with_network_proxy`].
@@ -305,11 +304,7 @@ impl ToolSessionState {
         self
     }
 
-    /// This session's shadow-mode judge handle, if one is installed -- see
-    /// [`Inner::judge`]'s doc comment. What `judge::maybe_fire_shadow_judge`
-    /// (called from `policy::horizon_events_for_provider_event`'s
-    /// `Classification::BoundaryCrossing` arm) reads to decide whether to
-    /// fire at all.
+    /// This session's enforcing judge handle, if one is installed.
     pub(crate) fn judge_handle(&self) -> Option<Arc<JudgeHandle>> {
         self.inner.judge.clone()
     }
@@ -489,8 +484,8 @@ pub(crate) fn session_runtime(session_id: SessionId) -> Option<SessionRuntime> {
 }
 
 /// `session_id`'s current live frame, if it has a registered runtime -- the
-/// narrow read `judge::maybe_fire_shadow_judge` needs (prior user messages
-/// for the shadow judge's input, `docs/agent-approval-design.md`'s "Input
+/// narrow read the judge needs (prior user messages for the judge's input,
+/// `docs/agent-approval-design.md`'s "Input
 /// restriction" bullet) without exposing the whole [`SessionRuntime`]
 /// outside this module (only `tools::execution`, a sibling submodule,
 /// reads `session_runtime` directly today).

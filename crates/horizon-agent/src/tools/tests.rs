@@ -8,8 +8,8 @@ use serde_json::json;
 
 use super::*;
 use crate::contract::{
-    Command, Event, ProviderEvent, SessionId, ToolCallId, ToolCallRequest, ToolCallResult,
-    ToolPermission,
+    ApprovalKind, ApprovalRequest, Command, Event, ProviderEvent, SessionId, ToolCallId,
+    ToolCallRequest, ToolCallResult, ToolPermission,
 };
 use crate::frame::{AgentFrame, AgentFrameItem};
 use crate::live::LiveState;
@@ -135,6 +135,9 @@ fn is_error(output: &serde_json::Value) -> bool {
 /// never produces a structured containment prompt.
 fn expect_finished(completion: BashCompletion) -> ToolCallResult {
     match completion {
+        BashCompletion::ApprovalJudged(judgment) => {
+            panic!("expected a finished bash completion, got judge result: {judgment:?}")
+        }
         BashCompletion::Finished(result) => result,
         BashCompletion::DomainDenied {
             call_id, domains, ..
@@ -1049,6 +1052,31 @@ fn resolve_approval_forwards_non_horizon_executed_tools() {
 }
 
 #[test]
+fn resolve_auto_approval_forwards_standard_candidate_without_a_prompt() {
+    let call_id = ToolCallId("call-auto".to_string());
+    let frame = requested_frame(&call_id, "mock.approval_required", json!({}));
+    let request = frame.tool_call_request(&call_id).expect("request").clone();
+    let candidate = ApprovalCandidate {
+        request,
+        approval: ApprovalRequest {
+            call_id: call_id.clone(),
+            reason: "test".to_string(),
+            kind: ApprovalKind::Standard,
+        },
+    };
+
+    let outcome = resolve_auto_approval(&frame, SessionId::new(), &candidate);
+    assert!(matches!(
+        outcome,
+        ApprovalOutcome::Forward(Command::ApproveToolCall { call_id: id }) if id == call_id
+    ));
+    assert!(!frame
+        .items
+        .iter()
+        .any(|item| matches!(item, AgentFrameItem::ApprovalRequested(_))));
+}
+
+#[test]
 fn resolve_approval_forwards_when_no_runtime_registered() {
     let call_id = ToolCallId("call-1".to_string());
     let frame = requested_frame(
@@ -1632,6 +1660,9 @@ fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
         .expect("the sandboxed bash call should finish");
 
     match completion {
+        BashCompletion::ApprovalJudged(judgment) => {
+            panic!("expected a filesystem denial, got judge result: {judgment:?}")
+        }
         BashCompletion::Finished(result) => {
             panic!(
                 "expected the literal /tmp write to be denied by the sandbox \
@@ -1760,29 +1791,25 @@ fn approved_git_commit_writes_linked_metadata_once_and_stays_sandboxed() {
         Execution::RequiresApproval
     );
     let events = crate::policy::horizon_events_for_provider_event(
-        &Event::ToolCallRequested(request),
+        &Event::ToolCallRequested(request.clone()),
         &tool_state,
         session_id,
     );
-    let displayed_roots = events
+    let approval = events
         .iter()
         .find_map(|event| match event {
-            Event::ApprovalRequested(crate::contract::ApprovalRequest {
-                kind: crate::contract::ApprovalKind::GitOperation { writable_roots },
-                ..
-            }) => Some(writable_roots.clone()),
+            Event::ApprovalRequested(approval) => Some(approval.clone()),
             _ => None,
         })
         .expect("metadata-writing Git must request its command-scoped grant");
+    let displayed_roots = match &approval.kind {
+        ApprovalKind::GitOperation { writable_roots } => writable_roots.clone(),
+        _ => panic!("metadata-writing Git must derive a GitOperation candidate"),
+    };
     assert_eq!(displayed_roots.len(), 2, "worktree and common git dirs");
-    let frame = live_state.extend_events(events);
-
-    let outcome = resolve_approval(
-        &frame,
-        session_id,
-        call_id.clone(),
-        ApprovalDecision::Approve,
-    );
+    let frame = live_state.extend_events([Event::ToolCallRequested(request.clone())]);
+    let outcome =
+        resolve_auto_approval(&frame, session_id, &ApprovalCandidate { request, approval });
     assert!(matches!(outcome, ApprovalOutcome::Started { .. }));
     let result = expect_finished(
         bash_results_rx
@@ -1907,7 +1934,7 @@ fn resolve_approval_filesystem_retry_adds_exact_grant_and_stays_sandboxed() {
         bash_results_tx,
     );
     let call_id = ToolCallId("bash-filesystem-retry".to_string());
-    live_state.extend_events([Event::ToolCallRequested(ToolCallRequest {
+    let request = ToolCallRequest {
         call_id: call_id.clone(),
         tool_id: "bash".to_string(),
         input: json!({
@@ -1918,27 +1945,22 @@ fn resolve_approval_filesystem_retry_adds_exact_grant_and_stays_sandboxed() {
             )
         })
         .into(),
-    })]);
+    };
+    let frame = live_state.extend_events([Event::ToolCallRequested(request.clone())]);
     let prior_result = ToolCallResult::new(
         call_id.clone(),
         json!({ "is_error": true, "filesystem_denied": true }),
     );
-    let frame =
-        live_state.extend_events([Event::ApprovalRequested(crate::contract::ApprovalRequest {
-            call_id: call_id.clone(),
-            reason: "allow exact file and retry".to_string(),
-            kind: crate::contract::ApprovalKind::FilesystemDenialRetry {
-                denials: vec![denial],
-                prior_result,
-            },
-        })]);
-
-    let outcome = resolve_approval(
-        &frame,
-        session_id,
-        call_id.clone(),
-        ApprovalDecision::Approve,
-    );
+    let approval = ApprovalRequest {
+        call_id: call_id.clone(),
+        reason: "allow exact file and retry".to_string(),
+        kind: ApprovalKind::FilesystemDenialRetry {
+            denials: vec![denial],
+            prior_result,
+        },
+    };
+    let outcome =
+        resolve_auto_approval(&frame, session_id, &ApprovalCandidate { request, approval });
     assert!(matches!(outcome, ApprovalOutcome::Started { .. }));
     let completion = bash_results_rx
         .recv_timeout(Duration::from_secs(10))
@@ -2073,14 +2095,21 @@ fn resolve_approval_web_fetch_approve_adds_only_the_exact_session_grant() {
         dummy_bash_results(),
     );
     let call_id = ToolCallId("web-fetch-domain-approve".to_string());
-    let frame = domain_grant_frame(&live_state, &call_id, "example.com");
-
-    let outcome = resolve_approval(
-        &frame,
-        session_id,
-        call_id.clone(),
-        ApprovalDecision::Approve,
-    );
+    let request = ToolCallRequest {
+        call_id: call_id.clone(),
+        tool_id: "web_fetch".to_string(),
+        input: json!({ "url": "https://example.com/" }).into(),
+    };
+    let frame = live_state.extend_events([Event::ToolCallRequested(request.clone())]);
+    let approval = ApprovalRequest {
+        call_id: call_id.clone(),
+        reason: "allow example.com for this session?".to_string(),
+        kind: ApprovalKind::DomainGrant {
+            domains: vec!["example.com".to_string()],
+        },
+    };
+    let outcome =
+        resolve_auto_approval(&frame, session_id, &ApprovalCandidate { request, approval });
 
     assert!(matches!(outcome, ApprovalOutcome::Started { .. }));
     assert!(approved_state.is_domain_allowed("example.com"));
@@ -2146,8 +2175,22 @@ fn resolve_approval_domain_denial_retry_approve_without_a_network_proxy_falls_ba
     let call_id = ToolCallId("bash-domain-retry-approve-no-proxy".to_string());
     let (frame, prior_result) =
         domain_denial_retry_frame(&live_state, &call_id, vec!["example.com".to_string()]);
-
-    let outcome = resolve_approval(&frame, session_id, call_id, ApprovalDecision::Approve);
+    let request = frame
+        .tool_call_request(&call_id)
+        .expect("reissued request")
+        .clone();
+    let approval = frame
+        .items
+        .iter()
+        .find_map(|item| match item {
+            AgentFrameItem::ApprovalRequested(approval) if approval.call_id == call_id => {
+                Some(approval.clone())
+            }
+            _ => None,
+        })
+        .expect("domain retry approval");
+    let outcome =
+        resolve_auto_approval(&frame, session_id, &ApprovalCandidate { request, approval });
     match outcome {
         ApprovalOutcome::Executed { command, .. } => {
             assert_eq!(command, Command::ToolCallResult(prior_result));
